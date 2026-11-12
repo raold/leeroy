@@ -26,6 +26,7 @@ from leeroy_mind.nightly.settings import NightlySettings, is_sunday, night_bound
 from leeroy_mind.nightly.store import set_run_plan
 from leeroy_mind.personas.screens import redact_real_name
 from leeroy_mind.storage.store import Store
+from leeroy_mind.server.clock import latest_window_bounds
 from leeroy_mind.wow import is_raid_fight
 
 if TYPE_CHECKING:
@@ -60,7 +61,9 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "notes": {"json": 2.0},                    # the call and its own judge batch of one: 40 s
     "claims": {"json": 1},                    # one extraction, no thinking or judge pass
     "signals": {},                           # screening only; no reflection calls
+    "talk_coach": {"json": 1},                # one bounded coaching call per member
     "rewards": {},                           # own measured wall cost; no generation calls
+    "bandit": {},
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
@@ -102,7 +105,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies", "talk_coach", "bandit"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -322,7 +325,14 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
                 for stage in UNIT_CALLS}
     counted = {"supersede": measured_supersede_calls(ctx.store),
                CORE_JUDGE: measured_core_judge_calls(ctx.store)}
-    budget = night_budget_s(ctx.clock.now(), night_bounds(ctx.night, ctx.tz)[1], base.parallel,
+    if base.quiet:
+        cutoff = ctx._memo.get('server:quiet_end')
+        if cutoff is None:
+            cutoff = latest_window_bounds(ctx.clock.local(), base.quiet, clock=ctx.clock)[1]
+            ctx._memo['server:quiet_end'] = cutoff
+    else:
+        cutoff = night_bounds(ctx.night, ctx.tz)[1]
+    budget = night_budget_s(ctx.clock.now(), cutoff, base.parallel,
                             base.budget_floor_hours)
     failed: set[str] = set()
 

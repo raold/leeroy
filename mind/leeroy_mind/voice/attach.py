@@ -153,6 +153,16 @@ class VoiceExtension:
                 raise
             except Exception as exc:
                 event("voice_pin_failed", level=logging.WARNING, reason=type(exc).__name__)
+            if not pin and (server := getattr(self.app, 'server', None)) is not None and server.lease.held:
+                # Even a partial unpin can shorten the live runner's lifetime.
+                # Restore through the arbiter's serialized hand-over before
+                # releasing voice; the server may have acquired during the I/O.
+                try:
+                    await self.app.arbiter.hand_over()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    event('voice_server_pin_failed', level=logging.WARNING, reason=type(exc).__name__)
             # Do not let queued pin work reload the live model after the night was admitted.
             # A disconnect or newer GPU status supersedes this proof that the GPU was freed.
             if not pin and generation == self._gpu_generation and not self._gpu_held:

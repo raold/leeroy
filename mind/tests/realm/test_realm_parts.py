@@ -99,7 +99,7 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
         return attach
 
     # Absent, whichever of these exist by now: None in sys.modules imports as not found.
-    install(monkeypatch, **dict.fromkeys(("talk", "rivals", "race", "poach", "calendar")))
+    install(monkeypatch, **dict.fromkeys(("talk", "rivals", "race", "poach", "calendar", "bond")))
     install(monkeypatch, direct=module("direct", attach_as("direct", ())),
             speech=module("speech", attach_as("speech", ("channel_chat", "zone"))),
             bank=module("bank", lambda realm: None),          # Declines.
@@ -119,11 +119,11 @@ def test_parts_registry_attaches_present_modules(app, monkeypatch, caplog):
     assert realm.on_event in app.handlers["zone"]  # The part's own event type, registered once.
     assert all(len(handlers) == 1 for handlers in app.handlers.values())
     absent = [r.getMessage() for r in caplog.records if r.getMessage().startswith("realm_part_absent")]
-    assert absent == ["realm_part_absent names=talk,rivals,race,poach,calendar"]
+    assert absent == ["realm_part_absent names=talk,rivals,race,poach,calendar,bond"]
     assert "realm_part_failed name=mail error=ZeroDivisionError" in caplog.text
     assert "realm_part_declined name=bank" in caplog.text
     assert parts.PART_MODULES == ("direct", "steps", "speech", "talk", "rivals", "race", "poach",
-                                  "canon", "bank", "calendar", "mail")
+                                  "canon", "bank", "calendar", "mail", "bond")
 
     async def go():
         await connect(app)

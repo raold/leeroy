@@ -20,6 +20,7 @@ def announce(**changes):
 
 
 CASES = [
+    (p.RealmVisit("visit", "org_inn"), "ack", ()),
     (p.RealmActors("actors", (3, 2), (2,), (50,)), "ack", ()),
     (p.RealmSay("say", 2, "trade", "hello"), "ack", ()),
     (p.WorldSay("world", 101, 50, "trade", "hello"), "ack", ()),

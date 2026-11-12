@@ -138,6 +138,10 @@ def attach(runner,data_dir,store=None):
         names = {s.name for s in runner.stages}
         runner.add_stage("rewards",stage_rewards,
                          after="signals" if "signals" in names else "threads",model=None)
+        from .bandit_night import attach as attach_bandit
+        attach_bandit(runner,data_dir,store)
+        from .coach import attach as attach_coach
+        attach_coach(runner,data_dir,store)
 
 
 async def stage_rewards(ctx):
@@ -145,6 +149,9 @@ async def stage_rewards(ctx):
         return
     conn = ctx.store.conn
     try:
+        from .capture import prune, available as capture_available
+        if not ctx.done('rewards','preference_prune') and await read_work(ctx,lambda c:capture_available(c.store.conn)):
+            ctx.commit('rewards','preference_prune',lambda store:prune(store.conn,ctx.clock.now(),schema_available=True))
         ids = await read_work(ctx,_selection)
         with ctx.store.transaction():
             if ids and ctx.store.get_meta(PLAN+ctx.night) is None:

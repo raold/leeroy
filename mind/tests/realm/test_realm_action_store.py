@@ -131,6 +131,19 @@ def test_restart_never_replays_prepared_or_dispatched_and_retains_unknown(store)
     assert store.holds()[0].guids == frozenset({3})
 
 
+def test_pre_social_journaled_move_decodes_and_recovers(store):
+    payload=document({'type':'realm_move','id':'legacy','guid':101,'place':'org_inn','slot':0})
+    cmd,_=decode(payload)
+    assert not cmd.social
+    record=prepare(store,cmd)
+    assert record.payload==payload
+    dispatch(store,record)
+    recovered=store.recover(process_id='new',now=20)
+    assert [r.command_id for r in recovered]==['legacy']
+    assert store.get('legacy').state=='unknown'
+    assert store.holds()[0].guids==frozenset({101})
+
+
 @pytest.mark.parametrize("reason", sorted(REFUSALS))
 def test_exact_ordinary_no_admission_refusal_allowlist(store, reason):
     dispatch(store, prepare(store))

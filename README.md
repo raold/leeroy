@@ -189,8 +189,7 @@ Its default loopback ports are 7879 for the mind and 7880 for its browser
 panel. Runtime settings and models stay in the ignored `voice-data/`; voice
 specs and synthetic references stay in `mind-data/voices/`. The
 [voice README](voice/README.md) covers setup, GPU warmup and the optional
-Chatterbox Turbo CPU fallback, and [the operating notes](CLAUDE.md#the-voice-service-leeroy-voice)
-cover commands and data-directory overrides. A
+Chatterbox Turbo CPU fallback. A
 [headless regression rehearsal](voice/tools/rehearsal/README.md) checks the two
 services together in CI, with synthetic data and fake audio devices.
 
@@ -240,7 +239,7 @@ MAP:BOSS:DIFFICULTY` or `training stock --context ...` changes the stored card
 selection under the service lock, while preserving pending command journals.
 Native `Leeroy.Training.Enable = 0` stops additions and requests verified
 cleanup, which may remain pending; `Leeroy.Telemetry.Enable = 0` stops
-recording. See the [operating notes](CLAUDE.md#training-ground).
+recording.
 Implementation and passing tests are separate from live observation and
 acceptance.
 
@@ -324,7 +323,6 @@ Apply them to a checkout of each module with
 | `selfie/` | The profile-photo worker (`python -m leeroy_selfie`), Python 3.12, started by the mind at night only; GPL-3.0-or-later, with its own [LICENSE](selfie/LICENSE) and [README](selfie/README.md) |
 | `dojo/` | The dojo (`python -m leeroy_dojo`); see [its README](dojo/README.md) |
 | `references.bib` | The research, software and models behind the project, each entry annotated with what it shaped |
-| `CLAUDE.md` | Operating notes: paths, build traps, module quirks, what each patch and switch does |
 
 ### Scripts
 
@@ -341,9 +339,7 @@ Apply them to a checkout of each module with
 ```
 
 They assume this repo is the install root, with the core checked out in
-`azerothcore-wotlk/` and the build in `build/`. The
-[operating notes](CLAUDE.md) have the commands for the mind, the console and
-every switch.
+`azerothcore-wotlk/` and the build in `build/`.
 
 ### CI
 

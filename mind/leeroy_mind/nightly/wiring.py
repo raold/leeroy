@@ -45,7 +45,9 @@ def attach(app):
                 ollama=replace(candidate.ollama, url=startup.ollama.url),
                 models=replace(candidate.models, embedding=startup.models.embedding))
             updated = replace(load_settings(candidate, app.data_dir),
-                              learn_enabled=settings.learn_enabled)
+                              learn_enabled=settings.learn_enabled, quiet=settings.quiet)
+            # The server lease's clock is a startup choice. Keep both owners on
+            # that clock until restart, even when runtime dials are reloaded.
         except ConfigError:
             # Config text may contain private identity values: log no raw values.
             log("nightly_config_error", level=logging.WARNING)
@@ -95,6 +97,8 @@ def attach(app):
             tuning=getattr(app.personas, "tuning", None))
 
     runner = NightRunner(STAGES, make_ctx)
+    from leeroy_mind.bond.night import attach as attach_bond
+    attach_bond(runner,settings)
     app.night_runner = runner
     scheduler = NightScheduler(app.store, settings, arbiter, runner.run, clock=app.clock)
     app.night_scheduler = scheduler  # the tuning preview asks whether a night runs or is due
@@ -111,6 +115,9 @@ def attach(app):
         discord = getattr(app, "discord_talk", None)
         if discord is not None:
             await discord.handback()
+        server = getattr(app, "server", None)
+        if server is not None:
+            await server.lease.handback()
 
     app.engine.live_admission = live_ready
 

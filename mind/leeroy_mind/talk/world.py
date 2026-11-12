@@ -7,7 +7,7 @@ from typing import Callable
 
 from leeroy_mind.discord import layout
 from leeroy_mind.discord.transport import channel_id, is_discord
-from leeroy_mind.protocol import (AfkEvent, Cast, Chat, Event, Group, Hello, Login, Logout,
+from leeroy_mind.protocol import (AfkEvent, Cast, Chat, Death, Event, Group, Hello, Login, Logout,
                                   Member, Zone)
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.wow import CAST_MIN_LEVEL
@@ -167,6 +167,7 @@ class WorldView:
                 self.human_online = on
                 if not on:
                     self.human_afk = False
+                    self.human_zone = 0
             elif on:
                 self.online.add(guid)
             else:
@@ -184,8 +185,12 @@ class WorldView:
             self._touch_member(guid, zone=ev.zone_id)
             if is_human:
                 self.human_zone = ev.zone_id
-        elif isinstance(ev, Chat) and is_human:
-            self.human_zone = ev.zone
+        elif isinstance(ev, Chat) and not is_discord(ev.channel):
+            self._touch_member(guid, map=ev.map, zone=ev.zone)
+            if is_human:
+                self.human_zone = ev.zone
+        elif isinstance(ev, Death):
+            self._touch_member(guid, map=ev.map)
         if is_human:
             self.human_last_active = now
 

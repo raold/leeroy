@@ -6,5 +6,6 @@ namespace Leeroy::Realm
 {
 void RegisterRealmSpeechHandlers();
 void AddRealmSpeechScripts();
+void TickSocialSeats();
 }
 #endif

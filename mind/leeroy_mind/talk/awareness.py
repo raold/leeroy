@@ -15,6 +15,8 @@ from types import SimpleNamespace
 from weakref import WeakValueDictionary
 
 from leeroy_mind.awareness import CardContext, CardSources, ContextItem, card
+from leeroy_mind.bond.policy import eligible as bond_eligible
+from leeroy_mind.tuning.effective import dials_of
 from leeroy_mind.console.feed import read as read_only
 from leeroy_mind.claims.config import load_claims_config
 from leeroy_mind.config import ConfigError
@@ -107,9 +109,9 @@ class LiveReview:
         return lock
 
     @asynccontextmanager
-    async def serial(self,turn):
+    async def serial(self,turn,meta=None):
         task = asyncio.current_task()
-        if not self.config.enabled or turn.template is not None or self.owners.get(turn.speaker) is task:
+        if not self.enabled(turn,meta) or self.owners.get(turn.speaker) is task:
             yield
             return
         async with self.lock(turn.speaker):
@@ -118,6 +120,12 @@ class LiveReview:
                 yield
             finally:
                 self.owners.pop(turn.speaker,None)
+
+    def enabled(self,turn,meta=None):
+        return turn.template is None and (self.config.enabled or getattr(meta,"review_required",False))
+
+    def config_for(self,meta):
+        return replace(self.config,enabled=True) if meta.review_required else self.config
 
     async def read(self,question):
         def snapshot(conn):
@@ -218,14 +226,26 @@ class LiveReview:
     async def block_async(self,turn,meta,*,close):
         names = dict(self.engine._names(turn.channel))
         observed = self.observe(turn,meta)
-        return await self.read(lambda conn:self.block(turn,meta,close=close,conn=conn,names=names,observed=observed))
+        bond = self._bond_settings(turn.speaker)
+        return await self.read(lambda conn:self.block(turn,meta,close=close,conn=conn,names=names,
+                                                      observed=observed,bond=bond))
 
-    def block(self, turn, meta, *, close, conn=None, names=None, observed=None):
+    def _bond_settings(self, guid):
+        # PersonaCache can read the live connection on a miss. Capture its immutable
+        # effective values on the caller, never in the read-only SQLite worker.
+        cfg = self.engine.cfg.romance
+        if not cfg.activities:
+            return False, 0
+        persona = self.engine.personas.get(guid)
+        return bond_eligible(persona, cfg.dial), cfg.jealousy * dials_of(persona).mult('jealousy')
+
+    def block(self, turn, meta, *, close, conn=None, names=None, observed=None, bond=None):
         e = self.engine
         conn = e.store.conn if conn is None else conn
         names = dict(e._names(turn.channel)) if names is None else names
-        if not e.cfg.talk.aware:
+        if not e.cfg.talk.aware and not meta.review_required:
             return ""
+        bond = self._bond_settings(turn.speaker) if bond is None else bond
         observed = self.observe(turn,meta) if observed is None else observed
         _, history = self.history(turn, meta,conn,observed=observed)
         raw, to, readers, now = observed.raw, observed.to, observed.readers, observed.draft.now
@@ -256,7 +276,8 @@ class LiveReview:
                                                       raw, h.guid, h.to_guid, readers))
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
-            discord_events=tuple(events[-4:]), now=now,names=names)
+            discord_events=tuple(events[-4:]), now=now,names=names,
+            romance_activities=bond[0], jealousy=bond[1])
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):
             if not close:
@@ -265,11 +286,11 @@ class LiveReview:
         return AwarenessBlock(tuple(clean(p.render()) for p in observation.parts), BUDGETS[place(turn,meta)[0]])
 
     async def check(self, turn, meta, text):
-        async with self.serial(turn):
+        async with self.serial(turn,meta):
             return await self._check(turn,meta,text)
 
     async def _check(self, turn, meta, text):
-        if not self.config.enabled or turn.template is not None:
+        if not self.enabled(turn,meta):
             return Verdict("send")
         e = self.engine
         try:
@@ -298,8 +319,15 @@ class LiveReview:
                     self.vectors.popitem(last=False)
             else:
                 cached = {}
+            if getattr(e,'learn_enabled',False) and getattr(e,'learn_capture_preferences',False) and cached:
+                try:
+                    from leeroy_mind.learn.capture import vectors as capture_vectors
+                    with e.store.transaction():
+                        capture_vectors(e.store.conn,context,cached,e.cfg.models.embedding,channel=turn.channel)
+                except Exception:
+                    log.warning('learn_vector_capture_failed')
             draft = replace(observed.draft,text=text,thread_ids=tuple(h.id for h in context[-16:]),embedding=embedding)
-            verdict = await self.read(lambda conn:review(GuardStores(conn,self.config,self.claims_enabled,
+            verdict = await self.read(lambda conn:review(GuardStores(conn,self.config_for(meta),self.claims_enabled,
                 history if is_discord(turn.channel) else (),cached if not is_discord(turn.channel) else {},
                 None if is_discord(turn.channel) else self.facts,e.clock),draft))
             meta.guard_codes = verdict.codes
@@ -309,16 +337,20 @@ class LiveReview:
                      ",".join(verdict.codes))
             return verdict
         except Exception:
+            if meta.review_required:
+                meta.guard_verdict = "drop"
+                log.warning("guard_review_unavailable guid=%d", turn.speaker)
+                return Verdict("drop", ("review_unavailable",))
             meta.guard_verdict = "failed_open"
             log.warning("guard_review_failed_open guid=%d", turn.speaker)
             return Verdict("send", ("review_failed_open",))
 
     def record(self, turn, meta, text, line_id):
-        if not self.config.enabled or turn.template is not None:
+        if not self.enabled(turn,meta):
             return
         try:
             with self.engine.store.transaction():
-                record_sent(GuardStores(self.engine.store.conn, self.config),
+                record_sent(GuardStores(self.engine.store.conn, self.config_for(meta)),
                     self.draft(turn, meta, text), receipt_id=f"line-{line_id}")
         except Exception:
             log.warning("guard_receipt_failed guid=%d line=%d", turn.speaker, line_id)
