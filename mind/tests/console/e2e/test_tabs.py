@@ -23,10 +23,10 @@ OLDER.update({"raid": "No raid is open.",
               "dojo": "No dojo set up", "mind": "stopped"})
 
 
-async def open_console(r):
+async def open_console(r, *, timeout=5000):
     from playwright.async_api import expect
     await r.page.goto(r.url + "/#key=" + KEY)
-    await expect(r.page.locator("#s-mind")).to_contain_text("mind running")
+    await expect(r.page.locator("#s-mind")).to_contain_text("mind running", timeout=timeout)
 
 
 async def tab_names(page):

@@ -5,10 +5,12 @@ import { currentView, openView } from "./feedview.mjs";
 import { channelOf, groupMessages, memberGroups, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel } from "./discord.mjs";
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
 import { PICKER, isOneEmoji } from "./emoji.mjs";
+import { photoBox, photoDraft, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
 
 var shown = "", thread = 0, panel = "", reply = null, entryMark = 0, drawing = "";
 var drafts = new Map(), replyDrafts = new Map(), folded = new Set(), dialog = null, returnTo = null, failure = "";
 var input = $("dc-text"), box = $("feed");
+var photoBusy = false;
 function button(text, cls) { var b = el("button", cls || "", text); b.type = "button"; return b; }
 function active() { return !!channelOf(currentView()); }
 function windowData() { return DISCORD.window(currentView(), thread); }
@@ -111,6 +113,7 @@ function messageRow(item, data) {
   var quote = quoteOf(m, (data.quotes || []).concat(data.messages), name);
   if (quote) { var q = el("blockquote", "dc-quote"); q.appendChild(el("b", "", quote.name)); q.appendChild(el("span", "", quote.text)); content.appendChild(q); }
   content.appendChild(el("div", "body", deleted ? "Message deleted" : str(m.text)));
+  if (!deleted && m.image) { content.appendChild(photoBox(m, name(m.author))); }
   if (m.edited && !deleted) { content.appendChild(el("small", "muted", "edited")); }
   if (m.pinned && !deleted) { content.appendChild(el("small", "dc-pin", "Pinned")); }
   if (!deleted) {
@@ -176,8 +179,10 @@ function renderMessages(data) {
 }
 function renderComposer() {
   var reason = discordReason(), count = Array.from(input.value).length;
-  input.disabled = !!reason; input.readOnly = discordBusy;
-  $("dc-send").disabled = !!reason || discordBusy || !input.value.trim() || count > 2000;
+  input.disabled = !!reason; input.readOnly = discordBusy || photoBusy;
+  var attached = DISCORD.photos && photoDraft(routeKey());
+  $("dc-send").disabled = !!reason || discordBusy || photoBusy || (!input.value.trim() && !attached) || count > 2000;
+  renderPhotoDraft(routeKey(), DISCORD.photos, !!reason || discordBusy || photoBusy);
   $("dc-emoji").disabled = !!reason || discordBusy;
   $("dc-count").textContent = count + " / 2000"; $("dc-count").classList.toggle("bad", count > 2000);
   $("dc-to").textContent = DISCORD.title(currentView()) + (thread ? " thread" : "");
@@ -209,11 +214,19 @@ function send() {
   var text = input.value, key = routeKey(), body = { action: "post", channel: channelOf(shown), text: text };
   if (thread) { body.thread = thread; } if (reply) { body.reply_to = reply.id; }
   failure = "";
-  mutateDiscord(body).then(function () {
+  var photo = DISCORD.photos ? photoDraft(key) : null;
+  photoBusy = !!photo; renderComposer();
+  preparePhoto(photo).then(function (token) {
+    if (token) { body.image = token; }
+    return mutateDiscord(body);
+  }).then(function () {
+    clearPhoto(key, photo);
     drafts.delete(key); replyDrafts.delete(key);
     if (key === routeKey() && input.value === text) { input.value = ""; reply = null; renderComposer(); input.focus(); }
-  }).catch(fail);
+  }).catch(fail).finally(function () { photoBusy = false; renderComposer(); });
 }
+setupPhotoComposer({ key:routeKey, enabled:() => active() && DISCORD.photos && !discordBusy && !photoBusy && !discordReason(),
+  changed:renderComposer, failed:fail });
 function openDialog(mode, m, trigger) {
   dialog = { mode: mode, message: m }; returnTo = trigger || document.activeElement;
   $("dc-dialog-title").textContent = { emoji: "Add an emoji", react: "React to this message", edit: "Edit your message", thread: "Start a thread", delete: "Delete your message?" }[mode];

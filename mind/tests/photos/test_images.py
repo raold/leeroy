@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -92,3 +93,23 @@ def test_existing_adopted_target_is_never_overwritten(tmp_path):
     relative, *_ = images.adopt(tmp_path, token, 1)
     assert (tmp_path / relative).read_bytes() == jpeg()
     assert target.read_bytes() == b'keep'
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows junction semantics')
+@pytest.mark.parametrize('where', [images.INCOMING, images.IMAGES])
+def test_adopt_refuses_windows_junctions(tmp_path, where):
+    import _winapi
+    data = tmp_path / 'data'
+    data.mkdir()
+    token = images.stage(data, jpeg())
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    path = data / where
+    if path.exists():
+        path.rename(outside / 'saved')
+    _winapi.CreateJunction(str(outside), str(path))
+    assert path.is_junction()
+    before = {p.relative_to(outside): p.read_bytes() for p in outside.rglob('*') if p.is_file()}
+    with pytest.raises(images.ImageRefused, match='link'):
+        images.adopt(data, token, 1)
+    assert before == {p.relative_to(outside): p.read_bytes() for p in outside.rglob('*') if p.is_file()}

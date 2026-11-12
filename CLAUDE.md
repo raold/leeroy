@@ -1432,9 +1432,19 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   endpoint and console on ephemeral ports with the invented cast and fake bridge,
   LLM and model admin: channel answer, named and officer-only replies, reaction and
   DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
+- `[photos] enabled = true` enables owner photo uploads after restarting both mind
+  and console; `enabled` and `send` default false. Attach or paste an image in a
+  Discord channel or DM: the page resizes to JPEG and strips metadata locally.
+  Uploads cap at 4 MiB, four per minute and 200 per local day. Files under
+  `discord/incoming` and `discord/images` are retained, including unposted uploads
+  and deleted messages' photos. A bounded vision look runs after posting; answers
+  use its screened description, and DM memories stay private. Owner uploads have
+  no NSFW scan; generated selfies keep their existing gates. Migration 0034 adds
+  attachments and reserves bot/meme storage for the later culture phase. `send`
+  is reserved for the next photo phase and currently sends no member photos.
 - D1 is owner-triggered conversation, with optional pre-send guard review and
   scoped awareness cards. Autonomous chatter, broader member reactions, topics,
-  photos, decisions and culture remain later phases.
+  member photos, decisions and culture remain later phases.
 
 ## The Realm (`leeroy_mind.realm`)
 
