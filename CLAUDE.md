@@ -257,6 +257,9 @@ back to compiled-in defaults. `ac-update.sh` reports them.
 
 ## Scripts
 
+`ac-server.sh start` keeps the newest ten timestamped AppenderFile rotations per
+native `.log` basename beside the binaries; active logs and unrelated files stay.
+
 Run from `F:\azerothcore\scripts` in Git Bash.
 
 ```bash
@@ -708,6 +711,18 @@ Food and drink are filled independently so existing food cannot crowd out missin
 water; shifted druids retain drink coverage. Audited factory helpers add potions
 and class consumables.
 
+`Leeroy.CastDeathLoop.Enable` (default 0, `.reload config`) enables a separate
+world-thread rescue for pinned cast members. Three observed deaths within 15 minutes
+while solo, outside instances/BGs and without a Realm/training owner make a member
+eligible once alive and out of combat. It teleports to the homebind, never resurrects,
+and bounds attempts to five per rolling 15 minutes and one per member per hour.
+Observations still run once a second. Group invitations, BG queues, transit, trade,
+duels and pending commands block rescue without erasing deaths. Alive for a full
+minute more than 100 yards from the last death (or on another map) ends the loop;
+old deaths also age out after 15 minutes. Training cleanup logs one skip per fence.
+Invalid homebinds and refused teleports log once per member/reason; rescue resets
+the bot AI and motion before teleporting. Logs carry only ids, counts and codes.
+
 Local commits `41386b71` and `a8f5d378` (first built 2026-10-31) keep pins quiet: for a
 pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
 (`ResetAiAction`, which playerbots runs on "group set leader") and the
@@ -820,6 +835,17 @@ The README targets an AzerothCore revision from 2020 while this core is current.
 It compiles clean and the BG registers, but in-game behaviour is unverified.
 
 ## The mind service (`leeroy_mind`)
+
+The launcher rotates a prior day's `mind-stdout.log` before starting the child,
+keeping 14 backups. The child inherits append handles for stdout and stderr, so
+import errors, launcher failures, tracebacks and OS-level writes remain visible.
+The file is not renamed while the child is running; restart picks up rotation.
+
+The live prompt budget is 1800 estimated input tokens (four characters per token),
+with Orion's context still 4096 and output allowance 80. Fixed late-whisper instructions
+can reach about 480 tokens before context, so the old 1300 budget crowded out memories
+and recent lines. Last-resort warnings now include each section's token count, never
+its text. The prompt's privacy gates and mandatory evidence/instructions are unchanged.
 
 - Talk awareness and guards are separately opt-in: `[talk] aware = true` adds a
   scoped observation card inside the live prompt budget; `[guards] enabled = true`
@@ -1178,10 +1204,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with the folds and read marks, `guild-console-collapsed` and
   `guild-console-read`). Beside it, Hide photos (`guild-console-photos`, applied before the first
   paint) draws every member's face as initials without asking for the photo, and blanks any
-  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel
-  (`guild-console-comms-panel`, also applied before the first paint; `comms/panel.mjs`) removes the
-  right column (the room's faces and the member card) so the feed takes its width; clicking a
-  member's face shows it again with their card. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel, in that
+  panel's top corner (`guild-console-comms-panel`, also applied before the first paint;
+  `comms/panel.mjs`), removes the right column (the room's faces and the member card) so the feed
+  takes its width; Show panel in the feed's top corner, or clicking a member's face, brings it back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. Ordinary reads have a
   30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action

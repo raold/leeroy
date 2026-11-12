@@ -165,30 +165,43 @@ def test_hide_comms_panel_widens_the_feed_and_a_face_brings_it_back(rehearsal):
         async with rehearsal() as r:
             await open_console(r)
             await visit(r.page, "comms")
-            right, toggle = r.page.locator("#comms-right"), r.page.locator("#c-panel")
+            right = r.page.locator("#comms-right")
+            hide, show = r.page.locator("#c-panel"), r.page.locator("#c-panel-show")
             await expect(right).to_be_visible()
-            await expect(toggle).to_have_text("Hide panel")
+            await expect(hide).to_have_text("Hide panel")
+            await expect(show).to_be_hidden()
+            # Hide sits in the panel's own top-right corner
+            rb, hb = await right.bounding_box(), await hide.bounding_box()
+            assert rb["x"] <= hb["x"] and hb["x"] + hb["width"] <= rb["x"] + rb["width"]
+            assert (rb["x"] + rb["width"]) - (hb["x"] + hb["width"]) < 40 and hb["y"] - rb["y"] < 40
             narrow = (await r.page.locator(".feedpanel").bounding_box())["width"]
-            await toggle.click()
+            await hide.click()
             await expect(right).to_be_hidden()
-            await expect(toggle).to_have_text("Show panel")
-            await expect(toggle).to_have_attribute("aria-expanded", "false")
+            await expect(show).to_have_text("Show panel")
+            await expect(show).to_have_attribute("aria-expanded", "false")
+            await expect(show).to_be_focused()
             assert (await r.page.locator(".feedpanel").bounding_box())["width"] > narrow + 200
+            await show.click()
+            await expect(right).to_be_visible()
+            await expect(show).to_be_hidden()
+            await expect(hide).to_be_focused()
             # A member's face in the feed asks for their card, which lives in the panel
+            await hide.click()
+            await expect(right).to_be_hidden()
             face = r.page.locator("#feed [data-card]").first
             await expect(face).to_be_visible()
             await face.click()
             await expect(right).to_be_visible()
             await expect(r.page.locator("#mcard")).to_be_visible()
-            await expect(toggle).to_have_text("Hide panel")
+            await expect(show).to_be_hidden()
             # Hidden again, the choice outlives a reload (theme.js applies it before paint)
-            await toggle.click()
+            await hide.click()
             await expect(right).to_be_hidden()
             r.expected_http_errors.add(("/api/events", 403))
             r.expected_http_errors.add(("/api/discord", 403))  # Comms polls Discord too
             await r.page.reload()
             await expect(r.page.locator("html")).to_have_attribute("data-comms-panel", "hidden")
-            await expect(r.page.locator("#c-panel")).to_have_text("Show panel")
+            await expect(r.page.locator("#c-panel-show")).to_be_visible()
             assert not r.errors, r.errors
     asyncio.run(run())
 

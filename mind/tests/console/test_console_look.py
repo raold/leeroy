@@ -256,7 +256,10 @@ def test_hide_comms_panel_is_one_remembered_key_applied_before_paint():
     """Comms' Hide panel: one localStorage key, read by theme.js before the first paint and
     flipped by comms/panel.mjs; while it is on, the right column is gone and the feed widens."""
     page = (STATIC.parent / "page.html").read_text("utf-8")
-    assert 'id="c-panel"' in page and 'aria-controls="comms-right"' in page
+    assert 'id="c-panel"' in page and 'id="c-panel-show"' in page and 'aria-controls="comms-right"' in page
+    # Hide sits in the panel's own top corner; Show in the feed's, for while the panel is gone
+    feed, right = page.index('class="panel feedpanel"'), page.index('id="comms-right"')
+    assert feed < page.index('id="c-panel-show"') < right < page.index('id="c-panel"')
     owners = [f for f in STATIC.rglob("*") if f.is_file() and f.suffix in (".js", ".mjs")
               and "guild-console-comms-panel" in f.read_text("utf-8")]
     assert {f.name for f in owners} == {"theme.js", "panel.mjs"}
@@ -266,5 +269,7 @@ def test_hide_comms_panel_is_one_remembered_key_applied_before_paint():
     assert "localStorage" not in panel and "remember(PANEL_KEY" in panel
     css = (STATIC / "console.css").read_text("utf-8")
     assert 'html[data-comms-panel="hidden"] .comms > .panel.right { display: none; }' in css
+    assert ".panel-show { display: none; }" in css
+    assert 'html[data-comms-panel="hidden"] .panel-show { display: block; }' in css
     right = (STATIC / "js" / "comms" / "rightview.mjs").read_text("utf-8")
     assert "if (panelHidden()) { setPanel(false); }" in right  # a face click brings the card back
