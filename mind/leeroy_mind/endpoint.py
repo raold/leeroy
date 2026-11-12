@@ -104,7 +104,7 @@ MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library",
-       "ops", "claim_check", "feedback", "kit")
+       "ops", "claim_check", "feedback", "kit", "learn")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge")
 TUNE_SHAPES = {
@@ -719,6 +719,14 @@ def feedback_args(args):
         raise BadRequest(str(exc)) from None
 
 
+def learn_args(args):
+    from leeroy_mind.learn.control import arguments
+    try:
+        return arguments(args)
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from None
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -730,7 +738,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
-                         "say, board, discord, library, ops, claim_check or feedback action)")
+                         "say, board, discord, library, ops, claim_check, feedback or learn action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -744,7 +752,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     parse_args = {"ops": ops_args, "raid": raid_args, "tune": tune_args, "selfie": selfie_args,
                   "say": say_args, "board": board_args, "discord": discord_args,
                   "library": library_args, "claim_check": claim_check_args,
-                  "feedback": feedback_args}.get(op)
+                  "feedback": feedback_args, "learn": learn_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -938,6 +946,11 @@ class ControlEndpoint:
             log_event("control_request", op=op, line=args["line_id"],
                       outcome="ok" if reply["ok"] else "refused")
             return reply, None
+        if op == "learn":
+            reply = await self.learn(args)
+            log_event("control_request", op=op, action=args["action"],
+                      outcome="ok" if reply["ok"] else "refused")
+            return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
                        "board": self.board, "discord": self.discord}[op](args)
         log_event("control_request", op=op, action=args["action"],
@@ -1037,6 +1050,18 @@ class ControlEndpoint:
         if signals is None:
             return {"ok": False, "error": "Signal capture is disabled."}
         return await signals.feedback(args)
+
+    async def learn(self, args: dict) -> dict:
+        from leeroy_mind.learn.control import change
+        if not self.cfg.enabled or self.app.stopping:
+            return {"ok": False, "error": "Control is off or the mind is stopping."}
+        try:
+            return change(self.app.store, args, now=self.app.clock.now())
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            log_event("control_learn_failed", error=type(exc).__name__)
+            return {"ok": False, "error": "This database could not save the learning change."}
 
     async def tune(self, args: dict) -> dict:
         """The owner's dials (leeroy_mind.tuning.service): writes one at a time, previews one

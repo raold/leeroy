@@ -1,5 +1,6 @@
 import { $, clear, clock, el, emit, on, str } from "../core.mjs";
 import { S } from "../state.mjs";
+import { feedbackButtons } from "./feedback.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { currentView, openView } from "./feedview.mjs";
 import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel } from "./discord.mjs";
@@ -114,6 +115,10 @@ function messageRow(item, data) {
   if (quote) { var q = el("blockquote", "dc-quote"); q.appendChild(el("b", "", quote.name)); q.appendChild(el("span", "", quote.text)); content.appendChild(q); }
   content.appendChild(el("div", "body", deleted ? "Message deleted" : str(m.text)));
   if (!deleted && m.image) { content.appendChild(photoBox(m, name(m.author))); }
+  if (!deleted && !mine && m.origin==='mind') {
+    var feedback = feedbackButtons(m,name(m.author));
+    content.appendChild(feedback || el('small','hint','Feedback unavailable: this older message has no unique stored chat line.'));
+  }
   if (m.edited && !deleted) { content.appendChild(el("small", "muted", "edited")); }
   if (m.pinned && !deleted) { content.appendChild(el("small", "dc-pin", "Pinned")); }
   if (!deleted) {

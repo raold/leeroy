@@ -370,7 +370,8 @@ class LiveReview:
                 try:
                     from leeroy_mind.learn.capture import vectors as capture_vectors
                     with e.store.transaction():
-                        capture_vectors(e.store.conn,context,cached,e.cfg.models.embedding,channel=turn.channel)
+                        capture_vectors(e.store.conn,context,cached,e.cfg.models.embedding,channel=turn.channel,
+                                        settings=getattr(e,'learn_settings',None))
                 except Exception:
                     log.warning('learn_vector_capture_failed')
             draft = replace(observed.draft,text=text,thread_ids=tuple(h.id for h in context[-16:]),

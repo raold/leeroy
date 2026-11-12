@@ -44,7 +44,7 @@ var VIEWS = { state: ["rooms", "array"], feed: ["lines", "array"], "feed/history
   dojo: ["setup", "boolean"], library: ["setup", "boolean"], health: ["mind", "object"],
   tuning: ["view", "object"], selfies: ["view", "object"], ops: ["panels", "object"],
   discord: ["categories", "array"], "persona/insight": ["claims", "object"],
-  "ops/badge": ["counts", "object"], "ops/action": ["enabled", "boolean"] };
+  "ops/badge": ["counts", "object"], "ops/action": ["enabled", "boolean"], lab: ['freeze','boolean'] };
 export function validView(path, value) {
   var route = path.split("?")[0].slice(5), rule = VIEWS[route];
   if (!rule) { return true; }
@@ -53,6 +53,13 @@ export function validView(path, value) {
   var valid = rule[1] === "array" ? Array.isArray(field) && field.every(record) :
     rule[1] === "object" ? !!field && typeof field === "object" && !Array.isArray(field) : typeof field === rule[1];
   if (!valid) { return false; }
+  if (route === 'lab') {
+    return ['rewards','arms','lessons','weights'].every(k => record(value[k])) &&
+      ['families','frozen_families'].every(k => Array.isArray(value[k])) &&
+      Array.isArray(value.rewards.days) && Array.isArray(value.rewards.members) &&
+      Array.isArray(value.arms.arms) && Array.isArray(value.arms.contexts) &&
+      Array.isArray(value.lessons.items) && record(value.weights.current) && Array.isArray(value.weights.history);
+  }
   if (route === "ops" || route === "ops/badge") {
     return Number.isFinite(value.at) && !!value.counts && typeof value.counts === "object" &&
       !Array.isArray(value.counts) && (route !== "ops" || Object.values(value.panels).every(record));

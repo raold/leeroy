@@ -9,6 +9,7 @@ from leeroy_mind.discord.channels import is_discord, is_private, channel_id
 from leeroy_mind.logs import log
 from . import arms
 from .config import LearnCfg
+from .control import effective
 from .reward import channel_kind, decayed
 
 
@@ -80,7 +81,7 @@ def choose(conn, guid, context, *, rng=None, now=None):
     Off/frozen paths neither write, draw randomness nor need the new schema.
     """
     result = arms.controls()
-    cfg = context.settings
+    cfg = effective(conn, context.settings)
     if not enabled(cfg, guid) or not arms.available(conn):
         return result
     key = context.key
@@ -139,6 +140,7 @@ def choose(conn, guid, context, *, rng=None, now=None):
 
 def update(conn, line_id, *, settings=LearnCfg(), now=None):
     """One reward observation, divided equally among recipe families; revisions replace it."""
+    settings = effective(conn, settings)
     if not settings.enabled or not settings.bandit or not arms.available(conn):
         return False
     row = conn.execute("SELECT r.guid,r.value,r.cap_weight,r.revision,c.ts,p.arm_ids,p.bandit_context,"
@@ -176,6 +178,7 @@ def update(conn, line_id, *, settings=LearnCfg(), now=None):
 
 def retirement_candidates(conn, *, settings=LearnCfg()):
     """Night's worker-owned read: pool screened attempts across members and contexts."""
+    settings = effective(conn, settings)
     if not settings.enabled or not settings.bandit or settings.freeze:
         return []
     stats = {aid:[n,bad] for aid,n,bad in conn.execute(
@@ -198,7 +201,13 @@ def retirement_candidates(conn, *, settings=LearnCfg()):
 
 def retire(conn, candidates):
     """Night-only bounded write after retirement_candidates runs off the event loop."""
+    cfg = effective(conn)
+    if cfg.freeze:
+        return
     for aid,n,cn,rate,control in candidates:
+        row = conn.execute('SELECT family FROM learn_arm WHERE id=?', (aid,)).fetchone()
+        if row is None or row[0] in cfg.frozen_families:
+            continue
         changed=conn.execute("UPDATE learn_arm SET status='retired' WHERE id=? AND status='active'",(aid,)).rowcount
         if changed:
             log('bandit_guard_retired',arm_id=aid,attempts=n,control_attempts=cn,rate=rate,control_rate=control)
@@ -206,14 +215,15 @@ def retire(conn, candidates):
 
 def reject(conn, guid, context, selected, *, attempt_id, reason):
     """Task 39's send guards can report unsent drafts without inventing a chat/reward row."""
-    if not enabled(context.settings, guid) or not arms.available(conn):
+    cfg = effective(conn, context.settings)
+    if not enabled(cfg, guid) or not arms.available(conn):
         return False
     if reason not in ("guard", "content") or not isinstance(attempt_id,str) or not 1 <= len(attempt_id) <= 64:
         raise ValueError("bandit_rejection_invalid")
     registry = {a.id:a for a in arms.read(conn)}
     if not selected or any(f not in arms.FAMILIES or a not in registry or registry[a].family != f for f,a in selected.items()):
         raise ValueError("bandit_rejection_invalid")
-    active=[aid for family,aid in selected.items() if family not in context.settings.frozen_families]
+    active=[aid for family,aid in selected.items() if family not in cfg.frozen_families]
     for aid in active:
         conn.execute("INSERT OR IGNORE INTO bandit_rejection VALUES (?,?,?,?,?)", (attempt_id,aid,guid,context.key,reason))
     return bool(active)

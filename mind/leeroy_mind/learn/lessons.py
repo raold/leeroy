@@ -48,18 +48,33 @@ def screen(item, *, scope, persona, ident, world_romance=0):
     return {**item,'text':text}
 
 
-def persist(conn, guid, result, *, known, night, now, automatic):
+def persist(conn, guid, result, *, known, night, now, automatic, settings=None, expected=None):
+    from .control import frozen, vetoed
+    if frozen(conn,settings):
+        return
+    changed = set()
+    for ident, snapshot in (expected or {}).items():
+        row=conn.execute('SELECT status,expires,reinforced FROM talk_lesson WHERE id=? AND guid=?',
+                         (ident,guid)).fetchone()
+        if row is None or tuple(row)!=tuple(snapshot):
+            changed.add(ident)
     # The model may only address the member/scope's displayed current IDs.
     for ident in result['drop']:
-        if ident in known:
+        if ident in known and ident not in changed and not vetoed(conn, 'lesson', ident):
             conn.execute('UPDATE talk_lesson SET expires=? WHERE id=? AND guid=?',(now,ident,guid))
     for ident in set(result['reinforce'])-set(result['drop']):
-        if ident in known:
-            conn.execute('UPDATE talk_lesson SET reinforced=reinforced+1,expires=? WHERE id=? AND guid=?',
-                         (now+14*DAY,ident,guid))
+        if ident in known and ident not in changed and not vetoed(conn, 'lesson', ident):
+            # An owner can expire this lesson while the coach is generating. A
+            # stale reinforcement must not revive it (and bypass the active cap).
+            conn.execute('UPDATE talk_lesson SET reinforced=reinforced+1,expires=? WHERE id=? AND guid=? AND expires>?',
+                         (now+14*DAY,ident,guid,now))
     for item in result['lessons']:
         old=conn.execute('SELECT id,expires FROM talk_lesson WHERE guid=? AND scope=? AND text=?',
                          (guid,item['scope'],item['text'])).fetchone()
+        if old and (old[0] in changed or vetoed(conn, 'lesson', old[0])):
+            continue
+        if old and old[0] in known and old[1]<=now:
+            continue  # the current lesson changed/expired after this coach read it
         if old and old[0] in result['drop']:
             continue  # dropping and proposing the same note cannot resurrect its lifetime
         if old and old[1]>now:

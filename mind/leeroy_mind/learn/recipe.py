@@ -50,7 +50,10 @@ def called_model(meta, model):
         meta.recipe_snapshot = replace(snapshot, model_id=model)
 
 
-def record(conn, line_id, turn, meta, persona, config):
+def record(conn, line_id, turn, meta, persona, config, *, settings=None):
+    from .control import frozen
+    if frozen(conn,settings):
+        return False
     anchor = getattr(meta, "recipe_line_id", None)
     if anchor is not None and conn.execute(
             "SELECT 1 FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id "

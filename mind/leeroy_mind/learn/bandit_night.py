@@ -1,6 +1,7 @@
 """Model-free, revision-aware bandit receipts after rewards."""
 from . import arms, bandit
 from .config import load_learn_config
+from .control import effective
 from .night import read_work
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.logs import log
@@ -27,7 +28,7 @@ def attach(runner, data_dir, store=None):
 async def stage_bandit(ctx):
     if not ctx.settings.learn_bandit or not ctx.settings.learn_enabled or not arms.available(ctx.store.conn):
         return
-    cfg = load_learn_config(ctx.settings.data_dir / "mind.toml")
+    cfg = effective(ctx.store.conn, load_learn_config(ctx.settings.data_dir / "mind.toml"))
     if not cfg.enabled or not cfg.bandit or cfg.freeze:
         return
     if not ctx.done('bandit','registry'):
