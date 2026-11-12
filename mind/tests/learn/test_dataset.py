@@ -189,7 +189,9 @@ def test_followup_vote_and_burst_crossing_holdout_boundary(data):
     fragment=add(data,'follow-up clause',ts=data.before+2)
     with data.store.transaction():
         data.store.conn.execute('CREATE TABLE IF NOT EXISTS talk_recipe_line(line_id INTEGER PRIMARY KEY,recipe_line_id INTEGER)')
-        data.store.conn.executemany('INSERT INTO talk_recipe_line VALUES (?,?)',[(first,first),(fragment,first)])
+        data.store.conn.execute("INSERT OR IGNORE INTO talk_recipe(line_id,template_id,template_version,dials_hash,"
+                                "model_id,guard_verdict) VALUES (?,'t',?,?,'m','not_run')",(first,'0'*16,'0'*64))
+        data.store.conn.executemany('INSERT OR REPLACE INTO talk_recipe_line VALUES (?,?)',[(first,first),(fragment,first)])
         data.store.conn.execute('DELETE FROM talk_signal WHERE line_id=?',(first,))
         feedback(data.store.conn,dict(line_id=fragment,value=1,reasons=[]),1,data.before+3)
     pairs=mine(data)[0]

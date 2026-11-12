@@ -257,6 +257,9 @@ back to compiled-in defaults. `ac-update.sh` reports them.
 
 ## Scripts
 
+`ac-server.sh start` keeps the newest ten timestamped AppenderFile rotations per
+native `.log` basename beside the binaries; active logs and unrelated files stay.
+
 Run from `F:\azerothcore\scripts` in Git Bash.
 
 ```bash
@@ -708,6 +711,18 @@ Food and drink are filled independently so existing food cannot crowd out missin
 water; shifted druids retain drink coverage. Audited factory helpers add potions
 and class consumables.
 
+`Leeroy.CastDeathLoop.Enable` (default 0, `.reload config`) enables a separate
+world-thread rescue for pinned cast members. Three observed deaths within 15 minutes
+while solo, outside instances/BGs and without a Realm/training owner make a member
+eligible once alive and out of combat. It teleports to the homebind, never resurrects,
+and bounds attempts to five per rolling 15 minutes and one per member per hour.
+Observations still run once a second. Group invitations, BG queues, transit, trade,
+duels and pending commands block rescue without erasing deaths. Alive for a full
+minute more than 100 yards from the last death (or on another map) ends the loop;
+old deaths also age out after 15 minutes. Training cleanup logs one skip per fence.
+Invalid homebinds and refused teleports log once per member/reason; rescue resets
+the bot AI and motion before teleporting. Logs carry only ids, counts and codes.
+
 Local commits `41386b71` and `a8f5d378` (first built 2026-10-31) keep pins quiet: for a
 pinned bot three `TellMaster` lines are skipped, "AI was reset to defaults"
 (`ResetAiAction`, which playerbots runs on "group set leader") and the
@@ -821,11 +836,24 @@ It compiles clean and the BG registers, but in-game behaviour is unverified.
 
 ## The mind service (`leeroy_mind`)
 
+The launcher rotates a prior day's `mind-stdout.log` before starting the child,
+keeping 14 backups. The child inherits append handles for stdout and stderr, so
+import errors, launcher failures, tracebacks and OS-level writes remain visible.
+The file is not renamed while the child is running; restart picks up rotation.
+
+The live prompt budget is 1800 estimated input tokens (four characters per token),
+with Orion's context still 4096 and output allowance 80. Fixed late-whisper instructions
+can reach about 480 tokens before context, so the old 1300 budget crowded out memories
+and recent lines. Last-resort warnings now include each section's token count, never
+its text. The prompt's privacy gates and mandatory evidence/instructions are unchanged.
+
 - Talk awareness and guards are separately opt-in: `[talk] aware = true` adds a
   scoped observation card inside the live prompt budget; `[guards] enabled = true`
   reviews model drafts, allows one screened retry, and records delivery rations.
   Deterministic announcements bypass model guards. Answers owed to the owner use
-  advisory verdicts; hard content/name/slash screens still apply. Discord cards
+  advisory verdicts for private replies, named replies, pushback and emotes at him;
+  public bystanders can be dropped. Hard content/name/slash screens still apply.
+  Cards shrink by section to fit the budget; workers use detached world inputs. Discord cards
   and guards omit game-state evidence. `[claims] enabled = true` supplies claim
   evidence and enables its night stage in both runners.
   See `mind/leeroy_mind/guards/README.md` for bounds and fake rehearsal results.
@@ -884,6 +912,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   live: they load another large model next to the live one and evict it.
 - Optional `[learn] enabled = true` records generation recipes in a savepoint
   alongside outgoing chat and attaches the capped `rewards` night stage.
+  A burst now has one recipe and one score, pooling its fragments' feedback after
+  the last fragment's observation window. A later fragment vote revises that score.
+  Reward planning learns lexical and embedding costs separately from completed
+  units; it no longer reserves a fixed 1,000 seconds for every 500-line batch.
   Read at startup: restart the mind after changing it. Missing/invalid settings
   mean off; signals remain separately opt-in. Rewards screen game quality independently of the signals cap, including CLI nights,
   after the 120-second observation window. Discord and voice rooms score measured
@@ -905,11 +937,36 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   in the reward night. A private per-install meta key keeps member hashes stable
   across exports. See `mind/leeroy_mind/learn/FINETUNE.md` for
   privacy flags, coverage limits and optional manual training instructions.
+  `[learn] coach = true` adds a reflection-model coaching stage after rewards,
+  at most 20 members with ten rewarded lines that day. Lessons stay proposed
+  unless `auto_lessons = true`; at most five are active per member and expire
+  after 14 days without reinforcement. `learn lessons [--guid N]` prints them
+  read-only. Private evidence produces private lessons; this stage does not yet
+  inject lessons into live talk. Restart after changing these switches.
+- Optional `[learn] bandit = true` (also needs `enabled`) attaches model-free arm
+  credit after rewards. `freeze` and `frozen_members` stop selection/credit;
+  `frozen_families` select control and receive no credit, rejection or retirement,
+  while other families keep learning. Restart after edits. `python -m leeroy_mind learn arms` inspects
+  posteriors/shares read-only. Live arm selection remains for the learning wiring
+  task; this switch alone changes no prompt. Parameters contain no instruction text.
 - Optional `[talk] realism = true` adds bounded typing cadence, rare corrections and
   small reply bursts; default off, read at mind start and each login. Mind-only:
   no migration or native rebuild. It preserves authored/altered-state typing,
   excludes raid-event turns, and drops stale follow-ups after a newer line from
   that member. See `mind/leeroy_mind/talk/README.md` for budgets and busy evidence.
+- Optional `[banter] enabled = true` starts public guild/Discord-General riffs on restart;
+  `per_hour` defaults to 2 (0 pauses, maximum 12). Invalid settings mean off.
+  Each admitted thread has 2–4 members and at most 3–8 planned lines, ending early
+  on refusal, an owner line in that medium, a five-man boss fight or raid combat/wipe/debrief. Cards and
+  deterministic guards are required for these turns; fingerprint hints and existing
+  typing apply. New topics wait 45 seconds after his line, and owner death/loot
+  teasing is limited to one thread per local evening. The night (including manual
+  nightly runs) reuses origin-backed lexicon jokes; rewarded funny-line ingestion
+  becomes available with task 30's reward tables. No migration or native rebuild.
+  Banter requires his game presence or existing Discord desk lease and never takes
+  a GPU lease. Chattiness scales spacing (0 pauses); talkative 0 excludes a member.
+  Joke threads are limited to one per evening, with a three-day rest and fading use.
+  See `mind/leeroy_mind/banter/README.md` for scopes and interruption behavior.
 - Optional `[fingerprint] enabled = true` attaches a model-free typing-profile stage
   on restart (also in `nightly run`). Missing/invalid settings mean off. It measures
   the last 300 mind-origin lines, or seeds a documented persona prior below 50.
@@ -1184,10 +1241,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   with the folds and read marks, `guild-console-collapsed` and
   `guild-console-read`). Beside it, Hide photos (`guild-console-photos`, applied before the first
   paint) draws every member's face as initials without asking for the photo, and blanks any
-  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel
-  (`guild-console-comms-panel`, also applied before the first paint; `comms/panel.mjs`) removes the
-  right column (the room's faces and the member card) so the feed takes its width; clicking a
-  member's face shows it again with their card. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
+  other photo (the gallery, the selfie picker) until it is switched back. Comms' Hide panel, in that
+  panel's top corner (`guild-console-comms-panel`, also applied before the first paint;
+  `comms/panel.mjs`), removes the right column (the room's faces and the member card) so the feed
+  takes its width; Show panel in the feed's top corner, or clicking a member's face, brings it back. It has 14 tabs (Comms, Raid, Guild, Personas, Social,
   Board, Calendar, Bank, Realm, Training, Dojo, Library, Ops, Mind); each polls only
   while it is open and the page is visible, one request at a time. Ordinary reads have a
   30 s browser deadline, actions 120 s (long enough for a clean stop); an unanswered action
@@ -1361,6 +1418,16 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
 
 ## The guild's Discord (`leeroy_mind.discord`)
 
+- `[server] enabled = true` reserves the live model outside `quiet_window =
+  ["03:00", "08:00"]` (local time). Nights begin only in that window after the
+  existing offline grace; a running night may continue for one extra hour, then
+  pauses for the next window. The photo booth waits for the server lease to end.
+  A pre-06:00 window retains the preceding reporting date for nightly stages;
+  that date stays fixed across the whole window. Host DST rules apply at each
+  boundary, and planning keeps its admitted cutoff across model preflight.
+  Voice releasing the GPU restores the server's pin when it still holds a lease.
+  Restart the mind after changing this switch or window. The table defaults off;
+  an invalid table disables it. This clock does not yet start autonomous posts.
 - Comms includes a local guild server above the separate **From WoW** and voice
   sections. It uses no external Discord API. `GET /api/discord` returns its channel
   layout, member roles/presence, DMs and an optional message window with quotes,
@@ -1411,8 +1478,10 @@ D=F:/azerothcore/mind-data                                  # pass --data-dir "$
   LLM and model admin: channel answer, named and officer-only replies, reaction and
   DM, both after logout and before the first bridge cast; no game `say`, clean shutdown.
 - D1 is owner-triggered conversation, with optional pre-send guard review and
-  scoped awareness cards. Autonomous chatter, broader member reactions, topics,
-  photos, decisions and culture remain later phases.
+  scoped awareness cards. `[banter] enabled = true` also permits bounded General
+  riffs while he is in game or his desk lease is already held; it never takes a
+  lease or moves game activity clocks. Offline autonomous chatter, broader member
+  reactions, photos, decisions and culture remain later phases.
 
 ## The Realm (`leeroy_mind.realm`)
 
@@ -1421,6 +1490,15 @@ progression rival he names, a drama farm, Alliance gankers), their officers' rat
 Trade and General and the gankers' emotes, the race for first kills, canon achievement grants,
 the guild bank, the guild calendar, mail to him, the kick guard and the realm's night stage.
 Its rows are the `realm_*` tables of `mind.db` (migrations 0009-0016).
+
+`[romance] activities = true` enables private shared moments/moods and bounded inn invitations
+(default false). Moods reach prompts only with `[talk] aware = true`. Invitations require Realm
+enabled, a native rebuild and a mind restart; the supported activity is meeting and sitting
+at a whitelisted inn. Limits use local calendar days; Discord never accepts or moves a body.
+See `mind/leeroy_mind/bond/README.md` for privacy, expiry and exactly-once recovery.
+Install the new bond migration before enabling it.
+Invitation ticks check at most one candidate's body ledger after cheap gates. Map evidence
+comes from Cast, in-game chat and death events; Zone carries no map and keeps the last one.
 
 - **Off by default, two switches; this install runs it on.** `[realm] enabled = true` in `mind.toml` (read again at each
   hello and login) and native `Leeroy.Realm.Enable = 1` in `mod_leeroy.conf` (`.reload config`;
@@ -1917,3 +1995,5 @@ apart from this install. Read `dojo/README.md` before touching it.
 - `mod-bg-slaveryvalley` server data + client patch (above).
 - Zip-sourced modules (transmog, individual-progression, slaveryvalley) have no
   update path; converting them to git clones would let `ac-update.sh` cover them.
+
+The talk coach rotates eligible members and screens notes against effective romance dials. Its prompts/nightly_talk_coach.txt overlay retains nightly invariants; context is bounded. Arm proposals are deduplicated across statuses and capped at five each night.

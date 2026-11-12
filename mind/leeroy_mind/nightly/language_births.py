@@ -1,16 +1,16 @@
 """Public running jokes and one checked lexicon proposal per laughed-at moment."""
 import json
-import re
 
 from leeroy_mind.nightly import lexicon
 from leeroy_mind.nightly.audience import cast_names
-from leeroy_mind.nightly.evidence import Evidence, load_facts, load_items
-from leeroy_mind.nightly.ground import Claim, Verdict, check, log_verdicts
+from leeroy_mind.nightly.evidence import load_facts
+from leeroy_mind.nightly.ground import Verdict, log_verdicts
 from leeroy_mind.nightly.llm import schema, system_prompt
+from leeroy_mind.nightly.language_screens import evidence as _evidence, screen as _screen, clean as _clean
 from leeroy_mind.nightly.reactions import LAUGH_RE, laughs_at
 from leeroy_mind.nightly.stories import find_moments
 from leeroy_mind.personas.screens import redact_real_name
-from leeroy_mind.text import strip_wow_markup, truncate_words
+from leeroy_mind.text import truncate_words
 
 STAGE = "language"
 JOKE_LAUGHS = 2
@@ -89,30 +89,6 @@ def find_jokes(store, window, *, limit=5):
         found.sort(key=lambda pair: (-len(pair[1]), pair[0]))
         return found[:max(0, limit)]
 
-
-def _evidence(ctx, refs):
-    ev = Evidence()
-    for item in load_items(ctx.store, refs, ident=ctx.ident):
-        ev.add(item)
-    return ev
-
-
-def _clean(text):
-    return " ".join(strip_wow_markup(text).split())
-
-
-def _screen(ctx, kind, owner, raw, refs, ev, facts):
-    """Screen raw input first: cleanup or truncation must not hide a prohibited suffix."""
-    # WoW's texture/link opener is glued to its payload (|TName|t). Make only that
-    # structural boundary visible to the ordinary case-sensitive real-name matcher;
-    # retain the entire payload so stripping it cannot hide names or other invariants.
-    screened_raw = re.sub(r"\|([TH])", r"|\1 ", raw)
-    claim = Claim(kind, owner, screened_raw, list(refs))
-    verdict = check(claim, ev, facts)
-    if not verdict.ok:
-        return claim, verdict
-    claim = Claim(kind, owner, _clean(raw), list(refs))
-    return claim, check(claim, ev, facts)
 
 
 def jokes(ctx):

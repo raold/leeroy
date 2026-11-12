@@ -56,7 +56,8 @@ def test_failed_precount_preserves_the_night_plan_without_private_error(context,
 
 
 def test_reward_budget_reserves_screening_and_optional_embedding_time():
-    assert budget.estimate({"rewards":500},measured={})["rewards"]>=500
+    assert budget.estimate({"rewards":500},measured={})["rewards"] == 10
+    assert budget.estimate({"rewards":500},measured={},unit_seconds={"rewards":.04})["rewards"] == 20
 
 
 def test_night_stores_silence_and_negative_responses_as_ruled(context,store,clock,tmp_path):

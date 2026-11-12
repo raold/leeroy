@@ -46,6 +46,7 @@ class CallbackContext:
     # Captured current room audience, required for non-guild/non-whisper rooms.
     readers: tuple[int, ...] | None = None
     embedding: bytes | None = None  # existing 512d memory-model vector, never computed here
+    bond_enabled: bool = False  # the caller's [romance] activities switch and current pair eligibility
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,13 @@ class _Privacy:
             elif kind == "event":
                 # Public game observations only; no payload text is read or rendered.
                 ok = row["ts"] <= self.now and row["type"] in {"boss", "death", "loot_won", "achievement", "bg_end", "zone"}
+                if row['type'] == 'mail_taken' and self.ctx.channel == 'whisper' and row['ts'] <= self.now:
+                    payload = _json(row['payload'], {})
+                    owner = _rows(self.conn, "SELECT value FROM meta WHERE key='human_guid'")
+                    if (owner and str(self.ctx.to_guid) == owner[0]['value'] and isinstance(payload, dict)):
+                        ok = bool(_rows(self.conn, "SELECT 1 FROM realm_mail WHERE sender=? AND item_guid=? "
+                            "AND state='taken' AND taken BETWEEN ? AND ? LIMIT 1",
+                            (self.guid, payload.get('item_guid'), row['ts']-2, row['ts']+2)))
             else:
                 ch = row["channel"]
                 audience = _json(row.get("audience"))
@@ -226,6 +234,8 @@ def _pick(conn, guid, ctx, now):
     query = _vector(ctx.embedding)
     picks = []
     for row in rows:
+        if (row.get('key') or '').startswith('bond:') and ctx.bond_enabled is not True:
+            continue
         actors = _json(row["actors"])
         if not _ids(actors) or not (set(actors) & (set(ctx.present) - {guid})):
             continue

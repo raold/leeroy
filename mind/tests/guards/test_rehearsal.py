@@ -60,7 +60,7 @@ async def run_mode(root, enabled):
                     session_id=None,origin="human",audience=(101,102,103,104,105))
                 engine.world.add_line(store.chat_lines([parent])[0],clock.now())
                 turn = Turn(TurnKind.REPLY_HUMAN,guid,"guild",addressee=1,trigger_line=parent)
-                meta = TurnMeta(f"rehearsal-{guid}",answers_human=True)
+                meta = TurnMeta(f"rehearsal-{guid}",answers_human=True,why="reply:named")
                 task = asyncio.create_task(engine._speak(turn,meta))
                 for _ in range(100):
                     await clock.advance(1)

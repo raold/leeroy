@@ -43,7 +43,7 @@ def test_owed_fallback_is_not_a_rewrite_pair(rig,monkeypatch):
         return Verdict('rewrite',('gag_daily_cap',) if len(calls)==1 else ('gag_daily_cap','claim_conflict'))
     monkeypatch.setattr(live,'review',checked)
     rig.script('the ferry leaves at seven','bring a flask for the trip')
-    sent,meta=speak(rig,turn())
+    sent,meta=speak(rig,turn(),TurnMeta('owed',why='reply:named',answers_human=True))
     assert sent and not meta.preference_original
     assert rig.store.conn.execute('SELECT count(*) FROM learn_rewrite').fetchone()[0]==0
     assert dataset.mine(rig.store.conn,rig.engine.human,since=0,until=rig.clock.now()+1)[0]==[]

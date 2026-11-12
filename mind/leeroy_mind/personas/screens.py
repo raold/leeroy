@@ -9,6 +9,7 @@ from ..human import HumanIdentity
 ROMANCE_RE = re.compile(
     r"(?<!\w)(?:crush(?:es|ed|ing)?\s+on|a\s+crush|flirt(?!\w*\s+with\s+(?:disaster|danger))\w*"
     r"|in\s+love|dating(?!\s+back)|girlfriend|boyfriend|ex-wife|ex-husband|slept\s+with"
+    r"|asks?\s+(?:him|her|them)\s+out(?:\s+on\s+a\s+date)?|babe|sweetheart|darling"
     r"|kiss(?!\w*\s+up)(?!(?:es)?\s+of\s+death)\w*|hook(?:ed|ing|s)?\s+up|fling"
     r"|romanc\w*|(?:his|her|their|secret|ex)[\s-]+lover"
     r"|fancies(?!\s+(?:him|her|them)sel(?:f|ves))|fancy\s+(?:him|her)"

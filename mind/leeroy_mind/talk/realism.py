@@ -174,7 +174,7 @@ class Realism:
         out, burst = list(lines), False
         if (busy or not safe) and len(out) > 1:
             out = out[:1]  # keep the complete first styled line; no invented busy excuse
-        elif safe and not busy and len(out) == 1 and len(out[0].plain.split()) >= 18 \
+        elif safe and not busy and not meta.single_line and len(out) == 1 and len(out[0].plain.split()) >= 18 \
                 and now-state.burst_at >= BURST_GAP and rng.random() < BURST_RATE:
             out = split_line(out[0])
             burst = len(out) > 1
@@ -186,7 +186,7 @@ class Realism:
         desired = [duration(s.line, wpm, rng, first=i == 0, busy=busy) * delay_mult +
                    (rng.uniform(.8, 2) if i else 0) for i, s in enumerate(out)]
         correction, correction_delay = "", 0.0
-        if safe and not busy and len(out) < 3 and state.credit >= 1 and rng.random() < CORRECTION_RATE:
+        if safe and not busy and not meta.single_line and len(out) < 3 and state.credit >= 1 and rng.random() < CORRECTION_RATE:
             chosen = typo(out[-1], engine._protect(turn.channel), rng)
             if chosen is not None:
                 out[-1], correction = chosen

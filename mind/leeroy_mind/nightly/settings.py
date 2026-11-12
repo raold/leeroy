@@ -16,8 +16,8 @@ _NIGHT_STARTS = time(6)
 
 @dataclass(frozen=True)
 class NightlySettings:
-    """From the config: the models, the Ollama URL and the knobs. romance_dial is reported only,
-    never read for a decision; female_share is the cast mix the weekly report compares
+    """From the config: the models, the Ollama URL and the knobs. romance_dial also bounds
+    learned coach notes (with the frozen world overlay); female_share is the cast mix the weekly report compares
     against. The rest are P1c's constants."""
     live_model: str
     reflection_model: str
@@ -30,8 +30,12 @@ class NightlySettings:
     wow_vs_life: int
     female_share: float
     data_dir: Path
+    quiet: tuple[time, time] | None = None
     learn_enabled: bool = False
+    learn_coach: bool = False
+    learn_bandit: bool = False
     looks_diversity: bool = False
+    romance_activities: bool = False
     grace_minutes: int = 10
     retry_minutes: int = 60
     max_attempts: int = 3
@@ -111,9 +115,11 @@ def load_life(path: Path) -> int:
 
 
 def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
+    from leeroy_mind.server.config import load_server_config
     from leeroy_mind.learn.config import load_learn_config
     from leeroy_mind.personas.looks_diversity import enabled
     data_dir = Path(data_dir)
+    server = load_server_config(data_dir / "mind.toml")
     from leeroy_mind.world.config import load as load_world
     world = load_world(data_dir / "mind.toml")
     return NightlySettings(
@@ -123,9 +129,12 @@ def load_settings(cfg: MindConfig, data_dir: Path) -> NightlySettings:
         jealousy=cfg.romance.jealousy, chattiness=cfg.talk.chattiness,
         wow_vs_life=load_life(data_dir / "mind.toml"), female_share=cfg.cast.female_share,
         data_dir=data_dir, learn_enabled=load_learn_config(data_dir / "mind.toml").enabled,
+        learn_coach=load_learn_config(data_dir / "mind.toml").coach,
+        learn_bandit=load_learn_config(data_dir / "mind.toml").bandit,
         world_per_night=world.world_per_night,
         world_selfies_per_night=world.world_selfies_per_night,
-        looks_diversity=enabled(data_dir))
+        looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None,
+        romance_activities=cfg.romance.activities)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

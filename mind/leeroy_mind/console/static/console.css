@@ -154,11 +154,15 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
   grid-template-rows: minmax(0, 1fr); gap: 18px; padding: 18px 16px; width: 100%; max-width: 1600px;
   margin: 0 auto; }
 .comms > .panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-/* Hide panel: the feed takes the right column's width; at narrower widths the panel (which sits
-   under the others there) is simply gone */
-.feedpanel { position: relative; }
+/* Hide panel, in the right column's top corner: the feed takes that column's width; at narrower
+   widths the panel (which sits under the others there) is simply gone. While it is, Show panel
+   takes the feed's top corner. */
+.feedpanel, .comms > .panel.right { position: relative; }
 .panel-toggle { position: absolute; top: 14px; right: 16px; }
-.feedpanel > #feed-title, .feedpanel > #feed-hint { padding-right: 120px; }  /* clear of the button */
+.panel-show { display: none; }
+html[data-comms-panel="hidden"] .panel-show { display: block; }
+#here-title, #dc-members > h3:first-child { padding-right: 110px; }  /* clear of the button */
+html[data-comms-panel="hidden"] .feedpanel > #feed-title, html[data-comms-panel="hidden"] .feedpanel > #feed-hint { padding-right: 120px; }
 html[data-comms-panel="hidden"] .comms > .panel.right { display: none; }
 @media (min-width: 1101px) { html[data-comms-panel="hidden"] .comms { grid-template-columns: 260px minmax(0, 1fr); } }
 @media (min-width: 721px) and (max-width: 1100px) { html[data-comms-panel="hidden"] .comms { grid-template-rows: minmax(420px, 70vh); } }

@@ -77,8 +77,8 @@
       </aside>
       <section class="panel feedpanel" aria-labelledby="feed-title">
         <h3 id="feed-title"># guild</h3>
-        <button id="c-panel" type="button" class="panel-toggle" aria-controls="comms-right"
-                aria-expanded="true">Hide panel</button>
+        <button id="c-panel-show" type="button" class="panel-toggle panel-show" aria-controls="comms-right"
+                aria-expanded="false">Show panel</button>
         <p id="feed-hint" class="hint"></p>
         <div id="dc-tools" hidden>
           <button id="dc-back" type="button" hidden>Back to channel</button>
@@ -107,6 +107,8 @@
         </div>
       </section>
       <aside id="comms-right" class="panel right" aria-labelledby="here-title">
+        <button id="c-panel" type="button" class="panel-toggle" aria-controls="comms-right"
+                aria-expanded="true">Hide panel</button>
         <section id="dc-members" aria-label="Guild Discord members" hidden></section>
         <div class="here">
           <h3 id="here-title">Not in a voice room</h3>

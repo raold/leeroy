@@ -49,6 +49,7 @@ class _Entry:
     command: object
     context: ActionContext
     callback: object = None
+    still_valid: object = None
 
 
 def _live(c):
@@ -87,7 +88,7 @@ class ActionQueue:
         record = self.store.get(cmd.id)
         return record is not None and record.payload == c.payload
 
-    def _enroll(self, cmd, owner, on_done, *, probe=False):
+    def _enroll(self, cmd, owner, on_done, *, probe=False, still_valid=None):
         c = self._context(); classified = classify(cmd)
         if self.closed or not _live(c): raise ActionRejected("disabled")
         if self.off and not probe and classified.policy != "defaults": raise ActionRejected("realm_off")
@@ -102,7 +103,7 @@ class ActionQueue:
             raise ActionRejected("backoff")
         record = self.store.prepare(ActionSpec(cmd.id, None, "root", classified.policy, owner, rank,
                  classified.kind, classified.payload, classified.reserved_manifest, c.guild, c.human), now=now)
-        entry = _Entry(cmd, c, on_done)
+        entry = _Entry(cmd, c, on_done, still_valid)
         self._entries[cmd.id] = entry; self._pending[cmd.id] = entry
         self.wake()
         return record.command_id
@@ -137,7 +138,7 @@ class ActionQueue:
             named |= set(skipped_backoff(old, now))
         return named
 
-    def submit(self, cmd, *, owner, guids=(), on_done=None, freeing=False):
+    def submit(self, cmd, *, owner, guids=(), on_done=None, freeing=False, still_valid=None):
         classified = classify(cmd)  # Reject malformed business fields before journaling.
         supplied = members(guids, 0)
         if supplied and tuple(sorted(supplied)) != classified.reserved_manifest:
@@ -146,7 +147,8 @@ class ActionQueue:
         if freeing and type(cmd) not in {LeavePvp, Rearm}: raise AssertionError("freeing requires LeavePvp or Rearm")
         if on_done is not None and not callable(on_done): raise ValueError("invalid action callback")
         # freeing grants no scheduling or retained-ownership bypass.
-        return self._enroll(cmd, owner, on_done)
+        if still_valid is not None and not callable(still_valid): raise ValueError('invalid action predicate')
+        return self._enroll(cmd, owner, on_done, still_valid=still_valid)
 
     def request_cleanup(self, origin_id):
         c = self._context()
@@ -241,6 +243,8 @@ class ActionQueue:
         if sum(r.transport_state == "inflight" for r in self.store.records()) >= 8: raise ActionRejected("transport_capacity")
         times = self._query_times if record.role == "query" else self._body_times if record.reserved_manifest else None
         if times is not None and not self._paced(times, now): raise ActionRejected("paced")
+        if entry.still_valid is not None and not entry.still_valid(): raise ActionRejected('intent_expired')
+        c, record = self._dispatch_entry(cmd, entry)
         # The successful commit must precede the direct transport. Commit errors
         # escape this hook and prevent writer.write.
         self.store.begin_dispatch(cmd.id, payload=classify(cmd, child=True).payload,

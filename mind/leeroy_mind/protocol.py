@@ -452,7 +452,8 @@ def sanitize_say_text(text: str) -> str:
 def _jsonable(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return {_key(f.name): _jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)
-                if not (f.metadata.get("omit_none") is True and getattr(value, f.name) is None)}
+                if not (f.metadata.get("omit_none") is True and getattr(value, f.name) is None)
+                and not (f.metadata.get("omit_default") is True and getattr(value, f.name) == f.default)}
     if isinstance(value, (tuple, list)):
         return [_jsonable(v) for v in value]
     return value

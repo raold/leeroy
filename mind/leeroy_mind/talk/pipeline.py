@@ -273,6 +273,7 @@ class TurnMeta:
     topic: str = ""
     answers_human: bool = False
     whisper_reply: bool = False
+    first_question_answer: bool = False
     rivalry: bool = False
     loot_cheer: bool = False
     settled: bool = False
@@ -283,6 +284,7 @@ class TurnMeta:
     realism_correction_until: float = 0
     realism_sequence: int = 0
     realism_planned: bool = False
+    realism_review_lines: tuple[str, ...] = ()
     realism_own: tuple[str, int, str] | None = None
     follow_up: bool = False
     aside: object | None = None
@@ -291,6 +293,7 @@ class TurnMeta:
     memory_ids: list[int] = field(default_factory=list)
     llm_s: float | None = None  # the model's time on this turn, its retry included
     recipe_snapshot: object | None = None  # optional numeric/identifier attribution at composition
+    recipe_line_id: int | None = None  # first acknowledged fragment of this generation
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
@@ -354,6 +357,9 @@ class TurnMeta:
     preference_original: str = field(default='',repr=False)
     preference_generation: str = ''
     guard_codes: tuple[str,...] = ()
+    review_required: bool = False  # opt-in sources require their card and deterministic guards
+    single_line: bool = False  # a bounded multi-member conversation owns its line count
+    keep_channel: bool = False  # a public thread must stay on its chosen transport
 
 
 class _ScopeChanged(SchedulerError):
@@ -1057,12 +1063,16 @@ class Pipeline:
         present = list(dict.fromkeys(
             [r.from_guid for r in recent if r.from_guid and r.from_guid != turn.speaker]
             + ([hg] if hg and self.world.human_online else [])))
+        from leeroy_mind.bond.policy import eligible as bond_eligible
+        bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(p, self.cfg.romance.dial) else {}
         memories = [] if preview else await self.recall.recall(
             turn.speaker, query, present=present, addressee=turn.addressee, k=5,
-            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid)
+            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid, **bond_options)
         if meta.lore_memory and all(m.id != meta.lore_memory for m in memories):
             # the memory she answers his question from leads, even while it rests
-            memories = [*self.store.get_memories([meta.lore_memory]), *memories][:5]
+            pinned = self.recall._shareable(self.store.get_memories([meta.lore_memory]),
+                turn.speaker, turn.channel, turn.to_guid, **bond_options)
+            memories = [*pinned, *memories][:5]
 
         state = self.store.get_state(turn.speaker)
         altered = self._altered_of(turn.speaker)
@@ -1158,11 +1168,13 @@ class Pipeline:
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept)
-        if self.cfg.talk.aware:
+        if self.cfg.talk.aware or meta.review_required:
             try:
                 parts.awareness = await self.live_review.block_async(turn,meta,close=bool(real))
             except Exception:
                 log.warning("awareness_card_failed guid=%d",turn.speaker)
+                if meta.review_required:
+                    raise ValueError("awareness_unavailable") from None
         trimmed = trim_to_budget(redact_for(parts, human, bool(real)))
         if live:
             meta.offered_real_name, meta.romance = bool(real), bool(romance)
@@ -1323,7 +1335,7 @@ class Pipeline:
                 return self._drop(turn, meta, "no_channel")
         discord = is_discord(turn.channel)
         if discord:  # one message of up to three typed lines; a DM is always to him
-            turn.max_lines = DISCORD_LINES
+            turn.max_lines = 1 if meta.single_line else DISCORD_LINES
             self._dm_to_him(turn)
         p = self.personas.get(turn.speaker)
         if p is None:
@@ -1434,10 +1446,13 @@ class Pipeline:
         delay_mult = effects_for(self._altered_of(turn.speaker), turn.kind).delay_mult
         plan = None
         if self.realism.eligible(self, turn, meta):
+            meta.realism_review_lines = tuple(s.plain for s in lines)
             baseline = [typing_delay(s.line, p.typing.chars_per_sec, delay_mult, self.rng)
                         for s in lines]
             baseline[0] = self._first_typing(turn, baseline[0])
             plan = self.realism.plan(self, turn, meta, p, lines, baseline)
+            if not plan.burst:  # a busy plan may retain only the first complete line
+                meta.realism_review_lines = meta.realism_review_lines[:len(plan.lines)]
             meta.realism_planned = True
             lines = list(plan.lines)
         sent: list[Styled] = []
@@ -1507,9 +1522,9 @@ class Pipeline:
         return [s.line for s in sent]
 
     async def _guarded_lines(self, turn, meta, p, lines, composed, *, close, spoken=False):
-        if not self.live_review.config.enabled or turn.template is not None:
+        if not self.live_review.enabled(turn, meta):
             return lines
-        async with self.live_review.serial(turn):
+        async with self.live_review.serial(turn, meta):
             return await self._review_lines(turn,meta,p,lines,composed,close=close,spoken=spoken)
 
     async def _review_lines(self,turn,meta,p,lines,composed,*,close,spoken=False):
@@ -1642,7 +1657,7 @@ class Pipeline:
         """Where the turn goes now its channel is known (Comms.place, which also fills in
         whom it is to), and the one decision on whether it is spoken, for the model's turns
         and templates alike (C1). Voice off, down or failing, it is typed as in phase 1."""
-        if self.comms is None or meta.before_transport is not None or is_discord(turn.channel):
+        if self.comms is None or meta.before_transport is not None or meta.keep_channel or is_discord(turn.channel):
             return False
         if meta.typed_on is None and not turn.channel.startswith("voice:"):
             meta.typed_on = turn.channel, turn.to_guid
@@ -1875,7 +1890,7 @@ class Pipeline:
 
     async def _generate(self, turn: Turn, meta: TurnMeta, c: Composed, *,
                         spoken: bool = False, max_attempts: int = 2) -> tuple[str, str | None]:
-        async with self.live_review.serial(turn):
+        async with self.live_review.serial(turn, meta):
             return await self._generate_serial(turn,meta,c,spoken=spoken,max_attempts=max_attempts)
 
     async def _generate_serial(self, turn: Turn, meta: TurnMeta, c: Composed, *,
@@ -2142,10 +2157,15 @@ class Pipeline:
         The send itself is shielded: once the server may have the line, it is recorded. A turn
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
-        if self.live_review.config.enabled and turn.template is None and not meta.realism_correction:
-            verdict = await self.live_review.check(turn, meta, meta.words or text)
-            if verdict.action != "send" and not self.live_review.owed(turn,meta):
-                return "guard_changed_before_send"
+        if self.live_review.enabled(turn, meta) and not meta.realism_correction:
+            # Recheck the reviewed text after typing, before its first fragment. A
+            # fragment can look like filler by itself; later fragments inherit this
+            # verdict, while transport scope, sequence and busy fences still run.
+            candidates = (meta.realism_review_lines if first else ()) if meta.realism_planned else (meta.words or text,)
+            for candidate in candidates:
+                verdict = await self.live_review.check(turn, meta, candidate)
+                if verdict.action != "send" and not self.live_review.owed(turn,meta):
+                    return "guard_changed_before_send"
             if not self.live_review.valid(turn, meta):
                 return "scope_changed"
         async with self._timed_send_lock(meta):
@@ -2273,7 +2293,7 @@ class Pipeline:
         audience = self.world.audience(turn.channel, from_guid=turn.speaker,
                                        to_guid=turn.to_guid, zone=zone)
         learn = getattr(self, "learn_enabled", False) and not meta.realism_correction
-        review = self.live_review.config.enabled and not meta.realism_correction
+        review = self.live_review.enabled(turn, meta) and not meta.realism_correction
         if learn or review:
             with self.store.transaction():
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
