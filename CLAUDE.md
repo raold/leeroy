@@ -851,7 +851,9 @@ its text. The prompt's privacy gates and mandatory evidence/instructions are unc
   scoped observation card inside the live prompt budget; `[guards] enabled = true`
   reviews model drafts, allows one screened retry, and records delivery rations.
   Deterministic announcements bypass model guards. Answers owed to the owner use
-  advisory verdicts; hard content/name/slash screens still apply. Discord cards
+  advisory verdicts for private replies, named replies, pushback and emotes at him;
+  public bystanders can be dropped. Hard content/name/slash screens still apply.
+  Cards shrink by section to fit the budget; workers use detached world inputs. Discord cards
   and guards omit game-state evidence. `[claims] enabled = true` supplies claim
   evidence and enables its night stage in both runners.
   See `mind/leeroy_mind/guards/README.md` for bounds and fake rehearsal results.
