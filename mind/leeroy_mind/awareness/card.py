@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from leeroy_mind.bodies import ALL
 from leeroy_mind.claims.store import nearest
 from leeroy_mind.claims.visibility import claim_visible
-from leeroy_mind.discord.channels import is_private, is_discord, is_restricted
+from leeroy_mind.discord.channels import is_private, is_discord, is_restricted, same_medium
 from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
 from leeroy_mind.text import estimate_tokens, strip_wow_markup
@@ -372,7 +372,8 @@ def _claims(reader, guid, officer, ctx, now):
         readers = tuple(_ids(_json(line['audience']))) if line['audience'] is not None else None
         visible = (claim_visible(source_channel=line['channel'], source_from=line['from_guid'],
             source_to=line['to_guid'], source_readers=readers, draft_channel=ctx.channel,
-            speaker=guid, to_guid=ctx.to_guid, officer=officer, cross_medium=True) if ctx.server else
+            speaker=guid, to_guid=ctx.to_guid, officer=officer, cross_medium=True)
+            if ctx.server and not same_medium(line['channel'], ctx.channel) else
             _visible(line['channel'], line['from_guid'], line['to_guid'], guid, officer, ctx, readers))
         if not visible:
             continue
@@ -442,6 +443,8 @@ def _directed_emotes(reader, guid, human, ctx, now):
         if not isinstance(payload, dict) or payload.get('guid') != human or payload.get('target_guid') != guid:
             continue
         code = payload.get('emote')
+        if isinstance(code, str) and code in ROMANTIC_EMOTES and not (is_private(ctx.channel) and ctx.to_guid == human):
+            continue
         if isinstance(code, str) and _CODE.fullmatch(code):
             lines.append(f'Directed at you: Emote {code} from {_person(ctx,human)} {_when(ctx,row["ts"],now)}')
         if len(lines) == 4:

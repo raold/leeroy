@@ -70,3 +70,58 @@ def test_server_semantics_cannot_fail_open(tmp_path):
         assert result.action == 'drop' and result.codes == ('review_unavailable',)
     finally:
         run(app.stop())
+
+
+def test_cold_server_review_embeds_only_newest_32_texts_and_reuses_cache(tmp_path):
+    app = mind_app(tmp_path,toml='[server]\nenabled=true\n[guards]\nenabled=true')
+    try:
+        now = app.clock.now()
+        for i in range(120):
+            ds.post(app.store,channel='general',author=101 if i % 2 else 102,origin='mind',
+                    text=f'Invented channel evidence {i}',now=now-120+i)
+        calls = []
+        async def embed(texts, priority):
+            calls.append(texts)
+            return [pack_vec(unit(0)) for _ in texts]
+        app.engine.recall._embedder.embed = embed
+        live = app.engine.live_review
+        turn = Turn(TurnKind.OPEN,101,'discord:general')
+        meta = TurnMeta('bounded',why='server:purpose',server_anchor='Guild news',discord=DiscordTarget(None,None))
+        result = run(live.check(turn,meta,'The harbor reopens tomorrow'))
+        assert 'review_unavailable' not in result.codes
+        assert len(calls) == 1 and len(calls[0]) == 32
+        assert set(calls[0]) == {'The harbor reopens tomorrow','Guild news',
+                               *(f'Invented channel evidence {i}' for i in range(90,120))}
+        run(live.check(turn,meta,'The harbor reopens tomorrow'))
+        assert len(calls) == 1
+    finally:
+        run(app.stop())
+
+
+def test_here_uses_speaking_channel_and_state_reads_run_off_loop(tmp_path,monkeypatch):
+    import threading
+    from leeroy_mind.server import state as state_module
+    app = mind_app(tmp_path,toml='[server]\nenabled=true\n[talk]\naware=true')
+    try:
+        now = app.clock.now()
+        for channel,author in [('raids',101),('raids',102),('general',103)]:
+            ds.post(app.store,channel=channel,author=author,origin='mind',text='Invented update',now=now-5)
+        loop_thread, calls = threading.get_ident(), []
+        original = state_module.state_of
+        def checked(*args,**kw):
+            calls.append(threading.get_ident())
+            assert calls[-1] != loop_thread
+            assert kw['conn'] is not app.store.conn
+            return original(*args,**kw)
+        monkeypatch.setattr(state_module,'state_of',checked)
+        live = app.engine.live_review
+        turn = Turn(TurnKind.OPEN,101,'discord:general')
+        meta = TurnMeta('here',discord=DiscordTarget(None,None))
+        live.observe(turn,meta)
+        assert calls == []
+        block = run(live.block_async(turn,meta,close=False))
+        assert len(calls) == 1
+        members = app.world.discord_members()
+        assert members[103].name in block and members[102].name not in block
+    finally:
+        run(app.stop())

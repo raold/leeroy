@@ -1610,12 +1610,14 @@ class Pipeline:
                 return
             if is_discord(turn.channel):
                 from leeroy_mind.discord.store import react
+                from leeroy_mind.guards.review import FILLER, REACTIONS
                 target = meta.discord.reply_to if meta.discord else None
                 if target is None:
                     return
                 try:
                     react(self.store, target, member=turn.speaker,
-                          emoji=reaction if reaction in {"👍", "😄"} else "👍", now=self.clock.now())
+                          emoji=reaction if reaction in {*REACTIONS, *(v[1] for v in FILLER.values())}
+                          else "👍", now=self.clock.now())
                 except DiscordRefused:
                     return
             else:

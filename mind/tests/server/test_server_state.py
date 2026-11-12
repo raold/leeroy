@@ -73,7 +73,7 @@ def test_state_of_reports_reading_mentions_and_company_without_dm_leaks(tmp_path
         post(app.store,channel=channel,author=app.human_guid,origin='human',
              text='Hi @'+member.name,now=now-10)
         state = state_of(app,101,now)
-        assert state.reading == channel
+        assert state.reading == (None if private else channel)
         assert state.last_said == (channel,now-100,app.human_guid if private else 0)
         assert state.with_her == (() if private else (102,103))
         assert state.unread_mentions == (2 if member.name == 'Arkon' else 1)
@@ -121,8 +121,18 @@ def test_officer_company_cannot_reach_a_public_here_card(tmp_path):
 def test_members_in_play_covers_raid_night_and_offline_raid(phase):
     from leeroy_mind.guild.service import GuildLife
     from leeroy_mind.guild.raid_night import State
-    guild = SimpleNamespace(ports=SimpleNamespace(human_guid=1),
-        raid_night=SimpleNamespace(state=State(phase),run=SimpleNamespace(plan=SimpleNamespace(members=(1,101,102))),
-                                   _forming_members=frozenset({103})),
-        offline=SimpleNamespace(active=True,_owned={'plan':{'members':[104,105]}}))
-    assert GuildLife.members_in_play(guild) == frozenset({104,105} if phase=='ended' else {101,102,103,104,105})
+    from leeroy_mind.guild.raid_night import RaidNight
+    from leeroy_mind.guild.offline import OfflineRaids
+    night = object.__new__(RaidNight)
+    night.state, night.run = State(phase), None
+    night._forming_members = frozenset({1,101,102}) if phase == 'forming' else frozenset()
+    if phase in ('assembling','running'):
+        night.run = SimpleNamespace(plan=SimpleNamespace(members=(1,101,102)))
+    offline = object.__new__(OfflineRaids)
+    offline._owned = {'phase':'running','plan':{'members':[104,105]},'accepted':[104]}
+    guild = SimpleNamespace(ports=SimpleNamespace(human_guid=1), raid_night=night,offline=offline)
+    assert GuildLife.members_in_play(guild) == frozenset({104} if phase in ('called','ended') else {101,102,104})
+    offline._owned['accepted'] = None
+    assert offline.members_in_play() == frozenset()
+    offline._owned.update(accepted=[104],phase='complete')
+    assert offline.members_in_play() == frozenset()

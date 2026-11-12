@@ -73,3 +73,21 @@ def test_game_card_shows_a_general_claim_with_server_on_only(populated, clock):
     ctx = context(clock,channel='guild')
     assert 'invented ferry' not in card(populated,101,context=ctx).render()
     assert 'invented ferry' in card(populated,101,context=replace(ctx,server=True)).render()
+
+
+@pytest.mark.parametrize('source', ['party','raid','say','yell','emote','voice:general'])
+@pytest.mark.parametrize('target', ['guild','officer','whisper','discord:general','discord:officer-chat','dm:101'])
+def test_local_claims_never_widen_with_server_on(populated, clock, source, target):
+    populated.conn.execute("UPDATE persona_core SET json=json_set(json,'$.play.guild_role','officer') WHERE guid=101")
+    mid = populated.insert_chat_line(Chat(0,source,101,'Arkon',0,'Invented local claim',0,0),
+        session_id=None, origin='mind', audience=(1,101,102))
+    claim(populated,'Invented local claim',source_line=mid)
+    ctx = context(clock,channel=target,to_guid=1,readers=(1,101,102))
+    assert 'Invented local claim' not in card(populated,101,context=replace(ctx,server=True)).render()
+
+
+@pytest.mark.parametrize('channel,expected', [('discord:general',False),('discord:officer-chat',False),('dm:101',True)])
+def test_romantic_emotes_only_in_her_dm(populated, clock, channel, expected):
+    populated.conn.execute("UPDATE persona_core SET json=json_set(json,'$.play.guild_role','officer') WHERE guid=101")
+    populated.insert_game_event(TextEmote(0,1,'kiss',101), session_id=None)
+    assert ('Emote kiss' in card(populated,101,context=discord(clock,channel,to_guid=1)).render()) is expected

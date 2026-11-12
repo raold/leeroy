@@ -23,6 +23,37 @@ class DiscordState:
     with_her: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class StateInputs:
+    """Runtime observations captured on the loop before opening a read worker."""
+    persona: object
+    cast: dict
+    officers: frozenset[int]
+    online: frozenset[int]
+    playing: frozenset[int]
+    human: int
+    timezone: object
+    voice_room: str | None
+
+
+def capture(app, guid: int) -> StateInputs:
+    cast = dict(app.world.discord_members())
+    comms = app.engine.comms
+    return StateInputs(app.personas.get(guid), cast,
+        frozenset(g for g in cast if app.world.is_officer(g)), frozenset(app.world.online),
+        pulled_into_play(app), app.human_guid, app.clock.local().tzinfo,
+        comms.room_of(guid) if comms is not None else None)
+
+
+def company_in(conn, channel, guid, now, cast, human) -> tuple[int, ...]:
+    definition = layout.channel(channel) if channel is not None else None
+    if definition is None or definition.officers_only:
+        return ()
+    return tuple(r[0] for r in conn.execute('SELECT DISTINCT author FROM discord_message '
+        'WHERE channel=? AND deleted IS NULL AND author<>? AND ts BETWEEN ? AND ? ORDER BY author',
+        (channel, guid, now-900, now)) if r[0] in cast and r[0] != human)
+
+
 def pulled_into_play(app) -> frozenset[int]:
     world = app.world
     members = set()
@@ -53,27 +84,27 @@ def read_play(conn, now: float) -> frozenset[int]:
         return frozenset()
 
 
-def state_of(app, guid: int, now: float) -> DiscordState:
-    conn, world = app.store.conn, app.world
-    cast = world.discord_members()
-    p, member = app.personas.get(guid), cast.get(guid)
-    owner_now = datetime.fromtimestamp(now, app.clock.local().tzinfo)
+def state_of(app, guid: int, now: float, *, conn=None, observed=None) -> DiscordState:
+    conn = app.store.conn if conn is None else conn
+    observed = capture(app, guid) if observed is None else observed
+    cast = observed.cast
+    p, member = observed.persona, cast.get(guid)
+    owner_now = datetime.fromtimestamp(now, observed.timezone)
     local = local_time(owner_now, p.identity.region) if p is not None else owner_now
-    presence = presence_of(p, local=local, body_online=guid in world.online,
+    presence = presence_of(p, local=local, body_online=guid in observed.online,
         body_zone=getattr(member, 'zone', 0), rng_seed=RNG_SEED,
-        in_his_group=guid in pulled_into_play(app)) if p is not None else Presence('offline', False, 0)
+        in_his_group=guid in observed.playing) if p is not None else Presence('offline', False, 0)
     row = conn.execute('SELECT channel,ts,reply_to FROM discord_message WHERE author=? '
         'AND origin=\'mind\' AND deleted IS NULL AND ts<=? ORDER BY ts DESC,id DESC LIMIT 1', (guid, now)).fetchone()
     last, reading = None, None
     if row:
         parent = conn.execute('SELECT author FROM discord_message WHERE id=?', (row[2],)).fetchone() if row[2] else None
-        target = app.human_guid if is_private(row[0]) else parent[0] if parent else 0
+        target = observed.human if is_private(row[0]) else parent[0] if parent else 0
         last = (row[0], row[1], target)
-        if now-row[1] <= 1800:
+        if now-row[1] <= 1800 and layout.channel(row[0]) is not None:
             reading = row[0]
-    officers = {g for g in cast if world.is_officer(g)}
     channels = [c.id for c in layout.CHANNELS
-                if guid in layout.audience(c.id, cast=set(cast), officers=officers, human=app.human_guid)]
+                if guid in layout.audience(c.id, cast=set(cast), officers=observed.officers, human=observed.human)]
     channels.append(f'dm:{guid}')
     name = getattr(member, 'name', p.character_name if p else '')
     pattern = re.compile(r'(?<!\w)@' + re.escape(name) + r'\b', re.I) if name else None
@@ -82,16 +113,9 @@ def state_of(app, guid: int, now: float) -> DiscordState:
         'SELECT text FROM discord_message WHERE channel IN (SELECT value FROM json_each(?)) '
         'AND deleted IS NULL AND author<>? AND ts>? AND ts<=? AND instr(text,\'@\')>0',
         (json.dumps(channels), guid, since, now))) if pattern else 0
-    company = ()
-    room_definition = layout.channel(reading) if reading is not None else None
-    if reading in channels and room_definition is not None and not room_definition.officers_only:
-        company = tuple(r[0] for r in conn.execute('SELECT DISTINCT author FROM discord_message '
-            'WHERE channel=? AND deleted IS NULL AND author<>? AND ts BETWEEN ? AND ? ORDER BY author',
-            (reading, guid, now-900, now)) if r[0] in cast and r[0] != app.human_guid)
-    comms = app.engine.comms
-    room = comms.room_of(guid) if comms is not None else None
+    company = company_in(conn, reading, guid, now, cast, observed.human) if reading in channels else ()
     return DiscordState(presence, status_text(p, local, presence, rng_seed=RNG_SEED) if p else None,
-                        reading, room, last, mentions, company)
+                        reading, observed.voice_room, last, mentions, company)
 
 
 def tie_kind(conn, a: int, b: int) -> str:

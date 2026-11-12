@@ -41,7 +41,7 @@ def claim_visible(*, source_channel: str, source_from: int, source_to: int, sour
                   cross_medium: bool) -> bool:
     legacy = lambda: _legacy(source_channel,source_from,source_to,source_readers,
                              draft_channel,speaker,to_guid,officer)
-    if not cross_medium:
+    if not cross_medium or not (is_discord(source_channel) or is_discord(draft_channel)):
         return legacy()
     src = audience_class(source_channel, readers=source_readers)
     dst = audience_class(draft_channel, readers=None)

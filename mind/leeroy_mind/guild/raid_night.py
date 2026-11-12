@@ -147,6 +147,11 @@ class RaidNight:
     def add_listener(self, listener):
         self._listeners.append(listener)
 
+    def members_in_play(self) -> frozenset[int]:
+        if self.state not in {State.FORMING, State.ASSEMBLING, State.RUNNING}:
+            return frozenset()
+        return frozenset(self.run.plan.members) if self.run is not None else self._forming_members
+
     def _check(self, epoch):
         if epoch != self._epoch or not self._present or not self.ports.human_online():
             raise _Stale
@@ -524,7 +529,6 @@ class RaidNight:
             required = {leaders.tank_guid, leaders.lead_guid, leaders.loot_guid} - {self.ports.human_guid}
             comp = select_comp(pick.size, candidates, must_include=sorted(required), human_in_raid=True,
                                seed=self.rng.getrandbits(64))
-            self._forming_members = frozenset(comp.members)
             members, bench = list(comp.members), list(comp.bench)
             by_guid = {c.guid: c for c in candidates}
             clear = ClearLockout(uuid4().hex, raid.map_id, tuple([*members, self.ports.human_guid]))
@@ -569,7 +573,6 @@ class RaidNight:
                             additions.append(replacement)
                             bench.remove(replacement)
                     if set(members) != accepted:
-                        self._forming_members = frozenset(members)
                         await self._send(ClearLockout(uuid4().hex, raid.map_id, tuple(additions)), epoch)
                         continue
                 break

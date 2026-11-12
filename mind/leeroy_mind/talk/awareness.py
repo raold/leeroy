@@ -69,8 +69,7 @@ class Observed:
     world: object
     human: int
     server: bool = False
-    here: tuple[str, ...] = ()
-    self_line: str = ''
+    state_inputs: object = None
 
 
 def place(turn, meta):
@@ -188,16 +187,12 @@ class LiveReview:
                                 group=e.world.group,human_guid=e.world.human_guid)
         app = getattr(e, 'server_app', None)
         server = app is not None and app.server is not None
-        here, self_line = (), ''
+        state_inputs = None
         if server and is_discord(raw):
-            from leeroy_mind.server.state import state_of
-            state = state_of(app, turn.speaker, e.clock.now())
-            members = e.world.discord_members()
-            here = tuple(members[g].name for g in state.with_her[:6] if g in members)
-            self_line = (f"You're {state.presence.state}" + (f' ({state.status})' if state.status else '')
-                         + (', playing WoW' if state.presence.playing else ', not playing WoW'))
+            from leeroy_mind.server.state import capture
+            state_inputs = capture(app, turn.speaker)
         return Observed(self.draft(turn,meta,""),raw,to,readers,bool(e.world.is_officer(turn.speaker)),
-                        world,e.human.guid,server,here,self_line)
+                        world,e.human.guid,server,state_inputs)
 
     def history(self, turn, meta, conn=None, *, observed=None):
         e = self.engine
@@ -298,11 +293,20 @@ class LiveReview:
                         if pattern.search(h.text):
                             events.append(ContextItem(f"{names.get(h.guid,'someone')} mentioned you: {h.text}",
                                                       raw, h.guid, h.to_guid, readers))
+        here, self_line = (), ''
+        if observed.state_inputs is not None:
+            from leeroy_mind.server.state import state_of, company_in
+            inputs = observed.state_inputs
+            state = state_of(None, turn.speaker, now, conn=conn, observed=inputs)
+            here = tuple(inputs.cast[g].name for g in
+                         company_in(conn, channel_id(raw), turn.speaker, now, inputs.cast, inputs.human)[:6])
+            self_line = (f"You're {state.presence.state}" + (f' ({state.status})' if state.status else '')
+                         + (', playing WoW' if state.presence.playing else ', not playing WoW'))
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
             discord_events=tuple(events[-4:]), now=now,names=names,
             romance_activities=bond[0], jealousy=bond[1], server=observed.server,
-            here=observed.here, self_line=observed.self_line)
+            here=here, self_line=self_line)
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):
             if not close:
@@ -333,7 +337,16 @@ class LiveReview:
                 if observed.draft.server and observed.draft.anchor:
                     texts.append(observed.draft.anchor)
                 keys = [hashlib.sha256(t.encode()).digest() for t in texts]
-                missing = list(dict.fromkeys(k for k in keys if k not in self.vectors))
+                selected = keys
+                if observed.draft.server:
+                    # Bound the entire cold batch, including the draft and anchor.
+                    # Older cached evidence still participates; all lines retain lexical checks.
+                    selected = [keys[0]]
+                    if observed.draft.anchor:
+                        selected.append(keys[-1])
+                    selected.extend(hashlib.sha256(h.text.encode()).digest() for h in
+                                    sorted(compared, key=lambda h: (h.ts,h.id), reverse=True)[:32-len(selected)])
+                missing = list(dict.fromkeys(k for k in selected if k not in self.vectors))
                 if missing:
                     by_key = dict(zip(keys, texts))
                     vectors = await asyncio.wait_for(e.recall._embedder.embed(
@@ -342,7 +355,7 @@ class LiveReview:
                         raise ValueError("guard_vectors_missing")
                     self.vectors.update(zip(missing, vectors))
                 embedding = self.vectors[keys[0]]
-                cached = {h.id: self.vectors[k] for h, k in zip(compared, keys[1:])}
+                cached = {h.id: self.vectors[k] for h, k in zip(compared, keys[1:]) if k in self.vectors}
                 if observed.draft.server and observed.draft.anchor:
                     anchor_embedding = self.vectors[keys[-1]]
                 history = tuple(replace(h, embedding=cached.get(h.id)) for h in history)
