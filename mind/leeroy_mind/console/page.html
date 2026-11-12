@@ -28,6 +28,7 @@
   <div id="s-lost" class="lost" role="status" hidden></div>
 </div>
 <nav class="tabs" role="tablist" aria-label="Areas">
+  <button role="tab" id="t-tonight" data-tab="tonight" aria-controls="tab-tonight">Tonight</button>
   <button role="tab" id="t-comms" data-tab="comms" aria-controls="tab-comms">Comms</button>
   <button role="tab" id="t-raid" data-tab="raid" aria-controls="tab-raid">Raid</button>
   <button role="tab" id="t-guild" data-tab="guild" aria-controls="tab-guild">Guild</button>
@@ -46,6 +47,11 @@
 <div id="toasts" role="status"></div>
 </header>
 <main tabindex="0" aria-label="Console panels">
+  <section id="tab-tonight" class="tab mindtab" role="tabpanel" aria-labelledby="t-tonight" hidden>
+    <div id="tonight-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Tonight</h2><p id="tonight-intro"></p></div></div>
+    <div id="tonight-cards" class="tonight-grid"></div>
+  </section>
   <section id="tab-comms" class="tab" role="tabpanel" aria-labelledby="t-comms">
     <div id="comms-banner" class="banner" hidden></div>
     <div id="comms-kpis" class="kpis" aria-label="Tonight"></div>

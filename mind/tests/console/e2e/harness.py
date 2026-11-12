@@ -156,6 +156,7 @@ class Rehearsal:
         self.app.guild.armory.roster = lambda guild: {}
         self.app.guild.armory.friends = lambda human: set()
         self.app.guild.armory.equipped = lambda guids: {}
+        self.app.guild.armory.kit = lambda human: {46376:2,40211:8,43015:10}
         self.app.guild.armory.bank = lambda guild: {
             "money": 1234567, "tabs": [{"tab": 0, "name": "Rehearsal supplies",
             "slots": [[0, 2589, 20]]}], "log": []}

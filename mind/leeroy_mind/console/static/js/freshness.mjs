@@ -6,7 +6,7 @@ import { ReadHealth } from "./resilience.mjs";
 var TABS = { state: "comms", feed: "comms", raid: "raid", guild: "guild", social: "social",
   personas: "personas", persona: "personas", tuning: "personas", selfies: "personas",
   insight: "personas", board: "board", calendar: "calendar", bank: "bank", realm: "realm",
-  training: "training", dojo: "dojo", library: "library", health: "mind", ops: "ops", discord: "comms" };
+  training: "training", dojo: "dojo", library: "library", health: "mind", ops: "ops", discord: "comms", tonight: "tonight" };
 var READS = new ReadHealth();
 function draw() {
   var panel = $("tab-" + S.tab);

@@ -34,9 +34,9 @@ from .. import health
 from ..nightly.settings import NightlySettings
 from . import mindlog, views
 
-PANELS = ("health", "night", "realm", "raids", "selfies", "backups", "drift", "schedules")
+PANELS = ("health", "night", "realm", "raids", "selfies", "backups", "drift", "schedules", "switches")
 BUDGETS = {"health": 6.0, "night": 1.0, "realm": 1.0, "raids": 1.0,
-           "selfies": 1.0, "backups": 1.0, "drift": 10.0, "schedules": 3.0}
+           "selfies": 1.0, "backups": 1.0, "drift": 10.0, "schedules": 3.0, "switches": 1.0}
 ROWS = 128
 FILE_BYTES = 2 * 1024 * 1024
 _CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,63}\Z")
@@ -404,6 +404,60 @@ def feature_state(data, section):
     return "on" if value.get("enabled", False) else "off"
 
 
+SWITCHES = (
+    ('talk','aware','Awareness cards',''), ('guards','enabled','Guards',''),
+    ('claims','enabled','Claims',''), ('talk','realism','Typing realism',''),
+    ('signals','enabled','Signals',''), ('fingerprint','enabled','Typing fingerprint',''),
+    ('callbacks','enabled','Memory callbacks',''), ('learn','enabled','Rewards',''),
+    ('learn','bandit','Bandit credit','learn.enabled'), ('learn','coach','Talk coach','learn.enabled'),
+    ('learn','capture_preferences','Preference capture','learn.enabled'), ('banter','enabled','Banter',''),
+    ('server','enabled','24/7 server','nights only inside its quiet window'),
+    ('romance','activities','Romance activities','realm.enabled; native rebuild'),
+    ('photos','enabled','Discord photos','restart the console too'), ('selfies','enabled','Selfies',''),
+    ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
+    ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
+    ('personas','auto_newcomers','Newcomer personas',''),
+    ('world','enabled','World personas','realm.enabled; Leeroy.World.Enable = 1'),
+    ('playstyle','enabled','Play styles','Leeroy.PlayStyle.Enable = 1'),
+    ('realm','enabled','The Realm','Leeroy.Realm.Enable = 1; realm/blocklist.txt'),
+    ('training','enabled','Training',''), ('decisions','enabled','Decisions','server.enabled'),
+    ('control','ops_actions','Ops actions','restart the console too'))
+
+
+def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:
+    from .switchvalidation import valid_table
+    path = data/'mind.toml'
+    invalid, changed = False, None
+    try:
+        raw = _read(path,65536)
+        tables = tomllib.loads(raw.decode('utf-8-sig'))
+        changed = path.stat().st_mtime
+    except FileNotFoundError:
+        raw, tables = b'', {}
+    except (OSError,ValueError,UnicodeError,Budget):
+        raw, tables, invalid = b'', {}, True
+    rows, states, validity = [], {}, {}
+    for table,key,label,needs in SWITCHES:
+        check(deadline)
+        if table == 'decisions' and not (Path(__file__).parents[1]/'decisions'/'config.py').is_file():
+            continue
+        if table not in validity:
+            try:
+                validity[table] = not invalid and valid_table(table,tables.get(table,{}),raw)
+            except (ValueError,TypeError,OverflowError):
+                validity[table] = False
+        state = ('invalid' if not validity[table] else 'on' if tables.get(table,{}).get(key,False) else 'off')
+        states[f'{table}.{key}'] = state
+        rows.append(dict(table=table,key=key,label=label,state=state,needs=needs,unmet=[],
+                         restart=changed is not None and mind_started is not None and changed>mind_started))
+    blocklist = (data/'realm'/'blocklist.txt').is_file()
+    for row in rows:
+        row['unmet'] = [need for need in row['needs'].split('; ') if need in states and states[need]!='on']
+        if row['table']=='realm':
+            row['blocklist'] = 'present' if blocklist else 'missing'
+    return panel(rows=rows)
+
+
 def backups_view(root, data, deadline, config=None):
     labels, total, count = {}, 0, 0
     for path in _entries(data / "snapshots", deadline):
@@ -636,6 +690,8 @@ class OpsView:
             return backups_view(self.root, self.data, deadline)
         if name == "drift":
             return drift_view(self.root, deadline)
+        if name == 'switches':
+            return switches_view(self.data,deadline,mind_started=runtime.get('mind_started'))
         return schedules_view(self.root, deadline)
 
     def _work(self, name, deadline, runtime):
