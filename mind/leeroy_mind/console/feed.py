@@ -23,6 +23,9 @@ from pathlib import Path
 
 FEED_LIMIT = 200
 HISTORY_LIMIT, HISTORY_MAX = 100, 200  # lines a history page brings by default, and at most
+# Whisper lines one snapshot carries across every thread: with FEED_LIMIT for each other view, its
+# event stays well under the page's 1 MiB frame limit (eventstream.mjs); older ones read back
+SNAPSHOT_WHISPERS = 400
 VIEW_RE = re.compile(r"(?:guild|officer|group|voice|w:[1-9]\d{0,9})\Z")
 WHISPER_GRACE_S = 3.0  # a whisper is stored a moment before the voice row that says it was spoken
 UNHEARD = ("deafened", "muted")  # drop reasons that leave a voiced whisper shown as text, unheard
@@ -94,6 +97,7 @@ WITH base AS (
      OR (channel = 'whisper' AND :human != 0 AND (from_guid = :human OR to_guid = :human) AND (
             coalesce(vrank, 0) > 0 OR vheard OR (to_guid = :human AND vunheard IS NOT NULL)
          OR (vrank IS NULL AND (:grace <= 0 OR :now - ts >= :grace)))))
+      AND (:settled = 0 OR coalesce(vrank, 0) != 1 OR vheard)
 ), ranked AS (
     SELECT *, row_number() OVER (PARTITION BY view ORDER BY id DESC) AS rn FROM shown
 )
@@ -139,13 +143,14 @@ def _line(r, human: int) -> dict:
             "you": you, "voice": voice, "heard": heard, "unheard": unheard}
 
 
-def _query(conn, *, after, upto, since, limit, ids, now=None, only=None, peer=0) -> list[dict]:
+def _query(conn, *, after, upto, since, limit, ids, now=None, only=None, peer=0,
+           settled=False) -> list[dict]:
     human = human_guid(conn)
     voiced = _has(conn, "voice_line", "voice_heard")
     vrank, vheard, vunheard = _VOICE_ROWS[voiced]
     rows = conn.execute(_FEED.format(vrank=vrank, vheard=vheard, vunheard=vunheard), {
         "after": int(after), "human": human, "limit": int(limit),
-        "only": only, "peer": int(peer),
+        "only": only, "peer": int(peer), "settled": 1 if settled else 0,
         "upto": (1 << 62) if upto is None else int(upto),
         "since": -1e18 if since is None else float(since),
         "now": 0.0 if now is None else float(now),
@@ -182,15 +187,50 @@ def history(conn, view: str, before: int, limit: int = HISTORY_LIMIT,
 
 def threads(conn, now: float | None = None) -> list[dict]:
     """Every member he has whispered with, newest thread first: their guid, name and the thread's
-    newest shown line (with `now`, as `feed` shows it). The page lists them all and reads a
-    thread's lines when it opens one."""
+    newest line the page shows (with `now`, as `feed` shows it; never one still on its way to
+    him). The page lists them all and reads a thread's lines when it opens one."""
     out = []
     for line in _query(conn, after=0, upto=None, since=None, limit=1, ids=None, now=now,
-                       only="whispers"):
+                       only="whispers", settled=True):
         peer, name = (line["to_guid"], line["to"]) if line["you"] else (line["from_guid"], line["from"])
         out.append({"guid": peer, "name": name, "last": line})
     out.sort(key=lambda t: t["last"]["id"], reverse=True)
     return out
+
+
+def view_of(line: dict) -> str:
+    """The page's view of a line `feed` gave (model.mjs viewOf)."""
+    channel = line["channel"]
+    if channel.startswith("voice:"):
+        return "voice"
+    if channel in ("guild", "officer"):
+        return channel
+    if channel in ("party", "raid", "raid_warning"):
+        return "group"
+    return f"w:{line['to_guid'] if line['you'] else line['from_guid']}"
+
+
+def snapshot_lines(lines: list[dict]) -> tuple[list[dict], list[str]]:
+    """A snapshot's lines, read with FEED_LIMIT + 1 of each view, cut to the newest FEED_LIMIT of
+    each and SNAPSHOT_WHISPERS whisper lines in all, oldest first, with the views it cut
+    (`partial`): for every other view it holds each shown line since its start, so a line the page
+    has there and it lacks has gone."""
+    views: dict[str, list[dict]] = {}
+    for line in lines:
+        views.setdefault(view_of(line), []).append(line)
+    partial, kept = set(), []
+    for view, held in views.items():
+        held.sort(key=lambda x: x["id"])
+        if len(held) > FEED_LIMIT:
+            partial.add(view)
+            held = held[-FEED_LIMIT:]
+        kept.extend(held)
+    whispers = sorted((x for x in kept if view_of(x).startswith("w:")), key=lambda x: x["id"],
+                      reverse=True)
+    dropped = {x["id"] for x in whispers[SNAPSHOT_WHISPERS:]}
+    partial.update(view_of(x) for x in whispers[SNAPSHOT_WHISPERS:])
+    return (sorted((x for x in kept if x["id"] not in dropped), key=lambda x: x["id"]),
+            sorted(partial))
 
 
 def look(conn, ids: list[int], now: float | None = None) -> list[dict]:
@@ -224,14 +264,15 @@ def waiting(conn, after: int, upto: int, now: float | None = None) -> list[int]:
                                                      else WHISPER_GRACE_S})]
 
 
-def poll(conn, *, after: int, since: float | None, now: float, ids: list[int]):
+def poll(conn, *, after: int, since: float | None, now: float, ids: list[int],
+         limit: int = FEED_LIMIT):
     """One look from a single read snapshot (so a row committed between the queries cannot be
     missed by all of them): (lines after `after`, the last id, ids still waiting for a voice
     row, the current state of `ids` and of those waiting)."""
     conn.execute("BEGIN")
     try:
         upto = last_id(conn)
-        lines = feed(conn, after=after, upto=upto, since=since, now=now)
+        lines = feed(conn, after=after, upto=upto, since=since, now=now, limit=limit)
         late = waiting(conn, after, upto, now)
         return lines, upto, late, look(conn, list(ids) + late, now)
     finally:

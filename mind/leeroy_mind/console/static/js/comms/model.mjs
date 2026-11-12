@@ -108,22 +108,21 @@ export class Feed {
     });
     if (this.floor === null) { this.floor = top; }
   }
-  // A snapshot's lines are the feed as it is now, from `since` (epoch seconds) on, at most the
-  // newest KEEP of each view: a line here it lacks within what it covered of the line's view (newer
-  // than its oldest line there, or from `since` on when it sent fewer than KEEP) has gone; an
-  // older one was read back through the history and stays. Without `since` (an older
-  // console) the snapshot is the whole feed. A view that loses lines may read them back again.
+  // A snapshot's lines are the feed as it is now, from `since` (epoch seconds) on, every shown
+  // line of each view but those it names `partial` (cut to their newest lines): a line here it
+  // lacks within what it covered of the line's view (newer than its oldest line there, or from
+  // `since` on in a view it holds whole) has gone; an older one was read back through the history
+  // and stays. Without `since` (an older console) the snapshot is the whole feed. A view that
+  // loses lines may read them back again.
   // null (the console could not read it) keeps the lines and the floor here. True when adopted.
-  adopt(chat, since) {
+  adopt(chat, since, partial) {
     if (!Array.isArray(chat)) { return false; }
-    var now = new Set(), low = new Map(), count = new Map(), human = this.human;
+    var now = new Set(), low = new Map(), human = this.human, cutViews = new Set(arr(partial));
     chat.forEach(function (l) {
       if (!l || !goodId(l.id)) { return; }
       now.add(l.id);
       var v = viewOf(l, human);
-      if (!v) { return; }
-      count.set(v, (count.get(v) || 0) + 1);
-      if (!(low.get(v) < l.id)) { low.set(v, l.id); }
+      if (v && !(low.get(v) < l.id)) { low.set(v, l.id); }
     });
     var cut = typeof since === "number" && isFinite(since) ? since : null;
     var gone = this.ids().filter((id) => {
@@ -131,9 +130,7 @@ export class Feed {
       if (cut === null) { return true; }
       var v = this.where.get(id);
       if (low.has(v) && id > low.get(v)) { return true; }
-      // Older than its view's lines there: gone only when the snapshot sent the whole view from
-      // `since` on, not just its newest KEEP (the console's own per-view limit)
-      return (count.get(v) || 0) < KEEP && num(this.views.get(v).get(id).ts) >= cut;
+      return !cutViews.has(v) && num(this.views.get(v).get(id).ts) >= cut;
     });
     gone.forEach((id) => { this.more.set(this.where.get(id), true); });
     this.drop(gone);
@@ -153,14 +150,19 @@ export class Feed {
     this.index = index;
     return true;
   }
-  // A page of a view's history ({lines, more}, from /api/feed/history), read back into it
-  older(view, page) {
+  // A page of a view's history ({lines, more}, from /api/feed/history), read back into it. `from`
+  // is the view's oldest line when it was asked (0: it held none); a page whose window changed
+  // meanwhile (the view trimmed, or evicted and begun again) no longer joins on and is dropped:
+  // false.
+  older(view, page, from) {
+    if (num(from) > 0 && this.oldest(view) !== from) { return false; }
     page = obj(page);
     this.held.add(view);
     this.more.delete(view);
     this.upsert(arr(page.lines));
     // A view he left in the meantime was trimmed again (more: true), whatever the page said
     if (this.more.get(view) !== true) { this.more.set(view, page.more === true); }
+    return true;
   }
   // The oldest line id the page holds for a view (0: none), where its history reads back from
   oldest(view) {

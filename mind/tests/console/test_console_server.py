@@ -265,8 +265,9 @@ def test_the_stream_starts_with_a_snapshot(data):
         async with served(make_app(data)) as app:
             (kind, snap), = await events(app)
             assert kind == "snapshot"
-            assert set(snap) == {"status", "voice", "chat", "chat_since", "threads", "rooms",
-                                 "mood", "build"}
+            assert set(snap) == {"status", "voice", "chat", "chat_since", "chat_partial",
+                                 "threads", "rooms", "mood", "build"}
+            assert snap["chat_partial"] == []
             assert snap["build"] == app.build  # an open tab compares it with its own page
             assert snap["voice"] is None and snap["chat"] == [] and snap["threads"] == []
             assert isinstance(snap["chat_since"], float)

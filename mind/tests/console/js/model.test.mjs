@@ -354,11 +354,32 @@ test("a reconnect keeps history a busy view's snapshot did not reach", () => {
   for (var j = 1; j <= 100; j++) { page.push(mk(j)); }  // read back, inside the window too
   f.older("guild", { lines: page, more: false });
   f.upsert([said(400, 1102, { channel: "officer" }), said(401, 1102, { channel: "officer" })]);
-  f.adopt(snap.slice(1).concat([mk(301), said(401, 1102, { channel: "officer" })]), 5000);
+  f.adopt(snap.slice(1).concat([mk(301), said(401, 1102, { channel: "officer" })]), 5000, ["guild"]);
   assert.equal(f.lines("guild").length, 301);
   assert.equal(f.lines("guild")[0].id, 1);
   // A quiet view's snapshot sent all of it from the window's start: a line it lacks went
   assert.deepEqual(ids(f.lines("officer")), [401]);
+  // A whisper thread the snapshot cut keeps its older lines too
+  f.older("w:1101", { lines: [toHim(350, 1101, { ts: 5001 })], more: false });
+  f.adopt(snap.slice(1).concat([mk(301), toHim(402, 1101)]), 5000, ["guild", "w:1101"]);
+  assert.deepEqual(ids(f.lines("w:1101")), [350, 402]);
+});
+
+test("a history page whose window changed before it came back is dropped", () => {
+  var f = new Feed();
+  f.adopt([toHim(101, 1101), toHim(102, 1101)], 0);
+  var from = f.oldest("w:1101");
+  for (var g = 2000; g < 2000 + VIEW_LIMIT; g++) { f.upsert([toHim(g, g)]); }  // evicted meanwhile
+  assert.equal(f.views.has("w:1101"), false);
+  assert.equal(f.older("w:1101", { lines: [toHim(1, 1101)], more: false }, from), false);
+  assert.deepEqual(f.lines("w:1101"), []);
+  assert.equal(f.known("w:1101"), false);  // opened again, it reads its newest lines back
+  // The same window: the page joins on
+  f.adopt([toHim(101, 1101), toHim(102, 1101)], 0);
+  assert.equal(f.older("w:1101", { lines: [toHim(1, 1101)], more: false }, f.oldest("w:1101")), true);
+  assert.deepEqual(ids(f.lines("w:1101")), [1, 101, 102]);
+  // A view that held nothing takes any page
+  assert.equal(f.older("w:1102", { lines: [toHim(5, 1102)], more: false }, 0), true);
 });
 
 test("history that comes back after he left the view keeps Load earlier", () => {

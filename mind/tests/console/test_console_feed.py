@@ -330,3 +330,34 @@ def test_history_and_threads_hold_back_a_whisper_inside_the_grace(db):
     later = feed.read(path, feed.history, "w:101", 1 << 40, now=ts + 5)["lines"]
     assert [x["id"] for x in later] == [line]
     assert [t["guid"] for t in feed.read(path, feed.threads, now=ts + 5)] == [101]
+
+
+def test_threads_skip_a_whisper_still_on_its_way(db):
+    store, path = db
+    shown_line = say(store, "whisper", HUMAN, "his answer", to=101, name="Owner")
+    pending = say(store, "whisper", 101, "queued on voice", to=HUMAN)
+    VoiceStore(store).add_line("w.pending", pending, "whisper", "sent", 1.0)
+    got = feed.read(path, feed.threads)
+    assert [(t["guid"], t["last"]["id"]) for t in got] == [(101, shown_line)]
+    VoiceStore(store).set_line("w.pending", "done", None, 2.0)
+    assert feed.read(path, feed.threads)[0]["last"]["id"] == pending
+
+
+def test_a_snapshot_stays_far_under_the_event_frame_limit(db):
+    import json
+    store, path = db
+    sid = store.start_session(1.0)
+    text = "x" * 250
+    for i in range(40 * 100):
+        say(store, "whisper", 101 + i % 40, text, to=HUMAN, name=f"P{i % 40}")
+    for i in range(300):
+        say(store, "guild", 101, text, session=sid)
+    quiet = say(store, "officer", 102, "one officer line", session=sid)
+    lines = feed.read(path, feed.feed, limit=feed.FEED_LIMIT + 1)
+    kept, partial = feed.snapshot_lines(lines)
+    assert len(json.dumps(kept)) < 600_000
+    assert len([x for x in kept if x["channel"] == "whisper"]) == feed.SNAPSHOT_WHISPERS
+    assert len([x for x in kept if x["channel"] == "guild"]) == feed.FEED_LIMIT
+    assert "guild" in partial and "officer" not in partial and quiet in [x["id"] for x in kept]
+    assert len([v for v in partial if v.startswith("w:")]) == 40  # every thread was cut
+    assert [x["id"] for x in kept] == sorted(x["id"] for x in kept)

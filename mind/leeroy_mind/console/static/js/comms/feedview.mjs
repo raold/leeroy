@@ -120,13 +120,13 @@ export function loadEarlier(view) {
   LOADING.add(view);
   FAILED.delete(view);
   if (view === VIEW) { drawMore(); }
-  var before = FEED.oldest(view) || NEWEST;
+  var from = FEED.oldest(view), before = from || NEWEST;
   api("/api/feed/history?view=" + encodeURIComponent(view) + "&before=" + before + "&limit=" + PAGE)
     .then(function (r) {
       if (r.status !== 200) { refused(r); throw new Error("history " + r.status); }
       return r.json();
     })
-    .then(function (page) { LOADING.delete(view); FEED.older(view, page); })
+    .then(function (page) { LOADING.delete(view); FEED.older(view, page, from); })
     .catch(function () { LOADING.delete(view); FAILED.add(view); })
     .finally(function () { if (view === VIEW) { renderFeed(true); } else { changed(); } });
 }
@@ -206,7 +206,10 @@ function changed() {
 
 // A snapshot (the first, or one after a reconnect) holds the feed as it is now; one whose read
 // failed (chat: null) leaves the lines, the floor and the reader's place as they are
-on("snapshot", function (d) { FEED.setThreads(d.threads); renderFeed(!FEED.adopt(d.chat, d.chat_since)); });
+on("snapshot", function (d) {
+  FEED.setThreads(d.threads);
+  renderFeed(!FEED.adopt(d.chat, d.chat_since, d.chat_partial));
+});
 on("chat", function (d) { FEED.upsert(d.lines); renderFeed(true); });
 on("chat_gone", function (d) { FEED.drop(d.ids); renderFeed(true); });
 on("status", renderKpis);
