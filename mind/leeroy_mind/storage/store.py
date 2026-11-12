@@ -98,7 +98,8 @@ class Store:
         if self._depth == 0:
             # A read outside a unit leaves the connection's transaction open on a WAL snapshot,
             # and a write in a snapshot another connection has since committed past fails at
-            # once ("database is locked"). Start each unit from a fresh one.
+            # once ("database is locked"). End it here: the unit's snapshot begins at its own
+            # first statement (one that reads before it writes can still meet a commit between).
             self.conn.commit()
             self._depth = 1
             try:
