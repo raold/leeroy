@@ -19,11 +19,17 @@ have distinct explanations; none means an empty inventory. Item names use the
 local library, falling back to item IDs if it is unavailable.
 
 The new `kit` control operation accepts no arguments and only reads the game
-database through the existing armory. Callers share one in-flight read with a
-15-second wait and reuse successful replies for 30 seconds. It remains available
-during other Ops actions. Tonight gives each database section one second and the
-kit card up to 2.8 seconds, running them concurrently so the request stays within
-three seconds. As with Ops, a stalled source owns one daemon worker until it
+database through the existing armory. Callers share one in-flight read per
+character with a 15-second wait. Successful replies stay fresh for 30 seconds
+and remain available for 120 seconds, so a read that finishes after the console's
+deadline can appear on its next minute poll. After 30 seconds a request starts
+or joins one refresh while immediately returning the retained result; a new
+success replaces it. Expired results are never shown. Tasks and results are keyed
+by your character's guid, which is checked again after waiting for a read, so
+changing characters cannot return the previous character's kit. It remains
+available during other Ops actions. Tonight gives each database section one
+second and the kit card up to 2.8 seconds, running concurrently to keep the
+request within three seconds. As with Ops, a stalled source owns one daemon worker until it
 returns; subsequent polls cannot create more workers for that source. A late
 result can be used on the next poll.
 
