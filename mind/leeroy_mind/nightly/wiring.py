@@ -44,7 +44,8 @@ def attach(app):
             candidate = replace(candidate,
                 ollama=replace(candidate.ollama, url=startup.ollama.url),
                 models=replace(candidate.models, embedding=startup.models.embedding))
-            updated = load_settings(candidate, app.data_dir)
+            updated = replace(load_settings(candidate, app.data_dir),
+                              learn_enabled=settings.learn_enabled)
         except ConfigError:
             # Config text may contain private identity values: log no raw values.
             log("nightly_config_error", level=logging.WARNING)

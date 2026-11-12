@@ -92,6 +92,36 @@ def test_whole_turn_cap_includes_correction_and_burst_gaps(rig, channel, cap, co
 LONG = "ready with the flask. we can head over now and get the other supplies. then we can start the next round."
 
 
+def test_refused_first_burst_line_records_one_drop(rig,monkeypatch):
+    rig.engine.rng = Always()
+    monkeypatch.setattr(rig.engine,"_style",lambda *a,**kw:[Styled(LONG,LONG)])
+    async def refuse(*a,**kw):
+        return "realism_busy"
+    monkeypatch.setattr(rig.engine,"_send_line",refuse)
+    assert not rig.speak_turn(turn(),seconds=60)
+    assert rig.store.conn.execute("SELECT count(*) FROM utterance WHERE dropped IS NOT NULL").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("channel",["guild","whisper","discord:general","dm:101"])
+def test_burst_history_is_one_turn_and_visible_as_it_arrives(rig,monkeypatch,channel):
+    e=rig.engine
+    e.rng=Always()
+    monkeypatch.setattr(e,"_style",lambda *a,**kw:[Styled(LONG,LONG)])
+    history=[]
+    original=e._record
+    def record(*a,**kw):
+        result=original(*a,**kw)
+        history.append(list(e._own_of(101)))
+        return result
+    monkeypatch.setattr(e,"_record",record)
+    assert len(rig.speak_turn(turn(channel),seconds=80)) >= 2
+    assert len(history) >= 2
+    assert all(len(rows)==1 for rows in history)
+    assert history[0][0][2] != LONG
+    assert history[-1][0][2] == LONG
+    assert history[-1][0][0] == channel
+
+
 @pytest.mark.parametrize("phase", list(RaidPhase))
 def test_natural_bursts_have_cooldown_and_never_split_during_combat_or_wipe(rig, monkeypatch, phase):
     rig.engine.rng = Always()

@@ -15,12 +15,12 @@
 
 namespace Leeroy::Realm
 {
-inline constexpr std::array<std::string_view, 33> kCommandTypes = {
+inline constexpr std::array<std::string_view, 35> kCommandTypes = {
     "realm_actors", "realm_say", "realm_emote", "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join",
     "arena_team", "arena_queue", "duel", "craft", "item_count", "equip", "set_profession", "transmog_set",
     "calendar_post", "calendar_signup", "calendar_update", "mail_send", "bank_tab_buy", "bank_money",
     "bank_deposit", "bank_withdraw", "bank_stock", "grant_achievement", "guild_rename", "guild_grow",
-    "guild_admit", "guild_note", "announce", "get_realm_pvp", "guild_readmit"
+    "guild_admit", "guild_note", "announce", "get_realm_pvp", "guild_readmit", "world_say", "get_world_roster"
 };
 inline constexpr std::array<std::uint32_t, 7> kGrantable = {3117, 4078, 4576, 2186, 3007, 1723, 1786};
 inline constexpr std::uint32_t kGuildTabard = 5976;
@@ -59,6 +59,7 @@ bool IsPrimaryProfession(std::uint32_t skill);
 
 struct ActorsCmd { std::vector<std::uint32_t> guids, gankers, guilds; };
 struct SayCmd { std::uint32_t guid = 0; std::string channel, text; std::uint32_t toGuid = 0; };
+struct WorldSayCmd { SayCmd speech; std::uint32_t guild = 0; };
 struct EmoteCmd { std::uint32_t guid = 0; std::string emote; std::uint32_t targetGuid = 0; };
 struct MoveCmd { std::uint32_t guid = 0; std::string place; std::uint32_t slot = 0; };
 struct RpgStatusCmd { std::uint32_t guid = 0; std::string status; std::uint32_t questId = 0; };
@@ -137,6 +138,7 @@ std::optional<AnnouncementMetrics> ValidatedAnnouncementMetrics(AnnounceCmd cons
 // calendar future time and the actual kill receipt remain runtime checks.
 std::optional<ActorsCmd> ParseActors(nlohmann::json const&, std::string& error);
 std::optional<SayCmd> ParseSay(nlohmann::json const&, std::string& error);
+std::optional<WorldSayCmd> ParseWorldSay(nlohmann::json const&, std::string& error);
 std::optional<EmoteCmd> ParseEmote(nlohmann::json const&, std::string& error);
 std::optional<MoveCmd> ParseMove(nlohmann::json const&, std::string& error);
 std::optional<RpgStatusCmd> ParseRpgStatus(nlohmann::json const&, std::string& error);

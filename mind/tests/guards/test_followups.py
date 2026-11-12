@@ -100,7 +100,7 @@ def test_full_card_is_rerendered_to_keep_its_priority_sections(rig,monkeypatch):
     original_card=e._card
     monkeypatch.setattr(e,"_card",lambda p:original_card(p)+"\n"+"fixed profile detail "*110)
     c=Card(101,(Part("game","In game",("IMPORTANT_CURRENT_STATE",)),
-                Part("context","Conversation",("x "*950,)),
+                Part("context","Conversation",("x "*(950+2*(LIVE_BUDGET-1300)),)),  # over budget at any LIVE_BUDGET
                 Part("drama","Social",("LOW_PRIORITY_DETAILS",))))
     monkeypatch.setattr(live,"card",lambda *a,**kw:c)
     messages,_=rig.sync(e.compose(turn()))

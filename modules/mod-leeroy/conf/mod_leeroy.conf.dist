@@ -27,6 +27,11 @@ Leeroy.Bridge.Port = 7878
 # Exempt the cast from randomize, refresh, teleport and revive-teleport.
 Leeroy.KeepCast = 1
 
+# Rescue solo pinned cast members after three deaths in fifteen minutes, once alive
+# and out of combat. Honors Realm/training ownership; at most once an hour per member.
+# Reloadable with .reload config. Does not resurrect bots itself.
+Leeroy.CastDeathLoop.Enable = 0
+
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
 
@@ -48,6 +53,11 @@ Leeroy.CastGuard = 0
 # Bounded world-thread body steps per tick, clamped to 1-20.
 Leeroy.Realm.MaxActionsPerTick = 5
 Leeroy.Realm.Announce = 1
+
+# Optional world persona roster and speech. Both this and Realm.Enable must be on.
+# Default off; .reload config applies the switch to subsequent commands.
+Leeroy.World.Enable = 0
+
 # Strict local CSV whitelists; missing/invalid files leave the respective list empty.
 # A relative path resolves against the module config directory (configs/modules, where
 # this file lives); an absolute path is used as written.

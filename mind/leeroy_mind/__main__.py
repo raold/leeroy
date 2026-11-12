@@ -52,7 +52,8 @@ def _data_dir_problem(root: Path) -> tuple[str | None, int]:
     except sqlite3.Error:
         return f"no mind.db in {root}", 0
     try:
-        n = conn.execute("SELECT count(*) FROM persona_core").fetchone()[0]
+        from .personas.tiers import cast_sql
+        n = conn.execute("SELECT count(*) FROM persona_core WHERE " + cast_sql(conn)).fetchone()[0]
     except sqlite3.Error as e:
         return f"{path} cannot be read: {e}", 0
     finally:
@@ -294,7 +295,7 @@ def _doctor_unvoiced(store, human_guid: int | None) -> list[tuple[bool | None, s
     """A note naming the cast members with no stored persona (personas.io.cast_without_persona),
     whom the mind never voices; nothing when every cast member has one."""
     from .personas.io import cast_without_persona
-    missing = cast_without_persona(store.cast().values(), store.persona_versions(), human_guid)
+    missing = cast_without_persona(store.cast(include_world=True).values(), store.persona_versions(), human_guid)
     if not missing:
         return []
     who = ", ".join(f"{m.name} ({m.guid})" for m in missing)
@@ -1284,6 +1285,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "signals":
         from .signals.cli import signals_main
         return signals_main(argv[1:])
+    if argv and argv[0] == "learn":
+        from .learn.cli import learn_main
+        return learn_main(argv[1:])
     if argv and argv[0] == "console":
         from .console.cli import main as console_main
         return console_main(argv[1:])
@@ -1304,6 +1308,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("callbacks", help="replay memory callbacks on a scratch copy")
     sub.add_parser('fingerprint', help='read-only typing style profile')
     sub.add_parser("signals", help="read-only response signal counts")
+    sub.add_parser("learn", help="read-only reward report")
     sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
                    "stopped")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
@@ -1414,6 +1419,11 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                        help="the mind's data folder (as personas --data-dir)")
     p_fix.set_defaults(func=cmd_fix_typing)
     p_pers.set_defaults(func=cmd_personas)
+    from .world.cli import run as world_status
+    p_world = psub.add_parser("world", help="read-only world target counts and generation plan")
+    p_world.add_argument("world_action", choices=("status", "plan"))
+    _add_data_dir(p_world, after_action=True)
+    p_world.set_defaults(func=world_status)
     from .personas.roster import DEFAULT_CONF, DEFAULT_MYSQL, ROSTER_FILE_HELP
     p_voices = sub.add_parser("voices", help="the guild's voices")
     _add_data_dir(p_voices)

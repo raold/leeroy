@@ -9,6 +9,7 @@ from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 from .birthdays import draw_birthday
 from .generate import cast_summary, generate_persona, generation_rules, plan_slots
 from .io import load_persona, save_persona
+from .promotion import promotion_seed, promote_world
 from .seed import seed_relationships
 
 STAGE = "newcomers"
@@ -39,7 +40,7 @@ def _eligible(ctx):
     if ctx.human <= 0:
         return []  # no reliable owner identity yet
     have = ctx.store.persona_versions()
-    return sorted(g for g, member in ctx.store.cast().items()
+    return sorted(g for g, member in ctx.store.cast(include_world=True).items()
                   if g > 0 and g != ctx.human and member.level >= CAST_MIN_LEVEL
                   and g not in have and _failures(ctx.store, g)[0] < FAILED_NIGHTS)
 
@@ -119,7 +120,7 @@ def make_stage(cast_config):
             if ctx.done(STAGE, unit) or guid not in _eligible(ctx):
                 continue
             try:
-                roster = list(ctx.store.cast().values())
+                roster = list(ctx.store.cast(include_world=True).values())
                 existing = _existing(ctx.store, unreadable)
                 slots = plan_slots(roster, existing, cfg, ctx.human, ctx.rng(STAGE, guid))
                 slot = next(s for s in slots if s.guid == guid)
@@ -128,8 +129,11 @@ def make_stage(cast_config):
                 taken = set(names) | {p.identity.real_name for p in existing}
                 taken.update(n for n in (ctx.ident.nickname, ctx.ident.real_name,
                                         ctx.ident.character_name) if n)
+                # A former outsider goes through the same generator and screens. Its
+                # old persona is seed data in the user context, never new instructions.
+                seed_version, summary = promotion_seed(ctx.store, guid, cast_summary(existing,human=ctx.ident))
                 p = await generate_persona(ctx.reasoner, ctx.settings.reflection_model, slot,
-                    member, cast_summary(existing, human=ctx.ident), rules, human=ctx.ident,
+                    member, summary, rules, human=ctx.ident,
                     taken_names=frozenset(taken),
                     member_names=frozenset(m.name for m in roster if m.guid != ctx.human),
                     private_logs=False)
@@ -150,10 +154,12 @@ def make_stage(cast_config):
                 nonlocal saved
                 try:
                     # A manual writer or cast removal while the request awaited wins.
-                    current = store.cast().get(guid)
+                    current = store.cast(include_world=True).get(guid)
                     if (current is None or current.level < CAST_MIN_LEVEL or guid == ctx.human
                             or guid in store.persona_versions()):
                         return
+                    if not promote_world(store, guid, seed_version):
+                        return  # another writer owns the changed persona
                     save_persona(store, p, source="generated", ts=ctx.clock.now(),
                                  race=RACES.get(current.race, ""),
                                  class_name=CLASSES.get(current.class_, ""))

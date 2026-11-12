@@ -240,13 +240,17 @@ ConvertTo-Json -Compress"""
 
 
 def spawn_mind(root, data, python, *, popen=subprocess.Popen):
+    from .stdio import rotate_before_launch
     logs = data / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.pop("PYTHONHOME", None)
+    env.pop("LEEROY_CAPTURE_STDIO", None)
     env.update(PYTHONPATH=str(root / "mind"), PYTHONNOUSERSITE="1", PYTHONUNBUFFERED="1",
                LEEROY_MIND_DATA=str(data))
-    with (logs / "mind-stdout.log").open("ab") as output:
+    path=logs/'mind-stdout.log'
+    rotate_before_launch(path)
+    with path.open('ab') as output:
         return popen_outside_job(
             popen, [str(python), "-m", "leeroy_mind", "run", "--data-dir", str(data)],
             what="mind", creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
