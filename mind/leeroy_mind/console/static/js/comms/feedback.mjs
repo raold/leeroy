@@ -21,8 +21,11 @@ function update(id) {
   document.querySelectorAll('[data-feedback="'+id+'"]').forEach(draw);
 }
 function receive(id,incoming) {
-  const previous=receipts.get(id), saved=reconcileVote(previous,incoming);
+  const previous=receipts.get(id);
+  let saved=reconcileVote(previous,incoming);
   if (!pending.has(id) && previous && saved.revision > previous.revision) { drafts.delete(id); }
+  // The same revision echoed by the event stream or a redraw keeps the save's message
+  if (previous && previous.message && saved.revision === previous.revision) { saved={...saved,message:previous.message}; }
   receipts.set(id,saved);
   return saved;
 }
