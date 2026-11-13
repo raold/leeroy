@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from dataclasses import replace
 from types import SimpleNamespace
 import pytest
@@ -117,9 +118,69 @@ def test_revalidation_rejects_changed_state_and_keeps_files(tmp_path,reason):
         if reason=='stopped':app._stopping=True
         if reason=='parent':dstore.delete(app.store,meta.discord.reply_to,author=app.human_guid,now=app.clock.now())
         assert not photo.valid()
+        ended={'pick':'photo_changed','looks':'looks_changed','nsfw':'flagged','missing':'missing'}.get(reason)
+        assert tuple(app.store.conn.execute('SELECT status,ended FROM selfie_snap WHERE id=?',(sid,)).fetchone())==(
+            ('expired',ended) if ended else ('ready',None))
         photo.release()
         assert snaps.sent_count(app.store,0)==0
         assert files.snap(app.data_dir,101,sid,thumb=True).exists()
+    finally:app.store.close()
+
+
+@pytest.mark.parametrize('change',['pick','looks'])
+def test_stale_snap_is_expired_not_sent(tmp_path,change):
+    """Her cover photo or looks changed since the render: rechecked at the turn, the photo is
+    expired with its reason and never sent; the answer goes out without it."""
+    async def go():
+        app=setup(tmp_path);sid=stock(app)
+        if change=='pick':pick(app.store,101,1,1,source='console',now=app.clock.now())
+        else:
+            p=app.personas.get(101)
+            app.personas.get=lambda guid:replace(p,appearance=replace(p.appearance,hair_colour='different')) if guid==101 else p
+        app.llm._script=lambda *a:'the dog has appointed himself tour guide'
+        before={p.relative_to(tmp_path):p.read_bytes() for p in tmp_path.rglob('*.jpg')}
+        try:
+            turn,meta=reply(app)
+            assert await finish(app,asyncio.create_task(app.engine.speak_meta(turn,meta)))
+            assert tuple(app.store.conn.execute('SELECT status,ended FROM selfie_snap WHERE id=?',(sid,)).fetchone())==(
+                'expired','photo_changed' if change=='pick' else 'looks_changed')
+            assert app.store.conn.execute('SELECT count(*) FROM discord_attachment').fetchone()[0]==0
+            assert meta.photo is None and not app.photos._in_flight
+            assert snaps.sent_count(app.store,0)==0
+            assert {p.relative_to(tmp_path):p.read_bytes() for p in tmp_path.rglob('*.jpg')}==before
+        finally:await app.stop()
+    run(go())
+
+
+def test_budgets_are_separate_and_survive_restart(tmp_path):
+    """Photos to him count in P4's week and day; channel photos in their own per-day meta. Both
+    survive a restart, and filling one never takes the other's room."""
+    from leeroy_mind.app import MindApp
+    from leeroy_mind.config import load_config
+    from leeroy_mind.photos.send import day_draw
+    from leeroy_mind.testing.fake_clock import FakeClock
+    from leeroy_mind.testing.fake_llm import FakeLLM
+    from selfies.fakes import CLOCK
+    app=setup(tmp_path)
+    now,date,dial=app.clock.now(),app.clock.local().date().isoformat(),app.cfg.talk.selfies
+    try:
+        assert snaps.mark_sent(app.store,stock(app,102),sender=102,channel='dm',line_id=1,now=now-2*86400)
+        app.store.set_meta(ration.CHANNEL_KEY.format(date=date),'1')
+    finally:app.store.close()
+    app=MindApp(load_config(tmp_path/'mind.toml'),tmp_path,llm=FakeLLM(),clock=FakeClock(CLOCK))
+    try:
+        assert snaps.sent_count(app.store,now-ration.WEEK_S,to_him=True)==1
+        assert snaps.sent_count(app.store,now-ration.DAY_S,to_him=True)==0
+        assert channel_count(app.store.conn,date)==1
+        assert app.photos._room('him',now) and ration.room(dial,week=1,day=0)
+        assert app.photos._room('anyone',now) and ration.channel_room(dial,today=1,draw=day_draw(date))
+        full=str(math.ceil(ration.channel_per_day(dial)))
+        app.store.set_meta(ration.CHANNEL_KEY.format(date=date),full)
+        assert not app.photos._room('anyone',now) and app.photos._room('him',now)
+        app.store.set_meta(ration.CHANNEL_KEY.format(date=date),'1')
+        for line in range(2,ration.per_week(dial)+1):
+            assert snaps.mark_sent(app.store,stock(app,103),sender=103,channel='dm',line_id=line,now=now-2*86400)
+        assert not app.photos._room('him',now) and app.photos._room('anyone',now)
     finally:app.store.close()
 
 
