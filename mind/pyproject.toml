@@ -26,6 +26,8 @@ include = ["leeroy_mind*"]
 testpaths = ["tests"]
 tmp_path_retention_count = 3
 tmp_path_retention_policy = "failed"
+# a test stuck this long dumps every thread's stack (a CI hang names itself)
+faulthandler_timeout = 300
 addopts = ["-m", "not ollama and not live and not mysql"]
 markers = [
   "ollama: needs a running Ollama with the configured models",

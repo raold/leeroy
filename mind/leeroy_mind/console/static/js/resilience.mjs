@@ -65,14 +65,19 @@ export function validView(path, value) {
       !Array.isArray(value.counts) && (route !== "ops" || Object.values(value.panels).every(record));
   }
   if (route === "discord") {
-    return Array.isArray(value.dms) && Array.isArray(value.members) && !!value.human &&
+    const voice = m => m.voice_note == null || (record(m.voice_note) &&
+      ['mind','human'].includes(m.voice_note.origin) && typeof m.voice_note.transcript_ok === 'boolean' &&
+      Number.isInteger(m.voice_note.ms) && m.voice_note.ms >= 200 && m.voice_note.ms <= 65000 &&
+      Number.isInteger(m.voice_note.bytes) && m.voice_note.bytes > 0 && m.voice_note.bytes <= 2097152);
+    return (value.voice_notes === undefined || typeof value.voice_notes === 'boolean') &&
+      Array.isArray(value.dms) && Array.isArray(value.members) && !!value.human &&
       typeof value.human === "object" && !Array.isArray(value.human) &&
       Number.isFinite(value.human.guid) && typeof value.human.name === "string" && Array.isArray(value.missing) &&
       value.categories.every(c => record(c) && Array.isArray(c.channels) && c.channels.every(record)) &&
       value.dms.every(record) && value.members.every(m => record(m) && record(m.presence)) &&
       (!/[?&]channel=/.test(path) || (typeof value.channel === "string" &&
         ["messages", "threads", "pins", "quotes"].every(k => Array.isArray(value[k]) && value[k].every(record)) &&
-        value.messages.every(m => Array.isArray(m.reactions) && m.reactions.every(record))));
+        value.messages.every(m => voice(m) && Array.isArray(m.reactions) && m.reactions.every(record))));
   }
   if (route === "ops/action") {
     return typeof value.reason === "string" && (value.operation === null ||

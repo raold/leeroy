@@ -104,7 +104,7 @@ MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library",
-       "ops", "claim_check", "feedback", "kit", "learn")
+       "ops", "claim_check", "feedback", "kit", "learn", "gpu")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge")
 TUNE_SHAPES = {
@@ -644,7 +644,9 @@ def discord_args(args) -> dict:
         raise BadRequest("discord: an action, one of " + ", ".join(DISCORD_SHAPES))
     action = args["action"]
     shape = DISCORD_SHAPES[action]
-    extra = {"reply_to", "thread", "image"} if action == "post" else set()
+    if action=='post' and 'voice' in args:
+        shape=shape-{'text'}
+    extra = {"reply_to", "thread", "image", "voice", "text"} if action == "post" else set()
     if not shape <= set(args) <= shape | extra:
         raise BadRequest(f"discord {action}: exactly " + ", ".join(sorted(shape - {"action"})))
     out = {"action": action}
@@ -659,6 +661,12 @@ def discord_args(args) -> dict:
         if not isinstance(ch, str) or (layout.channel(ch) is None and layout.dm_peer(ch) is None):
             raise BadRequest(WORDS["bad_channel"])
         out["channel"] = ch
+    if 'voice' in args:
+        from leeroy_mind.photos.images import TOKEN_RE
+        if 'image' in args or layout.dm_peer(out.get('channel','')) is None or type(args['voice']) is not str or not TOKEN_RE.fullmatch(args['voice']):
+            raise BadRequest('Choose one voice recording in a direct message.')
+        out['voice']=args['voice']
+        out['text']='(voice message)'
     for key in ("message", "reply_to", "thread"):
         if key in args:
             if not _row_id(args[key]):
@@ -719,6 +727,14 @@ def feedback_args(args):
         raise BadRequest(str(exc)) from None
 
 
+def gpu_args(args):
+    from .gpucontrol import arguments
+    try:
+        return arguments(args)
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from None
+
+
 def learn_args(args):
     from leeroy_mind.learn.control import arguments
     try:
@@ -738,7 +754,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
-                         "say, board, discord, library, ops, claim_check, feedback or learn action)")
+                         "say, board, discord, library, ops, claim_check, feedback, learn or gpu action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -752,7 +768,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     parse_args = {"ops": ops_args, "raid": raid_args, "tune": tune_args, "selfie": selfie_args,
                   "say": say_args, "board": board_args, "discord": discord_args,
                   "library": library_args, "claim_check": claim_check_args,
-                  "feedback": feedback_args, "learn": learn_args}.get(op)
+                  "feedback": feedback_args, "learn": learn_args, "gpu": gpu_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -919,7 +935,15 @@ class ControlEndpoint:
             self._refused("format")
             return {"ok": False, "error": str(e)}, None
         if op == "status":
+            gpu = getattr(self.app, 'gpu', None)
+            if gpu is not None and gpu.paused:
+                gpu.refresh_status()
             return self.status(), None
+        if op == 'gpu':
+            if not self.cfg.enabled or self.app.stopping:
+                return {'ok': False, 'error': 'mind_unavailable',
+                        'message': 'GPU control is unavailable while the mind is stopping or control is disabled.'}, None
+            return await self.app.gpu.action(args), None
         if op == "ops":
             return await self.ops.answer(args), None
         if self.ops.busy and op not in {"stop", "bank", "library", "kit"}:
@@ -981,7 +1005,8 @@ class ControlEndpoint:
             log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
             world = None
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
-                "raid": raid, **self._health(), "world": world, "typing": self._typing()}
+                "raid": raid, **self._health(), "world": world, "typing": self._typing(),
+                "gpu": self.app.gpu.snapshot() if getattr(self.app, "gpu", None) is not None else None}
 
     def _typing(self) -> list:
         """Who is typing, for Comms' dots: the talk engine's turns being composed or typed

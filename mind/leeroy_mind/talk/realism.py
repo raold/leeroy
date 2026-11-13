@@ -7,6 +7,7 @@ import re
 from leeroy_mind.discord.channels import is_discord, is_private
 from leeroy_mind.fingerprint import fingerprint
 from leeroy_mind.protocol import Boss, Hello, Logout, Zone
+from leeroy_mind.talk.discord_length import TYPING_CAP_S as DISCORD_TYPING_S, words_for
 from leeroy_mind.talk.raid import MAX_FIGHT_S, RaidPhase
 from leeroy_mind.talk.style import Styled
 from leeroy_mind.talk.turns import TurnKind
@@ -196,6 +197,8 @@ class Realism:
         baseline_total = sum(baseline)
         # The whole turn, including gaps and a possible correction, shares one cap.
         ceiling = baseline_total + cap - correction_delay
+        if words_for(engine.cfg.talk, turn.channel):  # a longer Discord message, typed in time
+            ceiling = min(ceiling, DISCORD_TYPING_S - correction_delay)
         total = sum(desired)
         if total > ceiling:
             desired = [d * ceiling / total for d in desired]

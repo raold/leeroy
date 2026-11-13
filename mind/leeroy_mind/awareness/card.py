@@ -13,6 +13,7 @@ from leeroy_mind.claims.visibility import claim_visible
 from leeroy_mind.discord.channels import OFFICER_GAME, is_private, is_discord, is_restricted, same_medium
 from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
+from leeroy_mind.realm.action_store import released_members
 from leeroy_mind.text import estimate_tokens, strip_wow_markup
 
 RECENT_S = 15 * 60
@@ -217,9 +218,12 @@ def _holds(reader, source, guid, meta):
                        if h.owner in HOLD_CODES and (h.guids is ALL or guid in _ids(h.guids))})
     codes = set()
     for row in reader.rows(("realm_action",),
-            "SELECT owner,reserved_manifest FROM realm_action WHERE role='root' "
+            "SELECT owner,reserved_manifest,role,policy,kind,state,evidence FROM realm_action WHERE role='root' "
             "AND state NOT IN ('completed','not_sent') AND transport_state<>'not_entered'"):
-        if guid in _ids(_json(row["reserved_manifest"])):
+        manifest = _json(row["reserved_manifest"])
+        # A failed leave's release proof frees those members, as the mind's own holds read it.
+        if guid in _ids(manifest) and guid not in released_members(
+                row["role"], row["policy"], row["kind"], row["state"], row["evidence"], manifest):
             codes.add(row["owner"] if row["owner"] in HOLD_CODES else "realm")
     for key, code, field in (("tg:lab:owned", "training", "guids"),
                              ("tg:benchmark:active", "benchmark", "members")):

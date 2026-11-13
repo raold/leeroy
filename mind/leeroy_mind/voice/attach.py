@@ -87,6 +87,9 @@ class VoiceExtension:
 
     async def on_message(self, msg: wire.Message) -> None:
         """What the service sends. The client logs a failure."""
+        notes = getattr(self.app,'voice_notes',None)
+        if notes is not None and notes.receive(msg):
+            return
         if isinstance(msg, wire.Status):
             await self._on_gpu(msg.gpu)
             if self.movement is not None:
@@ -109,6 +112,12 @@ class VoiceExtension:
         them. Run as a task, one at a time and in order, so a hung Ollama never stalls the
         client's receive loop (Ptt, Heard, Played)."""
         if self._gpu_closing:
+            return
+        if getattr(getattr(self.app, 'gpu', None), 'paused', False):
+            if gpu == 'none':
+                self._gpu_held = False
+                self._gpu_arbiter = None
+                await self.app.arbiter.release_live(VOICE_GPU)
             return
         was, self._gpu_held = self._gpu_held, gpu != "none"
         # Take the lease before yielding, so a scheduler tick cannot admit reflection
@@ -141,7 +150,7 @@ class VoiceExtension:
 
     async def _pin_job(self, pin: bool, generation: int) -> None:
         async with self._pin_lock:
-            if self._gpu_closing:
+            if self._gpu_closing or getattr(getattr(self.app, 'gpu', None), 'paused', False):
                 return
             models = self.app.cfg.models
             try:

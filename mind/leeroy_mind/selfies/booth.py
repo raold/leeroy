@@ -12,6 +12,7 @@ import time
 from contextlib import suppress
 from collections import Counter
 
+from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.gpu import LiveLeaseHeld
 
@@ -45,11 +46,15 @@ class PhotoBooth:
     def running(self):
         return self._task is not None and not self._task.done()
 
+    def stop(self):
+        """Ask a running pass to stop, with no await; cancel() then waits for its cleanup."""
+        if self.running and not self._stopping:
+            self._stopping = True
+            self._task.cancel()
+
     async def cancel(self):
         if self.running:
-            if not self._stopping:
-                self._stopping = True
-                self._task.cancel()
+            self.stop()
             # A cancelled hand-over must not cancel or abandon the worker's cleanup.
             await asyncio.wait({self._task})
 
@@ -64,11 +69,14 @@ class PhotoBooth:
 
     def _eligible(self):
         return (self.cfg.enabled and self.cfg.booth and not self.arbiter.holders
+                and not getattr(self.arbiter, 'paused', False)
                 and self.scheduler.presence.offline_seconds() >= OFFLINE_SECONDS
                 and self.scheduler.running is None and not self._exclusive.locked()
                 and self.scheduler.due() is None and not self._cooling())
 
     def problem(self):
+        if getattr(self.arbiter, 'paused', False):
+            return 'The GPU is paused. Resume it from the top bar first.'
         if not self.cfg.enabled or not self.cfg.booth:
             return "The photo booth is off."
         if self.running or self._exclusive.locked():
@@ -187,7 +195,7 @@ class PhotoBooth:
             except asyncio.CancelledError:
                 outcome = "preempted"
                 raise
-            except LiveLeaseHeld:
+            except (LiveLeaseHeld, GpuPaused):  # a lease, or the owner's GPU pause
                 outcome = "preempted"
             except Exception as e:
                 code = code or type(e).__name__

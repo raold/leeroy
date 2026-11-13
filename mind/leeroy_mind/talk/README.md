@@ -52,3 +52,35 @@ busy/AFK delays or advances game activity. Its enabled cadence may turn a long
 message into separate short posts, still in the same channel/thread or DM pair.
 
 Run `python -m pytest -q tests/test_timing_realism.py` for the fake-clock checks.
+
+# Discord message length
+
+`[talk] discord_words` (an integer 0-200, default 90; owner 2026-11-13, "Long and chatty") is
+about the most words a member's message on the guild's Discord runs to: a DM (`dm:<guid>`) or a
+channel (`discord:<id>`), whether it answers his post, opens or continues a server conversation,
+opens a DM, riffs on General or answers late on her own time. It is read with the rest of
+`[talk]`, at mind start and at each login; an invalid value is the default, logged once
+(`talk_discord_words_invalid`). No migration or native rebuild. Code: `discord_length.py`.
+
+- The instruction (`prompt.DISCORD_LENGTH`) takes the place of the template's "one short line"
+  (or "in a few words", or an explicit whisper's "a line or two"): write it the way you would
+  in a Discord DM thread (Discord chat, in a channel), usually a few sentences, a short
+  paragraph when there is something to say (at most about that many words), a single quick
+  sentence when that is all it needs, one paragraph. It ends the template's own text, before
+  its extra (his post, a server seed), so what she answers stays last, with the Lately line and
+  her tail after it as before. The system message keeps her game line, so Ollama's cached
+  prefix is the same in both media; the instruction says Discord is the exception.
+  Banter on Discord drops its own "One short line." for it.
+- Room: the request's `num_predict` is `max(80, ceil(words * 1.6) + 24)` (168 at 90), for that
+  request only (`preset_for`); `num_ctx` (4096) and the blank-line stop never change, and
+  `LIVE_BUDGET` stays 1800 input tokens.
+- A reply Ollama cut at num_predict (`done_reason` "length") goes back to its last sentence end
+  (".", "!", "?", "…" or an emoji); with none it is kept as it is. Each trim logs
+  `discord_line_trimmed` with word counts, never the words.
+- After the model: the "long" tell allows 1.25 times the words (its retry asks for "at most about"
+  that many), the typing lays the message out as one paragraph of up to that many words (never
+  her game line's cap) and at most the store's 2000 characters, and "is typing" lasts at most
+  25 seconds, realism's cadence and a correction included. The filters, the guards, memory
+  extraction and the console take the longer line as it is.
+- 0 is the rollback: one short line on Discord, with the prompts, room, typing and retries as
+  before. A game turn never changes, at any value.

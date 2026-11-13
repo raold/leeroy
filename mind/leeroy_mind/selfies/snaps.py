@@ -180,9 +180,12 @@ def mark_sent(store, snap_id: int, *, sender: int, channel: str, line_id: int,
             (float(now), sender, channel, line_id, snap_id)).rowcount == 1
 
 
-def sent_count(store, since: float) -> int:
-    return _one(store, "SELECT count(*) FROM selfie_snap WHERE status='sent' AND sent >= ?",
-                (since,))
+def sent_count(store, since: float, *, to_him: bool = False) -> int:
+    """Optionally count only the private ration, leaving channel posts independent."""
+    sql = "SELECT count(*) FROM selfie_snap WHERE status='sent' AND sent >= ?"
+    if to_him:
+        sql += " AND channel IN ('whisper','dm')"
+    return _one(store, sql, (since,))
 
 
 def last_sent(store, guid: int) -> float | None:
@@ -199,13 +202,17 @@ def last_sent_to_him(store, guid: int, since: float) -> SnapRow | None:
     return rows[0] if rows else None
 
 
-def open_stock(store, guid: int | None = None) -> int:
+def open_stock(store, guid: int | None = None, *, audience: str | None = None) -> int:
     """Planned plus ready situations, one member's or everyone's."""
-    if guid is None:
-        return _one(store, "SELECT count(*) FROM selfie_snap WHERE kind='situation' "
-                    "AND status IN ('planned','ready')")
-    return _one(store, "SELECT count(*) FROM selfie_snap WHERE kind='situation' AND guid=? "
-                "AND status IN ('planned','ready')", (guid,))
+    sql = "SELECT count(*) FROM selfie_snap WHERE kind='situation' AND status IN ('planned','ready')"
+    params = []
+    if guid is not None:
+        sql += ' AND guid=?'
+        params.append(guid)
+    if audience is not None:
+        sql += ' AND audience=?'
+        params.append(audience)
+    return _one(store, sql, params)
 
 
 def guild_photo_since(store, since: float) -> bool:

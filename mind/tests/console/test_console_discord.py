@@ -493,7 +493,7 @@ def test_typing_is_asked_for_while_a_discord_page_listens_even_out_of_game(data,
             assert app.game.state != "in_game"
             app._subs.add(console_app._Subscriber())
             await app.refresh()
-            assert link.calls == [] and app._typing == []   # no Discord page yet
+            assert link.calls and app._typing == []  # shared GPU status, no Discord dots yet
             await get(app)                                  # a page opens the Discord
             await app.refresh()
             return app._typing
@@ -509,7 +509,7 @@ def test_tables_that_appear_after_the_baseline_are_announced(data, cast):
         "SELECT sql FROM sqlite_master WHERE name LIKE 'discord%' AND sql IS NOT NULL "
         "ORDER BY CASE name WHEN 'discord_thread' THEN 0 WHEN 'discord_message' THEN 1 "
         "WHEN 'discord_reaction' THEN 2 ELSE 3 END")]
-    for t in ("discord_attachment", "discord_reaction", "discord_message", "discord_thread"):
+    for t in ("discord_voice", "discord_attachment", "discord_reaction", "discord_message", "discord_thread"):
         cast.conn.execute(f"DROP TABLE {t}")
     cast.conn.commit()
 

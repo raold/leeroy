@@ -429,7 +429,8 @@ def test_a_first_nothing_to_his_dm_is_asked_again(store, clock, tmp_path):
     answer(rig, talk, mid)
     [m] = answers(rig, "dm:104", mid)
     assert len(rig.chat_calls()) == 2
-    assert "Answer Zan's message in a line, in your own voice." in rig.prompts()[-1]
+    # a longer Discord message ([talk] discord_words, 90 by default) is not asked for a line
+    assert "Answer Zan's message in a few sentences, in your own voice." in rig.prompts()[-1]
     # An explicit mention also gets one retry; an ordinary drawn answer may stay quiet.
     rig.script("(nothing)", "yes im here")
     calls = len(rig.chat_calls())

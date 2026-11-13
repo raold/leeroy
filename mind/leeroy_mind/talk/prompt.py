@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from leeroy_mind.discord.channels import is_discord, is_private
 from leeroy_mind.human import THEY_FORMS, HumanIdentity
 from leeroy_mind.personas.schema import Persona, Typing
 from leeroy_mind.personas.screens import redact_real_name
@@ -277,11 +278,35 @@ _TOPIC = {
 # the exception to the standing rule (fix round 1, review minor 10).
 MORE_LINES = "in a line or two, more than your usual one line"
 
+# A Discord turn ([talk] discord_words, talk/discord_length.py; owner 2026-11-13, "Long and
+# chatty"): its template's game length goes (DISCORD_DROPS, each with its comma or space, so the
+# sentence still reads), and DISCORD_LENGTH ends the template, before its extra (his post, the
+# seed), so what she answers stays last, then the Lately line and her tail as before. It says it
+# is the exception to the standing rules' one line, as MORE_LINES does, so the system message
+# (Ollama's cached prefix) stays the same for the game.
+DISCORD_LENGTH = ("This is Discord, not the game, so more than your usual one line: write it the "
+                  "way you'd write in {where}, usually a few sentences, a short paragraph when "
+                  "you have something to say (at most about {words} words), a single quick "
+                  "sentence when that's all it needs. One paragraph, no line breaks.")
+DISCORD_WHERE = {"dm": "a Discord DM thread", "channel": "Discord chat"}
+DISCORD_DROPS = ((", in one short line", ""), (" in one short line", ""), (", one short line", ""),
+                 ("One short line, the way", "Say it the way"), (", in a few words", ""))
+
+
+def discord_length(channel: str, words: int) -> str:
+    """DISCORD_LENGTH for a turn on `channel` holding about `words`: a DM's or a channel's; ""
+    for a game channel or with no words (the one short line, as before)."""
+    if words <= 0 or not is_discord(channel):
+        return ""
+    where = DISCORD_WHERE["dm" if is_private(channel) else "channel"]
+    return DISCORD_LENGTH.format(where=where, words=words)
+
 
 def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
                        extra: str = "", forms: tuple[str, str, str] = THEY_FORMS,
                        lead: str = "", after: str = "", tail: str = "", long: bool = False,
-                       quiet: bool = True, to_him: bool = False) -> str:
+                       quiet: bool = True, to_him: bool = False, channel: str = "",
+                       discord_words: int = 0) -> str:
     """The TurnKind template on one line. `lead` (her romance text) comes before it, so the
     turn's own instruction is what the model reads last (prompts I5); `extra` (a bit, an aside,
     a fact) goes after it, cut to EXTRA_CAP_TOKENS, and a cut is logged without the text.
@@ -290,13 +315,24 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     last thing she reads; `long` lets the line run to "a line or two". An opener says "Chat
     has gone quiet." only when `quiet` (rehearsal 2: it said so under lines from just now).
     `forms` are the addressee's pronouns (HumanIdentity.forms when it is the human); nothing
-    is assumed without them. `to_him` on an OPEN: the opener addressed to him (OPEN_TO_HIM)."""
+    is assumed without them. `to_him` on an OPEN: the opener addressed to him (OPEN_TO_HIM).
+    A turn on a Discord `channel` with `discord_words` writes as on Discord (discord_length, in
+    place of the one short line and of `long`, at the template's end before `extra`, never cut);
+    any other turn is as before."""
     tmpl = OPEN_TO_HIM if to_him and kind is TurnKind.OPEN else INSTRUCTIONS[kind]
-    if long:
+    length = discord_length(channel, discord_words)
+    if length:
+        for old, new in DISCORD_DROPS:
+            tmpl = tmpl.replace(old, new)
+        tmpl = (tmpl.replace("{extra}", "{length} {extra}") if "{extra}" in tmpl
+                else tmpl + " {length}")
+    elif long:
         tmpl = tmpl.replace("in one short line", MORE_LINES).replace(
             "One short line", MORE_LINES[3:].capitalize())
     from leeroy_mind.prompts import note_template
     note_template("talk.instruction."+kind.value,tmpl)
+    if length:
+        note_template("talk.discord_length", DISCORD_LENGTH)
     if "{addressee}" in tmpl and not addressee:
         raise ValueError(f"a {kind} turn needs an addressee")
     extra = " ".join(extra.split())
@@ -307,7 +343,7 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     they, them, their = forms
     text = tmpl.format(addressee=addressee, topic=topic or _TOPIC.get(kind, "what just happened"),
                        extra=extra, they=they, them=them, their=their,
-                       quiet="Chat has gone quiet. " if quiet else "")
+                       quiet="Chat has gone quiet. " if quiet else "", length=length)
     return " ".join(f"{lead} {text} {after} {tail}".split())
 
 
@@ -517,13 +553,15 @@ def line_age(seconds: float) -> str:
 
 
 def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
-                   now: float | None = None) -> str:
+                   now: float | None = None, photo: str = '') -> str:
     """'Name: text' for guild chat, 'Name (raid): text' elsewhere, 'Name (on vent): text' in a
     voice room, markup stripped, and with `now` its age in front ('[3m ago] Name: text'), so an
     old line never reads as current.
     `names` maps guids to how the speaker knows them (the human by his nickname)."""
     who = names.get(row.from_guid) or row.from_name or "someone"
     text = " ".join(strip_wow_markup(row.text).split())
+    if photo:
+        text += ' ' + ' '.join(photo.split())
     if row.channel == "guild":
         tag = ""
     elif row.channel == "whisper":

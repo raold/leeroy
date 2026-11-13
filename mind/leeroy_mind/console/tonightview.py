@@ -100,7 +100,7 @@ def _presence(status):
     connected = isinstance(world,dict) and world.get('connected') is True
     human = world.get('human_online') if connected and type(world.get('human_online')) is bool else None
     online = world.get('cast_online') if connected and type(world.get('cast_online')) is int else None
-    return {'human_online':human,'cast_online':online}
+    return {'human_online':human,'cast_online':online, 'gpu': (status or {}).get('gpu')}
 
 
 def _guild(conn,status):

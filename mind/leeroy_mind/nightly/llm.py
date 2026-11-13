@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from leeroy_mind.human import HumanIdentity
-from leeroy_mind.llm.client import LLMClient, LLMError
+from leeroy_mind.llm.client import GpuPaused, LLMClient, LLMError
 from leeroy_mind.llm.presets import REASON, STRUCTURE, JSONJobFailed, Preset, chat_json
 from leeroy_mind.logs import log
 from leeroy_mind.prompts import load_prompt
@@ -270,6 +270,8 @@ class Reasoner:
             try:
                 r = await self._chat(self.model, messages, options=options,
                                      think=True, timeout=REASON.timeout)
+            except GpuPaused:
+                raise  # the owner's pause stops the night; it is no unit's failure
             except LLMError as e:
                 raise ReflectionError(f"reflection request 'think' failed: {e}",
                                       fatal=False) from e
@@ -300,6 +302,8 @@ class Reasoner:
             try:
                 return await chat_json(SimpleNamespace(chat=self._chat), self.model, messages,
                                        schema, preset, valid)
+            except GpuPaused:
+                raise
             except (JSONJobFailed, LLMError) as e:
                 raise ReflectionError(
                     f"reflection request {schema.get('title', 'json')!r} failed: {e}",

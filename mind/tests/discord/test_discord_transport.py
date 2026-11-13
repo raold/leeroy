@@ -2,6 +2,7 @@
 composed and typed as usual, its line is stored as a discord_message row and recorded as said,
 and nothing of it ever reaches the bridge (no Say, no emote), on any path. Invented text only."""
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -203,11 +204,23 @@ def test_spoken_channel_rules_do_not_apply(store, clock, tmp_path):
 
 def test_three_lines_become_one_message(store, clock, tmp_path):
     rig = make_rig(store, clock, tmp_path, reply=THREE)
+    # [talk] discord_words = 0: her game line's length, as before the longer Discord messages
+    rig.engine.cfg = replace(rig.cfg, talk=replace(rig.cfg.talk, discord_words=0))
     # typed as one message: its typing runs within the 120 s answer deadline (ruling R9)
     [said] = rig.speak_turn(discord_turn(rig, 101, "raid-planning"), seconds=150)
     [m] = messages(store.conn, "raid-planning")
     assert m["text"] == said and said.count("\n") == 2
     assert len(chat_rows(store, "discord:raid-planning")) == 1
+    assert rig.sent.log == []
+    rig.close()
+
+
+def test_a_longer_message_is_one_paragraph(store, clock, tmp_path):
+    rig = make_rig(store, clock, tmp_path, reply=THREE)  # [talk] discord_words, 90 by default
+    [said] = rig.speak_turn(discord_turn(rig, 101, "raid-planning"), seconds=150)
+    [m] = messages(store.conn, "raid-planning")
+    assert m["text"] == said and "\n" not in said
+    assert rig.engine.said_words(chat_rows(store, "discord:raid-planning")[0]["id"]) == THREE
     assert rig.sent.log == []
     rig.close()
 

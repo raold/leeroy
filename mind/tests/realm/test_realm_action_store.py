@@ -390,8 +390,10 @@ def test_a_failed_leave_that_skipped_members_keeps_the_failure_rules(store, chan
     store.observe_realm_job(leave_job(skipped=(102,), state="failed", reason="wg_private_state_unavailable",
                                       guid=103, changed=changed), now=3)
     record = store.get("leave")
-    assert record.state == state and action_store.leave_skipped_guids(record) == ()
-    assert "skipped_at" not in json.loads(record.evidence)
+    assert record.state == state and action_store.leave_skipped_guids(record) == (102,)
+    assert json.loads(record.evidence)["skipped_at"] == 3
+    assert action_store.skipped_backoff(record, 602) == (102,)
+    assert action_store.skipped_backoff(record, 603) == ()
     assert sorted(g for h in store.holds() for g in h.guids) == list(held)
 
 
@@ -802,7 +804,8 @@ def test_step_refusals_are_native_refusals_whose_reservation_is_released():
     assert "if (!reason.empty()) return fenced(std::move(reason));" in tick
     assert "return finish(std::move(why), pending, false, !pending);" in tick
     assert 'return finish(result.reason.empty() ? "refused" : result.reason, false, true, result.unchanged);' in tick
-    assert "if (retain) reservation.retained = true;\n            else _state->Release(entry.id);" in tick
+    assert 'bool const emptyLeave = entry.kind == "leave_pvp"' in tick
+    assert "if (retain && !emptyLeave) reservation.retained = true;\n            else _state->Release(entry.id);" in tick
     assert "if (reservation.guildJoinAttempts.empty()) return true;" in tick
 
 

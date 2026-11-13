@@ -2,6 +2,7 @@
 
 #include "LeeroyRealmCommands.h"
 #include "LeeroyRealmContinuations.h"
+#include "LeeroyRealmRelease.h"
 #include "LeeroyProtocol.h"
 #include <algorithm>
 #include <charconv>
@@ -239,6 +240,17 @@ std::optional<GetRealmPvpCmd> ParseGetRealmPvp(json const& j, std::string& error
 std::optional<RearmCmd> ParseRearm(json const& j, std::string& error)
 {
     Fields f(j, error); RearmCmd out; f.List("guids", out.guids, 1, 150); return f.Result(std::move(out));
+}
+std::optional<RealmForgetCmd> ParseRealmForget(json const& j, std::string& error)
+{
+    Fields f(j, error); RealmForgetCmd out;
+    f.String("origin_id", out.originId, 1, 128);
+    f.Require(!out.originId.empty() && std::all_of(out.originId.begin(), out.originId.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c == '_' || c == '-';
+    }), "origin_id");
+    f.Require(!j.contains("id") || !j.at("id").is_string() || j.at("id").get<std::string>() != out.originId, "origin_id");
+    return f.Result(std::move(out));
 }
 std::optional<WgJoinCmd> ParseWgJoin(json const& j, std::string& error)
 {
@@ -606,7 +618,14 @@ json MakeRealmJob(RealmJob const& e)
     if (!e.pvpOwner.empty()) body["pvp_owner"] = e.pvpOwner;
     if (!e.ok && e.changed.has_value()) body["changed"] = *e.changed;
     if (!e.skipped.empty()) body["skipped"] = e.skipped;
+    if (!e.ok && !e.released.empty()) body["released"] = e.released;
+    // Only a fixed code: the mind refuses the whole event over any other, so it never carries one.
+    if (!e.ok && e.readbackGuid && ReadbackCheck(e.check)) { body["readback_guid"] = e.readbackGuid; body["check"] = e.check; }
     return body;
+}
+json MakeRealmForgotten(std::string const& id, std::string const& originId, std::string const& outcome, std::size_t members)
+{
+    return {{"type", "realm_forgotten"}, {"id", id}, {"origin_id", originId}, {"outcome", outcome}, {"members", members}};
 }
 json MakeRealmPvp(std::string_view id, ContinuationOwner const& owner)
 {

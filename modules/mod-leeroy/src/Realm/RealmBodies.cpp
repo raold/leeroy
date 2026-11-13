@@ -5,6 +5,7 @@
 #include "LeeroyEvents.h"
 #include "LeeroyRealmCleanup.h"
 #include "LeeroyRealmFailure.h"
+#include "LeeroyRealmRelease.h"
 #include "LeeroyRealmTransmog.h"
 #include "Bag.h"
 #include "Battleground.h"
@@ -38,7 +39,6 @@ namespace
 {
 using Json = nlohmann::json;
 constexpr float Pi = 3.14159265358979323846f;
-constexpr std::uint64_t OperationWaitMs = 60000;
 RealmStep Refuse(std::string why) { return {StepState::Refused, std::move(why)}; }
 RealmStep UnchangedRefusal(std::string why) { return {StepState::Refused, std::move(why), 0, {}, true}; }
 // A member whose own step refused before it changed anything, for a reason of its own: Tick ends
@@ -672,10 +672,21 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         if (auto skip = SkipLeaveMember(entry, guid, why)) return *skip;
         return refuse(std::move(why));
     };
-    if (Expired(state)) return fail("leave_cleanup_unproved");
     // A fault in another member already rechecked (one this job took out or touched) is the job's own.
     if (auto fault = OrdinaryCleanupFault(entry); !fault.reason.empty())
-        return fault.guid == guid ? fail(std::move(fault.reason)) : refuse(std::move(fault.reason));
+    {
+        auto const check = LeaveReadbackCheck(entry, fault.guid);
+        if (fault.guid != guid && !Expired(state) && (check == "teleport" || check == "exit")) return Pending(state);
+        auto why = LeaveReadbackFault(entry, fault.guid,
+            check.empty() ? std::string(CleanupFaultCheck(fault.reason)) : check, fault.reason);
+        return fault.guid == guid ? fail(std::move(why)) : refuse(std::move(why));
+    }
+    if (Expired(state))
+    {
+        auto check = LeaveReadbackCheck(entry, guid);
+        return fail(check.empty() ? "leave_cleanup_unproved"
+            : LeaveReadbackFault(entry, guid, check, "leave_cleanup_unproved"));
+    }
     auto stage = state.at("stage").get<std::string>();
     if (stage == "shared_lfg") return LeaveOnlineLfgGroup(entry, guid);
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
@@ -683,12 +694,14 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     {
         auto const destination = LoadDestination(state.at("dest"));
         if (bot->IsBeingTeleported())
-            return TeleportMatches(bot, destination) ? Pending(state) : Unproved(state, "leave_worldport_changed");
+            return TeleportMatches(bot, destination) ? Pending(state)
+                : Unproved(state, LeaveReadbackFault(entry, guid, "teleport", "leave_worldport_changed"));
         if (!At(FindOnline(guid), destination)) return Pending(state);
         if (bot->GetDelayedOperations() & (DELAYED_BG_MOUNT_RESTORE | DELAYED_BG_TAXI_RESTORE | DELAYED_BG_GROUP_RESTORE))
             return Pending(state);
         auto group = GroupId(bot);
-        if (group != state.at("result_group").get<std::uint64_t>()) return Unproved(state, "leave_group_cleanup_unproved");
+        if (group != state.at("result_group").get<std::uint64_t>())
+            return Unproved(state, LeaveReadbackFault(entry, guid, "group", "leave_group_cleanup_unproved"));
         auto source = state.at("source").get<std::string>();
         if ((source == "bg" && bot->InBattleground())
             || (source == "wg" && WgMember(field, bot->GetGUID()))
@@ -766,16 +779,19 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
             {{bot->GetMapId(), bot->GetInstanceId(), GroupId(bot)}}); !why.empty()) return fail(why);
         state["changed"] = true;
         sLFGMgr->LeaveLfg(bot->GetGUID());
-        if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE) return Unproved(state, "lfg_queue_leave_unproved");
+        if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE)
+            return Unproved(state, LeaveReadbackFault(entry, guid, "lfg", "lfg_queue_leave_unproved"));
         return Pending(state);
     }
     if (field && WgMember(field, bot->GetGUID()))
         return fail("wg_private_state_unavailable");
     if (QueuedForPvp(bot) || bot->InBattleground() || sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE
         || (bot->GetGroup() && (bot->GetGroup()->isLFGGroup() || bot->GetGroup()->isBGGroup() || bot->GetGroup()->isBFGroup())))
-        return fail("leave_cleanup_unproved");
-    if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
+        return fail(LeaveReadbackFault(entry, guid, LeaveReadbackCheck(entry, guid), "leave_cleanup_unproved"));
+    if (entry.cursor + 1 < entry.guids.size())
+        if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
     bool const bodyChanged = state.at("changed").get<bool>() || TouchedByCleanup(entry, guid);
+    if (state.at("changed").get<bool>()) RecordOwnStepChange(entry, guid);
     auto result = Done(entry, bodyChanged ? 1 : 0);
     result.unchanged = !bodyChanged && !entry.payload.value("cleanup_mutated", false);
     return result;

@@ -72,6 +72,7 @@ export class Discord {
     this.categories = []; this.dms = []; this.members = []; this.human = { guid: 0, name: "" };
     this.windows = new Map(); this.error = ""; this.loaded = false; this.missing = [];
       this.photos = false;
+    this.voice_notes = false;
   }
   channels() {
     return this.categories.flatMap(function (c) { return c.channels; }).concat(this.dms.map(function (d) {
@@ -80,6 +81,7 @@ export class Discord {
   }
   adopt(data, thread) {
     this.photos = data.photos === true;
+    this.voice_notes = data.voice_notes === true;
     this.categories = arr(data.categories); this.dms = arr(data.dms); this.members = arr(data.members);
     this.human = data.human || this.human; this.loaded = true; this.error = ""; this.missing = arr(data.missing);
     var current = new Set(this.channels().map(function (c) { return viewOfChannel(c.id); }));

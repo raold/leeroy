@@ -7,7 +7,7 @@ features attach as parts (parts.py); a command the direct part prepared is its o
 
 import asyncio
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import uuid
 
@@ -24,6 +24,7 @@ from .actions import ActionContext, ActionQueue
 from .announce import Announcer
 from .config import load_realm_config
 from .fact_store import FactStore, FactWriteRejected
+from .forget import ForgetReceipts
 from .guard import FALLBACK, FALLBACK_RETRY_S, FALLBACK_TRIES, Admission, KickGuard
 from .kill_retention import PrivateKillRejected, PrivateKillStore
 from .ledger import Ledger, actor_exclusions_in_unit
@@ -108,6 +109,7 @@ class Realm:
         self.ports.set_enabled(self.enabled)
         self.ledger = Ledger(app.store, self.ports, self._facts)
         self.action_store = ActionStore(self.ports.conn)
+        self.forget = ForgetReceipts(self.action_store, app.bridge.send, self._forget_context, app.clock)
         self.announcer = Announcer(app.store, process_id=self._process_id, clock=app.clock)
         self.guard = KickGuard(app.store, self.ports, process_id=self._process_id, clock=app.clock)
         self._asking = None
@@ -154,6 +156,13 @@ class Realm:
         return ActionContext(self.enabled and not self._stopping, connected, known,
                              self._generation, self._process_id, self._connection_epoch,
                              self._guild, self._human)
+
+    def _forget_context(self):
+        context = self.action_context()
+        if (self._stopping or self.app.store is not self._source_store
+                or self.app.bridge is not self._source_bridge):
+            return replace(context, connected=False, presence_known=False)
+        return context
 
     def _invalidate(self):
         self._generation += 1
@@ -641,6 +650,11 @@ class Realm:
             self.on_bot_job(ev)
         elif name == "realm_pvp":
             self.on_realm_pvp(ev)
+        elif name == "realm_forgotten" and self._delivery_epoch(ev) == self._transport_epoch:
+            try:
+                self.forget.observe(ev)
+            except Exception as error:  # Settles nothing; a later connection asks again.
+                log.warning("realm_forget_failed: %s", type(error).__name__)
         elif name == "guard" and ev.action == "his_kick":
             store.record_kick(self.ports.conn, ev.guid, ev.ts / 1000, ev.rank)
         elif name == "guard":
@@ -692,6 +706,11 @@ class Realm:
         # Retained reservations and provider releases continue to be observed
         # while disabled. Callbacks still cannot admit local-disabled work.
         self.bodies.poll()
+        if not self._stopping:
+            try:
+                self.forget.tick()  # Operator cleanup works while ordinary Realm work is disabled.
+            except Exception as error:  # Never the Realm loop's failure; it sends nothing then.
+                log.warning("realm_forget_failed: %s", type(error).__name__)
         if not self.enabled or self._stopping:
             return
         state = self.ports.raid_state()
@@ -739,6 +758,7 @@ class Realm:
         await asyncio.shield(self._close_task)
 
     async def _drain(self):
+        await self.forget.close()
         if self._children:
             await asyncio.gather(*tuple(self._children), return_exceptions=True)
         await self.queue.close()

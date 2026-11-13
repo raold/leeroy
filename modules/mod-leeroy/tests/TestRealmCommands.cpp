@@ -44,6 +44,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
     if (type == "rpg_status") return ParseRpgStatus(j, error).has_value();
     if (type == "leave_pvp") return ParseLeavePvp(j, error).has_value();
     if (type == "get_realm_pvp") return ParseGetRealmPvp(j, error).has_value();
+    if (type == "realm_forget") return ParseRealmForget(j, error).has_value();
     if (type == "rearm") return ParseRearm(j, error).has_value();
     if (type == "wg_join") return ParseWgJoin(j, error).has_value();
     if (type == "arena_team") return ParseArenaTeam(j, error).has_value();
@@ -84,6 +85,7 @@ void RejectField(std::string_view fixture, char const* field, json bad)
 }
 json Event(std::string_view type)
 {
+    if (type == "realm_forgotten") return MakeRealmForgotten("forget-request", "old-root", "released", 2);
     if (type == "world_roster") return *Leeroy::World::RosterPage("roster-token",21,1,0,1,json::array({
         json{{"guid",101},{"account",11},{"guild_id",50},{"guild_name","Test rivals"},
              {"name","Fixture"},{"race",2},{"class",1},{"gender",0},{"level",24},{"rank",3},
@@ -283,7 +285,7 @@ LEEROY_TEST(Realm_FixtureLines)
             CHECK(valid); CHECK_EQ(row.at("name").get<std::string>(), type + "_ok"); full.insert(type);
         }
     }
-    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 18u);
+    CHECK_EQ(full.size(), kCommandTypes.size()); CHECK_EQ(events.size(), 19u);
     for (auto type : kCommandTypes) CHECK(full.contains(std::string(type)));
 }
 
