@@ -81,7 +81,7 @@ class Rehearsal:
         self.ports = set()
         self.worker = None
 
-    async def start(self, state="running", *, photos=False, learning=False):
+    async def start(self, state="running", *, photos=False, learning=False, voice_notes=False):
         cast = []
         for member in members():
             row = asdict(member)
@@ -97,7 +97,8 @@ class Rehearsal:
             "[guild]\noffline_raids_per_day = 0\n"
             f'worldserver_conf = "{(self.root / "absent.conf").as_posix()}"\n'
             f'[photos]\nenabled = {str(photos).lower()}\n'
-            + ('[signals]\nenabled = true\n[learn]\nenabled = true\n' if learning else ''), encoding="utf-8")
+            + ('[signals]\nenabled = true\n[learn]\nenabled = true\n' if learning else '')
+            + ('[voice_notes]\nenabled = true\n' if voice_notes else ''), encoding="utf-8")
         seed(self.data)
         command, env = fake_command(self.root)
         self.worker = SelfieWorker(command, env=env)

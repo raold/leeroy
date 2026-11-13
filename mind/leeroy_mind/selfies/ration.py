@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import math
+import random
 
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.romance import FOND_SHARE, WHISPER_WEIGHT, forward
 from leeroy_mind.tuning.effective import dials_of
 
 PER_WEEK = (0, 1, 2, 3, 5, 7, 10, 14, 20, 28, 40)
+CHANNEL_PER_DAY = (0, 0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12)
+CHANNEL_KEY = "photos:channel:{date}"
 MEMBER_STOCK = 2
 MEMBER_GAP_S = 172800.0
+SEND_MIN_AGE = 25  # new Discord delivery; legacy profile-photo rendering is unchanged
 WEEK_S = 604800.0
 DAY_S = 86400.0
 BASE = {"whisper": 0.35, "reply": 0.25, "guild": 0.04, "guild_photo": 0.5}
@@ -29,6 +33,29 @@ def per_day(dial: int) -> int:
 
 def stock_target(dial: int) -> int:
     return min(40, 2 * per_week(dial))
+
+
+def him_stock(dial: int) -> int:
+    return stock_target(dial)
+
+
+def channel_per_day(dial: int) -> float:
+    return CHANNEL_PER_DAY[max(0, min(10, dial))]
+
+
+def channel_stock(dial: int) -> int:
+    return min(20, math.ceil(3 * channel_per_day(dial)))
+
+
+def channel_room(dial: int, *, today: int, draw: float | None = None) -> bool:
+    """The fractional last slot needs a draw. Senders pass the local day's stable draw,
+    so repeated opportunities and restarts cannot turn half a photo/day into one/day."""
+    budget = channel_per_day(dial)
+    if type(today) is not int or today < 0 or today >= math.ceil(budget):
+        return False
+    if today < math.floor(budget):
+        return True
+    return (random.random() if draw is None else draw) < budget % 1
 
 
 def send_weight(p, rel: Relationship | None) -> float:

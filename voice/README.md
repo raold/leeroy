@@ -12,6 +12,11 @@ push-to-talk audio is not written to disk unless the debug recording is switched
 and keeps clips 24 hours), and the log holds ids, counts and timings, never what was said. Every
 voice is a blend of synthetic stock voices: none is cloned from a real person.
 
+Optional [Discord DM voice notes](../mind/leeroy_mind/voice_notes/README.md) use this service
+to render native audio files or transcribe an uploaded recording. They never open a room or
+microphone, and those files are kept indefinitely. The feature is off by default; restart
+voice, mind and console together when deploying its new wire types.
+
 ## Running it
 
 It needs Python 3.12 (misaki and kokoro-onnx do not support 3.13 or later), in its own venv:

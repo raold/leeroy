@@ -29,7 +29,8 @@ def counts(store, local_date):
 def increment(store, local_date, **changes):
     if not store.in_unit:
         raise RuntimeError('server_receipt_without_transaction')
-    value = counts(store, local_date)
+    checked = counts(store, local_date)
+    value = {**json.loads(store.get_meta(DAY_KEY.format(date=local_date)) or '{}'), **checked}
     for key, amount in changes.items():
         if key not in COUNTS or type(amount) is not int or amount < 0:
             raise ValueError('invalid_server_count')

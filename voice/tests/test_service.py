@@ -665,7 +665,7 @@ def test_status(tmp_path, fake_bank):
     async def body(rig):
         await rig.snapshot()
         await rig.tick()
-        assert rig.got(Status)[-1] == Status(True, "ok", "none", "parakeet", False, 0, ())
+        assert rig.got(Status)[-1] == Status(True, "ok", "none", "parakeet", False, 0, (), True)
         count = len(rig.got(Status))
         await rig.clock.advance(STATUS_S + 0.1, step=0.5)
         await eventually(lambda: len(rig.got(Status)) == count + 1)
@@ -1220,7 +1220,7 @@ def test_the_state_follows_server_pys_contract(tmp_path, fake_bank):
         assert state["ptt"] is False and state["volumes"] == {} and state["mutes"] == []
         assert state["invites"] == [] and state["mind"] is True
         assert state["transcript"][0]["kind"] == "say"
-        assert set(state["status"]) == {"ok", "mic", "gpu", "stt", "ui", "queue", "errors"}
+        assert set(state["status"]) == {"ok", "mic", "gpu", "stt", "ui", "queue", "errors", "render"}
         assert state["status"]["errors"] == []
     go(tmp_path, fake_bank, body)
 

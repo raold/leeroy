@@ -68,6 +68,13 @@ class DiscordDesk:
         from leeroy_mind.photos.config import PhotosConfig, load_photos_config
         self.photos = (load_photos_config(Path(app.data_dir) / 'mind.toml')
                        if getattr(app, 'data_dir', None) is not None else PhotosConfig())
+        from leeroy_mind.voice_notes.service import VoiceNotes
+        app.voice_notes = VoiceNotes(app)
+        if app.voice_notes.config.enabled:
+            if (engine:=getattr(app,'engine',None)) is not None:
+                engine.voice_notes = app.voice_notes
+            if (drain := getattr(app,'register_shutdown_drain',None)) is not None:
+                drain(app.voice_notes.close)
         self._photo_posts: list[float] = []
         self._photo_tasks: set[asyncio.Task] = set()
         self._photo_memories: set[tuple[int, int]] = set()
@@ -106,6 +113,12 @@ class DiscordDesk:
         store, now, action = app.store, app.clock.now(), args["action"]
         if action == "post":
             self._check_dm(args["channel"], me)
+            if 'voice' in args:
+                from leeroy_mind.voice_notes.files import AudioRefused, WORDS as AUDIO_WORDS
+                try:
+                    return app.voice_notes.human_post(args,self)
+                except AudioRefused as error:
+                    raise _Refused('voice_note_'+error.code,AUDIO_WORDS.get(error.code,'The recording could not be saved.')) from None
             image = args.get('image')
             attachment = None
             if image is not None:
