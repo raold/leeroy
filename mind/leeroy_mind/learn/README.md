@@ -140,7 +140,8 @@ Each call sees the best and worst three exchanges in that member's most-observed
 room, with the owner's preceding line and bounded recent context. It never mixes
 rooms or game and Discord text. Whispers and DMs contain only that member/owner
 pair and can produce only whisper lessons; group/voice evidence only group
-lessons. Officer, private/unknown voice rooms and unsupported channels are excluded. An exchange without an
+lessons. Officers may also learn from officer game/Discord/voice exchanges, whose
+provenance remains officers-only. Other private/unknown voice rooms and unsupported channels are excluded. An exchange without an
 identifiable recent owner line is omitted. Choosing one room per night is a
 deliberate privacy boundary; other rooms may be coached on later nights.
 
@@ -165,7 +166,8 @@ registry, the schema requires a null arm; coaching still works.
 `python -m leeroy_mind learn lessons --data-dir <data> [--guid N]` opens the
 database read-only, without migration, and prints unexpired active/proposed notes
 to the terminal. Text never enters logs. The stage stores notes but does not yet
-change live prompts; live integration and the Lab controls follow separately.
+change live prompts unless the separate `apply` switch below is enabled. The Lab
+provides approve, veto, expire and freeze controls.
 
 The central outgoing-line commit writes one recipe per generation, anchored to
 its first delivered line, in the same transaction as `chat_line`. Later fragments
@@ -188,17 +190,19 @@ recipes remain independent: the migration does not guess old generation boundari
 
 Recipes contain only the turn-kind/template identifiers and a 16-character
 SHA-256 version of the effective built-in templates and active overlays, SHA-256 of effective
-member and world dial values, model identifier, guard verdict, and empty arm and
-lesson ID arrays. Dial values are captured at composition before any model wait;
+member and world dial values, model identifier, guard verdict, and applied arm and
+lesson ID arrays (empty when application is off). Dial values are captured at composition before any model wait;
 the model ID is captured at the actual call. A dial change during generation
 therefore cannot relabel the old prompt. Template text, names, prompts and persona content are absent.
 Template identifiers name the turn kind and the template/overlay names actually
 loaded at composition. Task-local tracing hashes those texts without retaining
 them, consuming randomness or changing the prompt. Changes while delivery waits
 cannot relabel the captured recipe. Supplied templates have model `none`.
-Generation
-parameter attribution and arm/lesson assignment remain for their respective
-learning tasks.
+The optional `learn:recipe:<anchor-line-id>` meta receipt has `version: 1`, a
+`callback_id` (or null), a learned `num_predict` (or null), and `parameters`, the
+numeric generation options captured at the actual model call. It contains no
+prompt, lesson, callback or chat text. The receipt and callback-use row commit
+with the recipe; subsequent burst fragments share the first line's attribution.
 
 ## Variant arms and the bandit
 
@@ -208,9 +212,9 @@ or `frozen_families = ["length"]` provides an owner veto. Invalid learn settings
 disable the entire table. Restart after configuration changes.
 
 `freeze = true` (or the Lab's Freeze learning) stops all learning, not only the
-bandit: reward scoring, recipe capture, bandit selection and credit, coach lessons
+bandit: reward scoring, bandit selection and credit, coach lessons
 and arm proposals, preference and vector capture, the voice-fingerprint stage and
-banter's rewarded jokes. Feedback is still saved, and the 90-day retention of
+banter's rewarded jokes. Feedback and delivered recipes are still saved, and the 90-day retention of
 private drafts and vectors keeps running. The Lab can freeze more and lift its own
 freezes; it cannot lift a freeze or a frozen family that mind.toml sets.
 
@@ -222,9 +226,8 @@ using effective humour/forward and the lesser of member/world romance dials,
 gender and callback/fingerprint switches supplied in `Context`. A capped choice
 records control, and disabled callback/typing families also record control.
 Renderers still recheck current caps and use fixed wording; no instruction text
-is accepted in parameters. This task adds the
-selection/credit API; task 39 wires selection and rejection receipts to live talk.
-Enabling the bandit alone does not alter prompts or choose arms for live lines.
+is accepted in parameters. Live selection and rejection receipts require `apply`
+as described below. Enabling the bandit alone does not alter prompts or choose arms for live lines.
 Its first enabled night registers the built-ins for inspection. Frozen members
 are excluded before the night's batch limit, so they cannot crowd out other credit.
 
@@ -256,8 +259,8 @@ do not decay. A line with no recipe arms is not attributed by guesswork.
 
 Guard rewrites/reactions/drops count as trips. Failed-open and not-run reviews
 (including unavailable/skipped reviews) count as neither clean nor tripped screens.
-The future
-send adapter can call `reject` for unsent guard/content refusals with an idempotent
+The live
+send adapter calls `reject` for unsent guard/content refusals with an idempotent
 attempt ID; these do not count as rewarded uses. Retirement happens only at night,
 pooling screened uses across contexts: at least 20 arm and 20 family-control uses,
 an excess trip rate of at least 10 percentage points, and the arm's 90% Wilson
@@ -275,3 +278,71 @@ mean rewards and discounted totals by member ID, channel kind and each recipe
 field. Older schemas report unavailable. Days must be 1–3650.
 
 Coach review safeguards: eligible members rotate by last coaching time, then evidence count. Shared romance and content screens gate notes using effective forward, member romance and world romance dials; a false non-manipulation attestation discards only its note. The system prompt uses prompts/nightly_talk_coach.txt with immutable night invariants. Named evidence drops oldest exchanges to fit the context and answer margin. Duplicate arms of any status are ignored, with at most five new proposals per night. Dropped notes cannot be resurrected in the same reply.
+
+## Applying learning to live talk
+
+```toml
+[learn]
+enabled = true
+bandit = true
+apply = false
+```
+
+Set `apply = true` and restart to apply active arms and approved lessons to every
+model-generated pipeline turn: game chat, whispers, voice, banter, Discord answers,
+DMs and autonomous server conversations. It defaults to false; an invalid value
+disables the learning table. Deterministic templates and tuning previews retain
+their existing behavior. Optional typing and callback arms also need
+`[fingerprint] enabled = true` and `[callbacks] enabled = true`, respectively.
+
+Application reads effective freezes, including Lab overrides. TOML freezes cannot
+be lifted by the Lab. A global or member freeze is identical to `apply = false`
+for generated prompts and model options: this task supplies no arms, lessons,
+fingerprint hint or callback. Established features remain their off baseline,
+including banter's pre-existing fingerprint instruction and typing realism.
+Active application replaces banter's old hint with the scoped style block.
+Family freezes select control; other families continue. Freeze and lesson vetoes
+are rechecked after the detached style read, before using its results.
+
+Arms map only to reviewed, non-explicit wording in the user message. Length also
+sets an output allowance of 32–176 tokens for currently valid arm bounds; context
+size stays 4096. Question and follow-up rates choose whether this reply can include
+a question or one extra thought; they never schedule another turn or loosen
+single-line, combat, typing or deadline gates. Humour and teasing are clipped to
+current member dials, gender and the lesser member/world romance setting.
+Guards still review the resulting line, including server anchor cosine 0.35.
+
+The style block has a separate `style` token count and 220-token ceiling. Whole
+notes are removed from its end before trimming the other-medium timeline, chat
+or mandatory instructions/evidence. Recipes include only retained lesson IDs and
+materialized arms; an arm removed by trimming is attributed as control. Callback
+seeds are phrased as something that might fit, remain subject to relevance checks,
+and their IDs join the line's memory provenance. Failed or cancelled sends consume
+no callback use. In-flight offers count against the existing per-member/guild
+quotas; successful first fragments record use atomically. Those quotas still
+require an active recorded owner-play session, so unattended server conversations
+do not receive callbacks while the owner is offline.
+
+Lesson provenance uses `learn:lesson:evidence:<lesson-id>` in meta, with
+`version: 1`, bounded `refs` (`chat:<id>` and `memory:<id>`, at most 128), and
+`forward_min`. Sources include the coach's shown exchanges and memories carried
+by their generated lines. Reinforcement unions sources and raises, never lowers,
+the forward floor. Missing, malformed, deleted or excessive evidence fails closed.
+Legacy lessons without proven sources remain inspectable but do not enter prompts;
+new safely scoped coach notes can replace them. Reinforcement cannot bless an
+unproved legacy note with a wider audience.
+
+Application walks the sources again and uses `recall.scope_ok` and `hidden_ok`.
+Pair notes can reach that pair's whispers and DMs; officer notes reach officers'
+game/Discord turns only. Current officer membership is required. Unknown restricted
+rooms fail closed. Officer coaching stores the existing `group` category while its
+source provenance carries the actual officer audience; no migration is needed.
+Private notes never reach guild, party, public Discord or banter. Historical group
+notes require the current readers to fit the recorded audience. Deleted Discord
+sources are excluded through their durable message-to-line receipts.
+
+Typing hints use only numeric measurements of the latest 300 lines whose complete
+provenance passes the same audience checks, with a persona prior below 50 eligible
+lines. No lexical phrase is injected. This deliberately avoids applying a global
+profile learned from private or officer samples to public chat. Reads run on an
+owned SQLite snapshot; there is no extra model or embedding call.

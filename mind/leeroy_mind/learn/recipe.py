@@ -16,6 +16,10 @@ class Snapshot:
     model_id: str
     arm_ids: tuple[str, ...] = ()
     bandit_context: str | None = None
+    lesson_ids: tuple[int, ...] = ()
+    callback_id: int | None = None
+    num_predict: int | None = None
+    parameters: tuple = ()
 
 
 def describe(turn, persona, config):
@@ -44,16 +48,17 @@ def templates_used(meta, used):
                                        template_version=digest)
 
 
-def called_model(meta, model):
+def called_model(meta, model, options=None):
     snapshot = getattr(meta, "recipe_snapshot", None)
     if isinstance(snapshot, Snapshot):
-        meta.recipe_snapshot = replace(snapshot, model_id=model)
+        params = tuple((k,v) for k,v in (options or {}).items()
+                       if k in ('temperature','min_p','top_p','num_predict','num_ctx','seed')
+                       and type(v) in (int,float))
+        meta.recipe_snapshot = replace(snapshot, model_id=model, parameters=params)
 
 
 def record(conn, line_id, turn, meta, persona, config, *, settings=None):
-    from .control import frozen
-    if frozen(conn,settings):
-        return False
+    # Freeze stops adaptation/application, not observations of what was sent.
     anchor = getattr(meta, "recipe_line_id", None)
     if anchor is not None and conn.execute(
             "SELECT 1 FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id "
@@ -70,13 +75,18 @@ def record(conn, line_id, turn, meta, persona, config, *, settings=None):
     conn.execute("INSERT INTO talk_recipe(line_id,template_id,template_version,dials_hash,"
                  "model_id,guard_verdict,arm_ids,lesson_ids) VALUES (?,?,?,?,?,?,?,?)",
                  (line_id, snapshot.template_id, snapshot.template_version, snapshot.dials_hash,
-                  snapshot.model_id, verdict, "[]", "[]"))
+                  snapshot.model_id, verdict, "[]", json.dumps(snapshot.lesson_ids)))
     if snapshot.arm_ids:
         from .bandit import valid_key
         if not valid_key(snapshot.bandit_context):
             raise ValueError("recipe_bandit_context_invalid")
         conn.execute("UPDATE talk_recipe SET arm_ids=?,bandit_context=? WHERE line_id=?",
                      (json.dumps(snapshot.arm_ids),snapshot.bandit_context,line_id))
+    if snapshot.callback_id is not None or snapshot.num_predict is not None or snapshot.parameters:
+        conn.execute("INSERT INTO meta(key,value) VALUES (?,?)", (f"learn:recipe:{line_id}",
+                     json.dumps(dict(version=1, callback_id=snapshot.callback_id,
+                                     num_predict=snapshot.num_predict,
+                                     parameters=dict(snapshot.parameters)), separators=(",", ":"))))
     conn.execute("INSERT INTO talk_recipe_line VALUES (?,?)", (line_id, line_id))
     meta.recipe_line_id = line_id
     return True

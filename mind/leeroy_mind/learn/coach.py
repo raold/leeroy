@@ -1,7 +1,7 @@
 """One bounded, audience-scoped coaching call per eligible member each night."""
 import json
 from collections import defaultdict
-from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
+from leeroy_mind.discord.channels import is_discord, is_private, is_restricted, is_officer_channel
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.llm import (schema, check_schema, ReflectionError, system_prompt,
@@ -55,6 +55,8 @@ def response_schema(has_arms):
 
 
 def scope(channel):
+    if is_officer_channel(channel):
+        return 'group'  # legacy storage category; actual audience lives in source provenance
     if is_restricted(channel):
         return None
     if channel.startswith('voice:') and (channel.removeprefix('voice:') not in BY_ID or
@@ -133,6 +135,10 @@ def evidence(ctx,guid):
             'WHERE r.guid=? AND c.from_guid=? AND c.origin=\'mind\' AND c.ts>=? AND c.ts<? '
             'AND r.scored_at<=? ORDER BY c.ts,c.id', (guid,guid,*window(ctx),ctx.clock.now())):
         audience=scope(row['channel'])
+        if is_officer_channel(row['channel']) and not conn.execute(
+                "SELECT 1 FROM persona_core WHERE guid=? AND json_extract(json,'$.play.guild_role')='officer'",
+                (guid,)).fetchone():
+            continue
         if audience is None or audience=='whisper' and row['to_guid']!=ctx.human:
             continue
         groups[(audience,row['channel'])].append(row)
@@ -156,6 +162,8 @@ def evidence(ctx,guid):
         if parent is None:
             continue
         exchanges.append({'id':row['id'],'ts':row['ts'],'reward':row['value'],
+            'source_ids':[r['id'] for r in previous]+[row['id']]+[r[0] for r in conn.execute(
+                'SELECT line_id FROM talk_recipe_line WHERE recipe_line_id=?', (row['id'],))],
             'owner':{'speaker':ctx.ident.called,'text':parent['text'][:600]},
             'member':{'speaker':speaker(ctx,guid),'text':generated_text(conn,row)},
             'context':[{'speaker':speaker(ctx,r['from_guid']),'text':r['text'][:300]}
@@ -264,8 +272,12 @@ async def stage(ctx):
                 if effective(store.conn,cfg).freeze:
                     return
                 try:
+                    from .audience import evidence
+                    sources = evidence(store.conn, {ident for exchange in exchanges
+                                        for ident in exchange['source_ids']})
                     lessons.persist(store.conn,guid,result,known=known,night=ctx.night,
-                                    now=ctx.clock.now(),automatic=cfg.auto_lessons,settings=cfg,expected=expected)
+                                    now=ctx.clock.now(),automatic=cfg.auto_lessons,settings=cfg,
+                                    expected=expected,sources=sources)
                     proposed=propose_arm(store,arms,proposal,ctx.night,ctx.clock.now(),settings=cfg)
                 except Exception:
                     raise ValueError('talk_coach_write_failed') from None

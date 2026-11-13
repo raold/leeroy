@@ -20,12 +20,22 @@ class SteadyRandom(random.Random):
         return .5  # deterministic selection and no ten-minute late reply in this test
 
 
+@pytest.mark.parametrize('learning', [False, True])
 @pytest.mark.parametrize('kind,drop', [('purpose',False),('life',False),('his_day',False),
                                       ('life',True),('his_day',True)])
-def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands(store, tmp_path, monkeypatch,kind,drop):
+def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands(store, tmp_path, monkeypatch,kind,drop,learning):
     (tmp_path/'mind.toml').write_text('[guards]\nenabled=true\n', encoding='utf-8')
     clock = engine_clock()
     rig = make_rig(store, clock, tmp_path)
+    if learning:
+        from leeroy_mind.learn import arms, bandit
+        from leeroy_mind.learn.config import LearnCfg
+        rig.engine.learn_enabled=True
+        rig.engine.learn_settings=LearnCfg(enabled=True,bandit=True,apply=True)
+        def choose_arms(conn, guid, context, **kwargs):
+            arms.ensure(conn)
+            return arms.controls() | {'length':'length.1.v1'}
+        monkeypatch.setattr(bandit,'choose',choose_arms)
     rig.world.human_online = False
     rig.script(
         'the harbor walk tomorrow sounds worthwhile if the weather holds',
@@ -92,6 +102,11 @@ def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands
             assert store.get_meta('server:seed:'+chosen[0].key) is not None
             return
         assert len(rows)==5, (history,dropped)
+        if learning:
+            recipes=store.conn.execute('SELECT arm_ids FROM talk_recipe').fetchall()
+            assert len(recipes)==5
+            assert all('length.1.v1' in json.loads(r[0]) for r in recipes)
+            assert all('Your recent style notes' in r['messages'][-1]['content'] for r in requests)
         if kind != 'purpose':
             assert rows[0]['author']==101
             assert undisclosed in json.dumps(requests[0]['messages'])

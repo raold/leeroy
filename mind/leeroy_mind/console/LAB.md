@@ -48,13 +48,13 @@ supports:
   confirmation; the mind rejects an edit based on a stale version.
 
 Freeze overrides live in `meta` under `learn:control:` and survive restarts.
-They override the corresponding `learn.freeze` / `frozen_families` choices but
-never enable learning or change the feature flags in `mind.toml`. Explicit owner
+They add to the corresponding `learn.freeze` / `frozen_families` choices and
+cannot lift TOML freezes, enable learning or change the feature flags in `mind.toml`. Explicit owner
 edits remain available while frozen. Global freeze pauses conversational reward
-scoring, recipe capture, bandit selection/credit/rejection/automatic retirement,
+scoring, learned prompt application, bandit selection/credit/rejection/automatic retirement,
 coach lessons/proposals, preference draft/vector capture, and voice-fingerprint
 updates. Writers recheck after asynchronous work before saving. It does not
-disable chat, raw observations/feedback, memory, safety guards, game simulation or
+disable chat, delivered recipes, raw observations/feedback, memory, safety guards, game simulation or
 combat training. Existing learned state remains stored. An unfreeze resumes the
 configured learners on their next eligible work; it does not start a night run.
 Family freeze pauses that family's selection, credit and automated arm changes.
