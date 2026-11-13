@@ -9,6 +9,7 @@ import json
 from dataclasses import asdict, dataclass
 
 from leeroy_mind.board import text_problem
+from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.text import estimate_tokens
 
@@ -198,7 +199,7 @@ def for_member(nudges, p, member, groups, human):
 
 
 def in_scope(n, channel, recipient, human):
-    discord = channel.startswith(("discord:", "dm:"))
+    discord = is_discord(channel)
     return (n.scope == "everywhere" or n.scope == "game" and (channel in GAME_CHANNELS or channel.startswith("voice:"))
             or n.scope == "discord" and discord
             or n.scope == "whispers" and (channel == "whisper" or channel.startswith("dm:"))

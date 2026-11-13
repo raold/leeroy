@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from leeroy_mind.discord.channels import is_discord, is_private
+from leeroy_mind.discord.channels import is_discord, is_private, is_group
 from leeroy_mind.protocol import Chat
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
@@ -85,6 +85,15 @@ class ThreadTracker:
         if is_private(ev.channel) and not (self._is_cast(ev.from_guid) or self._is_cast(ev.to_guid)):
             return None
         key = thread_key(ev)
+        if is_group(ev.channel):
+            from leeroy_mind.groups.store import membership_epoch
+            from leeroy_mind.groups.audience import parse_readers
+            lines = self._store.chat_lines([line_id])
+            readers = parse_readers(lines[0].audience) if lines else frozenset()
+            # Snapshot readers also fence a line recorded before a membership
+            # change but handed to the tracker afterwards. Unknown readers never mix.
+            audience = ','.join(map(str,sorted(readers))) if readers else f'unknown:{line_id}'
+            key += f'#{membership_epoch(self._store.conn,ev.channel)}:{audience}'
         closed = None
         cur = self._open.get(key)
         if cur is not None and ts - cur.last_ts > self._silence:

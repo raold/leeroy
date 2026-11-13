@@ -1,9 +1,12 @@
 """Group membership changes commit together; historical readers never change."""
 import sqlite3
+import logging
 
 from leeroy_mind.discord.channels import GROUP_PREFIX, is_group
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import clean_name
+
+log = logging.getLogger(__name__)
 
 WORDS = {
     'groups_off': 'Group chats are turned off. Enable groups and restart the mind and console.',
@@ -80,6 +83,7 @@ def create(store, *, human, members, title, created_by, now, config):
                                  (title,created_by,now)).lastrowid
         store.conn.executemany('INSERT INTO discord_group_member(grp,guid,joined) VALUES(?,?,?)',
                               [(gid,g,now) for g in (human,*members)])
+    log.info('group_changed action=create group=%d actor=%d members=%d',gid,created_by,len(members)+1)
     return GROUP_PREFIX+str(gid)
 
 
@@ -96,6 +100,13 @@ def add(store, channel, guid, *, human, now):
                                    (group['id'],guid)).fetchone()[0]
         joined = max(now,prior+0.000001) if prior is not None else now
         store.conn.execute('INSERT INTO discord_group_member(grp,guid,joined) VALUES(?,?,?)',(group['id'],guid,joined))
+    log.info('group_changed action=add group=%d guid=%d members=%d',group['id'],guid,len(have)+1)
+
+
+def membership_epoch(conn, channel):
+    """Every join and departure advances the epoch, even at one clock instant."""
+    return conn.execute('SELECT count(*)+coalesce(sum(left IS NOT NULL),0) '
+                        'FROM discord_group_member WHERE grp=?',(ident(channel),)).fetchone()[0]
 
 
 def remove(store, channel, guid, *, human, now):
@@ -111,6 +122,7 @@ def remove(store, channel, guid, *, human, now):
             store.conn.execute('DELETE FROM meta WHERE key=?',(f'groups:first:{group["id"]}',))
         if guid == human or len(readers(store.conn,channel)) < 3:
             store.conn.execute('UPDATE discord_group SET closed=? WHERE id=?',(now,group['id']))
+    log.info('group_changed action=remove group=%d guid=%d',group['id'],guid)
 
 
 def rename(store, channel, title):
@@ -118,3 +130,4 @@ def rename(store, channel, title):
     with store.transaction():
         group = _open(store,channel)
         store.conn.execute('UPDATE discord_group SET name=? WHERE id=?',(title,group['id']))
+    log.info('group_changed action=rename group=%d',group['id'])

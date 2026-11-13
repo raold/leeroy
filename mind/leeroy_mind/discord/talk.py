@@ -424,6 +424,7 @@ class DiscordTalk:
             return []
         channel, thread, text = row[0], row[1], row[4]
         peer = layout.dm_peer(channel)
+        group_named = frozenset()
         if is_group(channel):
             groups = getattr(app,'groups',None)
             if groups is None or not groups.config.enabled:
@@ -435,7 +436,9 @@ class DiscordTalk:
             if hg not in audience or not visible(prior,channel,speaker=hg,to_guid=0,readers=audience):
                 return []
             chosen,how = self._named(text,replied,audience),'named'
+            group_named = frozenset(chosen)
             if group_chosen is not None:
+                how = 'named' if chosen else 'drawn'
                 chosen = [g for g in group_chosen if g in audience and g != hg and app.personas.get(g)]
             elif not chosen:
                 chosen,how = self._draw(layout.Channel(channel,'Group chat','groups',''),audience),'drawn'
@@ -463,7 +466,7 @@ class DiscordTalk:
             turn.instruction = self.instruction(g, place, message_id, thread) or ""
             meta = TurnMeta(app.engine._new_id(), answers_human=True, why=WHY,
                             discord=DiscordTarget(reply_to=message_id, thread=thread),
-                            discord_named=how == "named",
+                            discord_named=g in group_named if is_group(channel) else how == "named",
                             first_question_answer=not items and classify_human_line(text) == "question_all",
                             recall_query=self.recall_query(message_id) or "")
             items.append((turn, meta))
