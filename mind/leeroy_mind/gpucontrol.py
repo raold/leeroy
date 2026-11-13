@@ -242,13 +242,18 @@ class GpuControl:
             raise ValueError('invalid GPU resume reason')
         if not self.paused:
             return False
-        with self.app.store.transaction():
-            self.app.store.conn.execute('DELETE FROM meta WHERE key=?', (KEY,))
+        # Open the gate before the store: a failed delete must never keep members silent while
+        # he plays. The stored pause then outlives this one (a restart would pause again).
         self.since = None
         self.unload_failed = False
         self.app.arbiter.paused = False
         self.gate.set(False)
         log('gpu_resumed', reason=reason)
+        try:
+            with self.app.store.transaction():
+                self.app.store.conn.execute('DELETE FROM meta WHERE key=?', (KEY,))
+        except Exception as e:
+            log('gpu_resume_store_failed', level=logging.WARNING, reason=type(e).__name__)
         if reason != 'console':
             task = asyncio.create_task(self.restore(), name='gpu-resume')
             self._restore_tasks.add(task)

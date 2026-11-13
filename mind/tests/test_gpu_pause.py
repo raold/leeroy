@@ -774,6 +774,30 @@ def test_slow_night_cleanup_pauses_now_and_unloads_once_it_has_stopped(tmp_path,
     run(go())
 
 
+def test_login_resumes_even_when_the_stored_pause_cannot_be_cleared(tmp_path, monkeypatch, caplog):
+    import contextlib
+    import logging
+    import sqlite3
+    async def go():
+        app = app_at(tmp_path)
+        try:
+            assert (await app.gpu.action({'action': 'pause'}))['ok']
+            @contextlib.contextmanager
+            def locked():
+                raise sqlite3.OperationalError('database is locked')
+                yield
+            monkeypatch.setattr(app.store, 'transaction', locked)
+            assert app.arbiter.hold('human')
+            assert 'human' in app.arbiter.holders and not app.gpu.paused
+            assert not app.arbiter.paused and not app.gpu.gate.paused
+            monkeypatch.undo()
+        finally:
+            await app.stop()
+    with caplog.at_level(logging.INFO, logger='leeroy_mind'):
+        run(go())
+    assert 'gpu_resume_store_failed' in _events(caplog)
+
+
 def test_pause_reads_residency_with_the_admin_timeout(tmp_path):
     from leeroy_mind import gpucontrol
     async def go():
