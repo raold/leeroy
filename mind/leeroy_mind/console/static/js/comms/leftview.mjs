@@ -18,7 +18,8 @@ import { channelOf } from "./discord.mjs";
 var NOTE_MS = 8000;             // how long one of the console's own notes stays up
 var NOTES_SHOWN = 5;
 var COLLAPSED_KEY = "guild-console-collapsed";
-var CHANNELS = [["guild", "# guild"], ["officer", "# officer"], ["group", "# party / raid"]];
+var CHANNELS = [["guild", "# guild"], ["officer", "# officer"], ["group", "# party / raid"],
+                ["voice", "voice transcript"]];
 
 var NOTES = [];
 var collapsed = obj(recall(COLLAPSED_KEY, {}));
