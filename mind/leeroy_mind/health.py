@@ -1167,7 +1167,12 @@ def _gpu_pause(conn, now):
         return Check('gpu-pause', OK, 'GPU use is enabled')
     text = f'GPU paused since {_when(since)}'
     if now - since > 86400:
-        text += f'; the night has not run since {_when(since)}'
+        try:
+            last = conn.execute("SELECT max(finished) FROM night_run WHERE status='done'").fetchone()[0]
+        except sqlite3.Error:  # an older database: still only a note
+            last = None
+        text += (f'; the night has not run since {_when(last)}' if last is not None
+                 else '; no night has finished yet')
     return Check('gpu-pause', NOTE, text)
 
 

@@ -271,11 +271,18 @@ def test_paused_extraction_does_not_dequeue_model_work(tmp_path):
 
 
 def test_health_pause_is_only_a_note(store):
-    from leeroy_mind.health import _gpu_pause, NOTE, OK
+    from leeroy_mind.health import _gpu_pause, _when, NOTE, OK
+    from leeroy_mind.nightly.store import run_begin, run_finish
     assert _gpu_pause(store.conn, 100000).status == OK
     store.set_meta(KEY, json.dumps({'at': 1000}))
     check = _gpu_pause(store.conn, 100000)
-    assert check.status == NOTE and 'the night has not run since' in check.text
+    assert check.status == NOTE and 'no night has finished yet' in check.text
+    run_begin(store, '1970-01-01', 0, 500, now=500)
+    run_finish(store, '1970-01-01', now=800, status='done')
+    check = _gpu_pause(store.conn, 100000)
+    # The last finished night, not the pause's own time.
+    assert check.status == NOTE and check.text.endswith(f'the night has not run since {_when(800)}')
+    assert _when(1000) in check.text and _gpu_pause(store.conn, 2000).text == f'GPU paused since {_when(1000)}'
 
 
 def test_pause_during_extraction_keeps_pending_item_until_resume(store, clock, caplog):
