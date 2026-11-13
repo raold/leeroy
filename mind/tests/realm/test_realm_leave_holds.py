@@ -322,3 +322,45 @@ def test_actual_bridge_forget_runs_while_realm_off_and_rejects_replaced_bridge(t
             assert len(server.commands) == 1
             assert store.get("old-root").result_reason == "abandoned"
     asyncio.run(run())
+
+
+def test_a_forget_failure_never_ends_the_realm_loop(tmp_path, clock, caplog):
+    from realm.test_realm_connection_authority import application
+    from leeroy_mind.realm.action_store import ActionSpec, ActionUnavailable
+    from leeroy_mind.realm.action_policy import classify
+    async def run():
+        async with application(tmp_path, clock, original_bridge=True) as (app, client, server, hellos):
+            realm = app.realm; store = realm.action_store
+            c = classify(p.LeavePvp("old-root", (101,)))
+            r = store.prepare(ActionSpec("old-root", None, "root", c.policy, "realm_day", 4, c.kind,
+                c.payload, c.reserved_manifest, 21, 7), now=clock.now())
+            dispatch(store, r, now=clock.now())
+            store.observe_ack(Ack(0, "old-root", True, ""), now=clock.now())
+            store.observe_realm_job(p.RealmJob(0, "old-root", "leave_pvp", "failed", "partial", 101, 0), now=clock.now())
+            store.abandon("old-root", reason="invented review", now=clock.now())
+            # The review's row: an abandoned root no longer readable. Realm.tick fails closed.
+            with store.conn:
+                store.conn.execute("UPDATE realm_action SET transport_state='inflight' WHERE command_id='old-root'")
+            await realm.tick()
+            assert "realm_forget_failed: ActionUnavailable" in caplog.messages
+            with store.conn:
+                store.conn.execute("UPDATE realm_action SET transport_state='settled' WHERE command_id='old-root'")
+            # The running loop: only forget's read fails (an unreadable row also stops the queue,
+            # which reads every row; that is not forget's to fix).
+            class Unreadable:
+                conn = store.conn
+                def get(self, command_id):
+                    raise ActionUnavailable("realm action evidence unavailable")
+            realm.forget.store = Unreadable()
+            loop = asyncio.create_task(realm.run())
+            try:
+                await clock.advance(3, step=1)
+                for _ in range(12): await asyncio.sleep(0)
+                assert not loop.done()
+                assert caplog.messages.count("realm_forget_failed: ActionUnavailable") >= 3
+                assert not any(cmd["type"] == "realm_forget" for cmd in server.commands)
+            finally:
+                await realm.close()
+                await clock.advance(1, step=1)  # its sleep wakes on the fake clock
+                await asyncio.wait_for(loop, 3)
+    asyncio.run(run())

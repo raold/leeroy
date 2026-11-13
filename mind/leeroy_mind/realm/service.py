@@ -651,7 +651,10 @@ class Realm:
         elif name == "realm_pvp":
             self.on_realm_pvp(ev)
         elif name == "realm_forgotten" and self._delivery_epoch(ev) == self._transport_epoch:
-            self.forget.observe(ev)
+            try:
+                self.forget.observe(ev)
+            except Exception as error:  # Settles nothing; a later connection asks again.
+                log.warning("realm_forget_failed: %s", type(error).__name__)
         elif name == "guard" and ev.action == "his_kick":
             store.record_kick(self.ports.conn, ev.guid, ev.ts / 1000, ev.rank)
         elif name == "guard":
@@ -704,7 +707,10 @@ class Realm:
         # while disabled. Callbacks still cannot admit local-disabled work.
         self.bodies.poll()
         if not self._stopping:
-            self.forget.tick()  # Operator cleanup works while ordinary Realm work is disabled.
+            try:
+                self.forget.tick()  # Operator cleanup works while ordinary Realm work is disabled.
+            except Exception as error:  # Never the Realm loop's failure; it sends nothing then.
+                log.warning("realm_forget_failed: %s", type(error).__name__)
         if not self.enabled or self._stopping:
             return
         state = self.ports.raid_state()
