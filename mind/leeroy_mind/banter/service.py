@@ -6,7 +6,7 @@ import logging
 
 from leeroy_mind.culture.config import load_culture_config
 from leeroy_mind.culture.tease import tease_ok, _tease_ok, mark_teased, OWNER_KEY
-from leeroy_mind.clock import night_of
+from leeroy_mind.clock import night_of, local_at
 from leeroy_mind.discord.channels import is_discord, same_medium
 from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
 from leeroy_mind.discord.transport import DiscordTarget
@@ -245,7 +245,7 @@ class Banter:
             app.store.conn.execute("DELETE FROM meta WHERE key LIKE 'banter:used:%' AND CAST(value AS REAL)<?",(now-7*86400,))
         return True
 
-    def settle_reservation(self,topic,sent,first_line=None):
+    def settle_reservation(self,topic,sent,first_line=None,posted_at=None):
         if not self._reservation or self._reservation[0]!=topic.key: return
         _,prior,changes=self._reservation; self._reservation=None
         with self.app.store.transaction():
@@ -259,8 +259,10 @@ class Banter:
             elif topic.kind=='joke':
                 _,count=joke_uses(self.app.store,topic.key,durable=culture_on(self.app))
                 if culture_on(self.app):
-                    self.app.store.conn.execute("UPDATE lexicon SET uses_total=uses_total+1,last_used=? WHERE id=?",
-                        (self.app.clock.now(),int(topic.key[5:])))
+                    receipt = f"culture:wear-counted:{topic.key}:{first_line}"
+                    if first_line is None or self.app.store.get_meta(receipt) is None:
+                        self.app.store.conn.execute("UPDATE lexicon SET uses_total=uses_total+1,last_used=? WHERE id=?",
+                            (posted_at if posted_at is not None else self.app.clock.now(),int(topic.key[5:])))
                     if first_line is not None:
                         self.app.store.set_meta(f"culture:wear-counted:{topic.key}:{first_line}", '1')
                 else:
@@ -290,6 +292,7 @@ class Banter:
         e.banter_active = not is_discord(channel)
         delivered=0
         first_line=None
+        first_posted_at=None
         tease_marked=False
         def tease_valid(speaker):
             return not topic.target or not culture_on(app) or _tease_ok(app.store.conn,speaker,topic.target,
@@ -323,16 +326,45 @@ class Banter:
                     still_valid=lambda:self.valid(channel,owner_id,topic,app.clock.now()) and tease_valid(speaker))
                 if is_discord(channel):
                     meta.discord = DiscordTarget(reply_to=message,thread=None)
-                sent = await e._speak(turn,meta)
+                durable = culture_on(app)
+                floor = app.store.conn.execute('SELECT coalesce(max(id),0) FROM chat_line').fetchone()[0] if durable else None
+                try:
+                    sent = await e._speak(turn,meta)
+                finally:
+                    if durable:
+                        # The pipeline may persist a shielded send and then rethrow cancellation.
+                        # A game row alone is insufficient: this exact turn must have recorded a send.
+                        row = app.store.conn.execute("SELECT id,ts FROM chat_line WHERE id>? AND from_guid=? "
+                            "AND channel=? AND origin='mind' ORDER BY id LIMIT 1",(floor,speaker,channel)).fetchone()
+                        if not is_discord(channel) and not meta.said:
+                            row = None
+                        if is_discord(channel):
+                            post = app.store.conn.execute("SELECT id,ts FROM discord_message WHERE turn=? "
+                                "AND channel='general' AND author=? AND origin='mind' ORDER BY id LIMIT 1",
+                                (meta.turn_id,speaker)).fetchone()
+                            if post is None:
+                                row = None
+                            else:
+                                # A Discord post is durable before its chat-line mirror is recorded.
+                                line = app.store.get_meta(f"discord:line:{post['id']}")
+                                row = {'id': int(line) if line is not None else 'discord:'+str(post['id']),
+                                       'ts':post['ts']}
+                        if row is not None:
+                            delivered += 1
+                            if first_line is None:
+                                first_line,first_posted_at = row['id'],row['ts']
+                                with app.store.transaction():
+                                    if topic.target:
+                                        mark_teased(app.store,topic.target,now=first_posted_at)
+                                        if topic.target == app.human_guid:
+                                            app.store.set_meta(OWNER_KEY,night_of(local_at(first_posted_at)))
+                                    # Settle once here, before any later line or cancellation can intervene.
+                                    self.settle_reservation(topic,1,first_line,first_posted_at)
+                                tease_marked=True
                 if not sent:
                     break
-                if topic.target and culture_on(app) and not tease_marked:
-                    with app.store.transaction():
-                        mark_teased(app.store,topic.target,now=app.clock.now())
-                        if topic.target == app.human_guid:
-                            app.store.set_meta(OWNER_KEY,night_of(app.clock.local()))
-                    tease_marked=True
-                delivered+=len(sent)
+                if not durable:
+                    delivered+=len(sent)
                 previous = speaker
                 row = app.store.conn.execute("SELECT id FROM chat_line WHERE from_guid=? AND channel=? "
                     "AND origin='mind' ORDER BY id DESC LIMIT 1",(speaker,channel)).fetchone()
@@ -347,7 +379,7 @@ class Banter:
         finally:
             self.active = False
             e.banter_active = False
-            self.settle_reservation(topic,delivered,first_line)
+            self.settle_reservation(topic,delivered,first_line,first_posted_at)
 
     async def tick(self):
         now = self.app.clock.now()

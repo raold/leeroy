@@ -26,7 +26,7 @@ threads do not. Its first delivered chat row is marked so nightly spread cannot
 count that same delivery twice. With culture off, legacy banter receipts and
 legacy lexicon birth/spread/fade behavior remain in use.
 
-Migration 0041 adds the lexicon fields and reserves the discord_meme table for
+The culture migration adds the lexicon fields and reserves the discord_meme table for
 later culture work. It does not publish memes or add a native key. Release is
 mind-only. Parallel migration-number collisions must be renumbered at merge.
 
