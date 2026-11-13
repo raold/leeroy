@@ -66,8 +66,10 @@ def retain(conn, ident, refs, *, fresh=False, forward_min=0):
     old = saved(conn, ident)
     # An old note without its sources cannot acquire a public audience by a
     # later reinforcement. A newly written note starts a new provenance chain.
-    if not refs or not fresh and not old:
-        return
+    if not old and (not fresh or not refs):
+        if not conn.execute('SELECT 1 FROM meta WHERE key=?', (PREFIX+str(ident),)).fetchone():
+            return
+        refs = ()  # an existing failed-closed receipt can still raise its floor
     combined = sorted(set(old) | set(refs))
     if len(combined) > MAX_REFS:
         combined = []  # bounded and fail closed, never discard a restriction
@@ -82,9 +84,10 @@ class Visibility:
     Each source is admitted through the canonical gates, so checking every edge
     computes the intersection without repeatedly walking the whole graph.
     """
-    def __init__(self, conn, *, guid, channel, to_guid, readers=(), officer=False):
+    def __init__(self, conn, *, guid, channel, to_guid, readers=(), officer=False, human_guid=0):
         self.conn, self.guid, self.channel, self.to_guid = conn, guid, channel, to_guid
-        self.readers, self.officer = frozenset(readers), officer
+        # Game recordings contain cast only; the owner is never a missing cast reader.
+        self.readers, self.officer = frozenset(readers) - {human_guid}, officer
         self.cache, self.visited = {}, set()
 
     def visible(self, refs):

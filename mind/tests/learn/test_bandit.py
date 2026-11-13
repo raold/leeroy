@@ -67,6 +67,25 @@ def test_seeded_sampling_cap_and_per_context_share(store,clock):
         assert [bandit.choose(store.conn,101,context,rng=rng,now=clock.now()) for _ in range(100)] == first
 
 
+@pytest.mark.parametrize('family',['length','tease','callback','typing'])
+def test_context_gates_do_not_draw_or_spend_exploration(store,clock,family):
+    gates=dict(length=True,tease=True,callbacks=True,fingerprint=True)
+    gates[{'callback':'callbacks','typing':'fingerprint'}.get(family,family)]=False
+    cfg=replace(ON,frozen_families=tuple(f for f in arms.FAMILIES if f!=family))
+    context=bandit.Context('guild',settings=cfg,female=True,humour=10,forward=10,romance=10,**gates)
+    class NoDraw:
+        def betavariate(self,*args):
+            pytest.fail('ineligible family consumed a draw')
+    with store.transaction():
+        arms.ensure(store.conn,now=clock.now())
+        store.conn.execute('INSERT INTO bandit_turn VALUES (101,4,0)')
+        store.conn.execute('INSERT INTO bandit_share VALUES (?,?,4)',(context.key,arms.controls()[family]))
+        assert bandit.choose(store.conn,101,context,rng=NoDraw(),now=clock.now())==arms.controls()
+    assert tuple(store.conn.execute('SELECT turns,exploratory FROM bandit_turn').fetchone())==(5,0)
+    shares=dict(store.conn.execute('SELECT arm_id,turns FROM bandit_share'))
+    assert shares=={arms.controls()[family]:5}
+
+
 @pytest.mark.parametrize("settings",[replace(ON,freeze=True),replace(ON,frozen_members=(101,)),
                                     replace(ON,bandit=False),replace(ON,enabled=False)])
 def test_freeze_never_writes(store,settings):

@@ -140,8 +140,8 @@ Each call sees the best and worst three exchanges in that member's most-observed
 room, with the owner's preceding line and bounded recent context. It never mixes
 rooms or game and Discord text. Whispers and DMs contain only that member/owner
 pair and can produce only whisper lessons; group/voice evidence only group
-lessons. Officers may also learn from officer game/Discord/voice exchanges, whose
-provenance remains officers-only. Other private/unknown voice rooms and unsupported channels are excluded. An exchange without an
+lessons. Officer game/Discord/voice exchanges, private/unknown voice rooms and
+unsupported channels are excluded. An exchange without an
 identifiable recent owner line is omitted. Choosing one room per night is a
 deliberate privacy boundary; other rooms may be coached on later nights.
 
@@ -302,18 +302,22 @@ be lifted by the Lab. A global or member freeze is identical to `apply = false`
 for generated prompts and model options: this task supplies no arms, lessons,
 fingerprint hint or callback. Established features remain their off baseline,
 including banter's pre-existing fingerprint instruction and typing realism.
-Active application replaces banter's old hint with the scoped style block,
-including a baseline typing hint when its learned typing family selects control.
+Active application replaces banter's old hint with an audience-scoped baseline
+in its mandatory instruction, so trimming learned style or a later freeze cannot
+remove it. A learned typing arm can add its scoped adjustment in the style block.
 Family freezes select control; other families continue. Freeze and lesson vetoes
 are rechecked after the detached style read, before using its results.
 
 Arms map only to reviewed, non-explicit wording in the user message. Length also
-reduces a game's existing output allowance, never exceeding 80 tokens. Discord's
-length family selects control: only `[talk] discord_words` sets its instruction
+reduces a single-row game's existing output allowance, never exceeding 80 tokens.
+Multi-row turns and Discord select length control before sampling, so unused arms
+spend no exploration or shares: only `[talk] discord_words` sets Discord's instruction
 and output allowance. Context size stays 4096. Question and follow-up rates choose whether this reply can include
 a question or one extra thought; they never schedule another turn or loosen
 single-line, combat, typing or deadline gates. Humour and teasing are clipped to
-current member dials, gender and the lesser member/world romance setting.
+current member dials, gender and the lesser member/world romance setting. Teasing
+also needs the owner present: on Discord the turn must address him directly
+(`addressee` or `to_guid`); WoW presence alone never enables it there.
 Guards still review the resulting line, including server anchor cosine 0.35.
 
 The style block has a separate `style` input token count and 220-token ceiling,
@@ -324,7 +328,9 @@ materialized arms; an arm removed by trimming is attributed as control. Callback
 seeds are phrased as something that might fit, remain subject to relevance checks,
 and their IDs join the line's memory provenance. Failed or cancelled sends consume
 no callback use. In-flight offers count against the existing per-member/guild
-quotas; successful first fragments record use atomically. Those quotas still
+quotas; successful first fragments record use atomically, even if learning froze
+after composition. That delivery accounting preserves the 14-day reuse rest.
+Those quotas still
 require an active recorded owner-play session, so unattended server conversations
 do not receive callbacks while the owner is offline.
 
@@ -333,7 +339,10 @@ Lesson provenance uses `learn:lesson:evidence:<lesson-id>` in meta, with
 and owner-authored `owner:` leaves, at most 512), and
 `forward_min`. Sources include the coach's shown exchanges and memories carried
 by their generated lines. Reinforcement unions sources and raises, never lowers,
-the forward floor. Missing, malformed, deleted or excessive evidence fails closed.
+the forward floor, including when that night's new evidence is empty. The reward
+night prunes evidence for lessons expired more than 90 days ago; lesson rows stay
+inspectable. Provenance is retained with `apply` off so later activation can use it.
+Missing, malformed, deleted or excessive evidence fails closed.
 Legacy lessons without proven sources remain inspectable but do not enter prompts;
 new safely scoped coach notes can replace them. Reinforcement cannot bless an
 unproved legacy note with a wider audience.
@@ -344,8 +353,10 @@ game/Discord turns only. Current officer membership is required. Unknown restric
 rooms fail closed. Coaching keeps main's eligibility with application either on
 or off: officer conversations do not compete with guild or group coaching.
 Private notes never reach guild, party, public Discord or banter. Historical group
-notes, including voice and say/yell, require the current readers to fit the
-recorded audience. Deleted Discord sources are excluded through their durable
+notes, including voice and say/yell, require the current cast readers to fit the
+recorded cast audience. The owner's guid is excluded from this subset check;
+callback participants still include him for shared-actor eligibility. Deleted
+Discord sources are excluded through their durable
 message-to-line receipts. The receipt-index migration adds a partial value index for those
 receipts, avoiding a scan of accumulated Discord history. Each turn shares a
 512-node provenance memo across lessons and typing; the coach memoizes source

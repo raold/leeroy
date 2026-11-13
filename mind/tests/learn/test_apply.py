@@ -11,7 +11,7 @@ from leeroy_mind.discord import store as discord
 from leeroy_mind.discord.channels import channel_id, is_discord
 from leeroy_mind.learn import apply, arms, audience, bandit, control, lessons, recipe
 from leeroy_mind.learn.config import LearnCfg, load_learn_config
-from leeroy_mind.protocol import Chat
+from leeroy_mind.protocol import Chat, Group
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 
@@ -49,12 +49,13 @@ def lesson(rig, lid, *, guid=101, text='He keeps replies brief and clear.', scop
 def select(monkeypatch, **chosen):
     def choose(conn, guid, context, **kwargs):
         arms.ensure(conn)
-        return arms.controls() | chosen
+        return arms.controls() | {k:v for k,v in chosen.items()
+            if k not in ('length','tease') or getattr(context,k)}
     monkeypatch.setattr(bandit, 'choose', choose)
 
 
 def compose(rig, channel='guild', guid=101):
-    turn = Turn(TurnKind.REPLY_HUMAN, guid, channel, to_guid=1, addressee=1)
+    turn = Turn(TurnKind.REPLY_HUMAN, guid, channel, to_guid=1, addressee=1, max_lines=1)
     meta = TurnMeta(rig.engine._new_id())
     composed = rig.sync(rig.engine._compose(turn,meta,live=True))
     return turn,meta,composed
@@ -281,9 +282,9 @@ def test_owner_expiry_during_read_drops_the_pending_lesson(rig,monkeypatch):
     assert compose(rig)[1].recipe_snapshot.lesson_ids==()
 
 
-def callback_memory(rig, *, guid=101, channel='guild'):
+def callback_memory(rig, *, guid=101, channel='guild', readers=None):
     now=rig.clock.now()
-    lid=source(rig,channel,guid=guid)
+    lid=source(rig,channel,guid=guid,readers=readers)
     rig.store.conn.execute('UPDATE chat_line SET ts=? WHERE id=?',(now-5*86400,lid))
     mid=rig.store.conn.execute("INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,importance,"
         "valence,source,evidence,actors,scope,scope_with) VALUES (?,'conversation',?,?,?,?,8,.6,'chat',?,?,?,?)",
@@ -361,7 +362,7 @@ def test_every_live_transport_applies_and_credits_the_recipe(rig,monkeypatch,cha
     from leeroy_mind.learn import weights
     select(monkeypatch,length='length.0.v1',questions='questions.0.v1')
     rig.script('the harbor path sounds pleasant')
-    turn=Turn(TurnKind.REPLY_HUMAN,101,channel,to_guid=1,addressee=1)
+    turn=Turn(TurnKind.REPLY_HUMAN,101,channel,to_guid=1,addressee=1,max_lines=1)
     meta=TurnMeta(rig.engine._new_id(),answers_human=True,why=why)
     async def run():
         task=asyncio.create_task(rig.engine.speak_meta(turn,meta))
@@ -438,14 +439,45 @@ def test_nested_generated_line_expands_its_recalled_private_memory(rig):
     assert audience.visible(rig.store.conn,[f'memory:{mid}'],guid=101,channel='whisper',to_guid=1)
 
 
-@pytest.mark.parametrize('channel', ['party','raid','say','yell','voice:lounge'])
-def test_local_sources_require_all_current_readers(rig,channel):
-    lid=source(rig,channel,readers=[1,101,102])
+def local_room(rig, channel):
+    from types import SimpleNamespace
+    rig.store.set_meta('human_guid','1')  # app.py records this on the bridge hello
+    rig.world.human_online=True
+    rig.world.group=Group(0,1,False,(1,101,102))
+    rig.world.room_audience=lambda _:frozenset({101,102})
+    rig.world.human_zone=rig.world.members[101].zone
+    rig.engine.comms=SimpleNamespace(available=lambda:True,human_room=lambda:'lounge')
+    return rig.world.audience(channel,from_guid=1,to_guid=101,zone=rig.world.human_zone)
+
+
+@pytest.mark.parametrize('channel', ['party','raid','raid_warning','say','yell','voice:lounge'])
+def test_local_sources_use_real_cast_audiences_with_the_owner_present(rig,channel):
+    recorded=local_room(rig,channel)
+    assert recorded=={101,102} and 1 not in recorded
+    lid=source(rig,channel,readers=recorded)
     gate=lambda readers:audience.visible(rig.store.conn,[f'chat:{lid}'],guid=101,
-        channel=channel,to_guid=0,readers=readers)
-    assert gate([1,101,102])
-    assert not gate([1,101,103])
+        channel=channel,to_guid=0,readers=readers,human_guid=1)
+    readers=rig.world.conversation_readers(channel,from_guid=101,comms=rig.engine.comms)
+    assert readers=={1,101,102} and gate(readers)
+    assert not gate(readers | {103})
     assert not gate([])
+
+
+def test_party_lesson_and_typing_history_apply_with_the_owner_present(rig,monkeypatch):
+    recorded=local_room(rig,'party')
+    select(monkeypatch)
+    ident=lesson(rig,source(rig,'party',readers=recorded),scope='group')
+    assert ident in compose(rig,'party')[1].recipe_snapshot.lesson_ids
+    for _ in range(50):
+        turn=Turn(TurnKind.REPLY_HUMAN,101,'party')
+        rig.engine._record(turn,TurnMeta(rig.engine._new_id()),rig.engine.personas.get(101),'A fixture line.',[])
+    readers=rig.world.conversation_readers('party',from_guid=101)
+    profile=lambda current:apply.scoped_profile(rig.store.conn,101,rig.engine.personas.get(101),
+        channel='party',to_guid=0,readers=current,officer=False,human_guid=1)
+    assert profile(readers).samples==50
+    assert profile(readers | {103}).samples==0
+    rig.world.group=Group(0,1,False,(1,101,102,103))
+    assert ident not in compose(rig,'party')[1].recipe_snapshot.lesson_ids
 
 
 @pytest.mark.parametrize('channel', ['dm:101','discord:general'])
@@ -467,13 +499,26 @@ def test_discord_length_draw_keeps_channel_instruction_and_allowance(rig,monkeyp
         assert f'at most about {words} words' in str(c.messages)
 
 
-def test_duplicate_reinforcement_preserves_the_raised_forward_floor(rig):
+@pytest.mark.parametrize('empty_sources',[False,True])
+def test_duplicate_reinforcement_preserves_the_raised_forward_floor(rig,empty_sources):
     lid=source(rig)
     ident=lesson(rig,lid)
     result=dict(reinforce=[ident],drop=[],lessons=[dict(text='He keeps replies brief and clear.',
                                                     scope='guild',forward_min=8)])
     lessons.persist(rig.store.conn,101,result,known={ident},night='next',now=rig.clock.now(),
-                    automatic=True,sources=[f'chat:{lid}'])
+                    automatic=True,sources=[] if empty_sources else [f'chat:{lid}'])
+    assert audience.forward_floor(rig.store.conn,ident)==8
+    assert audience.saved(rig.store.conn,ident)==[f'chat:{lid}']
+
+
+def test_empty_provenance_stays_closed_while_its_forward_floor_rises(rig):
+    ident=lesson(rig,source(rig))
+    audience.retain(rig.store.conn,ident,[f'event:{i}' for i in range(1,514)])
+    assert audience.saved(rig.store.conn,ident)==[]
+    audience.retain(rig.store.conn,ident,[],forward_min=8)
+    assert audience.forward_floor(rig.store.conn,ident)==8
+    audience.retain(rig.store.conn,ident,['event:1'],forward_min=2)
+    assert audience.saved(rig.store.conn,ident)==[]
     assert audience.forward_floor(rig.store.conn,ident)==8
 
 
@@ -496,7 +541,46 @@ def test_apply_off_adds_no_recipe_meta_and_retention_removes_old_receipts(rig):
     assert rig.store.get_meta('learn:recipe:999999') is None
 
 
-def test_callback_seed_is_held_evidence_and_freeze_blocks_its_receipt(rig,monkeypatch):
+def test_apply_off_lesson_evidence_expires_ninety_days_after_the_lesson(rig):
+    from leeroy_mind.learn.capture import prune
+    rig.engine.learn_settings=replace(ON,apply=False)
+    ids=[lesson(rig,source(rig),text=f'He prefers a clear fixture {i}.') for i in range(3)]
+    cutoff=rig.clock.now()-90*86400
+    for ident,expiry in zip(ids,(cutoff-1,cutoff,rig.clock.now()+1)):
+        rig.store.conn.execute('UPDATE talk_lesson SET expires=? WHERE id=?',(expiry,ident))
+    prune(rig.store.conn,rig.clock.now())
+    assert audience.saved(rig.store.conn,ids[0])==[]
+    assert all(audience.saved(rig.store.conn,ident) for ident in ids[1:])
+    assert rig.store.conn.execute('SELECT count(*) FROM talk_lesson').fetchone()[0]==3
+
+
+def test_multi_row_bit_keeps_its_full_output_allowance(rig,monkeypatch):
+    from leeroy_mind.llm.presets import LIVE_BIT
+    select(monkeypatch,length='length.0.v1')
+    turn=Turn(TurnKind.BIT,101,'guild',max_lines=3)
+    meta=TurnMeta('multi-row-bit')
+    c=rig.sync(rig.engine._compose(turn,meta,live=True))
+    turn.deadline=rig.clock.now()+60
+    rig.sync(rig.engine._ask(turn,c.messages,meta=meta))
+    assert meta.learning.selected['length']==arms.controls()['length']
+    assert meta.learning.num_predict is None
+    assert 'This reply usually fits in 3-12 words' not in str(c.messages)
+    assert rig.chat_calls()[-1]['options']['num_predict']==LIVE_BIT.options['num_predict']
+
+
+@pytest.mark.parametrize('channel',['dm:101','discord:general'])
+@pytest.mark.parametrize('target',['addressee','to_guid'])
+def test_discord_reply_to_owner_allows_tease_without_game_presence(rig,monkeypatch,channel,target):
+    select(monkeypatch,tease='tease.1.v1')
+    rig.world.human_online=False
+    turn=Turn(TurnKind.REPLY_HUMAN,101,channel,**{target:1})
+    meta=TurnMeta('discord-owner')
+    applied=rig.sync(apply.prepare(rig.engine,turn,meta,rig.engine.personas.get(101),now=rig.clock.now()))
+    assert applied.context.tease
+    assert applied.selected['tease']=='tease.1.v1'
+
+
+def test_callback_seed_is_held_evidence_and_sent_use_survives_a_freeze(rig,monkeypatch):
     select(monkeypatch,callback='callback.1.v1')
     rig.engine._learn_features=(True,False)
     rig.store.start_session(rig.clock.now()-7200)
@@ -506,7 +590,10 @@ def test_callback_seed_is_held_evidence_and_freeze_blocks_its_receipt(rig,monkey
     control.change(rig.store,dict(action='freeze',frozen=True),now=rig.clock.now())
     rig.engine._record(turn,meta,c.persona,'Remember that red kite?',c.memory_ids)
     assert not rig.store.conn.execute('SELECT 1 FROM talk_recipe').fetchone()
-    assert not rig.store.conn.execute('SELECT 1 FROM callback_use').fetchone()
+    assert rig.store.conn.execute('SELECT memory_id FROM callback_use').fetchone()[0]==meta.learning.callback.memory_id
+    control.change(rig.store,dict(action='freeze',frozen=False),now=rig.clock.now())
+    apply.release(rig.engine,meta)
+    assert compose(rig,'dm:101')[1].recipe_snapshot.callback_id is None
 
 
 @pytest.mark.parametrize('channel',['guild','discord:general'])
@@ -519,37 +606,40 @@ def test_private_and_officer_lessons_do_not_enter_public_banter(rig,monkeypatch,
     meta=TurnMeta('public-banter',why='banter:fixture')
     c=rig.sync(rig.engine._compose(turn,meta,live=True))
     assert 'Style observation:' not in str(c.messages)
-    assert 'Typing:' in str(c.messages)  # scoped baseline survives a control draw
 
 
-def test_owner_absent_discussion_does_not_offer_a_tease_arm(rig,monkeypatch):
+@pytest.mark.parametrize('game_online',[False,True])
+def test_owner_absent_discord_discussion_does_not_offer_a_tease_arm(rig,monkeypatch,game_online):
     select(monkeypatch,tease='tease.1.v1')
-    rig.world.human_online=False
+    rig.world.human_online=game_online
     turn=Turn(TurnKind.CONTINUE,101,'discord:general',addressee=102)
     meta=TurnMeta('absent-owner')
     rig.sync(rig.engine._compose(turn,meta,live=True))
     assert meta.learning.selected['tease']==arms.controls()['tease']
 
 
-@pytest.mark.parametrize('channel',['voice:lounge','say','yell','discord:general'])
-def test_callbacks_include_the_owner_in_observed_voice_local_and_discord_readers(rig,monkeypatch,channel):
-    from types import SimpleNamespace
+@pytest.mark.parametrize('channel',['party','raid','raid_warning','voice:lounge','say','yell','discord:general'])
+def test_callbacks_use_real_recorded_audiences_with_the_owner_present(rig,monkeypatch,channel):
     select(monkeypatch,callback='callback.1.v1')
     rig.engine._learn_features=(True,False)
-    rig.world.human_online=True
     rig.store.start_session(rig.clock.now()-7200)
-    rig.engine.comms=SimpleNamespace(available=lambda:True,human_room=lambda:'lounge')
-    rig.world.room_audience=lambda _:frozenset({101,102})
-    monkeypatch.setattr(rig.world,'in_group',lambda _:True)
-    rig.world.human_zone=rig.world.members[101].zone
-    mid=callback_memory(rig,channel=channel)
-    rig.store.conn.execute('UPDATE chat_line SET audience=?',(json.dumps([1,101,102,103,104,105]),))
-    rig.store.conn.commit()
+    recorded=local_room(rig,channel)
+    assert (1 in recorded) is is_discord(channel)
+    mid=callback_memory(rig,channel=channel,readers=recorded)
     turn=Turn(TurnKind.REPLY_HUMAN,101,channel,addressee=1)
     meta=TurnMeta('callback-room')
     applied=rig.sync(apply.prepare(rig.engine,turn,meta,rig.engine.personas.get(101),now=rig.clock.now()))
     assert 1 in applied.callback_context.readers if applied.callback_context else False
     assert applied.callback and applied.callback.memory_id==mid
+    from leeroy_mind.memory.callbacks import pick_callback
+    # The owner stays in participants for the actor check; cast-only readers are valid too.
+    ctx=replace(applied.callback_context,readers=tuple(recorded))
+    assert pick_callback(rig.store.conn,101,ctx,now=rig.clock.now()).memory_id==mid
+    if not is_discord(channel):
+        ctx=replace(ctx,readers=(*ctx.readers,103))
+        assert pick_callback(rig.store.conn,101,ctx,now=rig.clock.now()) is None
+    rig.store.conn.execute('UPDATE memory SET actors=? WHERE id=?',('[101]',mid))
+    assert pick_callback(rig.store.conn,101,applied.callback_context,now=rig.clock.now()) is None
 
 
 def test_provenance_at_twenty_thousand_discord_receipts_is_indexed_and_bounded(rig):

@@ -25,6 +25,8 @@ class Context:
     romance: int = 0  # minimum of effective member and world romance dials
     callbacks: bool = False
     fingerprint: bool = False
+    length: bool = True  # this turn accepts a learned single-line game bound
+    tease: bool = True  # the owner is present in this medium
 
     @property
     def key(self):
@@ -86,7 +88,8 @@ def choose(conn, guid, context, *, rng=None, now=None):
         return result
     key = context.key
     if (type(context.female) is not bool or type(context.callbacks) is not bool
-            or type(context.fingerprint) is not bool or any(type(v) is not int or not 0<=v<=10
+            or type(context.fingerprint) is not bool or type(context.length) is not bool
+            or type(context.tease) is not bool or any(type(v) is not int or not 0<=v<=10
                 for v in (context.humour,context.forward,context.romance))):
         raise ValueError('bandit_context_invalid')
     rng = rng or random.Random()
@@ -101,6 +104,11 @@ def choose(conn, guid, context, *, rng=None, now=None):
     for family, control in result.items():
         if family in cfg.frozen_families:
             continue
+        if (family == 'length' and not context.length
+                or family == 'tease' and not context.tease
+                or family == 'callback' and not context.callbacks
+                or family == 'typing' and not context.fingerprint):
+            continue  # do not sample an arm the turn cannot use
         base = p.get(control, dict(alpha=1., beta=1., uses=0, bad=0))
         candidates = [control]
         immature = set()
@@ -122,8 +130,7 @@ def choose(conn, guid, context, *, rng=None, now=None):
             return rng.betavariate(stats["alpha"], stats["beta"])
         selected = max(candidates, key=sample)
         arm = next(a for a in registry if a.id==selected)
-        if (family=='callback' and not context.callbacks or family=='typing' and not context.fingerprint
-                or family=='tease' and (not context.female or context.forward<=0 or context.romance<=0)
+        if (family=='tease' and (not context.female or context.forward<=0 or context.romance<=0)
                 or family=='humour' and context.humour<=0
                 or arms.bounded(arm,humour=context.humour,forward=context.forward)!=arm.params):
             selected = control

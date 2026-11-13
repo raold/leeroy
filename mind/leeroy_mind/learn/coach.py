@@ -1,7 +1,7 @@
 """One bounded, audience-scoped coaching call per eligible member each night."""
 import json
 from collections import defaultdict
-from leeroy_mind.discord.channels import is_discord, is_private, is_restricted, is_officer_channel
+from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.llm import (schema, check_schema, ReflectionError, system_prompt,
@@ -133,10 +133,6 @@ def evidence(ctx,guid):
             'WHERE r.guid=? AND c.from_guid=? AND c.origin=\'mind\' AND c.ts>=? AND c.ts<? '
             'AND r.scored_at<=? ORDER BY c.ts,c.id', (guid,guid,*window(ctx),ctx.clock.now())):
         audience=scope(row['channel'])
-        if is_officer_channel(row['channel']) and not conn.execute(
-                "SELECT 1 FROM persona_core WHERE guid=? AND json_extract(json,'$.play.guild_role')='officer'",
-                (guid,)).fetchone():
-            continue
         if audience is None or audience=='whisper' and row['to_guid']!=ctx.human:
             continue
         groups[(audience,row['channel'])].append(row)
