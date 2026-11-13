@@ -55,18 +55,21 @@ his Discord DM when her Discord presence says she would see it (`discord/owntime
 - an urgent post ("are you up?", "need help", "asap", "call me", ...) cuts any wait to 45 s - 5
   min, asleep included; three posts of his in a row cut an idle or dnd wait the same way.
 
-The tick leaves a post alone until the desk hands it over (a photo's look runs first) or
-`HANDOFF_GRACE_S` has passed, and the desk's hand-over never answers a post the tick did; her
-answer to an earlier post that lands after his next one is no answer to it. A late answer's
-instruction says how long ago he wrote and why she missed it ("asleep", "at
-work", "busy"), so she answers as someone catching up. Every draw is seeded by his post id, so a
-restart finds the same moment; the owed DMs are re-read from the store each tick (`DiscordTalk.
-tick`, every 30 s from the mind's ticker), with the newest answered post in meta
-`discord:dm:answered:<guid>`. A non-urgent late answer goes out only while a live lease already
-holds the model (his login, the server's, his Discord's, voice, a raid) and takes no lease of
-its own, so it never wakes or delays the night; only an urgent one takes his Discord lease.
-Presence is read through UTC, so a daylight-saving change in the wait is honoured. Turning the
-switch off answers what it deferred in this run at once; with it off nothing is written. A DM still owed after 3 days is let go. A member
-away (`away` table) answers when she is back, within those 3 days. #259's DM openers skip a
-member who owes him an answer. Logs: `discord_dm_later`, `discord_dm_answered_later`,
-`discord_dm_let_go` (guid, message id, seconds), never words.
+Only a post she deferred is owed: `on_his_post` (after a photo's look) records it in meta
+`discord:dm:deferred:<guid>`, so the tick never answers a post before the desk hands it over,
+nor one she let be (turning the switch on answers no old DMs), and her answer to an earlier post
+that lands after his next one is no answer to it. A late answer's instruction says how long ago
+he wrote and why she missed it ("asleep", "at work", "busy"), so she answers as someone catching
+up. Every draw is seeded by his post id, so a restart finds the same moment; the owed DMs are
+re-read from the store each tick (`DiscordTalk.tick`, every 30 s from the mind's ticker), with
+the newest answered post in meta `discord:dm:answered:<guid>`. A non-urgent late answer goes out
+only while a live lease already holds the model (his login, the server's, his Discord's, voice,
+a raid), then holds his Discord lease beside it so the model stays for the answer; held beside
+another lease it hands nothing over, so it never wakes the night (it may keep the model up to
+10 minutes longer). An urgent one takes the lease itself. Presence is read through UTC, so a
+daylight-saving change in the wait is honoured. Turning the switch off answers what she
+deferred at once, across restarts; with it off and nothing deferred, nothing is written. A DM
+still owed after 3 days is let go. A member away (`away` table) answers when she is back,
+within those 3 days. #259's DM openers skip a member who owes him an answer. Logs:
+`discord_dm_later`, `discord_dm_answered_later`, `discord_dm_let_go` (guid, message id,
+seconds), never words.
