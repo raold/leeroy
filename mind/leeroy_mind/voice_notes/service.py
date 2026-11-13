@@ -91,22 +91,27 @@ class VoiceNotes:
         app,cfg=self.app,self.config
         peer=layout.dm_peer(channel_id(turn.channel))
         voice=getattr(app,'voice',None)
+        # A DM thread's messages have no player on the page. Only a voice service that reports
+        # `render` can render one: an older one answers with an error, after the whole wait.
         if (not cfg.enabled or self._closed or getattr(app,'stopping',False) or peer!=turn.speaker
                 or app.human_guid<=0 or meta.realism_correction or not meta.turn_id
+                or (meta.discord is not None and meta.discord.thread is not None)
                 or voice is None or turn.speaker not in voice.specs or not voice.client.greeted
-                or voice.client.status is None or not (voice.client.status.ok or getattr(voice.client.status,'render',False))):
+                or voice.client.status is None or not getattr(voice.client.status,'render',False)):
             return False
         arbiter=getattr(app,'arbiter',None)
         if arbiter is not None and not arbiter.holders:
             return False
-        if not 3<=len(text.split())<=cfg.max_words or not re.search(r'\w',text) or re.search(r'\|[Hh]|\[item|<item',text,re.I):
+        # an item: a game link or placeholder, or Discord's [Item Name] (talk.items), stays text
+        if not 3<=len(text.split())<=cfg.max_words or not re.search(r'\w',text) or re.search(r'\|[Hh]|\[item|<item|\[[^\]\n]+\]',text,re.I):
             return False
         talkative=dials_of(p).level('talkative')
         if not talkative:
             return False
         member=app.world.discord_members().get(turn.speaker)
         if member is None or presence_of(p,local=local_time(app.clock.local(),p.identity.region),
-            body_online=turn.speaker in app.world.online,body_zone=member.zone,rng_seed=RNG_SEED).state!='online':
+            body_online=turn.speaker in app.world.online,body_zone=member.zone,rng_seed=RNG_SEED,
+            in_his_group=app.world.human_online and app.world.in_group(turn.speaker)).state!='online':
             return False
         day=app.clock.local().date().isoformat(); value=counts(app.store,day)
         if value is None or value.get('voice_notes',0)>=cfg.guild_day or value.get(f'voice_note:{turn.speaker}',0)>=cfg.per_member_day:

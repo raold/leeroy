@@ -6,6 +6,7 @@ import pytest
 from conftest import run,seed_test_cast,make_persona
 from discord.test_discord_desk import desk_app
 from leeroy_mind.discord.presence import Presence
+from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.endpoint import discord_args,BadRequest
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn,TurnKind
@@ -24,7 +25,7 @@ def fixture(store,clock,monkeypatch):
     seen=[]
     app=desk_app(store,clock,data_dir=root,engine=SimpleNamespace(),
         discord_talk=SimpleNamespace(on_his_post=lambda mid:seen.append(mid),begin_photo=lambda:None))
-    app.voice=SimpleNamespace(specs={101:{}},client=SimpleNamespace(greeted=True,status=wire.Status(True,'closed','none','parakeet',False,0,()),send=lambda msg:None))
+    app.voice=SimpleNamespace(specs={101:{}},client=SimpleNamespace(greeted=True,status=wire.Status(True,'closed','none','parakeet',False,0,(),True),send=lambda msg:None))
     monkeypatch.setattr(service,'presence_of',lambda *a,**k:Presence('online',False,0))
     p=effective(make_persona(101,'Arkon'),MemberTuning({'talkative':10}))
     turn=Turn(TurnKind.OPEN,101,'dm:101',to_guid=1)
@@ -48,24 +49,38 @@ def test_choice_stable_and_caps_share_server_day_without_losing_other_counts(sto
     assert not notes.eligible(t,m,p,'An invented short message')
 
 
-@pytest.mark.parametrize('gate',['off','no_spec','down','engine','idle','short','long','item','emoji','channel','zero','bad_count','guild_cap','lease'])
+@pytest.mark.parametrize('gate',['off','no_spec','down','engine','old_service','idle','short','long','item','bracket_item','emoji','channel','thread','zero','bad_count','guild_cap','lease'])
 def test_choice_conditions_fail_closed(store,clock,monkeypatch,gate):
     app,p,t,m,_=fixture(store,clock,monkeypatch); notes=app.voice_notes; text='An invented short message'
     if gate=='off':notes.config=VoiceNotesConfig()
     elif gate=='no_spec':app.voice.specs={}
     elif gate=='down':app.voice.client.greeted=False
-    elif gate=='engine':app.voice.client.status=replace(app.voice.client.status,ok=False)
+    elif gate=='engine':app.voice.client.status=replace(app.voice.client.status,ok=False,render=False)
+    # An older voice service plays room audio (ok) but has no render: it would never answer.
+    elif gate=='old_service':app.voice.client.status=wire.Status(True,'closed','none','parakeet',False,0,())
     elif gate=='idle':monkeypatch.setattr(service,'presence_of',lambda *a,**k:Presence('idle',False,0))
     elif gate=='short':text='Hi there'
     elif gate=='long':text='word '*61
     elif gate=='item':text='An item |Hitem:42|h[thing]|h'
+    elif gate=='bracket_item':text='Bring the [Invented Charm] tonight please'  # Discord's item form
     elif gate=='emoji':text='👍 👍 👍'
     elif gate=='channel':t=replace(t,channel='discord:general')
+    elif gate=='thread':m.discord=DiscordTarget(None,7)  # the page plays notes only outside threads
     elif gate=='zero':p=effective(p,MemberTuning({'talkative':0}))
     elif gate=='bad_count':store.set_meta('server:day:'+clock.local().date().isoformat(),'[]')
     elif gate=='guild_cap':notes.config=replace(notes.config,guild_day=0)
     elif gate=='lease':app.arbiter=SimpleNamespace(holders=set())
     assert not notes.eligible(t,m,p,text)
+
+
+def test_a_member_in_his_group_counts_as_online_as_her_discord_presence_does(store,clock,monkeypatch):
+    app,p,t,m,_=fixture(store,clock,monkeypatch)
+    monkeypatch.setattr(service,'presence_of',
+        lambda *a,**k:Presence('online' if k.get('in_his_group') else 'idle',False,0))
+    assert not app.voice_notes.eligible(t,m,p,'An invented short message')
+    app.world.human_online=True
+    app.world.group=SimpleNamespace(members=(1,101),leader_guid=1)
+    assert app.voice_notes.eligible(t,m,p,'An invented short message')
 
 
 def test_offline_render_status_is_separate_from_room_output(store,clock,monkeypatch):

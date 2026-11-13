@@ -37,8 +37,9 @@ For this release, restart **voice, mind and console together**: both wire copies
 `render`, `rendered`, `transcribe` and `transcript` (20 message types, 11 to voice and 9 to
 mind). `Status.render` independently reports offline rendering readiness; `Status.ok`
 continues to describe room audio. New readers accept an old status without `render`, which
-defaults false. An old voice service cannot handle the new requests, so audio needs the new
-service even though an unsuccessful render still falls back to typed text.
+defaults false. An old voice service cannot handle the new requests: the mind asks only a
+service that reports `render`, so with an old one members' lines go out as typed text at once.
+His notes still need the new service to be transcribed.
 
 Migration **0040_discord_voice.sql** adds the six-column `discord_voice` attachment table.
 No worldserver rebuild is needed. This feature never enables itself or changes live config.
@@ -51,9 +52,11 @@ marker so the token cannot be posted twice. The disk therefore continues to grow
 
 ## Delivery and transcription
 
-A member must be online in Discord, have a voice spec, have an already held live lease and
-a usable connected voice service, and have room under both daily caps. Eligible lines have
-3–40 words by default, excluding emoji-only content and item-link placeholders. A stable
+A member must be online in Discord (as her presence shows it, which counts a member in his
+group in game as online), have a voice spec, have an already held live lease and a usable
+connected voice service, and have room under both daily caps. Eligible lines are DM lines
+outside threads (the page plays notes only there) with 3–40 words by default, excluding
+emoji-only content, item links and placeholders, and bracketed `[Item Name]`s. A stable
 SHA-256 draw from member and turn IDs scales the share by her talkative dial; zero never
 chooses audio. Presence, lease and caps are checked again after rendering.
 
