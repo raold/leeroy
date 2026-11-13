@@ -25,6 +25,7 @@ class Draft:
     anchor: str = field(default='', repr=False)
     server: bool = False
     anchor_embedding: bytes | None = field(default=None, repr=False)
+    readers: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)

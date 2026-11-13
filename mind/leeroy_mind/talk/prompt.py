@@ -401,7 +401,7 @@ def _note_fits(note: str, forms: tuple[str, str, str], speaker: str = "") -> boo
 def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
                       is_guild_master: bool = False,
                       forms: tuple[str, str, str] = THEY_FORMS, attitude: str = "",
-                      speaker: str = "") -> str:
+                      speaker: str = "", friendship_only: bool = False) -> str:
     """How the speaker feels about one person, in a few words. Only the warm side of trust
     and respect is shown: a low score usually just means "not yet". The human is tagged "(the
     guild master)" when he is one (HumanIdentity.is_guild_master) and referred to by `forms`
@@ -413,9 +413,9 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     r = r or Relationship(a=0, b=0)
     _, them, their = forms if is_human else THEY_FORMS
     bits = []
-    if not is_human and r.label.strip() in LABEL_TEXT:
+    if not friendship_only and not is_human and r.label.strip() in LABEL_TEXT:
         bits.append(LABEL_TEXT[r.label.strip()])
-    band = attraction_band(r, attitude) if is_human else ""
+    band = attraction_band(r, attitude) if is_human and not friendship_only else ""
     if band:
         bits.append(ATTRACTION_TEXT[band].format(them=them))
     if r.affinity >= CLOSE_AFFINITY:
@@ -435,7 +435,9 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
         bits.append(f"you rate {their} play")
     tag = " (the guild master)" if is_human and is_guild_master else ""
     card = f"{name}{tag}: {', '.join(bits)}"
-    notes = " ".join(r.notes.split()).rstrip(".")
+    # Group turns keep friendship scores, never romantic labels or free-form
+    # relationship notes (which can contain private romantic material).
+    notes = "" if friendship_only else " ".join(r.notes.split()).rstrip(".")
     if is_human and not _note_fits(notes, forms, speaker):
         notes = ""
     room = HUMAN_NOTE_CHARS if is_human else NOTE_CHARS
