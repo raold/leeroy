@@ -487,6 +487,8 @@ def test_the_discord_transport_takes_a_long_message_and_the_style_keeps_it_under
                          random.Random(1), max_lines=1, cap=math.ceil(200 * LONG_SLACK),
                          game=False, max_chars=DISCORD_MAX_TEXT)
     assert len(line.line) <= DISCORD_MAX_TEXT
+    # the plain words lose the same tail: what is stored is what was sent (bot P2 on #271)
+    assert len(line.plain.split()) == len(line.line.split())
     # through the pipeline at the largest setting: stored, never refused for length
     with_words(rig, 200)
     rig.script(huge)

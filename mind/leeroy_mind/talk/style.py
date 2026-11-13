@@ -496,6 +496,10 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
             if len(tokens) <= 1:
                 break
             typed = _end_punct(" ".join(tokens[:-1]).rstrip(",;:"), t.end_punct, drop_some)
+            # the plain text loses the same tail, so what is stored is what was sent
+            words = plain.split()
+            if len(words) > 1:
+                plain = _end_punct(" ".join(words[:-1]).rstrip(",;:"), t.end_punct, drop_some)
         line = sanitize_say_text(typed + tail) if game else (typed + tail).strip()
         if line:
             out.append(Styled(line, plain))
