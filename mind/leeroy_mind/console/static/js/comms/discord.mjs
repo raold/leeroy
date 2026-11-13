@@ -85,6 +85,7 @@ export class Discord {
     this.voice_notes = data.voice_notes === true;
     this.groups_enabled = data.groups_enabled === true;
     this.groups = this.groups_enabled ? arr(data.groups) : [];
+    this.voice_seats = data.voice_seats;
     this.categories = arr(data.categories); this.dms = arr(data.dms); this.members = arr(data.members);
     this.human = data.human || this.human; this.loaded = true; this.error = ""; this.missing = arr(data.missing);
     var current = new Set(this.channels().map(function (c) { return viewOfChannel(c.id); }));
@@ -135,4 +136,12 @@ export function memberStatus(member) {
   if (typeof member.status === 'string' && member.status.length <= 80 && member.status) { lines.push(member.status); }
   if (member.presence?.playing) { lines.push('Playing WoW'); }
   return lines;
+}
+
+// Away seats expire even if the browser loses its next refresh.
+export function voiceSeats(value, members, now = Date.now() / 1000, session = false) {
+  if (session || !value || !Number.isFinite(value.at) || now < value.at || now-value.at > 900) { return []; }
+  return Object.entries(value.rooms || {}).map(([id, guids]) => ({id,
+    people: arr(guids).map(g => arr(members).find(m => m.guid === g && m.presence.state === "online")).filter(Boolean)
+  })).filter(r => r.people.length);
 }
