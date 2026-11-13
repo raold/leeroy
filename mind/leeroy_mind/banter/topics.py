@@ -33,8 +33,11 @@ def joke_uses(store,key,*,durable=False):
         if store.get_meta(fold) is None:
             at, count = joke_uses(store, key)
             if not math.isfinite(at):
-                count = 12
+                count = lexicon.RETIRE_USES
                 at = 0
+            # History beyond retirement cannot extend a joke's allowance. Bound the
+            # Python integer before SQLite binding, including damaged huge receipts.
+            count = min(count, lexicon.RETIRE_USES)
             store.conn.execute("UPDATE lexicon SET uses_total=uses_total+?,last_used=max(last_used,?) WHERE id=?",
                                (count, at, int(key[5:])))
             store.set_meta(fold, '1')
@@ -45,7 +48,7 @@ def joke_uses(store,key,*,durable=False):
         value=json.loads(store.get_meta('banter:joke-use:'+key) or '{}')
         at,count=float(value.get('at',0)),int(value.get('count',0))
         return at,max(0,count)
-    except (TypeError,ValueError,AttributeError):
+    except (TypeError,ValueError,AttributeError,OverflowError):
         return float('inf'),4  # damaged usage never resets its allowance
 
 

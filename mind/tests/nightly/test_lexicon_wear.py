@@ -55,3 +55,16 @@ def test_banter_legacy_fold_is_once_and_damage_never_resets(h):
     h.store.set_meta(f"banter:joke-use:joke:{ident}", '{"at": 5, "count": 3}')
     assert joke_uses(h.store,f"joke:{ident}",durable=True)[1] == 3
     assert joke_uses(h.store,f"joke:{ident}",durable=True)[1] == 3
+
+
+@pytest.mark.parametrize("count", ["1e999", "-1e999", "NaN", "9223372036854775808", "9" * 400])
+def test_damaged_or_oversized_legacy_count_retires_without_overflow(h, count):
+    from leeroy_mind.banter.topics import joke_uses
+    ident = term(h)
+    enable(h)
+    h.store.set_meta(f"banter:joke-use:joke:{ident}", '{"at": 5, "count": ' + count + '}')
+    lexicon.fade(h.ctx())
+    assert row(h, ident)["uses_total"] == 12
+    assert row(h, ident)["status"] == "dormant"
+    assert row(h, ident)["retired"] is not None
+    assert joke_uses(h.store, f"joke:{ident}", durable=True)[1] == 12
