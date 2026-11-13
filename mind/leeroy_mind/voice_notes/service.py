@@ -18,6 +18,9 @@ from .config import load_config, VoiceNotesConfig
 from . import files
 
 TIMEOUT=20.0
+# A restarted mind can tick before the voice service, still loading its models, has greeted it:
+# a pending recording waits this long for the connection, then settles as a real failure.
+RECOVERY_WAIT_S=300.0
 PLACEHOLDER='(voice message)'
 FAILURE='He sent a private voice note, but you cannot play it right now. Do not invent its contents; you may say you will listen later.'
 PENDING_KEY='voice_note:pending:'
@@ -56,6 +59,7 @@ class VoiceNotes:
         self._pending={}
         self._tasks=set()
         self._active=set()
+        self._waiting={}  # message id -> monotonic time recovery first found the voice service down
         self._closed=False
 
     def receive(self,msg):
@@ -172,11 +176,17 @@ class VoiceNotes:
             self._done(task)
         task.add_done_callback(done)
 
+    def _connected(self):
+        voice=getattr(self.app,'voice',None)
+        return voice is not None and bool(voice.client.greeted)
+
     def tick(self):
         """Resume one durable receipt at a time after a shutdown or interrupted handoff.
 
         Only this receipt selects recovery work; a transcript failure is terminal too.
         The normal owed-DM tick cannot see a pending recording as an owed post.
+        A pending recording waits for the voice service's connection (at most RECOVERY_WAIT_S),
+        so a restart never turns it into a failure; a ready one needs no voice service.
         """
         if not self.config.enabled or self._closed or self.app.stopping or self._tasks:
             return
@@ -198,7 +208,13 @@ class VoiceNotes:
             if message is None or message['deleted'] is not None or chatrow is None:
                 with app.store.transaction():
                     app.store.conn.execute('DELETE FROM meta WHERE key=?',(key,))
+                self._waiting.pop(mid,None)
                 continue
+            if app.store.get_meta(key)!='ready' and not self._connected():
+                since=self._waiting.setdefault(mid,app.clock.monotonic())
+                if app.clock.monotonic()-since<RECOVERY_WAIT_S:
+                    continue
+            self._waiting.pop(mid,None)
             chat=Chat(ts=int(chatrow['ts']*1000),channel=chatrow['channel'],from_guid=chatrow['from_guid'],
                 from_name=chatrow['from_name'],to_guid=chatrow['to_guid'],text=chatrow['text'],map=chatrow['map'],zone=chatrow['zone'])
             self._start(mid,int(line),chat,message['path'],app.discord)

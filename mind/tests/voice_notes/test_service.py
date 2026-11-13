@@ -156,6 +156,90 @@ def test_shutdown_recovery_hands_terminal_note_once(store,clock,monkeypatch,when
     run(go())
 
 
+def pending_after_restart(app):
+    """His note whose transcription a shutdown interrupted: its receipt says pending, and a new
+    VoiceNotes (the restarted mind's) has not started it yet."""
+    async def go():
+        started=asyncio.Event()
+        async def hang(msg):
+            started.set(); await asyncio.Event().wait()
+        app.voice_notes.request=hang
+        token,_,_=files.stage(app.data_dir,wav())
+        result=await app.discord.handle(discord_args({'action':'post','channel':'dm:101','voice':token}))
+        await started.wait()
+        await app.voice_notes.close()
+        app.voice_notes=service.VoiceNotes(app,app.voice_notes.config)
+        return result['id']
+    return go()
+
+
+def note_state(store,mid):
+    return (store.get_meta(service.PENDING_KEY+str(mid)),
+            store.conn.execute('SELECT transcript_ok FROM discord_voice WHERE message=?',(mid,)).fetchone()[0],
+            store.conn.execute('SELECT text FROM discord_message WHERE id=?',(mid,)).fetchone()[0])
+
+
+def test_recovery_waits_for_the_voice_service_to_reconnect(store,clock,monkeypatch):
+    """A restarted mind ticks before the voice service (still loading its models) has greeted
+    it: the pending recording is neither sent nor failed until the connection is back."""
+    async def go():
+        app,_,_,_,seen=fixture(store,clock,monkeypatch)
+        mid=await pending_after_restart(app)
+        sent=[]
+        def send(msg):
+            sent.append(msg)
+            asyncio.get_running_loop().call_soon(app.voice_notes.receive,
+                wire.Transcript(msg.id,True,'An invented recovered sentence.','ok'))
+        app.voice.client.greeted=False; app.voice.client.send=send
+        before=inventory(app.data_dir/'discord')
+        for _ in range(3):
+            app.voice_notes.tick(); await asyncio.sleep(0)
+            await asyncio.gather(*tuple(app.voice_notes._tasks))
+            await clock.advance(1,step=1)
+        assert not seen and not sent
+        assert note_state(store,mid)==('pending',0,service.PLACEHOLDER)
+        app.voice.client.greeted=True  # the voice service is back
+        app.voice_notes.tick()
+        await asyncio.gather(*tuple(app.voice_notes._tasks))
+        assert seen==[mid] and len(sent)==1 and isinstance(sent[0],wire.Transcribe)
+        assert note_state(store,mid)==(None,1,'An invented recovered sentence.')
+        assert inventory(app.data_dir/'discord')==before
+        await app.voice_notes.close()
+    run(go())
+
+
+def test_recovery_gives_up_waiting_for_a_voice_service_that_stays_down(store,clock,monkeypatch):
+    """Still down after RECOVERY_WAIT_S: the note settles as a real failure, so she answers
+    that she can't play it right now rather than never."""
+    async def go():
+        app,_,_,_,seen=fixture(store,clock,monkeypatch)
+        mid=await pending_after_restart(app)
+        app.voice.client.greeted=False
+        app.voice_notes.tick(); await asyncio.sleep(0)
+        await clock.advance(service.RECOVERY_WAIT_S-1,step=service.RECOVERY_WAIT_S-1)
+        app.voice_notes.tick(); await asyncio.sleep(0)
+        assert not app.voice_notes._tasks and not seen and note_state(store,mid)[0]=='pending'
+        await clock.advance(2,step=2)
+        app.voice_notes.tick()
+        await asyncio.gather(*tuple(app.voice_notes._tasks))
+        assert seen==[mid] and note_state(store,mid)==(None,0,service.PLACEHOLDER)
+        await app.voice_notes.close()
+    run(go())
+
+
+def test_a_ready_note_is_handed_over_without_waiting_for_the_voice_service(store,clock,monkeypatch):
+    async def go():
+        app,_,_,_,seen=fixture(store,clock,monkeypatch)
+        mid=await pending_after_restart(app)
+        store.set_meta(service.PENDING_KEY+str(mid),'ready')
+        app.voice.client.greeted=False
+        app.voice_notes.tick()
+        await asyncio.gather(*tuple(app.voice_notes._tasks))
+        assert seen==[mid] and note_state(store,mid)[0] is None
+        await app.voice_notes.close()
+    run(go())
+
+
 @pytest.mark.parametrize('mode',['disconnected','refused'])
 def test_disconnected_requests_fail_without_wait(store,clock,monkeypatch,mode):
     async def go():

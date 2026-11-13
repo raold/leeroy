@@ -81,8 +81,11 @@ the bubble playable and tells the answering member only that she cannot play it 
 Only the completed success or failure is handed to `DiscordTalk.on_his_post`, exactly once
 in the running mind. Its ordinary own-time rules determine when she answers; no pending
 placeholder creates a deferred-answer receipt. Durable pending/ready receipts resume an
-interrupted transcription or handoff after restart. Deleted messages are not handed over,
-and a completed handoff has no recovery receipt left. Recovery processes one receipt at a
-time; switching the feature off leaves the retained receipts untouched.
+interrupted transcription or handoff after restart. An interrupted transcription waits for
+the voice service to connect (it loads its models after a restart) and is sent then; only
+after five minutes without a connection does it settle as a failed transcription. Deleted
+messages are not handed over, and a completed handoff has no recovery receipt left. Recovery
+processes one receipt at a time; switching the feature off leaves the retained receipts
+untouched.
 
 Logs contain IDs, sizes, durations and reason codes, never transcript text or names.
