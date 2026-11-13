@@ -2377,26 +2377,30 @@ class Pipeline:
         if learn or review:
             with self.store.transaction():
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
+                if discord_id is not None:
+                    self.store.set_meta(f'discord:line:{discord_id}',str(line_id))
                 if review:
                     self.live_review.record(turn, meta, meta.words or text, line_id)
                 if learn:
                     from leeroy_mind.learn.recipe import record as record_recipe
                     try:
                         with self.store.transaction():
-                            record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg)
+                            record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg,
+                                          settings=getattr(self,'learn_settings',None))
                     except Exception:
                         log.warning("learn_recipe_record_failed")
                     if getattr(self,'learn_capture_preferences',False):
                         try:
                             with self.store.transaction():
                                 from leeroy_mind.learn.capture import delivered
-                                if discord_id is not None:
-                                    self.store.set_meta(f'discord:line:{discord_id}',str(line_id))
-                                delivered(self.store.conn,line_id,meta)
+                                delivered(self.store.conn,line_id,meta,settings=getattr(self,'learn_settings',None))
                         except Exception:
                             log.warning('learn_preference_capture_failed')
         else:
-            line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
+            with self.store.transaction():
+                line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
+                if discord_id is not None:
+                    self.store.set_meta(f'discord:line:{discord_id}',str(line_id))
         if self.cfg.talk.realism:
             meta.realism_sequence = self.realism.record_line(turn.speaker,credit=not meta.realism_correction)
             if meta.realism_planned and not meta.realism_correction and meta.words:

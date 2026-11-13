@@ -5,6 +5,7 @@ import { registerTab, setBadge } from "../tabs.mjs";
 import { Feed, kpis, lineChips } from "./model.mjs";
 import { channelOf } from "./discord.mjs";
 import { DISCORD } from "./discordstate.mjs";
+import { feedbackButtons } from "./feedback.mjs";
 
 // The Comms middle column: the open view of the feed (# guild, # officer, # party / raid, the
 // voice transcript or one whisper thread), each line with its face, name, time, a chip for where
@@ -70,6 +71,7 @@ function row(l) {
   lineChips(l, roomName).forEach(function (c) { h.appendChild(el("span", c.cls, c.text)); });
   m.appendChild(h);
   m.appendChild(el("div", "body", str(l.text)));
+  var feedback = feedbackButtons(l,who); if (feedback) { m.appendChild(feedback); }
   r.appendChild(m);
   return r;
 }

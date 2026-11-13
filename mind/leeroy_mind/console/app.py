@@ -857,6 +857,10 @@ class ConsoleApp:
                   ("GET", "/api/discord/image"): self._api_discord_image,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/tonight"): self._api_tonight,
+                  ("GET", "/api/lab"): self._api_lab,
+                  ("GET", "/api/lab/line"): self._api_lab_line,
+                  ("POST", "/api/learn"): self._api_learning_action,
+                  ("POST", "/api/feedback"): self._api_learning_action,
                   ("GET", "/api/training"): self._api_training,
                   ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/ops/badge"): self._api_ops_badge,
@@ -1009,6 +1013,53 @@ class ConsoleApp:
 
     async def _api_social(self, req: Request):
         return await self._db_view("social", socialview.social_view, now=self._clock())
+
+    async def _api_lab(self, req: Request):
+        if set(req.query)-{'member','offset'} or any(len(v)!=1 for v in req.query.values()):
+            return json_response(400, {'ok':False,'error':'Choose a member and a lesson page.'})
+        member = digits(req.query['member'][0],10) if 'member' in req.query else None
+        offset = digits(req.query.get('offset',['0'])[0],8)
+        if ('member' in req.query and (member is None or member<=0)) or offset is None:
+            return json_response(400, {'ok':False,'error':'Choose a member and a lesson page.'})
+        return await self._lab_read(member=member,offset=offset)
+
+    async def _api_lab_line(self, req: Request):
+        if set(req.query) != {'id'} or len(req.query['id']) != 1:
+            return json_response(400, {'ok': False, 'error': 'Choose one stored line.'})
+        ident = digits(req.query['id'][0], 19)
+        if ident is None or not 0 < ident < 2**63:
+            return json_response(400, {'ok': False, 'error': 'Choose one stored line.'})
+        return await self._lab_read(ident)
+
+    async def _lab_read(self, line=None, **options):
+        from . import labview
+        try:
+            value = await asyncio.to_thread(labview.read, self.s.data_dir, now=self._clock(), line=line, **options)
+        except Exception as exc:
+            log.warning('console_lab_unread error=%s', type(exc).__name__)
+            return json_response(503, {'ok': False, 'error': 'The Lab could not read mind.db just now.'})
+        return json_response(200, value)
+
+    async def _api_learning_action(self, req: Request):
+        op = 'feedback' if req.path == '/api/feedback' else 'learn'
+        try:
+            args = (endpoint.feedback_args if op == 'feedback' else endpoint.learn_args)(req.json())
+        except endpoint.BadRequest as exc:
+            return json_response(400, {'ok': False, 'error': str(exc)})
+        if not self.controls.enabled:
+            return json_response(403, {'ok': False, 'error': 'Control is off. Learning changes and feedback are read-only.'})
+        if self.controls.busy is not None or self.view.state != 'running' or self.link is None:
+            return json_response(409, {'ok': False, 'error': 'The mind must be running and available to save this change.'})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), op, args)
+        except LinkError:
+            return json_response(409, {'ok': False, 'error': 'The mind did not confirm this change. Check its state before trying again.'})
+        if reply.get('ok') is not True:
+            return json_response(409, {'ok': False, 'error': str(reply.get('error') or 'The mind refused this change.')[:300]})
+        if op == 'feedback':
+            reply = {**reply, 'message': 'Feedback saved.', 'value': args['value'], 'reasons': args['reasons']}
+            self.broadcast('feedback', {k:reply.get(k) for k in ('line_id','value','reasons','revision')})
+        return json_response(200, reply)
 
     async def _api_realm(self, req: Request):
         return await self._db_view("realm", realmview.realm_view, now=self._clock())

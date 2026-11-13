@@ -46,7 +46,7 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
         pytest.skip(message)
 
     @asynccontextmanager
-    async def start(*, width=1440, theme="dark", state="running", photos=False):
+    async def start(*, width=1440, theme="dark", state="running", photos=False, learning=False):
         # A rehearsal that runs past 75 s prints every asyncio task's stack once, so a
         # wait with no deadline names itself before the job's timeout cancels it. Capture
         # is suspended for it: a job killed mid-test never shows captured output.
@@ -67,13 +67,13 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
         watchdog.daemon = True
         watchdog.start()
         try:
-            async with _browser(width, theme, state, photos) as fixture:
+            async with _browser(width, theme, state, photos, learning) as fixture:
                 yield fixture
         finally:
             watchdog.cancel()
 
     @asynccontextmanager
-    async def _browser(width, theme, state, photos):
+    async def _browser(width, theme, state, photos, learning):
         async with playwright.async_playwright() as pw:
             if not Path(pw.chromium.executable_path).is_file():
                 message = "Chromium is not installed; run python -m playwright install chromium"
@@ -114,7 +114,7 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
             page.on("response", response_seen)
             fixture.page, fixture.context, fixture.errors = page, context, errors
             try:
-                await fixture.start(state, photos=photos)
+                await fixture.start(state, photos=photos, learning=learning)
                 # Browser requests may reach ONLY this fixture's own console: the console's
                 # CSP ('self') confines the page, and any other destination fails the test.
                 # Observed, not intercepted: with context.route() interception Chromium now

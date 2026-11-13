@@ -207,6 +207,13 @@ night stage after rewards. Default false. `freeze = true`, `frozen_members = [10
 or `frozen_families = ["length"]` provides an owner veto. Invalid learn settings
 disable the entire table. Restart after configuration changes.
 
+`freeze = true` (or the Lab's Freeze learning) stops all learning, not only the
+bandit: reward scoring, recipe capture, bandit selection and credit, coach lessons
+and arm proposals, preference and vector capture, the voice-fingerprint stage and
+banter's rewarded jokes. Feedback is still saved, and the 90-day retention of
+private drafts and vectors keeps running. The Lab can freeze more and lift its own
+freezes; it cannot lift a freeze or a frozen family that mind.toml sets.
+
 The registry stores versioned, closed numeric/enum parameters for length,
 questions, humour, callback, tease, typing and followup. Control means the existing
 behaviour, not an approximation to a numeric preset. Coach proposals are excluded

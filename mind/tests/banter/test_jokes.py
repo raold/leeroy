@@ -77,3 +77,13 @@ def test_vetoed_or_newly_private_origin_is_no_longer_a_topic(h):
     assert reward_jokes(h.ctx())==1
     h.store.conn.execute("UPDATE chat_line SET channel='whisper',to_guid=1 WHERE id=?",(line,))
     assert not list(jokes(app(h),"guild",h.T))
+
+
+def test_learning_freeze_holds_rewarded_jokes(h):
+    from leeroy_mind.learn import control
+    line=h.say(h.T,102,"pulling with my face again")
+    reward(h,line)
+    control.change(h.store,{"action":"freeze","frozen":True},now=h.T)
+    assert reward_jokes(h.ctx())==0
+    control.change(h.store,{"action":"freeze","frozen":False},now=h.T)
+    assert reward_jokes(h.ctx())==1

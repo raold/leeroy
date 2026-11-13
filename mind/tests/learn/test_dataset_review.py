@@ -133,6 +133,20 @@ def test_night_prunes_private_evidence_at_90_days(context):
     asyncio.run(go())
 
 
+def test_night_prunes_private_evidence_while_learning_is_frozen(context):
+    from leeroy_mind.learn import control
+    async def go():
+        async with context(learn_enabled=True) as (ctx,_):
+            control.change(ctx.store,{'action':'freeze','frozen':True},now=ctx.clock.now())
+            fixture=NS(store=ctx.store,before=ctx.clock.now()-91*dataset.DAY)
+            old=add(fixture,'old draft')
+            ctx.store.conn.execute('INSERT INTO learn_rewrite VALUES (?,?,?)',(str(old),old,'private original'))
+            await night.stage_rewards(ctx)
+            assert not ctx.store.conn.execute('SELECT 1 FROM learn_rewrite').fetchone()
+            assert not ctx.store.conn.execute('SELECT 1 FROM talk_reward').fetchone()
+    asyncio.run(go())
+
+
 @pytest.mark.parametrize('value',['1','"true"','[]','{}'])
 def test_capture_config_invalid_disables_learning(tmp_path,value):
     path=tmp_path/'mind.toml'; path.write_text('[learn]\nenabled=true\ncapture_preferences='+value)

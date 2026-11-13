@@ -55,4 +55,10 @@ def feedback(conn, args, owner, now):
     put(conn, args['line_id'], row[0], 'explicit', args['value'], now, 'explicit')
     for reason in args['reasons']:
         put(conn, args['line_id'], row[0], 'reason_' + reason.replace('-', '_'), 1, now, 'explicit')
-    return {'ok': True, 'line_id': args['line_id'], 'recorded': 1 + len(args['reasons'])}
+    # A numeric receipt lets separate consoles reconcile without letting an older
+    # in-flight snapshot undo the just-confirmed vote (timestamps can be equal).
+    key = f'learn:feedback:{args["line_id"]}'
+    conn.execute("INSERT INTO meta(key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE "
+                 "SET value=CAST(meta.value AS INTEGER)+1", (key,))
+    revision = int(conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()[0])
+    return {'ok': True, 'line_id': args['line_id'], 'recorded': 1 + len(args['reasons']), 'revision': revision}

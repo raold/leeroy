@@ -14,6 +14,7 @@ from leeroy_mind.signals import stage as screening
 from leeroy_mind.signals.store import REPLY_SECONDS, RETENTION_S
 from leeroy_mind.nightly.budget import register_counter
 from .config import load_learn_config
+from .control import effective
 from .reward import DAY, GAME_SCREENED, reward
 from .weights import available, ensure
 from .generation import lines
@@ -117,6 +118,8 @@ def remaining(ctx):
 
 async def prepare_count(ctx):
     ctx._memo["rewards:count"] = 0
+    if effective(ctx.store.conn, load_learn_config(ctx.settings.data_dir/'mind.toml')).freeze:
+        return
     if ctx.settings.learn_enabled and ready(ctx.store):
         try:
             ctx._memo["rewards:count"] = await read_work(ctx,remaining)
@@ -147,13 +150,19 @@ def attach(runner,data_dir,store=None):
 async def stage_rewards(ctx):
     if not ctx.settings.learn_enabled or not ready(ctx.store):
         return
+    cfg = load_learn_config(ctx.settings.data_dir / 'mind.toml')
     conn = ctx.store.conn
+    # The 90-day retention of private drafts and vectors is not learning: a freeze keeps it.
+    from .capture import prune, available as capture_available
+    if not ctx.done('rewards','preference_prune') and await read_work(ctx,lambda c:capture_available(c.store.conn)):
+        ctx.commit('rewards','preference_prune',lambda store:prune(store.conn,ctx.clock.now(),schema_available=True))
+    if effective(conn, cfg).freeze:
+        return
     try:
-        from .capture import prune, available as capture_available
-        if not ctx.done('rewards','preference_prune') and await read_work(ctx,lambda c:capture_available(c.store.conn)):
-            ctx.commit('rewards','preference_prune',lambda store:prune(store.conn,ctx.clock.now(),schema_available=True))
         ids = await read_work(ctx,_selection)
         with ctx.store.transaction():
+            if effective(conn,cfg).freeze:
+                return
             if ids and ctx.store.get_meta(PLAN+ctx.night) is None:
                 ctx.store.set_meta(PLAN+ctx.night,json.dumps(ids))
             if ids:
@@ -226,6 +235,8 @@ async def stage_rewards(ctx):
             raise RuntimeError("reward_screen_failed") from None
 
         def write(store):
+            if effective(store.conn, cfg).freeze:
+                return
             try:
                 store.conn.execute("INSERT INTO talk_reward(line_id,guid,value,cap_weight,parts,weights_version,scored_at) "
                     "VALUES (?,?,?,?,?,?,?) ON CONFLICT(line_id) DO UPDATE SET value=excluded.value,"

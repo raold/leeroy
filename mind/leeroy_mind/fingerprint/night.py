@@ -12,15 +12,22 @@ def attach(runner, data_dir):
 
 
 async def stage_fingerprint(ctx):
+    from leeroy_mind.learn.control import effective
+    from leeroy_mind.learn.config import load_learn_config
+    cfg=load_learn_config(ctx.settings.data_dir/'mind.toml')
+    if effective(ctx.store.conn,cfg).freeze:
+        return
     async def one(unit):
         guid = int(unit)
         def write(store):
+            if effective(store.conn,cfg).freeze:
+                return
             try:
                 persona = ctx.persona(guid)
                 dials = dials_of(persona)
                 profile = update(store.conn, guid, now=ctx.clock.now(),
                                  talkative=dials.level('talkative'), humour_dial=dials.level('humour'),
-                                 blocked_names=(ctx.ident.real_name,))
+                                 blocked_names=(ctx.ident.real_name,), settings=cfg)
             except Exception:
                 # NightContext.fail logs exception messages; do not forward SQLite/JSON text.
                 raise ValueError('fingerprint_unit_failed') from None

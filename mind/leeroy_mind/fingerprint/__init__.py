@@ -225,8 +225,11 @@ def _phrases(rows, blocked):
             for kind,c in counts.items()}
 
 
-def update(conn, guid, *, now, persona=None, talkative=5, humour_dial=5, blocked_names=()):
+def update(conn, guid, *, now, persona=None, talkative=5, humour_dial=5, blocked_names=(), settings=None):
     """Write inside the caller's unit transaction; never commits or logs chat text."""
+    from leeroy_mind.learn.control import frozen
+    if frozen(conn,settings):
+        return fingerprint(conn, guid)
     from leeroy_mind.personas.tiers import is_cast
     if not is_cast(conn,guid):
         return seed()

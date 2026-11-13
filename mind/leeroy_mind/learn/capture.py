@@ -2,13 +2,16 @@
 from hashlib import sha256
 from leeroy_mind.claims.store import vector
 from leeroy_mind.discord.channels import is_restricted, is_discord, channel_id
+from .control import frozen
 
 
 def digest(text):
     return sha256(text.encode('utf-8')).hexdigest()
 
 
-def vectors(conn, history, cached, model,*,channel=None):
+def vectors(conn, history, cached, model,*,channel=None,settings=None):
+    if frozen(conn,settings):
+        return
     for item in history:
         if item.id<=0 or item.id not in cached:
             continue
@@ -33,7 +36,9 @@ def vectors(conn, history, cached, model,*,channel=None):
             (line_id,digest(model),digest(item.text),vector(cached[item.id])))
 
 
-def delivered(conn,line_id,meta):
+def delivered(conn,line_id,meta,*,settings=None):
+    if frozen(conn,settings):
+        return
     target=getattr(meta,'discord',None)
     if target is not None and target.reply_to is not None:
         parent=conn.execute("SELECT value FROM meta WHERE key=?",(f'discord:line:{target.reply_to}',)).fetchone()

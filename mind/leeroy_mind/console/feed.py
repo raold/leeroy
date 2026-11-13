@@ -66,7 +66,7 @@ _VOICE_ROWS = {
 
 _FEED = """
 WITH base AS (
-    SELECT l.id, l.ts, l.channel, l.from_guid, l.from_name, l.to_guid, l.text, l.session_id,
+    SELECT l.id, l.ts, l.channel, l.from_guid, l.from_name, l.to_guid, l.text, l.session_id, l.origin,
            l.audience, coalesce(c.name, '') AS to_name, {vrank} AS vrank, {vheard} AS vheard,
            {vunheard} AS vunheard
     FROM chat_line l LEFT JOIN cast_member c ON c.guid = l.to_guid
@@ -140,7 +140,8 @@ def _line(r, human: int) -> dict:
     return {"id": r["id"], "ts": r["ts"], "channel": channel,
             "from": r["from_name"], "from_guid": r["from_guid"],
             "to": r["to_name"], "to_guid": r["to_guid"], "text": r["text"],
-            "you": you, "voice": voice, "heard": heard, "unheard": unheard}
+            "you": you, "voice": voice, "heard": heard, "unheard": unheard,
+            "feedback_id": r["id"] if r['origin']=='mind' and not you else None}
 
 
 def _query(conn, *, after, upto, since, limit, ids, now=None, only=None, peer=0,
@@ -156,7 +157,9 @@ def _query(conn, *, after, upto, since, limit, ids, now=None, only=None, peer=0,
         "now": 0.0 if now is None else float(now),
         "grace": WHISPER_GRACE_S if voiced and now is not None else 0.0,
         "ids": None if ids is None else json.dumps([int(i) for i in ids])}).fetchall()
-    return [_line(r, human) for r in rows]
+    from .labview import feedback
+    votes = feedback(conn, [r['id'] for r in rows if r['origin']=='mind'])
+    return [{**_line(r, human), 'feedback': votes.get(r['id'])} for r in rows]
 
 
 def feed(conn, *, after: int = 0, upto: int | None = None, since: float | None = None,

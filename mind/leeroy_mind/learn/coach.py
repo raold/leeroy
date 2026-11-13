@@ -10,6 +10,7 @@ from leeroy_mind.text import estimate_tokens
 from leeroy_mind.storage.provenance import paired
 from leeroy_mind.voice.rooms import BY_ID,PRIVATE
 from .config import load_learn_config
+from .control import effective
 from . import lessons
 
 STAGE = 'talk_coach'
@@ -189,8 +190,11 @@ def fit_payload(payload,system,shape):
         payload['exchanges'].pop(0)
 
 
-def propose_arm(store,arms,proposal,night,now):
+def propose_arm(store,arms,proposal,night,now,*,settings=None):
     if proposal is None:
+        return False
+    cfg=effective(store.conn,settings)
+    if cfg.freeze or proposal['family'] in cfg.frozen_families:
         return False
     if any(a.family==proposal['family'] and a.params==proposal['params'] for a in arms.read(store.conn)):
         return False
@@ -204,8 +208,8 @@ def propose_arm(store,arms,proposal,night,now):
 
 
 async def stage(ctx):
-    cfg=load_learn_config(ctx.settings.data_dir/'mind.toml')
-    if not cfg.enabled or not cfg.coach:
+    cfg=effective(ctx.store.conn,load_learn_config(ctx.settings.data_dir/'mind.toml'))
+    if not cfg.enabled or not cfg.coach or cfg.freeze:
         return
     from .night import read_work
     members=await read_work(ctx,candidates)
@@ -253,13 +257,16 @@ async def stage(ctx):
                     if arms.bounded(arm,**dials)!=proposal['params']:
                         proposal=None
             known={l['id'] for l in current}
+            expected={l['id']:(l['status'],l['expires'],l['reinforced']) for l in current}
             proposed=False
             def write(store):
                 nonlocal proposed
+                if effective(store.conn,cfg).freeze:
+                    return
                 try:
                     lessons.persist(store.conn,guid,result,known=known,night=ctx.night,
-                                    now=ctx.clock.now(),automatic=cfg.auto_lessons)
-                    proposed=propose_arm(store,arms,proposal,ctx.night,ctx.clock.now())
+                                    now=ctx.clock.now(),automatic=cfg.auto_lessons,settings=cfg,expected=expected)
+                    proposed=propose_arm(store,arms,proposal,ctx.night,ctx.clock.now(),settings=cfg)
                 except Exception:
                     raise ValueError('talk_coach_write_failed') from None
             if ctx.commit(STAGE,unit,write):
@@ -279,6 +286,8 @@ def attach(runner,data_dir,store=None):
 
 def count(ctx):
     if not ctx.settings.learn_enabled or not ctx.settings.learn_coach:
+        return 0
+    if effective(ctx.store.conn,load_learn_config(ctx.settings.data_dir/'mind.toml')).freeze:
         return 0
     # Budgeting runs before rewards. Count possible members from delivered lines
     # so a first scoring night does not reserve zero for newly eligible members.

@@ -6,7 +6,7 @@ import pytest
 from console.rig import KEY
 
 TABS = ("tonight", "comms", "raid", "guild", "social", "personas", "board", "calendar",
-        "bank", "realm", "training", "dojo", "library", "ops", "mind")
+        "bank", "realm", "training", "dojo", "library", "lab", "ops", "mind")
 POPULATED = {
     "tonight": "Waiting for you",
     "comms": "Rehearsal supplies are ready.", "raid": "Icecrown Citadel",
@@ -14,10 +14,10 @@ POPULATED = {
     "board": "Bring tea for the rehearsal.", "calendar": "Rehearsal raid night",
     "bank": "Rehearsal supplies", "realm": "Lantern Company",
     "training": "Rehearsal tactic", "dojo": "rehearsal-episode", "ops": "Release drift",
-    "library": "1 passage", "mind": "running",
+    "library": "1 passage", "lab": "Reward weights", "mind": "running",
 }
 OLDER = {tab: "Not set up yet" for tab in (
-    "tonight", "social", "board", "calendar", "bank", "realm", "training", "library", "ops")}
+    "tonight", "social", "board", "calendar", "bank", "realm", "training", "library", "lab", "ops")}
 OLDER.update({"raid": "No raid is open.",
               "guild": "The mind has no roster yet.",
               "personas": "This mind.db is older than some of what this tab reads",

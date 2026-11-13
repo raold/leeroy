@@ -18,6 +18,11 @@ def attach(runner,path):
 
 def reward_jokes(ctx):
     store = ctx.store
+    from leeroy_mind.learn.config import load_learn_config
+    from leeroy_mind.learn.control import frozen
+    data_dir = getattr(getattr(ctx, "settings", None), "data_dir", None)
+    if frozen(store.conn, load_learn_config(data_dir/"mind.toml") if data_dir is not None else None):
+        return 0  # the Lab's or mind.toml's learning freeze holds rewarded jokes too
     if not store.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='talk_reward'").fetchone():
         return 0  # Task 30 may not yet be installed; ordinary origin-backed jokes still work.
     rows = store.conn.execute("SELECT r.line_id FROM talk_reward r JOIN chat_line c ON c.id=r.line_id "

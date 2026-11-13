@@ -42,12 +42,46 @@
   <button role="tab" id="t-training" data-tab="training" aria-controls="tab-training">Training</button>
   <button role="tab" id="t-dojo" data-tab="dojo" aria-controls="tab-dojo">Dojo</button>
   <button role="tab" id="t-library" data-tab="library" aria-controls="tab-library">Library</button>
+  <button role="tab" id="t-lab" data-tab="lab" aria-controls="tab-lab">Lab</button>
   <button role="tab" id="t-ops" data-tab="ops" aria-controls="tab-ops">Ops</button>
   <button role="tab" id="t-mind" data-tab="mind" aria-controls="tab-mind">Mind</button>
 </nav>
 <div id="toasts" role="status"></div>
 </header>
 <main tabindex="0" aria-label="Console panels">
+  <section id="tab-lab" class="tab mindtab" role="tabpanel" aria-labelledby="t-lab" hidden>
+    <div id="lab-banner" class="banner bad" hidden></div>
+    <div class="view-head"><div><h2>Lab</h2><p>Feedback, reward scores and the guild’s learning controls.</p></div></div>
+    <div class="panel lab-controls">
+      <p id="lab-learning-state">Reading learning state…</p>
+      <button id="lab-freeze" type="button" data-lab-action="true" aria-pressed="false" disabled>Freeze learning</button>
+      <p id="lab-why" class="hint"></p><p id="lab-result" role="status" aria-live="polite"></p>
+    </div>
+    <div class="lab-grid">
+      <section class="panel"><h3>Rewards</h3><div id="lab-rewards"></div></section>
+      <section class="panel"><h3>Arms</h3><div id="lab-arms"></div></section>
+      <section class="panel"><h3>Lessons</h3><div id="lab-lessons"></div></section>
+      <section class="panel"><h3>Reward weights</h3><p id="lab-weights-note"></p>
+        <form id="lab-weights-form">
+          <div class="lab-weight-fields">
+            <label for="lab-weight-explicit">Explicit feedback<input id="lab-weight-explicit" type="number" min="0" max="1" step="any" required></label>
+            <label for="lab-weight-engagement">Engagement<input id="lab-weight-engagement" type="number" min="0" max="1" step="any" required></label>
+            <label for="lab-weight-emote">Emote<input id="lab-weight-emote" type="number" min="0" max="1" step="any" required></label>
+            <label for="lab-weight-quality">Quality deduction<input id="lab-weight-quality" type="number" min="0" max="1" step="any" required></label>
+          </div>
+          <button id="lab-weights-save" type="submit" data-lab-action="true" disabled>Review weights</button>
+          <button id="lab-weights-reset" type="button">Reset to current weights</button>
+        </form>
+        <details class="lab-detail"><summary>Version history</summary><div id="lab-weight-history"></div></details>
+      </section>
+      <section class="panel"><h3>Weekly report</h3><pre id="lab-report">Not set up yet.</pre></section>
+    </div>
+  </section>
+  <dialog id="lab-confirm" aria-labelledby="lab-confirm-title" aria-describedby="lab-confirm-words">
+    <h2 id="lab-confirm-title">Review learning change</h2><p id="lab-confirm-words"></p>
+    <div class="acts"><button id="lab-confirm-cancel" type="button" autofocus>Cancel</button>
+      <button id="lab-confirm-save" type="button" data-lab-action="true">Save change</button></div>
+  </dialog>
   <section id="tab-tonight" class="tab mindtab" role="tabpanel" aria-labelledby="t-tonight" hidden>
     <div id="tonight-banner" class="banner bad" hidden></div>
     <div class="view-head"><div><h2>Tonight</h2><p id="tonight-intro"></p></div></div>
