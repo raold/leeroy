@@ -437,7 +437,8 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
                 keep_case: frozenset[str] = frozenset(), max_lines: int = 2,
                 aliases: tuple[str, ...] = (), force_lines: bool = False,
                 no_emoticon: bool = False, wink_ok: bool = True,
-                game: bool = True) -> list[Styled]:
+                game: bool = True, cap: int | None = None,
+                max_chars: int | None = None) -> list[Styled]:
     """apply_style's lines with their plain words (Styled). `force_lines`: the turn may take
     all of max_lines whatever the persona's split_rate (a whisper to him at the explicit band
     runs to a line or two). `no_emoticon`: no mark is added (a line that carried her romance
@@ -445,7 +446,10 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
     (a line to or naming a member) no wink, kiss or heart is added, a smile still may be (fix
     round 1, review I2: ";)" went onto a line the member screen had passed). Without `game` (a
     Discord line) nothing is folded to ASCII and no line is cut to the bridge's bytes or
-    cleaned as a chat line: the Discord store cleans and limits its text."""
+    cleaned as a chat line: the Discord store cleans and limits its text. `cap`: a line's
+    words instead of line_cap's (a longer Discord message, talk/discord_length.py);
+    `max_chars`: a line loses whole words until it has at most that many characters (the
+    Discord store's MAX_TEXT, which would refuse it whole)."""
     if kind in RAID_CALLS:
         eff = EFFECTS[Altered.SOBER]
     asc = to_ascii if game else str
@@ -464,7 +468,7 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
     lines = (max(1, max_lines) if kind is TurnKind.BIT or force_lines
              else turn_lines(t, max_lines))
     split = rng.random() < t.split_rate
-    laid = _fit(_TOKEN.findall(body), line_cap(t, eff, length_mult), lines)
+    laid = _fit(_TOKEN.findall(body), cap or line_cap(t, eff, length_mult), lines)
     if split and lines > 1 and len(laid) == 1:
         laid = _split_one(laid[0], t.words_per_line[0]) or laid
     protected = frozenset(asc(w) for w in protect) | keep
@@ -483,6 +487,11 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
         tail = (f" {emoticon}" if emoticon and i == len(laid) - 1 and not _ends_marked(typed)
                 else "")
         while game and len((typed + tail).encode("utf-8")) > MAX_TEXT_BYTES:
+            tokens = _TOKEN.findall(typed)
+            if len(tokens) <= 1:
+                break
+            typed = _end_punct(" ".join(tokens[:-1]).rstrip(",;:"), t.end_punct, drop_some)
+        while max_chars is not None and len((typed + tail).strip()) > max_chars:
             tokens = _TOKEN.findall(typed)
             if len(tokens) <= 1:
                 break
