@@ -13,6 +13,9 @@ rechecks older unknown rows carrying terminal evidence.
 The timeout's `transport_unknown` callback is a non-final notice: Recall waits
 for the job's real result, including across its periodic ticks. A terminal result
 then advances the same rearm, leave or defaults chain in either arrival order.
+A native terminal failure is delivered once even when ownership stays unknown:
+a failed leave can retry its released members while retaining the others, and a
+failed defaults receipt ends its chain without releasing unproved holds.
 A done WG cleanup job also completes its WG root after the cleanup transport
 settles, even when its ACK was lost, in either arrival order.
 

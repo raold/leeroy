@@ -130,6 +130,129 @@ def test_rearm_refusal_after_lost_ack_still_sends_defaults(ledger, first):
     run(scenario())
 
 
+@pytest.mark.parametrize('first', ['job', 'timeout'])
+def test_failed_leave_after_lost_ack_retries_released_members_once_in_both_orders(ledger, first):
+    async def scenario():
+        h = Harness(ledger)
+        h.clock.value = NOW
+        members = (101, 102, 103)
+        ports = SimpleNamespace(cast=lambda: [SimpleNamespace(guid=g, online=True) for g in members],
+                                human_online=lambda: True)
+        recall = Recall(ports, h.queue, h.bodies, h.clock)
+        outcomes = []
+        original_done = recall._done
+
+        def observe(chain, step, ok, reason, past, command_id=None):
+            outcomes.append((command_id, step, ok, reason))
+            original_done(chain, step, ok, reason, past, command_id)
+
+        recall._done = observe
+        recall.on_login(NOW)
+        try:
+            await h.cycle()
+            cmd = h.sent[0][1]
+            failure = p.RealmJob(0, cmd.id, 'leave_pvp', 'failed', 'lfg_queue_leave_unproved',
+                                 102, 0, released=(101, 103))
+            if first == 'job': h.queue.on_realm_job(failure)
+            h.waits[cmd.id].set_exception(TimeoutError())
+            await h.cycle()
+            if first == 'timeout':
+                recall.tick(h.clock.now())
+                assert recall._chains and ledger.holds()[0].guids == frozenset(members)
+                h.queue.on_realm_job(failure)
+            assert (ledger.get(cmd.id).state, ledger.get(cmd.id).result_reason) == ('unknown', 'job_failed')
+            assert ledger.holds()[0].guids == frozenset({102})
+            expected = [(cmd.id, 'leave', False, 'transport_unknown')] if first == 'timeout' else []
+            expected.append((cmd.id, 'leave', False, 'job_failed'))
+            assert outcomes == expected
+            assert cmd.id not in h.queue._entries
+            assert set(recall._busy) == {101, 103}
+            for _ in range(2):
+                h.queue.on_realm_job(failure)
+                h.queue.on_send_error(cmd, 'TimeoutError')
+            assert outcomes == expected
+            # Native released these members, but did not prove that they left PvP.
+            # Their fresh smaller leave must succeed before rearm/defaults follow.
+            index = 1
+            for step in range(1, 5):
+                await h.cycle(NOW + step * 2)
+                if index == len(h.sent): break
+                next_cmd = h.sent[index][1]
+                index += 1
+                h.ack(next_cmd.id)
+                await h.cycle()
+                event = terminal(next_cmd)
+                (h.queue.on_job if isinstance(next_cmd, BotDo) else h.queue.on_realm_job)(event)
+                recall.tick(h.clock.now())
+            assert [(type(c), c.guids) for _, c in h.sent] == [
+                (p.LeavePvp, members), (p.LeavePvp, (101, 103)),
+                (p.Rearm, (101, 103)), (BotDo, (101, 103))]
+            assert h.sent[1][1].id != cmd.id
+            assert [(step, ok, reason) for _, step, ok, reason in outcomes if reason != 'transport_unknown'] == [
+                ('leave', False, 'job_failed'), ('leave', True, ''), ('rearm', True, ''), ('defaults', True, '')]
+            assert not recall._chains and not recall._busy
+            assert ledger.holds()[0].guids == frozenset({102})
+        finally:
+            await h.finish()
+    run(scenario())
+
+
+@pytest.mark.parametrize('first', ['job', 'timeout'])
+@pytest.mark.parametrize('complete_receipt', [False, True])
+def test_failed_defaults_after_lost_ack_end_chain_once_and_preserve_holds(ledger, first, complete_receipt):
+    async def scenario():
+        h = Harness(ledger)
+        h.clock.value = NOW
+        members = tuple(range(101, 144))
+        ports = SimpleNamespace(cast=lambda: [SimpleNamespace(guid=g, online=True) for g in members],
+                                human_online=lambda: True)
+        recall = Recall(ports, h.queue, h.bodies, h.clock)
+        outcomes = []
+        original_done = recall._done
+
+        def observe(chain, step, ok, reason, past, command_id=None):
+            outcomes.append((command_id, step, ok, reason))
+            original_done(chain, step, ok, reason, past, command_id)
+
+        recall._done = observe
+        recall.restore_defaults(members)
+        try:
+            await h.cycle()
+            rearm = h.sent[0][1]
+            h.ack(rearm.id)
+            await h.cycle()
+            h.queue.on_realm_job(terminal(rearm))
+            await h.cycle(NOW + 2)
+            cmd = h.sent[1][1]
+            assert isinstance(cmd, BotDo) and len(cmd.guids) == 40
+            failure = Job(0, cmd.id, 'bot_do', 'failed', 'cancelled', '',
+                          cmd.guids if complete_receipt else cmd.guids[:1], (), 0, 0, 0, 0, 0, 0)
+            if first == 'job': h.queue.on_job(failure)
+            h.waits[cmd.id].set_exception(TimeoutError())
+            await h.cycle()
+            if first == 'timeout':
+                recall.tick(h.clock.now())
+                assert recall._chains
+                h.queue.on_job(failure)
+            state, reason = ('completed', 'defaults_failed') if complete_receipt else ('unknown', 'incomplete_defaults')
+            assert (ledger.get(cmd.id).state, ledger.get(cmd.id).result_reason) == (state, reason)
+            expected = [(rearm.id, 'rearm', True, '')]
+            if first == 'timeout': expected.append((cmd.id, 'defaults', False, 'transport_unknown'))
+            expected.append((cmd.id, 'defaults', False, reason))
+            assert outcomes == expected
+            assert not recall._chains and not recall._busy and not h.queue._entries
+            for _ in range(2):
+                h.queue.on_job(failure)
+                h.queue.on_send_error(cmd, 'TimeoutError')
+            recall.tick(h.clock.now())
+            await h.cycle(NOW + 4)
+            assert outcomes == expected and len(h.sent) == 2  # the later defaults batch stays unsent
+            assert [hold.guids for hold in ledger.holds()] == ([] if complete_receipt else [frozenset(cmd.guids)])
+        finally:
+            await h.finish()
+    run(scenario())
+
+
 def test_transport_unknown_chain_waits_until_ticket_change_without_replaying(ledger):
     async def scenario():
         h = Harness(ledger)

@@ -680,8 +680,13 @@ class ActionStore:
     def _transition(self, old, new):
         ev = json.loads(new.evidence)
         value = next((ev[key]["value"] for key in ("job", "enrollment_job") if key in ev), 0)
+        # A native terminal failure may retain unknown ownership. Its actual
+        # result still replaces the transport notice, exactly once.
+        native_terminal = any(ev.get(key, {}).get("state") in {"done", "failed"}
+                              for key in ("job", "bot", "origin_failure"))
         ready = (old.result_ok is None and new.result_ok is not None
-                 or old.result_reason == "transport_unknown" and new.state in TERMINAL)
+                 or old.result_reason == "transport_unknown" and new.result_reason != "transport_unknown"
+                 and (new.state in TERMINAL or native_terminal))
         return Transition(True, old != new, new.command_id, ready,
                           new.result_ok, new.result_reason, value)
 
