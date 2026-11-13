@@ -21,7 +21,9 @@ releases the members after the failing step, whose steps never ran. So a failed 
 to rearm or defaults. Its released members that it did not skip, when they are fewer than its
 manifest, get a new leave as a new command, as a named ack refusal's rest does (each retry strictly
 smaller; a no-op for those already out), and only that leave's success rearms them and restores
-their defaults. A whole-job refusal, or a failure that released everyone, ends the chain. The
+their defaults. A whole-job refusal, or a failure that released everyone, ends the chain. The end
+of that leave's hold hands none of its members back to defaults either (the recall's release
+callback keeps them out for 60 s), nor a member a done leave skipped or an ack refusal named. The
 failed root's 600 s backoff covers its held and skipped members, not those released ones. Skipped
 members back off for 600 seconds even when the leave ends unknown. A failed leave without new
 release evidence retains the full manifest, as before.

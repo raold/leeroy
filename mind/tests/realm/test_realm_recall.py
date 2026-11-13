@@ -305,11 +305,13 @@ def test_recall_shrinks_145_through_wintergrasp_then_closure_refusals(pipeline, 
 
 async def _settle_all(h, leave_answer, *, tick_recall=False):
     """Answer every command the recall sends until it is quiet; leaves through leave_answer.
-    tick_recall also runs the recall's own tick, as the Realm loop does each second, so a chain
-    that waited for a queue slot goes on."""
+    tick_recall also runs, as the Realm loop does each second, the body ledger's poll and the
+    recall's own tick: a chain that waited for a queue slot goes on, and a hold seen in flight is
+    reported, so its end reaches the recall's release callback."""
     seen = set()
     for _ in range(60):
         if tick_recall:
+            h.realm.bodies.poll()
             h.realm.recall.tick(h.clock.now())
         await h.cycle()
         fresh = [c for c in h.app.sent if c.id not in seen]
@@ -318,6 +320,9 @@ async def _settle_all(h, leave_answer, *, tick_recall=False):
             fresh = [c for c in h.app.sent if c.id not in seen]
         if not fresh:
             return
+        if tick_recall:
+            await h.cycle(1.01)
+            h.realm.bodies.poll()  # the commands in flight are seen holding their bodies
         for c in fresh:
             seen.add(c.id)
             if type(c) is p.LeavePvp:
@@ -436,6 +441,21 @@ def test_a_failed_leave_sends_its_released_members_a_new_leave_never_a_rearm(pip
             assert kinds.index((p.Rearm, (101, 103))) > kinds.index((p.LeavePvp, (101, 103)))
             assert [h.guids for h in h.realm.action_store.holds()] == [frozenset({102})]
             assert "realm_recall_released held=1 skipped=0 rest=2" in caplog.messages
+    run(scenario())
+
+
+def test_a_member_a_done_leave_skipped_gets_no_defaults_from_its_release(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+
+            async def skip_101(cmd):
+                await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "done", "", 0, 2, "", None, (101,)))
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, skip_101, tick_recall=True)
+            assert [c.guids for c in h.app.sent if type(c) is p.Rearm] == [(102, 103)]
+            assert set().union(*(set(c.guids) for c in h.app.sent if type(c) is BotDo)) == {102, 103}
     run(scenario())
 
 
