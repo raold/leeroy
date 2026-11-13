@@ -14,13 +14,14 @@ class LearnCfg:
     frozen_families: tuple[str, ...] = ()
     frozen_members: tuple[int, ...] = ()
     capture_preferences: bool = False
+    apply: bool = False
 
 
 def load_learn_config(path: Path) -> LearnCfg:
     try:
         table = tomllib.loads(path.read_text(encoding="utf-8-sig")).get("learn", {})
         from .arms import FAMILIES
-        flags = ("enabled", "coach", "auto_lessons", "bandit", "freeze", "capture_preferences")
+        flags = ("enabled", "coach", "auto_lessons", "bandit", "freeze", "capture_preferences", "apply")
         if (type(table) is not dict or set(table) - {*flags, "frozen_families", "frozen_members"}
                 or any(type(table.get(k, False)) is not bool for k in flags)
                 or type(table.get("frozen_families", [])) is not list

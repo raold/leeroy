@@ -1,8 +1,7 @@
 """A bounded, model-free callback selector. Selection never marks a memory used.
 
-The future talk caller must pass observed participants and privacy context, and
-record use in the same transaction as a successfully sent line. Nothing attaches
-this module to talk in this change.
+The talk caller passes observed participants and privacy context, and records
+use in the same transaction as a successfully sent line's recipe.
 """
 from dataclasses import dataclass
 import json
@@ -13,8 +12,9 @@ import sqlite3
 import tomllib
 from types import SimpleNamespace
 
-from leeroy_mind.discord.channels import OFFICER_GAME, is_private
-from leeroy_mind.memory.recall import scope_ok, whisper_ok
+from leeroy_mind.discord.channels import is_private, is_officer_channel, is_discord, channel_id
+from leeroy_mind.memory.recall import scope_ok, whisper_ok, hidden_ok
+from leeroy_mind.memory.privacy import restricted_channels
 from leeroy_mind.storage.rows import cosine, unpack_vec
 
 DAY = 86400
@@ -125,8 +125,9 @@ class _Privacy:
     Public and private evidence mixed together still must all pass. Officer and
     historical group/room audiences restrict even a mistakenly open memory.
     """
-    def __init__(self, conn, guid, ctx, now):
+    def __init__(self, conn, guid, ctx, now, human):
         self.conn, self.guid, self.ctx, self.now = conn, guid, ctx, now
+        self.readers = None if ctx.readers is None else set(ctx.readers) - {human}
         self.cache = {}
         self.count = 0
         rows = _rows(conn, "SELECT json FROM persona_core WHERE guid=?", (guid,))
@@ -159,7 +160,9 @@ class _Privacy:
             row = rows[0]
             if kind == "memory":
                 refs = _json(row["evidence"])
+                hidden = restricted_channels(self.conn, {0: refs}).get(0, ()) if isinstance(refs, list) else ()
                 ok = (row["t_created"] <= self.now and self.memory_scope(row)
+                      and (not hidden or hidden_ok(hidden, self.ctx.channel))
                       and isinstance(refs, list) and 0 < len(refs) <= 40
                       and all(self.visible(r, stack | {ref}) for r in refs))
             elif kind == "event":
@@ -180,15 +183,21 @@ class _Privacy:
                     ok = (self.guid in (row["from_guid"], row["to_guid"])
                           and whisper_ok(ch, row["from_guid"], row["to_guid"], speaker=self.guid,
                                          turn_channel=self.ctx.channel, to_guid=self.ctx.to_guid))
-                elif ch in OFFICER_GAME:
-                    ok = self.officer and self.ctx.channel in OFFICER_GAME
+                elif is_officer_channel(ch):
+                    ok = self.officer and hidden_ok((ch,), self.ctx.channel)
                 elif ch == "guild":
                     ok = True
                 else:
                     # Every current reader must have been in the historical audience.
-                    ok = (ch == self.ctx.channel and _ids(audience) and self.ctx.readers is not None
-                          and set(self.ctx.readers).issubset(audience) and self.guid in audience)
+                    ok = (ch == self.ctx.channel and _ids(audience) and self.readers is not None
+                          and self.readers.issubset(audience) and self.guid in audience)
                 ok = ok and audience_ok and row["ts"] <= self.now
+                if ok and is_discord(ch):
+                    deleted = self.conn.execute("SELECT 1 FROM meta r JOIN discord_message m "
+                        "ON m.id=CAST(substr(r.key,14) AS INTEGER) WHERE r.key GLOB 'discord:line:*' "
+                        "AND r.value=? AND m.channel=? AND m.deleted IS NOT NULL LIMIT 1",
+                        (str(row['id']), channel_id(ch))).fetchone()
+                    ok = deleted is None
                 # A mind line can itself carry private recalled memories.
                 if ok and row["origin"] == "mind":
                     pairs = _rows(self.conn, "SELECT memory_ids FROM utterance WHERE guid=? AND channel=? "
@@ -215,16 +224,18 @@ def _pick(conn, guid, ctx, now):
     usage = _rows(conn, "SELECT guid FROM callback_use WHERE ts>=? AND ts<=? LIMIT 4", (floor, now))
     if len(usage) >= 3 or any(r["guid"] == guid for r in usage):
         return None
+    owner = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
+    human = int(owner[0]) if owner and str(owner[0]).isdecimal() else 0
     # Unknown room authorization fails closed, even for public memory seeds.
-    if ctx.channel == "whisper":
+    if is_private(ctx.channel):
         if (not ctx.to_guid or ctx.to_guid == guid or set(ctx.present) - {guid, ctx.to_guid}
                 or (ctx.readers is not None and set(ctx.readers) - {guid, ctx.to_guid})):
             return None
     elif ctx.channel != "guild" and (ctx.readers is None or guid not in ctx.readers
-                                     or not set(ctx.present).issubset(ctx.readers)):
+                                     or not (set(ctx.present) - {human}).issubset(ctx.readers)):
         return None
-    privacy = _Privacy(conn, guid, ctx, now)
-    if ctx.channel == "officer" and not privacy.officer:
+    privacy = _Privacy(conn, guid, ctx, now, human)
+    if is_officer_channel(ctx.channel) and not privacy.officer:
         return None
     rows = _rows(conn, "SELECT * FROM memory m WHERE owner=? AND status='active' "
         "AND kind NOT IN ('plan','story') AND source NOT IN ('hearsay','offscreen') AND confidence>=0.8 "

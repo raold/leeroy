@@ -11,6 +11,8 @@ from . import calendarview, raidview, selfieview, views, items
 from .feed import human_guid
 from .opsview import OpsView, Missing, Budget, database, require
 from leeroy_mind.realm.bank import BankLedger, STOCK
+from leeroy_mind.discord.channels import group_sql
+from leeroy_mind.groups.config import load_groups_config
 
 SECTIONS = ('raid','waiting','loot','bank','kit','week','guild')
 
@@ -74,17 +76,29 @@ def _waiting(conn,data_dir,now):
     human = human_guid(conn)
     if not human:
         raise Missing('no_owner')
+    group_channels = set()
+    if load_groups_config(data_dir/'mind.toml').enabled and 'discord_group' in views.tables(conn):
+        group_channels = {f'gdm:{r[0]}' for r in conn.execute('SELECT g.id FROM discord_group g '
+            'JOIN discord_group_member m ON m.grp=g.id WHERE g.closed IS NULL AND m.guid=? AND m.left IS NULL',
+            (human,))}
     # Select only identities and times; private message contents never enter this view.
     rows = conn.execute("SELECT channel,author,ts,id FROM (SELECT channel,author,ts,id,"
                         "row_number() OVER (PARTITION BY channel,author ORDER BY ts DESC,id DESC) AS rank "
-                        "FROM discord_message WHERE deleted IS NULL AND channel GLOB 'dm:[0-9]*' AND ts<=?) "
-                        "WHERE rank=1",(now,)).fetchall()
+                        f"FROM discord_message WHERE deleted IS NULL AND (channel GLOB 'dm:[0-9]*' OR (? AND {group_sql()})) AND ts<=?) "
+                        "WHERE rank=1",(bool(group_channels),now)).fetchall()
     threads = {}
+    group_threads = {}
     for channel,author,at,mid in rows:
+        if channel in group_channels and author > 0:
+            people = group_threads.setdefault(channel,{})
+            who = human if author == human else 0
+            people[who] = max(people.get(who,(float('-inf'),0)),(at,mid))
+            continue
         peer = channel[3:]
         if peer.isascii() and peer.isdigit() and int(peer)>0 and author in (human,int(peer)):
             threads.setdefault(channel,{})[author] = (at,mid)
     dms = sum(v.get(int(c[3:]),(float('-inf'),0)) > v.get(human,(float('-inf'),0)) for c,v in threads.items())
+    dms += sum(v.get(0,(float('-inf'),0)) > v.get(human,(float('-inf'),0)) for v in group_threads.values())
     letters = conn.execute("SELECT count(*) FROM realm_mail m WHERE state IN ('sent','taken') "
         "AND ts<=? AND NOT EXISTS (SELECT 1 FROM board_reply r WHERE r.kind='letter' AND r.parent=m.id "
         "AND r.state IN ('waiting','answered','posted'))",(now,)).fetchone()[0]

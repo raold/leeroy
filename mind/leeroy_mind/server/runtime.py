@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from leeroy_mind.console.feed import connect
 from leeroy_mind.storage.rows import Relationship
-from .state import StateInputs, pulled_into_play, state_of
+from .state import StateInputs, live_voice_session, pulled_into_play, state_of
 
 
 async def snapshot(app, now, *, include_seeds=False):
@@ -19,14 +19,16 @@ async def snapshot(app, now, *, include_seeds=False):
     officers = frozenset(g for g in cast if app.world.is_officer(g))
     playing, online = pulled_into_play(app), frozenset(app.world.online)
     comms = app.engine.comms
+    server, voice_session = getattr(app, 'server', None) is not None, live_voice_session(app)
     observed = {g: StateInputs(p, cast, officers, online, playing, human, local.tzinfo,
-                 comms.room_of(g) if comms is not None else None) for g, p in personas.items()}
+                 comms.room_of(g) if comms is not None else None, server, voice_session) for g, p in personas.items()}
     trial_rank = getattr(getattr(getattr(app, 'realm', None), 'cfg', None), 'trial_rank', 4)
     path, library = Path(app.data_dir) / 'mind.db', Path(app.data_dir) / 'library.db'
     from leeroy_mind.culture.config import load_culture_config
     culture_on = load_culture_config(Path(app.data_dir) / "mind.toml").enabled
     photos_on = getattr(app, 'photos', None) is not None
     photo_dial = app.cfg.talk.selfies if photos_on else 0
+    groups_config = getattr(getattr(app,'groups',None),'config',None)
     def read():
         deadline = time.monotonic() + 2
         with closing(connect(path)) as conn:
@@ -52,18 +54,27 @@ async def snapshot(app, now, *, include_seeds=False):
                         'friend' if score >= 60 else 'fond' if score >= 30 else 'rival' if score <= -30 else 'neutral')
             relationships = {g: Relationship(**{k:v for k,v in rows.get((g,human), {'a':g,'b':human}).items()
                              if k in {f.name for f in fields(Relationship)} and k not in ('notes', 'pinned', 'label')}) for g in personas}
-            seeds = []
+            seeds, source = [], []
             if include_seeds:
                 from .seeds import gather, fresh
                 # Only the roster's character name; never his private real-name setting.
                 human_name = getattr(cast.get(human), 'name', '')
-                seeds = fresh(conn, gather(conn, now=now, local=local, cast=personas, officers=officers,
-                              human=human, human_name=human_name, trial_rank=trial_rank, culture_enabled=culture_on), now=now)
+                source = gather(conn, now=now, local=local, cast=personas, officers=officers,
+                                human=human, human_name=human_name, trial_rank=trial_rank, culture_enabled=culture_on)
+                seeds = fresh(conn, source, now=now)
                 if photos_on:
                     from leeroy_mind.photos.send import photo_seeds
                     seeds += fresh(conn, photo_seeds(conn, now=now, local=local, dial=photo_dial), now=now)
             meta = dict(conn.execute("SELECT key,value FROM meta WHERE key LIKE 'server:%'"))
+            group_audiences = {}
+            if include_seeds and groups_config is not None and groups_config.enabled:
+                from leeroy_mind.groups.conversations import seeds as group_seeds
+                extra,group_audiences = group_seeds(conn,source,now=now,local=local,human=human,config=groups_config)
+                # Each group owns its subject cooldown. An introduction stays pending
+                # until delivery, so a dropped attempt may retry within the daily cap.
+                seeds += fresh(conn,(s for s in extra if s.kind != 'group_start'),now=now)
+                seeds += [s for s in extra if s.kind == 'group_start']
             return SimpleNamespace(personas=personas, states=states, ties=ties, in_play=playing, officers=officers,
                 away=away, classes={g:m.class_ for g,m in cast.items()}, cast=cast, human=human, local=local,
-                seeds=seeds, relationships=relationships, meta=meta)
+                seeds=seeds, relationships=relationships, meta=meta,group_audiences=group_audiences)
     return await asyncio.to_thread(read)

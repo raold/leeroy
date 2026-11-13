@@ -1,5 +1,58 @@
 # Recall holds and operator release
 
+## Lost ACKs and native restarts
+
+A correlated terminal job takes precedence over a lost ACK. Once its transport
+settles, a complete `bot_do` receipt or a done `realm_job` completes the action
+even if the ACK timed out. Arrival order does not change the result. Failed jobs
+retain their existing rules: proved no-change refusals free the manifest;
+unproved failures stay `job_failed`, holding whatever native has not released.
+Skipped members retain their existing 600-second backoff. Mind startup also
+rechecks older unknown rows carrying terminal evidence.
+
+The timeout's `transport_unknown` callback is a non-final notice: Recall waits
+for the job's real result, including across its periodic ticks. A terminal result
+then advances the same rearm, leave or defaults chain in either arrival order.
+A native terminal failure is delivered once even when ownership stays unknown:
+a failed leave can retry its released members while retaining the others, and a
+failed defaults receipt ends its chain without releasing unproved holds.
+A done WG cleanup job also completes its WG root after the cleanup transport
+settles, even when its ACK was lost, in either arrival order.
+
+Every new dispatch records the adopted world's `started_ms` in its evidence.
+A hello with a different, later process start proves that the old process's
+in-memory reservations are gone, even if the wall clock stepped backward after
+that process started. Settled unknown roots and positively acked dispatched roots
+without terminal evidence qualify for ordinary rearm, ordinary leave, or
+Recall's exact defaults command.
+There must be no children, continuation, declared scope or conflicting evidence;
+WG, ACK/result commands, guild growth and other kinds remain excluded. The hello
+must match the current guild and owner. A hello from the same native process
+does nothing. If the new hello arrives while a transport is still in flight,
+its proof is rechecked when the transport actually settles.
+
+Such a root becomes `completed` with result `restart_released`, **not** successful.
+Its permanent `realm:action:restart_released:<id>` receipt stores the hello start,
+release time and complete prior row. Neither this row nor its receipt is pruned.
+Health and Ops no longer count it as a hold, and `realm release` explains that it
+is no longer unknown. No command is resent by this recovery: Recall decides its
+next fresh command under its normal gates. A half-done rearm/defaults batch is
+safe to reapply; a half-done leave must leave again under the existing recall
+rules. This is the same process-start proof used by training's lab-clear.
+The old unknown's generic backoff does not survive this proof; specific native
+skip backoffs still do. A later contradictory receipt remains a conflict hold.
+
+This recovery change needs only a mind release and restart, no migration or
+native rebuild. Older native without `started_ms` retains conservative holds.
+Unresolved rows written before dispatch process identity was recorded also stay
+held: a dispatch wall-clock time alone cannot identify their native process.
+An unknown legacy row can still be reviewed and released by the operator;
+`realm release` continues to refuse dispatched rows. Health names a worldserver
+restart for an eligible acked dispatched root and the release command for an
+unknown root. Previously recorded restart releases remain readable.
+Rollback to a mind version without these new evidence keys requires restoring
+the pre-release database snapshot, as for the newer leave evidence below.
+
 An ordinary `leave_pvp` can finish unknown while holding only part of its original manifest.
 Native's failed `realm_job.released` is release proof for distinct members of that exact root.
 The journal keeps the full original manifest and payload; its holder projection subtracts only

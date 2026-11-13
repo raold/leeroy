@@ -36,7 +36,7 @@ class Seed:
     @property
     def openers(self) -> tuple[int, ...] | None:
         """Who already knows a subject before any of it is posted in the channel."""
-        if self.kind in ('life', 'photo'):
+        if self.kind in ('life', 'photo', 'group_start'):
             return self.about
         if self.kind == 'his_day':
             return self.witnesses

@@ -509,7 +509,7 @@ def test_tables_that_appear_after_the_baseline_are_announced(data, cast):
         "SELECT sql FROM sqlite_master WHERE name LIKE 'discord%' AND sql IS NOT NULL "
         "ORDER BY CASE name WHEN 'discord_thread' THEN 0 WHEN 'discord_message' THEN 1 "
         "WHEN 'discord_reaction' THEN 2 ELSE 3 END")]
-    for t in ("discord_meme", "discord_voice", "discord_attachment", "discord_reaction", "discord_message", "discord_thread"):
+    for t in ("discord_group_member", "discord_group", "discord_meme", "discord_voice", "discord_attachment", "discord_reaction", "discord_message", "discord_thread"):
         cast.conn.execute(f"DROP TABLE {t}")
     cast.conn.commit()
 

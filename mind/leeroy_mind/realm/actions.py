@@ -14,7 +14,7 @@ import math
 import uuid
 
 from .action_policy import classify, integer, members, text, U64
-from .action_store import ActionCapacity, ActionSpec, TERMINAL, failed_backoff, leave_refusal_guids, skipped_backoff
+from .action_store import ActionCapacity, ActionSpec, TERMINAL, Transition, failed_backoff, leave_refusal_guids, skipped_backoff
 from .protocol import GetRealmPvp, LeavePvp, Rearm, RealmActors
 
 log = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ class ActionQueue:
         self._pending = {}; self._entries = {}; self._started = set(); self._tasks = set()
         self._body_times = deque(maxlen=2); self._query_times = deque(maxlen=2)
         self._cleanup_wanted = set(); self._probe_ids = set(); self._probe_at = 0.0
+        self._native_start = None  # adopted connection identity and its native started_ms
         self._wake = asyncio.Event(); self._running = False
         self._context()
 
@@ -160,7 +161,10 @@ class ActionQueue:
 
     def _deliver(self, transition):
         if not transition.result_ready: return
-        entry = self._entries.pop(transition.command_id, None)
+        record = self.store.get(transition.command_id)
+        waiting = record is not None and record.state == "unknown" and record.result_reason == "transport_unknown"
+        entry = (self._entries.get(transition.command_id) if waiting
+                 else self._entries.pop(transition.command_id, None))
         self._pending.pop(transition.command_id, None)
         if entry is None or entry.callback is None: return
         c = self._context()
@@ -247,7 +251,8 @@ class ActionQueue:
         # The successful commit must precede the direct transport. Commit errors
         # escape this hook and prevent writer.write.
         self.store.begin_dispatch(cmd.id, payload=classify(cmd, child=True).payload,
-             process_id=c.process_id, connection_epoch=c.connection_epoch, now=now)
+             process_id=c.process_id, connection_epoch=c.connection_epoch, now=now,
+             started_ms=self._started_ms(c))
         if times is not None: times.append(now)
         self._pending.pop(cmd.id, None)
 
@@ -264,14 +269,18 @@ class ActionQueue:
         if transition.matched and cmd.id in self._probe_ids:
             self._probe_ids.discard(cmd.id)
             if ack.ok: self.off = False
-        return self._after(transition)
+        matched = self._after(transition)
+        self._restart_release(record)
+        return matched
 
     def on_send_error(self, cmd, safe_type):
         if not self.owns_command(cmd): return False
         transition = self.store.observe_send_error(cmd.id, safe_type, now=self.clock.now())
         if transition.matched and self.store.get(cmd.id).role != "root": self._entries.pop(cmd.id, None)
         self._probe_ids.discard(cmd.id)
-        return self._after(transition)
+        matched = self._after(transition)
+        self._restart_release(self.store.get(cmd.id))
+        return matched
 
     def on_realm_job(self, ev):
         return self._after(self.store.observe_realm_job(ev, now=self.clock.now()))
@@ -287,7 +296,37 @@ class ActionQueue:
         if (_live(c) and type(ev.guild_id) is int and type(ev.human_guid) is int
                 and ev.guild_id == c.guild and ev.human_guid in (0, c.human)):
             self.off = False
+            self._native_start = None
+            try:
+                started = integer(getattr(ev, 'started_ms', 0), 0, 0x7FFFFFFFFFFFFFFF)
+                self._native_start = (self._native_context(c), started)
+                self._restart_release()
+            except Exception as e:  # never cost the rest of the hello (Recall, speech, the actor set)
+                log.warning("realm_action_restart_release_failed: %s", type(e).__name__)
         self.context_changed()
+
+    @staticmethod
+    def _native_context(c):
+        return c.process_id, c.connection_epoch, c.guild, c.human
+
+    def _started_ms(self, c):
+        return self._native_start[1] if self._native_start and self._native_start[0] == self._native_context(c) else 0
+
+    def _restart_release(self, record=None):
+        c = self._context()
+        started = self._started_ms(c)
+        if not _live(c) or not started:
+            return
+        if record is not None:
+            dispatched_start = json.loads(record.evidence).get("dispatch_started_ms")
+            if not dispatched_start or started <= dispatched_start:
+                return
+        try:
+            released = self.store.restart_release(started_ms=started, guild=c.guild, human=c.human, now=self.clock.now())
+            for command_id in released:
+                self._deliver(Transition(True, True, command_id, True, False, "restart_released", 0))
+        except Exception as e:  # receipt failure must not cost Recall or the rest of the hello
+            log.warning("realm_action_restart_release_failed: %s", type(e).__name__)
 
     def _paced(self, times, now):
         while times and now - times[0] >= 1.0: times.popleft()

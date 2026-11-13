@@ -156,6 +156,8 @@ def evidence(ctx,guid):
         if parent is None:
             continue
         exchanges.append({'id':row['id'],'ts':row['ts'],'reward':row['value'],
+            'source_ids':[r['id'] for r in previous]+[row['id']]+[r[0] for r in conn.execute(
+                'SELECT line_id FROM talk_recipe_line WHERE recipe_line_id=?', (row['id'],))],
             'owner':{'speaker':ctx.ident.called,'text':parent['text'][:600]},
             'member':{'speaker':speaker(ctx,guid),'text':generated_text(conn,row)},
             'context':[{'speaker':speaker(ctx,r['from_guid']),'text':r['text'][:300]}
@@ -221,6 +223,8 @@ async def stage(ctx):
                 ctx.skip(STAGE,unit)
                 return
             audience,channel,exchanges,current=data
+            # Provenance ids stay beside the payload: the model sees exactly what main sent it.
+            source_ids={ident for exchange in exchanges for ident in exchange.pop('source_ids')}
             p=ctx.persona(guid)
             from leeroy_mind.tuning.effective import dials_of
             dials={name:dials_of(p).value(name,p) for name in ('forward','humour')}
@@ -264,8 +268,12 @@ async def stage(ctx):
                 if effective(store.conn,cfg).freeze:
                     return
                 try:
+                    from .audience import evidence
+                    cache = ctx._memo.setdefault('learn:provenance', {})
+                    sources = evidence(store.conn, source_ids, cache=cache)
                     lessons.persist(store.conn,guid,result,known=known,night=ctx.night,
-                                    now=ctx.clock.now(),automatic=cfg.auto_lessons,settings=cfg,expected=expected)
+                                    now=ctx.clock.now(),automatic=cfg.auto_lessons,settings=cfg,
+                                    expected=expected,sources=sources)
                     proposed=propose_arm(store,arms,proposal,ctx.night,ctx.clock.now(),settings=cfg)
                 except Exception:
                     raise ValueError('talk_coach_write_failed') from None

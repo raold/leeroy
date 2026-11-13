@@ -75,3 +75,7 @@ def prune(conn,now,*,schema_available=False):
     conn.execute('DELETE FROM learn_rewrite WHERE first_line_id IN (SELECT id FROM chat_line WHERE ts<?)',(cutoff,))
     conn.execute('DELETE FROM learn_line_vector WHERE line_id IN (SELECT id FROM chat_line WHERE ts<?)',(cutoff,))
     conn.execute("DELETE FROM meta WHERE key IN (SELECT 'learn:discord-parent:' || id FROM chat_line WHERE ts<?)",(cutoff,))
+    conn.execute("DELETE FROM meta WHERE key GLOB 'learn:recipe:*' AND NOT EXISTS "
+                 "(SELECT 1 FROM chat_line WHERE id=CAST(substr(meta.key,14) AS INTEGER) AND ts>=?)", (cutoff,))
+    conn.execute("DELETE FROM meta WHERE key IN (SELECT 'learn:lesson:evidence:' || id "
+                 "FROM talk_lesson WHERE expires<?)", (cutoff,))

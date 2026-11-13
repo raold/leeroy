@@ -67,6 +67,7 @@ def test_fake_model_proposes_scoped_lesson_once_without_logging_content(context,
             assert len(llm.calls)==1
             encoded=json.dumps(llm.calls)
             assert 'member fixture 0' in encoded and 'member fixture 9' in encoded
+            assert 'source_ids' not in encoded
             assert len(coach.evidence(ctx,101)[2]) == 6
             assert 'owner fixture' not in caplog.text and note()['text'] not in caplog.text
     asyncio.run(go())
@@ -105,6 +106,25 @@ def test_restricted_rooms_supply_no_coaching_content(context,tmp_path,channel):
             exchanges(ctx,channel=channel)
             await coach.stage(ctx)
             assert not llm.calls
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize('channel',['officer','discord:officer-chat','voice:officers'])
+@pytest.mark.parametrize('apply', [False, True])
+def test_officer_coaching_keeps_main_behavior_with_apply_on_or_off(context,tmp_path,channel,apply):
+    enabled(tmp_path,auto=True)
+    with (tmp_path/'mind.toml').open('a') as f:
+        f.write('\napply='+str(apply).lower()+'\n')
+    async def go():
+        async with context(lambda *_:json.dumps(answer([note(scope='group')])),
+                           learn_enabled=True,learn_coach=True) as (ctx,llm):
+            ctx.store.conn.execute("UPDATE persona_core SET json=json_set(json,'$.play.guild_role','officer') WHERE guid=101")
+            exchanges(ctx,channel=channel)
+            for row in ctx.store.conn.execute("SELECT * FROM chat_line WHERE origin='mind'").fetchall():
+                ctx.store.log_utterance(row['ts'],101,channel,'reply_human',row['text'],[],None,None,to_guid=1)
+            await coach.stage(ctx)
+            assert not llm.calls
+            assert not lessons.read(ctx.store.conn,guid=101,now=ctx.clock.now())
     asyncio.run(go())
 
 

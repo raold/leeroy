@@ -33,6 +33,7 @@ class _Chain:
     index: int = 0
     mode: str = "defaults"
     waiting: bool = False
+    awaiting_terminal: bool = False
 
 
 class Recall:
@@ -236,6 +237,8 @@ class Recall:
         if not self._current(chain):
             self._finish(chain)
             return
+        if chain.awaiting_terminal:
+            return
         online = self._online()
         # Rank availability may refresh sources, so it precedes the final
         # selection. Keep the complete chain busy while both reads consume its
@@ -306,6 +309,11 @@ class Recall:
             self._finish(chain)
 
     def _done(self, chain, kind, ok, reason, past, command_id=None):
+        if reason == "transport_unknown":
+            chain.waiting = True
+            chain.awaiting_terminal = True
+            return
+        chain.awaiting_terminal = False
         named = leave_refusal_guids(reason, chain.members) if kind == "leave" and not ok else None
         if not named:
             if kind == "leave":

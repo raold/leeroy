@@ -49,7 +49,7 @@ from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
-from leeroy_mind.discord.channels import is_private, same_medium
+from leeroy_mind.discord.channels import is_private, same_medium, is_group
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
@@ -310,6 +310,7 @@ class TurnMeta:
     llm_s: float | None = None  # the model's time on this turn, its retry included
     recipe_snapshot: object | None = None  # optional numeric/identifier attribution at composition
     recipe_line_id: int | None = None  # first acknowledged fragment of this generation
+    learning: object | None = field(default=None, repr=False)  # scoped style for this generation
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
@@ -920,9 +921,11 @@ class Pipeline:
         """Whether a chat line may be in this turn's chat window, the conversation she answers
         (memory.recall.whisper_ok, in the turn's own medium: R11). The other medium's lines
         between her and him come only through _pair_lines, in a block of their own."""
+        from leeroy_mind.groups.audience import turn_readers
         return same_medium(row.channel, turn.channel) and whisper_ok(
             row.channel, row.from_guid, row.to_guid, speaker=turn.speaker,
-            turn_channel=turn.channel, to_guid=turn.to_guid)
+            turn_channel=turn.channel, to_guid=turn.to_guid, source_readers=row.audience,
+            readers=turn_readers(self.store.conn,turn.channel,turn.speaker,turn.to_guid))
 
     def _pair_lines(self, turn: Turn, recent: list[ChatLineRow], now: float) -> list[ChatLineRow]:
         """One mind per member: in a private turn between her and him (a whisper or a Discord DM),
@@ -1030,7 +1033,7 @@ class Pipeline:
         (arc.live.arc_view, all of them for a whisper or DM to him only); the romance text
         shows them only in a whisper or a Discord DM (is_private)."""
         hg = self.human.guid
-        if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
+        if (is_group(turn.channel) or not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE or meta.casual):
             return None
         dial = self.cfg.romance.dial if dial is None else dial
@@ -1160,7 +1163,8 @@ class Pipeline:
                                    is_guild_master=g == hg and human.is_guild_master,
                                    forms=human.forms if g == hg else THEY_FORMS,
                                    attitude=attitude if g == hg else "",
-                                   speaker=p.identity.player_gender)
+                                   speaker=p.identity.player_gender,
+                                   friendship_only=is_group(turn.channel))
                  for g in people]
 
         trigger = ""
@@ -1292,6 +1296,11 @@ class Pipeline:
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept)
+        if live and getattr(self, 'learn_enabled', False):
+            from leeroy_mind.learn.apply import prepare
+            meta.learning = await prepare(self, turn, meta, p, now=now)
+            if meta.learning is not None:
+                parts.style = [entry[2] for entry in meta.learning.entries]
         if self.cfg.talk.aware or meta.review_required:
             try:
                 parts.awareness = await self.live_review.block_async(turn,meta,close=bool(real))
@@ -1300,6 +1309,9 @@ class Pipeline:
                 if meta.review_required:
                     raise ValueError("awareness_unavailable") from None
         trimmed = trim_to_budget(redact_for(parts, human, bool(real)))
+        if meta.learning is not None:
+            from leeroy_mind.learn.apply import used
+            used(meta, len(trimmed.style))
         if live:
             meta.offered_real_name, meta.romance = bool(real), bool(romance)
             meta.memory_ids = [m.id for m in memories[:len(trimmed.memories)]]
@@ -1319,12 +1331,18 @@ class Pipeline:
                    *([follow] if follow else []),
                    *([turn.instruction] if turn.kind in (TurnKind.BIT, TurnKind.ASIDE)
                      else [])]
+        callback = (meta.learning.callback if meta.learning is not None and
+                    any(k == 'callback' for k,_,_ in meta.learning.used) else None)
+        if callback is not None:
+            support.append(callback.seed)
+            meta.memory_ids = list(dict.fromkeys([*meta.memory_ids, callback.memory_id]))
         messages = render_messages(trimmed)
         return Composed(messages,
-                        [m.id for m in memories[:len(trimmed.memories)]], p, close,
+                        list(dict.fromkeys([m.id for m in memories[:len(trimmed.memories)]] +
+                             ([callback.memory_id] if callback else []))), p, close,
                         [trigger] if trigger else [], [r.text for r in earlier], samples,
                         support, [r.text for r in recent if r.id != turn.trigger_line],
-                        [*trimmed.memories, *trimmed.facts], moves=recent_moves)
+                        [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves)
 
     def _their_story(self, turn: Turn, meta: TurnMeta, line: str, memories) -> str:
         """For a member answering his public question to other members (it opens on a
@@ -1377,14 +1395,14 @@ class Pipeline:
     # -- speaking ------------------------------------------------------------------------------
 
     async def speak(self, turn: Turn, *, why: str = "speak", elsewhere: bool = False,
-                    guards: Guards | None = None, after: str = "",
+                    guards: Guards | None = None, after: str = "", topic: str = "",
                     still_valid: Callable[[], bool] | None = None) -> list[str]:
         """Speak one turn (after turn.delay) through the whole pipeline: the lines sent, or []
         when it was dropped (the reason is in the utterance log). The caller's Turn is left as
         it was: the pipeline fills in its own copy's priority, deadline and channel. The
         keywords go on its TurnMeta."""
         return await self._speak(replace(turn), TurnMeta(
-            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after,
+            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after, topic=topic,
             still_valid=still_valid))
 
     async def speak_meta(self, turn: Turn, meta: TurnMeta) -> list[str]:
@@ -1454,6 +1472,9 @@ class Pipeline:
             self._phase(turn, None)  # sent, dropped, cancelled or raised: nobody is typing
             if self._real_name_hold == meta.turn_id:  # ended without its line: free the slot
                 self._real_name_hold = None
+            if meta.learning is not None:
+                from leeroy_mind.learn.apply import release
+                release(self, meta)
 
     async def _speak_now(self, turn: Turn, meta: TurnMeta) -> list[str]:
         if getattr(getattr(self.scheduler, 'gpu_gate', None), 'paused', False):
@@ -1565,6 +1586,9 @@ class Pipeline:
                 return await self._answer_without_photo(turn, meta, 'photo_words')
             return self._drop(turn, meta, 'photo_words', memory_ids)
         text = self._link_items(turn, meta, text)
+        if is_group(turn.channel) and any(command.casefold() in ROMANCE_EMOTES
+                for command in re.findall(r'(?<!\S)/([A-Za-z]+)(?=[\s.!?,]|$)',text)):
+            return self._drop(turn,meta,'command',memory_ids,text=text)
         # an emote is public: a whisper keeps its words (NB6), and so does a Discord line,
         # which has no game to emote in
         if turn.channel == "whisper" or discord:
@@ -2034,13 +2058,16 @@ class Pipeline:
                 if expired:
                     raise Expired(turn.deadline)
                 options = dict(preset.options)
+                if (not is_discord(turn.channel) and meta is not None and meta.learning is not None
+                        and meta.learning.num_predict is not None):
+                    options['num_predict'] = min(options.get('num_predict', 80), meta.learning.num_predict, 80)
                 if meta is not None and meta.seed is not None:  # a tuning preview's
                     options["seed"] = meta.seed
                 self.timing.model(trace, attempt, "call")
                 model = self.cfg.models.live
                 if meta is not None and getattr(self, "learn_enabled", False):
                     from leeroy_mind.learn.recipe import called_model
-                    called_model(meta, model)
+                    called_model(meta, model, options)
                 return await llm.chat(model, messages, options=options,
                                       think=preset.think, timeout=preset.timeout)
             except asyncio.CancelledError:
@@ -2590,6 +2617,9 @@ class Pipeline:
                         with self.store.transaction():
                             record_recipe(self.store.conn, line_id, turn, meta, p, self.cfg,
                                           settings=getattr(self,'learn_settings',None))
+                            if meta.said == 0 and meta.learning is not None:
+                                from leeroy_mind.learn.apply import record as record_learning
+                                record_learning(self, turn, meta)
                     except Exception:
                         log.warning("learn_recipe_record_failed")
                     if getattr(self,'learn_capture_preferences',False):
@@ -2754,6 +2784,9 @@ class Pipeline:
 
     def _drop(self, turn: Turn, meta: TurnMeta, reason: str, memory_ids=(), *, text: str = "",
               at: float | None = None) -> list[str]:
+        if meta.learning is not None and meta.said == 0:
+            from leeroy_mind.learn.apply import rejected
+            rejected(self, turn, meta, reason)
         self._release_photo(meta, reason)
         self.timing.decision(meta.timing_trace, reason)
         if reason.startswith("guard_"):

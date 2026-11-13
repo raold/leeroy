@@ -33,6 +33,30 @@ def test_waiting_dms_count_only_unanswered_threads(store,tmp_path,clock):
     assert 'text' not in json.dumps(result)
 
 
+def test_waiting_groups_count_threads_and_obey_enabled_closed_and_owner_reply(store,tmp_path,clock):
+    from leeroy_mind.groups import store as groups
+    from leeroy_mind.groups.config import GroupsConfig
+    store.set_meta('human_guid','1')
+    now=clock.now()
+    channel=groups.create(store,human=1,members=[101,102],title='PRIVATE_TITLE',created_by=1,
+        now=now-10,config=GroupsConfig(enabled=True))
+    for who in (101,102):
+        post(store,channel=channel,author=who,origin='mind',text='PRIVATE_CONTENT',now=now-5)
+    def waiting():
+        view=tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
+        assert 'PRIVATE' not in json.dumps(view)
+        return view['sections']['waiting']['dms']
+    assert waiting()==0
+    (tmp_path/'mind.toml').write_text('[groups]\nenabled=true',encoding='utf-8')
+    assert waiting()==1
+    post(store,channel=channel,author=1,origin='human',text='PRIVATE_REPLY',now=now-4)
+    assert waiting()==0
+    post(store,channel=channel,author=101,origin='mind',text='PRIVATE_CONTENT',now=now-3)
+    assert waiting()==1
+    groups.remove(store,channel,1,human=1,now=now)
+    assert waiting()==0
+
+
 def test_bank_shortage_is_under_half_of_stock_target(store,tmp_path,clock):
     from leeroy_mind.realm.bank import STOCK, BankLedger
     ledger = BankLedger(store,clock)

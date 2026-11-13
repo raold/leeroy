@@ -22,7 +22,7 @@ from leeroy_mind.console.feed import read as read_only
 from leeroy_mind.claims.config import load_claims_config
 from leeroy_mind.config import ConfigError
 from leeroy_mind.discord import layout, store as dstore
-from leeroy_mind.discord.channels import channel_id, is_discord, is_private
+from leeroy_mind.discord.channels import channel_id, is_discord, is_private, is_group
 from leeroy_mind.eval.talk.unawareness import load_facts
 from leeroy_mind.guards import Draft, GuardStores, HistoryLine, Verdict, record_sent, review
 from leeroy_mind.guards.config import load_guards_config
@@ -33,7 +33,7 @@ from leeroy_mind.text import estimate_tokens
 
 log = logging.getLogger("leeroy_mind.talk")
 BUDGETS = {"guild": 600, "officer": 600, "whisper": 450, "game": 400,
-           "discord": 600, "dm": 450, "voice": 600}
+           "discord": 600, "dm": 450, "group": 600, "voice": 600}
 PURPOSES = {"guild": "Guild conversation", "officer": "Private officer conversation",
             "whisper": "Private conversation with this partner", "party": "Current party",
             "raid": "Current raid", "raid_warning": "Raid instructions", "say": "Nearby conversation"}
@@ -78,6 +78,8 @@ def place(turn, meta):
         return "voice", turn.channel.removeprefix(VOICE), turn.to_guid
     raw, to, _ = typed(turn, meta)
     if is_discord(raw):
+        if is_group(raw):
+            return "group", raw.removeprefix('gdm:'), to
         return ("dm", str(layout.dm_peer(raw)), to) if is_private(raw) else ("discord", channel_id(raw), to)
     return (raw, "", to) if raw in {"guild", "officer", "whisper"} else ("game", raw, to)
 
@@ -155,7 +157,13 @@ class LiveReview:
         conn = e.store.conn if conn is None else conn
         row = conn.execute("SELECT channel,deleted FROM discord_message WHERE id=?",
                                    (target.reply_to,)).fetchone()
-        return bool(row and row[0] == channel_id(turn.channel) and row[1] is None)
+        if not (row and row[0] == channel_id(turn.channel) and row[1] is None):
+            return False
+        if is_group(turn.channel):
+            from leeroy_mind.groups.audience import message_readers, visible
+            return visible(message_readers(conn,target.reply_to),turn.channel,
+                speaker=turn.speaker,to_guid=turn.to_guid,readers=readers)
+        return True
 
     def draft(self, turn, meta, text, *, history=(), embedding=None):
         e = self.engine
@@ -167,7 +175,9 @@ class LiveReview:
             to_guid=to, room=room, now=e.clock.now(), map=0 if is_discord(turn.channel) else getattr(member, "map", 0),
             zone=0 if is_discord(turn.channel) else getattr(member, "zone", 0), real_answer_due=self.owed(turn,meta),
             server=bool(getattr(getattr(e,'server_app',None),'server',None) is not None and is_discord(turn.channel)
-                        and meta.why.startswith('server:')), anchor=meta.server_anchor)
+                        and meta.why.startswith('server:')), anchor=meta.server_anchor,
+            readers=tuple(e.world.audience(turn.channel,from_guid=turn.speaker,to_guid=to))
+                if is_group(turn.channel) else ())
 
     def owed(self,turn,meta):
         from leeroy_mind.talk.turns import TurnKind
@@ -227,6 +237,10 @@ class LiveReview:
                     "WHERE id=? AND channel=? AND deleted IS NULL AND ts<=?",
                     (draft.parent_id, cid, now)).fetchall(), *rows]
             from leeroy_mind.photos.notes import by_messages
+            if is_group(turn.channel):
+                from leeroy_mind.groups.audience import message_readers, visible
+                rows = [r for r in rows if visible(message_readers(conn,r[0]),turn.channel,
+                    speaker=turn.speaker,to_guid=turn.to_guid,readers=readers)]
             photos = by_messages(conn, [r[0] for r in rows], uploads=getattr(e,'photos_enabled',False),
                                  members=getattr(e,'photos_send',False))
             history = tuple(HistoryLine(r[0], r[1], r[2], r[3] + (
@@ -247,7 +261,7 @@ class LiveReview:
                     'ORDER BY ts DESC,id DESC LIMIT 64', (turn.speaker,now-self.config.repeat_seconds,now)).fetchall()[::-1]
                 seen = {h.id for h in history}
                 extra = tuple(HistoryLine(r[0],r[1],r[2],r[3],
-                    'dm' if is_private(r[5]) else 'discord', observed.human if is_private(r[5]) else 0,
+                    'group' if is_group(r[5]) else 'dm' if is_private(r[5]) else 'discord', observed.human if is_private(r[5]) else 0,
                     str(layout.dm_peer(r[5])) if is_private(r[5]) else r[5],r[4],readers=(turn.speaker,),own_repeat_only=True)
                     for r in own if r[0] not in seen)
                 history = (*history,*extra)
@@ -307,13 +321,19 @@ class LiveReview:
             cid = channel_id(raw)
             ch = layout.channel(cid)
             purpose = ch.topic if ch else "Private conversation with this partner"
+            if is_group(raw):
+                purpose = 'Small private group chat with the people present; no romance'
             if self.valid(turn, meta,conn,observed=observed):
+                from leeroy_mind.groups.audience import message_readers
                 pins = tuple(ContextItem(p["text"], raw, p["author"], to, readers)
-                             for p in dstore.pins(conn, cid)[:4])
-                for r in conn.execute("SELECT r.member,r.emoji FROM discord_reaction r "
+                             for p in dstore.pins(conn, cid)[:4]
+                             if not is_group(raw) or set(readers)<=message_readers(conn,p['id']))
+                for r in conn.execute("SELECT r.member,r.emoji,m.id FROM discord_reaction r "
                         "JOIN discord_message m ON m.id=r.message WHERE m.channel=? AND m.author=? "
                         "AND m.deleted IS NULL AND r.ts BETWEEN ? AND ? ORDER BY r.ts DESC LIMIT 4",
                         (cid, turn.speaker, now-900, now)):
+                    if is_group(raw) and not set(readers)<=message_readers(conn,r[2]):
+                        continue
                     events.append(ContextItem(f"{names.get(r[0],'someone')} reacted {r[1]} to your post", raw,
                                               turn.speaker, to, readers))
                 if name := names.get(turn.speaker):
@@ -329,12 +349,14 @@ class LiveReview:
             state = state_of(None, turn.speaker, now, conn=conn, observed=inputs)
             here = tuple(inputs.cast[g].name for g in
                          company_in(conn, channel_id(raw), turn.speaker, now, inputs.cast, inputs.human)[:6])
+            if is_group(raw):
+                here = tuple(names[g] for g in readers if g in names and g != turn.speaker)
             self_line = (f"You're {state.presence.state}" + (f' ({state.status})' if state.status else '')
                          + (', playing WoW' if state.presence.playing else ', not playing WoW'))
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
             discord_events=tuple(events[-4:]), now=now,names=names,
-            romance_activities=bond[0], jealousy=bond[1], server=observed.server,
+            romance_activities=bond[0] and not is_group(raw), jealousy=0 if is_group(raw) else bond[1], server=observed.server,
             here=here, self_line=self_line)
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):

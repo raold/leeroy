@@ -150,7 +150,7 @@ def last_by_channel(conn) -> dict[str, int]:
 
 def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | None = None,
                  after: int = 0, thread: int | None = None, read_marks: dict | None = None,
-                 server: bool = False) -> dict:
+                 server: bool = False, groups: bool = False) -> dict:
     have = views.tables(conn)
     missing = [t for t in DISCORD_TABLES if t not in have]
     last = last_by_channel(conn) if "discord_message" in have else {}
@@ -180,8 +180,27 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
                                           else names.get(human, ""))},
         "missing": missing,
     }
+    if groups:
+        from leeroy_mind.groups import store as group_store
+        out['groups_enabled'] = True
+        tables = {'discord_group','discord_group_member'}
+        out['groups'] = []
+        if tables <= have:
+            for row in views.rows(conn,'SELECT g.* FROM discord_group g WHERE EXISTS '
+                    '(SELECT 1 FROM discord_group_member m WHERE m.grp=g.id AND m.guid=?) ORDER BY g.id DESC',(human,)):
+                cid = f'gdm:{row["id"]}'
+                out['groups'].append(dict(id=cid,name=row['name'],closed=row['closed'],
+                    members=sorted(group_store.readers(conn,cid,include_closed=True)-{human}),
+                    last_id=last.get(cid,0),unread=unread.get(cid,0)))
+        else:
+            out['missing'] += sorted(tables-have)
+    if server:
+        from leeroy_mind.server.seats import read_seats
+        out['voice_seats'] = read_seats(conn, owner_now.timestamp(), human=human)
+        out['voice_seats_now'] = owner_now.timestamp()
     if channel is not None:
-        known = layout.channel(channel) is not None or layout.dm_peer(channel) is not None
+        known = (layout.channel(channel) is not None or layout.dm_peer(channel) is not None
+                 or any(g['id']==channel for g in out.get('groups',())))
         ok = known and not missing
         out["channel"] = channel
         out["messages"] = with_reactions(conn, store.messages(

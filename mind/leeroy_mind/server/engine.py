@@ -8,7 +8,7 @@ import re
 import uuid
 
 from leeroy_mind.discord import layout
-from leeroy_mind.discord.channels import channel_id
+from leeroy_mind.discord.channels import channel_id, is_group
 from leeroy_mind.discord.talk import answer_delay, GONE
 from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
 from leeroy_mind.discord.transport import DiscordTarget
@@ -53,6 +53,7 @@ class Conversation:
     teased: bool = False
     in_flight: int | None = None
     in_flight_turn: Turn | None = None
+    readers: frozenset[int] = frozenset()
 
 
 class ServerEngine:
@@ -146,12 +147,20 @@ class ServerEngine:
                 officers=observed.officers, human=observed.human, in_play=observed.in_play | speaking,
                 ties=lambda a,b:TIES[observed.ties.get((a,b),'neutral')], rng=self.rng,
                 classes=observed.classes, away=observed.away,
-                tease=lambda a,b: self._tease(a,b))
+                tease=lambda a,b: self._tease(a,b),
+                group_audience=getattr(observed,'group_audiences',{}).get(channel,frozenset()))
             if len(cast) < 2:
                 return
             conversation = Conversation(uuid.uuid4().hex, channel, seed, cast, now, rhythm.length(self.rng))
+            if is_group(channel):
+                conversation.maximum = self.rng.randint(2,4)
+                conversation.readers = observed.group_audiences.get(channel,frozenset())
             if not self._valid(conversation, cast[0]):
                 return
+            if is_group(channel):
+                from leeroy_mind.groups.conversations import reserve
+                if not reserve(self.app.store,channel,day):
+                    return
             self._live[conversation.id] = conversation
             conversation.task = asyncio.create_task(self._conversation(conversation), name='server-conversation')
             conversation.task.add_done_callback(lambda task,c=conversation:self._finished(c))
@@ -234,6 +243,9 @@ class ServerEngine:
                 rng_seed=RNG_SEED).state not in ('online','idle'):
             return False
         # A rank change during generation cannot leak the officer conversation.
+        if is_group(conversation.channel):
+            from leeroy_mind.groups.conversations import valid
+            return valid(self.app,conversation,speaker)
         return speaker in self.app.world.audience('discord:'+conversation.channel, from_guid=speaker)
 
     def _instruction(self, turn, meta, previous):
@@ -331,6 +343,9 @@ class ServerEngine:
                     conversation.reason = conversation.reason or 'scope_changed'
                     break
                 definition = layout.channel(conversation.channel)
+                if is_group(conversation.channel):
+                    from leeroy_mind.groups.conversations import definition as group_definition
+                    definition = group_definition(conversation.channel)
                 purpose = definition.topic
                 if conversation.seed.kind == 'purpose':
                     opener = 'Talk about this topic in your own way: '
@@ -350,7 +365,8 @@ class ServerEngine:
                 if conversation.seed.kind == 'joke' and conversation.teaser is None:
                     conversation.teaser = speaker
                 turn = Turn(TurnKind.OPEN if parent is None else TurnKind.CONTINUE, speaker,
-                    'discord:'+conversation.channel, addressee=parent_author, instruction=instruction,
+                    conversation.channel if is_group(conversation.channel) else 'discord:'+conversation.channel,
+                    addressee=parent_author, instruction=instruction,
                     priority=Priority.BACKGROUND, max_lines=1)
                 topic = conversation.seed.fact if parent is None else ''
                 meta = TurnMeta('', why='server:'+conversation.seed.kind, topic=topic,
@@ -373,6 +389,9 @@ class ServerEngine:
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
                 conversation.messages.extend(added)
+                if added and conversation.seed.kind == 'group_start':
+                    app.store.conn.execute('DELETE FROM meta WHERE key=?',
+                        ('groups:first:'+conversation.channel.removeprefix('gdm:'),))
                 if opening_photo and (added or meta.photo is not None):
                     # Spent once its photo was offered; one never offered (another photo in
                     # flight) stays for a later conversation.

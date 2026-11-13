@@ -25,8 +25,9 @@ from datetime import datetime
 from typing import Iterable
 
 from leeroy_mind.clock import night_of
-from leeroy_mind.discord.channels import (OFFICER_GAME, is_officer_channel, is_private,
+from leeroy_mind.discord.channels import (OFFICER_GAME, is_officer_channel, is_private, is_group,
                                           is_restricted, private_sql, restricted_sql)
+from leeroy_mind.groups.audience import GroupSource, parse_readers
 
 log = logging.getLogger("leeroy_mind")
 
@@ -40,9 +41,10 @@ DONT_TELL_RE = re.compile(
 SCOPES = ("open", "private", "secret")  # in order of strictness
 _REF = re.compile(r"(chat|memory):([0-9]+)")
 _NIGHT_S = 25 * 3600  # the longest night: 24 hours, 25 when the clocks go back
-WALK_DEPTH = 8  # how many memory: levels restricted_channels follows
+WALK_DEPTH = 512  # bounded graph walk; unresolved remainder fails closed
 # scope_with of a private memory the officers may know, in either medium (recall.scope_ok); no guid
 OFFICERS = -1
+GROUP = -2  # historical group evidence is checked by hidden_ok, never a pair guid
 
 
 @dataclass(frozen=True)
@@ -209,7 +211,7 @@ def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
             if ln is None:
                 continue
             if not is_private(ln.channel):
-                public = public or cited
+                public = public or cited and not is_group(ln.channel)
                 continue
             here = "secret" if _asked_secrecy(ln, secret_threads) else "private"
             claim = (ln.to if ln.frm == owner else ln.frm) if owner in (ln.frm, ln.to) else 0
@@ -218,7 +220,7 @@ def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
             if mem is None or mem.scope == "open":
                 continue
             here = mem.scope
-            claim = mem.scope_with if mem.owner == owner else mem.owner
+            claim = mem.scope_with if mem.owner == owner or mem.scope_with == GROUP else mem.owner
         cls = max(cls, here, key=SCOPES.index)
         claims.append(claim)
     if cls == "open":
@@ -239,8 +241,8 @@ def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
     for _ in range(WALK_DEPTH + 1):
         chats = {k: _ids(v, "chat") for k, v in frontier.items()}
         wanted = set().union(*chats.values()) if chats else set()
-        hidden = {r[0]: r[1] for r in conn.execute(
-            "SELECT id, channel FROM chat_line WHERE id IN (SELECT value FROM json_each(?)) "
+        hidden = {r[0]: GroupSource(r[1],parse_readers(r[2])) if is_group(r[1]) else r[1] for r in conn.execute(
+            "SELECT id, channel, audience FROM chat_line WHERE id IN (SELECT value FROM json_each(?)) "
             f"AND {restricted_sql()}",
             (json.dumps(sorted(wanted)),)) if is_restricted(r[1])} if wanted else {}
         for k, ids in chats.items():
@@ -259,6 +261,10 @@ def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
         for k, ids in nxt.items():
             walked[k] |= ids
             frontier[k] = [e for i in ids for e in evidence.get(i, ())]
+    else:
+        for k, pending in frontier.items():
+            if pending:
+                out[k] = out.get(k, frozenset()) | {'unresolved'}
     return out
 
 
@@ -289,6 +295,15 @@ def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], 
     hidden = restricted_channels(conn, {0: refs})
     if hidden:
         cls = max(derived.scope, "private", key=SCOPES.index)
+        groups = hidden[0]
+        if all(isinstance(c,GroupSource) for c in groups):
+            known = set.intersection(*(set(c.readers) for c in groups))
+            if owner in known:
+                if derived.scope == 'open' or derived.scope_with == GROUP:
+                    return Scope(cls,GROUP,derived.public)
+                if derived.scope_with > 0 and derived.scope_with in known:
+                    return Scope(cls,derived.scope_with,derived.public)
+            return Scope(cls,0,derived.public)
         officers = all(is_officer_channel(c) for c in hidden[0]) and (
             derived.scope == "open" or derived.scope_with == OFFICERS)
         return Scope(cls, OFFICERS if officers else 0, derived.public)

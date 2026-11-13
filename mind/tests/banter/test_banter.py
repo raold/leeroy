@@ -158,6 +158,69 @@ def test_real_pipeline_card_guards_fingerprint_and_natural_end(rig,monkeypatch,c
         assert (rig.engine._last_talk_at,rig.world.human_last_active,dict(rig.engine._last_line_id))==game_before
 
 
+def test_learning_owns_active_banter_style_but_off_and_frozen_keep_baseline(rig,monkeypatch):
+    from leeroy_mind.learn.config import LearnCfg
+    from leeroy_mind.learn import arms,bandit
+    from leeroy_mind.fingerprint import measure
+    from leeroy_mind.banter import service
+    profile=measure(['PRIVATE_STYLE '+('long '*24)]*55)
+    monkeypatch.setattr(service,'fingerprint',lambda *args:profile)
+    monkeypatch.setattr(rig.banter,'candidates',lambda _:[101,102,103])
+    def choose(conn,*args,**kwargs):
+        arms.ensure(conn)
+        return arms.controls() | {'typing':'typing.2.v1'}
+    monkeypatch.setattr(bandit,'choose',choose)
+    rig.engine.learn_enabled=True
+    rig.engine._learn_features=(False,True)
+    instructions=[]
+    prompts=[]
+    async def speak(turn,meta):
+        instructions.append(turn.instruction)
+        prompts.append((await rig.engine._compose(turn,meta,live=True)).messages)
+        return []
+    monkeypatch.setattr(rig.engine,'_speak',speak)
+    topic=Topic('fixture','quiet',rig.clock.now(),'The guild channel is quiet.')
+    for settings in (LearnCfg(enabled=True,apply=False), LearnCfg(enabled=True,apply=True,freeze=True),
+                     LearnCfg(enabled=True,apply=True,bandit=True)):
+        rig.engine.learn_settings=settings
+        rig.sync(rig.banter.thread('guild',topic,[101,102,103]))
+    assert instructions[0]==instructions[1]
+    assert 'Typing: longer lines' in instructions[0]
+    assert 'Typing:' in instructions[2]
+    active=json.dumps(prompts[2])
+    assert 'Typing:' in active and 'Typing: longer lines' not in active
+    assert 'PRIVATE_STYLE' not in active
+
+
+@pytest.mark.parametrize('interruption',['trim','freeze','template'])
+def test_scoped_banter_typing_instruction_survives_missing_learned_style(rig,monkeypatch,interruption):
+    from leeroy_mind.learn.config import LearnCfg
+    from leeroy_mind.learn import control
+    from leeroy_mind.talk import prompt
+    rig.engine.learn_enabled=True
+    rig.engine.learn_settings=LearnCfg(enabled=True,apply=True,bandit=True)
+    rig.engine._learn_features=(False,True)
+    monkeypatch.setattr(rig.banter,'candidates',lambda _:[101,102,103])
+    if interruption=='trim':
+        monkeypatch.setattr(prompt,'STYLE_CAP_TOKENS',0)
+    composed=[]
+    async def speak(turn,meta):
+        assert 'Typing:' in turn.instruction
+        if interruption=='freeze':
+            control.change(rig.store,dict(action='freeze',frozen=True),now=rig.clock.now())
+        elif interruption=='template':
+            turn.template='A fixture template.'
+        c=await rig.engine._compose(turn,meta,live=True)
+        assert 'Typing:' in json.dumps(c.messages)
+        assert meta.learning is None or not meta.learning.used
+        composed.append(c)
+        return []
+    monkeypatch.setattr(rig.engine,'_speak',speak)
+    topic=Topic('fixture','quiet',rig.clock.now(),'The guild channel is quiet.')
+    rig.sync(rig.banter.thread('guild',topic,[101,102,103]))
+    assert len(composed)==1
+
+
 @pytest.mark.parametrize("channel",["guild","discord:general"])
 def test_a_riff_takes_its_mediums_length(rig,monkeypatch,channel):
     """[talk] discord_words: a Discord riff writes as on Discord; the game's keeps one short line."""
