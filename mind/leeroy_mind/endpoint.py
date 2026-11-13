@@ -130,7 +130,10 @@ DISCORD_SHAPES = {
     "post": {"action", "channel", "text"}, "react": {"action", "message", "emoji"},
     "unreact": {"action", "message", "emoji"}, "edit": {"action", "message", "text"},
     "delete": {"action", "message"}, "pin": {"action", "message"},
-    "unpin": {"action", "message"}, "thread": {"action", "message", "name"}}
+    "unpin": {"action", "message"}, "thread": {"action", "message", "name"},
+    "group_create": {"action","members"}, "group_add": {"action","channel","guid"},
+    "group_remove": {"action","channel","guid"}, "group_leave": {"action","channel"},
+    "group_rename": {"action","channel","name"}}
 BOARD_ACTIONS = ("reply", "withdraw")
 BOARD_SHAPES = {"reply": {"action", "kind", "to", "text"}, "withdraw": {"action", "id"}}
 _DIAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz_")
@@ -643,6 +646,12 @@ def discord_args(args) -> dict:
     if not isinstance(args, dict) or args.get("action") not in DISCORD_SHAPES:
         raise BadRequest("discord: an action, one of " + ", ".join(DISCORD_SHAPES))
     action = args["action"]
+    if action.startswith('group_'):
+        from leeroy_mind.groups.service import arguments
+        try:
+            return arguments(args)
+        except ValueError as error:
+            raise BadRequest(str(error)) from None
     shape = DISCORD_SHAPES[action]
     if action=='post' and 'voice' in args:
         shape=shape-{'text'}
@@ -658,7 +667,8 @@ def discord_args(args) -> dict:
         out['image'] = token
     if "channel" in shape:
         ch = args["channel"]
-        if not isinstance(ch, str) or (layout.channel(ch) is None and layout.dm_peer(ch) is None):
+        from leeroy_mind.groups.store import ident
+        if not isinstance(ch, str) or (layout.channel(ch) is None and layout.dm_peer(ch) is None and ident(ch) is None):
             raise BadRequest(WORDS["bad_channel"])
         out["channel"] = ch
     if 'voice' in args:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from . import layout
 from . import store as dstore
-from .channels import CHANNEL_PREFIX, DM_PREFIX, channel_id, is_discord
+from .channels import CHANNEL_PREFIX, DM_PREFIX, channel_id, is_discord, is_group
 
 __all__ = ("CHANNEL_PREFIX", "DM_PREFIX", "LINES", "DiscordTarget", "channel_id", "is_discord",
            "store_line")
@@ -34,7 +34,18 @@ def store_line(store, turn, meta, text: str, now: float, *, audience) -> int:
     have is refused too (bad_channel), as is anything the store refuses (DiscordRefused)."""
     cid = channel_id(turn.channel)
     peer = layout.dm_peer(cid)
-    if peer is not None:
+    if is_group(cid):
+        from leeroy_mind.groups.audience import message_readers, visible
+        from leeroy_mind.groups.store import readers
+        current = readers(store.conn,cid)
+        if turn.speaker not in current or set(audience) != current:
+            raise dstore.DiscordRefused('group_member')
+        target = meta.discord
+        if target is not None and target.reply_to is not None and not visible(
+                message_readers(store.conn,target.reply_to),cid,speaker=turn.speaker,
+                to_guid=turn.to_guid,readers=current):
+            raise dstore.DiscordRefused('group_member')
+    elif peer is not None:
         if peer != turn.speaker:
             raise dstore.DiscordRefused("not_peer")
     else:

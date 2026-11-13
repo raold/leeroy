@@ -741,6 +741,14 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .lab-controls { margin-bottom:16px; }
 .lab-detail { margin:10px 0; border-top:1px solid var(--line); padding:10px 0; overflow-wrap:anywhere; }
 .lab-detail summary { cursor:pointer; font-weight:600; padding:6px 0; }
+.group-dialog { width:min(460px,calc(100vw - 32px)); max-height:85vh; overflow:auto; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); }
+.group-dialog::backdrop { background:rgb(0 0 0 / .45); }
+.group-dialog input:not([type=checkbox]) { width:100%; box-sizing:border-box; margin:8px 0; }
+.group-dialog fieldset { max-height:40vh; overflow:auto; margin:12px 0; border:1px solid var(--line); }
+.group-choice { display:flex; align-items:center; gap:10px; min-height:40px; }
+.group-member { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:8px 0; }
+.group-faces { display:inline-flex; flex-shrink:0; margin-right:8px; }
+.group-faces .av + .av { margin-left:-12px; }
 .lab-detail .lab-detail { margin-left:10px; }
 .lab-detail button, .lab-line { margin:5px 6px 5px 0; }
 .lab-line button { max-width:100%; white-space:normal; }

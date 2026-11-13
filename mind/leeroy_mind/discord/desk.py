@@ -21,7 +21,7 @@ from pathlib import Path
 
 from leeroy_mind.discord import layout
 from leeroy_mind.discord import store as dstore
-from leeroy_mind.discord.channels import CHANNEL_PREFIX
+from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_group
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.logs import log as log_event
 from leeroy_mind.memory.privacy import DONT_TELL_RE
@@ -65,6 +65,8 @@ class DiscordDesk:
 
     def __init__(self, app):
         self.app = app
+        from leeroy_mind.groups.service import Groups
+        app.groups = Groups(app)
         from leeroy_mind.photos.config import PhotosConfig, load_photos_config
         self.photos = (load_photos_config(Path(app.data_dir) / 'mind.toml')
                        if getattr(app, 'data_dir', None) is not None else PhotosConfig())
@@ -91,7 +93,8 @@ class DiscordDesk:
             reply = self._handle(args)
             outcome = "ok"
         except DiscordRefused as e:
-            reply = {"ok": False, "error": WORDS.get(e.code, "That can't be done.")}
+            from leeroy_mind.groups.store import WORDS as GROUP_WORDS
+            reply = {"ok": False, "error": WORDS.get(e.code, GROUP_WORDS.get(e.code,"That can't be done."))}
             outcome = e.code
         except _Refused as e:
             reply, outcome = {"ok": False, "error": str(e)}, e.outcome
@@ -111,6 +114,8 @@ class DiscordDesk:
         if not (type(me) is int and me > 0):
             raise _Refused("no_human", NO_HUMAN)
         store, now, action = app.store, app.clock.now(), args["action"]
+        if action.startswith('group_'):
+            return app.groups.handle(args)
         if action == "post":
             self._check_dm(args["channel"], me)
             if 'voice' in args:
@@ -177,6 +182,9 @@ class DiscordDesk:
                     hook.on_his_post(mid)
             return {"ok": True, "id": mid}
         message = args["message"]
+        channel_row = store.conn.execute('SELECT channel FROM discord_message WHERE id=?',(message,)).fetchone()
+        if channel_row is not None and is_group(channel_row[0]):
+            app.groups.check(channel_row[0])
         if action == "thread":
             thread = dstore.open_thread(store, message, name=args["name"], now=now)
             self._his_action()
@@ -274,7 +282,7 @@ class DiscordDesk:
         channel, text = store.conn.execute(
             "SELECT channel, text FROM discord_message WHERE id = ?", (message,)).fetchone()
         peer = layout.dm_peer(channel)
-        place, to = (channel, peer) if peer is not None else (CHANNEL_PREFIX + channel, 0)
+        place, to = (channel, peer) if peer is not None else (channel if is_group(channel) else CHANNEL_PREFIX + channel, 0)
         chat = Chat(ts=int(now * 1000), channel=place, from_guid=me,
                     from_name=store.get_meta("human_name") or "", to_guid=to, text=text, map=0,
                     zone=0)
@@ -305,6 +313,9 @@ class DiscordDesk:
             touch()
 
     def _check_dm(self, channel: str, me: int) -> None:
+        if is_group(channel):
+            self.app.groups.check(channel)
+            return
         peer = layout.dm_peer(channel)
         if peer is None:
             return
