@@ -231,6 +231,24 @@ def test_release_shows_the_root_and_releases_it_on_its_typed_id(tmp_path, store,
     assert ActionStore(store.conn).holds() == ()
 
 
+def test_release_counts_only_the_members_a_failed_leave_still_holds(tmp_path, store, clock, capsys):
+    from leeroy_mind.protocol import Ack
+    from leeroy_mind.realm import protocol
+    from leeroy_mind.realm.action_policy import classify
+    from leeroy_mind.realm.action_store import ActionSpec, ActionStore
+    journal = ActionStore(store.conn)
+    c = classify(protocol.LeavePvp(ROOT_ID, (101, 102, 103)))
+    r = journal.prepare(ActionSpec(ROOT_ID, None, "root", c.policy, "realm_day", 4, c.kind, c.payload,
+                                   c.reserved_manifest, 21, 1), now=clock.now() - 7200)
+    journal.begin_dispatch(ROOT_ID, payload=r.payload, process_id="old", connection_epoch=1, now=clock.now() - 7199)
+    journal.observe_ack(Ack(0, ROOT_ID, True, ""), now=clock.now() - 7198)
+    journal.observe_realm_job(protocol.RealmJob(0, ROOT_ID, "leave_pvp", "failed", "cleanup_manifest_readback_changed",
+                                                103, 0, released=(101, 103)), now=clock.now() - 7197)
+    code, _ = release(tmp_path, clock, ROOT_ID, "--reason", "checked", "--yes")
+    output = capsys.readouterr().out
+    assert code == 0 and "1 members held" in output and "1 members free" in output
+
+
 @pytest.mark.parametrize("answer", ["", "no", ROOT_ID[:-1], ROOT_ID + " ", None])
 def test_release_without_the_exact_typed_id_changes_nothing(tmp_path, store, clock, capsys, answer):
     stored_unknown(store)
