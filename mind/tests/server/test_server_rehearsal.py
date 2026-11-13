@@ -38,6 +38,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.tuning.effective import effective, MemberTuning
 from nightly.conftest import FakeAdmin
 from selfies.fakes import until
 from guards.test_review import sources, NOW
@@ -186,10 +187,10 @@ def test_whole_server_day(tmp_path, monkeypatch, capsys):
         app.server.engine._finished = finish
         task = asyncio.create_task(app.run())
         held_tasks = []
-        async def advance_to(hours, minutes=0):
+        async def advance_to(hours, minutes=0, *, step=10):
             target = START.replace(hour=0,minute=0).timestamp()+hours*3600+minutes*60
             while clock.now()<target:
-                await clock.advance(min(10,target-clock.now()),10)
+                await clock.advance(min(step,target-clock.now()),step)
                 # Real SQLite read workers and the loopback dispatcher must settle.
                 await asyncio.sleep(.001)
         try:
@@ -222,7 +223,9 @@ def test_whole_server_day(tmp_path, monkeypatch, capsys):
             await bridge.push(dict(type='chat',channel='guild',from_guid=HUMAN,from_name='Testmage',
                 to_guid=0,text='Belra, how is the harbor plan?',map=0,zone=0,ts=int(clock.now()*1000)))
             await until(lambda: any(c=='guild' and w.startswith('reply:') for c,p,w in queued))
-            await advance_to(19,2)
+            # Real read workers need finer fake-clock steps inside the game's
+            # short deadline, especially while the broad suite shares the CPU.
+            await advance_to(19,2,step=1)
             his_line = app.store.conn.execute('SELECT id FROM chat_line WHERE channel="guild" '
                                               'AND origin="human" ORDER BY id DESC LIMIT 1').fetchone()
             assert his_line and app.engine._answer_lines.get(his_line[0])
@@ -255,6 +258,32 @@ def test_whole_server_day(tmp_path, monkeypatch, capsys):
             assert app.server.lease.ready() and 'server' in app.arbiter.holders
             await advance_to(33,30)
             await app.server.engine.close()
+            # Force one eligible, dramatic rival's draw against a real stored
+            # post. Otherwise an empty rival-reaction subset could pass below.
+            parent = app.store.conn.execute('SELECT id,text FROM discord_message WHERE author=102 '
+                'AND channel="general" AND deleted IS NULL ORDER BY id DESC LIMIT 1').fetchone()
+            assert parent is not None
+            original_get = app.personas.get
+            class RivalDraw(random.Random):
+                def random(self):
+                    return 0.
+                def uniform(self, low, high):
+                    return 0.  # write now, preserving production eligibility checks
+                def shuffle(self, candidates):
+                    candidates.sort(key=lambda guid: (guid!=105,guid))
+            with monkeypatch.context() as probe:
+                probe.setattr(app.personas,'get',lambda guid: effective(original_get(guid),
+                    MemberTuning({'drama':7})) if guid==105 else original_get(guid))
+                probe.setattr(app.server.reactions,'rng',RivalDraw(1))
+                snapshot = await runtime.snapshot(app,clock.now())
+                assert snapshot.ties[105,102]=='rival'
+                assert reacting._allowed(snapshot,105,102,'general')
+                assert app.server.reactions._live_allowed(105,102,'general','🙄',clock.now())
+                before = set(app.server.reactions._tasks)
+                await app.server.reactions._plan(parent['id'],102,'general',parent['text'],False)
+                await asyncio.gather(*(app.server.reactions._tasks-before))
+                assert app.store.conn.execute('SELECT emoji FROM discord_reaction '
+                    'WHERE message=? AND member=105',(parent['id'],)).fetchone()[0]=='🙄'
             result['nights'] = nights
             result['starts'] = starts
             result['counts'] = {day:counts(app.store,day) for day in ('2026-11-12','2026-11-13')}
@@ -270,9 +299,11 @@ def test_whole_server_day(tmp_path, monkeypatch, capsys):
             reactions = app.store.conn.execute('SELECT member,emoji,message FROM discord_reaction').fetchall()
             result['reactions'] = len(reactions)
             assert reactions
-            assert all(r['emoji'] not in reacting.LOVE for r in reactions
+            rival_reactions = [r for r in reactions
                 if app.store.conn.execute('SELECT author FROM discord_message WHERE id=?',(r['message'],)).fetchone()[0]==102
-                and r['member']==105)
+                and r['member']==105]
+            result['rival_reactions'] = len(rival_reactions)
+            assert rival_reactions and all(r['emoji'] not in reacting.LOVE for r in rival_reactions)
             assert all(r['session_id'] is None for r in app.store.conn.execute('SELECT channel,session_id FROM chat_line')
                        if is_discord(r['channel']))
             game = app.store.conn.execute('SELECT text FROM chat_line WHERE channel="guild" AND origin="mind"').fetchall()
