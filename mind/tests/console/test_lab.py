@@ -335,10 +335,12 @@ def test_console_mutation_gates_and_forwarding(store,path,args):
             app.controls.enabled=False
             assert (await http(app,'POST',path,body=args,origin=True)).status==403
             app.controls.enabled=True
+            # Hold the status loop so its next tick cannot put the running view back mid-request
+            derive=app._derive; app._derive=lambda: None
             app.view=SimpleNamespace(state='stopped')
             assert (await http(app,'POST',path,body=args,origin=True)).status==409
             assert not link.calls
-            app.view=original_view
+            app._derive=derive; app.view=original_view
             assert (await http(app,'POST',path,body=args,origin=True)).status==200
             assert link.calls[-1][1:]==(path.removeprefix('/api/'),args)
         finally: await app.close()
