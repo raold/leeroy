@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from leeroy_mind.console.feed import connect
 from leeroy_mind.storage.rows import Relationship
-from .state import StateInputs, pulled_into_play, state_of
+from .state import StateInputs, live_voice_session, pulled_into_play, state_of
 
 
 async def snapshot(app, now, *, include_seeds=False):
@@ -19,8 +19,9 @@ async def snapshot(app, now, *, include_seeds=False):
     officers = frozenset(g for g in cast if app.world.is_officer(g))
     playing, online = pulled_into_play(app), frozenset(app.world.online)
     comms = app.engine.comms
+    server, voice_session = getattr(app, 'server', None) is not None, live_voice_session(app)
     observed = {g: StateInputs(p, cast, officers, online, playing, human, local.tzinfo,
-                 comms.room_of(g) if comms is not None else None) for g, p in personas.items()}
+                 comms.room_of(g) if comms is not None else None, server, voice_session) for g, p in personas.items()}
     trial_rank = getattr(getattr(getattr(app, 'realm', None), 'cfg', None), 'trial_rank', 4)
     path, library = Path(app.data_dir) / 'mind.db', Path(app.data_dir) / 'library.db'
     photos_on = getattr(app, 'photos', None) is not None

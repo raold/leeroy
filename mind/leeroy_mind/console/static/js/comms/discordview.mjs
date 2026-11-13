@@ -1,9 +1,9 @@
 import { $, clear, clock, el, emit, on, str } from "../core.mjs";
-import { S } from "../state.mjs";
+import { S, roomName } from "../state.mjs";
 import { feedbackButtons } from "./feedback.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { currentView, openView } from "./feedview.mjs";
-import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel } from "./discord.mjs";
+import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel, voiceSeats } from "./discord.mjs";
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
 import { PICKER, isOneEmoji } from "./emoji.mjs";
 import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
@@ -58,6 +58,20 @@ function renderLists() {
     category.channels.forEach(function (channel) { details.appendChild(channelButton(channel.id, "# " + channel.name, channel.officers_only)); });
     left.appendChild(details);
   });
+  var seats = voiceSeats(DISCORD.voice_seats, DISCORD.members, Date.now()/1000,
+    !!(S.voice && (S.voice.room || S.voice.where?.[S.voice.human])));
+  if (seats.length) {
+    var rooms = el("details", "dc-category"); rooms.open = true;
+    rooms.appendChild(el("summary", "sec", "VOICE"));
+    seats.forEach(function (r) {
+      rooms.appendChild(el("div", "ch", roomName(r.id)));
+      r.people.forEach(function (m) {
+        var row = el("div", "dc-member"); row.appendChild(el("span", "who", m.name));
+        row.appendChild(el("small", "badge", "in voice")); rooms.appendChild(row);
+      });
+    });
+    left.appendChild(rooms);
+  }
   restore(left, key);
   var dms = $("dc-dms"), dmkey = focusKey(dms); clear(dms);
   DISCORD.dms.forEach(function (d) { dms.appendChild(channelButton("dm:" + d.guid, d.name, false)); });
