@@ -7,10 +7,11 @@ from typing import Sequence
 
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.discord.channels import (OFFICER_GAME, is_discord, is_officer_channel,
-                                          is_private, is_restricted)
+                                          is_private, is_restricted, is_group)
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
-from leeroy_mind.memory.privacy import OFFICERS, restricted_channels
+from leeroy_mind.memory.privacy import OFFICERS, GROUP, restricted_channels
+from leeroy_mind.groups.audience import GroupSource, visible as group_visible, turn_readers
 from leeroy_mind.memory.writer import Embedder
 from leeroy_mind.retrieval import mmr, vector_or_word_similarity  # mmr remains a public import
 from leeroy_mind.storage.rows import MemoryRow, cosine, unpack_vec
@@ -61,7 +62,7 @@ def chat_ids(evidence) -> list[int]:
 
 
 def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: str,
-               to_guid: int) -> bool:
+               to_guid: int, source_readers=None, readers=()) -> bool:
     """Whether one chat line may reach a turn by `speaker` on `turn_channel` (going to
     `to_guid`), as the conversation she is in (one mind per member, 2026-11-12):
     - a private line (a whisper or a Discord DM) reaches a private turn between the same two in
@@ -74,6 +75,8 @@ def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: s
     Memories are kept to their audience through their scope (scope_ok), and their evidence
     still goes through this under the scope as a second check (Recall._shareable; controller
     ruling B1)."""
+    if is_group(channel):
+        return group_visible(source_readers,turn_channel,speaker=speaker,to_guid=to_guid,readers=readers)
     if is_private(channel):
         return is_private(turn_channel) and {frm, to} == {speaker, to_guid}
     if is_discord(channel) or is_discord(turn_channel):
@@ -96,6 +99,8 @@ def scope_ok(m: MemoryRow, *, turn_channel: str, to_guid: int) -> bool:
         return True
     if m.scope_with == OFFICERS:
         return m.scope == "private" and is_officer_channel(turn_channel)
+    if m.scope_with == GROUP:
+        return m.scope == 'private' and (is_group(turn_channel) or is_private(turn_channel))
     if (peer := _dm_peer(turn_channel)) is not None and peer not in (m.owner, m.scope_with):
         return False  # a DM is its member's own: never another member's
     return (m.scope_with != 0 and is_private(turn_channel)
@@ -111,11 +116,17 @@ def _dm_peer(channel) -> int | None:
     return int(tail) if tail.isdigit() else -1
 
 
-def hidden_ok(channels, turn_channel: str) -> bool:
+def hidden_ok(channels, turn_channel: str, *, speaker=0, to_guid=0, readers=()) -> bool:
     """Whether a memory resting on lines of these restricted channels may reach a turn on
     `turn_channel`: the officers' in either medium reach every officers' turn; any other (a
     Discord channel the layout lacks) only a turn on that one channel (rulings R7, R10)."""
     channels = frozenset(channels)
+    groups = [c for c in channels if isinstance(c,GroupSource)]
+    if groups:
+        return len(groups) == len(channels) and all(group_visible(c.readers,turn_channel,
+            speaker=speaker,to_guid=to_guid,readers=readers) for c in groups)
+    if any(is_group(c) for c in channels):
+        return False  # a bare channel cannot prove its historical audience
     if channels == {turn_channel}:
         return True
     return is_officer_channel(turn_channel) and all(is_officer_channel(c) for c in channels)
@@ -147,7 +158,7 @@ def format_memory(m: MemoryRow, now: float, *, tz: tzinfo) -> str:
             text = text[:1].upper() + text[1:]
     tail = " (heard)" if m.confidence < HEARD else ""
     if m.scope != "open":
-        tail += OFFICERS_TAIL if m.scope_with == OFFICERS else PRIVATE_TAIL
+        tail += OFFICERS_TAIL if m.scope_with == OFFICERS else ' (only among those in the group then)' if m.scope_with == GROUP else PRIVATE_TAIL
     return f"- {when}: {text}{tail}"
 
 
@@ -249,22 +260,27 @@ class Recall:
         refs = {m.id: chat_ids(m.evidence) for m in rows}
         lines = self._store.chat_line_parties(i for ids in refs.values() for i in ids)
         hidden = {m.id: frozenset(ch for i in refs[m.id] if i in lines
-                                  and is_restricted(ch := lines[i][0])) for m in rows}
-        nested = {m.id: [e for e in m.evidence if isinstance(e, str) and e.startswith("memory:")]
-                  for m in rows}
-        if nested := {k: v for k, v in nested.items() if v}:  # only these need the walk
+            and is_restricted(ch := lines[i][0]) and not is_group(ch)) for m in rows}
+        walk = {m.id: [e for e in m.evidence if isinstance(e,str) and (
+            e.startswith('memory:') or e.startswith('chat:') and e[5:].isdigit()
+            and int(e[5:]) in lines and is_group(lines[int(e[5:])][0]))] for m in rows}
+        if walk := {k:v for k,v in walk.items() if v}:
             with self._store.transaction():
-                for k, found in restricted_channels(self._store.conn, nested).items():
+                for k,found in restricted_channels(self._store.conn,walk).items():
                     hidden[k] |= found
-        hidden = {k: v for k, v in hidden.items() if v}
+        hidden = {k:v for k,v in hidden.items() if v}
+        current = turn_readers(self._store.conn,channel,owner,to_guid) if any(
+            isinstance(c,GroupSource) for values in hidden.values() for c in values) else ()
         keep = []
         for m in rows:
             if not scope_ok(m, turn_channel=channel, to_guid=to_guid):
                 continue
+            if m.scope_with == GROUP and not any(isinstance(c,GroupSource) for c in hidden.get(m.id,())):
+                continue
             if (m.key or '').startswith('bond:') and (not include_bond or m.owner != owner):
                 continue
             cited = [lines[i] for i in refs[m.id] if i in lines]
-            if m.id in hidden and not hidden_ok(hidden[m.id], channel):
+            if m.id in hidden and not hidden_ok(hidden[m.id], channel, speaker=owner,to_guid=to_guid,readers=current):
                 continue
             if any(isinstance(e, str) and e.startswith(OWNER_REF) for e in m.evidence):
                 keep.append(m)

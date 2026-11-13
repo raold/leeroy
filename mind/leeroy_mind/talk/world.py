@@ -75,6 +75,7 @@ class WorldView:
         self.last_spoke: dict[int, float] = {}
         # who sits in a `voice:` channel's room, once the voice extension is attached
         self.room_audience: Callable[[str], frozenset[int]] | None = None
+        self.group_audience: Callable[[str], frozenset[int]] | None = None
 
     def cast_guids(self) -> set[int]:
         return {g for g, m in self.members.items()
@@ -203,6 +204,9 @@ class WorldView:
         """Cast guids that can see a line on this channel right now. A Discord channel's
         (discord.layout.audience): the whole cast, online or not, its officers only in an
         officers' channel, the two of a DM, and him in each."""
+        from leeroy_mind.discord.channels import is_group
+        if is_group(channel):
+            return self.group_audience(channel) if self.group_audience else frozenset()
         if is_discord(channel):
             cast = {g for g, m in self.discord_members().items()
                     if g != self.human_guid and m.level >= CAST_MIN_LEVEL}

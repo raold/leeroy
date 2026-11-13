@@ -25,6 +25,7 @@ async def snapshot(app, now, *, include_seeds=False):
     path, library = Path(app.data_dir) / 'mind.db', Path(app.data_dir) / 'library.db'
     photos_on = getattr(app, 'photos', None) is not None
     photo_dial = app.cfg.talk.selfies if photos_on else 0
+    groups_config = getattr(getattr(app,'groups',None),'config',None)
     def read():
         deadline = time.monotonic() + 2
         with closing(connect(path)) as conn:
@@ -50,18 +51,27 @@ async def snapshot(app, now, *, include_seeds=False):
                         'friend' if score >= 60 else 'fond' if score >= 30 else 'rival' if score <= -30 else 'neutral')
             relationships = {g: Relationship(**{k:v for k,v in rows.get((g,human), {'a':g,'b':human}).items()
                              if k in {f.name for f in fields(Relationship)} and k not in ('notes', 'pinned', 'label')}) for g in personas}
-            seeds = []
+            seeds, source = [], []
             if include_seeds:
                 from .seeds import gather, fresh
                 # Only the roster's character name; never his private real-name setting.
                 human_name = getattr(cast.get(human), 'name', '')
-                seeds = fresh(conn, gather(conn, now=now, local=local, cast=personas, officers=officers,
-                              human=human, human_name=human_name, trial_rank=trial_rank), now=now)
+                source = gather(conn, now=now, local=local, cast=personas, officers=officers,
+                                human=human, human_name=human_name, trial_rank=trial_rank)
+                seeds = fresh(conn, source, now=now)
                 if photos_on:
                     from leeroy_mind.photos.send import photo_seeds
                     seeds += fresh(conn, photo_seeds(conn, now=now, local=local, dial=photo_dial), now=now)
             meta = dict(conn.execute("SELECT key,value FROM meta WHERE key LIKE 'server:%'"))
+            group_audiences = {}
+            if include_seeds and groups_config is not None and groups_config.enabled:
+                from leeroy_mind.groups.conversations import seeds as group_seeds
+                extra,group_audiences = group_seeds(conn,source,now=now,local=local,human=human,config=groups_config)
+                # Each group owns its subject cooldown. An introduction stays pending
+                # until delivery, so a dropped attempt may retry within the daily cap.
+                seeds += fresh(conn,(s for s in extra if s.kind != 'group_start'),now=now)
+                seeds += [s for s in extra if s.kind == 'group_start']
             return SimpleNamespace(personas=personas, states=states, ties=ties, in_play=playing, officers=officers,
                 away=away, classes={g:m.class_ for g,m in cast.items()}, cast=cast, human=human, local=local,
-                seeds=seeds, relationships=relationships, meta=meta)
+                seeds=seeds, relationships=relationships, meta=meta,group_audiences=group_audiences)
     return await asyncio.to_thread(read)

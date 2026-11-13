@@ -49,7 +49,7 @@ from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
-from leeroy_mind.discord.channels import is_private, same_medium
+from leeroy_mind.discord.channels import is_private, same_medium, is_group
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
@@ -920,9 +920,11 @@ class Pipeline:
         """Whether a chat line may be in this turn's chat window, the conversation she answers
         (memory.recall.whisper_ok, in the turn's own medium: R11). The other medium's lines
         between her and him come only through _pair_lines, in a block of their own."""
+        from leeroy_mind.groups.audience import turn_readers
         return same_medium(row.channel, turn.channel) and whisper_ok(
             row.channel, row.from_guid, row.to_guid, speaker=turn.speaker,
-            turn_channel=turn.channel, to_guid=turn.to_guid)
+            turn_channel=turn.channel, to_guid=turn.to_guid, source_readers=row.audience,
+            readers=turn_readers(self.store.conn,turn.channel,turn.speaker,turn.to_guid))
 
     def _pair_lines(self, turn: Turn, recent: list[ChatLineRow], now: float) -> list[ChatLineRow]:
         """One mind per member: in a private turn between her and him (a whisper or a Discord DM),
@@ -1030,7 +1032,7 @@ class Pipeline:
         (arc.live.arc_view, all of them for a whisper or DM to him only); the romance text
         shows them only in a whisper or a Discord DM (is_private)."""
         hg = self.human.guid
-        if (not hg or turn.addressee != hg or p.identity.player_gender != "female"
+        if (is_group(turn.channel) or not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE or meta.casual):
             return None
         dial = self.cfg.romance.dial if dial is None else dial
@@ -1160,7 +1162,8 @@ class Pipeline:
                                    is_guild_master=g == hg and human.is_guild_master,
                                    forms=human.forms if g == hg else THEY_FORMS,
                                    attitude=attitude if g == hg else "",
-                                   speaker=p.identity.player_gender)
+                                   speaker=p.identity.player_gender,
+                                   friendship_only=is_group(turn.channel))
                  for g in people]
 
         trigger = ""
@@ -1565,6 +1568,9 @@ class Pipeline:
                 return await self._answer_without_photo(turn, meta, 'photo_words')
             return self._drop(turn, meta, 'photo_words', memory_ids)
         text = self._link_items(turn, meta, text)
+        if is_group(turn.channel) and any(command.casefold() in ROMANCE_EMOTES
+                for command in re.findall(r'(?<!\S)/([A-Za-z]+)(?=[\s.!?,]|$)',text)):
+            return self._drop(turn,meta,'command',memory_ids,text=text)
         # an emote is public: a whisper keeps its words (NB6), and so does a Discord line,
         # which has no game to emote in
         if turn.channel == "whisper" or discord:

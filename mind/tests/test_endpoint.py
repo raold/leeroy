@@ -1255,7 +1255,8 @@ def test_a_failed_embed_is_not_answered_as_a_deeper_search(tmp_path):
 def test_discord_is_an_op_and_its_args_are_checked():
     assert "discord" in endpoint.OPS
     assert set(endpoint.DISCORD_SHAPES) == {"post", "react", "unreact", "edit", "delete", "pin",
-                                            "unpin", "thread"}
+                                            "unpin", "thread", "group_create", "group_add",
+                                            "group_remove", "group_leave", "group_rename"}
     assert parse_request(line(v=1, key=KEY, op="discord", args={
         "action": "react", "message": 4, "emoji": "\U0001F44D"}), KEY) == (
         "discord", {"action": "react", "message": 4, "emoji": "\U0001F44D"})
