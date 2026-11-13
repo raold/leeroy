@@ -493,7 +493,7 @@ def test_typing_is_asked_for_while_a_discord_page_listens_even_out_of_game(data,
             assert app.game.state != "in_game"
             app._subs.add(console_app._Subscriber())
             await app.refresh()
-            assert link.calls == [] and app._typing == []   # no Discord page yet
+            assert link.calls and app._typing == []  # shared GPU status, no Discord dots yet
             await get(app)                                  # a page opens the Discord
             await app.refresh()
             return app._typing

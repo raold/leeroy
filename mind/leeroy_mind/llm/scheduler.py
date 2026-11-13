@@ -73,6 +73,7 @@ class LLMScheduler:
         self._running: set[_Entry] = set()
         self._low_running = 0
         self._closed = False
+        self.gpu_gate = None
 
     def pending(self) -> dict[Priority, int]:
         out = {p: 0 for p in Priority}
@@ -89,6 +90,8 @@ class LLMScheduler:
                      deadline: float | None = None) -> T:
         if self._closed:
             raise SchedulerClosed("scheduler is closed")
+        if self.gpu_gate is not None:
+            self.gpu_gate.check()
         fut = asyncio.get_running_loop().create_future()
         entry = _Entry(Priority(priority), next(self._seq), job, deadline, fut)
         heapq.heappush(self._heap, entry)
@@ -133,7 +136,10 @@ class LLMScheduler:
         if entry.fut.done():
             return
         try:
-            result = await entry.job(self._llm)
+            if self.gpu_gate is not None:
+                result = await self.gpu_gate.run(lambda: entry.job(self._llm))
+            else:
+                result = await entry.job(self._llm)
         except Exception as e:
             if not entry.fut.done():
                 entry.fut.set_exception(e)

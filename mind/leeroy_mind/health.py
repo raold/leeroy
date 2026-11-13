@@ -1153,9 +1153,22 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("weekly-eval", _weekly_eval, conn),
                 _guarded("secret-gate", _secret_gate, conn),
                 _guarded("offline-days", _offline_days, conn, now),
-                _guarded("training-lab", _training_lab, conn, now)]
+                _guarded("training-lab", _training_lab, conn, now),
+                _guarded("gpu-pause", _gpu_pause, conn, now)]
     finally:
         conn.close()
+
+
+def _gpu_pause(conn, now):
+    from .gpucontrol import KEY, since_value
+    row = conn.execute('SELECT value FROM meta WHERE key=?', (KEY,)).fetchone()
+    since = since_value(row[0] if row else None)
+    if since is None:
+        return Check('gpu-pause', OK, 'GPU use is enabled')
+    text = f'GPU paused since {_when(since)}'
+    if now - since > 86400:
+        text += f'; the night has not run since {_when(since)}'
+    return Check('gpu-pause', NOTE, text)
 
 
 def _guarded(name: str, check, *args):

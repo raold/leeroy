@@ -139,6 +139,9 @@ class DiscordDesk:
                 server = getattr(app, 'server', None)
                 if server is not None and (peer := layout.dm_peer(args['channel'])) is not None:
                     store.conn.execute('DELETE FROM meta WHERE key=?', (f'server:dm:open:{peer}',))
+            gpu = getattr(app, 'gpu', None)
+            if gpu is not None:
+                gpu.resume_now('discord')
             if server is not None:
                 # Stop immediately, even when vision delays the existing D1 answer hook.
                 server.engine.his_post(args['channel'])

@@ -274,6 +274,33 @@ def test_login_kills_fake_worker_and_child_before_live_preload(app, tmp_path):
     run(go())
 
 
+def test_free_gpu_kills_worker_tree_before_unloading_and_booth_stays_asleep(app, tmp_path):
+    pids, requests = tmp_path / 'gpu-pids.json', tmp_path / 'gpu-requests.log'
+    app.selfie_booth.worker = fake_worker(tmp_path, FAKE_SELFIE_HANG='1', FAKE_SELFIE_CHILD='1',
+        FAKE_SELFIE_PIDS=str(pids), FAKE_SELFIE_LOG=str(requests))
+    admin = app.arbiter.admin
+    original = admin.unload
+    seen = []
+    async def unload(model):
+        if pids.exists():
+            row = json.loads(pids.read_text())
+            seen.append((pid_alive(row['pid']), pid_alive(row['child'])))
+        await original(model)
+    admin.unload = unload
+    async def go():
+        await advance(app, 600)
+        await app.selfie_booth.tick()
+        await until(requests.exists)
+        reply = await app.gpu.action({'action': 'pause'})
+        assert reply['ok'] and app.selfie_booth._task.cancelled()
+        assert seen and all(pair == (False, False) for pair in seen)
+        before = requests.read_bytes()
+        await advance(app, 3600)
+        await app.selfie_booth.tick()
+        assert requests.read_bytes() == before and not app.selfie_booth.running
+    run(go())
+
+
 def test_night_preempts_booth_and_waits_for_its_tree(app, tmp_path):
     pids, requests = tmp_path / "pids.json", tmp_path / "requests.log"
     app.selfie_booth.worker = fake_worker(tmp_path, FAKE_SELFIE_HANG="1", FAKE_SELFIE_CHILD="1",

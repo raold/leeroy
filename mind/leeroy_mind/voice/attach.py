@@ -110,6 +110,12 @@ class VoiceExtension:
         client's receive loop (Ptt, Heard, Played)."""
         if self._gpu_closing:
             return
+        if getattr(getattr(self.app, 'gpu', None), 'paused', False):
+            if gpu == 'none':
+                self._gpu_held = False
+                self._gpu_arbiter = None
+                await self.app.arbiter.release_live(VOICE_GPU)
+            return
         was, self._gpu_held = self._gpu_held, gpu != "none"
         # Take the lease before yielding, so a scheduler tick cannot admit reflection
         # between this status and the admin task. CPU rendering reports gpu="none".
@@ -141,7 +147,7 @@ class VoiceExtension:
 
     async def _pin_job(self, pin: bool, generation: int) -> None:
         async with self._pin_lock:
-            if self._gpu_closing:
+            if self._gpu_closing or getattr(getattr(self.app, 'gpu', None), 'paused', False):
                 return
             models = self.app.cfg.models
             try:

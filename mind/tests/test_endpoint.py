@@ -386,7 +386,7 @@ def test_status_answers_and_a_wrong_key_is_forbidden_without_logging_it(tmp_path
             assert reply == {"ok": True, "v": 1, "pid": os.getpid(), "stopping": False,
                              "raid": FakeGuild().console_status(), "bridge_connected": None,
                              "cast": None, "schema_version": None,  # this app cannot tell
-                             "world": None, "typing": []}
+                             "world": None, "typing": [], "gpu": None}
             assert await ask(ep, "status", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert await ask(ep, "stop", key="x" * 43) == {"ok": False, "error": "forbidden"}
             assert app.stops == 0

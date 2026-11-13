@@ -636,8 +636,10 @@ class DiscordTalk:
             return  # no timer could release a lease taken here
         self._until = self.app.clock.now() + LEASE_IDLE_S
         if not self._held:
-            self._held, self._arbiter = True, arbiter
+            if getattr(arbiter, 'paused', False):
+                return
             first = arbiter.hold(LEASE)
+            self._held, self._arbiter = True, arbiter
             if first:
                 task = loop.create_task(arbiter.hand_over(), name="discord-gpu-handback")
                 self._handbacks.add(task)

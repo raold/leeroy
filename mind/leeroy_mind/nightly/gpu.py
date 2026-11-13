@@ -44,7 +44,7 @@ import urllib.error
 import urllib.request
 from typing import AsyncIterator, Awaitable, Callable
 
-from leeroy_mind.llm.client import LLMError
+from leeroy_mind.llm.client import LLMError, GpuPaused, OllamaClient
 from leeroy_mind.llm.presets import LIVE as LIVE_PRESET
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.settings import NightlySettings
@@ -94,10 +94,13 @@ class HttpOllamaAdmin:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
         self._preload_timeout = preload_timeout
+        self.gpu_gate = None
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def _request(self, path: str, body: dict | None, timeout: float) -> bytes:
         try:
+            if self.gpu_gate is not None and body is not None and body.get('keep_alive') != 0:
+                self.gpu_gate.check()
             data = None if body is None else json.dumps(body).encode("utf-8")
             req = urllib.request.Request(
                 self._base + path, data=data, method="GET" if body is None else "POST",
@@ -109,17 +112,21 @@ class HttpOllamaAdmin:
         except (OSError, http.client.HTTPException, ValueError) as e:
             raise LLMError(f"{path}: {e}") from e
 
-    async def loaded_models(self) -> list[str]:
+    async def loaded(self, *, timeout: float | None = None) -> list[dict]:
         """The names GET /api/ps lists: the models in memory now."""
-        raw = await asyncio.to_thread(self._request, "/api/ps", None, self._timeout)
+        raw = await asyncio.to_thread(self._request, "/api/ps", None, self._timeout if timeout is None else timeout)
         try:
             out = json.loads(raw)
         except ValueError as e:
             raise LLMError("/api/ps: reply is not JSON") from e
         if not isinstance(out, dict):
             raise LLMError("/api/ps: reply is not an object")
-        return [m["name"] for m in out.get("models") or ()
+        return [{"name": m["name"], "size_vram": max(0, m.get("size_vram", 0))
+                 if type(m.get("size_vram")) is int else 0} for m in out.get("models") or ()
                 if isinstance(m, dict) and isinstance(m.get("name"), str)]
+
+    async def loaded_models(self) -> list[str]:
+        return [m["name"] for m in await self.loaded()]
 
     async def unload(self, model: str) -> None:
         """What `ollama stop` does: keep_alive 0."""
@@ -134,7 +141,20 @@ class HttpOllamaAdmin:
         body = {"model": model, "keep_alive": keep_alive}
         if options:
             body["options"] = dict(options)
-        await asyncio.to_thread(self._request, "/api/generate", body, self._preload_timeout)
+        async def run():
+            if self.gpu_gate is not None:
+                self.gpu_gate.check()
+            work = asyncio.create_task(asyncio.to_thread(
+                self._request, "/api/generate", body, self._preload_timeout))
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                await OllamaClient._drain(work)
+                raise
+        if self.gpu_gate is not None:
+            await self.gpu_gate.run(run)
+        else:
+            await run()
 
 
 class NullAdmin:
@@ -173,6 +193,9 @@ class GpuArbiter:
         self._preempt: Callable[[], Awaitable[None]] | None = None
         self._lock = asyncio.Lock()
         self._letting_go: set[asyncio.Task] = set()
+        self.paused = False
+        self.on_login = None
+        self.needs_live_reload = False
         self._shared_gpu = False  # an image stage began: a loaded live model may be split
 
     def reconfigure(self, settings: NightlySettings) -> bool:
@@ -217,7 +240,7 @@ class GpuArbiter:
         return frozenset(self._holders)
 
     def reflection_allowed(self) -> bool:
-        return not self._holders
+        return not self.paused and not self._holders
 
     def hold(self, holder: str) -> bool:
         """Take a live lease now, with no await: `holders` and `reflection_allowed()` show it
@@ -225,7 +248,14 @@ class GpuArbiter:
         holder, or the same one again, gets False and has nothing more to do. A bridge handler
         calls this inline and runs hand_over() as a task; release_live then ends the lease
         inline, in event order."""
-        first = not self._holders
+        if self.paused:
+            if holder != 'human':
+                raise GpuPaused('The GPU is paused.')
+            if self.on_login is not None:
+                self.on_login()
+            self.paused = False
+        first = not self._holders or self.needs_live_reload
+        self.needs_live_reload = False
         self._holders.add(holder)
         return first
 
@@ -257,10 +287,10 @@ class GpuArbiter:
         lease has ended by the time it gets the lock. A failed step raises; the lease stays
         held."""
         async with self._lock:
-            if not self._holders:
+            if self.paused or not self._holders:
                 return
             await self._run_preempt()
-            while self._holders:
+            while self._holders and not self.paused:
                 revision, target = self._revision, self._live
                 listed = await self.admin.loaded_models()
                 if revision != self._revision:
@@ -276,7 +306,7 @@ class GpuArbiter:
                             break
                 if revision != self._revision:
                     continue
-                if not self._holders:
+                if self.paused or not self._holders:
                     self._prune_managed(remaining)
                     return
                 await self.admin.preload(target, -1,
@@ -312,7 +342,7 @@ class GpuArbiter:
         live requests use so it is not reloaded. It never loads a model, and a login that came
         first keeps the pin its hand-over set."""
         async with self._lock:
-            if self._holders:
+            if self.paused or self._holders:
                 return
             for name in await self.admin.loaded_models():
                 if norm(name) == norm(self._live):
@@ -352,6 +382,8 @@ class GpuArbiter:
         only load whole again."""
         revision = self._revision
         async with self._lock:
+            if self.paused:
+                raise GpuPaused('The GPU is paused.')
             if revision != self._revision:
                 raise RuntimeError("nightly models changed during model admission")
             listed = await self.admin.loaded_models()
@@ -370,6 +402,8 @@ class GpuArbiter:
             self._prune_managed(remaining)
 
     def _refuse_if_held(self) -> None:
+        if self.paused:
+            raise GpuPaused('The GPU is paused.')
         if self._holders:
             raise LiveLeaseHeld(frozenset(self._holders))
 

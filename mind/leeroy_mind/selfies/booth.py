@@ -64,11 +64,14 @@ class PhotoBooth:
 
     def _eligible(self):
         return (self.cfg.enabled and self.cfg.booth and not self.arbiter.holders
+                and not getattr(self.arbiter, 'paused', False)
                 and self.scheduler.presence.offline_seconds() >= OFFLINE_SECONDS
                 and self.scheduler.running is None and not self._exclusive.locked()
                 and self.scheduler.due() is None and not self._cooling())
 
     def problem(self):
+        if getattr(self.arbiter, 'paused', False):
+            return 'The GPU is paused. Resume it from the top bar first.'
         if not self.cfg.enabled or not self.cfg.booth:
             return "The photo booth is off."
         if self.running or self._exclusive.locked():
