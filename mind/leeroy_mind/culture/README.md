@@ -36,3 +36,12 @@ A delivered thread consumes one target allowance per host-local calendar day;
 the owner's existing evening allowance also lasts until the 06:00 boundary.
 Nothing is charged on selection or a dropped send. Further lines in that same
 bounded thread retain their allowance but recheck kindness before each send.
+
+With both switches enabled, the Discord server gathers active, unretired jokes
+after three days without use, for general and memes. Origins and every retained
+source must still pass the public provenance and audience checks; private,
+officer, frozen and missing sources cannot be widened into these channels.
+Facts are rebuilt before speaking. The starter and each teasing participant
+pass the kindness gate again before sending; the target may answer without an
+instruction to tease themselves. Only a first delivered line spends the joke's
+cooldown, lifetime use and target allowance. Dropped lines spend nothing.

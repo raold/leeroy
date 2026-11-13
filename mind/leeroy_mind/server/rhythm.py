@@ -73,7 +73,8 @@ def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_
 def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
                 personas: Mapping[int, Persona], *, officers: frozenset[int], human: int,
                 in_play: frozenset[int], ties: Callable[[int, int], float], rng: random.Random,
-                classes: Mapping[int, int] | None = None, away: frozenset[int] = frozenset()) -> list[int]:
+                classes: Mapping[int, int] | None = None, away: frozenset[int] = frozenset(),
+                tease: Callable[[int, int], bool] | None = None) -> list[int]:
     definition = layout.channel(channel)
     if definition is None or definition.category == 'info' or seed.officers_only and not definition.officers_only:
         return []
@@ -104,6 +105,9 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
     if not starters:
         return []
     first = starters[0]
+    if seed.kind == 'joke' and seed.about and seed.about[0]:
+        if tease is None or first == seed.about[0] or not tease(first, seed.about[0]):
+            return []
     rest = {g: w * max(0, ties(first, g)) for g, w in weights.items() if g != first}
     chosen = [first]
     size = rng.randint(2, 5)

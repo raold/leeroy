@@ -14,7 +14,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
-              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo')
+              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke')
 FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
@@ -248,7 +248,7 @@ def _purpose(conn, c):
 
 
 def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
-           officers: frozenset[int], human: int, human_name: str, trial_rank: int) -> list[Seed]:
+           officers: frozenset[int], human: int, human_name: str, trial_rank: int, culture_enabled: bool = False) -> list[Seed]:
     names = {g: p.character_name for g, p in cast.items()}
     for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
         if guid in cast or guid == human:
@@ -260,7 +260,11 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
                'plan': _plan, 'calendar': _calendar, 'birthday': lambda db, ctx: _calendar(db, ctx, birthday=True),
                'reset': _reset, 'weekend': _weekend, 'rival': _rival, 'his_day': _his_day,
                'officer': _officer, 'purpose': _purpose}
-    return [seed for kind, source in sources.items() for seed in _read(kind, lambda: source(conn, c))]
+    result = [seed for kind, source in sources.items() for seed in _read(kind, lambda: source(conn, c))]
+    if culture_enabled:
+        from leeroy_mind.culture.seeds import culture_seeds
+        result += _read("joke", lambda: culture_seeds(conn, now=now, local=local, personas=cast, human=human))
+    return result
 
 
 def fresh(conn, seeds: Iterable[Seed], *, now: float) -> list[Seed]:

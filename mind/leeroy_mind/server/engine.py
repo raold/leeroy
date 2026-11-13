@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import dataclass, field
 import logging
+from pathlib import Path
 import random
 import re
 import uuid
@@ -48,6 +49,8 @@ class Conversation:
     messages: list[int] = field(default_factory=list)
     reason: str = ''
     task: asyncio.Task | None = None
+    teaser: int | None = None
+    teased: bool = False
     in_flight: int | None = None
     in_flight_turn: Turn | None = None
 
@@ -142,7 +145,8 @@ class ServerEngine:
             cast = rhythm.choose_cast(channel, seed, observed.states, observed.personas,
                 officers=observed.officers, human=observed.human, in_play=observed.in_play | speaking,
                 ties=lambda a,b:TIES[observed.ties.get((a,b),'neutral')], rng=self.rng,
-                classes=observed.classes, away=observed.away)
+                classes=observed.classes, away=observed.away,
+                tease=lambda a,b: self._tease(a,b))
             if len(cast) < 2:
                 return
             conversation = Conversation(uuid.uuid4().hex, channel, seed, cast, now, rhythm.length(self.rng))
@@ -177,8 +181,35 @@ class ServerEngine:
         return [dict(id=c.id, channel=c.channel, seed=c.seed.kind, messages=len(c.messages), started=c.started)
                 for c in self._live.values()]
 
+    def _tease(self, teaser, target, *, allowance=False):
+        from leeroy_mind.culture.tease import _tease_ok
+        return _tease_ok(self.app.store.conn, teaser, target, personas=self.app.personas,
+                         human=self.app.human_guid, now=self.app.clock.now(), allowance=allowance)[0]
+
+    def _joke_valid(self, conversation, speaker):
+        if conversation.seed.kind != "joke":
+            return True
+        from leeroy_mind.culture.config import load_culture_config
+        from leeroy_mind.culture.seeds import _culture_seeds
+        if not load_culture_config(Path(self.app.data_dir) / "mind.toml").enabled:
+            return False
+        people = {g:self.app.personas.get(g) for g in self.app.world.discord_members()
+                  if g != self.app.human_guid and self.app.personas.get(g) is not None}
+        current = _culture_seeds(self.app.store.conn, now=self.app.clock.now(), personas=people,
+                                human=self.app.human_guid, include_recent=True)
+        if not any(s.key == conversation.seed.key and s.fact == conversation.seed.fact
+                   and s.about == conversation.seed.about for s in current):
+            return False
+        target = conversation.seed.about[0]
+        teaser = conversation.teaser if conversation.teaser is not None else speaker
+        if not target:
+            return True
+        if teaser == target or not self._tease(teaser, target, allowance=conversation.teased):
+            return False
+        return speaker == target or self._tease(speaker, target, allowance=conversation.teased)
+
     def _valid(self, conversation, speaker, parent=None):
-        if conversation.reason or self._blocked(self.app.clock.now()):
+        if conversation.reason or self._blocked(self.app.clock.now()) or not self._joke_valid(conversation, speaker):
             return False
         if parent is not None:
             row = self.app.store.conn.execute('SELECT channel,deleted FROM discord_message WHERE id=?',
@@ -280,6 +311,14 @@ class ServerEngine:
                 instruction = (f"You're in #{definition.id}: {purpose}. " +
                     (opener+conversation.seed.fact
                      if parent is None else 'Reply to the chosen message and keep this conversation going naturally.'))
+                if (conversation.seed.kind == 'joke' and conversation.seed.about[0]
+                        and speaker != conversation.seed.about[0]):
+                    target = conversation.seed.about[0]
+                    person = observed.personas.get(target)
+                    name = person.character_name if person is not None else 'the owner'
+                    instruction += f" Tease {name} about it the way friends do; keep it kind."
+                if conversation.seed.kind == 'joke' and conversation.teaser is None:
+                    conversation.teaser = speaker
                 turn = Turn(TurnKind.OPEN if parent is None else TurnKind.CONTINUE, speaker,
                     'discord:'+conversation.channel, addressee=parent_author, instruction=instruction,
                     priority=Priority.BACKGROUND, max_lines=1)
@@ -292,7 +331,7 @@ class ServerEngine:
                     keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
                 opening_photo = meta.photo_seed is not None and dry == 0
-                if parent is None and dry == 0 and not opening_photo:
+                if parent is None and dry == 0 and not opening_photo and conversation.seed.kind != 'joke':
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
                 conversation.in_flight, conversation.in_flight_turn = speaker, turn
                 try:
@@ -301,6 +340,22 @@ class ServerEngine:
                     conversation.in_flight = conversation.in_flight_turn = None
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
+                if added and not conversation.messages and conversation.seed.kind == 'joke':
+                    from leeroy_mind.culture.tease import mark_teased, OWNER_KEY
+                    from leeroy_mind.clock import local_at, night_of
+                    with app.store.transaction():
+                        seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
+                        app.store.conn.execute('UPDATE lexicon SET last_used=?,uses_total=uses_total+1 WHERE id=?',
+                            (app.clock.now(), int(conversation.seed.key[5:])))
+                        line = app.store.get_meta(f'discord:line:{added[0]}')
+                        if line is not None:
+                            app.store.set_meta(f'culture:wear-counted:{conversation.seed.key}:{line}', '1')
+                        target = conversation.seed.about[0]
+                        if target:
+                            mark_teased(app.store, target, now=app.clock.now())
+                            if target == app.human_guid:
+                                app.store.set_meta(OWNER_KEY, night_of(local_at(app.clock.now())))
+                    conversation.teased = True
                 conversation.messages.extend(added)
                 if opening_photo and (added or meta.photo is not None):
                     # Spent once its photo was offered; one never offered (another photo in

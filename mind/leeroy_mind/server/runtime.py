@@ -23,6 +23,8 @@ async def snapshot(app, now, *, include_seeds=False):
                  comms.room_of(g) if comms is not None else None) for g, p in personas.items()}
     trial_rank = getattr(getattr(getattr(app, 'realm', None), 'cfg', None), 'trial_rank', 4)
     path, library = Path(app.data_dir) / 'mind.db', Path(app.data_dir) / 'library.db'
+    from leeroy_mind.culture.config import load_culture_config
+    culture_on = load_culture_config(Path(app.data_dir) / "mind.toml").enabled
     photos_on = getattr(app, 'photos', None) is not None
     photo_dial = app.cfg.talk.selfies if photos_on else 0
     def read():
@@ -56,7 +58,7 @@ async def snapshot(app, now, *, include_seeds=False):
                 # Only the roster's character name; never his private real-name setting.
                 human_name = getattr(cast.get(human), 'name', '')
                 seeds = fresh(conn, gather(conn, now=now, local=local, cast=personas, officers=officers,
-                              human=human, human_name=human_name, trial_rank=trial_rank), now=now)
+                              human=human, human_name=human_name, trial_rank=trial_rank, culture_enabled=culture_on), now=now)
                 if photos_on:
                     from leeroy_mind.photos.send import photo_seeds
                     seeds += fresh(conn, photo_seeds(conn, now=now, local=local, dial=photo_dial), now=now)
