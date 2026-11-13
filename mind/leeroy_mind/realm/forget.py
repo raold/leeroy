@@ -1,8 +1,9 @@
 """Operator abandonment receipts release eligible retained native reservations.
 
 This sends a fresh envelope targeting an old root, never the original command.
-The original action journal is read-only here. A timeout waits for reconnection;
-only an explicit busy:teleport answer permits another attempt on the next tick.
+The original action journal is read-only here. A timeout waits for reconnection.
+An explicit busy:teleport answer permits another attempt after 5 s, doubling to
+60 s; a running answer after 60 s; kind waits for a new connection.
 """
 import asyncio
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from .protocol import RealmForget, RealmForgotten
 
 log = logging.getLogger(__name__)
 FORGOTTEN_RECEIPT = "realm:action:forgotten:"
+TELEPORT_RETRY_S, TELEPORT_RETRY_MAX_S = 5, 60
+RUNNING_RETRY_S = 60
 
 
 @dataclass
@@ -30,6 +33,8 @@ class ForgetReceipts:
         self.store, self.send, self.context, self.clock = store, send, context, clock
         self.ticket = None
         self.attempted = set()
+        self.due = {}  # root id -> when an answered retry may be sent again
+        self.delay = {}  # root id -> its last busy:teleport wait, doubled up to its cap
         self.pending = {}
         self.tasks = set()
         self.closed = False
@@ -66,14 +71,24 @@ class ForgetReceipts:
             self.ticket = ticket
             self.attempted.clear()
             self.pending.clear()
+            self.due.clear()
+            self.delay.clear()
+        now = self.clock.now()
+        for root_id, due in tuple(self.due.items()):
+            if now >= due:
+                del self.due[root_id]
+                self.attempted.discard(root_id)
         # Bound discovery and in-flight work. A refusal stays attempted until a
-        # new connection; settled receipts are excluded by SQL on the next tick.
+        # new connection or its retry time; settled receipts and attempted roots
+        # are excluded by SQL, so old refusals never fill the window.
         rows = self.store.conn.execute(
             "SELECT a.command_id FROM realm_action a JOIN meta m ON m.key=? || a.command_id "
             "LEFT JOIN meta f ON f.key=? || a.command_id WHERE f.key IS NULL "
             "AND a.role='root' AND a.policy='ordinary' AND a.kind IN ('leave_pvp','rearm') "
             "AND a.state='completed' AND a.result_reason='abandoned' AND a.guild=? AND a.human=? "
-            "ORDER BY a.seq LIMIT 128", (ABANDON_RECEIPT, FORGOTTEN_RECEIPT, *ticket[1:])).fetchall()
+            "AND a.command_id NOT IN (SELECT value FROM json_each(?)) "
+            "ORDER BY a.seq LIMIT 128", (ABANDON_RECEIPT, FORGOTTEN_RECEIPT, *ticket[1:],
+                                         json.dumps(sorted(self.attempted)))).fetchall()
         for (root_id,) in rows:
             if len(self.tasks) >= 8:
                 break
@@ -131,10 +146,17 @@ class ForgetReceipts:
         if outcome in {"released", "not_held"}:
             self._settle(attempt, outcome, members)
         else:
-            log.warning("realm_forget id=%s outcome=%s members=0", attempt.command.origin_id, outcome)
+            root_id = attempt.command.origin_id
+            log.warning("realm_forget id=%s outcome=%s members=0", root_id, outcome)
             self.pending.pop(attempt.command.id, None)
+            # It stays attempted until then: a body stuck mid-teleport is asked again after
+            # 5 s, doubling to 60 s; a job still in flight once a minute; kind not on this connection.
             if outcome == "busy:teleport":
-                self.attempted.discard(attempt.command.origin_id)
+                wait = min(TELEPORT_RETRY_MAX_S, self.delay[root_id] * 2) if root_id in self.delay else TELEPORT_RETRY_S
+                self.delay[root_id] = wait
+                self.due[root_id] = self.clock.now() + wait
+            elif outcome == "running":
+                self.due[root_id] = self.clock.now() + RUNNING_RETRY_S
 
     def _settle(self, attempt, outcome, members):
         if not self._current(attempt) or not self._released(attempt.command.origin_id):
@@ -144,6 +166,8 @@ class ForgetReceipts:
                 FORGOTTEN_RECEIPT + attempt.command.origin_id,
                 json.dumps({"outcome": outcome, "members": members, "at": self.clock.now()}, sort_keys=True)))
         self.pending.pop(attempt.command.id, None)
+        self.due.pop(attempt.command.origin_id, None)
+        self.delay.pop(attempt.command.origin_id, None)
         log.info("realm_forget id=%s outcome=%s members=%d", attempt.command.origin_id, outcome, members)
 
     async def close(self):

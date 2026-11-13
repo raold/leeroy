@@ -75,7 +75,8 @@ class ForgetHarness:
         failed(store)
         store.abandon("original", reason="invented operator review", now=4)
         self.context = SimpleNamespace(connection_epoch=1, guild=50, human=1, connected=True, presence_known=True)
-        self.clock = SimpleNamespace(now=lambda: 5)
+        self.now = 5
+        self.clock = SimpleNamespace(now=lambda: self.now)
         self.sent, self.waiting = [], {}
         self.forget = ForgetReceipts(store, self.send, lambda: self.context, self.clock)
 
@@ -143,14 +144,85 @@ def test_forget_answers_and_retry_policy(store, outcome, caplog):
             else:
                 h.result(cmd, outcome, 0); await h.ack(cmd, False, outcome)
             await h.tick()
-            assert len(h.sent) == (2 if outcome == "busy:teleport" else 1)
+            assert len(h.sent) == 1  # a retry waits for its timer, never the next tick
             if outcome in {"not_held", "unsupported"}:
                 assert h.receipt()["outcome"] == outcome
             else:
                 assert h.receipt() is None
-            if outcome == "busy:teleport":
+            h.now += 60; await h.tick()
+            assert len(h.sent) == (2 if outcome in {"busy:teleport", "running"} else 1)
+            if outcome in {"busy:teleport", "running"}:
                 newer = h.sent[-1]; await h.ack(newer); h.result(newer)
                 assert h.receipt()["outcome"] == "released"
+        finally: await h.forget.close()
+    asyncio.run(run())
+
+
+def test_forget_backs_off_busy_teleport_from_5_doubling_to_60_seconds(store, caplog):
+    async def run():
+        h = ForgetHarness(store)
+        try:
+            await h.tick(); cmd = h.sent[-1]
+            for delay in (5, 10, 20, 40, 60, 60):
+                h.result(cmd, "busy:teleport", 0); await h.ack(cmd, False, "busy:teleport")
+                start = h.now
+                h.now = start + delay - 1; await h.tick()
+                assert h.sent[-1] is cmd
+                h.now = start + delay; await h.tick()
+                assert h.sent[-1] is not cmd
+                cmd = h.sent[-1]
+            assert caplog.text.count("outcome=busy:teleport") == 6
+            await h.ack(cmd); h.result(cmd)
+            assert h.receipt()["outcome"] == "released"
+        finally: await h.forget.close()
+    asyncio.run(run())
+
+
+def test_forget_retries_running_every_60_seconds_and_kind_only_on_a_new_connection(store):
+    async def run():
+        h = ForgetHarness(store)
+        try:
+            await h.tick(); cmd = h.sent[-1]
+            for _ in range(2):
+                h.result(cmd, "running", 0); await h.ack(cmd, False, "running")
+                start = h.now
+                h.now = start + 59; await h.tick()
+                assert h.sent[-1] is cmd
+                h.now = start + 60; await h.tick()
+                assert h.sent[-1] is not cmd
+                cmd = h.sent[-1]
+            h.result(cmd, "kind", 0); await h.ack(cmd, False, "kind")
+            h.now += 3600; await h.tick()
+            assert h.sent[-1] is cmd and h.receipt() is None
+            h.context.connection_epoch += 1; await h.tick()
+            assert h.sent[-1] is not cmd
+        finally: await h.forget.close()
+    asyncio.run(run())
+
+
+def abandoned(store, root_id, now):
+    dispatch(store, prepare(store, p.LeavePvp(root_id, (101,)), now=now), now=now)
+    store.observe_ack(Ack(0, root_id, True, ""), now=now)
+    store.observe_realm_job(p.RealmJob(0, root_id, "leave_pvp", "failed", "partial", 101, 0), now=now)
+    store.abandon(root_id, reason="invented operator review", now=now)
+
+
+def test_old_refusals_never_starve_forget_discovery_of_a_newer_root(store):
+    async def run():
+        h = ForgetHarness(store)
+        for n in range(130):
+            abandoned(store, f"old{n:03d}", 4)
+        try:
+            for _ in range(40):
+                await h.tick()
+                for cmd in [c for c in h.sent if c.id in h.waiting and not h.waiting[c.id].done()]:
+                    h.result(cmd, "kind", 0); await h.ack(cmd, False, "kind")
+                if h.sent[-1].origin_id == "old129":
+                    break
+            targets = [c.origin_id for c in h.sent]
+            assert targets[-1] == "old129" and len(targets) == len(set(targets)) == 131
+            await h.tick()
+            assert len(h.sent) == 131  # every refusal stays attempted on this connection
         finally: await h.forget.close()
     asyncio.run(run())
 
