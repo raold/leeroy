@@ -83,14 +83,24 @@ bool Grounded(Player* player)
     return ground > INVALID_HEIGHT && player->GetPositionZ() - ground <= kGroupRezGroundYards;
 }
 
+bool InFlightForm(Player* player)
+{
+    return player->GetShapeshiftForm() == FORM_FLIGHT || player->GetShapeshiftForm() == FORM_FLIGHT_EPIC;
+}
+
 // As playerbots' CheckMountStateAction::Dismount: the cancel goes through the bot's session, whose
 // SMSG_DISMOUNT puts it down at its feet; flight flags the mount left behind are cleared after.
 void Dismount(Player* bot)
 {
     if (bot->isMoving())
         bot->StopMoving();
-    WorldPacket empty;
-    bot->GetSession()->HandleCancelMountAuraOpcode(empty);
+    if (InFlightForm(bot))
+        bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+    if (bot->IsMounted())
+    {
+        WorldPacket empty;
+        bot->GetSession()->HandleCancelMountAuraOpcode(empty);
+    }
     if (!bot->HasIncreaseMountedFlightSpeedAura() && !bot->HasFlyAura()
         && bot->HasUnitMovementFlag(MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY))
     {
@@ -102,9 +112,9 @@ void Dismount(Player* bot)
 
 SpellCastResult StartRez(Player* caster, Player* body, std::uint32_t spell)
 {
-    if (caster->IsMounted())
+    if (caster->IsMounted() || InFlightForm(caster))
         Dismount(caster);
-    if (caster->GetShapeshiftForm() != FORM_NONE) // Shadowform, Ghost Wolf
+    if (caster->GetShapeshiftForm() != FORM_NONE) // Shadowform, Ghost Wolf, a druid's forms
         caster->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
     // Playerbots waits out a cast in progress, so nothing walks it away mid-rez.
     caster->GetMotionMaster()->Clear();
@@ -211,7 +221,7 @@ void TickGroupRez(std::uint32_t diffMs)
                 candidate.distance = member->GetDistance(body);
                 candidate.castRange = info->GetMaxRange(true);
                 candidate.los = candidate.distance <= kGroupRezSearchYards && member->IsWithinLOSInMap(body);
-                candidate.mounted = member->IsMounted();
+                candidate.mounted = member->IsMounted() || InFlightForm(member);
                 candidate.grounded = !candidate.mounted || Grounded(member);
                 candidates.push_back(candidate);
                 casters.emplace(id, std::make_pair(member, spell));
@@ -242,9 +252,13 @@ void TickGroupRez(std::uint32_t diffMs)
                 busy.insert(decision.caster);
                 if (result == SPELL_CAST_OK)
                     LOG_INFO("module.leeroy", "group_rez_cast guid={} body={} spell={}", decision.caster, guid, spell);
-                else if (refusalsLogged.emplace(guid, decision.caster, static_cast<int>(result)).second)
-                    LOG_INFO("module.leeroy", "group_rez_cast_refused guid={} body={} result={}", decision.caster, guid,
-                        static_cast<int>(result));
+                else
+                {
+                    NoteGroupRezRefused(memories[guid], decision.caster, now);
+                    if (refusalsLogged.emplace(guid, decision.caster, static_cast<int>(result)).second)
+                        LOG_INFO("module.leeroy", "group_rez_cast_refused guid={} body={} result={}", decision.caster,
+                            guid, static_cast<int>(result));
+                }
                 break;
             }
             case GroupRezStep::None:

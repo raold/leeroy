@@ -33,7 +33,7 @@ Leeroy.KeepCast = 1
 Leeroy.CastDeathLoop.Enable = 0
 
 # Dead members of the owner's group. Out of combat (nobody in his group fighting within
-# 100 yards), the nearest free paladin, priest or shaman bot of the group within 57 yards
+# 100 yards), the nearest free paladin, priest, shaman or druid bot of the group within 57 yards
 # and in sight gets off its mount (only on the ground) and rezzes, as players do; playerbots
 # alone never casts from a mount, and his bots stay mounted while he is. A bot outside a
 # dungeon or raid still dead after ReleaseSeconds of quiet releases and runs back from the

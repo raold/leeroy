@@ -20,7 +20,8 @@ LEEROY_TEST(GroupRez_RanksAreHighestFirstAndOnlyForRezClasses)
     CHECK_EQ(RezRanks(2)->back(), 7328u);
     CHECK_EQ(RezRanks(5)->front(), 48171u);
     CHECK_EQ(RezRanks(7)->front(), 49277u);
-    CHECK(RezRanks(11) == nullptr); // druid: no out-of-combat rez in 3.3.5
+    CHECK_EQ(RezRanks(11)->front(), 50763u); // druid Revive, rank 7
+    CHECK_EQ(RezRanks(11)->back(), 50769u);
     CHECK(RezRanks(1) == nullptr);
 }
 
@@ -147,4 +148,16 @@ LEEROY_TEST(GroupRez_TiesGoToTheLowestGuid)
     GroupRezMemory m;
     auto d = DecideGroupRez(Bot(), false, {Rezzer(9, 10.0f), Rezzer(4, 10.0f)}, m, 0, kRelease);
     CHECK_EQ(d.caster, 4u);
+}
+
+LEEROY_TEST(GroupRez_ARefusedRezzerIsPassedOverSoAnotherCanTry)
+{
+    GroupRezMemory m;
+    CHECK_EQ(DecideGroupRez(Bot(), false, {Rezzer(7, 5.0f), Rezzer(9, 20.0f)}, m, 0, kRelease).caster, 7u);
+    NoteGroupRezRefused(m, 7, 0);
+    auto d = DecideGroupRez(Bot(), false, {Rezzer(7, 5.0f), Rezzer(9, 20.0f)}, m, kGroupRezRetryMs, kRelease);
+    CHECK(d.step == GroupRezStep::Cast);
+    CHECK_EQ(d.caster, 9u);
+    CHECK(DecideGroupRez(Bot(), false, {Rezzer(7, 5.0f)}, m, kGroupRezRetryMs * 2, kRelease).step == GroupRezStep::None);
+    CHECK_EQ(DecideGroupRez(Bot(), false, {Rezzer(7, 5.0f)}, m, kGroupRezRefusedMs, kRelease).caster, 7u);
 }

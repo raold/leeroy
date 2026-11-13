@@ -8,6 +8,7 @@ namespace
 constexpr std::array<std::uint32_t, 7> kRedemption{48950, 48949, 20773, 20772, 10324, 10322, 7328};
 constexpr std::array<std::uint32_t, 7> kResurrection{48171, 25435, 20770, 10881, 10880, 2010, 2006};
 constexpr std::array<std::uint32_t, 7> kAncestralSpirit{49277, 25590, 20777, 20776, 20610, 20609, 2008};
+constexpr std::array<std::uint32_t, 7> kRevive{50763, 50764, 50765, 50766, 50767, 50768, 50769};
 }
 
 std::array<std::uint32_t, 7> const* RezRanks(std::uint8_t playerClass)
@@ -17,8 +18,14 @@ std::array<std::uint32_t, 7> const* RezRanks(std::uint8_t playerClass)
         case 2: return &kRedemption;      // paladin
         case 5: return &kResurrection;    // priest
         case 7: return &kAncestralSpirit; // shaman
+        case 11: return &kRevive;         // druid
         default: return nullptr;
     }
+}
+
+void NoteGroupRezRefused(GroupRezMemory& memory, std::uint32_t caster, std::uint64_t now)
+{
+    memory.refusedAt[caster] = now;
 }
 
 GroupRezDecision DecideGroupRez(GroupRezBody const& body, bool groupCombat,
@@ -43,6 +50,9 @@ GroupRezDecision DecideGroupRez(GroupRezBody const& body, bool groupCombat,
     for (auto const& c : candidates)
     {
         if (!c.los || c.distance > kGroupRezSearchYards || (c.mounted && !c.grounded))
+            continue;
+        if (auto it = memory.refusedAt.find(c.guid);
+            it != memory.refusedAt.end() && now - it->second < kGroupRezRefusedMs)
             continue;
         if (!best || c.distance < best->distance || (c.distance == best->distance && c.guid < best->guid))
             best = &c;

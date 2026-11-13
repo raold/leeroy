@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -17,10 +18,12 @@ inline constexpr float kGroupRezCombatYards = 100.0f;
 // A mounted rezzer this close to the ground can be put down without a fall.
 inline constexpr float kGroupRezGroundYards = 3.0f;
 inline constexpr std::uint64_t kGroupRezRetryMs = 3000;
+// A rezzer whose cast was refused (no mana, say) is passed over for this long, so another can try.
+inline constexpr std::uint64_t kGroupRezRefusedMs = 30000;
 inline constexpr std::uint32_t kGroupRezDefaultReleaseSeconds = 60;
 
-// Out-of-combat rez spells, highest rank first: Redemption, Resurrection, Ancestral Spirit.
-// Null for a class without one (a druid's Revive is not in 3.3.5).
+// Out-of-combat rez spells, highest rank first: Redemption, Resurrection, Ancestral Spirit, Revive.
+// Null for a class without one.
 std::array<std::uint32_t, 7> const* RezRanks(std::uint8_t playerClass);
 
 // A member of the owner's group lying dead (not released).
@@ -42,7 +45,7 @@ struct GroupRezCandidate
     float distance = 0;    // yards to the body
     float castRange = 0;   // the rez spell's range
     bool los = false;
-    bool mounted = false;
+    bool mounted = false;  // on a mount or in Flight Form
     bool grounded = true;  // within kGroupRezGroundYards of the ground and not falling
 };
 
@@ -50,7 +53,10 @@ struct GroupRezMemory
 {
     std::optional<std::uint64_t> quietSince; // dead with the group out of combat
     std::optional<std::uint64_t> lastCast;
+    std::map<std::uint32_t, std::uint64_t> refusedAt; // caster -> when its cast was refused
 };
+
+void NoteGroupRezRefused(GroupRezMemory& memory, std::uint32_t caster, std::uint64_t now);
 
 enum class GroupRezStep : std::uint8_t { None, Cast, Dismount, Release };
 

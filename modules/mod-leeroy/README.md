@@ -61,7 +61,7 @@ Logs carry raid ids, guids, team ids and counts only. **Native rebuild required.
 # Rezzes in the owner's group
 
 Stock playerbots leaves a member of a real player's group lying dead: it never releases
-within 100 yards of him (or inside his instance), and its paladins, priests and shamans
+within 100 yards of him (or inside his instance), and its paladins, priests, shamans and druids
 rez only out of combat, unmounted, unmoving, within 57 yards and in sight. While he rides,
 his bots ride too, and a mounted player cannot cast, so nobody rezzes. The pinned bots'
 revive-in-place timer skips every grouped bot.
@@ -71,8 +71,8 @@ policy `LeeroyGroupRezPolicy`). For a member lying dead (not released, not in a
 battleground) while nobody in his group fights within 100 yards of the body, the nearest
 free rezzer bot of the group (alive, out of combat, not casting, not in a vehicle or on a
 taxi, no Realm or training owner) within 57 yards and in sight is used: within its spell's
-range it is put down from its mount (only within 3 yards of the ground), out of Shadowform
-or Ghost Wolf, stopped and made to cast its highest-rank rez (`group_rez_cast`, refusals
+range it is put down from its mount or Flight Form (only within 3 yards of the ground), out of
+Shadowform, Ghost Wolf or a druid form, stopped and made to cast its highest-rank rez (`group_rez_cast`, refusals
 once per code as `group_rez_cast_refused`); farther out a mounted one is put down so
 playerbots walks it in (`group_rez_dismount`). His own body is offered a rez the same way.
 A bot outside a dungeon or raid that has lain dead through `Leeroy.GroupRez.ReleaseSeconds`
