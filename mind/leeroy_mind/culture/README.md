@@ -29,3 +29,10 @@ legacy lexicon birth/spread/fade behavior remain in use.
 Migration 0041 adds the lexicon fields and reserves the discord_meme table for
 later culture work. It does not publish memes or add a native key. Release is
 mind-only. Parallel migration-number collisions must be renumbered at merge.
+
+With culture enabled, targeted banter requires affinity at least 30 and refuses
+cruel teasers, hurt moods or emotions, active feuds and current owner hurts.
+A delivered thread consumes one target allowance per host-local calendar day;
+the owner's existing evening allowance also lasts until the 06:00 boundary.
+Nothing is charged on selection or a dropped send. Further lines in that same
+bounded thread retain their allowance but recheck kindness before each send.

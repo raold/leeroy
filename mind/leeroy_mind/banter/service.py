@@ -5,6 +5,7 @@ import json
 import logging
 
 from leeroy_mind.culture.config import load_culture_config
+from leeroy_mind.culture.tease import tease_ok, _tease_ok, mark_teased, OWNER_KEY
 from leeroy_mind.clock import night_of
 from leeroy_mind.discord.channels import is_discord, same_medium
 from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
@@ -45,7 +46,10 @@ class ThreadGuards(Guards):
         return self.maximum
 
 
-def role(app, guid, target):
+def role(app, guid, target, *, allowance=False):
+    if target and culture_on(app) and not _tease_ok(app.store.conn,guid,target,
+            personas=app.personas,human=app.human_guid,now=app.clock.now(),allowance=allowance)[0]:
+        return "defend"
     p = app.personas.get(guid)
     rel = app.store.get_relationship(guid,target) if target else None
     if target == app.human_guid and p.romance.stance in {"fond","drawn","lust"}:
@@ -61,6 +65,9 @@ def choose_cast(app, candidates, topic, rng):
     if topic.target and app.store.get_state(topic.target).mood < -.3:
         return []
     for g in candidates:
+        if topic.target and culture_on(app) and not tease_ok(app.store.conn,g,topic.target,
+                personas=app.personas,human=app.human_guid,now=app.clock.now())[0]:
+            continue
         p = app.personas.get(g)
         dials = dials_of(p)
         rel = app.store.get_relationship(g,topic.target) if topic.target else None
@@ -228,7 +235,7 @@ class Banter:
             if len(starts)>=self.cfg.per_hour or not self.unused(topic,now):
                 return False
             changes={LIMIT_KEY:json.dumps([*starts,now]),'banter:used:'+topic.key:str(now)}
-            if topic.tease_owner:
+            if topic.tease_owner and not culture_on(app):
                 changes[TEASE_KEY]=night_of(app.clock.local())
             if topic.kind=='joke': changes[JOKE_KEY]=night_of(app.clock.local())
             prior={key:app.store.get_meta(key) for key in changes}
@@ -283,6 +290,10 @@ class Banter:
         e.banter_active = not is_discord(channel)
         delivered=0
         first_line=None
+        tease_marked=False
+        def tease_valid(speaker):
+            return not topic.target or not culture_on(app) or _tease_ok(app.store.conn,speaker,topic.target,
+                personas=app.personas,human=app.human_guid,now=app.clock.now(),allowance=tease_marked)[0]
         try:
             for index in range(maximum):
                 if not self.valid(channel,owner_id,topic,app.clock.now()):
@@ -290,7 +301,9 @@ class Banter:
                 speaker = cast[index] if index<len(cast) else app.rng.choice([g for g in cast if g!=previous])
                 if speaker not in self.candidates(channel):
                     break
-                stance = role(app,speaker,topic.target or previous)
+                if not tease_valid(speaker):
+                    break
+                stance = role(app,speaker,topic.target or previous,allowance=tease_marked)
                 task = {"defend":"Offer a warm, light defence; do not reveal private affection.",
                         "needle":"A mild competitive jab is enough. No cruelty or escalation.",
                         "join":"Add a fresh playful angle, not agreement or a repeated punchline."}[stance]
@@ -307,12 +320,18 @@ class Banter:
                     addressee=previous,instruction=instruction,trigger_line=line_id,max_lines=1,
                     delay=app.rng.uniform(3,8))
                 meta = TurnMeta(e._new_id(),why="banter:"+topic.kind,review_required=True,single_line=True,keep_channel=True,guards=guards,
-                    still_valid=lambda:self.valid(channel,owner_id,topic,app.clock.now()))
+                    still_valid=lambda:self.valid(channel,owner_id,topic,app.clock.now()) and tease_valid(speaker))
                 if is_discord(channel):
                     meta.discord = DiscordTarget(reply_to=message,thread=None)
                 sent = await e._speak(turn,meta)
                 if not sent:
                     break
+                if topic.target and culture_on(app) and not tease_marked:
+                    with app.store.transaction():
+                        mark_teased(app.store,topic.target,now=app.clock.now())
+                        if topic.target == app.human_guid:
+                            app.store.set_meta(OWNER_KEY,night_of(app.clock.local()))
+                    tease_marked=True
                 delivered+=len(sent)
                 previous = speaker
                 row = app.store.conn.execute("SELECT id FROM chat_line WHERE from_guid=? AND channel=? "
