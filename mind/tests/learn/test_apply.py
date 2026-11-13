@@ -638,8 +638,12 @@ def test_callbacks_use_real_recorded_audiences_with_the_owner_present(rig,monkey
     if not is_discord(channel):
         ctx=replace(ctx,readers=(*ctx.readers,103))
         assert pick_callback(rig.store.conn,101,ctx,now=rig.clock.now()) is None
-    rig.store.conn.execute('UPDATE memory SET actors=? WHERE id=?',('[101]',mid))
+    rig.store.conn.execute('UPDATE memory SET actors=? WHERE id=?',('[101,102]',mid))
     assert pick_callback(rig.store.conn,101,applied.callback_context,now=rig.clock.now()) is None
+    rig.store.conn.commit()
+    apply.release(rig.engine,meta)
+    assert rig.sync(apply.prepare(rig.engine,turn,TurnMeta('cast-only-actors'),
+        rig.engine.personas.get(101),now=rig.clock.now())).callback is None
 
 
 def test_provenance_at_twenty_thousand_discord_receipts_is_indexed_and_bounded(rig):

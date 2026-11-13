@@ -355,7 +355,8 @@ or off: officer conversations do not compete with guild or group coaching.
 Private notes never reach guild, party, public Discord or banter. Historical group
 notes, including voice and say/yell, require the current cast readers to fit the
 recorded cast audience. The owner's guid is excluded from this subset check;
-callback participants still include him for shared-actor eligibility. Deleted
+live callback eligibility requires him as a shared actor, while retaining the full
+reader set for privacy. Another cast participant alone does not qualify. Deleted
 Discord sources are excluded through their durable
 message-to-line receipts. The receipt-index migration adds a partial value index for those
 receipts, avoiding a scan of accumulated Discord history. Each turn shares a

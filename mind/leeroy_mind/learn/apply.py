@@ -150,8 +150,10 @@ async def prepare(engine, turn, meta, persona, *, now):
             to_guid=turn.to_guid, readers=readers, officer=officer, visibility=visibility) if (
                 fingerprint and typing
                 and typing.params.get('strength',0)>0 and 'typing' not in cfg.frozen_families) else None
+        # Live callbacks recall something shared with him; all readers still
+        # participate in the independent historical-audience privacy check.
         cb_context = CallbackContext(callbacks, turn.channel, turn.to_guid,
-            tuple(g for g in callback_readers if g != turn.speaker), tuple(callback_readers),
+            (human,) if human in callback_readers else (), tuple(callback_readers),
             bond_enabled=engine.cfg.romance.activities and bond_eligible(persona, engine.cfg.romance.dial))
         arm = registry.get(selected['callback'])
         callback = pick_callback(conn, turn.speaker, cb_context, now=now) if (
