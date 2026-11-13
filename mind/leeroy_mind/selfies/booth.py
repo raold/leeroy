@@ -12,6 +12,7 @@ import time
 from contextlib import suppress
 from collections import Counter
 
+from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.gpu import LiveLeaseHeld
 
@@ -45,11 +46,15 @@ class PhotoBooth:
     def running(self):
         return self._task is not None and not self._task.done()
 
+    def stop(self):
+        """Ask a running pass to stop, with no await; cancel() then waits for its cleanup."""
+        if self.running and not self._stopping:
+            self._stopping = True
+            self._task.cancel()
+
     async def cancel(self):
         if self.running:
-            if not self._stopping:
-                self._stopping = True
-                self._task.cancel()
+            self.stop()
             # A cancelled hand-over must not cancel or abandon the worker's cleanup.
             await asyncio.wait({self._task})
 
@@ -190,7 +195,7 @@ class PhotoBooth:
             except asyncio.CancelledError:
                 outcome = "preempted"
                 raise
-            except LiveLeaseHeld:
+            except (LiveLeaseHeld, GpuPaused):  # a lease, or the owner's GPU pause
                 outcome = "preempted"
             except Exception as e:
                 code = code or type(e).__name__

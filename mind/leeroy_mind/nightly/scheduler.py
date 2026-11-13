@@ -48,6 +48,7 @@ from datetime import date, datetime, timedelta
 from typing import Awaitable, Callable
 
 from leeroy_mind.clock import Clock, night_of
+from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.gpu import GpuArbiter
 from leeroy_mind.nightly.presence import Presence
@@ -238,6 +239,14 @@ class NightScheduler:
         except asyncio.CancelledError:
             log("nightly_paused", night=night, attempt=attempt)  # still running: resumable
             raise
+        except GpuPaused:
+            # The owner's GPU pause met a model step before its stop request reached the run:
+            # an interruption like his login's, so it resumes later with no attempt spent.
+            log("nightly_paused", night=night, attempt=attempt)
+            self._mark(night, "interrupted")
+            if _cancelling():
+                raise asyncio.CancelledError from None
+            return
         except Exception as e:
             if _cancelling():  # its cleanup raised on the way out of a cancel: no failure
                 log("nightly_cleanup_failed", level=logging.WARNING, night=night, error=repr(e))

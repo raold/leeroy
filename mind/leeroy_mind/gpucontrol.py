@@ -1,6 +1,7 @@
 """Owner-controlled GPU pause; no timer or background work may end it."""
 import asyncio
 import json
+import logging
 import math
 
 from .llm.pause import PauseGate
@@ -9,6 +10,8 @@ from .logs import log
 KEY = 'gpu:paused'
 IN_GAME = 'Log out of WoW first: your game keeps the model loaded'
 UNKNOWN = "Can't tell whether you're in WoW yet; try again in a moment."
+STOPPING = 'GPU use is paused and will finish once the night has stopped.'
+PAUSE_WAIT_S = 60  # the op's wait for the night's cleanup; the pause then finishes by itself
 
 
 def since_value(raw):
@@ -28,10 +31,11 @@ def arguments(args):
     return dict(args)
 
 
-async def loaded(admin):
+async def loaded(admin, *, timeout=.5):
+    """Ollama's /api/ps. The status strip's short timeout by default; None: the admin's own."""
     from .nightly.gpu import HttpOllamaAdmin
     if isinstance(admin, HttpOllamaAdmin):
-        return await admin.loaded(timeout=.5)
+        return await admin.loaded(timeout=timeout)
     if callable(getattr(admin, 'loaded', None)):
         return await admin.loaded()
     return [{'name': n, 'size_vram': 0} for n in await admin.loaded_models()]
@@ -48,6 +52,7 @@ class GpuControl:
         self.unload_failed = self.gate.paused
         self._status_task = None
         self._status_at = -float('inf')
+        self._finishing = None  # the pause's cleanup wait and unload, which may outlive the op
         app.arbiter.paused = self.gate.paused
         app.arbiter.on_login = lambda: self.resume_now('login')
         app.scheduler.gpu_gate = self.gate
@@ -139,58 +144,94 @@ class GpuControl:
             if code:
                 log('gpu_pause_refused', reason=code)
                 return {'ok': False, **self.snapshot(), 'error': code, 'message': reason}
-            if not self.paused:
-                self.since = self.app.clock.now()
-                with self.app.store.transaction():
-                    self.app.store.set_meta(KEY, json.dumps({'at': self.since}))
-            self.unload_failed = True
-            self.gate.set(True)
-            self.app.arbiter.paused = True
-            self.app.arbiter.needs_live_reload = True
-            names, freed = [], 0
-            try:
-                server = getattr(self.app, 'server', None)
-                if server is not None:
-                    await server.lease._release('gpu_pause')
-                    await server.engine.tick(self.app.clock.now())
+            finishing = self._finishing
+            # A pause already finishing is joined; one a resume interrupted is started afresh.
+            if not self.paused or finishing is None or finishing.done():
+                if not self.paused:
+                    self.since = self.app.clock.now()
+                    with self.app.store.transaction():
+                        self.app.store.set_meta(KEY, json.dumps({'at': self.since}))
+                # Preempt first, as his login does: the night and the booth are told to stop
+                # before the gate closes, so they end interrupted at their next await rather
+                # than failing on GpuPaused at their next model step.
+                self._stop_gpu_work()
+                self.unload_failed = True
+                self.gate.set(True)
+                self.app.arbiter.paused = True
+                self.app.arbiter.needs_live_reload = True
+                try:
+                    server = getattr(self.app, 'server', None)
+                    if server is not None:
+                        await server.lease._release('gpu_pause')
+                        await server.engine.tick(self.app.clock.now())
+                    if not self.paused:
+                        return self._interrupted()
+                    discord = getattr(self.app, 'discord_talk', None)
+                    if discord is not None:
+                        await discord._release()
+                    voice = getattr(self.app, 'voice', None)
+                    tasks = tuple(getattr(voice, '_gpu_tasks', ()))
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                except Exception:
+                    return self._failed([], 0)
                 if not self.paused:
                     return self._interrupted()
-                discord = getattr(self.app, 'discord_talk', None)
-                if discord is not None:
-                    await discord._release()
-                voice = getattr(self.app, 'voice', None)
-                tasks = tuple(getattr(voice, '_gpu_tasks', ()))
-                if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                # The existing preempt waits for the night and photo worker's whole tree.
-                # Unlike login's bounded preempt, do not claim success before cleanup ends.
-                async with self.app.arbiter._lock:
+                if finishing is not None and not finishing.done():
+                    finishing.cancel()  # its pause was resumed: this one replaces it
+                finishing = self._finishing = asyncio.create_task(self._finish(), name='gpu-pause')
+        # Outside the control lock, so Resume is never queued behind a slow cleanup.
+        done, _ = await asyncio.wait({finishing}, timeout=PAUSE_WAIT_S)
+        if not self.paused:
+            return self._interrupted()
+        if not done or finishing.cancelled():  # still stopping, or a newer pause took over
+            return {'ok': True, **self.snapshot(), 'pending': True, 'message': STOPPING}
+        return finishing.result()
+
+    def _stop_gpu_work(self):
+        """The night's and the booth's own stop requests, with no await (the image stages are
+        the night's, so their worker trees end with it). _finish then waits for the cleanup."""
+        self.app.night_scheduler._stop_run()
+        booth = getattr(self.app, 'selfie_booth', None)
+        if booth is not None:
+            booth.stop()
+
+    async def _finish(self):
+        """Wait for the night's and the booth's cleanup through the existing preempt, then unload
+        every model Ollama lists. The cleanup wait is outside the arbiter's lock, so his login's
+        hand-over is never held behind a slow worker tree."""
+        names, freed = [], 0
+        arbiter = self.app.arbiter
+        try:
+            if arbiter._preempt is not None:
+                await arbiter._preempt()
+            async with arbiter._lock:
+                if not self.paused:
+                    return self._interrupted()
+                await self.gate.drain()
+                self._loaded = await loaded(arbiter.admin, timeout=None)
+                for model in tuple(self._loaded):
                     if not self.paused:
-                        return self._interrupted()
-                    if self.app.arbiter._preempt is not None:
-                        await self.app.arbiter._preempt()
-                    if not self.paused:
-                        return self._interrupted()
-                    await self.gate.drain()
-                    self._loaded = await loaded(self.app.arbiter.admin)
-                    for model in tuple(self._loaded):
-                        if not self.paused:
-                            break  # a login or his post superseded this pause
-                        await self.app.arbiter.admin.unload(model['name'])
-                        names.append(model['name'])
-                        freed += model['size_vram']
-                        self._loaded = [m for m in self._loaded if m['name'] != model['name']]
-                    self._loaded = [m for m in self._loaded if m['name'] not in names]
-            except Exception:
-                self.unload_failed = True
-                return {'ok': False, **self.snapshot(), 'error': 'gpu_pause_failed',
-                        'unloaded': names, 'freed_bytes': freed,
-                        'message': 'GPU use is paused, but unloading did not finish. Try Free GPU again.'}
-            if not self.paused:
-                return self._interrupted()
-            self.unload_failed = False
-            log('gpu_paused', unloaded=len(names), vram_mb=round(freed / 1048576))
-            return {'ok': True, **self.snapshot(), 'unloaded': names, 'freed_bytes': freed}
+                        break  # a login or his post superseded this pause
+                    await arbiter.admin.unload(model['name'])
+                    names.append(model['name'])
+                    freed += model['size_vram']
+                    self._loaded = [m for m in self._loaded if m['name'] != model['name']]
+                self._loaded = [m for m in self._loaded if m['name'] not in names]
+        except Exception as e:
+            log('gpu_pause_failed', level=logging.WARNING, reason=type(e).__name__)
+            return self._failed(names, freed)
+        if not self.paused:
+            return self._interrupted()
+        self.unload_failed = False
+        log('gpu_paused', unloaded=len(names), vram_mb=round(freed / 1048576))
+        return {'ok': True, **self.snapshot(), 'unloaded': names, 'freed_bytes': freed}
+
+    def _failed(self, names, freed):
+        self.unload_failed = True
+        return {'ok': False, **self.snapshot(), 'error': 'gpu_pause_failed',
+                'unloaded': names, 'freed_bytes': freed,
+                'message': 'GPU use is paused, but unloading did not finish. Try Free GPU again.'}
 
     def _interrupted(self):
         return {'ok': False, **self.snapshot(), 'error': 'gpu_resumed',
@@ -229,7 +270,8 @@ class GpuControl:
                 await server.lease.handback()
 
     async def close(self):
-        tasks = tuple(self._restore_tasks) + ((self._status_task,) if self._status_task is not None else ())
+        tasks = tuple(self._restore_tasks) + tuple(
+            t for t in (self._status_task, self._finishing) if t is not None)
         for task in tasks:
             task.cancel()
         if tasks:

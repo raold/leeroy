@@ -10,7 +10,7 @@ from conftest import run
 from leeroy_mind.clock import night_of
 from leeroy_mind.nightly.store import run_begin, run_finish
 from leeroy_mind.protocol import Login
-from leeroy_mind.selfies.booth import LAST, STAGE
+from leeroy_mind.selfies.booth import COOLDOWN, LAST, STAGE, STREAK
 from leeroy_mind.selfies.cli import _status
 from leeroy_mind.selfies.files import set_dir
 from leeroy_mind.selfies.job import pid_alive
@@ -569,3 +569,58 @@ def test_start_failure_cools_down_backs_off_and_success_resets(app, caplog):
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         run(go())
     assert caplog.text.count("selfies_booth_cooldown") == 2
+
+
+def _no_cooldown(app):
+    assert not app.selfie_booth._cooling()
+    assert app.store.get_meta(STREAK) is None and app.store.get_meta(COOLDOWN) is None
+
+
+def test_pause_while_the_booth_renders_is_a_preemption_without_cooldown(app, caplog):
+    """The review's probe, for the booth: its pass ends (closing make_room) while Free GPU is
+    still releasing the Discord lease, before the old pause reached its preempt."""
+    known_offline(app)
+    rendering, rendered, released = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def on_render(req):
+        rendering.set()
+        await rendered.wait()
+    w = MemoryWorker(on_render=on_render)
+    app.selfie_booth.worker = lambda: w
+    original = app.discord_talk._release
+    async def release():
+        await released.wait()
+        await original()
+    app.discord_talk._release = release
+    async def go():
+        await advance(app, 600)
+        await app.selfie_booth.tick()
+        await rendering.wait()
+        pause = asyncio.create_task(app.gpu.action({'action': 'pause'}))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        rendered.set()
+        await asyncio.wait({app.selfie_booth._task}, timeout=5)
+        released.set()
+        assert (await asyncio.wait_for(pause, 5))['ok']
+        assert json.loads(app.store.get_meta(LAST))["outcome"] == "preempted"
+        _no_cooldown(app)
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert not any(getattr(r, "leeroy_event", "") == "selfies_booth_failed" for r in caplog.records)
+
+
+def test_a_pause_meeting_the_booth_without_its_stop_is_a_preemption(app):
+    """Wherever GpuPaused still surfaces in the booth, it is the pause's preemption."""
+    admin = app.arbiter.admin
+    original = admin.unload
+    async def unload(model):
+        app.arbiter.paused = True  # the closed gate alone, with no stop request
+        await original(model)
+    admin.unload = unload
+    async def go():
+        await advance(app, 600)
+        await tick(app)
+        assert json.loads(app.store.get_meta(LAST))["outcome"] == "preempted"
+        _no_cooldown(app)
+        assert not ready_set(app.store, 101, 1)
+    run(go())

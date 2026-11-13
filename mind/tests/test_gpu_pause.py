@@ -583,6 +583,129 @@ def test_delayed_hook_for_old_owner_post_cannot_resume_pause(tmp_path):
     run(go())
 
 
+def _night_ready(app):
+    scheduler = app.night_scheduler
+    scheduler.settings = replace(scheduler.settings, grace_minutes=0,
+                                 min_window_hours=0, min_gap_hours=0)
+    return scheduler
+
+
+def _events(caplog):
+    return [getattr(r, 'leeroy_event', '') for r in caplog.records]
+
+
+def test_pause_while_the_night_makes_room_interrupts_it_without_an_attempt(tmp_path, caplog):
+    """The review's probe: Free GPU while the night waits on a slow unload in make_room."""
+    import logging
+    from leeroy_mind.nightly.store import UNFINISHED, run_get
+    async def go():
+        app = app_at(tmp_path)
+        scheduler = _night_ready(app)
+        admin = app.arbiter.admin
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = admin.unload
+        async def unload(name):
+            if not entered.is_set():
+                entered.set()
+                await release.wait()
+            await original(name)
+        admin.unload = unload
+        starts = []
+        async def night(night, window):
+            starts.append(night)
+            if len(starts) == 1:
+                await app.arbiter.make_room()
+        scheduler.run_night = night
+        try:
+            await scheduler.tick()
+            await entered.wait()
+            pause = asyncio.create_task(app.gpu.action({'action': 'pause'}))
+            for _ in range(5):
+                await asyncio.sleep(0)
+            release.set()
+            assert (await asyncio.wait_for(pause, 5))['ok']
+            row = run_get(app.store, starts[0])
+            assert row.status in UNFINISHED and row.attempts == 1 and row.error is None
+            await app.gpu.action({'action': 'resume'})
+            await scheduler.tick()
+            await scheduler.wait_idle()
+            row = run_get(app.store, starts[0])
+            assert starts == [starts[0]] * 2 and row.status == 'done' and row.attempts == 1
+        finally:
+            release.set()
+            await scheduler.cancel_run()
+            await app.stop()
+    with caplog.at_level(logging.INFO, logger='leeroy_mind'):
+        run(go())
+    assert 'nightly_failed' not in _events(caplog)
+
+
+def test_pause_reaching_a_night_step_without_its_stop_is_an_interruption(tmp_path, caplog):
+    """Wherever GpuPaused still surfaces in the night, it is the pause's interruption."""
+    import logging
+    from leeroy_mind.nightly.runner import NightRunner, Stage
+    from leeroy_mind.nightly.store import run_get
+    async def go():
+        app = app_at(tmp_path)
+        scheduler = _night_ready(app)
+        admin = app.arbiter.admin
+        original = admin.unload
+        async def unload(name):
+            app.arbiter.paused = True  # the closed gate alone, with no stop request
+            await original(name)
+        admin.unload = unload
+        runs = []
+        async def stage(ctx):
+            runs.append(ctx.night)
+            if len(runs) < 3:
+                await ctx.arbiter.make_room()
+        scheduler.run_night = NightRunner([Stage('room', stage, None)], app.night_runner.make_ctx).run
+        try:
+            for expected in (1, 2):
+                await scheduler.tick()
+                await scheduler.wait_idle()
+                row = run_get(app.store, runs[0])
+                assert len(runs) == expected and row.status == 'interrupted'
+                assert row.attempts == 1 and row.resumes == 0  # the resume was refunded
+                app.arbiter.paused = False
+            admin.unload = original
+            await scheduler.tick()
+            await scheduler.wait_idle()
+            row = run_get(app.store, runs[0])
+            assert row.status == 'done' and row.attempts == 1
+        finally:
+            await scheduler.cancel_run()
+            await app.stop()
+    with caplog.at_level(logging.INFO, logger='leeroy_mind'):
+        run(go())
+    assert 'nightly_failed' not in _events(caplog) and 'nightly_unit_failed' not in _events(caplog)
+
+
+def test_a_unit_meeting_the_pause_ends_the_stage_instead_of_failing(tmp_path):
+    from types import SimpleNamespace
+    from leeroy_mind.nightly.llm import Reasoner
+    async def go():
+        app = app_at(tmp_path)
+        try:
+            ctx = app.night_runner.make_ctx('2026-11-13', (0, app.clock.now()))
+            async def unit(name):
+                if name == 'b':
+                    raise GpuPaused('The GPU is paused.')
+            with pytest.raises(GpuPaused):
+                await ctx.map_units('stage', ['a', 'b'], unit)
+            assert not ctx.failures['stage']
+            async def chat(*args, **kwargs):
+                raise GpuPaused('The GPU is paused.')
+            reasoner = Reasoner(SimpleNamespace(chat=chat), 'invented-reflection')
+            with pytest.raises(GpuPaused):
+                await reasoner.think('system', 'user')
+            with pytest.raises(GpuPaused):
+                await reasoner.json('system', 'user', {'type': 'object'})
+        finally:
+            await app.stop()
+    run(go())
+
+
 @pytest.mark.parametrize('state', ['no_hello', 'bridge_down', 'presence_unknown', 'unreadable'])
 def test_pause_refused_while_his_wow_presence_is_unknown(tmp_path, state):
     async def go():
@@ -608,5 +731,98 @@ def test_pause_refused_while_his_wow_presence_is_unknown(tmp_path, state):
             assert not app.arbiter.admin.calls
         finally:
             app.world = world
+            await app.stop()
+    run(go())
+
+
+def test_slow_night_cleanup_pauses_now_and_unloads_once_it_has_stopped(tmp_path, monkeypatch):
+    from leeroy_mind import gpucontrol
+    from leeroy_mind.nightly.store import UNFINISHED, run_get
+    monkeypatch.setattr(gpucontrol, 'PAUSE_WAIT_S', .05)
+    async def go():
+        app = app_at(tmp_path)
+        scheduler = _night_ready(app)
+        entered, cleanup = asyncio.Event(), asyncio.Event()
+        starts = []
+        async def night(night, window):
+            starts.append(night)
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                await cleanup.wait()  # a worker tree that takes its time to end
+        scheduler.run_night = night
+        try:
+            await scheduler.tick()
+            await entered.wait()
+            reply = await asyncio.wait_for(app.gpu.action({'action': 'pause'}), 2)
+            assert reply['ok'] and reply['paused'] and reply['pending']
+            assert reply['message'] == 'GPU use is paused and will finish once the night has stopped.'
+            assert app.gpu.paused and not app.arbiter.reflection_allowed()
+            with pytest.raises(GpuPaused):
+                app.gpu.gate.check()
+            assert not app.arbiter.admin.calls and app.arbiter.admin.models
+            cleanup.set()
+            await asyncio.wait_for(app.gpu._finishing, 2)
+            assert not app.arbiter.admin.models and not app.gpu.unload_failed
+            row = run_get(app.store, starts[0])
+            assert row.status in UNFINISHED and row.attempts == 1
+        finally:
+            cleanup.set()
+            await scheduler.cancel_run()
+            await app.stop()
+    run(go())
+
+
+def test_pause_reads_residency_with_the_admin_timeout(tmp_path):
+    from leeroy_mind import gpucontrol
+    async def go():
+        seen = []
+        class Admin(HttpOllamaAdmin):
+            async def loaded(self, *, timeout=None):
+                seen.append(timeout)
+                return []
+        app = app_at(tmp_path)
+        try:
+            app.arbiter.admin = Admin('http://127.0.0.1:1')
+            assert (await app.gpu.action({'action': 'pause'}))['ok']
+            assert seen == [None]  # the admin's own timeout, not the status strip's .5 s
+            await gpucontrol.loaded(app.arbiter.admin)
+            assert seen == [None, .5]
+        finally:
+            await app.stop()
+    run(go())
+
+
+def test_pause_after_a_resume_during_slow_cleanup_closes_the_gate_again(tmp_path, monkeypatch):
+    from leeroy_mind import gpucontrol
+    monkeypatch.setattr(gpucontrol, 'PAUSE_WAIT_S', .05)
+    async def go():
+        app = app_at(tmp_path)
+        scheduler = _night_ready(app)
+        entered, cleanup = asyncio.Event(), asyncio.Event()
+        async def night(night, window):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                await cleanup.wait()
+        scheduler.run_night = night
+        try:
+            await scheduler.tick()
+            await entered.wait()
+            first = await app.gpu.action({'action': 'pause'})
+            assert first['pending']
+            assert (await app.gpu.action({'action': 'resume'}))['ok'] and not app.gpu.paused
+            second = await app.gpu.action({'action': 'pause'})
+            assert second['ok'] and second['pending'] and app.gpu.paused
+            with pytest.raises(GpuPaused):
+                app.gpu.gate.check()
+            cleanup.set()
+            await asyncio.wait_for(app.gpu._finishing, 2)
+            assert app.gpu.paused and not app.arbiter.admin.models and not app.gpu.unload_failed
+        finally:
+            cleanup.set()
+            await scheduler.cancel_run()
             await app.stop()
     run(go())

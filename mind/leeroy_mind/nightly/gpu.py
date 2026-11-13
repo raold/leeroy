@@ -72,6 +72,18 @@ class LiveLeaseHeld(RuntimeError):
                          "no room for a stage that needs the whole GPU")
 
 
+class PausedRoom(GpuPaused, LiveLeaseHeld):
+    """make_room refused by the owner's GPU pause. A GpuPaused, so the night and the booth count
+    it as an interruption and never a failure; and a LiveLeaseHeld, so every image path that
+    stops for a lease (worker start, a slot's room after an oom, the snaps) stops for the pause
+    the same way, without failing a unit or a set."""
+
+    def __init__(self):
+        self.holders = frozenset({"gpu_pause"})
+        self.diagnostics = None
+        Exception.__init__(self, "The GPU is paused.")
+
+
 def _error_body(e: urllib.error.HTTPError) -> str:
     try:
         return e.read()[:200].decode("utf-8", "replace")
@@ -403,7 +415,7 @@ class GpuArbiter:
 
     def _refuse_if_held(self) -> None:
         if self.paused:
-            raise GpuPaused('The GPU is paused.')
+            raise PausedRoom()
         if self._holders:
             raise LiveLeaseHeld(frozenset(self._holders))
 
