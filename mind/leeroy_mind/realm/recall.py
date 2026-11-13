@@ -306,11 +306,9 @@ class Recall:
                     self._finish(chain)
                     return
                 skipped = set(leave_skipped_guids(record)) & set(chain.members) if record else set()
-                if not ok and record:
-                    released = set(leave_released_guids(record)) - skipped
-                    if released:
-                        self._leave_out(chain, set(chain.members) - released)
-                        ok = True  # only these bodies have exact native release proof
+                if not ok:
+                    self._retry_released(chain, record, skipped)
+                    return
                 if skipped:
                     self._leave_out(chain, skipped)
             if kind == "defaults" and not ok:
@@ -335,6 +333,23 @@ class Recall:
         # Validated nonempty, distinct manifest members guarantee a strictly smaller retry.
         log.info("realm_recall_left_out reason=%s named=%d rest=%d", reason.partition(":")[0], len(named), len(rest))
         if current and rest:
+            self._start(rest, chain.mode)
+
+    def _retry_released(self, chain, record, skipped):
+        """A failed leave. Native's release proof says only that it no longer holds those bodies,
+        not that they left PvP: a member whose step never ran is released too. So none of them
+        gets this chain's rearm or defaults; the released members it did not skip get a new leave
+        as a new command, when they are strictly fewer than this chain's (a no-op for those that
+        already left). The changed members stay held by the unknown root; the skipped back off."""
+        released = (set(leave_released_guids(record)) & set(chain.members)) - skipped if record else set()
+        current = self._current(chain)
+        self._finish(chain)
+        rest = tuple(g for g in chain.members if g in released)
+        if not rest or len(rest) >= len(chain.members):
+            return  # Every retry strictly shrinks its manifest: a whole-job refusal ends here.
+        log.info("realm_recall_released held=%d skipped=%d rest=%d",
+                 len(chain.members) - len(rest) - len(skipped), len(skipped), len(rest))
+        if current:
             self._start(rest, chain.mode)
 
     def _leave_out(self, chain, skipped):

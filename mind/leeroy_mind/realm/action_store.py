@@ -93,24 +93,48 @@ def leave_skipped_guids(r):
     return tuple(json.loads(r.evidence).get("job", {}).get("skipped", ()))
 
 
+def released_members(role, policy, kind, state, evidence, manifest):
+    """Native's release proof on a stored root's columns (evidence as its stored JSON text): the
+    distinct manifest members a failed ordinary leave no longer holds. () for any other root, a
+    conflict, a refused ack or malformed evidence, so a reader that cannot tell holds them all.
+    The read-only views (health, Ops, awareness) use it on raw rows."""
+    if role != "root" or policy != "ordinary" or kind != "leave_pvp" or state == "conflict":
+        return ()
+    try:
+        ev = json.loads(evidence) if isinstance(evidence, str) else evidence
+        job, ack = ev.get("job", {}), ev.get("ack", {})
+        named = job.get("released", [])
+        if (ev.get("conflict") or not isinstance(ack, dict) or ack.get("ok") is False
+                or job.get("state") != "failed" or type(named) is not list or len(named) > 150
+                or any(type(g) is not int or not 0 < g <= 0xFFFFFFFF or g not in manifest for g in named)
+                or len(named) != len(set(named))):
+            return ()
+        return tuple(named)
+    except (TypeError, ValueError, AttributeError):
+        return ()
+
+
 def leave_released_guids(r):
     """Correlated native release proof, never usable by another kind or a conflict."""
-    if r.role != "root" or r.policy != "ordinary" or r.kind != "leave_pvp" or r.state == "conflict":
-        return ()
-    evidence = json.loads(r.evidence)
-    if evidence.get("conflict") or evidence.get("ack", {}).get("ok") is False:
-        return ()
-    job = evidence.get("job", {})
-    named = job.get("released", [])
-    if (job.get("state") != "failed" or type(named) is not list
-            or any(type(g) is not int or g not in r.reserved_manifest for g in named)
-            or len(named) != len(set(named))):
-        return ()
-    return tuple(named)
+    return released_members(r.role, r.policy, r.kind, r.state, r.evidence, r.reserved_manifest)
 
 
 def held_manifest(r):
     return tuple(g for g in r.reserved_manifest if g not in leave_released_guids(r))
+
+
+def failed_backoff(r):
+    """The members a failed root backs off for 600 s: only those a named leave ack refusal names.
+    A failed ordinary leave's manifest without the members native released and did not skip, when
+    those are fewer than all: the recall sends them a new leave at once, as it does the rest of a
+    named refusal. Otherwise (a whole-job refusal included) its whole manifest."""
+    named = leave_refusal_guids(r.result_reason or "", r.reserved_manifest)
+    if named:
+        return frozenset(named)
+    free = set(leave_released_guids(r)) - set(leave_skipped_guids(r))
+    if free and len(free) < len(r.reserved_manifest):
+        return frozenset(r.reserved_manifest) - free
+    return frozenset(r.reserved_manifest)
 
 
 def skipped_backoff(r, now):

@@ -221,7 +221,9 @@ def test_fakebridge_109_member_leave_waits_then_releases_untouched_recall(tmp_pa
 
     C++ policy tests prove the native wait/skip decisions. This fixture supplies
     their wire outcome after 60s and proves recall never replays the leave or
-    sends rearm/defaults to either the skipped or retained member.
+    sends rearm/defaults to either the skipped or retained member. Release proof
+    is not proof a body left PvP, so the 107 released members get a new, smaller
+    leave (a no-op for those already out) before their rearm and defaults.
     """
     from conftest import make_persona
     from leeroy_mind.personas.io import save_persona
@@ -256,7 +258,16 @@ def test_fakebridge_109_member_leave_waits_then_releases_untouched_recall(tmp_pa
             r = realm.action_store.get(leave["id"])
             assert held_manifest(r) == (102,) and skipped_backoff(r, clock.now()) == (101,)
             assert realm.bodies.movable("realm_day", set(members)) == set(members) - {102}
-            realm.queue.tick()
+            realm.recall.tick(clock.now()); realm.queue.tick()
+            await until(lambda: sum(c["type"] == "leave_pvp" for c in server.commands) == 2)
+            again = [c for c in server.commands if c["type"] == "leave_pvp"][-1]
+            assert again["guids"] == list(range(103, 210)) and again["id"] != leave["id"]
+            assert not any(c["type"] in {"rearm", "bot_do"} for c in server.commands)
+            await until(lambda: realm.action_store.get(again["id"]).transport_state == "settled")
+            await server.push(dict(type="realm_job", id=again["id"], kind="leave_pvp", state="done", reason="",
+                                   guid=0, value=0))
+            await until(lambda: realm.action_store.get(again["id"]).state == "completed")
+            await clock.advance(1.01, step=1.01); realm.recall.tick(clock.now()); realm.queue.tick()
             rearm = await server.wait_for_command("rearm")
             assert rearm["guids"] == list(range(103, 210))
             await server.push(dict(type="realm_job", id=rearm["id"], kind="rearm", state="done", reason="", guid=0, value=0))
@@ -270,7 +281,7 @@ def test_fakebridge_109_member_leave_waits_then_releases_untouched_recall(tmp_pa
                     guids=cmd["guids"], skipped=[], kills=0, wipes=0, instance_id=0, guid=0, level=0, avg_ilvl=0))
                 await until(lambda: realm.action_store.get(cmd["id"]).state == "completed")
             assert defaulted == set(range(103, 210))
-            assert sum(c["type"] == "leave_pvp" for c in server.commands) == 1
+            assert sum(c["type"] == "leave_pvp" for c in server.commands) == 2
             assert realm.action_store.holds()[0].guids == frozenset({102})
             assert skipped_backoff(r, 600 + json.loads(r.evidence)["skipped_at"]) == ()
     asyncio.run(run())
