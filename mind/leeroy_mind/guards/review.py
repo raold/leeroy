@@ -11,7 +11,7 @@ import time
 
 from leeroy_mind.claims.store import vector as checked_vector
 from leeroy_mind.claims.visibility import claim_visible
-from leeroy_mind.discord.channels import channel_id, discord_sql, is_discord, is_private
+from leeroy_mind.discord.channels import channel_id, discord_sql, is_discord, is_private, is_group
 from leeroy_mind.discord.layout import dm_peer
 from leeroy_mind.discord.text import is_emoji_message
 from leeroy_mind.eval.talk import contradiction, nonsequitur, repetition, unawareness
@@ -28,7 +28,7 @@ CONTEXT_LINES = 16
 MAX_TEXT = 4000
 RECEIPT_DAYS = 14
 REACTIONS = ('👍', '😄')
-_CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm', 'voice'})
+_CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm', 'group', 'voice'})
 _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
                         'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener'})
@@ -92,7 +92,7 @@ def _validate(draft, now):
         raise ValueError('guard_guid_invalid')
     if draft.channel not in _CHANNELS or (draft.channel == 'game' and draft.room not in _GAME):
         raise ValueError('guard_channel_invalid')
-    if draft.channel in {'discord', 'dm', 'voice'} and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', draft.room):
+    if draft.channel in {'discord', 'dm', 'group', 'voice'} and not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', draft.room):
         raise ValueError('guard_room_invalid')
     if type(now) not in (float, int) or not math.isfinite(now):
         raise ValueError('guard_time_invalid')
@@ -109,6 +109,12 @@ def _validate(draft, now):
 
 
 def _visible(line, draft, officer):
+    if line.channel == 'group':
+        from leeroy_mind.groups.audience import visible
+        target = ('gdm:' + draft.room if draft.channel == 'group' else
+                  'dm:' + draft.room if draft.channel == 'dm' else draft.channel)
+        return visible(line.readers,target,speaker=draft.guid,to_guid=draft.to_guid,
+                       readers=draft.readers)
     if line.channel in {'whisper', 'dm'} and draft.channel in {'whisper', 'dm'}:
         # One mind per member: a whisper and a DM between the same two are one conversation.
         if line.readers is not None and line.guid != draft.guid and draft.guid not in line.readers:
@@ -116,7 +122,7 @@ def _visible(line, draft, officer):
         return ((line.channel != 'dm' or line.readers is not None)
                 and draft.guid in (line.guid, line.to_guid)
                 and {line.guid, line.to_guid} == {draft.guid, draft.to_guid})
-    if (line.channel in {'discord', 'dm'}) != (draft.channel in {'discord', 'dm'}):
+    if (line.channel in {'discord', 'dm', 'group'}) != (draft.channel in {'discord', 'dm', 'group'}):
         return False
     if line.readers is not None and line.guid != draft.guid and draft.guid not in line.readers:
         return False
@@ -150,8 +156,9 @@ def _line(row, vectors):
     room = channel if channel in _GAME else ''
     if is_discord(channel):
         private = is_private(channel)
-        room = str(dm_peer(channel)) if private else channel_id(channel)
-        channel = 'dm' if private else 'discord'
+        group = is_group(channel)
+        room = channel.removeprefix('gdm:') if group else str(dm_peer(channel)) if private else channel_id(channel)
+        channel = 'group' if group else 'dm' if private else 'discord'
     elif channel.startswith('voice:'):
         room, channel = channel.removeprefix('voice:'), 'voice'
     readers = _json(row.get('audience'))
@@ -171,7 +178,7 @@ def _history(reader, stores, draft, now, officer):
         (draft.guid, now-stores.config.repeat_seconds, now, cutoff, OWN_LINES)),
         reader.rows('history_unavailable', f'SELECT {columns} FROM chat_line '
         "WHERE channel='guild' AND origin='mind' AND ts BETWEEN ? AND ? AND id<? ORDER BY ts DESC,id DESC LIMIT ?",
-        (now-GUILD_SECONDS, now, cutoff, GUILD_LINES))] if draft.channel not in {'discord', 'dm'} else []
+        (now-GUILD_SECONDS, now, cutoff, GUILD_LINES))] if draft.channel not in {'discord', 'dm', 'group'} else []
     if draft.channel in {'whisper', 'dm'}:
         # One mind per member: her own lines in their whispers and in her DM with him count
         # toward her repeats in either (_visible keeps them to the same two).
@@ -180,7 +187,7 @@ def _history(reader, stores, draft, now, officer):
             'AND id<? ORDER BY ts DESC,id DESC LIMIT ?',
             (draft.guid, f'dm:{draft.guid}', now-stores.config.repeat_seconds, now, cutoff,
              OWN_LINES)))
-    if ids and draft.channel not in {'discord', 'dm'}:
+    if ids and draft.channel not in {'discord', 'dm', 'group'}:
         groups.append(reader.rows('context_unavailable', f'SELECT {columns} FROM chat_line '
             'WHERE id IN (SELECT value FROM json_each(?)) AND ts BETWEEN ? AND ? AND id<?',
             (json.dumps(ids), now-nonsequitur.CONTEXT_SECONDS, now, cutoff)))
@@ -318,13 +325,15 @@ def _claim_hits(reader, stores, draft, now, officer):
         if (row['line_id'] is not None and row['ts'] <= now
                 and (row['source'] == 'owner' or row['source'] == 'chat' and row['from_guid'] == draft.guid)):
             raw = ('discord:' + draft.room if draft.channel == 'discord' else
+                   'gdm:' + draft.room if draft.channel == 'group' else
                    'dm:' + draft.room if draft.channel == 'dm' else
                    'voice:' + draft.room if draft.channel == 'voice' else
                    draft.room if draft.channel == 'game' else draft.channel)
             line = _line(dict(row, id=row['line_id'], text=''), {})
             if claim_visible(source_channel=row['channel'], source_from=row['from_guid'],
                     source_to=row['to_guid'], source_readers=line.readers, draft_channel=raw,
-                    speaker=draft.guid, to_guid=draft.to_guid, officer=officer, cross_medium=stores.cross_medium):
+                    speaker=draft.guid, to_guid=draft.to_guid, officer=officer, cross_medium=stores.cross_medium,
+                    draft_readers=draft.readers):
                 visible.add(row['id'])
     return [hit for hit in found if hit.claim_id in visible]
 
@@ -337,7 +346,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         return Verdict('drop', ('world_excluded',))
     now = _now(stores, draft)
     _validate(draft, now)
-    if not words(draft.text) and not (draft.channel in {'discord', 'dm'} and is_emoji_message(draft.text)):
+    if not words(draft.text) and not (draft.channel in {'discord', 'dm', 'group'} and is_emoji_message(draft.text)):
         return Verdict('drop', ('empty',))
     cfg, reader = stores.config, Reader(stores.conn)
     if draft.server:
@@ -353,7 +362,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         # The all-channel shelf is only for her own repeats. It never enters
         # context, cross-member comparisons, relevance or a rewrite hint.
         own_discord = [h for h in stores.history if h.guid == draft.guid and h.origin == 'mind'
-            and h.channel in {'discord','dm'} and 0 <= now-h.ts <= cfg.repeat_seconds
+            and h.channel in {'discord','dm','group'} and 0 <= now-h.ts <= cfg.repeat_seconds
             and (draft.line_id is None or h.id < draft.line_id)]
         day = [h for h in history if _same_room(h,draft) and h.origin == 'mind' and 0 <= now-h.ts <= 86400]
         for code, shelf in (('own_repeat_discord',own_discord), ('channel_repeat',day)):
@@ -377,7 +386,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         refs.append(Reference('line', previous.id))
     shared = defaultdict(set)
     bucket = evening(now)
-    if draft.channel in {'guild', 'discord'} and bucket is not None:
+    if draft.channel in {'guild', 'discord', 'group'} and bucket is not None:
         for line in history:
             if _same_room(line, draft) and line.origin == 'mind' and now-line.ts <= GUILD_SECONDS \
                     and evening(line.ts) == bucket:
@@ -419,7 +428,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         rewrite.append('claim_conflict')
         refs.extend(Reference('claim', hit.claim_id) for hit in conflicts)
         scores.append(Score('claim', round(max(hit.score for hit in conflicts), 6)))
-    if stores.facts is not None and draft.channel not in {'discord','dm'}:
+    if stores.facts is not None and draft.channel not in {'discord','dm','group'}:
         line = Line(0, now, draft.guid, draft.to_guid, None, draft.channel, 'mind', draft.map, draft.zone, draft.text)
         world = unawareness.check_line(stores.facts, line)
         rewrite.extend(flag.rule for flag in world)

@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
 from leeroy_mind.discord import layout
+from leeroy_mind.discord.channels import is_group
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.talk.budget import DayPhase, day_phase
 from leeroy_mind.talk.select import pick_speakers
@@ -51,10 +52,13 @@ def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_
     for seed in seeds:
         for index, name in enumerate(seed.channels):
             channel = layout.channel(name)
+            if is_group(name):
+                from leeroy_mind.groups.conversations import definition
+                channel = definition(name)
             if (channel is None or channel.category == 'info' or seed.weight <= 0 or
                     channel.officers_only and officers_free < 2 or seed.officers_only and not channel.officers_only):
                 continue
-            weight = CHANNEL_BASE.get(name, CLASS_CHANNEL_BASE if name in layout.CLASS_CHANNEL.values() else 0)
+            weight = .3 if is_group(name) else CHANNEL_BASE.get(name, CLASS_CHANNEL_BASE if name in layout.CLASS_CHANNEL.values() else 0)
             weight *= seed.weight * (3 if index == 0 else 1.5)
             if name == 'irl' and (phase == DayPhase.LATE or local.weekday() >= 5):
                 weight *= 2
@@ -73,11 +77,15 @@ def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_
 def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
                 personas: Mapping[int, Persona], *, officers: frozenset[int], human: int,
                 in_play: frozenset[int], ties: Callable[[int, int], float], rng: random.Random,
-                classes: Mapping[int, int] | None = None, away: frozenset[int] = frozenset()) -> list[int]:
+                classes: Mapping[int, int] | None = None, away: frozenset[int] = frozenset(),
+                group_audience: frozenset[int] = frozenset()) -> list[int]:
     definition = layout.channel(channel)
+    if is_group(channel):
+        from leeroy_mind.groups.conversations import definition as group_definition
+        definition = group_definition(channel)
     if definition is None or definition.category == 'info' or seed.officers_only and not definition.officers_only:
         return []
-    audience = layout.audience(channel, cast=personas, officers=officers, human=human)
+    audience = group_audience if is_group(channel) else layout.audience(channel, cast=personas, officers=officers, human=human)
     weights = {}
     for guid, p in personas.items():
         state = states.get(guid)

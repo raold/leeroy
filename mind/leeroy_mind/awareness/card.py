@@ -179,8 +179,11 @@ def _sources(value):
 
 def _visible(channel, frm, to, guid, officer, context, readers=None):
     if not whisper_ok(channel, frm, to, speaker=guid, turn_channel=context.channel,
-                      to_guid=context.to_guid):
+                      to_guid=context.to_guid, source_readers=readers, readers=context.readers):
         return False
+    from leeroy_mind.discord.channels import is_group
+    if is_group(channel):
+        return True  # whisper_ok proved the complete current audience is historical
     if readers is not None and guid not in readers:
         return False
     if is_private(channel):
@@ -376,7 +379,8 @@ def _claims(reader, guid, officer, ctx, now):
         readers = tuple(_ids(_json(line['audience']))) if line['audience'] is not None else None
         visible = (claim_visible(source_channel=line['channel'], source_from=line['from_guid'],
             source_to=line['to_guid'], source_readers=readers, draft_channel=ctx.channel,
-            speaker=guid, to_guid=ctx.to_guid, officer=officer, cross_medium=True)
+            speaker=guid, to_guid=ctx.to_guid, officer=officer, cross_medium=True,
+            draft_readers=ctx.readers)
             if ctx.server and not same_medium(line['channel'], ctx.channel) else
             _visible(line['channel'], line['from_guid'], line['to_guid'], guid, officer, ctx, readers))
         if not visible:

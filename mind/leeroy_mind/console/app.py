@@ -331,6 +331,8 @@ class ConsoleApp:
         self.photos = load_photos_config(settings.data_dir / 'mind.toml')
         from ..voice_notes.config import load_config as load_voice_notes
         self.voice_notes = load_voice_notes(settings.data_dir / 'mind.toml')
+        from ..groups.config import load_groups_config
+        self.groups = load_groups_config(settings.data_dir / 'mind.toml')
         self._voice_uploads = []
         self._voice_day = None
         self._voice_day_total = 0
@@ -1716,7 +1718,7 @@ class ConsoleApp:
         view = discordview.discord_view(
             conn, owner_now=mind_clock.local_at(self._clock()),
             trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
-            read_marks=read_marks, server=self.server_enabled)
+            read_marks=read_marks, server=self.server_enabled, groups=self.groups.enabled)
         view['photos'] = self.photos.enabled and self.controls.enabled
         view['voice_notes'] = self.voice_notes.enabled and self.controls.enabled
         fp = None
@@ -1727,8 +1729,9 @@ class ConsoleApp:
     async def _api_discord(self, req: Request):
         self._discord_seen = self._monotonic()
         channel = req.query.get("channel", [None])[0]
+        from ..groups.store import ident as group_id
         if channel is not None and (discord_layout.channel(channel) is None
-                                    and discord_layout.dm_peer(channel) is None):
+                                    and discord_layout.dm_peer(channel) is None and group_id(channel) is None):
             return text(400, "channel: a Discord channel")
         after = digits(req.query.get("after", ["0"])[0], 18)
         thread = req.query.get("thread", [None])[0]
@@ -1742,7 +1745,7 @@ class ConsoleApp:
         except (ValueError, TypeError):
             return text(400, "read: channel read marks")
         if (not isinstance(read_marks, dict) or len(read_marks) > 512
-                or any((discord_layout.channel(k) is None and discord_layout.dm_peer(k) is None)
+                or any((discord_layout.channel(k) is None and discord_layout.dm_peer(k) is None and group_id(k) is None)
                        or type(v) is not int or not 0 <= v < 2**53
                        for k, v in read_marks.items())):
             return text(400, "read: channel read marks")
@@ -1903,6 +1906,9 @@ class ConsoleApp:
             args = endpoint.discord_args(req.json())  # checked and cleaned exactly as the mind will
         except endpoint.BadRequest as e:
             return json_response(400, {"ok": False, "error": str(e)})
+        from ..discord.channels import is_group
+        if (args['action'].startswith('group_') or is_group(args.get('channel',''))) and not self.groups.enabled:
+            return json_response(409,{'ok':False,'error':'Group chats are turned off. Enable groups and restart the mind and console.'})
         problem = self._discord_problem()
         if problem is not None:
             return json_response(problem[0], {"ok": False, "error": problem[1]})
@@ -1922,7 +1928,10 @@ class ConsoleApp:
             return json_response(409, {"ok": False, "error": error[:300] or "The mind refused it."})
         reply_id = reply.get("id") if type(reply.get("id")) is int else None
         self.broadcast("discord", {"channel": args.get("channel"), "id": reply_id})
-        return json_response(200, {"ok": True, "id": reply_id})
+        result = {"ok": True, "id": reply_id}
+        if args['action'].startswith('group_'):
+            result['channel'] = reply.get('channel')
+        return json_response(200,result)
 
     async def _api_feed(self, req: Request):
         after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer
