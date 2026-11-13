@@ -126,14 +126,23 @@ replaying that step. Teleport and delayed exit restoration wait up to `Operation
 After that window, any bad readback of a provably untouched member skips that member alone.
 The log names `readback_changed guid=<guid> check=<code>`, then the skip reason
 `readback_changed:<code>`. Codes are `offline`, `owner`, `teleport`, `exit`, `battleground`,
-`original_group`, `lfg`, `group`, and `queue`.
+`original_group`, `lfg`, `group`, and `queue`. The final readback still rechecks its last member's
+cleanup state (`MemberCleanupFault`) even when untouched; a fault there the codes do not see (a
+Wintergrasp queue, a training fence) fails the job named by its reason's code (`CleanupFaultCheck`:
+`offline`, `queue`, `lfg` or `owner`). A readback without one of the nine codes is never recorded
+or sent (`MakeRealmJob`), since the mind refuses the whole event over one. Tick reads the readback
+fields and its `final_readback` shortcut only for `leave_pvp`, with typed reads: another kind's
+payload can be the wire message itself.
 
 A changed member still fails the readback. A failed ordinary leave keeps only members it may
 have changed (including scopes/continuations) and ends the others' leases. Its `realm_job`
 contains distinct manifest members in `released`, plus `readback_guid` and `check` when known.
 The existing `guid` remains the current step, which can be different. The mind holds the original
-manifest minus that exact release proof, backs off skipped members for 600 s, and rearms/defaults
-only released members that were not skipped. Missing fields retain the old conservative behavior.
+manifest minus that exact release proof and backs off skipped members for 600 s. Release proof is
+not proof a body left PvP (members after the failing step are released untouched too), so the mind
+never rearms or defaults on it: the released members it did not skip, when fewer than the
+manifest, get a new, strictly smaller leave, and only its success leads to rearm and defaults.
+Missing fields retain the old conservative behavior.
 Neither a contradictory receipt nor another kind/policy can borrow this proof.
 
 After an operator's `realm release` abandonment receipt, a supporting mind sends `realm_forget`
@@ -142,8 +151,9 @@ would collide with its original ACK; this command never replays or rewrites the 
 Native emits `realm_forgotten` with those two ids, `outcome`, and `members`. Only a retained ordinary
 `leave_pvp` or `rearm`, without declared scopes, continuation or guild joins, may be released.
 `released` and `not_held` settle the mind's `realm:action:forgotten:<root>` receipt; `running` and
-`kind` refuse without changing anything; `busy:teleport` retries on the next mind tick. Other
-unanswered/refused requests wait for a new connection. IDs/codes/counts are the only logged data.
+`kind` refuse without changing anything. The mind asks again after `busy:teleport` in 5 s,
+doubling to 60 s, and after `running` every 60 s; `kind` and unanswered requests wait for a new
+connection. IDs/codes/counts are the only logged data.
 
 Deploy mind and native together; Claude performs the native rebuild/release with the owner offline.
 New mind with old native keeps full failed manifests when `released` is absent, records an exact
