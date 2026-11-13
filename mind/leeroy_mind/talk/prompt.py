@@ -84,7 +84,12 @@ class PromptParts:
     pinned: int | None = None
     kept: int | None = None
     awareness: str = ""
+    # One mind per member: their lines from the other medium (a whisper's DMs, a DM's whispers),
+    # chat_line_text lines oldest first, shown before the chat and never the line answered
+    elsewhere: list[str] = field(default_factory=list)
 
+
+ELSEWHERE_HEAD = "Earlier between you two, elsewhere (you remember it; it is not the line you answer):"
 
 FACTS_HEAD = ("Facts you know (use them if they help, in your own words; never invent anything "
               "beyond them; if they don't cover it, say you're not sure or point {them} to "
@@ -523,6 +528,11 @@ def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
         tag = f" (whisper to {to})" if to else " (whisper)"
     elif row.channel.startswith("voice:"):
         tag = " (on vent)"
+    elif row.channel.startswith("dm:"):
+        to = names.get(row.to_guid)
+        tag = f" (Discord DM to {to})" if to else " (Discord DM)"
+    elif row.channel.startswith("discord:"):
+        tag = f" (Discord #{row.channel.removeprefix('discord:')})"
     else:
         tag = f" ({row.channel})"
     age = "" if now is None else f"[{line_age(now - row.ts)}] "
@@ -555,6 +565,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         _section("People here:", people),
         _section("You remember:", p.memories),
         _section("Right now:", [p.mood]),
+        _section(ELSEWHERE_HEAD, p.elsewhere),
         _section("Chat:", p.chat),
         _section(p.facts_head or facts_head("them"), p.facts),
         _section("Your last lines (don't make the same move again):", p.own_recent),
@@ -574,7 +585,8 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
         ("rules", p.rules.strip()),
         ("people", _section("People here:", [*p.rel_cards, *([p.real_name] if p.real_name else [])])),
         ("memories", _section("You remember:", p.memories)),
-        ("mood", _section("Right now:", [p.mood])), ("chat", _section("Chat:", p.chat)),
+        ("mood", _section("Right now:", [p.mood])),
+        ("elsewhere", _section(ELSEWHERE_HEAD, p.elsewhere)), ("chat", _section("Chat:", p.chat)),
         ("facts", _section(p.facts_head or facts_head("them"), p.facts)),
         ("own_recent", _section("Your last lines (don't make the same move again):", p.own_recent)),
         ("awareness", p.awareness.strip()), ("instruction", p.instruction.strip()))}
@@ -595,6 +607,7 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     stay a prefix of the input, so len(result.memories) says which recalled memories were
     used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
+                elsewhere=list(p.elsewhere),
                 own_recent=list(p.own_recent))
     pin = p.pinned if p.facts and p.pinned is not None and 0 <= p.pinned < len(p.chat) else None
     kept = p.kept if p.kept is not None and 0 <= p.kept < len(p.chat) else None
@@ -624,6 +637,7 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
             if kept is not None and i < kept:
                 kept -= 1
 
+    drop(t.elsewhere, 0, True)  # the other medium's lines go first, oldest first
     if t.facts:
         drop_chat(MIN_CHAT)
     drop(t.memories, MIN_MEMORIES, False)
@@ -668,6 +682,7 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
     return replace(parts, rel_cards=[r(x) for x in parts.rel_cards],
                    memories=[r(x) for x in parts.memories], mood=r(parts.mood),
                    chat=[r(x) for x in parts.chat], own_recent=[r(x) for x in parts.own_recent],
+                   elsewhere=[r(x) for x in parts.elsewhere],
                    instruction=r(parts.instruction), awareness=(parts.awareness.redacted(r)
                        if hasattr(parts.awareness,"redacted") else r(parts.awareness)), facts=[r(x) for x in parts.facts],
                    real_name="")

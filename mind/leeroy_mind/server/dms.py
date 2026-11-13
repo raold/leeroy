@@ -93,6 +93,9 @@ class DmOpeners:
     def _can_open(self, guid, now, day, meta):
         if now<self._human_until.get(guid,0):
             return False
+        owes = getattr(getattr(self.app,'discord_talk',None),'owes',None)
+        if owes is not None and owes(guid):
+            return False  # she owes him an answer she has not seen yet: no opener on top
         if DAY_MEMBER_KEY.format(date=day,guid=guid) in meta:
             return False
         raw = meta.get(OPEN_KEY.format(guid=guid))

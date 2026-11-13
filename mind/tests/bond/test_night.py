@@ -30,7 +30,9 @@ def test_first_shared_kill_is_private_idempotent_and_whisper_callback(h, caplog)
     assert h.count('bond_moment') == 1
     memory = h.rows(101)[0]
     assert (memory.scope, memory.scope_with, memory.evidence) == ('private',1,(f'event:{ref}',))
-    for channel, peer in [('guild',0), ('officer',0), ('say',1), ('dm:1',1), ('whisper',102)]:
+    # one mind per member: their DM is the same conversation as their whispers
+    assert scope_ok(memory, turn_channel='dm:101', to_guid=1)
+    for channel, peer in [('guild',0), ('officer',0), ('say',1), ('dm:102',1), ('whisper',102)]:
         assert not scope_ok(memory, turn_channel=channel, to_guid=peer)
     now = h.T+3*DAY
     h.session(now-100, now+100)

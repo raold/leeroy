@@ -273,6 +273,25 @@ class Store:
         return [_chat_from_row(r) for r in
                 self._all(f"SELECT * FROM chat_line WHERE id IN ({marks}) ORDER BY id", ids)]
 
+    def pair_lines(self, guid: int, other: int, *, since: float, limit: int,
+                   discord: bool) -> list[ChatLineRow]:
+        """The newest `limit` lines between `guid` and `other` no older than `since`, oldest
+        first, in one medium: with `discord`, the Discord DM `dm:<guid>` (a member's DM with
+        him), leaving out a post he deleted (its line stays, meta discord:line:<post>); else
+        their whispers either way (one mind per member)."""
+        if discord:
+            rows = self._all(
+                "SELECT * FROM chat_line WHERE channel = ? AND ts >= ? AND id NOT IN ("
+                "SELECT CAST(m.value AS INTEGER) FROM discord_message d JOIN meta m "
+                "ON m.key = 'discord:line:' || d.id WHERE d.channel = ? AND d.deleted IS NOT NULL) "
+                "ORDER BY ts DESC, id DESC LIMIT ?", (f"dm:{guid}", since, f"dm:{guid}", limit))
+        else:
+            rows = self._all(
+                "SELECT * FROM chat_line WHERE channel = 'whisper' AND ts >= ? "
+                "AND ((from_guid = ? AND to_guid = ?) OR (from_guid = ? AND to_guid = ?)) "
+                "ORDER BY ts DESC, id DESC LIMIT ?", (since, guid, other, other, guid, limit))
+        return [_chat_from_row(r) for r in reversed(rows)]
+
     def lines_before(self, line_id: int, channels, *, since: float, from_guid: int = 0,
                      limit: int = 50) -> list[ChatLineRow]:
         """The lines on `channels` stored before line `line_id` and no older than `since`

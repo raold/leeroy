@@ -24,7 +24,7 @@ def test_persona_and_dials_are_captured_before_read_only_worker(rig,monkeypatch,
 
 
 @pytest.mark.parametrize('enabled,channel,shown',[(False,'guild',False),(True,'guild',False),
-    (False,'whisper',False),(True,'whisper',True),(True,'dm:101',False)])
+    (False,'whisper',False),(True,'whisper',True),(False,'dm:101',False),(True,'dm:101',True)])
 @pytest.mark.parametrize('kind',['first_kill','gift'])
 def test_event_backed_bond_memory_stays_out_of_public_lore_and_disabled_pins(rig,enabled,channel,shown,kind):
     from leeroy_mind.personas.io import save_persona, load_persona

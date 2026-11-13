@@ -18,6 +18,12 @@ def audience_class(channel: str, *, readers: frozenset[int] | None) -> str:
 
 
 def _legacy(source, frm, to, readers, target, speaker, partner, officer):
+    if is_private(source) and is_private(target):
+        # One mind per member: a whisper and a DM between the same two are one conversation
+        if readers is not None and frm != speaker and speaker not in readers:
+            return False
+        return ({frm, to} == {speaker, partner}
+                and (not is_discord(source) or readers is not None and speaker in readers))
     if not same_medium(source, target):
         return False
     if readers is not None and frm != speaker and speaker not in readers:

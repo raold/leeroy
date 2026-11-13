@@ -6,10 +6,11 @@ from datetime import date, datetime, tzinfo
 from typing import Sequence
 
 from leeroy_mind.clock import Clock, night_of
-from leeroy_mind.discord.channels import is_discord, is_private, is_restricted
+from leeroy_mind.discord.channels import (OFFICER_GAME, is_discord, is_officer_channel,
+                                          is_private, is_restricted)
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
-from leeroy_mind.memory.privacy import restricted_channels
+from leeroy_mind.memory.privacy import OFFICERS, restricted_channels
 from leeroy_mind.memory.writer import Embedder
 from leeroy_mind.retrieval import mmr, vector_or_word_similarity  # mmr remains a public import
 from leeroy_mind.storage.rows import MemoryRow, cosine, unpack_vec
@@ -24,6 +25,7 @@ _CHAT_REF = re.compile(r"chat:([0-9]+)")
 OWNER_REF = "owner:"  # owner-authored evidence (the guild's history): public, not a chat line
 # What a private or secret memory's prompt line ends with (memory.privacy).
 PRIVATE_TAIL = " (keep it between you two)"
+OFFICERS_TAIL = " (officers only)"  # one the officers may know (privacy.OFFICERS)
 # A memory a live prompt brought up rests this long: it comes back only when nothing else
 # fills the prompt (final fix wave, prompts I3: the same five memories won every query).
 REST_S = 1800.0
@@ -60,28 +62,63 @@ def chat_ids(evidence) -> list[int]:
 
 def whisper_ok(channel: str, frm: int, to: int, *, speaker: int, turn_channel: str,
                to_guid: int) -> bool:
-    """The pair rule for one chat line, for a turn by `speaker` on `turn_channel` (a whisper
-    going to `to_guid`): a line on any channel but whisper may reach every turn's prompt, a
-    whisper only a whisper between the same two. Memories are kept to it through their scope
-    (scope_ok), and their evidence still goes through it under the scope as a second check
-    (Recall._shareable; controller ruling B1). The guild's Discord and the game keep apart: a
-    line on a Discord channel (a DM is one, `dm:<guid>`) reaches only a turn on that same
-    channel, and a game line no Discord turn."""
+    """Whether one chat line may reach a turn by `speaker` on `turn_channel` (going to
+    `to_guid`), as the conversation she is in (one mind per member, 2026-11-12):
+    - a private line (a whisper or a Discord DM) reaches a private turn between the same two in
+      either medium: a whisper and a DM between her and him are one conversation;
+    - any other Discord line reaches only a turn on that same channel, and a Discord turn no
+      other game line: a public conversation keeps to its own place (R11);
+    - the officers' game lines (officer chat, their voice room) reach only the officers' game
+      turns;
+    - every other game line reaches every game turn, as before.
+    Memories are kept to their audience through their scope (scope_ok), and their evidence
+    still goes through this under the scope as a second check (Recall._shareable; controller
+    ruling B1)."""
+    if is_private(channel):
+        return is_private(turn_channel) and {frm, to} == {speaker, to_guid}
     if is_discord(channel) or is_discord(turn_channel):
         return channel == turn_channel
-    return channel != "whisper" or (turn_channel == "whisper"
-                                    and {frm, to} == {speaker, to_guid})
+    if channel in OFFICER_GAME:
+        return turn_channel in OFFICER_GAME
+    return True
 
 
 def scope_ok(m: MemoryRow, *, turn_channel: str, to_guid: int) -> bool:
     """Whether a memory's scope lets it into a turn's prompt (controller rulings N4 and B1). An
     open memory reaches every turn. A private or secret one counts as a whisper between its
-    owner and its partner, so it reaches only a private turn (a whisper, or a Discord DM) from
-    her to that partner, and one with no partner (scope_with 0) reaches none."""
-    if (getattr(m, 'key', None) or '').startswith('bond:') and turn_channel != 'whisper':
+    owner and its partner, so it reaches only a private turn (a whisper, or a Discord DM: one
+    conversation) from her to that partner, and one with no partner (scope_with 0) reaches
+    none. A private one the officers may know (privacy.OFFICERS) reaches the officers' turns in
+    either medium. A bond moment is a pair's: a whisper or a DM to her partner only."""
+    if (getattr(m, 'key', None) or '').startswith('bond:') and not is_private(turn_channel):
         return False
-    return m.scope == "open" or (m.scope_with != 0 and is_private(turn_channel)
-                                 and {m.owner, m.scope_with} == {m.owner, to_guid})
+    if m.scope == "open":
+        return True
+    if m.scope_with == OFFICERS:
+        return m.scope == "private" and is_officer_channel(turn_channel)
+    if (peer := _dm_peer(turn_channel)) is not None and peer not in (m.owner, m.scope_with):
+        return False  # a DM is its member's own: never another member's
+    return (m.scope_with != 0 and is_private(turn_channel)
+            and {m.owner, m.scope_with} == {m.owner, to_guid})
+
+
+def _dm_peer(channel) -> int | None:
+    """The member of a Discord DM turn channel (`dm:<guid>`); None for any other channel, and -1
+    for a malformed one (it matches nobody)."""
+    if not isinstance(channel, str) or not channel.startswith("dm:"):
+        return None
+    tail = channel[3:]
+    return int(tail) if tail.isdigit() else -1
+
+
+def hidden_ok(channels, turn_channel: str) -> bool:
+    """Whether a memory resting on lines of these restricted channels may reach a turn on
+    `turn_channel`: the officers' in either medium reach every officers' turn; any other (a
+    Discord channel the layout lacks) only a turn on that one channel (rulings R7, R10)."""
+    channels = frozenset(channels)
+    if channels == {turn_channel}:
+        return True
+    return is_officer_channel(turn_channel) and all(is_officer_channel(c) for c in channels)
 
 
 def recency(t_accessed: float, now: float, tau_days: float) -> float:
@@ -110,7 +147,7 @@ def format_memory(m: MemoryRow, now: float, *, tz: tzinfo) -> str:
             text = text[:1].upper() + text[1:]
     tail = " (heard)" if m.confidence < HEARD else ""
     if m.scope != "open":
-        tail += PRIVATE_TAIL
+        tail += OFFICERS_TAIL if m.scope_with == OFFICERS else PRIVATE_TAIL
     return f"- {when}: {text}{tail}"
 
 
@@ -201,10 +238,11 @@ class Recall:
         """P1b's interim whisper rule, kept under the memory scope as a second check
         (controller ruling B1). A memory whose stored chat lines are all private (whispers or
         Discord DMs) stays out of a turn on any other channel, and out of a private turn unless
-        every one of them may reach it (whisper_ok: between `owner` and `to_guid`, a DM's only
-        in that DM). A memory resting on a line of a restricted Discord channel (an officers'
-        one), directly or through memory: refs (privacy.restricted_channels), comes up only in a
-        turn on that channel, owner refs or not (rulings R7, R10). A memory with a
+        every one of them may reach it (whisper_ok: between `owner` and `to_guid`, in a whisper
+        or a DM alike). A memory resting on a line of a restricted channel, directly or through
+        memory: refs (privacy.restricted_channels), comes up only where hidden_ok allows: an
+        officers' one in every officers' turn of either medium, any other only in a turn on that
+        channel, owner refs or not (rulings R7, R10). A memory with a
         public line, an owner-authored ref (OWNER_REF: public, non-chat evidence) or no stored
         chat line (a game event) stays. One store query for all of `rows`, and one walk more
         only for rows that cite other memories."""
@@ -226,7 +264,7 @@ class Recall:
             if (m.key or '').startswith('bond:') and (not include_bond or m.owner != owner):
                 continue
             cited = [lines[i] for i in refs[m.id] if i in lines]
-            if m.id in hidden and hidden[m.id] != {channel}:
+            if m.id in hidden and not hidden_ok(hidden[m.id], channel):
                 continue
             if any(isinstance(e, str) and e.startswith(OWNER_REF) for e in m.evidence):
                 keep.append(m)

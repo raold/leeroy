@@ -1231,6 +1231,10 @@ class MindApp:
                     self._extract_queue.put_nowait(closed)
             except Exception:
                 log.exception("thread_expiry_failed")
+            try:
+                self.discord_talk.tick(now)  # DM answers on her own time ([talk] dm_own_time)
+            except Exception:
+                log.exception("discord_owed_failed")
             if now - last_embed >= EMBED_EVERY_S:
                 last_embed = now
                 if self._embed_task is None or self._embed_task.done():

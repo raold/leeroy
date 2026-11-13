@@ -352,7 +352,9 @@ def test_optional_world_facts_use_shared_positive_evidence_checker(store):
 @pytest.mark.parametrize('source_channel,target_channel,peer,expected', [
     ('whisper','guild',0,False), ('whisper','whisper',1,True),
     ('whisper','whisper',102,False), ('whisper','discord',0,False),
-    ('dm:101','whisper',1,False), ('dm:101','dm',1,True),
+    # one mind per member: a claim in their DM guards her whispers to him, and the reverse
+    ('dm:101','whisper',1,True), ('dm:101','dm',1,True), ('dm:101','whisper',102,False),
+    ('whisper','dm',1,True),
     ('discord:general','guild',0,False), ('discord:general','discord',0,True),
     ('officer','guild',0,False)])
 def test_owner_claim_guard_requires_visible_provenance(store, source_channel, target_channel, peer, expected):

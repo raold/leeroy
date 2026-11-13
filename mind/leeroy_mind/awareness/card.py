@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from leeroy_mind.bodies import ALL
 from leeroy_mind.claims.store import nearest
 from leeroy_mind.claims.visibility import claim_visible
-from leeroy_mind.discord.channels import is_private, is_discord, is_restricted, same_medium
+from leeroy_mind.discord.channels import OFFICER_GAME, is_private, is_discord, is_restricted, same_medium
 from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
 from leeroy_mind.text import estimate_tokens, strip_wow_markup
@@ -185,8 +185,8 @@ def _visible(channel, frm, to, guid, officer, context, readers=None):
     if is_private(channel):
         return guid in (frm, to) and whisper_ok(channel, frm, to, speaker=guid,
             turn_channel=context.channel, to_guid=context.to_guid) and {frm, to} == {guid, context.to_guid}
-    if channel == "officer":
-        return officer and context.channel == "officer"
+    if channel in OFFICER_GAME:
+        return officer and context.channel in OFFICER_GAME
     if channel == "guild":
         return True
     # Historical party, local and Discord messages need their captured audience.
