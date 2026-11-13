@@ -196,7 +196,7 @@ class ServerEngine:
         people = {g:self.app.personas.get(g) for g in self.app.world.discord_members()
                   if g != self.app.human_guid and self.app.personas.get(g) is not None}
         current = _culture_seeds(self.app.store.conn, now=self.app.clock.now(), personas=people,
-                                human=self.app.human_guid, include_recent=True)
+                                human=self.app.human_guid, include_recent=conversation.teased)
         if not any(s.key == conversation.seed.key and s.fact == conversation.seed.fact
                    and s.about == conversation.seed.about for s in current):
             return False
@@ -250,6 +250,36 @@ class ServerEngine:
                 conversation.reason = 'deleted_parent'
                 raise TurnWithdrawn(GONE)
         return previous
+
+    def _settle_joke(self, conversation, meta):
+        """Reconcile a shielded delivery even when the pipeline rethrows cancellation."""
+        if conversation.teased or not meta.turn_id:
+            return
+        app = self.app
+        row = app.store.conn.execute('SELECT id,ts FROM discord_message WHERE turn=? AND channel=? '
+            'ORDER BY id LIMIT 1', (meta.turn_id, conversation.channel)).fetchone()
+        if row is None:
+            return
+        from leeroy_mind.culture.tease import mark_teased, OWNER_KEY
+        from leeroy_mind.clock import local_at, night_of
+        receipt = f'culture:server-joke:{conversation.id}'
+        with app.store.transaction():
+            if app.store.get_meta(receipt) is None:
+                # The persisted post's time owns the day/evening, even across midnight.
+                now = row['ts']
+                seeds.mark_used(app.store, conversation.seed, now=now)
+                app.store.conn.execute('UPDATE lexicon SET last_used=?,uses_total=uses_total+1 WHERE id=?',
+                    (now, int(conversation.seed.key[5:])))
+                line = app.store.get_meta(f"discord:line:{row['id']}")
+                if line is not None:
+                    app.store.set_meta(f'culture:wear-counted:{conversation.seed.key}:{line}', '1')
+                target = conversation.seed.about[0]
+                if target:
+                    mark_teased(app.store, target, now=now)
+                    if target == app.human_guid:
+                        app.store.set_meta(OWNER_KEY, night_of(local_at(now)))
+                app.store.set_meta(receipt, str(row['id']))
+        conversation.teased = True
 
     async def _conversation(self, conversation):
         app, last, dry = self.app, None, 0
@@ -338,24 +368,10 @@ class ServerEngine:
                     await app.engine.speak_meta(turn, meta)
                 finally:
                     conversation.in_flight = conversation.in_flight_turn = None
+                    if conversation.seed.kind == "joke":
+                        self._settle_joke(conversation, meta)
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
-                if added and not conversation.messages and conversation.seed.kind == 'joke':
-                    from leeroy_mind.culture.tease import mark_teased, OWNER_KEY
-                    from leeroy_mind.clock import local_at, night_of
-                    with app.store.transaction():
-                        seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
-                        app.store.conn.execute('UPDATE lexicon SET last_used=?,uses_total=uses_total+1 WHERE id=?',
-                            (app.clock.now(), int(conversation.seed.key[5:])))
-                        line = app.store.get_meta(f'discord:line:{added[0]}')
-                        if line is not None:
-                            app.store.set_meta(f'culture:wear-counted:{conversation.seed.key}:{line}', '1')
-                        target = conversation.seed.about[0]
-                        if target:
-                            mark_teased(app.store, target, now=app.clock.now())
-                            if target == app.human_guid:
-                                app.store.set_meta(OWNER_KEY, night_of(local_at(app.clock.now())))
-                    conversation.teased = True
                 conversation.messages.extend(added)
                 if opening_photo and (added or meta.photo is not None):
                     # Spent once its photo was offered; one never offered (another photo in

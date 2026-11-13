@@ -1,3 +1,4 @@
+import asyncio
 import random
 import pytest
 from nightly.test_night_lexicon import term
@@ -181,3 +182,56 @@ def test_runtime_gathers_public_joke_in_read_only_worker(app):
                            (f'chat:{line}',now-5*86400,now-4*86400))
     observed=run(real_snapshot(app,now,include_seeds=True))
     assert any(s.kind=='joke' and 'floor inspector' in s.fact for s in observed.seeds)
+
+@pytest.mark.parametrize('failure',[asyncio.CancelledError,RuntimeError])
+@pytest.mark.parametrize('persisted',[True,False])
+def test_interrupted_delivery_settles_only_real_first_post(app,monkeypatch,failure,persisted):
+    from leeroy_mind.server.engine import Conversation
+    from leeroy_mind.discord import store as dstore
+    from leeroy_mind.culture.tease import TEASED_KEY
+    seed=joke_app(app,monkeypatch)
+    conversation=Conversation('interrupted','general',seed,[101,103],app.clock.now(),1)
+    e=app.server.engine
+    e._live[conversation.id]=conversation
+    captured=[]
+    async def interrupted(turn,meta):
+        meta.turn_id='interrupted-turn'
+        captured.append(meta)
+        if persisted:
+            dstore.post(app.store,channel='general',author=turn.speaker,origin='mind',
+                        text='Invented joke delivery',turn=meta.turn_id,now=app.clock.now())
+        raise failure()
+    monkeypatch.setattr(app.engine,'speak_meta',interrupted)
+    async def go():
+        if failure is asyncio.CancelledError:
+            with pytest.raises(failure):
+                await e._conversation(conversation)
+        else:
+            await e._conversation(conversation)
+    run(go())
+    assert bool(app.store.get_meta('server:seed:'+seed.key)) is persisted
+    assert bool(app.store.get_meta(TEASED_KEY.format(date=app.clock.local().date(),guid=102))) is persisted
+    assert app.store.conn.execute('SELECT uses_total FROM lexicon WHERE id=1').fetchone()[0]==int(persisted)
+    conversation.teased=False  # durable receipt still prevents a second charge
+    e._settle_joke(conversation,captured[0])
+    assert app.store.conn.execute('SELECT uses_total FROM lexicon WHERE id=1').fetchone()[0]==int(persisted)
+
+
+def test_pre_delivery_competing_use_refuses_but_own_delivery_continues(app,monkeypatch):
+    from leeroy_mind.protocol import Chat
+    from leeroy_mind.server.engine import Conversation
+    (app.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    now=app.clock.now()
+    line=app.store.insert_chat_line(Chat(ts=int((now-5*86400)*1000),channel='guild',
+        from_guid=101,from_name='Member101',to_guid=0,text='floor inspector',map=0,zone=0),
+        session_id=None,origin='game')
+    app.store.conn.execute("INSERT INTO lexicon(kind,term,origin_ref,originator,born,last_used) VALUES('joke','floor inspector',?,101,?,?)",
+                           (f'chat:{line}',now-5*86400,now-4*86400))
+    people=app.observed.personas
+    seed=culture_seeds(app.store.conn,now=now,local=app.clock.local(),personas=people,human=1)[0]
+    c=Conversation('cooldown','general',seed,[101,103],now,5)
+    assert app.server.engine._joke_valid(c,101)
+    app.store.conn.execute('UPDATE lexicon SET last_used=?',(now,))
+    assert not app.server.engine._joke_valid(c,101)
+    c.teased=True
+    assert app.server.engine._joke_valid(c,101)
