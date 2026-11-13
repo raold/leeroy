@@ -1377,14 +1377,14 @@ class Pipeline:
     # -- speaking ------------------------------------------------------------------------------
 
     async def speak(self, turn: Turn, *, why: str = "speak", elsewhere: bool = False,
-                    guards: Guards | None = None, after: str = "",
+                    guards: Guards | None = None, after: str = "", topic: str = "",
                     still_valid: Callable[[], bool] | None = None) -> list[str]:
         """Speak one turn (after turn.delay) through the whole pipeline: the lines sent, or []
         when it was dropped (the reason is in the utterance log). The caller's Turn is left as
         it was: the pipeline fills in its own copy's priority, deadline and channel. The
         keywords go on its TurnMeta."""
         return await self._speak(replace(turn), TurnMeta(
-            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after,
+            self._new_id(), why=why, elsewhere=elsewhere, guards=guards, after=after, topic=topic,
             still_valid=still_valid))
 
     async def speak_meta(self, turn: Turn, meta: TurnMeta) -> list[str]:
