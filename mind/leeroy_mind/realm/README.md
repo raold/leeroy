@@ -1,5 +1,39 @@
 # Recall holds and operator release
 
+## Lost ACKs and native restarts
+
+A correlated terminal job takes precedence over a lost ACK. Once its transport
+settles, a complete `bot_do` receipt or a done `realm_job` completes the action
+even if the ACK timed out. Arrival order does not change the result. Failed jobs
+retain their existing rules: proved no-change refusals free the manifest;
+unproved failures stay `job_failed`, holding whatever native has not released.
+Skipped members retain their existing 600-second backoff. Mind startup also
+rechecks older unknown rows carrying terminal evidence.
+
+At a hello, a worldserver `started_ms` later than a root's dispatch proves that
+the old process's in-memory reservations are gone. Only settled, unknown roots
+for ordinary rearm, ordinary leave, or Recall's exact defaults command qualify.
+There must be no children, continuation, declared scope or conflicting evidence;
+WG, ACK/result commands, guild growth and other kinds remain excluded. The hello
+must match the current guild and owner. A hello from the same native process
+does nothing.
+
+Such a root becomes `completed` with result `restart_released`, **not** successful.
+Its permanent `realm:action:restart_released:<id>` receipt stores the hello start,
+release time and complete prior row. Neither this row nor its receipt is pruned.
+Health and Ops no longer count it as a hold, and `realm release` explains that it
+is no longer unknown. No command is resent by this recovery: Recall decides its
+next fresh command under its normal gates. A half-done rearm/defaults batch is
+safe to reapply; a half-done leave must leave again under the existing recall
+rules. This is the same process-start proof used by training's lab-clear.
+The old unknown's generic backoff does not survive this proof; specific native
+skip backoffs still do. A later contradictory receipt remains a conflict hold.
+
+This recovery change needs only a mind release and restart, no migration or
+native rebuild. Older native without `started_ms` retains conservative holds.
+Rollback to a mind version without these new evidence keys requires restoring
+the pre-release database snapshot, as for the newer leave evidence below.
+
 An ordinary `leave_pvp` can finish unknown while holding only part of its original manifest.
 Native's failed `realm_job.released` is release proof for distinct members of that exact root.
 The journal keeps the full original manifest and payload; its holder projection subtracts only

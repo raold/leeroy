@@ -540,13 +540,13 @@ def test_a_step_refusal_without_its_ack_waits_and_a_negative_ack_stays_unknown(s
     dispatch(store, prepare(store, p.Rearm("rearm", CAST)))
     assert not store.observe_realm_job(job("rearm", "rearm", "failed", "busy:combat", CAST[0]), now=2).result_ready
     assert store.get("rearm").state == "dispatched" and store.holds()
-    store.recover(process_id="new", now=3)  # its ack never came: lost, so it may have run
-    assert store.get("rearm").state == "unknown"
+    store.recover(process_id="new", now=3)  # settled transport; its terminal proves refusal
+    assert store.get("rearm").state == "completed"
     dispatch(store, prepare(store, p.Rearm("other", (301,))))
     store.observe_ack(Ack(0, "other", False, "busy:combat"), now=3)
     store.observe_realm_job(job("other", "rearm", "failed", "busy:combat", 301), now=4)
     assert store.get("other").state == "unknown"
-    assert {h.scope_id for h in store.holds()} == {"rearm", "other"}
+    assert {h.scope_id for h in store.holds()} == {"other"}
 
 
 def _stored_unknown(store, command_id, cmd, ev, *, reason="job_failed", seq_time=1793900000.0):
@@ -622,8 +622,9 @@ def test_recovery_leaves_other_stored_failures_alone(store):
     with store.conn:
         store.conn.execute("UPDATE realm_action SET send_error='TimeoutError' WHERE command_id='lost'")
     _stored_unknown(store, "transport", p.Rearm("transport", (302,)), {"failed_at": 5.0}, reason="transport_unknown")
-    assert [r.command_id for r in store.recover(process_id="new", now=20)] == ["lost", "transport"]
-    assert len(store.holds()) == 2
+    assert [r.command_id for r in store.recover(process_id="new", now=20)] == ["transport"]
+    assert store.get("lost").result_reason == "step_refused"
+    assert len(store.holds()) == 1
 
 
 @pytest.fixture
