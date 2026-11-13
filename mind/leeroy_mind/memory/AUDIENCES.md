@@ -58,7 +58,10 @@ his Discord DM when her Discord presence says she would see it (`discord/owntime
 Only a post she deferred is owed: `on_his_post` (after a photo's look) records it in meta
 `discord:dm:deferred:<guid>`, so the tick never answers a post before the desk hands it over,
 nor one she let be (turning the switch on answers no old DMs), and her answer to an earlier post
-that lands after his next one is no answer to it. A late answer's instruction says how long ago
+that lands after his next one is no answer to it. A late answer stays owed until hers is
+stored: a turn that comes to nothing (a restart, a drop) is queued again after 10 minutes, and
+the post is let go after two tries. An edit of his reads the moment again (urgent words added or
+dropped). A late answer's instruction says how long ago
 he wrote and why she missed it ("asleep", "at work", "busy"), so she answers as someone catching
 up. Every draw is seeded by his post id, so a restart finds the same moment; the owed DMs are
 re-read from the store each tick (`DiscordTalk.tick`, every 30 s from the mind's ticker), with

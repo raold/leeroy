@@ -74,6 +74,10 @@ ANSWERED_KEY = "discord:dm:answered:{guid}"
 # his newest DM post she deferred (on_his_post, after a photo's look): only a deferred post is
 # owed, so the tick never answers a post before the desk hands it over, nor one she let be
 DEFERRED_KEY = "discord:dm:deferred:{guid}"
+# A late answer stays owed until hers is stored: one queued is not queued again for RETRY_S,
+# and after TRIES that came to nothing (a drop, a silence) the post is let go
+RETRY_S = 600.0
+TRIES = 2
 QUERY_LINES = 2  # his thread's last lines that go into recall's query with his post
 # what the instruction may hold: the compose cuts its extra at EXTRA_CAP_TOKENS (4 characters
 # a token), less room for anything else it adds
@@ -128,6 +132,7 @@ class DiscordTalk:
         self._owed_at = -float("inf")
         self._due: dict[int, tuple[float, bool]] = {}  # his DM post id -> (when, urgent)
         self._owes: tuple[float, frozenset[int]] = (-float("inf"), frozenset())
+        self._queued: dict[int, tuple[float, int]] = {}  # his DM post -> (last queued, tries)
         engine = getattr(app, "engine", None)
         if engine is not None:
             engine.add_instruction_hook(self._instruction_hook)
@@ -284,6 +289,8 @@ class DiscordTalk:
             if conn.execute("SELECT 1 FROM discord_message WHERE channel = ? AND id > ? "
                             "AND origin = 'mind' AND (reply_to IS NULL OR reply_to >= ?) LIMIT 1",
                             (channel, mid, mid)).fetchone():
+                conn.execute("DELETE FROM meta WHERE key = ?", (DEFERRED_KEY.format(guid=guid),))
+                self._queued.pop(mid, None)
                 continue
             ts = conn.execute("SELECT ts FROM discord_message WHERE id = ?", (mid,)).fetchone()[0]
             out.append((guid, mid, ts))
@@ -339,23 +346,36 @@ class DiscordTalk:
             urgent = self._due[mid][1]
         if guid in away or now < due:
             return
+        last, tries = self._queued.get(mid, (-float("inf"), 0))
+        if now - last < RETRY_S:
+            return  # queued already: owed until her answer is stored
+        if tries >= TRIES:
+            self._queued.pop(mid, None)
+            self._answered(mid, guid)
+            log.info("discord_dm_let_go: guid=%d message=%d tries=%d", guid, mid, tries)
+            return
         if not urgent and not self._model_ready():
             return
         items = self.plan(mid)
         if not items:
             self._answered(mid, guid)
             return
+        self._queued[mid] = (now, tries + 1)
+        while len(self._queued) > 256:
+            del self._queued[next(iter(self._queued))]
         # Its own lease keeps the model for the answer even if the one that admitted it ends;
         # held beside another, it hands nothing over (the night is not woken)
         self._take_lease()
-        self._answered(mid, guid)
         self.app.engine._queue(items)
         log.info("discord_dm_answered_later: guid=%d message=%d late_s=%d", guid, mid,
                  int(now - ts))
 
     def on_his_action(self) -> None:
         """Any other action of his (a reaction, an edit, a pin, a thread): a lease he holds is
-        kept LEASE_IDLE_S from now; with none, nothing is taken."""
+        kept LEASE_IDLE_S from now; with none, nothing is taken. An edit may add or drop urgent
+        words, so the cached answer moments are read again."""
+        self._due.clear()
+        self._owes = (-float("inf"), frozenset())
         if self._held:
             self._until = self.app.clock.now() + LEASE_IDLE_S
 

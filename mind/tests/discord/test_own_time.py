@@ -293,3 +293,40 @@ def test_waking_reads_her_clock_across_the_daylight_saving_change(store, tmp_pat
                          urgent=False, talking=False, insist=False)
     woke = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)  # 07:00 EST, not 07:00 EDT
     assert woke.timestamp() + owntime.BACK_S[0] <= due <= woke.timestamp() + owntime.BACK_S[1]
+
+
+def test_a_lost_late_answer_is_tried_again_then_let_go(store, tmp_path, caplog):
+    """Owed until her answer is stored: a queued turn that comes to nothing (a restart, a drop)
+    is queued again after RETRY_S, and let go after TRIES."""
+    from leeroy_mind.discord.talk import RETRY_S, TRIES
+    rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)
+    own_time(rig)
+    talk = talk_for(rig)
+    caplog.set_level("INFO", logger="leeroy_mind.discord")
+    mid = post(rig, "dm:101", "are you up? need help with something")
+    hand(rig, talk, mid)
+    queued = []
+    rig.engine._queue = lambda items: queued.append(items)  # every turn is lost
+    run_for(rig, talk, owntime.URGENT_S[1] + 60)
+    assert len(queued) == 1 and talk.owes(101)
+    run_for(rig, talk, RETRY_S)
+    assert len(queued) == TRIES
+    run_for(rig, talk, RETRY_S)
+    assert len(queued) == TRIES and not talk.owes(101)
+    assert "discord_dm_let_go: guid=101" in caplog.text
+
+
+def test_an_edit_to_urgent_words_reads_the_moment_again(store, tmp_path):
+    from leeroy_mind.discord import store as dstore
+    rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)
+    own_time(rig)
+    talk = talk_for(rig)
+    mid = post(rig, "dm:101", "did you ever find that recipe")
+    hand(rig, talk, mid)
+    run_for(rig, talk, 120)
+    assert answers(rig, "dm:101", mid) == []
+    dstore.edit(store, mid, author=1, text="are you up? need help with something",
+                now=rig.clock.now())
+    talk.on_his_action()
+    run_for(rig, talk, owntime.URGENT_S[1] + 200)
+    assert len(answers(rig, "dm:101", mid)) == 1
