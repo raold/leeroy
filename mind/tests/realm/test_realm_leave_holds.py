@@ -227,6 +227,22 @@ def test_old_refusals_never_starve_forget_discovery_of_a_newer_root(store):
     asyncio.run(run())
 
 
+def test_ineligible_old_receipts_never_starve_forget_discovery_of_a_newer_root(store):
+    async def run():
+        h = ForgetHarness(store)
+        for n in range(130):
+            abandoned(store, f"old{n:03d}", 4)
+        with store.conn:  # receipts that no longer match their rows never authorize a forget
+            store.conn.execute("UPDATE meta SET value=json_set(value,'$.seq',-1) WHERE key LIKE 'realm:action:abandoned:old%'")
+        abandoned(store, "newest", 4)
+        try:
+            for _ in range(4):
+                await h.tick()
+            assert [c.origin_id for c in h.sent] == ["original", "newest"]
+        finally: await h.forget.close()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("change", ["no_receipt", "wrong_identity", "conflict", "unsettled", "not_connected"])
 def test_forget_never_sends_without_exact_abandoned_authority(store, change):
     async def run():
@@ -403,22 +419,25 @@ def test_a_forget_failure_never_ends_the_realm_loop(tmp_path, clock, caplog):
     async def run():
         async with application(tmp_path, clock, original_bridge=True) as (app, client, server, hellos):
             realm = app.realm; store = realm.action_store
-            c = classify(p.LeavePvp("old-root", (101,)))
-            r = store.prepare(ActionSpec("old-root", None, "root", c.policy, "realm_day", 4, c.kind,
-                c.payload, c.reserved_manifest, 21, 7), now=clock.now())
-            dispatch(store, r, now=clock.now())
-            store.observe_ack(Ack(0, "old-root", True, ""), now=clock.now())
-            store.observe_realm_job(p.RealmJob(0, "old-root", "leave_pvp", "failed", "partial", 101, 0), now=clock.now())
-            store.abandon("old-root", reason="invented review", now=clock.now())
+            def abandoned_root(root_id):
+                c = classify(p.LeavePvp(root_id, (101,)))
+                r = store.prepare(ActionSpec(root_id, None, "root", c.policy, "realm_day", 4, c.kind,
+                    c.payload, c.reserved_manifest, 21, 7), now=clock.now())
+                dispatch(store, r, now=clock.now())
+                store.observe_ack(Ack(0, root_id, True, ""), now=clock.now())
+                store.observe_realm_job(p.RealmJob(0, root_id, "leave_pvp", "failed", "partial", 101, 0), now=clock.now())
+                store.abandon(root_id, reason="invented review", now=clock.now())
+            abandoned_root("old-root")
             # The review's row: an abandoned root no longer readable. Realm.tick fails closed.
             with store.conn:
                 store.conn.execute("UPDATE realm_action SET transport_state='inflight' WHERE command_id='old-root'")
             await realm.tick()
-            assert "realm_forget_failed: ActionUnavailable" in caplog.messages
+            assert caplog.messages.count("realm_forget_failed: ActionUnavailable") == 1
             with store.conn:
                 store.conn.execute("UPDATE realm_action SET transport_state='settled' WHERE command_id='old-root'")
-            # The running loop: only forget's read fails (an unreadable row also stops the queue,
-            # which reads every row; that is not forget's to fix).
+            # The running loop: only forget's read of a newer root fails (an unreadable row also
+            # stops the queue, which reads every row; that is not forget's to fix).
+            abandoned_root("new-root")
             class Unreadable:
                 conn = store.conn
                 def get(self, command_id):
@@ -429,7 +448,8 @@ def test_a_forget_failure_never_ends_the_realm_loop(tmp_path, clock, caplog):
                 await clock.advance(3, step=1)
                 for _ in range(12): await asyncio.sleep(0)
                 assert not loop.done()
-                assert caplog.messages.count("realm_forget_failed: ActionUnavailable") >= 3
+                # Logged once per root and connection, never once a second.
+                assert caplog.messages.count("realm_forget_failed: ActionUnavailable") == 2
                 assert not any(cmd["type"] == "realm_forget" for cmd in server.commands)
             finally:
                 await realm.close()

@@ -92,10 +92,14 @@ class ForgetReceipts:
         for (root_id,) in rows:
             if len(self.tasks) >= 8:
                 break
-            if root_id in self.attempted or not self._released(root_id):
+            if root_id in self.attempted:
+                continue
+            # Attempted before it is read: one never eligible on this connection, or unreadable (the
+            # caller logs that once and carries on), leaves the window until a new connection.
+            self.attempted.add(root_id)
+            if not self._released(root_id):
                 continue
             attempt = _Attempt(RealmForget(uuid.uuid4().hex, root_id), ticket)
-            self.attempted.add(root_id)
             self.pending[attempt.command.id] = attempt
             task = asyncio.create_task(self._send(attempt))
             self.tasks.add(task)
