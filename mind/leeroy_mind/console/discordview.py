@@ -194,6 +194,9 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
                     last_id=last.get(cid,0),unread=unread.get(cid,0)))
         else:
             out['missing'] += sorted(tables-have)
+    if server:
+        from leeroy_mind.server.seats import read_seats
+        out['voice_seats'] = read_seats(conn, owner_now.timestamp(), human=human)
     if channel is not None:
         known = (layout.channel(channel) is not None or layout.dm_peer(channel) is not None
                  or any(g['id']==channel for g in out.get('groups',())))
