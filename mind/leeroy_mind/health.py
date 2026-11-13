@@ -700,9 +700,11 @@ def _realm_holds(conn, now: float) -> Check:
                                               "realm_action)")
         return Check("realm-holds", FAIL, f"realm: realm_action cannot be read "
                                           f"({type(e).__name__})")
+    from .realm.action_store import released_members
+    from .realm.protocol import READBACK_CHECKS
     holds, unknown, bodies, oldest = 0, 0, set(), None
     kinds = Counter()
-    details = []
+    details, quiet = [], []
     for kind, state, transport, manifest, created, ident, raw_evidence, policy in rows:
         try:
             guids = json.loads(manifest)
@@ -714,34 +716,38 @@ def _realm_holds(conn, now: float) -> Check:
             if not isinstance(job, dict): job = {}
         except (TypeError, ValueError):
             job = {}
-        released = job.get("released", [])
-        if (kind == "leave_pvp" and policy == "ordinary" and state != "conflict" and job.get("state") == "failed"
-                and not evidence.get("conflict") and isinstance(evidence.get("ack", {}), dict)
-                and evidence.get("ack", {}).get("ok") is not False
-                and isinstance(guids, list) and isinstance(released, list)
-                and len(released) <= 150 and all(type(g) is int and 0 < g <= 0xFFFFFFFF and g in guids for g in released)
-                and len(released) == len(set(released))):
+        released = released_members("root", policy, kind, state, raw_evidence, guids)
+        if released:
             guids = [g for g in guids if g not in released]
         held = transport != "not_entered" and bool(guids)
         if not held and state != "unknown":
             continue
-        holds += held
-        unknown += state == "unknown"
-        if held and isinstance(guids, list):
-            bodies.update(g for g in guids if type(g) is int)
-        kinds[kind if isinstance(kind, str) and _IDENT.match(kind) else "?"] += 1
-        oldest = created if oldest is None else min(oldest, created)
+        # Native's release proof covers every member: still unknown, but it holds nobody.
+        wholly_released = bool(released) and not guids and state == "unknown"
+        if not wholly_released:
+            holds += held
+            unknown += state == "unknown"
+            if held and isinstance(guids, list):
+                bodies.update(g for g in guids if type(g) is int)
+            kinds[kind if isinstance(kind, str) and _IDENT.match(kind) else "?"] += 1
+            oldest = created if oldest is None else min(oldest, created)
         # IDs/kinds only. Do not echo a malformed stored value into a shell command.
         if isinstance(ident, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", ident):
             count = len({g for g in guids if type(g) is int and g > 0}) if isinstance(guids, list) else 0
             code = kind if isinstance(kind, str) and _IDENT.fullmatch(kind) else "unknown_kind"
-            details.append(f"{ident} kind={code} members={count}: realm release {ident} "
-                           "--reason reviewed_stale_hold")
-            from .realm.protocol import READBACK_CHECKS
+            detail = f"{ident} kind={code} members={count}: realm release {ident} --reason reviewed_stale_hold"
             member, check = job.get("readback_guid"), job.get("check")
             if type(member) is int and 0 < member <= 0xFFFFFFFF and type(check) is str and check in READBACK_CHECKS:
-                details[-1] += f" readback_guid={member} check={check}"
+                detail += f" readback_guid={member} check={check}"
+            (quiet if wholly_released else details).append(detail)
+    nobody = (f"{len(quiet)} unknown root{'s' if len(quiet) != 1 else ''} older than 1 h "
+              f"hold{'s' if len(quiet) == 1 else ''} nobody")
     if not holds and not unknown:
+        if quiet:
+            return Check("realm-holds", NOTE,
+                         f"realm: {nobody} (native released every member); to tidy up, with the mind stopped: "
+                         + "; ".join(quiet[:20])
+                         + (f"; {len(quiet) - 20} more roots" if len(quiet) > 20 else ""))
         return Check("realm-holds", OK, "realm: no body hold or unknown root older than 1 h")
     return Check("realm-holds", FAIL,
                  f"realm: {holds} body hold{'s' if holds != 1 else ''} ({len(bodies)} members) "
@@ -751,6 +757,7 @@ def _realm_holds(conn, now: float) -> Check:
                  + "; inspect native state, then with the mind stopped: "
                  + "; ".join(details[:20])
                  + (f"; {len(details) - 20} more roots" if len(details) > 20 else "")
+                 + (f"; {len(quiet)} more {nobody.partition(' ')[2]}" if quiet else "")
                  + "; on restart, realm release also frees eligible native holds when the worldserver supports realm_forget")
 
 
