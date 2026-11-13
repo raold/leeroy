@@ -22,6 +22,8 @@ after the first attempted opener, even if its lines are dropped; channel-purpose
 seeds renew daily. Live plans, officer attendance and trials return at most once
 per ISO week. Private poaching offers never become seeds. Only a life beat's owner
 may open it, and only observed participants may open his group's kill or loot.
+Native `loot_won` events carry no member list today, so his loot seeds nothing
+(fails closed); only his group's boss kills seed his day.
 An unavailable owner leaves the seed unused; a dropped restricted opener ends
 the conversation. Later speakers see only what was actually posted. Officer
 meetings stay in officer chat. Purpose seeds are topics, and rival activity carries
