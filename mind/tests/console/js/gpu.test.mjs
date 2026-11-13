@@ -47,6 +47,12 @@ test('Ops switches and Tonight presence show the same retained pause', () => {
   assert.ok(cardModel('guild',{status:'ok',gpu:paused}).lines.some(l=>l.text.startsWith('GPU paused since')));
   assert.equal(pausedWords(running),'');
 });
+test('a pause his login or post interrupted says so, not the refusal it now carries', () => {
+  const message = 'GPU use resumed after your login or Discord post.';
+  assert.equal(gpuResult({ok:false,error:'gpu_resumed',refusal:'Log out of WoW first: your game keeps the model loaded',message}),message);
+  const stopping = 'GPU use is paused and will finish once the night has stopped.';
+  assert.equal(gpuResult({ok:true,paused:true,pending:true,message:stopping}),stopping);
+});
 test('a Resume button never carries the pause refusal as its reason', () => {
   const unknown = "Can't tell whether you're in WoW yet; try again in a moment.";
   assert.equal(gpuModel({...paused,refusal:unknown}).why,'');

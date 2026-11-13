@@ -48,7 +48,8 @@ async def stopped(url, action, *, admin_factory=LocalAdmin):
     admin = admin_factory(url, timeout=5)
     names, freed = [], 0
     try:
-        models = await loaded(admin)
+        # A pause waits the admin's own timeout; the status strip keeps its short one.
+        models = await loaded(admin, timeout=None) if action == 'pause' else await loaded(admin)
         if action == 'pause':
             for model in models:
                 await admin.unload(model['name'])

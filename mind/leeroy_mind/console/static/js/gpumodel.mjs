@@ -26,7 +26,8 @@ export function gpuModel(value, {busy=false, keyLost=false, format} = {}) {
       paused ? 'GPU freed at '+at+'. Members are resting until you resume, log into WoW or post in Discord.' : ''};
 }
 export function gpuResult(value) {
-  if (!value?.ok) { return value?.refusal || value?.message || 'The console did not confirm the GPU change. Check its state before trying again.'; }
+  if (!value?.ok && value?.error === 'gpu_resumed' && value.message) { return value.message; }
+  if (!value?.ok) { return value?.refusal || value?.message ||'The console did not confirm the GPU change. Check its state before trying again.'; }
   if (typeof value.message === 'string' && value.message) { return value.message; }
   if (value.mind_down) { return 'The mind is stopped; unloaded '+(Array.isArray(value.unloaded) ? value.unloaded.length : 0)+' models.'; }
   if (value.paused && Number.isFinite(value.freed_bytes) && value.freed_bytes >= 0) {
