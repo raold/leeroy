@@ -60,8 +60,11 @@ emoji-only content, item links and placeholders, and bracketed `[Item Name]`s. A
 SHA-256 draw from member and turn IDs scales the share by her talkative dial; zero never
 chooses audio. Presence, lease and caps are checked again after rendering.
 
-Rendering waits behind queued live room synthesis and never plays, ducks, enters the mixer,
-adds microphone or room effects, or takes a GPU lease. An already admitted CUDA expressive
+Room playback comes first: while a room line waits or plays, the voice service answers a
+render `busy` at once and her line goes out as typed text, so a note never holds up the
+room's synthesis. One render and one transcription can run at a time, side by side (they use
+different workers). Rendering never plays, ducks, enters the mixer, adds microphone or room
+effects, or takes a GPU lease. An already admitted CUDA expressive
 engine can render on that same synthesis queue; otherwise the member's native Kokoro blend
 is used. CPU expressive is reserved for its separately admitted room worker, so notes use
 Kokoro rather than compete with a room job on that worker. This is a deliberate admission

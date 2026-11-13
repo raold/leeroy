@@ -38,7 +38,10 @@ def test_offline_native_render_is_atomic_without_playback_or_duck(tmp_path,fake_
     run(go())
 
 
-def test_notes_wait_behind_queued_room_synthesis(tmp_path,fake_bank):
+def test_a_note_never_starts_while_room_lines_wait_or_play(tmp_path,fake_bank):
+    """Room playback first: a note asked for while a room line waits or plays is refused busy at
+    once (the mind sends her line as text), so it never holds up the room's synthesis; one asked
+    for when the room is quiet renders."""
     async def go():
         async with Rig(tmp_path,fake_bank) as r:
             await r.snapshot()
@@ -46,16 +49,50 @@ def test_notes_wait_behind_queued_room_synthesis(tmp_path,fake_bank):
             def line(ident,text):
                 return Speak(ident,101,text,'guild_hall',False,'p3','banter','none','sober',int((r.clock.now()+120)*1000))
             await r.mind.send(line('room-first','First ordinary room line.'))
-            await eventually(lambda:r.service.pending_synthesis or 'room-first' in r.service._jobs)
+            await eventually(lambda:'room-first' in r.service._jobs)
+            before=inventory(r.service.notes.root)
             await r.mind.send(Render('b'*32,101,'Later private audio note.'))
-            await r.mind.send(line('room-second','Second ordinary room line.'))
-            await eventually(lambda:'room-second' in r.service._jobs)
+            refused=await r.next_of(Rendered)
+            assert refused.id=='b'*32 and not refused.ok and refused.reason=='busy'
             r.engine.gate.set()
-            result=await r.next_of(Rendered)
-            assert result.ok
-            spoken=r.engine.live()
-            assert spoken.index('Second ordinary room line.')<spoken.index('Later private audio note.')
-            assert not any(ident=='b'*32 for ident,_,_ in r.played())
+            await r.sees('room-first','started')
+            await r.mind.send(Render('c'*32,101,'Later private audio note.'))
+            assert (await r.next_of(Rendered)).reason=='busy'  # still playing
+            await r.play_out()
+            await r.sees('room-first','done')
+            assert inventory(r.service.notes.root)==before
+            await r.mind.send(Render('d'*32,101,'Later private audio note.'))
+            assert (await r.next_of(Rendered)).ok
+            assert r.engine.live().count('Later private audio note.')==1
+            assert not any(ident in ('b'*32,'c'*32,'d'*32) for ident,_,_ in r.played())
+    run(go())
+
+
+def test_one_render_and_one_transcription_run_side_by_side(tmp_path,fake_bank):
+    """A render and a transcription use different workers: one of each at a time, so his note
+    is never refused because a member's note is rendering (a second of a kind is busy)."""
+    async def go():
+        async with Rig(tmp_path,fake_bank) as r:
+            await r.mind.send(VoiceDef(101,'Arkon',spec()))
+            folder=r.service.notes.root/'discord/voice';folder.mkdir(parents=True)
+            path=folder/('9'*32+'.wav')
+            with wave.open(str(path),'wb') as wav:
+                wav.setparams((1,2,16000,0,'NONE','not compressed'));wav.writeframes(b'\0'*32000)
+            relative=path.relative_to(r.service.notes.root).as_posix()
+            r.engine.gate.clear()
+            await r.mind.send(Render('a'*32,101,'An invented private note.'))
+            await eventually(lambda:'a'*32 in r.service.notes.pending)
+            await r.mind.send(Render('b'*32,101,'Another invented private note.'))
+            busy=await r.next_of(Rendered)
+            assert busy.id=='b'*32 and busy.reason=='busy'
+            await r.mind.send(Transcribe('c'*32,relative))
+            heard=await r.next_of(Transcript)
+            assert heard.id=='c'*32 and heard.ok and heard.text=='hello team'
+            await r.mind.send(Transcribe('e'*32,relative))
+            assert (await r.next_of(Transcript)).ok  # the first one is done: not busy
+            r.engine.gate.set()
+            done=await r.next_of(Rendered)
+            assert done.id=='a'*32 and done.ok
     run(go())
 
 

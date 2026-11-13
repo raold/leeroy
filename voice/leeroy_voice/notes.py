@@ -40,20 +40,24 @@ class NoteJob:
 class Notes:
     def __init__(self,service,root):
         self.service,self.root=service,Path(root)
-        self.pending=set()
+        self.pending={}  # request id -> Render or Transcribe: one of each kind at a time
         self.format='OGG' if sf.check_format('OGG','VORBIS') else 'WAV'
         log('voice_note_format',code='ogg' if self.format=='OGG' else 'wav')
 
     def request(self,msg):
-        if self.pending:
+        s=self.service
+        # A render and a transcription use different workers (synthesis, STT), so each kind
+        # waits only for its own. Room playback first: no render starts while a room line
+        # waits or plays, since once started it would hold up the room's later lines.
+        if (type(msg) in self.pending.values()
+                or (isinstance(msg,Render) and (s.scheduler.waiting() or s.scheduler.playing()))):
             result=Rendered(msg.id,False,'',0,0,'busy') if isinstance(msg,Render) else Transcript(msg.id,False,'','busy')
-            self.service._send(result); return
-        self.pending.add(msg.id)
+            s._send(result); return
+        self.pending[msg.id]=type(msg)
         if isinstance(msg,Render):
             # Lower than every live tier; one queue serializes access to the engines.
             self.service._tts_queue.put((99,next(self.service._tts_seq),0,NoteJob(msg)))
         else:
-            s=self.service
             # Like _hear, refresh on the event loop before handing work to STT.
             # with_names returns a new corrector; later roster changes cannot
             # change this note's snapshot. The recent-speaker deque is bounded.
@@ -68,7 +72,7 @@ class Notes:
         result=(Rendered(msg.id,ok,path,ms,size,reason) if isinstance(msg,Render)
                 else Transcript(msg.id,ok,text,reason))
         def done():
-            self.pending.discard(msg.id)
+            self.pending.pop(msg.id,None)
             self.service._send(result)
         self.service._post(done)
 
