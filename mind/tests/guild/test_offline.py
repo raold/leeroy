@@ -816,3 +816,39 @@ async def test_attendance_runs_once_and_the_attended_flag_survives_a_restart(set
     await recreated.on_job(event(recreated, state="done", stage="", reason="cleared", kills=1))
     await recreated.tick()
     assert calls == [] and not recreated.active
+
+
+@_run_async
+async def test_offline_raid_due_during_a_gpu_pause_waits_and_starts_after_resume(setup, caplog):
+    ports, _, controller = setup
+    ports.gpu_pause = True
+    with caplog.at_level("INFO"):
+        for _ in range(3):
+            await controller.tick()
+            await advance(ports, 60)
+    assert not ports.sent and not ports.gpu and not controller.active
+    day = controller._day_state()
+    assert day["attempts"] == 0 and not day["blocked"]
+    assert sum("offline_raid_waiting reason=gpu_paused" in r.message for r in caplog.records) == 1
+    ports.gpu_pause = False  # Resume: the raid starts by its normal rules, the same day.
+    await start(setup)
+
+
+@_run_async
+async def test_offline_raid_whose_gpu_hold_meets_a_pause_waits_without_blocking_the_day(setup, caplog):
+    from leeroy_mind.llm.client import GpuPaused
+    ports, _, controller = setup
+
+    async def paused(holder):  # the arbiter's hold() while paused, past _due()'s check
+        ports.gpu.append(f"acquire:{holder}")
+        raise GpuPaused("The GPU is paused.")
+    ports.acquire_gpu = paused
+    with caplog.at_level("INFO"):
+        await controller.tick()
+    assert not ports.sent and not controller.active and controller._owned["phase"] == "rejected"
+    day = controller._day_state()
+    assert day["attempts"] == 0 and not day["blocked"]
+    assert any("offline_raid_waiting reason=gpu_paused" in r.message for r in caplog.records)
+    assert not any("could not complete" in r.message for r in caplog.records)
+    del ports.acquire_gpu
+    await start(setup)
