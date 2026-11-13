@@ -9,7 +9,40 @@ members who answer look at it first.
 
 - `enabled = true` allows owner uploads. Restart both the mind and the console after
   changing it.
-- `send` is reserved for the next photo phase (members' own photos) and sends nothing yet.
+- `send = true` lets members attach their retained, screened photos to their Discord messages.
+  It requires `[selfies] enabled = true`, `[selfies] snaps = true`, and `[server] enabled = true`.
+  A missing prerequisite logs `photos_send_needs key=...` once at startup and leaves delivery off.
+  It is independent of owner uploads: `enabled` may remain false with `send` true.
+
+## Members' photos
+
+- A member can attach a private `him` snap to a DM opener or an answer to his own DM. He need
+  not be online. When replies on her own time are enabled, the photo is offered only when
+  that deferred reply actually speaks.
+- Public `anyone` snaps start conversations in `food`, `pets`, `irl`, or `pics`, according to
+  the scene. The member pictured opens the conversation; other members see a short scene
+  note beside the caption. A private snap never enters a channel. Lust-style snaps only go
+  to that member's DM with him; nightly channel stock excludes members whose scene recipe
+  is the lust style.
+- Her DM photo is remembered in their whispers too, with its original Discord DM label.
+  Its scene is available only to their pair, including the awareness card. Deleted messages
+  hide their notes and images while retaining the files.
+- The selfies world dial keeps its existing private weekly ration. Channel photos have a
+  separate local-day budget: `0, 0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12`. The half-photo slot uses
+  a stable draw per local date, so repeated checks and restarts cannot grant extra chances.
+  Both counters survive restart, and each member still waits two days between photos.
+- The night stocks both outlets, private first, within the existing member stock, scene
+  and render caps. Birthday and life-beat priority is unchanged. With delivery off, planning
+  follows the previous path.
+- Only one photo may be reserved at a time. Its caption, Discord attachment, chat line,
+  sent receipt and budget spend commit together. A guard rejection, unsafe caption, failed
+  delivery or cancelled turn releases the reservation without spending the photo ration.
+  Pick, looks, phase, expiry, current NSFW threshold, file and audience checks repeat before
+  delivery. No photo file is deleted.
+- Discord delivery and its new outlet stock require adults 25 and over, clothed and
+  non-explicit. This delivery floor is stricter than the existing plain profile renderer's
+  schema age floor; profile rendering and the delivery-off planning path keep their previous
+  behavior. Captions also pass the existing explicit-content, clothing and age screens.
 
 ## Uploads
 
@@ -39,6 +72,11 @@ members who answer look at it first.
 
 ## Storage
 
-Migration `00NN_discord_photos.sql` rebuilds `discord_message` (adding the `bot` origin
-reserved for later server bots) and adds `discord_attachment` (`upload`, `snap`, and `meme`
-reserved for later). The console serves a photo with `GET /api/discord/image?id=&size=sm|lg`.
+Migration `0038_discord_photos.sql` already supplies `discord_attachment` and the `dm` and
+`discord` snap outlets. Member delivery needs no additional migration. The console serves a
+photo with `GET /api/discord/image?id=&size=sm|lg`; a snap's small size uses its thumbnail.
+
+After release, post a photo of something known and check that the answer engages what it
+shows. With the delivery switches on and stock available, check a member's DM photo and a
+channel photo conversation. These switches are operator choices; tests use only fake models,
+rendered fixtures and isolated ports.

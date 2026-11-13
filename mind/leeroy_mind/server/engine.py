@@ -285,6 +285,8 @@ class ServerEngine:
                     priority=Priority.BACKGROUND, max_lines=1)
                 topic = conversation.seed.fact if parent is None else ''
                 meta = TurnMeta('', why='server:'+conversation.seed.kind, topic=topic,
+                    photo_seed=(int(conversation.seed.key.removeprefix('photo:'))
+                                if parent is None and conversation.seed.kind == 'photo' else None),
                     server_anchor=purpose+' '+topic, server_thread=tuple(conversation.messages),
                     server_conversation=conversation.id, discord=DiscordTarget(parent,None), single_line=True,
                     keep_channel=True, review_required=True, guards=guards,

@@ -226,10 +226,11 @@ class LiveReview:
                 rows = [*conn.execute("SELECT id,ts,author,text,thread,origin FROM discord_message "
                     "WHERE id=? AND channel=? AND deleted IS NULL AND ts<=?",
                     (draft.parent_id, cid, now)).fetchall(), *rows]
-            from leeroy_mind.photos.look import photo_note
-            photos = dstore.attachments(conn, [r[0] for r in rows]) if getattr(e, 'photos_enabled', False) else {}
+            from leeroy_mind.photos.notes import by_messages
+            photos = by_messages(conn, [r[0] for r in rows], uploads=getattr(e,'photos_enabled',False),
+                                 members=getattr(e,'photos_send',False))
             history = tuple(HistoryLine(r[0], r[1], r[2], r[3] + (
-                ' ' + photo_note(photos[r[0]]['look']) if r[0] in photos else ''), draft.channel,
+                ' ' + photos[r[0]] if r[0] in photos else ''), draft.channel,
                 (observed.human if r[2] == turn.speaker else turn.speaker) if draft.channel == "dm" else 0,
                 draft.room, r[4], readers=readers, origin=r[5]) for r in rows)
             thread = meta.discord.thread if meta.discord else None
@@ -257,7 +258,18 @@ class LiveReview:
             "ORDER BY ts DESC,id DESC LIMIT 256", (raw,now-12*3600,now)).fetchall()[::-1]
         history = tuple(h for r in rows if _visible(h := _line(dict(r), {}), draft,
                                                   observed.officer))
-        return history, tuple(h for h in history if now-h.ts <= 300)[-16:]
+        photos = ()
+        if (getattr(e,'photos_send',False) and raw == 'whisper'
+                and observed.to == observed.human and observed.human):
+            from leeroy_mind.photos.notes import by_lines
+            paired = conn.execute('SELECT c.* FROM chat_line c JOIN selfie_snap s ON s.line_id=c.id '
+                "WHERE c.channel=? AND c.from_guid=? AND c.to_guid=? AND c.ts BETWEEN ? AND ? "
+                "AND s.status='sent' AND s.audience='him' ORDER BY c.ts DESC,c.id DESC LIMIT 4",
+                (f'dm:{turn.speaker}',turn.speaker,observed.human,now-7*86400,now)).fetchall()[::-1]
+            notes = by_lines(conn,[r['id'] for r in paired])
+            photos = tuple(replace(h,text='Earlier in your Discord DM: '+h.text+' '+notes[h.id])
+                for r in paired if (h := _line(dict(r),{})).id in notes and _visible(h,draft,observed.officer))
+        return (*history,*photos), (*photos,*(h for h in history if now-h.ts <= 300))[-16:]
 
     async def block_async(self,turn,meta,*,close):
         names = dict(self.engine._names(turn.channel))

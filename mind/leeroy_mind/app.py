@@ -483,6 +483,8 @@ class MindApp:
         self.realm = attach_realm(self)
         from .server.attach import attach_server
         self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.
+        from .photos.attach import attach_photos
+        self.photos = attach_photos(self)
 
     # -- extension points --------------------------------------------------------------------
 

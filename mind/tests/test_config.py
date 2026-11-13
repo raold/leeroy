@@ -121,7 +121,7 @@ def test_loopback_ollama_urls_pass(tmp_path, url):
 
 def test_talk_selfies_defaults_to_three_and_refuses_eleven(tmp_path):
     assert load_config(tmp_path / "missing.toml").talk.selfies == 3
-    assert re.search(r"^selfies = 3 +# 0-10, photos the guild sends you \(rendered at night\)$",
+    assert re.search(r"^selfies = 3 +# 0-10, member photos in your DMs and guild channels \(rendered at night\)$",
                      DEFAULT_TOML, re.MULTILINE)
     p = tmp_path / "bad.toml"
     p.write_text("[talk]\nselfies = 11\n", encoding="utf-8")

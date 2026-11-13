@@ -164,11 +164,13 @@ def _world_numbers(dial: str, before: int, after: int) -> list[dict]:
         return [{"what": "minutes between the guild's bursts of talk, evening, you active",
                  "before": gap(before), "after": gap(after), "unit": "min"}]
     if dial == "selfies":
-        from leeroy_mind.selfies.ration import per_day, per_week
-        return [{"what": "photos made and stocked a week across the guild, at most", "before": per_week(before),
+        from leeroy_mind.selfies.ration import per_day, per_week, channel_per_day
+        return [{"what": "photos sent to you a week across the guild, at most", "before": per_week(before),
                  "after": per_week(after), "unit": ""},
-                {"what": "photos made and stocked a day, at most", "before": per_day(before),
-                 "after": per_day(after), "unit": ""}]
+                {"what": "photos sent to you a day, at most", "before": per_day(before),
+                 "after": per_day(after), "unit": ""},
+                {"what": "photos posted in guild channels a day", "before": channel_per_day(before),
+                 "after": channel_per_day(after), "unit": ""}]
     if dial == "jealousy":
         return [{"what": "envy asides an hour, at most", "before": round(2 * before / 5),
                  "after": round(2 * after / 5), "unit": ""},

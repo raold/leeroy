@@ -93,7 +93,7 @@ WORLD_DIALS: dict[str, WorldDial] = {d.name: d for d in (
     WorldDial("jealousy", "jealousy", 0, 10, "romance", "jealousy", "at once",
               "how many envy asides an hour, the women's rivalry and the night's jealousy"),
     WorldDial("selfies", "selfies", 0, 10, "talk", "selfies", "at once",
-              "how many photos are made and stocked for the guild a week; sending them arrives with the guild Discord's photo phase"),
+              "how many photos members send to your DMs and post in the guild's photo channels"),
 )}
 
 
