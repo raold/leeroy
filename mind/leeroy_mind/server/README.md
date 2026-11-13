@@ -230,6 +230,8 @@ behind their own switches. The photo rehearsal waits for real read workers
 before each fake-clock step, retaining its 100-step, 200-second budget. Its
 two-line conversation fixes prompt-reply draws: production's optional 600–2400
 second late gap is covered by pacing tests, not this photo-wiring fixture.
+The follow-up passed 100 consecutive photo rehearsals with 24 pytest workers
+in 14.40 seconds, using only fake services and isolated temporary directories.
 D4 adds decision
 ledgers and guarded game consequences; D5 adds guild culture and server bots;
 D6 adds day plans, intent to action, shared activities and operator nudges/undo.
