@@ -201,7 +201,9 @@ cannot relabel the captured recipe. Supplied templates have model `none`.
 The optional `learn:recipe:<anchor-line-id>` meta receipt has `version: 1`, a
 `callback_id` (or null), a learned `num_predict` (or null), and `parameters`, the
 numeric generation options captured at the actual model call. It contains no
-prompt, lesson, callback or chat text. The receipt and callback-use row commit
+prompt, lesson, callback or chat text. It is written only for an applied callback
+or learned game output allowance, never with application off, and pruned after
+90 days (including orphaned receipts). The receipt and callback-use row commit
 with the recipe; subsequent burst fragments share the first line's attribution.
 
 ## Variant arms and the bandit
@@ -214,7 +216,7 @@ disable the entire table. Restart after configuration changes.
 `freeze = true` (or the Lab's Freeze learning) stops all learning, not only the
 bandit: reward scoring, bandit selection and credit, coach lessons
 and arm proposals, preference and vector capture, the voice-fingerprint stage and
-banter's rewarded jokes. Feedback and delivered recipes are still saved, and the 90-day retention of
+banter's rewarded jokes and delivered recipes. Feedback is still saved, and the 90-day retention of
 private drafts and vectors keeps running. The Lab can freeze more and lift its own
 freezes; it cannot lift a freeze or a frozen family that mind.toml sets.
 
@@ -300,19 +302,22 @@ be lifted by the Lab. A global or member freeze is identical to `apply = false`
 for generated prompts and model options: this task supplies no arms, lessons,
 fingerprint hint or callback. Established features remain their off baseline,
 including banter's pre-existing fingerprint instruction and typing realism.
-Active application replaces banter's old hint with the scoped style block.
+Active application replaces banter's old hint with the scoped style block,
+including a baseline typing hint when its learned typing family selects control.
 Family freezes select control; other families continue. Freeze and lesson vetoes
 are rechecked after the detached style read, before using its results.
 
 Arms map only to reviewed, non-explicit wording in the user message. Length also
-sets an output allowance of 32–176 tokens for currently valid arm bounds; context
-size stays 4096. Question and follow-up rates choose whether this reply can include
+reduces a game's existing output allowance, never exceeding 80 tokens. Discord's
+length family selects control: only `[talk] discord_words` sets its instruction
+and output allowance. Context size stays 4096. Question and follow-up rates choose whether this reply can include
 a question or one extra thought; they never schedule another turn or loosen
 single-line, combat, typing or deadline gates. Humour and teasing are clipped to
 current member dials, gender and the lesser member/world romance setting.
 Guards still review the resulting line, including server anchor cosine 0.35.
 
-The style block has a separate `style` token count and 220-token ceiling. Whole
+The style block has a separate `style` input token count and 220-token ceiling,
+independent of either channel's output allowance. Whole
 notes are removed from its end before trimming the other-medium timeline, chat
 or mandatory instructions/evidence. Recipes include only retained lesson IDs and
 materialized arms; an arm removed by trimming is attributed as control. Callback
@@ -324,7 +329,8 @@ require an active recorded owner-play session, so unattended server conversation
 do not receive callbacks while the owner is offline.
 
 Lesson provenance uses `learn:lesson:evidence:<lesson-id>` in meta, with
-`version: 1`, bounded `refs` (`chat:<id>` and `memory:<id>`, at most 128), and
+`version: 1`, bounded `refs` (`chat:<id>`, `memory:<id>`, non-chat `event:<id>`
+and owner-authored `owner:` leaves, at most 512), and
 `forward_min`. Sources include the coach's shown exchanges and memories carried
 by their generated lines. Reinforcement unions sources and raises, never lowers,
 the forward floor. Missing, malformed, deleted or excessive evidence fails closed.
@@ -335,11 +341,17 @@ unproved legacy note with a wider audience.
 Application walks the sources again and uses `recall.scope_ok` and `hidden_ok`.
 Pair notes can reach that pair's whispers and DMs; officer notes reach officers'
 game/Discord turns only. Current officer membership is required. Unknown restricted
-rooms fail closed. Officer coaching stores the existing `group` category while its
-source provenance carries the actual officer audience; no migration is needed.
+rooms fail closed. Coaching keeps main's eligibility with application either on
+or off: officer conversations do not compete with guild or group coaching.
 Private notes never reach guild, party, public Discord or banter. Historical group
-notes require the current readers to fit the recorded audience. Deleted Discord
-sources are excluded through their durable message-to-line receipts.
+notes, including voice and say/yell, require the current readers to fit the
+recorded audience. Deleted Discord sources are excluded through their durable
+message-to-line receipts. The receipt-index migration adds a partial value index for those
+receipts, avoiding a scan of accumulated Discord history. Each turn shares a
+512-node provenance memo across lessons and typing; the coach memoizes source
+expansion within a night. Nested generated lines expand their recalled memories.
+The regression benchmark uses 20,000 receipts and 300 candidate typing lines,
+with a 250 ms smoke-test ceiling; this is a test guard, not a production timeout.
 
 Typing hints use only numeric measurements of the latest 300 lines whose complete
 provenance passes the same audience checks, with a persona prior below 50 eligible

@@ -42,6 +42,12 @@ def is_private(channel) -> bool:
     return isinstance(channel, str) and (channel == WHISPER or channel.startswith(DM_PREFIX))
 
 
+def is_local_channel(channel) -> bool:
+    """Game rooms whose historical readers must contain the current readers."""
+    return isinstance(channel, str) and (channel in ('party', 'raid', 'raid_warning', 'say', 'yell')
+                                         or channel.startswith('voice:'))
+
+
 def is_restricted(channel) -> bool:
     """A line only its audience reads: the officers' (is_officer_channel), or one on a Discord
     channel the layout does not have (fail closed)."""

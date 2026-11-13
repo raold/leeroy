@@ -34,7 +34,7 @@ def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands
         rig.engine.learn_settings=LearnCfg(enabled=True,bandit=True,apply=True)
         def choose_arms(conn, guid, context, **kwargs):
             arms.ensure(conn)
-            return arms.controls() | {'length':'length.1.v1'}
+            return arms.controls() | {'length':'length.1.v1', 'questions':'questions.1.v1'}
         monkeypatch.setattr(bandit,'choose',choose_arms)
     rig.world.human_online = False
     rig.script(
@@ -105,7 +105,8 @@ def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands
         if learning:
             recipes=store.conn.execute('SELECT arm_ids FROM talk_recipe').fetchall()
             assert len(recipes)==5
-            assert all('length.1.v1' in json.loads(r[0]) for r in recipes)
+            assert all('length.control.v1' in json.loads(r[0]) for r in recipes)
+            assert all('questions.1.v1' in json.loads(r[0]) for r in recipes)
             assert all('Your recent style notes' in r['messages'][-1]['content'] for r in requests)
         if kind != 'purpose':
             assert rows[0]['author']==101

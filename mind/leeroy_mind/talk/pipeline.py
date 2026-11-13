@@ -1339,7 +1339,7 @@ class Pipeline:
                              ([callback.memory_id] if callback else []))), p, close,
                         [trigger] if trigger else [], [r.text for r in earlier], samples,
                         support, [r.text for r in recent if r.id != turn.trigger_line],
-                        [*trimmed.memories, *trimmed.facts], moves=recent_moves)
+                        [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves)
 
     def _their_story(self, turn: Turn, meta: TurnMeta, line: str, memories) -> str:
         """For a member answering his public question to other members (it opens on a
@@ -2052,8 +2052,9 @@ class Pipeline:
                 if expired:
                     raise Expired(turn.deadline)
                 options = dict(preset.options)
-                if meta is not None and meta.learning is not None and meta.learning.num_predict is not None:
-                    options['num_predict'] = meta.learning.num_predict
+                if (not is_discord(turn.channel) and meta is not None and meta.learning is not None
+                        and meta.learning.num_predict is not None):
+                    options['num_predict'] = min(options.get('num_predict', 80), meta.learning.num_predict, 80)
                 if meta is not None and meta.seed is not None:  # a tuning preview's
                     options["seed"] = meta.seed
                 self.timing.model(trace, attempt, "call")

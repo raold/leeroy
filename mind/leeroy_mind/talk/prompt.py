@@ -93,7 +93,7 @@ class PromptParts:
 
 ELSEWHERE_HEAD = "Earlier between you two, elsewhere (you remember it; it is not the line you answer):"
 STYLE_HEAD = "Your recent style notes (observations, not rules; use only what fits this moment):"
-STYLE_CAP_TOKENS = 220
+STYLE_CAP_TOKENS = 220  # input observations only; output length belongs to the channel preset
 
 FACTS_HEAD = ("Facts you know (use them if they help, in your own words; never invent anything "
               "beyond them; if they don't cover it, say you're not sure or point {them} to "

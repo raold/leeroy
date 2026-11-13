@@ -55,8 +55,6 @@ def response_schema(has_arms):
 
 
 def scope(channel):
-    if is_officer_channel(channel):
-        return 'group'  # legacy storage category; actual audience lives in source provenance
     if is_restricted(channel):
         return None
     if channel.startswith('voice:') and (channel.removeprefix('voice:') not in BY_ID or
@@ -273,8 +271,9 @@ async def stage(ctx):
                     return
                 try:
                     from .audience import evidence
+                    cache = ctx._memo.setdefault('learn:provenance', {})
                     sources = evidence(store.conn, {ident for exchange in exchanges
-                                        for ident in exchange['source_ids']})
+                                        for ident in exchange['source_ids']}, cache=cache)
                     lessons.persist(store.conn,guid,result,known=known,night=ctx.night,
                                     now=ctx.clock.now(),automatic=cfg.auto_lessons,settings=cfg,
                                     expected=expected,sources=sources)

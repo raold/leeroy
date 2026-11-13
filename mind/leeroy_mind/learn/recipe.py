@@ -58,7 +58,9 @@ def called_model(meta, model, options=None):
 
 
 def record(conn, line_id, turn, meta, persona, config, *, settings=None):
-    # Freeze stops adaptation/application, not observations of what was sent.
+    from .control import frozen
+    if frozen(conn, settings):
+        return False
     anchor = getattr(meta, "recipe_line_id", None)
     if anchor is not None and conn.execute(
             "SELECT 1 FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id "
@@ -82,7 +84,7 @@ def record(conn, line_id, turn, meta, persona, config, *, settings=None):
             raise ValueError("recipe_bandit_context_invalid")
         conn.execute("UPDATE talk_recipe SET arm_ids=?,bandit_context=? WHERE line_id=?",
                      (json.dumps(snapshot.arm_ids),snapshot.bandit_context,line_id))
-    if snapshot.callback_id is not None or snapshot.num_predict is not None or snapshot.parameters:
+    if snapshot.callback_id is not None or snapshot.num_predict is not None:
         conn.execute("INSERT INTO meta(key,value) VALUES (?,?)", (f"learn:recipe:{line_id}",
                      json.dumps(dict(version=1, callback_id=snapshot.callback_id,
                                      num_predict=snapshot.num_predict,

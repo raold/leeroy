@@ -109,9 +109,11 @@ def test_restricted_rooms_supply_no_coaching_content(context,tmp_path,channel):
 
 
 @pytest.mark.parametrize('channel',['officer','discord:officer-chat','voice:officers'])
-def test_officers_receive_proven_scoped_notes_without_a_schema_change(context,tmp_path,channel):
-    from leeroy_mind.learn import audience
+@pytest.mark.parametrize('apply', [False, True])
+def test_officer_coaching_keeps_main_behavior_with_apply_on_or_off(context,tmp_path,channel,apply):
     enabled(tmp_path,auto=True)
+    with (tmp_path/'mind.toml').open('a') as f:
+        f.write('\napply='+str(apply).lower()+'\n')
     async def go():
         async with context(lambda *_:json.dumps(answer([note(scope='group')])),
                            learn_enabled=True,learn_coach=True) as (ctx,llm):
@@ -120,12 +122,8 @@ def test_officers_receive_proven_scoped_notes_without_a_schema_change(context,tm
             for row in ctx.store.conn.execute("SELECT * FROM chat_line WHERE origin='mind'").fetchall():
                 ctx.store.log_utterance(row['ts'],101,channel,'reply_human',row['text'],[],None,None,to_guid=1)
             await coach.stage(ctx)
-            assert len(llm.calls)==1
-            saved=lessons.read(ctx.store.conn,guid=101,now=ctx.clock.now())
-            assert len(saved)==1 and saved[0]['scope']=='group'
-            refs=audience.saved(ctx.store.conn,saved[0]['id'])
-            assert refs and all(r.startswith('chat:') for r in refs)
-            assert not audience.visible(ctx.store.conn,refs,guid=101,channel='guild',to_guid=0,officer=True)
+            assert not llm.calls
+            assert not lessons.read(ctx.store.conn,guid=101,now=ctx.clock.now())
     asyncio.run(go())
 
 

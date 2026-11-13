@@ -37,7 +37,7 @@ def active(engine, guid):
     return cfg if not cfg.freeze and guid not in cfg.frozen_members else None
 
 
-def render_arm(arm, *, humour, forward, romance, female, rng):
+def render_arm(arm, *, humour, forward, romance, female, rng, called='your conversation partner'):
     """Closed parameters to reviewed phrases; dials are enforced after selection."""
     if arm.status == 'control' or not arms.valid(arm.family, arm.params):
         return '', None
@@ -45,7 +45,7 @@ def render_arm(arm, *, humour, forward, romance, female, rng):
     family = arm.family
     if family == 'length':
         lo, hi = p['min_words'], p['max_words']
-        return f'This reply usually fits in {lo}-{hi} words; never pad it.', min(240, max(32, hi*2+16))
+        return f'This reply usually fits in {lo}-{hi} words; never pad it.', min(80, max(32, hi*2+16))
     if family == 'questions':
         return ('One brief, relevant question can fit, if there is something real to ask.'
                 if rng.random() < p['rate'] else 'Let this reply stand without adding a new question.'), None
@@ -54,22 +54,23 @@ def render_arm(arm, *, humour, forward, romance, female, rng):
                 'light':'A little light humour can fit when the moment supports it.',
                 'playful':'A playful observation can fit; never force a joke.'}[p['level']], None
     if family == 'tease':
-        return ('Gentle teasing of the owner can fit if welcome; stay within your current boundaries.'
+        return (f'Gentle teasing of {called} can fit if welcome; stay within your current boundaries.'
                 if p['level'] == 'light' else 'No added teasing in this reply.'), None
     if family == 'followup':
         # This shapes this generation, not another scheduled turn. No arm can
         # override a single-line job, combat gate, deadline or delivery cadence.
-        return ('If one small follow-up thought belongs, include it in this same reply, within its line limit.'
+        return ('If one small follow-up thought belongs, include it in this same reply, within this channel\'s allowance.'
                 if rng.random() < p['rate'] else 'One complete thought is enough; leave room for an answer.'), None
     # Callback/typing choices are materialized from scoped data separately.
     return '', None
 
 
-def scoped_profile(conn, guid, persona, *, channel, to_guid, readers, officer):
+def scoped_profile(conn, guid, persona, *, channel, to_guid, readers, officer, visibility=None):
     rows = conn.execute("SELECT id,text FROM chat_line WHERE from_guid=? AND origin='mind' "
                         "ORDER BY ts DESC,id DESC LIMIT 300", (guid,)).fetchall()
-    lines = [r['text'] for r in rows if audience.visible(conn, audience.evidence(conn, [r['id']]),
-             guid=guid, channel=channel, to_guid=to_guid, readers=readers, officer=officer)]
+    visibility = visibility or audience.Visibility(conn, guid=guid, channel=channel,
+        to_guid=to_guid, readers=readers, officer=officer)
+    lines = [r['text'] for r in rows if visibility.visible([f"chat:{r['id']}"])]
     dials = dials_of(persona)
     return measure(lines) if len(lines) >= 50 else seed(asdict(persona), samples=len(lines),
         talkative=dials.value('talkative',persona), humour_dial=dials.value('humour',persona))
@@ -95,36 +96,37 @@ async def prepare(engine, turn, meta, persona, *, now):
         selected = bandit.choose(engine.store.conn, turn.speaker, context, rng=engine.rng, now=now)
         registry = {a.id:a for a in arms.read(engine.store.conn)}
     result = Applied(context, selected)
-    readers = tuple(engine.world.audience(turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
+    readers = tuple(engine.world.conversation_readers(turn.channel, from_guid=turn.speaker,
+        to_guid=turn.to_guid, comms=engine.comms, human_officer=engine.human.is_guild_master))
     officer = bool(engine.world.is_officer(turn.speaker))
     # WorldView's game audience intentionally lists cast only. Callback context
     # additionally observes him when he can actually hear this conversation.
     callback_readers = set(readers)
     human = engine.human.guid
-    if is_private(turn.channel):
-        callback_readers = {turn.speaker, turn.to_guid}
-    elif not is_discord(turn.channel) and human and engine.world.human_online:
-        if turn.channel == 'guild' or is_officer_channel(turn.channel) and engine.human.is_guild_master:
-            callback_readers.add(human)
-        elif turn.channel in ('party','raid','raid_warning') and engine.world.in_group(human):
-            callback_readers.add(human)
+    if is_discord(turn.channel):
+        selected['length'] = arms.controls()['length']
+    if not human or not (human in (turn.addressee, turn.to_guid)
+                          or human in readers and engine.world.human_online):
+        selected['tease'] = arms.controls()['tease']
     for family, aid in selected.items():
         arm = registry.get(aid)
         if arm is None or family in cfg.frozen_families:
             continue
         text, predict = render_arm(arm, humour=context.humour, forward=context.forward,
-                                  romance=context.romance, female=context.female, rng=engine.rng)
+                                  romance=context.romance, female=context.female, rng=engine.rng,
+                                  called=engine.human.called)
         if text:
             result.entries.append(('arm', aid, text))
         if predict is not None:
             result.num_predict = predict
     def read(conn):
         notes = []
+        visibility = audience.Visibility(conn, guid=turn.speaker, channel=turn.channel,
+            to_guid=turn.to_guid, readers=readers, officer=officer)
         for note in lessons.read(conn, guid=turn.speaker, now=now):
             if note['status'] != 'active' or vetoed(conn, 'lesson', note['id']):
                 continue
-            if not audience.visible(conn, audience.saved(conn, note['id']), guid=turn.speaker,
-                    channel=turn.channel, to_guid=turn.to_guid, readers=readers, officer=officer):
+            if not visibility.visible(audience.saved(conn, note['id'])):
                 continue
             checked = lessons.screen(dict(text=note['text'], scope=note['scope'],
                 non_manipulative=True, forward_min=audience.forward_floor(conn,note['id'])), scope=note['scope'], persona=persona,
@@ -135,7 +137,8 @@ async def prepare(engine, turn, meta, persona, *, now):
                 break
         typing = registry.get(selected['typing'])
         profile = scoped_profile(conn, turn.speaker, persona, channel=turn.channel,
-            to_guid=turn.to_guid, readers=readers, officer=officer) if (fingerprint and typing
+            to_guid=turn.to_guid, readers=readers, officer=officer, visibility=visibility) if (
+                meta.why.startswith('banter:') or fingerprint and typing
                 and typing.params.get('strength',0)>0 and 'typing' not in cfg.frozen_families) else None
         cb_context = CallbackContext(callbacks, turn.channel, turn.to_guid,
             tuple(g for g in callback_readers if g != turn.speaker), tuple(callback_readers),
@@ -166,6 +169,8 @@ async def prepare(engine, turn, meta, persona, *, now):
         if typing.params['strength'] < 1:
             hint = 'A light touch of your usual typing style: '+hint
         result.entries.append(('arm', typing.id, hint))
+    elif meta.why.startswith('banter:') and profile:
+        result.entries.append(('baseline', 'banter.typing', render_style_hint(profile)))
     if callback and 'callback' not in current.frozen_families:
         holds = getattr(engine, '_learn_callback_holds', {})
         engine._learn_callback_holds = holds
@@ -200,6 +205,8 @@ def used(meta, count):
             note_template('learn.lesson.v1', LESSON_HEAD)
         elif kind == 'callback':
             note_template('learn.callback.v1', CALLBACK_HEAD)
+        elif kind == 'baseline':
+            note_template('learn.banter.typing.v1', text)
     # A trimmed arm did not shape the model; attribute its control instead.
     used_arms = {i for kind,i,_ in applied.used if kind == 'arm'}
     selected = dict(applied.selected)
@@ -219,6 +226,8 @@ def used(meta, count):
 
 
 def record(engine, turn, meta):
+    if active(engine, turn.speaker) is None:
+        return
     applied = meta.learning
     if applied and applied.callback and any(k == 'callback' for k,_,_ in applied.used):
         record_callback(engine.store.conn, turn.speaker, applied.callback_context,

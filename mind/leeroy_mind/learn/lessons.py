@@ -83,7 +83,7 @@ def persist(conn, guid, result, *, known, night, now, automatic, settings=None, 
             if old[0] not in result['reinforce'] and old[0] not in result['drop']:
                 conn.execute('UPDATE talk_lesson SET reinforced=reinforced+1,expires=? WHERE id=?',
                              (now+14*DAY,old[0]))
-                retain(conn, old[0], sources, forward_min=item.get('forward_min',0))
+            retain(conn, old[0], sources, forward_min=item.get('forward_min',0))
             continue
         active=conn.execute("SELECT count(*) FROM talk_lesson WHERE guid=? AND status='active' AND expires>?",
                             (guid,now)).fetchone()[0]

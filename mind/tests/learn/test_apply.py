@@ -162,7 +162,7 @@ def test_nested_misscoped_memory_and_missing_sources_never_widen_a_note(rig,monk
 
 
 @pytest.mark.parametrize('how', ['apply_off','toml_freeze','lab_freeze','member_freeze'])
-def test_off_and_global_freeze_are_byte_identical_and_still_record(rig,how):
+def test_off_and_global_freeze_are_byte_identical_and_global_freeze_stops_recipes(rig,how):
     rig.engine.learn_settings=replace(ON,apply=False)
     _,_,baseline=compose(rig)
     state=rig.engine.rng.getstate()
@@ -179,7 +179,10 @@ def test_off_and_global_freeze_are_byte_identical_and_still_record(rig,how):
     assert meta.learning is None and rig.engine.rng.getstate()==state
     line=rig.engine._record(turn,meta,c.persona,'A plain line.',[])
     row=rig.store.conn.execute('SELECT * FROM talk_recipe WHERE line_id=?',(line,)).fetchone()
-    assert json.loads(row['arm_ids'])==json.loads(row['lesson_ids'])==[]
+    if how in ('toml_freeze', 'lab_freeze'):
+        assert row is None
+    else:
+        assert json.loads(row['arm_ids'])==json.loads(row['lesson_ids'])==[]
     assert not rig.store.conn.execute('SELECT 1 FROM bandit_turn').fetchone()
 
 
@@ -235,7 +238,8 @@ def test_fixed_style_templates_are_versioned_without_private_content(rig,monkeyp
         original(name,text)
     monkeypatch.setattr(apply,'note_template',trace)
     _,first,_=compose(rig,'dm:101')
-    assert {'learn.style.v1','learn.arm.length.v1','learn.lesson.v1','learn.callback.v1'} <= {k for k,_ in traced}
+    assert {'learn.style.v1','learn.lesson.v1','learn.callback.v1'} <= {k for k,_ in traced}
+    assert 'learn.arm.length.v1' not in {k for k,_ in traced}
     assert 'picnic' not in json.dumps(traced) and 'confidential' not in json.dumps(traced)
     apply.release(rig.engine,first)
     monkeypatch.setattr(apply,'LESSON_HEAD','A recent style observation: ')
@@ -369,10 +373,13 @@ def test_every_live_transport_applies_and_credits_the_recipe(rig,monkeypatch,cha
         assert task.done()
         return await task
     assert rig.sync(run())
-    assert rig.chat_calls()[-1]['options']['num_predict']==40
+    from leeroy_mind.llm.presets import LIVE
+    from leeroy_mind.talk.discord_length import preset_for
+    expected = preset_for(LIVE, rig.engine.cfg.talk.discord_words).options['num_predict'] if is_discord(channel) else 40
+    assert rig.chat_calls()[-1]['options']['num_predict']==expected
     rows=rig.store.conn.execute('SELECT p.*,c.channel FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id').fetchall()
     assert len(rows)==1 and rows[0]['channel']==channel
-    assert 'length.0.v1' in json.loads(rows[0]['arm_ids'])
+    assert ('length.control.v1' if is_discord(channel) else 'length.0.v1') in json.loads(rows[0]['arm_ids'])
     if is_discord(channel):
         assert not rig.sent.log
         mid=rig.store.conn.execute("SELECT id FROM discord_message WHERE origin='mind'").fetchone()[0]
@@ -385,3 +392,191 @@ def test_every_live_transport_applies_and_credits_the_recipe(rig,monkeypatch,cha
     credits=rig.store.conn.execute('SELECT success,failure FROM bandit_credit').fetchall()
     assert len(credits)==7 and sum(r[0] for r in credits)==pytest.approx(1)
     assert sum(r[1] for r in credits)==0
+
+
+@pytest.mark.parametrize('ref', ['event:1', 'owner:fixture-history'])
+def test_non_chat_evidence_can_back_a_lesson(rig,monkeypatch,ref):
+    select(monkeypatch)
+    mid=callback_memory(rig)
+    rig.store.conn.execute('UPDATE memory SET evidence=? WHERE id=?',(json.dumps([ref]),mid))
+    ident=lesson(rig,source(rig))
+    audience.retain(rig.store.conn,ident,[f'memory:{mid}'])
+    rig.store.conn.commit()
+    assert ident in compose(rig)[1].recipe_snapshot.lesson_ids
+
+
+def test_provenance_cap_is_512_distinct_nodes_and_shared_work_is_memoized(rig):
+    conn=rig.store.conn
+    refs=[f'event:{i}' for i in range(1,513)]
+    gate=audience.Visibility(conn,guid=101,channel='guild',to_guid=0)
+    assert gate.visible(refs) and len(gate.visited)==512
+    assert gate.visible(refs)  # the same graph consumes no second budget
+    assert not gate.visible(['event:513'])
+    assert not audience.visible(conn,refs+['event:513'],guid=101,channel='guild',to_guid=0)
+
+
+def test_deep_provenance_is_bounded_without_using_the_python_call_stack(rig):
+    conn = rig.store.conn
+    ref = 'event:1'
+    for _ in range(511):
+        mid = conn.execute("INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,importance,"
+            "valence,source,evidence,actors,scope,scope_with) VALUES (101,'conversation','Fixture',"
+            "0,0,0,5,0,'chat',?,'[101]','open',0)", (json.dumps([ref]),)).lastrowid
+        ref = f'memory:{mid}'
+    assert audience.visible(conn,[ref],guid=101,channel='guild',to_guid=0)
+    conn.execute('UPDATE memory SET evidence=? WHERE id=?', (json.dumps([ref]), mid-510))
+    assert not audience.visible(conn,[ref],guid=101,channel='guild',to_guid=0)
+
+
+def test_nested_generated_line_expands_its_recalled_private_memory(rig):
+    secret=callback_memory(rig,channel='whisper')
+    turn=Turn(TurnKind.REPLY_HUMAN,101,'guild',to_guid=1)
+    line=rig.engine._record(turn,TurnMeta('nested'),rig.engine.personas.get(101),'A bland generated fixture.',[secret])
+    mid=callback_memory(rig)
+    rig.store.conn.execute('UPDATE memory SET evidence=? WHERE id=?',(json.dumps([f'chat:{line}']),mid))
+    assert not audience.visible(rig.store.conn,[f'memory:{mid}'],guid=101,channel='guild',to_guid=0)
+    assert audience.visible(rig.store.conn,[f'memory:{mid}'],guid=101,channel='whisper',to_guid=1)
+
+
+@pytest.mark.parametrize('channel', ['party','raid','say','yell','voice:lounge'])
+def test_local_sources_require_all_current_readers(rig,channel):
+    lid=source(rig,channel,readers=[1,101,102])
+    gate=lambda readers:audience.visible(rig.store.conn,[f'chat:{lid}'],guid=101,
+        channel=channel,to_guid=0,readers=readers)
+    assert gate([1,101,102])
+    assert not gate([1,101,103])
+    assert not gate([])
+
+
+@pytest.mark.parametrize('channel', ['dm:101','discord:general'])
+@pytest.mark.parametrize('words', [0,90,200])
+def test_discord_length_draw_keeps_channel_instruction_and_allowance(rig,monkeypatch,channel,words):
+    from leeroy_mind.llm.presets import LIVE
+    from leeroy_mind.talk.discord_length import preset_for
+    rig.engine.cfg=replace(rig.engine.cfg,talk=replace(rig.engine.cfg.talk,discord_words=words))
+    select(monkeypatch,length='length.2.v1')
+    turn,meta,c=compose(rig,channel)
+    turn.deadline=rig.clock.now()+60
+    rig.sync(rig.engine._ask(turn,c.messages,meta=meta))
+    assert meta.learning.selected['length']==arms.controls()['length']
+    assert meta.learning.num_predict is None
+    assert '20-60 words' not in str(c.messages)
+    expected=preset_for(LIVE,words).options['num_predict'] if words else LIVE.options['num_predict']
+    assert rig.chat_calls()[-1]['options']['num_predict']==expected
+    if words:
+        assert f'at most about {words} words' in str(c.messages)
+
+
+def test_duplicate_reinforcement_preserves_the_raised_forward_floor(rig):
+    lid=source(rig)
+    ident=lesson(rig,lid)
+    result=dict(reinforce=[ident],drop=[],lessons=[dict(text='He keeps replies brief and clear.',
+                                                    scope='guild',forward_min=8)])
+    lessons.persist(rig.store.conn,101,result,known={ident},night='next',now=rig.clock.now(),
+                    automatic=True,sources=[f'chat:{lid}'])
+    assert audience.forward_floor(rig.store.conn,ident)==8
+
+
+def test_apply_off_adds_no_recipe_meta_and_retention_removes_old_receipts(rig):
+    from leeroy_mind.learn.capture import prune
+    rig.engine.learn_settings=replace(ON,apply=False)
+    turn,meta,c=compose(rig)
+    turn.deadline=rig.clock.now()+60
+    rig.sync(rig.engine._ask(turn,c.messages,meta=meta))
+    lid=rig.engine._record(turn,meta,c.persona,'A normal fixture line.',[])
+    assert rig.store.conn.execute('SELECT 1 FROM talk_recipe WHERE line_id=?',(lid,)).fetchone()
+    assert rig.store.get_meta(f'learn:recipe:{lid}') is None
+    old=source(rig)
+    rig.store.conn.execute('UPDATE chat_line SET ts=? WHERE id=?',(rig.clock.now()-91*86400,old))
+    for ident in (old,lid,999999):
+        rig.store.set_meta(f'learn:recipe:{ident}','{}')
+    prune(rig.store.conn,rig.clock.now())
+    assert rig.store.get_meta(f'learn:recipe:{lid}')=='{}'
+    assert rig.store.get_meta(f'learn:recipe:{old}') is None
+    assert rig.store.get_meta('learn:recipe:999999') is None
+
+
+def test_callback_seed_is_held_evidence_and_freeze_blocks_its_receipt(rig,monkeypatch):
+    select(monkeypatch,callback='callback.1.v1')
+    rig.engine._learn_features=(True,False)
+    rig.store.start_session(rig.clock.now()-7200)
+    callback_memory(rig,channel='whisper')
+    turn,meta,c=compose(rig,'dm:101')
+    assert meta.learning.callback.seed in c.held
+    control.change(rig.store,dict(action='freeze',frozen=True),now=rig.clock.now())
+    rig.engine._record(turn,meta,c.persona,'Remember that red kite?',c.memory_ids)
+    assert not rig.store.conn.execute('SELECT 1 FROM talk_recipe').fetchone()
+    assert not rig.store.conn.execute('SELECT 1 FROM callback_use').fetchone()
+
+
+@pytest.mark.parametrize('channel',['guild','discord:general'])
+@pytest.mark.parametrize('origin',['whisper','officer'])
+def test_private_and_officer_lessons_do_not_enter_public_banter(rig,monkeypatch,channel,origin):
+    select(monkeypatch)
+    guid=102 if origin=='officer' else 101
+    lesson(rig,source(rig,origin,guid=guid),guid=guid,scope='group' if origin=='officer' else 'whisper')
+    turn=Turn(TurnKind.ASIDE,guid,channel)
+    meta=TurnMeta('public-banter',why='banter:fixture')
+    c=rig.sync(rig.engine._compose(turn,meta,live=True))
+    assert 'Style observation:' not in str(c.messages)
+    assert 'Typing:' in str(c.messages)  # scoped baseline survives a control draw
+
+
+def test_owner_absent_discussion_does_not_offer_a_tease_arm(rig,monkeypatch):
+    select(monkeypatch,tease='tease.1.v1')
+    rig.world.human_online=False
+    turn=Turn(TurnKind.CONTINUE,101,'discord:general',addressee=102)
+    meta=TurnMeta('absent-owner')
+    rig.sync(rig.engine._compose(turn,meta,live=True))
+    assert meta.learning.selected['tease']==arms.controls()['tease']
+
+
+@pytest.mark.parametrize('channel',['voice:lounge','say','yell','discord:general'])
+def test_callbacks_include_the_owner_in_observed_voice_local_and_discord_readers(rig,monkeypatch,channel):
+    from types import SimpleNamespace
+    select(monkeypatch,callback='callback.1.v1')
+    rig.engine._learn_features=(True,False)
+    rig.world.human_online=True
+    rig.store.start_session(rig.clock.now()-7200)
+    rig.engine.comms=SimpleNamespace(available=lambda:True,human_room=lambda:'lounge')
+    rig.world.room_audience=lambda _:frozenset({101,102})
+    monkeypatch.setattr(rig.world,'in_group',lambda _:True)
+    rig.world.human_zone=rig.world.members[101].zone
+    mid=callback_memory(rig,channel=channel)
+    rig.store.conn.execute('UPDATE chat_line SET audience=?',(json.dumps([1,101,102,103,104,105]),))
+    rig.store.conn.commit()
+    turn=Turn(TurnKind.REPLY_HUMAN,101,channel,addressee=1)
+    meta=TurnMeta('callback-room')
+    applied=rig.sync(apply.prepare(rig.engine,turn,meta,rig.engine.personas.get(101),now=rig.clock.now()))
+    assert 1 in applied.callback_context.readers if applied.callback_context else False
+    assert applied.callback and applied.callback.memory_id==mid
+
+
+def test_provenance_at_twenty_thousand_discord_receipts_is_indexed_and_bounded(rig):
+    from statistics import median
+    from time import perf_counter
+    conn=rig.store.conn
+    mids=[callback_memory(rig) for _ in range(3)]
+    for i in range(300):
+        ts=rig.clock.now()-i-1
+        text=f'A synthetic garden observation {i}.'
+        lid=rig.store.insert_chat_line(Chat(0,'dm:101',101,'Invented',1,text,0,0),
+            ts=ts,session_id=None,origin='mind',audience=[1,101])
+        rig.store.log_utterance(ts,101,'dm:101','reply_human',text,mids,None,None,to_guid=1)
+        mid=discord.post(rig.store,channel='dm:101',author=101,origin='mind',text=text,now=ts)
+        rig.store.set_meta(f'discord:line:{mid}',str(lid))
+    conn.executemany('INSERT INTO meta(key,value) VALUES (?,?)',
+        [(f'discord:line:{100000+i}',str(100000+i)) for i in range(19700)])
+    conn.commit()
+    plan=conn.execute("EXPLAIN QUERY PLAN SELECT value FROM meta WHERE key GLOB 'discord:line:*' AND value=?",('1',)).fetchall()
+    assert any('meta_discord_line_value' in str(tuple(r)) for r in plan)
+    times=[]
+    for _ in range(5):
+        begin=perf_counter()
+        profile=apply.scoped_profile(conn,101,rig.engine.personas.get(101),channel='dm:101',
+                                     to_guid=1,readers=(1,101),officer=False)
+        times.append(perf_counter()-begin)
+    print(f'provenance_20000_receipts_median_ms={median(times)*1000:.2f}')
+    # 512 distinct nodes maximum and indexed receipts: no linear history scan.
+    # Generous wall-clock ceiling tolerates shared CI hosts; report the actual median.
+    assert median(times)<.25
