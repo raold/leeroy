@@ -291,7 +291,8 @@ class ServerEngine:
                     server_conversation=conversation.id, discord=DiscordTarget(parent,None), single_line=True,
                     keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
-                if parent is None and dry == 0:
+                opening_photo = meta.photo_seed is not None and dry == 0
+                if parent is None and dry == 0 and not opening_photo:
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
                 conversation.in_flight, conversation.in_flight_turn = speaker, turn
                 try:
@@ -301,6 +302,10 @@ class ServerEngine:
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
                 conversation.messages.extend(added)
+                if opening_photo and (added or meta.photo is not None):
+                    # Spent once its photo was offered; one never offered (another photo in
+                    # flight) stays for a later conversation.
+                    seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
                 if parent is None and not added and conversation.seed.openers is not None:
                     conversation.reason = 'opener_dropped'
                     break

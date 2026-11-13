@@ -183,9 +183,12 @@ def photo_seeds(conn, *, now, local, dial, today=None):
     date = local.date().isoformat()
     if not ration.channel_room(dial, today=channel_count(conn,date) if today is None else today, draw=day_draw(date)):
         return []
-    rows = conn.execute(f'SELECT {snaps._COLS} FROM selfie_snap WHERE kind=\'situation\' '
-        "AND audience='anyone' AND status='ready' AND not_before<=? AND expires>? ORDER BY expires,id LIMIT 200",
-        (now,now)).fetchall()
+    # Her member gap (offer() checks it too): a seed its opener cannot post is no seed.
+    rows = conn.execute(f'SELECT {snaps._COLS} FROM selfie_snap s WHERE kind=\'situation\' '
+        "AND audience='anyone' AND status='ready' AND not_before<=? AND expires>? "
+        "AND NOT EXISTS (SELECT 1 FROM selfie_snap t WHERE t.kind='situation' AND t.status='sent' "
+        "AND t.sender=s.guid AND t.sent>?) ORDER BY expires,id LIMIT 200",
+        (now,now,now-ration.MEMBER_GAP_S)).fetchall()
     out = []
     for row in rows:
         try:

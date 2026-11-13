@@ -255,3 +255,17 @@ def test_offer_that_cannot_be_built_reserves_nothing(tmp_path):
         assert app.photos.offer(*reply(app),app.clock.now()) is None
         assert not app.photos._in_flight
     finally:app.store.close()
+
+
+def test_channel_seed_waits_out_her_member_gap(tmp_path):
+    """A channel photo is no seed while her last photo (a DM one included) is under two days
+    old: its opener could not post it and would burn the seed."""
+    app=setup(tmp_path);sid=stock(app,audience='anyone');earlier=stock(app)
+    try:
+        now,local=app.clock.now(),app.clock.local()
+        assert snaps.mark_sent(app.store,earlier,sender=101,channel='dm',line_id=1,now=now-ration.MEMBER_GAP_S+60)
+        assert photo_seeds(app.store.conn,now=now,local=local,dial=3)==[]
+        assert app.photos.offer(Turn(TurnKind.OPEN,101,'discord:pets'),
+            TurnMeta('',why='server:photo',photo_seed=sid),now) is None
+        assert [s.key for s in photo_seeds(app.store.conn,now=now+60,local=local,dial=3)]==[f'photo:{sid}']
+    finally:app.store.close()
