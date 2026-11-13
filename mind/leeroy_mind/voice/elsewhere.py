@@ -9,7 +9,7 @@ from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.talk.engine import CONTINUE_S, OPEN_S
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.turns import Turn, TurnKind
-from leeroy_mind.voice.rooms import PRIVATE
+from leeroy_mind.voice.rooms import PRIVATE, BY_ID
 
 CHECK_S = 60.0
 WINDOW_S = 600.0
@@ -81,7 +81,12 @@ class ElsewhereTalk:
                         addressee=previous, trigger_line=trigger, max_lines=1,
                         delay=delay, deadline=now + delay + 120,
                         priority=Priority.BACKGROUND)
-            said = await engine.speak(turn, why=f"elsewhere:{kind.value}",
+            topic = ""
+            if getattr(self.ext.app, "server", None) is not None:
+                definition = BY_ID[room]
+                topic = definition.topic
+                turn.instruction = f"You're in the {definition.name} voice room: {topic}"
+            said = await engine.speak(turn, topic=topic, why=f"elsewhere:{kind.value}",
                                       elsewhere=True, guards=self.guards)
             if not said:
                 return

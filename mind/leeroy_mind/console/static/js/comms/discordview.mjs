@@ -1,14 +1,15 @@
 import { $, clear, clock, el, emit, on, str } from "../core.mjs";
-import { S } from "../state.mjs";
+import { S, roomName } from "../state.mjs";
 import { feedbackButtons } from "./feedback.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { currentView, openView } from "./feedview.mjs";
-import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel } from "./discord.mjs";
+import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel, voiceSeats } from "./discord.mjs";
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
 import { PICKER, isOneEmoji } from "./emoji.mjs";
 import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
 import { voiceBox, retainVoicePlayers } from "./voiceplayer.mjs";
 import { voiceDraft, voicePreparing, clearVoice, prepareVoice, renderVoiceDraft, setupVoiceComposer } from "./voicerecorder.mjs";
+import { groupList, groupPanel, groupReason, currentGroup } from "./groups.mjs";
 
 var shown = "", thread = 0, panel = "", reply = null, entryMark = 0, drawing = "";
 var drafts = new Map(), replyDrafts = new Map(), folded = new Set(), dialog = null, returnTo = null, failure = "";
@@ -18,7 +19,7 @@ function button(text, cls) { var b = el("button", cls || "", text); b.type = "bu
 function active() { return !!channelOf(currentView()); }
 function privateDm() { return /^dm:[1-9]\d{0,9}$/.test(channelOf(shown)) && !thread; }
 function windowData() { return DISCORD.window(currentView(), thread); }
-function name(guid) { return DISCORD.name(guid); }
+function name(guid) { return guid === 0 ? 'System' : DISCORD.name(guid); }
 function focusKey(root) {
   var a = document.activeElement;
   return a && root.contains(a) && a.dataset.focus ? a.dataset.focus : "";
@@ -58,9 +59,24 @@ function renderLists() {
     category.channels.forEach(function (channel) { details.appendChild(channelButton(channel.id, "# " + channel.name, channel.officers_only)); });
     left.appendChild(details);
   });
+  var seats = voiceSeats(DISCORD.voice_seats, DISCORD.members, Date.now()/1000,
+    !!(S.voice && (S.voice.room || S.voice.where?.[S.voice.human])));
+  if (seats.length) {
+    var rooms = el("details", "dc-category"); rooms.open = true;
+    rooms.appendChild(el("summary", "sec", "VOICE"));
+    seats.forEach(function (r) {
+      rooms.appendChild(el("div", "ch", roomName(r.id)));
+      r.people.forEach(function (m) {
+        var row = el("div", "dc-member"); row.appendChild(el("span", "who", m.name));
+        row.appendChild(el("small", "badge", "in voice")); rooms.appendChild(row);
+      });
+    });
+    left.appendChild(rooms);
+  }
   restore(left, key);
   var dms = $("dc-dms"), dmkey = focusKey(dms); clear(dms);
   DISCORD.dms.forEach(function (d) { dms.appendChild(channelButton("dm:" + d.guid, d.name, false)); });
+  groupList(dms,channelButton);
   if (DISCORD.loaded && !DISCORD.dms.length) { dms.appendChild(el("p", "none", "No members with personas yet.")); }
   restore(dms, dmkey);
 }
@@ -78,6 +94,7 @@ function renderMembers() {
   var members = $("dc-members"); members.hidden = !active();
   if (!active()) { return; }
   var key = focusKey(members); clear(members);
+  if (groupPanel(members,currentView())) { restore(members,key); return; }
   members.appendChild(el("h3", "", "Guild members"));
   memberGroups(DISCORD.members).forEach(function (g) {
     members.appendChild(el("h4", "sec", g.role + " — " + g.members.length));
@@ -132,14 +149,14 @@ function messageRow(item, data) {
       b.setAttribute("aria-pressed", String(r.mine)); b.setAttribute("aria-label", r.emoji + ": " + r.who);
       b.dataset.action = r.mine ? "unreact" : "react-emoji"; b.dataset.emoji = r.emoji;
       b.dataset.message = m.id; b.dataset.focus = m.id + ":" + r.emoji;
-      b.disabled = !!discordReason() || discordBusy; reactions.appendChild(b);
+      b.disabled = !!groupReason(currentView()) || !!discordReason() || discordBusy; reactions.appendChild(b);
     }); content.appendChild(reactions);
     var actions = el("div", "dc-message-actions");
     [["reply", "Reply"], ["react", "React"], [m.pinned ? "unpin" : "pin", m.pinned ? "Unpin" : "Pin"], ["thread", "Thread"]]
       .concat(mine ? [["edit", "Edit"], ["delete", "Delete"]] : []).forEach(function (a) {
         var b = button(a[1]); b.dataset.action = a[0]; b.dataset.message = m.id; b.dataset.focus = m.id + ":" + a[0];
         b.setAttribute("aria-label", a[1] + " message by " + name(m.author));
-        b.disabled = !!discordReason() || discordBusy; actions.appendChild(b);
+        b.disabled = !!groupReason(currentView()) || !!discordReason() || discordBusy; actions.appendChild(b);
       }); content.appendChild(actions);
     (data.threads || []).filter(function (t) { return t.parent === m.id; }).forEach(function (t) {
       var b = button(t.name + " · " + t.count + " replies", "dc-thread-link"); b.dataset.thread = t.id;
@@ -188,7 +205,7 @@ function renderMessages(data) {
   box.scrollTop = newView || bottom ? box.scrollHeight : top; restore(box, key);
 }
 function renderComposer() {
-  var reason = discordReason(), count = Array.from(input.value).length;
+  var reason = groupReason(currentView()) || discordReason(), count = Array.from(input.value).length;
   var note = DISCORD.voice_notes && privateDm() && voiceDraft(routeKey());
   var recording = voicePreparing(routeKey());
   input.disabled = !!reason; input.readOnly = discordBusy || photoBusy || !!note || recording;
@@ -211,7 +228,8 @@ function render() {
   var data = windowData(), t = data && (data.threads || []).find(function (x) { return x.id === thread; });
   $("feed-title").textContent = DISCORD.title(currentView()) + (t ? " / " + t.name : "");
   var channel = DISCORD.channels().find(function (c) { return c.id === channelOf(currentView()); });
-  $("feed-hint").textContent = DISCORD.error || (channel && channel.topic) || "A private conversation between you and this member.";
+  $("feed-hint").textContent = DISCORD.error || groupReason(currentView()) || (channel && channel.topic) ||
+    (currentGroup(currentView()) ? 'A private group with you and a few members.' : "A private conversation between you and this member.");
   $("dc-back").hidden = !thread;
   renderMessages(data); renderPanel(data); renderComposer(); renderMembers();
   if (data && !thread && document.visibilityState === "visible" && S.tab === "comms") { DISCORD.markRead(currentView()); saveDiscordRead(); }

@@ -88,9 +88,12 @@ class PromptParts:
     # One mind per member: their lines from the other medium (a whisper's DMs, a DM's whispers),
     # chat_line_text lines oldest first, shown before the chat and never the line answered
     elsewhere: list[str] = field(default_factory=list)
+    style: list[str] = field(default_factory=list)
 
 
 ELSEWHERE_HEAD = "Earlier between you two, elsewhere (you remember it; it is not the line you answer):"
+STYLE_HEAD = "Your recent style notes (observations, not rules; use only what fits this moment):"
+STYLE_CAP_TOKENS = 220  # input observations only; output length belongs to the channel preset
 
 FACTS_HEAD = ("Facts you know (use them if they help, in your own words; never invent anything "
               "beyond them; if they don't cover it, say you're not sure or point {them} to "
@@ -398,7 +401,7 @@ def _note_fits(note: str, forms: tuple[str, str, str], speaker: str = "") -> boo
 def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
                       is_guild_master: bool = False,
                       forms: tuple[str, str, str] = THEY_FORMS, attitude: str = "",
-                      speaker: str = "") -> str:
+                      speaker: str = "", friendship_only: bool = False) -> str:
     """How the speaker feels about one person, in a few words. Only the warm side of trust
     and respect is shown: a low score usually just means "not yet". The human is tagged "(the
     guild master)" when he is one (HumanIdentity.is_guild_master) and referred to by `forms`
@@ -410,9 +413,9 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     r = r or Relationship(a=0, b=0)
     _, them, their = forms if is_human else THEY_FORMS
     bits = []
-    if not is_human and r.label.strip() in LABEL_TEXT:
+    if not friendship_only and not is_human and r.label.strip() in LABEL_TEXT:
         bits.append(LABEL_TEXT[r.label.strip()])
-    band = attraction_band(r, attitude) if is_human else ""
+    band = attraction_band(r, attitude) if is_human and not friendship_only else ""
     if band:
         bits.append(ATTRACTION_TEXT[band].format(them=them))
     if r.affinity >= CLOSE_AFFINITY:
@@ -432,7 +435,9 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
         bits.append(f"you rate {their} play")
     tag = " (the guild master)" if is_human and is_guild_master else ""
     card = f"{name}{tag}: {', '.join(bits)}"
-    notes = " ".join(r.notes.split()).rstrip(".")
+    # Group turns keep friendship scores, never romantic labels or free-form
+    # relationship notes (which can contain private romantic material).
+    notes = "" if friendship_only else " ".join(r.notes.split()).rstrip(".")
     if is_human and not _note_fits(notes, forms, speaker):
         notes = ""
     room = HUMAN_NOTE_CHARS if is_human else NOTE_CHARS
@@ -603,6 +608,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         _section("People here:", people),
         _section("You remember:", p.memories),
         _section("Right now:", [p.mood]),
+        _section(STYLE_HEAD, p.style),
         _section(ELSEWHERE_HEAD, p.elsewhere),
         _section("Chat:", p.chat),
         _section(p.facts_head or facts_head("them"), p.facts),
@@ -624,6 +630,7 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
         ("people", _section("People here:", [*p.rel_cards, *([p.real_name] if p.real_name else [])])),
         ("memories", _section("You remember:", p.memories)),
         ("mood", _section("Right now:", [p.mood])),
+        ("style", _section(STYLE_HEAD, p.style)),
         ("elsewhere", _section(ELSEWHERE_HEAD, p.elsewhere)), ("chat", _section("Chat:", p.chat)),
         ("facts", _section(p.facts_head or facts_head("them"), p.facts)),
         ("own_recent", _section("Your last lines (don't make the same move again):", p.own_recent)),
@@ -645,7 +652,7 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     stay a prefix of the input, so len(result.memories) says which recalled memories were
     used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
-                elsewhere=list(p.elsewhere),
+                elsewhere=list(p.elsewhere), style=list(p.style),
                 own_recent=list(p.own_recent))
     pin = p.pinned if p.facts and p.pinned is not None and 0 <= p.pinned < len(p.chat) else None
     kept = p.kept if p.kept is not None and 0 <= p.kept < len(p.chat) else None
@@ -654,6 +661,10 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     def over() -> bool:
         return _tokens(render_messages(t)) > budget
 
+    # Learned style is expendable before evidence, including the other-medium
+    # timeline. Drop whole notes so attribution remains a prefix, never half a fact.
+    while t.style and (estimate_tokens(_section(STYLE_HEAD, t.style)) > STYLE_CAP_TOKENS or over()):
+        t.style.pop()
     if t.awareness and over():
         awareness, t.awareness = t.awareness, ""
         room = budget - _tokens(render_messages(t)) - 2  # separators and rounding
@@ -721,6 +732,7 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
                    memories=[r(x) for x in parts.memories], mood=r(parts.mood),
                    chat=[r(x) for x in parts.chat], own_recent=[r(x) for x in parts.own_recent],
                    elsewhere=[r(x) for x in parts.elsewhere],
+                   style=[r(x) for x in parts.style],
                    instruction=r(parts.instruction), awareness=(parts.awareness.redacted(r)
                        if hasattr(parts.awareness,"redacted") else r(parts.awareness)), facts=[r(x) for x in parts.facts],
                    real_name="")

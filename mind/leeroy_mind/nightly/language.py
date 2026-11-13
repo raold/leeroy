@@ -25,3 +25,5 @@ async def stage_language(ctx):
         await candidates(ctx)
     for name, function in (("spread", spread), ("fade", fade)):
         await sql_unit(name, function)
+    from leeroy_mind.groups.night import stage_groups
+    await stage_groups(ctx)

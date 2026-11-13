@@ -16,6 +16,7 @@ import re
 
 CHANNEL_PREFIX = "discord:"
 DM_PREFIX = "dm:"
+GROUP_PREFIX = "gdm:"
 WHISPER = "whisper"
 # The officers' channels in the game: officer chat and their voice room
 OFFICER_GAME = frozenset({"officer", "voice:officers"})
@@ -23,7 +24,11 @@ _COLUMN = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 
 
 def is_discord(channel) -> bool:
-    return isinstance(channel, str) and channel.startswith((CHANNEL_PREFIX, DM_PREFIX))
+    return isinstance(channel, str) and channel.startswith((CHANNEL_PREFIX, DM_PREFIX, GROUP_PREFIX))
+
+
+def is_group(channel) -> bool:
+    return isinstance(channel, str) and channel.startswith(GROUP_PREFIX)
 
 
 def same_medium(a, b) -> bool:
@@ -42,10 +47,16 @@ def is_private(channel) -> bool:
     return isinstance(channel, str) and (channel == WHISPER or channel.startswith(DM_PREFIX))
 
 
+def is_local_channel(channel) -> bool:
+    """Game rooms whose historical readers must contain the current readers."""
+    return isinstance(channel, str) and (channel in ('party', 'raid', 'raid_warning', 'say', 'yell')
+                                         or channel.startswith('voice:'))
+
+
 def is_restricted(channel) -> bool:
     """A line only its audience reads: the officers' (is_officer_channel), or one on a Discord
     channel the layout does not have (fail closed)."""
-    if channel in OFFICER_GAME:
+    if is_group(channel) or channel in OFFICER_GAME:
         return True
     if not isinstance(channel, str) or not channel.startswith(CHANNEL_PREFIX):
         return False
@@ -74,7 +85,7 @@ def restricted_sql(column: str = "channel") -> str:
     column = _column(column)
     games = ", ".join(f"'{c}'" for c in sorted(OFFICER_GAME))
     return (f"({column} IN ({games}) "
-            f"OR substr({column}, 1, {len(CHANNEL_PREFIX)}) = '{CHANNEL_PREFIX}')")
+            f"OR substr({column}, 1, {len(CHANNEL_PREFIX)}) = '{CHANNEL_PREFIX}' OR {group_sql(column)})")
 
 
 def is_public(channel) -> bool:
@@ -99,4 +110,8 @@ def discord_sql(column: str = "channel") -> str:
     """is_discord as an SQL condition on `column`, a fixed column name, as private_sql."""
     column = _column(column)
     return (f"(substr({column}, 1, {len(CHANNEL_PREFIX)}) = '{CHANNEL_PREFIX}' "
-            f"OR substr({column}, 1, {len(DM_PREFIX)}) = '{DM_PREFIX}')")
+            f"OR substr({column}, 1, {len(DM_PREFIX)}) = '{DM_PREFIX}' OR {group_sql(column)})")
+
+
+def group_sql(column: str = "channel") -> str:
+    return f"(substr({_column(column)}, 1, {len(GROUP_PREFIX)}) = '{GROUP_PREFIX}')"
