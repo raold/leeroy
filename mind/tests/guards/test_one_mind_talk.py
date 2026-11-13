@@ -84,3 +84,54 @@ def test_lines_are_labelled_with_where_they_were_said(channel, to, tag):
     row = ChatLineRow(id=1, ts=0, channel=channel, from_guid=101, from_name="Invented", to_guid=to,
                       text="hi", map=0, zone=0, session_id=None, thread_id=None, origin="mind")
     assert chat_line_text(row, {1: "Zan", 101: "Invented"}) == f"Invented{(' ' + tag) if tag else ''}: hi"
+
+
+def _chat_and_elsewhere(text):
+    body = text.replace(chr(92) + "n", chr(10))  # the messages' repr escapes newlines
+    chat = body.split("Chat:\n", 1)[1].split("\n\n", 1)[0] if "Chat:\n" in body else ""
+    head = "Earlier between you two, elsewhere"
+    elsewhere = body.split(head, 1)[1].split("\n\n", 1)[0] if head in body else ""
+    return chat, elsewhere
+
+
+def test_his_newer_line_in_the_other_medium_is_never_the_line_she_answers(rig):
+    """R11: his DM after his whisper is shown apart, not as his last line in her whisper."""
+    rig.engine._chat_from = rig.clock.now() - 3600  # the session opened an hour ago
+    trigger = line(rig, "HIS_WHISPER_TRIGGER", "whisper", 1, 101, ago=120)
+    rig.world.add_line(rig.store.chat_lines([trigger])[0], rig.clock.now())
+    line(rig, "HIS_LATER_DM", "dm:101", 1, 101, ago=30)
+    text = prompt(rig, turn("whisper", trigger_line=trigger))
+    chat, elsewhere = _chat_and_elsewhere(text)
+    assert chat.strip().splitlines()[-1].endswith("HIS_WHISPER_TRIGGER")
+    assert "HIS_LATER_DM" in elsewhere and "HIS_LATER_DM" not in chat
+    assert text.index("Earlier between you two") < text.index("Chat:")
+
+
+def test_a_dm_turn_never_takes_game_whispers_into_its_chat(rig):
+    old = line(rig, "OLD_WHISPER", "whisper", 1, 101, ago=5 * 86400)
+    new = line(rig, "NEW_WHISPER", "whisper", 1, 101, ago=600)
+    for lid in (old, new):
+        rig.world.add_line(rig.store.chat_lines([lid])[0], rig.clock.now())
+    text = prompt(rig, turn("dm:101"))
+    chat, elsewhere = _chat_and_elsewhere(text)
+    assert "OLD_WHISPER" not in text  # outside the pair window
+    assert "NEW_WHISPER" in elsewhere and "NEW_WHISPER" not in chat
+
+
+def test_many_whispers_never_hide_the_other_medium(rig):
+    line(rig, "THE_DM_LINE", "dm:101", 101, 1, ago=3000)
+    for n in range(20):
+        line(rig, f"WHISPER_{n}", "whisper", 101, 1, ago=2000 - n)
+    assert "THE_DM_LINE" in prompt(rig, turn("whisper"))
+
+
+def test_a_deleted_dm_post_stays_out_of_her_whispers(rig):
+    from leeroy_mind.discord import store as dstore
+    mid = dstore.post(rig.store, channel="dm:101", author=1, origin="human",
+                      text="DELETED_POST", now=rig.clock.now() - 600)
+    lid = line(rig, "DELETED_POST", "dm:101", 1, 101, ago=600)
+    rig.store.set_meta(f"discord:line:{mid}", str(lid))
+    dstore.delete(rig.store, mid, author=1, now=rig.clock.now())
+    line(rig, "KEPT_POST", "dm:101", 1, 101, ago=500)
+    text = prompt(rig, turn("whisper"))
+    assert "KEPT_POST" in text and "DELETED_POST" not in text

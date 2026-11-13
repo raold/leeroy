@@ -71,6 +71,9 @@ CONTEXT_LINES = 12
 # and the meta key of his newest DM post a member has answered (or let go)
 OWED_TICK_S = 30.0
 ANSWERED_KEY = "discord:dm:answered:{guid}"
+# A post the tick has not seen handed over (on_his_post) is left alone this long: a photo's
+# look runs between storing his post and handing it over (desk._look_then_answer, 30 s at most)
+HANDOFF_GRACE_S = 120.0
 QUERY_LINES = 2  # his thread's last lines that go into recall's query with his post
 # what the instruction may hold: the compose cuts its extra at EXTRA_CAP_TOKENS (4 characters
 # a token), less room for anything else it adds
@@ -125,6 +128,7 @@ class DiscordTalk:
         self._owed_at = -float("inf")
         self._due: dict[int, tuple[float, bool]] = {}  # his DM post id -> (when, urgent)
         self._owes: tuple[float, frozenset[int]] = (-float("inf"), frozenset())
+        self._handed: dict[int, bool] = {}  # his DM posts on_his_post saw -> deferred
         engine = getattr(app, "engine", None)
         if engine is not None:
             engine.add_instruction_hook(self._instruction_hook)
@@ -144,6 +148,8 @@ class DiscordTalk:
                                                   (message_id,)).fetchone()
                 if row and row[1] == self.app.human_guid and row[2] is None:
                     server.engine.his_post(row[0])
+            if self.own_time() and self._already(message_id):
+                return
             if self._later(message_id):
                 return
             items = self.plan(message_id)
@@ -159,6 +165,22 @@ class DiscordTalk:
     def own_time(self) -> bool:
         talk = getattr(getattr(getattr(self.app, "engine", None), "cfg", None), "talk", None)
         return bool(getattr(talk, "dm_own_time", False))
+
+    def _already(self, message_id: int) -> bool:
+        """His DM post the tick answered already (a photo's, during its look): not twice."""
+        post = self._post(message_id)
+        if post is None:
+            return False
+        done = self.app.store.get_meta(ANSWERED_KEY.format(guid=post[0]))
+        if done is not None and done.isdigit() and int(done) >= message_id:
+            log.info("discord_dm_already_answered: guid=%d message=%d", post[0], message_id)
+            return True
+        return False
+
+    def _hand(self, message_id: int, deferred: bool) -> None:
+        self._handed[message_id] = deferred
+        while len(self._handed) > 512:
+            del self._handed[next(iter(self._handed))]
 
     def _post(self, message_id: int):
         """(member, his post's ts) for his live DM post `message_id`; None for anything else."""
@@ -213,7 +235,9 @@ class DiscordTalk:
         guid, ts = post
         wait = self._due_of(guid, message_id, ts) - self.app.clock.now()
         if wait <= MAX_DELAY_S:
+            self._hand(message_id, False)
             return False
+        self._hand(message_id, True)
         self._owes = (-float("inf"), frozenset())
         log.info("discord_dm_later: guid=%d message=%d wait_s=%d", guid, message_id, int(wait))
         return True
@@ -221,6 +245,8 @@ class DiscordTalk:
     def _answered(self, message_id: int) -> None:
         """Her answer to his DM post `message_id` is queued: the tick leaves it (and every post
         of his before it in that DM) alone."""
+        if not self.own_time():
+            return  # off: nothing is owed, and nothing is written
         post = self._post(message_id)
         if post is not None:
             self.app.store.set_meta(ANSWERED_KEY.format(guid=post[0]), str(message_id))
@@ -241,8 +267,11 @@ class DiscordTalk:
             done = app.store.get_meta(ANSWERED_KEY.format(guid=guid))
             if done is not None and done.isdigit() and int(done) >= mid:
                 continue
+            # her answer to this post or a later one of his; her answer to an earlier post that
+            # lands after this one (still typing when he wrote) is no answer to it
             if conn.execute("SELECT 1 FROM discord_message WHERE channel = ? AND id > ? "
-                            "AND origin = 'mind' LIMIT 1", (channel, mid)).fetchone():
+                            "AND origin = 'mind' AND (reply_to IS NULL OR reply_to >= ?) LIMIT 1",
+                            (channel, mid, mid)).fetchone():
                 continue
             ts = conn.execute("SELECT ts FROM discord_message WHERE id = ?", (mid,)).fetchone()[0]
             out.append((guid, mid, ts))
@@ -268,29 +297,59 @@ class DiscordTalk:
 
     def tick(self, now: float) -> None:
         """Every OWED_TICK_S with dm_own_time: answer each owed DM whose moment has come; let
-        one older than LET_GO_S go. An urgent one may take his Discord lease itself."""
-        if not self.own_time() or now - self._owed_at < OWED_TICK_S:
+        one older than LET_GO_S go. Only an urgent one takes his Discord lease. A post the tick
+        has not seen handed over waits HANDOFF_GRACE_S (a photo's look). With the switch turned
+        off, the posts it deferred in this run are answered at once instead of stranded."""
+        if now - self._owed_at < OWED_TICK_S:
+            return
+        on = self.own_time()
+        if not on and not any(self._handed.values()):
             return
         self._owed_at = now
-        away = away_now(self.app.store, now)
-        for guid, mid, ts in self._owed():
+        try:
+            owed, away = self._owed(), away_now(self.app.store, now)
+        except Exception as e:
+            log.warning("discord_owed_failed: reason=%s", type(e).__name__)
+            return
+        for guid, mid, ts in owed:
+            try:
+                self._tick_one(now, guid, mid, ts, on, away)
+            except Exception as e:  # one DM never stops the others
+                log.warning("discord_owed_one_failed: guid=%d message=%d reason=%s", guid, mid,
+                            type(e).__name__)
+
+    def _tick_one(self, now, guid, mid, ts, on, away) -> None:
+        deferred = self._handed.get(mid)
+        if not on:
+            if not deferred:
+                return
+            urgent, due = True, now  # stranded by the switch: answered as the switch now says
+        else:
+            if deferred is None and now - ts < HANDOFF_GRACE_S:
+                return
             if now - ts > owntime.LET_GO_S:
                 self.app.store.set_meta(ANSWERED_KEY.format(guid=guid), str(mid))
+                self._handed.pop(mid, None)
                 log.info("discord_dm_let_go: guid=%d message=%d", guid, mid)
-                continue
-            if guid in away or now < self._due_of(guid, mid, ts):
-                continue
-            if not self._due[mid][1] and not self._model_ready():
-                continue
-            items = self.plan(mid)
-            if not items:
+                return
+            due = self._due_of(guid, mid, ts)
+            urgent = self._due[mid][1]
+        if guid in away or now < due:
+            return
+        if not urgent and not self._model_ready():
+            return
+        items = self.plan(mid)
+        self._handed.pop(mid, None)
+        if not items:
+            if on:
                 self.app.store.set_meta(ANSWERED_KEY.format(guid=guid), str(mid))
-                continue
+            return
+        if urgent:
             self._take_lease()
-            self._answered(mid)
-            self.app.engine._queue(items)
-            log.info("discord_dm_answered_later: guid=%d message=%d late_s=%d", guid, mid,
-                     int(now - ts))
+        self._answered(mid)
+        self.app.engine._queue(items)
+        log.info("discord_dm_answered_later: guid=%d message=%d late_s=%d", guid, mid,
+                 int(now - ts))
 
     def on_his_action(self) -> None:
         """Any other action of his (a reaction, an edit, a pin, a thread): a lease he holds is

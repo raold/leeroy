@@ -7,6 +7,8 @@ import json
 import re
 from collections import defaultdict
 
+from leeroy_mind.discord.channels import is_officer_channel
+from leeroy_mind.memory.privacy import OFFICERS
 from leeroy_mind.nightly import knowledge
 from leeroy_mind.nightly.evidence import Evidence, load_facts, load_items
 from leeroy_mind.nightly.ground import Claim, check, log_verdicts
@@ -87,7 +89,15 @@ def _node(store, ref):
     scope = "secret" if knowledge.is_secret(store, ref) else (
         "private" if knowledge.is_private(store, ref) else "open")
     parties = knowledge.parties(store, ref)
-    return (tuple(row), scope, tuple(sorted(parties))), children, None, (scope, 0), parties
+    partner = 0
+    if scope == "private" and ref.startswith("chat:"):
+        # an officers' line is the officers' (one audience in either medium), as the writer
+        # derives it (privacy.OFFICERS); any other restricted or private root reaches nobody here
+        line = store.conn.execute("SELECT channel FROM chat_line WHERE id=?",
+                                  (int(ref.split(":", 1)[1]),)).fetchone()
+        if line is not None and is_officer_channel(line[0]):
+            partner = OFFICERS
+    return (tuple(row), scope, tuple(sorted(parties))), children, None, (scope, partner), parties
 
 
 def _snapshot(store, chunk):

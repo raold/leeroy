@@ -125,7 +125,10 @@ def _secret_threads(conn: sqlite3.Connection, lines: dict[int, _Line]) -> set[in
         (json.dumps(sorted(threads - secret)),))}
     if not rest:
         return secret
-    keys = json.dumps(sorted({key for key, _ in rest.values()}))
+    # One mind per member: their whispers and her DM with him are one conversation, so an ask
+    # in either covers the pair's later threads in both that night
+    human = _human_guid(conn)
+    keys = json.dumps(sorted({k for key, _ in rest.values() for k in _pair_keys(key, human)}))
     asks: dict[str, list[tuple[float, str]]] = {}
     for lo, hi in _spans(opened for _, opened in rest.values()):
         for r in conn.execute(
@@ -133,12 +136,38 @@ def _secret_threads(conn: sqlite3.Connection, lines: dict[int, _Line]) -> set[in
                 f"ON t.id = l.thread_id WHERE {private_sql('l.channel')} AND l.ts BETWEEN ? AND ? "
                 "AND t.key IN (SELECT value FROM json_each(?))", (lo, hi, keys)):
             if DONT_TELL_RE.search(r[1]):
-                asks.setdefault(r[2], []).append((r[0], _night(r[0])))
+                asks.setdefault(_pair_of(r[2], human), []).append((r[0], _night(r[0])))
     for tid, (key, opened) in rest.items():
         night = _night(opened)
-        if any(ts <= opened and n == night for ts, n in asks.get(key, ())):
+        if any(ts <= opened and n == night for ts, n in asks.get(_pair_of(key, human), ())):
             secret.add(tid)
     return secret
+
+
+def _human_guid(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT value FROM meta WHERE key = 'human_guid'").fetchone()
+    return int(row[0]) if row and str(row[0]).isdigit() else 0
+
+
+def _pair_of(key: str, human: int) -> str:
+    """A private thread key's pair: whisper:lo:hi as it is, and a DM's (dm:<guid>, her and him)
+    the whisper key of the same two; any other key as it is."""
+    if key.startswith("dm:") and key[3:].isdigit() and human:
+        lo, hi = sorted((int(key[3:]), human))
+        return f"whisper:{lo}:{hi}"
+    return key
+
+
+def _pair_keys(key: str, human: int) -> set[str]:
+    """Every thread key of the pair `key` belongs to: their whisper key and, with him in it,
+    her DM's."""
+    pair = _pair_of(key, human)
+    keys = {key, pair}
+    parts = pair.split(":")
+    if human and len(parts) == 3 and parts[0] == "whisper" and str(human) in parts[1:]:
+        other = parts[2] if parts[1] == str(human) else parts[1]
+        keys.add(f"dm:{other}")
+    return keys
 
 
 def _asked_secrecy(ln: _Line, secret_threads: set[int]) -> bool:
@@ -266,6 +295,16 @@ def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], 
     return derived
 
 
+def _officer_guids(conn: sqlite3.Connection) -> frozenset[int]:
+    """The members whose persona is an officer (play.guild_role), as the guards read it."""
+    try:
+        return frozenset(r[0] for r in conn.execute(
+            "SELECT guid FROM persona_core WHERE json_valid(json) "
+            "AND json_extract(json, '$.play.guild_role') = 'officer'"))
+    except sqlite3.OperationalError:
+        return frozenset()
+
+
 def backfill_officer_scopes(conn: sqlite3.Connection) -> int:
     """The officer-scope migration's data step (one mind per member, 2026-11-12). A memory resting
     on officer lines only (officer chat or their voice room in the game, an officers' Discord
@@ -274,25 +313,46 @@ def backfill_officer_scopes(conn: sqlite3.Connection) -> int:
     the officers' scope derive_scope now gives it. Nothing else changes, and nothing is
     committed: it runs inside the migration's transaction. Returns how many rows changed.
 
-    First, slang is learned from public lines only (nightly.vocab), and his officer-chat lines
-    were taken as public until officer chat became restricted: a slang memory citing them keeps
-    its other evidence and drops those (on the live guild, 2026-11-12, about 570 slang memories
-    of common words cited his officer lines, and 1,035 reflections through them)."""
+    First, his officer-chat lines were taken as public until officer chat became restricted,
+    and night stages cited them where they did not belong: slang and the lexicon learned from
+    them (they learn from public lines only), and raiders' memories cited them though raiders
+    never read officer chat. So a slang memory, any memory of a member who is not an officer,
+    and the lexicon's retained sources (meta nightly:lexicon-sources:<id>) drop those refs and
+    keep the rest; a memory or term with nothing else left keeps them. On the live guild
+    (2026-11-12) this left 15 memories that really rest on officer chat."""
     officer = {r[0] for r in conn.execute(
         "SELECT id FROM chat_line WHERE channel IN (SELECT value FROM json_each(?))",
         (json.dumps(sorted(OFFICER_GAME)),))}
-    cleaned = 0
+
+    def strip(refs):
+        return [e for e in refs if not (isinstance(e, str) and e.startswith("chat:")
+                                        and e[5:].isdigit() and int(e[5:]) in officer)]
+    cleaned = terms = 0
     if officer:
-        for mid, raw in conn.execute(
-                "SELECT id, evidence FROM memory WHERE substr(key, 1, 6) = 'slang:'").fetchall():
+        officers = _officer_guids(conn)
+        for mid, owner, key, raw in conn.execute(
+                "SELECT id, owner, key, evidence FROM memory").fetchall():
+            if not ((key or "").startswith("slang:") or owner not in officers):
+                continue
             refs = json.loads(raw)
-            kept = [e for e in refs if not (isinstance(e, str) and e.startswith("chat:")
-                                            and e[5:].isdigit() and int(e[5:]) in officer)]
+            kept = strip(refs)
             if kept and len(kept) != len(refs):
                 conn.execute("UPDATE memory SET evidence = ? WHERE id = ?", (json.dumps(kept), mid))
                 cleaned += 1
-    if cleaned:
-        log.info("officer_scope_slang_cleaned: memories=%d", cleaned)
+        for key, raw in conn.execute("SELECT key, value FROM meta "
+                                     "WHERE key GLOB 'nightly:lexicon-sources:*'").fetchall():
+            try:
+                refs = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(refs, list):
+                continue
+            kept = strip(refs)
+            if kept and len(kept) != len(refs):
+                conn.execute("UPDATE meta SET value = ? WHERE key = ?", (json.dumps(kept), key))
+                terms += 1
+    if cleaned or terms:
+        log.info("officer_scope_cleaned: memories=%d terms=%d", cleaned, terms)
     rows = conn.execute("SELECT id, owner, evidence, scope, scope_with FROM memory "
                         "ORDER BY id").fetchall()
     stored = {r[0]: (r[1], json.loads(r[2]), r[3], r[4]) for r in rows}
@@ -302,13 +362,13 @@ def backfill_officer_scopes(conn: sqlite3.Connection) -> int:
         if not all(is_officer_channel(c) for c in hidden[mid]):
             continue
         owner, evidence, scope, scope_with = stored[mid]
-        if (scope, scope_with) not in (("open", 0), ("private", 0)):
-            continue
+        if (scope, scope_with) != ("open", 0):
+            continue  # only raised: a memory already reaching nobody is never widened
         d = derive_scope(conn, owner, evidence)
-        if d.scope_with != OFFICERS:
+        new = stricter((scope, scope_with), (d.scope, d.scope_with))
+        if new == (scope, scope_with):
             continue
-        conn.execute("UPDATE memory SET scope = ?, scope_with = ? WHERE id = ?",
-                     (d.scope, OFFICERS, mid))
+        conn.execute("UPDATE memory SET scope = ?, scope_with = ? WHERE id = ?", (*new, mid))
         changed += 1
     if changed:
         log.info("officer_scope_backfill: changed=%d", changed)

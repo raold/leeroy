@@ -36,6 +36,6 @@ def test_warning_reports_every_rendered_section_as_counts_without_text(caplog):
         trim_to_budget(p)
     record = next(r for r in caplog.records if "last-resort trim" in r.getMessage())
     assert record.args[-1] == section_tokens(p)
-    assert len(record.args[-1]) == 11
+    assert len(record.args[-1]) == 12  # with one mind's elsewhere block
     assert all(isinstance(v, int) for v in record.args[-1].values())
     assert "PRIVATE_SENTINEL" not in caplog.text

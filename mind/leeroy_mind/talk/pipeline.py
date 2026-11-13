@@ -49,7 +49,7 @@ from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
-from leeroy_mind.discord.channels import is_private
+from leeroy_mind.discord.channels import is_private, same_medium
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
@@ -860,31 +860,33 @@ class Pipeline:
         return "\n".join(s.line for s in styled), None
 
     def _may_carry(self, turn: Turn, row: ChatLineRow) -> bool:
-        """Whether a chat line may reach this turn's prompt (memory.recall.whisper_ok)."""
-        return whisper_ok(row.channel, row.from_guid, row.to_guid, speaker=turn.speaker,
-                          turn_channel=turn.channel, to_guid=turn.to_guid)
+        """Whether a chat line may be in this turn's chat window, the conversation she answers
+        (memory.recall.whisper_ok, in the turn's own medium: R11). The other medium's lines
+        between her and him come only through _pair_lines, in a block of their own."""
+        return same_medium(row.channel, turn.channel) and whisper_ok(
+            row.channel, row.from_guid, row.to_guid, speaker=turn.speaker,
+            turn_channel=turn.channel, to_guid=turn.to_guid)
 
     def _pair_lines(self, turn: Turn, recent: list[ChatLineRow], now: float) -> list[ChatLineRow]:
         """One mind per member: in a private turn between her and him (a whisper or a Discord DM),
         their lines from the other medium within PAIR_WINDOW_S that the chat shown lacks, at most
-        PAIR_LINES, oldest first, each labelled with where it was said (prompt.chat_line_text). An
-        opener sees only hers: it never answers his line. A line in one medium is still no answer
-        to a line in the other; she knows it, as anyone remembers what was said in their DMs."""
+        PAIR_LINES, oldest first, each labelled with where it was said (prompt.chat_line_text), for
+        the prompt's own block (PromptParts.elsewhere), never the chat she answers (R11). An opener
+        sees only hers; a deleted DM post of his is left out, as the DM's own context leaves it."""
         hg = self.human.guid
         if not hg or turn.speaker == hg or turn.to_guid != hg or not is_private(turn.channel):
             return []
         have = {r.id for r in recent}
         try:
             rows = self.store.pair_lines(turn.speaker, hg, since=now - PAIR_WINDOW_S,
-                                         limit=PAIR_LINES * 3)
+                                         limit=PAIR_LINES, discord=not is_discord(turn.channel))
         except Exception as e:
             log.warning("pair_lines_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
             return []
-        out = [r for r in rows if r.id not in have
-               and is_discord(r.channel) != is_discord(turn.channel)
-               and self._may_carry(turn, r)
-               and (turn.kind is not TurnKind.OPEN or r.from_guid != hg)]
-        return out[-PAIR_LINES:]
+        return [r for r in rows if r.id not in have
+                and whisper_ok(r.channel, r.from_guid, r.to_guid, speaker=turn.speaker,
+                               turn_channel=turn.channel, to_guid=turn.to_guid)
+                and (turn.kind is not TurnKind.OPEN or r.from_guid != hg)]
 
     def _own_of(self, guid: int) -> deque[tuple[str, int, str]]:
         """The member's own lines; the first time this run asks, the last ones she said before
@@ -1069,8 +1071,7 @@ class Pipeline:
                       if now - r.ts < IDLE_WINDOW_S or r.id == turn.trigger_line]
         if turn.kind is TurnKind.OPEN and hg:  # an opener never answers his line (rehearsal 3)
             recent = [r for r in recent if r.from_guid != hg]
-        if not preview and (pair := self._pair_lines(turn, recent, now)):
-            recent = sorted([*pair, *recent], key=lambda r: (r.ts, r.id))
+        pair = [] if preview else self._pair_lines(turn, recent, now)
         if meta.pushback_line and all(r.id != meta.pushback_line for r in recent):
             # her own line his pushback is about, older than the chat shown or one the bridge
             # reported, which only the log holds (fix wave G6)
@@ -1221,6 +1222,7 @@ class Pipeline:
             chat=[said_hi_text(r, names, human.called, now=now) if r.id in hi
                   else chat_line_text(r, names, now=now) for r in recent],
             own_recent=self._own_lines(turn), instruction=instruction,
+            elsewhere=[chat_line_text(r, names, now=now) for r in pair],
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept)
@@ -1247,6 +1249,7 @@ class Pipeline:
                    rl.household, rl.money, rl.sleep, rl.life_thread,
                    *(r.text for r in recent
                      if not turn.trigger_line or r.id < turn.trigger_line),
+                   *(r.text for r in pair),
                    *([follow] if follow else []),
                    *([turn.instruction] if turn.kind in (TurnKind.BIT, TurnKind.ASIDE)
                      else [])]

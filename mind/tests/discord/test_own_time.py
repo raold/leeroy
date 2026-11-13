@@ -208,3 +208,69 @@ def test_dm_openers_wait_while_she_owes_him_an_answer(store, tmp_path):
     now = rig.clock.now()
     assert not openers._can_open(101, now, "2026-10-30", {})
     assert openers._can_open(102, now, "2026-10-30", {})
+
+
+def test_a_photo_dm_is_answered_once(store, tmp_path):
+    """The tick never answers a post before the desk hands it over (a photo's look), and a post
+    the tick answered (after a restart, say) is not answered again when it is handed over."""
+    rig = rig_for(store, at(2026, 10, 29, 20), tmp_path)  # online
+    own_time(rig)
+    talk = talk_for(rig)
+    mid = post(rig, "dm:101", "look at this")
+    run_for(rig, talk, 60)  # the look is running: not handed over yet
+    assert answers(rig, "dm:101", mid) == []
+    hand(rig, talk, mid)
+    run_for(rig, talk, 200)
+    assert len(answers(rig, "dm:101", mid)) == 1
+    late = post(rig, "dm:101", "and this one")
+    run_for(rig, talk, 300)  # past the grace with no hand-over: the tick answers it
+    assert len(answers(rig, "dm:101", late)) == 1
+    hand(rig, talk, late)
+    run_for(rig, talk, 200)
+    assert len(answers(rig, "dm:101", late)) == 1
+
+
+def test_her_answer_to_an_earlier_post_is_no_answer_to_a_later_one(store, tmp_path):
+    from discord.test_discord_talk import member_post
+    rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)
+    own_time(rig)
+    talk = talk_for(rig)
+    first = post(rig, "dm:101", "did you ever find that recipe")
+    second = post(rig, "dm:101", "the soup one")
+    member_post(rig, 101, "dm:101", "oh yes", reply_to=first)  # landed after his second post
+    assert [m for _, m, _ in talk._owed()] == [second]
+
+
+def test_switching_it_off_answers_what_it_deferred(store, tmp_path):
+    rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)
+    own_time(rig)
+    talk = talk_for(rig)
+    mid = post(rig, "dm:101", "did you ever find that recipe")
+    hand(rig, talk, mid)
+    run_for(rig, talk, 120)
+    assert answers(rig, "dm:101", mid) == []
+    own_time(rig, on=False)
+    run_for(rig, talk, 200)
+    assert len(answers(rig, "dm:101", mid)) == 1
+
+
+def test_off_writes_nothing(store, tmp_path):
+    rig = rig_for(store, at(2026, 10, 29, 20), tmp_path)
+    talk = talk_for(rig)
+    mid = post(rig, "dm:101", "you around tonight?")
+    hand(rig, talk, mid)
+    run_for(rig, talk, 200)
+    assert store.get_meta(ANSWERED_KEY.format(guid=101)) is None
+
+
+def test_waking_reads_her_clock_across_the_daylight_saving_change(store, tmp_path):
+    from datetime import timedelta, timezone
+    rig = rig_for(store, at(2026, 11, 1, 1), tmp_path)  # US clocks go back at 02:00 tonight
+    p = rig.engine.personas.get(101)
+    edt = datetime(2026, 11, 1, 1, 0, tzinfo=timezone(timedelta(hours=-4)))  # SystemClock-like
+    now = edt.timestamp()
+    assert owntime.state_at(p, edt) == "offline"
+    due = owntime.due_at(p, post_ts=now, now=now, local_now=edt, message_id=9,
+                         urgent=False, talking=False, insist=False)
+    woke = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)  # 07:00 EST, not 07:00 EDT
+    assert woke.timestamp() + owntime.BACK_S[0] <= due <= woke.timestamp() + owntime.BACK_S[1]

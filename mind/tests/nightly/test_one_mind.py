@@ -2,6 +2,7 @@
 conversation, and the officers' channels in the game and on Discord are one audience. What she
 knows reaches a turn by its audience, never by its medium; public conversations still keep to
 their own place (R11). Invented members only (TEST_CAST 101-105, him 1)."""
+import json
 from datetime import timezone
 
 import pytest
@@ -136,7 +137,7 @@ def test_officer_lines_scope_to_the_officers_in_either_medium(h):
     assert line.endswith(OFFICERS_TAIL) and not line.endswith(PRIVATE_TAIL)
 
 
-def test_officer_backfill_raises_game_officer_memories_and_opens_discord_ones_to_officers(h):
+def test_officer_backfill_raises_game_officer_memories_and_never_widens(h):
     game = put(h, h.T, 102, "we should bench arkon next week", "officer")
     disc = put(h, h.T + 5, 102, "trial for the new hunter ends friday", OFFICERS,
                audience=OFFICER_AUDIENCE)
@@ -155,10 +156,12 @@ def test_officer_backfill_raises_game_officer_memories_and_opens_discord_ones_to
     changed = backfill_officer_scopes(h.store.conn)
     rows = {m.id: (m.scope, m.scope_with) for m in h.store.get_memories(
         [old_game, old_disc, reflection, mixed, public, paired])}
-    assert rows == {old_game: ("private", OFFICER_SCOPE), old_disc: ("private", OFFICER_SCOPE),
+    # a stored scope that reaches nobody is never widened by the backfill (its nobody may come
+    # from what the night was shown); new memories derive the officers' scope when written
+    assert rows == {old_game: ("private", OFFICER_SCOPE), old_disc: ("private", 0),
                     reflection: ("private", OFFICER_SCOPE), mixed: ("private", 0),
                     public: ("open", 0), paired: ("private", 1)}
-    assert changed == 3
+    assert changed == 2
     assert backfill_officer_scopes(h.store.conn) == 0  # idempotent
 
 
@@ -183,3 +186,48 @@ def test_slang_learned_from_his_officer_lines_keeps_its_public_evidence(h):
     assert rows[reflection].scope == "open"
     # nothing public left to rest on: it stays with the officers
     assert (rows[only].scope, rows[only].scope_with) == ("private", OFFICER_SCOPE)
+
+
+def _set_role(h, guid, role):
+    h.store.conn.execute("UPDATE persona_core SET json = json_set(json, '$.play.guild_role', ?) "
+                         "WHERE guid = ?", (role, guid))
+
+
+def test_a_raider_never_read_officer_chat_so_his_officer_lines_leave_her_evidence(h):
+    _set_role(h, 101, "raider")
+    _set_role(h, 102, "officer")
+    off = put(h, h.T, 1, "zanny here, bench call tonight", "officer")
+    pub = put(h, h.T + 5, 1, "zanny is fine by me", "guild")
+    raider = h.mem(101, "Everyone calls him Zanny.", key="nick:1",
+                   evidence=(f"chat:{off}", f"chat:{pub}"))
+    officer = h.mem(102, "Zan made a bench call.", evidence=(f"chat:{off}", f"chat:{pub}"))
+    h.store.set_meta("nightly:lexicon-sources:7", json.dumps([f"chat:{off}", f"chat:{pub}"]))
+    h.store.set_meta("nightly:lexicon-sources:8", json.dumps([f"chat:{off}"]))
+    backfill_officer_scopes(h.store.conn)
+    rows = {m.id: m for m in h.store.get_memories([raider, officer])}
+    assert rows[raider].evidence == (f"chat:{pub}",) and rows[raider].scope == "open"
+    assert (rows[officer].scope, rows[officer].scope_with) == ("private", OFFICER_SCOPE)
+    assert json.loads(h.store.get_meta("nightly:lexicon-sources:7")) == [f"chat:{pub}"]
+    assert json.loads(h.store.get_meta("nightly:lexicon-sources:8")) == [f"chat:{off}"]
+
+
+def test_the_nights_provenance_scope_matches_the_writer_for_officer_roots(h):
+    from leeroy_mind.nightly.mood import evidence_scope
+    off = put(h, h.T, 102, "we should bench arkon next week", "officer")
+    assert evidence_scope(h.store, 102, [f"chat:{off}"]) == ("private", OFFICER_SCOPE)
+    d = derive_scope(h.store.conn, 102, [f"chat:{off}"])
+    assert (d.scope, d.scope_with) == ("private", OFFICER_SCOPE)
+
+
+def test_a_dont_tell_in_the_dm_covers_their_whisper_that_night(h):
+    from leeroy_mind.memory.privacy import _secret_threads, _lines
+    h.store.set_meta("human_guid", "1")
+    put(h, h.T, 1, "dont tell anyone but i might quit", DM, to=102)
+    later = put(h, h.T + 600, 1, "anyway what are you up to", "whisper", to=102)
+    lines = _lines(h.store.conn, {later})
+    thread = lines[later].thread_id
+    assert thread in _secret_threads(h.store.conn, lines)
+    # never another pair's
+    other = put(h, h.T + 700, 1, "hey whats up", "whisper", to=103)
+    lines = _lines(h.store.conn, {other})
+    assert lines[other].thread_id not in _secret_threads(h.store.conn, lines)

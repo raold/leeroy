@@ -11,6 +11,7 @@ from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly import knowledge
 from leeroy_mind.nightly.attraction import FINAL_BOSSES, reflection_row
+from leeroy_mind.memory.privacy import OFFICERS
 from leeroy_mind.nightly.forget import _node as _provenance_node
 from leeroy_mind.nightly.motives import trait_today
 from leeroy_mind.nightly.settings import night_of_ts
@@ -171,7 +172,7 @@ def _evidence_scope_state(store, owner, refs):
         nodes[ref] = (node[0], children, holder, scope, parties)
         active.add(ref)
         if holder is None:
-            if scope[0] != "open":
+            if scope[0] != "open" and scope[1] != OFFICERS:  # an officers' root stays theirs
                 partners = parties - {viewer} if viewer in parties else set()
                 scope = scope[0], next(iter(partners)) if len(partners) == 1 else 0
             for child in children:

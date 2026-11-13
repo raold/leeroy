@@ -15,9 +15,9 @@ same moment. A DM still owed after LET_GO_S is let go. Nothing here reads the ga
 not play (R11), and her body being online in the game changes nothing."""
 import random
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from .presence import RNG_SEED, local_time, presence_of
+from .presence import OWNER_ZONE, RNG_SEED, local_time, presence_of
 
 URGENT_RE = re.compile(
     r"\b(urgent|asap|emergency|right now|call me|need (?:you|help)|help me|"
@@ -32,6 +32,14 @@ SCAN_STEP_S = 300.0
 SCAN_MAX_S = 36 * 3600.0
 LET_GO_S = 3 * 86400.0
 LATE_S = 600.0  # an answer this long after his post says she is only now seeing it
+
+
+def shifted(local: datetime, seconds: float) -> datetime:
+    """Owner-local `local` moved by `seconds` of real time, through UTC, so a daylight-saving
+    change in between is honoured; a naive owner clock is US Eastern and stays naive."""
+    aware = local if local.tzinfo else local.replace(tzinfo=OWNER_ZONE)
+    moved = (aware.astimezone(timezone.utc) + timedelta(seconds=seconds)).astimezone(OWNER_ZONE)
+    return moved.replace(tzinfo=None) if local.tzinfo is None else moved
 
 
 def state_at(p, local: datetime) -> str:
@@ -57,7 +65,7 @@ def due_at(p, *, post_ts: float, now: float, local_now: datetime, message_id: in
     glance_draw, back_draw, urgent_draw = (rng.random() for _ in range(3))
 
     def at(t: float) -> datetime:
-        return local_now + timedelta(seconds=t - now)
+        return shifted(local_now, t - now)
 
     def span(bounds, draw):
         lo, hi = bounds
@@ -98,6 +106,6 @@ def late_note(p, *, post_ts: float, now: float, local_now: datetime, forms) -> s
     """The instruction's note for an answer LATE_S or more after his post; "" sooner."""
     if now - post_ts < LATE_S:
         return ""
-    why = away_words(p, local_now + timedelta(seconds=post_ts - now))
+    why = away_words(p, shifted(local_now, post_ts - now))
     return (f"{forms[0].capitalize()} wrote this {age_words(now - post_ts)} ago while you were "
             f"{why}; you are only now seeing it, so answer as someone catching up would.")
