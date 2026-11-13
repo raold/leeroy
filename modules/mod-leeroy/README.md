@@ -129,10 +129,11 @@ The log names `readback_changed guid=<guid> check=<code>`, then the skip reason
 `original_group`, `lfg`, `group`, and `queue`. The final readback still rechecks its last member's
 cleanup state (`MemberCleanupFault`) even when untouched; a fault there the codes do not see (a
 Wintergrasp queue, a training fence) fails the job named by its reason's code (`CleanupFaultCheck`:
-`offline`, `queue`, `lfg` or `owner`). A readback without one of the nine codes is never recorded
-or sent (`MakeRealmJob`), since the mind refuses the whole event over one. Tick reads the readback
-fields and its `final_readback` shortcut only for `leave_pvp`, with typed reads: another kind's
-payload can be the wire message itself.
+`offline`, `queue`, `lfg` or `owner`). A readback without one of the nine codes, or naming a
+member outside the manifest, is never sent (`LeaveReadbackFault`, `MakeRealmJob`, Tick's finish),
+since the mind refuses the whole event over one. Tick reads the readback fields and its
+`final_readback` shortcut only for `leave_pvp`, with typed reads: another kind's payload can be
+the wire message itself.
 
 A changed member still fails the readback. A failed ordinary leave keeps only members it may
 have changed (including scopes/continuations) and ends the others' leases. Its `realm_job`

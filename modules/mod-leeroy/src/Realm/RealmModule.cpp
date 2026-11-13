@@ -1047,8 +1047,13 @@ void RealmModule::Tick(std::uint32_t diff)
                     && member->get<std::uint64_t>() <= 0xFFFFFFFFull
                     && check != entry.payload.end() && check->is_string() && ReadbackCheck(check->get<std::string>()))
                 {
-                    readbackGuid = static_cast<std::uint32_t>(member->get<std::uint64_t>());
-                    readbackCheck = check->get<std::string>();
+                    auto const named = static_cast<std::uint32_t>(member->get<std::uint64_t>());
+                    // The mind refuses a terminal naming anyone outside the manifest, so never send one.
+                    if (std::find(entry.guids.begin(), entry.guids.end(), named) != entry.guids.end())
+                    {
+                        readbackGuid = named;
+                        readbackCheck = check->get<std::string>();
+                    }
                 }
             }
             bool const emptyLeave = entry.kind == "leave_pvp" && entry.domain == ActivityDomain::Realm
