@@ -32,6 +32,16 @@ Leeroy.KeepCast = 1
 # Reloadable with .reload config. Does not resurrect bots itself.
 Leeroy.CastDeathLoop.Enable = 0
 
+# Dead members of the owner's group. Out of combat (nobody in his group fighting within
+# 100 yards), the nearest free paladin, priest or shaman bot of the group within 57 yards
+# and in sight gets off its mount (only on the ground) and rezzes, as players do; playerbots
+# alone never casts from a mount, and his bots stay mounted while he is. A bot outside a
+# dungeon or raid still dead after ReleaseSeconds of quiet releases and runs back from the
+# graveyard (0 never releases; at most 600). Inside an instance it waits for a rez as before.
+# Honors Realm and training ownership. Reloadable with .reload config.
+Leeroy.GroupRez.Enable = 1
+Leeroy.GroupRez.ReleaseSeconds = 60
+
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
 
