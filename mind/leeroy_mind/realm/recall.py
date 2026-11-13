@@ -12,7 +12,7 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable
 from leeroy_mind.guild.protocol import BotDo
 
 from .actions import ActionRejected
-from .action_store import STEP_REFUSED, ActionCapacity, defaults_partial, leave_refusal_guids, leave_skipped_guids
+from .action_store import STEP_REFUSED, ActionCapacity, defaults_partial, leave_refusal_guids, leave_skipped_guids, leave_released_guids
 from .protocol import LeavePvp, Rearm
 
 log = logging.getLogger(__name__)
@@ -299,13 +299,18 @@ class Recall:
     def _done(self, chain, kind, ok, reason, past, command_id=None):
         named = leave_refusal_guids(reason, chain.members) if kind == "leave" and not ok else None
         if not named:
-            if kind == "leave" and ok:
+            if kind == "leave":
                 try:
                     record = self.queue.store.get(command_id)
                 except BodyEvidenceUnavailable:
                     self._finish(chain)
                     return
                 skipped = set(leave_skipped_guids(record)) & set(chain.members) if record else set()
+                if not ok and record:
+                    released = set(leave_released_guids(record)) - skipped
+                    if released:
+                        self._leave_out(chain, set(chain.members) - released)
+                        ok = True  # only these bodies have exact native release proof
                 if skipped:
                     self._leave_out(chain, skipped)
             if kind == "defaults" and not ok:

@@ -85,6 +85,8 @@ def classify(cmd, *, child=False):
         kind = "bot_do"
     if kind is None:
         raise ValueError("unsupported action type")
+    if kind == "realm_forget":
+        raise ValueError("realm_forget requires an operator abandonment receipt")
     identity(cmd.id)
     if kind == "arena_queue" or kind == "arena_team" and cmd.action != "create":
         raise ValueError("arena requires Task24 atomic full-roster admission")

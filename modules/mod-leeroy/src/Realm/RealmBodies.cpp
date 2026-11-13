@@ -5,6 +5,7 @@
 #include "LeeroyEvents.h"
 #include "LeeroyRealmCleanup.h"
 #include "LeeroyRealmFailure.h"
+#include "LeeroyRealmRelease.h"
 #include "LeeroyRealmTransmog.h"
 #include "Bag.h"
 #include "Battleground.h"
@@ -38,7 +39,6 @@ namespace
 {
 using Json = nlohmann::json;
 constexpr float Pi = 3.14159265358979323846f;
-constexpr std::uint64_t OperationWaitMs = 60000;
 RealmStep Refuse(std::string why) { return {StepState::Refused, std::move(why)}; }
 RealmStep UnchangedRefusal(std::string why) { return {StepState::Refused, std::move(why), 0, {}, true}; }
 // A member whose own step refused before it changed anything, for a reason of its own: Tick ends
@@ -672,10 +672,15 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         if (auto skip = SkipLeaveMember(entry, guid, why)) return *skip;
         return refuse(std::move(why));
     };
-    if (Expired(state)) return fail("leave_cleanup_unproved");
     // A fault in another member already rechecked (one this job took out or touched) is the job's own.
     if (auto fault = OrdinaryCleanupFault(entry); !fault.reason.empty())
-        return fault.guid == guid ? fail(std::move(fault.reason)) : refuse(std::move(fault.reason));
+    {
+        auto const check = LeaveReadbackCheck(entry, fault.guid);
+        if (fault.guid != guid && !Expired(state) && (check == "teleport" || check == "exit")) return Pending(state);
+        auto why = check.empty() ? fault.reason : LeaveReadbackFault(entry, fault.guid, check, fault.reason);
+        return fault.guid == guid ? fail(std::move(why)) : refuse(std::move(why));
+    }
+    if (Expired(state)) return fail("leave_cleanup_unproved");
     auto stage = state.at("stage").get<std::string>();
     if (stage == "shared_lfg") return LeaveOnlineLfgGroup(entry, guid);
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
@@ -774,8 +779,10 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     if (QueuedForPvp(bot) || bot->InBattleground() || sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE
         || (bot->GetGroup() && (bot->GetGroup()->isLFGGroup() || bot->GetGroup()->isBGGroup() || bot->GetGroup()->isBFGroup())))
         return fail("leave_cleanup_unproved");
-    if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
+    if (entry.cursor + 1 < entry.guids.size())
+        if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
     bool const bodyChanged = state.at("changed").get<bool>() || TouchedByCleanup(entry, guid);
+    if (state.at("changed").get<bool>()) RecordOwnStepChange(entry, guid);
     auto result = Done(entry, bodyChanged ? 1 : 0);
     result.unchanged = !bodyChanged && !entry.payload.value("cleanup_mutated", false);
     return result;

@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmModule.h"
 #include "LeeroyRealmFailure.h"
+#include "LeeroyRealmRelease.h"
 #include "RealmOwnership.h"
 #include "RealmPorts.h"
 #include "RealmGuild.h"
@@ -205,6 +206,59 @@ struct RealmModule::State
 RealmModule& RealmModule::Instance() { static RealmModule module; return module; }
 RealmModule::RealmModule() : _state(std::make_unique<State>()) { }
 RealmModule::~RealmModule() = default;
+bool RealmModule::LeaveMayHaveChanged(Queued const& entry, std::uint32_t guid) const
+{
+    auto it = _state->reservations.find(entry.id);
+    if (it == _state->reservations.end() || entry.kind != "leave_pvp" || entry.domain != ActivityDomain::Realm) return true;
+    auto const& reservation = it->second;
+    auto const step = entry.payload.find("step");
+    bool const current = entry.cursor < entry.guids.size() && entry.guids[entry.cursor] == guid;
+    bool const currentStep = current && step != entry.payload.end()
+        && (step->value("changed", false) || step->contains("receipt"));
+    return MayHaveChanged({OwnStepChanged(entry, guid), TouchedByCleanup(entry, guid), reservation.declaredScopes.contains(guid),
+        !reservation.continuation.empty() || !reservation.guildJoinAttempts.empty(), currentStep});
+}
+bool RealmModule::SkipUntouchedLeave(Queued& entry, std::uint32_t guid, std::string const& check)
+{
+    auto it = _state->reservations.find(entry.id);
+    if (!ReadbackCheck(check) || it == _state->reservations.end() || !it->second.bodies.contains(guid)
+        || LeaveMayHaveChanged(entry, guid)) return false;
+    it->second.bodies.erase(guid);
+    it->second.pending.erase(guid);
+    if (Holder(guid) == entry.id) _state->holders.erase(guid);
+    if (!entry.payload.contains("skipped")) entry.payload["skipped"] = nlohmann::json::array();
+    entry.payload["skipped"].push_back(guid);
+    entry.payload.erase("readback_guid"); entry.payload.erase("readback_check");
+    LOG_INFO("module.leeroy", "mod-leeroy: realm leave_pvp {} skipped guid={} reason=readback_changed:{}", entry.id, guid, check);
+    return true;
+}
+std::pair<std::string, std::size_t> RealmModule::Forget(std::string const& id)
+{
+    auto it = _state->reservations.find(id);
+    ForgetFacts facts;
+    if (it != _state->reservations.end())
+    {
+        auto const& r = it->second;
+        facts = {true, r.retained, r.admitted.kind, r.admitted.domain == ActivityDomain::Realm,
+            !r.declaredScopes.empty(), !r.continuation.empty(), !r.guildJoins.empty() || !r.guildJoinAttempts.empty(), false};
+        for (auto const& [guid, scopes] : r.pending) { (void)guid; if (!scopes.empty()) facts.scopes = true; }
+        for (auto const& [guid, lease] : r.bodies)
+        {
+            (void)lease;
+            auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
+            if (player && player->IsBeingTeleported()) facts.teleport = true;
+        }
+    }
+    auto const count = ForgetOutcome(facts) == "released" ? it->second.bodies.size() : 0;
+    std::string const outcome(ApplyForget(facts, [&]
+    {
+        _state->Release(id);
+        std::erase_if(_state->holders, [&](auto const& holder) { return holder.second == id; });
+        _state->ApplyPins();
+    }));
+    LOG_INFO("module.leeroy", "mod-leeroy: realm_forget id={} outcome={} members={}", id, outcome, count);
+    return {outcome, count};
+}
 bool RealmModule::On() const { return _state->on.load(); }
 std::uint64_t RealmModule::Epoch() const { return _state->epoch.load(); }
 bool RealmModule::GuildOn() const { return _state->guildOn.load(); }
@@ -967,10 +1021,28 @@ void RealmModule::Tick(std::uint32_t diff)
                 retain || reservation.retained, !reservation.declaredScopes.empty(),
                 !reservation.continuation.empty(), !reservation.guildJoinAttempts.empty(),
                 entry.payload.value("cleanup_mutated", false)});
-            if (retain) reservation.retained = true;
+            std::vector<std::uint32_t> released;
+            if (entry.kind == "leave_pvp" && entry.domain == ActivityDomain::Realm && reservation.continuation.empty())
+            {
+                released = SkippedMembers(entry);
+                std::vector<std::uint32_t> held;
+                for (auto const& [member, body] : reservation.bodies) { (void)body; held.push_back(member); }
+                auto untouched = ReleaseUntouched(held, [&](auto member) { return LeaveMayHaveChanged(entry, member); }, [&](auto member)
+                {
+                    reservation.pending.erase(member);
+                    if (Holder(member) == entry.id) _state->holders.erase(member);
+                    reservation.bodies.erase(member);
+                });
+                released.insert(released.end(), untouched.begin(), untouched.end());
+            }
+            bool const emptyLeave = entry.kind == "leave_pvp" && entry.domain == ActivityDomain::Realm
+                && reservation.bodies.empty() && reservation.pending.empty() && reservation.declaredScopes.empty()
+                && reservation.continuation.empty() && reservation.guildJoins.empty() && reservation.guildJoinAttempts.empty();
+            if (retain && !emptyLeave) reservation.retained = true;
             else _state->Release(entry.id);
             PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid, knownJoins,
-                "", noChange ? std::optional<bool>{false} : std::nullopt, SkippedMembers(entry)});
+                "", noChange ? std::optional<bool>{false} : std::nullopt, SkippedMembers(entry), released,
+                entry.payload.value("readback_guid", std::uint32_t{0}), entry.payload.value("readback_check", std::string{})});
             return true;
         };
         bool const pending = reservation.pending.contains(guid);
@@ -990,6 +1062,15 @@ void RealmModule::Tick(std::uint32_t diff)
         // After a completed or skipped step: the next member, or the job's end.
         auto advance = [&]
         {
+            if (entry.kind == "leave_pvp" && entry.cursor + 1 == entry.guids.size())
+            {
+                if (!entry.payload.contains("final_readback")) entry.payload["final_readback"] = NowMs();
+                RealmStep readback;
+                try { readback = FinalLeaveReadback(entry); }
+                catch (...) { return finish("operation_outcome_unknown", true); }
+                if (readback.state == StepState::Pending) return false;
+                if (readback.state != StepState::Complete) return finish(readback.reason, true);
+            }
             ++entry.cursor;
             if (entry.cursor < entry.guids.size())
                 return false;
@@ -1001,6 +1082,9 @@ void RealmModule::Tick(std::uint32_t diff)
                 std::nullopt, SkippedMembers(entry)});
             return true;
         };
+        // The last body step is already proved complete/skipped. Waiting for
+        // another member's teleport must not run or fence that step again.
+        if (entry.payload.contains("final_readback")) return advance();
         // Only this member's lease ends; the others go on, and the job's event names it.
         auto skip = [&](std::string const& why)
         {
@@ -1009,13 +1093,14 @@ void RealmModule::Tick(std::uint32_t diff)
             if (Holder(guid) == entry.id) _state->holders.erase(guid);
             if (!entry.payload.contains("skipped")) entry.payload["skipped"] = nlohmann::json::array();
             entry.payload["skipped"].push_back(guid);
+            entry.payload.erase("readback_guid"); entry.payload.erase("readback_check");
             LOG_INFO("module.leeroy", "mod-leeroy: realm {} {} skipped guid={} reason={}", entry.kind, entry.id, guid, why);
             return advance();
         };
         // Tick's own fence refused this member before its executor ever ran (DecideFence). With no
         // pending entry at all it has had no step, so nothing in its own step changed it; it is
         // skipped when the reason is its own and nothing else in the job touched it either.
-        // Otherwise the old rule. A leave's last member first reads back the members still held.
+        // Otherwise the old rule. advance reads every remaining member after the last skip.
         auto fenced = [&](std::string why)
         {
             FenceFacts facts;
@@ -1029,14 +1114,6 @@ void RealmModule::Tick(std::uint32_t diff)
             facts.last = entry.cursor + 1 == entry.guids.size();
             auto const outcome = DecideFence(facts);
             if (outcome == FenceOutcome::OldRule) return finish(std::move(why), pending, false, !pending);
-            if (outcome == FenceOutcome::ReadbackThenSkip)
-            {
-                std::string failed;
-                // Outside the executor's own try: no throw may leave the world-thread update.
-                try { failed = SkipReadback(entry, guid); }
-                catch (...) { return finish("operation_outcome_unknown", true); }
-                if (!failed.empty()) return finish(std::move(failed), true);
-            }
             return skip(why);
         };
         auto before = Identity(guid, pending);
@@ -1073,7 +1150,13 @@ void RealmModule::Tick(std::uint32_t diff)
             }
         } active(*_state, budget, entry, guid);
         try { result = executor->second.execute(entry, guid); }
-        catch (...) { return finish("operation_outcome_unknown", true); }
+        catch (...)
+        {
+            if (entry.kind == "leave_pvp") RecordOwnStepChange(entry, guid); // no unchanged proof after a throw
+            return finish("operation_outcome_unknown", true);
+        }
+        if (entry.kind == "leave_pvp" && entry.payload.contains("step")
+            && entry.payload.at("step").value("changed", false)) RecordOwnStepChange(entry, guid);
         if (!reservation.continuation.empty())
         {
             if (result.state != StepState::Detached)
@@ -1233,6 +1316,15 @@ void RealmModule::Shutdown()
 
 void RegisterRealmContinuationHandlers()
 {
+    RegisterCommand("realm_forget", [](nlohmann::json const& message) -> LeeroyCommandResult
+    {
+        std::string error;
+        auto command = ParseRealmForget(message, error);
+        if (!command) return {false, error};
+        auto const [outcome, count] = RealmModule::Instance().Forget(command->originId);
+        Publish(MakeRealmForgotten(message.at("id").get<std::string>(), command->originId, outcome, count));
+        return {outcome == "released" || outcome == "not_held", outcome == "released" || outcome == "not_held" ? "" : outcome};
+    });
     RegisterCommand("get_realm_pvp", [](nlohmann::json const& message) -> LeeroyCommandResult
     {
         std::string error;

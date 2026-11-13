@@ -88,13 +88,33 @@ def leave_skipped_guids(r):
     """The members a completed ordinary leave skipped: native left them as they were, no longer
     holds them, and took the others out. () for any other root."""
     if (r.role != "root" or r.policy != "ordinary" or r.kind != "leave_pvp"
-            or r.state != "completed" or r.result_ok is not True):
+            or r.state not in {"completed", "unknown"}):
         return ()
     return tuple(json.loads(r.evidence).get("job", {}).get("skipped", ()))
 
 
+def leave_released_guids(r):
+    """Correlated native release proof, never usable by another kind or a conflict."""
+    if r.role != "root" or r.policy != "ordinary" or r.kind != "leave_pvp" or r.state == "conflict":
+        return ()
+    evidence = json.loads(r.evidence)
+    if evidence.get("conflict") or evidence.get("ack", {}).get("ok") is False:
+        return ()
+    job = evidence.get("job", {})
+    named = job.get("released", [])
+    if (job.get("state") != "failed" or type(named) is not list
+            or any(type(g) is not int or g not in r.reserved_manifest for g in named)
+            or len(named) != len(set(named))):
+        return ()
+    return tuple(named)
+
+
+def held_manifest(r):
+    return tuple(g for g in r.reserved_manifest if g not in leave_released_guids(r))
+
+
 def skipped_backoff(r, now):
-    """A completed leave's skipped members while they are backed off: a leave naming one is
+    """A terminal leave's skipped members while they are backed off: a leave naming one is
     rejected, so the recall leaves them out as it does a named refusal's."""
     at = json.loads(r.evidence).get("skipped_at")
     return leave_skipped_guids(r) if at is not None and now < at + BACKOFF_S else ()
@@ -186,14 +206,16 @@ def _rank(owner, rank):
 def _evidence(ev):
     # A receipt without native's newer fields is stored as before, so older minds can read it.
     return {k: v for k, v in asdict(ev).items() if k not in {"id", "ts"}
-            and not (type(ev) is p.RealmJob and (k == "changed" and v is None or k == "skipped" and not v))}
+            and not (type(ev) is p.RealmJob and (k == "changed" and v is None
+                     or k in {"skipped", "released", "readback_guid", "check"} and not v))}
 
 
 def _realm_job(value, command_id):
     if type(value) is not dict: raise ValueError("invalid action evidence")
-    if "skipped" in value:
-        if type(value["skipped"]) is not list or not value["skipped"]: raise ValueError("invalid action evidence")
-        value = {**value, "skipped": tuple(value["skipped"])}
+    for key in ("skipped", "released"):
+        if key in value:
+            if type(value[key]) is not list or not value[key]: raise ValueError("invalid action evidence")
+            value = {**value, key: tuple(value[key])}
     ev = p.RealmJob(ts=0, id=command_id, **value)
     text(ev.reason, 0, 256)
     if ev.state == "done" and ev.reason: raise ValueError("invalid success reason")
@@ -343,6 +365,12 @@ class ActionStore:
             if key in ev and "skipped" in ev[key] and (key != "job" or r.policy != "ordinary" or r.kind not in SKIPPING_KINDS
                                                        or not set(ev[key]["skipped"]) <= set(r.reserved_manifest)):
                 raise ValueError("invalid skip receipt")
+            if key in ev and ("released" in ev[key] or "readback_guid" in ev[key] or "check" in ev[key]):
+                job = ev[key]
+                if (key != "job" or r.role != "root" or r.policy != "ordinary" or r.kind != "leave_pvp"
+                        or not set(job.get("released", ())) <= set(r.reserved_manifest)
+                        or job.get("readback_guid", r.reserved_manifest[0]) not in r.reserved_manifest):
+                    raise ValueError("invalid leave readback receipt")
         if "bot" in ev: _bot(ev["bot"], r.command_id)
         if "status" in ev: _status(ev["status"], r.command_id)
         for key in ("query_id", "cleanup_id"):
@@ -483,9 +511,9 @@ class ActionStore:
                         raise ActionUnavailable("realm action evidence unavailable")
                 if data.get("cleanup_id") and data["cleanup_id"] not in history:
                     raise ActionUnavailable("realm action evidence unavailable")
-        return tuple(BodyHold(r.command_id, r.owner, r.rank, frozenset(r.reserved_manifest), True)
+        return tuple(BodyHold(r.command_id, r.owner, r.rank, frozenset(held_manifest(r)), True)
                      for r in rows if r.role == "root" and r.state not in TERMINAL
-                     and r.transport_state != "not_entered" and r.reserved_manifest)
+                     and r.transport_state != "not_entered" and held_manifest(r))
 
     def _save(self, r):
         if r.result_ok is False and r.result_reason not in LOCAL_CANCELED:
@@ -505,8 +533,10 @@ class ActionStore:
                 # It now holds its manifest until typed evidence or `realm release` ends it.
                 ev = json.loads(r.evidence)
                 native = ev.get("job", {}).get("reason") or ev.get("ack", {}).get("error") or "none"
-                log.warning("realm_action_%s id=%s kind=%s reason=%s native=%s members=%d", r.state, r.command_id,
-                            r.kind, r.result_reason or r.send_error or "none", native, len(r.reserved_manifest))
+                job = ev.get("job", {})
+                detail = f" readback_guid={job['readback_guid']} check={job['check']}" if job.get("readback_guid") else ""
+                log.warning("realm_action_%s id=%s kind=%s reason=%s native=%s members=%d%s", r.state, r.command_id,
+                            r.kind, r.result_reason or r.send_error or "none", native, len(held_manifest(r)), detail)
         if r.role == "root" and r.kind == "leave_pvp" and leave_refusal_guids(r.result_reason, r.reserved_manifest):
             before = self.conn.execute("SELECT state FROM realm_action WHERE seq=?", (r.seq,)).fetchone()
             if before is not None and before[0] != r.state:
@@ -708,6 +738,9 @@ class ActionStore:
             # Only an ordinary leave or a rearm skips members, and only members of its own manifest.
             if ev.skipped and (old.policy != "ordinary" or old.kind not in SKIPPING_KINDS
                                or not set(ev.skipped) <= set(old.reserved_manifest)): return Transition(False)
+            if (ev.released or ev.readback_guid) and (old.role != "root" or old.policy != "ordinary"
+                    or old.kind != "leave_pvp" or not set(ev.released) <= set(old.reserved_manifest)
+                    or ev.readback_guid and ev.readback_guid not in old.reserved_manifest): return Transition(False)
             data = json.loads(old.evidence)
             if old.policy == "wg":
                 if not ev.pvp_owner or ev.guid != 0 or ev.state == "done" and not 1 <= ev.value <= len(old.reserved_manifest): return Transition(False)

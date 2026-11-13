@@ -15,12 +15,12 @@
 
 namespace Leeroy::Realm
 {
-inline constexpr std::array<std::string_view, 36> kCommandTypes = {
+inline constexpr std::array<std::string_view, 37> kCommandTypes = {
     "realm_actors", "realm_say", "realm_emote", "realm_move", "realm_visit", "rpg_status", "leave_pvp", "rearm", "wg_join",
     "arena_team", "arena_queue", "duel", "craft", "item_count", "equip", "set_profession", "transmog_set",
     "calendar_post", "calendar_signup", "calendar_update", "mail_send", "bank_tab_buy", "bank_money",
     "bank_deposit", "bank_withdraw", "bank_stock", "grant_achievement", "guild_rename", "guild_grow",
-    "guild_admit", "guild_note", "announce", "get_realm_pvp", "guild_readmit", "world_say", "get_world_roster"
+    "guild_admit", "guild_note", "announce", "get_realm_pvp", "guild_readmit", "world_say", "get_world_roster", "realm_forget"
 };
 inline constexpr std::array<std::uint32_t, 7> kGrantable = {3117, 4078, 4576, 2186, 3007, 1723, 1786};
 inline constexpr std::uint32_t kGuildTabard = 5976;
@@ -67,6 +67,7 @@ struct VisitCmd { std::string place; };
 struct RpgStatusCmd { std::uint32_t guid = 0; std::string status; std::uint32_t questId = 0; };
 struct LeavePvpCmd { std::vector<std::uint32_t> guids; std::string pvpOwner; };
 struct GetRealmPvpCmd { std::string pvpOwner, originId; };
+struct RealmForgetCmd { std::string originId; };
 struct RearmCmd { std::vector<std::uint32_t> guids; };
 struct WgJoinCmd { std::vector<std::uint32_t> guids; };
 // The v1 discriminator always occupies "type". Payload keys are arena_type/event_type,
@@ -147,6 +148,7 @@ std::optional<VisitCmd> ParseVisit(nlohmann::json const&, std::string& error);
 std::optional<RpgStatusCmd> ParseRpgStatus(nlohmann::json const&, std::string& error);
 std::optional<LeavePvpCmd> ParseLeavePvp(nlohmann::json const&, std::string& error);
 std::optional<GetRealmPvpCmd> ParseGetRealmPvp(nlohmann::json const&, std::string& error);
+std::optional<RealmForgetCmd> ParseRealmForget(nlohmann::json const&, std::string& error);
 std::optional<RearmCmd> ParseRearm(nlohmann::json const&, std::string& error);
 std::optional<WgJoinCmd> ParseWgJoin(nlohmann::json const&, std::string& error);
 std::optional<ArenaTeamCmd> ParseArenaTeam(nlohmann::json const&, std::string& error);
@@ -208,8 +210,12 @@ struct RealmJob
     // Members whose step native skipped, as they were and no longer held. On the wire only when
     // there are some, so older minds and jobs without skips see the old shape.
     std::vector<std::uint32_t> skipped{};
+    std::vector<std::uint32_t> released{};
+    std::uint32_t readbackGuid = 0;
+    std::string check{};
 };
 nlohmann::json MakeRealmJob(RealmJob const&);
+nlohmann::json MakeRealmForgotten(std::string const& id, std::string const& originId, std::string const& outcome, std::size_t members);
 // Body only; the drain supplies this proof's already captured publishedAtMs to
 // EncodeEvent exactly once, before handing the encoded line to bridge replay.
 nlohmann::json MakeRealmKill(Kill const&);

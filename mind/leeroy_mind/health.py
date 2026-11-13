@@ -691,7 +691,7 @@ def _gate_phase(conn) -> tuple[str, int]:
 def _realm_holds(conn, now: float) -> Check:
     try:
         rows = conn.execute(
-            "SELECT kind, state, transport_state, reserved_manifest, created, command_id FROM realm_action "
+            "SELECT kind, state, transport_state, reserved_manifest, created, command_id, evidence, policy FROM realm_action "
             "WHERE role = 'root' AND state NOT IN ('completed', 'not_sent') AND created < ?",
             (now - HOLD_S,)).fetchall()
     except sqlite3.Error as e:
@@ -703,11 +703,25 @@ def _realm_holds(conn, now: float) -> Check:
     holds, unknown, bodies, oldest = 0, 0, set(), None
     kinds = Counter()
     details = []
-    for kind, state, transport, manifest, created, ident in rows:
+    for kind, state, transport, manifest, created, ident, raw_evidence, policy in rows:
         try:
             guids = json.loads(manifest)
         except (TypeError, ValueError):
             guids = []
+        try:
+            evidence = json.loads(raw_evidence)
+            job = evidence.get("job", {}) if isinstance(evidence, dict) else {}
+            if not isinstance(job, dict): job = {}
+        except (TypeError, ValueError):
+            job = {}
+        released = job.get("released", [])
+        if (kind == "leave_pvp" and policy == "ordinary" and state != "conflict" and job.get("state") == "failed"
+                and not evidence.get("conflict") and isinstance(evidence.get("ack", {}), dict)
+                and evidence.get("ack", {}).get("ok") is not False
+                and isinstance(guids, list) and isinstance(released, list)
+                and len(released) <= 150 and all(type(g) is int and 0 < g <= 0xFFFFFFFF and g in guids for g in released)
+                and len(released) == len(set(released))):
+            guids = [g for g in guids if g not in released]
         held = transport != "not_entered" and bool(guids)
         if not held and state != "unknown":
             continue
@@ -723,6 +737,10 @@ def _realm_holds(conn, now: float) -> Check:
             code = kind if isinstance(kind, str) and _IDENT.fullmatch(kind) else "unknown_kind"
             details.append(f"{ident} kind={code} members={count}: realm release {ident} "
                            "--reason reviewed_stale_hold")
+            from .realm.protocol import READBACK_CHECKS
+            member, check = job.get("readback_guid"), job.get("check")
+            if type(member) is int and 0 < member <= 0xFFFFFFFF and type(check) is str and check in READBACK_CHECKS:
+                details[-1] += f" readback_guid={member} check={check}"
     if not holds and not unknown:
         return Check("realm-holds", OK, "realm: no body hold or unknown root older than 1 h")
     return Check("realm-holds", FAIL,
@@ -732,7 +750,8 @@ def _realm_holds(conn, now: float) -> Check:
                  + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items()))
                  + "; inspect native state, then with the mind stopped: "
                  + "; ".join(details[:20])
-                 + (f"; {len(details) - 20} more roots" if len(details) > 20 else ""))
+                 + (f"; {len(details) - 20} more roots" if len(details) > 20 else "")
+                 + "; on restart, realm release also frees eligible native holds when the worldserver supports realm_forget")
 
 
 def _table_check(name, operation):

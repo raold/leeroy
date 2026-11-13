@@ -12,6 +12,7 @@ std::string BeginLfgApplicantCleanup(std::string const& operation, LfgApplicantR
 // Caller has validated, reserved, charged and marked the whole native closure.
 // This only scopes the exact synchronous rolecheck-abort packet attribution.
 void CancelLfgApplicants(LfgApplicantReceipt const& receipt);
-bool VerifyLfgApplicantCleanup(std::string const& operation, std::uint64_t group, std::uint64_t join);
+bool VerifyLfgApplicantCleanup(std::string const& operation, std::uint64_t group, std::uint64_t join,
+    std::uint32_t* failedGuid = nullptr);
 }
 #endif
