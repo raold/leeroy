@@ -94,12 +94,13 @@ def test_false_is_not_enough_with_an_unbound_receipt(actions, changes):
 
 
 @pytest.mark.parametrize("ack", [None, False])
-def test_no_change_without_positive_admission_keeps_the_hold(actions, ack):
+def test_no_change_survives_lost_ack_but_negative_admission_keeps_the_hold(actions, ack):
     start(actions)
     if ack is not None: actions.observe_ack(Ack(0, "leave", ack, "busy:combat"), now=3)
     actions.observe_realm_job(failure(), now=4)
     actions.recover(process_id="next", now=5)
-    assert actions.get("leave").state == "unknown" and actions.holds()
+    assert actions.get("leave").state == ("unknown" if ack is False else "completed")
+    assert bool(actions.holds()) is (ack is False)
 
 
 def test_recovery_settles_only_an_uncontested_stored_no_change_failure(actions):
