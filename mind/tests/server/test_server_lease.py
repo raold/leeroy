@@ -193,7 +193,8 @@ def test_app_attach_is_last_and_starts_nothing(tmp_path, text, enabled):
         assert (app.server is not None) is enabled
         assert not app._bg_tasks
         if enabled:
-            assert app._background[-1] == app.server.lease.run
+            assert app.server.lease.run in app._background
+            assert app.server.engine.run in app._background
             assert app._shutdown_drains[-1] == app.server.lease.close
         else:
             assert attach_server(app) is None

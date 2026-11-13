@@ -8,6 +8,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, replace
 from contextlib import asynccontextmanager
 import hashlib
+import json
 import logging
 import re
 from pathlib import Path
@@ -165,7 +166,7 @@ class LiveReview:
             thread_ids=tuple(h.id for h in history[-16:]), embedding=embedding,
             to_guid=to, room=room, now=e.clock.now(), map=0 if is_discord(turn.channel) else getattr(member, "map", 0),
             zone=0 if is_discord(turn.channel) else getattr(member, "zone", 0), real_answer_due=self.owed(turn,meta),
-            server=bool(getattr(e,'server_app',None) is not None and is_discord(turn.channel)
+            server=bool(getattr(getattr(e,'server_app',None),'server',None) is not None and is_discord(turn.channel)
                         and meta.why.startswith('server:')), anchor=meta.server_anchor)
 
     def owed(self,turn,meta):
@@ -208,6 +209,18 @@ class LiveReview:
             rows = conn.execute("SELECT id,ts,author,text,thread,origin FROM discord_message "
                 "WHERE channel=? AND deleted IS NULL AND ts BETWEEN ? AND ? ORDER BY id DESC LIMIT ?",
                 (cid, now-86400 if draft.server else float('-inf'), now, 50 if draft.server else 128)).fetchall()[::-1]
+            # Explicit conversation ids survive a late reply. Never import a row
+            # from another channel, a deleted message, or a future timestamp.
+            has_thread = draft.server and bool(meta.server_thread)
+            thread_ids = tuple(dict.fromkeys(i for i in meta.server_thread
+                               if type(i) is int and i > 0))[-20:] if has_thread else ()
+            if thread_ids:
+                known = {r[0] for r in rows}
+                older = conn.execute("SELECT id,ts,author,text,thread,origin FROM discord_message "
+                    "WHERE id IN (SELECT value FROM json_each(?)) AND channel=? "
+                    "AND deleted IS NULL AND ts<=? ORDER BY id",
+                    (json.dumps(thread_ids), cid, now)).fetchall()
+                rows = sorted([*rows, *(r for r in older if r[0] not in known)], key=lambda r:r[0])
             # A parent can predate the bounded history. Add it explicitly, in this channel only.
             if draft.parent_id and not any(r[0] == draft.parent_id for r in rows):
                 rows = [*conn.execute("SELECT id,ts,author,text,thread,origin FROM discord_message "
@@ -220,9 +233,10 @@ class LiveReview:
                 (observed.human if r[2] == turn.speaker else turn.speaker) if draft.channel == "dm" else 0,
                 draft.room, r[4], readers=readers, origin=r[5]) for r in rows)
             thread = meta.discord.thread if meta.discord else None
-            context = tuple(h for h in history if h.thread_id == thread and now-h.ts <= 300)[-16:]
+            context = (tuple(h for h in history if h.id in thread_ids)[-16:] if has_thread else
+                       tuple(h for h in history if h.thread_id == thread and now-h.ts <= 300)[-16:])
             parent = next((h for h in history if h.id == draft.parent_id), None)
-            if parent is not None and parent not in context:
+            if parent is not None and parent not in context and (not has_thread or parent.id in thread_ids):
                 context = (parent, *context[-15:])
             if draft.server:
                 # Only this author's all-channel lines; these are guard evidence,
@@ -347,8 +361,14 @@ class LiveReview:
                     selected = [keys[0]]
                     if observed.draft.anchor:
                         selected.append(keys[-1])
-                    selected.extend(hashlib.sha256(h.text.encode()).digest() for h in
-                                    sorted(compared, key=lambda h: (h.ts,h.id), reverse=True)[:32-len(selected)])
+                    newest = sorted(compared, key=lambda h: (h.ts,h.id), reverse=True)
+                    # A late reply's parent and explicit thread are its relevance
+                    # evidence, even when a busy channel has many newer messages.
+                    preferred = (sorted(context, key=lambda h:(h.id == observed.draft.parent_id,h.ts,h.id),
+                                        reverse=True) if meta.server_thread else ())
+                    candidates = dict.fromkeys(hashlib.sha256(h.text.encode()).digest()
+                                               for h in (*preferred,*newest))
+                    selected.extend([k for k in candidates if k not in selected][:32-len(selected)])
                 missing = list(dict.fromkeys(k for k in selected if k not in self.vectors))
                 if missing:
                     by_key = dict(zip(keys, texts))

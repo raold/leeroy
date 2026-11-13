@@ -136,6 +136,14 @@ class DiscordDesk:
                                        'WHERE message=?', (path, w, h, size, mid))
                     store.set_meta(uploads.DAY_KEY.format(day), str(count + 1))
                 line, chat = self._his_line(mid, me, now)
+                server = getattr(app, 'server', None)
+                if server is not None and (peer := layout.dm_peer(args['channel'])) is not None:
+                    store.conn.execute('DELETE FROM meta WHERE key=?', (f'server:dm:open:{peer}',))
+            if server is not None:
+                # Stop immediately, even when vision delays the existing D1 answer hook.
+                server.engine.his_post(args['channel'])
+                server.dms.his_post(args['channel'])
+                server.reactions.after_post(mid, author=me, channel=args['channel'], text=args['text'], his=True)
             if image is not None:
                 self._photo_posts.append(now)
             try:
