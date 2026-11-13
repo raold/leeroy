@@ -158,6 +158,25 @@ def test_real_pipeline_card_guards_fingerprint_and_natural_end(rig,monkeypatch,c
         assert (rig.engine._last_talk_at,rig.world.human_last_active,dict(rig.engine._last_line_id))==game_before
 
 
+@pytest.mark.parametrize("channel",["guild","discord:general"])
+def test_a_riff_takes_its_mediums_length(rig,monkeypatch,channel):
+    """[talk] discord_words: a Discord riff writes as on Discord; the game's keeps one short line."""
+    answers=iter(["the kettle has declared independence","a flag would suit that tiny kingdom",
+        "its first law should concern biscuits"])
+    rig.llm.set_script(lambda *_:next(answers,"the pantry treaty is signed"))
+    monkeypatch.setattr(rig.banter,"candidates",lambda _: [101,102,103])
+    topic=Topic("fixture","quiet",rig.clock.now(),"The guild channel is quiet.")
+    async def go():
+        await finish(rig,asyncio.create_task(rig.banter.thread(channel,topic,[101,102,103])))
+    rig.sync(go())
+    asked=[c["messages"][1]["content"] for c in rig.llm.calls if "messages" in c]
+    assert asked
+    if channel=="guild":
+        assert all("One short line." in a and "This is Discord" not in a for a in asked)
+    else:
+        assert all("short line" not in a and "write in Discord chat" in a for a in asked)
+
+
 @pytest.mark.parametrize("interrupt",["owner","fight"])
 def test_owner_or_fight_interrupts_before_next_transport(rig,monkeypatch,interrupt):
     monkeypatch.setattr(rig.banter,"candidates",lambda _: [101,102,103])

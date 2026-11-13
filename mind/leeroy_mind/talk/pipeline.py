@@ -51,6 +51,7 @@ from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
 from leeroy_mind.discord.channels import is_private, same_medium
 from leeroy_mind.discord.store import DiscordRefused
+from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
@@ -69,6 +70,8 @@ from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.budget import PHASE_MODS, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
+from leeroy_mind.talk.discord_length import (TYPING_CAP_S as DISCORD_TYPING_S, preset_for,
+                                             trim_to_sentence, words_for)
 from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, is_silence,
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
@@ -134,6 +137,8 @@ PAIR_WINDOW_S = 86400.0
 CHAIN_QUIET_S = 90.0
 # The retry's hint says what was wrong with the first answer (prompts lens, minor 14).
 REGEN_HINT = "Say it the way {name} would type it in game chat: short, not like a helper."
+# The same for a longer Discord message ([talk] discord_words), which is never told "short"
+DISCORD_REGEN_HINT = "Say it the way {name} would write it on Discord, not like a helper."
 ECHO_HINT = "Don't say their line back: answer it in your own words."
 # Answering his question (rehearsal 2, judge B 2: the echo retry broke a member's right answer).
 ECHO_HIM_HINT = ("Don't say {their} line back: the same answer in your own words, and keep "
@@ -141,6 +146,7 @@ ECHO_HIM_HINT = ("Don't say {their} line back: the same answer in your own words
 COPY_HINT = "Don't copy a line from the chat: say your own thing."
 REPEAT_HINT = "Don't repeat what you said before."
 LONG_HINT = "Shorter: {lo}-{hi} words, the way you type."
+DISCORD_LONG_HINT = "Shorter: at most about {words} words."
 SAMPLE_HINT = "Say it your own way: the examples only show how you type."
 FRIENDS_HINT = "Keep it friendly: you only ever flirt with {human}."
 # A turn of his whose line went to a member (fix round 1, review I1: "Keep it friendly" asked
@@ -157,6 +163,7 @@ SILENT_WHISPER_HINT = "Answer {human}'s whisper in {length}, in your own voice."
 SILENT_START_HINT = "Start the conversation with {human} in {length}, in your own voice."
 # And for her answer to his Discord DM (ruling R9).
 SILENT_DM_HINT = "Answer {human}'s message in {length}, in your own voice."
+DISCORD_SILENT_LENGTH = "a few sentences"  # a longer Discord message's {length} above
 # A move she just made with this person, made again (filters.move_repeat: "move repeat:
 # <move>"; "clause", her final clause again, takes REPEAT_HINT): the phrase carries the
 # pronoun (moves.MOVE_PHRASES). A summons out of the game (filters "summons").
@@ -1260,7 +1267,8 @@ class Pipeline:
             extra=" ".join(x for x in (turn.instruction, follow, seen, story, lore, quest,
                                        *ends) if x),
             forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
-            quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN)
+            quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN,
+            channel=turn.channel, discord_words=self._discord_words(turn))
         chat_notes, pair_notes = {}, {}
         if getattr(self, 'photos_send', False):
             from leeroy_mind.photos.notes import by_lines
@@ -1917,7 +1925,10 @@ class Pipeline:
     def _first_typing(self, turn: Turn, typing: float) -> float:
         """The first line's typing, capped so it goes out within the turn's deadline: typed
         faster, never dropped, when the model answered in time (rehearsal 2, finding 5: three
-        lines the model gave in half a second were lost to typing alone)."""
+        lines the model gave in half a second were lost to typing alone). A longer Discord
+        message ([talk] discord_words) types for DISCORD_TYPING_S at most, not minutes."""
+        if self._discord_words(turn):
+            typing = min(typing, DISCORD_TYPING_S)
         left = turn.deadline - self.clock.now() - SEND_MARGIN_S
         return min(typing, max(MIN_TYPING_S, left)) if turn.deadline > 0 else typing
 
@@ -1998,6 +2009,9 @@ class Pipeline:
                    meta: TurnMeta | None = None, attempt: int = 0) -> str:
         # a bit of several rows keeps the rows a blank line separates (prompts lens, minor 9)
         preset = LIVE_BIT if turn.kind is TurnKind.BIT and turn.max_lines > 1 else LIVE
+        words = self._discord_words(turn)
+        if words:  # a longer Discord message: room for it in this request only
+            preset = preset_for(preset, words)
         trace = meta.timing_trace if meta is not None else None
 
         async def job(llm):
@@ -2064,7 +2078,15 @@ class Pipeline:
             raise
         finally:
             self.timing.model(trace, attempt, outcome)
-        return result.text
+        text = result.text
+        if words and getattr(result.diagnostics, "done_reason", None) == "length":
+            # cut off by num_predict: back to its last full sentence (none: as it is)
+            cut = trim_to_sentence(text)
+            if cut != text:
+                log.info("discord_line_trimmed: guid=%d kind=%s words=%d kept=%d", turn.speaker,
+                         turn.kind, len(text.split()), len(cut.split()))
+            text = cut
+        return text
 
     async def _generate(self, turn: Turn, meta: TurnMeta, c: Composed, *,
                         spoken: bool = False, max_attempts: int = 2) -> tuple[str, str | None]:
@@ -2155,7 +2177,8 @@ class Pipeline:
                             else SILENT_WHISPER_HINT)
                     messages = asking(hint.format(
                         human=self.human.called,
-                        length="a line or two" if meta.two_lines else "a line"))
+                        length=(DISCORD_SILENT_LENGTH if self._discord_words(turn)
+                                else "a line or two" if meta.two_lines else "a line")))
                     continue
                 return raw, "silent"
             log.info("say_tells: guid=%d kind=%s attempt=%d tells=%s", turn.speaker, turn.kind,
@@ -2214,7 +2237,9 @@ class Pipeline:
         reasons = {t.reason for t in tells if t.fatal or t.soft}
         repeated = {r.removeprefix(MOVE_REPEAT) for r in reasons if r.startswith(MOVE_REPEAT)}
         unhinted = {r for r in reasons - _HINTED if not r.startswith(MOVE_REPEAT)}
-        hints = [REGEN_HINT.format(name=p.character_name)] if unhinted else []
+        words = 0 if turn is None else self._discord_words(turn)
+        hints = ([(DISCORD_REGEN_HINT if words else REGEN_HINT).format(name=p.character_name)]
+                 if unhinted else [])
         forms = dict(zip(("they", "them", "their"), THEY_FORMS if turn is None
                          else self._forms_of(self._counterpart(turn))))
         if "member flirt" in reasons:  # a turn of his is told the line is his
@@ -2240,13 +2265,25 @@ class Pipeline:
             hints.append(HISTORY_HINT)
         if "slang" in reasons:
             hints.append(SLANG_HINT)
-        if "long" in reasons:
+        if "long" in reasons and words:
+            hints.append(DISCORD_LONG_HINT.format(words=words))
+        elif "long" in reasons:
             lo, hi = p.typing.words_per_line
             hints.append(LONG_HINT.format(lo=lo, hi=hi))
         return " ".join(hints)
 
+    def _discord_words(self, turn: Turn) -> int:
+        """The words a longer Discord message of this turn's holds ([talk] discord_words,
+        talk/discord_length.py); 0 for a game turn, which never reads it, or with it at 0."""
+        if not is_discord(turn.channel):
+            return 0
+        return words_for(getattr(self.cfg, "talk", None), turn.channel)
+
     def _word_budget(self, turn: Turn, p: Persona, two_lines: bool = False) -> int:
-        """How many words this turn's lines hold for the speaker now."""
+        """How many words this turn's lines hold for the speaker now: a longer Discord
+        message's discord_words, whatever her game line."""
+        if words := self._discord_words(turn):
+            return words
         cap = line_cap(p.typing, effects_for(self._altered_of(turn.speaker), turn.kind),
                        PHASE_MODS[day_phase(self.clock.local())].length_mult)
         lines = (turn.max_lines if turn.kind is TurnKind.BIT or two_lines
@@ -2294,26 +2331,32 @@ class Pipeline:
         bit of several lines keeps the lines the model wrote, one each; any other turn is
         styled as one text. A member of his inner circle keeps his real name capitalised
         through it where it was written so (_real_name_spelling). A Discord turn keeps its
-        letters and emoji (no ASCII fold) and its lines become one message, joined by "\n"."""
+        letters and emoji (no ASCII fold) and its lines become one message, joined by "\n", at
+        most the store's MAX_TEXT. A longer Discord message ([talk] discord_words) is one
+        paragraph of up to LONG_SLACK times its words, whatever her game line."""
         discord = is_discord(turn.channel)
+        words = self._discord_words(turn)
         phase = day_phase(self.clock.local())
         keep = self._real_name_spelling() if close else frozenset()
         pieces = ([x for x in text.split("\n") if x.strip()]
-                  if turn.kind is TurnKind.BIT and turn.max_lines > 1 else [text])
+                  if turn.kind is TurnKind.BIT and turn.max_lines > 1 and not words else [text])
         out: list[Styled] = []
         typing = p.typing
+        most = 1 if words else turn.max_lines
         for piece in pieces:
             out += style_lines(piece, typing, self._effects(turn.speaker), self.rng,
                                length_mult=PHASE_MODS[phase].length_mult,
                                protect=self._protect(turn.channel),
                                speaker=p.character_name, kind=turn.kind, keep_case=keep,
-                               max_lines=turn.max_lines if len(pieces) == 1 else 1,
-                               aliases=aliases(p), force_lines=two_lines,
+                               max_lines=most if len(pieces) == 1 else 1,
+                               aliases=aliases(p), force_lines=two_lines and not words,
                                no_emoticon=romance or turn.kind in NO_MARK_KINDS,
                                wink_ok=not (self._to_member(turn) or names_any(
                                    piece, [m.name for g, m in self._members_for(turn.channel).items()
-                                           if g != self.human.guid])), game=not discord)
-        out = out[:max(1, turn.max_lines)]
+                                           if g != self.human.guid])), game=not discord,
+                               cap=math.ceil(words * LONG_SLACK) if words else None,
+                               max_chars=DISCORD_MAX_TEXT if discord else None)
+        out = out[:max(1, most)]
         if discord and out:
             return [Styled("\n".join(s.line for s in out), " ".join(s.plain for s in out))]
         return out
