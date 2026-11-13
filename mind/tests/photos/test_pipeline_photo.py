@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import patch
 import pytest
 
 from conftest import run
@@ -12,13 +13,54 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 
 
 async def finish(app, task):
-    for _ in range(100):
-        if task.done():
-            return await task
-        await app.clock.advance(2,2)
-    task.cancel()
-    await asyncio.gather(task,return_exceptions=True)
+    original_to_thread=asyncio.to_thread
+    idle=asyncio.Event()
+    idle.set()
+    working=0
+    async def tracked_work(*args,**kwargs):
+        nonlocal working
+        working+=1
+        idle.clear()
+        try:
+            return await original_to_thread(*args,**kwargs)
+        finally:
+            working-=1
+            if not working:
+                idle.set()
+    try:
+        with patch('asyncio.to_thread',tracked_work):
+            async with asyncio.timeout(10):
+                for _ in range(100):
+                    # Settle real workers before spending fake time. A yield(0)
+                    # alone can exhaust a turn's deadline while SQLite waits for CPU.
+                    await asyncio.sleep(.001)
+                    while working:
+                        await idle.wait()
+                    if task.done():
+                        return await task
+                    await app.clock.advance(2,2)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task,return_exceptions=True)
     pytest.fail('photo turn did not finish within its fake-clock deadline')
+
+
+def test_finish_gives_a_real_worker_time_before_spending_fake_deadline():
+    import time
+    from datetime import datetime, timezone
+    from leeroy_mind.testing.fake_clock import FakeClock
+    async def go():
+        clock=FakeClock(datetime(2026,11,12,tzinfo=timezone.utc),yields=2)
+        app=SimpleNamespace(clock=clock)
+        async def turn():
+            await asyncio.to_thread(time.sleep,.05)
+            await clock.sleep(4)
+            return 'finished'
+        before=clock.now()
+        assert await finish(app,asyncio.create_task(turn()))=='finished'
+        assert clock.now()-before==4  # no fake time passes while real work is pending
+    run(go())
 
 
 def offer(app):

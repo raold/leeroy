@@ -59,7 +59,7 @@ function renderLists() {
     category.channels.forEach(function (channel) { details.appendChild(channelButton(channel.id, "# " + channel.name, channel.officers_only)); });
     left.appendChild(details);
   });
-  var seats = voiceSeats(DISCORD.voice_seats, DISCORD.members, Date.now()/1000,
+  var seats = voiceSeats(DISCORD.voice_seats, DISCORD.members, performance.now()/1000,
     !!(S.voice && (S.voice.room || S.voice.where?.[S.voice.human])));
   if (seats.length) {
     var rooms = el("details", "dc-category"); rooms.open = true;

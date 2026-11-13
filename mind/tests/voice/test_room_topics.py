@@ -21,8 +21,11 @@ def test_elsewhere_carries_the_topic_only_with_server_on(vrig):
         seen.append((turn.instruction,kw['topic']))
         return []
     v.engine.speak = capture
-    for server in (None,object()):
+    for server,room in ((None,'lore'),(object(),'lore'),(object(),'penalty_box')):
         v.ext.app.server = server
+        for g in v.ext.on_comms:
+            v.seat(g,room)
         policy = ElsewhereTalk(v.ext, lines_per_10min=6,rng=random.Random(7))
-        run(policy._scene('lore'))
-    assert seen == [('', ''), ("You're in the Lore & Strategy voice room: Lore and boss mechanics", 'Lore and boss mechanics')]
+        run(policy._scene(room))
+    # Leave OPEN's default evening subject intact; the room guidance appears once.
+    assert seen == [('', ''), ("You're in the Lore & Strategy voice room: Lore and boss mechanics", ''), ('','')]

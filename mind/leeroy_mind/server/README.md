@@ -138,8 +138,13 @@ idle minutes the night can resume within that same window.
 
 The booth renders inside the quiet window only while the server is on. Generic
 voice room topics guide room conversation. Silent away seats represent scheduled
-presence only: they start no session or audio, refresh every five minutes, become
-stale after fifteen minutes, and yield to real voice sessions.
+presence only: they start no session or audio and refresh every five minutes
+between 17:00 and 03:00 local. The tick calculates regional presence directly,
+without reading Discord messages. It clears seats outside those hours, while he
+plays, or during a real voice session, and excludes members in play or away.
+Snapshots become stale after fifteen minutes; a crashed voice session cannot
+hide a newer snapshot. The browser uses server age plus elapsed monotonic time,
+so a phone's wall-clock skew does not hide fresh seats.
 `server:voice_seats` stores that snapshot alongside
 `server:playing`; neither is a chat or a game-activity clock.
 
@@ -187,10 +192,10 @@ distribution. Its phase-count acceptance band is ±40% of `starts_per_hour`
 integrated over available hours. It is not a production
 messages-per-day benchmark.
 
-One controlled 26-hour run admitted morning/day/evening/late starts of
-6/14/18/9 against integrated targets 5.25/14/18.75/10 (zero in the dead phase).
-It stored 47 conversations, 367 server messages including one DM opener, two
-additional D1 replies and 145 reactions. His game question was answered while an
+One controlled follow-up run admitted morning/day/evening/late starts of
+6/14/16/9 against integrated targets 5.25/14/18.75/10 (zero in the dead phase).
+It stored 45 conversations, 386 server messages including five DM openers, two
+additional D1 replies and 142 reactions. His game question was answered while an
 extraction job held the low slot and a background embedding remained queued.
 Scheduling of real SQLite workers can change aggregate counts on later runs;
 the assertions check the band and boundaries, not an exact daily total.
@@ -205,13 +210,29 @@ remaining P3-7 limitation: priority protects his request, but sustained low-slot
 load can dry out conversations. These artificial held jobs are not a live-load
 frequency estimate. The test prints fresh timings on each run.
 
-Controlled guard probes separately print sample counts and rewrite/drop rates
-per check. Each two-case probe pairs a clean draft with a deliberate failure:
+`SERVER_DAY_SYNTHETIC` reports actual guard verdicts for that run's `server:`
+conversation and DM attempts: total reviews, send/rewrite/drop/reaction counts,
+and rewrite/drop counts and rates per verdict code. The denominator is all
+review calls, including pre-send rechecks and rewritten drafts; codes may co-occur, and an absent
+code does not establish that an independent check ran and passed. Fake embeddings
+make these wiring measurements, not false-positive rates or live calibration.
+The same run above made 772 reviews, all sends: every listed check's rewrite and
+drop frequency was zero. A separate 60,000-message fixture measured the seat tick
+at 1.422 ms of event-loop delay (50 ms regression ceiling) without a Discord-message query.
+
+Controlled guard classification probes separately pair a clean draft with a deliberate failure:
 off-anchor and parent/thread relevance rewrite one of two; own Discord repeat,
 channel repeat and filler opener drop one of two. These constructed rates test
 classification paths, not false-positive rates or real-embedding calibration.
 
-D3 adds photo sending and his photo's private vision step; D4 adds decision
+D3 photo sending and his photo's private vision step are already implemented
+behind their own switches. The photo rehearsal waits for real read workers
+before each fake-clock step, retaining its 100-step, 200-second budget. Its
+two-line conversation fixes prompt-reply draws: production's optional 600–2400
+second late gap is covered by pacing tests, not this photo-wiring fixture.
+The follow-up passed 100 consecutive photo rehearsals with 24 pytest workers
+in 14.40 seconds, using only fake services and isolated temporary directories.
+D4 adds decision
 ledgers and guarded game consequences; D5 adds guild culture and server bots;
 D6 adds day plans, intent to action, shared activities and operator nudges/undo.
 Those later integrations have their own switches and acceptance evidence; this

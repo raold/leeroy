@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 import logging
 import os
+import random
 import re
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -104,6 +105,13 @@ def test_photos_end_to_end_keep_files_and_never_use_game_transport(tmp_path,capl
                 before=inventory(tmp_path)
                 seed=next(s for s in photo_seeds(app.store.conn,now=app.clock.now(),local=app.clock.local(),dial=3) if s.key==f'photo:{food}')
                 conv=Conversation('photo-rehearsal','food',seed,[103,101],app.clock.now(),2)
+                # This photo-wiring fixture needs a prompt reply. The engine's
+                # separately tested 10% late-gap draw (600–2400 s) exceeds finish's
+                # unchanged 200 s budget and depends on concurrent RNG consumers.
+                class PromptReplyRandom(random.Random):
+                    def random(self):
+                        return .5
+                app.server.engine.rng=PromptReplyRandom(0)
                 app.server.engine._live[conv.id]=conv
                 conv.task=asyncio.create_task(app.server.engine._conversation(conv))
                 await finish(app,conv.task)
