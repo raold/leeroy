@@ -34,7 +34,8 @@ def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands
         rig.engine.learn_settings=LearnCfg(enabled=True,bandit=True,apply=True)
         def choose_arms(conn, guid, context, **kwargs):
             arms.ensure(conn)
-            return arms.controls() | {'length':'length.1.v1', 'questions':'questions.1.v1'}
+            assert context.length is False  # Discord is gated before the chooser samples.
+            return arms.controls() | {'questions':'questions.1.v1'}
         monkeypatch.setattr(bandit,'choose',choose_arms)
     rig.world.human_online = False
     rig.script(
