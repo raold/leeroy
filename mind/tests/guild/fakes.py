@@ -59,6 +59,7 @@ class FakePorts:
         self.lost = []
         self.leads = []
         self.gpu = []
+        self.gpu_pause = False
         self.acks = defaultdict(deque)
         self.jobs = defaultdict(deque)
         self._command_types = {}
@@ -125,6 +126,9 @@ class FakePorts:
 
     def in_dungeon(self):
         return set(self.dungeon_set)
+
+    def gpu_paused(self):
+        return self.gpu_pause
 
     async def acquire_gpu(self, holder):
         self.gpu.append(f"acquire:{holder}")

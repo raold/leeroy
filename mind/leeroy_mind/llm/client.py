@@ -26,6 +26,10 @@ class LLMError(Exception):
         self.diagnostics = diagnostics
 
 
+class GpuPaused(LLMError):
+    """Intentional model unavailability; callers should quietly wait or drop their turn."""
+
+
 @dataclass(frozen=True)
 class ChatResult:
     text: str
@@ -103,6 +107,7 @@ class OllamaClient:
         self._prefix = parts.path.rstrip("/")
         self._timeout = timeout
         self._warned_truncate = False
+        self.gpu_gate = None
 
     def _request(self, path: str, body: dict | None, timeout: float, attempt: _Attempt) -> dict:
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -118,6 +123,11 @@ class OllamaClient:
                 if attempt.aborted:
                     raise LLMError(f"{path}: aborted")
                 conn.sock.settimeout(timeout)
+            gated = self.gpu_gate if path in ('/api/chat', '/api/generate', '/api/embed') else None
+            if gated:
+                gated.check()
+            # Admission closes without taking a socket/thread lock on the event loop.
+            # A send already admitted here remains tracked until abort/drain finishes.
             conn.request("GET" if data is None else "POST", self._prefix + path, body=data,
                          headers={"Content-Type": "application/json"} if data is not None else {})
             # With stream:false the server sends nothing until generation ends, so
@@ -159,6 +169,11 @@ class OllamaClient:
         return out
 
     async def _call(self, path: str, body: dict | None, timeout: float | None) -> dict:
+        if self.gpu_gate is not None and path in ('/api/chat', '/api/generate', '/api/embed'):
+            return await self.gpu_gate.run(lambda: self._exchange(path, body, timeout))
+        return await self._exchange(path, body, timeout)
+
+    async def _exchange(self, path: str, body: dict | None, timeout: float | None) -> dict:
         """Run the exchange in a thread without blocking the loop.
 
         On cancellation or on the total-time cap the attempt is flagged aborted;

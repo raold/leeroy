@@ -5,6 +5,7 @@ from collections import deque
 import logging
 import random
 
+from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.protocol import Hello, Login, Logout
 
 from .calls import CallGap, RaidCalls
@@ -279,8 +280,11 @@ class GuildLife:
         owner, turn, run = row
         online = self.ports.human_online()
         try:
-            if await self.ports.acquire_gpu("guild_speech") is False:
-                return
+            try:
+                if await self.ports.acquire_gpu("guild_speech") is False:
+                    return
+            except GpuPaused:
+                return  # the owner paused the GPU: the turn is dropped, as a refused one is
             if (not self._ready() or owner != self.ports.human_guid
                     or online != self.ports.human_online() or self.app.clock.now() >= turn.deadline
                     or run is not None and run is not self.ports.run_for_speech()):

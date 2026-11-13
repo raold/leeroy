@@ -23,7 +23,7 @@ def test_golden_lines():
 
 def test_golden_covers_every_type():
     assert {c["type"] for c in golden()} == set(MESSAGE_TYPES)
-    assert len(MESSAGE_TYPES) == 16 and len(FROM_MIND) == 9 and len(FROM_VOICE) == 7
+    assert len(MESSAGE_TYPES) == 20 and len(FROM_MIND) == 11 and len(FROM_VOICE) == 9
     assert ANOTHER_MIND == "another mind is connected"
 
 

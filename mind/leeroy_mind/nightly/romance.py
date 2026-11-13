@@ -104,6 +104,15 @@ def strong_evidence(store, guid: int, human: int, target: str, since: float, unt
             "AND a.guid=? AND m.status='active' AND m.valence>0 AND m.importance>=7 "
             "AND m.t_event>? AND m.t_event<=? LIMIT 1",
             (guid, human, since, until)).fetchone() is not None
+    if target == 'picture':
+        return store.conn.execute(
+            "SELECT 1 FROM selfie_snap s JOIN chat_line c ON c.id=s.line_id "
+            "JOIN discord_attachment a ON a.snap=s.id JOIN discord_message m ON m.id=a.message "
+            "WHERE s.status='sent' AND s.audience='him' AND s.channel='dm' AND s.sender=? "
+            "AND c.from_guid=? AND c.to_guid=? AND c.channel=? AND m.channel=? "
+            "AND m.deleted IS NULL AND s.sent>? AND s.sent<=? LIMIT 1",
+            (guid, guid, human, f'dm:{guid}', f'dm:{guid}', max(since,until-7*86400),until)
+        ).fetchone() is not None
     return False
 
 

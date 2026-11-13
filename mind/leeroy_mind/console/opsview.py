@@ -694,7 +694,8 @@ class OpsView:
         if name == "drift":
             return drift_view(self.root, deadline)
         if name == 'switches':
-            return switches_view(self.data,deadline,mind_started=runtime.get('mind_started'))
+            return {**switches_view(self.data,deadline,mind_started=runtime.get('mind_started')),
+                    'gpu': runtime.get('gpu')}
         return schedules_view(self.root, deadline)
 
     def _work(self, name, deadline, runtime):

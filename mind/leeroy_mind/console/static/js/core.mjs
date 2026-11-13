@@ -72,9 +72,13 @@ export function api(path, opts) {
       if (path === "/api/events" || !r.headers) { return r; }
       var kind = r.headers.get("content-type") || "";
       var photo = /^\/api\/(face\?|selfies\/photo\?|discord\/image\?)/.test(path);
-      var maximum = photo ? 4 * 1024 * 1024 : path.indexOf("/api/selfies/images?") === 0 ? 24 * 1024 * 1024 : 1024 * 1024;
+      var voiceNote = /^\/api\/discord\/voice\?id=[1-9]\d*$/.test(path);
+      var maximum = voiceNote ? 2 * 1024 * 1024 : photo ? 4 * 1024 * 1024 : path.indexOf("/api/selfies/images?") === 0 ? 24 * 1024 * 1024 : 1024 * 1024;
       var bytes = await boundedBody(r, maximum);
-      if (photo && r.status === 200) { r.blob = function () { return Promise.resolve(new Blob([bytes], { type: kind })); }; }
+      if ((photo || voiceNote) && r.status === 200) {
+        if (voiceNote && !['audio/ogg','audio/wav'].includes(kind.split(';')[0])) { throw new Error('The voice note could not be read.'); }
+        r.blob = function () { return Promise.resolve(new Blob([bytes], { type: kind })); };
+      }
       else if (kind.indexOf("application/json") >= 0) {
         var j = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
         if (!j || typeof j !== "object" || Array.isArray(j) || (r.status === 200 && !Object.keys(j).length)) {

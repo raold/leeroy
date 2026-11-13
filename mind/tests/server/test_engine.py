@@ -451,3 +451,25 @@ def test_no_claims_warning_when_server_is_off_or_claims_are_on(app,caplog,server
         await finished(app.server.engine)
     run(go())
     assert not any(r.message=='server_needs_claims' for r in caplog.records)
+
+
+@pytest.mark.parametrize('offered',[False,True])
+def test_photo_seed_is_spent_only_when_its_photo_was_offered(app,monkeypatch,offered):
+    """An opener that could not even be offered its photo (another photo in flight) leaves the
+    seed for a later conversation; one that was offered it spends the seed as any opener does."""
+    seed = Seed('photo:7','photo',('pets',),'an invented scene',(101,))
+    app.observed.seeds = [seed]
+    async def dropped(turn,meta):
+        app.turns.append((turn,meta))
+        meta.turn_id = 'photo-dropped'
+        if offered:
+            meta.photo = SimpleNamespace()  # offered, then refused by a guard
+        return []
+    monkeypatch.setattr(app.engine,'speak_meta',dropped)
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    run(go())
+    assert len(app.turns) == 1 and app.turns[0][1].photo_seed == 7
+    assert json.loads(app.store.get_meta('server:recent'))[-1]['reason'] == 'opener_dropped'
+    assert (fresh(app.store.conn,[seed],now=app.clock.now()) == []) == offered

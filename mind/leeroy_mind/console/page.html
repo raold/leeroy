@@ -25,7 +25,9 @@
     <span id="s-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span><span id="s-self" class="selfmark" hidden></span></span>
     <button id="theme" type="button" class="theme">Light / dark</button>
     <button id="photos" type="button" class="theme photos" aria-pressed="false">Hide photos</button>
+    <button id="gpu" type="button" class="theme gpu" aria-disabled="true">Free GPU</button>
   </div>
+  <div id="gpu-banner" class="gpu-banner" role="status" hidden></div>
   <div id="s-lost" class="lost" role="status" hidden></div>
 </div>
 <nav class="tabs" role="tablist" aria-label="Areas">
@@ -135,9 +137,16 @@
           <textarea id="dc-text" rows="2" aria-describedby="dc-why dc-count" disabled></textarea>
           <input id="dc-photo-file" type="file" accept="image/*" hidden>
           <div id="dc-photo-preview" hidden><img id="dc-photo-preview-img" alt="Photo to attach"><button id="dc-photo-remove" type="button">Remove photo</button></div>
+          <div id="dc-voice-preview" hidden>
+            <audio id="dc-voice-preview-audio" controls preload="metadata" aria-label="Preview your voice note"></audio>
+            <button id="dc-voice-discard" type="button">Discard voice note</button>
+            <p class="hint">Listen before sending. Any typed text stays as a draft.</p>
+          </div>
           <div class="dc-compose-actions"><button id="dc-emoji" type="button" disabled>Emoji</button>
             <button id="dc-photo-pick" type="button" hidden>Attach photo</button>
+            <button id="dc-voice-record" type="button" aria-pressed="false" hidden>Record voice note</button>
             <span id="dc-count" class="mono">0 / 2000</span><button id="dc-send" type="button" class="primary" disabled>Send</button></div>
+          <p id="dc-voice-timer" class="mono" role="timer" hidden></p>
           <p id="dc-why" role="status"></p>
         </div>
         <div id="composer" class="composer" tabindex="-1">

@@ -285,11 +285,14 @@ class ServerEngine:
                     priority=Priority.BACKGROUND, max_lines=1)
                 topic = conversation.seed.fact if parent is None else ''
                 meta = TurnMeta('', why='server:'+conversation.seed.kind, topic=topic,
+                    photo_seed=(int(conversation.seed.key.removeprefix('photo:'))
+                                if parent is None and conversation.seed.kind == 'photo' else None),
                     server_anchor=purpose+' '+topic, server_thread=tuple(conversation.messages),
                     server_conversation=conversation.id, discord=DiscordTarget(parent,None), single_line=True,
                     keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
-                if parent is None and dry == 0:
+                opening_photo = meta.photo_seed is not None and dry == 0
+                if parent is None and dry == 0 and not opening_photo:
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
                 conversation.in_flight, conversation.in_flight_turn = speaker, turn
                 try:
@@ -299,6 +302,10 @@ class ServerEngine:
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
                 conversation.messages.extend(added)
+                if opening_photo and (added or meta.photo is not None):
+                    # Spent once its photo was offered; one never offered (another photo in
+                    # flight) stays for a later conversation.
+                    seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
                 if parent is None and not added and conversation.seed.openers is not None:
                     conversation.reason = 'opener_dropped'
                     break

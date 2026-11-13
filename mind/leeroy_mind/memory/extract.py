@@ -10,7 +10,7 @@ from typing import Callable
 from leeroy_mind.clock import night_of
 from leeroy_mind.discord.channels import is_private, is_public
 from leeroy_mind.human import HumanIdentity
-from leeroy_mind.llm.client import LLMClient, LLMError
+from leeroy_mind.llm.client import LLMClient, LLMError, GpuPaused
 from leeroy_mind.llm.presets import EXTRACT, JSONJobFailed, chat_json
 from leeroy_mind.llm.scheduler import LLMScheduler, Priority, SchedulerError
 from leeroy_mind.logs import log as log_event
@@ -812,6 +812,8 @@ class Extractor:
                                               facts=facts, said=said))
         try:
             result = await self._scheduler.submit(Priority.EXTRACTION, job)
+        except GpuPaused:
+            raise
         except (JSONJobFailed, LLMError, SchedulerError) as e:
             log.warning("extraction of thread %d failed: %s", t.thread_id, e)
             store.set_thread_status(t.thread_id, store.clock.now(), "failed")
@@ -862,7 +864,15 @@ class Extractor:
         while True:
             t = await queue.get()
             try:
-                await self.extract(t)
+                while True:
+                    try:
+                        await self.extract(t)
+                        break
+                    except GpuPaused:
+                        gate = getattr(self, 'gpu_gate', None)
+                        if gate is None:
+                            raise
+                        await gate.wait()
             except asyncio.CancelledError:
                 raise
             except Exception:

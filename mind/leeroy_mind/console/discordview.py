@@ -114,7 +114,13 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
     react = store.reactions(conn, [m["id"] for m in rows])
     photos = (store.attachments(conn, [m['id'] for m in rows])
               if 'discord_attachment' in views.tables(conn) else {})
+    from leeroy_mind.voice_notes.service import rows as voice_rows
+    notes=voice_rows(conn,[m['id'] for m in rows])
     return [{**m, "reactions": react.get(m["id"], []),
+             'voice_note': ({'url':f"/api/discord/voice?id={m['id']}",
+                 'ms':notes[m['id']]['ms'],'bytes':notes[m['id']]['bytes'],
+                 'transcript_ok':bool(notes[m['id']]['transcript_ok']),'origin':notes[m['id']]['origin']}
+                 if m['id'] in notes and layout.dm_peer(m['channel']) is not None else None),
              'feedback_id': lines.get(m['id']), 'feedback': votes.get(lines.get(m['id'])),
              'image': ({'w': photos[m['id']]['width'], 'h': photos[m['id']]['height'],
                         'kind': photos[m['id']]['kind']} if m['id'] in photos else None)} for m in rows]

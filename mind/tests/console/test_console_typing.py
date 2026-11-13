@@ -185,14 +185,14 @@ def test_a_mind_that_does_not_answer_shows_nobody_typing(data, in_game):
     asyncio.run(go())
 
 
-def test_an_absent_mind_or_bridge_shows_no_dots_and_asks_nothing(data, in_game):
+def test_an_absent_mind_or_bridge_shows_no_dots_with_shared_gpu_status(data, in_game):
     link = FakeLink(status([ENTRY]))
 
     async def go():
         async with served(make_app(data, link=link, tcp=lambda: LINKED)) as app:  # stopped
             async with listening(app):
                 await app.refresh()
-                assert app.strip()["typing"] == []
+                assert app.strip()["typing"] == [] and link.calls == []
         async with served(make_app(data, mind=running(data), tcp=lambda: [],
                                    link=link)) as app:  # its bridge is not linked
             async with listening(app):
@@ -203,7 +203,7 @@ def test_an_absent_mind_or_bridge_shows_no_dots_and_asks_nothing(data, in_game):
                 await app.refresh()
                 assert app.strip()["typing"] == []
     asyncio.run(go())
-    assert link.calls == []
+    assert link.calls and set(link.calls) == {"status"}
 
 
 def test_the_dots_go_when_the_mind_stops(data, in_game):
@@ -221,7 +221,7 @@ def test_the_dots_go_when_the_mind_stops(data, in_game):
     asyncio.run(go())
 
 
-def test_not_in_game_asks_nothing(data):
+def test_not_in_game_reads_gpu_status_without_typing(data):
     link = FakeLink(status([ENTRY]))
 
     async def go():
@@ -231,7 +231,7 @@ def test_not_in_game_asks_nothing(data):
                 await app.refresh()
                 assert app.game.state == "not_in_game" and app.strip()["typing"] == []
     asyncio.run(go())
-    assert link.calls == []
+    assert link.calls and set(link.calls) == {"status"}
 
 
 def test_the_strip_loop_is_the_only_poll():
