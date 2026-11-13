@@ -1,7 +1,8 @@
 # Memory callbacks
 
-Task 34 provides selection and replay only. It adds no talk hook, prompt wording,
-background task or model call. The default is off:
+The selector and replay are model-free. Live talk uses them only when learning
+application and the selected callback arm also enable it; see
+[learning application](../learn/README.md#applying-learning-to-live-talk). The default is off:
 
 ```toml
 [callbacks]
@@ -9,7 +10,7 @@ enabled = false
 ```
 
 `load_callbacks_config(path)` returns false for a missing, unreadable or invalid
-table, including unknown keys and non-boolean values. The future talk caller
+table, including unknown keys and non-boolean values. The live talk caller
 passes that result as `CallbackContext.enabled`. Calling the selector without an
 enabled context does not even read the database. Golden prompts are unchanged.
 
@@ -50,7 +51,7 @@ the same `Store.transaction()` as the sent-line write**. It takes a write lock,
 rechecks eligibility and quotas, and writes only IDs and time to `callback_use`.
 It never commits. A failed send must roll back; a SQLite concurrent-writer error
 requires retrying the whole transaction. A rejected or changed offer returns
-false. This API is ready for task 39, which must connect it to send receipts.
+false. The talk pipeline connects it to the first acknowledged fragment's recipe.
 
 A memory rests for 14 wall-clock days after use. A member may use one callback,
 and the whole guild three, during the last hour of recorded owner play. Session

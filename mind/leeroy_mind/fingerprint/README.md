@@ -3,8 +3,9 @@
 `[fingerprint] enabled = true` in `mind.toml` attaches the nightly `fingerprint`
 stage after thread extraction, with no model. A restart applies the switch;
 missing, false or malformed settings leave the stage unattached. Manual
-`nightly run` uses the same switch. This module does not change talk prompts or
-guards. `python -m leeroy_mind fingerprint show 101 --data-dir <directory>`
+`nightly run` uses the same switch. Optional [learning application](../learn/README.md#applying-learning-to-live-talk)
+uses an audience-filtered numeric hint for typing arms; the measurement switch
+alone does not change prompts. `python -m leeroy_mind fingerprint show 101 --data-dir <directory>`
 opens SQLite read-only, with no migration, service, model or logger setup.
 
 The latest 300 mind-origin lines per member are ordered by timestamp, then id.

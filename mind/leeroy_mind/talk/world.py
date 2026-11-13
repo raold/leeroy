@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from leeroy_mind.discord import layout
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.discord.transport import channel_id, is_discord
 from leeroy_mind.protocol import (AfkEvent, Cast, Chat, Death, Event, Group, Hello, Login, Logout,
                                   Member, Zone)
@@ -225,6 +226,24 @@ class WorldView:
         if channel in ("say", "yell"):
             return frozenset(g for g in grouped if self.members[g].zone == zone)
         return frozenset()
+
+    def conversation_readers(self, channel, *, from_guid, to_guid=0, comms=None, human_officer=False):
+        """Observed readers, including the owner when this conversation reaches him."""
+        member = self.members.get(from_guid)
+        zone = getattr(member, 'zone', 0)
+        readers = set(self.audience(channel, from_guid=from_guid, to_guid=to_guid, zone=zone))
+        human = self.human_guid
+        if is_private(channel):
+            return frozenset({from_guid, to_guid} - {0})
+        if not is_discord(channel) and human and self.human_online:
+            heard = (channel == 'guild' or channel == 'officer' and human_officer
+                or channel in ('party', 'raid', 'raid_warning') and self.in_group(human)
+                or channel in ('say', 'yell') and self.in_group(human) and self.human_zone == zone
+                or channel.startswith('voice:') and comms is not None and comms.available()
+                   and comms.human_room() == channel.removeprefix('voice:'))
+            if heard:
+                readers.add(human)
+        return frozenset(readers)
 
     def add_line(self, row: ChatLineRow, now: float) -> SeenLine:
         seen = SeenLine(row, self.audience(
