@@ -24,10 +24,13 @@ class ServerLease:
         return self._held
 
     def ready(self) -> bool:
-        return self._held and not self._handbacks
+        return self._held and not self._handbacks and not getattr(self.app.arbiter, 'paused', False)
 
     async def tick(self, now: float) -> None:
         if self._closed:
+            return
+        if getattr(self.app.arbiter, 'paused', False):
+            await self._release('gpu_pause')
             return
         local = self.app.clock.local()
         if in_window(local, self.config.quiet_window):

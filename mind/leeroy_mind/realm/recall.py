@@ -12,12 +12,15 @@ from leeroy_mind.bodies import BodyEvidenceUnavailable
 from leeroy_mind.guild.protocol import BotDo
 
 from .actions import ActionRejected
-from .action_store import STEP_REFUSED, ActionCapacity, defaults_partial, leave_refusal_guids, leave_skipped_guids
+from .action_store import STEP_REFUSED, ActionCapacity, defaults_partial, leave_refusal_guids, leave_skipped_guids, leave_released_guids
 from .protocol import LeavePvp, Rearm
 
 log = logging.getLogger(__name__)
 # A rearm's results that settle it holding nobody: refused at its ack, or at one body's step.
 REARM_REFUSED = frozenset({"refused", STEP_REFUSED})
+# How long the end of a leave's hold on a member its leave did not take out (refused, skipped,
+# released unrun) is kept from handing that member back to defaults: the ledger's next poll.
+KEEP_S = 60
 
 
 @dataclass(slots=True)
@@ -43,6 +46,7 @@ class Recall:
         self._busy = {}
         self._cleanup = {}
         self._handback = set()
+        self._kept = {}  # guid -> until when a leave's release of it hands it no defaults
         self._last_recall = None
         self._second_at = None
         self._last_defaults = clock.now()
@@ -103,6 +107,11 @@ class Recall:
         selected = set(guids) - self._busy.keys()
         if owner in {"realm_day", "realm_event"}:
             selected &= self._handback
+        # A leave that did not take these members out ended its hold on them: they may still be in
+        # a battleground or LFG, so the release hands them no rearm or defaults.
+        now = self.clock.now()
+        self._kept = {g: until for g, until in self._kept.items() if until > now}
+        selected -= self._kept.keys()
         for guid in selected:
             self._desired.setdefault(guid, "defaults")
         self._handback.difference_update(selected)
@@ -299,13 +308,16 @@ class Recall:
     def _done(self, chain, kind, ok, reason, past, command_id=None):
         named = leave_refusal_guids(reason, chain.members) if kind == "leave" and not ok else None
         if not named:
-            if kind == "leave" and ok:
+            if kind == "leave":
                 try:
                     record = self.queue.store.get(command_id)
                 except BodyEvidenceUnavailable:
                     self._finish(chain)
                     return
                 skipped = set(leave_skipped_guids(record)) & set(chain.members) if record else set()
+                if not ok:
+                    self._retry_released(chain, record, skipped)
+                    return
                 if skipped:
                     self._leave_out(chain, skipped)
             if kind == "defaults" and not ok:
@@ -326,16 +338,41 @@ class Recall:
         # others as a new command.
         current = self._current(chain)
         self._finish(chain)
+        self._keep(named)
         rest = tuple(g for g in chain.members if g not in named)
         # Validated nonempty, distinct manifest members guarantee a strictly smaller retry.
         log.info("realm_recall_left_out reason=%s named=%d rest=%d", reason.partition(":")[0], len(named), len(rest))
         if current and rest:
             self._start(rest, chain.mode)
 
+    def _retry_released(self, chain, record, skipped):
+        """A failed leave. Native's release proof says only that it no longer holds those bodies,
+        not that they left PvP: a member whose step never ran is released too. So none of them
+        gets this chain's rearm or defaults; the released members it did not skip get a new leave
+        as a new command, when they are strictly fewer than this chain's (a no-op for those that
+        already left). The changed members stay held by the unknown root; the skipped back off."""
+        released = (set(leave_released_guids(record)) & set(chain.members)) - skipped if record else set()
+        current = self._current(chain)
+        self._finish(chain)
+        self._keep(chain.members)
+        rest = tuple(g for g in chain.members if g in released)
+        if not rest or len(rest) >= len(chain.members):
+            return  # Every retry strictly shrinks its manifest: a whole-job refusal ends here.
+        log.info("realm_recall_released held=%d skipped=%d rest=%d",
+                 len(chain.members) - len(rest) - len(skipped), len(skipped), len(rest))
+        if current:
+            self._start(rest, chain.mode)
+
+    def _keep(self, guids):
+        until = self.clock.now() + KEEP_S
+        for guid in guids:
+            self._kept[guid] = until
+
     def _leave_out(self, chain, skipped):
         """Native took the others out and left these as they were (one leading its battleground
         group, say), holding them no longer. They are backed off like named refusals; the chain's
         rearm and defaults go on for the rest."""
+        self._keep(skipped)
         rest = tuple(g for g in chain.members if g not in skipped)
         for guid in skipped:
             if self._busy.get(guid) == chain.key:

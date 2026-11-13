@@ -691,7 +691,7 @@ def _gate_phase(conn) -> tuple[str, int]:
 def _realm_holds(conn, now: float) -> Check:
     try:
         rows = conn.execute(
-            "SELECT kind, state, transport_state, reserved_manifest, created, command_id FROM realm_action "
+            "SELECT kind, state, transport_state, reserved_manifest, created, command_id, evidence, policy FROM realm_action "
             "WHERE role = 'root' AND state NOT IN ('completed', 'not_sent') AND created < ?",
             (now - HOLD_S,)).fetchall()
     except sqlite3.Error as e:
@@ -700,30 +700,54 @@ def _realm_holds(conn, now: float) -> Check:
                                               "realm_action)")
         return Check("realm-holds", FAIL, f"realm: realm_action cannot be read "
                                           f"({type(e).__name__})")
+    from .realm.action_store import released_members
+    from .realm.protocol import READBACK_CHECKS
     holds, unknown, bodies, oldest = 0, 0, set(), None
     kinds = Counter()
-    details = []
-    for kind, state, transport, manifest, created, ident in rows:
+    details, quiet = [], []
+    for kind, state, transport, manifest, created, ident, raw_evidence, policy in rows:
         try:
             guids = json.loads(manifest)
         except (TypeError, ValueError):
             guids = []
+        try:
+            evidence = json.loads(raw_evidence)
+            job = evidence.get("job", {}) if isinstance(evidence, dict) else {}
+            if not isinstance(job, dict): job = {}
+        except (TypeError, ValueError):
+            job = {}
+        released = released_members("root", policy, kind, state, raw_evidence, guids)
+        if released:
+            guids = [g for g in guids if g not in released]
         held = transport != "not_entered" and bool(guids)
         if not held and state != "unknown":
             continue
-        holds += held
-        unknown += state == "unknown"
-        if held and isinstance(guids, list):
-            bodies.update(g for g in guids if type(g) is int)
-        kinds[kind if isinstance(kind, str) and _IDENT.match(kind) else "?"] += 1
-        oldest = created if oldest is None else min(oldest, created)
+        # Native's release proof covers every member: still unknown, but it holds nobody.
+        wholly_released = bool(released) and not guids and state == "unknown"
+        if not wholly_released:
+            holds += held
+            unknown += state == "unknown"
+            if held and isinstance(guids, list):
+                bodies.update(g for g in guids if type(g) is int)
+            kinds[kind if isinstance(kind, str) and _IDENT.match(kind) else "?"] += 1
+            oldest = created if oldest is None else min(oldest, created)
         # IDs/kinds only. Do not echo a malformed stored value into a shell command.
         if isinstance(ident, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", ident):
             count = len({g for g in guids if type(g) is int and g > 0}) if isinstance(guids, list) else 0
             code = kind if isinstance(kind, str) and _IDENT.fullmatch(kind) else "unknown_kind"
-            details.append(f"{ident} kind={code} members={count}: realm release {ident} "
-                           "--reason reviewed_stale_hold")
+            detail = f"{ident} kind={code} members={count}: realm release {ident} --reason reviewed_stale_hold"
+            member, check = job.get("readback_guid"), job.get("check")
+            if type(member) is int and 0 < member <= 0xFFFFFFFF and type(check) is str and check in READBACK_CHECKS:
+                detail += f" readback_guid={member} check={check}"
+            (quiet if wholly_released else details).append(detail)
+    nobody = (f"{len(quiet)} unknown root{'s' if len(quiet) != 1 else ''} older than 1 h "
+              f"hold{'s' if len(quiet) == 1 else ''} nobody")
     if not holds and not unknown:
+        if quiet:
+            return Check("realm-holds", NOTE,
+                         f"realm: {nobody} (native released every member); to tidy up, with the mind stopped: "
+                         + "; ".join(quiet[:20])
+                         + (f"; {len(quiet) - 20} more roots" if len(quiet) > 20 else ""))
         return Check("realm-holds", OK, "realm: no body hold or unknown root older than 1 h")
     return Check("realm-holds", FAIL,
                  f"realm: {holds} body hold{'s' if holds != 1 else ''} ({len(bodies)} members) "
@@ -732,7 +756,9 @@ def _realm_holds(conn, now: float) -> Check:
                  + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items()))
                  + "; inspect native state, then with the mind stopped: "
                  + "; ".join(details[:20])
-                 + (f"; {len(details) - 20} more roots" if len(details) > 20 else ""))
+                 + (f"; {len(details) - 20} more roots" if len(details) > 20 else "")
+                 + (f"; {len(quiet)} more {nobody.partition(' ')[2]}" if quiet else "")
+                 + "; on restart, realm release also frees eligible native holds when the worldserver supports realm_forget")
 
 
 def _table_check(name, operation):
@@ -1153,9 +1179,27 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("weekly-eval", _weekly_eval, conn),
                 _guarded("secret-gate", _secret_gate, conn),
                 _guarded("offline-days", _offline_days, conn, now),
-                _guarded("training-lab", _training_lab, conn, now)]
+                _guarded("training-lab", _training_lab, conn, now),
+                _guarded("gpu-pause", _gpu_pause, conn, now)]
     finally:
         conn.close()
+
+
+def _gpu_pause(conn, now):
+    from .gpucontrol import KEY, since_value
+    row = conn.execute('SELECT value FROM meta WHERE key=?', (KEY,)).fetchone()
+    since = since_value(row[0] if row else None)
+    if since is None:
+        return Check('gpu-pause', OK, 'GPU use is enabled')
+    text = f'GPU paused since {_when(since)}'
+    if now - since > 86400:
+        try:
+            last = conn.execute("SELECT max(finished) FROM night_run WHERE status='done'").fetchone()[0]
+        except sqlite3.Error:  # an older database: still only a note
+            last = None
+        text += (f'; the night has not run since {_when(last)}' if last is not None
+                 else '; no night has finished yet')
+    return Check('gpu-pause', NOTE, text)
 
 
 def _guarded(name: str, check, *args):

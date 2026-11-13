@@ -253,7 +253,7 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
         "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "realm-holds": OK, "unvoiced": OK,
         "offline-raid": OK, "guild-raids": OK, "night-failures": NOTE,
         "evidence-cycles": OK, "selfie-queue": OK, "realm-screen": OK, "weekly-eval": OK,
-        "secret-gate": OK, "offline-days": OK, "training-lab": OK}
+        "secret-gate": OK, "offline-days": OK, "training-lab": OK, "gpu-pause": OK}
     assert checks["server-log"].text == "Server.log: cast 111 members, pinned 111 (floor 100)"
     assert checks["mind"].text.startswith(f"mind: pid {MIND_PID} running (control.json names it)")
     assert "bridge_hello" in checks["mind-log"].text
@@ -271,11 +271,11 @@ def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, ca
     argv = ["--root", str(rig.root), "--data-dir", str(rig.data)]
     assert health.main(argv, probes=rig.probes()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 25 and lines[0].startswith("ok   authserver.exe running")
+    assert len(lines) == 26 and lines[0].startswith("ok   authserver.exe running")
     assert all(line[:5] in ("ok   ", "note ") for line in lines)
     assert health.main(argv + ["--json"], probes=rig.probes()) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and len(out["checks"]) == 25
+    assert out["ok"] is True and len(out["checks"]) == 26
     assert out["checks"][0] == {"name": "authserver", "status": "ok",
                                 "text": out["checks"][0]["text"]}
     rig.servers = [s for s in rig.servers if s.image != "authserver.exe"]
@@ -666,6 +666,40 @@ def test_a_realm_hold_or_unknown_root_older_than_an_hour_fails(rig):
         f"{health._when(NOW - 7200)}: guild_grow 1, leave_pvp 1")
     assert f"kind=leave_pvp members=3: realm release leave_pvp-{NOW - 7200}" in checks["realm-holds"].text
     assert "with the mind stopped" in checks["realm-holds"].text
+
+
+def test_realm_hold_reports_released_members_and_safe_readback_codes(rig):
+    rig.action("leave_pvp", "unknown", "settled", [101, 102, 103], NOW - 7200)
+    evidence = {"job": {"state": "failed", "released": [101, 103], "readback_guid": 102, "check": "owner"}}
+    rig.db("UPDATE realm_action SET evidence=?", (json.dumps(evidence),))
+    check = rig.run()["realm-holds"]
+    assert check.status == FAIL and "1 body hold (1 members)" in check.text
+    assert "members=1:" in check.text and "readback_guid=102 check=owner" in check.text
+    assert "supports realm_forget" in check.text
+    evidence["job"].update(released=[101, 101], check="private text")
+    rig.db("UPDATE realm_action SET evidence=?", (json.dumps(evidence),))
+    text = rig.run()["realm-holds"].text
+    assert "members=3:" in text and "private text" not in text and "readback_guid=" not in text
+
+
+def test_an_unknown_leave_native_released_wholly_is_a_note_not_a_fail(rig):
+    rig.action("leave_pvp", "unknown", "settled", [101, 102, 103], NOW - 7200)
+    evidence = {"job": {"state": "failed", "released": [101, 102, 103], "readback_guid": 103, "check": "owner"}}
+    rig.db("UPDATE realm_action SET evidence=?", (json.dumps(evidence),))
+    check = rig.run()["realm-holds"]
+    assert check.status == NOTE
+    assert check.text.startswith("realm: 1 unknown root older than 1 h holds nobody (native released every member)")
+    assert f"realm release leave_pvp-{NOW - 7200} --reason reviewed_stale_hold" in check.text
+    assert "readback_guid=103 check=owner" in check.text
+    # Any other hold or unknown root still fails, the wholly released one named beside it.
+    rig.action("rearm", "unknown", "settled", [104], NOW - 5000)
+    check = rig.run()["realm-holds"]
+    assert check.status == FAIL and "1 body hold (1 members) and 1 unknown root" in check.text
+    assert "; 1 more unknown root older than 1 h holds nobody" in check.text
+    # Without valid release proof for every member it is held, as before.
+    evidence["job"]["released"] = [101, 102]
+    rig.db("UPDATE realm_action SET evidence=? WHERE kind='leave_pvp'", (json.dumps(evidence),))
+    assert "2 body holds (2 members) and 2 unknown roots" in rig.run()["realm-holds"].text
 
 
 def test_cast_without_a_persona_is_a_note(rig):

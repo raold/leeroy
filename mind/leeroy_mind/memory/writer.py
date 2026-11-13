@@ -6,7 +6,7 @@ from typing import Callable, Iterable, Literal
 from leeroy_mind.clock import Clock
 from leeroy_mind.discord.channels import is_private, is_restricted
 from leeroy_mind.human import HumanIdentity
-from leeroy_mind.llm.client import LLMClient, LLMError
+from leeroy_mind.llm.client import LLMClient, LLMError, GpuPaused
 from leeroy_mind.llm.scheduler import LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.privacy import derive_scope, with_request
 from leeroy_mind.personas.screens import redact_real_name
@@ -233,10 +233,18 @@ class MemoryWriter:
         if enforce_limits and self._limited(c.owner, now):
             return WriteResult(None, "rate_limited")
         vec: bytes | None = None
-        try:
-            vec = (await self._embedder.embed([text], Priority.EXTRACTION))[0]
-        except (LLMError, SchedulerError) as e:
-            log.warning("memory embed failed, storing without a vector: %s", e)
+        while True:
+            try:
+                vec = (await self._embedder.embed([text], Priority.EXTRACTION))[0]
+                break
+            except GpuPaused:
+                gate = getattr(self, 'gpu_gate', None)
+                if gate is None:
+                    raise
+                await gate.wait()
+            except (LLMError, SchedulerError) as e:
+                log.warning("memory embed failed, storing without a vector: %s", e)
+                break
         # No await below: the checks, the scope and the insert are one transaction and one step
         # for the event loop.
         with store.transaction():
@@ -280,6 +288,8 @@ class MemoryWriter:
     async def _embed_one(self, text: str) -> bytes | None:
         try:
             return (await self._embedder.embed([text], Priority.BACKGROUND))[0]
+        except GpuPaused:
+            raise
         except (LLMError, SchedulerError):
             return None
 
@@ -297,6 +307,8 @@ class MemoryWriter:
         try:
             vecs = await self._embedder.embed([r.text for r in rows], Priority.BACKGROUND)
             pairs = list(zip(rows, vecs))
+        except GpuPaused:
+            raise
         except (LLMError, SchedulerError) as e:
             if await self._embed_one(self._PROBE) is None:
                 if not self._backfill_failing:

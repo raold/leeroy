@@ -168,6 +168,16 @@ CleanupReadback ReadGroupCleanup(std::vector<std::uint32_t> const& expected,
     return pending ? CleanupReadback::Pending : CleanupReadback::Ready;
 }
 
+std::uint32_t GroupCleanupFault(std::vector<std::uint32_t> const& expected,
+    std::vector<GroupCleanupReadback> const& actual)
+{
+    auto const state = ReadGroupCleanup(expected, actual);
+    if (state == CleanupReadback::Ready) return 0;
+    for (auto const& member : actual)
+        if (ReadGroupCleanup({member.guid}, {member}) == state) return member.guid;
+    return 0;
+}
+
 bool ReadQueueCleanup(std::vector<std::uint32_t> const& expected,
     std::vector<QueueCleanupReadback> const& actual)
 {

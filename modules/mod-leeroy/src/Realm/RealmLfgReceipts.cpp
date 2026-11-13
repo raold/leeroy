@@ -186,7 +186,7 @@ public:
 // All global manager/body lookups are world-thread only. Group/current count
 // merely cross-check the witnessed fresh-birth/add producer chain and complete
 // actual roles packet. They cannot manufacture a missing producer receipt.
-bool NativeExact(LfgApplicantReceipt const& receipt, bool cancelled)
+bool NativeExact(LfgApplicantReceipt const& receipt, bool cancelled, std::uint32_t* failedGuid = nullptr)
 {
     auto const guid = ObjectGuid(receipt.group);
     auto* group = sGroupMgr->GetGroupByGUID(guid.GetCounter());
@@ -207,7 +207,11 @@ bool NativeExact(LfgApplicantReceipt const& receipt, bool cancelled)
         if (!player || Life(player) != life || player->GetSession()->PlayerLogout() || player->GetGroup() != group
             || player->GetOriginalGroup() || player->InBattleground() || player->IsBeingTeleported()
             || sLFGMgr->GetState(player->GetGUID()) != state || sLFGMgr->GetGroup(player->GetGUID()) != guid
-            || sLFGMgr->GetOldState(player->GetGUID()) != lfg::LFG_STATE_NONE) return false;
+            || sLFGMgr->GetOldState(player->GetGUID()) != lfg::LFG_STATE_NONE)
+        {
+            if (failedGuid) *failedGuid = life.guid;
+            return false;
+        }
     }
     return true;
 }
@@ -240,14 +244,19 @@ void CancelLfgApplicants(LfgApplicantReceipt const& receipt)
     } scope(receipt.queued ? 0 : receipt.join);
     sLFGMgr->LeaveLfg(ObjectGuid(receipt.group));
 }
-bool VerifyLfgApplicantCleanup(std::string const& operation, std::uint64_t group, std::uint64_t join)
+bool VerifyLfgApplicantCleanup(std::string const& operation, std::uint64_t group, std::uint64_t join, std::uint32_t* failedGuid)
 {
+    if (failedGuid) *failedGuid = 0;
     std::optional<LfgApplicantReceipt> receipt;
     { std::lock_guard lock(inbox.mutex); Epoch(); receipt = inbox.book.Held(operation, group, join); }
-    if (!receipt || !NativeExact(*receipt, true)) return false;
+    if (!receipt || !NativeExact(*receipt, true, failedGuid)) return false;
     for (auto const& life : receipt->members)
         if (RealmModule::Instance().Holder(life.guid) != operation
-            || !RealmModule::Instance().ValidateOwnedBody(life.guid, operation).empty()) return false;
+            || !RealmModule::Instance().ValidateOwnedBody(life.guid, operation).empty())
+        {
+            if (failedGuid) *failedGuid = life.guid;
+            return false;
+        }
     std::lock_guard lock(inbox.mutex); Epoch(); return inbox.book.Verify(operation, *receipt);
 }
 void AddRealmLfgReceiptScripts()

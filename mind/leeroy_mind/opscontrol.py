@@ -14,7 +14,7 @@ from contextlib import closing
 from uuid import uuid4
 
 from .logs import log
-from .realm.action_store import ActionStore, abandon_refusal
+from .realm.action_store import ActionStore, abandon_refusal, held_manifest
 
 ACTIONS = ("release", "offline_stop", "render", "snapshot")
 ID = re.compile(r"[0-9a-f]{32}")
@@ -101,7 +101,7 @@ def release_record(conn, root_id, now):
     # Native reason codes only, never arbitrary evidence strings.
     native = native if isinstance(native, str) and re.fullmatch(r"[a-z_:]{1,80}", native) else "not_recorded"
     return {"id": root_id, "kind": row.kind, "age_s": max(0, now-row.created),
-            "members": len(row.reserved_manifest), "native_reason": native}
+            "members": len(held_manifest(row)), "native_reason": native}
 
 
 class OpsControl:

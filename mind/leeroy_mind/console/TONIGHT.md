@@ -1,5 +1,8 @@
 # Tonight and the feature switchboard
 
+The top bar's [Free GPU control](GPU.md) pauses model work and unloads Ollama.
+Tonight's presence card and Ops Switches show when the persistent pause began.
+
 Tonight is the first console tab. The default page still opens Comms; `#tonight`
 opens Tonight directly. The tab polls once a minute while visible. Failed polls
 retain the last good data and show its age. Faces respect Hide photos.

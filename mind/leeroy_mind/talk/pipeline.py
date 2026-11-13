@@ -55,7 +55,7 @@ from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
-from leeroy_mind.llm.client import LLMError
+from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.recall import Recall, whisper_ok
@@ -1456,6 +1456,8 @@ class Pipeline:
                 self._real_name_hold = None
 
     async def _speak_now(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        if getattr(getattr(self.scheduler, 'gpu_gate', None), 'paused', False):
+            return []
         if not _scope_valid(meta):
             return self._drop(turn, meta, "scope_changed")
         with self.timing.span(meta.timing_trace, "delay"):
@@ -1936,6 +1938,8 @@ class Pipeline:
         (after its delay); a line the model gave in time is never expired after that."""
         if not _scope_valid(meta):
             return "scope_changed"
+        if getattr(getattr(self.scheduler, 'gpu_gate', None), 'paused', False):
+            return 'gpu_paused'
         g, w = turn.speaker, self.world
         if meta.elsewhere and not self._comms_says(
                 "scene_valid", False, turn, meta.why.startswith("elsewhere:")):
@@ -2127,6 +2131,8 @@ class Pipeline:
                 return text, "scope_changed"
             except Expired:
                 return text, "expired"
+            except GpuPaused:
+                return text, 'gpu_paused'
             except (SchedulerError, LLMError) as e:
                 log.warning("talk_llm_failed: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
                 return text, "llm_error"

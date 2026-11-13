@@ -1,4 +1,5 @@
 // Pure, deliberately content-free words for the Ops payload. No generic JSON renderer.
+import { pausedWords } from "./gpumodel.mjs";
 export const PANELS = [
   ["health", "Health"], ["night", "Night"], ["realm", "Realm holds"], ["raids", "Raids"],
   ["selfies", "Selfies and snaps"], ["backups", "Backups"], ["drift", "Release drift"], ["schedules", "Scheduled tasks"], ["switches", "Feature switchboard"]
@@ -81,6 +82,7 @@ export function lines(name, value) {
   } else if (name === "schedules") {
     arr(p.tasks).forEach(t => out.push(str(t.name) + " · " + (t.installed ? str(t.state) + " · last " + at(t.last_run) + " · result " + n(t.result) : "Not set up yet: task is not installed.")));
   } else if (name === 'switches') {
+    if (p.gpu?.paused) { out.push(pausedWords(p.gpu,at)); }
     arr(p.rows).forEach(r => out.push(str(r.label)+' · '+(r.state==='invalid' ? 'invalid, so off' : r.state==='on' ? 'on' : 'off')
       +(r.needs ? ' · needs '+str(r.needs) : '')+(arr(r.unmet).length ? ' · unmet: '+r.unmet.join(', ') : '')
       +(r.blocklist ? ' · blocklist '+str(r.blocklist) : '')+(r.restart ? ' · config changed since the mind started; restart to apply' : '')));

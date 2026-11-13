@@ -111,13 +111,59 @@ Tick's own pre-step fence (its holder and lease checks, its admission) also skip
 step never ran: no pending entry at all, not declared, not touched (`DecideFence`); a
 battleground that ends under a member still waiting its turn is this case. The readback a skipped
 last member makes runs under a `try`: a throw finishes `operation_outcome_unknown`, retained. A step
-rechecks only the members up to its own and later ones the job touched (`RecheckedMembers`), so such
+rechecks its current member and earlier/later members the job may have changed (`RecheckedMembers`), so such
 a member no longer fails an earlier member's step; each producer rechecks its whole closure in full
 (`ClosureFault`) before it charges it, and the last step still reads back every member held. Kept
 retained: anything after a step set `changed`, a member a shared cleanup declared or changed,
-producer refusals after charging or declaring or after an LFG group receipt, faults in a member
-already processed, an unreadable body after the step, and a pre-step fence on a member whose step
-had already gone pending.
+producer refusals after declaring or after an LFG group receipt, and faults in a body the job may
+have changed. The failed ordinary leave releases provably untouched members as described below.
+
+An ordinary leave records each completed member's own change in `changed_guids`, beside shared
+`cleanup_changed_guids`. An in-progress changed flag, an LFG receipt, declared scopes, or a
+continuation also prevents a member being called untouched; an executor exception conservatively
+marks its current member changed. Final readback runs after the last step or skip, without
+replaying that step. Teleport and delayed exit restoration wait up to `OperationWaitMs` (60 s).
+After that window, any bad readback of a provably untouched member skips that member alone.
+The log names `readback_changed guid=<guid> check=<code>`, then the skip reason
+`readback_changed:<code>`. Codes are `offline`, `owner`, `teleport`, `exit`, `battleground`,
+`original_group`, `lfg`, `group`, and `queue`. The final readback still rechecks its last member's
+cleanup state (`MemberCleanupFault`) even when untouched; a fault there the codes do not see (a
+Wintergrasp queue, a training fence) fails the job named by its reason's code (`CleanupFaultCheck`:
+`offline`, `queue`, `lfg` or `owner`). A readback without one of the nine codes, or naming a
+member outside the manifest, is never sent (`LeaveReadbackFault`, `MakeRealmJob`, Tick's finish),
+since the mind refuses the whole event over one. Tick reads the readback fields and its
+`final_readback` shortcut only for `leave_pvp`, with typed reads: another kind's payload can be
+the wire message itself.
+
+A changed member still fails the readback. A failed ordinary leave keeps only members it may
+have changed (including scopes/continuations) and ends the others' leases. Its `realm_job`
+contains distinct manifest members in `released`, plus `readback_guid` and `check` when known.
+The existing `guid` remains the current step, which can be different. The mind holds the original
+manifest minus that exact release proof and backs off skipped members for 600 s. Release proof is
+not proof a body left PvP (members after the failing step are released untouched too), so the mind
+never rearms or defaults on it: the released members it did not skip, when fewer than the
+manifest, get a new, strictly smaller leave, and only its success leads to rearm and defaults.
+Missing fields retain the old conservative behavior.
+Neither a contradictory receipt nor another kind/policy can borrow this proof.
+
+After an operator's `realm release` abandonment receipt, a supporting mind sends `realm_forget`
+with a **fresh envelope `id`** and the abandoned root as `origin_id`. Reusing the root's envelope
+would collide with its original ACK; this command never replays or rewrites the original action.
+Native emits `realm_forgotten` with those two ids, `outcome`, and `members`. Only a retained ordinary
+`leave_pvp` or `rearm`, without declared scopes, continuation or guild joins, may be released.
+`released` and `not_held` settle the mind's `realm:action:forgotten:<root>` receipt; `running` and
+`kind` refuse without changing anything. The mind asks again after `busy:teleport` in 5 s,
+doubling to 60 s, and after `running` every 60 s; `kind` and unanswered requests wait for a new
+connection. IDs/codes/counts are the only logged data.
+
+Deploy mind and native together; Claude performs the native rebuild/release with the owner offline.
+New mind with old native keeps full failed manifests when `released` is absent, records an exact
+unknown-command reply as `unsupported` once, and still needs the reviewed worldserver restart plus
+operator release for native fences. Old mind with new native ignores the new wire fields, retains
+its larger failed hold, and never sends `realm_forget`; the same manual recovery remains available.
+Rolling an old mind over a database that already contains new release/readback evidence is different:
+its strict journal reader cannot read the new keys. Use the pre-deployment snapshot for rollback;
+do not strip exact receipts. No migration is required. See the mind Realm README for receipt details.
 
 A rearm skips the same way (`SkipsMembers`): every refusal of its step before a swap
 (`MemberRefusal`: the `busy:` fences such as `busy:combat` and `busy:dead`,

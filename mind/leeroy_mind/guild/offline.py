@@ -12,6 +12,7 @@ import logging
 import math
 from uuid import uuid4
 
+from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.memory.writer import MemoryCandidate
 from leeroy_mind.wow import DUNGEONS, RAID_MAPS
 
@@ -162,6 +163,7 @@ class OfflineRaids:
                              if last_logout is not None else None)
         self._online = ports.human_online()
         self._lease = False
+        self._gpu_waiting = False  # logged the owner's GPU pause holding the day's raid back
         self._owned = _get(ports.conn, OWNED_KEY)
         # A restart must see a new native heartbeat before using any saved observation.
         self._progress = None
@@ -224,12 +226,25 @@ class OfflineRaids:
             (begin.timestamp(), end.timestamp(), *void)).fetchone()[0]
         quota = max(held, day.get("accepted", 0) - len(voided)) >= self.cfg.offline_raids_per_day
         active = self.ports.conn.execute("SELECT 1 FROM guild_raid WHERE ended IS NULL").fetchone() is not None
-        return (not day["blocked"] and day["attempts"] < MAX_ATTEMPTS
-                and self.ports.clock.now() >= day["next_try"]
-                and is_due(now, human_online=self._online or self.ports.human_online(),
-                           last_logout=self._last_logout, raided_today=quota,
-                           window=tuple(time.fromisoformat(t) for t in self.cfg.offline_window),
-                           min_away_min=self.cfg.offline_min_away_min, raid_active=active))
+        due = (not day["blocked"] and day["attempts"] < MAX_ATTEMPTS
+               and self.ports.clock.now() >= day["next_try"]
+               and is_due(now, human_online=self._online or self.ports.human_online(),
+                          last_logout=self._last_logout, raided_today=quota,
+                          window=tuple(time.fromisoformat(t) for t in self.cfg.offline_window),
+                          min_away_min=self.cfg.offline_min_away_min, raid_active=active))
+        if due and self.ports.gpu_paused():
+            self._gpu_wait()  # his Resume, login or post ends the pause; the raid then starts
+            return False
+        if due:
+            self._gpu_waiting = False
+        return due
+
+    def _gpu_wait(self):
+        """The owner's GPU pause holds the day's raid back without spending or blocking it.
+        Logged once a pause."""
+        if not self._gpu_waiting:
+            self._gpu_waiting = True
+            log.info("offline_raid_waiting reason=gpu_paused")
 
     def _raid_key(self):
         return next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn),
@@ -624,7 +639,16 @@ class OfflineRaids:
         self._save()
         try:
             self._lease = True
-            result = await self.ports.acquire_gpu(HOLDER)
+            try:
+                result = await self.ports.acquire_gpu(HOLDER)
+            except GpuPaused:
+                # A pause that came after _due(): nothing was sent and the day is untouched, so
+                # the raid waits as for the pause itself and starts by its rules after Resume.
+                self._lease = False
+                self._owned["phase"] = "rejected"
+                self._save()
+                self._gpu_wait()
+                return
             if result is False:
                 self._lease = False  # An explicitly denied acquisition grants no holder.
                 self._owned["phase"] = "rejected"

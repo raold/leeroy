@@ -169,7 +169,7 @@ def test_night_joins_inflight_ordinary_thread_before_reflection(h):
         app._extract_queue.put_nowait(closed)
         worker = asyncio.create_task(MindApp._extract_worker(app))
         try:
-            await extracting.wait()
+            await asyncio.wait_for(extracting.wait(), 2)
             await app.nightly.tick()
             await settle()
             assert not reflecting.is_set() and calls == [closed.thread_id]

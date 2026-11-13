@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -31,7 +32,7 @@ async def until(predicate):
 
 
 @asynccontextmanager
-async def application(tmp_path, clock, *, confirmed=7):
+async def application(tmp_path, clock, *, confirmed=7, original_bridge=False):
     path = tmp_path / "mind.toml"
     path.write_text("[realm]\nenabled = true\n", encoding="utf-8")
     seed = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
@@ -42,13 +43,19 @@ async def application(tmp_path, clock, *, confirmed=7):
     server = FakeBridge(events=[dict(type="hello", server="test", version="1",
                                     guild_id=21, human_guid=0)], cast=[], known_types=set(p.COMMANDS))
     port = await server.start()
-    app = MindApp(load_config(path), tmp_path, llm=FakeLLM(), clock=clock)
+    cfg = load_config(path)
+    cfg = replace(cfg, bridge=replace(cfg.bridge, host="127.0.0.1", port=port))
+    app = MindApp(cfg, tmp_path, llm=FakeLLM(), clock=clock)
     # Ordinary identity/world bookkeeping remains real. Session/model work is
     # outside these transport/presence regressions and must not block them.
     app._start_session = AsyncMock()
     app.engine.on_event = AsyncMock()
-    app.bridge = client = BridgeClient("127.0.0.1", port, app.handle,
-        on_connection=app._on_connection, backoff=Backoff(0.01, 0.01, 0), ping_interval=3600)
+    if original_bridge:
+        client = app.bridge
+        server._known_types.add("ping")
+    else:
+        app.bridge = client = BridgeClient("127.0.0.1", port, app.handle,
+            on_connection=app._on_connection, backoff=Backoff(0.01, 0.01, 0), ping_interval=3600)
     hellos = []
     async def observed(ev):
         copied = Hello(ev.ts, ev.server, ev.version, ev.guild_id, ev.human_guid)

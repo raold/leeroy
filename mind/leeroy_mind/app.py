@@ -51,7 +51,7 @@ from leeroy_mind.human import HumanIdentity
 from leeroy_mind.ingress import RowReceipt, WireOrigin, chat_row_binding, game_row_binding
 from leeroy_mind.library.core import Library
 from leeroy_mind.library.search_worker import LibrarySearchWorker
-from leeroy_mind.llm.client import LLMClient, LLMError, OllamaClient
+from leeroy_mind.llm.client import LLMClient, LLMError, OllamaClient, GpuPaused
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.llm.scheduler import LLMScheduler
 from leeroy_mind.logs import log as log_event
@@ -480,6 +480,8 @@ class MindApp:
         self.world_people = attach_world(self)
         from .banter.service import attach as attach_banter
         self.banter = attach_banter(self)
+        from .gpucontrol import GpuControl
+        self.gpu = GpuControl(self)
         self.realm = attach_realm(self)
         from .server.attach import attach_server
         self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.
@@ -1261,6 +1263,8 @@ class MindApp:
             async def get(self):
                 closed = await app._extract_queue.get()
                 try:
+                    if (gpu := getattr(app, 'gpu', None)) is not None:
+                        await gpu.gate.wait()
                     await app.nightly.wait_idle()
                     if (admit := getattr(app.engine, "live_admission", None)) is not None:
                         await admit()
@@ -1275,12 +1279,15 @@ class MindApp:
         await self.extractor.run(Queue())
 
     async def _embed_pending(self) -> None:
+        if getattr(getattr(self, 'gpu', None), 'paused', False):
+            return
         try:
             await self.writer.embed_pending()
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("embed_backfill_failed")
+            if not getattr(getattr(self, 'gpu', None), 'paused', False):
+                log.exception("embed_backfill_failed")
 
     async def _health(self) -> None:
         """The silent latch's recheck: now (unless startup_checks has just checked), then
@@ -1400,6 +1407,8 @@ class MindApp:
         while True:
             item = await self._memory_queue.get()
             try:
+                if (gpu := getattr(self, 'gpu', None)) is not None:
+                    await gpu.gate.wait()
                 if isinstance(item, _ActivityFlush):
                     try:
                         await self.event_rules.activity.flush(self.writer, self.clock.now())

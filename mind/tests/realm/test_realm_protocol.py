@@ -50,9 +50,10 @@ COMMAND_FIELDS = {
     "guild_readmit": "id guid kick_ts rank",
     "world_say": "id guid guild_id channel text to_guid",
     "get_world_roster": "id request",
+    "realm_forget": "id origin_id",
 }
 EVENT_FIELDS = {
-    "realm_job": "ts id kind state reason guid value pvp_owner changed skipped",
+    "realm_job": "ts id kind state reason guid value pvp_owner changed skipped released readback_guid check",
     "realm_visit_state": "ts id place guild_id human_guid ready near",
     "channel_chat": "ts channel from_guid from_name zone text via_bridge",
     "pvp_kill": "ts killer victim map zone",
@@ -75,6 +76,7 @@ EVENT_FIELDS = {
                            "heroic human_present cast_members"),
     "realm_achievement": "ts guid achievement_id name category flags realm_first",
     "world_roster": "ts request own_guild human page pages total members",
+    "realm_forgotten": "ts id origin_id outcome members",
 }
 
 
@@ -103,7 +105,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 36 and len(protocol.EVENTS) == 18
+    assert len(protocol.COMMANDS) == 37 and len(protocol.EVENTS) == 19
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -209,12 +211,15 @@ def test_events_parse_from_native_fixture():
         parsed = wire.parse_event(json.dumps(msg))
         assert type(parsed) is protocol.EVENTS[msg["type"]]
         assert wire.event_type(parsed) == msg["type"]
-        expected = {key: tuple(value) if key in {"members", "cast_members"} else value for key, value in msg.items()
+        expected = {key: tuple(value) if isinstance(value, list) and key in {"members", "cast_members"} else value for key, value in msg.items()
                     if key not in {"type", "v"}}
         if msg["type"] == "realm_job":
             expected.setdefault("pvp_owner", "")
             expected.setdefault("changed", None)
             expected.setdefault("skipped", ())
+            expected.setdefault("released", ())
+            expected.setdefault("readback_guid", 0)
+            expected.setdefault("check", "")
             assert type(parsed.value) is int
         if msg["type"] == "world_roster":
             expected["members"] = tuple({("class_" if k == "class" else k):v for k,v in m.items()} for m in msg["members"])
@@ -284,7 +289,7 @@ def test_native_owner_fixture_and_command_contracts():
             assert dataclasses.asdict(parsed) == {
                 key: tuple(value) if key == "members" else value for key, value in msg.items()
                 if key not in {"type", "v"}
-            } | ({"pvp_owner": "", "changed": None, "skipped": ()} if msg["type"] == "realm_job" else {})
+            } | ({"pvp_owner": "", "changed": None, "skipped": (), "released": (), "readback_guid": 0, "check": ""} if msg["type"] == "realm_job" else {})
         elif msg["type"] in {"leave_pvp", "get_realm_pvp"} and row["kind"] == "command":
             cls = protocol.LeavePvp if msg["type"] == "leave_pvp" else protocol.GetRealmPvp
             fields = {key: tuple(value) if key == "guids" else value for key, value in msg.items()

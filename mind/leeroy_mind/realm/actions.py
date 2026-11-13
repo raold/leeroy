@@ -14,7 +14,7 @@ import math
 import uuid
 
 from .action_policy import classify, integer, members, text, U64
-from .action_store import ActionCapacity, ActionSpec, TERMINAL, leave_refusal_guids, skipped_backoff
+from .action_store import ActionCapacity, ActionSpec, TERMINAL, failed_backoff, leave_refusal_guids, skipped_backoff
 from .protocol import GetRealmPvp, LeavePvp, Rearm, RealmActors
 
 log = logging.getLogger(__name__)
@@ -112,12 +112,11 @@ class ActionQueue:
         if not scope: return False
         for old in self.store.records():
             failed_at = json.loads(old.evidence).get("failed_at")
-            # A named leave ack refusal changed nobody:
-            # only the members it names are backed off.
-            failed = set(leave_refusal_guids(old.result_reason, old.reserved_manifest) or old.reserved_manifest)
+            # A named leave ack refusal changed nobody: only the members it names are backed off.
+            # Nor does a failed leave back off what native released and did not skip (failed_backoff).
             if (old.role == "root" and old.owner == owner and old.kind == kind
                     and old.result_ok is False and failed_at is not None and now < failed_at + 600
-                    and failed & set(scope)):
+                    and failed_backoff(old) & set(scope)):
                 return True
             # Nor did a completed leave change the members it skipped.
             if old.role == "root" and old.owner == owner and old.kind == kind and set(skipped_backoff(old, now)) & set(scope):

@@ -45,6 +45,7 @@ from typing import Awaitable, Callable, Literal, NamedTuple, Sequence
 
 from leeroy_mind.clock import Clock
 from leeroy_mind.human import HumanIdentity
+from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
@@ -184,6 +185,8 @@ class NightContext:
                     if _cancelling():
                         raise
                     self.fail(stage, unit, e)
+                except GpuPaused:
+                    raise  # the owner's pause stops the night: no unit of it failed
                 except ReflectionError as e:
                     if e.fatal:
                         raise
@@ -195,6 +198,9 @@ class NightContext:
                 for unit in todo:
                     tg.create_task(one(unit), name=f"nightly-{stage}-{unit}")
         except ExceptionGroup as group:
+            paused = [e for e in group.exceptions if isinstance(e, GpuPaused)]
+            if paused:
+                raise paused[0]
             fatal = [e for e in group.exceptions if isinstance(e, ReflectionError)]
             if fatal:
                 raise fatal[0]
@@ -391,6 +397,9 @@ class NightRunner:
             if _cancelling():  # a requested stop: no stall
                 self._refund(ctx)
             raise
+        except GpuPaused:  # the owner's GPU pause stops the night as his login would
+            self._refund(ctx)
+            raise
 
     @staticmethod
     def _refund(ctx: NightContext) -> None:
@@ -408,9 +417,12 @@ class NightRunner:
         log("nightly_image_refused", night=ctx.night, stage=stage.name, holders=sorted(e.holders))
 
     async def _room_for_images(self, ctx: NightContext, stage: Stage) -> bool:
-        """make_room for an image stage. False, logged, when a live lease refuses it."""
+        """make_room for an image stage. False, logged, when a live lease refuses it; the owner's
+        GPU pause is raised, since it stops the whole night and not only its images."""
         try:
             await ctx.arbiter.make_room()
+        except GpuPaused:
+            raise
         except LiveLeaseHeld as e:
             self._images_refused(ctx, stage, e)
             return False
@@ -479,7 +491,7 @@ class NightRunner:
             try:
                 await stage.fn(ctx)
             except LiveLeaseHeld as e:
-                if stage.model != "image":
+                if stage.model != "image" or isinstance(e, GpuPaused):
                     raise
                 self._images_refused(ctx, stage, e)
                 images = False
