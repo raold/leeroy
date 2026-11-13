@@ -211,7 +211,7 @@ def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
             if ln is None:
                 continue
             if not is_private(ln.channel):
-                public = public or cited
+                public = public or cited and not is_group(ln.channel)
                 continue
             here = "secret" if _asked_secrecy(ln, secret_threads) else "private"
             claim = (ln.to if ln.frm == owner else ln.frm) if owner in (ln.frm, ln.to) else 0
@@ -300,10 +300,10 @@ def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], 
             known = set.intersection(*(set(c.readers) for c in groups))
             if owner in known:
                 if derived.scope == 'open' or derived.scope_with == GROUP:
-                    return Scope(cls,GROUP,False)
+                    return Scope(cls,GROUP,derived.public)
                 if derived.scope_with > 0 and derived.scope_with in known:
-                    return Scope(cls,derived.scope_with,False)
-            return Scope(cls,0,False)
+                    return Scope(cls,derived.scope_with,derived.public)
+            return Scope(cls,0,derived.public)
         officers = all(is_officer_channel(c) for c in hidden[0]) and (
             derived.scope == "open" or derived.scope_with == OFFICERS)
         return Scope(cls, OFFICERS if officers else 0, derived.public)

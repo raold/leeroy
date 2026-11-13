@@ -258,9 +258,13 @@ class DiscordDesk:
         peer = layout.dm_peer(row['channel'])
         if peer is not None and peer != member:
             return
-        place = row['channel'] if peer else CHANNEL_PREFIX + row['channel']
+        place = row['channel'] if peer or is_group(row['channel']) else CHANNEL_PREFIX + row['channel']
         if member not in app.world.audience(place, from_guid=app.human_guid, to_guid=peer or 0):
             return
+        if is_group(place):
+            from leeroy_mind.groups.audience import message_readers
+            if member not in message_readers(app.store.conn,message):
+                return
         prefix = (f'{app.engine.human.called} sent me a photo: ' if peer else
                   f"{app.engine.human.called} posted a photo in #{row['channel']}: ")
         await app.writer.write(MemoryCandidate(owner=member, kind='observation',

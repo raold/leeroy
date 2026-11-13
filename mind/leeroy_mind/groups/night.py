@@ -3,6 +3,7 @@ from datetime import date
 
 from leeroy_mind.personas.screens import redact_real_name
 from leeroy_mind.protocol import Chat
+from leeroy_mind.server.config import load_server_config
 from .config import load_groups_config
 from . import store as groups
 
@@ -24,7 +25,7 @@ def _left(store,channel,guid,name,now):
     store.set_meta(f'discord:line:{mid}',str(line))
 
 
-def settle(ctx,config):
+def settle(ctx,config,*,can_start=False):
     store,now = ctx.store,ctx.clock.now()
     store.conn.execute("DELETE FROM meta WHERE key GLOB 'groups:owed:*' AND value='{}' AND NOT EXISTS "
         "(SELECT 1 FROM discord_message m WHERE m.id=CAST(substr(meta.key,13) AS INTEGER) AND m.ts>=?)",
@@ -42,7 +43,7 @@ def settle(ctx,config):
                 groups.remove(store,channel,guid,human=ctx.human,now=now)
                 name = redact_real_name(p.character_name if p else 'A member',ctx.ident,ctx.ident.called)
                 _left(store,channel,guid,name,now)
-    if not ctx.human or not config.member_starts_per_week:
+    if not can_start or not ctx.human or not config.member_starts_per_week:
         return
     if store.conn.execute('SELECT count(*) FROM discord_group WHERE closed IS NULL').fetchone()[0]>=config.max_open:
         return
@@ -74,6 +75,7 @@ async def stage_groups(ctx):
     config = load_groups_config(ctx.settings.data_dir/'mind.toml')
     if not config.enabled:
         return
+    can_start = load_server_config(ctx.settings.data_dir/'mind.toml').enabled
     async def one(unit):
-        ctx.commit('language',unit,lambda store:settle(ctx,config))
+        ctx.commit('language',unit,lambda store:settle(ctx,config,can_start=can_start))
     await ctx.map_units('language',['groups'],one)

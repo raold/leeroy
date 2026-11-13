@@ -10,7 +10,8 @@ from types import SimpleNamespace
 from leeroy_mind.bodies import ALL
 from leeroy_mind.claims.store import nearest
 from leeroy_mind.claims.visibility import claim_visible
-from leeroy_mind.discord.channels import OFFICER_GAME, is_private, is_discord, is_restricted, same_medium
+from leeroy_mind.discord.channels import (OFFICER_GAME, is_private, is_discord, is_restricted,
+                                         is_group, is_officer_channel, same_medium)
 from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
 from leeroy_mind.realm.action_store import released_members
@@ -482,7 +483,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     discord = is_discord(context.channel)
     human = int(meta.get('human_guid', '0')) if str(meta.get('human_guid', '0')).isdecimal() else 0
     if discord and context.server and (context.readers is None or guid not in context.readers
-                                      or is_restricted(context.channel) and not officer):
+                                      or is_restricted(context.channel) and not is_group(context.channel) and not officer):
         return Card(guid, ())
     conversation = _context(guid, officer, context)
     here = ([context.self_line] if context.self_line else []) + list(context.here[:6]) if context.server and discord else []
@@ -553,7 +554,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         "GROUP BY dir ORDER BY dir", (now-7*DAY_S, now)))
     if bank and not any(line.startswith("Balance:") for line in bank):
         bank.insert(0, "Current balance: unknown")
-    if not discord or officer and is_restricted(context.channel):
+    if not discord or officer and is_officer_channel(context.channel):
         add("bank", "Guild bank", bank)
     add("drama", "Your recent guild drama", _drama(reader, guid, officer, context, now))
     return Card(guid, tuple(parts[key] for key in PRIORITY if key in parts), tuple(sorted(reader.missing)))

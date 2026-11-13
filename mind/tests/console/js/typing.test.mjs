@@ -16,6 +16,19 @@ test("Discord typing stays in its channel or private DM, separate from game whis
   assert.equal(found.size, 2); assert.deepEqual(whisperTypers(found), []);
 });
 
+test("group typing stays with its group, expires and clears after delivery", () => {
+  const list = [typing(101, { channel: "gdm:1" }), typing(102, { channel: "gdm:2" }),
+    typing(103, { channel: "gdm:0" }), typing(104, { channel: "gdm:1", age: 31 })];
+  const found = at(list);
+  assert.deepEqual(names(found, "gdm:1"), ["Arkon"]);
+  assert.deepEqual(names(found, "gdm:2"), ["Belra"]);
+  assert.equal(found.size, 2);
+  const delivered = at(list, { lines: view => view === "gdm:1"
+    ? [{ from_guid: 101, ts: SINCE - 1 }] : [] });
+  assert.deepEqual(names(delivered, "gdm:1"), []);
+  assert.deepEqual(names(delivered, "gdm:2"), ["Belra"]);
+});
+
 function typing(guid, o) {
   return Object.assign({ guid: guid, name: NAMES[guid], channel: "guild", to: null, since: SINCE - 2,
                          age: 2 }, o);
