@@ -104,7 +104,7 @@ def test_composed_prompts_get_one_bounded_card_only_when_on(rig, channel):
 
 @pytest.mark.parametrize("channel,peer,shown", [
     ("guild", 0, False), ("party", 0, False), ("raid", 0, False),
-    ("whisper", 1, True), ("whisper", 102, False), ("discord:general", 0, False), ("dm:101", 1, False)])
+    ("whisper", 1, True), ("whisper", 102, False), ("discord:general", 0, False), ("dm:101", 1, True)])
 def test_owner_claim_card_inherits_whisper_pair_and_medium(rig, channel, peer, shown):
     line = source(rig, "PAIR_ONLY", "whisper", who=101, to=1)
     add(rig.store, 101, kind="opinion", subject="ferry", text="PAIR_ONLY", polarity=1,

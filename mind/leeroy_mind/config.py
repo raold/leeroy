@@ -24,6 +24,7 @@ openers_per_hour = 6          # members starting a line to him in party or guild
 selfies = 3                    # 0-10, photos the guild sends you (rendered at night)
 aware = false                  # include a bounded card of visible observations in talk
 realism = false                # bounded member typing, small bursts and rare corrections
+dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -82,6 +83,7 @@ class TalkCfg:
     selfies: int = 3
     aware: bool = False
     realism: bool = False
+    dm_own_time: bool = False
 
 
 @dataclass(frozen=True)
@@ -178,6 +180,7 @@ _RULES = {
     "talk": {
         "aware": (lambda v: type(v) is bool, "a boolean"),
         "realism": (lambda v: type(v) is bool, "a boolean"),
+        "dm_own_time": (lambda v: type(v) is bool, "a boolean"),
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
         "selfies": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
@@ -237,7 +240,7 @@ def _build(data: dict, source: str) -> MindConfig:
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
-            if section == "talk" and key == "realism" and type(v) is not bool:
+            if section == "talk" and key in ("realism", "dm_own_time") and type(v) is not bool:
                 v = False
             if section == 'romance' and key == 'activities' and type(v) is not bool:
                 v = False

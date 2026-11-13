@@ -13,6 +13,7 @@ import sqlite3
 import tomllib
 from types import SimpleNamespace
 
+from leeroy_mind.discord.channels import OFFICER_GAME, is_private
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
 from leeroy_mind.storage.rows import cosine, unpack_vec
 
@@ -175,12 +176,12 @@ class _Privacy:
                 ch = row["channel"]
                 audience = _json(row.get("audience"))
                 audience_ok = row.get("audience") is None or (_ids(audience) and self.guid in audience)
-                if ch == "whisper":
+                if is_private(ch):  # a whisper or a DM: one conversation between the two
                     ok = (self.guid in (row["from_guid"], row["to_guid"])
                           and whisper_ok(ch, row["from_guid"], row["to_guid"], speaker=self.guid,
                                          turn_channel=self.ctx.channel, to_guid=self.ctx.to_guid))
-                elif ch == "officer":
-                    ok = self.officer and self.ctx.channel == "officer"
+                elif ch in OFFICER_GAME:
+                    ok = self.officer and self.ctx.channel in OFFICER_GAME
                 elif ch == "guild":
                     ok = True
                 else:

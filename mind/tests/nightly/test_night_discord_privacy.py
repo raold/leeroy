@@ -103,9 +103,11 @@ def test_which_channels_are_private_restricted_and_public():
     assert not any(is_private(c) for c in ("guild", "officer", "say", GENERAL, OFFICERS, None))
     assert is_restricted(OFFICERS) and is_restricted("discord:applications")
     assert is_restricted("discord:no-such-channel")  # a channel the layout lacks: fail closed
-    assert not any(is_restricted(c) for c in ("guild", "officer", "whisper", DM, GENERAL))
+    # one mind per member: the officers' game channels are restricted like their Discord ones
+    assert is_restricted("officer") and is_restricted("voice:officers")
+    assert not any(is_restricted(c) for c in ("guild", "whisper", DM, GENERAL, "voice:general"))
     assert [c for c in ("guild", "officer", "whisper", DM, GENERAL, OFFICERS) if is_public(c)] == [
-        "guild", "officer", GENERAL]
+        "guild", GENERAL]
     assert is_discord(DM) and is_discord(OFFICERS) and not is_discord("whisper")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE t(channel TEXT)")
@@ -140,7 +142,7 @@ def test_a_dm_is_scoped_like_a_whisper(h):
     assert (m.scope, m.scope_with) == ("private", 1)
 
 
-def test_a_dm_memory_reaches_only_her_dm_with_him(h):
+def test_a_dm_memory_reaches_only_her_dm_and_whispers_with_him(h):
     his = put(h, h.T, 1, "my sister is getting married next month", DM, to=102)
     mid = h.mem(102, "Testy told me his sister is getting married.", actors=(102, 1),
                 evidence=(f"chat:{his}",), scope="private", scope_with=1)
@@ -150,7 +152,8 @@ def test_a_dm_memory_reaches_only_her_dm_with_him(h):
         return [m.id for m in run(r.recall(owner, "sister married", present=[1], addressee=1,
                                            channel=channel, to_guid=to))]
     assert got(DM, 1) == [mid]
-    for channel, to in (("guild", 0), ("whisper", 1), (GENERAL, 0), (OFFICERS, 0), ("dm:103", 1)):
+    assert got("whisper", 1) == [mid]  # one mind per member: one conversation with him
+    for channel, to in (("guild", 0), ("whisper", 103), (GENERAL, 0), (OFFICERS, 0), ("dm:103", 1)):
         assert got(channel, to) == [], channel
     assert got(DM, 1, owner=103) == []
 
@@ -255,7 +258,9 @@ def test_an_officers_line_is_known_to_its_audience_only(h, monkeypatch):
         return [x.id for x in run(r.recall(102, "arkon raider", present=[], addressee=None,
                                            channel=channel, to_guid=0))]
     assert mid in got(OFFICERS)
-    for channel in ("guild", "officer", GENERAL, "discord:applications"):
+    # one officer audience in either medium: officer chat and every officers' Discord channel
+    assert mid in got("officer") and mid in got("discord:applications")
+    for channel in ("guild", GENERAL, "whisper", "discord:no-such-channel"):
         assert mid not in got(channel), channel
 
 
@@ -275,8 +280,9 @@ def _row(h, owner, text, evidence, **kw):
 
 def test_the_restriction_is_transitive_and_recorded_at_write_time(h):
     """R10: a memory resting on an officers' line through memory: refs is as restricted as one
-    citing it, and the writer stores both so (private to nobody), so every open-only reader
-    leaves them out. Rows stored open by any other path are left out by their roots too."""
+    citing it, and the writer stores both so (private to the officers: one audience in either
+    medium, 2026-11-12), so every open-only reader leaves them out. Rows stored open by any
+    other path are left out by their roots too."""
     line = put(h, h.T, 102, "we should demote arkon next week", OFFICERS,
                audience=OFFICER_AUDIENCE)
     w = writer(h)
@@ -287,14 +293,14 @@ def test_the_restriction_is_transitive_and_recorded_at_write_time(h):
     deeper = w.put(_row(h, 102, "Arkon seems tense lately.", [f"memory:{derived}"],
                         actors=(102, 101)))
     assert [(m.scope, m.scope_with) for m in h.store.get_memories([direct, derived, deeper])] == [
-        ("private", 0)] * 3
+        ("private", -1)] * 3
     # rows stored open by another path (the reviewer's probe): the roots still tell
     open_direct = h.mem(102, "I said Arkon should be demoted.", actors=(102, 101),
                         evidence=(f"chat:{line}",))
     open_derived = h.mem(102, "I fear Arkon gets demoted.", actors=(102, 101),
                          evidence=(f"memory:{open_direct}",), kind="reflection",
                          source="reflection")
-    assert derive_scope(h.store.conn, 102, [f"memory:{open_derived}"]) == Scope("private", 0)
+    assert derive_scope(h.store.conn, 102, [f"memory:{open_derived}"]) == Scope("private", -1)
     control = h.mem(102, "Arkon tanked the drake well.", actors=(102, 101))
     every = [direct, derived, deeper, open_direct, open_derived]
     r = recall(h)
@@ -302,8 +308,9 @@ def test_the_restriction_is_transitive_and_recorded_at_write_time(h):
     def got(channel):
         return {m.id for m in run(r.recall(102, "arkon demoted tense", present=[101],
                                            addressee=101, channel=channel, to_guid=0))}
-    for channel in ("guild", GENERAL, "officer", "whisper", "discord:applications"):
+    for channel in ("guild", GENERAL, "whisper", "discord:no-such-channel", "party"):
         assert not got(channel) & set(every), channel
+    assert {direct, derived, deeper} <= got("officer") and {direct, derived, deeper} <= got(OFFICERS)
     assert control in got("guild")
     rows = h.store.get_memories([*every, control])
     assert Extractor._public(SimpleNamespace(_store=h.store), rows) == {control}

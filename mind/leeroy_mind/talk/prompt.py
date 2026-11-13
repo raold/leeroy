@@ -523,6 +523,11 @@ def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
         tag = f" (whisper to {to})" if to else " (whisper)"
     elif row.channel.startswith("voice:"):
         tag = " (on vent)"
+    elif row.channel.startswith("dm:"):
+        to = names.get(row.to_guid)
+        tag = f" (Discord DM to {to})" if to else " (Discord DM)"
+    elif row.channel.startswith("discord:"):
+        tag = f" (Discord #{row.channel.removeprefix('discord:')})"
     else:
         tag = f" ({row.channel})"
     age = "" if now is None else f"[{line_age(now - row.ts)}] "

@@ -16,7 +16,8 @@ _LABEL_BAD = re.compile(r"[^A-Za-z0-9_-]+")
 # called with the connection after the file's script and before its user_version bump, in the
 # same transaction. It must not commit.
 DATA_STEPS = {"nightly": "leeroy_mind.memory.privacy:backfill_scopes",
-              "romance_arc": "leeroy_mind.arc.ladder:map_stored_stages"}
+              "romance_arc": "leeroy_mind.arc.ladder:map_stored_stages",
+              "officer_scope": "leeroy_mind.memory.privacy:backfill_officer_scopes"}
 
 
 class EmbeddingMismatch(RuntimeError):

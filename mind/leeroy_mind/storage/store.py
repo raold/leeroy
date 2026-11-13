@@ -273,6 +273,18 @@ class Store:
         return [_chat_from_row(r) for r in
                 self._all(f"SELECT * FROM chat_line WHERE id IN ({marks}) ORDER BY id", ids)]
 
+    def pair_lines(self, guid: int, other: int, *, since: float, limit: int) -> list[ChatLineRow]:
+        """The newest `limit` lines between `guid` and `other` no older than `since`, oldest
+        first: their whispers either way and the Discord DM `dm:<guid>` (a member's DM with him),
+        one conversation (one mind per member)."""
+        rows = self._all(
+            "SELECT * FROM (SELECT * FROM chat_line WHERE channel = 'whisper' AND ts >= ? "
+            "AND ((from_guid = ? AND to_guid = ?) OR (from_guid = ? AND to_guid = ?)) "
+            "UNION ALL SELECT * FROM chat_line WHERE channel = ? AND ts >= ?) "
+            "ORDER BY ts DESC, id DESC LIMIT ?",
+            (since, guid, other, other, guid, f"dm:{guid}", since, limit))
+        return [_chat_from_row(r) for r in reversed(rows)]
+
     def lines_before(self, line_id: int, channels, *, since: float, from_guid: int = 0,
                      limit: int = 50) -> list[ChatLineRow]:
         """The lines on `channels` stored before line `line_id` and no older than `since`

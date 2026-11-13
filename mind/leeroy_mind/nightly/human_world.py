@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import asdict, replace
 from datetime import datetime
 
-from leeroy_mind.discord.channels import discord_sql, is_private, same_medium
+from leeroy_mind.discord.channels import discord_sql, is_private, is_public, same_medium
 from leeroy_mind.memory.privacy import stricter
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly.attraction import reflection_row
@@ -230,7 +230,11 @@ def _reaction_refs(ctx, reaction, line):
     if reaction.reaction in chosen:
         refs += [f"chat:{a['id']}" for a in direct if chosen[reaction.reaction](a)][:1]
     elif reaction.reaction == "ignored":
-        refs += [f"chat:{a['id']}" for a in answers if a["ts"] <= line["ts"] + REPLY_S][:1]
+        # what he said instead, only where she could read it: a public line or one to her (an
+        # officers' line or his whisper to someone else would close her memory to everyone)
+        refs += [f"chat:{a['id']}" for a in answers if a["ts"] <= line["ts"] + REPLY_S
+                 and (is_public(a["channel"]) or is_private(a["channel"])
+                      and a["to_guid"] == reaction.speaker)][:1]
     elif reaction.reaction == "emote":
         for event in ctx.store.conn.execute("SELECT * FROM game_event WHERE type='text_emote' "
                 "AND ts>? AND ts<=? ORDER BY ts,id", (line["ts"], line["ts"] + REPLY_S)):

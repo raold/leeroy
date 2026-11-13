@@ -109,6 +109,13 @@ def _validate(draft, now):
 
 
 def _visible(line, draft, officer):
+    if line.channel in {'whisper', 'dm'} and draft.channel in {'whisper', 'dm'}:
+        # One mind per member: a whisper and a DM between the same two are one conversation.
+        if line.readers is not None and line.guid != draft.guid and draft.guid not in line.readers:
+            return False
+        return ((line.channel != 'dm' or line.readers is not None)
+                and draft.guid in (line.guid, line.to_guid)
+                and {line.guid, line.to_guid} == {draft.guid, draft.to_guid})
     if (line.channel in {'discord', 'dm'}) != (draft.channel in {'discord', 'dm'}):
         return False
     if line.readers is not None and line.guid != draft.guid and draft.guid not in line.readers:
@@ -165,6 +172,14 @@ def _history(reader, stores, draft, now, officer):
         reader.rows('history_unavailable', f'SELECT {columns} FROM chat_line '
         "WHERE channel='guild' AND origin='mind' AND ts BETWEEN ? AND ? AND id<? ORDER BY ts DESC,id DESC LIMIT ?",
         (now-GUILD_SECONDS, now, cutoff, GUILD_LINES))] if draft.channel not in {'discord', 'dm'} else []
+    if draft.channel in {'whisper', 'dm'}:
+        # One mind per member: her own lines in their whispers and in her DM with him count
+        # toward her repeats in either (_visible keeps them to the same two).
+        groups.append(reader.rows('history_unavailable', f'SELECT {columns} FROM chat_line '
+            "WHERE from_guid=? AND (channel='whisper' OR channel=?) AND ts BETWEEN ? AND ? "
+            'AND id<? ORDER BY ts DESC,id DESC LIMIT ?',
+            (draft.guid, f'dm:{draft.guid}', now-stores.config.repeat_seconds, now, cutoff,
+             OWN_LINES)))
     if ids and draft.channel not in {'discord', 'dm'}:
         groups.append(reader.rows('context_unavailable', f'SELECT {columns} FROM chat_line '
             'WHERE id IN (SELECT value FROM json_each(?)) AND ts BETWEEN ? AND ? AND id<?',

@@ -5,10 +5,12 @@ person it may come up with (0 for nobody: it then reaches no prompt).
 The scope comes from the evidence. A whisper among it makes the memory private to the whisper's
 two people, and secret when its thread asked for secrecy (DONT_TELL_RE), or an earlier thread of
 the same two did that night (fix I1). A Discord DM is a whisper here (ruling R7: the private
-channels are discord.channels.is_private). A memory resting on a line of a restricted Discord
-channel (an officers' one), directly or through memory: refs, is private to nobody (ruling R10:
-restricted_channels), so no open-only reader ever takes it. A scoped memory it cites passes its
-scope on. The strictest wins. A caller may raise a scope, never lower it, and what was said on a
+channels are discord.channels.is_private). A memory resting on a line of a restricted channel,
+directly or through memory: refs (restricted_channels), is private: to the officers (scope_with
+OFFICERS) when every such line is the officers' (officer chat or their voice room in the game, an
+officers' Discord channel: one audience, 2026-11-12) and nothing else narrows it, else to nobody
+(ruling R10), so no open-only reader ever takes it. A scoped memory it cites passes its scope on.
+The strictest wins. A caller may raise a scope, never lower it, and what was said on a
 public channel is never secret, whatever it says.
 
 Standard library, leeroy_mind.clock and leeroy_mind.discord.channels (which reads the layout only
@@ -23,7 +25,8 @@ from datetime import datetime
 from typing import Iterable
 
 from leeroy_mind.clock import night_of
-from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_private, is_restricted, private_sql
+from leeroy_mind.discord.channels import (OFFICER_GAME, is_officer_channel, is_private,
+                                          is_restricted, private_sql, restricted_sql)
 
 log = logging.getLogger("leeroy_mind")
 
@@ -38,6 +41,8 @@ SCOPES = ("open", "private", "secret")  # in order of strictness
 _REF = re.compile(r"(chat|memory):([0-9]+)")
 _NIGHT_S = 25 * 3600  # the longest night: 24 hours, 25 when the clocks go back
 WALK_DEPTH = 8  # how many memory: levels restricted_channels follows
+# scope_with of a private memory the officers may know, in either medium (recall.scope_ok); no guid
+OFFICERS = -1
 
 
 @dataclass(frozen=True)
@@ -194,8 +199,8 @@ def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
 
 
 def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
-    """For each key of `refs` (key -> refs) whose refs rest on a line of a restricted Discord
-    channel (discord.channels.is_restricted), directly or through memory:<id> refs followed up
+    """For each key of `refs` (key -> refs) whose refs rest on a line of a restricted channel
+    (discord.channels.is_restricted), directly or through memory:<id> refs followed up
     to WALK_DEPTH levels (each memory's evidence, of any status), the set of those channels
     (ruling R10). Keys that rest on none are left out. A few batched SELECTs per level, no
     commit."""
@@ -207,7 +212,7 @@ def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
         wanted = set().union(*chats.values()) if chats else set()
         hidden = {r[0]: r[1] for r in conn.execute(
             "SELECT id, channel FROM chat_line WHERE id IN (SELECT value FROM json_each(?)) "
-            f"AND substr(channel, 1, {len(CHANNEL_PREFIX)}) = '{CHANNEL_PREFIX}'",
+            f"AND {restricted_sql()}",
             (json.dumps(sorted(wanted)),)) if is_restricted(r[1])} if wanted else {}
         for k, ids in chats.items():
             found = {hidden[i] for i in ids if i in hidden}
@@ -243,17 +248,71 @@ def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], 
     - any other ref, or an id with no row: open, and no claim.
     The scope is the strictest class; scope_with is the guid every claim names when that is
     one non-zero guid, else 0 (two partners, a claim of nobody). On top of that, refs that rest
-    on a restricted Discord line, at any depth (restricted_channels), make it at least private,
-    with nobody (ruling R10). Plain SELECTs on `conn` and no commit, so it can run inside the
-    caller's transaction."""
+    on a restricted line, at any depth (restricted_channels), make it at least private: with the
+    officers (OFFICERS) when every such line is the officers' and the rest derives open or the
+    officers already, else with nobody (ruling R10). Plain SELECTs on `conn` and no commit, so it
+    can run inside the caller's transaction."""
     evidence, shown = list(evidence), list(shown)
     refs = evidence + shown
     lines = _lines(conn, _ids(refs, "chat"))
     derived = _derive(owner, evidence, shown, lines, _secret_threads(conn, lines),
                       _memories(conn, _ids(refs, "memory")))
-    if restricted_channels(conn, {0: refs}):
-        return Scope(max(derived.scope, "private", key=SCOPES.index), 0, derived.public)
+    hidden = restricted_channels(conn, {0: refs})
+    if hidden:
+        cls = max(derived.scope, "private", key=SCOPES.index)
+        officers = all(is_officer_channel(c) for c in hidden[0]) and (
+            derived.scope == "open" or derived.scope_with == OFFICERS)
+        return Scope(cls, OFFICERS if officers else 0, derived.public)
     return derived
+
+
+def backfill_officer_scopes(conn: sqlite3.Connection) -> int:
+    """The officer-scope migration's data step (one mind per member, 2026-11-12). A memory resting
+    on officer lines only (officer chat or their voice room in the game, an officers' Discord
+    channel), at any depth, that is stored open (game officer chat, which was not restricted
+    before) or private with nobody (an officers' Discord channel: R10's fail-closed class), takes
+    the officers' scope derive_scope now gives it. Nothing else changes, and nothing is
+    committed: it runs inside the migration's transaction. Returns how many rows changed.
+
+    First, slang is learned from public lines only (nightly.vocab), and his officer-chat lines
+    were taken as public until officer chat became restricted: a slang memory citing them keeps
+    its other evidence and drops those (on the live guild, 2026-11-12, about 570 slang memories
+    of common words cited his officer lines, and 1,035 reflections through them)."""
+    officer = {r[0] for r in conn.execute(
+        "SELECT id FROM chat_line WHERE channel IN (SELECT value FROM json_each(?))",
+        (json.dumps(sorted(OFFICER_GAME)),))}
+    cleaned = 0
+    if officer:
+        for mid, raw in conn.execute(
+                "SELECT id, evidence FROM memory WHERE substr(key, 1, 6) = 'slang:'").fetchall():
+            refs = json.loads(raw)
+            kept = [e for e in refs if not (isinstance(e, str) and e.startswith("chat:")
+                                            and e[5:].isdigit() and int(e[5:]) in officer)]
+            if kept and len(kept) != len(refs):
+                conn.execute("UPDATE memory SET evidence = ? WHERE id = ?", (json.dumps(kept), mid))
+                cleaned += 1
+    if cleaned:
+        log.info("officer_scope_slang_cleaned: memories=%d", cleaned)
+    rows = conn.execute("SELECT id, owner, evidence, scope, scope_with FROM memory "
+                        "ORDER BY id").fetchall()
+    stored = {r[0]: (r[1], json.loads(r[2]), r[3], r[4]) for r in rows}
+    hidden = restricted_channels(conn, {i: v[1] for i, v in stored.items()})
+    changed = 0
+    for mid in sorted(hidden):
+        if not all(is_officer_channel(c) for c in hidden[mid]):
+            continue
+        owner, evidence, scope, scope_with = stored[mid]
+        if (scope, scope_with) not in (("open", 0), ("private", 0)):
+            continue
+        d = derive_scope(conn, owner, evidence)
+        if d.scope_with != OFFICERS:
+            continue
+        conn.execute("UPDATE memory SET scope = ?, scope_with = ? WHERE id = ?",
+                     (d.scope, OFFICERS, mid))
+        changed += 1
+    if changed:
+        log.info("officer_scope_backfill: changed=%d", changed)
+    return changed
 
 
 def with_request(derived: Scope, scope: str, scope_with: int) -> tuple[str, int]:
