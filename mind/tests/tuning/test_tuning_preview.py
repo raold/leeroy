@@ -109,9 +109,10 @@ def test_the_preview_counts_photos(tmp_path):
         app = _app(tmp_path)
         try:
             r = await app.tuning.handle(_args("world", "", "selfies", 10))
-            week, day = r["world"]
+            week, day, channels = r["world"]
             assert (week["before"], week["after"]) == (3, 40)
             assert (day["before"], day["after"]) == (1, 14)
+            assert (channels["before"], channels["after"]) == (2, 12)
             assert app.llm.calls == []
         finally:
             app.store.close()

@@ -518,9 +518,11 @@ class DiscordTalk:
             "AND deleted IS NULL AND id != ? "
             "AND (turn IS NULL OR substr(turn,1,19)!='realism_correction:') ORDER BY id DESC LIMIT ?",
             (channel, thread, exclude, limit)).fetchall()
-        from leeroy_mind.photos.look import photo_note
-        photos = self._photos(conn, [r[2] for r in rows])
-        return [f"{self._name(a)}: {fold(t)}" + (' ' + photo_note(photos[mid]['look']) if mid in photos else '')
+        from leeroy_mind.photos.notes import by_messages
+        photos = by_messages(conn, [r[2] for r in rows],
+            uploads=getattr(self.app.engine,'photos_enabled',False),
+            members=getattr(self.app.engine,'photos_send',False))
+        return [f"{self._name(a)}: {fold(t)}" + (' ' + photos[mid] if mid in photos else '')
                 for a, t, mid in reversed(rows)]
 
     def _name(self, g: int) -> str:
