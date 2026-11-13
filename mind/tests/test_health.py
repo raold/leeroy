@@ -668,6 +668,40 @@ def test_a_realm_hold_or_unknown_root_older_than_an_hour_fails(rig):
     assert "with the mind stopped" in checks["realm-holds"].text
 
 
+def test_realm_hold_reports_released_members_and_safe_readback_codes(rig):
+    rig.action("leave_pvp", "unknown", "settled", [101, 102, 103], NOW - 7200)
+    evidence = {"job": {"state": "failed", "released": [101, 103], "readback_guid": 102, "check": "owner"}}
+    rig.db("UPDATE realm_action SET evidence=?", (json.dumps(evidence),))
+    check = rig.run()["realm-holds"]
+    assert check.status == FAIL and "1 body hold (1 members)" in check.text
+    assert "members=1:" in check.text and "readback_guid=102 check=owner" in check.text
+    assert "supports realm_forget" in check.text
+    evidence["job"].update(released=[101, 101], check="private text")
+    rig.db("UPDATE realm_action SET evidence=?", (json.dumps(evidence),))
+    text = rig.run()["realm-holds"].text
+    assert "members=3:" in text and "private text" not in text and "readback_guid=" not in text
+
+
+def test_an_unknown_leave_native_released_wholly_is_a_note_not_a_fail(rig):
+    rig.action("leave_pvp", "unknown", "settled", [101, 102, 103], NOW - 7200)
+    evidence = {"job": {"state": "failed", "released": [101, 102, 103], "readback_guid": 103, "check": "owner"}}
+    rig.db("UPDATE realm_action SET evidence=?", (json.dumps(evidence),))
+    check = rig.run()["realm-holds"]
+    assert check.status == NOTE
+    assert check.text.startswith("realm: 1 unknown root older than 1 h holds nobody (native released every member)")
+    assert f"realm release leave_pvp-{NOW - 7200} --reason reviewed_stale_hold" in check.text
+    assert "readback_guid=103 check=owner" in check.text
+    # Any other hold or unknown root still fails, the wholly released one named beside it.
+    rig.action("rearm", "unknown", "settled", [104], NOW - 5000)
+    check = rig.run()["realm-holds"]
+    assert check.status == FAIL and "1 body hold (1 members) and 1 unknown root" in check.text
+    assert "; 1 more unknown root older than 1 h holds nobody" in check.text
+    # Without valid release proof for every member it is held, as before.
+    evidence["job"]["released"] = [101, 102]
+    rig.db("UPDATE realm_action SET evidence=? WHERE kind='leave_pvp'", (json.dumps(evidence),))
+    assert "2 body holds (2 members) and 2 unknown roots" in rig.run()["realm-holds"].text
+
+
 def test_cast_without_a_persona_is_a_note(rig):
     store = Store(open_db(rig.data / "mind.db"), clock=FakeClock(CLOCK))
     try:

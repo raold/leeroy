@@ -247,7 +247,9 @@ RELEASE_HELP = (
     "root, asks for its exact id again and marks it abandoned (completed, holding nobody), with a meta "
     "receipt realm:action:abandoned:<id>. It refuses every other state, conflict included, a transport "
     "not yet settled, a WG, ack or result root and one with children. A released root that native "
-    "evidence later contradicts goes to conflict and stays held; it cannot be released again.")
+    "evidence later contradicts goes to conflict and stays held; it cannot be released again. "
+    "On restart the mind asks a supporting worldserver to forget retained ordinary leave/rearm holds. "
+    "Scopes, continuations and guild joins still require native recovery or a worldserver restart.")
 
 
 def _open_rw(root):
@@ -277,7 +279,7 @@ def _native_said(evidence):
 def _release(args, clock, root_of, ask):
     """One unknown body move released by hand: the mind stopped, its lock held throughout."""
     from leeroy_mind.app import AlreadyRunning, acquire_instance_lock
-    from .action_store import ABANDON_RECEIPT, ActionStore, ActionUnavailable, abandon_refusal, release_reason
+    from .action_store import ABANDON_RECEIPT, ActionStore, ActionUnavailable, abandon_refusal, held_manifest, release_reason
 
     if not release_reason(args.reason):
         print("realm release refused: --reason needs 1 to 200 printable characters")
@@ -299,14 +301,14 @@ def _release(args, clock, root_of, ask):
                   f"  state {record.state}: {record.result_reason or 'no result'}; "
                   f"native said {_native_said(json.loads(record.evidence))}\n"
                   f"  created {created}, {age:.1f} hours ago\n"
-                  f"  {len(record.reserved_manifest)} members held")
+                  f"  {len(held_manifest(record))} members held")
             refusal = abandon_refusal(record, children)
             if refusal:
                 print(f"realm release refused: {refusal}")
                 return 1
             if not args.yes:
-                print("Releasing frees these members in the mind's ledger; native keeps its own fence "
-                      "for any body it still holds. If native evidence later contradicts the release, "
+                print("Releasing frees these members in the mind's ledger. On restart, realm_forget also "
+                      "frees eligible native leave/rearm holds on a supporting worldserver. If native evidence later contradicts the release, "
                       "the root goes to conflict and holds them again.")
                 try:
                     typed = ask("Type the root id to release it: ")
@@ -320,7 +322,7 @@ def _release(args, clock, root_of, ask):
             except ValueError as error:  # Each message is fixed text; no value is echoed.
                 print(f"realm release refused: {error}")
                 return 1
-            print(f"realm release: released {record.command_id}; {len(record.reserved_manifest)} members free; "
+            print(f"realm release: released {record.command_id}; {len(held_manifest(record))} members free; "
                   f"receipt in meta {ABANDON_RECEIPT}{record.command_id}")
             return 0
     except AlreadyRunning:

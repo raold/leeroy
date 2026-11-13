@@ -96,6 +96,11 @@ public:
     // The operation declared a transition for this body (a shared cleanup touched it), or the
     // body's own step went pending.
     bool AwaitsTransition(std::string_view operation, std::uint32_t guid) const;
+    // Exact reservation facts, used only by ordinary leave readback. A skip ends
+    // a lease only after proving this job never changed or declared that body.
+    bool LeaveMayHaveChanged(Queued const& entry, std::uint32_t guid) const;
+    bool SkipUntouchedLeave(Queued& entry, std::uint32_t guid, std::string const& check);
+    std::pair<std::string, std::size_t> Forget(std::string const& id);
     // Active exact guild_grow only. One synchronous native add with a causal
     // receipt kept in the existing whole-manifest reservation. The original
     // identity stays immutable; no other command gains a guild-change waiver.

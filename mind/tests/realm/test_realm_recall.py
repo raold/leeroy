@@ -303,10 +303,16 @@ def test_recall_shrinks_145_through_wintergrasp_then_closure_refusals(pipeline, 
     run(scenario())
 
 
-async def _settle_all(h, leave_answer):
-    """Answer every command the recall sends until it is quiet; leaves through leave_answer."""
+async def _settle_all(h, leave_answer, *, tick_recall=False):
+    """Answer every command the recall sends until it is quiet; leaves through leave_answer.
+    tick_recall also runs, as the Realm loop does each second, the body ledger's poll and the
+    recall's own tick: a chain that waited for a queue slot goes on, and a hold seen in flight is
+    reported, so its end reaches the recall's release callback."""
     seen = set()
     for _ in range(60):
+        if tick_recall:
+            h.realm.bodies.poll()
+            h.realm.recall.tick(h.clock.now())
         await h.cycle()
         fresh = [c for c in h.app.sent if c.id not in seen]
         if not fresh:
@@ -314,6 +320,9 @@ async def _settle_all(h, leave_answer):
             fresh = [c for c in h.app.sent if c.id not in seen]
         if not fresh:
             return
+        if tick_recall:
+            await h.cycle(1.01)
+            h.realm.bodies.poll()  # the commands in flight are seen holding their bodies
         for c in fresh:
             seen.add(c.id)
             if type(c) is p.LeavePvp:
@@ -403,6 +412,109 @@ def test_a_leave_that_skipped_everyone_chains_nothing(pipeline):
             assert [type(c) for c in h.app.sent] == [p.LeavePvp]
             assert h.realm.action_store.holds() == ()
             assert h.realm.queue.leave_backed_off("raid") == {101, 102}
+    run(scenario())
+
+
+def test_a_failed_leave_sends_its_released_members_a_new_leave_never_a_rearm(pipeline, caplog):
+    # Native released 103 although its step never ran (the job failed at 102): release proof is
+    # not proof it left PvP, so it gets a new, smaller leave before any rearm or defaults.
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+            caplog.set_level("INFO", logger="leeroy_mind.realm")
+
+            async def answer(cmd):
+                if 102 in cmd.guids:
+                    await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "failed", "lfg_queue_leave_unproved",
+                                                 102, 0, released=(101, 103)))
+                else:
+                    await h.result(cmd)
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, answer, tick_recall=True)
+            kinds = [(type(c), c.guids) for c in h.app.sent]
+            first, second = (c for c in h.app.sent if type(c) is p.LeavePvp)
+            assert kinds[:2] == [(p.LeavePvp, (101, 102, 103)), (p.LeavePvp, (101, 103))]
+            assert second.id != first.id
+            assert [c.guids for c in h.app.sent if type(c) is p.Rearm] == [(101, 103)]
+            assert set().union(*(set(c.guids) for c in h.app.sent if type(c) is BotDo)) == {101, 103}
+            assert kinds.index((p.Rearm, (101, 103))) > kinds.index((p.LeavePvp, (101, 103)))
+            assert [h.guids for h in h.realm.action_store.holds()] == [frozenset({102})]
+            assert "realm_recall_released held=1 skipped=0 rest=2" in caplog.messages
+    run(scenario())
+
+
+def test_a_member_a_done_leave_skipped_gets_no_defaults_from_its_release(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+
+            async def skip_101(cmd):
+                await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "done", "", 0, 2, "", None, (101,)))
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, skip_101, tick_recall=True)
+            assert [c.guids for c in h.app.sent if type(c) is p.Rearm] == [(102, 103)]
+            assert set().union(*(set(c.guids) for c in h.app.sent if type(c) is BotDo)) == {102, 103}
+    run(scenario())
+
+
+def test_a_whole_job_leave_refusal_rearms_nobody(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+
+            async def refuse_all(cmd):
+                await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "failed", "operation_transition_unknown",
+                                             cmd.guids[0], 0, changed=False, released=cmd.guids))
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, refuse_all, tick_recall=True)
+            leave, = h.app.sent
+            record = h.realm.action_store.get(leave.id)
+            assert (record.state, record.result_ok) == ("completed", False)
+            assert h.realm.action_store.holds() == ()
+    run(scenario())
+
+
+def test_failed_leave_retries_shrink_strictly_until_everyone_is_held_or_released(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103)
+
+            async def answer(cmd):
+                # Each leave changes (and keeps) its second member; with one member left, native
+                # released everyone and the chain ends without a leave of the same size.
+                held = cmd.guids[1:2]
+                await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "failed", "cleanup_manifest_readback_changed",
+                                             cmd.guids[-1], 0, released=tuple(g for g in cmd.guids if g not in held)))
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, answer, tick_recall=True)
+            assert [c.guids for c in h.app.sent] == [(101, 102, 103), (101, 103), (101,)]
+            assert sorted(min(h.guids) for h in h.realm.action_store.holds()) == [102, 103]
+    run(scenario())
+
+
+def test_a_failed_leave_backs_off_its_skipped_and_releases_only_the_unskipped(pipeline):
+    async def scenario():
+        async with pipeline:
+            h = pipeline
+            h.cast(101, 102, 103, 104)
+
+            async def answer(cmd):
+                if 102 in cmd.guids:
+                    await h.app.event(p.RealmJob(0, cmd.id, "leave_pvp", "failed", "cleanup_manifest_readback_changed",
+                                                 104, 0, skipped=(101,), released=(101, 103, 104),
+                                                 readback_guid=102, check="owner"))
+                else:
+                    await h.result(cmd)
+            h.realm.recall.on_login(h.clock.now())
+            await _settle_all(h, answer, tick_recall=True)
+            assert [c.guids for c in h.app.sent if type(c) is p.LeavePvp] == [(101, 102, 103, 104), (103, 104)]
+            assert [c.guids for c in h.app.sent if type(c) is p.Rearm] == [(103, 104)]
+            assert h.realm.queue.leave_backed_off("raid") == {101}
+            assert [h.guids for h in h.realm.action_store.holds()] == [frozenset({102})]
     run(scenario())
 
 

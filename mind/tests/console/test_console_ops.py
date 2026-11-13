@@ -160,6 +160,25 @@ def test_realm_holds_unique_members_and_copy_text_only(store):
     assert SECRET not in json.dumps(got)
 
 
+def test_realm_hold_counts_a_failed_leaves_released_members_as_free(store):
+    add_hold(store.conn)
+    store.conn.execute("INSERT INTO realm_action(command_id,role,policy,owner,rank,kind,payload,"
+                       "reserved_manifest,guild,human,state,transport_state,evidence,created,updated) "
+                       "VALUES(?,'root','ordinary','raid',1,'leave_pvp','{}','[21,22,23]',21,1,'unknown','settled',?,?,?)",
+                       ("b"*32, json.dumps({"job": {"state": "failed", "reason": "cleanup_manifest_readback_changed",
+                                                    "released": [21, 23]}}), NOW-4000, NOW-20))
+    got = ops.realm_view(store.conn, NOW)
+    assert got["held_members"] == 3
+    assert [r["members"] for r in got["roots"]] == [2, 1]
+    # Proof that names a member outside its manifest, or a conflict, frees nobody.
+    store.conn.execute("UPDATE realm_action SET evidence=? WHERE command_id=?",
+                       (json.dumps({"job": {"state": "failed", "released": [21, 99]}}), "b"*32))
+    assert ops.realm_view(store.conn, NOW)["held_members"] == 5
+    store.conn.execute("UPDATE realm_action SET state='conflict',evidence=? WHERE command_id=?",
+                       (json.dumps({"job": {"state": "failed", "released": [21, 23]}}), "b"*32))
+    assert ops.realm_view(store.conn, NOW)["held_members"] == 5
+
+
 def test_realm_unentered_rows_do_not_claim_body_hold(store):
     add_hold(store.conn)
     store.conn.execute("UPDATE realm_action SET transport_state='not_entered',state='prepared'")

@@ -59,6 +59,7 @@ def _proof_identity(value, mode=_raid_mode) -> bool:
 
 # Native AttemptLedger: an exact count of confirmed pulls, 1..99; 0 is unknown.
 MAX_ATTEMPTS = 99
+READBACK_CHECKS = frozenset({"offline", "owner", "teleport", "exit", "battleground", "original_group", "lfg", "group", "queue"})
 
 
 def _kill_proof(value, mode) -> bool:
@@ -176,6 +177,33 @@ class LeavePvp:
 class Rearm:
     id: str
     guids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RealmForget:
+    id: str
+    origin_id: str
+
+    def __post_init__(self):
+        if not _id(self.id) or not _id(self.origin_id) or self.id == self.origin_id:
+            raise ValueError("invalid Realm forget request")
+
+
+@dataclass(frozen=True, slots=True)
+class RealmForgotten:
+    ts: int
+    id: str
+    origin_id: str
+    outcome: str
+    members: int
+
+    def __post_init__(self):
+        if (type(self.ts) is not int or not 0 <= self.ts <= 0x7FFFFFFFFFFFFFFF
+                or not _id(self.id) or not _id(self.origin_id) or self.id == self.origin_id
+                or self.outcome not in {"released", "not_held", "running", "kind", "busy:teleport"}
+                or type(self.members) is not int or not 0 <= self.members <= 150
+                or self.outcome != "released" and self.members != 0):
+            raise ValueError("invalid Realm forget receipt")
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,6 +545,9 @@ class RealmJob:
     # Members a leave or a rearm left as they were and stopped holding (one leading its battleground
     # group, one in combat); native sends the field only when there are some.
     skipped: tuple[int, ...] = ()
+    released: tuple[int, ...] = ()
+    readback_guid: int = 0
+    check: str = ""
 
     def __post_init__(self):
         if (type(self.ts) is not int or not 0 <= self.ts <= 0x7FFFFFFFFFFFFFFF
@@ -530,6 +561,13 @@ class RealmJob:
                 or any(type(g) is not int or not 0 < g <= 0xFFFFFFFF for g in self.skipped)
                 or len(set(self.skipped)) != len(self.skipped)):
             raise ValueError("invalid Realm job receipt")
+        if (type(self.released) is not tuple or len(self.released) > 150
+                or any(not _uint(g) for g in self.released) or len(set(self.released)) != len(self.released)
+                or type(self.readback_guid) is not int or not 0 <= self.readback_guid <= 0xFFFFFFFF
+                or (self.readback_guid == 0 and self.check != "")
+                or (self.readback_guid != 0 and self.check not in READBACK_CHECKS)
+                or self.state != "failed" and (self.released or self.readback_guid)):
+            raise ValueError("invalid Realm leave readback")
 
 
 @dataclass(frozen=True, slots=True)
@@ -731,6 +769,7 @@ COMMANDS: dict[str, type] = {
     "guild_readmit": GuildReadmit,
     "world_say": WorldSay,
     "get_world_roster": GetWorldRoster,
+    "realm_forget": RealmForget,
 }
 EVENTS: dict[str, type] = {
     "realm_job": RealmJob,
@@ -751,6 +790,7 @@ EVENTS: dict[str, type] = {
     "realm_dungeon_kill": RealmDungeonKill,
     "realm_achievement": RealmAchievement,
     "world_roster": WorldRoster,
+    "realm_forgotten": RealmForgotten,
 }
 NOISY = frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state"})
 

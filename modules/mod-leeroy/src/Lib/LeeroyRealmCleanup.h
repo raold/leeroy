@@ -116,6 +116,9 @@ struct GroupCleanupReadback
 enum class CleanupReadback { Ready, Pending, Unknown };
 CleanupReadback ReadGroupCleanup(std::vector<std::uint32_t> const& expected,
     std::vector<GroupCleanupReadback> const& actual);
+// Exact member behind the aggregate result; zero means a malformed/group-wide receipt.
+std::uint32_t GroupCleanupFault(std::vector<std::uint32_t> const& expected,
+    std::vector<GroupCleanupReadback> const& actual);
 struct QueueCleanupReadback
 {
     std::uint32_t guid = 0;

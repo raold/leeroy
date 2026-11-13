@@ -30,16 +30,20 @@ std::vector<std::uint32_t> SkippedMembers(Queued const& entry);
 std::vector<std::uint32_t> HeldMembers(Queued const& entry, std::uint32_t skipping = 0);
 // Whether a shared cleanup in this leave changed the member (MarkChanged, before its mutation).
 bool TouchedByCleanup(Queued const& entry, std::uint32_t guid);
+bool OwnStepChanged(Queued const& entry, std::uint32_t guid);
+void RecordOwnStepChange(Queued& entry, std::uint32_t guid);
 // A member the leave cannot take out (SkipsLeaveMember): its skip, or nothing when the member's own
-// step or a shared cleanup in this job changed it. When it is the manifest's last, the skip first
-// makes the job's final readback of the members still held, and an unproved readback stays Unknown.
+// step or a shared cleanup in this job changed it. Tick reads back the remaining members after
+// the final step/skip; a transient final readback waits without running that step again.
 std::optional<RealmStep> SkipLeaveMember(Queued& entry, std::uint32_t guid, std::string const& why);
-// The final readback a skip of the manifest's last member makes; empty for any other member.
-std::string SkipReadback(Queued const& entry, std::uint32_t guid);
 std::string PrepareOrdinaryCleanupMutation(Queued& entry, std::uint32_t guid, std::vector<BodyScope> scopes);
 // Recheck every earlier shared native mutation before releasing the operation.
-// A nonempty result retains the admitted manifest through Unknown. The last
-// step (`skipping` when that step skips its member) reads back every held member.
-std::string VerifyCleanupReceipts(Queued const& entry, std::uint32_t skipping = 0);
+// A nonempty result retains affected bodies through Unknown. Tick separately
+// reads back every held member after the final step or skip.
+std::string VerifyCleanupReceipts(Queued& entry, std::uint32_t skipping = 0);
+// Runs after the last member's step/skip, without replaying that step while waiting.
+RealmStep FinalLeaveReadback(Queued& entry);
+std::string LeaveReadbackCheck(Queued const& entry, std::uint32_t guid);
+std::string LeaveReadbackFault(Queued& entry, std::uint32_t guid, std::string const& check, std::string reason);
 }
 #endif

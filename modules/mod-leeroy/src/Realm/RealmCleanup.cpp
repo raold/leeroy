@@ -5,6 +5,8 @@
 #include "RealmLfgReceipts.h"
 #include "LeeroyRealmCleanup.h"
 #include "LeeroyRealmFailure.h"
+#include "LeeroyRealmRelease.h"
+#include "Log.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
@@ -237,7 +239,7 @@ std::vector<std::uint32_t> ReceiptGuids(Json const& receipt, bool remainingOnly 
         if (!remainingOnly || !member.at("left").get<bool>()) members.push_back(member.at("guid").get<std::uint32_t>());
     return members;
 }
-CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
+CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt, std::uint32_t* failedGuid = nullptr)
 {
     std::vector<std::uint32_t> expected;
     std::vector<GroupCleanupReadback> actual;
@@ -258,6 +260,7 @@ CleanupReadback ReadLeftMembers(Queued const& entry, Json const& receipt)
             player && player->IsBeingTeleported(), player && teleports && (PortMatches(player, destination) || (delayedExit && arrived)),
             arrived, delayedExit});
     }
+    if (failedGuid) *failedGuid = expected.empty() ? 0 : GroupCleanupFault(expected, actual);
     return expected.empty() ? CleanupReadback::Ready : ReadGroupCleanup(expected, actual);
 }
 }
@@ -289,11 +292,17 @@ bool TouchedByCleanup(Queued const& entry, std::uint32_t guid)
         && std::find(changed->begin(), changed->end(), Json(guid)) != changed->end();
 }
 
-std::string SkipReadback(Queued const& entry, std::uint32_t guid)
+bool OwnStepChanged(Queued const& entry, std::uint32_t guid)
 {
-    return entry.cursor + 1 == entry.guids.size() ? VerifyCleanupReceipts(entry, guid) : "";
+    auto const changed = entry.payload.find("changed_guids");
+    return changed != entry.payload.end() && changed->is_array()
+        && std::find(changed->begin(), changed->end(), Json(guid)) != changed->end();
 }
-
+void RecordOwnStepChange(Queued& entry, std::uint32_t guid)
+{
+    if (!entry.payload.contains("changed_guids")) entry.payload["changed_guids"] = Json::array();
+    if (!OwnStepChanged(entry, guid)) entry.payload["changed_guids"].push_back(guid);
+}
 std::optional<RealmStep> SkipLeaveMember(Queued& entry, std::uint32_t guid, std::string const& why)
 {
     // A step that left a queue, began an exit or recorded a group receipt for its member is no
@@ -302,8 +311,6 @@ std::optional<RealmStep> SkipLeaveMember(Queued& entry, std::uint32_t guid, std:
     bool const stepChanged = started && (entry.payload.at("step").value("changed", false)
         || entry.payload.at("step").contains("receipt"));
     if (!SkipsLeaveMember(why, stepChanged, TouchedByCleanup(entry, guid))) return std::nullopt;
-    if (auto failed = SkipReadback(entry, guid); !failed.empty())
-        return started ? Result(entry, StepState::Unknown, std::move(failed)) : RealmStep{StepState::Unknown, std::move(failed)};
     entry.payload.erase("step");
     RealmStep result{StepState::Skipped, why};
     result.unchanged = true;
@@ -376,7 +383,12 @@ CleanupFault OrdinaryCleanupFault(Queued const& entry, std::uint32_t skipping)
     auto const members = RecheckedMembers(entry.guids, entry.cursor, SkippedMembers(entry), skipping,
         [&](std::uint32_t guid) { return module.AwaitsTransition(entry.id, guid) || TouchedByCleanup(entry, guid); });
     for (auto guid : members)
+    {
+        // A completed no-op can have changed independently since its step. Its
+        // final readback will skip it, not fail a later member's mutation.
+        if (guid != entry.guids[entry.cursor] && !module.LeaveMayHaveChanged(entry, guid)) continue;
         if (auto why = MemberCleanupFault(entry, guid); !why.empty()) return {std::move(why), guid};
+    }
     return {};
 }
 
@@ -462,7 +474,17 @@ RealmStep LeaveNativeQueue(Queued& entry, std::uint32_t guid, std::uint32_t slot
             player && player->GetBattlegroundQueueIndex(type) >= PLAYER_MAX_BATTLEGROUND_QUEUES,
             player && !player->IsInvitedForBattlegroundQueueType(type) && !queue.IsPlayerInvitedToRatedArena(PlayerGuid(member)), slotsPreserved});
     }
-    if (!ReadQueueCleanup(affected, readback)) return Result(entry, StepState::Unknown, "queue_leave_unproved");
+    if (!ReadQueueCleanup(affected, readback))
+    {
+        for (auto const& actual : readback)
+            if (!ReadQueueCleanup({actual.guid}, {actual}))
+            {
+                auto check = LeaveReadbackCheck(entry, actual.guid);
+                return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, actual.guid,
+                    check.empty() ? "queue" : check, "queue_leave_unproved"));
+            }
+        return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, guid, "queue", "queue_leave_unproved"));
+    }
     WorldPacket status;
     sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, templateBg, static_cast<uint8>(slot), STATUS_NONE, 0, 0, 0, TEAM_NEUTRAL);
     bot->SendDirectMessage(&status);
@@ -502,10 +524,16 @@ RealmStep LeaveObservedLfgApplicants(Queued& entry, std::uint32_t guid)
     entry.payload["step"]["changed"] = true;
     MarkChanged(entry, members);
     if (!entry.payload.contains("lfg_applicant_cleanup_receipts")) entry.payload["lfg_applicant_cleanup_receipts"] = Json::array();
-    entry.payload["lfg_applicant_cleanup_receipts"].push_back({{"group", receipt->group}, {"join", receipt->join}});
+    entry.payload["lfg_applicant_cleanup_receipts"].push_back({{"group", receipt->group}, {"join", receipt->join}, {"members", members}});
     CancelLfgApplicants(*receipt);
-    if (!VerifyLfgApplicantCleanup(entry.id, receipt->group, receipt->join))
-        return Result(entry, StepState::Unknown, "lfg_applicant_leave_unproved");
+    std::uint32_t failedGuid = 0;
+    if (!VerifyLfgApplicantCleanup(entry.id, receipt->group, receipt->join, &failedGuid))
+    {
+        if (!failedGuid) failedGuid = members.front(); // group-wide receipt failure
+        auto check = LeaveReadbackCheck(entry, failedGuid);
+        return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, failedGuid,
+            check.empty() ? "lfg" : check, "lfg_applicant_leave_unproved"));
+    }
     return Result(entry, StepState::Pending);
 }
 
@@ -553,14 +581,20 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
     }
     auto& receipt = entry.payload["lfg_cleanup_receipts"].at(state.at("receipt").get<std::size_t>());
     CurrentScopes(state, receipt, guid);
-    auto const left = ReadLeftMembers(entry, receipt);
-    if (left == CleanupReadback::Unknown) return Failure(entry, "lfg_member_cleanup_unproved");
+    std::uint32_t failedGuid = 0;
+    auto const left = ReadLeftMembers(entry, receipt, &failedGuid);
+    if (left == CleanupReadback::Unknown)
+    {
+        if (!failedGuid) failedGuid = guid;
+        auto check = LeaveReadbackCheck(entry, failedGuid);
+        return Failure(entry, LeaveReadbackFault(entry, failedGuid, check.empty() ? "lfg" : check, "lfg_member_cleanup_unproved"));
+    }
     if (left == CleanupReadback::Pending) return Result(entry, StepState::Pending);
     auto const remaining = ReceiptGuids(receipt, true);
     auto* group = Lookup(receipt.at("group").get<std::uint64_t>());
     if (remaining.empty())
     {
-        if (group) return Failure(entry, "lfg_group_disband_unproved");
+        if (group) return Failure(entry, LeaveReadbackFault(entry, guid, "group", "lfg_group_disband_unproved"));
         receipt["complete"] = true;
         state["stage"] = "queues";
         return Result(entry, StepState::Pending);
@@ -620,22 +654,74 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
         if (!player || !module.ValidateOwnedBody(memberGuid, entry.id).empty() || player->GetGroup() || player->GetOriginalGroup()
             || sLFGMgr->GetState(player->GetGUID()) != lfg::LFG_STATE_NONE || sLFGMgr->GetGroup(player->GetGUID())
             || !EntryMatches(player, member) || !At(player, Load(member.at("origin")), false))
-            return Result(entry, StepState::Unknown, "lfg_survivor_exit_unproved");
+        {
+            auto check = LeaveReadbackCheck(entry, memberGuid);
+            return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, memberGuid,
+                check.empty() ? "lfg" : check, "lfg_survivor_exit_unproved"));
+        }
         if (!player->TeleportToEntryPoint()) return Result(entry, StepState::Unknown, "lfg_survivor_worldport_refused");
     }
-    if (ReadLeftMembers(entry, receipt) == CleanupReadback::Unknown)
-        return Result(entry, StepState::Unknown, "lfg_member_cleanup_unproved");
+    if (ReadLeftMembers(entry, receipt, &failedGuid) == CleanupReadback::Unknown)
+    {
+        if (!failedGuid) failedGuid = guid;
+        auto check = LeaveReadbackCheck(entry, failedGuid);
+        return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, failedGuid,
+            check.empty() ? "lfg" : check, "lfg_member_cleanup_unproved"));
+    }
     return Result(entry, StepState::Pending);
 }
 
-std::string VerifyCleanupReceipts(Queued const& entry, std::uint32_t skipping)
+std::string LeaveReadbackFault(Queued& entry, std::uint32_t guid, std::string const& check, std::string reason)
+{
+    // Only a fixed code names the member (the mind refuses any other); the reason stays the step's.
+    if (!guid || !ReadbackCheck(check)) return reason;
+    entry.payload["readback_guid"] = guid;
+    entry.payload["readback_check"] = check;
+    LOG_INFO("module.leeroy", "mod-leeroy: realm leave_pvp {} readback_changed guid={} check={}", entry.id, guid, check);
+    return reason;
+}
+std::string LeaveReadbackCheck(Queued const& entry, std::uint32_t guid)
+{
+    auto* player = ObjectAccessor::FindConnectedPlayer(PlayerGuid(guid));
+    if (!player || !player->GetSession()) return "offline";
+    // A worldport can temporarily remove the same Player from the world. Wait
+    // before applying the ordinary online/lease checks, without changing it.
+    if (player->IsBeingTeleported()) return "teleport";
+    if (player->GetDelayedOperations() & ExitRestoreMask) return "exit";
+    if (!FindOnline(guid)) return "offline";
+    if (!RealmModule::Instance().ValidateOwnedBody(guid, entry.id).empty()) return "owner";
+    if (player->InBattleground()) return "battleground";
+    if (player->GetOriginalGroup()) return "original_group";
+    if (sLFGMgr->GetState(PlayerGuid(guid)) != lfg::LFG_STATE_NONE) return "lfg";
+    if (player->GetGroup() && (player->GetGroup()->isLFGGroup() || player->GetGroup()->isBGGroup() || player->GetGroup()->isBFGroup())) return "group";
+    for (uint32 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
+        if (player->GetBattlegroundQueueTypeId(slot) != BATTLEGROUND_QUEUE_NONE) return "queue";
+    return "";
+}
+
+std::string VerifyCleanupReceipts(Queued& entry, std::uint32_t skipping)
 {
     auto& module = RealmModule::Instance();
-    if (auto why = OrdinaryCleanupReason(entry, skipping); !why.empty()) return why;
+    if (auto fault = OrdinaryCleanupFault(entry, skipping); !fault.reason.empty())
+    {
+        // The final readback's last member is rechecked even when untouched: a fault the readback
+        // codes do not see (a Wintergrasp queue, a training fence) is named by its own reason.
+        auto check = LeaveReadbackCheck(entry, fault.guid);
+        if (check.empty()) check = std::string(CleanupFaultCheck(fault.reason));
+        return LeaveReadbackFault(entry, fault.guid, check, fault.reason);
+    }
     if (entry.payload.contains("lfg_applicant_cleanup_receipts"))
         for (auto const& receipt : entry.payload.at("lfg_applicant_cleanup_receipts"))
-            if (!VerifyLfgApplicantCleanup(entry.id, receipt.at("group").get<std::uint64_t>(), receipt.at("join").get<std::uint64_t>()))
-                return "lfg_applicant_cleanup_readback_changed";
+        {
+            std::uint32_t failedGuid = 0;
+            if (!VerifyLfgApplicantCleanup(entry.id, receipt.at("group").get<std::uint64_t>(), receipt.at("join").get<std::uint64_t>(), &failedGuid))
+            {
+                // Missing/group-wide receipt: every affected member lacks that proof.
+                if (!failedGuid) failedGuid = receipt.at("members").at(0).get<std::uint32_t>();
+                auto check = LeaveReadbackCheck(entry, failedGuid);
+                return LeaveReadbackFault(entry, failedGuid, check.empty() ? "lfg" : check, "lfg_applicant_cleanup_readback_changed");
+            }
+        }
     if (entry.payload.contains("queue_cleanup_receipts"))
         for (auto const& receipt : entry.payload.at("queue_cleanup_receipts"))
         {
@@ -652,26 +738,47 @@ std::string VerifyCleanupReceipts(Queued const& entry, std::uint32_t skipping)
                     player && player->GetBattlegroundQueueIndex(type) >= PLAYER_MAX_BATTLEGROUND_QUEUES,
                     player && !player->IsInvitedForBattlegroundQueueType(type) && !queue.IsPlayerInvitedToRatedArena(PlayerGuid(guid)), true});
             }
-            if (!ReadQueueCleanup(members, readback)) return "queue_cleanup_readback_changed";
+            if (!ReadQueueCleanup(members, readback))
+            {
+                for (auto const& actual : readback)
+                    if (!ReadQueueCleanup({actual.guid}, {actual}))
+                        return LeaveReadbackFault(entry, actual.guid, "queue", "queue_cleanup_readback_changed");
+                return LeaveReadbackFault(entry, members.at(0), "queue", "queue_cleanup_readback_changed");
+            }
         }
     if (entry.payload.contains("lfg_cleanup_receipts"))
         for (auto const& receipt : entry.payload.at("lfg_cleanup_receipts"))
-            if (!receipt.at("complete").get<bool>() || Lookup(receipt.at("group").get<std::uint64_t>())
-                || ReadLeftMembers(entry, receipt) != CleanupReadback::Ready)
-                return "lfg_cleanup_readback_changed";
-    if (entry.cursor + 1 == entry.guids.size())
-        for (auto guid : HeldMembers(entry, skipping))
         {
-            auto* player = FindOnline(guid);
-            if (!player || !module.ValidateOwnedBody(guid, entry.id).empty() || player->IsBeingTeleported()
-                || (player->GetDelayedOperations() & ExitRestoreMask) || player->InBattleground() || player->GetOriginalGroup()
-                || sLFGMgr->GetState(PlayerGuid(guid)) != lfg::LFG_STATE_NONE
-                || (player->GetGroup() && (player->GetGroup()->isLFGGroup() || player->GetGroup()->isBGGroup() || player->GetGroup()->isBFGroup())))
-                return "cleanup_manifest_readback_changed";
-            for (uint32 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
-                if (player->GetBattlegroundQueueTypeId(slot) != BATTLEGROUND_QUEUE_NONE)
-                    return "cleanup_manifest_queue_changed";
+            std::uint32_t failedGuid = 0;
+            auto const readback = ReadLeftMembers(entry, receipt, &failedGuid);
+            if (!receipt.at("complete").get<bool>() || Lookup(receipt.at("group").get<std::uint64_t>())
+                || readback != CleanupReadback::Ready)
+            {
+                // Only the group-wide receipt/disband failure uses its first affected member.
+                if (!failedGuid) failedGuid = receipt.at("members").at(0).at("guid").get<std::uint32_t>();
+                auto check = LeaveReadbackCheck(entry, failedGuid);
+                return LeaveReadbackFault(entry, failedGuid, check.empty() ? "lfg" : check, "lfg_cleanup_readback_changed");
+            }
         }
     return "";
+}
+
+RealmStep FinalLeaveReadback(Queued& entry)
+{
+    auto& module = RealmModule::Instance();
+    bool const expired = NowMs() - entry.payload.at("final_readback").get<std::uint64_t>() >= OperationWaitMs;
+    for (auto guid : HeldMembers(entry))
+    {
+        auto const check = LeaveReadbackCheck(entry, guid);
+        auto const decision = JudgeLeaveReadback(check, {module.LeaveMayHaveChanged(entry, guid)}, expired);
+        if (decision == LeaveReadback::Pending) return {StepState::Pending};
+        if (decision == LeaveReadback::Ready) continue;
+        auto const reason = LeaveReadbackFault(entry, guid, check,
+            check == "queue" ? "cleanup_manifest_queue_changed" : "cleanup_manifest_readback_changed");
+        if (decision != LeaveReadback::Skip || !module.SkipUntouchedLeave(entry, guid, check))
+            return {StepState::Unknown, reason};
+    }
+    if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return {StepState::Unknown, std::move(why)};
+    return {StepState::Complete};
 }
 }
