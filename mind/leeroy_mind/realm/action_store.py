@@ -173,6 +173,15 @@ def _restart_kind(r):
                  or r.policy == "defaults" and r.kind == "bot_do"))
 
 
+def _restart_eligible(r, children):
+    ev = json.loads(r.evidence)
+    return (_restart_kind(r) and r.transport_state == "settled" and not children
+            and bool(r.reserved_manifest) and not ev.get("conflict")
+            and (r.state == "unknown" or r.state == "dispatched"
+                 and ev.get("ack", {}).get("ok") is True
+                 and not any(key in ev for key in ("job", "bot"))))
+
+
 def _step_refused(r, job) -> bool:
     """Native refused one body of this command before it changed it, and released them all."""
     return (r.role == "root" and r.policy == "ordinary" and job.get("changed") is None
@@ -389,7 +398,7 @@ class ActionStore:
         if type(ev) is not dict or document(ev, limit=32768) != r.evidence: raise ValueError("invalid action evidence")
         allowed = {"ack", "job", "bot", "enrollment_job", "origin_failure", "status", "binding", "query_id",
                    "last_query", "cleanup_id", "cleanup_ids", "cleanup_admitted", "canceled", "dispatch_revision", "conflict", "failed_at",
-                   "abandoned", "skipped_at", "restart_released", "restart_started_ms"}
+                   "abandoned", "skipped_at", "restart_released", "restart_started_ms", "dispatch_started_ms"}
         if not set(ev) <= allowed: raise ValueError("invalid action evidence keys")
         if legacy and not set(ev) <= {"ack", "conflict", "failed_at"}:
             raise ValueError("invalid historical announcement evidence")
@@ -426,11 +435,17 @@ class ActionStore:
         if "abandoned" in ev:
             _now(ev["abandoned"])
             if r.role != "root" or r.policy not in {"ordinary", "defaults"}: raise ValueError("invalid abandonment")
+        if "dispatch_started_ms" in ev:
+            integer(ev["dispatch_started_ms"], 1, 0x7FFFFFFFFFFFFFFF)
+            if r.dispatched is None or r.transport_state == "not_entered":
+                raise ValueError("invalid native dispatch identity")
         if "restart_released" in ev or "restart_started_ms" in ev:
             _now(ev.get("restart_released"))
             integer(ev.get("restart_started_ms"), 1, 0x7FFFFFFFFFFFFFFF)
             if (not _restart_kind(r) or r.dispatched is None
-                    or ev["restart_started_ms"] <= r.dispatched * 1000
+                    # Older completed releases predate dispatch identity. Keep
+                    # reading their original proof; never create another one.
+                    or ev["restart_started_ms"] <= ev.get("dispatch_started_ms", r.dispatched * 1000)
                     or r.transport_state != "settled"
                     or self.conn.execute("SELECT 1 FROM realm_action WHERE parent_id=?", (r.command_id,)).fetchone()):
                 raise ValueError("invalid native restart release")
@@ -633,8 +648,9 @@ class ActionStore:
             if self.get(spec.command_id) is not None: raise ValueError("action identity already enrolled")
             return self._insert(spec, now)
 
-    def begin_dispatch(self, command_id, *, payload, process_id, connection_epoch, now):
+    def begin_dispatch(self, command_id, *, payload, process_id, connection_epoch, now, started_ms=0):
         now = _now(now); text(process_id, 1, 256); integer(connection_epoch, 1, U64)
+        integer(started_ms, 0, 0x7FFFFFFFFFFFFFFF)
         with self.conn:
             r = self.get(command_id)
             if r is None or r.state != "prepared" or r.payload != payload: raise ValueError("invalid action dispatch")
@@ -656,13 +672,22 @@ class ActionStore:
                 child_data = json.loads(r.evidence)
                 child_data["dispatch_revision"] = data["status"]["revision"]
                 r = replace(r, evidence=document(child_data, limit=32768))
+            if started_ms:
+                r = replace(r, evidence=document({**json.loads(r.evidence), "dispatch_started_ms": started_ms}, limit=32768))
             return self._save(replace(r, state="dispatched", transport_state="inflight", process_id=process_id,
                                       connection_epoch=connection_epoch, updated=now, dispatched=now))
 
     def _transition(self, old, new):
         ev = json.loads(new.evidence)
         value = next((ev[key]["value"] for key in ("job", "enrollment_job") if key in ev), 0)
-        return Transition(True, old != new, new.command_id, old.result_ok is None and new.result_ok is not None,
+        # A native terminal failure may retain unknown ownership. Its actual
+        # result still replaces the transport notice, exactly once.
+        native_terminal = any(ev.get(key, {}).get("state") in {"done", "failed"}
+                              for key in ("job", "bot", "origin_failure"))
+        ready = (old.result_ok is None and new.result_ok is not None
+                 or old.result_reason == "transport_unknown" and new.result_reason != "transport_unknown"
+                 and (new.state in TERMINAL or native_terminal))
+        return Transition(True, old != new, new.command_id, ready,
                           new.result_ok, new.result_reason, value)
 
     def predispatch_failed(self, command_id, *, reason, now):
@@ -995,11 +1020,12 @@ class ActionStore:
         with self.conn:
             self.holds()  # unreadable or inconsistent history fails closed
             for old in self.unresolved():
-                if (not _restart_kind(old) or (old.guild, old.human) != (guild, human)
-                        or old.dispatched is None or started_ms <= old.dispatched * 1000
-                        or abandon_refusal(old, self._records("parent_id=?", (old.command_id,)))):
-                    continue
                 ev = json.loads(old.evidence)
+                dispatched_start = ev.get("dispatch_started_ms")
+                if ((old.guild, old.human) != (guild, human)
+                        or not dispatched_start or started_ms <= dispatched_start
+                        or not _restart_eligible(old, self._records("parent_id=?", (old.command_id,)))):
+                    continue
                 receipt = {"started_ms": started_ms, "at": now, "before": asdict(old)}
                 self.conn.execute("INSERT INTO meta(key,value) VALUES (?,?)",
                                   (RESTART_RECEIPT + old.command_id, document(receipt)))

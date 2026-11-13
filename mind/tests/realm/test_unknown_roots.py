@@ -77,10 +77,17 @@ def test_mind_recovery_reduces_stored_terminal_even_without_an_ack(ledger, alrea
     assert not ledger.holds()
 
 
+NOW = 1_794_000_000
+START = (NOW - 100) * 1000
+NEXT_START = (NOW + 15) * 1000
+
+
 def unknown(ledger, cmd=None):
     cmd = cmd or p.Rearm('root', (101,102,103,104,105))
-    dispatch(ledger, prepare(ledger, cmd), now=10)
-    ledger.observe_send_error(cmd.id, 'ConnectionError', now=11)
+    record = prepare(ledger, cmd, now=NOW)
+    ledger.begin_dispatch(cmd.id, payload=record.payload, process_id="process",
+                          connection_epoch=1, now=NOW + 10, started_ms=START)
+    ledger.observe_send_error(cmd.id, 'ConnectionError', now=NOW + 11)
     return ledger.get(cmd.id)
 
 
@@ -89,23 +96,23 @@ def test_later_native_start_releases_once_keeps_prior_row_and_never_prunes(ledge
     cmd = {'rearm':p.Rearm('root',(101,102)), 'leave_pvp':p.LeavePvp('root',(101,102)),
            'bot_do':BotDo('root',(101,102),'nc','-bg,-lfg')}[kind]
     before = unknown(ledger,cmd)
-    assert not ledger.restart_release(started_ms=10000, guild=50, human=1, now=20)
+    assert not ledger.restart_release(started_ms=START, guild=50, human=1, now=NOW + 20)
     caplog.set_level(logging.INFO)
-    assert ledger.restart_release(started_ms=15000, guild=50, human=1, now=20) == ('root',)
+    assert ledger.restart_release(started_ms=NEXT_START, guild=50, human=1, now=NOW + 20) == ('root',)
     row = ledger.get('root')
     assert (row.state,row.result_ok,row.result_reason) == ('completed',False,'restart_released')
     assert not ledger.holds()
     receipt = json.loads(ledger.conn.execute("SELECT value FROM meta WHERE key='realm:action:restart_released:root'").fetchone()[0])
-    assert receipt['started_ms'] == 15000 and receipt['at'] == 20
+    assert receipt['started_ms'] == NEXT_START and receipt['at'] == NOW + 20
     assert receipt['before'] == json.loads(json.dumps(asdict(before)))
-    assert not ledger.restart_release(started_ms=15000, guild=50, human=1, now=21)
+    assert not ledger.restart_release(started_ms=NEXT_START, guild=50, human=1, now=NOW + 21)
     assert caplog.text.count('realm_action_restart_released') == 1
-    assert ledger.prune(keep=0, now=100000) == 0
+    assert ledger.prune(keep=0, now=NOW + 100000) == 0
     assert ledger.get('root').result_reason == 'restart_released'
     h = Harness(ledger)
-    assert not h.queue._backed_off('realm_day',kind,(101,102),21)
+    assert not h.queue._backed_off('realm_day',kind,(101,102),NOW + 21)
     with pytest.raises(ValueError,match='only an unknown root'):
-        ledger.abandon('root',reason='fixture',now=22)
+        ledger.abandon('root',reason='fixture',now=NOW + 22)
 
 
 @pytest.mark.parametrize('cmd', [p.WgJoin('root',(101,102)), p.RealmActors('root',(101,102)),
@@ -113,47 +120,50 @@ def test_later_native_start_releases_once_keeps_prior_row_and_never_prunes(ledge
     p.RealmMove('root',101,'home'),p.Duel('root',101,102)])
 def test_restart_excludes_wg_ack_result_grow_scope_and_continuation_kinds(ledger,cmd):
     before = unknown(ledger,cmd)
-    assert not ledger.restart_release(started_ms=15000,guild=50,human=1,now=20)
+    assert not ledger.restart_release(started_ms=NEXT_START,guild=50,human=1,now=NOW + 20)
     assert ledger.get('root') == before
 
 
 @pytest.mark.parametrize('field,value', [('guild',51),('human',2),('started_ms',0)])
 def test_restart_does_not_use_an_unrelated_or_absent_hello(ledger,field,value):
     before=unknown(ledger)
-    args=dict(started_ms=15000,guild=50,human=1,now=20)
+    args=dict(started_ms=NEXT_START,guild=50,human=1,now=NOW + 20)
     args[field]=value
     assert not ledger.restart_release(**args)
     assert ledger.get('root') == before
 
 
 def test_restart_waits_for_transport_settlement_and_conflict_stays_held(ledger):
-    dispatch(ledger,prepare(ledger,p.Rearm('root',(101,102))),now=10)
-    assert not ledger.restart_release(started_ms=15000,guild=50,human=1,now=20)
-    ledger.observe_send_error('root','AckTimeout',now=21)
-    ledger.observe_ack(Ack(0,'root',True,''),now=22)
-    ledger.observe_ack(Ack(0,'root',False,'realm_off'),now=23)
+    row = prepare(ledger,p.Rearm('root',(101,102)),now=NOW)
+    ledger.begin_dispatch('root',payload=row.payload,process_id='process',connection_epoch=1,
+                          now=NOW + 10,started_ms=START)
+    assert not ledger.restart_release(started_ms=NEXT_START,guild=50,human=1,now=NOW + 20)
+    ledger.observe_send_error('root','AckTimeout',now=NOW + 21)
+    ledger.observe_ack(Ack(0,'root',True,''),now=NOW + 22)
+    ledger.observe_ack(Ack(0,'root',False,'realm_off'),now=NOW + 23)
     assert ledger.get('root').state == 'conflict'
-    assert not ledger.restart_release(started_ms=15000,guild=50,human=1,now=24)
+    assert not ledger.restart_release(started_ms=NEXT_START,guild=50,human=1,now=NOW + 24)
     assert ledger.holds()
 
 
-def test_queue_hello_releases_before_recall_and_health_and_ops_no_longer_report_a_hold(ledger):
-    from leeroy_mind.health import _realm_holds, OK
+def test_queue_hello_release_removes_health_and_ops_hold(ledger):
+    from leeroy_mind.health import _realm_holds, FAIL, OK
     from leeroy_mind.console.opsview import realm_view
     unknown(ledger)
     h=Harness(ledger)
-    h.clock.value=4000
-    h.queue.on_hello(Hello(0,'fixture','1',50,1,started_ms=15000))
+    h.clock.value=NOW + 4000
+    assert _realm_holds(ledger.conn,NOW + 4000).status == FAIL
+    h.queue.on_hello(Hello(0,'fixture','1',50,1,started_ms=NEXT_START))
     assert not ledger.holds() and not ledger.unresolved()
-    assert _realm_holds(ledger.conn,4000).status == OK
-    view = realm_view(ledger.conn,4000)
+    assert _realm_holds(ledger.conn,NOW + 4000).status == OK
+    view = realm_view(ledger.conn,NOW + 4000)
     assert view['held_members'] == 0 and view['roots'] == []
 
 
 def test_cli_explains_that_restart_released_root_is_no_longer_unknown(ledger,tmp_path,clock,capsys):
     from leeroy_mind.realm.cli import realm_main
     unknown(ledger)
-    ledger.restart_release(started_ms=15000,guild=50,human=1,now=20)
+    ledger.restart_release(started_ms=NEXT_START,guild=50,human=1,now=NOW + 20)
     assert realm_main(['release','root','--reason','fixture','--yes','--data-dir',str(tmp_path)],clock=clock) == 1
     output = capsys.readouterr().out
     assert 'only an unknown root can be released; this one is completed' in output
@@ -162,22 +172,22 @@ def test_cli_explains_that_restart_released_root_is_no_longer_unknown(ledger,tmp
 
 def test_late_terminal_cannot_remove_restart_receipt_or_reintroduce_a_hold(ledger):
     unknown(ledger,p.Rearm('root',(101,102)))
-    ledger.restart_release(started_ms=15000,guild=50,human=1,now=20)
-    ledger.observe_realm_job(p.RealmJob(0,'root','rearm','done','',0,0),now=21)
-    ledger.observe_ack(Ack(0,'root',True,''),now=22)
+    ledger.restart_release(started_ms=NEXT_START,guild=50,human=1,now=NOW + 20)
+    ledger.observe_realm_job(p.RealmJob(0,'root','rearm','done','',0,0),now=NOW + 21)
+    ledger.observe_ack(Ack(0,'root',True,''),now=NOW + 22)
     assert not ledger.holds() and ledger.get('root').result_reason == 'restart_released'
-    ledger.observe_ack(Ack(0,'root',False,'realm_off'),now=23)
+    ledger.observe_ack(Ack(0,'root',False,'realm_off'),now=NOW + 23)
     assert ledger.get('root').state == 'conflict' and ledger.holds()
 
 
 def test_a_child_on_an_ordinary_root_is_inconsistent_and_cannot_be_released(ledger):
     from leeroy_mind.realm.action_store import ActionUnavailable
     before = unknown(ledger)
-    dispatch(ledger,prepare(ledger,p.Rearm('child',(101,102))),now=10)
+    dispatch(ledger,prepare(ledger,p.Rearm('child',(101,102))),now=NOW + 10)
     with ledger.conn:
         ledger.conn.execute("UPDATE realm_action SET parent_id='root',role='cleanup' WHERE command_id='child'")
     with pytest.raises(ActionUnavailable):
-        ledger.restart_release(started_ms=15000,guild=50,human=1,now=20)
+        ledger.restart_release(started_ms=NEXT_START,guild=50,human=1,now=NOW + 20)
     assert ledger.get('root') == before
 
 
@@ -187,6 +197,6 @@ def test_a_failing_restart_release_still_lets_the_hello_through(ledger, caplog, 
     monkeypatch.setattr(ledger, 'restart_release', lambda **kw: (_ for _ in ()).throw(ValueError('bad')))
     monkeypatch.setattr(h.queue, 'context_changed', lambda: seen.append(True))
     with caplog.at_level(logging.WARNING):
-        h.queue.on_hello(Hello(0,'fixture','1',50,1,started_ms=15000))
+        h.queue.on_hello(Hello(0,'fixture','1',50,1,started_ms=NEXT_START))
     assert seen == [True]
     assert 'realm_action_restart_release_failed: ValueError' in caplog.text
