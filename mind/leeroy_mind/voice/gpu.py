@@ -23,6 +23,7 @@ def _listed(names: set[str], model: str) -> bool:
 class OllamaPins:
     def __init__(self, url: str):
         self.url = url.rstrip("/")
+        self.gpu_gate = None
 
     async def pin(self, live: str, embed: str) -> None:
         await self._keep(live, embed, -1)
@@ -33,6 +34,8 @@ class OllamaPins:
     async def _keep(self, live: str, embed: str, keep_alive) -> None:
         """Raises OSError (urllib's errors are) when Ollama fails a call; does nothing when
         /api/ps cannot be read or does not list a model."""
+        if self.gpu_gate is not None:
+            self.gpu_gate.check()
         names = await asyncio.to_thread(self._loaded)
         if names is None:
             return
@@ -53,6 +56,8 @@ class OllamaPins:
             return None
 
     def _post(self, path: str, body: dict) -> None:
+        if self.gpu_gate is not None:
+            self.gpu_gate.check()
         request = urllib.request.Request(
             self.url + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=TIMEOUT_S) as reply:

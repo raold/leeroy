@@ -1,3 +1,4 @@
+import { pausedWords } from "./gpumodel.mjs";
 export const SECTIONS = ['raid','waiting','loot','bank','kit','week','guild'];
 export const INTRO = 'Your raid, replies and supplies at a glance. Read-only; nothing here sends a message or changes the game.';
 const TITLES = {raid:'Raid tonight',waiting:'Waiting for you',loot:'Due an item',bank:'Bank shortages',kit:'Your kit',week:'This week',guild:'Guild now'};
@@ -41,6 +42,7 @@ export function cardModel(name, value) {
     if (!lines.length) { lines.push(row('No events on the calendar in the next seven days.','#calendar')); }
   } else if (name === 'guild') {
     lines.push(row(p.human_online===true ? 'You are in game.' : p.human_online===false ? 'You are out of game.' : 'Your game presence is unknown.'));
+    if (p.gpu?.paused) { lines.push(row(pausedWords(p.gpu,at),'#ops')); }
     lines.push(row('Cast online: '+count(p.cast_online)));
     lines.push(row(p.night ? 'Last finished night: '+String(p.night.date)+' · '+count(p.night.failed_units)+' failed units' : 'No finished night is recorded.','#ops'));
   }

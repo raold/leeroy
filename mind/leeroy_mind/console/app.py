@@ -368,6 +368,8 @@ class ConsoleApp:
         self._strip: dict = {}
         self._typing: list[dict] = []  # who is typing, from the mind's status (_read_typing)
         self._mind_snapshot, self._mind_snapshot_at = None, float('-inf')
+        self._gpu_state = {'paused': False, 'since': None, 'loaded': [], 'holders': [],
+                           'refusal': None, 'enabled': controls.enabled, 'mind_down': True}
         self._tonight_seen = float('-inf')
         self._feed_last = 0
         self._discord_last: int | None = None  # newest Discord message id the pass has seen
@@ -393,7 +395,7 @@ class ConsoleApp:
                 "game": {"state": self.game.state, "reason": self.game.reason,
                          "since": self.game.since},
                 "voice": {"enabled": self.s.voice_enabled, "service": voice_up, "link": link},
-                "control": self.controls.describe(), "typing": self._typing}
+                "control": self.controls.describe(), "typing": self._typing, "gpu": self._gpu_view()}
 
     def _probe(self, force: bool) -> None:
         """Worker thread. A probe of a free mind.lock takes it for a moment, and a mind starting
@@ -452,16 +454,22 @@ class ConsoleApp:
             self.view.state == "running" and self.bridge is True) else (None, None)
         self.game = status.game_view(self.view.state, self.bridge, session, unread=unread)
         self._typing = await self._read_typing()
+        if self.view.state != 'running':
+            from .gpuview import stored
+            try:
+                value = await asyncio.to_thread(feed.read, self.s.data_dir / 'mind.db', stored)
+                self._gpu_state = {**self._gpu_state, **value, 'holders': [], 'loaded': [], 'refusal': None}
+            except Exception:
+                pass
         self._publish_status()
 
     async def _read_typing(self) -> list[dict]:
-        """Who is typing (Comms' dots), from the mind's status: asked on this pass only while a
-        page listens and he is in game, or a page has asked for Discord lately (its answers come
-        at any time), within TYPING_S. Otherwise, or with no answer: none."""
+        """One shared status snapshot for GPU state on every listening page, within TYPING_S.
+        Typing remains visible only in game or while Discord/Tonight is being read.
+        A stopped/unreachable mind has no dots and never delays the status strip."""
         discord = (self._monotonic() - self._discord_seen < DISCORD_LISTEN_S
                    or self._monotonic() - self._tonight_seen < 90)
-        if (not self._subs or self.link is None
-                or (self.game.state != status.IN_GAME and not discord)):
+        if not self._subs or self.link is None or self.view.state != 'running':
             return []
         try:
             reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "status",
@@ -471,7 +479,9 @@ class ConsoleApp:
         if not isinstance(reply, dict) or reply.get("ok") is not True:
             return []
         self._mind_snapshot, self._mind_snapshot_at = reply, self._monotonic()
-        return typing_entries(reply.get("typing"))
+        if isinstance(reply.get('gpu'), dict):
+            self._gpu_state = reply['gpu']
+        return typing_entries(reply.get("typing")) if self.game.state == status.IN_GAME or discord else []
 
     def _publish_status(self) -> None:
         """A changed strip goes out; an age that moved alone is no news (the page counts on from
@@ -871,6 +881,8 @@ class ConsoleApp:
                   ("GET", "/api/discord/voice"): self._api_voice_audio,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/tonight"): self._api_tonight,
+                  ("GET", "/api/gpu"): self._api_gpu,
+                  ("POST", "/api/gpu"): self._api_gpu,
                   ("GET", "/api/lab"): self._api_lab,
                   ("GET", "/api/lab/line"): self._api_lab_line,
                   ("POST", "/api/learn"): self._api_learning_action,
@@ -1054,6 +1066,69 @@ class ConsoleApp:
             return json_response(503, {'ok': False, 'error': 'The Lab could not read mind.db just now.'})
         return json_response(200, value)
 
+    def _gpu_view(self):
+        value = {**self._gpu_state, 'enabled': self.controls.enabled,
+                 'mind_down': self.view.state in ('stopped', 'crashed')}
+        if not self.controls.enabled:
+            value['refusal'] = self.controls.reason or 'Control is off. GPU pause and resume are disabled.'
+        return value
+
+    async def _api_gpu(self, req: Request):
+        from .gpuview import stopped
+        try:
+            args = endpoint.gpu_args(req.json() if req.method == 'POST' else {'action': 'status'})
+        except endpoint.BadRequest as exc:
+            return json_response(400, {'ok': False, 'error': 'invalid_action', 'message': str(exc)})
+        if args['action'] != 'status' and not self.controls.enabled:
+            return json_response(403, {'ok': False, **self._gpu_view(), 'error': 'control_disabled',
+                                      'message': self._gpu_view()['refusal']})
+        if self.controls.busy is not None:
+            return json_response(409, {'ok': False, **self._gpu_view(), 'error': 'mind_unavailable',
+                                      'message': 'Wait for the current mind action to finish.'})
+        if self.view.state in ('stopped', 'crashed'):
+            reply = await self._gpu_stopped(args['action'])
+        elif self.view.state != 'running' or self.link is None:
+            reply = {'ok': False, **self._gpu_view(), 'error': 'mind_unavailable',
+                     'message': 'The mind state is unknown; GPU use was not changed.'}
+        else:
+            try:
+                reply = await asyncio.to_thread(self.link.call, self._mind_pids(), 'gpu', args, timeout=180)
+            except LinkError:
+                reply = {'ok': False, **self._gpu_view(), 'error': 'mind_unavailable',
+                         'message': 'The mind did not confirm this GPU action. Check its state before trying again.'}
+        self._gpu_state = {k: reply.get(k, self._gpu_state.get(k)) for k in
+                           ('paused', 'since', 'loaded', 'holders', 'refusal', 'enabled', 'mind_down', 'unload_failed')}
+        self._publish_status()
+        return json_response(200 if reply.get('ok') else 409, {**reply, **self._gpu_view()})
+
+    async def _gpu_stopped(self, action):
+        from .gpuview import stopped
+        from ..app import acquire_instance_lock, AlreadyRunning
+        if action != 'pause':
+            return {**self._gpu_view(), **await stopped(self.s.ollama_url, action)}
+        if self.controls._lock.locked():
+            return {'ok': False, **self._gpu_view(), 'error': 'mind_unavailable',
+                    'message': 'Wait for the current mind action to finish.'}
+        async with self.controls._lock:
+            # Reserve console actions before the ownership check; the OS lock then
+            # excludes a start from another console, CLI or scheduled task too.
+            await self.refresh(force=True)
+            if (not self.controls.enabled or self.controls.busy is not None
+                    or self.view.state not in ('stopped', 'crashed') or self._held):
+                return {'ok': False, **self._gpu_view(), 'error': 'mind_unavailable',
+                        'message': 'The mind may be starting. Try again when its state is known.'}
+            try:
+                lock = acquire_instance_lock(self.s.data_dir)
+            except (AlreadyRunning, OSError):
+                return {'ok': False, **self._gpu_view(), 'error': 'mind_unavailable',
+                        'message': 'The mind may be starting. GPU use was not changed.'}
+            self.controls.busy = ('mind', 'gpu')
+            try:
+                return {**self._gpu_view(), **await stopped(self.s.ollama_url, action)}
+            finally:
+                lock.release()
+                self.controls.busy = None
+
     async def _api_learning_action(self, req: Request):
         op = 'feedback' if req.path == '/api/feedback' else 'learn'
         try:
@@ -1136,7 +1211,7 @@ class ConsoleApp:
             except Exception:
                 return None,'read_failed'
         cached = self._mind_snapshot if running and self._monotonic()-self._mind_snapshot_at<10 else None
-        payload = await self._tonight.snapshot({'now':self._clock(),'status':cached,'kit_read':kit_read})
+        payload = await self._tonight.snapshot({'now':self._clock(),'status':{**(cached or {}),'gpu':self._gpu_view()},'kit_read':kit_read})
         if not running:
             payload['sections']['kit'] = result('unavailable','mind_down')
         return json_response(200,payload)
@@ -1201,7 +1276,7 @@ class ConsoleApp:
         created = [p.created/10_000_000-11644473600 for p in (self._found or ())
                    if p.pid in self.view.pids and type(getattr(p,'created',None)) is int and p.created>0]
         return json_response(200, await self._ops.snapshot({"mind": self.view.state,
-                            "mind_started":min(created) if created else None}))
+                            "mind_started":min(created) if created else None, "gpu":self._gpu_view()}))
 
     async def _api_ops_badge(self, req: Request):
         return json_response(200, await self._ops.badge({"mind": self.view.state}))
