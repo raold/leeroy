@@ -39,6 +39,11 @@ members who answer look at it first.
   delivery or cancelled turn releases the reservation without spending the photo ration.
   Pick, looks, phase, expiry, current NSFW threshold, file and audience checks repeat before
   delivery. No photo file is deleted.
+- An answer owed to his DM (on time or on her own time) never dies with its photo: when its
+  caption fails the screens or the photo goes stale before it is stored, the photo is released
+  (or expired, when stale) and the answer is asked once more without it. An opener is
+  dropped with its photo (`photo_words`, `photo_stale`). A channel photo seed is spent only
+  once its photo was offered, and a member inside her two-day gap offers no seed.
 - Discord delivery and its new outlet stock require adults 25 and over, clothed and
   non-explicit. This delivery floor is stricter than the existing plain profile renderer's
   schema age floor; profile rendering and the delivery-off planning path keep their previous
