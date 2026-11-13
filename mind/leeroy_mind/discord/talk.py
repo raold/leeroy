@@ -37,7 +37,7 @@ import re
 
 from leeroy_mind.arc.live import away_now
 from leeroy_mind.discord import layout, owntime
-from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord
+from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord, is_group
 from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presence_of
 from leeroy_mind.discord.transport import DiscordTarget, channel_id
 from leeroy_mind.llm.scheduler import Priority
@@ -146,6 +146,12 @@ class DiscordTalk:
         """His post was stored: take or keep the lease, then queue the answers."""
         self._take_lease()
         try:
+            row = self.app.store.conn.execute('SELECT channel FROM discord_message WHERE id=?',(message_id,)).fetchone()
+            if row is not None and is_group(row[0]):
+                groups = getattr(self.app,'groups',None)
+                if groups is not None:
+                    groups.his_post(self,message_id)
+                return
             server = getattr(self.app, 'server', None)
             if server is not None:
                 row = self.app.store.conn.execute('SELECT channel,author,deleted FROM discord_message WHERE id=?',
@@ -322,6 +328,9 @@ class DiscordTalk:
             return
         on = self.own_time()
         self._owed_at = now
+        groups = getattr(self.app,'groups',None)
+        if groups is not None:
+            groups.tick(self,now)
         try:
             owed, away = self._owed(), away_now(self.app.store, now)
         except Exception as e:
@@ -376,6 +385,9 @@ class DiscordTalk:
         words, so the cached answer moments are read again."""
         self._due.clear()
         self._owes = (-float("inf"), frozenset())
+        groups = getattr(self.app,'groups',None)
+        if groups is not None:
+            groups.refresh_due()
         if self._held:
             self._until = self.app.clock.now() + LEASE_IDLE_S
 
@@ -391,7 +403,7 @@ class DiscordTalk:
 
     # -- who answers -----------------------------------------------------------------------
 
-    def plan(self, message_id: int) -> list[tuple[Turn, TurnMeta]]:
+    def plan(self, message_id: int, *, group_chosen=None) -> list[tuple[Turn, TurnMeta]]:
         """The answer turns for his post `message_id` (see the module docstring); none for a
         message that is not his, is deleted or is on a channel the layout lacks."""
         app, store = self.app, self.app.store
@@ -412,7 +424,22 @@ class DiscordTalk:
             return []
         channel, thread, text = row[0], row[1], row[4]
         peer = layout.dm_peer(channel)
-        if peer is not None:
+        if is_group(channel):
+            groups = getattr(app,'groups',None)
+            if groups is None or not groups.config.enabled:
+                return []
+            place = channel
+            audience = groups.readers(channel)
+            from leeroy_mind.groups.audience import message_readers, visible
+            prior = message_readers(store.conn,message_id)
+            if hg not in audience or not visible(prior,channel,speaker=hg,to_guid=0,readers=audience):
+                return []
+            chosen,how = self._named(text,replied,audience),'named'
+            if group_chosen is not None:
+                chosen = [g for g in group_chosen if g in audience and g != hg and app.personas.get(g)]
+            elif not chosen:
+                chosen,how = self._draw(layout.Channel(channel,'Group chat','groups',''),audience),'drawn'
+        elif peer is not None:
             place, how = channel, "dm"
             chosen = [peer] if peer != hg and app.personas.get(peer) is not None else []
         else:
@@ -502,6 +529,8 @@ class DiscordTalk:
 
     def purpose_line(self, channel: str) -> str:
         """Where the member is, for a store channel id ("general", "dm:<guid>")."""
+        if is_group(channel):
+            return 'You are in a small private group chat with the people present. Keep this conversation within this group; no romance.'
         if layout.dm_peer(channel) is not None:
             return f"You are in a private message with {self.app.engine.human.called}"
         ch = layout.channel(channel)
@@ -518,6 +547,10 @@ class DiscordTalk:
             "AND deleted IS NULL AND id != ? "
             "AND (turn IS NULL OR substr(turn,1,19)!='realism_correction:') ORDER BY id DESC LIMIT ?",
             (channel, thread, exclude, limit)).fetchall()
+        if is_group(channel):
+            from leeroy_mind.groups.audience import message_readers
+            current = self.app.groups.readers(channel)
+            rows = [r for r in rows if current and current <= message_readers(conn,r[2])]
         from leeroy_mind.photos.notes import by_messages
         photos = by_messages(conn, [r[2] for r in rows],
             uploads=getattr(self.app.engine,'photos_enabled',False),
@@ -550,6 +583,11 @@ class DiscordTalk:
                                      (message, cid)).fetchone()
             if row is None or row[1] is not None:
                 return None
+            if is_group(cid):
+                from leeroy_mind.groups.audience import message_readers, visible
+                if not visible(message_readers(store.conn,message),place,speaker=speaker,to_guid=0,
+                               readers=app.groups.readers(place)):
+                    return None
             lines = self.context_lines(store.conn, cid, thread, exclude=message) if reads else []
             photo = self._photos(store.conn, [message]).get(message) if reads else None
         their = app.engine.human.forms[2]
@@ -561,7 +599,7 @@ class DiscordTalk:
             if note is not None and not note['transcript_ok']:
                 tail=failure(app.engine.human.forms)
         late = ""
-        if layout.dm_peer(cid) is not None and self.own_time():
+        if (layout.dm_peer(cid) is not None or is_group(cid)) and self.own_time():
             p = app.personas.get(speaker)
             if p is not None:
                 late = owntime.late_note(p, post_ts=row[2], now=app.clock.now(),
@@ -603,6 +641,14 @@ class DiscordTalk:
             if row is None or row[4] is not None:
                 return None
             channel, thread, text, reply_to = row[0], row[1], row[2], row[3]
+            if is_group(channel):
+                from leeroy_mind.groups.audience import message_readers
+                current = self.app.groups.readers(channel)
+                if not current or not current <= message_readers(store.conn,message):
+                    return None
+                prior = store.conn.execute('SELECT id,text FROM discord_message WHERE channel=? AND thread IS ? '
+                    'AND deleted IS NULL AND id<? ORDER BY id DESC LIMIT ?', (channel,thread,message,QUERY_LINES)).fetchall()
+                return ' '.join(fold(t) for mid,t in reversed(prior) if current <= message_readers(store.conn,mid))+' '+fold(text)
             parts = []
             if reply_to is not None:
                 parts += [t for (t,) in store.conn.execute(

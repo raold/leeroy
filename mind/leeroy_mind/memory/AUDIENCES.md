@@ -8,6 +8,7 @@ conversation by **who is in it**, never by where it was said.
 | Audience | Lines | Reaches |
 |---|---|---|
 | Pair | a whisper between two people; a Discord DM (`dm:<guid>`, her and him) | a whisper or a DM between the same two, in either medium |
+| Group | a small DM (`gdm:<id>`) with captured readers | a pair or group whose complete current audience is a subset of those readers; never a public, officer, game-local or voice turn |
 | Officers | game officer chat, the officers' voice room, every officers-only Discord channel | every officers' channel, in either medium |
 | Guild | game guild chat and the other game channels; public Discord channels | public knowledge reaches every turn; a public *conversation* stays in its own place (R11) |
 | Closed | a `discord:` channel the layout does not have | that one channel (fail closed) |
@@ -43,6 +44,12 @@ conversation by **who is in it**, never by where it was said.
   a claim from their DM guards her whispers to him and the reverse.
 
 ## Replies on her own time (`[talk] dm_own_time`)
+
+Group DMs are restricted and never `is_private` (which means a pair). Their memories
+use `privacy.GROUP` (-2) and retain the original reader sets through nested evidence.
+`scope_ok` and `hidden_ok` must both authorize recall. New members receive no old
+group observations. The pair timeline remains pair-only. See `groups/README.md` for
+the switch, membership rules and per-member answer timing.
 
 Default false; invalid means off; read with the rest of `[talk]`. With it on, a member answers
 his Discord DM when her Discord presence says she would see it (`discord/owntime.py`):
