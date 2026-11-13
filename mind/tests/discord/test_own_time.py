@@ -9,7 +9,7 @@ import pytest
 
 from discord.test_discord_talk import FakeArbiter, answers, post, rig_for, talk_for
 from leeroy_mind.discord import owntime
-from leeroy_mind.discord.talk import ANSWERED_KEY, OWED_TICK_S
+from leeroy_mind.discord.talk import ANSWERED_KEY, DEFERRED_KEY, OWED_TICK_S
 from leeroy_mind.testing.fake_clock import FakeClock
 
 NY = ZoneInfo("America/New_York")
@@ -128,6 +128,7 @@ def test_an_old_dm_is_let_go(store, tmp_path, caplog):
     mid = post(rig, "dm:101", "did you ever find that recipe")
     store.conn.execute("UPDATE discord_message SET ts = ? WHERE id = ?",
                        (rig.clock.now() - owntime.LET_GO_S - 60, mid))
+    store.set_meta(DEFERRED_KEY.format(guid=101), str(mid))  # deferred, then never answered
     talk.tick(rig.clock.now())
     assert store.get_meta(ANSWERED_KEY.format(guid=101)) == str(mid)
     assert "discord_dm_let_go: guid=101" in caplog.text and not talk.owes(101)
@@ -211,23 +212,19 @@ def test_dm_openers_wait_while_she_owes_him_an_answer(store, tmp_path):
 
 
 def test_a_photo_dm_is_answered_once(store, tmp_path):
-    """The tick never answers a post before the desk hands it over (a photo's look), and a post
-    the tick answered (after a restart, say) is not answered again when it is handed over."""
-    rig = rig_for(store, at(2026, 10, 29, 20), tmp_path)  # online
+    """The tick answers only a post she deferred, so never one the desk has not handed over
+    yet (a photo's look runs first), and the hand-over answers it once."""
+    rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)  # asleep: her answer is deferred
     own_time(rig)
     talk = talk_for(rig)
-    mid = post(rig, "dm:101", "look at this")
-    run_for(rig, talk, 60)  # the look is running: not handed over yet
-    assert answers(rig, "dm:101", mid) == []
-    hand(rig, talk, mid)
-    run_for(rig, talk, 200)
-    assert len(answers(rig, "dm:101", mid)) == 1
-    late = post(rig, "dm:101", "and this one")
-    run_for(rig, talk, 300)  # past the grace with no hand-over: the tick answers it
-    assert len(answers(rig, "dm:101", late)) == 1
-    hand(rig, talk, late)
-    run_for(rig, talk, 200)
-    assert len(answers(rig, "dm:101", late)) == 1
+    first = post(rig, "dm:101", "did you ever find that recipe")
+    hand(rig, talk, first)  # deferred
+    photo = post(rig, "dm:101", "look at this")  # its look is running: not handed over yet
+    run_for(rig, talk, 5 * 3600)  # morning: her deferred answer is due, the photo is not owed
+    assert answers(rig, "dm:101", photo) == [] and answers(rig, "dm:101", first) == []
+    hand(rig, talk, photo)  # the look is done: answered (or deferred) once, covering both
+    run_for(rig, talk, 1800)
+    assert len(answers(rig, "dm:101", photo)) == 1
 
 
 def test_her_answer_to_an_earlier_post_is_no_answer_to_a_later_one(store, tmp_path):
@@ -238,6 +235,7 @@ def test_her_answer_to_an_earlier_post_is_no_answer_to_a_later_one(store, tmp_pa
     first = post(rig, "dm:101", "did you ever find that recipe")
     second = post(rig, "dm:101", "the soup one")
     member_post(rig, 101, "dm:101", "oh yes", reply_to=first)  # landed after his second post
+    store.set_meta(DEFERRED_KEY.format(guid=101), str(second))  # she deferred his second
     assert [m for _, m, _ in talk._owed()] == [second]
 
 
@@ -252,6 +250,27 @@ def test_switching_it_off_answers_what_it_deferred(store, tmp_path):
     own_time(rig, on=False)
     run_for(rig, talk, 200)
     assert len(answers(rig, "dm:101", mid)) == 1
+
+
+def test_what_she_deferred_survives_a_restart_with_the_switch_off(store, tmp_path):
+    rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)
+    own_time(rig)
+    mid = post(rig, "dm:101", "did you ever find that recipe")
+    hand(rig, talk_for(rig), mid)
+    own_time(rig, on=False)
+    again = talk_for(rig, seed=2)  # a restart: nothing in memory
+    run_for(rig, again, 200)
+    assert len(answers(rig, "dm:101", mid)) == 1
+    assert store.get_meta(DEFERRED_KEY.format(guid=101)) is None
+
+
+def test_turning_it_on_never_answers_old_dms_she_let_be(store, tmp_path):
+    rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)
+    old = post(rig, "dm:101", "an old one she never answered")
+    own_time(rig)
+    talk = talk_for(rig)
+    run_for(rig, talk, 8 * 3600)
+    assert answers(rig, "dm:101", old) == [] and not talk.owes(101)
 
 
 def test_off_writes_nothing(store, tmp_path):
