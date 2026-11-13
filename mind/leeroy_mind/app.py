@@ -485,6 +485,8 @@ class MindApp:
         self.realm = attach_realm(self)
         from .server.attach import attach_server
         self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.
+        from .photos.attach import attach_photos
+        self.photos = attach_photos(self)
 
     # -- extension points --------------------------------------------------------------------
 
@@ -1233,6 +1235,10 @@ class MindApp:
                     self._extract_queue.put_nowait(closed)
             except Exception:
                 log.exception("thread_expiry_failed")
+            try:
+                self.voice_notes.tick()  # recover interrupted recording/transcript handoffs
+            except Exception:
+                log.exception("voice_note_recovery_failed")
             try:
                 self.discord_talk.tick(now)  # DM answers on her own time ([talk] dm_own_time)
             except Exception:

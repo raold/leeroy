@@ -199,7 +199,7 @@
   {
     "type": "status",
     "ts": 1793404814000,
-    "line": "{\"v\":1,\"type\":\"status\",\"ts\":1793404814000,\"ok\":true,\"mic\":\"unset\",\"gpu\":\"none\",\"stt\":\"parakeet\",\"ui\":false,\"queue\":2,\"errors\":[\"wow_elevated\"]}",
+    "line": "{\"v\":1,\"type\":\"status\",\"ts\":1793404814000,\"ok\":true,\"mic\":\"unset\",\"gpu\":\"none\",\"stt\":\"parakeet\",\"ui\":false,\"queue\":2,\"errors\":[\"wow_elevated\"],\"render\":false}",
     "fields": {
       "ok": true,
       "mic": "unset",
@@ -209,7 +209,8 @@
       "queue": 2,
       "errors": [
         "wow_elevated"
-      ]
+      ],
+      "render": false
     }
   },
   {
@@ -218,6 +219,49 @@
     "line": "{\"v\":1,\"type\":\"error\",\"ts\":1793404815000,\"message\":\"another mind is connected\"}",
     "fields": {
       "message": "another mind is connected"
+    }
+  },
+  {
+    "type": "render",
+    "ts": 1793404900000,
+    "line": "{\"v\":1,\"type\":\"render\",\"ts\":1793404900000,\"id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"guid\":101,\"text\":\"An invented voice note.\"}",
+    "fields": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "guid": 101,
+      "text": "An invented voice note."
+    }
+  },
+  {
+    "type": "transcribe",
+    "ts": 1793404900000,
+    "line": "{\"v\":1,\"type\":\"transcribe\",\"ts\":1793404900000,\"id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"path\":\"discord/voice/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav\"}",
+    "fields": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "discord/voice/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav"
+    }
+  },
+  {
+    "type": "rendered",
+    "ts": 1793404900000,
+    "line": "{\"v\":1,\"type\":\"rendered\",\"ts\":1793404900000,\"id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ok\":true,\"path\":\"discord/voice/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ogg\",\"ms\":1000,\"bytes\":1000,\"reason\":\"ok\"}",
+    "fields": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": true,
+      "path": "discord/voice/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ogg",
+      "ms": 1000,
+      "bytes": 1000,
+      "reason": "ok"
+    }
+  },
+  {
+    "type": "transcript",
+    "ts": 1793404900000,
+    "line": "{\"v\":1,\"type\":\"transcript\",\"ts\":1793404900000,\"id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ok\":true,\"text\":\"An invented voice note.\",\"reason\":\"ok\"}",
+    "fields": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": true,
+      "text": "An invented voice note.",
+      "reason": "ok"
     }
   }
 ]

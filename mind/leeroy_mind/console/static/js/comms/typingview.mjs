@@ -1,7 +1,7 @@
 import { $, clear, el, emit, on } from "../core.mjs";
 import { S, name } from "../state.mjs";
 import { FEED, currentView } from "./feedview.mjs";
-import { staleIn, typingByView, typingLabel, whisperTypers } from "./typing.mjs";
+import { staleIn, typingByView, activityLabel, whisperTypers } from "./typing.mjs";
 import { channelOf } from "./discord.mjs";
 import { DISCORD } from "./discordstate.mjs";
 
@@ -36,7 +36,7 @@ export function typingWhispers() { return whisperTypers(BY_VIEW); }
 
 function render() {
   var who = BY_VIEW.get(currentView()) || [];
-  var label = typingLabel(who.map(function (t) { return t.name; }));
+  var label = activityLabel(who);
   if (label === shown) { return; }
   shown = label;
   var box = $("typing");

@@ -63,6 +63,7 @@ from leeroy_mind.personas.card import card_race_class, render_prompt_card
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.personas.screens import redact_real_name
+from leeroy_mind.photos.offer import PhotoOffer, caption_ok
 from leeroy_mind.protocol import Ack, Chat, Command, Emote, Say
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
@@ -225,12 +226,16 @@ SPOKEN_CHANNELS = frozenset({"say", "yell"})
 # A line may still be said when its ack timed out or the connection dropped while it was due:
 # its row waits for the echo (the bridge keeps events across a reconnect).
 AWAIT_ECHO = frozenset({"ack_timeout", "connection_lost"})
+# A photo a turn cannot carry after all; an answer owed to him goes on without it (_photo_owed).
+PHOTO_LOST = frozenset({"photo_words", "photo_stale"})
+DISCORD_REPLY_WHY = "discord:reply"  # discord.talk.WHY, which imports this module
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 # Who is typing (the console's Comms dots, Pipeline.typing_now): a model turn is composing from
 # its compose call until its text exists, and typing over the typing delay before each line is
 # sent. Only where Comms shows the line: guild and officer, his group's party and raid, and a
 # whisper to him (typed or voiced); a voice room, say and yell, and templates show nothing.
-COMPOSING, TYPING = "composing", "typing"
+# Recording: a member's DM line being rendered as a voice note (voice_notes), shown as such.
+COMPOSING, TYPING, RECORDING = "composing", "typing", "recording"
 COMMS_CHANNELS = frozenset({"guild", "officer"})
 GROUP_CHANNELS = frozenset({"party", "raid", "raid_warning"})
 _CAMEL = re.compile(r"(?<!^)(?=[A-Z])")
@@ -351,7 +356,13 @@ class TurnMeta:
     seed: int | None = None
     # a Discord turn's message: the one it replies to and its thread (discord.transport); a
     # Discord turn is known by its channel, never by this
+    voice_note: object = None
     discord: DiscordTarget | None = None
+    photo: PhotoOffer | None = None
+    photo_asked: bool = False
+    photo_seed: int | None = None
+    photo_finished: bool = False
+    single_line_before_photo: bool = False  # restored when an owed answer goes on without it
     discord_named: bool = False  # he addressed this member in a channel: re-ask one silence
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); "" for every other turn
@@ -561,6 +572,45 @@ class Pipeline:
         raise TurnWithdrawn to drop the turn there, before the model is asked."""
         self._instruction_hooks.append(fn)
 
+    def attach_photos(self, fn: Callable[[Turn, TurnMeta, float], PhotoOffer | None]) -> None:
+        if getattr(self, '_photo_offer', None) is not None:
+            raise ValueError('a photo sender is already attached')
+        self._photo_offer = fn
+
+    @staticmethod
+    def _release_photo(meta: TurnMeta, reason: str) -> None:
+        if meta.photo is None or meta.photo_finished:
+            return
+        meta.photo_finished = True
+        meta.photo.reason = reason
+        try:
+            meta.photo.release()
+        except Exception:
+            log.warning('photo_release_failed')
+
+    def _photo_owed(self, turn: Turn, meta: TurnMeta) -> bool:
+        """The turn answers his Discord post (discord.talk, on time or on her own time) and drew a
+        photo it cannot carry before any line was said: the answer goes on without the photo.
+        An opener (server:dm, server:photo) has nothing owed and is dropped with it."""
+        return (meta.photo is not None and not meta.photo_finished and meta.said == 0
+                and (meta.why == DISCORD_REPLY_WHY or self._answers_his_dm(turn, meta)))
+
+    async def _answer_without_photo(self, turn: Turn, meta: TurnMeta, reason: str) -> list[str]:
+        """His answer's photo was refused (its caption tripped the screens) or went stale at
+        send: release it, spending nothing, and ask the answer once more without it, as an
+        ordinary answer. A turn's photo is asked for only once, so this never repeats."""
+        self._release_photo(meta, reason)
+        meta.photo = None
+        meta.single_line = meta.single_line_before_photo
+        turn.delay = 0  # its answer delay has passed
+        meta.guard_verdict, meta.guard_rewritten, meta.guard_codes = "not_run", False, ()
+        meta.preference_original = ""
+        meta.realism_planned, meta.realism_review_lines, meta.words = False, (), ""
+        if self._real_name_hold == meta.turn_id:  # composed again below
+            self._real_name_hold = None
+        log.info("photo_answer_without: guid=%d reason=%s", turn.speaker, reason)
+        return await self._speak_now(turn, meta)
+
     # -- identity and lookups ------------------------------------------------------------------
 
     def set_human(self, guid: int) -> None:
@@ -764,18 +814,18 @@ class Pipeline:
 
     def typing_now(self) -> list[dict]:
         """The control endpoint's status `typing`: each model turn being composed or typed where
-        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age"}
-        (`to`: a whisper's target, him; else None; `age`: seconds since the phase's latest
-        refresh, at least every ten seconds during a realism wait, read now, so a
-        page judges staleness without comparing clocks; `since` is for matching the line when it
-        lands). Ids, names and times only, never text; the game's places none while he is
+        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age",
+        "phase"} (`phase`: COMPOSING, TYPING or RECORDING; `to`: a whisper's target, him; else
+        None; `age`: seconds since the phase's latest refresh, at least every ten seconds during
+        a realism wait, read now, so a page judges staleness without comparing clocks; `since` is
+        for matching the line when it lands). Ids, names and times only, never text; the game's places none while he is
         offline, a Discord turn's (channel as given, `to` him in a DM to him) always."""
         w, hg = self.world, self.human.guid
         if not hg:
             return []
         now = self.clock.now()
         out = []
-        for turn, _, since in self._phases.values():
+        for turn, phase, since in self._phases.values():
             channel, to = turn.channel, None
             if is_discord(channel):
                 to = hg if turn.to_guid == hg else None
@@ -789,7 +839,7 @@ class Pipeline:
             m = w.members.get(turn.speaker)
             out.append({"guid": turn.speaker, "name": m.name if m is not None else "",
                         "channel": channel, "to": to, "since": since,
-                        "age": max(0.0, now - since)})
+                        "age": max(0.0, now - since), "phase": phase})
         return sorted(out, key=lambda e: (e["since"], e["guid"]))
 
     def planned_turns(self) -> list[Turn]:
@@ -1079,7 +1129,9 @@ class Pipeline:
                    if r.ts >= self._chat_from and self._may_carry(turn, r)]
             recent = sorted([*recent, *own], key=lambda r: r.id)
 
+        from_thread = False
         if not preview and self._server_turn(turn, meta) and meta.server_thread:
+            from_thread = True  # rows keyed by Discord message ids, their notes already added
             observed = self.live_review.observe(turn, meta)
             _, context = await self.live_review.read(
                 lambda conn:self.live_review.history(turn, meta, conn, observed=observed))
@@ -1209,6 +1261,12 @@ class Pipeline:
                                        *ends) if x),
             forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN)
+        chat_notes, pair_notes = {}, {}
+        if getattr(self, 'photos_send', False):
+            from leeroy_mind.photos.notes import by_lines
+            pair_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in pair])
+            if not from_thread:
+                chat_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in recent])
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
@@ -1220,9 +1278,9 @@ class Pipeline:
                            variant=random.Random(f"{p.guid}:{night_of(local)}:mood")
                            .randrange(1000), today=day_line(local, p.identity.region)),
             chat=[said_hi_text(r, names, human.called, now=now) if r.id in hi
-                  else chat_line_text(r, names, now=now) for r in recent],
+                  else chat_line_text(r, names, now=now, photo=chat_notes.get(r.id,'')) for r in recent],
             own_recent=self._own_lines(turn), instruction=instruction,
-            elsewhere=[chat_line_text(r, names, now=now) for r in pair],
+            elsewhere=[chat_line_text(r, names, now=now, photo=pair_notes.get(r.id,'')) for r in pair],
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept)
@@ -1381,6 +1439,7 @@ class Pipeline:
             outcome = "error"
             raise
         finally:
+            self._release_photo(meta, outcome)
             self.timing.pipeline_done(meta.timing_trace, outcome)
             if self._current.get(task) is turn:
                 del self._current[task]
@@ -1416,6 +1475,24 @@ class Pipeline:
         p = self.personas.get(turn.speaker)
         if p is None:
             return self._drop(turn, meta, "no_persona")
+        offer = getattr(self, '_photo_offer', None)
+        if (discord and turn.template is None and meta.before_transport is None
+                and not meta.photo_asked and offer is not None):
+            meta.photo_asked = True
+            try:
+                meta.photo = offer(turn, meta, now)
+            except Exception:
+                log.warning('photo_offer_failed')
+            if meta.photo is not None:
+                turn.max_lines = 1
+                meta.single_line_before_photo = meta.single_line
+                meta.single_line = True
+                if meta.why == 'server:dm':
+                    # The real image is now this opener's subject. Its caption need not
+                    # refer to the idle/life topic chosen before the photo was offered.
+                    meta.server_anchor = meta.photo.snap.scene['shows']
+        if meta.photo_seed is not None and meta.photo is None:
+            return self._drop(turn, meta, 'photo_unavailable')
         voiced = self._route(turn, meta)
         if self._follows_silence(meta):
             return self._drop(turn, meta, "after_dropped")
@@ -1451,6 +1528,8 @@ class Pipeline:
                         except Exception:
                             turn.instruction = previous
                             log.warning("instruction_hook_failed")
+                    if meta.photo is not None:
+                        turn.instruction += '\n' + meta.photo.instruction
                     c = await self._compose(turn, meta, live=True)
             except ValueError as e:  # a turn the instruction can't be written for
                 log.warning("talk_bad_turn: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
@@ -1473,6 +1552,10 @@ class Pipeline:
         else:
             hg = self.human.guid
             close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg))
+        if meta.photo is not None and not caption_ok(text):
+            if self._photo_owed(turn, meta):
+                return await self._answer_without_photo(turn, meta, 'photo_words')
+            return self._drop(turn, meta, 'photo_words', memory_ids)
         text = self._link_items(turn, meta, text)
         # an emote is public: a whisper keeps its words (NB6), and so does a Discord line,
         # which has no game to emote in
@@ -1532,6 +1615,7 @@ class Pipeline:
             meta.realism_planned = True
             lines = list(plan.lines)
         sent: list[Styled] = []
+        without_photo = ''
         try:
             for i, s in enumerate(lines):
                 if i and plan and not self.realism.safe(self, turn):
@@ -1557,6 +1641,9 @@ class Pipeline:
                 meta.realism_followup = bool(i and plan)
                 why = await self._send_line(turn, meta, p, s.line, memory_ids, first=i == 0)
                 self._phase(turn, None)  # sent, or refused
+                if why in PHOTO_LOST and self._photo_owed(turn, meta):
+                    without_photo = why  # nothing is said yet: asked again below
+                    break
                 if why:
                     if why not in AWAIT_ECHO:  # that row waits for the echo (_settle_unacked)
                         self._drop(turn, meta, why, memory_ids, text=s.line)
@@ -1592,6 +1679,8 @@ class Pipeline:
                 if not plan:  # realism records each confirmed line before a newer turn composes
                     self._own_of(turn.speaker).append((turn.channel, turn.to_guid, words))
                 self._record_moves(turn, words)
+        if without_photo:
+            return await self._answer_without_photo(turn, meta, without_photo)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
@@ -1676,6 +1765,7 @@ class Pipeline:
         return fallback() if owed and best is not None else drop("guard_rewrite_failed")
 
     async def _guard_react(self, turn, meta, reaction):
+        self._release_photo(meta, 'reaction')
         # A private game whisper has no private emote transport. It stays silent.
         if turn.channel == "whisper" or meta.elsewhere or meta.why == "hotmic":
             return
@@ -2247,6 +2337,11 @@ class Pipeline:
         The send itself is shielded: once the server may have the line, it is recorded. A turn
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
+        if meta.photo is not None and not meta.photo_finished:
+            if not caption_ok(text):
+                return 'photo_words'
+            if not meta.photo.valid():
+                return 'photo_stale'
         if self.live_review.enabled(turn, meta) and not meta.realism_correction:
             # Recheck the reviewed text after typing, before its first fragment. A
             # fragment can look like filler by itself; later fragments inherit this
@@ -2258,6 +2353,17 @@ class Pipeline:
                     return "guard_changed_before_send"
             if not self.live_review.valid(turn, meta):
                 return "scope_changed"
+        meta.voice_note = None
+        notes = getattr(self,'voice_notes',None)
+        # a line that carries a photo is its caption: typed, never a voice note
+        if notes is not None and getattr(meta,'photo',None) is None and notes.eligible(turn,meta,p,text):
+            self._phase(turn,RECORDING)
+            try:
+                meta.voice_note = await notes.prepare(turn,meta,p,text)
+            finally:
+                self._phase(turn,TYPING)
+            if not _scope_valid(meta) or not self.live_review.valid(turn,meta):
+                return 'scope_changed'
         async with self._timed_send_lock(meta):
             if meta.realism_followup and meta.realism_sequence != self.realism.member(turn.speaker).sequence:
                 return "realism_stale"
@@ -2344,8 +2450,13 @@ class Pipeline:
         server_turn = self._server_turn(turn, meta)
         from leeroy_mind.server.records import BadDayCounter
         stage = 'store'
+        photo = meta.photo if not meta.said else None
+        after_commit = []
         try:
-            with self.store.transaction() if server_turn else nullcontext():
+            with self.store.transaction() if (server_turn or photo is not None
+                                              or meta.voice_note is not None) else nullcontext():
+                if photo is not None and (meta.photo_finished or not photo.valid()):
+                    return 'photo_stale'
                 message = store_line(self.store, turn, meta, text, self.clock.now(),
                                      audience=self.world.audience(
                                          turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
@@ -2355,9 +2466,20 @@ class Pipeline:
                     posted(self.store, self.clock.local().date().isoformat(), self.clock.now(),
                            conversation=meta.server_conversation,
                            dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
+                if meta.voice_note is not None:
+                    self.voice_notes.record(message,turn.speaker,meta.voice_note)
+                if photo is not None:
+                    line = self._record(turn, meta, p, text, memory_ids, discord_id=message,
+                                        after_commit=after_commit)
             # The post and its budget are durable before _record updates memory-only
             # guards, chain state and hooks. Those effects cannot survive a rollback.
-            self._record(turn, meta, p, text, memory_ids, discord_id=message)
+            if photo is None:
+                self._record(turn, meta, p, text, memory_ids, discord_id=message)
+            else:
+                meta.photo_finished = True
+                log.info('photo_sent snap=%d line=%d', photo.snap.id, line)
+                for effect in after_commit:
+                    effect()
         except DiscordRefused as e:
             log.info("discord_line_refused: guid=%d channel=%s code=%s", turn.speaker,
                      turn.channel, e.code)
@@ -2388,7 +2510,8 @@ class Pipeline:
 
     def _record(self, turn: Turn, meta: TurnMeta, p: Persona, text: str,
                 memory_ids: list[int], *, ack: Ack | None = None,
-                discord_id: int | None = None) -> int:
+                discord_id: int | None = None,
+                after_commit: list[Callable[[], None]] | None = None) -> int:
         """A line was said: the chat log (origin "mind", with who could see it), the world, the
         thread hook, the guards, the chain and the utterance log (with why and the bit). Its
         line id. A line he had no way of hearing (Comms.unheard: I8, N3) moves neither the
@@ -2438,6 +2561,22 @@ class Pipeline:
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
                 if discord_id is not None:
                     self.store.set_meta(f'discord:line:{discord_id}',str(line_id))
+        if meta.photo is not None and discord_id is not None and not meta.said:
+            with self.store.transaction():
+                meta.photo.on_sent(line_id, discord_id)
+        def finished():
+            self._after_record(turn, meta, p, text, memory_ids, line_id=line_id, chat=chat,
+                now=now, discord=discord, heard=heard, sid=sid, zone=zone, map_id=map_id,
+                ack=ack, discord_id=discord_id)
+        if after_commit is None:
+            finished()
+        else:
+            after_commit.append(finished)
+        return line_id
+
+    def _after_record(self, turn, meta, p, text, memory_ids, *, line_id, chat, now,
+                      discord, heard, sid, zone, map_id, ack, discord_id):
+        """Memory-only guards and hooks run only after an atomic photo post commits."""
         if self.cfg.talk.realism:
             meta.realism_sequence = self.realism.record_line(turn.speaker,credit=not meta.realism_correction)
             if meta.realism_planned and not meta.realism_correction and meta.words:
@@ -2572,6 +2711,7 @@ class Pipeline:
 
     def _drop(self, turn: Turn, meta: TurnMeta, reason: str, memory_ids=(), *, text: str = "",
               at: float | None = None) -> list[str]:
+        self._release_photo(meta, reason)
         self.timing.decision(meta.timing_trace, reason)
         if reason.startswith("guard_"):
             text = ""

@@ -514,13 +514,15 @@ def line_age(seconds: float) -> str:
 
 
 def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
-                   now: float | None = None) -> str:
+                   now: float | None = None, photo: str = '') -> str:
     """'Name: text' for guild chat, 'Name (raid): text' elsewhere, 'Name (on vent): text' in a
     voice room, markup stripped, and with `now` its age in front ('[3m ago] Name: text'), so an
     old line never reads as current.
     `names` maps guids to how the speaker knows them (the human by his nickname)."""
     who = names.get(row.from_guid) or row.from_name or "someone"
     text = " ".join(strip_wow_markup(row.text).split())
+    if photo:
+        text += ' ' + ' '.join(photo.split())
     if row.channel == "guild":
         tag = ""
     elif row.channel == "whisper":

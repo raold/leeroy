@@ -14,7 +14,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
-              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose')
+              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo')
 FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
@@ -36,7 +36,7 @@ class Seed:
     @property
     def openers(self) -> tuple[int, ...] | None:
         """Who already knows a subject before any of it is posted in the channel."""
-        if self.kind == 'life':
+        if self.kind in ('life', 'photo'):
             return self.about
         if self.kind == 'his_day':
             return self.witnesses

@@ -45,7 +45,10 @@ def store_line(store, turn, meta, text: str, now: float, *, audience) -> int:
             raise dstore.DiscordRefused("officers_only" if ch.officers_only
                                         else "not_in_audience")
     target = meta.discord
+    photo = getattr(meta, 'photo', None)
+    attachment = photo.attachment if photo is not None and not meta.said else None
     return dstore.post(store, channel=cid, author=turn.speaker, origin="mind", text=text,
                        reply_to=target.reply_to if target is not None else None,
                        thread=target.thread if target is not None else None,
-                       turn=("realism_correction:" if getattr(meta,"realism_correction",False) else "")+meta.turn_id, now=now)
+                       turn=("realism_correction:" if getattr(meta,"realism_correction",False) else "")+meta.turn_id, now=now,
+                       attachment=attachment)

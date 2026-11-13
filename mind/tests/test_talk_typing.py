@@ -66,7 +66,7 @@ def test_a_turn_is_composing_then_typing_and_clears_when_its_line_is_sent(store,
         assert turn.speaker == 101 and since <= clock.now()
         assert r.engine.typing_now() == [{"guid": 101, "name": TEST_CAST[101][0],
                                           "channel": "guild", "to": None, "since": since,
-                                          "age": clock.now() - since}]
+                                          "age": clock.now() - since, "phase": "composing"}]
         await r.advance(5)
         assert phases(r) == ["composing"]  # the model has not answered: still composing
         gate.set()
@@ -133,13 +133,13 @@ def test_status_entries_say_where_and_when_never_what(store, clock, tmp_path):
         task = asyncio.create_task(r.engine.speak(reply_to_human(102, "whisper", HUMAN)))
         await until(r, lambda: phases(r) == ["composing"])
         [entry] = r.engine.typing_now()
-        assert set(entry) == {"guid", "name", "channel", "to", "since", "age"}
-        assert (entry["guid"], entry["name"], entry["channel"], entry["to"]) == (
-            102, TEST_CAST[102][0], "whisper", HUMAN)
+        assert set(entry) == {"guid", "name", "channel", "to", "since", "age", "phase"}
+        assert (entry["guid"], entry["name"], entry["channel"], entry["to"], entry["phase"]) == (
+            102, TEST_CAST[102][0], "whisper", HUMAN, "composing")
         gate.set()
         await until(r, lambda: phases(r) == ["typing"])
         [entry] = r.engine.typing_now()
-        assert entry["channel"] == "whisper" and entry["to"] == HUMAN
+        assert entry["channel"] == "whisper" and entry["to"] == HUMAN and entry["phase"] == "typing"
         text = json.dumps(r.engine.typing_now())
         assert REPLY not in text and "omw" not in text
         await until(r, task.done)

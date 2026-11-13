@@ -4,6 +4,7 @@ Pairings describe coherent activities and props, not a substitute for the scene 
 Lust outfits/colours/expressions still come from kind.py and meet screen_lust unchanged.
 """
 from .kind import LUST_SETTINGS
+from collections.abc import Mapping
 
 RECIPE = 1  # persisted with composed text; older pending prose is held, never grandfathered
 GAME_MONITOR = "monitor displaying a landscape game map"
@@ -74,6 +75,37 @@ PROP_ACTIVITIES = {
     "book": ("reading", "relaxing"), "notebook": ("writing", "guild_planning"),
     "leash": ("dog_walk",), "plant": ("gardening", "watering", "relaxing"),
 }
+
+# Channel classification for every composed activity, setting and prop. Content enums
+# remain unchanged; food takes precedence, then pets, then real-life places/activities.
+ACTIVITY_CHANNEL = {
+    'raiding':'pics', 'guild_planning':'pics', 'spreadsheet':'irl', 'writing':'pics',
+    'reading':'pics', 'cooking':'food', 'baking':'food', 'chopping':'food', 'coffee':'food',
+    'tea':'food', 'exercise':'irl', 'stretching':'irl', 'dog_walk':'pets', 'walking':'irl',
+    'hiking':'irl', 'gardening':'irl', 'watering':'irl', 'sketching':'pics', 'painting':'pics',
+    'knitting':'pics', 'puzzle':'pics', 'guitar':'pics', 'repairing':'irl', 'organizing':'irl',
+    'birdwatching':'irl', 'picnic':'food', 'breakfast':'food', 'relaxing':'pics', 'sunset':'irl',
+    'celebrating':'pics',
+}
+PLACE_CHANNEL = {
+    'desk':'pics', 'kitchen':'food', 'gym':'irl', 'park':'irl', 'cafe':'food', 'garden':'irl',
+    'porch':'irl', 'living_room':'pics', 'workbench':'irl', 'library':'pics', 'balcony':'irl',
+    'trail':'irl', 'harbour':'irl', 'beach':'irl', 'pool_deck':'irl', 'dock':'irl', 'boat':'irl',
+    'picnic':'food', 'studio':'pics', 'dining_room':'food',
+}
+PROP_CHANNEL = {'none':'pics', 'mug':'pics', 'book':'pics', 'notebook':'pics',
+                'leash':'pets', 'plant':'irl'}
+
+
+def channel_for(scene: Mapping) -> str:
+    """Read the composed enums stored with the image, never classify model prose."""
+    activity, setting = scene.get('activity', ''), scene.get('setting', '')
+    found = {ACTIVITY_CHANNEL[key] for key, (phrase, _) in ACTIVITIES.items()
+             if activity == phrase or activity.startswith(phrase + ', ')}
+    found.update(PLACE_CHANNEL[key] for key, phrase in PLACES.items() if setting == phrase)
+    found.update(PROP_CHANNEL[key] for key, phrase in PROPS.items()
+                 if phrase and activity.endswith(', ' + phrase))
+    return next((channel for channel in ('food', 'pets', 'irl') if channel in found), 'pics')
 # Same vetted settings as the profile photo, except crowd/bathing/mirror contexts.
 LUST_PLACES = {
     "a rooftop bar at night": "balcony", "a city street at night": "harbour",

@@ -21,7 +21,7 @@ chattiness = 4                # 0-10, social chat outside raids
 raid_rule = "leaders_and_urgent"
 whispers_per_hour = 4         # members whispering him first, per hour of his play, at chattiness 4
 openers_per_hour = 6          # members starting a line to him in party or guild, per hour, likewise
-selfies = 3                    # 0-10, photos the guild sends you (rendered at night)
+selfies = 3                    # 0-10, member photos in your DMs and guild channels (rendered at night)
 aware = false                  # include a bounded card of visible observations in talk
 realism = false                # bounded member typing, small bursts and rare corrections
 dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
@@ -58,7 +58,7 @@ MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
-                                "banter", "photos"})
+                                "banter", "photos", "voice_notes"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 

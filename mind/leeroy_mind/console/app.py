@@ -162,6 +162,7 @@ STATUS_S = 2.0
 TYPING_S = 1.0  # the mind's status, asked for who is typing on each strip pass, answers in this
 TYPING_MAX = 40  # entries kept from it
 TYPING_STALE_S = 30.0  # an entry older than this (its `age`) is dropped; the page's own STALE_S
+TYPING_PHASES = frozenset({"composing", "typing", "recording"})  # Pipeline.typing_now's phases
 SNAPSHOT_S = 15.0  # a settled mind's process list is taken this often (an unclear one's at most)
 VOICE_LOCK_S = 15.0  # how long the Mind tab reuses its reading of voice.lock
 FEED_S = 1.5
@@ -198,8 +199,9 @@ def _number(x) -> bool:
 def typing_entries(value) -> list[dict]:
     """The mind's status `typing` (Pipeline.typing_now) as the strip carries it: the well-formed
     entries no older than TYPING_STALE_S, each with only its own keys, {"guid", "name",
-    "channel", "to", "since", "age"}. `age` (seconds, read by the mind as it answered) is what
-    staleness goes by; `since` is the mind's clock, for matching the line when it lands."""
+    "channel", "to", "since", "age"}, plus "phase" when it is one of TYPING_PHASES (an older
+    mind sends none). `age` (seconds, read by the mind as it answered) is what staleness goes
+    by; `since` is the mind's clock, for matching the line when it lands."""
     if not isinstance(value, list):
         return []
     out = []
@@ -212,8 +214,12 @@ def typing_entries(value) -> list[dict]:
                 or not _number(since) or not _number(age) or not 0 <= age <= TYPING_STALE_S
                 or (to is not None and (type(to) is not int or to <= 0))):
             continue
-        out.append({"guid": guid, "name": name if isinstance(name, str) else "",
-                    "channel": channel, "to": to, "since": since, "age": age})
+        entry = {"guid": guid, "name": name if isinstance(name, str) else "",
+                 "channel": channel, "to": to, "since": since, "age": age}
+        phase = e.get("phase")
+        if isinstance(phase, str) and phase in TYPING_PHASES:
+            entry["phase"] = phase
+        out.append(entry)
     return out
 
 
@@ -230,7 +236,7 @@ OLD_OPS = "bad request: op is one of "  # a mind from before the say op names th
 
 # The page runs only the console's own files: no inline script or style, nothing from elsewhere
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
-       "img-src blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+       "img-src blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 STATIC_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".mjs": "text/javascript; charset=utf-8", ".woff2": "font/woff2",
@@ -323,6 +329,12 @@ class ConsoleApp:
         self.server_enabled = load_server_config(settings.data_dir / 'mind.toml').enabled
         from ..photos.config import load_photos_config
         self.photos = load_photos_config(settings.data_dir / 'mind.toml')
+        from ..voice_notes.config import load_config as load_voice_notes
+        self.voice_notes = load_voice_notes(settings.data_dir / 'mind.toml')
+        self._voice_uploads = []
+        self._voice_day = None
+        self._voice_day_total = 0
+        self._voice_upload_lock = asyncio.Lock()
         self._photo_uploads: list[float] = []
         self._photo_day = None
         self._photo_day_total = 0
@@ -818,11 +830,11 @@ class ConsoleApp:
             if origins != [site]:
                 return text(403, "Forbidden: a change needs the console's own Origin.")
             kind = (req.one("content-type") or "").split(";")[0].strip().lower()
-            upload = req.path == '/api/discord/upload'
+            upload = req.path in ('/api/discord/upload','/api/discord/voice')
             if upload and sites != ['same-origin']:
                 return text(403, "Forbidden: upload from the console's own page.")
-            if kind != ('image/jpeg' if upload else 'application/json'):
-                return text(415, 'Send a JPEG photo.' if upload else 'Send JSON.')
+            if kind != ('audio/wav' if req.path=='/api/discord/voice' else 'image/jpeg' if upload else 'application/json'):
+                return text(415, 'Send a WAV recording.' if req.path=='/api/discord/voice' else 'Send a JPEG photo.' if upload else 'Send JSON.')
         elif req.method != "GET":
             return text(405, "Method not allowed.", [("Allow", "GET, POST")])
         if req.method == "GET" and (req.path == "/" or req.path.startswith("/static/")):
@@ -865,6 +877,8 @@ class ConsoleApp:
                   ("POST", "/api/discord"): self._api_discord_action,
                   ("POST", "/api/discord/upload"): self._api_discord_upload,
                   ("GET", "/api/discord/image"): self._api_discord_image,
+                  ("POST", "/api/discord/voice"): self._api_voice_upload,
+                  ("GET", "/api/discord/voice"): self._api_voice_audio,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/tonight"): self._api_tonight,
                   ("GET", "/api/gpu"): self._api_gpu,
@@ -1704,6 +1718,7 @@ class ConsoleApp:
             trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
             read_marks=read_marks, server=self.server_enabled)
         view['photos'] = self.photos.enabled and self.controls.enabled
+        view['voice_notes'] = self.voice_notes.enabled and self.controls.enabled
         fp = None
         if channel is not None and not view["missing"]:
             fp = discordview.watched(conn, channel, thread)
@@ -1759,6 +1774,66 @@ class ConsoleApp:
         if self.link is None:
             return 409, "Nothing was saved: the console has no link to the mind's control endpoint."
         return None
+
+    async def _api_voice_upload(self, req: Request):
+        from ..voice_notes import files
+        if not self.voice_notes.enabled or not self.controls.enabled:
+            return json_response(403, {'ok':False,'error':'Voice notes are off or this console is read-only.'})
+        problem=self._discord_problem()
+        if problem is not None:
+            return json_response(problem[0],{'ok':False,'error':problem[1]})
+        try:
+            files.check_wav(req.body)
+            async with self._voice_upload_lock:
+                now=self._monotonic()
+                self._voice_uploads=[t for t in self._voice_uploads if now-t<60]
+                if len(self._voice_uploads)>=4:
+                    return json_response(429,{'ok':False,'error':'Wait a minute before another voice note (four per minute).'})
+                day=mind_clock.local_at(self._clock()).date().isoformat()
+                if self._voice_day!=day:
+                    self._voice_day_total=await asyncio.to_thread(files.staged_count,self.s.data_dir,day)
+                    self._voice_day=day
+                if self._voice_day_total>=100:
+                    return json_response(429,{'ok':False,'error':"Today's 100-recording allowance is used up."})
+                token,ms,size=await asyncio.to_thread(files.stage,self.s.data_dir,req.body)
+                self._voice_uploads.append(now)
+                self._voice_day_total+=1
+        except files.AudioRefused as error:
+            return json_response(413 if error.code=='too_big' else 400,
+                {'ok':False,'error':files.WORDS.get(error.code,'The recording could not be saved.')})
+        except Exception as error:
+            log.warning('voice_note_upload_failed reason=%s',type(error).__name__)
+            return json_response(503,{'ok':False,'error':'The recording could not be saved.'})
+        return json_response(201,{'ok':True,'token':token,'ms':ms,'bytes':size})
+
+    async def _api_voice_audio(self, req: Request):
+        from ..voice_notes import files
+        from ..voice_notes.service import rows
+        if set(req.query)!={'id'} or len(req.query['id'])!=1:
+            return text(400,'Choose one voice message.')
+        mid=digits(req.query['id'][0],19)
+        if mid is None or not 0<mid<2**63:
+            return text(400,'Choose one voice message.')
+        def read(conn):
+            row=rows(conn,[mid]).get(mid)
+            if row is None:
+                return None
+            message=conn.execute('SELECT channel FROM discord_message WHERE id=?',(mid,)).fetchone()
+            from ..discord.layout import dm_peer
+            if message is None or dm_peer(message[0]) is None:
+                return None
+            relative=Path(row['path'])
+            if relative.parent!=files.VOICE or relative.suffix not in ('.wav','.ogg'):
+                return None
+            return files.read_audio(self.s.data_dir/relative,self.s.data_dir)
+        try:
+            data=await asyncio.to_thread(feed.read,self.s.data_dir/'mind.db',read)
+        except Exception:
+            data=None
+        if data is None:
+            return text(404,'No voice note.')
+        return Response(200,data,'audio/ogg' if data.startswith(b'OggS') else 'audio/wav',
+            [('Cache-Control','private, max-age=60'),('Cross-Origin-Resource-Policy','same-origin')])
 
     async def _api_discord_upload(self, req: Request):
         from ..photos import images, uploads
@@ -1943,7 +2018,8 @@ class ConsoleApp:
         from .httpd import Route, serve
         from ..photos.images import MAX_IMAGE_BYTES
         self._server = await serve(self.handle, HOST, self.s.port, routes={
-            ('POST', '/api/discord/upload'): Route(MAX_IMAGE_BYTES, 60., True)})
+            ('POST', '/api/discord/upload'): Route(MAX_IMAGE_BYTES, 60., True),
+            ('POST', '/api/discord/voice'): Route(2097152, 60., True)})
         self.s.port = self._server.sockets[0].getsockname()[1]
         self.origin = f"http://{HOST}:{self.s.port}"
         await self.refresh(force=True)
