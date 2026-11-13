@@ -680,7 +680,12 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
         auto why = check.empty() ? fault.reason : LeaveReadbackFault(entry, fault.guid, check, fault.reason);
         return fault.guid == guid ? fail(std::move(why)) : refuse(std::move(why));
     }
-    if (Expired(state)) return fail("leave_cleanup_unproved");
+    if (Expired(state))
+    {
+        auto check = LeaveReadbackCheck(entry, guid);
+        return fail(check.empty() ? "leave_cleanup_unproved"
+            : LeaveReadbackFault(entry, guid, check, "leave_cleanup_unproved"));
+    }
     auto stage = state.at("stage").get<std::string>();
     if (stage == "shared_lfg") return LeaveOnlineLfgGroup(entry, guid);
     auto* field = sBattlefieldMgr->GetBattlefieldToZoneId(4197);
@@ -688,12 +693,14 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     {
         auto const destination = LoadDestination(state.at("dest"));
         if (bot->IsBeingTeleported())
-            return TeleportMatches(bot, destination) ? Pending(state) : Unproved(state, "leave_worldport_changed");
+            return TeleportMatches(bot, destination) ? Pending(state)
+                : Unproved(state, LeaveReadbackFault(entry, guid, "teleport", "leave_worldport_changed"));
         if (!At(FindOnline(guid), destination)) return Pending(state);
         if (bot->GetDelayedOperations() & (DELAYED_BG_MOUNT_RESTORE | DELAYED_BG_TAXI_RESTORE | DELAYED_BG_GROUP_RESTORE))
             return Pending(state);
         auto group = GroupId(bot);
-        if (group != state.at("result_group").get<std::uint64_t>()) return Unproved(state, "leave_group_cleanup_unproved");
+        if (group != state.at("result_group").get<std::uint64_t>())
+            return Unproved(state, LeaveReadbackFault(entry, guid, "group", "leave_group_cleanup_unproved"));
         auto source = state.at("source").get<std::string>();
         if ((source == "bg" && bot->InBattleground())
             || (source == "wg" && WgMember(field, bot->GetGUID()))
@@ -771,14 +778,15 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
             {{bot->GetMapId(), bot->GetInstanceId(), GroupId(bot)}}); !why.empty()) return fail(why);
         state["changed"] = true;
         sLFGMgr->LeaveLfg(bot->GetGUID());
-        if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE) return Unproved(state, "lfg_queue_leave_unproved");
+        if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE)
+            return Unproved(state, LeaveReadbackFault(entry, guid, "lfg", "lfg_queue_leave_unproved"));
         return Pending(state);
     }
     if (field && WgMember(field, bot->GetGUID()))
         return fail("wg_private_state_unavailable");
     if (QueuedForPvp(bot) || bot->InBattleground() || sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE
         || (bot->GetGroup() && (bot->GetGroup()->isLFGGroup() || bot->GetGroup()->isBGGroup() || bot->GetGroup()->isBFGroup())))
-        return fail("leave_cleanup_unproved");
+        return fail(LeaveReadbackFault(entry, guid, LeaveReadbackCheck(entry, guid), "leave_cleanup_unproved"));
     if (entry.cursor + 1 < entry.guids.size())
         if (auto why = VerifyCleanupReceipts(entry); !why.empty()) return Unproved(state, why);
     bool const bodyChanged = state.at("changed").get<bool>() || TouchedByCleanup(entry, guid);

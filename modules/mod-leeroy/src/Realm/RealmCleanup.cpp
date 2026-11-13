@@ -474,7 +474,17 @@ RealmStep LeaveNativeQueue(Queued& entry, std::uint32_t guid, std::uint32_t slot
             player && player->GetBattlegroundQueueIndex(type) >= PLAYER_MAX_BATTLEGROUND_QUEUES,
             player && !player->IsInvitedForBattlegroundQueueType(type) && !queue.IsPlayerInvitedToRatedArena(PlayerGuid(member)), slotsPreserved});
     }
-    if (!ReadQueueCleanup(affected, readback)) return Result(entry, StepState::Unknown, "queue_leave_unproved");
+    if (!ReadQueueCleanup(affected, readback))
+    {
+        for (auto const& actual : readback)
+            if (!ReadQueueCleanup({actual.guid}, {actual}))
+            {
+                auto check = LeaveReadbackCheck(entry, actual.guid);
+                return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, actual.guid,
+                    check.empty() ? "queue" : check, "queue_leave_unproved"));
+            }
+        return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, guid, "queue", "queue_leave_unproved"));
+    }
     WorldPacket status;
     sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, templateBg, static_cast<uint8>(slot), STATUS_NONE, 0, 0, 0, TEAM_NEUTRAL);
     bot->SendDirectMessage(&status);
@@ -516,8 +526,14 @@ RealmStep LeaveObservedLfgApplicants(Queued& entry, std::uint32_t guid)
     if (!entry.payload.contains("lfg_applicant_cleanup_receipts")) entry.payload["lfg_applicant_cleanup_receipts"] = Json::array();
     entry.payload["lfg_applicant_cleanup_receipts"].push_back({{"group", receipt->group}, {"join", receipt->join}, {"members", members}});
     CancelLfgApplicants(*receipt);
-    if (!VerifyLfgApplicantCleanup(entry.id, receipt->group, receipt->join))
-        return Result(entry, StepState::Unknown, "lfg_applicant_leave_unproved");
+    std::uint32_t failedGuid = 0;
+    if (!VerifyLfgApplicantCleanup(entry.id, receipt->group, receipt->join, &failedGuid))
+    {
+        if (!failedGuid) failedGuid = members.front(); // group-wide receipt failure
+        auto check = LeaveReadbackCheck(entry, failedGuid);
+        return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, failedGuid,
+            check.empty() ? "lfg" : check, "lfg_applicant_leave_unproved"));
+    }
     return Result(entry, StepState::Pending);
 }
 
@@ -565,14 +581,20 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
     }
     auto& receipt = entry.payload["lfg_cleanup_receipts"].at(state.at("receipt").get<std::size_t>());
     CurrentScopes(state, receipt, guid);
-    auto const left = ReadLeftMembers(entry, receipt);
-    if (left == CleanupReadback::Unknown) return Failure(entry, "lfg_member_cleanup_unproved");
+    std::uint32_t failedGuid = 0;
+    auto const left = ReadLeftMembers(entry, receipt, &failedGuid);
+    if (left == CleanupReadback::Unknown)
+    {
+        if (!failedGuid) failedGuid = guid;
+        auto check = LeaveReadbackCheck(entry, failedGuid);
+        return Failure(entry, LeaveReadbackFault(entry, failedGuid, check.empty() ? "lfg" : check, "lfg_member_cleanup_unproved"));
+    }
     if (left == CleanupReadback::Pending) return Result(entry, StepState::Pending);
     auto const remaining = ReceiptGuids(receipt, true);
     auto* group = Lookup(receipt.at("group").get<std::uint64_t>());
     if (remaining.empty())
     {
-        if (group) return Failure(entry, "lfg_group_disband_unproved");
+        if (group) return Failure(entry, LeaveReadbackFault(entry, guid, "group", "lfg_group_disband_unproved"));
         receipt["complete"] = true;
         state["stage"] = "queues";
         return Result(entry, StepState::Pending);
@@ -632,11 +654,20 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
         if (!player || !module.ValidateOwnedBody(memberGuid, entry.id).empty() || player->GetGroup() || player->GetOriginalGroup()
             || sLFGMgr->GetState(player->GetGUID()) != lfg::LFG_STATE_NONE || sLFGMgr->GetGroup(player->GetGUID())
             || !EntryMatches(player, member) || !At(player, Load(member.at("origin")), false))
-            return Result(entry, StepState::Unknown, "lfg_survivor_exit_unproved");
+        {
+            auto check = LeaveReadbackCheck(entry, memberGuid);
+            return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, memberGuid,
+                check.empty() ? "lfg" : check, "lfg_survivor_exit_unproved"));
+        }
         if (!player->TeleportToEntryPoint()) return Result(entry, StepState::Unknown, "lfg_survivor_worldport_refused");
     }
-    if (ReadLeftMembers(entry, receipt) == CleanupReadback::Unknown)
-        return Result(entry, StepState::Unknown, "lfg_member_cleanup_unproved");
+    if (ReadLeftMembers(entry, receipt, &failedGuid) == CleanupReadback::Unknown)
+    {
+        if (!failedGuid) failedGuid = guid;
+        auto check = LeaveReadbackCheck(entry, failedGuid);
+        return Result(entry, StepState::Unknown, LeaveReadbackFault(entry, failedGuid,
+            check.empty() ? "lfg" : check, "lfg_member_cleanup_unproved"));
+    }
     return Result(entry, StepState::Pending);
 }
 
@@ -703,9 +734,12 @@ std::string VerifyCleanupReceipts(Queued& entry, std::uint32_t skipping)
                     player && !player->IsInvitedForBattlegroundQueueType(type) && !queue.IsPlayerInvitedToRatedArena(PlayerGuid(guid)), true});
             }
             if (!ReadQueueCleanup(members, readback))
+            {
                 for (auto const& actual : readback)
                     if (!ReadQueueCleanup({actual.guid}, {actual}))
                         return LeaveReadbackFault(entry, actual.guid, "queue", "queue_cleanup_readback_changed");
+                return LeaveReadbackFault(entry, members.at(0), "queue", "queue_cleanup_readback_changed");
+            }
         }
     if (entry.payload.contains("lfg_cleanup_receipts"))
         for (auto const& receipt : entry.payload.at("lfg_cleanup_receipts"))
