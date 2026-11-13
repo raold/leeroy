@@ -3,6 +3,8 @@ import json
 import re
 from datetime import date
 
+from leeroy_mind.culture.config import enabled as culture_enabled
+from leeroy_mind.culture.origins import COLD_DAYS, RETIRE_USES, origin_text, term_origin, loot_record, fold_banter_uses
 from leeroy_mind.logs import log
 from leeroy_mind.discord.channels import is_public
 from leeroy_mind.nightly import knowledge
@@ -103,7 +105,11 @@ def source_snapshot(store, refs):
                 value = (term["id"], term["kind"], term["term"], term["target"], term["origin_ref"],
                          term["originator"], term["status"], children)
             else:
-                node = _public_node(store, ref)
+                receipt = loot_record(store.conn, ref) if ref.startswith("loot:") else None
+                if receipt and (knowledge.is_secret(store, ref) or knowledge.is_private(store, ref)):
+                    return None
+                node = ((json.dumps(receipt, sort_keys=True), (), True) if receipt else
+                        _public_node(store, ref))
                 if node is None:
                     return None
                 value, children, original = node
@@ -325,12 +331,15 @@ def adopt(store, ctx, term_id, guid, *, via, now, refs=(), use=False):
     return True
 
 
-def create_term(store, ctx, *, kind, term, target=0, origin_ref, originator, adopters=(), now, refs=()):
+def create_term(store, ctx, *, kind, term, target=0, origin_ref, originator, adopters=(), now, refs=(),
+                butt=0, origin_kind="line", origin_refs=()):
     """Create once; an active duplicate reuses its ID, a vetoed/dormant one returns None.
 
     Empty adopters really means empty: callers decide whether the originator adopts.
     Every source must already be screened and public; this helper repeats core gates.
     """
+    if origin_kind != "line" and not culture_enabled(ctx):
+        return None
     raw = re.sub(r"\|([TH])", r"|\1 ", term)
     if has_meta(raw) or names_real_name(raw, ctx.ident):
         return None
@@ -343,13 +352,25 @@ def create_term(store, ctx, *, kind, term, target=0, origin_ref, originator, ado
             or (kind != "nickname" and target != 0)
             or public_sources(store, (origin_ref, *refs)) is None):
         return None
+    if culture_enabled(ctx):
+        if type(butt) is not int or butt not in members | {0} or origin_kind not in {"line", "event"}:
+            return None
+        if kind == "joke" and origin_kind == "line":
+            return None
+        if origin_kind == "event":
+            source = dict(origin_refs=json.dumps(origin_refs), butt=butt, originator=originator, born=now)
+            if not origin_refs or origin_ref != origin_refs[0] or origin_text(store.conn, term_origin(source), {}) is None:
+                return None
     old = store.conn.execute("SELECT * FROM lexicon WHERE kind=? AND term=? AND target=?",
                              (kind, term, target)).fetchone()
-    if old is not None and old["status"] != "active":
+    if old is not None and (old["status"] != "active" or culture_enabled(ctx) and old["retired"] is not None):
         return None
     if old is None:
         ident = store.conn.execute("INSERT INTO lexicon(kind,term,target,origin_ref,originator,born,last_used) "
             "VALUES (?,?,?,?,?,?,?)", (kind, term, target, origin_ref, originator, now, now)).lastrowid
+        if culture_enabled(ctx):
+            store.conn.execute("UPDATE lexicon SET butt=?,origin_kind=?,origin_refs=? WHERE id=?",
+                (butt, origin_kind, json.dumps(origin_refs), ident))
         store.set_meta(f"nightly:lexicon-born-night:{ident}", ctx.night)
     else:
         ident = old["id"]
@@ -379,6 +400,7 @@ def _validate_variant(ctx, line, term):
 def spread(ctx):
     """One frozen attribution per public line, with rule-driven conversions and variants."""
     store, now = ctx.store, ctx.clock.now()
+    culture = culture_enabled(ctx)
     rows = store.conn.execute("SELECT id FROM chat_line WHERE channel!='whisper' AND ts>=? AND ts<? "
                               "ORDER BY ts,id", ctx.window).fetchall()
     for raw in rows:
@@ -398,6 +420,8 @@ def spread(ctx):
         used = []
         for term in terms:
             ident = term["id"]
+            if culture and term["retired"] is not None:
+                continue
             cited_joke = term["kind"] == "joke" and ident in recalled
             if not has_word(line["text"], term["term"]) and not cited_joke:
                 continue
@@ -411,6 +435,8 @@ def spread(ctx):
                     store.conn.execute("UPDATE lexicon SET status='dormant' WHERE id=?", (ident,))
                 continue
             store.conn.execute("UPDATE lexicon SET uses=uses+1,last_used=? WHERE id=?", (line["ts"], ident))
+            if culture and store.get_meta(f"culture:wear-counted:joke:{ident}:{line['id']}") is None:
+                store.conn.execute("UPDATE lexicon SET uses_total=uses_total+1 WHERE id=?", (ident,))
             key = f"nightly:lexicon-uses:{ctx.night}:{ident}"
             store.set_meta(key, str(int(store.get_meta(key) or 0) + 1))
             used.append(ident)
@@ -435,6 +461,9 @@ def spread(ctx):
 
 def fade(ctx):
     store, now = ctx.store, ctx.clock.now()
+    culture = culture_enabled(ctx)
+    if culture:
+        fold_banter_uses(store)
     for term in store.conn.execute("SELECT * FROM lexicon WHERE status!='vetoed' ORDER BY id").fetchall():
         key = f"nightly:lexicon-heat:{term['id']}"
         state = json.loads(store.get_meta(key) or "null")
@@ -448,6 +477,13 @@ def fade(ctx):
         added = state["uses"] if state and nights == 0 else 0
         heat = term["heat"] * HEAT_DECAY ** nights + max(0, uses - added)
         status = term["status"]
+        if culture and term["kind"] == "joke":
+            missing = (origin_text(store.conn, term_origin(term), {}) is None
+                       if term["origin_kind"] == "event" else source_snapshot(store, (f"joke:{term['id']}",)) is None)
+            if (term["retired"] is not None or term["uses_total"] >= RETIRE_USES
+                    or term["born"] < now - COLD_DAYS * 86400 and heat < 1 or missing):
+                status = "dormant"
+                store.conn.execute("UPDATE lexicon SET retired=coalesce(retired,?) WHERE id=?", (now, term["id"]))
         if status == "active" and heat < DORMANT_HEAT and term["last_used"] < now - DORMANT_DAYS * 86400:
             status = "dormant"
         store.conn.execute("UPDATE lexicon SET heat=?,status=? WHERE id=?", (heat, status, term["id"]))

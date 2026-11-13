@@ -4,6 +4,7 @@ from collections import deque
 import json
 import logging
 
+from leeroy_mind.culture.config import load_culture_config
 from leeroy_mind.clock import night_of
 from leeroy_mind.discord.channels import is_discord, same_medium
 from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
@@ -28,6 +29,10 @@ BLOCKED = {RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WIPE_DEBRIEF}
 LIMIT_KEY = "banter:starts"
 TEASE_KEY = "banter:owner-evening"
 JOKE_KEY = "banter:joke-evening"
+
+
+def culture_on(app):
+    return load_culture_config(getattr(app, "data_dir", app.engine.data_dir) / "mind.toml").enabled
 
 
 class ThreadGuards(Guards):
@@ -181,8 +186,8 @@ class Banter:
 
     def unused(self,topic,now):
         if topic.kind=='joke':
-            at,count=joke_uses(self.app.store,topic.key)
-            if count>=4 or now-at<JOKE_COOLDOWN or self.app.store.get_meta(JOKE_KEY)==night_of(self.app.clock.local()):
+            at,count=joke_uses(self.app.store,topic.key,durable=culture_on(self.app))
+            if count>=(12 if culture_on(self.app) else 4) or now-at<JOKE_COOLDOWN or self.app.store.get_meta(JOKE_KEY)==night_of(self.app.clock.local()):
                 return False
         stamp = self.app.store.get_meta("banter:used:"+topic.key)
         return stamp is None or (topic.kind in {"joke","quiet"} and now-float(stamp)>=86400)
@@ -204,7 +209,7 @@ class Banter:
                 continue
             eligible.append(t)
             if t.kind=='joke':
-                at,count=joke_uses(app.store,t.key)
+                at,count=joke_uses(app.store,t.key,durable=culture_on(app))
                 weights.append(min(4,max(1,(now-at)/JOKE_COOLDOWN))*(.5**count))
             else: weights.append(4)
         if eligible:
@@ -233,7 +238,7 @@ class Banter:
             app.store.conn.execute("DELETE FROM meta WHERE key LIKE 'banter:used:%' AND CAST(value AS REAL)<?",(now-7*86400,))
         return True
 
-    def settle_reservation(self,topic,sent):
+    def settle_reservation(self,topic,sent,first_line=None):
         if not self._reservation or self._reservation[0]!=topic.key: return
         _,prior,changes=self._reservation; self._reservation=None
         with self.app.store.transaction():
@@ -245,8 +250,14 @@ class Banter:
                     if value is None: self.app.store.conn.execute('DELETE FROM meta WHERE key=?',(key,))
                     else: self.app.store.set_meta(key,value)
             elif topic.kind=='joke':
-                _,count=joke_uses(self.app.store,topic.key)
-                self.app.store.set_meta('banter:joke-use:'+topic.key,json.dumps({'at':self.app.clock.now(),'count':count+1}))
+                _,count=joke_uses(self.app.store,topic.key,durable=culture_on(self.app))
+                if culture_on(self.app):
+                    self.app.store.conn.execute("UPDATE lexicon SET uses_total=uses_total+1,last_used=? WHERE id=?",
+                        (self.app.clock.now(),int(topic.key[5:])))
+                    if first_line is not None:
+                        self.app.store.set_meta(f"culture:wear-counted:{topic.key}:{first_line}", '1')
+                else:
+                    self.app.store.set_meta('banter:joke-use:'+topic.key,json.dumps({'at':self.app.clock.now(),'count':count+1}))
 
     def valid(self,channel,owner_id,topic,now):
         if topic.source_channel and not same_medium(topic.source_channel,channel):
@@ -271,6 +282,7 @@ class Banter:
         self.active = True
         e.banter_active = not is_discord(channel)
         delivered=0
+        first_line=None
         try:
             for index in range(maximum):
                 if not self.valid(channel,owner_id,topic,app.clock.now()):
@@ -306,6 +318,8 @@ class Banter:
                 row = app.store.conn.execute("SELECT id FROM chat_line WHERE from_guid=? AND channel=? "
                     "AND origin='mind' ORDER BY id DESC LIMIT 1",(speaker,channel)).fetchone()
                 line_id = row[0] if row else None
+                if first_line is None:
+                    first_line=line_id
                 if is_discord(channel):
                     row = app.store.conn.execute("SELECT id FROM discord_message WHERE author=? AND channel='general' "
                         "AND origin='mind' ORDER BY id DESC LIMIT 1",(speaker,)).fetchone()
@@ -314,7 +328,7 @@ class Banter:
         finally:
             self.active = False
             e.banter_active = False
-            self.settle_reservation(topic,delivered)
+            self.settle_reservation(topic,delivered,first_line)
 
     async def tick(self):
         now = self.app.clock.now()
