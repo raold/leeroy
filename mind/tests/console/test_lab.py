@@ -253,10 +253,20 @@ def test_configured_freeze_reaches_each_direct_writer_without_lab_overrides(stor
     proposal={'family':'length','params':{'min_words':5,'max_words':15}}
     assert not coach.propose_arm(store,arms,proposal,'frozen',clock.now(),settings=cfg)
     assert store.conn.total_changes==before
-    # Explicit owner changes remain usable; unfreezing does not enable disabled features.
+    # The Lab cannot lift a freeze or a frozen family that mind.toml sets (ruling 2026-11-12)
     control.change(store,{'action':'freeze','frozen':False},now=clock.now())
-    assert not control.frozen(store.conn,cfg)
+    control.change(store,{'action':'family','family':'length','frozen':False},now=clock.now())
+    assert control.frozen(store.conn,cfg)
+    assert 'length' in control.effective(store.conn,cfg).frozen_families
     assert not coach.propose_arm(store,arms,proposal,'family-frozen',clock.now(),settings=cfg)
+    view=labview.lab_view(store.conn,now=clock.now(),config=cfg)
+    assert view['config_freeze'] is True and view['config_frozen_families']==['length']
+    # A freeze the Lab set, it can lift again
+    plain=load_learn_config(tmp_path/'none.toml')
+    control.change(store,{'action':'freeze','frozen':True},now=clock.now())
+    assert control.frozen(store.conn,plain)
+    control.change(store,{'action':'freeze','frozen':False},now=clock.now())
+    assert not control.frozen(store.conn,plain)
 
 
 def test_configured_freeze_is_passed_by_live_pipeline(store,tmp_path):

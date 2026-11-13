@@ -12,7 +12,9 @@ function draw(box) {
   box.querySelectorAll('button,input').forEach(b => { b.disabled = !!reason || busy; });
   box.querySelectorAll('[data-vote]').forEach(b => b.setAttribute('aria-pressed',String(saved.value === Number(b.dataset.vote))));
   box.querySelectorAll('[data-reason]').forEach(b => { b.checked = (drafts.get(id) || saved.reasons).includes(b.dataset.reason); });
-  box.querySelector('.feedback-status').textContent = busy ? 'Saving feedback…' : reason ||
+  // Why the controls are off goes on the controls, not under every line (200 copies a view)
+  box.title = reason || '';
+  box.querySelector('.feedback-status').textContent = busy ? 'Saving feedback…' :
     (!saved.value && drafts.has(id) ? 'Choose thumbs up or down to save these reasons.' : saved.message || '');
 }
 function update(id) {
@@ -47,7 +49,7 @@ export function feedbackButtons(line,author) {
     const b = el('button','',value===1 ? '👍' : '👎'); b.type='button'; b.dataset.vote=String(value);
     b.dataset.focus='feedback-'+id+'-'+value;
     b.setAttribute('aria-label',(value===1 ? 'Thumbs up' : 'Thumbs down')+' on '+author+'’s line '+id);
-    b.addEventListener('click',() => send(id,value,drafts.get(id) || receipts.get(id).reasons)); box.appendChild(b);
+    b.addEventListener('click',() => send(id,value,drafts.get(id) || (receipts.get(id) || vote(null,[])).reasons)); box.appendChild(b);
   });
   const detail = el('details','feedback-reasons'), summary=el('summary','','Reasons (optional)');
   detail.appendChild(summary); const chips = el('div','feedback-chips');
@@ -55,7 +57,7 @@ export function feedbackButtons(line,author) {
     const label=el('label','feedback-chip'), input=el('input'); input.type='checkbox'; input.dataset.reason=reason;
     input.dataset.focus='feedback-'+id+'-'+reason;
     input.addEventListener('change',() => {
-      const saved=receipts.get(id), before=drafts.get(id) || saved.reasons;
+      const saved=receipts.get(id) || vote(null,[]), before=drafts.get(id) || saved.reasons;
       const reasons=REASONS.filter(r => r===reason ? input.checked : before.includes(r));
       if (saved.value) { send(id,saved.value,reasons); }
       else { drafts.set(id,reasons); update(id); }

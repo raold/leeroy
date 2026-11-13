@@ -65,7 +65,10 @@ function arms(view) {
   const box=$('lab-arms'); clear(box);
   latest.families.forEach(f => {
     const d=details(f,'family-'+f), frozen=latest.frozen_families.includes(f);
-    d.appendChild(button(frozen ? 'Unfreeze family' : 'Freeze family',() => mutate({action:'family',family:f,frozen:!frozen})));
+    const fixed=(latest.config_frozen_families || []).includes(f);
+    const toggle=button(fixed ? 'Frozen in mind.toml' : frozen ? 'Unfreeze family' : 'Freeze family',() => mutate({action:'family',family:f,frozen:!frozen}));
+    if (fixed) { toggle.disabled=true; }
+    d.appendChild(toggle);
     if (!view.available) { empty(d); }
     view.arms.filter(a => a.family===f).forEach(a => {
       const arm=details(a.id+' · '+a.status,'arm-'+a.id); arm.appendChild(el('p','mono',JSON.stringify(a.params)));
@@ -127,7 +130,8 @@ $('lab-weights-reset').addEventListener('click',() => { editVersion=null; if (la
 $('lab-freeze').addEventListener('click',() => {
   if (latest) {
     const frozen = !latest.freeze;
-    confirm(!frozen ? 'Unfreeze learning? Its configured switches still apply.' :
+    if (latest.config_freeze) { return; }
+    confirm(!frozen ? 'Unfreeze learning?' :
     'Freeze learning? New scoring, arms, coach lessons, voice fingerprints and preference capture will pause. Your feedback is still saved.',
     () => mutate({action:'freeze',frozen}));
   }
@@ -137,9 +141,10 @@ function render(value) {
   const open=new Set([...$('tab-lab').querySelectorAll('details[open]')].map(d => d.dataset.detail || d.id));
   const focused=document.activeElement;
   const focusKey=$('tab-lab').contains(focused) ? focused.dataset.labFocus : null;
-  latest=value; $('lab-freeze').textContent=value.freeze ? 'Unfreeze learning' : 'Freeze learning';
+  latest=value; $('lab-freeze').textContent=value.config_freeze ? 'Frozen in mind.toml' : value.freeze ? 'Unfreeze learning' : 'Freeze learning';
   $('lab-freeze').setAttribute('aria-pressed',String(value.freeze));
-  $('lab-learning-state').textContent=value.freeze ? 'Learning is frozen.' : value.enabled ? 'Learning is enabled by its config.' : 'Learning is disabled in config. Controls do not enable it.';
+  $('lab-freeze').disabled=!!value.config_freeze;
+  $('lab-learning-state').textContent=value.config_freeze ? 'Learning is frozen in mind.toml ([learn] freeze). Change it there.' : value.freeze ? 'Learning is frozen.' : value.enabled ? 'Learning is enabled by its config.' : 'Learning is disabled in config. Controls do not enable it.';
   rewards(value.rewards); arms(value.arms); lessons(value.lessons); weights(value.weights);
   $('lab-report').textContent=value.report===null ? 'Not set up yet.' : JSON.stringify(value.report,null,2);
   $('tab-lab').querySelectorAll('details').forEach(d => {

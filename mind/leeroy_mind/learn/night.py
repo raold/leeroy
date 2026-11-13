@@ -151,13 +151,14 @@ async def stage_rewards(ctx):
     if not ctx.settings.learn_enabled or not ready(ctx.store):
         return
     cfg = load_learn_config(ctx.settings.data_dir / 'mind.toml')
-    if effective(ctx.store.conn, cfg).freeze:
-        return
     conn = ctx.store.conn
+    # The 90-day retention of private drafts and vectors is not learning: a freeze keeps it.
+    from .capture import prune, available as capture_available
+    if not ctx.done('rewards','preference_prune') and await read_work(ctx,lambda c:capture_available(c.store.conn)):
+        ctx.commit('rewards','preference_prune',lambda store:prune(store.conn,ctx.clock.now(),schema_available=True))
+    if effective(conn, cfg).freeze:
+        return
     try:
-        from .capture import prune, available as capture_available
-        if not ctx.done('rewards','preference_prune') and await read_work(ctx,lambda c:capture_available(c.store.conn)):
-            ctx.commit('rewards','preference_prune',lambda store:prune(store.conn,ctx.clock.now(),schema_available=True))
         ids = await read_work(ctx,_selection)
         with ctx.store.transaction():
             if effective(conn,cfg).freeze:

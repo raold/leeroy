@@ -20,13 +20,16 @@ def overrides(conn):
 
 
 def effective(conn, cfg=None):
+    """The learning switches in force: mind.toml's, plus the Lab's overrides. The Lab can freeze
+    more and lift its own freezes, never one mind.toml sets (owner ruling 2026-11-12)."""
     cfg = cfg or LearnCfg()
     saved = overrides(conn)
     families = set(cfg.frozen_families)
     for family in arms.FAMILIES:
-        if 'family:'+family in saved:
-            (families.add if saved['family:'+family] else families.discard)(family)
-    return replace(cfg, freeze=saved.get('freeze', cfg.freeze), frozen_families=tuple(sorted(families)))
+        if saved.get('family:'+family) is True:
+            families.add(family)
+    return replace(cfg, freeze=cfg.freeze or saved.get('freeze') is True,
+                   frozen_families=tuple(sorted(families)))
 
 
 def frozen(conn, cfg=None):
@@ -79,7 +82,7 @@ def change(store, args, *, now):
             key = 'freeze' if action == 'freeze' else 'family:'+args['family']
             store.set_meta(PREFIX+key, json.dumps(args['frozen']))
             subject = 'Learning' if action == 'freeze' else args['family'].capitalize()+' arms'
-            message = subject+(' frozen.' if args['frozen'] else ' unfrozen. Configured learning switches still apply.')
+            message = subject+(' frozen.' if args['frozen'] else ' unfrozen here. A freeze set in mind.toml still holds.')
         elif action == 'weights':
             if not weights.available(conn):
                 raise ValueError('Reward weights are not set up in this database yet.')

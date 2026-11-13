@@ -172,8 +172,10 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
                 report = _numeric(parsed) if type(parsed) is dict else None
             except (ValueError, RecursionError):
                 pass
+    base = config if config is not None else control.LearnCfg()
     return {'at': now, 'freeze': cfg.freeze, 'families': list(arms.FAMILIES),
             'frozen_families': list(cfg.frozen_families), 'enabled': cfg.enabled,
+            'config_freeze': bool(base.freeze), 'config_frozen_families': sorted(base.frozen_families),
             'rewards': _rewards(conn, now), 'arms': _arms(conn, now),
             'lessons': {'available': lessons.available(conn), 'items': notes, 'members':people,
                         'member':member, 'offset':offset, 'total':total, 'more':offset+len(notes)<total},
