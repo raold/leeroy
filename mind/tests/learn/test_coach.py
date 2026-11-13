@@ -67,6 +67,7 @@ def test_fake_model_proposes_scoped_lesson_once_without_logging_content(context,
             assert len(llm.calls)==1
             encoded=json.dumps(llm.calls)
             assert 'member fixture 0' in encoded and 'member fixture 9' in encoded
+            assert 'source_ids' not in encoded
             assert len(coach.evidence(ctx,101)[2]) == 6
             assert 'owner fixture' not in caplog.text and note()['text'] not in caplog.text
     asyncio.run(go())

@@ -227,6 +227,8 @@ async def stage(ctx):
                 ctx.skip(STAGE,unit)
                 return
             audience,channel,exchanges,current=data
+            # Provenance ids stay beside the payload: the model sees exactly what main sent it.
+            source_ids={ident for exchange in exchanges for ident in exchange.pop('source_ids')}
             p=ctx.persona(guid)
             from leeroy_mind.tuning.effective import dials_of
             dials={name:dials_of(p).value(name,p) for name in ('forward','humour')}
@@ -272,8 +274,7 @@ async def stage(ctx):
                 try:
                     from .audience import evidence
                     cache = ctx._memo.setdefault('learn:provenance', {})
-                    sources = evidence(store.conn, {ident for exchange in exchanges
-                                        for ident in exchange['source_ids']}, cache=cache)
+                    sources = evidence(store.conn, source_ids, cache=cache)
                     lessons.persist(store.conn,guid,result,known=known,night=ctx.night,
                                     now=ctx.clock.now(),automatic=cfg.auto_lessons,settings=cfg,
                                     expected=expected,sources=sources)
