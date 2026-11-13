@@ -8,6 +8,7 @@ from .logs import log
 
 KEY = 'gpu:paused'
 IN_GAME = 'Log out of WoW first: your game keeps the model loaded'
+UNKNOWN = "Can't tell whether you're in WoW yet; try again in a moment."
 
 
 def since_value(raw):
@@ -68,12 +69,25 @@ class GpuControl:
     def refusal(self):
         app = self.app
         holders = app.arbiter.holders
-        if 'human' in holders or app.world.human_online or app.night_scheduler.presence.online:
+        if 'human' in holders:
             return 'gpu_in_game', IN_GAME
+        try:
+            # Known only from a hello on a live bridge: before the first one, while the bridge
+            # is down or when the session cannot be read, he may be in WoW.
+            known = getattr(app, 'hello', None) is not None and app.bridge.connected
+            online = app.world.human_online, app.night_scheduler.presence.online
+        except Exception:
+            known = False
+        if known and any(online):
+            return 'gpu_in_game', IN_GAME
+        if not known or online[1] is None:
+            return 'gpu_presence_unknown', UNKNOWN
         if 'offline_raid' in holders:
             return 'gpu_held', 'An offline raid holds the GPU. Stop it in the Raid tab first.'
         other = holders - {'server', 'discord', 'voice_gpu'}
         if other:
+            # No training job takes a GPU lease today: lab trials and benchmarks are native body
+            # jobs with no model. The words stay as a defence should one ever take a lease.
             return 'gpu_held', ('A Training lab trial holds the GPU. Stop it in the Training tab first.'
                 if any('lab' in h or 'train' in h for h in other) else
                 'A live GPU job holds the GPU (' + ', '.join(sorted(other)) + '). Stop it first.')

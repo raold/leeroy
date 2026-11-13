@@ -141,6 +141,17 @@ def mind_app(root: Path, *, toml: str = "", prepare: Callable[[Store], None] | N
     return MindApp(load_config(root / "mind.toml"), root, llm=FakeLLM(), clock=FakeClock(CLOCK))
 
 
+def known_offline(app: MindApp) -> MindApp:
+    """His WoW presence known and offline, as a connected bridge's hello naming nobody leaves
+    it (nothing is started: only the state the GPU pause reads)."""
+    from leeroy_mind.protocol import Hello
+    app.hello = Hello(ts=int(app.clock.now() * 1000), server="mod-leeroy", version="0.1.0",
+                      guild_id=0, human_guid=0)
+    app.bridge._connected = True
+    app.night_scheduler.presence.online = False
+    return app
+
+
 LOOKS = "0" * 64  # an invented looks hash
 
 

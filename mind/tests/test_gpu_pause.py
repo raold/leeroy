@@ -12,7 +12,7 @@ from leeroy_mind.llm.client import GpuPaused, OllamaClient
 from leeroy_mind.llm.pause import PauseGate
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.nightly.gpu import HttpOllamaAdmin
-from selfies.fakes import mind_app
+from selfies.fakes import known_offline, mind_app
 
 
 class Admin:
@@ -44,7 +44,7 @@ def app_at(tmp_path, *, server=False, hour=12):
     app = mind_app(tmp_path, toml='[server]\nenabled=true\n' if server else '')
     app.clock._t = datetime(2026, 11, 13, hour, tzinfo=timezone.utc).timestamp()
     app.arbiter.admin = Admin()
-    return app
+    return known_offline(app)
 
 
 def test_pause_all_models_persists_and_restart_stays_paused(tmp_path):
@@ -467,11 +467,13 @@ def test_real_app_bridge_server_dm_and_booth_rest_then_answer_his_post(tmp_path)
         app.llm._script = lambda model, messages: 'The spare flasks are ready for the next raid.'
         worker = MemoryWorker()
         app.selfie_booth.worker = lambda: worker
-        app.night_scheduler.presence.changed = app.clock.now() - 1000
-        await app.gpu.action({'action': 'pause'})
         task = asyncio.create_task(app.run())
         try:
             await until(lambda: app.bridge.greeted, 5)
+            assert (await app.gpu.action({'action': 'pause'}))['ok']
+            assert not app.arbiter.admin.models
+            # Long offline: only the pause keeps the booth from rendering now.
+            app.night_scheduler.presence.changed = app.clock.now() - 1000
             app.llm.calls.clear()
             await app.server.lease.tick(app.clock.now())
             await app.server.engine.tick(app.clock.now())
@@ -577,5 +579,34 @@ def test_delayed_hook_for_old_owner_post_cannot_resume_pause(tmp_path):
             assert app.gpu.paused and 'discord' not in app.arbiter.holders
             assert not app.llm.calls
         finally:
+            await app.stop()
+    run(go())
+
+
+@pytest.mark.parametrize('state', ['no_hello', 'bridge_down', 'presence_unknown', 'unreadable'])
+def test_pause_refused_while_his_wow_presence_is_unknown(tmp_path, state):
+    async def go():
+        app = app_at(tmp_path)
+        world = app.world
+        try:
+            if state == 'no_hello':
+                app.hello = None
+            elif state == 'bridge_down':
+                app.bridge._connected = False
+            elif state == 'presence_unknown':
+                app.night_scheduler.presence.online = None
+            else:
+                class Unreadable:
+                    def __getattr__(self, name):
+                        raise RuntimeError('invented unreadable session')
+                app.world = Unreadable()
+            reply = await app.gpu.action({'action': 'pause'})
+            assert not reply['ok'] and reply['error'] == 'gpu_presence_unknown'
+            assert reply['message'] == "Can't tell whether you're in WoW yet; try again in a moment."
+            assert reply['refusal'] == reply['message']
+            assert not app.gpu.paused and app.store.get_meta(KEY) is None
+            assert not app.arbiter.admin.calls
+        finally:
+            app.world = world
             await app.stop()
     run(go())

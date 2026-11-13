@@ -47,3 +47,9 @@ test('Ops switches and Tonight presence show the same retained pause', () => {
   assert.ok(cardModel('guild',{status:'ok',gpu:paused}).lines.some(l=>l.text.startsWith('GPU paused since')));
   assert.equal(pausedWords(running),'');
 });
+test('a Resume button never carries the pause refusal as its reason', () => {
+  const unknown = "Can't tell whether you're in WoW yet; try again in a moment.";
+  assert.equal(gpuModel({...paused,refusal:unknown}).why,'');
+  assert.equal(gpuModel({...paused,refusal:unknown,unload_failed:true}).why,unknown);
+  assert.equal(gpuModel({...running,refusal:unknown}).why,unknown);
+});

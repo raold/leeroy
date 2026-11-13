@@ -21,7 +21,8 @@ from leeroy_mind.selfies.style import LUST
 from leeroy_mind.selfies.worker import Rendered, SelfieWorker
 from leeroy_mind.selfies.job import WorkerError
 from nightly.conftest import FakeAdmin
-from .fakes import JPEG, OWNER, fake_command, fake_worker, mind_app, ready, until
+from .fakes import (JPEG, OWNER, fake_command, fake_worker, known_offline, mind_app, ready,
+                    until)
 
 ON = "[selfies]\nenabled=true\nbooth=true\n"
 
@@ -287,6 +288,7 @@ def test_free_gpu_kills_worker_tree_before_unloading_and_booth_stays_asleep(app,
             seen.append((pid_alive(row['pid']), pid_alive(row['child'])))
         await original(model)
     admin.unload = unload
+    known_offline(app)
     async def go():
         await advance(app, 600)
         await app.selfie_booth.tick()
