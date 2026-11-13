@@ -48,10 +48,11 @@ def screen(item, *, scope, persona, ident, world_romance=0):
     return {**item,'text':text}
 
 
-def persist(conn, guid, result, *, known, night, now, automatic, settings=None, expected=None):
+def persist(conn, guid, result, *, known, night, now, automatic, settings=None, expected=None, sources=()):
     from .control import frozen, vetoed
     if frozen(conn,settings):
         return
+    from .audience import retain
     changed = set()
     for ident, snapshot in (expected or {}).items():
         row=conn.execute('SELECT status,expires,reinforced FROM talk_lesson WHERE id=? AND guid=?',
@@ -68,6 +69,7 @@ def persist(conn, guid, result, *, known, night, now, automatic, settings=None, 
             # stale reinforcement must not revive it (and bypass the active cap).
             conn.execute('UPDATE talk_lesson SET reinforced=reinforced+1,expires=? WHERE id=? AND guid=? AND expires>?',
                          (now+14*DAY,ident,guid,now))
+            retain(conn, ident, sources)
     for item in result['lessons']:
         old=conn.execute('SELECT id,expires FROM talk_lesson WHERE guid=? AND scope=? AND text=?',
                          (guid,item['scope'],item['text'])).fetchone()
@@ -81,6 +83,7 @@ def persist(conn, guid, result, *, known, night, now, automatic, settings=None, 
             if old[0] not in result['reinforce'] and old[0] not in result['drop']:
                 conn.execute('UPDATE talk_lesson SET reinforced=reinforced+1,expires=? WHERE id=?',
                              (now+14*DAY,old[0]))
+            retain(conn, old[0], sources, forward_min=item.get('forward_min',0))
             continue
         active=conn.execute("SELECT count(*) FROM talk_lesson WHERE guid=? AND status='active' AND expires>?",
                             (guid,now)).fetchone()[0]
@@ -89,3 +92,6 @@ def persist(conn, guid, result, *, known, night, now, automatic, settings=None, 
                      'ON CONFLICT(guid,scope,text) DO UPDATE SET status=excluded.status,expires=excluded.expires,'
                      'origin_night=excluded.origin_night',
                      (guid,item['scope'],item['text'],status,now+14*DAY,night))
+        ident = conn.execute('SELECT id FROM talk_lesson WHERE guid=? AND scope=? AND text=?',
+                             (guid,item['scope'],item['text'])).fetchone()[0]
+        retain(conn, ident, sources, fresh=old is None, forward_min=item.get('forward_min',0))
