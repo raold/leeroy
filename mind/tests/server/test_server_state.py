@@ -10,6 +10,35 @@ from leeroy_mind.server.state import PLAY_KEY, refresh_play, state_of, tie_kind
 from selfies.fakes import mind_app
 
 
+@pytest.mark.parametrize('mode,expected', [('fresh','lore'),('edge','lore'),('stale',None),
+    ('future',None),('off',None),('off_live','pvp'),('live','pvp'),('live_unseated',None),('stored_live',None)])
+def test_away_voice_seat_reaches_all_state_paths(tmp_path,mode,expected):
+    from leeroy_mind.server import runtime
+    from leeroy_mind.server.seats import SEATS_KEY
+    from leeroy_mind.server.state import capture
+    app = mind_app(tmp_path,toml='[server]\nenabled='+('false' if mode in ('off','off_live') else 'true'))
+    original_voice = app.voice
+    original_comms = app.engine.comms
+    try:
+        now = app.clock.now()
+        age = {'edge':900,'stale':901,'future':-1}.get(mode,0)
+        app.store.set_meta(SEATS_KEY,json.dumps({'at':now-age,'rooms':{'lore':[101]}}))
+        live = mode in ('live','live_unseated','off_live')
+        app.voice = SimpleNamespace(rooms=SimpleNamespace(human_room=lambda:'guild_hall' if live else None))
+        app.engine.comms = SimpleNamespace(room_of=lambda guid:'pvp' if mode in ('live','off_live') and guid==101 else None)
+        if mode=='stored_live':
+            app.store.conn.execute('INSERT INTO voice_presence(guid,room,since,by) VALUES (?,"guild_hall",?,0)',
+                                   (app.human_guid,now))
+        assert state_of(app,101,now).voice_room == expected
+        observed = capture(app,101)
+        assert state_of(None,101,now,conn=app.store.conn,observed=observed).voice_room == expected
+        assert run(runtime.snapshot(app,now)).states[101].voice_room == expected
+        assert state_of(app,102,now).voice_room is None
+    finally:
+        app.voice,app.engine.comms = original_voice,original_comms
+        run(app.stop())
+
+
 def test_status_is_generic_deterministic_and_none_offline():
     p = make_persona(101, 'Arkon')
     local = datetime(2026, 11, 12, 19)

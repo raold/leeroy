@@ -34,6 +34,15 @@ class StateInputs:
     human: int
     timezone: object
     voice_room: str | None
+    server: bool = False
+    voice_session: bool = False
+
+
+def live_voice_session(app) -> bool:
+    # Session placement still wins while the voice service is unavailable;
+    # Comms.room_of() deliberately returns None in that case.
+    voice = getattr(app, 'voice', None)
+    return voice is not None and voice.rooms.human_room() is not None
 
 
 def capture(app, guid: int) -> StateInputs:
@@ -42,7 +51,8 @@ def capture(app, guid: int) -> StateInputs:
     return StateInputs(app.personas.get(guid), cast,
         frozenset(g for g in cast if app.world.is_officer(g)), frozenset(app.world.online),
         pulled_into_play(app), app.human_guid, app.clock.local().tzinfo,
-        comms.room_of(guid) if comms is not None else None)
+        comms.room_of(guid) if comms is not None else None,
+        getattr(app, 'server', None) is not None, live_voice_session(app))
 
 
 def company_in(conn, channel, guid, now, cast, human) -> tuple[int, ...]:
@@ -114,8 +124,15 @@ def state_of(app, guid: int, now: float, *, conn=None, observed=None) -> Discord
         'AND deleted IS NULL AND author<>? AND ts>? AND ts<=? AND instr(text,\'@\')>0',
         (json.dumps(channels), guid, since, now))) if pattern else 0
     company = company_in(conn, reading, guid, now, cast, observed.human) if reading in channels else ()
+    room = observed.voice_room
+    if room is None and observed.server and not observed.voice_session and guid in cast:
+        # Read with the caller's snapshot, including its expiry and durable live
+        # session check. Import lazily: the seat writer itself observes state.
+        from .seats import read_seats
+        seats = read_seats(conn, now, human=observed.human).get('rooms', {})
+        room = next((room for room, guids in seats.items() if guid in guids), None)
     return DiscordState(presence, status_text(p, local, presence, rng_seed=RNG_SEED) if p else None,
-                        reading, observed.voice_room, last, mentions, company)
+                        reading, room, last, mentions, company)
 
 
 def tie_kind(conn, a: int, b: int) -> str:

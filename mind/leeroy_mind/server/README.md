@@ -29,6 +29,8 @@ the conversation. Later speakers see only what was actually posted. Officer
 meetings stay in officer chat. Purpose seeds are topics, and rival activity carries
 no invented contents.
 New and running conversations stop during raid holds and his login quiet period.
+The inherited login quiet period is 180 seconds. The D2 plan's ten-minute review
+target is not implemented or certified by this rehearsal.
 His post ends the conversation in its channel and holds new starts there for five
 minutes; D1 still answers him. Threads also end
 on shutdown, quiet-window entry, lease loss, a deleted parent or two dry turns.
@@ -108,9 +110,109 @@ overwriting the counter.
 
 No migration or native rebuild is required. Claude's real-embedding replay informed
 the anchor default above; implementation regressions use fake services and vectors.
-Task 54 still owns the full-day rehearsal, including low-priority-slot contention.
 Deploy after review with the normal mind-only
 `bash scripts/ac-release.sh <commit>` flow, then restart the mind/console only when
 the replay is accepted and the owner is ready to enable the switch. Nothing in the
-implementation or tests changes live configuration. Room topics, away voice seats,
-the full-day rehearsal and the status CLI remain task 54.
+implementation or tests changes live configuration.
+
+## Settings and the quiet-window budget
+
+```toml
+[server]
+enabled = false
+quiet_window = ["03:00", "08:00"]
+conversations_per_hour = 2.5
+in_game_share = 0.5
+dms_per_day = 3
+reactions = true
+```
+
+Times require two distinct zero-padded `HH:MM` values; a window may cross midnight.
+An unknown key, wrong type or out-of-range value disables the entire table. With
+the switch off the existing night clock, prompts and leases remain in force.
+The server holds a live lease outside the window and releases it at 03:00. A night
+still running at 08:00 receives at most one hour of overrun before the lease
+preempts it; unfinished work resumes inside the next window. His game login or
+Discord activity can preempt a night separately; after the Discord lease's ten
+idle minutes the night can resume within that same window.
+
+The booth renders inside the quiet window only while the server is on. Generic
+voice room topics guide room conversation. Silent away seats represent scheduled
+presence only: they start no session or audio, refresh every five minutes, become
+stale after fifteen minutes, and yield to real voice sessions.
+`server:voice_seats` stores that snapshot alongside
+`server:playing`; neither is a chat or a game-activity clock.
+
+At parallelism two, five quiet hours provide ten model call-hours. The earlier
+read-only timing sample (November 2026) was:
+
+| Night | Wall hours | Model call-hours | Context |
+| --- | ---: | ---: | --- |
+| 11-11 | 1.9 | 3.8 | Reflection 89 minutes, encounters 20 |
+| 11-10 | 2.1 | 4.0 | Ordinary night |
+| 11-09 | 4.6 | 6.8 | Two days; reflection 157 minutes, notes 36, encounters 48 |
+| 11-07 | 12.5 | 3.4 | Enrichment and photo work waited out logins |
+
+The measured call-hours fit ten; the long interrupted wall time does not promise
+completion in five hours. Keep the default 03:00–08:00 and inspect unfinished
+nights rather than increasing chatter based on a synthetic message estimate.
+
+## Status and operator checks
+
+`python -m leeroy_mind server status --data-dir PATH [--json]` opens `mind.db`
+read-only, without migration, model calls, service connections or a control key.
+It reports the startup file's config, local quiet window and current membership,
+today's successful-post counters, five latest ended conversations (channel, seed
+kind, message count and end reason), and outstanding DM opener timestamps. It is
+a durable receipt view, not proof of current lease ownership or running config:
+editing `mind.toml` still requires a restart. Missing or malformed state reports
+`server_status_unavailable` instead of repairing the database.
+
+Before enabling server lines, the owner reviews real-embedding off-topic and
+relevance replay on a scratch database copy. The earlier replay above informed
+the 0.35 anchor default; synthetic unit vectors cannot establish live quality.
+After one live day, run
+`python -m leeroy_mind eval talk --data-dir "$D" --since 1` against a scratch copy
+and compare Discord contradiction, repetition, non-sequitur and unawareness rates
+with guild chat. Preserve counts and the input/time window for comparison.
+
+The fake-only regression rehearsal uses its own loopback bridge and control
+ports, FakeLLM, synthetic embeddings and a fake-admin arbiter. It advances a real
+MindApp from 07:30 through 09:30 the next day, including his 19:00–21:00 session,
+night interruption by a 05:00 Discord post, and shutdown cleanup. Its controlled
+availability and ample synthetic topic stock isolate admission rates from roster
+coverage and source exhaustion. Interarrival draws are fixed at their exponential
+mean for this wiring test; the separate rhythm tests exercise the production
+distribution. Its phase-count acceptance band is ±40% of `starts_per_hour`
+integrated over available hours. It is not a production
+messages-per-day benchmark.
+
+One controlled 26-hour run admitted morning/day/evening/late starts of
+6/14/18/9 against integrated targets 5.25/14/18.75/10 (zero in the dead phase).
+It stored 47 conversations, 367 server messages including one DM opener, two
+additional D1 replies and 145 reactions. His game question was answered while an
+extraction job held the low slot and a background embedding remained queued.
+Scheduling of real SQLite workers can change aggregate counts on later runs;
+the assertions check the band and boundaries, not an exact daily total.
+
+The contention probe preserves the real single low-priority slot and the real
+five-second guard embedding timeout. With an EXTRACTION job occupying that slot,
+the sampled review dropped as `review_unavailable` after 5.014 seconds; a
+BACKGROUND occupant produced the same drop after 5.016 seconds. Concurrent
+REPLY_HUMAN embeddings used the reserved slot in 0.002 and 0.001 seconds.
+Both saturated samples dropped (2/2); neither rewrote. This demonstrates the
+remaining P3-7 limitation: priority protects his request, but sustained low-slot
+load can dry out conversations. These artificial held jobs are not a live-load
+frequency estimate. The test prints fresh timings on each run.
+
+Controlled guard probes separately print sample counts and rewrite/drop rates
+per check. Each two-case probe pairs a clean draft with a deliberate failure:
+off-anchor and parent/thread relevance rewrite one of two; own Discord repeat,
+channel repeat and filler opener drop one of two. These constructed rates test
+classification paths, not false-positive rates or real-embedding calibration.
+
+D3 adds photo sending and his photo's private vision step; D4 adds decision
+ledgers and guarded game consequences; D5 adds guild culture and server bots;
+D6 adds day plans, intent to action, shared activities and operator nudges/undo.
+Those later integrations have their own switches and acceptance evidence; this
+rehearsal does not certify them.
