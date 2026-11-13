@@ -149,7 +149,7 @@ def test_frozen_fingerprint_and_capture_do_not_write_but_feedback_still_does(sto
     update(store.conn,101,now=clock.now())
     capture.delivered(store.conn,1,SimpleNamespace())
     capture.vectors(store.conn,[],{},'fake')
-    assert not recipe.record(store.conn,1,None,None,None,None)
+    assert recipe.record(store.conn,1,None,None,None,None) is False
     assert store.conn.total_changes==before
     lid=line(store,clock.now())
     with store.transaction():
@@ -245,7 +245,7 @@ def test_configured_freeze_reaches_each_direct_writer_without_lab_overrides(stor
     cfg=load_learn_config(path)
     before=store.conn.total_changes
     assert control.frozen(store.conn,cfg)
-    assert not recipe.record(store.conn,1,None,None,None,None,settings=cfg)
+    assert recipe.record(store.conn,1,None,None,None,None,settings=cfg) is False
     capture.delivered(store.conn,1,SimpleNamespace(),settings=cfg)
     capture.vectors(store.conn,[SimpleNamespace(id=1)],{1:[1]},'fake',settings=cfg)
     update(store.conn,101,now=clock.now(),settings=cfg)
