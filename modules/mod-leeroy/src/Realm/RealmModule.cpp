@@ -1035,6 +1035,22 @@ void RealmModule::Tick(std::uint32_t diff)
                 });
                 released.insert(released.end(), untouched.begin(), untouched.end());
             }
+            // Only a leave records a readback (LeaveReadbackFault); another kind's payload can be the
+            // wire message itself, so its keys are never read here, and nothing malformed may throw.
+            std::uint32_t readbackGuid = 0;
+            std::string readbackCheck;
+            if (entry.kind == "leave_pvp" && entry.payload.is_object())
+            {
+                auto const member = entry.payload.find("readback_guid");
+                auto const check = entry.payload.find("readback_check");
+                if (member != entry.payload.end() && member->is_number_unsigned()
+                    && member->get<std::uint64_t>() <= 0xFFFFFFFFull
+                    && check != entry.payload.end() && check->is_string() && ReadbackCheck(check->get<std::string>()))
+                {
+                    readbackGuid = static_cast<std::uint32_t>(member->get<std::uint64_t>());
+                    readbackCheck = check->get<std::string>();
+                }
+            }
             bool const emptyLeave = entry.kind == "leave_pvp" && entry.domain == ActivityDomain::Realm
                 && reservation.bodies.empty() && reservation.pending.empty() && reservation.declaredScopes.empty()
                 && reservation.continuation.empty() && reservation.guildJoins.empty() && reservation.guildJoinAttempts.empty();
@@ -1042,7 +1058,7 @@ void RealmModule::Tick(std::uint32_t diff)
             else _state->Release(entry.id);
             PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid, knownJoins,
                 "", noChange ? std::optional<bool>{false} : std::nullopt, SkippedMembers(entry), released,
-                entry.payload.value("readback_guid", std::uint32_t{0}), entry.payload.value("readback_check", std::string{})});
+                readbackGuid, std::move(readbackCheck)});
             return true;
         };
         bool const pending = reservation.pending.contains(guid);
@@ -1084,7 +1100,7 @@ void RealmModule::Tick(std::uint32_t diff)
         };
         // The last body step is already proved complete/skipped. Waiting for
         // another member's teleport must not run or fence that step again.
-        if (entry.payload.contains("final_readback")) return advance();
+        if (entry.kind == "leave_pvp" && entry.payload.contains("final_readback")) return advance();
         // Only this member's lease ends; the others go on, and the job's event names it.
         auto skip = [&](std::string const& why)
         {

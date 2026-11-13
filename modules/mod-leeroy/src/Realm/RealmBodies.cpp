@@ -677,7 +677,8 @@ RealmStep LeavePvp(Queued& entry, std::uint32_t guid)
     {
         auto const check = LeaveReadbackCheck(entry, fault.guid);
         if (fault.guid != guid && !Expired(state) && (check == "teleport" || check == "exit")) return Pending(state);
-        auto why = check.empty() ? fault.reason : LeaveReadbackFault(entry, fault.guid, check, fault.reason);
+        auto why = LeaveReadbackFault(entry, fault.guid,
+            check.empty() ? std::string(CleanupFaultCheck(fault.reason)) : check, fault.reason);
         return fault.guid == guid ? fail(std::move(why)) : refuse(std::move(why));
     }
     if (Expired(state))

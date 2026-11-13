@@ -95,3 +95,37 @@ LEEROY_TEST(RealmRelease_GroupReceiptNamesActualBadMemberNotHealthyFirst)
     CHECK_EQ(GroupCleanupFault({101,102,103},{healthy,bad,unproved}),103u); // failure outranks transient
     CHECK_EQ(GroupCleanupFault({101},{healthy}),0u);
 }
+LEEROY_TEST(RealmRelease_CleanupFaultsNameTheirMemberWithAFixedCode)
+{
+    CHECK(CleanupFaultCheck("").empty());
+    CHECK(CleanupFaultCheck("cleanup_member_offline") == "offline");
+    CHECK(CleanupFaultCheck("busy:body_unavailable") == "offline");
+    CHECK(CleanupFaultCheck("wg_private_state_unavailable") == "queue");
+    CHECK(CleanupFaultCheck("shared_lfg_proposal") == "lfg");
+    CHECK(CleanupFaultCheck("shared_lfg_participants_unavailable") == "lfg");
+    CHECK(CleanupFaultCheck("cleanup_member_busy") == "lfg");
+    CHECK(CleanupFaultCheck("cleanup_member_not_admitted") == "lfg");
+    for (auto reason : {"busy:training_cleanup", "busy:training_state", "busy:realm_owner", "busy:raid_owner",
+        "busy:operation_identity", "not_bot", "not_actor", "realm_off"})
+        CHECK(CleanupFaultCheck(reason) == "owner");
+    // Every fault the recheck can report maps to a code the mind accepts beside readback_guid.
+    for (auto reason : {"cleanup_member_offline", "wg_private_state_unavailable", "shared_lfg_proposal",
+        "busy:training_cleanup", "anything_new"})
+        CHECK(ReadbackCheck(CleanupFaultCheck(reason)));
+}
+LEEROY_TEST(RealmRelease_JobNeverCarriesAReadbackWithoutAFixedCode)
+{
+    RealmJob job{"leave", "leave_pvp", false, "cleanup_manifest_readback_changed", 209};
+    job.readbackGuid = 102;
+    for (auto check : {"", "private text", "Owner"})
+    {
+        job.check = check;
+        auto wire = MakeRealmJob(job);
+        CHECK(!wire.contains("readback_guid")); CHECK(!wire.contains("check"));
+    }
+    job.check = "queue";
+    auto wire = MakeRealmJob(job);
+    CHECK_EQ(wire.at("readback_guid"), 102); CHECK_EQ(wire.at("check"), "queue");
+    job.ok = true; job.reason.clear();
+    CHECK(!MakeRealmJob(job).contains("readback_guid"));
+}

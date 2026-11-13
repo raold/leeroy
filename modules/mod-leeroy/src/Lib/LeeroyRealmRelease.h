@@ -14,6 +14,19 @@ constexpr bool ReadbackCheck(std::string_view check)
     for (auto value : LeaveReadbackChecks) if (value == check) return true;
     return false;
 }
+// The code that names a member a leave's cleanup recheck (MemberCleanupFault) refused when the
+// readback itself sees nothing (a Wintergrasp queue, a training fence), so the failed job still
+// carries readback_guid: empty only for no fault. Any other reason is a fence or another owner.
+constexpr std::string_view CleanupFaultCheck(std::string_view reason)
+{
+    if (reason.empty()) return {};
+    if (reason == "cleanup_member_offline" || reason == "busy:body_unavailable" || reason == "busy:offline")
+        return "offline";
+    if (reason == "wg_private_state_unavailable") return "queue";
+    // The member's LFG closure: a proposal, a boot, or a closure member it cannot take along.
+    if (reason.starts_with("shared_lfg") || reason.starts_with("cleanup_member_")) return "lfg";
+    return "owner";
+}
 struct LeaveChangeProof
 {
     bool ownStep = false, cleanup = false, scopes = false, continuation = false, currentStep = false;

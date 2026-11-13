@@ -673,6 +673,8 @@ RealmStep LeaveOnlineLfgGroup(Queued& entry, std::uint32_t guid)
 
 std::string LeaveReadbackFault(Queued& entry, std::uint32_t guid, std::string const& check, std::string reason)
 {
+    // Only a fixed code names the member (the mind refuses any other); the reason stays the step's.
+    if (!guid || !ReadbackCheck(check)) return reason;
     entry.payload["readback_guid"] = guid;
     entry.payload["readback_check"] = check;
     LOG_INFO("module.leeroy", "mod-leeroy: realm leave_pvp {} readback_changed guid={} check={}", entry.id, guid, check);
@@ -702,8 +704,11 @@ std::string VerifyCleanupReceipts(Queued& entry, std::uint32_t skipping)
     auto& module = RealmModule::Instance();
     if (auto fault = OrdinaryCleanupFault(entry, skipping); !fault.reason.empty())
     {
+        // The final readback's last member is rechecked even when untouched: a fault the readback
+        // codes do not see (a Wintergrasp queue, a training fence) is named by its own reason.
         auto check = LeaveReadbackCheck(entry, fault.guid);
-        return check.empty() ? fault.reason : LeaveReadbackFault(entry, fault.guid, check, fault.reason);
+        if (check.empty()) check = std::string(CleanupFaultCheck(fault.reason));
+        return LeaveReadbackFault(entry, fault.guid, check, fault.reason);
     }
     if (entry.payload.contains("lfg_applicant_cleanup_receipts"))
         for (auto const& receipt : entry.payload.at("lfg_applicant_cleanup_receipts"))

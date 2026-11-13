@@ -2,6 +2,7 @@
 
 #include "LeeroyRealmCommands.h"
 #include "LeeroyRealmContinuations.h"
+#include "LeeroyRealmRelease.h"
 #include "LeeroyProtocol.h"
 #include <algorithm>
 #include <charconv>
@@ -618,7 +619,8 @@ json MakeRealmJob(RealmJob const& e)
     if (!e.ok && e.changed.has_value()) body["changed"] = *e.changed;
     if (!e.skipped.empty()) body["skipped"] = e.skipped;
     if (!e.ok && !e.released.empty()) body["released"] = e.released;
-    if (!e.ok && e.readbackGuid) { body["readback_guid"] = e.readbackGuid; body["check"] = e.check; }
+    // Only a fixed code: the mind refuses the whole event over any other, so it never carries one.
+    if (!e.ok && e.readbackGuid && ReadbackCheck(e.check)) { body["readback_guid"] = e.readbackGuid; body["check"] = e.check; }
     return body;
 }
 json MakeRealmForgotten(std::string const& id, std::string const& originId, std::string const& outcome, std::size_t members)
