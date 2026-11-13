@@ -130,6 +130,9 @@ class PhotoSender:
                 continue
             if not self._fresh(snap, now):
                 continue
+            shows = snap.scene.get('shows')
+            if not isinstance(shows, str) or not shows:
+                continue  # never reserve a photo whose offer cannot be built
             attachment = self._attachment(snap)
             if attachment is None:
                 continue
@@ -166,7 +169,7 @@ class PhotoSender:
                     date = app.clock.local().date().isoformat()
                     app.store.set_meta(ration.CHANNEL_KEY.format(date=date), str(channel_count(app.store.conn,date)+1))
                 self._in_flight.pop(snap.id, None)
-            photo = PhotoOffer(snap, "You're posting a photo of yourself: "+snap.scene['shows']+
+            photo = PhotoOffer(snap, "You're posting a photo of yourself: "+shows+
                 ". Write the short message you'd post with it, in your own way; don't describe the photo in detail.",
                 sent, release, attachment, valid)
             log('photo_offered', snap=snap.id, channel_kind='dm' if audience == 'him' else 'discord')

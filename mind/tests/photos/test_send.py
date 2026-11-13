@@ -247,3 +247,11 @@ def test_his_dm_answer_is_sent_without_a_photo_it_cannot_carry(tmp_path,cause):
             assert {p.relative_to(tmp_path):p.read_bytes() for p in tmp_path.rglob('*.jpg')}==before
         finally:await app.stop()
     run(go())
+
+
+def test_offer_that_cannot_be_built_reserves_nothing(tmp_path):
+    app=setup(tmp_path);stock(app,scene={**compose_choices(PICKS),'shows':['not','text']})
+    try:
+        assert app.photos.offer(*reply(app),app.clock.now()) is None
+        assert not app.photos._in_flight
+    finally:app.store.close()
