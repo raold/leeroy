@@ -279,8 +279,8 @@ def test_all_body_hold_snapshot_and_finished_training(store,clock):
 def test_durable_realm_hold_codes_ignore_completed_and_other_members(clock):
     conn=sqlite3.connect(":memory:")
     try:
-        conn.execute("CREATE TABLE realm_action(owner, reserved_manifest, role, state, transport_state)")
-        conn.executemany("INSERT INTO realm_action VALUES (?,?,?,?,?)",[
+        conn.execute("CREATE TABLE realm_action(owner, reserved_manifest, role, state, transport_state, policy, kind, evidence)")
+        conn.executemany("INSERT INTO realm_action VALUES (?,?,?,?,?,'ordinary','walk','{}')",[
             ("realm_day","[101]","root","waiting","entered"),
             ("PRIVATE_OWNER","[101]","root","blocked","entered"),
             ("raid","[101]","root","completed","entered"),
@@ -289,6 +289,20 @@ def test_durable_realm_hold_codes_ignore_completed_and_other_members(clock):
         ])
         out=card(conn,101,context=context(clock)).render()
         assert "Holds: realm, realm_day" in out and "PRIVATE" not in out
+    finally:
+        conn.close()
+
+
+def test_durable_realm_hold_codes_leave_out_a_failed_leaves_released_members(clock):
+    conn=sqlite3.connect(":memory:")
+    try:
+        conn.execute("CREATE TABLE realm_action(owner, reserved_manifest, role, state, transport_state, policy, kind, evidence)")
+        released=json.dumps({"job":{"state":"failed","released":[101]}})
+        conn.execute("INSERT INTO realm_action VALUES ('raid','[101,102]','root','unknown','settled','ordinary','leave_pvp',?)",(released,))
+        assert "Holds: none recorded" in card(conn,101,context=context(clock)).render()
+        assert "Holds: raid" in card(conn,102,context=context(clock)).render()
+        conn.execute("UPDATE realm_action SET kind='rearm'")  # another kind cannot borrow the proof
+        assert "Holds: raid" in card(conn,101,context=context(clock)).render()
     finally:
         conn.close()
 

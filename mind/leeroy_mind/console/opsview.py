@@ -32,6 +32,7 @@ from types import SimpleNamespace
 
 from .. import health
 from ..nightly.settings import NightlySettings
+from ..realm.action_store import released_members
 from . import mindlog, views
 
 PANELS = ("health", "night", "realm", "raids", "selfies", "backups", "drift", "schedules", "switches")
@@ -243,7 +244,7 @@ def night_view(conn, data, now, deadline, runtime):
 
 def realm_view(conn, now):
     require(conn, "realm_action")
-    rows = conn.execute("SELECT command_id,kind,state,transport_state,"
+    rows = conn.execute("SELECT command_id,kind,policy,state,transport_state,"
                         "CASE WHEN length(reserved_manifest)<=65536 THEN reserved_manifest END AS reserved_manifest,"
                         "created,substr(evidence,1,65537) AS evidence,"
                         "result_reason FROM realm_action WHERE role='root' "
@@ -259,6 +260,8 @@ def realm_view(conn, now):
         if not isinstance(raw_manifest, list) or any(type(g) is not int or not 0 < g <= 4294967295 for g in raw_manifest):
             raise ValueError("invalid manifest")
         guids = members(r["reserved_manifest"]) if r["transport_state"] != "not_entered" else set()
+        # A failed leave's release proof: native no longer holds those members (as the mind's holds).
+        guids -= set(released_members("root", r["policy"], r["kind"], r["state"], r["evidence"], raw_manifest))
         if not guids and r["state"] not in {"unknown", "conflict"}:
             continue
         held.update(guids)
