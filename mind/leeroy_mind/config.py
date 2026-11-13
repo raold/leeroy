@@ -25,6 +25,7 @@ selfies = 3                    # 0-10, photos the guild sends you (rendered at n
 aware = false                  # include a bounded card of visible observations in talk
 realism = false                # bounded member typing, small bursts and rare corrections
 dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
+discord_words = 90             # 0-200: most words in a member's Discord message (0: one short line, as in game)
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -55,6 +56,8 @@ max_inflight = 3              # 1-4 of Ollama's 4 slots
 
 RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
+DISCORD_WORDS_MAX = 200  # [talk] discord_words
+_WARNED: set[str] = set()  # invalid [talk] values already logged in this process
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
@@ -84,6 +87,7 @@ class TalkCfg:
     aware: bool = False
     realism: bool = False
     dm_own_time: bool = False
+    discord_words: int = 90  # [talk] discord_words; talk/discord_length.py
 
 
 @dataclass(frozen=True)
@@ -184,6 +188,7 @@ _RULES = {
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
         "selfies": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
+        "discord_words": (lambda v: _int_in(v, 0, DISCORD_WORDS_MAX), f"an integer 0-{DISCORD_WORDS_MAX}"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
     },
@@ -242,6 +247,12 @@ def _build(data: dict, source: str) -> MindConfig:
             v = given.get(key, defaults[section][key])
             if section == "talk" and key in ("realism", "dm_own_time") and type(v) is not bool:
                 v = False
+            if section == "talk" and key == "discord_words" and not check(v):
+                if repr(v) not in _WARNED:  # the default, logged once (each login reads it again)
+                    _WARNED.add(repr(v))
+                    log.warning("talk_discord_words_invalid key=discord_words want=%s default=%s",
+                                want, defaults[section][key])
+                v = defaults[section][key]
             if section == 'romance' and key == 'activities' and type(v) is not bool:
                 v = False
             if not check(v):
