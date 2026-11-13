@@ -1,9 +1,11 @@
 """Claim disclosure across media, always bounded by its original audience."""
-from leeroy_mind.discord.channels import channel_id, is_discord, is_private, same_medium
+from leeroy_mind.discord.channels import channel_id, is_discord, is_private, is_group, same_medium
 from leeroy_mind.discord.layout import channel as layout_channel
 
 
 def audience_class(channel: str, *, readers: frozenset[int] | None) -> str:
+    if is_group(channel):
+        return 'group'
     if is_private(channel):
         return 'pair'
     if channel == 'guild':
@@ -44,7 +46,11 @@ def _legacy(source, frm, to, readers, target, speaker, partner, officer):
 
 def claim_visible(*, source_channel: str, source_from: int, source_to: int, source_readers,
                   draft_channel: str, speaker: int, to_guid: int, officer: bool,
-                  cross_medium: bool) -> bool:
+                  cross_medium: bool, draft_readers=()) -> bool:
+    if is_group(source_channel):
+        from leeroy_mind.groups.audience import visible
+        return visible(source_readers,draft_channel,speaker=speaker,to_guid=to_guid,
+                       readers=draft_readers)
     legacy = lambda: _legacy(source_channel,source_from,source_to,source_readers,
                              draft_channel,speaker,to_guid,officer)
     if not cross_medium or not (is_discord(source_channel) or is_discord(draft_channel)):

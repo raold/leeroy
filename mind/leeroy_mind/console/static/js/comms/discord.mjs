@@ -3,9 +3,9 @@ import { arr, num, str } from "../core.mjs";
 // Pure Discord presentation rules. Store channel ids never overlap the WoW views.
 export function channelOf(view) {
   if (/^d:[a-z][a-z0-9-]{0,39}$/.test(str(view))) { return view.slice(2); }
-  return /^dm:[1-9]\d{0,9}$/.test(str(view)) ? view : "";
+  return /^(?:dm:[1-9]\d{0,9}|gdm:[1-9]\d{0,15})$/.test(str(view)) ? view : "";
 }
-export function viewOfChannel(channel) { return channel.indexOf("dm:") === 0 ? channel : "d:" + channel; }
+export function viewOfChannel(channel) { return /^(?:gdm|dm):/.test(channel) ? channel : "d:" + channel; }
 export function mergeReadMarks(saved, discord) {
   var out = Object.create(null);
   Object.keys(saved || {}).forEach(function (key) { if (!channelOf(key)) { out[key] = saved[key]; } });
@@ -73,15 +73,18 @@ export class Discord {
     this.windows = new Map(); this.error = ""; this.loaded = false; this.missing = [];
       this.photos = false;
     this.voice_notes = false;
+    this.groups = []; this.groups_enabled = false;
   }
   channels() {
     return this.categories.flatMap(function (c) { return c.channels; }).concat(this.dms.map(function (d) {
       return { id: "dm:" + d.guid, name: d.name, last_id: d.last_id, unread: d.unread };
-    }));
+    })).concat(this.groups);
   }
   adopt(data, thread) {
     this.photos = data.photos === true;
     this.voice_notes = data.voice_notes === true;
+    this.groups_enabled = data.groups_enabled === true;
+    this.groups = this.groups_enabled ? arr(data.groups) : [];
     this.voice_seats = data.voice_seats && {...data.voice_seats,
       server_now: data.voice_seats_now, received_at: performance.now()/1000};
     this.categories = arr(data.categories); this.dms = arr(data.dms); this.members = arr(data.members);
@@ -102,10 +105,13 @@ export class Discord {
     }
   }
   key(channel, thread) { return channel + ":" + (thread || 0); }
-  window(view, thread) { return this.windows.get(this.key(channelOf(view), thread)); }
+  window(view, thread) {
+    if (view.startsWith('gdm:') && !this.groups_enabled) { return undefined; }
+    return this.windows.get(this.key(channelOf(view), thread));
+  }
   title(view) {
     var channel = channelOf(view), c = this.channels().find(function (x) { return x.id === channel; });
-    return c ? (channel.indexOf("dm:") === 0 ? c.name : "# " + c.name) : channel;
+    return c ? (/^(?:gdm|dm):/.test(channel) ? c.name : "# " + c.name) : channel;
   }
   name(guid) { return guid === this.human.guid ? this.human.name || "You" : (this.members.find(function (m) { return m.guid === guid; }) || {}).name || "#" + guid; }
   unread(view) {
