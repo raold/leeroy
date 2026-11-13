@@ -22,3 +22,9 @@ def test_defaults_overrides_and_extension_registration(tmp_path,caplog):
     assert 'unknown section' not in caplog.text
     path.write_text('NOT TOML [')
     assert not load_guards_config(path).enabled
+
+
+def test_replayed_anchor_default_leaves_parent_and_thread_unchanged():
+    cfg = parse_config({})
+    assert cfg.anchor_cosine==.35
+    assert cfg.parent_cosine==.20 and cfg.thread_cosine==.25

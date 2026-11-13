@@ -5,6 +5,7 @@ audience reads), the 120 s deadline, a DM's first "(nothing)" asked again, an em
 and his `discord` lease on the GPU, released ten minutes after his last action. Invented text."""
 import asyncio
 import random
+import sqlite3
 from collections import Counter
 from datetime import datetime
 from types import SimpleNamespace
@@ -127,6 +128,33 @@ def answer(rig, talk, mid, seconds=200.0):
 def answers(rig, channel, mid, **kw):
     return [m for m in messages(rig.store.conn, channel, **kw)
             if m["origin"] == "mind" and m["reply_to"] == mid]
+
+
+def test_server_post_lookup_error_keeps_his_post_and_reports_plan_failure(store, clock, tmp_path, caplog):
+    rig = rig_for(store,clock,tmp_path)
+    talk = talk_for(rig)
+    talk.app.server = SimpleNamespace(engine=SimpleNamespace(his_post=lambda channel: None))
+    mid = post(rig,'general','an invented question')
+    conn = store.conn
+    class BrokenLookup:
+        def execute(self, sql, *args):
+            if sql.startswith('SELECT channel,author,deleted'):
+                raise sqlite3.OperationalError('synthetic lookup failure')
+            return conn.execute(sql,*args)
+    async def run():
+        try:
+            store.conn = BrokenLookup()
+            talk.on_his_post(mid)  # the already successful post must not become an API error
+        finally:
+            store.conn = conn
+            await talk.close()
+    try:
+        rig.sync(run())
+        assert conn.execute('SELECT id FROM discord_message WHERE id=?',(mid,)).fetchone()
+        assert any(r.message.startswith('discord_plan_failed:') for r in caplog.records)
+        assert not rig.engine.planned_turns()
+    finally:
+        rig.close()
 
 
 def speakers(talk, mid, n=1):

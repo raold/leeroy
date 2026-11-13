@@ -158,6 +158,8 @@ class Banter:
     def allowed(self,channel,now):
         if self.stopping or not self.cfg.enabled or not self.cfg.per_hour or not self.app.engine.cfg.talk.chattiness:
             return False
+        if is_discord(channel) and getattr(self.app, 'server', None) is not None:
+            return False
         if self.app.engine.raid.phase(now) in BLOCKED or self.app.engine._in_boss_fight(now):
             return False
         desk=getattr(self.app,'discord_talk',None)
