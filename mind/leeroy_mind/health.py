@@ -715,6 +715,7 @@ def _realm_holds(conn, now: float) -> Check:
             job = evidence.get("job", {}) if isinstance(evidence, dict) else {}
             if not isinstance(job, dict): job = {}
         except (TypeError, ValueError):
+            evidence = {}
             job = {}
         released = released_members("root", policy, kind, state, raw_evidence, guids)
         if released:
@@ -735,7 +736,19 @@ def _realm_holds(conn, now: float) -> Check:
         if isinstance(ident, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", ident):
             count = len({g for g in guids if type(g) is int and g > 0}) if isinstance(guids, list) else 0
             code = kind if isinstance(kind, str) and _IDENT.fullmatch(kind) else "unknown_kind"
-            detail = f"{ident} kind={code} members={count}: realm release {ident} --reason reviewed_stale_hold"
+            if state == "unknown":
+                remedy = f"realm release {ident} --reason reviewed_stale_hold"
+            elif (state == "dispatched" and transport == "settled"
+                  and (policy == "ordinary" and kind in {"rearm", "leave_pvp"} or policy == "defaults" and kind == "bot_do")
+                  and isinstance(evidence, dict) and isinstance(evidence.get("ack"), dict)
+                  and evidence["ack"].get("ok") is True
+                  and not any(k in evidence for k in ("job", "bot", "conflict"))
+                  and not conn.execute("SELECT 1 FROM realm_action WHERE parent_id=? LIMIT 1", (ident,)).fetchone()):
+                remedy = ("a worldserver restart frees it" if evidence.get("dispatch_started_ms")
+                          else "dispatch process identity unavailable; automatic restart release is unavailable")
+            else:
+                remedy = f"inspect native state; realm release cannot release a {state} root"
+            detail = f"{ident} kind={code} members={count}: {remedy}"
             member, check = job.get("readback_guid"), job.get("check")
             if type(member) is int and 0 < member <= 0xFFFFFFFF and type(check) is str and check in READBACK_CHECKS:
                 detail += f" readback_guid={member} check={check}"

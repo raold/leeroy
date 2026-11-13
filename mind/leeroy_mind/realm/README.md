@@ -10,13 +10,23 @@ unproved failures stay `job_failed`, holding whatever native has not released.
 Skipped members retain their existing 600-second backoff. Mind startup also
 rechecks older unknown rows carrying terminal evidence.
 
-At a hello, a worldserver `started_ms` later than a root's dispatch proves that
-the old process's in-memory reservations are gone. Only settled, unknown roots
-for ordinary rearm, ordinary leave, or Recall's exact defaults command qualify.
+The timeout's `transport_unknown` callback is a non-final notice: Recall waits
+for the job's real result, including across its periodic ticks. A terminal result
+then advances the same rearm, leave or defaults chain in either arrival order.
+A done WG cleanup job also completes its WG root after the cleanup transport
+settles, even when its ACK was lost, in either arrival order.
+
+Every new dispatch records the adopted world's `started_ms` in its evidence.
+A hello with a different, later process start proves that the old process's
+in-memory reservations are gone, even if the wall clock stepped backward after
+that process started. Settled unknown roots and positively acked dispatched roots
+without terminal evidence qualify for ordinary rearm, ordinary leave, or
+Recall's exact defaults command.
 There must be no children, continuation, declared scope or conflicting evidence;
 WG, ACK/result commands, guild growth and other kinds remain excluded. The hello
 must match the current guild and owner. A hello from the same native process
-does nothing.
+does nothing. If the new hello arrives while a transport is still in flight,
+its proof is rechecked when the transport actually settles.
 
 Such a root becomes `completed` with result `restart_released`, **not** successful.
 Its permanent `realm:action:restart_released:<id>` receipt stores the hello start,
@@ -31,6 +41,12 @@ skip backoffs still do. A later contradictory receipt remains a conflict hold.
 
 This recovery change needs only a mind release and restart, no migration or
 native rebuild. Older native without `started_ms` retains conservative holds.
+Unresolved rows written before dispatch process identity was recorded also stay
+held: a dispatch wall-clock time alone cannot identify their native process.
+An unknown legacy row can still be reviewed and released by the operator;
+`realm release` continues to refuse dispatched rows. Health names a worldserver
+restart for an eligible acked dispatched root and the release command for an
+unknown root. Previously recorded restart releases remain readable.
 Rollback to a mind version without these new evidence keys requires restoring
 the pre-release database snapshot, as for the newer leave evidence below.
 
