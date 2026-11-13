@@ -153,20 +153,27 @@ class HttpOllamaAdmin:
         body = {"model": model, "keep_alive": keep_alive}
         if options:
             body["options"] = dict(options)
+        gate = self.gpu_gate
+        if gate is None:
+            await asyncio.to_thread(self._request, "/api/generate", body, self._preload_timeout)
+            return
+
         async def run():
-            if self.gpu_gate is not None:
-                self.gpu_gate.check()
+            gate.check()
             work = asyncio.create_task(asyncio.to_thread(
                 self._request, "/api/generate", body, self._preload_timeout))
             try:
                 await asyncio.shield(work)
             except asyncio.CancelledError:
-                await OllamaClient._drain(work)
+                # A pause unloads next, so it waits for this load to land first. Any other
+                # cancel (a hand-over stopped at shutdown) returns at once, as it always did;
+                # the gate keeps the load in flight for a later pause's drain.
+                if gate.paused:
+                    await OllamaClient._drain(work)
+                else:
+                    gate.linger(work)
                 raise
-        if self.gpu_gate is not None:
-            await self.gpu_gate.run(run)
-        else:
-            await run()
+        await gate.run(run)
 
 
 class NullAdmin:

@@ -818,6 +818,40 @@ def test_pause_reads_residency_with_the_admin_timeout(tmp_path):
     run(go())
 
 
+def test_ordinary_preload_cancel_returns_at_once_and_a_later_pause_waits_for_it(monkeypatch):
+    import threading
+    import time
+    async def go():
+        admin = HttpOllamaAdmin('http://127.0.0.1:1')
+        gate = admin.gpu_gate = PauseGate()
+        started, release = threading.Event(), threading.Event()
+        landed = []
+        def request(path, body, timeout):
+            started.set()
+            release.wait(5)
+            landed.append(path)
+        monkeypatch.setattr(admin, '_request', request)
+        task = asyncio.create_task(admin.preload('fake', -1))
+        try:
+            while not started.is_set():
+                await asyncio.sleep(.001)
+            task.cancel()
+            began = time.monotonic()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert time.monotonic() - began < .5 and not landed
+            gate.set(True)
+            drain = asyncio.create_task(gate.drain())
+            await asyncio.sleep(.05)
+            assert not drain.done()  # the late preload must land before any unload
+            release.set()
+            await asyncio.wait_for(drain, 2)
+            assert landed == ['/api/generate']
+        finally:
+            release.set()
+    run(go())
+
+
 def test_pause_after_a_resume_during_slow_cleanup_closes_the_gate_again(tmp_path, monkeypatch):
     from leeroy_mind import gpucontrol
     monkeypatch.setattr(gpucontrol, 'PAUSE_WAIT_S', .05)

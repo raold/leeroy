@@ -10,6 +10,7 @@ class PauseGate:
             self._ready.set()
         self._active = set()
         self._pause_cancelled = set()
+        self._lingering = set()
 
     def set(self, paused):
         self.paused = paused
@@ -38,6 +39,17 @@ class PauseGate:
             self._active.discard(task)
             self._pause_cancelled.discard(task)
 
+    def linger(self, work):
+        """A request whose caller stopped waiting while its thread still runs: the next drain
+        waits for it too, so a pause never unloads before a late load lands."""
+        self._lingering.add(work)
+        work.add_done_callback(self._lingered)
+
+    def _lingered(self, work):
+        self._lingering.discard(work)
+        if not work.cancelled():
+            work.exception()  # retrieved: the caller that would have read it is gone
+
     async def drain(self):
         tasks = tuple(self._active)
         self._pause_cancelled.update(tasks)
@@ -45,3 +57,5 @@ class PauseGate:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._lingering:
+            await asyncio.wait(tuple(self._lingering))
