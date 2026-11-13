@@ -45,6 +45,27 @@ from guards.test_review import sources, NOW
 
 
 START = datetime(2026,11,12,7,30,tzinfo=timezone.utc)
+SERVER_GUARD_CODES = ('off_anchor', 'low_parent_and_thread_relevance', 'own_repeat_discord',
+    'channel_repeat', 'filler_opener', 'server_filler', 'review_unavailable')
+
+
+def guard_rates(verdicts):
+    """Code frequencies across all reviewed drafts, including rewritten rechecks.
+
+    Codes may co-occur; absence of a code is not an independently measured pass.
+    """
+    total=len(verdicts)
+    actions=('send','rewrite','drop','react')
+    overall=Counter(v.action for v in verdicts)
+    codes=set(SERVER_GUARD_CODES).union(*(v.codes for v in verdicts))
+    per_check={}
+    for code in sorted(codes):
+        counted=Counter(v.action for v in verdicts if code in v.codes)
+        per_check[code]=dict(reviewed=total,flagged=sum(counted.values()),
+            actions={a:counted[a] for a in actions},
+            rewrite_rate=counted['rewrite']/total if total else 0.,
+            drop_rate=counted['drop']/total if total else 0.)
+    return dict(reviewed=total,actions={a:overall[a] for a in actions},per_check=per_check)
 
 
 class MeanGapRandom(random.Random):
@@ -95,7 +116,7 @@ class VariedLLM(FakeLLM):
         return vectors
 
 
-def test_whole_server_day(tmp_path, monkeypatch, capsys):
+def test_whole_server_day(tmp_path, monkeypatch):
     monkeypatch.setattr(wiring, 'GpuArbiter', FakeArbiter)
     # A tiny invented roster cannot cover every region/shift. Hold availability
     # constant so the phase band measures the clock/rate rather than staffing.
@@ -155,6 +176,14 @@ def test_whole_server_day(tmp_path, monkeypatch, capsys):
         cfg = load_config(conf)
         llm.set_models({cfg.models.live,cfg.models.embedding,cfg.models.reflection})
         app = MindApp(cfg,tmp_path,llm=llm,clock=clock,rng_seed=53)
+        verdicts=[]
+        original_check=app.engine.live_review.check
+        async def measured_check(turn,meta,text):
+            verdict=await original_check(turn,meta,text)
+            if meta.why.startswith('server:'):
+                verdicts.append(verdict)
+            return verdict
+        monkeypatch.setattr(app.engine.live_review,'check',measured_check)
         app.server.engine.rng = MeanGapRandom(19)
         # Game autonomous chatter has separate pace tests; keep this rehearsal's
         # bridge output attributable to the explicit turns under observation.
@@ -290,6 +319,10 @@ def test_whole_server_day(tmp_path, monkeypatch, capsys):
             assert sum(c['dms'] for c in result['counts'].values()) > 0
             rows = app.store.conn.execute('SELECT channel,author,ts,reply_to FROM discord_message WHERE origin="mind"').fetchall()
             result['messages'] = len(rows)
+            result['guards'] = guard_rates(verdicts)
+            assert result['guards']['reviewed'] > 0
+            assert sum(result['guards']['actions'].values()) == len(verdicts)
+            assert result['guards']['actions']['send'] > 0
             assert rows
             assert any(r['channel']=='officer-chat' for r in rows)
             assert all(r['author'] in OFFICERS for r in rows if r['channel']=='officer-chat')
@@ -345,8 +378,8 @@ def test_whole_server_day(tmp_path, monkeypatch, capsys):
         assert .6*n <= phase_counts[phase] <= 1.4*n, result
 
 
-def test_synthetic_guard_rates_per_check(store, capsys):
-    """Controlled probes: denominator and rewrite/drop rates, not quality estimates."""
+def test_synthetic_guard_classification_per_check(store):
+    """Deliberate clean/failing pairs exercise classification, not measured rates."""
     seed_test_cast(store)
     good, bad = pack_vec(unit(0)), pack_vec(unit(1))
     text = 'A copper lantern hangs beside the invented harbor'
@@ -374,7 +407,21 @@ def test_synthetic_guard_rates_per_check(store, capsys):
         assert measured[key]['actions'] == {'send':1,'rewrite':1}
     for key in ('own_repeat_discord','channel_repeat','filler_opener'):
         assert measured[key]['actions'] == {'send':1,'drop':1}
-    print('SERVER_GUARDS_SYNTHETIC '+json.dumps(measured,sort_keys=True))
+    print('SERVER_GUARD_CLASSIFICATION '+json.dumps(measured,sort_keys=True))
+
+
+def test_guard_report_preserves_overall_actions_and_cooccurring_codes():
+    from leeroy_mind.guards.types import Verdict
+    report=guard_rates([Verdict('send'),Verdict('rewrite',('off_anchor',)),
+        Verdict('drop',('own_repeat_discord','channel_repeat')),
+        Verdict('react',('server_filler',))])
+    assert report['reviewed']==4
+    assert report['actions']==dict(send=1,rewrite=1,drop=1,react=1)
+    assert report['per_check']['off_anchor']['rewrite_rate']==.25
+    assert report['per_check']['off_anchor']['actions']['drop']==0
+    assert report['per_check']['own_repeat_discord']['drop_rate']==.25
+    assert report['per_check']['channel_repeat']['drop_rate']==.25
+    assert report['per_check']['filler_opener']['flagged']==0
 
 
 def test_low_slot_contention_measures_guard_timeout_and_foreground_reserve(tmp_path, monkeypatch):

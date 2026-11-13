@@ -84,8 +84,8 @@ class ElsewhereTalk:
             topic = ""
             if getattr(self.ext.app, "server", None) is not None:
                 definition = BY_ID[room]
-                topic = definition.topic
-                turn.instruction = f"You're in the {definition.name} voice room: {topic}"
+                if definition.topic:
+                    turn.instruction = f"You're in the {definition.name} voice room: {definition.topic}"
             said = await engine.speak(turn, topic=topic, why=f"elsewhere:{kind.value}",
                                       elsewhere=True, guards=self.guards)
             if not said:

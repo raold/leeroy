@@ -183,6 +183,7 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
     if server:
         from leeroy_mind.server.seats import read_seats
         out['voice_seats'] = read_seats(conn, owner_now.timestamp(), human=human)
+        out['voice_seats_now'] = owner_now.timestamp()
     if channel is not None:
         known = layout.channel(channel) is not None or layout.dm_peer(channel) is not None
         ok = known and not missing
