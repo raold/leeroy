@@ -1234,6 +1234,10 @@ class MindApp:
             except Exception:
                 log.exception("thread_expiry_failed")
             try:
+                self.voice_notes.tick()  # recover interrupted recording/transcript handoffs
+            except Exception:
+                log.exception("voice_note_recovery_failed")
+            try:
                 self.discord_talk.tick(now)  # DM answers on her own time ([talk] dm_own_time)
             except Exception:
                 log.exception("discord_owed_failed")

@@ -234,7 +234,8 @@ _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 # its compose call until its text exists, and typing over the typing delay before each line is
 # sent. Only where Comms shows the line: guild and officer, his group's party and raid, and a
 # whisper to him (typed or voiced); a voice room, say and yell, and templates show nothing.
-COMPOSING, TYPING = "composing", "typing"
+# Recording: a member's DM line being rendered as a voice note (voice_notes), shown as such.
+COMPOSING, TYPING, RECORDING = "composing", "typing", "recording"
 COMMS_CHANNELS = frozenset({"guild", "officer"})
 GROUP_CHANNELS = frozenset({"party", "raid", "raid_warning"})
 _CAMEL = re.compile(r"(?<!^)(?=[A-Z])")
@@ -355,6 +356,7 @@ class TurnMeta:
     seed: int | None = None
     # a Discord turn's message: the one it replies to and its thread (discord.transport); a
     # Discord turn is known by its channel, never by this
+    voice_note: object = None
     discord: DiscordTarget | None = None
     photo: PhotoOffer | None = None
     photo_asked: bool = False
@@ -812,18 +814,18 @@ class Pipeline:
 
     def typing_now(self) -> list[dict]:
         """The control endpoint's status `typing`: each model turn being composed or typed where
-        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age"}
-        (`to`: a whisper's target, him; else None; `age`: seconds since the phase's latest
-        refresh, at least every ten seconds during a realism wait, read now, so a
-        page judges staleness without comparing clocks; `since` is for matching the line when it
-        lands). Ids, names and times only, never text; the game's places none while he is
+        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age",
+        "phase"} (`phase`: COMPOSING, TYPING or RECORDING; `to`: a whisper's target, him; else
+        None; `age`: seconds since the phase's latest refresh, at least every ten seconds during
+        a realism wait, read now, so a page judges staleness without comparing clocks; `since` is
+        for matching the line when it lands). Ids, names and times only, never text; the game's places none while he is
         offline, a Discord turn's (channel as given, `to` him in a DM to him) always."""
         w, hg = self.world, self.human.guid
         if not hg:
             return []
         now = self.clock.now()
         out = []
-        for turn, _, since in self._phases.values():
+        for turn, phase, since in self._phases.values():
             channel, to = turn.channel, None
             if is_discord(channel):
                 to = hg if turn.to_guid == hg else None
@@ -837,7 +839,7 @@ class Pipeline:
             m = w.members.get(turn.speaker)
             out.append({"guid": turn.speaker, "name": m.name if m is not None else "",
                         "channel": channel, "to": to, "since": since,
-                        "age": max(0.0, now - since)})
+                        "age": max(0.0, now - since), "phase": phase})
         return sorted(out, key=lambda e: (e["since"], e["guid"]))
 
     def planned_turns(self) -> list[Turn]:
@@ -2345,6 +2347,17 @@ class Pipeline:
                     return "guard_changed_before_send"
             if not self.live_review.valid(turn, meta):
                 return "scope_changed"
+        meta.voice_note = None
+        notes = getattr(self,'voice_notes',None)
+        # a line that carries a photo is its caption: typed, never a voice note
+        if notes is not None and getattr(meta,'photo',None) is None and notes.eligible(turn,meta,p,text):
+            self._phase(turn,RECORDING)
+            try:
+                meta.voice_note = await notes.prepare(turn,meta,p,text)
+            finally:
+                self._phase(turn,TYPING)
+            if not _scope_valid(meta) or not self.live_review.valid(turn,meta):
+                return 'scope_changed'
         async with self._timed_send_lock(meta):
             if meta.realism_followup and meta.realism_sequence != self.realism.member(turn.speaker).sequence:
                 return "realism_stale"
@@ -2434,7 +2447,8 @@ class Pipeline:
         photo = meta.photo if not meta.said else None
         after_commit = []
         try:
-            with self.store.transaction() if server_turn or photo is not None else nullcontext():
+            with self.store.transaction() if (server_turn or photo is not None
+                                              or meta.voice_note is not None) else nullcontext():
                 if photo is not None and (meta.photo_finished or not photo.valid()):
                     return 'photo_stale'
                 message = store_line(self.store, turn, meta, text, self.clock.now(),
@@ -2446,6 +2460,8 @@ class Pipeline:
                     posted(self.store, self.clock.local().date().isoformat(), self.clock.now(),
                            conversation=meta.server_conversation,
                            dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
+                if meta.voice_note is not None:
+                    self.voice_notes.record(message,turn.speaker,meta.voice_note)
                 if photo is not None:
                     line = self._record(turn, meta, p, text, memory_ids, discord_id=message,
                                         after_commit=after_commit)

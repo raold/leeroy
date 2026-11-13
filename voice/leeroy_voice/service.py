@@ -300,6 +300,9 @@ class VoiceService:
                                               daemon=True)
         self._fx_pool = concurrent.futures.ThreadPoolExecutor(1, "leeroy-voice-fx")
         self._stt_pool = concurrent.futures.ThreadPoolExecutor(1, "leeroy-voice-stt")
+        from .notes import Notes
+        from .__main__ import mind_voices_dir
+        self.notes = Notes(self,mind_voices_dir().parent)
 
     # the service's life
 
@@ -529,6 +532,10 @@ class VoiceService:
         self.ui.broadcast({"type": "mind", "up": False})
 
     def _on_message(self, msg: Message) -> None:
+        from .wire import Render, Transcribe
+        if isinstance(msg,(Render,Transcribe)):
+            self.notes.request(msg)
+            return
         match msg:
             case Speak():
                 self._on_speak(msg)
@@ -839,6 +846,10 @@ class VoiceService:
             if job is None:
                 return
             if job.ended:
+                continue
+            from .notes import NoteJob
+            if isinstance(job,NoteJob):
+                self.notes.render(job.request)
                 continue
             try:
                 clip = self._segment(job, index, lambda: self._dry(job, index))
@@ -1479,7 +1490,7 @@ class VoiceService:
                   *(("wow_elevated",) if self._elevated else ()))
         return Status(self.output.ok and self._engine is not None, self.mic.state,
                       self._gpu_holder(), self._stt_name(), self.ui.clients > 0,
-                      self.scheduler.waiting(), errors)
+                      self.scheduler.waiting(), errors, render=self._engine is not None)
 
     def _gpu_holder(self) -> str:
         """What the mind pins Ollama's models beside (Task 21)."""
