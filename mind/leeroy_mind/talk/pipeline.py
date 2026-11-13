@@ -226,6 +226,9 @@ SPOKEN_CHANNELS = frozenset({"say", "yell"})
 # A line may still be said when its ack timed out or the connection dropped while it was due:
 # its row waits for the echo (the bridge keeps events across a reconnect).
 AWAIT_ECHO = frozenset({"ack_timeout", "connection_lost"})
+# A photo a turn cannot carry after all; an answer owed to him goes on without it (_photo_owed).
+PHOTO_LOST = frozenset({"photo_words", "photo_stale"})
+DISCORD_REPLY_WHY = "discord:reply"  # discord.talk.WHY, which imports this module
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 # Who is typing (the console's Comms dots, Pipeline.typing_now): a model turn is composing from
 # its compose call until its text exists, and typing over the typing delay before each line is
@@ -357,6 +360,7 @@ class TurnMeta:
     photo_asked: bool = False
     photo_seed: int | None = None
     photo_finished: bool = False
+    single_line_before_photo: bool = False  # restored when an owed answer goes on without it
     discord_named: bool = False  # he addressed this member in a channel: re-ask one silence
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); "" for every other turn
@@ -581,6 +585,29 @@ class Pipeline:
             meta.photo.release()
         except Exception:
             log.warning('photo_release_failed')
+
+    def _photo_owed(self, turn: Turn, meta: TurnMeta) -> bool:
+        """The turn answers his Discord post (discord.talk, on time or on her own time) and drew a
+        photo it cannot carry before any line was said: the answer goes on without the photo.
+        An opener (server:dm, server:photo) has nothing owed and is dropped with it."""
+        return (meta.photo is not None and not meta.photo_finished and meta.said == 0
+                and (meta.why == DISCORD_REPLY_WHY or self._answers_his_dm(turn, meta)))
+
+    async def _answer_without_photo(self, turn: Turn, meta: TurnMeta, reason: str) -> list[str]:
+        """His answer's photo was refused (its caption tripped the screens) or went stale at
+        send: release it, spending nothing, and ask the answer once more without it, as an
+        ordinary answer. A turn's photo is asked for only once, so this never repeats."""
+        self._release_photo(meta, reason)
+        meta.photo = None
+        meta.single_line = meta.single_line_before_photo
+        turn.delay = 0  # its answer delay has passed
+        meta.guard_verdict, meta.guard_rewritten, meta.guard_codes = "not_run", False, ()
+        meta.preference_original = ""
+        meta.realism_planned, meta.realism_review_lines, meta.words = False, (), ""
+        if self._real_name_hold == meta.turn_id:  # composed again below
+            self._real_name_hold = None
+        log.info("photo_answer_without: guid=%d reason=%s", turn.speaker, reason)
+        return await self._speak_now(turn, meta)
 
     # -- identity and lookups ------------------------------------------------------------------
 
@@ -1454,6 +1481,7 @@ class Pipeline:
                 log.warning('photo_offer_failed')
             if meta.photo is not None:
                 turn.max_lines = 1
+                meta.single_line_before_photo = meta.single_line
                 meta.single_line = True
                 if meta.why == 'server:dm':
                     # The real image is now this opener's subject. Its caption need not
@@ -1521,6 +1549,8 @@ class Pipeline:
             hg = self.human.guid
             close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg))
         if meta.photo is not None and not caption_ok(text):
+            if self._photo_owed(turn, meta):
+                return await self._answer_without_photo(turn, meta, 'photo_words')
             return self._drop(turn, meta, 'photo_words', memory_ids)
         text = self._link_items(turn, meta, text)
         # an emote is public: a whisper keeps its words (NB6), and so does a Discord line,
@@ -1581,6 +1611,7 @@ class Pipeline:
             meta.realism_planned = True
             lines = list(plan.lines)
         sent: list[Styled] = []
+        without_photo = ''
         try:
             for i, s in enumerate(lines):
                 if i and plan and not self.realism.safe(self, turn):
@@ -1606,6 +1637,9 @@ class Pipeline:
                 meta.realism_followup = bool(i and plan)
                 why = await self._send_line(turn, meta, p, s.line, memory_ids, first=i == 0)
                 self._phase(turn, None)  # sent, or refused
+                if why in PHOTO_LOST and self._photo_owed(turn, meta):
+                    without_photo = why  # nothing is said yet: asked again below
+                    break
                 if why:
                     if why not in AWAIT_ECHO:  # that row waits for the echo (_settle_unacked)
                         self._drop(turn, meta, why, memory_ids, text=s.line)
@@ -1641,6 +1675,8 @@ class Pipeline:
                 if not plan:  # realism records each confirmed line before a newer turn composes
                     self._own_of(turn.speaker).append((turn.channel, turn.to_guid, words))
                 self._record_moves(turn, words)
+        if without_photo:
+            return await self._answer_without_photo(turn, meta, without_photo)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
@@ -2293,7 +2329,7 @@ class Pipeline:
         The send itself is shielded: once the server may have the line, it is recorded. A turn
         cancelled meanwhile keeps the lock until the line has settled, and that line's outcome
         is the turn's row."""
-        if meta.photo is not None:
+        if meta.photo is not None and not meta.photo_finished:
             if not caption_ok(text):
                 return 'photo_words'
             if not meta.photo.valid():

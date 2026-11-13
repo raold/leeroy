@@ -216,3 +216,34 @@ def test_adult_floor_and_private_lust_style_keep_existing_content_gate(tmp_path,
         if photo:photo.release()
         assert files.snap(tmp_path,101,sid).exists() and files.snap(tmp_path,101,sid,thumb=True).exists()
     finally:app.store.close()
+
+
+@pytest.mark.parametrize('cause',['caption','stale'])
+def test_his_dm_answer_is_sent_without_a_photo_it_cannot_carry(tmp_path,cause):
+    """An answer owed to his DM never dies with its photo: the photo is released (or expired
+    when it went stale) and the answer is asked again without it."""
+    async def go():
+        app=setup(tmp_path);sid=stock(app)
+        before={p.relative_to(tmp_path):p.read_bytes() for p in tmp_path.rglob('*.jpg')}
+        def script(model,messages):
+            if "You're posting a photo of yourself" not in str(messages):
+                return 'the dog has appointed himself tour guide'
+            if cause=='stale':  # her profile photo changes while she types the caption
+                pick(app.store,101,1,1,source='console',now=app.clock.now())
+                return 'the dog has appointed himself tour guide'
+            return 'my pajamas and the dog, an evening'
+        app.llm._script=script
+        try:
+            turn,meta=reply(app)
+            meta.answers_human=True
+            lines=await finish(app,asyncio.create_task(app.engine.speak_meta(turn,meta)))
+            assert len(lines)==1 and 'pajamas' not in lines[0]
+            rows=app.store.conn.execute("SELECT text FROM discord_message WHERE origin='mind' AND channel='dm:101'").fetchall()
+            assert [r[0] for r in rows]==lines
+            assert app.store.conn.execute('SELECT count(*) FROM discord_attachment').fetchone()[0]==0
+            status,ended=app.store.conn.execute('SELECT status,ended FROM selfie_snap WHERE id=?',(sid,)).fetchone()
+            assert (status,ended)==(('expired','photo_changed') if cause=='stale' else ('ready',None))
+            assert not app.photos._in_flight and snaps.sent_count(app.store,0,to_him=True)==0
+            assert {p.relative_to(tmp_path):p.read_bytes() for p in tmp_path.rglob('*.jpg')}==before
+        finally:await app.stop()
+    run(go())

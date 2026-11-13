@@ -68,7 +68,8 @@ def test_failed_photo_turn_releases_once_without_spending_snap(tmp_path,reason):
         photo,called=offer(app)
         app.llm._script=lambda *a:'my pajamas survived' if reason=='photo_words' else 'the garden has claimed my afternoon'
         turn=Turn(TurnKind.REPLY_HUMAN,101,'dm:101',to_guid=app.human_guid,addressee=app.human_guid)
-        meta=TurnMeta('test-photo',why='discord:reply')
+        # an opener loses its turn with its photo; an answer owed to him never does (below)
+        meta=TurnMeta('test-photo',why='server:dm' if reason=='photo_words' else 'discord:reply')
         if reason=='guard':app.engine._blocked=lambda *a,**k:'test_guard'
         if reason=='record':
             original=app.engine._record
@@ -109,5 +110,69 @@ def test_game_and_template_turns_never_ask_for_photo(tmp_path):
             await app.engine.speak_meta(Turn(TurnKind.OPEN,101,'guild'),TurnMeta('game'))
             await app.engine.speak_meta(Turn(TurnKind.REPLY_HUMAN,101,'dm:101',template='hello'),TurnMeta('template'))
             assert called.asked==called.released==0
+        finally:await app.stop()
+    run(go())
+
+
+PHOTO_ASK = 'invented garden'
+
+
+def _no_photo_files_lost(app, sid):
+    return files.snap(app.data_dir,101,sid).exists() and files.snap(app.data_dir,101,sid,thumb=True).exists()
+
+
+@pytest.mark.parametrize('cause',['words','words_at_send','stale_at_send','stale_at_store'])
+def test_owed_dm_answer_loses_only_its_photo(tmp_path,cause,monkeypatch):
+    """His DM is always answered: a caption the screens refuse or a photo gone stale at send
+    releases the photo, and the answer is asked once more without it."""
+    async def go():
+        app=mind_app(tmp_path)
+        photo,called=offer(app)
+        asked=[]
+        def script(model,messages):
+            with_photo=PHOTO_ASK in str(messages)
+            asked.append(with_photo)
+            return 'my pajamas survived' if with_photo and cause=='words' else 'the garden has claimed my afternoon'
+        app.llm._script=script
+        if cause=='words_at_send':  # the typed line, not the model's words, trips the screen
+            import leeroy_mind.talk.pipeline as pipeline
+            checks=iter([True,False])
+            monkeypatch.setattr(pipeline,'caption_ok',lambda text:next(checks))
+        if cause.startswith('stale'):
+            checks=iter([True] if cause=='stale_at_store' else [])
+            photo.valid=lambda:next(checks,False)
+        turn=Turn(TurnKind.REPLY_HUMAN,101,'dm:101',to_guid=app.human_guid,addressee=app.human_guid)
+        meta=TurnMeta('test-photo',why='discord:reply',answers_human=True)
+        try:
+            lines=await finish(app,asyncio.create_task(app.engine.speak_meta(turn,meta)))
+            assert len(lines)==1 and 'pajamas' not in lines[0]
+            assert asked==[True,False]
+            assert called.asked==1 and called.released==1 and called.sent==[]
+            assert meta.photo is None and meta.said==1
+            assert [r[0] for r in app.store.conn.execute('SELECT text FROM discord_message')]==lines
+            assert app.store.conn.execute('SELECT count(*) FROM discord_attachment').fetchone()[0]==0
+            assert app.store.conn.execute('SELECT status FROM selfie_snap WHERE id=?',(photo.snap.id,)).fetchone()[0]=='ready'
+            assert not app.store.conn.execute("SELECT count(*) FROM utterance WHERE dropped IS NOT NULL").fetchone()[0]
+            assert _no_photo_files_lost(app,photo.snap.id)
+        finally:await app.stop()
+    run(go())
+
+
+@pytest.mark.parametrize('cause',['photo_words','photo_stale'])
+def test_opener_still_drops_with_its_photo(tmp_path,cause):
+    async def go():
+        app=mind_app(tmp_path)
+        photo,called=offer(app)
+        app.llm._script=lambda *a:'my pajamas survived' if cause=='photo_words' else 'the garden has claimed my afternoon'
+        if cause=='photo_stale':photo.valid=lambda:False
+        turn=Turn(TurnKind.OPEN,101,'dm:101',to_guid=app.human_guid,addressee=app.human_guid)
+        meta=TurnMeta('test-opener',why='server:dm',initiates=True)
+        try:
+            assert await finish(app,asyncio.create_task(app.engine.speak_meta(turn,meta)))==[]
+            assert len([c for c in app.llm.calls if 'messages' in c])==1
+            assert called.released==1 and called.sent==[]
+            assert app.store.conn.execute('SELECT count(*) FROM discord_message').fetchone()[0]==0
+            assert app.store.conn.execute('SELECT dropped FROM utterance ORDER BY id DESC LIMIT 1').fetchone()[0]==cause
+            assert _no_photo_files_lost(app,photo.snap.id)
         finally:await app.stop()
     run(go())
