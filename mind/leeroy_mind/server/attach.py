@@ -42,6 +42,15 @@ def attach_server(app) -> ServerExt | None:
             except Exception as error:
                 logging.getLogger('leeroy_mind').warning('server_dm_failed code=%s', type(error).__name__)
             await app.clock.sleep(30)
+    async def seats_tick():
+        from .seats import refresh_seats
+        while True:
+            try:
+                refresh_seats(app, app.clock.now())
+            except Exception as error:
+                logging.getLogger('leeroy_mind').warning('server_seats_failed code=%s', type(error).__name__)
+            await app.clock.sleep(300)
+    app.register_background(seats_tick)
     app.register_background(play_tick)
     app.register_background(lease.run)
     app.register_background(engine.run)

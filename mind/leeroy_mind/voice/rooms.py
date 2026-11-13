@@ -12,6 +12,7 @@ class RoomDef:
     name: str
     parent: str = ""
     capacity: int = 0  # 0: unlimited
+    topic: str = ""
 
 
 _CLASS_ROOMS = (("warriors", "Warriors"), ("paladins", "Paladins"), ("hunters", "Hunters"),
@@ -20,28 +21,28 @@ _CLASS_ROOMS = (("warriors", "Warriors"), ("paladins", "Paladins"), ("hunters", 
                 ("warlocks", "Warlocks"), ("druids", "Druids"))
 
 ROOMS: tuple[RoomDef, ...] = (
-    RoomDef("guild_hall", "Guild Hall"),
-    RoomDef("raid", "Raid"),
-    RoomDef("raid2", "Raid 2", "raid"),
-    RoomDef("officers", "Officers"),
-    RoomDef("tanks", "Tanks"),
-    RoomDef("healers", "Healers"),
-    RoomDef("casters", "Casters"),
-    RoomDef("melee", "Melee"),
+    RoomDef("guild_hall", "Guild Hall", topic="Hanging out"),
+    RoomDef("raid", "Raid", topic="Raid comms"),
+    RoomDef("raid2", "Raid 2", "raid", topic="Raid comms"),
+    RoomDef("officers", "Officers", topic="Officer business: lineups, the bank and recruitment"),
+    RoomDef("tanks", "Tanks", topic="Tanking: pulls, cooldowns and threat"),
+    RoomDef("healers", "Healers", topic="Healing assignments and mana"),
+    RoomDef("casters", "Casters", topic="Caster talk: rotations and gear"),
+    RoomDef("melee", "Melee", topic="Melee talk: rotations and gear"),
     RoomDef("class_halls", "Class Halls"),
-    *(RoomDef(i, n, "class_halls") for i, n in _CLASS_ROOMS),
-    RoomDef("loot_dkp", "Loot & DKP"),
-    RoomDef("lore", "Lore & Strategy"),
-    RoomDef("pvp", "PvP & Arena"),
-    RoomDef("achievements", "Achievements & Mounts"),
-    RoomDef("kitchen", "The Kitchen"),
-    RoomDef("irl", "IRL"),
-    RoomDef("smoke_room", "The Smoke Room"),
+    *(RoomDef(i, n, "class_halls", topic=f"{n} talk: specs, talents, glyphs and BiS") for i, n in _CLASS_ROOMS),
+    RoomDef("loot_dkp", "Loot & DKP", topic="Loot and DKP"),
+    RoomDef("lore", "Lore & Strategy", topic="Lore and boss mechanics"),
+    RoomDef("pvp", "PvP & Arena", topic="Battlegrounds and arena"),
+    RoomDef("achievements", "Achievements & Mounts", topic="Achievements, mounts and collections"),
+    RoomDef("kitchen", "The Kitchen", topic="Food, drinks and cooking"),
+    RoomDef("irl", "IRL", topic="Real life"),
+    RoomDef("smoke_room", "The Smoke Room", topic="Late-night talk"),
     RoomDef("afk", "AFK"),
     RoomDef("private1", "Private 1", capacity=3),
     RoomDef("private2", "Private 2", capacity=3),
     RoomDef("private3", "Private 3", capacity=3),
-    RoomDef("interview", "Interview Room"),
+    RoomDef("interview", "Interview Room", topic="Applicant interviews"),
     RoomDef("penalty_box", "Penalty Box"),
 )
 BY_ID = {r.id: r for r in ROOMS}
