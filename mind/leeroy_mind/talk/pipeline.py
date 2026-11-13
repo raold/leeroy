@@ -1100,7 +1100,9 @@ class Pipeline:
                    if r.ts >= self._chat_from and self._may_carry(turn, r)]
             recent = sorted([*recent, *own], key=lambda r: r.id)
 
+        from_thread = False
         if not preview and self._server_turn(turn, meta) and meta.server_thread:
+            from_thread = True  # rows keyed by Discord message ids, their notes already added
             observed = self.live_review.observe(turn, meta)
             _, context = await self.live_review.read(
                 lambda conn:self.live_review.history(turn, meta, conn, observed=observed))
@@ -1230,10 +1232,12 @@ class Pipeline:
                                        *ends) if x),
             forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN)
-        photo_notes = {}
+        chat_notes, pair_notes = {}, {}
         if getattr(self, 'photos_send', False):
             from leeroy_mind.photos.notes import by_lines
-            photo_notes = by_lines(self.store.conn, [r.id for r in (*recent,*pair)])
+            pair_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in pair])
+            if not from_thread:
+                chat_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in recent])
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
@@ -1245,9 +1249,9 @@ class Pipeline:
                            variant=random.Random(f"{p.guid}:{night_of(local)}:mood")
                            .randrange(1000), today=day_line(local, p.identity.region)),
             chat=[said_hi_text(r, names, human.called, now=now) if r.id in hi
-                  else chat_line_text(r, names, now=now, photo=photo_notes.get(r.id,'')) for r in recent],
+                  else chat_line_text(r, names, now=now, photo=chat_notes.get(r.id,'')) for r in recent],
             own_recent=self._own_lines(turn), instruction=instruction,
-            elsewhere=[chat_line_text(r, names, now=now, photo=photo_notes.get(r.id,'')) for r in pair],
+            elsewhere=[chat_line_text(r, names, now=now, photo=pair_notes.get(r.id,'')) for r in pair],
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept)

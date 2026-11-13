@@ -58,7 +58,7 @@ def test_private_snap_cannot_label_an_unrelated_public_chat_line(tmp_path,repair
                 line=cur.lastrowid
                 app.store.conn.execute('UPDATE selfie_snap SET line_id=? WHERE id=?',(line,sid))
                 if repair_receipt:app.store.set_meta(f'discord:line:{mid}',str(line))
-            assert not by_lines(app.store.conn,[line])
+            assert not by_lines(app.store.conn,[(line,'guild')])
             assert not by_messages(app.store.conn,[mid],members=True)
         finally:await app.stop()
     run(go())
@@ -75,5 +75,37 @@ def test_mislinked_private_attachment_is_never_channel_evidence(tmp_path):
                 app.store.conn.execute("UPDATE discord_message SET channel='general' WHERE id=?",(mid,))
             assert not by_messages(app.store.conn,[mid],members=True)
             assert SCENE not in str(app.discord_talk.context_lines(app.store.conn,'general',None))
+        finally:await app.stop()
+    run(go())
+
+
+def test_server_thread_ids_never_take_chat_line_photo_notes(tmp_path):
+    """A server thread's history rows carry Discord message ids, not chat line ids: a public
+    message whose id equals a private photo's chat line id never takes that photo's note."""
+    from leeroy_mind.llm.scheduler import Priority
+    from leeroy_mind.discord.transport import DiscordTarget
+    async def go():
+        app=setup(tmp_path);sid=stock(app,scene={**compose_choices(PICKS),'shows':SCENE})
+        app.llm._script=lambda *a:'this seemed worth sharing'
+        try:
+            with app.store.transaction():
+                for i in range(5):  # game chat keeps chat line ids ahead of Discord ids
+                    app.store.conn.execute("INSERT INTO chat_line(ts,from_guid,from_name,to_guid,channel,text,origin) "
+                        "VALUES(?,102,'Invented',0,'guild',?,'mind')",(app.clock.now(),f'guild line {i}'))
+            assert await finish(app,asyncio.create_task(app.engine.speak_meta(*reply(app))))
+            line=app.store.conn.execute('SELECT line_id FROM selfie_snap WHERE id=?',(sid,)).fetchone()[0]
+            mid=0
+            while mid<line:
+                mid=dstore.post(app.store,channel='general',author=102,origin='mind',
+                                text='COLLIDING PUBLIC LINE',now=app.clock.now())
+            assert mid==line
+            turn=Turn(TurnKind.CONTINUE,103,'discord:general',addressee=102,priority=Priority.BACKGROUND)
+            meta=TurnMeta('',why='server:life',server_thread=(mid,),discord=DiscordTarget(mid,None),
+                          review_required=True,single_line=True)
+            composed=await app.engine._compose_prompt(turn,meta,live=False)
+            assert 'COLLIDING PUBLIC LINE' in str(composed.messages)
+            assert SCENE not in str(composed.messages)
+            assert by_lines(app.store.conn,[(line,'dm:101')])  # the DM line itself keeps its note
+            assert not by_lines(app.store.conn,[(mid,'discord:general')])
         finally:await app.stop()
     run(go())

@@ -266,7 +266,7 @@ class LiveReview:
                 "WHERE c.channel=? AND c.from_guid=? AND c.to_guid=? AND c.ts BETWEEN ? AND ? "
                 "AND s.status='sent' AND s.audience='him' ORDER BY c.ts DESC,c.id DESC LIMIT 4",
                 (f'dm:{turn.speaker}',turn.speaker,observed.human,now-7*86400,now)).fetchall()[::-1]
-            notes = by_lines(conn,[r['id'] for r in paired])
+            notes = by_lines(conn,[(r['id'],r['channel']) for r in paired])
             photos = tuple(replace(h,text='Earlier in your Discord DM: '+h.text+' '+notes[h.id])
                 for r in paired if (h := _line(dict(r),{})).id in notes and _visible(h,draft,observed.officer))
         return (*history,*photos), (*photos,*(h for h in history if now-h.ts <= 300))[-16:]

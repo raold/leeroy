@@ -11,7 +11,7 @@ def _snaps(conn, column, ids):
     ids = tuple(dict.fromkeys(ids))
     if not ids:
         return {}
-    rows = conn.execute(f'SELECT {column},s.scene,s.audience,s.guid,m.channel FROM selfie_snap s '
+    rows = conn.execute(f'SELECT {column},s.scene,s.audience,c.channel FROM selfie_snap s '
         'JOIN discord_attachment a ON a.snap=s.id JOIN discord_message m ON m.id=a.message '
         "JOIN meta receipt ON receipt.key='discord:line:'||m.id AND receipt.value=CAST(s.line_id AS TEXT) "
         'JOIN chat_line c ON c.id=s.line_id AND c.from_guid=m.author '
@@ -23,7 +23,7 @@ def _snaps(conn, column, ids):
         "AND c.channel='discord:'||m.channel))",
         (json.dumps(ids),))
     out = {}
-    for key, raw, audience, guid, channel in rows:
+    for key, raw, audience, line_channel in rows:
         try:
             scene = json.loads(raw)
             if scene.get('audience') != audience:
@@ -31,7 +31,7 @@ def _snaps(conn, column, ids):
             if audience == 'anyone' and scene.get('style','plain') != 'plain':
                 continue
             if isinstance(scene.get('shows'),str):
-                out[key] = photo_note(scene['shows'])
+                out[key] = (photo_note(scene['shows']), line_channel)
         except (ValueError, TypeError, AttributeError):
             continue
     return out
@@ -39,7 +39,7 @@ def _snaps(conn, column, ids):
 
 def by_messages(conn, ids, *, uploads=False, members=False):
     ids = tuple(ids)
-    out = _snaps(conn,'m.id',ids) if members else {}
+    out = {mid: note for mid, (note, _) in _snaps(conn,'m.id',ids).items()} if members else {}
     if uploads and ids:
         from leeroy_mind.discord.store import attachments
         out.update({mid:photo_note(row['look']) for mid,row in attachments(conn,ids).items()
@@ -47,5 +47,10 @@ def by_messages(conn, ids, *, uploads=False, members=False):
     return out
 
 
-def by_lines(conn, ids):
-    return _snaps(conn,'s.line_id',ids)
+def by_lines(conn, rows):
+    """Notes for chat lines given as (chat_line id, its channel) pairs. Only chat_line ids belong
+    here, never Discord message ids (by_messages); a row whose channel is not the photo line's own
+    never takes its note."""
+    rows = {(i, ch) for i, ch in rows}
+    return {key: note for key, (note, channel) in _snaps(conn,'s.line_id',[i for i, _ in rows]).items()
+            if (key, channel) in rows}
