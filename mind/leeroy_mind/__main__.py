@@ -1447,6 +1447,12 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_ros.add_argument("--mysql", default=str(DEFAULT_MYSQL))
     p_ros.add_argument("--guild", type=int, default=21)
     p_ros.set_defaults(func=cmd_roster)
+    from .server.cli import run as server_status
+    p_server = sub.add_parser("server", help="read-only Discord server receipts")
+    p_server.add_argument("server_action", choices=("status",))
+    _add_data_dir(p_server, after_action=True)
+    p_server.add_argument("--json", action="store_true")
+    p_server.set_defaults(func=server_status)
     args = parser.parse_args(argv)
     args.make_llm = make_llm
     return args.func(args)
