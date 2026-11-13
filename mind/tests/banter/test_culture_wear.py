@@ -1,6 +1,7 @@
 import pytest
 from banter.test_banter import rig
 from leeroy_mind.banter.topics import Topic
+from leeroy_mind.culture.config import load_culture_config
 
 
 def persist(rig,turn,meta):
@@ -12,12 +13,15 @@ def persist(rig,turn,meta):
     if turn.channel.startswith('discord:'):
         message=dstore.post(rig.store,channel='general',author=turn.speaker,origin='mind',text='the kettle escaped',turn=meta.turn_id,now=now)
         rig.store.set_meta(f'discord:line:{message}',str(line))
+        if meta.on_discord_record:
+            meta.on_discord_record(line,message,now)
 
 
 
 def test_culture_banter_counts_delivery_and_leaves_dropped_allowance(rig):
     path=rig.engine.data_dir / "mind.toml"
     path.write_text("[server]\nenabled=true\n[culture]\nenabled=true\n")
+    rig.banter.app.culture_config=load_culture_config(rig.engine.data_dir/'mind.toml')
     now=rig.clock.now()
     rig.store.conn.execute("INSERT INTO lexicon(id,kind,term,target,origin_ref,originator,born,last_used) "
         "VALUES(1,'joke','floor inspector',0,'chat:1',101,?,?)",(now-10*86400,now-10*86400))
@@ -43,6 +47,7 @@ def test_banter_culture_cast_and_delivery_receipt(rig,monkeypatch,channel):
     import random
     app=rig.banter.app
     (rig.engine.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    rig.banter.app.culture_config=load_culture_config(rig.engine.data_dir/'mind.toml')
     now=rig.clock.now()
     topic=Topic('test','death',now,'Recorded event',1,True)
     for guid in (101,102):
@@ -76,8 +81,9 @@ def test_banter_receipt_requires_delivery_and_rechecks_mood(rig,monkeypatch,sent
     from leeroy_mind.storage.rows import Relationship
     app=rig.banter.app
     (rig.engine.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    rig.banter.app.culture_config=load_culture_config(rig.engine.data_dir/'mind.toml')
     now=rig.clock.now()
-    topic=Topic('test','death',now,'Recorded event',102)
+    topic=Topic('test','joke',now,'Recorded event',102)
     for guid in (101,103):
         rig.store.put_relationship(Relationship(guid,102,affinity=30))
     monkeypatch.setattr(rig.banter,'valid',lambda *args:True)
@@ -101,6 +107,7 @@ def test_tease_gate_off_keeps_legacy_roles_and_reservations(rig,config):
     from leeroy_mind.banter.service import role
     from leeroy_mind.storage.rows import Relationship
     (rig.engine.data_dir/'mind.toml').write_text(config)
+    rig.banter.app.culture_config=load_culture_config(rig.engine.data_dir/'mind.toml')
     rig.store.put_relationship(Relationship(101,102,affinity=-20))
     assert role(rig.banter.app,101,102)=='needle'
     topic=Topic('test','death',rig.clock.now(),'Recorded event',1,True)
@@ -119,6 +126,7 @@ def test_interrupted_delivery_settles_only_persisted_post(rig,monkeypatch,channe
     from leeroy_mind.storage.rows import Relationship
     app=rig.banter.app
     (rig.engine.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    rig.banter.app.culture_config=load_culture_config(rig.engine.data_dir/'mind.toml')
     now=rig.clock.now()
     posted_at=now-86400
     rig.store.conn.execute("INSERT INTO lexicon(id,kind,term,target,origin_ref,originator,born,last_used) VALUES(1,'joke','test kettle',1,'chat:1',101,?,?)",(now-10*86400,now-10*86400))
@@ -136,6 +144,8 @@ def test_interrupted_delivery_settles_only_persisted_post(rig,monkeypatch,channe
             if channel.startswith('discord:'):
                 message=dstore.post(rig.store,channel='general',author=turn.speaker,origin='mind',text='the kettle escaped',turn=meta.turn_id,now=posted_at)
                 rig.store.set_meta(f'discord:line:{message}',str(line))
+                if meta.on_discord_record:
+                    meta.on_discord_record(line,message,posted_at)
         raise error()
     monkeypatch.setattr(rig.engine,'_speak',speak)
     assert rig.banter.reserve(topic,now)
@@ -157,6 +167,7 @@ def test_cancelled_turn_never_claims_another_turns_post(rig,monkeypatch,channel)
     from leeroy_mind.discord import store as dstore
     from leeroy_mind.storage.rows import Relationship
     (rig.engine.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    rig.banter.app.culture_config=load_culture_config(rig.engine.data_dir/'mind.toml')
     now=rig.clock.now()
     topic=Topic('test','death',now,'Recorded event',1,True)
     for g in (101,102):

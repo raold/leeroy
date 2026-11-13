@@ -1,14 +1,17 @@
 """Code-built event facts; the reflection model may supply only a short label."""
 from dataclasses import dataclass
-from leeroy_mind.clock import SystemClock
+from contextlib import closing
 import json
+from pathlib import Path
 import re
+import sqlite3
 from typing import Mapping
 
 EVENT_KINDS = ("wipe_first_death", "close_loot", "his_claim", "laughed_line")
 RETIRE_USES = 12
 COLD_DAYS = 60
 JOKES_TARGET = 8
+WIPE_RECHECK_ROWS = 4096
 
 @dataclass(frozen=True, slots=True)
 class Origin:
@@ -50,14 +53,14 @@ def loot_record(conn, ref):
         return None
 
 
-def event_origins(conn, window: tuple[float, float]) -> list[Origin]:
+def _wipe_origins(conn, window, *, limit=None):
+    """Only game evidence, with an indexed bounded read for use-time rechecks."""
     found, pulls, firsts = [], {}, {}
-    human = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
-    try:
-        human = int(human[0]) if human else 0
-    except (TypeError, ValueError):
-        human = 0
-    for row in conn.execute("SELECT * FROM game_event WHERE ts>=? AND ts<? ORDER BY ts,id", window):
+    rows = conn.execute("SELECT * FROM game_event WHERE ts>=? AND ts<? ORDER BY ts,id LIMIT ?",
+                        (*window, -1 if limit is None else limit + 1)).fetchall()
+    if limit is not None and len(rows) > limit:
+        return []  # Too much evidence to recheck promptly never becomes a guessed fact.
+    for row in rows:
         p = _object(row["payload"])
         try:
             if row["type"] == "boss":
@@ -83,6 +86,17 @@ def event_origins(conn, window: tuple[float, float]) -> list[Origin]:
         if len(rows) >= 6:
             found.append(Origin("wipe_first_death", tuple(f"event:{r['id']}" for r in rows),
                                 guid, guid, rows[-1]["ts"]))
+    return found
+
+
+def event_origins(store, window: tuple[float, float]) -> list[Origin]:
+    conn = store.conn
+    found = _wipe_origins(conn, window)
+    human = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
+    try:
+        human = int(human[0]) if human else 0
+    except (TypeError, ValueError):
+        human = 0
     for row in conn.execute("SELECT key FROM meta WHERE key GLOB 'guild:loot:*' ORDER BY key"):
         ref = "loot:close_loot:" + row[0]
         receipt = loot_record(conn, ref)
@@ -101,9 +115,7 @@ def event_origins(conn, window: tuple[float, float]) -> list[Origin]:
                 if bid.get("wanted") is True and type(bid.get("guid")) is int and bid["guid"] != human:
                     found.append(Origin("his_claim", ("loot:his_claim:" + row[0],), bid["guid"], human, when))
     # Keep precisely the existing public, paired-output, distinct-laugher rule.
-    from leeroy_mind.storage.store import Store
     from leeroy_mind.nightly.language_births import find_jokes, _laughs
-    store = Store(conn, clock=SystemClock())
     for ident, _ in find_jokes(store, window, limit=1000):
         row = conn.execute("SELECT * FROM chat_line WHERE id=?", (ident,)).fetchone()
         _, replies = _laughs(store, ident)
@@ -111,20 +123,55 @@ def event_origins(conn, window: tuple[float, float]) -> list[Origin]:
     return sorted(found, key=lambda o: (o.when, o.kind, o.refs, o.butt))
 
 
-def origin_text(conn, origin: Origin, names: Mapping[int, str]) -> str | None:
+def origin_text(store, origin: Origin, names: Mapping[int, str], *, library=None, ident=None) -> str | None:
     try:
-        return _origin_text(conn, origin, names)
+        return _origin_text(store, origin, names, library=library, ident=ident)
     except (ValueError, TypeError, KeyError, IndexError, AttributeError):
         return None
 
 
-def _origin_text(conn, origin: Origin, names: Mapping[int, str]) -> str | None:
+def _safe_name(value, *, ident=None):
+    from leeroy_mind.personas.screens import names_real_name
+    from leeroy_mind.text import has_meta, strip_wow_markup
+    if not isinstance(value, str) or not value.strip() or len(value) > 200:
+        return None
+    # Screen the full raw label: hidden link/texture payloads must not hide a name.
+    raw = re.sub(r"\|([TH])", r"|\1 ", value)
+    if has_meta(raw) or ident is not None and names_real_name(raw, ident):
+        return None
+    clean = " ".join(strip_wow_markup(value).split())
+    if not clean or len(clean) > 100 or has_meta(clean) or ident is not None and names_real_name(clean, ident):
+        return None
+    return clean
+
+
+def _item_name(conn, record, *, library=None, ident=None):
+    name = None
+    try:
+        if library is not None and hasattr(library, "item_info"):
+            row = library.item_info((record["item_id"],)).get(record["item_id"])
+            name = row["name"] if row is not None else None
+        elif library is not None:
+            path = Path(library)
+            if path.is_file():
+                with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as source:
+                    row = source.execute("SELECT name FROM item WHERE id=?", (record["item_id"],)).fetchone()
+                    name = row[0] if row else None
+        else:
+            row = conn.execute("SELECT name FROM library.item WHERE id=?", (record["item_id"],)).fetchone()
+            name = row[0] if row else None
+    except sqlite3.OperationalError as exc:
+        if not str(exc).startswith(("no such table", "no such column")):
+            raise
+    return _safe_name(name, ident=ident) or _safe_name(record.get("name"), ident=ident) or "an item"
+
+
+def _origin_text(store, origin: Origin, names: Mapping[int, str], *, library=None, ident=None) -> str | None:
+    conn = store.conn
     if origin.kind not in EVENT_KINDS or not origin.refs:
         return None
     if origin.kind == "laughed_line":
         from leeroy_mind.nightly.lexicon import public_line, public_sources
-        from leeroy_mind.storage.store import Store
-        store = Store(conn, clock=SystemClock())
         if public_sources(store, origin.refs) is None:
             return None
         row = public_line(store, int(origin.refs[0].split(":")[1]))
@@ -137,19 +184,22 @@ def _origin_text(conn, origin: Origin, names: Mapping[int, str]) -> str | None:
             return None
         rec, _ = receipt
         award = rec["award"]
+        item = _item_name(conn, rec, library=library, ident=ident)
         if len(origin.refs) != 1 or award["guid"] != origin.originator:
             return None
         if origin.kind == "close_loot":
             if award.get("close") is not True or award.get("runner_up") != origin.butt:
                 return None
-            return f"{names.get(origin.butt, 'A guild member')} narrowly lost item {rec['item_id']} to {names.get(award['guid'], 'a guild member')}."
+            return f"{names.get(origin.butt, 'A guild member')} narrowly lost {item} to {names.get(award['guid'], 'a guild member')}."
         human = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
         if not human or int(human[0]) != origin.originator:
             return None
         if rec.get("human_claimed") is not True or award["guid"] != origin.originator or not any(
                 b.get("guid") == origin.butt and b.get("wanted") is True for b in rec.get("bidders", [])):
             return None
-        return f"{names.get(origin.originator, 'The owner')} claimed item {rec['item_id']}, which {names.get(origin.butt, 'a guild member')} wanted."
+        return f"{names.get(origin.originator, 'The owner')} claimed {item}, which {names.get(origin.butt, 'a guild member')} wanted."
+    if len(origin.refs) > WIPE_RECHECK_ROWS:
+        return None
     rows = []
     for ref in origin.refs:
         if not re.fullmatch(r"event:[0-9]+", ref):
@@ -159,11 +209,15 @@ def _origin_text(conn, origin: Origin, names: Mapping[int, str]) -> str | None:
             return None
         rows.append(row)
     # Re-run the factual rule so changed state, members or death order fails closed.
-    candidates = event_origins(conn, (min(r["ts"] for r in rows), max(r["ts"] for r in rows) + .001))
+    candidates = _wipe_origins(conn, (min(r["ts"] for r in rows), max(r["ts"] for r in rows) + .001),
+                               limit=WIPE_RECHECK_ROWS)
     if origin not in candidates:
         return None
-    boss = _object(rows[-1]["payload"]).get("boss_id")
-    return f"{names.get(origin.butt, 'A guild member')} died first in {len(rows)//3} wipes on boss {boss}."
+    from leeroy_mind.wow import boss_name
+    payload = _object(rows[-1]["payload"])
+    boss = boss_name(payload.get("map"), payload.get("boss_id"), "")
+    boss = _safe_name(boss, ident=ident) if boss != "the boss" else None
+    return f"{names.get(origin.butt, 'A guild member')} died first in {len(rows)//3} wipes on {boss or 'a boss'}."
 
 
 def term_origin(row):
@@ -203,44 +257,58 @@ async def events(ctx):
     from leeroy_mind.nightly import lexicon
     if not enabled(ctx) or ctx.done("language", "events"):
         return
-    names = {g: ctx.name(g) for g in (*ctx.members(include_away=True), ctx.human)}
-    count = ctx.store.conn.execute("SELECT count(*) FROM lexicon WHERE kind='joke' AND status='active' AND retired IS NULL").fetchone()[0]
-    origins = event_origins(ctx.store.conn, ctx.window)
-    completed = ctx.store.conn.execute("SELECT count(*) FROM night_step WHERE night=? AND stage='language' "
-        "AND unit LIKE 'event:%'", (ctx.night,)).fetchone()[0]
-    remaining = min(max(0, ctx.settings.jokes_per_night-completed), max(0, JOKES_TARGET-count))
-    failed = False
+    names, origins, remaining = {}, [], 0
+    scanned = False
+    async def scan(unit):
+        nonlocal names, origins, remaining, scanned
+        names = {g: ctx.name(g) for g in (*ctx.members(include_away=True), ctx.human)}
+        count = ctx.store.conn.execute("SELECT count(*) FROM lexicon WHERE kind='joke' AND status='active' AND retired IS NULL").fetchone()[0]
+        completed = ctx.store.conn.execute("SELECT count(*) FROM night_step WHERE night=? AND stage='language' "
+            "AND unit LIKE 'event:%'", (ctx.night,)).fetchone()[0]
+        remaining = min(max(0, ctx.settings.jokes_per_night-completed), max(0, JOKES_TARGET-count))
+        if remaining:
+            origins = event_origins(ctx.store, ctx.window)
+        scanned = True
+    # Discovery can fail too. No checkpoint on this read: retry it with failed origins.
+    await ctx.map_units("language", ["events:scan"], scan)
+    if not scanned:
+        return
+    failures = ctx.failures["language"]
     for origin in origins:
         if remaining <= 0:
             break
-        if origin.originator not in names or origin.butt not in {*names, 0}:
-            continue
         unit = "event:" + origin.kind + ":" + str(origin.butt) + ":" + origin.refs[0]
-        if ctx.done("language", unit):
-            continue
-        if ctx.store.conn.execute("SELECT 1 FROM lexicon WHERE origin_ref=? AND butt=?", (origin.refs[0], origin.butt)).fetchone():
-            continue
-        text = origin_text(ctx.store.conn, origin, names)
-        if text is None:
-            continue
-        term = await coin(ctx, origin, text)
-        def write(store):
-            if origin_text(store.conn, origin, names) != text:
-                raise ValueError("Culture origin changed")
-            if term is not None:
-                lexicon.create_term(store, ctx, kind="joke", term=term, origin_ref=origin.refs[0],
-                    originator=origin.originator, now=origin.when, refs=origin.refs,
-                    butt=origin.butt, origin_kind="event", origin_refs=origin.refs)
-        if ctx.commit("language", unit, write):
-            remaining -= 1
-        else:
-            failed = True
-    if not failed:
+        async def one(unit):
+            nonlocal remaining
+            if origin.originator not in names or origin.butt not in {*names, 0}:
+                return
+            if ctx.store.conn.execute("SELECT 1 FROM lexicon WHERE origin_ref=? AND butt=?", (origin.refs[0], origin.butt)).fetchone():
+                return
+            library = ctx.settings.data_dir / 'library.db'
+            text = origin_text(ctx.store, origin, names, library=library, ident=ctx.ident)
+            if text is None:
+                return
+            term = await coin(ctx, origin, text)
+            def write(store):
+                if origin_text(store, origin, names, library=library, ident=ctx.ident) != text:
+                    raise ValueError("Culture origin changed")
+                if term is not None:
+                    lexicon.create_term(store, ctx, kind="joke", term=term, origin_ref=origin.refs[0],
+                        originator=origin.originator, now=origin.when, refs=origin.refs,
+                        butt=origin.butt, origin_kind="event", origin_refs=origin.refs)
+            if ctx.commit("language", unit, write):
+                remaining -= 1
+        # Sequential guarded units keep the nightly cap exact, including on resume.
+        await ctx.map_units("language", [unit], one)
+    if ctx.failures["language"] == failures:
         ctx.skip("language", "events")
 
 
 def fold_banter_uses(store):
     """Carry historical delivered-thread counts before nightly lifetime decisions."""
     from leeroy_mind.banter.topics import joke_uses
-    for row in store.conn.execute("SELECT id FROM lexicon WHERE kind='joke'").fetchall():
+    from leeroy_mind.nightly.lexicon import frozen_origin
+    for row in store.conn.execute("SELECT * FROM lexicon WHERE kind='joke'").fetchall():
+        if frozen_origin(store, row):
+            continue  # Historical restricted terms stay frozen, including wear.
         joke_uses(store, f"joke:{row['id']}", durable=True)

@@ -37,11 +37,13 @@ def app(tmp_path, monkeypatch):
         app.turns.append((turn,meta))
         meta.turn_id = 'test-'+str(len(app.turns))
         with app.store.transaction():
-            dstore.post(app.store,channel=turn.channel.removeprefix('discord:'),author=turn.speaker,
+            message=dstore.post(app.store,channel=turn.channel.removeprefix('discord:'),author=turn.speaker,
                 origin='mind',text='An invented thought '+str(len(app.turns)),turn=meta.turn_id,
                 reply_to=meta.discord.reply_to,now=app.clock.now())
             records.posted(app.store,app.clock.local().date().isoformat(),app.clock.now(),
                            conversation=meta.server_conversation)
+            if meta.on_discord_record:
+                meta.on_discord_record(message,message,app.clock.now())
         return ['An invented thought']
     monkeypatch.setattr(app.engine, 'speak_meta', speak)
     yield app

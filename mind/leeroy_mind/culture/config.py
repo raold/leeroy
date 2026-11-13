@@ -32,4 +32,9 @@ def load_culture_config(path: Path) -> CultureConfig:
 
 
 def enabled(ctx):
-    return load_culture_config(ctx.settings.data_dir / "mind.toml").enabled
+    return bool(getattr(ctx.settings, "culture_enabled", False))
+
+
+def app_enabled(app):
+    """The startup choice is shared by live and nightly callers until restart."""
+    return getattr(app, "culture_config", CultureConfig()).enabled

@@ -1,4 +1,5 @@
 """A shared kindness gate; callers own feature switches and delivery receipts."""
+from datetime import date, timedelta
 from leeroy_mind.clock import local_at, night_of
 from leeroy_mind.tuning.effective import dials_of
 
@@ -22,8 +23,12 @@ def _tease_ok(conn, teaser, target, *, personas, human, now, allowance=False):
     if mood and mood[0] < -.3:
         return False, 'hurt_mood'
     local = local_at(now)
-    if conn.execute("SELECT 1 FROM emotion WHERE guid=? AND night=? AND (target=? OR (type IN ('shame','distress') AND intensity>=2)) LIMIT 1",
-                    (target,night_of(local),teaser)).fetchone():
+    night = night_of(local)
+    previous = (date.fromisoformat(night) - timedelta(days=1)).isoformat()
+    if conn.execute("SELECT 1 FROM emotion WHERE guid=? AND night IN (?,?) AND "
+                    "((target=? AND type IN ('distress','shame','reproach','anger','fear','resentment','pity')) "
+                    "OR (type IN ('shame','distress') AND intensity>=2)) LIMIT 1",
+                    (target,night,previous,teaser)).fetchone():
         return False, 'hurt_emotion'
     a,b = sorted((teaser,target))
     if conn.execute('SELECT 1 FROM feud WHERE a=? AND b=? AND ended IS NULL', (a,b)).fetchone():

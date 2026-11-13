@@ -198,14 +198,16 @@ class ServerEngine:
     def _joke_valid(self, conversation, speaker):
         if conversation.seed.kind != "joke":
             return True
-        from leeroy_mind.culture.config import load_culture_config
+        from leeroy_mind.culture.config import app_enabled
         from leeroy_mind.culture.seeds import _culture_seeds
-        if not load_culture_config(Path(self.app.data_dir) / "mind.toml").enabled:
+        if not app_enabled(self.app):
             return False
         people = {g:self.app.personas.get(g) for g in self.app.world.discord_members()
                   if g != self.app.human_guid and self.app.personas.get(g) is not None}
-        current = _culture_seeds(self.app.store.conn, now=self.app.clock.now(), personas=people,
-                                human=self.app.human_guid, include_recent=conversation.teased)
+        current = _culture_seeds(self.app.store, now=self.app.clock.now(), personas=people,
+                                human=self.app.human_guid, include_recent=conversation.teased,
+                                only=int(conversation.seed.key[5:]),
+                                library=Path(self.app.data_dir) / 'library.db', ident=self.app.engine.human)
         if not any(s.key == conversation.seed.key and s.fact == conversation.seed.fact
                    and s.about == conversation.seed.about for s in current):
             return False
@@ -263,35 +265,28 @@ class ServerEngine:
                 raise TurnWithdrawn(GONE)
         return previous
 
-    def _settle_joke(self, conversation, meta):
-        """Reconcile a shielded delivery even when the pipeline rethrows cancellation."""
-        if conversation.teased or not meta.turn_id:
-            return
+    def _record_joke(self, conversation, line, message, now):
+        """DB-only spending inside the pipeline's post/chat transaction."""
         app = self.app
-        row = app.store.conn.execute('SELECT id,ts FROM discord_message WHERE turn=? AND channel=? '
-            'ORDER BY id LIMIT 1', (meta.turn_id, conversation.channel)).fetchone()
-        if row is None:
-            return
         from leeroy_mind.culture.tease import mark_teased, OWNER_KEY
         from leeroy_mind.clock import local_at, night_of
         receipt = f'culture:server-joke:{conversation.id}'
         with app.store.transaction():
             if app.store.get_meta(receipt) is None:
-                # The persisted post's time owns the day/evening, even across midnight.
-                now = row['ts']
                 seeds.mark_used(app.store, conversation.seed, now=now)
                 app.store.conn.execute('UPDATE lexicon SET last_used=?,uses_total=uses_total+1 WHERE id=?',
                     (now, int(conversation.seed.key[5:])))
-                line = app.store.get_meta(f"discord:line:{row['id']}")
-                if line is not None:
-                    app.store.set_meta(f'culture:wear-counted:{conversation.seed.key}:{line}', '1')
+                app.store.set_meta(f'culture:wear-counted:{conversation.seed.key}:{line}', '1')
                 target = conversation.seed.about[0]
                 if target:
                     mark_teased(app.store, target, now=now)
                     if target == app.human_guid:
                         app.store.set_meta(OWNER_KEY, night_of(local_at(now)))
-                app.store.set_meta(receipt, str(row['id']))
-        conversation.teased = True
+                app.store.set_meta(receipt, str(message))
+
+    def _settle_joke(self, conversation, meta):
+        """Read the committed receipt after success or shielded cancellation."""
+        conversation.teased = self.app.store.get_meta(f'culture:server-joke:{conversation.id}') is not None
 
     async def _conversation(self, conversation):
         app, last, dry = self.app, None, 0
@@ -360,7 +355,7 @@ class ServerEngine:
                         and speaker != conversation.seed.about[0]):
                     target = conversation.seed.about[0]
                     person = observed.personas.get(target)
-                    name = person.character_name if person is not None else 'the owner'
+                    name = app.engine.human.called if target == app.human_guid else person.character_name
                     instruction += f" Tease {name} about it the way friends do; keep it kind."
                 if conversation.seed.kind == 'joke' and conversation.teaser is None:
                     conversation.teaser = speaker
@@ -376,6 +371,8 @@ class ServerEngine:
                     server_conversation=conversation.id, discord=DiscordTarget(parent,None), single_line=True,
                     keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
+                if conversation.seed.kind == 'joke':
+                    meta.on_discord_record = lambda line,message,now:self._record_joke(conversation,line,message,now)
                 opening_photo = meta.photo_seed is not None and dry == 0
                 if parent is None and dry == 0 and not opening_photo and conversation.seed.kind != 'joke':
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())

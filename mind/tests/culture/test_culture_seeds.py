@@ -1,5 +1,6 @@
 import asyncio
 import random
+from leeroy_mind.culture.config import load_culture_config
 import pytest
 from nightly.test_night_lexicon import term
 from leeroy_mind.culture.seeds import culture_seeds
@@ -9,7 +10,7 @@ from leeroy_mind.server.runtime import snapshot as real_snapshot
 
 
 def collect(h):
-    return culture_seeds(h.store.conn, now=h.T+4*86400, local=h.clock.local(),
+    return culture_seeds(h.store, now=h.T+4*86400, local=h.clock.local(),
                          personas={g:h.ctx().personas.get(g) for g in h.ctx().members()}, human=1)
 
 
@@ -51,9 +52,10 @@ def test_cast_gate_checks_starter_and_rejects_self(monkeypatch):
     args=dict(officers=frozenset(),human=1,in_play=frozenset(),ties=lambda a,b:1,rng=random.Random(1))
     calls=[]
     assert choose_cast('general',seed,states,people,**args,tease=lambda a,b:calls.append((a,b)) or False)==[]
-    assert calls==[(101,102)]
+    assert set(calls)=={(101,102),(103,102)}
     assert len(choose_cast('general',seed,states,people,**args,tease=lambda a,b:True))>=2
-    assert choose_cast('general',Seed('joke:2','joke',('general',),'A joke',(101,102)),states,people,**args,tease=lambda a,b:True)==[]
+    cast=choose_cast('general',Seed('joke:2','joke',('general',),'A joke',(101,102)),states,people,**args,tease=lambda a,b:True)
+    assert cast[0]!=101 and 101 in cast
 
 
 @pytest.mark.parametrize('update',["status='vetoed'","status='dormant'","retired=1","last_used=9999999999"])
@@ -76,6 +78,7 @@ def joke_app(app,monkeypatch):
     from leeroy_mind.culture import seeds as module
     seed=Seed('joke:1','joke',('general',),'Running joke with real origin',(102,101))
     (app.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    app.culture_config=load_culture_config(app.data_dir/'mind.toml')
     app.observed.seeds=[seed]
     monkeypatch.setattr('leeroy_mind.server.rhythm.choose_cast',lambda *a,**kw:[101,103,102])
     app.store.conn.execute("INSERT INTO lexicon(id,kind,term,origin_ref,originator,born,last_used,butt) VALUES(1,'joke','floor inspector','chat:1',101,0,0,102)")
@@ -132,7 +135,7 @@ def test_event_seed_uses_revalidated_event_fact(h):
     from nightly.test_lexicon_wear import enable
     enable(h)
     wipes(h)
-    origin=event_origins(h.store.conn,(h.T-200,h.T))[0]
+    origin=event_origins(h.store,(h.T-200,h.T))[0]
     lexicon.create_term(h.store,h.ctx(),kind='joke',term='floor inspector',origin_ref=origin.refs[0],
         originator=origin.originator,now=origin.when,butt=origin.butt,origin_kind='event',
         origin_refs=origin.refs,refs=origin.refs)
@@ -174,6 +177,7 @@ def test_each_teasing_speaker_is_checked_and_target_can_reply(app,monkeypatch):
 def test_runtime_gathers_public_joke_in_read_only_worker(app):
     from leeroy_mind.protocol import Chat
     (app.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    app.culture_config=load_culture_config(app.data_dir/'mind.toml')
     now=app.clock.now()
     line=app.store.insert_chat_line(Chat(ts=int((now-5*86400)*1000),channel='guild',
         from_guid=101,from_name='Member101',to_guid=0,text='floor inspector',map=0,zone=0),
@@ -198,8 +202,10 @@ def test_interrupted_delivery_settles_only_real_first_post(app,monkeypatch,failu
         meta.turn_id='interrupted-turn'
         captured.append(meta)
         if persisted:
-            dstore.post(app.store,channel='general',author=turn.speaker,origin='mind',
-                        text='Invented joke delivery',turn=meta.turn_id,now=app.clock.now())
+            with app.store.transaction():
+                message=dstore.post(app.store,channel='general',author=turn.speaker,origin='mind',
+                            text='Invented joke delivery',turn=meta.turn_id,now=app.clock.now())
+                meta.on_discord_record(17,message,app.clock.now())
         raise failure()
     monkeypatch.setattr(app.engine,'speak_meta',interrupted)
     async def go():
@@ -221,6 +227,7 @@ def test_pre_delivery_competing_use_refuses_but_own_delivery_continues(app,monke
     from leeroy_mind.protocol import Chat
     from leeroy_mind.server.engine import Conversation
     (app.data_dir/'mind.toml').write_text('[server]\nenabled=true\n[culture]\nenabled=true\n')
+    app.culture_config=load_culture_config(app.data_dir/'mind.toml')
     now=app.clock.now()
     line=app.store.insert_chat_line(Chat(ts=int((now-5*86400)*1000),channel='guild',
         from_guid=101,from_name='Member101',to_guid=0,text='floor inspector',map=0,zone=0),
@@ -228,7 +235,7 @@ def test_pre_delivery_competing_use_refuses_but_own_delivery_continues(app,monke
     app.store.conn.execute("INSERT INTO lexicon(kind,term,origin_ref,originator,born,last_used) VALUES('joke','floor inspector',?,101,?,?)",
                            (f'chat:{line}',now-5*86400,now-4*86400))
     people=app.observed.personas
-    seed=culture_seeds(app.store.conn,now=now,local=app.clock.local(),personas=people,human=1)[0]
+    seed=culture_seeds(app.store,now=now,local=app.clock.local(),personas=people,human=1)[0]
     c=Conversation('cooldown','general',seed,[101,103],now,5)
     assert app.server.engine._joke_valid(c,101)
     app.store.conn.execute('UPDATE lexicon SET last_used=?',(now,))

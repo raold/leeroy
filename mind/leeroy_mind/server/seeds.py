@@ -248,7 +248,8 @@ def _purpose(conn, c):
 
 
 def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
-           officers: frozenset[int], human: int, human_name: str, trial_rank: int, culture_enabled: bool = False) -> list[Seed]:
+           officers: frozenset[int], human: int, human_name: str, trial_rank: int,
+           culture_enabled: bool = False, culture_store=None, ident=None) -> list[Seed]:
     names = {g: p.character_name for g, p in cast.items()}
     for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
         if guid in cast or guid == human:
@@ -263,7 +264,10 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
     result = [seed for kind, source in sources.items() for seed in _read(kind, lambda: source(conn, c))]
     if culture_enabled:
         from leeroy_mind.culture.seeds import culture_seeds
-        result += _read("joke", lambda: culture_seeds(conn, now=now, local=local, personas=cast, human=human))
+        if culture_store is None or culture_store.conn is not conn:
+            raise ValueError("Culture gathering requires the connection's owning Store")
+        result += _read("joke", lambda: culture_seeds(culture_store, now=now, local=local,
+                                                   personas=cast, human=human, ident=ident))
     return result
 
 

@@ -6,6 +6,7 @@ from datetime import date
 from leeroy_mind.culture.config import enabled as culture_enabled
 from leeroy_mind.culture.origins import COLD_DAYS, RETIRE_USES, origin_text, term_origin, loot_record, fold_banter_uses
 from leeroy_mind.logs import log
+from leeroy_mind.memory.privacy import derive_scope, restricted_channels
 from leeroy_mind.discord.channels import is_public
 from leeroy_mind.nightly import knowledge
 from leeroy_mind.nightly.audience import audience_of, cast_names
@@ -70,6 +71,12 @@ def _origins(store, term):
     if saved is None or any(not isinstance(ref, str) for ref in saved):
         return None
     return tuple(dict.fromkeys((term["origin_ref"], *saved)))
+
+
+def frozen_origin(store, term):
+    refs = _origins(store, term) or ()
+    return (derive_scope(store.conn, term['originator'], refs).scope != 'open'
+            or bool(restricted_channels(store.conn, {term['id']: refs})))
 
 
 def source_snapshot(store, refs):
@@ -355,11 +362,9 @@ def create_term(store, ctx, *, kind, term, target=0, origin_ref, originator, ado
     if culture_enabled(ctx):
         if type(butt) is not int or butt not in members | {0} or origin_kind not in {"line", "event"}:
             return None
-        if kind == "joke" and origin_kind == "line":
-            return None
         if origin_kind == "event":
             source = dict(origin_refs=json.dumps(origin_refs), butt=butt, originator=originator, born=now)
-            if not origin_refs or origin_ref != origin_refs[0] or origin_text(store.conn, term_origin(source), {}) is None:
+            if not origin_refs or origin_ref != origin_refs[0] or origin_text(store, term_origin(source), {}, ident=ctx.ident) is None:
                 return None
     old = store.conn.execute("SELECT * FROM lexicon WHERE kind=? AND term=? AND target=?",
                              (kind, term, target)).fetchone()
@@ -465,6 +470,10 @@ def fade(ctx):
     if culture:
         fold_banter_uses(store)
     for term in store.conn.execute("SELECT * FROM lexicon WHERE status!='vetoed' ORDER BY id").fetchall():
+        if culture and frozen_origin(store, term):
+            # Historical officer/pair terms stay frozen; public culture must neither
+            # revive them nor retire/archive their holders' old memories.
+            continue
         key = f"nightly:lexicon-heat:{term['id']}"
         state = json.loads(store.get_meta(key) or "null")
         previous = (state["night"] if state else
@@ -478,7 +487,7 @@ def fade(ctx):
         heat = term["heat"] * HEAT_DECAY ** nights + max(0, uses - added)
         status = term["status"]
         if culture and term["kind"] == "joke":
-            missing = (origin_text(store.conn, term_origin(term), {}) is None
+            missing = (origin_text(store, term_origin(term), {}, ident=ctx.ident) is None
                        if term["origin_kind"] == "event" else source_snapshot(store, (f"joke:{term['id']}",)) is None)
             if (term["retired"] is not None or term["uses_total"] >= RETIRE_USES
                     or term["born"] < now - COLD_DAYS * 86400 and heat < 1 or missing):

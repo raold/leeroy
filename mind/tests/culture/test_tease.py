@@ -89,3 +89,21 @@ def test_day_and_evening_have_different_boundaries(gate):
     s.set_meta('banter:owner-evening','2026-11-12')
     assert tease_ok(s.conn,101,1,personas=gate.people,human=1,now=midnight)==(False,'his_evening')
     assert tease_ok(s.conn,101,1,personas=gate.people,human=1,now=midnight+6*3600)[0]
+
+
+@pytest.mark.parametrize('kind', ['anger', 'reproach', 'distress', 'shame', 'fear', 'resentment'])
+def test_previous_reporting_night_hurt_still_blocks_daytime_teasing(gate, kind):
+    # The Nov 12 reflection writes at 03:00 on Nov 13; daytime night_of is Nov 13.
+    written = datetime(2026, 11, 13, 3, tzinfo=timezone.utc).timestamp()
+    daytime = datetime(2026, 11, 13, 15, tzinfo=timezone.utc).timestamp()
+    gate.store.conn.execute("INSERT INTO emotion(guid,night,type,target,intensity,source,ts) "
+        "VALUES(102,'2026-11-12',?,101,2,'reflect',?)", (kind, written))
+    assert tease_ok(gate.store.conn,101,102,personas=gate.people,human=1,now=daytime)==(False,'hurt_emotion')
+    assert tease_ok(gate.store.conn,101,102,personas=gate.people,human=1,now=daytime+86400)[0]
+
+
+@pytest.mark.parametrize('kind', ['gratitude', 'admiration', 'love', 'joy', 'happy_for', 'hope'])
+def test_positive_feelings_toward_teaser_are_not_hurt(gate, kind):
+    gate.store.conn.execute("INSERT INTO emotion(guid,night,type,target,intensity,source,ts) "
+        "VALUES(102,'2026-11-11',?,101,3,'reflect',?)", (kind, gate.now-12*3600))
+    assert gate.check() == (True, 'ok')

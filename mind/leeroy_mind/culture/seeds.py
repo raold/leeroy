@@ -1,26 +1,37 @@
 """Running jokes rebuilt from their surviving, public factual provenance."""
 import json
-from leeroy_mind.clock import SystemClock
+import math
 from leeroy_mind.culture.origins import origin_text, term_origin
 from leeroy_mind.memory.privacy import derive_scope, restricted_channels
 from leeroy_mind.memory.recall import hidden_ok
 from leeroy_mind.nightly import lexicon
-from leeroy_mind.storage.store import Store
 from leeroy_mind.server.seeds import Seed
 
 
-def culture_seeds(conn, *, now, local, personas, human) -> list[Seed]:
-    return _culture_seeds(conn, now=now, personas=personas, human=human)
+def culture_seeds(store, *, now, local, personas, human, library=None, ident=None) -> list[Seed]:
+    return _culture_seeds(store, now=now, personas=personas, human=human, library=library, ident=ident)
 
 
-def _culture_seeds(conn, *, now, personas, human, include_recent=False):
-    store = Store(conn, clock=SystemClock())
+def _culture_seeds(store, *, now, personas, human, include_recent=False, only=None, library=None, ident=None):
+    conn = store.conn
     names = {g: p.character_name for g, p in personas.items()}
     names.update({g: name for g, name in conn.execute('SELECT guid,name FROM cast_member')
                   if g in personas or g == human})
     result = []
-    for row in conn.execute("SELECT * FROM lexicon WHERE kind='joke' AND status='active' "
-                            'AND retired IS NULL AND (? OR last_used<?) ORDER BY id', (include_recent, now-3*86400)).fetchall():
+    # The live conversation rechecks just its own indexed row, never every joke.
+    query = "SELECT * FROM lexicon WHERE kind='joke' AND status='active' AND retired IS NULL AND (? OR last_used<?)"
+    args = [include_recent, now-3*86400]
+    if only is not None:
+        query += ' AND id=?'
+        args.append(only)
+    for row in conn.execute(query + ' ORDER BY id', args).fetchall():
+        if not include_recent:
+            try:
+                reserved = float(store.get_meta(f"banter:used:joke:{row['id']}") or 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(reserved) or reserved > now - 86400:
+                continue
         # Walking the joke root also checks retained sources, paired output memories,
         # freeze/veto markers and nested evidence. Missing proof never becomes public.
         refs = lexicon.public_sources(store, (f"joke:{row['id']}",))
@@ -36,7 +47,7 @@ def _culture_seeds(conn, *, now, personas, human, include_recent=False):
         if hidden and not all(hidden_ok(hidden, 'discord:'+channel) for channel in ('general', 'memes')):
             continue
         if row['origin_kind'] == 'event':
-            text = origin_text(conn, term_origin(row), names)
+            text = origin_text(store, term_origin(row), names, library=library, ident=ident)
         else:
             ref = row['origin_ref']
             if not isinstance(ref, str) or not ref.startswith('chat:') or not ref[5:].isdigit():
