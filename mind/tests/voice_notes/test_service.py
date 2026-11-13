@@ -120,6 +120,7 @@ def test_his_transcript_is_private_and_only_then_handed_to_answers(store,clock,m
         row=store.conn.execute('SELECT channel,to_guid,text FROM chat_line').fetchone()
         assert row['channel']=='dm:101' and row['to_guid']==101
         assert ("Don't tell" in row['text']) is success
+        assert store.conn.execute('SELECT edited FROM discord_message').fetchone()[0] is None  # not his edit
         assert bool(store.conn.execute('SELECT transcript_ok FROM discord_voice').fetchone()[0]) is success
         from leeroy_mind.memory.privacy import derive_scope
         lid=store.conn.execute('SELECT id FROM chat_line').fetchone()[0]
@@ -252,6 +253,70 @@ def test_a_ready_note_is_handed_over_without_waiting_for_the_voice_service(store
         await asyncio.gather(*tuple(app.voice_notes._tasks))
         assert seen==[mid] and note_state(store,mid)[0] is None
         await app.voice_notes.close()
+    run(go())
+
+
+def test_failure_instruction_follows_his_forms():
+    assert service.failure(('he','him','his')).startswith('He sent a private voice note')
+    assert service.failure(('she','her','her')).startswith('She sent a private voice note')
+    assert service.failure(('they','them','their')).startswith('They sent a private voice note')
+    assert 'Do not invent its contents' in service.failure(('they','them','their'))
+
+
+def test_a_transcript_too_long_for_a_post_settles_as_a_failure_not_a_retry(store,clock,monkeypatch):
+    async def go():
+        app,_,_,_,seen=fixture(store,clock,monkeypatch)
+        async def request(msg):
+            return wire.Transcript(msg.id,True,'word '*500,'ok')  # over the 2000 code points
+        app.voice_notes.request=request
+        token,_,_=files.stage(app.data_dir,wav())
+        result=await app.discord.handle(discord_args({'action':'post','channel':'dm:101','voice':token}))
+        await asyncio.gather(*tuple(app.voice_notes._tasks))
+        assert seen==[result['id']] and note_state(store,result['id'])==(None,0,service.PLACEHOLDER)
+        await app.voice_notes.close()
+    run(go())
+
+
+def test_a_threading_failure_still_hands_his_note_to_the_answers(store,clock,monkeypatch):
+    async def go():
+        app,_,_,_,seen=fixture(store,clock,monkeypatch)
+        async def request(msg):
+            return wire.Transcript(msg.id,True,'An invented private sentence.','ok')
+        app.voice_notes.request=request
+        def broken(*a):
+            raise RuntimeError('synthetic threading failure')
+        app.on_his_discord_line=broken
+        token,_,_=files.stage(app.data_dir,wav())
+        result=await app.discord.handle(discord_args({'action':'post','channel':'dm:101','voice':token}))
+        await asyncio.gather(*tuple(app.voice_notes._tasks))
+        assert seen==[result['id']] and note_state(store,result['id'])[0] is None
+        await app.voice_notes.close()
+    run(go())
+
+
+def test_a_recovery_failure_never_stops_the_owed_dm_tick():
+    from leeroy_mind.app import MindApp
+    async def go():
+        steps,owed=asyncio.Queue(),asyncio.Event()
+        class Clock:
+            t=0
+            def now(self):
+                return self.t
+            async def sleep(self,_seconds):
+                self.t+=await steps.get()
+        def broken():
+            raise RuntimeError('synthetic recovery failure')
+        app=SimpleNamespace(clock=Clock(),world=SimpleNamespace(human_online=False),
+            threads=SimpleNamespace(expire=lambda now:[]),_extract_queue=asyncio.Queue(),
+            _embed_task=None,voice_notes=SimpleNamespace(tick=broken),
+            discord_talk=SimpleNamespace(tick=lambda now:owed.set()))
+        task=asyncio.create_task(MindApp._ticker(app))
+        try:
+            steps.put_nowait(1)
+            await asyncio.wait_for(owed.wait(),1)
+        finally:
+            task.cancel()
+            await asyncio.gather(task,return_exceptions=True)
     run(go())
 
 

@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import replace
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 import re
 import uuid
@@ -10,6 +11,7 @@ import uuid
 from leeroy_mind.discord import layout, store as discord
 from leeroy_mind.discord.channels import channel_id
 from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
+from leeroy_mind.discord.text import TextRefused, clean_text
 from leeroy_mind.logs import log
 from leeroy_mind.protocol import Chat
 from leeroy_mind.tuning.effective import dials_of
@@ -22,7 +24,8 @@ TIMEOUT=20.0
 # a pending recording waits this long for the connection, then settles as a real failure.
 RECOVERY_WAIT_S=300.0
 PLACEHOLDER='(voice message)'
-FAILURE='He sent a private voice note, but you cannot play it right now. Do not invent its contents; you may say you will listen later.'
+FAILURE=('{they} sent a private voice note, but you cannot play it right now. Do not invent its '
+         'contents; you may say you will listen later.')
 PENDING_KEY='voice_note:pending:'
 
 
@@ -32,6 +35,11 @@ def rows(conn,ids):
     return {r['message']:dict(r) for r in conn.execute('SELECT v.* FROM discord_voice v JOIN discord_message m '
         'ON m.id=v.message WHERE m.deleted IS NULL AND v.message IN (SELECT value FROM json_each(?))',
         (json.dumps(list(ids)),))}
+
+
+def failure(forms):
+    """The answering member's instruction for his note she cannot play, in his forms."""
+    return FAILURE.format(they=forms[0].capitalize())
 
 
 def counts(store,day):
@@ -239,17 +247,23 @@ class VoiceNotes:
         row=app.store.conn.execute('SELECT deleted,text FROM discord_message WHERE id=?',(mid,)).fetchone()
         if self._closed or app.stopping or row is None or row[0] is not None:
             return
-        text=result.text.strip() if isinstance(result,wire.Transcript) and result.ok else ''
+        reason=result.reason if isinstance(result,wire.Transcript) else 'unavailable'
+        try:
+            text=clean_text(result.text) if isinstance(result,wire.Transcript) and result.ok else ''
+        except TextRefused:
+            text,reason='','engine_error'  # no post could hold it: a failure, never a retry
         with app.store.transaction():
             if text:
-                # An owner edit made while STT ran wins over this old recording.
+                # An owner edit made while STT ran wins over this old recording. The transcript
+                # is the post's own words, not his edit: `edited` stays unset.
                 if row[1]==PLACEHOLDER:
-                    discord.edit(app.store,mid,author=chat.from_guid,text=text,now=app.clock.now())
+                    app.store.conn.execute('UPDATE discord_message SET text=? WHERE id=? AND deleted IS NULL',
+                                           (text,mid))
                     desk._edit_line(mid)
                 app.store.conn.execute('UPDATE discord_voice SET transcript_ok=1 WHERE message=?',(mid,))
             app.store.set_meta(PENDING_KEY+str(mid),'ready')
         if not text:
-            log('voice_note_transcript_failed',reason=result.reason if isinstance(result,wire.Transcript) else 'unavailable')
+            log('voice_note_transcript_failed',reason=reason)
         stored=app.store.conn.execute('SELECT text FROM chat_line WHERE id=?',(line,)).fetchone()[0]
         self._handoff(mid,line,replace(chat,text=stored))
 
@@ -262,7 +276,11 @@ class VoiceNotes:
         # thread back if a later handoff fails. Its row makes this step idempotent on retry.
         row=app.store.conn.execute('SELECT thread_id FROM chat_line WHERE id=?',(line,)).fetchone()
         if row is not None and row[0] is None:
-            app.on_his_discord_line(line,chat,app.clock.now())
+            try:
+                app.on_his_discord_line(line,chat,app.clock.now())
+            except Exception as e:  # as the desk's typed post: the note is stored, answers still come
+                log('discord_thread_failed',level=logging.WARNING,message=mid,line=line,
+                    error=type(e).__name__)
         # No await between answer handoff and its receipt. A crash before this commit
         # leaves a ready note, not another STT request.
         with app.store.transaction():

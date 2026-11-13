@@ -78,7 +78,8 @@ file-identity checks as photos, with private 60-second caching; deleted posts re
 The post appears immediately as “(voice message)”. A separate 20-second STT request uses
 the existing recognizer and hotwords without opening the microphone or changing push-to-talk
 state. A successful transcript replaces both message and chat text. The ordinary “don't
-tell” screen applies, including secret private-pair memories. Failed transcription leaves
+tell” screen applies, including secret private-pair memories. The transcript is not his
+edit, so the post is not marked edited. Failed transcription leaves
 the bubble playable and tells the answering member only that she cannot play it right now.
 
 Only the completed success or failure is handed to `DiscordTalk.on_his_post`, exactly once
