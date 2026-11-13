@@ -162,6 +162,7 @@ STATUS_S = 2.0
 TYPING_S = 1.0  # the mind's status, asked for who is typing on each strip pass, answers in this
 TYPING_MAX = 40  # entries kept from it
 TYPING_STALE_S = 30.0  # an entry older than this (its `age`) is dropped; the page's own STALE_S
+TYPING_PHASES = frozenset({"composing", "typing", "recording"})  # Pipeline.typing_now's phases
 SNAPSHOT_S = 15.0  # a settled mind's process list is taken this often (an unclear one's at most)
 VOICE_LOCK_S = 15.0  # how long the Mind tab reuses its reading of voice.lock
 FEED_S = 1.5
@@ -198,8 +199,9 @@ def _number(x) -> bool:
 def typing_entries(value) -> list[dict]:
     """The mind's status `typing` (Pipeline.typing_now) as the strip carries it: the well-formed
     entries no older than TYPING_STALE_S, each with only its own keys, {"guid", "name",
-    "channel", "to", "since", "age"}. `age` (seconds, read by the mind as it answered) is what
-    staleness goes by; `since` is the mind's clock, for matching the line when it lands."""
+    "channel", "to", "since", "age"}, plus "phase" when it is one of TYPING_PHASES (an older
+    mind sends none). `age` (seconds, read by the mind as it answered) is what staleness goes
+    by; `since` is the mind's clock, for matching the line when it lands."""
     if not isinstance(value, list):
         return []
     out = []
@@ -212,8 +214,12 @@ def typing_entries(value) -> list[dict]:
                 or not _number(since) or not _number(age) or not 0 <= age <= TYPING_STALE_S
                 or (to is not None and (type(to) is not int or to <= 0))):
             continue
-        out.append({"guid": guid, "name": name if isinstance(name, str) else "",
-                    "channel": channel, "to": to, "since": since, "age": age})
+        entry = {"guid": guid, "name": name if isinstance(name, str) else "",
+                 "channel": channel, "to": to, "since": since, "age": age}
+        phase = e.get("phase")
+        if isinstance(phase, str) and phase in TYPING_PHASES:
+            entry["phase"] = phase
+        out.append(entry)
     return out
 
 

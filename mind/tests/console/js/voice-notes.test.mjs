@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { NOTE_BYTES, NOTE_RATE, NOTE_SECONDS, mono, resample, wav, audioUrl, noteTime, playerState, VoiceRecorder }
   from '../../../leeroy_mind/console/static/js/comms/voicenotes.mjs';
 import { api } from '../../../leeroy_mind/console/static/js/core.mjs';
@@ -116,9 +117,17 @@ test('malformed voice metadata cannot replace a valid Discord view', () => {
     assert.equal(validView('/api/discord?channel=dm:101',{...data,messages:[{reactions:[],voice_note:{...data.messages[0].voice_note,...bad}}]}),false);
   }
 });
+// The console's strip while a member's DM line renders as a voice note: the mind's tests build
+// this payload from the talk pipeline through the control status and the console
+// (tests/voice_notes/test_typing_strip.py), so the phase here is the one the page really gets.
+const RECORDING = JSON.parse(readFileSync(new URL('../../fixtures/typing_recording.json', import.meta.url), 'utf8'));
 test('a member recording a DM has a recording strip that still expires normally', () => {
-  const entries=typingByView([{guid:101,name:'Arkon',channel:'dm:101',to:1,since:10,age:2,phase:'recording'}],{human:1});
+  const o={human:RECORDING.human,name:g => g === 101 ? 'Arkon' : '#'+g};
+  const entries=typingByView(RECORDING.typing,o);
   assert.equal(activityLabel(entries.get('dm:101')),'Arkon is recording a voice message');
-  assert.equal(activityLabel([]),''); assert.equal(activityLabel([{name:'Arkon'}]),'Arkon is typing');
-  assert.equal(typingByView([{guid:101,channel:'dm:101',to:1,since:10,age:31,phase:'recording'}],{human:1}).size,0);
+  const typing=RECORDING.typing.map(e => ({...e,phase:'typing'}));
+  assert.equal(activityLabel(typingByView(typing,o).get('dm:101')),'Arkon is typing');
+  assert.equal(activityLabel([]),'');
+  const stale=RECORDING.typing.map(e => ({...e,age:31}));
+  assert.equal(typingByView(stale,o).size,0);
 });

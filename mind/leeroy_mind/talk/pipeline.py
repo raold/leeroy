@@ -230,7 +230,8 @@ _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 # its compose call until its text exists, and typing over the typing delay before each line is
 # sent. Only where Comms shows the line: guild and officer, his group's party and raid, and a
 # whisper to him (typed or voiced); a voice room, say and yell, and templates show nothing.
-COMPOSING, TYPING = "composing", "typing"
+# Recording: a member's DM line being rendered as a voice note (voice_notes), shown as such.
+COMPOSING, TYPING, RECORDING = "composing", "typing", "recording"
 COMMS_CHANNELS = frozenset({"guild", "officer"})
 GROUP_CHANNELS = frozenset({"party", "raid", "raid_warning"})
 _CAMEL = re.compile(r"(?<!^)(?=[A-Z])")
@@ -765,18 +766,18 @@ class Pipeline:
 
     def typing_now(self) -> list[dict]:
         """The control endpoint's status `typing`: each model turn being composed or typed where
-        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age"}
-        (`to`: a whisper's target, him; else None; `age`: seconds since the phase's latest
-        refresh, at least every ten seconds during a realism wait, read now, so a
-        page judges staleness without comparing clocks; `since` is for matching the line when it
-        lands). Ids, names and times only, never text; the game's places none while he is
+        Comms shows its line, oldest first, as {"guid", "name", "channel", "to", "since", "age",
+        "phase"} (`phase`: COMPOSING, TYPING or RECORDING; `to`: a whisper's target, him; else
+        None; `age`: seconds since the phase's latest refresh, at least every ten seconds during
+        a realism wait, read now, so a page judges staleness without comparing clocks; `since` is
+        for matching the line when it lands). Ids, names and times only, never text; the game's places none while he is
         offline, a Discord turn's (channel as given, `to` him in a DM to him) always."""
         w, hg = self.world, self.human.guid
         if not hg:
             return []
         now = self.clock.now()
         out = []
-        for turn, _, since in self._phases.values():
+        for turn, phase, since in self._phases.values():
             channel, to = turn.channel, None
             if is_discord(channel):
                 to = hg if turn.to_guid == hg else None
@@ -790,7 +791,7 @@ class Pipeline:
             m = w.members.get(turn.speaker)
             out.append({"guid": turn.speaker, "name": m.name if m is not None else "",
                         "channel": channel, "to": to, "since": since,
-                        "age": max(0.0, now - since)})
+                        "age": max(0.0, now - since), "phase": phase})
         return sorted(out, key=lambda e: (e["since"], e["guid"]))
 
     def planned_turns(self) -> list[Turn]:
@@ -2256,7 +2257,7 @@ class Pipeline:
         meta.voice_note = None
         notes = getattr(self,'voice_notes',None)
         if notes is not None and notes.eligible(turn,meta,p,text):
-            self._phase(turn,'recording')
+            self._phase(turn,RECORDING)
             try:
                 meta.voice_note = await notes.prepare(turn,meta,p,text)
             finally:
