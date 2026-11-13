@@ -287,8 +287,11 @@ class ActionQueue:
         if (_live(c) and type(ev.guild_id) is int and type(ev.human_guid) is int
                 and ev.guild_id == c.guild and ev.human_guid in (0, c.human)):
             self.off = False
-            self.store.restart_release(started_ms=getattr(ev, 'started_ms', 0),
-                guild=c.guild, human=c.human, now=self.clock.now())
+            try:
+                self.store.restart_release(started_ms=getattr(ev, 'started_ms', 0),
+                    guild=c.guild, human=c.human, now=self.clock.now())
+            except Exception as e:  # never cost the rest of the hello (Recall, speech, the actor set)
+                log.warning("realm_action_restart_release_failed: %s", type(e).__name__)
         self.context_changed()
 
     def _paced(self, times, now):

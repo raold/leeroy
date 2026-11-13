@@ -179,3 +179,14 @@ def test_a_child_on_an_ordinary_root_is_inconsistent_and_cannot_be_released(ledg
     with pytest.raises(ActionUnavailable):
         ledger.restart_release(started_ms=15000,guild=50,human=1,now=20)
     assert ledger.get('root') == before
+
+
+def test_a_failing_restart_release_still_lets_the_hello_through(ledger, caplog, monkeypatch):
+    h=Harness(ledger)
+    seen=[]
+    monkeypatch.setattr(ledger, 'restart_release', lambda **kw: (_ for _ in ()).throw(ValueError('bad')))
+    monkeypatch.setattr(h.queue, 'context_changed', lambda: seen.append(True))
+    with caplog.at_level(logging.WARNING):
+        h.queue.on_hello(Hello(0,'fixture','1',50,1,started_ms=15000))
+    assert seen == [True]
+    assert 'realm_action_restart_release_failed: ValueError' in caplog.text
