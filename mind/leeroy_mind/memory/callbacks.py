@@ -125,8 +125,9 @@ class _Privacy:
     Public and private evidence mixed together still must all pass. Officer and
     historical group/room audiences restrict even a mistakenly open memory.
     """
-    def __init__(self, conn, guid, ctx, now):
+    def __init__(self, conn, guid, ctx, now, human):
         self.conn, self.guid, self.ctx, self.now = conn, guid, ctx, now
+        self.readers = None if ctx.readers is None else set(ctx.readers) - {human}
         self.cache = {}
         self.count = 0
         rows = _rows(conn, "SELECT json FROM persona_core WHERE guid=?", (guid,))
@@ -188,8 +189,8 @@ class _Privacy:
                     ok = True
                 else:
                     # Every current reader must have been in the historical audience.
-                    ok = (ch == self.ctx.channel and _ids(audience) and self.ctx.readers is not None
-                          and set(self.ctx.readers).issubset(audience) and self.guid in audience)
+                    ok = (ch == self.ctx.channel and _ids(audience) and self.readers is not None
+                          and self.readers.issubset(audience) and self.guid in audience)
                 ok = ok and audience_ok and row["ts"] <= self.now
                 if ok and is_discord(ch):
                     deleted = self.conn.execute("SELECT 1 FROM meta r JOIN discord_message m "
@@ -223,15 +224,17 @@ def _pick(conn, guid, ctx, now):
     usage = _rows(conn, "SELECT guid FROM callback_use WHERE ts>=? AND ts<=? LIMIT 4", (floor, now))
     if len(usage) >= 3 or any(r["guid"] == guid for r in usage):
         return None
+    owner = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
+    human = int(owner[0]) if owner and str(owner[0]).isdecimal() else 0
     # Unknown room authorization fails closed, even for public memory seeds.
     if is_private(ctx.channel):
         if (not ctx.to_guid or ctx.to_guid == guid or set(ctx.present) - {guid, ctx.to_guid}
                 or (ctx.readers is not None and set(ctx.readers) - {guid, ctx.to_guid})):
             return None
     elif ctx.channel != "guild" and (ctx.readers is None or guid not in ctx.readers
-                                     or not set(ctx.present).issubset(ctx.readers)):
+                                     or not (set(ctx.present) - {human}).issubset(ctx.readers)):
         return None
-    privacy = _Privacy(conn, guid, ctx, now)
+    privacy = _Privacy(conn, guid, ctx, now, human)
     if is_officer_channel(ctx.channel) and not privacy.officer:
         return None
     rows = _rows(conn, "SELECT * FROM memory m WHERE owner=? AND status='active' "

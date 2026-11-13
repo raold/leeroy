@@ -36,7 +36,10 @@ Privacy uses the existing whisper pair and memory scope rules. Every evidence
 branch must also be visible: mixed public/private evidence remains private;
 officer evidence requires a current officer room and the stored officer role;
 historical party/local/other room evidence requires a matching channel and an
-audience containing every current reader. Mind-origin evidence additionally
+audience containing every current cast reader. Game recordings contain cast only;
+the owner's guid (from `human_guid` meta) is excluded from this reader subset test,
+but remains in the observed participants for the shared-actor check.
+Mind-origin evidence additionally
 checks the recalled memories in its paired, non-dropped utterance. Recursive
 memory and chat provenance is checked with a 32-level, 500-node budget. Missing
 or unsupported roots, cycles and exhausted budgets fail closed. Supported roots
@@ -51,7 +54,8 @@ the same `Store.transaction()` as the sent-line write**. It takes a write lock,
 rechecks eligibility and quotas, and writes only IDs and time to `callback_use`.
 It never commits. A failed send must roll back; a SQLite concurrent-writer error
 requires retrying the whole transaction. A rejected or changed offer returns
-false. The talk pipeline connects it to the first acknowledged fragment's recipe.
+false. The talk pipeline connects it to the first acknowledged fragment's transaction,
+even if learning froze after composition: delivery accounting still starts the rest.
 
 A memory rests for 14 wall-clock days after use. A member may use one callback,
 and the whole guild three, during the last hour of recorded owner play. Session
