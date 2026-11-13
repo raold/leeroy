@@ -1,13 +1,21 @@
-"""Voice protocol v1, the mind's own copy (stdlib only; the voice service keeps
-leeroy_voice.wire with the same names). NDJSON between the mind and leeroy-voice on
-127.0.0.1:7879, one JSON object per line, at most MAX_LINE_BYTES before the newline. Every
-message carries "v": 1, "type" and "ts" (unix ms), then its fields in declaration order,
-encoded with separators (",", ":") and ensure_ascii. A Python field `from_` is JSON `from`.
-Unknown fields are ignored. Both suites test their codecs against
-voice/tests/fixtures/wire_golden.json: keep the two copies in step."""
+"""Voice protocol v1: newline-delimited JSON between the mind and leeroy-voice on 127.0.0.1:7879.
+
+One JSON object per line, UTF-8, at most MAX_LINE_BYTES before the newline. Every message
+carries "v": 1, "type" and "ts" (unix ms), then its fields in declaration order, encoded with
+separators (",", ":") and ensure_ascii. A Python field `from_` is JSON `from`, a tuple a JSON
+array and a nested dataclass a JSON object. Unknown fields are ignored; a missing field is an
+error unless its class gives it a default. A float field takes a JSON integer; a boolean is
+never a number and a number never a boolean. The protocol's word lists (tiers, attitudes,
+states, phases, play states and reasons) are checked both ways: encode refuses what parse
+would.
+
+The mind keeps its own copy (leeroy_mind.voice.wire, stdlib only, the same names), and
+tests/fixtures/wire_golden.json holds one exact line per type for both suites (20 types,
+11 from the mind and 9 from the voice service)."""
 import dataclasses
 import json
 import math
+import re
 import typing
 from dataclasses import dataclass
 
@@ -128,6 +136,37 @@ class Raid:
     lead: int
 
 
+@dataclass(frozen=True, slots=True)
+class Render:
+    id: str
+    guid: int
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Transcribe:
+    id: str
+    path: str
+
+
+@dataclass(frozen=True, slots=True)
+class Rendered:
+    id: str
+    ok: bool
+    path: str
+    ms: int
+    bytes: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class Transcript:
+    id: str
+    ok: bool
+    text: str
+    reason: str
+
+
 # from the voice service
 
 
@@ -178,6 +217,7 @@ class Status:
     ui: bool  # the voice UI has a page open
     queue: int
     errors: tuple[str, ...]
+    render: bool = False  # offline native TTS is available independently of room playback
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,18 +226,19 @@ class Error:
 
 
 Message = (Session | Channels | Moved | Invite | Refused | VoiceDef | Speak | Cancel | Raid
-           | Hello | Join | Played | Ptt | Heard | Status | Error)
+           | Hello | Join | Played | Ptt | Heard | Status | Error | Render | Rendered | Transcribe | Transcript)
 
 _TYPES: dict[str, type] = {
     "session": Session, "channels": Channels, "moved": Moved, "invite": Invite,
     "refused": Refused, "voice": VoiceDef, "speak": Speak, "cancel": Cancel, "raid": Raid,
+    "render": Render, "transcribe": Transcribe,
     "hello": Hello, "join": Join, "played": Played, "ptt": Ptt, "heard": Heard,
-    "status": Status, "error": Error,
+    "status": Status, "error": Error, "rendered": Rendered, "transcript": Transcript,
 }
 _NAMES = {cls: name for name, cls in _TYPES.items()}
 MESSAGE_TYPES = tuple(_TYPES)
-FROM_MIND = frozenset(MESSAGE_TYPES[:9])
-FROM_VOICE = frozenset(MESSAGE_TYPES[9:])
+FROM_MIND = frozenset(MESSAGE_TYPES[:11])
+FROM_VOICE = frozenset(MESSAGE_TYPES[11:])
 _HINTS = {cls: typing.get_type_hints(cls) for cls in (*_TYPES.values(), Room)}
 
 
@@ -254,6 +295,21 @@ def _one_of(value: str, allowed: tuple[str, ...], key: str) -> None:
 
 def _check(msg) -> None:
     """The protocol's word lists and its rules beyond types."""
+    if isinstance(msg,(Render,Rendered,Transcribe,Transcript)):
+        if re.fullmatch(r'[0-9a-f]{32}',msg.id) is None:
+            raise WireError(BAD_FIELD+'id')
+        if isinstance(msg,(Rendered,Transcript)):
+            _one_of(msg.reason,('ok','no_voice','engine_error','busy','too_long','write_failed'), 'reason')
+            if msg.ok != (msg.reason=='ok'):
+                raise WireError(BAD_FIELD+'reason')
+        if isinstance(msg,(Render,Transcript)) and len(msg.text)>4000:
+            raise WireError(BAD_FIELD+'text')
+        if isinstance(msg,Render) and msg.guid<=0:
+            raise WireError(BAD_FIELD+'guid')
+        if isinstance(msg,(Transcribe,Rendered)) and (len(msg.path)>240 or '\x00' in msg.path):
+            raise WireError(BAD_FIELD+'path')
+        if isinstance(msg,Rendered) and (msg.ok and not (200<=msg.ms<=65000 and 1<=msg.bytes<=2097152) or not msg.ok and (msg.path or msg.ms or msg.bytes)):
+            raise WireError(BAD_FIELD+'audio')
     match msg:
         case Speak():
             _one_of(msg.priority, TIERS, "priority")

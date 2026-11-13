@@ -351,6 +351,7 @@ class TurnMeta:
     seed: int | None = None
     # a Discord turn's message: the one it replies to and its thread (discord.transport); a
     # Discord turn is known by its channel, never by this
+    voice_note: object = None
     discord: DiscordTarget | None = None
     discord_named: bool = False  # he addressed this member in a channel: re-ask one silence
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
@@ -2252,6 +2253,16 @@ class Pipeline:
                     return "guard_changed_before_send"
             if not self.live_review.valid(turn, meta):
                 return "scope_changed"
+        meta.voice_note = None
+        notes = getattr(self,'voice_notes',None)
+        if notes is not None and notes.eligible(turn,meta,p,text):
+            self._phase(turn,'recording')
+            try:
+                meta.voice_note = await notes.prepare(turn,meta,p,text)
+            finally:
+                self._phase(turn,TYPING)
+            if not _scope_valid(meta) or not self.live_review.valid(turn,meta):
+                return 'scope_changed'
         async with self._timed_send_lock(meta):
             if meta.realism_followup and meta.realism_sequence != self.realism.member(turn.speaker).sequence:
                 return "realism_stale"
@@ -2339,7 +2350,7 @@ class Pipeline:
         from leeroy_mind.server.records import BadDayCounter
         stage = 'store'
         try:
-            with self.store.transaction() if server_turn else nullcontext():
+            with self.store.transaction() if server_turn or meta.voice_note is not None else nullcontext():
                 message = store_line(self.store, turn, meta, text, self.clock.now(),
                                      audience=self.world.audience(
                                          turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
@@ -2349,6 +2360,8 @@ class Pipeline:
                     posted(self.store, self.clock.local().date().isoformat(), self.clock.now(),
                            conversation=meta.server_conversation,
                            dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
+                if meta.voice_note is not None:
+                    self.voice_notes.record(message,turn.speaker,meta.voice_note)
             # The post and its budget are durable before _record updates memory-only
             # guards, chain state and hooks. Those effects cannot survive a rollback.
             self._record(turn, meta, p, text, memory_ids, discord_id=message)

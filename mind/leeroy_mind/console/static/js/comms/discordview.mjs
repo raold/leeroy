@@ -7,6 +7,8 @@ import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, pres
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
 import { PICKER, isOneEmoji } from "./emoji.mjs";
 import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
+import { voiceBox, retainVoicePlayers } from "./voiceplayer.mjs";
+import { voiceDraft, voicePreparing, clearVoice, prepareVoice, renderVoiceDraft, setupVoiceComposer } from "./voicerecorder.mjs";
 
 var shown = "", thread = 0, panel = "", reply = null, entryMark = 0, drawing = "";
 var drafts = new Map(), replyDrafts = new Map(), folded = new Set(), dialog = null, returnTo = null, failure = "";
@@ -14,6 +16,7 @@ var input = $("dc-text"), box = $("feed");
 var photoBusy = false;
 function button(text, cls) { var b = el("button", cls || "", text); b.type = "button"; return b; }
 function active() { return !!channelOf(currentView()); }
+function privateDm() { return /^dm:[1-9]\d{0,9}$/.test(channelOf(shown)) && !thread; }
 function windowData() { return DISCORD.window(currentView(), thread); }
 function name(guid) { return DISCORD.name(guid); }
 function focusKey(root) {
@@ -113,7 +116,8 @@ function messageRow(item, data) {
   }
   var quote = quoteOf(m, (data.quotes || []).concat(data.messages), name);
   if (quote) { var q = el("blockquote", "dc-quote"); q.appendChild(el("b", "", quote.name)); q.appendChild(el("span", "", quote.text)); content.appendChild(q); }
-  content.appendChild(el("div", "body", deleted ? "Message deleted" : str(m.text)));
+  if (!deleted && m.voice_note && privateDm()) { content.appendChild(voiceBox(m, mine ? 'you' : name(m.author), mine)); }
+  else { content.appendChild(el("div", "body", deleted ? "Message deleted" : str(m.text))); }
   if (!deleted && m.image) { content.appendChild(photoBox(m, name(m.author))); }
   if (!deleted && !mine && m.origin==='mind') {
     var feedback = feedbackButtons(m,name(m.author));
@@ -165,6 +169,7 @@ function renderPanel(data) {
 function renderMessages(data) {
   var signature = JSON.stringify([shown, thread, data, entryMark, discordBusy, discordReason(), DISCORD.human]);
   if (signature === drawing) { return; }
+  retainVoicePlayers(privateDm() && data ? data.messages.filter(m => m.voice_note && m.deleted === null).map(m => m.id) : []);
   var key = focusKey(box), top = box.scrollTop, bottom = box.scrollHeight - top - box.clientHeight < 40;
   var newView = !drawing; drawing = signature; clear(box);
   if (!data) { box.appendChild(el("p", "empty muted", DISCORD.error || "Loading messages…")); return; }
@@ -184,12 +189,16 @@ function renderMessages(data) {
 }
 function renderComposer() {
   var reason = discordReason(), count = Array.from(input.value).length;
-  input.disabled = !!reason; input.readOnly = discordBusy || photoBusy;
+  var note = DISCORD.voice_notes && privateDm() && voiceDraft(routeKey());
+  var recording = voicePreparing(routeKey());
+  input.disabled = !!reason; input.readOnly = discordBusy || photoBusy || !!note || recording;
   var attached = DISCORD.photos && photoDraft(routeKey());
   var preparing = photoPreparing(routeKey());
-  $("dc-send").disabled = !!reason || discordBusy || photoBusy || preparing || (!input.value.trim() && !attached) || count > 2000;
-  renderPhotoDraft(routeKey(), DISCORD.photos, !!reason || discordBusy || photoBusy || preparing);
-  $("dc-emoji").disabled = !!reason || discordBusy;
+  $("dc-send").disabled = !!reason || discordBusy || photoBusy || preparing || recording ||
+    (!input.value.trim() && !attached && !note) || (!note && count > 2000);
+  renderPhotoDraft(routeKey(), DISCORD.photos, !!reason || discordBusy || photoBusy || preparing || recording || !!note);
+  renderVoiceDraft(routeKey(), DISCORD.voice_notes && privateDm(), !!reason || discordBusy || photoBusy || preparing || !!attached);
+  $("dc-emoji").disabled = !!reason || discordBusy || recording || !!note;
   $("dc-count").textContent = count + " / 2000"; $("dc-count").classList.toggle("bad", count > 2000);
   $("dc-to").textContent = DISCORD.title(currentView()) + (thread ? " thread" : "");
   $("dc-why").textContent = reason || (preparing ? "Your photo is being prepared…" : failure || (discordBusy ? "Saving…" : "Enter sends · Shift+Enter starts a new line"));
@@ -198,7 +207,7 @@ function renderComposer() {
 }
 function render() {
   var yes = active(); $("dc-tools").hidden = !yes; $("dc-composer").hidden = !yes; $("composer").hidden = yes;
-  if (!yes) { $("dc-panel").hidden = true; renderMembers(); return; }
+  if (!yes) { $("dc-panel").hidden = true; retainVoicePlayers([]); renderVoiceDraft(routeKey(), false, true); renderMembers(); return; }
   var data = windowData(), t = data && (data.threads || []).find(function (x) { return x.id === thread; });
   $("feed-title").textContent = DISCORD.title(currentView()) + (t ? " / " + t.name : "");
   var channel = DISCORD.channels().find(function (c) { return c.id === channelOf(currentView()); });
@@ -221,22 +230,29 @@ function send() {
   if (thread) { body.thread = thread; } if (reply) { body.reply_to = reply.id; }
   failure = "";
   var photo = DISCORD.photos ? photoDraft(key) : null;
-  photoBusy = !!photo; renderComposer();
-  preparePhoto(photo).then(function (token) {
-    if (token) { body.image = token; }
+  var note = DISCORD.voice_notes && privateDm() ? voiceDraft(key) : null;
+  photoBusy = !!photo || !!note; renderComposer();
+  (note ? prepareVoice(note) : preparePhoto(photo)).then(function (token) {
+    if (note) { body.voice = token; delete body.text; }
+    else if (token) { body.image = token; }
     return mutateDiscord(body);
   }).then(function () {
     clearPhoto(key, photo);
-    drafts.delete(key); replyDrafts.delete(key);
-    if (key === routeKey() && input.value === text) { input.value = ""; reply = null; renderComposer(); input.focus(); }
+    clearVoice(key, note);
+    if (!note) { drafts.delete(key); } replyDrafts.delete(key);
+    if (key === routeKey() && input.value === text) { if (!note) { input.value = ""; } reply = null; renderComposer(); input.focus(); }
   }).catch(function (error) {
     // A refused/uncertain post may already have consumed the token. Preserve
     // the local photo, but stage a fresh token if he chooses to retry.
     if (photo) { photo.token = null; }
+    if (note) { note.token = null; }
     fail(error);
   }).finally(function () { photoBusy = false; renderComposer(); });
 }
-setupPhotoComposer({ key:routeKey, enabled:() => active() && DISCORD.photos && !discordBusy && !photoBusy && !discordReason(),
+setupPhotoComposer({ key:routeKey, enabled:() => active() && DISCORD.photos && !discordBusy && !photoBusy && !discordReason() && !voicePreparing(routeKey()) && !voiceDraft(routeKey()),
+  changed:renderComposer, failed:fail });
+setupVoiceComposer({ key:routeKey, enabled:() => active() && DISCORD.voice_notes && privateDm() &&
+  !discordBusy && !photoBusy && !discordReason() && !photoPreparing(routeKey()) && !photoDraft(routeKey()),
   changed:renderComposer, failed:fail });
 function openDialog(mode, m, trigger) {
   dialog = { mode: mode, message: m }; returnTo = trigger || document.activeElement;

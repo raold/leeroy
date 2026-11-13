@@ -87,6 +87,9 @@ class VoiceExtension:
 
     async def on_message(self, msg: wire.Message) -> None:
         """What the service sends. The client logs a failure."""
+        notes = getattr(self.app,'voice_notes',None)
+        if notes is not None and notes.receive(msg):
+            return
         if isinstance(msg, wire.Status):
             await self._on_gpu(msg.gpu)
             if self.movement is not None:

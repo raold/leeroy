@@ -25,14 +25,14 @@ def test_golden_lines():
 
 def test_golden_covers_every_type():
     assert {c["type"] for c in golden()} == set(MESSAGE_TYPES)
-    assert len(golden()) == len(MESSAGE_TYPES) == 16  # M1: one case per type
+    assert len(golden()) == len(MESSAGE_TYPES) == 20  # one case per type
 
 
 def test_the_protocol_table():
     assert PROTOCOL_VERSION == 1 and MAX_LINE_BYTES == 65536
     assert FROM_MIND == {"session", "channels", "moved", "invite", "refused", "voice", "speak",
-                         "cancel", "raid"}
-    assert FROM_VOICE == {"hello", "join", "played", "ptt", "heard", "status", "error"}
+                         "cancel", "raid", "render", "transcribe"}
+    assert FROM_VOICE == {"hello", "join", "played", "ptt", "heard", "status", "error", "rendered", "transcript"}
     assert set(MESSAGE_TYPES) == FROM_MIND | FROM_VOICE and not FROM_MIND & FROM_VOICE
     assert TIERS == ("p0", "p1", "p2", "p3", "p4") and ANOTHER_MIND == "another mind is connected"
     assert DROP_REASONS == ("expired", "moved", "not_his_channel", "no_voice", "muted", "empty",

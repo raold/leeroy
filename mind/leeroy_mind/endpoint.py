@@ -644,7 +644,9 @@ def discord_args(args) -> dict:
         raise BadRequest("discord: an action, one of " + ", ".join(DISCORD_SHAPES))
     action = args["action"]
     shape = DISCORD_SHAPES[action]
-    extra = {"reply_to", "thread", "image"} if action == "post" else set()
+    if action=='post' and 'voice' in args:
+        shape=shape-{'text'}
+    extra = {"reply_to", "thread", "image", "voice", "text"} if action == "post" else set()
     if not shape <= set(args) <= shape | extra:
         raise BadRequest(f"discord {action}: exactly " + ", ".join(sorted(shape - {"action"})))
     out = {"action": action}
@@ -659,6 +661,12 @@ def discord_args(args) -> dict:
         if not isinstance(ch, str) or (layout.channel(ch) is None and layout.dm_peer(ch) is None):
             raise BadRequest(WORDS["bad_channel"])
         out["channel"] = ch
+    if 'voice' in args:
+        from leeroy_mind.photos.images import TOKEN_RE
+        if 'image' in args or layout.dm_peer(out.get('channel','')) is None or type(args['voice']) is not str or not TOKEN_RE.fullmatch(args['voice']):
+            raise BadRequest('Choose one voice recording in a direct message.')
+        out['voice']=args['voice']
+        out['text']='(voice message)'
     for key in ("message", "reply_to", "thread"):
         if key in args:
             if not _row_id(args[key]):

@@ -26,6 +26,13 @@ export function typingLabel(names) {
   return "Several people are typing";
 }
 
+export function activityLabel(entries) {
+  if (entries.length === 1 && entries[0].phase === 'recording') {
+    return entries[0].name + ' is recording a voice message';
+  }
+  return typingLabel(entries.map(entry => entry.name));
+}
+
 function seconds(x) { return typeof x === "number" && isFinite(x); }
 
 // view -> [{guid, name, since, age, left}], oldest first, each member once (left: seconds until
@@ -56,12 +63,15 @@ export function typingByView(list, o) {
     var here = out.get(view) || [];
     var had = here.filter(function (t) { return t.guid === e.guid; })[0];
     if (had) {
+      if (e.phase === 'recording') { had.phase = 'recording'; }
       had.since = Math.min(had.since, since);
       had.age = Math.max(had.age, age);
       had.left = Math.min(had.left, left);
       return;
     }
-    here.push({ guid: e.guid, name: str(e.name) || nameOf(e.guid), since: since, age: age, left: left });
+    var entry = { guid: e.guid, name: str(e.name) || nameOf(e.guid), since: since, age: age, left: left };
+    if (e.phase === 'recording') { entry.phase = 'recording'; }
+    here.push(entry);
     out.set(view, here);
   });
   out.forEach(function (l) { l.sort(function (a, b) { return a.since - b.since || a.guid - b.guid; }); });

@@ -553,6 +553,11 @@ class DiscordTalk:
         their = app.engine.human.forms[2]
         purpose = self.purpose_line(cid)
         tail = f"Answer {their} message: {_clip(fold(row[0]), HIS_CHARS)}"
+        if getattr(app,'voice_notes',None) is not None and app.voice_notes.config.enabled:
+            from leeroy_mind.voice_notes.service import rows as voice_rows, FAILURE
+            note=voice_rows(store.conn,[message]).get(message)
+            if note is not None and not note['transcript_ok']:
+                tail=FAILURE
         late = ""
         if layout.dm_peer(cid) is not None and self.own_time():
             p = app.personas.get(speaker)
