@@ -9,6 +9,7 @@ tomorrow, then tonight's life beat, then everyone else by a weighted draw, until
 dial allows is planned. One JSON call asks for each scene; a declined or refused scene is stored
 nowhere and not asked again tonight. Logs carry ids, counts and codes, never a scene."""
 from contextlib import suppress
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -21,7 +22,8 @@ from .config import SelfieCfg
 from .files import sync_snaps
 from .kind import looks_line
 from .prompt import renderable
-from .ration import MEMBER_GAP_S, MEMBER_STOCK, send_weight, stock_target
+from .ration import MEMBER_GAP_S, MEMBER_STOCK, SEND_MIN_AGE, send_weight, stock_target, channel_stock
+from .style import style_of, LUST
 from .scene import (ABOUT, PHASES, SCENE_ASK, SCENE_ASK_AGAIN, scene_from, scene_json, scene_renderable,
                     scene_schema, scene_system, screen_scene, window)
 from .scene_choices import compose_choices, pairing_codes
@@ -57,8 +59,9 @@ def _pending_face(ctx, guid):
     return cur is not None and ctx.store.get_meta(f"selfies:variety-pick:{guid}") == str(cur.pick)
 
 
-def _eligible(ctx: "NightContext", guid: int, now: float) -> bool:
-    if ctx.done(STAGE, str(guid)) or current(ctx.store, guid) is None:
+def _eligible(ctx: "NightContext", guid: int, now: float, *, audience=None) -> bool:
+    unit = str(guid) if audience is None else f'{audience}:{guid}'
+    if ctx.done(STAGE, unit) or current(ctx.store, guid) is None:
         return False
     if _pending_face(ctx,guid):
         return False
@@ -71,6 +74,10 @@ def _eligible(ctx: "NightContext", guid: int, now: float) -> bool:
         p = ctx.persona(guid)
     except KeyError:
         return False
+    if audience is not None and p.identity.age < SEND_MIN_AGE:
+        return False
+    if audience == 'anyone' and style_of(p) == LUST:
+        return False  # that member's existing scene recipe is private; never weaken it
     return renderable(p) is None and send_weight(
         p, ctx.store.get_relationship(guid, ctx.human)) > 0
 
@@ -99,19 +106,21 @@ def _asked_tonight(ctx: "NightContext") -> int:
     """The members' units done tonight: planned, declined or refused, each used a call."""
     with ctx.store.transaction():
         return ctx.store.conn.execute(
-            "SELECT count(*) FROM night_step WHERE night=? AND stage=? AND unit GLOB '[0-9]*' "
-            "AND unit NOT GLOB '*[^0-9]*'", (ctx.night, STAGE)).fetchone()[0]
+            "SELECT count(*) FROM night_step WHERE night=? AND stage=? AND "
+            "((unit GLOB '[0-9]*' AND unit NOT GLOB '*[^0-9]*') OR unit GLOB 'him:[0-9]*' "
+            "OR unit GLOB 'anyone:[0-9]*')", (ctx.night, STAGE)).fetchone()[0]
 
 
-def candidates(ctx: "NightContext", dial: int) -> list[tuple[int, str, str]]:
+def candidates(ctx: "NightContext", dial: int, *, audience=None) -> list[tuple[int, str, str]]:
     """(guid, source, ref) for the members to ask tonight, in order, at most the stock the dial
     wants beyond what is planned and scenes_per_night."""
     room = ctx.settings.scenes_per_night - max(_planned_tonight(ctx), _asked_tonight(ctx))
-    want = min(stock_target(dial) - open_stock(ctx.store), room)
+    target = channel_stock(dial) if audience == 'anyone' else stock_target(dial)
+    want = min(target - open_stock(ctx.store, audience=audience), room)
     if want <= 0:
         return []
     now = ctx.clock.now()
-    pool = [g for g in ctx.members() if _eligible(ctx, g, now)]
+    pool = [g for g in ctx.members() if _eligible(ctx, g, now, audience=audience)]
     tomorrow, beats = _tomorrow(ctx.night), _beats(ctx)
     out: list[tuple[int, str, str]] = []
     left = []
@@ -243,10 +252,13 @@ async def _guild(ctx: "NightContext") -> int:
     return planned
 
 
-def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
+def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int], outlets: Callable[[], bool] = lambda: False
                       ) -> Callable[["NightContext"], Awaitable[None]]:
     def count(ctx: "NightContext") -> int:
-        return len(candidates(ctx, dial()))
+        if not outlets():
+            return len(candidates(ctx, dial()))
+        return max(0, min(ctx.settings.scenes_per_night - max(_planned_tonight(ctx), _asked_tonight(ctx)),
+                          sum(len(candidates(ctx, dial(), audience=a)) for a in ('him','anyone'))))
     register_counter(STAGE, count)  # replaces an earlier stage's entry
 
     async def stage_scenes(ctx: "NightContext") -> None:
@@ -255,7 +267,6 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
         if n <= 0:
             return
         guild = await _guild(ctx)
-        picks = {g: (src, ref) for g, src, ref in candidates(ctx, n)}
         beats = _beats(ctx)
         planned = declined = refused = 0
 
@@ -267,8 +278,10 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
 
         async def one(unit: str) -> None:
             nonlocal planned, declined
-            guid = int(unit)
+            guid = int(unit.split(':')[-1])
             source, ref = picks[guid]
+            if audience is not None:
+                ref += ':'+audience
             p = ctx.base(guid)
             cur = current(ctx.store, guid)
             if cur is None:
@@ -276,6 +289,9 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
                 return
             about = (ABOUT["life"].format(beat=beats[guid][1]) if source == "life"
                      else ABOUT[source])
+            if audience is not None:
+                about += (' This photo is for his private DM only.' if audience == 'him' else
+                          ' This photo is for a public guild channel, safe for everyone.')
             s, codes = await ask_scene(ctx, guid, about=about)
             if codes == [DECLINED]:
                 declined += 1
@@ -285,6 +301,8 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
             if codes:
                 refuse(guid, unit, codes)
                 return
+            if audience is not None:
+                s = replace(s, audience=audience)
             not_before, expires = window(source, ctx.window[1])
 
             def write(store) -> None:
@@ -296,7 +314,9 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int]
                           now=ctx.clock.now(), pick=cur.pick, looks=looks_hash(p.appearance))
             if ctx.commit(STAGE, unit, write):
                 planned += 1
-        await ctx.map_units(STAGE, [str(g) for g in picks], one)
+        for audience in (('him','anyone') if outlets() else (None,)):
+            picks = {g:(src,ref) for g,src,ref in candidates(ctx,n,audience=audience)}
+            await ctx.map_units(STAGE, [str(g) if audience is None else f'{audience}:{g}' for g in picks], one)
         log("selfies_scenes", night=ctx.night, planned=planned, declined=declined,
             refused=refused, guild=guild)
     return stage_scenes

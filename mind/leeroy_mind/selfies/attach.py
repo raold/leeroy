@@ -34,7 +34,8 @@ def attach_selfies(app) -> SelfieService:
         runner.add_stage(stage.STAGE, stage.make_stage(cfg), after="regress", model="image",
                          wants_gpu=stage.wants_gpu)
         if cfg.snaps:
-            runner.add_stage("scenes", make_scenes_stage(cfg, dial=lambda: app.cfg.talk.selfies),
+            runner.add_stage("scenes", make_scenes_stage(cfg, dial=lambda: app.cfg.talk.selfies,
+                             outlets=lambda: getattr(app, 'photos', None) is not None),
                              after="life", model="reflection")
             runner.add_stage("snaps", make_snaps_stage(cfg), after="selfies", model="image",
                              wants_gpu=snapstage.wants_gpu)
