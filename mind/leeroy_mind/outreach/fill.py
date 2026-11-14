@@ -15,14 +15,14 @@ def fill_member(store, guid, *, now, local, human, persona, romance_dial=5, iden
         return 0
     added = 0
 
-    def put(kind, ref, text, audience, weight, expires):
+    def put(kind, ref, text, audience, weight, expires, not_before=now):
         nonlocal added
         draft = SimpleNamespace(guid=guid, kind=kind, ref=ref, about=about(text), audience=audience)
         if expires <= now or not source_alive(store, draft, now=now, human=human, local=local,
                                                persona=persona, ident=ident, library=library):
             return
-        result = items.add(store, guid=guid, kind=kind, ref=ref, about=draft.about,
-                           audience=audience, weight=weight, created=now, not_before=now, expires=expires)
+        result = items.add(store, guid=guid, kind=kind, ref=ref, about=draft.about, audience=audience,
+                           weight=weight, created=now, not_before=not_before, expires=expires)
         added += result is not None
 
     with store.transaction():
@@ -48,9 +48,12 @@ def fill_member(store, guid, *, now, local, human, persona, romance_dial=5, iden
             if text := his_day(store, row[0], guid, human, library=library, ident=ident):
                 put("his_day", f"his_day:{row[0]}", text, "guild", 2, now + DAY)
         at = member_local(local, persona)
-        if persona.real_life.birthday == at.strftime("%m-%d"):
-            midnight = datetime.combine(at.date() + timedelta(days=1), time.min, tzinfo=at.tzinfo)
-            put("birthday", f"birthday:{at.date()}", BIRTHDAY_ABOUT, "guild", 5, midnight.timestamp())
+        # His night can fall on her day before: tomorrow's birthday waits for her midnight.
+        for day in (at.date(), at.date() + timedelta(days=1)):
+            if persona.real_life.birthday == day.strftime("%m-%d"):
+                start, end = (datetime.combine(d, time.min, tzinfo=at.tzinfo).timestamp()
+                              for d in (day, day + timedelta(days=1)))
+                put("birthday", f"birthday:{day}", BIRTHDAY_ABOUT, "guild", 5, end, max(now, start))
         if (persona.identity.age >= MIN_AGE and persona.identity.player_gender == "female"
                 and persona.romance.stance in ("drawn", "lust") and forward(persona) > 0
                 and quiet_pair(store, guid, human, now=now)):

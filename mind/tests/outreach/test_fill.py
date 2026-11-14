@@ -269,6 +269,23 @@ def test_his_loot_witnesses_come_from_a_bounded_index_range(h, age, filled):
     assert [i.ref for i in items.open_items(h.store, 101)] == ([f"his_day:{eid}"] if filled else [])
 
 
+def test_birthday_tomorrow_in_her_region_waits_for_her_midnight(h):
+    night = datetime(2026, 10, 29, 4, 30, tzinfo=ZoneInfo("America/New_York"))
+    p = h.persona(101, region="UK", birthday="10-30")
+    fill(h, p=p, local=night, now=night.timestamp())
+    item, = items.open_items(h.store, 101)
+    london = ZoneInfo("Europe/London")
+    assert (item.ref, item.audience, item.weight) == ("birthday:2026-10-30", "guild", 5)
+    assert (item.not_before, item.expires) == (datetime(2026, 10, 30, tzinfo=london).timestamp(),
+                                               datetime(2026, 10, 31, tzinfo=london).timestamp())
+    evening = datetime(2026, 10, 29, 21, tzinfo=ZoneInfo("America/New_York"))
+    assert item.not_before <= evening.timestamp() < item.expires
+    assert source_alive(h.store, item, now=evening.timestamp(), human=1, local=evening)
+    later = datetime(2026, 10, 30, 4, 30, tzinfo=ZoneInfo("America/New_York"))
+    assert fill(h, p=p, local=later, now=later.timestamp()) == 0
+    assert items.open_items(h.store, 101) == [item]
+
+
 def test_birthday_uses_her_regional_day_and_expires_at_her_midnight(h):
     local = datetime(2026, 10, 29, 21, 30, tzinfo=ZoneInfo("America/New_York"))
     p = h.persona(101, region="UK", birthday="10-30")

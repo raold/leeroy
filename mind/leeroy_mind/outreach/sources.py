@@ -1,5 +1,5 @@
 """Current, bounded evidence for intentions. Reading a row never widens its audience."""
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import re
 
@@ -212,9 +212,10 @@ def source_alive(store, item, *, now, human, local=None, persona=None, delivered
             return his_day(store, _id(item.ref, "his_day"), guid, human, now=now,
                            library=library, ident=ident) == item.about
         if item.kind == "birthday":
-            at = member_local(local or store.clock.local(), p)
-            return (item.ref == f"birthday:{at.date()}" and p.real_life.birthday == at.strftime("%m-%d")
-                    and item.about == BIRTHDAY_ABOUT)
+            today = member_local(local or store.clock.local(), p).date()
+            day = datetime.strptime(item.ref.removeprefix("birthday:"), "%Y-%m-%d").date()
+            return (item.ref == f"birthday:{day}" and day in (today, today + timedelta(days=1))
+                    and p.real_life.birthday == day.strftime("%m-%d") and item.about == BIRTHDAY_ABOUT)
         if item.kind == "miss_you":
             datetime.strptime(item.ref.removeprefix("miss_you:"), "%Y-%m-%d")
             return (item.ref.startswith("miss_you:") and item.about == MISS_YOU_ABOUT

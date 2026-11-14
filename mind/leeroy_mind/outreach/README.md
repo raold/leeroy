@@ -48,7 +48,7 @@ is called by the filler.
 | `plan` | Her live plan claims with valid source provenance | Pair | 2 | Claim expiry, at most 7 days |
 | `followup` | Her active `followup:` memories, deduped by original human line | Pair | 4 | 3 days |
 | `his_day` | His kill or loot with recorded witnesses including her | Guild | 2 | 1 day |
-| `birthday` | Her card birthday on her regional date | Guild | 5 | Her next local midnight |
+| `birthday` | Her card birthday, today or tomorrow on her regional date | Guild | 5 | Her whole local birthday: ready at its midnight, ends at the next |
 | `miss_you` | Woman aged 25+, drawn/lust, quiet with him in whispers and DMs for 2 days | Pair | Romance lift × forward, bounded 0.1–10 | 1 day |
 | `dm_nudge` | A witnessed login and her newest unanswered ordinary DM under 3 days old | Pair, whisper only | 6 | That login; ready after 2–10 minutes |
 
