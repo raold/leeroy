@@ -434,7 +434,9 @@ creators were inside the running raid (`busy:training_owner`).
 that reserves, pins and queues nothing (`IsQueued` no longer lists it). The signer and the event's
 creator are each held to their identity fence (`CreatorFence`/`ExactCreator`) across the write.
 It acks as before and still publishes `realm_job` `calendar_signup` (the member as `guid`, value 0)
-once the write was attempted; a refusal is the ack's alone, as for a post. The first write of each
+once the write was attempted; a refusal is the ack's alone, as for a post. A write that threw or
+failed its readback after native entered it answers `calendar_write_unknown` (ack and job); the
+mind settles that as unknown and never sends it again. The first write of each
 kind past each body fence code is logged once per process:
 `realm calendar_signup by guid=<n> went past body fence busy:training_cleanup (...)`.
 

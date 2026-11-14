@@ -767,6 +767,76 @@ def test_busy_refusals_hand_a_signups_try_back(rig):
     assert [calendar.busy_pause(n) for n in range(1, 6)] == [600, 1200, 2400, 3600, 3600]
 
 
+def test_busy_signup_refusals_survive_a_restart(rig):
+    rig.lead()
+    rig.tick()
+    tuesday = rig.rows()[0]["event_id"]
+    rig.answer = lambda cmd: (False, "busy:training_cleanup") if type(cmd) is protocol.CalendarSignup else (True, "")
+    rig.hours(9)
+    ref = f"signup:{tuesday}:{LEAD}"
+    before = len(rig.signups(tuesday))
+    assert before > calendar.MAX_TRIES
+    rig.tick()  # The last refusal's outcome is read and kept.
+    fenced, streak, sent = json.loads(rig.store.conn.execute(
+        "SELECT value FROM meta WHERE key=?", (calendar.BUSY_KEY + ref,)).fetchone()[0])
+    assert fenced == streak == before and sent <= rig.clock.now()
+    # A restart: a fresh desk on the same store keeps the pause and the count.
+    rig.desk = CalendarDesk(rig.realm)
+    wait = calendar.busy_pause(streak) - (rig.clock.now() - sent)
+    if wait > 120:
+        rig.tick()
+        assert len(rig.signups(tuesday)) == before  # Still inside the pause.
+    rig.answer = None
+    rig.tick(calendar.BUSY_MAX_S)
+    rig.tick()  # The next pass reads the ack: taken, and its kept refusals forgotten.
+    assert len(rig.signups(tuesday)) == before + 1 and LEAD in rig.rsvps(tuesday)
+    assert rig.store.conn.execute("SELECT 1 FROM meta WHERE key=?", (calendar.BUSY_KEY + ref,)).fetchone() is None
+
+
+def test_kept_busy_refusals_still_end_at_rows_max_and_age_out(rig):
+    rig.lead()
+    rig.tick()
+    tuesday = rig.rows()[0]["event_id"]
+    ref = f"signup:{tuesday}:{LEAD}"
+    with rig.store.transaction():  # An earlier process's busy refusals: one short of ROWS_MAX.
+        rig.store.conn.execute("INSERT INTO meta(key,value) VALUES (?,?)",
+                               (calendar.BUSY_KEY + ref, json.dumps([calendar.ROWS_MAX - 1, 4, rig.clock.now()])))
+        rig.store.conn.execute("INSERT INTO meta(key,value) VALUES (?,?)",
+                               (calendar.BUSY_KEY + "signup:1:2", json.dumps([3, 3, rig.clock.now() - 40 * 86400])))
+    rig.desk = CalendarDesk(rig.realm)
+    rig.answer = lambda cmd: (False, "busy:training_cleanup") if type(cmd) is protocol.CalendarSignup else (True, "")
+    rig.hours(9)
+    assert len(rig.signups(tuesday)) == 1  # One more try, then ROWS_MAX in all.
+    keys = {r[0] for r in rig.store.conn.execute("SELECT key FROM meta WHERE key LIKE 'realm:calendar:busy:%'")}
+    assert calendar.BUSY_KEY + ref in keys and calendar.BUSY_KEY + "signup:1:2" not in keys  # Aged out.
+
+
+def test_a_signup_native_cannot_prove_is_never_sent_again(rig):
+    rig.lead()
+    rig.member(200)
+    rig.tick()
+    tuesday = rig.rows()[0]["event_id"]
+    rig.answer = lambda cmd: ((False, "calendar_write_unknown") if type(cmd) is protocol.CalendarSignup
+                              else (True, ""))
+    rig.hours(12)
+    assert Counter(c.guid for c in rig.signups(tuesday)) == {LEAD: 1, 200: 1}
+    assert {g for g in rig.rsvps(tuesday)} == {LEAD, 200}  # Maybe done: counted as taken.
+    assert {rig.ledger.state("calendar", f"signup:{tuesday}:{g}")[0] for g in (LEAD, 200)} == {"unknown"}
+
+
+def test_a_post_native_cannot_prove_is_never_posted_again(rig):
+    rig.lead()
+    rig.member(SECOND, "Coros", officer_title="Raid Lead", raid_role="healer")
+    rig.answer = lambda cmd: (False, "calendar_write_unknown")
+    rig.tick()
+    for _ in range(10):
+        rig.tick(calendar.BUSY_MAX_S)
+    assert len(_night_posts(rig, 3)) == 1
+    assert [(r["state"], r["event_id"]) for r in rig.rows("raid") if r["ref"] == "raid:2026-11-03"] == [
+        ("posted", None)]
+    assert rig.signups() == []  # No event id: nobody signs up for it.
+
+
 def test_a_real_signup_refusal_still_counts(rig):
     rig.lead()
     rig.member(200)

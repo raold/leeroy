@@ -167,15 +167,22 @@ The desk (`calendar.py`) no longer spends a try on a fence, which an older world
 - Posts read each failed attempt's reason from its `realm_direct` row (joined on `command_id`).
   The ledger's prune keeps a `calendar_post` refusal 30 days (`RETAIN_POST_REFUSALS_S`) whatever the
   refusal count, so the desk can still read it; other refusals keep the newest-512 rule.
-- Signups and updates keep their in-memory tries: a try whose outcome was a busy refusal is handed
-  back once it is read. A restart still starts their count again, as before.
+- Signups and updates keep their tries in memory: a try whose outcome was a busy refusal is handed
+  back once it is read. Their busy refusals (count, run, last send) are also kept in meta
+  (`realm:calendar:busy:<ref>`), so a restart neither resets `ROWS_MAX` nor cuts a pause short; the
+  key goes when the signup is taken, or 30 days after its last send. Other tries restart at zero
+  with the process, as before.
 - A post's creator is passed over next time after a refusal, except `busy_training_cleanup`, which
   held every creator at once.
 - An offline raid's post leaves the raid's roster out of its creators (its plans' members and
   leads, the members native accepted and the job's `guids`): the raid-lead rotation first, else
   the social chain (events, social, historian), else no post (`realm_calendar_no_creator`).
 
-Exactly-once is unchanged: an unknown or acked ref is never sent again, busy refusals or not.
+Exactly-once is unchanged: an unknown or acked ref is never sent again, busy refusals or not. A
+write native entered and cannot prove (`calendar_write_unknown`, by ack or by job) settles
+**unknown** in the direct ledger (`NATIVE_UNKNOWN`), never refused: a post reads `posted` with no
+event id and a signup counts as taken, so neither is sent again. Before, such a refusal freed the
+ref, and a post could have been made twice.
 No migration. After release, a ref an older worldserver gave up for busy refusals alone is tried
 again while its event is still ahead and its refusals' ledger rows survive (until now the prune
 kept only the newest 512 refusals): as of 2026-11-14, the raid nights of 11-15 and 11-16 (refused

@@ -11,7 +11,8 @@ most one live intent per (owner, ref):
              value comes in; a job may also come before the ack, and settles it the same way.
   refused    native refused it (by ack or by its job), or the bridge refused it before writing
              anything. Never done: the owner may prepare the ref again.
-  unknown    it may have reached native, and nothing says whether it was done. Never sent
+  unknown    it may have reached native, and nothing says whether it was done, or native says it
+             tried and cannot prove what it did (NATIVE_UNKNOWN, by ack or by job). Never sent
              again and never replaced: the ref stays taken for good.
   abandoned  it never reached the wire (cancelled, refused at the barrier, or found prepared
              at a restart). The owner may prepare the ref again.
@@ -57,6 +58,9 @@ RETAIN_ACKED_S = 30 * 86400
 RETAIN_POST_REFUSALS_S = 30 * 86400
 # Send errors raised before the bridge writes anything: the command cannot have gone out.
 _PRETRANSPORT = frozenset({"RealmDisabled", "NotConnected"})
+# Native's failures after it entered the write: it may have been done. Unknown, never refused, so
+# never sent again (a calendar write that threw or failed its readback; ApplyCalendarWrite).
+NATIVE_UNKNOWN = frozenset({"calendar_write_unknown"})
 _ID = re.compile(r"[0-9a-f]{32}")
 _REF = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 # Native's reasons: [a-z0-9_], with ':' before an owner or a guid (busy:training_owner,
@@ -240,7 +244,8 @@ class DirectLedger:
                     or ack.id != cmd.id or type(ack.ok) is not bool or type(ack.error) is not str):
                 return False
             if not ack.ok:
-                self._move(row, "refused", reason=_reason(ack.error, "native_refused"))
+                state = "unknown" if ack.error in NATIVE_UNKNOWN else "refused"
+                self._move(row, state, reason=_reason(ack.error, "native_refused"))
             else:
                 self._move(row, "acked", settle=not row["expects_job"])
         return True
@@ -260,7 +265,8 @@ class DirectLedger:
             if ev.state == "done" and type(ev.value) is int and 0 <= ev.value <= _U64:
                 self._move(row, "acked", value=str(ev.value))
             else:
-                self._move(row, "refused", reason=_reason(ev.reason, "job_failed"))
+                state = "unknown" if type(ev.reason) is str and ev.reason in NATIVE_UNKNOWN else "refused"
+                self._move(row, state, reason=_reason(ev.reason, "job_failed"))
         return True
 
     def on_send_error(self, cmd, error_type) -> bool:
