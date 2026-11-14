@@ -8,6 +8,7 @@
 #include "DeathLoopJob.h"
 #include "GroupRezJob.h"
 #include "HazardJob.h"
+#include "MechanicJob.h"
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
 #include "OwnerSay.h"
@@ -30,6 +31,7 @@ public:
         Leeroy::Guild::ReloadDeathLoop();
         Leeroy::Guild::ReloadGroupRez();
         Leeroy::Guild::ReloadHazards();
+        Leeroy::Guild::ReloadMechanics();
         Leeroy::Guild::ReloadStrings();
         Leeroy::Guild::ReloadGuildAdd();
     }
@@ -46,6 +48,8 @@ public:
         Leeroy::Guild::RegisterGuildAddRosterHandler();
         Leeroy::Guild::RegisterRaidLeadHandler();
         Leeroy::Guild::InstallHazardFilter();
+        Leeroy::Guild::InstallMechanicGuard();
+        Leeroy::Guild::RegisterMechanicsHandler();
         Leeroy::Guild::RegisterStringsHandler();
     }
 
@@ -59,6 +63,7 @@ public:
         Leeroy::Guild::TickDeathLoop(diff);
         Leeroy::Guild::TickGroupRez(diff);
         Leeroy::Guild::TickHazards(diff);
+        Leeroy::Guild::TickMechanics(diff);
         Leeroy::Guild::TickOfflineRaid(diff);
         Leeroy::Guild::TickStrings(diff);
         if (diff >= _styleCleanup)
@@ -115,4 +120,5 @@ void AddSC_leeroy_guild_life()
     new LeeroyGuildWorldScript();
     new LeeroyGuildPlayerScript();
     Leeroy::Guild::AddGuildAddScripts();
+    Leeroy::Guild::AddMechanicScripts();
 }

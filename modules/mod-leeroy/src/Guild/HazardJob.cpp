@@ -639,6 +639,22 @@ private:
 #endif
 }
 
+std::vector<HazardZone> ScanHazardZones(Player* reference, std::vector<HazardPoint> const& anchors)
+{
+    std::vector<HazardZone> zones;
+    Map* map = reference && reference->IsInWorld() ? reference->GetMap() : nullptr;
+    if (!map)
+        return zones;
+    std::set<ObjectGuid> seen;
+    for (HazardPoint const& anchor : anchors)
+    {
+        HazardScanner scanner{reference, anchor.x, anchor.y, sPlayerbotAIConfig.MaxAoeAvoidRadius,
+            sPlayerbotAIConfig.AoeAvoidSpellWhitelist, seen, zones};
+        Cell::VisitObjects(anchor.x, anchor.y, map, scanner, kScanYards);
+    }
+    return zones;
+}
+
 void ReloadHazards()
 {
     enabled.store(sConfigMgr->GetOption<bool>("Leeroy.Hazards.Enable", false), std::memory_order_relaxed);

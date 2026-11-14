@@ -1783,6 +1783,26 @@ bool OfflineRaidOwns([[maybe_unused]] uint32 guid)
 #endif
 }
 
+OfflineFighters OfflineRaidFighters()
+{
+    OfflineFighters out;
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (!active || Benchmark(*active) || active->stage != Stage::Running || !active->event.instanceId)
+        return out;
+    out.leader = active->command.leaderGuid;
+    for (Member const& member : active->members)
+    {
+        if (member.finished || member.abandoned)
+            continue;
+        Player* player = FindOnline(member.guid);
+        if (InJobGroup(*active, player) && player->GetMapId() == active->command.mapId
+            && player->GetInstanceId() == active->event.instanceId)
+            out.guids.push_back(member.guid);
+    }
+#endif
+    return out;
+}
+
 std::string AdmitTrainingRun(std::string const& handle, std::vector<std::uint32_t> const& guids, uint32 leader)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
