@@ -93,6 +93,9 @@ def find_jokes(store, window, *, limit=5):
 
 def jokes(ctx):
     """The deterministic unit's writes; join the caller's atomic unit transaction."""
+    from leeroy_mind.culture.config import enabled
+    if enabled(ctx):
+        return
     def write(store):
         facts = load_facts(ctx)
         for ident, laughers in find_jokes(store, ctx.window, limit=ctx.settings.jokes_per_night):

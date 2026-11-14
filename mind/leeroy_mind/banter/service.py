@@ -4,7 +4,9 @@ from collections import deque
 import json
 import logging
 
-from leeroy_mind.clock import night_of
+from leeroy_mind.culture.config import app_enabled
+from leeroy_mind.culture.tease import tease_ok, _tease_ok, mark_teased, OWNER_KEY
+from leeroy_mind.clock import night_of, local_at
 from leeroy_mind.discord.channels import is_discord, same_medium
 from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
 from leeroy_mind.discord.transport import DiscordTarget
@@ -30,6 +32,15 @@ TEASE_KEY = "banter:owner-evening"
 JOKE_KEY = "banter:joke-evening"
 
 
+def culture_on(app):
+    return app_enabled(app)
+
+
+def teasing(topic):
+    """A person being mentioned is not itself permission to tease them."""
+    return bool(topic.target and (topic.kind == 'joke' or topic.tease_owner))
+
+
 class ThreadGuards(Guards):
     """The admitted thread owns 3-8 lines; preserve all normal safety/send checks."""
     def __init__(self,maximum,rng):
@@ -40,7 +51,10 @@ class ThreadGuards(Guards):
         return self.maximum
 
 
-def role(app, guid, target):
+def role(app, guid, target, *, allowance=False, tease=True):
+    if target and tease and culture_on(app) and not _tease_ok(app.store.conn,guid,target,
+            personas=app.personas,human=app.human_guid,now=app.clock.now(),allowance=allowance)[0]:
+        return "defend"
     p = app.personas.get(guid)
     rel = app.store.get_relationship(guid,target) if target else None
     if target == app.human_guid and p.romance.stance in {"fond","drawn","lust"}:
@@ -56,6 +70,9 @@ def choose_cast(app, candidates, topic, rng):
     if topic.target and app.store.get_state(topic.target).mood < -.3:
         return []
     for g in candidates:
+        if teasing(topic) and culture_on(app) and not tease_ok(app.store.conn,g,topic.target,
+                personas=app.personas,human=app.human_guid,now=app.clock.now())[0]:
+            continue
         p = app.personas.get(g)
         dials = dials_of(p)
         rel = app.store.get_relationship(g,topic.target) if topic.target else None
@@ -75,7 +92,7 @@ def choose_cast(app, candidates, topic, rng):
         weights[g] = dials.mult("talkative") * dials.level("humour")
         if rel:
             weights[g] *= 1 + max(0,rel.affinity)/100
-        if role(app,g,topic.target)=="defend":
+        if role(app,g,topic.target,tease=teasing(topic))=="defend":
             weights[g] *= 2
     if len(weights)<2:
         return []
@@ -181,8 +198,8 @@ class Banter:
 
     def unused(self,topic,now):
         if topic.kind=='joke':
-            at,count=joke_uses(self.app.store,topic.key)
-            if count>=4 or now-at<JOKE_COOLDOWN or self.app.store.get_meta(JOKE_KEY)==night_of(self.app.clock.local()):
+            at,count=joke_uses(self.app.store,topic.key,durable=culture_on(self.app))
+            if count>=(12 if culture_on(self.app) else 4) or now-at<JOKE_COOLDOWN or self.app.store.get_meta(JOKE_KEY)==night_of(self.app.clock.local()):
                 return False
         stamp = self.app.store.get_meta("banter:used:"+topic.key)
         return stamp is None or (topic.kind in {"joke","quiet"} and now-float(stamp)>=86400)
@@ -204,7 +221,7 @@ class Banter:
                 continue
             eligible.append(t)
             if t.kind=='joke':
-                at,count=joke_uses(app.store,t.key)
+                at,count=joke_uses(app.store,t.key,durable=culture_on(app))
                 weights.append(min(4,max(1,(now-at)/JOKE_COOLDOWN))*(.5**count))
             else: weights.append(4)
         if eligible:
@@ -223,7 +240,7 @@ class Banter:
             if len(starts)>=self.cfg.per_hour or not self.unused(topic,now):
                 return False
             changes={LIMIT_KEY:json.dumps([*starts,now]),'banter:used:'+topic.key:str(now)}
-            if topic.tease_owner:
+            if topic.tease_owner and not culture_on(app):
                 changes[TEASE_KEY]=night_of(app.clock.local())
             if topic.kind=='joke': changes[JOKE_KEY]=night_of(app.clock.local())
             prior={key:app.store.get_meta(key) for key in changes}
@@ -233,9 +250,9 @@ class Banter:
             app.store.conn.execute("DELETE FROM meta WHERE key LIKE 'banter:used:%' AND CAST(value AS REAL)<?",(now-7*86400,))
         return True
 
-    def settle_reservation(self,topic,sent):
+    def settle_reservation(self,topic,sent,first_line=None,posted_at=None):
         if not self._reservation or self._reservation[0]!=topic.key: return
-        _,prior,changes=self._reservation; self._reservation=None
+        _,prior,changes=self._reservation
         with self.app.store.transaction():
             if not sent:
                 self._empty_at = self.app.clock.now()
@@ -245,16 +262,43 @@ class Banter:
                     if value is None: self.app.store.conn.execute('DELETE FROM meta WHERE key=?',(key,))
                     else: self.app.store.set_meta(key,value)
             elif topic.kind=='joke':
-                _,count=joke_uses(self.app.store,topic.key)
-                self.app.store.set_meta('banter:joke-use:'+topic.key,json.dumps({'at':self.app.clock.now(),'count':count+1}))
+                if culture_on(self.app):
+                    self._record_joke(topic,first_line,posted_at if posted_at is not None else self.app.clock.now())
+                else:
+                    _,count=joke_uses(self.app.store,topic.key)
+                    self.app.store.set_meta('banter:joke-use:'+topic.key,json.dumps({'at':self.app.clock.now(),'count':count+1}))
+        self._reservation=None
 
-    def valid(self,channel,owner_id,topic,now):
+    def _record_joke(self,topic,line,now):
+        """Idempotent DB-only wear; also used by the atomic Discord record hook."""
+        receipt = f"culture:wear-counted:{topic.key}:{line}"
+        if line is None or self.app.store.get_meta(receipt) is None:
+            joke_uses(self.app.store,topic.key,durable=True)
+            self.app.store.conn.execute("UPDATE lexicon SET uses_total=uses_total+1,last_used=? WHERE id=?",
+                (now,int(topic.key[5:])))
+        if line is not None:
+            self.app.store.set_meta(receipt,'1')
+
+    def _record_delivery(self,topic,line,now):
+        """Only database effects: the caller owns the delivery transaction."""
+        if teasing(topic):
+            mark_teased(self.app.store,topic.target,now=now)
+            if topic.target == self.app.human_guid:
+                self.app.store.set_meta(OWNER_KEY,night_of(local_at(now)))
+        if topic.kind == 'joke' and self._reservation and self._reservation[0] == topic.key:
+            self._record_joke(topic,line,now)
+
+    def valid(self,channel,owner_id,topic,now,joke_started=False):
         if topic.source_channel and not same_medium(topic.source_channel,channel):
             return False
         if not (self.allowed(channel,now) and self.owner_last(channel)[0]==owner_id and now-topic.at <= FRESH):
             return False
         if topic.kind=="joke":
             conn=self.app.store.conn
+            if culture_on(self.app) and not joke_started:
+                row=conn.execute('SELECT last_used FROM lexicon WHERE id=?',(int(topic.key[5:]),)).fetchone()
+                if row is None or now-row[0] < JOKE_COOLDOWN:
+                    return False
             stamp=(conn.total_changes,conn.execute('PRAGMA data_version').fetchone()[0])
             cached=self._joke_checks.get(topic.key)
             if cached is None or cached[0]!=stamp:
@@ -271,14 +315,23 @@ class Banter:
         self.active = True
         e.banter_active = not is_discord(channel)
         delivered=0
+        first_line=None
+        first_posted_at=None
+        tease_marked=False
+        def tease_valid(speaker):
+            return not teasing(topic) or not culture_on(app) or _tease_ok(app.store.conn,speaker,topic.target,
+                personas=app.personas,human=app.human_guid,now=app.clock.now(),allowance=tease_marked)[0]
         try:
             for index in range(maximum):
-                if not self.valid(channel,owner_id,topic,app.clock.now()):
+                if not self.valid(channel,owner_id,topic,app.clock.now(),delivered > 0):
                     break
                 speaker = cast[index] if index<len(cast) else app.rng.choice([g for g in cast if g!=previous])
                 if speaker not in self.candidates(channel):
                     break
-                stance = role(app,speaker,topic.target or previous)
+                if not tease_valid(speaker):
+                    break
+                stance = ('join' if culture_on(app) and not topic.target else
+                    role(app,speaker,topic.target or previous,allowance=tease_marked,tease=teasing(topic)))
                 task = {"defend":"Offer a warm, light defence; do not reveal private affection.",
                         "needle":"A mild competitive jab is enough. No cruelty or escalation.",
                         "join":"Add a fresh playful angle, not agreement or a repeated punchline."}[stance]
@@ -299,17 +352,54 @@ class Banter:
                     addressee=previous,instruction=instruction,trigger_line=line_id,max_lines=1,
                     delay=app.rng.uniform(3,8))
                 meta = TurnMeta(e._new_id(),why="banter:"+topic.kind,review_required=True,single_line=True,keep_channel=True,guards=guards,
-                    still_valid=lambda:self.valid(channel,owner_id,topic,app.clock.now()))
+                    still_valid=lambda:self.valid(channel,owner_id,topic,app.clock.now(),delivered > 0) and tease_valid(speaker))
                 if is_discord(channel):
                     meta.discord = DiscordTarget(reply_to=message,thread=None)
-                sent = await e._speak(turn,meta)
+                durable = culture_on(app)
+                if durable and is_discord(channel) and first_line is None:
+                    meta.on_discord_record = lambda line,message,now:self._record_delivery(topic,line,now)
+                floor = app.store.conn.execute('SELECT coalesce(max(id),0) FROM chat_line').fetchone()[0] if durable else None
+                try:
+                    sent = await e._speak(turn,meta)
+                finally:
+                    if durable:
+                        # The pipeline may persist a shielded send and then rethrow cancellation.
+                        # A game row alone is insufficient: this exact turn must have recorded a send.
+                        row = app.store.conn.execute("SELECT id,ts FROM chat_line WHERE id>? AND from_guid=? "
+                            "AND channel=? AND origin='mind' ORDER BY id LIMIT 1",(floor,speaker,channel)).fetchone()
+                        if not is_discord(channel) and not meta.said:
+                            row = None
+                        if is_discord(channel):
+                            post = app.store.conn.execute("SELECT id,ts FROM discord_message WHERE turn=? "
+                                "AND channel='general' AND author=? AND origin='mind' ORDER BY id LIMIT 1",
+                                (meta.turn_id,speaker)).fetchone()
+                            if post is None:
+                                row = None
+                            else:
+                                # The hook commits its post, mirror and culture receipts together.
+                                line = app.store.get_meta(f"discord:line:{post['id']}")
+                                row = {'id': int(line) if line is not None else 'discord:'+str(post['id']),
+                                       'ts':post['ts']}
+                        if row is not None:
+                            delivered += 1
+                            if first_line is None:
+                                first_line,first_posted_at = row['id'],row['ts']
+                                with app.store.transaction():
+                                    if not is_discord(channel):
+                                        self._record_delivery(topic,first_line,first_posted_at)
+                                    # Settle once here, before any later line or cancellation can intervene.
+                                    self.settle_reservation(topic,1,first_line,first_posted_at)
+                                tease_marked=True
                 if not sent:
                     break
-                delivered+=len(sent)
+                if not durable:
+                    delivered+=len(sent)
                 previous = speaker
                 row = app.store.conn.execute("SELECT id FROM chat_line WHERE from_guid=? AND channel=? "
                     "AND origin='mind' ORDER BY id DESC LIMIT 1",(speaker,channel)).fetchone()
                 line_id = row[0] if row else None
+                if first_line is None:
+                    first_line=line_id
                 if is_discord(channel):
                     row = app.store.conn.execute("SELECT id FROM discord_message WHERE author=? AND channel='general' "
                         "AND origin='mind' ORDER BY id DESC LIMIT 1",(speaker,)).fetchone()
@@ -318,7 +408,7 @@ class Banter:
         finally:
             self.active = False
             e.banter_active = False
-            self.settle_reservation(topic,delivered)
+            self.settle_reservation(topic,delivered,first_line,first_posted_at)
 
     async def tick(self):
         now = self.app.clock.now()

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from leeroy_mind.console.feed import connect
 from leeroy_mind.storage.rows import Relationship
+from leeroy_mind.storage.store import Store
 from .state import StateInputs, live_voice_session, pulled_into_play, state_of
 
 
@@ -24,12 +25,16 @@ async def snapshot(app, now, *, include_seeds=False):
                  comms.room_of(g) if comms is not None else None, server, voice_session) for g, p in personas.items()}
     trial_rank = getattr(getattr(getattr(app, 'realm', None), 'cfg', None), 'trial_rank', 4)
     path, library = Path(app.data_dir) / 'mind.db', Path(app.data_dir) / 'library.db'
+    from leeroy_mind.culture.config import app_enabled
+    culture_on = app_enabled(app)
+    identity = app.engine.human if culture_on else None
     photos_on = getattr(app, 'photos', None) is not None
     photo_dial = app.cfg.talk.selfies if photos_on else 0
     groups_config = getattr(getattr(app,'groups',None),'config',None)
     def read():
         deadline = time.monotonic() + 2
-        with closing(connect(path)) as conn:
+        worker_store = Store(connect(path), clock=app.clock)
+        with closing(worker_store.conn) as conn, worker_store.transaction():
             conn.set_progress_handler(lambda: time.monotonic() >= deadline, 1000)
             if library.is_file():
                 try:
@@ -58,7 +63,8 @@ async def snapshot(app, now, *, include_seeds=False):
                 # Only the roster's character name; never his private real-name setting.
                 human_name = getattr(cast.get(human), 'name', '')
                 source = gather(conn, now=now, local=local, cast=personas, officers=officers,
-                                human=human, human_name=human_name, trial_rank=trial_rank)
+                                human=human, human_name=human_name, trial_rank=trial_rank,
+                                culture_enabled=culture_on, culture_store=worker_store, ident=identity)
                 seeds = fresh(conn, source, now=now)
                 if photos_on:
                     from leeroy_mind.photos.send import photo_seeds

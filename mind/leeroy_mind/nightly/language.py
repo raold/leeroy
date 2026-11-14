@@ -21,6 +21,8 @@ async def stage_language(ctx):
 
     for name, function in (("vocab", vocab), ("slang", slang), ("jokes", jokes)):
         await sql_unit(name, function)
+    from leeroy_mind.culture.origins import events
+    await events(ctx)
     if not ctx.done(STAGE, "candidates"):
         await candidates(ctx)
     for name, function in (("spread", spread), ("fade", fade)):

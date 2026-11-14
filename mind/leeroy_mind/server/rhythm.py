@@ -78,6 +78,7 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
                 personas: Mapping[int, Persona], *, officers: frozenset[int], human: int,
                 in_play: frozenset[int], ties: Callable[[int, int], float], rng: random.Random,
                 classes: Mapping[int, int] | None = None, away: frozenset[int] = frozenset(),
+                tease: Callable[[int, int], bool] | None = None,
                 group_audience: frozenset[int] = frozenset()) -> list[int]:
     definition = layout.channel(channel)
     if is_group(channel):
@@ -108,6 +109,10 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
     if sum(w > 0 for w in weights.values()) < 2:
         return []
     openers = {g:w for g,w in weights.items() if seed.openers is None or g in seed.openers}
+    butt = seed.about[0] if seed.kind == 'joke' and seed.about else 0
+    if butt:
+        openers = {g:w for g,w in openers.items() if g != butt and tease is not None and tease(g, butt)}
+        weights = {g:w for g,w in weights.items() if g == butt or tease is not None and tease(g, butt)}
     starters = pick_speakers(openers, 1, rng)
     if not starters:
         return []
