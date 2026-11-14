@@ -283,6 +283,30 @@ def test_direct_prune_keeps_live(ledger, store):
             ledger.prune(keep=keep)
 
 
+def test_direct_prune_keeps_a_calendar_posts_refusals_for_its_desk(ledger, store, clock):
+    # The calendar desk reads a post's refusal reason to tell a busy one from a real one.
+    posts = []
+    for n in range(2):
+        post = _dispatched(ledger, _post(), f"raid:2026-11-1{n}", owner="calendar", expects_job=True)
+        ledger.on_ack(post, _ack(post, ok=False, error="busy:training_cleanup"))
+        posts.append(post)
+    for n in range(3):
+        cmd = _dispatched(ledger, _say(), f"line:{n}")
+        ledger.on_ack(cmd, _ack(cmd, ok=False, error="busy"))
+    assert ledger.prune(keep=0) == 3  # Every other refusal goes; the posts' stay.
+    assert [row[2:5] for row in _rows(store)] == [
+        ("raid:2026-11-10", "refused", "busy_training_cleanup"),
+        ("raid:2026-11-11", "refused", "busy_training_cleanup")]
+    clock._t += 30 * 86400 - 1
+    assert ledger.prune(keep=0) == 0
+    clock._t += 2
+    assert ledger.prune(keep=1) == 1  # A month on, they are ordinary refusals again.
+    assert [row[0] for row in _rows(store)] == [posts[1].id]
+    live = _dispatched(ledger, _post(), "raid:2026-12-01", owner="calendar", expects_job=True)
+    clock._t += 31 * 86400
+    assert ledger.prune(keep=0) == 1 and [row[0] for row in _rows(store)] == [live.id]  # Live: never.
+
+
 def test_direct_attach_is_a_part_without_io(store, clock):
     realm = SimpleNamespace(app=SimpleNamespace(store=store, clock=clock), _process_id=PROCESS)
     changes = store.conn.total_changes

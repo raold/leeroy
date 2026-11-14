@@ -316,13 +316,14 @@ def test_raid_night_never_declined(rig):
 def test_offline_raid_posted_and_updated(rig):
     rig.lead()
     rig.member(SECOND, "Coros", officer_title="raid lead", raid_role="healer")
+    rig.member(THIRD, "Dunna", officer_title="raid lead", raid_role="ranged")
     rig.owned()
     rig.event(_offline_job("progress", "grouping"))  # Not started yet.
     assert rig.posts() == []
     rig.event(_offline_job())
     (post,) = rig.posts("raid")
     assert post.title == "Icecrown Citadel 10, offline" and post.at == int(rig.clock.now()) + calendar.OFFLINE_AHEAD_S
-    assert post.creator_guid in {LEAD, SECOND}
+    assert post.creator_guid == THIRD  # The lead and the second are in the raid.
     rig.event(_offline_job())  # Running again: still the one entry.
     assert len(rig.posts()) == 1
     event_id = rig.rows()[0]["event_id"]
@@ -378,7 +379,7 @@ def test_creators_rotate_before_the_cap(rig):
 def test_refused_post_retried_by_another_creator_then_given_up(rig):
     rig.lead()
     rig.member(SECOND, "Coros", officer_title="Raid Lead", raid_role="healer")
-    rig.answer = lambda cmd: (False, "busy:training_owner")
+    rig.answer = lambda cmd: (False, "calendar_full")
     rig.tick()
     tuesday = [p for p in rig.posts("raid") if datetime.fromtimestamp(p.at, NY).day == 3]
     assert [p.creator_guid for p in tuesday] == [LEAD]
@@ -395,6 +396,177 @@ def test_refused_post_retried_by_another_creator_then_given_up(rig):
     rig.answer = None
     rig.tick(calendar.RETRY_S)
     assert len(rig.posts("raid")) == 3 * calendar.MAX_TRIES
+
+
+def _sent_at(rig):
+    """Answer like rig.answer, recording when each command reached native."""
+    times, answer = {}, rig.answer
+
+    def record(cmd):
+        times[cmd.id] = rig.clock.now()
+        return answer(cmd) if answer is not None else (True, "")
+    rig.answer = record
+    return times
+
+
+def _night_posts(rig, day):
+    return [p for p in rig.posts("raid") if datetime.fromtimestamp(p.at, NY).day == day]
+
+
+def test_busy_refusals_never_use_up_a_posts_tries(rig):
+    # 2026-11-10: a twelve-hour training cleanup refused every raid night three times (3 nights,
+    # 3 creators), and the week's nights never reached the calendar.
+    rig.lead()
+    rig.member(SECOND, "Coros", officer_title="Raid Lead", raid_role="healer")
+    rig.answer = lambda cmd: (False, "busy:training_cleanup")
+    times = _sent_at(rig)
+    rig.tick()
+    start = rig.clock.now()
+    rig.tick(calendar.RETRY_S)
+    rig.tick(calendar.RETRY_S)  # The pause doubles: nothing yet.
+    assert len(_night_posts(rig, 3)) == 2
+    rig.tick(calendar.RETRY_S)
+    rig.tick(2 * calendar.RETRY_S)
+    rig.tick(2 * calendar.RETRY_S)
+    rig.tick(calendar.BUSY_MAX_S)
+    rig.tick(calendar.BUSY_MAX_S)
+    tuesday = _night_posts(rig, 3)
+    assert len(tuesday) == 6 > calendar.MAX_TRIES
+    # 600, 1200, 2400, then at most an hour between tries.
+    gaps = [b - a for a, b in zip([times[p.id] for p in tuesday], [times[p.id] for p in tuesday][1:])]
+    assert gaps == [600, 1200, 2400, 3600, 3600] and times[tuesday[0].id] == start
+    # The training cleanup holds every creator at once: the standing lead keeps the post.
+    assert {p.creator_guid for p in tuesday} == {LEAD}
+    rig.answer = None
+    rig.tick(calendar.BUSY_MAX_S)
+    tuesday = _night_posts(rig, 3)
+    assert len(tuesday) == 7
+    row = [r for r in rig.rows("raid") if r["ref"] == "raid:2026-11-03" and r["state"] == "posted"]
+    assert len(row) == 1 and row[0]["event_id"] is not None and row[0]["command_id"] == tuesday[-1].id
+    rig.tick(calendar.BUSY_MAX_S)
+    assert len(_night_posts(rig, 3)) == 7  # Posted once, never again.
+
+
+def test_a_busy_owner_passes_the_post_to_another_creator_without_a_try(rig):
+    rig.lead()
+    rig.member(SECOND, "Coros", officer_title="Raid Lead", raid_role="healer")
+    rig.answer = lambda cmd: (False, "busy:training_owner") if cmd.creator_guid == LEAD else (True, "")
+    rig.tick()
+    rig.tick(calendar.RETRY_S)
+    tuesday = _night_posts(rig, 3)
+    assert [p.creator_guid for p in tuesday] == [LEAD, SECOND]
+    assert [r["state"] for r in rig.rows("raid") if r["ref"] == "raid:2026-11-03"] == ["failed", "posted"]
+
+
+def test_a_real_refusal_still_counts_after_busy_ones(rig):
+    rig.lead()
+    seen = Counter()
+
+    def answer(cmd):
+        seen[cmd.at] += 1
+        return False, "busy:training_cleanup" if seen[cmd.at] <= 4 else "calendar_full"
+    rig.answer = answer
+    for _ in range(12):
+        rig.tick(calendar.BUSY_MAX_S)
+    tuesday = _night_posts(rig, 3)
+    assert len(tuesday) == 4 + calendar.MAX_TRIES  # Four busy refusals, then three real ones.
+    assert all(r["state"] == "failed" for r in rig.rows("raid"))
+
+
+def test_busy_retries_end_before_the_event_and_after_rows_max(rig):
+    rig.lead()
+    rig.answer = lambda cmd: (False, "busy:training_cleanup")
+    times = _sent_at(rig)
+    for _ in range(3 * 24):
+        rig.tick(calendar.BUSY_MAX_S)
+    tuesday, thursday = _night_posts(rig, 3), _night_posts(rig, 5)
+    at = tuesday[0].at
+    assert tuesday and all(times[p.id] <= at - calendar.POST_AHEAD_S for p in tuesday)
+    assert len(tuesday) < calendar.ROWS_MAX  # The night came first.
+    assert len(thursday) == calendar.ROWS_MAX  # Two days of a fence: then given up.
+
+
+def test_a_busy_refusal_never_resends_an_unknown_post(rig):
+    rig.lead()
+    rig.answer = lambda cmd: (False, "busy:training_cleanup")
+    rig.tick()
+    rig.tick(calendar.RETRY_S)
+    assert len(_night_posts(rig, 3)) == 2
+
+    async def lost(cmd):  # It passed the barrier and the ack never came back.
+        rig.ledger.before_send(cmd, context=rig.context())
+        rig.sent.append(cmd)
+        rig.ledger.on_send_error(cmd, "AckTimeout")
+        raise TimeoutError("ack timeout")
+    rig.native = lost
+    rig.tick(2 * calendar.RETRY_S)
+    assert len(_night_posts(rig, 3)) == 3
+    del rig.native
+    rig.answer = None
+    for _ in range(10):
+        rig.tick(calendar.BUSY_MAX_S)
+    assert len(_night_posts(rig, 3)) == 3  # Maybe done: never posted again.
+    states = [(r["state"], r["event_id"]) for r in rig.rows("raid") if r["ref"] == "raid:2026-11-03"]
+    assert states == [("failed", None), ("failed", None), ("posted", None)]
+
+
+def test_posts_an_older_worldserver_refused_busy_are_tried_again(rig, monkeypatch):
+    # Before this change a busy refusal counted, and the night was given up after three.
+    rig.lead()
+    rig.member(SECOND, "Coros", officer_title="Raid Lead", raid_role="healer")
+    rig.member(THIRD, "Dunna", officer_title="Raid Lead", raid_role="ranged")
+    monkeypatch.setattr(calendar, "busy", lambda reason: False)
+    rig.answer = lambda cmd: (False, "busy:training_cleanup")
+    for _ in range(4):
+        rig.tick(calendar.RETRY_S)
+    assert len(_night_posts(rig, 3)) == calendar.MAX_TRIES
+    rig.tick(calendar.RETRY_S)
+    assert len(_night_posts(rig, 3)) == calendar.MAX_TRIES  # Given up.
+    monkeypatch.undo()
+    rig.answer = None
+    rig.tick(calendar.BUSY_MAX_S)
+    assert len(_night_posts(rig, 3)) == calendar.MAX_TRIES + 1
+    assert {r["state"] for r in rig.rows("raid") if r["ref"] == "raid:2026-11-03"} == {"failed", "posted"}
+
+
+def test_an_offline_raids_post_leaves_its_roster_out(rig):
+    rig.lead()
+    rig.member(SECOND, "Coros", officer_title="Raid Lead", raid_role="healer")
+    rig.member(THIRD, "Dunna", officer_title="Raid Lead", raid_role="ranged")
+    rig.member(105, "Ebbo", officer_title="Events")
+    rig.owned(plan=dict(raid_key="icc", size=10, heroic=False, members=[LEAD, 150], lead_guid=LEAD,
+                        tank_guid=LEAD, loot_guid=150, bench=[THIRD]),
+              accepted=[LEAD, SECOND])
+    rig.event(_offline_job())
+    (post,) = rig.posts("raid")
+    assert post.creator_guid == THIRD  # The one raid lead outside the raid (benched).
+    # Every raid lead inside: the social chain posts it.
+    other = "e" * 32
+    rig.owned(id=other, plan=dict(raid_key="icc", size=10, heroic=False, members=[LEAD, SECOND, THIRD]))
+    rig.event(Job(0, other, "offline_raid", "progress", "", "running", (LEAD, SECOND, THIRD), (), 0, 0, 77, 0, 0, 0))
+    assert [p.creator_guid for p in rig.posts("raid")] == [THIRD, 105]
+    # Nobody outside: no post, no attempt.
+    third = "f" * 32
+    rig.owned(id=third, plan=dict(raid_key="icc", size=10, heroic=False, members=[LEAD, SECOND, THIRD, 105]))
+    rig.event(Job(0, third, "offline_raid", "progress", "", "running", (), (), 0, 0, 77, 0, 0, 0))
+    assert len(rig.posts("raid")) == 2 and not [r for r in rig.rows() if r["ref"] == f"offline:{third}"]
+
+
+def test_an_offline_post_refused_busy_is_tried_again_while_the_raid_runs(rig):
+    rig.lead()
+    rig.member(SECOND, "Coros", officer_title="Raid Lead", raid_role="healer")
+    rig.member(THIRD, "Dunna", officer_title="Raid Lead", raid_role="ranged")
+    rig.owned()
+    rig.answer = lambda cmd: (False, "busy:training_cleanup")
+    for _ in range(4):
+        rig.event(_offline_job())  # Its heartbeats.
+        rig.clock._t += calendar.RETRY_S
+    assert len(rig.posts("raid")) == 3  # 600, then 1200 between tries: no try used.
+    rig.answer = None
+    rig.clock._t += calendar.BUSY_MAX_S
+    rig.event(_offline_job())
+    assert len(rig.posts("raid")) == 4
+    assert [r["state"] for r in rig.rows("offline")] == ["failed", "failed", "failed", "posted"]
 
 
 # -- the officer meeting, birthdays and the anniversary ----------------------------------------------
@@ -570,6 +742,40 @@ def test_signup_schedule_deterministic_no_duplicates(rig):
     assert len(signed) == len(set(signed)) == 31  # Each member once, ever.
     assert set(rig.rsvps(tuesday)) == set(signed)  # Cut off counts as maybe done: never again.
     assert all(rig.rsvps(tuesday)[c.guid] == c.status for c in rig.signups(tuesday))
+
+
+def test_busy_refusals_hand_a_signups_try_back(rig):
+    rig.lead()
+    for guid in range(200, 210):
+        rig.member(guid)
+    rig.tick()
+    tuesday = rig.rows()[0]["event_id"]
+    rig.answer = lambda cmd: (False, "busy:training_cleanup") if type(cmd) is protocol.CalendarSignup else (True, "")
+    rig.hours(10)
+    members = {LEAD, *range(200, 210)}
+    tries = Counter(c.guid for c in rig.signups(tuesday))
+    assert set(tries) == members and max(tries.values()) > calendar.MAX_TRIES
+    assert rig.rsvps(tuesday) == {}
+    rig.answer = None
+    rig.hours(2)
+    assert set(rig.rsvps(tuesday)) == members
+    acked = Counter(r[0] for r in rig.store.conn.execute(
+        "SELECT ref FROM realm_direct WHERE owner='calendar' AND kind='calendar_signup' AND state='acked' "
+        "AND ref LIKE ?", (f"signup:{tuesday}:%",)))
+    assert acked == Counter(f"signup:{tuesday}:{g}" for g in members)  # Each once.
+    # Its pause: RETRY_S, doubling with each busy refusal in a row, up to BUSY_MAX_S.
+    assert [calendar.busy_pause(n) for n in range(1, 6)] == [600, 1200, 2400, 3600, 3600]
+
+
+def test_a_real_signup_refusal_still_counts(rig):
+    rig.lead()
+    rig.member(200)
+    rig.tick()
+    tuesday = rig.rows()[0]["event_id"]
+    rig.answer = lambda cmd: (False, "calendar_locked") if type(cmd) is protocol.CalendarSignup else (True, "")
+    rig.hours(12)
+    assert Counter(c.guid for c in rig.signups(tuesday)) == {LEAD: calendar.MAX_TRIES, 200: calendar.MAX_TRIES}
+    assert rig.rsvps(tuesday) == {}
 
 
 # -- the post and its event id ---------------------------------------------------------------------

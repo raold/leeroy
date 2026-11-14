@@ -17,7 +17,9 @@ most one live intent per (owner, ref):
              at a restart). The owner may prepare the ref again.
 
 An acked or unknown intent keeps its ref, so a ref is never dispatched twice. prune removes
-refused and abandoned rows (their refs are free already); prune_acked removes acked rows of the
+refused and abandoned rows (their refs are free already), all but the newest 512, except a calendar
+post's for RETAIN_POST_REFUSALS_S: the desk reads their reasons, so that a busy refusal never uses
+up one of a post's tries (realm/calendar.py). prune_acked removes acked rows of the
 refs in RETAIN_ACKED a month after they settled: calendar signups (only ever asked for a coming
 event, and the event is long past) and speech's lines and emotes (each ref is one moment's,
 never asked again). Every other acked row, and every unknown one, is kept. Every transition
@@ -50,6 +52,9 @@ PRUNE_EVERY_S = 3600
 # owner can ask for again by then. A step's items, a mail, a grant or a post keep theirs.
 RETAIN_ACKED = (("calendar", "signup:"), ("speech", "line:"), ("speech", "emote:"))
 RETAIN_ACKED_S = 30 * 86400
+# A calendar post is never prepared for an event more than about a week away, so its refusals are
+# read only within this.
+RETAIN_POST_REFUSALS_S = 30 * 86400
 # Send errors raised before the bridge writes anything: the command cannot have gone out.
 _PRETRANSPORT = frozenset({"RealmDisabled", "NotConnected"})
 _ID = re.compile(r"[0-9a-f]{32}")
@@ -309,16 +314,19 @@ class DirectLedger:
 
     def prune(self, keep=512) -> int:
         """Drop all but the newest `keep` refused and abandoned rows; their refs are free
-        already. A live row (prepared, dispatched, acked, unknown) is never removed: it is what
+        already. A calendar post's stay RETAIN_POST_REFUSALS_S after they settled whatever their
+        count. A live row (prepared, dispatched, acked, unknown) is never removed: it is what
         keeps its ref from being sent twice. Returns how many were removed."""
         if type(keep) is not int or not 0 <= keep <= 65536:
             raise ValueError("invalid keep")
         self._own_unit()
+        recent = self._now_ms() - RETAIN_POST_REFUSALS_S * 1000
         with self._store.transaction():
             removed = self._store.conn.execute(
-                "DELETE FROM realm_direct WHERE state IN ('refused','abandoned') AND rowid NOT IN "
+                "DELETE FROM realm_direct WHERE state IN ('refused','abandoned') "
+                "AND NOT (kind='calendar_post' AND coalesce(settled_ms,prepared_ms)>=?) AND rowid NOT IN "
                 "(SELECT rowid FROM realm_direct WHERE state IN ('refused','abandoned') "
-                "ORDER BY rowid DESC LIMIT ?)", (keep,)).rowcount
+                "ORDER BY rowid DESC LIMIT ?)", (recent, keep)).rowcount
         if removed:
             log.debug("realm_direct_pruned: rows=%d", removed)
         return removed

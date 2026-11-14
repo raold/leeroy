@@ -32,6 +32,16 @@ std::string CalendarAuthorityReason(CalendarAuthorityFacts const& f)
         || f.creatorGuild != f.guild || f.announcement || f.eventGuild != (f.guildEvent ? f.guild : 0)
         ? "no_event" : "";
 }
+CalendarMemberVerdict CalendarMemberAdmission(CalendarMemberFacts const& f)
+{
+    if (!f.realmOn) return {"realm_off", {}};
+    if (!f.guid || !f.guild || f.guid == f.human || !f.cast || !f.character || !f.body || !f.rosterMember
+        || f.characterGuild != f.guild || f.bodyGuild != f.guild
+        || f.characterAccount != f.bodyAccount || f.rosterAccount != f.bodyAccount)
+        return {"no_event", {}};
+    if (!f.randomBotAccount) return {"not_bot", {}};
+    return {{}, f.bodyFence};
+}
 std::string CalendarCapacityReason(std::size_t creatorEvents, std::size_t guildEvents)
 {
     return creatorEvents >= kCalendarCreatorLimit || guildEvents >= kCalendarGuildLimit ? "calendar_full" : "";

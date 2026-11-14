@@ -411,6 +411,37 @@ this change is different: the new mind stores `changed` (and `skipped`, `skipped
 key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
 native rebuild and an updated mind are needed for the new proof to take effect.
 
+# Calendar writes take no body fence
+
+A calendar post, update or signup changes CalendarMgr rows and sends calendar packets. It never
+touches a body (strategies, group, master, position, DC settings), so native refuses one only for
+identity (`CalendarMemberAdmission`, `LeeroyRealmCalendar.h`): `realm_off`; `no_event` unless the
+character is a cast member, not the owner, and its character cache row, live body (a bot between
+maps counts) and roster entry all name the configured guild and one account; `not_bot` off a
+random-bot account. The event's creator is checked the same way (`CalendarAuthorityReason` first),
+the event must exist, and each write's own checks stay (packet hooks, time, caps, invite lock,
+`calendar_authority_changed` when an identity fence moved mid-write). No body fence refuses one:
+not the training cleanup (`TrainingCleanupPending()`, `OfflineTrainingCleanupPending()`), not a
+training, offline-raid, Realm or raid owner, not pending bot commands, not the queue fence.
+
+Before this, `MemberReason` reused the body-move admission (`MutationReason`). On 2026-11-10 a
+twelve-hour training cleanup refused all nine raid-night posts (three nights, three creators each)
+and 361 signups `busy:training_cleanup`; the mind gave each post up after three tries, so none of
+that week's raid nights reached the calendar. No offline-raid post ever succeeded either: its
+creators were inside the running raid (`busy:training_owner`).
+
+`calendar_signup` is now a direct command like a post: one synchronous write on the world thread
+that reserves, pins and queues nothing (`IsQueued` no longer lists it). The signer and the event's
+creator are each held to their identity fence (`CreatorFence`/`ExactCreator`) across the write.
+It acks as before and still publishes `realm_job` `calendar_signup` (the member as `guid`, value 0)
+once the write was attempted; a refusal is the ack's alone, as for a post. The first write of each
+kind past each body fence code is logged once per process:
+`realm calendar_signup by guid=<n> went past body fence busy:training_cleanup (...)`.
+
+Body moves, `NativeOwnershipReason` and `OfflineTrainingCleanupPending()` (still unbounded) are
+unchanged. Ship with a native rebuild (`ac-release.sh --native`); the mind needs no change for it,
+and its desk separately never spends a try on an older worldserver's `busy:` refusal.
+
 # World persona roster and speech
 
 A native rebuild adds `get_world_roster` (complete, bounded roster pages carrying

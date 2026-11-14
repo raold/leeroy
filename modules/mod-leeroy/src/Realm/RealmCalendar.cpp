@@ -4,6 +4,7 @@
 #include "LeeroyRealmCalendar.h"
 #include "CalendarMgr.h"
 #include "GameTime.h"
+#include "Log.h"
 #include "ScriptMgr.h"
 #include "ServerScript.h"
 #include "WorldScript.h"
@@ -11,6 +12,9 @@
 #include <atomic>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_set>
 
 namespace Leeroy::Realm
 {
@@ -20,6 +24,7 @@ using Json = nlohmann::json;
 static_assert(CALENDAR_MAX_EVENTS == kCalendarCreatorLimit && CALENDAR_MAX_GUILD_EVENTS == kCalendarGuildLimit);
 static_assert(CALENDAR_STATUS_ACCEPTED == 1 && CALENDAR_STATUS_DECLINED == 2 && CALENDAR_STATUS_SIGNED_UP == 6
     && CALENDAR_STATUS_TENTATIVE == 8 && CALENDAR_STATUS_REMOVED == 9);
+constexpr std::string_view kPost = "calendar_post", kUpdate = "calendar_update", kSignup = "calendar_signup";
 std::atomic<std::uint64_t> reloadRevision{0};
 CalendarRsvpTracker rsvps; // World-thread only; this is observation state, never ownership.
 
@@ -88,11 +93,6 @@ CalendarInviteFact Fact(CalendarInvite const& invite)
         invite.GetSenderGUID().GetCounter(), static_cast<std::uint64_t>(invite.GetStatusTime()),
         static_cast<std::uint8_t>(invite.GetStatus()), static_cast<std::uint8_t>(invite.GetRank()), invite.GetText()};
 }
-Json EventFact(CalendarEventFact const& event)
-{
-    return Json::array({event.id, event.creator, event.guild, event.type, event.dungeon, event.at,
-        event.timezone, event.flags, event.title, event.description});
-}
 Json BodyFact(std::optional<BodyIdentity> const& body)
 {
     if (!body) return nullptr;
@@ -100,30 +100,56 @@ Json BodyFact(std::optional<BodyIdentity> const& body)
         body->classId, body->race, body->sex, reinterpret_cast<std::uintptr_t>(body->player),
         reinterpret_cast<std::uintptr_t>(body->ai), reinterpret_cast<std::uintptr_t>(body->session)});
 }
-std::string MemberReason(std::uint32_t guid, std::string_view operation = {})
+std::unordered_set<std::string> pastFences; // World-thread only: "<kind> <fence>" already logged.
+// Identity only (CalendarMemberAdmission): a body fence never refuses a calendar write. The first
+// write of each kind past each fence code is logged once per process, so Server.log shows it.
+std::string MemberReason(std::uint32_t guid, std::string_view kind)
 {
     auto& module = RealmModule::Instance();
-    if (!module.On()) return "realm_off";
-    auto const body = Identity(guid);
-    auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(guid));
+    CalendarMemberFacts facts;
+    facts.realmOn = module.On();
+    facts.guid = guid;
+    facts.human = HumanGuid();
+    facts.guild = GuildId();
+    if (!facts.realmOn || !guid) return CalendarMemberAdmission(facts).reason;
+    facts.cast = IsCast(guid);
+    facts.randomBotAccount = IsOnRandomBotAccount(guid);
+    if (auto const* character = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(guid)))
+    {
+        facts.character = true;
+        facts.characterGuild = character->GuildId;
+        facts.characterAccount = character->AccountId;
+    }
+    // A teleport is the body's state, not its identity: a bot between maps may still write.
+    if (auto const body = Identity(guid, true))
+    {
+        facts.body = true;
+        facts.bodyGuild = body->guild;
+        facts.bodyAccount = body->account;
+    }
     auto const* guild = sGuildMgr->GetGuildById(GuildId());
-    auto const* member = guild ? guild->GetMember(PlayerGuid(guid)) : nullptr;
-    if (!guid || guid == HumanGuid() || !IsCast(guid) || !body || body->guild != GuildId()
-        || !character || character->GuildId != GuildId() || character->AccountId != body->account
-        || !member || member->GetGUID() != PlayerGuid(guid) || member->GetAccountId() != body->account)
-        return "no_event";
-    // Initial admission has no reservation yet. An execution check uses only
-    // its exact existing holder; an unrelated owner always refuses the write.
-    return module.MutationReason(guid, !operation.empty() && module.Holder(guid) == operation ? operation : std::string_view{});
+    if (auto const* member = guild ? guild->GetMember(PlayerGuid(guid)) : nullptr;
+        member && member->GetGUID() == PlayerGuid(guid))
+    {
+        facts.rosterMember = true;
+        facts.rosterAccount = member->GetAccountId();
+    }
+    facts.bodyFence = module.MutationReason(guid); // Read-only; reported, never a refusal.
+    auto verdict = CalendarMemberAdmission(facts);
+    if (!verdict.pastFence.empty() && pastFences.size() < 64
+        && pastFences.insert(std::string(kind) + " " + verdict.pastFence).second)
+        LOG_INFO("module.leeroy", "mod-leeroy: realm {} by guid={} went past body fence {} "
+            "(calendar writes take no body fence; logged once per kind and fence)", kind, guid, verdict.pastFence);
+    return verdict.reason;
 }
-std::string EventReason(CalendarEventFact const& event, std::string_view operation = {})
+std::string EventReason(CalendarEventFact const& event, std::string_view kind)
 {
-    auto const creator = Identity(event.creator);
+    auto const creator = Identity(event.creator, true);
     CalendarAuthorityFacts facts{GuildId(), HumanGuid(), event.creator, creator ? creator->guild : 0, event.guild,
         IsCast(event.creator), IsConfiguredGuildMember(event.creator),
         CalendarEvent::IsGuildEvent(event.flags), CalendarEvent::IsGuildAnnouncement(event.flags)};
     if (auto why = CalendarAuthorityReason(facts); !why.empty()) return why;
-    return MemberReason(event.creator, operation);
+    return MemberReason(event.creator, kind);
 }
 Json CreatorFence(std::uint32_t creator)
 {
@@ -192,7 +218,7 @@ LeeroyCommandResult Post(Json const& message)
     if (!command) return {false, why};
     if (!(why = PacketHookReason()).empty()) return {false, why};
     auto& module = RealmModule::Instance();
-    if (!(why = MemberReason(command->creatorGuid)).empty()) return {false, why};
+    if (!(why = MemberReason(command->creatorGuid, kPost)).empty()) return {false, why};
     if (!(why = CalendarTimeReason(command->at, NowSeconds())).empty()) return {false, why};
     if (command->inviteHuman && !sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(HumanGuid())))
         return {false, "human unavailable"};
@@ -233,7 +259,7 @@ LeeroyCommandResult Post(Json const& message)
         if (!ExactCreator(fence, command->creatorGuid) || sGuildMgr->GetGuildById(GuildId()) != guild)
             return "calendar_authority_changed";
         if (auto reason = CalendarTimeReason(command->at, NowSeconds()); !reason.empty()) return reason;
-        return EventReason(expected);
+        return EventReason(expected, kPost);
     }, [&]
     {
         HandoffCalendarRecord(event, [](CalendarEvent* record)
@@ -241,20 +267,21 @@ LeeroyCommandResult Post(Json const& message)
             [](CalendarEvent* record) noexcept { return NativeRegistered(record); });
         if (nativeInvite)
         {
-            if (!PacketHookReason().empty() || !ExactCreator(fence, command->creatorGuid) || !EventReason(expected).empty()
-                || !ExactEvent(native, expected)) throw std::runtime_error("calendar event changed");
+            if (!PacketHookReason().empty() || !ExactCreator(fence, command->creatorGuid)
+                || !EventReason(expected, kPost).empty() || !ExactEvent(native, expected))
+                throw std::runtime_error("calendar event changed");
             HandoffCalendarRecord(humanInvite, [&](CalendarInvite* record) { sCalendarMgr->AddInvite(native, record); },
                 [](CalendarInvite* record) noexcept { return NativeRegistered(record); });
         }
     }, [&]
     {
         return ExactCreator(fence, command->creatorGuid) && sGuildMgr->GetGuildById(GuildId()) == guild
-            && EventReason(expected).empty() && ExactEvent(native, expected)
+            && EventReason(expected, kPost).empty() && ExactEvent(native, expected)
             && (!nativeInvite || ExactInvite(nativeInvite, expectedInvite));
     });
     bool const ok = result.state == CalendarWriteState::Complete;
     if (result.state != CalendarWriteState::Refused)
-        module.PublishJob({message.at("id").get<std::string>(), "calendar_post", ok, result.reason,
+        module.PublishJob({message.at("id").get<std::string>(), std::string(kPost), ok, result.reason,
             command->creatorGuid, eventId});
     return {ok, result.reason};
 }
@@ -267,7 +294,7 @@ LeeroyCommandResult Update(Json const& message)
     auto* const event = sCalendarMgr->GetEvent(command->eventId);
     if (!event) return {false, "no_event"};
     auto const before = Fact(*event);
-    if (!(why = EventReason(before)).empty()) return {false, why};
+    if (!(why = EventReason(before, kUpdate)).empty()) return {false, why};
     if (!(why = CalendarTimeReason(command->at, NowSeconds(), true)).empty()) return {false, why};
     auto const fence = CreatorFence(before.creator);
     auto expected = before;
@@ -279,44 +306,56 @@ LeeroyCommandResult Update(Json const& message)
         if (auto reason = PacketHookReason(); !reason.empty()) return reason;
         if (!ExactCreator(fence, before.creator) || !ExactEvent(event, before)) return "calendar_authority_changed";
         if (auto reason = CalendarTimeReason(command->at, NowSeconds(), true); !reason.empty()) return reason;
-        return EventReason(before);
+        return EventReason(before, kUpdate);
     }, [&]
     {
         event->SetTitle(expected.title); event->SetDescription(expected.description);
         event->SetEventTime(static_cast<time_t>(expected.at));
         sCalendarMgr->UpdateEvent(event);
         // UpdateEvent persists only; this is the native handler's separate alert.
-        if (!ExactCreator(fence, before.creator) || !EventReason(expected).empty() || !ExactEvent(event, expected))
-            throw std::runtime_error("calendar update changed");
+        if (!ExactCreator(fence, before.creator) || !EventReason(expected, kUpdate).empty()
+            || !ExactEvent(event, expected)) throw std::runtime_error("calendar update changed");
         sCalendarMgr->SendCalendarEventUpdateAlert(*event, static_cast<time_t>(before.at));
     }, [&]
-    { return ExactCreator(fence, before.creator) && EventReason(expected).empty() && ExactEvent(event, expected); });
+    {
+        return ExactCreator(fence, before.creator) && EventReason(expected, kUpdate).empty()
+            && ExactEvent(event, expected);
+    });
     return {result.state == CalendarWriteState::Complete, result.reason};
 }
-std::string SignupAdmission(Queued const& entry, std::uint32_t guid)
+// A signup is a direct command, as a post is: it adds or changes one CalendarMgr invite and sends its
+// status, never touching a body, so it reserves, pins and queues nothing. The signer and the event's
+// creator are each held to their identity (CreatorFence) across the write, as a post's creator is.
+std::string SignupReason(CalendarEvent* event, CalendarEventFact const& fact, std::uint32_t guid,
+    Json const& creatorFence, Json const& signerFence)
 {
     if (auto reason = PacketHookReason(); !reason.empty()) return reason;
-    auto const eventId = entry.payload.at("event_id").get<std::uint64_t>();
-    auto* const event = sCalendarMgr->GetEvent(eventId);
-    if (!event || EventFact(Fact(*event)) != entry.payload.at("event")) return "no_event";
-    auto const fact = Fact(*event);
-    if (auto why = EventReason(fact, fact.creator == guid ? entry.id : std::string_view{}); !why.empty()) return why;
-    if (!ExactCreator(entry.payload.at("creator"), fact.creator)) return "calendar_authority_changed";
-    if (auto why = MemberReason(guid, entry.id); !why.empty()) return why;
+    if (!ExactEvent(event, fact)) return "no_event";
+    if (auto why = EventReason(fact, kSignup); !why.empty()) return why;
+    if (!ExactCreator(creatorFence, fact.creator) || !ExactCreator(signerFence, guid))
+        return "calendar_authority_changed";
+    if (auto why = MemberReason(guid, kSignup); !why.empty()) return why;
     if (fact.flags & CALENDAR_FLAG_INVITES_LOCKED) return "calendar_locked";
-    auto const found = FindInvite(eventId, guid);
+    auto const found = FindInvite(fact.id, guid);
     if (!found.valid) return "calendar_invite_ambiguous";
     return CalendarSignupReason(found.total, found.matches);
 }
-RealmStep Signup(Queued& entry, std::uint32_t guid)
+LeeroyCommandResult Signup(Json const& message)
 {
-    if (auto why = SignupAdmission(entry, guid); !why.empty()) return {StepState::Refused, why};
-    auto& module = RealmModule::Instance();
-    auto* const event = sCalendarMgr->GetEvent(entry.payload.at("event_id").get<std::uint64_t>());
+    std::string why;
+    auto const command = ParseCalendarSignup(message, why);
+    if (!command) return {false, why};
+    auto const status = CalendarStatus(command->status);
+    if (!status) return {false, "bad field: status"};
+    if (!(why = PacketHookReason()).empty()) return {false, why};
+    auto* const event = sCalendarMgr->GetEvent(command->eventId);
+    if (!event) return {false, "no_event"};
+    auto const guid = command->guid;
     auto const eventFact = Fact(*event);
+    auto const creatorFence = CreatorFence(eventFact.creator), signerFence = CreatorFence(guid);
+    auto const admission = [&] { return SignupReason(event, eventFact, guid, creatorFence, signerFence); };
+    if (!(why = admission()).empty()) return {false, why};
     auto const found = FindInvite(eventFact.id, guid);
-    auto const status = CalendarStatus(entry.payload.at("status").get<std::string>());
-    if (!status) return {StepState::Refused, "bad field: status"};
     CalendarInvite* native = found.invite;
     std::unique_ptr<CalendarInvite> added;
     CalendarInviteFact before, expected;
@@ -324,7 +363,7 @@ RealmStep Signup(Queued& entry, std::uint32_t guid)
     else
     {
         auto const id = sCalendarMgr->GetFreeInviteId();
-        if (!id || NativeInviteIdExists(id)) return {StepState::Refused, "calendar_id_unavailable"};
+        if (!id || NativeInviteIdExists(id)) return {false, "calendar_id_unavailable"};
         added = ConstructCalendarRecord(id, [&](std::uint64_t allocated)
         {
             return std::make_unique<CalendarInvite>(allocated, eventFact.id, PlayerGuid(guid), PlayerGuid(guid),
@@ -335,10 +374,8 @@ RealmStep Signup(Queued& entry, std::uint32_t guid)
     expected.status = *status; expected.at = NowSeconds();
     auto const result = ApplyCalendarWrite([&]() -> std::string
     {
-        if (auto why = SignupAdmission(entry, guid); !why.empty()) return why;
-        if (auto why = module.ValidateOwnedBody(guid, entry.id); !why.empty()) return why;
-        if (!ExactEvent(event, eventFact) || (found.invite && !ExactInvite(found.invite, before)))
-            return "calendar_invite_changed";
+        if (auto reason = admission(); !reason.empty()) return reason;
+        if (found.invite && !ExactInvite(found.invite, before)) return "calendar_invite_changed";
         return {};
     }, [&]
     {
@@ -348,17 +385,15 @@ RealmStep Signup(Queued& entry, std::uint32_t guid)
             HandoffCalendarRecord(added, [&](CalendarInvite* record) { sCalendarMgr->AddInvite(event, record); },
                 [](CalendarInvite* record) noexcept { return NativeRegistered(record); });
         else sCalendarMgr->UpdateInvite(native);
-        if (!module.ValidateOwnedBody(guid, entry.id).empty() || !SignupAdmission(entry, guid).empty()
-            || !ExactEvent(event, eventFact) || !ExactInvite(native, expected))
-            throw std::runtime_error("calendar signup changed");
+        if (!admission().empty() || !ExactInvite(native, expected)) throw std::runtime_error("calendar signup changed");
         sCalendarMgr->SendCalendarEventStatus(*event, *native);
-    }, [&]
-    {
-        return module.ValidateOwnedBody(guid, entry.id).empty() && SignupAdmission(entry, guid).empty()
-            && ExactEvent(event, eventFact) && ExactInvite(native, expected);
-    });
-    if (result.state == CalendarWriteState::Unknown) return {StepState::Unknown, result.reason};
-    return {result.state == CalendarWriteState::Complete ? StepState::Complete : StepState::Refused, result.reason};
+    }, [&] { return admission().empty() && ExactInvite(native, expected); });
+    bool const ok = result.state == CalendarWriteState::Complete;
+    // The job a queued signup published before: its member, value 0. A refusal is the ack's alone.
+    if (result.state != CalendarWriteState::Refused)
+        RealmModule::Instance().PublishJob({message.at("id").get<std::string>(), std::string(kSignup), ok,
+            result.reason, guid, 0});
+    return {ok, result.reason};
 }
 void Poll()
 {
@@ -393,27 +428,10 @@ public:
 }
 void RegisterRealmCalendarHandlers()
 {
-    auto& module = RealmModule::Instance();
-    module.RegisterExecutor("calendar_signup", Signup, SignupAdmission);
-    module.RegisterPoll("realm_calendar", 60000, Poll);
-    RegisterCommand("calendar_post", Post);
-    RegisterCommand("calendar_update", Update);
-    RegisterCommand("calendar_signup", [](Json const& message) -> LeeroyCommandResult
-    {
-        std::string why;
-        auto const command = ParseCalendarSignup(message, why);
-        if (!command) return {false, why};
-        if (!(why = PacketHookReason()).empty()) return {false, why};
-        auto* const event = sCalendarMgr->GetEvent(command->eventId);
-        if (!event) return {false, "no_event"};
-        auto const fact = Fact(*event);
-        if (!(why = EventReason(fact)).empty()) return {false, why};
-        Queued entry{message.at("id").get<std::string>(), "calendar_signup", {command->guid}, 0,
-            {{"event_id", command->eventId}, {"status", command->status}, {"event", EventFact(fact)},
-                {"creator", CreatorFence(fact.creator)}}};
-        return RealmModule::Instance().Accept(std::move(entry), why) ? LeeroyCommandResult{true, ""}
-            : LeeroyCommandResult{false, why};
-    });
+    RealmModule::Instance().RegisterPoll("realm_calendar", 60000, Poll);
+    RegisterCommand(std::string(kPost), Post);
+    RegisterCommand(std::string(kUpdate), Update);
+    RegisterCommand(std::string(kSignup), Signup);
 }
 void AddRealmCalendarScripts() { new CalendarWorldScript(); }
 }
