@@ -204,9 +204,10 @@ def make_plan_stage(app, selfies_cfg) -> Callable:
     from leeroy_mind.nightly.llm import ReflectionError, schema
     from leeroy_mind.personas.screens import redact_real_name
 
-    def count(ctx) -> int:
+    def count(ctx) -> int:  # one call, only when a meme is due and a joke can carry it
         return int(not ctx.done(PLAN_STAGE, "plan")
-                   and plan_due(ctx.store.conn, ctx.clock.now(), app.culture_config.memes_per_week) is None)
+                   and plan_due(ctx.store.conn, ctx.clock.now(), app.culture_config.memes_per_week) is None
+                   and bool(_jokes(ctx, Path(ctx.settings.data_dir) / "library.db")[1]))
     register_counter(PLAN_STAGE, count)
 
     async def stage_meme_plan(ctx) -> None:
