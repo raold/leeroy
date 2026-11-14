@@ -489,6 +489,8 @@ class MindApp:
         self.photos = attach_photos(self)
         from .outreach.attach import attach as attach_outreach
         self.outreach = attach_outreach(self)
+        from .decisions.attach import attach_decisions
+        self.decisions = attach_decisions(self)  # after the server: decisions need it
 
     # -- extension points --------------------------------------------------------------------
 

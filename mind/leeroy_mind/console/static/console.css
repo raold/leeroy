@@ -595,6 +595,10 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .dc-message-actions { opacity: 0; }
 .dc-message:hover .dc-message-actions, .dc-message:focus-within .dc-message-actions { opacity: 1; }
 .dc-pin { display: inline-block; margin-left: 8px; color: var(--accent); }
+.dc-poll { display: grid; gap: 6px; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; max-width: 32rem; }
+.dc-poll-option { text-align: left; min-height: 32px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 18%, var(--surface)) var(--share, 0%), var(--surface) var(--share, 0%)); }
+.dc-poll-option.on { border-color: var(--accent); }
+.dc-polls { display: grid; gap: 8px; }
 .dc-new { border-top: 1px solid var(--accent); color: var(--accent); text-align: center; font-size: 12px; font-weight: 700; margin: 12px 0; }
 #dc-composer { padding: 12px 14px; border-top: 1px solid var(--line); }
 #dc-composer label { display: block; font-size: 12px; margin-bottom: 5px; }

@@ -10,6 +10,7 @@ import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderP
 import { voiceBox, retainVoicePlayers } from "./voiceplayer.mjs";
 import { voiceDraft, voicePreparing, clearVoice, prepareVoice, renderVoiceDraft, setupVoiceComposer } from "./voicerecorder.mjs";
 import { groupList, groupPanel, groupReason, currentGroup } from "./groups.mjs";
+import { castVote, pollCard } from "../decisions.mjs";
 
 var shown = "", thread = 0, panel = "", reply = null, entryMark = 0, drawing = "";
 var drafts = new Map(), replyDrafts = new Map(), folded = new Set(), dialog = null, returnTo = null, failure = "";
@@ -136,6 +137,7 @@ function messageRow(item, data) {
   if (!deleted && m.voice_note && privateDm()) { content.appendChild(voiceBox(m, mine ? 'you' : name(m.author), mine)); }
   else { content.appendChild(el("div", "body", deleted ? "Message deleted" : str(m.text))); }
   if (!deleted && m.image) { content.appendChild(photoBox(m, name(m.author))); }
+  if (!deleted && m.poll) { content.appendChild(pollCard(m.poll, discordReason(), discordBusy)); }
   if (!deleted && !mine && m.origin==='mind') {
     var feedback = feedbackButtons(m,name(m.author));
     content.appendChild(feedback || el('small','hint','Feedback unavailable: this older message has no unique stored chat line.'));
@@ -312,6 +314,9 @@ function action(ev) {
   var target = ev.target.closest("[data-action], [data-thread], [data-dm]"); if (!target) { return; }
   if (target.dataset.dm) { openView("dm:" + target.dataset.dm); input.focus(); return; }
   if (target.dataset.thread) { chooseThread(Number(target.dataset.thread)); return; }
+  if (target.dataset.action === "poll-vote") {
+    castVote(Number(target.dataset.poll), target.dataset.option).then(refreshDiscord).catch(fail); return;
+  }
   var m = message(Number(target.dataset.message)), act = target.dataset.action; if (!m) { return; }
   if (act === "reply") { reply = m; renderComposer(); input.focus(); }
   else if (act === "thread") {

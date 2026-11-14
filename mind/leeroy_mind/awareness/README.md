@@ -41,6 +41,7 @@ an empty string. It does not trim a sentence or partially expose a part.
 | Guild raid | Current recorded or most recent `guild_raid`, with kills and wipes. A durable active row is labeled recorded active, rather than treated as a live server probe. |
 | Upcoming calendar | First four posted events within 14 days, plus the next posted raid even when later. `realm_rsvp` joins through the native `event_id`, with up to four signups per event so later guild facts still fit. Pending/failed posts are omitted. |
 | Your standing | `dkp_ledger` balance/rank and `guild_attendance` status counts. |
+| Guild decisions | Only with `[decisions]` on (`CardContext.decisions`): up to five lines of live `guild_decision` rows that touch her (her lineup or bench, the loot rule, a strategy, her request or rank; a proposal only with her position), her vote or code-built position on each, and at most two open `guild_poll` rows she votes in. Bank, rank and officers'-channel polls reach only officers' rooms (game officer chat, the officers' voice room, officers' Discord channels) and group DMs whose every reader but him is an officer. See `decisions/README.md`. |
 | Guild bank | Cached balance only when observed within 15 minutes; `realm_bank` movement counts over seven days. The ledger is not a current balance; without a fresh snapshot that balance is unknown. |
 | Your recent guild drama | At most four active/recent `feud` rows involving this member, gated on visible direct chat/encounter evidence. Only counterpart/id/status, never the generated cause or evidence text. |
 
