@@ -24,8 +24,11 @@ The goal it is named for is a bot raid leader. Much of it exists now:
 [mod-dungeon-clear](https://github.com/jrad7/mod-dungeon-clear) has the group's
 tank bot route boss to boss and pull, and the mind's raid nights assemble the
 raid from the guild and give it a raid leader who calls the plan before each
-boss. The boss fights themselves are still played by playerbots' raid
-strategies; teaching the bots to fight better is the work of the
+boss. When the player leads, he can name a member as raid lead, and she runs
+the calls and the marks while he gives orders in plain words. The boss fights
+themselves are still played by playerbots' raid strategies, now with written
+boss playbooks and better hazard avoidance beside them; teaching the bots to
+fight better is the work of the
 [training ground and the dojo](#teaching-the-bots-to-fight).
 
 ## A tour
@@ -111,14 +114,29 @@ audience, and a group DM is shared only with those who were in it.
   members start with him, things each member means to tell him, answers to his
   emotes, and reactions to raids, loot and what happens in game. Members keep
   their own typing rhythm, banter, and share running jokes born from things
-  that really happened, teasing only where they are friends. Before a line is
+  that really happened, teasing only where they are friends, and talk about
+  the server's real calendar events and real loot. Before a line is
   sent, guards check it against what she knows and recently said, and drop
   repeats, filler and a reply that only says his message back.
+- **Decisions**: the guild records what it decides, who argued what and how
+  each member voted, with officers' polls; votes and positions come from each
+  member's data, never from model text, and he can overrule a decision where
+  the game allows it.
+- **Godmode**: he can edit a member's traits, feelings, mood, life events and
+  memories, and start or end a feud, each as an overlay that undo removes
+  exactly; and he can give a member something to do in Discord, which she
+  carries out in her own way or reports back as not taken.
 - **Guild life**: raid nights from call to loot (a fair composition, a rotating
   raid lead, summons, the dungeon-clear run, DKP and an MVP vote), offline
   raids the guild runs on its own while he is away, a group he fills with
   `.playerbots bot addN` counted like a called raid night, and the ranks,
-  specs, gear, flask and feast habits kept current between raids. A healer in
+  specs, gear, flask and feast habits kept current between raids. In a group he
+  leads he can name a raid lead (from the console or in raid chat) who does the
+  pull countdown, the marks and the boss calls, and he can give orders in raid
+  chat or by push-to-talk (follow, stack, spread, wait for my pull, kill skull,
+  tanks swap, Bloodlust now) that the bodies carry out, acknowledged only once
+  the game confirms them. Offline raids skip any raid he is saved to that week
+  and say in words why a run stopped. A healer in
   his group rezzes the dead out of combat. Optional play styles let members use
   potions and hold a moment before a pull in their own way outdoors, never in
   instances or raids.
@@ -184,15 +202,15 @@ player can play something else, until he resumes or logs into WoW. Its 16 tabs:
 |---|---|
 | Tonight | Tonight at a glance: raids and sign-ups, what is waiting for him (DMs, letters, photo picks, polls), who is due loot, bank items running low, his own flasks, potions and food, the week ahead and the last night; plus which feature switches are on |
 | Comms | The voice rooms and the game's chat in one feed with the members' faces, channels, whispers, a voice transcript, mute and deafen, a reply box that speaks in game as the player, and **the guild's Discord**: channels, private DMs and group DMs, emoji, reactions, reply quotes, threads, pins, photos and voice notes both ways. Members talk there on their own around the clock and answer even while he is out of game; DMs are as private as whispers, nothing in it becomes WoW chat, and every conversation is kept |
-| Raid | The raid night as it happens (call, composition, members, loot, DKP), recent raids, and the raid actions: call, form, summon, start, stop, end |
-| Guild | Roster, DKP ladder and stats (attendance, who is due an item), loot history, season awards, the chronicle |
+| Raid | The raid night as it happens (call, composition, members, loot, DKP), recent raids, the raid actions (call, form, summon, start, stop, end), and the raid lead picker |
+| Guild | Roster, DKP ladder and stats (attendance, who is due an item), loot history, season awards, the chronicle, and the guild's decisions and polls with his vote and overrule |
 | Social | Feuds, jealousy, romances, how members feel about him, rumours, the guild mood |
-| Personas | The cast as a wall of faces or a table: mood, stance, ties, memories, persona versions, what each means to tell him; their insight (claims, awareness, talk quality); tuning dials at world, group and member level with undo; temporary nudges; choosing profile photos and browsing each member's gallery |
+| Personas | The cast as a wall of faces or a table: mood, stance, ties, memories, persona versions, what each means to tell him; their insight (claims, awareness, talk quality); tuning dials at world, group and member level with undo; temporary nudges; godmode edits with undo; choosing profile photos and browsing each member's gallery |
 | Board | The Realm's forum, letters and write-ups, where he can reply |
 | Calendar | Raid nights, the officers' meeting, birthdays and sign-ups |
 | Bank | The guild bank's gold, tabs and money log, read through the mind so the database password stays with it |
 | Realm | Rival guilds, the race for first kills, poaching, Trade lines |
-| Training | The training ground's fights, gate, trials and cards |
+| Training | The training ground's fights, gate, trials and cards, what hurt the members per boss, and the raid playbooks |
 | Dojo | The dojo's builds, baselines and runs, read from its own files |
 | Library | Search of the game library, text first, the mind's semantic search as a fallback |
 | Lab | What the guild is learning: line rewards, variants and lessons (approve, veto, retire), reward weights, and a freeze; thumbs on every member line feed it |
@@ -276,6 +294,33 @@ recording.
 Implementation and passing tests are separate from live observation and
 acceptance.
 
+It records the player's own raids as well as the guild's offline ones: while
+its overhead check runs, recorded and unrecorded pulls alternate, and nothing
+but the recording switch reaches his raid. `python -m leeroy_mind training
+hurt` (and a Training tab panel) reports, per boss, what killed members, the
+spells that hurt them most, the mechanics they failed and who took avoidable
+hits.
+
+### Raid playbooks
+
+`mind/leeroy_mind/raidplay/` holds a playbook per boss and difficulty for
+Naxxramas, Icecrown Citadel and Trial of the Crusader, as data: each mechanic's
+spell ids, kind (avoid the ground, leave a cone, spread, stack, run out with a
+debuff, interrupt, dispel, tank swap and so on), roles, distances and whether
+playerbots' own boss script already handles it. The entries are checked
+against the core's boss scripts and spell data; tactics are written in this
+project's own words. The training ground scores each entry, and a local-only
+extractor can read facts from an installed boss-mod addon into the data
+directory for cross-checks (never into the repo). See the
+[raidplay README](mind/leeroy_mind/raidplay/README.md).
+
+### Hazards
+
+With `Leeroy.Hazards.Enable = 1`, guild members in the player's group step out
+of avoidable ground effects out of combat as well as in it, never take a
+follow spot inside one, and walk around one rather than through it, with a
+breaker so a bot is never stranded between overlapping hazards.
+
 ### The dojo
 
 The dojo is where the bots' combat is to be trained with deep reinforcement
@@ -334,6 +379,9 @@ output in `patches/`:
   of their group, and never logged out to meet the online bot count. A pinned
   bot revives in place, skips playerbots' canned status and hello whispers,
   and stays out of random bot arena teams. mod-leeroy pins the guild with it.
+- **Hazard-aware follow spots** (playerbots): an inert hook another module can
+  install so a bot's follow position, and its way out of a ground effect,
+  avoid known hazards. mod-leeroy installs it for the player's group only.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
