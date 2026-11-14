@@ -18,7 +18,7 @@ from leeroy_mind.outreach.sources import BIRTHDAY_ABOUT, member_local
 from leeroy_mind.bridge import AckTimeout
 from leeroy_mind.guards import Verdict
 from leeroy_mind.personas.io import save_persona
-from leeroy_mind.protocol import Chat
+from leeroy_mind.protocol import Chat, Group
 from leeroy_mind.talk.pipeline import ECHO_WAIT_S, TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 
@@ -291,16 +291,20 @@ def test_real_dm_opener_delivers_selected_item_through_pipeline(rig,tmp_path,mon
     assert app.outreach.select(101,'whisper') is None
 
 
-def test_real_public_opener_uses_guild_item_and_records_its_delivery(rig,tmp_path,monkeypatch):
-    app=app_for(rig,tmp_path)
+def birthday(rig):
     p=rig.engine.personas.get(101)
     local=member_local(rig.clock.local(),p)
     p=replace(p,real_life=replace(p.real_life,birthday=local.strftime('%m-%d')))
     save_persona(rig.store,p,source='seed',ts=rig.clock.now(),race='Orc',class_name='Warrior')
     rig.engine.personas.invalidate(101)
-    item=records.add(rig.store,guid=101,kind='birthday',ref=f'birthday:{local.date()}',
+    return records.add(rig.store,guid=101,kind='birthday',ref=f'birthday:{local.date()}',
         about=BIRTHDAY_ABOUT,audience='guild',weight=5,created=rig.clock.now(),
         not_before=rig.clock.now(),expires=rig.clock.now()+3600)
+
+
+def test_real_public_opener_uses_guild_item_and_records_its_delivery(rig,tmp_path,monkeypatch):
+    app=app_for(rig,tmp_path)
+    item=birthday(rig)
     monkeypatch.setattr(rig.engine,'_candidates',lambda *a,**k:[101])
     rig.script('another birthday means another excuse for cake')
     async def go():
@@ -311,6 +315,30 @@ def test_real_public_opener_uses_guild_item_and_records_its_delivery(rig,tmp_pat
     assert BIRTHDAY_ABOUT in rig.prompts()[-1]
     assert len(rig.sent.says())==1 and rig.sent.says()[0].channel=='guild'
     assert app.outreach.select(101,'dm') is None
+
+
+@pytest.mark.parametrize('channel',['guild','party'])
+def test_public_item_stays_typed_while_she_sits_in_his_voice_room(rig,tmp_path,monkeypatch,channel):
+    from voice.conftest import VRig
+    app=app_for(rig,tmp_path)
+    voice=VRig(rig)
+    voice.him('guild_hall')
+    voice.seat(101,'guild_hall')
+    if channel=='party':
+        rig.sync(rig.event(Group(ts=0,leader_guid=HUMAN,raid=False,members=(HUMAN,101))))
+    item=birthday(rig)
+    monkeypatch.setattr(rig.engine,'_candidates',lambda *a,**k:[101])
+    rig.script('another birthday means another excuse for cake')
+    async def go():
+        await finish(rig,asyncio.create_task(rig.engine._open_to_him()))
+    rig.sync(go())
+    told=records.get(rig.store,item.id)
+    assert told.state=='told' and told.told_via==channel
+    assert rig.store.chat_lines([told.line_id])[0].channel==channel
+    assert [s.channel for s in rig.sent.says()]==[channel] and not voice.speaks()
+    assert list(rig.engine._to_him_at)==[101]
+    assert [tuple(r) for r in rig.store.conn.execute('SELECT channel,dropped FROM utterance WHERE guid=101')]==[(channel,None)]
+    assert not app.outreach._held and app.outreach.select(101,'whisper') is None
 
 
 def test_off_keeps_seeded_dm_speakers_and_topics(store,tmp_path,monkeypatch):

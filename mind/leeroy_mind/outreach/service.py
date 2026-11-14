@@ -123,13 +123,15 @@ class Outreach:
         return via
 
     def bind(self, turn, meta, item):
-        self._via(turn, item)  # fail closed before any private text joins instructions
+        via = self._via(turn, item)  # fail closed before any private text joins instructions
         if item.id in self._held:
             return False
         self._held[item.id] = meta.turn_id
         meta.outreach_item = item.id
         meta.single_line = True
         meta.topic = item.about
+        if via in {'guild', 'party'}:
+            meta.keep_channel = True  # typed where its receipt can name it, never moved into a voice room
         if is_discord(turn.channel):
             meta.server_anchor = item.about
         previous = meta.still_valid

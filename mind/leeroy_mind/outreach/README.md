@@ -69,7 +69,9 @@ fail closed. Officer material cannot become pair outreach. Group sources retain
 their original readers and must permit the destination pair.
 
 Pair items can only reach that member's whisper or ordinary DM with him. Guild
-items may additionally reach a guild or party opener to him. A nudge never becomes
+items may additionally reach a guild or party opener to him, which stays a typed
+line on that channel even while she sits in his voice room: voice routing never
+moves it into the room, where its receipt could not name it. A nudge never becomes
 a DM. A later owner post, including a tombstone, prevents an earlier DM from
 becoming an unanswered nudge again.
 The nudge's exact verified DM can appear in the labelled pair-history block even
