@@ -355,6 +355,32 @@ def test_a_tick_that_fails_is_logged_and_the_loop_goes_on(h, caplog):
     assert "nightly_tick_failed" in caplog.text and "database is locked" in caplog.text
 
 
+def test_a_reload_a_photo_borrow_left_failed_is_retried_once_the_night_is_due(h, caplog):
+    """Nobody online calls live admission, so only the night's own check can repair the gate a
+    failed post-borrow reload left closed. It tries only when that gate alone holds the night."""
+    from leeroy_mind.llm.borrow import BorrowGate
+    async def go():
+        sched, started, admin = make_sched(h)
+        gate = sched.arbiter.live_admission = BorrowGate(h.clock)
+        gate.close(); gate.fail(); sched.arbiter.needs_live_reload = True
+        preload, tries = admin.preload, []
+        async def down(*args, **kwargs):
+            tries.append(1)
+            raise RuntimeError("synthetic model down")
+        admin.preload = down
+        await sched.on_event(h.hello(1)); await sched.on_event(h.logout())
+        h.clock.advance(5 * 60); await sched.tick()
+        assert started == [] and tries == []                   # not due yet: nothing is tried
+        h.clock.advance(6 * 60); await sched.tick()
+        assert started == [] and tries == [1, 1] and gate.blocked
+        admin.preload = preload
+        await sched.tick(); await sched.wait_idle()
+        assert not gate.blocked and started and started[0][0] == night_of(h.clock.local())
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        run(go())
+    assert "nightly_borrow_recovery_failed" in caplog.text
+
+
 # -- windows and attempts ------------------------------------------------------------------------
 
 def test_a_run_a_restart_left_running_resumes_with_its_window(h):

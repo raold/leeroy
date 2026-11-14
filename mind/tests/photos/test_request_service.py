@@ -75,6 +75,22 @@ def test_target_is_dm_peer_or_first_named_and_never_random(tmp_path):
         run(app.stop())
 
 
+def test_target_subject_must_be_her_own_name_or_self(tmp_path):
+    app = make_app(tmp_path)
+    try:
+        a,b = [app.world.discord_members()[g].name for g in (101,102)]
+        real = app.personas.get(101).identity.real_name.split()[0]
+        assert request_target(app,post(app,'dm:101',f'send me a pic of {a}')) == 101
+        assert request_target(app,post(app,'dm:101',f'send me a pic of {real}')) == 101
+        assert request_target(app,post(app,'dm:101',f'send me a pic of {b}')) is None
+        assert request_target(app,post(app,'general',f'@{a} send me a pic of @{a}')) == 101
+        assert request_target(app,post(app,'general',f'@{a} send me a pic of @{b}')) is None
+        assert request_target(app,post(app,'dm:101','got it, nice pic')) is None
+        assert request_target(app,post(app,'dm:101',"I'll send you a pic later")) is None
+    finally:
+        run(app.stop())
+
+
 def test_off_adds_no_request_hooks_or_admission(tmp_path):
     app = make_app(tmp_path,ON.replace('requests=true','requests=false'))
     try:
@@ -139,6 +155,12 @@ def test_online_request_answers_with_gallery_copy_and_keeps_fresh_plan(tmp_path,
             await drive(app,lambda: app.store.conn.execute('SELECT 1 FROM discord_message WHERE reply_to=? AND origin=\'mind\'',(again['id'],)).fetchone())
             assert records.get(app.store,again['id']) is None
             assert app.store.conn.execute('SELECT count(*) FROM discord_attachment').fetchone()[0]==1
+            # Just past the member's two-minute window, a new ask is a request again.
+            await app.clock.advance(request.created+records.MEMBER_GAP+1-app.clock.now(),1)
+            app.llm._script = lambda *args: 'fine, the window light was decent anyway'
+            third=await app.discord.handle({'action':'post','channel':channel,'text':f'@{name} pic?'})
+            await drive(app,lambda: bool((r:=records.get(app.store,third['id'])) and r.initial_message))
+            assert records.get(app.store,third['id']).guid==101
         finally:
             await app.stop()
     run(scenario())

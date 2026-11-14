@@ -9,12 +9,13 @@ import re
 
 from leeroy_mind.selfies import snaps
 
-MEMBER_GAP = 600.0
+MEMBER_GAP = 120.0
 LIFETIME = 86400.0
 HOUR = 3600.0
 HOUR_BORROWS = 6
 DAY_BORROWS = 30
 REPEAT_WINDOW = 30 * LIFETIME
+RETRIES = 2
 PHASES = ('morning', 'day', 'evening', 'late', 'dead')
 _DELIVERIES = {kind: kind + '_message' for kind in
                ('initial', 'fresh', 'fallback', 'followup', 'failure')}
@@ -194,6 +195,30 @@ def fail(store, message: int, code: str, *, now: float) -> None:
         photo = snap(store, request.fresh_snap)
         if photo is not None and photo.status == 'planned':
             snaps.expire(store, photo.id, 'flagged' if code == 'flagged' else 'missing', now=now)
+
+
+def attempt(store, message: int, part: str, *, now: float) -> bool:
+    """Count one try at delivering `part`: the first and RETRIES more. One more ends the request
+    `passed`, its failure `retry_limit` unless it had one, and closes its open photos (files stay)."""
+    if part not in ('initial', 'followup', 'failure'):
+        raise RequestError('invalid delivery role')
+    key = f'photos:request:tries:{message}:{part}'
+    with store.transaction():
+        request = get(store, message)
+        if request is None or request.ended is not None:
+            return False
+        raw = store.get_meta(key)
+        tries = 0 if raw is None else int(raw) if raw.isdigit() else RETRIES + 1
+        if tries <= RETRIES:
+            store.set_meta(key, str(tries + 1))
+            return True
+        store.conn.execute("UPDATE selfie_request SET ended='passed',failure=COALESCE(failure,'retry_limit') "
+                           'WHERE message=?', (message,))
+        for snap_id in (request.fresh_snap, request.fallback_snap):
+            photo = snap(store, snap_id)
+            if photo is not None and photo.status in ('planned', 'ready'):
+                snaps.expire(store, photo.id, 'passed', now=now)
+        return False
 
 
 def expire_unrendered(store, *, now: float) -> list[Request]:

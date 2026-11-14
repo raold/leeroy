@@ -40,8 +40,9 @@ def _fallback(p, audience: str) -> dict:
     return picks
 
 
-async def choose_scene(app, guid: int, words: str, audience: str) -> Scene:
+async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool = True) -> Scene:
     """Choose at most twice, then use a screened everyday choice. Never store his words.
+    `model=False` takes that everyday choice at once, without the live model.
 
     The scheduler's job awaits admission itself: a borrow can begin while this job queues.
     chat_json owns the single retry, including schema, pairing and content failures.
@@ -104,12 +105,14 @@ async def choose_scene(app, guid: int, words: str, audience: str) -> Scene:
                                preset=SCENE_LIVE, validate=validate)
 
     try:
-        return await app.scheduler.submit(Priority.REPLY_HUMAN, job)
+        if model:
+            return await app.scheduler.submit(Priority.REPLY_HUMAN, job)
     except GpuPaused:
         raise
     except (JSONJobFailed, LLMError):
-        try:
-            return validate(_fallback(p, audience))
-        except ValueError:
-            # A name clash or changed content rule also applies to the fixed fallback.
-            raise RequestSceneError("unrenderable") from None
+        pass
+    try:
+        return validate(_fallback(p, audience))
+    except ValueError:
+        # A name clash or changed content rule also applies to the fixed fallback.
+        raise RequestSceneError("unrenderable") from None
