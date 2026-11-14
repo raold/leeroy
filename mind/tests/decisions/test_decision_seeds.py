@@ -82,3 +82,19 @@ def test_a_polled_proposal_never_seeds_publicly_before_its_poll(store, clock, gu
     seeds = {s.key: s for s in decision_seeds(store.conn, now=now, personas=guild, officers=OFFICERS)}
     assert not seeds['decision:2:proposed'].officers_only
     assert seeds['decision:2:proposed'].channels == ('loot-and-dkp',)
+
+
+def test_the_daily_sweep_keeps_a_decision_stages_receipt(store, clock, guild):
+    from datetime import date
+    from leeroy_mind.server import records
+    from leeroy_mind.server.seeds import fresh, mark_used
+    now = clock.now()
+    ledger.propose(store, kind='lineup', subject='raid:9', value={'members': [101], 'bench': [103]},
+                   positions=[{'guid': 103, 'side': 'object', 'why': 'benched_twice'}], now=now)
+    [seed] = decision_seeds(store.conn, now=now, personas=guild, officers=OFFICERS)
+    mark_used(store, seed, now=now)
+    store.set_meta('server:seed:life:1', str(now))
+    later = now + 8 * 86400  # past the sweep's seven days, still proposed
+    records.prune(store, date.fromtimestamp(later).isoformat(), later)
+    assert store.get_meta('server:seed:life:1') is None  # other receipts still go
+    assert fresh(store.conn, decision_seeds(store.conn, now=later, personas=guild, officers=OFFICERS), now=later) == []

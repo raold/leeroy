@@ -1,6 +1,7 @@
 """Facts never strengthen unverified damage, or attach another pull's history."""
 
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -136,6 +137,15 @@ def test_hook_only_for_the_leads_calls(fake):
     assert hook(turn, meta, INSTRUCTION).endswith(NO_CAUSE)
 
 
+def test_his_pull_adds_no_fact_while_the_gate_measures(fake):
+    rec = save(fake, record(fake), checked=True)
+    phase = ["ab"]
+    hook = TalkHook(fake, live=lambda: phase[0] == "passed")
+    assert hook(*lead(rec), INSTRUCTION) == INSTRUCTION
+    phase[0] = "passed"
+    assert hook(*lead(rec), INSTRUCTION).endswith(NO_CAUSE)
+
+
 def test_fact_swaps_the_wipe_wording_only_with_complete_checks(fake):
     rec = save(fake, record(fake), checked=True)
     text = TalkHook(fake)(*lead(rec), INSTRUCTION)
@@ -217,7 +227,16 @@ def test_hook_rejects_ineligible_or_mismatched_records(fake, which):
     assert TalkHook(fake)(turn, meta, INSTRUCTION) == INSTRUCTION
 
 
+def gate_passed(fake, at=None):
+    value = {"phase": "passed", "raids": 4, "verdict_ms": 0.2}
+    if at is not None:
+        value["passed_at"] = at
+    with fake.conn:
+        fake.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('tg_gate',?)", (json.dumps(value),))
+
+
 def test_kill_hook_uses_only_earlier_his_same_context_kills(fake):
+    gate_passed(fake)
     rec = record(fake, outcome="killed", duration=270)
     r = raid(fake)
     for i, duration in enumerate((300, 290, 280)):
@@ -227,6 +246,24 @@ def test_kill_hook_uses_only_earlier_his_same_context_kills(fake):
     save(fake, rec, run=r)
     text = TalkHook(fake)(*lead(rec), "The raid killed the boss.")
     assert text.endswith("Record: 4:30, our fastest Lord Marrowgar kill yet.")
+
+
+@pytest.mark.parametrize("phase", ["ab", "passed_later"])
+def test_no_record_claim_from_the_gates_sampled_kills(fake, phase):
+    rec = record(fake, outcome="killed", duration=270)
+    r = raid(fake)
+    for i, duration in enumerate((300, 290, 280)):
+        save(fake, record(fake, outcome="killed", duration=duration,
+                          end=rec.header.start_ms - (i + 1) * 400_000), run=r)
+    save(fake, rec, run=r)
+    if phase == "ab":
+        with fake.conn:
+            fake.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('tg_gate',?)",
+                              (json.dumps({"phase": "ab", "raids": 2, "verdict_ms": None}),))
+    else:  # the priors were stored before the gate passed: a sample, not every kill
+        gate_passed(fake, (rec.header.start_ms - 500_000) / 1000)
+    text = TalkHook(fake)(*lead(rec), "The raid killed the boss.")
+    assert "Record" not in text and "fastest" not in text
 
 
 def test_kill_without_three_priors_leaves_instruction_unchanged(fake):

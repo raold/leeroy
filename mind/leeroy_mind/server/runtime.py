@@ -25,8 +25,9 @@ async def snapshot(app, now, *, include_seeds=False):
                  comms.room_of(g) if comms is not None else None, server, voice_session) for g, p in personas.items()}
     trial_rank = getattr(getattr(getattr(app, 'realm', None), 'cfg', None), 'trial_rank', 4)
     path, library = Path(app.data_dir) / 'mind.db', Path(app.data_dir) / 'library.db'
-    from leeroy_mind.culture.config import app_enabled
+    from leeroy_mind.culture.config import app_calendar, app_enabled, app_loot
     culture_on = app_enabled(app)
+    calendar_on, loot_on = app_calendar(app), app_loot(app)
     identity = app.engine.human if culture_on else None
     photos_on = getattr(app, 'photos', None) is not None
     photo_dial = app.cfg.talk.selfies if photos_on else 0
@@ -66,6 +67,7 @@ async def snapshot(app, now, *, include_seeds=False):
                 source = gather(conn, now=now, local=local, cast=personas, officers=officers,
                                 human=human, human_name=human_name, trial_rank=trial_rank,
                                 culture_enabled=culture_on, culture_store=worker_store, ident=identity,
+                                culture_calendar=calendar_on, culture_loot=loot_on,
                                 decisions_enabled=decisions_on)
                 seeds = fresh(conn, source, now=now)
                 if photos_on:
