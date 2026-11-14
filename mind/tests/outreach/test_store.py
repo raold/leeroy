@@ -264,9 +264,10 @@ def test_cap_and_insert_roll_back_as_one_unit(ready):
 def test_migration_preserves_previous_lines_and_receipts_survive_reopen(tmp_path, clock, monkeypatch):
     before = tmp_path / 'before'
     before.mkdir()
-    for migration in db.MIGRATIONS_DIR.glob('*.sql'):
-        if migration.name != '0045_outreach.sql':
-            shutil.copy2(migration, before / migration.name)
+    for migration in sorted(db.MIGRATIONS_DIR.glob('*.sql')):
+        if migration.name.endswith('_outreach.sql'):
+            break
+        shutil.copy2(migration, before / migration.name)
     path = tmp_path / 'upgrade.db'
     with monkeypatch.context() as patched:
         patched.setattr(db, 'MIGRATIONS_DIR', before)
