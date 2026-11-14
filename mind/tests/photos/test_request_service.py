@@ -75,6 +75,22 @@ def test_target_is_dm_peer_or_first_named_and_never_random(tmp_path):
         run(app.stop())
 
 
+def test_target_subject_must_be_her_own_name_or_self(tmp_path):
+    app = make_app(tmp_path)
+    try:
+        a,b = [app.world.discord_members()[g].name for g in (101,102)]
+        real = app.personas.get(101).identity.real_name.split()[0]
+        assert request_target(app,post(app,'dm:101',f'send me a pic of {a}')) == 101
+        assert request_target(app,post(app,'dm:101',f'send me a pic of {real}')) == 101
+        assert request_target(app,post(app,'dm:101',f'send me a pic of {b}')) is None
+        assert request_target(app,post(app,'general',f'@{a} send me a pic of @{a}')) == 101
+        assert request_target(app,post(app,'general',f'@{a} send me a pic of @{b}')) is None
+        assert request_target(app,post(app,'dm:101','got it, nice pic')) is None
+        assert request_target(app,post(app,'dm:101',"I'll send you a pic later")) is None
+    finally:
+        run(app.stop())
+
+
 def test_off_adds_no_request_hooks_or_admission(tmp_path):
     app = make_app(tmp_path,ON.replace('requests=true','requests=false'))
     try:
