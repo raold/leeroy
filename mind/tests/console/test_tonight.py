@@ -152,8 +152,10 @@ def test_waiting_never_carries_message_text(store,tmp_path,clock):
         store.conn.execute("INSERT INTO realm_mail(id,ts,sender,kind,subject,body,state) VALUES (?, ?,101,'letter','PRIVATE SUBJECT','PRIVATE LETTER','sent')",(number,now))
     store.conn.execute("INSERT INTO board_reply(ts,kind,parent,to_guid,text,state) VALUES (?,'letter',1,101,'PRIVATE REPLY','waiting')",(now,))
     store.conn.execute("INSERT INTO board_reply(ts,kind,parent,to_guid,text,state,settled) VALUES (?,'letter',2,101,'PRIVATE REPLY','withdrawn',?)",(now,now))
-    store.conn.execute('CREATE TABLE guild_poll(status TEXT, question TEXT)')
-    store.conn.execute("INSERT INTO guild_poll VALUES ('open','PRIVATE POLL'),('closed','PRIVATE POLL')")
+    for status in ('open', 'open', 'closed'):
+        store.conn.execute("INSERT INTO guild_poll(channel,question,options,voters,opened,closes,status) "
+                           "VALUES ('officer-chat','PRIVATE POLL','[\"a\",\"b\"]','[1,102]',?,?,?)", (now-1, now+60, status))
+    store.conn.execute("INSERT INTO guild_poll_vote(poll,member,option,ts) VALUES (2,1,'a',?)", (now,))
     view = tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
     assert view['sections']['waiting']['letters']==2 and view['sections']['waiting']['polls']==1
     assert 'PRIVATE' not in json.dumps(view)

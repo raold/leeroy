@@ -8,7 +8,7 @@ opens Tonight directly. The tab polls once a minute while visible. Failed polls
 retain the last good data and show its age. Faces respect Hide photos.
 
 The seven cards are read-only: today's posted raids and signups; unanswered DM
-threads, letters, selfie choices and open polls; the existing top-five DKP due
+threads, letters, selfie choices and open polls still waiting for his vote; the existing top-five DKP due
 list; up to six bank items below half their stock target; your consumables; the
 next seven days on the calendar; and observed game presence and the last finished
 night. DMs, letters, officer lines and memories are never displayed. Poll counts

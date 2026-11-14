@@ -105,7 +105,9 @@ def _waiting(conn,data_dir,now):
     queue = selfieview.queue_view(conn,data_dir,now=now)
     if not queue['available']:
         raise Missing('photo_tables')
-    polls = conn.execute("SELECT count(*) FROM guild_poll WHERE status='open'").fetchone()[0] if 'guild_poll' in views.tables(conn) else None
+    # Open polls still waiting for his vote (he is a voter in every poll; a vote is final)
+    polls = conn.execute("SELECT count(*) FROM guild_poll p WHERE status='open' AND closes>? AND NOT EXISTS "
+        "(SELECT 1 FROM guild_poll_vote v WHERE v.poll=p.id AND v.member=?)", (now, human)).fetchone()[0]         if {'guild_poll', 'guild_poll_vote'} <= views.tables(conn) else None
     return result(dms=dms,letters=letters,selfies=len(queue['queue']),polls=polls)
 
 

@@ -6,7 +6,7 @@ argued, voted and later says cannot drift. Never parsed from model text.
 Officers vote on a poll once, each at a time drawn 10 minutes to 6 hours after it opens (the same
 draw after a restart), while their Discord presence is online or idle; the vote is the side of the
 position fixed when the poll opened, with its `why` stored."""
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import hashlib
 import json
@@ -226,6 +226,3 @@ def cast_votes(store, *, now, present: Callable[[int], bool]) -> int:
             cast += vote(store, row['id'], g, p['side'], why=p['why'], now=now)
     return cast
 
-
-def positions_by_guid(positions: Iterable[Mapping]) -> dict[int, Mapping]:
-    return {p['guid']: p for p in positions if isinstance(p, Mapping) and type(p.get('guid')) is int}
