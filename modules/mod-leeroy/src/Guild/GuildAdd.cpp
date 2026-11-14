@@ -11,6 +11,7 @@
 #include "AiFactory.h"
 #include "Chat.h"
 #include "ChatCommand.h"
+#include "Config.h"
 #include "DBCStores.h"
 #include "Group.h"
 #include "InstanceSaveMgr.h"
@@ -37,6 +38,10 @@ namespace
 // instance, the mind is told, so a raid built this way can count like a called one.
 ObjectGuid builtGroup;
 uint32 builtSize = 0;
+// World thread. The posted raid lineup (guild_add_roster), in memory only: a worldserver start clears it and the mind
+// sends it again on hello. Followed only while Leeroy.GuildAdd.FollowRoster is on.
+GuildAddRoster postedRoster;
+bool followRoster = false;
 
 GuildAddRole RoleOf(Player* player)
 {
@@ -269,7 +274,11 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         candidates.push_back({guid, RoleOf(bot), bot->getClass(), TabOf(bot), GearOf(bot)});
     }
 
-    auto const plan = PlanGuildAdd(size, members, connected, std::move(candidates));
+    auto const roster = GuildAddRosterInForce(followRoster, postedRoster, NowUnixMs());
+    if (!roster.preferred.empty() || !roster.bench.empty())
+        LOG_INFO("module.leeroy", "mod-leeroy: add{} from the guild follows the posted roster ({} members, {} bench)",
+            size, roster.preferred.size(), roster.bench.size());
+    auto const plan = PlanGuildAdd(size, members, connected, std::move(candidates), roster);
     GuildAddCounts added{};
     GuildAddBuffs covered = plan.covered;
     std::uint32_t notBrought = 0;
@@ -364,6 +373,20 @@ void SwapSavedElsewhere(Player* human, Group* group)
         handler.PSendSysMessage("{}", message);
 }
 
+LeeroyCommandResult HandleGuildAddRoster(nlohmann::json const& message)
+{
+    std::string error;
+    auto roster = ParseGuildAddRoster(message, error);
+    if (!roster)
+        return {false, std::move(error)};
+    if (auto why = GuildAddRosterRefusal(*roster, NowUnixMs()); !why.empty())
+        return {false, std::move(why)};
+    postedRoster = std::move(*roster);
+    LOG_INFO("module.leeroy", "mod-leeroy: guild_add_roster held ({} members, {} bench)", postedRoster.preferred.size(),
+        postedRoster.bench.size());
+    return {true, {}};
+}
+
 class GuildAddCommandScript : public AllCommandScript
 {
 public:
@@ -421,6 +444,10 @@ public:
     }
 };
 }
+
+void RegisterGuildAddRosterHandler() { RegisterCommand(std::string(kGuildAddRosterType), HandleGuildAddRoster); }
+
+void ReloadGuildAdd() { followRoster = sConfigMgr->GetOption<bool>("Leeroy.GuildAdd.FollowRoster", false); }
 
 void AddGuildAddScripts()
 {

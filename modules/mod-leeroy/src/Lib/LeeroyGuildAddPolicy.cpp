@@ -1,11 +1,14 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LeeroyGuildAddPolicy.h"
+#include "LeeroyProtocol.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -227,6 +230,68 @@ bool Fits(Slot slot, GuildAddHealer kind)
 
 // A candidate's place in one pick, compared in order: lower comes first.
 using Rank = std::array<std::int64_t, 5>;
+
+// A roster's tiers: its members first, then everyone else, its bench last.
+constexpr std::uint8_t kPreferred = 0, kOthers = 1, kBench = 2, kNoTier = 3;
+
+std::optional<std::vector<std::uint32_t>> RosterGuids(nlohmann::json const& msg, char const* key)
+{
+    auto const it = msg.find(key);
+    if (it == msg.end() || !it->is_array() || it->size() > kGuildAddRosterMax)
+        return std::nullopt;
+    std::vector<std::uint32_t> guids;
+    std::set<std::uint32_t> seen;
+    for (auto const& value : *it)
+    {
+        if (!value.is_number_unsigned() || value.get<std::uint64_t>() == 0
+            || value.get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+            return std::nullopt;
+        auto const guid = value.get<std::uint32_t>();
+        if (!seen.insert(guid).second)
+            return std::nullopt;
+        guids.push_back(guid);
+    }
+    return guids;
+}
+}
+
+std::optional<GuildAddRoster> ParseGuildAddRoster(nlohmann::json const& msg, std::string& error)
+{
+    error.clear();
+    auto const fail = [&](char const* key) -> std::optional<GuildAddRoster>
+    {
+        error = std::string(Err::BadField) + key;
+        return std::nullopt;
+    };
+    if (!msg.is_object())
+        return fail("members");
+    auto preferred = RosterGuids(msg, "members");
+    if (!preferred)
+        return fail("members");
+    auto bench = RosterGuids(msg, "bench");
+    if (!bench)
+        return fail("bench");
+    for (auto guid : *bench)
+        if (std::find(preferred->begin(), preferred->end(), guid) != preferred->end())
+            return fail("bench");
+    auto const until = msg.find("until_ms");
+    if (until == msg.end() || !until->is_number_integer() || until->get<std::int64_t>() < 0)
+        return fail("until_ms");
+    return GuildAddRoster{std::move(*preferred), std::move(*bench), until->get<std::int64_t>()};
+}
+
+std::string GuildAddRosterRefusal(GuildAddRoster const& roster, std::int64_t nowMs)
+{
+    if (roster.untilMs > nowMs && roster.untilMs - nowMs > kGuildAddRosterMaxMs)
+        return std::string(Err::BadField) + "until_ms";
+    return {};
+}
+
+GuildAddRoster GuildAddRosterInForce(bool follow, GuildAddRoster const& roster, std::int64_t nowMs)
+{
+    if (!follow || roster.untilMs <= nowMs || (roster.preferred.empty() && roster.bench.empty()))
+        return {};
+    return roster;
 }
 
 std::uint32_t GuildAddBuffWeight(GuildAddBuff buff)
@@ -357,7 +422,7 @@ std::string GuildAddSwapLine(std::vector<std::string> const& names)
 }
 
 GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector<GuildAddMember> const& connected,
-    std::vector<GuildAddCandidate> candidates)
+    std::vector<GuildAddCandidate> candidates, GuildAddRoster const& roster)
 {
     GuildAddPlan plan;
     plan.size = size;
@@ -410,8 +475,17 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
     candidates.erase(std::unique(candidates.begin(), candidates.end(),
         [](GuildAddCandidate const& a, GuildAddCandidate const& b) { return a.guid == b.guid; }), candidates.end());
     std::vector<GuildAddSpec> specs;
+    std::vector<std::uint8_t> tiers;
+    auto const listed = [](std::vector<std::uint32_t> const& list, std::uint32_t guid)
+    {
+        return std::find(list.begin(), list.end(), guid) != list.end();
+    };
     for (auto const& candidate : candidates)
+    {
         specs.push_back(GuildAddSpecFacts(candidate.cls, candidate.tab, candidate.role));
+        tiers.push_back(listed(roster.preferred, candidate.guid) ? kPreferred
+            : listed(roster.bench, candidate.guid) ? kBench : kOthers);
+    }
     std::vector<bool> taken(candidates.size());
 
     std::size_t const none = candidates.size();
@@ -448,7 +522,15 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
             ++(spec.melee ? melee : ranged);
         plan.picks.push_back({candidate.guid, candidate.role, spec.buffs});
     };
-    auto any = [](std::size_t) { return true; };
+    // The best tier a free candidate of the role is in: each pick takes from it alone.
+    auto tierOf = [&](GuildAddRole role)
+    {
+        std::uint8_t lowest = kNoTier;
+        for (std::size_t i = 0; i < candidates.size(); ++i)
+            if (!taken[i] && candidates[i].guid && candidates[i].role == role)
+                lowest = std::min(lowest, tiers[i]);
+        return lowest;
+    };
     auto gear = [&](std::size_t i) { return -static_cast<std::int64_t>(candidates[i].gear); };
     auto guid = [&](std::size_t i) { return static_cast<std::int64_t>(candidates[i].guid); };
     auto cls = [&](std::size_t i) { return static_cast<std::int64_t>(classes[candidates[i].cls]); };
@@ -456,12 +538,15 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
     // Tanks: a tank class not yet tanking, then gear, among those close to the best-geared tank left.
     for (std::uint32_t slot = 0; slot < plan.open[Index(GuildAddRole::Tank)]; ++slot)
     {
-        auto const top = best(GuildAddRole::Tank, any, [&](std::size_t c) { return Rank{gear(c), guid(c), 0, 0, 0}; });
+        auto const tier = tierOf(GuildAddRole::Tank);
+        auto inTier = [&](std::size_t c) { return tiers[c] == tier; };
+        auto const top = best(GuildAddRole::Tank, inTier, [&](std::size_t c) { return Rank{gear(c), guid(c), 0, 0, 0}; });
         if (top == none)
             break;
         std::uint32_t const topGear = candidates[top].gear;
         std::uint32_t const lowest = topGear > kTankGearWindow ? topGear - kTankGearWindow : 0;
-        auto const i = best(GuildAddRole::Tank, [&](std::size_t c) { return candidates[c].gear >= lowest; },
+        auto const i = best(GuildAddRole::Tank,
+            [&](std::size_t c) { return inTier(c) && candidates[c].gear >= lowest; },
             [&](std::size_t c) { return Rank{tankClasses[candidates[c].cls], gear(c), cls(c), guid(c), 0}; });
         take(i);
     }
@@ -475,36 +560,46 @@ GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector
             slots.erase(mine);
     slots.resize(std::min<std::size_t>(slots.size(), plan.open[Index(GuildAddRole::Healer)]));
     std::vector<bool> filled(slots.size());
-    for (std::size_t s = 0; s < slots.size(); ++s)
+    // One pass per tier over the slots still empty: the roster's healers fill what they can first, its bench last.
+    for (std::uint8_t tier = kPreferred; tier <= kBench; ++tier)
     {
-        auto const i = best(GuildAddRole::Healer, [&](std::size_t c) { return Fits(slots[s], specs[c].healer); },
-            [&](std::size_t c)
+        auto inTier = [&](std::size_t c) { return tiers[c] <= tier; };
+        for (std::size_t s = 0; s < slots.size(); ++s)
+        {
+            if (filled[s])
+                continue;
+            auto const i = best(GuildAddRole::Healer,
+                [&](std::size_t c) { return inTier(c) && Fits(slots[s], specs[c].healer); },
+                [&](std::size_t c)
+                {
+                    auto const kind = static_cast<std::size_t>(specs[c].healer);
+                    std::int64_t const mix = slots[s] == Slot::Raid ? healers[kind] : 0;
+                    return Rank{mix, gear(c), cls(c), guid(c), 0};
+                });
+            if (i != none)
             {
-                auto const kind = static_cast<std::size_t>(specs[c].healer);
-                std::int64_t const mix = slots[s] == Slot::Raid ? healers[kind] : 0;
-                return Rank{mix, gear(c), cls(c), guid(c), 0};
-            });
-        if (i != none)
-        {
-            take(i);
-            filled[s] = true;
+                take(i);
+                filled[s] = true;
+            }
         }
+        for (std::size_t s = 0; s < slots.size(); ++s)
+            if (!filled[s])
+            {
+                auto const i = best(GuildAddRole::Healer, inTier,
+                    [&](std::size_t c) { return Rank{gear(c), cls(c), guid(c), 0, 0}; });
+                if (i == none)
+                    break;
+                take(i);
+                filled[s] = true;
+            }
     }
-    for (std::size_t s = 0; s < slots.size(); ++s)
-        if (!filled[s])
-        {
-            auto const i = best(GuildAddRole::Healer, any,
-                [&](std::size_t c) { return Rank{gear(c), cls(c), guid(c), 0, 0}; });
-            if (i == none)
-                break;
-            take(i);
-        }
 
     // Damage: the most weight of buffs the raid still wants (a second Replenishment in a 25 or 40), then gear, then the
     // melee/ranged split nearest even.
     for (std::uint32_t slot = 0; slot < plan.open[Index(GuildAddRole::Damage)]; ++slot)
     {
-        auto const i = best(GuildAddRole::Damage, any, [&](std::size_t c)
+        auto const tier = tierOf(GuildAddRole::Damage);
+        auto const i = best(GuildAddRole::Damage, [&](std::size_t c) { return tiers[c] == tier; }, [&](std::size_t c)
             {
                 std::int64_t const split = specs[c].melee ? melee + 1 - ranged : melee - ranged - 1;
                 return Rank{-Coverage(specs[c].buffs, have, size), gear(c), std::abs(split), cls(c), guid(c)};

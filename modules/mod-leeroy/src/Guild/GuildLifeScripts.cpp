@@ -28,6 +28,7 @@ public:
         Leeroy::Guild::ReloadDeathLoop();
         Leeroy::Guild::ReloadGroupRez();
         Leeroy::Guild::ReloadHazards();
+        Leeroy::Guild::ReloadGuildAdd();
     }
 
     void OnStartup() override
@@ -39,6 +40,7 @@ public:
         Leeroy::Guild::RegisterBotCommandHandlers();
         Leeroy::Guild::RegisterOfflineRaidHandler();
         Leeroy::Guild::RegisterOwnerSayHandler();
+        Leeroy::Guild::RegisterGuildAddRosterHandler();
         Leeroy::Guild::InstallHazardFilter();
     }
 

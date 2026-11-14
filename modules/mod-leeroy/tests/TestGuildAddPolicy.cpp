@@ -788,3 +788,129 @@ LEEROY_TEST(Guild_AddIsDeterministicForAFixedPool)
     std::vector<GuildAddCandidate> const reversed(pool.rbegin(), pool.rend());
     CHECK_EQ(List(Guids(PlanGuildAdd(25, 2, group, reversed))), List(Guids(plan)));
 }
+
+namespace
+{
+GuildAddRoster Roster(std::vector<std::uint32_t> preferred, std::vector<std::uint32_t> bench = {})
+{
+    return {std::move(preferred), std::move(bench), 1'700'000'000'000};
+}
+}
+
+LEEROY_TEST(Guild_AddRosterPutsItsMembersFirstWithinEachRole)
+{
+    std::vector<GuildAddMember> const him{{Damage, Rogue, Combat}};
+    auto const today = PlanGuildAdd(10, 1, him, RaidPool());
+    CHECK_EQ(List(Guids(today, Tank)), "103 101");
+    CHECK_EQ(List(Guids(today, Healer)), "200 202 204");
+    // The posted lineup's death knight tank, druid healer and shadow priest come first in their roles; the rest of
+    // each role follows today's rules among everyone else.
+    auto const posted = PlanGuildAdd(10, 1, him, RaidPool(), Roster({102, 205, 307}));
+    CHECK_EQ(List(Guids(posted, Tank)), "102 103");
+    CHECK_EQ(List(Guids(posted, Healer)), "205 200 202");
+    CHECK_EQ(Guids(posted, Damage).front(), 307u);
+    CHECK(Picked(posted) == Picked(today));
+    // Listed members the pool lacks (busy, offline) change nothing.
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, him, RaidPool(), Roster({9001, 9002})))), List(Guids(today)));
+}
+
+LEEROY_TEST(Guild_AddRosterBenchIsTheLastResort)
+{
+    std::vector<GuildAddMember> const him{{Damage, Rogue, Combat}};
+    std::vector<GuildAddCandidate> const tanks{{100, Tank, Warrior, ProtWarrior, 245},
+        {101, Tank, Paladin, ProtPaladin, 240}, {102, Tank, DeathKnight, Blood, 235},
+        {103, Tank, Warrior, ProtWarrior, 250}};
+    // The best-geared tank is benched: two others are free, so he stays out.
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, him, tanks), Tank)), "103 101");
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, him, tanks, Roster({}, {103})), Tank)), "100 101");
+    // Nobody else fits the third tank slot of a 25: the bench fills it.
+    std::vector<GuildAddCandidate> const two{{100, Tank, Warrior, ProtWarrior, 245},
+        {103, Tank, Warrior, ProtWarrior, 250}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(25, 1, him, two, Roster({}, {103})), Tank)), "100 103");
+    // Healers: the benched Holy paladins are used only once nobody else is left for a slot.
+    auto const healers = PlanGuildAdd(10, 1, him, RaidPool(), Roster({}, {200, 201}));
+    CHECK_EQ(List(Guids(healers, Healer)), "202 204 203");
+    std::vector<GuildAddCandidate> const few{{200, Healer, Paladin, HolyPaladin, 240},
+        {202, Healer, Priest, Discipline, 238}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(10, 1, him, few, Roster({}, {200})), Healer)), "202 200");
+    // Damage: a benched mage waits behind every other free damage member.
+    std::vector<GuildAddCandidate> const damage{{300, Damage, Mage, Arcane, 250}, {301, Damage, Mage, Fire, 249},
+        {302, Damage, Hunter, BeastMastery, 248}};
+    CHECK_EQ(List(Guids(PlanGuildAdd(5, 1, him, damage, Roster({}, {300})), Damage)), "301 302");
+}
+
+LEEROY_TEST(Guild_AddRosterExpiredOffOrEmptyIsTodaysPlan)
+{
+    std::vector<GuildAddMember> const him{{Damage, Rogue, Combat}};
+    auto const roster = Roster({102, 205, 307}, {103});
+    auto const today = List(Guids(PlanGuildAdd(25, 1, him, RaidPool())));
+    auto const now = roster.untilMs - 1;
+    // Followed: on and unexpired.
+    CHECK(GuildAddRosterInForce(true, roster, now).preferred == roster.preferred);
+    CHECK(GuildAddRosterInForce(true, roster, now).bench == roster.bench);
+    // Off, expired or empty: nothing to follow, so the plan is today's.
+    for (auto const& held : {GuildAddRosterInForce(false, roster, now), GuildAddRosterInForce(true, roster, roster.untilMs),
+             GuildAddRosterInForce(true, Roster({}, {}), now), GuildAddRoster{}})
+    {
+        CHECK(held.preferred.empty() && held.bench.empty());
+        CHECK_EQ(List(Guids(PlanGuildAdd(25, 1, him, RaidPool(), held))), today);
+    }
+}
+
+LEEROY_TEST(Guild_AddRosterIsDeterministicForAFixedPool)
+{
+    auto pool = RaidPool();
+    auto const healers = Healers();
+    pool.insert(pool.end(), healers.begin() + 3, healers.end());
+    std::vector<GuildAddMember> const group{{Damage, Rogue, Combat}};
+    auto const roster = Roster({102, 241, 304, 307}, {103, 220});
+    auto const plan = List(Guids(PlanGuildAdd(25, 1, group, pool, roster)));
+    for (std::size_t shift = 1; shift < pool.size(); shift += 4)
+    {
+        auto rotated = pool;
+        std::rotate(rotated.begin(), rotated.begin() + static_cast<std::ptrdiff_t>(shift), rotated.end());
+        CHECK_EQ(List(Guids(PlanGuildAdd(25, 1, group, rotated, roster))), plan);
+    }
+}
+
+LEEROY_TEST(Guild_AddRosterParsesAndRefuses)
+{
+    using json = nlohmann::json;
+    // Positive numbers arrive as unsigned JSON numbers (the bridge parses the wire text).
+    std::string error;
+    auto const ok = ParseGuildAddRoster(json{{"members", json::array({101u, 102u})}, {"bench", json::array({103u})}, {"until_ms", 5000}}, error);
+    CHECK(ok.has_value() && error.empty());
+    CHECK(ok->preferred == std::vector<std::uint32_t>({101, 102}) && ok->bench == std::vector<std::uint32_t>({103}));
+    CHECK_EQ(ok->untilMs, 5000);
+    // Empty lists clear it.
+    CHECK(ParseGuildAddRoster(json{{"members", json::array()}, {"bench", json::array()}, {"until_ms", 0}}, error));
+    auto const refuse = [&](json msg, char const* field)
+    {
+        std::string why;
+        CHECK(!ParseGuildAddRoster(msg, why).has_value());
+        CHECK_EQ(why, std::string("bad field: ") + field);
+    };
+    refuse(json{{"bench", json::array()}, {"until_ms", 1}}, "members");
+    refuse(json{{"members", json::array({0u})}, {"bench", json::array()}, {"until_ms", 1}}, "members");
+    refuse(json{{"members", json::array({101u, 101u})}, {"bench", json::array()}, {"until_ms", 1}}, "members");
+    refuse(json{{"members", json::array({"101"})}, {"bench", json::array()}, {"until_ms", 1}}, "members");
+    refuse(json{{"members", json::array({4294967296ull})}, {"bench", json::array()}, {"until_ms", 1}}, "members");
+    std::vector<std::uint32_t> many;
+    for (std::uint32_t guid = 1; guid <= kGuildAddRosterMax + 1; ++guid)
+        many.push_back(guid);
+    refuse(json{{"members", many}, {"bench", json::array()}, {"until_ms", 1}}, "members");
+    many.pop_back();
+    CHECK(ParseGuildAddRoster(json{{"members", many}, {"bench", json::array()}, {"until_ms", 1}}, error));
+    refuse(json{{"members", json::array({101u})}, {"bench", json::array({101u})}, {"until_ms", 1}}, "bench");
+    refuse(json{{"members", json::array({101u})}, {"until_ms", 1}}, "bench");
+    refuse(json{{"members", json::array({101u})}, {"bench", json::array()}}, "until_ms");
+    refuse(json{{"members", json::array({101u})}, {"bench", json::array()}, {"until_ms", -1}}, "until_ms");
+    refuse(json{{"members", json::array({101u})}, {"bench", json::array()}, {"until_ms", 1.5}}, "until_ms");
+    // Held for at most 12 hours ahead.
+    GuildAddRoster held{{101}, {}, 1000 + kGuildAddRosterMaxMs};
+    CHECK(GuildAddRosterRefusal(held, 1000).empty());
+    held.untilMs += 1;
+    CHECK_EQ(GuildAddRosterRefusal(held, 1000), "bad field: until_ms");
+    held.untilMs = 10;
+    CHECK(GuildAddRosterRefusal(held, 1000).empty());  // already over: held, never followed
+}

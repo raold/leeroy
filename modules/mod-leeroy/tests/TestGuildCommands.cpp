@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
+#include "LeeroyGuildAddPolicy.h"
 #include "LeeroyGuildCommands.h"
 #include "LeeroyProtocol.h"
 #include "TestHarness.h"
@@ -49,6 +50,7 @@ bool Parse(std::string_view type, json const& j, std::string& error)
     if (type == "set_spec") return ParseSetSpec(j, error).has_value();
     if (type == "bot_do") return ParseBotDo(j, error).has_value();
     if (type == "stock_items") return ParseStockItems(j, error).has_value();
+    if (type == "guild_add_roster") return ParseGuildAddRoster(j, error).has_value();
     throw std::runtime_error("unhandled P1d command type in test");
 }
 

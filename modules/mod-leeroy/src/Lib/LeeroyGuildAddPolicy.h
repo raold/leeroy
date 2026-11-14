@@ -8,7 +8,9 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 namespace Leeroy::Guild
 {
@@ -128,6 +130,26 @@ struct GuildAddPick
     GuildAddBuffs buffs = 0;
 };
 
+// The posted raid lineup the mind sends (guild_add_roster) for the picker to follow while Leeroy.GuildAdd.FollowRoster
+// is on: within each role its members come first and its bench only when no other free member fits. It lives in
+// memory only, until untilMs (Unix ms, at most kGuildAddRosterMaxMs ahead); empty lists clear it.
+inline constexpr std::string_view kGuildAddRosterType = "guild_add_roster";
+inline constexpr std::size_t kGuildAddRosterMax = 200;
+inline constexpr std::int64_t kGuildAddRosterMaxMs = 12LL * 3600 * 1000;
+struct GuildAddRoster
+{
+    std::vector<std::uint32_t> preferred, bench;
+    std::int64_t untilMs = 0;
+};
+// Fields only (members, bench, until_ms): positive guids, none twice in either list, at most kGuildAddRosterMax each;
+// until_ms a non-negative integer. error is "bad field: <key>" on refusal.
+std::optional<GuildAddRoster> ParseGuildAddRoster(nlohmann::json const& msg, std::string& error);
+// Empty when the roster may be held from nowMs; else the refusal: an until_ms beyond kGuildAddRosterMaxMs ahead.
+std::string GuildAddRosterRefusal(GuildAddRoster const& roster, std::int64_t nowMs);
+// The roster the picker follows now: the stored one while follow is on and it has not expired; else an empty one,
+// which plans exactly as without a roster.
+GuildAddRoster GuildAddRosterInForce(bool follow, GuildAddRoster const& roster, std::int64_t nowMs);
+
 struct GuildAddPlan
 {
     std::uint32_t size = 0, members = 0;
@@ -146,9 +168,10 @@ struct GuildAddPlan
 // three, two and five), minus healers already there and cut to the open slots; a kind nobody free has goes to the
 // best-geared healer left. Damage: the member adding the most weight of buffs his group and the picks so far lack,
 // then gear, then the melee/ranged split nearest even. The last ties go to the class his group has fewest of, then
-// the lowest guid.
+// the lowest guid. With a roster, each pick takes the roster's members of the role first and its bench last: the rules
+// above order the candidates within that tier.
 GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector<GuildAddMember> const& connected,
-    std::vector<GuildAddCandidate> candidates);
+    std::vector<GuildAddCandidate> candidates, GuildAddRoster const& roster = {});
 
 // added is what actually joined, per role; open slots not added stayed empty for want of a free guild member.
 // notBrought joined but could not be teleported to him. unavailable counts skip reasons for the tally line.

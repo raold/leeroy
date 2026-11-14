@@ -143,6 +143,18 @@ class StockItems:
 
 
 @dataclass(frozen=True, slots=True)
+class GuildAddRoster:
+    """The posted raid lineup (decisions.lineup) the owner's add-from-guild picker follows while
+    Leeroy.GuildAdd.FollowRoster is on: members first within each role, the bench only when nobody
+    else fits, until until_ms (Unix ms, at most 12 h ahead). Empty members and bench clear it.
+    Held in memory: a worldserver start clears it and the mind sends it again on hello."""
+    id: str
+    members: tuple[int, ...]
+    bench: tuple[int, ...]
+    until_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class JobSkip:
     guid: int
     reason: str
@@ -211,6 +223,7 @@ COMMANDS: dict[str, type] = {
     "set_spec": SetSpec,
     "bot_do": BotDo,
     "stock_items": StockItems,
+    "guild_add_roster": GuildAddRoster,
 }
 
 
