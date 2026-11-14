@@ -11,6 +11,7 @@ import { initPanelToggle } from "./comms/panel.mjs";
 import "./comms/discordview.mjs";
 import "./raid.mjs";
 import "./guild.mjs";
+import "./decisions.mjs";
 import "./social.mjs";
 import "./board.mjs";
 import "./calendar.mjs";
@@ -51,7 +52,7 @@ on("key-lost", keyLost);
 // card's photo in Comms are drawn again with the new one
 on("selfie", function (d) { if (d.action !== "more") { refreshFaces(); } });
 var KINDS = { snapshot: 1, status: 1, voice: 1, chat: 1, chat_gone: 1, control: 1, raid: 1, tuning: 1,
-              selfie: 1, board: 1, discord: 1, feedback: 1, string: 1 };
+              selfie: 1, board: 1, discord: 1, feedback: 1, decision: 1, string: 1 };
 // One server-sent event block: "event: <kind>" and "data: <json>" lines; ": ping" is a comment
 function dispatch(block) {
   var kind = "", data = "";

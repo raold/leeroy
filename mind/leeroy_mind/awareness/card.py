@@ -20,7 +20,9 @@ from leeroy_mind.text import estimate_tokens, strip_wow_markup
 RECENT_S = 15 * 60
 DAY_S = 86400
 SIGNUPS_PER_EVENT = 4
-PRIORITY = ("game", "context", "here", "recent", "claims", "raid", "calendar", "standing", "bank", "drama")
+PRIORITY = ("game", "context", "here", "recent", "claims", "raid", "calendar", "standing", "decisions",
+            "bank", "drama")
+DECISION_LINES, POLL_LINES = 5, 2
 HOLD_CODES = frozenset({"raid", "offline_raid", "training", "benchmark", "realm_event", "realm_day"})
 _CODE = re.compile(r"[a-zA-Z0-9_-]{1,48}\Z")
 
@@ -66,6 +68,7 @@ class CardContext:
     server: bool = False
     here: tuple[str, ...] = ()
     self_line: str = ''
+    decisions: bool = False  # [decisions] enabled: the Decisions part (D4)
     intents: tuple[str, ...] = ()  # her own plans from his strings (godmode), caller-filtered
     holidays: bool = False  # culture's server calendar ([culture] calendar): its events join Upcoming
 
@@ -463,6 +466,69 @@ def _directed_emotes(reader, guid, human, ctx, now):
     return lines
 
 
+def _officers_room(officer, ctx):
+    """Whether the officers' business may reach this turn: an officers' channel in either medium
+    (game officer chat, their voice room, an officers' Discord channel), for an officer, as #265's
+    officers' audience reaches. Never a group DM, a whisper, a DM or a public room."""
+    return officer and is_officer_channel(ctx.channel)
+
+
+def _decisions(reader, guid, officer, ctx, now):
+    """Decisions that touch her (in effect, settled, or proposed with her position), her vote or
+    position on each, and the open polls she votes in. Officers' business only in officers' rooms."""
+    from leeroy_mind.decisions import apply
+    tables = ("guild_decision", "guild_poll", "guild_poll_vote")
+    if not set(tables) <= reader.tables:
+        reader.missing.update(set(tables) - reader.tables)
+        return []
+    room = _officers_room(officer, ctx)
+    name = lambda g: _person(ctx, g)  # noqa: E731
+    votes = {r["poll"]: r for r in reader.rows(("guild_poll_vote",),
+             "SELECT poll,option,why FROM guild_poll_vote WHERE member=? AND ts<=?", (guid, now))}
+    def stand(poll, private, positions):
+        if private and not room:
+            return ""
+        if poll in votes:
+            return f"; you voted {_text(votes[poll]['option'], 40)} ({_text(votes[poll]['why'], 40) or 'no reason given'})"
+        mine = next((p for p in positions if isinstance(p, dict) and p.get("guid") == guid), None)
+        if mine and isinstance(mine.get("side"), str) and isinstance(mine.get("why"), str):
+            return f"; your position: {_text(mine['side'], 40)} ({_text(mine['why'], 40)})"
+        return ""
+    lines = []
+    for row in reader.rows(("guild_decision",), "SELECT d.*,(SELECT channel FROM guild_poll WHERE id=d.poll) "
+            "AS poll_channel FROM guild_decision d WHERE d.status IN ('proposed','settled','in_effect') "
+            "AND d.proposed<=? ORDER BY coalesce(d.effect,d.settled,d.proposed) DESC,d.id DESC LIMIT 64", (now,)):
+        message = reader.rows(("discord_message",), "SELECT channel FROM discord_message WHERE id=?",
+                              (row["message"],)) if row["message"] else []
+        message = message[0]["channel"] if message else None
+        if apply.officers_only(row, message) and not room:
+            continue
+        positions = _json(row["positions"], [])
+        positions = positions if isinstance(positions, list) else []
+        mine = stand(row["poll"], apply.positions_private(row, message, row["poll_channel"]), positions)
+        if not apply.touches(row, guid) or row["status"] == "proposed" and not mine:
+            continue
+        lines.append(f"{apply.LABELS[row['kind']]} {apply.STATES[row['status']]}: "
+                     f"{_text(apply.summary(row, name, guid), 200)}{mine}")
+        if len(lines) == DECISION_LINES:
+            break
+    polls = []
+    for row in reader.rows(("guild_poll",), "SELECT * FROM guild_poll WHERE status='open' AND opened<=? "
+                           "AND closes>? ORDER BY closes,id LIMIT 32", (now, now)):
+        voters = _json(row["voters"], [])
+        if not isinstance(voters, list) or guid not in voters or apply.private_channel(row["channel"]) and not room:
+            continue
+        options = _json(row["options"], [])
+        options = [o for o in options if isinstance(o, str)] if isinstance(options, list) else []
+        positions = _json(row["positions"], [])
+        mine = stand(row["id"], apply.private_channel(row["channel"]), positions if isinstance(positions, list) else [])
+        polls.append(f"Open poll in #{_text(row['channel'], 40)}: {_text(row['question'], 200)} "
+                     f"(options: {', '.join(_text(o, 40) for o in options)})" + (mine or "; you have not voted"))
+        if len(polls) == POLL_LINES:
+            break
+    return lines[:DECISION_LINES - len(polls)] + polls
+
+
 def _holidays(reader, ctx, now):
     """The server's own events from culture's cached calendar and the bridge's start/stop."""
     from leeroy_mind.culture import wowcal
@@ -512,6 +578,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         parts = (("context","Conversation",conversation),
                  ("here","Here",here),
                  ("claims","Your claims",_claims(reader,guid,officer,context,now)),
+                 ("decisions","Guild decisions",_decisions(reader,guid,officer,context,now)
+                  if context.decisions else []),
                  ("drama","Your recent guild drama",_drama(reader,guid,officer,context,now)))
         return Card(guid,tuple(Part(k,title,tuple(lines)) for k,title,lines in parts if lines),tuple(sorted(reader.missing)))
     game, recent, human = ([], [], human) if discord else _game(reader, source, guid, meta, now, context)
@@ -566,6 +634,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
                              "WHERE guid=? GROUP BY status ORDER BY status", (guid,))
     standing.extend(f"Attendance: {r['n']} {r['status']}" for r in attendance)
     add("standing", "Your standing", standing)
+    if context.decisions:
+        add("decisions", "Guild decisions", _decisions(reader, guid, officer, context, now))
     bank = []
     snapshot = source.bank_snapshot
     if isinstance(snapshot, dict) and type(snapshot.get("money")) is int and snapshot["money"] >= 0 \

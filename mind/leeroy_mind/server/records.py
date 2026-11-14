@@ -66,7 +66,8 @@ def ended(store, value):
 
 
 def prune(store, local_date, now):
-    """The daily sweep owns dated counters and timestamped seed/DM receipts only."""
+    """The daily sweep owns dated counters and timestamped seed/DM receipts only. A decision
+    stage's seed receipt is kept: each stage is argued once, however long it stays open."""
     cutoff = (date.fromisoformat(local_date) - timedelta(days=7)).isoformat()
     stale = []
     for key, value in store.conn.execute("SELECT key,value FROM meta WHERE key LIKE 'server:%'"):
@@ -76,6 +77,8 @@ def prune(store, local_date, now):
                 old = date.fromisoformat(stamp[:10]).isoformat() < cutoff
             except ValueError:
                 old = False
+        elif key.startswith('server:seed:decision:'):
+            old = False
         elif key.startswith(('server:seed:', 'server:conversation:', 'server:dm:open:')):
             try:
                 old = float(value) < now - 7 * 86400

@@ -3,6 +3,7 @@ import { nameCell } from "./faces.mjs";
 import { photoButton } from "./gallery.mjs";
 import { S, roomOf } from "./state.mjs";
 import { registerTab } from "./tabs.mjs";
+import { pollDecisions } from "./decisions.mjs";
 import { CLASSES, dkp, mode, when, who } from "./words.mjs";
 
 // -- the guild tab: mind.db only ------------------------------------------------------------------
@@ -132,7 +133,7 @@ function pollGuild() {
     return r.json().then(function (j) { return { status: r.status, j: j }; });
   }).then(function (x) {
     if (!x) { return; }
-    if (x.status === 200) { renderGuild(x.j); }
+    if (x.status === 200) { renderGuild(x.j); pollDecisions(); }
     else { $("guild-banner").textContent = str(x.j.error) || "mind.db could not be read."; $("guild-banner").hidden = false; }
   }, function () { /* the strip says it */ })
     .then(function () { guildBusy = false; });
