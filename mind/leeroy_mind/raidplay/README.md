@@ -182,6 +182,12 @@ Naxxramas bosses have no call yet, so they keep the generic one. If the playbook
 read, `BOSS_CALLS` falls back to those 18 calls as they were (log `boss_calls_fallback`, once)
 so guild life never fails with it; a test keeps the two equal.
 
+With `[raidlead] briefs` on, the raid lead's boss briefs (`raidlead/briefs.py`, see
+`raidlead/README.md`) are built from these playbooks: the 2-4 mechanics that matter most to his
+group at the difficulty, each said with its `explain` line word for word, in place of the stock
+call before the pull and when he asks for the plan. An `explain` is therefore said in raid chat as
+written: keep each one a whole sentence that stands on its own.
+
 ## Commands
 
 From `mind/` with `--data-dir "$D"`:

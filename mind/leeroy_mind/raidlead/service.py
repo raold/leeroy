@@ -20,6 +20,7 @@ import logging
 from uuid import uuid4
 
 from leeroy_mind.guild.protocol import BotDo, GuildGroup, RaidControl, register as register_guild
+from leeroy_mind.guild.raids import CATALOG
 from leeroy_mind.guild.roles import is_raid_lead, role_of
 from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.llm.scheduler import Priority
@@ -29,7 +30,9 @@ from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.wow import boss_name, faction_known
 
+from . import briefs as B
 from . import callouts as C
+from .briefs import damage_range
 from .config import load
 from .designate import default_lead
 from .orders import (SYSTEM, AskPlan, Countdown, Designate, Order, Ready, Unclear, normalize, parse,
@@ -56,20 +59,12 @@ SOURCES = ("console", "chat", "default")
 # Orders that clear a hold on the members that carried them out (native erases its own record).
 UNHOLDS = frozenset({"follow", "come_back", "stay", "stack", "attack", "kill_skull", "lift"})
 MAX_GUID = 0xFFFFFFFF
+BRIEF_GAP_S = 20.0  # one boss's brief is not posted again sooner (guild/calls.CallGap's gap)
+MODES = {0: (10, False), 1: (25, False), 2: (10, True), 3: (25, True)}  # instance difficulty
 
 
 def _guid(value) -> bool:
     return type(value) is int and 0 < value <= MAX_GUID
-
-
-def damage_range(cls: int, spec_tab: int) -> str:
-    """Where a damage dealer stands: hunters, mages, warlocks, shadow priests, elemental shamans
-    and balance druids are ranged; everyone else is melee."""
-    if cls in (3, 5, 8, 9):
-        return "ranged"
-    if cls in (7, 11):
-        return "melee" if spec_tab == 1 else "ranged"
-    return "melee"
 
 
 @dataclass(slots=True)
@@ -114,6 +109,10 @@ class RaidLeadService:
         self._lift_wait = LIFT_RETRY_S
         self._lines_done: deque[int] = deque(maxlen=64)  # his lines already carried out
         self.stopping = False
+        self.briefs = False  # [raidlead] briefs: the boss briefs built from the raid playbooks
+        self._modes: dict[int, int] = {}  # map -> its instance difficulty, from his group's guild_group
+        self._briefing: asyncio.Task | None = None
+        self._briefed: dict[str, float] = {}  # brief context -> when it was last posted
 
     # -- state ---------------------------------------------------------------------------------
 
@@ -163,6 +162,7 @@ class RaidLeadService:
         self.lead_guid = self.source = None
         self.his = False
         self.held.clear()
+        self._modes.clear()
         self._generation += 1
         self._queue.clear()
         self._save()
@@ -304,6 +304,9 @@ class RaidLeadService:
         elif isinstance(ev, GuildGroup):
             if ev.leader_guid == human:
                 await self._group(ev.leader_guid, ev.raid, ev.members)
+                if (self.briefs and ev.difficulty in MODES and type(ev.map) is int
+                        and type(ev.instance_id) is int and 0 < ev.instance_id <= MAX_GUID):
+                    self._modes[ev.map] = ev.difficulty  # where he is; a broken group forgets it
         elif isinstance(ev, Chat):
             row = self._claimed.pop(id(ev), None)
             if row is not None:
@@ -365,7 +368,7 @@ class RaidLeadService:
                     or not (ev.channel in COMMAND_CHANNELS
                             or ev.channel.startswith("voice:") and ev.channel not in PRIVATE_ROOMS)):
                 return False
-            intent = parse(ev.text, self._names())
+            intent = parse(ev.text, self._names(), B.boss_aliases() if self.briefs else None)
             if intent is None:
                 return False
             self._claimed[id(ev)] = (intent, line_id)
@@ -769,13 +772,89 @@ class RaidLeadService:
         if self._last is not None and self.app.clock.now() - self._last[2] < 600:
             facts.append(f"The last order: {self._last[0]}, for {self._last[1]}.")
         his = self.app.world.members.get(self.app.human_guid)
-        boss = self._bosses.get(his.map) if his is not None else None
+        if intent.boss is not None:  # only with the briefs on (orders.parse)
+            boss = intent.boss[0], intent.boss[1], boss_name(intent.boss[0], intent.boss[1], "")
+        else:
+            here = self._bosses.get(his.map) if his is not None else None
+            boss = (his.map, *here) if here is not None else None
         if boss is not None:
-            plan = C.boss_plan(C.BossContext(his.map, boss[0], boss[1]))
-            facts.append(f"The boss here is {boss[1]}: {plan}." if plan
-                         else f"The boss here is {boss[1]}; there is no plan on file for it.")
+            context = self._context(*boss) if self.briefs else C.BossContext(*boss)
+            if self.briefs and self._brief(speaker, context, facts, line_id):
+                return
+            plan = C.boss_plan(context)
+            if intent.boss is not None:
+                facts.append(f"{human} asked about {boss[2]}: {plan}." if plan
+                             else f"{human} asked about {boss[2]}; there is no plan on file for it.")
+            else:
+                facts.append(f"The boss here is {boss[2]}: {plan}." if plan
+                             else f"The boss here is {boss[2]}; there is no plan on file for it.")
         else:
             facts.append("No boss plan on file for here yet.")
+        self._propose(speaker, C.plan(human, facts), line_id)
+
+    # -- the boss briefs ([raidlead] briefs) --------------------------------------------------------
+
+    def _context(self, map_id, boss_id, name) -> C.BossContext:
+        """The fight as a brief needs it: the instance's size and heroic where he is (the raid he
+        drives, else his group's last guild_group there; 0 when not known, which gives no brief),
+        and the playbook role of each member of his group, his own too."""
+        size, heroic = 0, False
+        his = self.app.world.members.get(self.app.human_guid)
+        if his is not None and his.map == map_id:
+            run = getattr(getattr(getattr(self.app, "guild", None), "raid_night", None), "run", None)
+            raid = CATALOG.get(run.plan.raid_key) if run is not None and run.lead_is_human else None
+            if raid is not None and raid.map_id == map_id:
+                size, heroic = run.plan.size, run.plan.heroic
+            else:
+                size, heroic = MODES.get(self._modes.get(map_id), (0, False))
+        roles = [role if role in ("tank", "healer") else where for role, where, _, _ in self._roles().values()]
+        if his is not None and his.class_:
+            roles.append(B.playbook_role(role_of(his.class_, his.spec_tab, None), his.class_, his.spec_tab))
+        return C.BossContext(map_id, boss_id, name, size, bool(heroic), tuple(sorted(roles)))
+
+    def _brief(self, speaker, context: C.BossContext, facts, line_id) -> bool:
+        """Her answer with the playbook's brief (callouts.boss_brief), when there is one: its lines
+        word for word, then her own words around them (C.briefed). False when there is none, so
+        the standing call answers as before. One brief at a time, and the same boss's not again
+        within BRIEF_GAP_S."""
+        text = C.boss_brief(context)
+        if not text:
+            return False
+        now = self.app.clock.now()
+        key = context.context_id
+        if (self._briefing is not None and not self._briefing.done()
+                or now - self._briefed.get(key, float("-inf")) < BRIEF_GAP_S):
+            log_event("raidlead_brief", context=key, lines=0, via="question", outcome="recent")
+            return True
+        self._briefed = {k: t for k, t in self._briefed.items() if now - t < BRIEF_GAP_S}
+        self._briefed[key] = now
+        self._briefing = asyncio.get_running_loop().create_task(
+            self._post_brief(speaker, context, text.split("\n"), facts, line_id, self._generation),
+            name="raidlead-brief")
+        return True
+
+    async def _post_brief(self, speaker, context, lines, facts, line_id, generation):
+        ports, channel, human = self.app.guild.ports, self._channel(), self.app.guild.ports.human_name()
+
+        def still():  # the line goes out only while this group and her lead still hold
+            return (generation == self._generation and self.blocked() is None
+                    and self._speakable(speaker) and self._channel() == channel)
+        said = 0
+        for text in lines:
+            if not still() or not await ports.say(speaker, channel, text, kind=TurnKind.CALLOUT,
+                                                  before_transport=still):
+                break
+            said += 1
+        log_event("raidlead_brief", context=context.context_id, lines=said, via="question",
+                  outcome="said" if said == len(lines) else "cut" if said else "dropped")
+        if not still():
+            return
+        if said:
+            self._propose(speaker, C.briefed(human, context.boss_name, facts), line_id)
+            return
+        plan = C.boss_plan(context)  # nothing of it went out: the standing call answers instead
+        facts.append(f"The plan for {context.boss_name}: {plan}." if plan
+                     else f"There is no plan on file for {context.boss_name}.")
         self._propose(speaker, C.plan(human, facts), line_id)
 
     # -- speech and the bridge --------------------------------------------------------------------
@@ -893,6 +972,9 @@ class RaidLeadService:
         if self._countdown is not None and not self._countdown.done():
             self._countdown.cancel()
             tasks.append(self._countdown)
+        if self._briefing is not None and not self._briefing.done():
+            self._briefing.cancel()
+            tasks.append(self._briefing)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -918,11 +1000,17 @@ def _code(value) -> str:
 def attach(app):
     """The raid lead, or None while [raidlead] is off (then nothing is registered and nothing
     changes)."""
-    if not load(app.data_dir / "mind.toml").enabled or getattr(app, "guild", None) is None:
+    cfg = load(app.data_dir / "mind.toml")
+    if not cfg.enabled or getattr(app, "guild", None) is None:
         return None
     register_guild()
     register()
     service = RaidLeadService(app)
+    if cfg.briefs:  # the boss briefs: his questions here, the raid nights' pre-pull call there
+        service.briefs = True
+        calls = getattr(app.guild, "calls", None)
+        if calls is not None:
+            calls.briefs = True
     for kind in ("hello", "group", "guild_group", "chat", "death", "resurrect", "boss"):
         app.register_event_handler(kind, service.event)
     app.register_connection_hook(service.connection)
