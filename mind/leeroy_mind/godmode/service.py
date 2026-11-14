@@ -1,17 +1,37 @@
 """The running mind's side of intents (godmode.intents): the `string` op, a 30-second tick that
-expires, checks and hands out pending Discord intents, and the hooks that settle them.
+expires, checks and hands out pending Discord intents, the hooks that settle them, and the game
+strings, sent to native at once (`string_do`) and settled by its answer.
 
 Attached only with [godmode] enabled (godmode.attach); with it off nothing here exists and the
 seeds, cards, openers and reactions are as on main. Logs carry ids, kinds and codes only."""
 import asyncio
 import logging
+import re
+import uuid
 
+from leeroy_mind.bridge import AckTimeout, BridgeError
+from leeroy_mind.guild.ports import JobWaiter
+from leeroy_mind.guild.protocol import StringDo
 from leeroy_mind.logs import log as log_event
 
 from . import intents as I
 
 log = logging.getLogger(__name__)
 TICK_S = 30.0
+JOB_WAIT_S = 2.0  # native publishes the done job before its ack; this only covers the reordering
+_CODE = re.compile(r"[a-z_]{1,40}(:[a-z_]{1,40})?")
+
+
+def native_code(error: str) -> str:
+    """Native's refusal as one code: its own policy codes (combat, in_instance, busy:raid_owner),
+    an older worldserver's unknown type as `unsupported`, a field error as `invalid`; anything
+    else `refused` (never its text)."""
+    error = (error or "").strip()
+    if error.startswith("unknown type"):
+        return "unsupported"
+    if error.startswith("bad field"):
+        return "invalid"
+    return error if _CODE.fullmatch(error) else "refused"
 
 
 class Godmode:
@@ -22,6 +42,7 @@ class Godmode:
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
         self._missed: set[int] = set()  # bring_up openers posted without naming the topic
+        self.jobs = JobWaiter(capacity=64)  # string_do's done jobs (what she did)
 
     # -- the console's op --------------------------------------------------------------------
 
@@ -46,7 +67,63 @@ class Godmode:
         except I.IntentRefused as e:
             log_event("godmode_intent_refused", kind=args["kind"], code=e.code)
             return {"ok": False, "code": e.code, "error": str(e)}
+        if args["kind"] in I.GAME_KINDS:
+            return await self.pull(ident)
         return {"ok": True, "id": ident, "message": f"Saved as string #{ident}."}
+
+    # -- strings in game ---------------------------------------------------------------------
+
+    async def pull(self, ident) -> dict:
+        """Carry a game string out at once: her fit, him in game and the bridge up, then one
+        `string_do`. Settled taken with what she did (native's done job), or not_taken with the
+        code (hers, native's or the link's). Never retried: a refusal in his fight or his copy is
+        reported once and the string is done."""
+        app, store = self.app, self.app.store
+        row = I.get(store.conn, ident)
+        ok, why = I.fit(store.conn, row, app.personas, now=app.clock.now())
+        bridge = getattr(app, "bridge", None)
+        if ok and not getattr(getattr(app, "world", None), "human_online", False):
+            ok, why = False, "human_offline"
+        if ok and (bridge is None or not bridge.connected):
+            ok, why = False, "no_link"
+        if not ok:
+            I.settle(store, ident, status="not_taken", reason=why, now=app.clock.now())
+            return self.game_reply(ident)
+        self._busy.add(ident)
+        wire = uuid.uuid4().hex
+        try:
+            self.jobs.expect(wire)
+            cmd = StringDo(id=wire, guid=row["member"], kind=row["kind"],
+                           target_guid=app.human_guid or 0, emote=row["args"].get("emote", ""))
+            try:
+                ack = await bridge.send(cmd, preserve_id=True)
+            except AckTimeout:
+                status, reason = "not_taken", "no_answer"
+            except BridgeError:
+                status, reason = "not_taken", "no_link"
+            else:
+                if ack.ok:
+                    job = await self.jobs.wait(wire, JOB_WAIT_S)
+                    done = getattr(job, "reason", "")
+                    status, reason = "taken", done if _CODE.fullmatch(done or "") else "done"
+                else:
+                    status, reason = "not_taken", native_code(ack.error)
+            if status != "taken":
+                await self.jobs.wait(wire, 0)  # no done job comes: free its mailbox entry
+        finally:
+            self._busy.discard(ident)
+        I.settle(store, ident, status=status, reason=reason, now=app.clock.now())
+        return self.game_reply(ident)
+
+    def game_reply(self, ident) -> dict:
+        row = I.get(self.app.store.conn, ident)
+        # "state", not "status": the console's post() keeps the HTTP status there.
+        return {"ok": True, "id": ident, "state": row["status"], "reason": row["reason"],
+                "message": I.outcome_words(row)}
+
+    def on_job(self, ev) -> None:
+        if getattr(ev, "kind", "") == "string_do":
+            self.jobs.feed(ev)
 
     # -- what her turns read -----------------------------------------------------------------
 
@@ -54,7 +131,8 @@ class Godmode:
         if self._closed:
             return []
         conn = self.app.store.conn if conn is None else conn
-        return I.card_lines(conn, guid, channel, to_guid=to_guid, human=self.app.human_guid)
+        return I.card_lines(conn, guid, channel, to_guid=to_guid, human=self.app.human_guid,
+                            now=self.app.clock.now())
 
     def seed_valid(self, seed) -> bool:
         """An intent seed's conversation goes on only while its intent is still waiting."""
@@ -191,6 +269,7 @@ class Godmode:
 
     async def close(self):
         self._closed = True
+        self.jobs.close()
         tasks = tuple(self._tasks)
         for t in tasks:
             t.cancel()

@@ -12,6 +12,7 @@
 #include "OfflineRaidJob.h"
 #include "OwnerSay.h"
 #include "PlayStyle.h"
+#include "Strings.h"
 #include "ScriptMgr.h"
 #include "Player.h"
 #include "Map.h"
@@ -28,6 +29,7 @@ public:
         Leeroy::Guild::ReloadDeathLoop();
         Leeroy::Guild::ReloadGroupRez();
         Leeroy::Guild::ReloadHazards();
+        Leeroy::Guild::ReloadStrings();
     }
 
     void OnStartup() override
@@ -40,6 +42,7 @@ public:
         Leeroy::Guild::RegisterOfflineRaidHandler();
         Leeroy::Guild::RegisterOwnerSayHandler();
         Leeroy::Guild::InstallHazardFilter();
+        Leeroy::Guild::RegisterStringsHandler();
     }
 
     void OnUpdate(uint32 diff) override
@@ -52,6 +55,7 @@ public:
         Leeroy::Guild::TickGroupRez(diff);
         Leeroy::Guild::TickHazards(diff);
         Leeroy::Guild::TickOfflineRaid(diff);
+        Leeroy::Guild::TickStrings(diff);
         if (diff >= _styleCleanup)
         {
             _styleCleanup = 1000;
@@ -80,7 +84,11 @@ public:
         { PLAYERHOOK_ON_CREATURE_KILL_CREDIT, PLAYERHOOK_ON_BEFORE_SEND_LOOT, PLAYERHOOK_ON_LOGOUT,
           PLAYERHOOK_ON_MAP_CHANGED }) { }
 
-    void OnPlayerLogout(Player* player) override { Leeroy::PlayStyle::Forget(player->GetGUID().GetCounter()); }
+    void OnPlayerLogout(Player* player) override
+    {
+        Leeroy::PlayStyle::Forget(player->GetGUID().GetCounter());
+        Leeroy::Guild::ForgetStrings(player->GetGUID().GetCounter());
+    }
     void OnPlayerMapChanged(Player* player) override
     {
         if (player->GetMap() && player->GetMap()->IsDungeon()) Leeroy::PlayStyle::Restore(player);

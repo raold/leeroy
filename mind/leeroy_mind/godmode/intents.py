@@ -10,9 +10,11 @@ Rows live in godmode_intent (migration strings). Part A runs the Discord kinds t
 - react: done by the server's Reactor with the named emoji;
 - dm_him: a DM opener on D2's DM path, taken when it is sent (or when her DM to him mentions it).
 
-The game kinds (come_to_me, join_group, follow, duel_me, emote, sit) are the native strings of
-Part B; until then they are refused here (`not_yet`). Group DMs are never an intent's place: no
-seed, card line or mention counts there. Nothing here logs text: ids, kinds and codes only."""
+The game kinds (come_to_me, join_group, follow, duel_me, emote, sit) are Part B's native strings:
+the service sends one `string_do` at once and settles it taken (with what she did) or not taken
+(with native's refusal code); for the next half hour her card in game and in her DM with him says
+what she did for him. Group DMs are never an intent's place: no seed, card line or mention counts
+there. Nothing here logs text: ids, kinds and codes only."""
 import json
 import logging
 import re
@@ -42,7 +44,36 @@ DM_FLOOR_S = 600.0  # never right after an opener of her own
 LOVE = frozenset({"❤️", "😍", "😊", "🫂", "💕", "😘", "🥰"})
 _ARGS = {"post": ({"channel", "about"}, set()), "thread": ({"channel", "name", "about"}, set()),
          "react": ({"message", "emoji"}, set()), "dm_him": ({"about"}, set()),
-         "bring_up": ({"topic"}, {"channel"})}
+         "bring_up": ({"topic"}, {"channel"}),
+         **{k: (set(), set()) for k in GAME_KINDS if k != "emote"}, "emote": ({"emote"}, set())}
+# The emotes a string may ask for, aimed at him: native's kStringEmotes (LeeroyStrings.h).
+GAME_EMOTES = ("applaud", "bow", "cheer", "dance", "flirt", "hello", "highfive", "hug", "kiss",
+               "laugh", "salute", "shy", "smile", "thank", "wave", "wink")
+# Romantic ones only from a woman whose stance toward him carries them (talk.emotes.stance_key):
+# a kiss or a flirt from a drawn or lust one, a hug or a wink from a fond one too.
+_ROMANTIC = {"kiss": ("lust", "drawn"), "flirt": ("lust", "drawn"),
+             "hug": ("lust", "drawn", "fond"), "wink": ("lust", "drawn", "fond")}
+# What she did for him (native's done job names it), as she remembers it for GAME_CARD_S.
+GAME_CARD_S = 1800.0
+_EMOTE_DONE = {"applaud": "applauded him", "bow": "bowed to him", "cheer": "cheered for him",
+               "dance": "danced for him", "flirt": "flirted with him", "hello": "said hello to him",
+               "highfive": "high-fived him", "hug": "hugged him", "kiss": "kissed him",
+               "laugh": "laughed with him", "salute": "saluted him", "shy": "went shy around him",
+               "smile": "smiled at him", "thank": "thanked him", "wave": "waved at him",
+               "wink": "winked at him"}
+_TAKEN = {"came": "You went over to him because he asked you to come.",
+          "joined": "You joined his group because he asked.",
+          "joined_far": "You joined his group because he asked.",
+          "following": "You're following him because he asked.",
+          "stopped": "You stopped following him and waited, because he asked.",
+          "challenged": "You challenged him to a duel because he asked for one.",
+          "sat": "You sat down near him because he asked."}
+_ASKED = {"come_to_me": "to come over", "join_group": "to join his group", "follow": "to follow him",
+          "duel_me": "for a duel", "emote": "for a little gesture", "sit": "to sit with him"}
+# Refusals she would not know of (the server, the link, his own state, her being offline): no line.
+_UNSEEN = frozenset({"off", "human_offline", "human_dead", "not_online", "not_cast", "no_link",
+                     "no_answer", "unsupported", "invalid", "refused", "gone", "due", "owner",
+                     "away"})
 
 
 class IntentRefused(ValueError):
@@ -78,6 +109,8 @@ def parse(args) -> dict:
                     raise ValueError("A string's text fields are text.")
             if "message" in a and (type(a["message"]) is not int or not 0 < a["message"] < 1 << 63):
                 raise ValueError("A reaction names a message id.")
+            if "emote" in a and (not isinstance(a["emote"], str) or len(a["emote"]) > 40):
+                raise ValueError("An emote is named.")
         return dict(args)
     raise ValueError("A string action is create {member, kind, args}, cancel {id} or list.")
 
@@ -144,10 +177,10 @@ def create(store, *, member, kind, args, human, now, pic=None, server=True) -> i
     from leeroy_mind.tuning import edits as E
     if pic is None:
         pic = E._picture(store)
-    if kind in GAME_KINDS:
-        raise IntentRefused("not_yet", "Strings in the game come with the native strings update.")
-    if kind not in DISCORD_KINDS:
+    if kind not in KINDS:
         raise IntentRefused("kind", "Unknown string.")
+    if kind in GAME_KINDS:
+        return _create_game(store, member=member, kind=kind, args=args, now=now, pic=pic)
     if not server:
         raise IntentRefused("server_off", "Discord strings need the guild Discord's engine "
                                           "([server] enabled).")
@@ -191,6 +224,10 @@ def create(store, *, member, kind, args, human, now, pic=None, server=True) -> i
                                          human=pic.human):
             raise IntentRefused("audience", "She cannot read that message.")
         a = {"message": args["message"], "emoji": args["emoji"]}
+    return _insert(store, member, kind, a, now)
+
+
+def _insert(store, member, kind, a, now) -> int:
     with store.transaction():
         conn = store.conn
         open_ = conn.execute("SELECT count(*), sum(member=?) FROM godmode_intent "
@@ -205,6 +242,22 @@ def create(store, *, member, kind, args, human, now, pic=None, server=True) -> i
                               now, due)).lastrowid
     log_event("godmode_intent_created", id=ident, member=member, kind=kind)
     return ident
+
+
+def _create_game(store, *, member, kind, args, now, pic) -> int:
+    """A string in game: no text to screen, only her and (for an emote) one of GAME_EMOTES. The
+    service carries it out at once (godmode.service)."""
+    from leeroy_mind.tuning import edits as E
+    try:
+        E._cast_member(pic, member)
+    except E.EditRefused as e:
+        raise IntentRefused(e.code, str(e)) from None
+    a = {}
+    if kind == "emote":
+        if args.get("emote") not in GAME_EMOTES:
+            raise IntentRefused("bad_emote", "Choose one of the emotes offered.")
+        a = {"emote": args["emote"]}
+    return _insert(store, member, kind, a, now)
 
 
 def settle(store, id, *, status, reason=None, now) -> bool:
@@ -238,6 +291,8 @@ def fit(conn, intent, personas, *, now) -> tuple[bool, str]:
     if conn.execute("SELECT 1 FROM away WHERE guid=? AND returned_at IS NULL "
                     "AND (returns_at IS NULL OR returns_at>?) LIMIT 1", (member, now)).fetchone():
         return False, "away"
+    if kind in GAME_KINDS:
+        return _game_fit(conn, member, kind, a, p)
     if kind == "react":
         row = conn.execute("SELECT author,deleted FROM discord_message WHERE id=?",
                            (a["message"],)).fetchone()
@@ -264,6 +319,31 @@ def fit(conn, intent, personas, *, now) -> tuple[bool, str]:
         return False, reason
     if _contradicts(conn, member, words, now):
         return False, "claims"
+    return True, "ok"
+
+
+def _affinity_to_him(conn, member) -> float | None:
+    human = int((conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone() or ["0"])[0] or 0)
+    if not human:
+        return None
+    rel = conn.execute("SELECT affinity FROM relationship WHERE a=? AND b=?", (member, human)).fetchone()
+    from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay
+    return apply_feelings({"affinity": rel[0] if rel else 0.0},
+                          feeling_overlay(conn).get((member, human)))["affinity"]
+
+
+def _game_fit(conn, member, kind, a, persona) -> tuple[bool, str]:
+    """Always available to him: come_to_me, join_group, follow and sit fit anyone. A duel is
+    absurd from one who dislikes him (affinity -30 or below, the DM rule), and a romantic emote
+    from anyone whose stance toward him does not carry it (never a man)."""
+    if kind == "duel_me":
+        affinity = _affinity_to_him(conn, member)
+        if affinity is not None and affinity <= -30:
+            return False, "stance"
+    if kind == "emote" and a.get("emote") in _ROMANTIC:
+        from leeroy_mind.talk.emotes import stance_key
+        if stance_key(persona) not in _ROMANTIC[a["emote"]]:
+            return False, "stance"
     return True, "ok"
 
 
@@ -308,6 +388,47 @@ def mentions(topic: str, text: str) -> bool:
     return any(re.search(rf"(?<!\w){re.escape(w)}", folded) for w in words)
 
 
+# The string op's words for a game string's outcome; the console has the same codes.
+GAME_WORDS = {
+    "came": "She's on her way to you.", "joined": "She joined your group.",
+    "joined_far": "She joined your group; the game could not bring her to you.",
+    "following": "She's following you.", "stopped": "She stopped following you and waits there.",
+    "challenged": "She challenged you to a duel.", "emoted": "Done.", "sat": "She sat down near you.",
+    "done": "Done.",
+    "off": "Strings in game are off (Leeroy.Strings.Enable in mod_leeroy.conf).",
+    "unsupported": "The game server needs the rebuild that adds strings.",
+    "human_offline": "You are not in game.", "human_dead": "You are dead.",
+    "no_link": "The game server is not connected.", "no_answer": "The game server did not answer.",
+    "not_cast": "She is not a pinned member of the cast.", "not_online": "She is not online.",
+    "dead": "She is dead.", "combat": "Someone is in a fight.", "in_instance": "Not in or into an instance.",
+    "in_bg": "Not in a battleground or arena.", "queued": "She is queued for something.",
+    "travelling": "Someone is travelling.", "grouped": "She is in another group.",
+    "bad_area": "Not here: a city or rest area for come to me, a place duels are allowed for a duel.",
+    "in_group": "You are already grouped.", "lfg_group": "Not into a Dungeon Finder or battleground group.",
+    "not_leader": "You do not lead your group.", "in_raid": "Your group is a raid.",
+    "group_full": "Your party is full.", "not_in_group": "She is not in your party.",
+    "busy:raid_owner": "Your raid holds her.", "busy:duel": "Someone is already duelling.",
+    "too_far": "She is too far from you.", "bad_emote": "Choose one of the emotes offered.",
+    "muted": "She cannot speak just now.", "teleport_failed": "The game could not bring her.",
+    "duel_failed": "The game refused the duel.", "follow_failed": "She could not follow you.",
+    "sit_failed": "She could not sit.", "group_failed": "The game could not make your group.",
+    "locked": "She is saved to another copy of your instance.", "other_team": "She is of the other faction.",
+    "stance": "Her stance makes that absurd.", "away": "She is away.", "gone": "She is no longer in the cast.",
+    "invalid": "The game server refused the request.", "refused": "The game server refused it.",
+}
+
+
+def outcome_words(row) -> str:
+    """A settled game string in words for him: what she did, or why not."""
+    reason = row.get("reason") or ""
+    words = GAME_WORDS.get(reason)
+    if words is None and reason.startswith("busy:"):
+        words = "Someone else is using her just now."
+    if row["status"] == "taken":
+        return words or "Done."
+    return "Not taken: " + (words or "refused.")
+
+
 def instruction(intent) -> str:
     """Her own plan, in her terms: never an order and never his words as her line."""
     kind, a = intent["kind"], intent["args"]
@@ -334,12 +455,60 @@ def in_place(intent, cid, *, to_guid=0, human=0) -> bool:
     return kind == "dm_him" and dm
 
 
-def card_lines(conn, guid, channel, *, to_guid=0, human=0) -> list[str]:
-    """Her pending intents as her own plans ("You meant to ..."), only where she would carry
-    them out (in_place). Never in a group DM, never a thread or a reaction."""
-    from leeroy_mind.discord.channels import channel_id, is_discord, is_group
-    if not is_discord(channel) or is_group(channel):
+# Game channels where she is with him: his group's chat, or near him in the open.
+_WITH_HIM = ("party", "raid", "say", "yell", "emote")
+
+
+def game_lines(conn, guid, channel, *, to_guid=0, human=0, now) -> list[str]:
+    """What she did for him in game in the last GAME_CARD_S, as her own past ("You joined his
+    group because he asked."), or that she could not ("He asked you to come over, but you
+    couldn't just then."), newest first, at most two. Only where she talks with him: his group's
+    chat, near him, a whisper with him or her DM with him; never guild or officer chat, a server
+    channel or a group DM. A refusal she would not have known of (the server, the link, his own
+    state, her being offline) says nothing."""
+    from leeroy_mind.discord.channels import is_discord
+    if is_discord(channel):
+        if channel != f"dm:{guid}" or to_guid not in (0, human):
+            return []
+    elif not (channel in _WITH_HIM or (channel == "whisper" and human and to_guid == human)):
         return []
+    try:
+        rows = conn.execute(
+            f"SELECT {_COLS} FROM godmode_intent WHERE member=? AND kind IN "
+            f"({','.join('?' * len(GAME_KINDS))}) AND status IN ('taken','not_taken') "
+            "AND settled>? ORDER BY settled DESC, id DESC LIMIT 4",
+            (guid, *GAME_KINDS, now - GAME_CARD_S)).fetchall()
+    except Exception:
+        return []  # an older mind.db without the table
+    out = []
+    for r in map(_row, rows):
+        reason = r["reason"] or ""
+        if r["status"] == "taken":
+            if r["kind"] == "emote":
+                done = _EMOTE_DONE.get(r["args"].get("emote", ""))
+                line = f"You {done} because he asked." if done else ""
+            else:
+                line = _TAKEN.get(reason, "")
+        elif reason in _UNSEEN or r["kind"] not in _ASKED:
+            line = ""
+        elif reason == "stance":
+            line = f"He asked you {_ASKED[r['kind']]}, but you didn't feel like it."
+        else:
+            line = f"He asked you {_ASKED[r['kind']]}, but you couldn't just then."
+        if line and line not in out:
+            out.append(line)
+    return out[:2]
+
+
+def card_lines(conn, guid, channel, *, to_guid=0, human=0, now=None) -> list[str]:
+    """Her pending intents as her own plans ("You meant to ..."), only where she would carry
+    them out (in_place), then (given `now`) what she did for him in game lately (game_lines).
+    Never in a group DM, never a thread or a reaction."""
+    from leeroy_mind.discord.channels import channel_id, is_discord, is_group
+    game = [] if now is None else game_lines(conn, guid, channel, to_guid=to_guid, human=human,
+                                             now=now)
+    if not is_discord(channel) or is_group(channel):
+        return game
     cid = channel_id(channel)
     out = []
     for i in pending(conn, guid):
@@ -352,7 +521,7 @@ def card_lines(conn, guid, channel, *, to_guid=0, human=0) -> list[str]:
             out.append(f"You meant to bring up {a['topic']}.")
         elif kind == "dm_him":
             out.append(f"You meant to message him about {a['about']}.")
-    return out[:2]
+    return (out + game)[:2]
 
 
 def tries(conn, ident) -> tuple[int, float]:

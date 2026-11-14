@@ -422,6 +422,27 @@ public:
 };
 }
 
+std::string GuildAddJoinRefusal(Player* human, Player* bot)
+{
+    if (!human || !bot || !human->GetMap())
+        return "offline";
+    if (Group* group = human->GetGroup())
+    {
+        if (GroupHasRealmOwner(group))
+            return "busy:realm_owner";
+        for (auto const& slot : group->GetMemberSlots())
+            if (OfflineRaidOwns(slot.guid.GetCounter()))
+                return "busy:training_owner";
+    }
+    constexpr uint32 kParty = 5;
+    std::vector<GuildAddSave> const outside = human->GetMap()->IsDungeon() ? std::vector<GuildAddSave>{}
+        : SavesOf(human->GetGUID());
+    return GuildAddSkipReason(BodyOf(bot->GetGUID().GetCounter(), bot, human, LeeroyModule::Instance().GuildId(),
+        false, &outside, kParty));
+}
+
+bool GuildAddBring(Player* bot, Player* human) { return Bring(bot, human, 0, 1); }
+
 void AddGuildAddScripts()
 {
     new GuildAddCommandScript();

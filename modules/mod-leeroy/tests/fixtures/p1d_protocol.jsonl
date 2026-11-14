@@ -42,3 +42,5 @@
 {"name":"guild_group_built","kind":"event","valid":true,"msg":{"v":1,"type":"guild_group","ts":0,"reason":"built","size":10,"leader_guid":1,"raid":true,"map":571,"instance_id":0,"difficulty":0,"added":[{"guid":1101,"role":"tank"},{"guid":1102,"role":"healer"},{"guid":1103,"role":"damage"}],"members":[1101,1102,1103]}}
 {"name":"guild_group_entered","kind":"event","valid":true,"msg":{"v":1,"type":"guild_group","ts":0,"reason":"entered","size":10,"leader_guid":1,"raid":true,"map":631,"instance_id":77,"difficulty":1,"added":[],"members":[1101,1102,1103]}}
 {"name":"offline_raid_stop_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"offline_raid_stop","id":"stop1","ts":0,"raid_id":"raid1"}}
+{"name":"string_do_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"string_do","id":"t13","ts":0,"guid":1101,"kind":"emote","target_guid":1,"emote":"wave"}}
+{"name":"string_do_bad_kind","kind":"command","valid":false,"error":"bad field: kind","msg":{"v":1,"type":"string_do","id":"t14","ts":0,"guid":1101,"kind":"queue_arena","target_guid":1,"emote":""}}

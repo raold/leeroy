@@ -143,6 +143,18 @@ class StockItems:
 
 
 @dataclass(frozen=True, slots=True)
+class StringDo:
+    """His string in game (godmode, D6 Part B): one cast member comes to him, joins his party,
+    follows him (or stops), duels him, emotes at him or sits near him. Carried out at once or
+    refused with one code in the ack; a done `job` (kind string_do) names what she did."""
+    id: str
+    guid: int
+    kind: str
+    target_guid: int = 0
+    emote: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class JobSkip:
     guid: int
     reason: str
@@ -211,6 +223,7 @@ COMMANDS: dict[str, type] = {
     "set_spec": SetSpec,
     "bot_do": BotDo,
     "stock_items": StockItems,
+    "string_do": StringDo,
 }
 
 
