@@ -115,8 +115,11 @@ Wound stacks on tanks, the Four Horsemen's mark stacks) write `tg_failure` rows,
 also have an `avoid` or `adds` row, so their pulls never count as fully checked and the score
 ignores failed mechanics for them (`training/score.py`). The switch is groundwork for when avoid
 damage is measured; ICC and Trial of the Crusader rows are unchanged either way. The version 1
-avoid rows keep their original names (some name the cast, not the hit) for parity; the checker
-never resolves an avoid row's names, and the mechanics' `hits` carry the ids that land.
+avoid rows keep their original names for parity, and two of them name the cast rather than the
+hit (Putricide's "Choking Gas Bomb", Lana'thel's "Bloodbolt Whirl"). The score's checker never
+resolves an avoid row's names, but the training ground's "what hurt them" report
+(`training/hurt.py`) does, so those two rows' avoidable-hit counts stay as they were on `main`;
+the mechanics' `hits` carry the ids that land.
 
 ## Raid lead calls
 

@@ -56,8 +56,8 @@ def spells(playbooks: Playbooks, book: Book) -> list[Finding]:
                     out.append(Finding("error", "check_name_unresolved", c.id))
                 resolved |= ids
             mapped = set().union(*(m.all_hit_ids() for m in boss.mechanics if m.check == c.id))
-            # The original version 1 avoid rows keep their transcription for parity; the checker
-            # never resolves an avoid row's names (it records unverified damage instead).
+            # The original version 1 avoid rows keep their transcription for parity (training/hurt.py
+            # reads their names as on main); the README names the two that name a cast, not a hit.
             legacy = c.since == 1 and c.kind == "avoid"
             if c.names and resolved and not resolved & mapped and not legacy:
                 out.append(Finding("note", "check_names_disjoint", c.id))

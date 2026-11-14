@@ -1,6 +1,7 @@
 import { $, api, arr, clear, el, num, obj, plural, refused, str } from "./core.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
-import { adaptText, changeText, coverageText, deathsText, evidenceNotes, gateText, playbookGroups, playbookTotals, scopeText, trialText } from "./trainmodel.mjs";
+import { adaptText, avoidText, changeText, coverageText, deathsBy, deathsText, evidenceNotes, gateText, hitHardest, hurtHead,
+  mechanicsText, playbookGroups, playbookTotals, scopeText, trialText } from "./trainmodel.mjs";
 import { when } from "./words.mjs";
 
 // -- the training tab: mind.db only, read-only -----------------------------------------------------
@@ -15,7 +16,7 @@ function kinds(o) {
 }
 
 function renderTraining(v) {
-  var ids = ["training-week", "training-trials", "training-cards", "training-done", "training-evidence"];
+  var ids = ["training-week", "training-hurt", "training-trials", "training-cards", "training-done", "training-evidence"];
   if (!v.setup) {
     renderKpis($("training-kpis"), []);
     ids.forEach(function (id) { notSetUp($(id), str(v.why)); });
@@ -41,6 +42,8 @@ function renderTraining(v) {
     week.appendChild(r);
   });
   empty(week, "No scored fights this week.");
+
+  renderHurt($("training-hurt"), obj(v.hurt));
 
   var trials = $("training-trials");
   clear(trials);
@@ -85,6 +88,30 @@ function renderTraining(v) {
   clear(ev);
   evidenceNotes(v.evidence).forEach(function (t) { ev.appendChild(el("p", "note", t)); });
   empty(ev, "The report states no limits.");
+}
+
+// What hurt them: per boss, deaths by killing spell, the spells that hit hardest, failed mechanics
+// and avoidable hits, from the stored pulls. Numbers and spell names only.
+function renderHurt(box, h) {
+  clear(box);
+  arr(h.contexts).forEach(function (c) {
+    box.appendChild(el("h4", "", scopeText(c)));
+    box.appendChild(el("p", "note", hurtHead(c)));
+    [["Deaths by", deathsBy(c)], ["Hit hardest by", hitHardest(c)], ["Failed mechanics", mechanicsText(c)]]
+      .concat(avoidText(c).map(function (t) { return ["Avoidable", t]; }))
+      .forEach(function (pair) {
+        if (!pair[1]) { return; }
+        var r = row();
+        r.appendChild(el("span", "chip", pair[0]));
+        r.appendChild(el("span", "", pair[1]));
+        box.appendChild(r);
+      });
+  });
+  empty(box, "No boss pull has been stored yet.");
+  if (arr(h.contexts).length) {
+    var ev = obj(h.evidence);
+    ["damage_taken", "avoidable"].forEach(function (k) { if (str(ev[k])) { box.appendChild(el("p", "muted", str(ev[k]))); } });
+  }
 }
 
 // The raid playbooks are the repo's data: read once a page, kept while it stays open

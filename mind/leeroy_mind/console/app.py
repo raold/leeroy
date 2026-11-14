@@ -337,6 +337,9 @@ class ConsoleApp:
         self.groups = load_groups_config(settings.data_dir / 'mind.toml')
         from ..outreach.config import load_outreach_config
         self.outreach_enabled = load_outreach_config(settings.data_dir / 'mind.toml').enabled
+        from ..culture.config import load_culture_config
+        culture = load_culture_config(settings.data_dir / 'mind.toml')
+        self.item_tooltips = culture.enabled and culture.loot
         self._voice_uploads = []
         self._voice_day = None
         self._voice_day_total = 0
@@ -1733,7 +1736,8 @@ class ConsoleApp:
         view = discordview.discord_view(
             conn, owner_now=mind_clock.local_at(self._clock()),
             trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
-            read_marks=read_marks, server=self.server_enabled, groups=self.groups.enabled)
+            read_marks=read_marks, server=self.server_enabled, groups=self.groups.enabled,
+            items=self.s.data_dir / 'library.db' if self.item_tooltips else None)
         view['photos'] = self.photos.enabled and self.controls.enabled
         view['voice_notes'] = self.voice_notes.enabled and self.controls.enabled
         fp = None
