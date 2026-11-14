@@ -34,7 +34,9 @@ _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
                         'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener',
                         'echo_parent'})
-ECHO_RUN, ECHO_SHARE, ECHO_MIN_WORDS = 8, .8, 6
+ECHO_RUN, ECHO_RATIO, ECHO_MIN_WORDS = 8, .9, 6
+_ASKING = re.compile(r'^(?:can|could|would|will|do|does|did|are|is|am|was|were|have|has|had|'
+                     r'should|what|how|when|where|why|who|which|whats|hows|wanna)\b')
 HINTS = {
     'echo_parent': 'it repeats the message you are answering back instead of answering it',
     'nothing_new': 'it only repeats what was already said',
@@ -59,18 +61,30 @@ _EMOTICONS = re.compile(r':[pd](?!\w)|:[()]|<3(?!\w)|(?<!\w)xd(?!\w)', re.IGNORE
 
 
 def echoes(text: str, parent: str) -> bool:
-    """True when `text` says `parent` back: a copied run of ECHO_RUN words, or copied runs of two
-    or more words covering ECHO_SHARE of a parent of at least ECHO_MIN_WORDS words. Apostrophes
-    are dropped first, so "you're" and "youre" match; a short line said back ("i love you") is
-    not an echo."""
+    """True when `text` says `parent` back instead of answering it: the whole of a parent of at
+    least ECHO_MIN_WORDS words in the same mood (a question as a question, a statement as a
+    statement; their letters ECHO_RATIO alike), or a run of ECHO_RUN words copied from one of his
+    statements. Turning his question into its answer ("Are the flasks ready?" / "The flasks are
+    ready.") is an answer, and a short line said back ("i love you") is not an echo. Apostrophes
+    are dropped first, so "you're" and "youre" match."""
     def bare(value):
-        return words(re.sub(r"['’]", "", value or ""))
+        return words(re.sub(r"['\u2019]", "", value or ""))
+
+    def asking(sentence):
+        return sentence.rstrip().endswith('?') or bool(_ASKING.match(' '.join(bare(sentence))))
     mine, his = bare(text), bare(parent)
     if not mine or not his:
         return False
-    runs = [b.size for b in SequenceMatcher(None, his, mine, autojunk=False).get_matching_blocks()]
-    return max(runs) >= ECHO_RUN or (len(his) >= ECHO_MIN_WORDS
-                                     and sum(n for n in runs if n >= 2) >= ECHO_SHARE * len(his))
+    if (len(his) >= ECHO_MIN_WORDS and asking(text) == asking(parent)
+            and SequenceMatcher(None, ' '.join(his), ' '.join(mine), autojunk=False).ratio() >= ECHO_RATIO):
+        return True
+    for sentence in re.split(r'(?<=[.!?])\s+|\n+', parent or ''):
+        said = bare(sentence)
+        if len(said) >= ECHO_RUN and not asking(sentence):
+            blocks = SequenceMatcher(None, said, mine, autojunk=False).get_matching_blocks()
+            if max(block.size for block in blocks) >= ECHO_RUN:
+                return True
+    return False
 
 
 def rewrite_hint(codes) -> str:

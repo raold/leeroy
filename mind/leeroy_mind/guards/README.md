@@ -95,14 +95,16 @@ the better screened candidate. React also prompts one attempt at a real answer.
 Existing hard content, name, slash and delivery gates still apply.
 
 `echo_parent` (owner, 2026-11-14) is a drop code that stays hard even when the
-answer is owed: a draft that says back the message it answers (a copied run of 8
-words, or copied runs of two or more words covering 80% of a message of 6 or more
-words; apostrophes ignored, her own lines never count) is never sent, and never
+answer is owed: a draft that says back the message it answers (the whole of a
+message of 6 or more words in the same mood, a question as a question or a statement
+as a statement, its letters 90% alike; or a run of 8 words copied from one of his
+statements; apostrophes ignored, her own lines never count) is never sent, and never
 chosen as the owed answer's fallback. When both drafts echo, the answer drops
 (`guard_echo`). The screened retry is told what is wrong in words
 (`review.rewrite_hint`), not by code names, which the model could not act on.
 Measured on the live history before the change: it flagged exactly the 3 echoes
-among 81 Discord replies to him and none of 683 whisper replies.
+among 84 Discord replies to him and none of 683 whisper replies. Turning his
+question into its answer ("Are the flasks ready?" / "The flasks are ready.") is an answer.
 
 A rewrite takes priority over drop, which takes priority over react. The optional
 `await judge_relevance(reasoner, stores, draft)` is a separate model call that may

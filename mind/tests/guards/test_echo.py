@@ -23,6 +23,12 @@ HIS = "how many kids do you have? what about their dad?"
     ("hey babe", "hey babe! missed you", False),
     ("are you coming to the raid tonight?", "coming to the raid, yes, after dinner", False),
     ("", "anything", False),
+    # His question turned into its answer is an answer, not an echo.
+    ("Are the spare flasks ready for the next raid?", "The spare flasks are ready for the next raid.", False),
+    ("can you bring the spare flasks to the raid tonight", "ill bring the spare flasks to the raid tonight", False),
+    ("i love you", "i love you", False),
+    ("how are you doing tonight?", "how are you doing tonight?", False),
+    ("how are you doing tonight babe?", "how are you doing tonight babe?", True),
 ])
 def test_echo_is_a_copied_run_of_his_words(parent, reply, expected):
     assert echoes(reply, parent) is expected
