@@ -8,8 +8,9 @@ from leeroy_mind.protocol import register_command
 
 @dataclass(frozen=True, slots=True)
 class RaidLead:
-    """"assist"/"unassist": the assistant flag of cast member `guid` in the group he leads (never
-    the leader flag); "mark": `icon` on his hostile target, set by `guid` (her, or him)."""
+    """"mark": `icon` on his hostile target, set server-side by `guid` (her, or him; no assistant
+    flag is ever set); "probe": whether native's switch is on (the ack); "sync": that, and native
+    publishes his group as a group event. guid 0 and icon "" are none."""
     id: str
     action: str
     guid: int

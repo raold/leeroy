@@ -15,7 +15,9 @@ bool RaidLeadEnabled();
 // One bot of an acknowledged bot_do "order" job, at the mutation boundary (TickBotCommands): "" applied, else the
 // skip reason. Only bots in the group the owner leads, behind the Realm, training, offline-raid and pending-job fences.
 std::string ApplyRaidOrder(Player* bot, BotDoCmd const& command);
-// raid_lead: the assistant flag of the member he names to lead, and her raid icon on his target. World thread.
+// World tick: lift each hold when his group's fight starts or ends, after kRaidHoldMs, or once the switch is off.
+void TickRaidLead();
+// raid_lead: her raid icon on his target, the switch probe and his group's state. World thread.
 void RegisterRaidLeadHandler();
 }
 

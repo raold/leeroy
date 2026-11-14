@@ -392,6 +392,10 @@ async def test_a_member_he_named_calls_his_groups_raid_while_he_drives_it(setup)
         await night.tick()
     assert not any(isinstance(c, RaidControl) for c in ports.sent)
     assert night.console_refusal("start") == "you lead tonight: dungeon-clear runs only under a bot lead"
+    # her raid because he named her is no raid night the mind led: the rotation never sees it (P3-9)
+    from leeroy_mind.guild.store import NAMED_LEAD_KEY, last_led
+    assert _get(ports.conn, NAMED_LEAD_KEY.format(raid_id=raid_id)) == 103
+    assert 103 not in last_led(ports.conn)
 
 
 @_run_async
@@ -400,3 +404,6 @@ async def test_a_named_lead_outside_the_raid_leaves_him_its_lead(setup):
     ports.designated_lead = lambda: 999
     await adopted(setup)
     assert night.run.lead_is_human and night.run.plan.lead_guid == 1
+    [(raid_id, *_)] = records(ports)
+    from leeroy_mind.guild.store import NAMED_LEAD_KEY
+    assert _get(ports.conn, NAMED_LEAD_KEY.format(raid_id=raid_id)) is None

@@ -53,8 +53,8 @@ REASONS = {
     "busy:training_owner": "they're busy elsewhere", "busy:training_cleanup": "they're busy elsewhere",
     "busy:training_state": "they're still on another order", "offline": "they're offline",
     "nobody": "nobody it's for is here", "no_shaman": "nobody here has Bloodlust or Heroism",
-    "not_raid": "this isn't a raid", "not_assistant": "she can't mark here",
-    "busy": "they're busy", "failed": "it didn't take",
+    "busy": "they're busy", "failed": "it didn't take", "not_here": "they're not here",
+    "not_damage": "tanks and healers don't hold",
 }
 
 
@@ -62,8 +62,10 @@ def reason_words(code: str) -> str:
     return REASONS.get(code, "they can't right now")
 
 
-def refusal(code: str) -> str:
+def refusal(code: str, name: str = "") -> str:
     """A refused or impossible order: plain, never a fake "on it"."""
+    if code == "not_here" and name:
+        return f"can't do that one, {name} isn't here"
     return f"can't do that one, {reason_words(code)}"
 
 
@@ -99,13 +101,6 @@ def designated(human: str) -> str:
 
 def ready(human: str) -> str:
     return f"The ready check is up for {human}'s group. Tell the raid in a few words to click ready."
-
-
-def wipe(boss: str, released: int) -> str:
-    if released:
-        return (f"The group wiped on {boss}. {released} released and are running back. Call it in a "
-                f"few words: release and run back.")
-    return f"The group wiped on {boss}. Call it in a few words: run back and rebuff."
 
 
 def plan(human: str, facts: list[str]) -> str:

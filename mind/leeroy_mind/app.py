@@ -1009,13 +1009,20 @@ class MindApp:
         if origin != "human":
             return True  # game lines are kept in the log only
         self._note_human_name(ev.from_name)
-        command = self.voice.echoes_command(ev) or his_command(ev.channel, ev.text)
+        command = self.voice.echoes_command(ev)
+        held = False
         raidlead = getattr(self, "raidlead", None)
         if not command and not backlog and raidlead is not None:
-            command = raidlead.claims(ev, line_id)  # an order to his group, not talk
-        if not backlog and self.signals is not None:
+            # An order to his group is the raid lead's before playerbots' command words; a line it
+            # holds for the model goes to talk later, after any line it held before (raidlead).
+            await raidlead.before_his_line()
+            claim = raidlead.claims(ev, line_id)
+            command, held = claim == "order", claim == "held"
+        if not command and not held:
+            command = his_command(ev.channel, ev.text)
+        if not backlog and self.signals is not None and not held:
             self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
-        if command:
+        if command or held:
             self.world.apply(ev, now)  # he is active, but a bot command is not talk
             return True
         await self._his_talk(ev, line_id, now, at, backlog)
@@ -1034,9 +1041,15 @@ class MindApp:
 
     async def release_to_talk(self, ev: Chat, line_id: int) -> None:
         """A line of his the raid lead held as a possible order and found to be none: it goes on
-        as the talk he meant, as if never held (raidlead.service)."""
+        as the talk he meant, as if never held (raidlead.service), and the signals see talk."""
         if not self._stopping:
+            self.signal_his_line(ev, line_id, command=False)
             await self._his_talk(ev, line_id, self.clock.now(), None, False)
+
+    def signal_his_line(self, ev: Chat, line_id: int, *, command: bool) -> None:
+        """The signals' record of a line the raid lead held, once it is known to be an order or talk."""
+        if self.signals is not None:
+            self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
 
     def _record_only(self, ev: Event, name: str) -> None:
         """While stopping: keep what still arrives in the log and start nothing."""

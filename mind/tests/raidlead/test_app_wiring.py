@@ -5,6 +5,8 @@ import asyncio
 import contextlib
 import itertools
 
+import pytest
+
 from conftest import HUMAN, run
 from leeroy_mind.app import MindApp
 from leeroy_mind.config import load_config
@@ -83,4 +85,48 @@ def test_off_the_same_line_is_talk(tmp_path, clock):
             assert not [c for c in h.bridge.commands if c["type"] == "bot_do"]
             row = h.rows("SELECT thread_id FROM chat_line WHERE text = ?", ("everyone stack on me",))[0]
             assert row["thread_id"] is not None
+    run(main())
+
+
+def _bot_dos(h):
+    return [c for c in h.bridge.commands if c["type"] == "bot_do"]
+
+
+def _done(cmd):
+    return {"type": "job", "id": cmd["id"], "kind": "bot_do", "state": "done", "reason": "",
+            "stage": "", "guids": cmd["guids"], "skipped": [], "kills": 0, "wipes": 0,
+            "instance_id": 0, "guid": 0, "level": 0, "avg_ilvl": 0}
+
+
+@pytest.mark.parametrize("text", ["dps, hold", "wait for my pull", "dps stop"])
+def test_orders_that_start_with_a_playerbots_word_reach_the_raid_lead(tmp_path, clock, text):
+    """P2-3, through _on_chat: "wait" and "dps" are playerbots words (his_command), yet these
+    lines are the raid lead's orders. The invented cast's damage dealers (by persona role) hold."""
+    async def main():
+        async with running(tmp_path, clock, raidlead=True) as h:
+            await h.wait(lambda: h.app.world.online and h.app.raidlead.supported)
+            await h.bridge.push(group(101, 102, 103, 104, 105))
+            await h.until(lambda: h.app.raidlead.native is True and h.app.raidlead.members)
+            await h.bridge.push(chat(text, channel="raid"))
+            cmd = await h.bridge.wait_for_command("bot_do")
+            assert (cmd["action"], cmd["param"]) == ("order", "hold")
+            await h.bridge.push(_done(cmd))
+            row = h.rows("SELECT thread_id FROM chat_line WHERE text = ?", (text,))[0]
+            assert row["thread_id"] is None
+    run(main())
+
+
+@pytest.mark.parametrize("text", ["follow", "stay", "attack"])
+def test_playerbots_own_words_still_pass_through(tmp_path, clock, text):
+    async def main():
+        async with running(tmp_path, clock, raidlead=True) as h:
+            await h.wait(lambda: h.app.world.online and h.app.raidlead.supported)
+            await h.bridge.push(group(101, 102, 103, 104, 105))
+            await h.until(lambda: h.app.raidlead.native is True and h.app.raidlead.members)
+            await h.bridge.push(chat(text, channel="raid"))
+            await h.wait(lambda: h.count("chat_line", "WHERE text = ?", (text,)) == 1)
+            await h.advance(10)
+            assert _bot_dos(h) == []
+            row = h.rows("SELECT thread_id FROM chat_line WHERE text = ?", (text,))[0]
+            assert row["thread_id"] is None  # playerbots' command, as before: no talk either
     run(main())

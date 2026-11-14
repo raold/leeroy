@@ -24,7 +24,7 @@ from .pick import Decline, Hangout, Lead, LeadOnly, Pick, is_end, parse
 from .protocol import ClearLockout, FormRaid, RaidControl, SetLootMaster, Summon
 from .raids import CATALOG, validate
 from .session import RaidPlan, RaidSession
-from .store import attendance_counts, bench_streaks, last_led
+from .store import NAMED_LEAD_KEY, attendance_counts, bench_streaks, last_led
 
 
 log = logging.getLogger(__name__)
@@ -668,6 +668,10 @@ class RaidNight:
                             leaders.loot_guid, [c.guid for c in candidates], [], True)
             await self._send(SetLootMaster(uuid4().hex, self.ports.human_guid, leaders.loot_guid), epoch)
             await self._begin(plan, epoch, plan.members, [], instance_id=instance_id, lead_is_human=True)
+            if plan.lead_guid != self.ports.human_guid:
+                # Her raid because he named her: it counts as no raid night the mind led (last_led).
+                with self.ports.conn:
+                    _put(self.ports.conn, NAMED_LEAD_KEY.format(raid_id=self.session.raid_id), plan.lead_guid)
             self._call_due = self._call_deadline = None
             self._adopted = True
         except (_Stale, NoTankError, ValueError, _Failed) as error:

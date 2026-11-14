@@ -11,16 +11,16 @@ namespace Leeroy::Guild
 {
 namespace
 {
-// The strategy strings of playerbots' FollowChatShortcutAction, StayChatShortcutAction,
-// MoveFromGroupChatShortcutAction and FleeChatShortcutAction.
+// The strategy strings of playerbots' FollowChatShortcutAction and StayChatShortcutAction.
 constexpr std::string_view kFollowNonCombat = "+follow,-passive,-grind,-move from group";
 constexpr std::string_view kFollowCombat = "-stay,-follow,-passive,-grind,-move from group";
 constexpr std::string_view kStayNonCombat = "+stay,-passive,-move from group";
 constexpr std::string_view kStayCombat = "+stay,-follow,-passive,-move from group";
-constexpr std::string_view kMoveFromGroup = "+move from group";
-constexpr std::string_view kFlee = "+follow,-stay,+passive";
 constexpr std::string_view kPassive = "+passive";
 constexpr std::string_view kActive = "-passive";
+// One "move from group" of this many yards: spread out, or run out of the group.
+constexpr float kSpreadYards = 10.0f;
+constexpr float kRunOutYards = 30.0f;
 }
 
 bool IsRaidOrder(std::string_view order)
@@ -49,21 +49,22 @@ std::optional<RaidOrderPlan> PlanRaidOrder(std::string_view order)
         plan.combat = kStayCombat;
         plan.stayAtTarget = true;
     }
-    else if (order == "spread" || order == "run_out")
-    {
-        plan.nonCombat = kMoveFromGroup;
-        plan.combat = kMoveFromGroup;
-    }
+    else if (order == "spread")
+        plan.moveAway = kSpreadYards;
+    else if (order == "run_out")
+        plan.moveAway = kRunOutYards;
     else if (order == "back_off")
-    {
-        plan.nonCombat = kFlee;
-        plan.combat = kFlee;
-        plan.clearPositions = true;
-    }
+        plan.toHisSide = true;
     else if (order == "hold")
     {
         plan.nonCombat = kPassive;
         plan.combat = kPassive;
+        plan.hold = true;
+    }
+    else if (order == "lift")
+    {
+        plan.nonCombat = kActive;
+        plan.combat = kActive;
     }
     else if (order == "attack")
     {
@@ -79,6 +80,8 @@ std::optional<RaidOrderPlan> PlanRaidOrder(std::string_view order)
     }
     else if (order == "taunt")
         plan.taunt = true;
+    else if (order == "lust")
+        plan.lust = true;
     else if (order == "release")
         plan.release = true;
     else
@@ -91,11 +94,12 @@ std::string_view RaidOrderRefusal(std::string_view order, RaidOrderBody const& b
     auto const plan = PlanRaidOrder(order);
     if (!plan)
         return "bad_order";
-    if (!body.enabled)
+    bool const lift = order == "lift";
+    if (!body.enabled && !lift)
         return "raidlead_off";
     if (!body.ownerOnline)
         return "owner_offline";
-    if (!body.ownerLeads)
+    if (!body.ownerLeads && !lift)
         return "not_leader";
     if (!body.inHisGroup)
         return "not_in_group";
@@ -109,9 +113,11 @@ std::string_view RaidOrderRefusal(std::string_view order, RaidOrderBody const& b
             return "released";
         return {};
     }
-    if (!body.alive)
+    if (!body.alive && !lift)
         return "dead";
-    if (!body.sameMap)
+    if (plan->hold && body.tankOrHealer)
+        return "not_damage"; // tanks and healers never go passive
+    if (!body.sameMap && !lift)
         return "elsewhere";
     return {};
 }
@@ -139,6 +145,26 @@ std::string_view TauntSpell(std::uint8_t playerClass)
     }
 }
 
+std::string_view LustSpell(bool horde)
+{
+    return horde ? "bloodlust" : "heroism";
+}
+
+bool AttackCounts(bool attacked, bool alreadyOnIt, bool inSight)
+{
+    return attacked || alreadyOnIt || !inSight;
+}
+
+HoldStep DecideHold(RaidHold const& hold, std::uint64_t now, bool groupFighting, bool online, bool inHisGroup,
+    bool enabled)
+{
+    if (!online)
+        return HoldStep::Drop;
+    if (!inHisGroup || !enabled || now >= hold.until || groupFighting != hold.groupFought)
+        return HoldStep::Lift;
+    return HoldStep::Keep;
+}
+
 std::optional<RaidLeadCmd> ParseRaidLead(nlohmann::json const& message, std::string& error)
 {
     error.clear();
@@ -154,22 +180,27 @@ std::optional<RaidLeadCmd> ParseRaidLead(nlohmann::json const& message, std::str
     if (action == message.end() || !action->is_string())
         return bad("action");
     out.action = action->get<std::string>();
-    if (out.action != "assist" && out.action != "unassist" && out.action != "mark")
+    if (out.action != "mark" && out.action != "probe" && out.action != "sync")
         return bad("action");
+    bool const mark = out.action == "mark";
     auto guid = message.find("guid");
-    if (guid == message.end() || !guid->is_number_unsigned() || guid->get<std::uint64_t>() == 0
-        || guid->get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
-        return bad("guid");
-    out.guid = guid->get<std::uint32_t>();
-    auto icon = message.find("icon");
-    if (out.action == "mark")
+    if (guid != message.end())
     {
-        if (icon == message.end() || !icon->is_string() || !RaidIconIndex(icon->get<std::string>()))
+        if (!guid->is_number_unsigned() || guid->get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+            return bad("guid");
+        out.guid = guid->get<std::uint32_t>();
+    }
+    if (mark ? out.guid == 0 : out.guid != 0)
+        return bad("guid");
+    auto icon = message.find("icon");
+    if (icon != message.end())
+    {
+        if (!icon->is_string())
             return bad("icon");
         out.icon = icon->get<std::string>();
     }
-    else if (icon != message.end() && (!icon->is_string() || !icon->get<std::string>().empty()))
-        return bad("icon"); // the mind's encoder sends every field: an empty icon is no icon
+    if (mark ? !RaidIconIndex(out.icon) : !out.icon.empty())
+        return bad("icon");
     return out;
 }
 
@@ -184,15 +215,16 @@ std::optional<std::uint8_t> RaidIconIndex(std::string_view icon)
 
 std::string_view RaidLeadRefusal(std::string_view action, RaidLeadFacts const& facts)
 {
-    if (action != "assist" && action != "unassist" && action != "mark")
+    if (action != "mark" && action != "probe" && action != "sync")
         return "bad_action";
     if (!facts.enabled)
         return "raidlead_off";
+    if (action == "probe")
+        return {};
     if (!facts.ownerOnline)
         return "owner_offline";
-    // He may set an icon himself; only a cast member ever gets the assistant flag.
-    if (facts.memberIsOwner && action != "mark")
-        return "owner";
+    if (action == "sync")
+        return {};
     if (!facts.memberIsOwner && !facts.memberIsCast)
         return "not_cast";
     if (!facts.ownerLeads)
@@ -201,17 +233,8 @@ std::string_view RaidLeadRefusal(std::string_view action, RaidLeadFacts const& f
         return "not_in_group";
     if (facts.fenced)
         return "busy:realm_owner";
-    if (action == "mark")
-    {
-        // In a raid only the leader and assistants may set icons (WorldSession::HandleRaidTargetUpdateOpcode).
-        if (facts.raid && !facts.memberIsAssistant)
-            return "not_assistant";
-        if (!facts.targetHostile)
-            return "no_target";
-        return {};
-    }
-    if (!facts.raid)
-        return "not_raid";
+    if (!facts.targetHostile)
+        return "no_target";
     return {};
 }
 }

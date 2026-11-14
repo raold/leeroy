@@ -46,6 +46,7 @@ public:
         Leeroy::Guild::TickSummons();
         Leeroy::Guild::TickGearUp();
         Leeroy::Guild::TickBotCommands();
+        Leeroy::Guild::TickRaidLead();
         Leeroy::Guild::TickTopUp(diff);
         Leeroy::Guild::TickDeathLoop(diff);
         Leeroy::Guild::TickGroupRez(diff);

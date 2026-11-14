@@ -3,16 +3,18 @@ and his orders to his group, understood and carried out by the bodies.
 
 Read README.md. In short: the lead is the member he names (console, his raid or party chat, or
 his push-to-talk), else the code-built default (designate.py); it lasts until he changes it or
-the group breaks, persists in meta (KEY), and native makes her raid assistant (raid_lead). His
-orders map onto a fixed list (orders.py); each runs on his group's bots through mod-leeroy's
-bot_do "order" (or "cast" for Bloodlust/Heroism), and she or the member he named acknowledges
-only what the game's job confirms. A refused or impossible order gets a plain "can't do that
-one". Nothing runs while a raid the mind leads, an offline raid or a raid being formed holds
-the group, and nothing here logs his words, names or persona text.
+the group breaks, and persists in meta (KEY). No raid assistant flag is ever set. His orders map
+onto a fixed list (orders.py); each runs on his group's bots through mod-leeroy's bot_do "order",
+and she or the member he named acknowledges only what the game's job confirms. A refused or
+impossible order gets a plain "can't do that one". Native's switch is asked (probe/sync): while
+it is off, or the worldserver lacks the feature, nothing here leads or speaks. Nothing runs while
+a raid the mind leads, an offline raid or a raid being formed holds the group, and nothing here
+logs his words, names or persona text.
 """
 
 import asyncio
 from collections import deque
+from dataclasses import dataclass, field
 import json
 import logging
 from uuid import uuid4
@@ -30,9 +32,9 @@ from leeroy_mind.wow import boss_name, faction_known
 from . import callouts as C
 from .config import load
 from .designate import default_lead
-from .protocol import RaidLead as RaidLeadCmd, register
 from .orders import (SYSTEM, AskPlan, Countdown, Designate, Order, Ready, Unclear, normalize, parse,
                      read_answer, schema)
+from .protocol import RaidLead as RaidLeadCmd, register
 
 log = logging.getLogger(__name__)
 KEY = "raidlead:state"
@@ -45,7 +47,14 @@ CONFIDENT = 0.7  # below this the model's reading is a guess: she asks instead
 SPEECH_S = 30.0
 QUEUE = 16
 CLAIMED = 32
+HOLD_S = 30.0  # native lifts a hold by then too (kRaidHoldMs)
+LIFT_RETRY_S = 5.0
+LIFT_GIVE_UP_S = 90.0
+PROBE_S = 60.0  # native's switch is asked again this often while he plays
+PROBE_UNKNOWN_S = 5.0
 SOURCES = ("console", "chat", "default")
+# Orders that clear a hold on the members that carried them out (native erases its own record).
+UNHOLDS = frozenset({"follow", "come_back", "stay", "stack", "attack", "kill_skull", "lift"})
 MAX_GUID = 0xFFFFFFFF
 
 
@@ -63,28 +72,45 @@ def damage_range(cls: int, spec_tab: int) -> str:
     return "melee"
 
 
+@dataclass(slots=True)
+class _Held:
+    """A line of his held as a possible order while the model reads it."""
+    ev: Chat
+    line_id: int
+    intent: Unclear
+    generation: int
+    task: asyncio.Task | None = None
+    answer: object = None
+    done: bool = False
+    released: bool = False
+    names: dict = field(default_factory=dict)
+
+
 class RaidLeadService:
     def __init__(self, app):
         self.app = app
         self.supported = False
         self.connected = False
+        self.native: bool | None = None  # Leeroy.RaidLead.Enable as native last answered; None unknown
         self.lead_guid: int | None = None
         self.source: str | None = None
-        self.his = False  # he said he leads it himself: no default lead
-        self.assisted: int | None = None  # who has the assistant flag from us
+        self.his = False  # he said he leads it himself: no lead, no default
         self.members: frozenset[int] = frozenset()  # his group's cast, him excluded
         self.raid = False
         self.leader = 0
+        self.held: dict[int, float] = {}  # member -> when we put them on hold
         self._load()
         self._claimed: dict[int, tuple[object, int]] = {}
         self._queue: deque = deque(maxlen=QUEUE)
+        self._pending: deque[_Held] = deque()
+        self._generation = 0
         self._wake = asyncio.Event()
-        self._assist_tried: tuple | None = None
         self._dead: set[int] = set()
-        self._held: set[int] = set()
         self._bosses: dict[int, tuple[int, str]] = {}  # map -> the last boss his group engaged there
         self._last: tuple[str, str, float] | None = None  # (order words, who words, when)
         self._countdown: asyncio.Task | None = None
+        self._probe_at = float("-inf")
+        self._lift_at = float("-inf")
         self.stopping = False
 
     # -- state ---------------------------------------------------------------------------------
@@ -105,37 +131,46 @@ class RaidLeadService:
         if _guid(lead) and lead in self.members and value.get("source") in SOURCES:
             self.lead_guid, self.source = lead, value["source"]
         self.his = value.get("his") is True and self.lead_guid is None
-        assisted = value.get("assisted")
-        self.assisted = assisted if _guid(assisted) and assisted in self.members else None
+        held = value.get("held", {})
+        if isinstance(held, dict) and len(held) <= 40:
+            for key, since in held.items():
+                if (isinstance(key, str) and key.isascii() and key.isdigit() and _guid(int(key))
+                        and type(since) in (int, float)):
+                    self.held[int(key)] = float(since)
 
     def _save(self):
         state = {"lead": self.lead_guid, "source": self.source, "his": self.his,
-                 "assisted": self.assisted, "members": sorted(self.members), "raid": self.raid,
-                 "leader": self.leader}
+                 "members": sorted(self.members), "raid": self.raid, "leader": self.leader,
+                 "held": {str(g): t for g, t in sorted(self.held.items())}}
         with self.app.store.transaction():
             self.app.store.set_meta(KEY, json.dumps(state, separators=(",", ":")))
 
     def _set(self, guid: int | None, source: str | None, *, his: bool = False):
-        old = self.lead_guid
+        old = (self.lead_guid, self.his)
         self.lead_guid, self.source, self.his = guid, source if guid is not None else None, his
-        self._assist_tried = None
         self._save()
         self._sync_talk()
-        if old != guid:
-            log_event("raidlead_set", lead=guid or 0, source=source or "-")
+        if old != (guid, his):
+            log_event("raidlead_set", lead=guid or 0, source=source or ("his" if his else "-"))
 
     def _break(self, why: str):
-        """His group broke (or she left it): no lead, no flag of ours, nothing held."""
-        if self.lead_guid is not None or self.assisted is not None or self.his:
+        """His group broke (or she left it): no lead, nothing queued for the old group. Native lifts
+        any hold of a bot no longer in his group itself."""
+        if self.lead_guid is not None or self.his or self.held:
             log_event("raidlead_cleared", reason=why)
-        self.lead_guid = self.source = self.assisted = None
+        self.lead_guid = self.source = None
         self.his = False
-        self._held.clear()
+        self.held.clear()
+        self._generation += 1
+        self._queue.clear()
         self._save()
         self._sync_talk()
 
     def lead(self) -> int | None:
-        """The member who calls his group's raid, or None."""
+        """The member who calls his group's raid; None while he leads it himself, while native's
+        switch is off or unknown, or while the worldserver has no raid lead."""
+        if self.his or not (self.connected and self.supported and self.native is True):
+            return None
         return self.lead_guid
 
     # -- when it may act ----------------------------------------------------------------------------
@@ -147,6 +182,8 @@ class RaidLeadService:
             return "stopping"
         if not self.connected or not self.supported:
             return "unsupported"
+        if self.native is not True:
+            return "native_off"
         if not app.world.human_online:
             return "offline"
         if self.leader != app.human_guid or not self.members:
@@ -164,10 +201,17 @@ class RaidLeadService:
         return None
 
     def _sync_talk(self):
-        """The talk's raid lead (RaidState.set_designated): hers while the group is his to lead."""
+        """The talk's raid lead: hers while the group is his to lead. A raid he drives whose lead
+        she is goes back to him at once when he takes it back or the raid lead stops (P2-5)."""
         why = self.blocked()
-        held = why not in ("raid_led", "offline_raid", "forming", "no_group")
-        self.app.raid.set_designated(self.lead_guid if held else None)
+        lead = self.lead() if why in (None, "offline", "stopping") else None
+        self.app.raid.set_designated(lead)
+        guild = getattr(self.app, "guild", None)
+        run = getattr(getattr(guild, "raid_night", None), "run", None)
+        human = self.app.human_guid
+        if (run is not None and run.lead_is_human and run.plan.lead_guid != human
+                and (lead is None or lead not in run.plan.members)):
+            self.app.raid.set_lead(human)
 
     # -- his group -----------------------------------------------------------------------------------
 
@@ -200,20 +244,26 @@ class RaidLeadService:
         roles = self._roles()
         who = order.who if order.who != "everyone" or order.action != "taunt" else "tanks"
         if who == "member":
-            return [order.member] if order.member in roles else []
-        if who == "everyone":
-            return sorted(roles)
-        if who in ("tanks", "healers"):
-            return [g for g, r in roles.items() if r[0] == who[:-1]]
-        if who == "damage":
-            return [g for g, r in roles.items() if r[0] == "damage"]
-        return [g for g, r in roles.items() if r[0] == "damage" and r[1] == who]
+            guids = [order.member] if order.member in roles else []
+        elif who == "everyone":
+            guids = sorted(roles)
+        elif who in ("tanks", "healers"):
+            guids = [g for g, r in roles.items() if r[0] == who[:-1]]
+        elif who == "damage":
+            guids = [g for g, r in roles.items() if r[0] == "damage"]
+        else:
+            guids = [g for g, r in roles.items() if r[0] == "damage" and r[1] == who]
+        if order.action == "hold":  # tanks and healers never go passive (native refuses them too)
+            guids = [g for g in guids if roles[g][0] == "damage"]
+        return guids
 
     def _who_words(self, order: Order) -> str:
         if order.who == "member":
             return self._name(order.member)
         if order.action == "taunt" and order.who == "everyone":
             return C.WHO_WORDS["tanks"]
+        if order.action == "hold" and order.who == "everyone":
+            return C.WHO_WORDS["damage"]
         return C.WHO_WORDS[order.who]
 
     def _name(self, guid) -> str:
@@ -231,8 +281,10 @@ class RaidLeadService:
         self.connected = connected
         if not connected:
             self.supported = False
+            self.native = None
             self._claimed.clear()
             self._queue.clear()
+            self._sync_talk()
 
     async def event(self, ev):
         if self.app.is_backlog(ev) or self.stopping:
@@ -240,16 +292,23 @@ class RaidLeadService:
         human = self.app.human_guid
         if isinstance(ev, Hello):
             self.supported = FEATURE in ev.features
-            self._assist_tried = None  # a new worldserver: try her flag once more
+            self.native = None
+            self._probe_at = float("-inf")  # a new worldserver: ask its switch, and for his group
+            if self.held:
+                self._enqueue(("lift", "hello"))
         elif isinstance(ev, Group):
-            self._group(ev.leader_guid, ev.raid, ev.members)
+            await self._group(ev.leader_guid, ev.raid, ev.members)
         elif isinstance(ev, GuildGroup):
             if ev.leader_guid == human:
-                self._group(ev.leader_guid, ev.raid, ev.members)
+                await self._group(ev.leader_guid, ev.raid, ev.members)
         elif isinstance(ev, Chat):
             row = self._claimed.pop(id(ev), None)
             if row is not None:
-                self._enqueue(("line", row[0], row[1], ev))
+                intent, line_id = row
+                if isinstance(intent, Unclear):
+                    self._hold_line(ev, line_id, intent)
+                else:
+                    self._enqueue(("line", intent, line_id, ev))
         elif isinstance(ev, Death):
             if ev.guid in self.members:
                 self._dead.add(ev.guid)
@@ -259,23 +318,23 @@ class RaidLeadService:
             self._boss(ev)
         self._sync_talk()
 
-    def _group(self, leader, raid, members):
+    async def _group(self, leader, raid, members):
         human = self.app.human_guid
         everyone = set(members) | ({leader} if leader else set())
         if (not leader and not members) or human not in everyone:
             self.members, self.leader, self.raid = frozenset(), 0, False
             self._break("group_left")
+            await self._release_pending()
             return
         self.members = frozenset(g for g in members if _guid(g) and g != human)
         self.leader, self.raid = leader, bool(raid)
         if self.lead_guid is not None and self.lead_guid not in self.members:
             self._break("lead_left")
+            await self._release_pending()
             return
-        if self.assisted is not None and self.assisted not in self.members:
-            self.assisted = None
         self._dead &= self.members
-        self._held &= self.members
-        self._assist_tried = None
+        for guid in [g for g in self.held if g not in self.members]:
+            del self.held[guid]  # native lifts a hold of a bot that left his group
         self._save()
         self._wake.set()
 
@@ -285,31 +344,80 @@ class RaidLeadService:
             return
         if ev.state == "engaged":
             self._bosses[ev.map] = (ev.boss_id, boss_name(ev.map, ev.boss_id, ev.boss_name))
-            if self._held:
-                self._enqueue(("unhold",))
-        elif ev.state == "wiped":
-            self._enqueue(("wipe", ev.map, ev.boss_id, boss_name(ev.map, ev.boss_id, ev.boss_name)))
+            if self.held:
+                self._enqueue(("lift", "engage"))
 
     def _enqueue(self, item):
-        self._queue.append(item)
+        self._queue.append((self._generation, item))
         self._wake.set()
 
-    def claims(self, ev: Chat, line_id: int) -> bool:
-        """Whether his line (already stored) is the raid lead's, not talk: a designation, an
-        order, a ready check, a pull countdown or a question about the plan, in his raid or party
-        chat or a push-to-talk room that is not private. Synchronous and model-free: the app asks
-        before planning replies."""
-        if (ev.from_guid != self.app.human_guid or ev.via_bridge or self.blocked() is not None
-                or not (ev.channel in COMMAND_CHANNELS
-                        or ev.channel.startswith("voice:") and ev.channel not in PRIVATE_ROOMS)):
+    def claims(self, ev: Chat, line_id: int) -> str | bool:
+        """Whether his line (already stored) is the raid lead's, not talk: "order" for a
+        designation, an order, a ready check, a pull countdown or a question about the plan;
+        "held" for an addressed order attempt the model reads first; False for anything else.
+        Only his raid or party chat, or a push-to-talk room that is not private (never a whisper,
+        Discord or a DM). Synchronous and model-free; any failure is False (talk)."""
+        try:
+            if (ev.from_guid != self.app.human_guid or ev.via_bridge or self.blocked() is not None
+                    or not (ev.channel in COMMAND_CHANNELS
+                            or ev.channel.startswith("voice:") and ev.channel not in PRIVATE_ROOMS)):
+                return False
+            intent = parse(ev.text, self._names())
+            if intent is None:
+                return False
+            self._claimed[id(ev)] = (intent, line_id)
+            while len(self._claimed) > CLAIMED:
+                del self._claimed[next(iter(self._claimed))]
+            return "held" if isinstance(intent, Unclear) else "order"
+        except Exception as exc:
+            log_event("raidlead_claim_failed", level=logging.WARNING, error=type(exc).__name__)
             return False
-        intent = parse(ev.text, self._names())
-        if intent is None:
-            return False
-        self._claimed[id(ev)] = (intent, line_id)
-        while len(self._claimed) > CLAIMED:
-            del self._claimed[next(iter(self._claimed))]
-        return True
+
+    # -- held lines: the model reads them beside the worker, and they go to talk in order --------
+
+    def _hold_line(self, ev, line_id, intent):
+        held = _Held(ev, line_id, intent, self._generation, names=self._names())
+        held.task = asyncio.get_running_loop().create_task(self._read(held), name="raidlead-read")
+        self._pending.append(held)
+
+    async def _read(self, held: _Held):
+        try:
+            held.answer = await self._classify(held.ev.text, held.names)
+        finally:
+            held.done = True
+            self._wake.set()
+
+    async def before_his_line(self):
+        """His next line is about to be handled: a line still held for the model goes to talk
+        first, so his lines reach talk in the order he wrote them (P3-3)."""
+        if any(not h.done for h in self._pending):
+            await self._release_pending(unread_only=True)
+
+    async def _release_pending(self, *, unread_only=False):
+        keep = deque()
+        while self._pending:
+            held = self._pending.popleft()
+            if unread_only and held.done:
+                keep.append(held)
+                continue
+            if held.task is not None and not held.task.done():
+                held.task.cancel()
+            if not held.released:
+                held.released = True
+                log_event("raidlead_unclear", reason="talk_first")
+                await self.app.release_to_talk(held.ev, held.line_id)
+        self._pending = keep
+
+    async def _settle_pending(self):
+        while self._pending and self._pending[0].done:
+            held = self._pending.popleft()
+            if held.released:
+                continue
+            held.released = True
+            if held.generation != self._generation or self.blocked() is not None:
+                await self.app.release_to_talk(held.ev, held.line_id)
+                continue
+            await self._unclear(held)
 
     # -- the worker -------------------------------------------------------------------------------
 
@@ -322,15 +430,19 @@ class RaidLeadService:
             self._wake.clear()
             try:
                 await self._tick()
+                await self._settle_pending()
                 while self._queue:
-                    await self._handle(self._queue.popleft())
+                    generation, item = self._queue.popleft()
+                    await self._handle(generation, item)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 log_event("raidlead_failed", level=logging.WARNING, error=type(exc).__name__)
 
     async def _tick(self):
+        await self._probe()
         self._sync_talk()
+        await self._lift_due()
         if self.blocked() is not None:
             return
         if self.lead_guid is None and not self.his:
@@ -345,41 +457,66 @@ class RaidLeadService:
             pick = default_lead(self.app.store.conn, officers, titled)
             if pick is not None:
                 self._set(pick, "default")
-        await self._reconcile_assist()
 
-    async def _reconcile_assist(self):
-        """Her assistant flag, and none on a lead he replaced: one attempt per state of his group
-        (a group change or a new worldserver tries again), never a retry every tick."""
-        state = (self.lead_guid, self.assisted, self.raid, self.leader, self.members)
-        if not self.raid or self._assist_tried == state:
+    async def _probe(self):
+        """Native's switch, asked (P2-4): at each hello a sync (which also has native publish his
+        group, P3-10), then a probe a minute while he plays. Off, nothing here leads or speaks."""
+        if not (self.connected and self.supported and self.app.world.human_online):
             return
-        self._assist_tried = state
-        if self.assisted is not None and self.assisted != self.lead_guid and self.assisted in self.members:
-            ok, _ = await self._native(RaidLeadCmd(uuid4().hex, "unassist", self.assisted))
-            if ok:
-                self.assisted = None
-                self._save()
-        if self.lead_guid is not None and self.assisted != self.lead_guid:
-            ok, error = await self._native(RaidLeadCmd(uuid4().hex, "assist", self.lead_guid))
-            if ok:
-                self.assisted = self.lead_guid
-                self._save()
-            log_event("raidlead_assist", lead=self.lead_guid, ok=int(ok), error=_code(error))
+        now = self.app.clock.now()
+        if now - self._probe_at < (PROBE_UNKNOWN_S if self.native is None else PROBE_S):
+            return
+        self._probe_at = now
+        action = "probe" if self.native is True else "sync"
+        ok, error = await self._native(RaidLeadCmd(uuid4().hex, action, 0))
+        self._native_answer(ok, error)
 
-    async def _handle(self, item):
+    def _native_answer(self, ok, error):
+        before = self.native
+        if ok:
+            self.native = True
+        elif error == "raidlead_off":
+            self.native = False
+        if self.native != before and self.native is not None:
+            log_event("raidlead_native", on=int(self.native))
+            self._sync_talk()
+
+    async def _lift_due(self):
+        """Holds older than HOLD_S, and lifts that failed, tried again (native lifts them too)."""
+        now = self.app.clock.now()
+        due = sorted(g for g, since in self.held.items() if now - since >= HOLD_S)
+        if due and now - self._lift_at >= LIFT_RETRY_S:
+            await self._lift(due, "timer")
+
+    async def _lift(self, guids, why):
+        if not guids:
+            return
+        self._lift_at = self.app.clock.now()
+        result = await self._job(BotDo(uuid4().hex, tuple(guids), "order", "lift"), quiet=True)
+        now = self.app.clock.now()
+        if result is None:
+            return
+        done, missed = result
+        for guid in done:
+            self.held.pop(guid, None)
+        for guid, reason in missed:
+            gone = reason in ("not_in_group", "offline", "raidlead_off", "not_cast", "not_bot")
+            if gone or now - self.held.get(guid, now) >= LIFT_GIVE_UP_S:
+                self.held.pop(guid, None)  # native lifts or resets it itself
+                log_event("raidlead_lift_dropped", guid=guid, reason=_code(reason))
+        self._save()
+        log_event("raidlead_lift", why=why, count=len(guids), done=len(done))
+
+    async def _handle(self, generation, item):
         kind = item[0]
-        if self.blocked() is not None:
+        if kind == "lift":
+            await self._lift(sorted(self.held), item[1])
             return
+        if generation != self._generation or self.blocked() is not None:
+            return  # queued for a group that broke, or the raid lead stopped (P3-2)
         if kind == "line":
             _, intent, line_id, ev = item
             await self._line(intent, line_id, ev)
-        elif kind == "wipe":
-            await self._wipe(*item[1:])
-        elif kind == "unhold":
-            held = sorted(self._held & self.members)
-            self._held.clear()
-            if held:
-                await self._job(BotDo(uuid4().hex, tuple(held), "order", "follow"))
 
     async def _line(self, intent, line_id, ev):
         human = self.app.guild.ports.human_name()
@@ -390,12 +527,9 @@ class RaidLeadService:
             if not self._speakable(intent.guid):
                 return
             self._set(intent.guid, "chat")
-            await self._reconcile_assist()
             self._propose(intent.guid, C.designated(human), line_id)
         elif isinstance(intent, Order):
             await self._order(intent, line_id)
-        elif isinstance(intent, Unclear):
-            await self._unclear(intent, line_id, ev)
         elif isinstance(intent, Ready):
             await self._ready(intent, line_id)
         elif isinstance(intent, Countdown):
@@ -413,13 +547,14 @@ class RaidLeadService:
             await self._lust(order, targets, speaker, line_id)
             return
         if not targets:
-            await self._refuse(speaker, "nobody")
+            await self._refuse(speaker, self._nobody(order),
+                               name=self._name(order.member) if order.who == "member" else "")
             return
         if order.action == "kill_skull":
-            marker = self.lead_guid if self.lead_guid is not None and (
-                not self.raid or self.assisted == self.lead_guid) else self.app.human_guid
+            marker = self.lead() if self._speakable(self.lead()) else self.app.human_guid
             ok, error = await self._native(RaidLeadCmd(uuid4().hex, "mark", marker, "skull"))
             if not ok:
+                self._native_answer(ok, error)
                 await self._refuse(speaker, error)
                 return
         on = ""
@@ -431,9 +566,14 @@ class RaidLeadService:
             return
         done, missed = result
         if order.action == "hold":
-            self._held |= set(done)
-        elif order.action in ("follow", "come_back", "attack", "back_off"):
-            self._held -= set(done)
+            now = self.app.clock.now()
+            for guid in done:
+                self.held[guid] = now
+            self._save()
+        elif order.action in UNHOLDS and set(done) & set(self.held):
+            for guid in done:
+                self.held.pop(guid, None)
+            self._save()
         if not done:
             await self._refuse(speaker, missed[0][1] if missed else "failed")
             return
@@ -445,27 +585,36 @@ class RaidLeadService:
                                      [(self._name(g), C.reason_words(r)) for g, r in missed]),
                       line_id)
 
+    def _nobody(self, order: Order) -> str:
+        if order.who == "member" and order.member not in self._roles():
+            return "not_here"
+        if order.action == "hold":
+            return "not_damage"
+        return "nobody"
+
     async def _lust(self, order, targets, speaker, line_id):
+        """One shaman casts her faction's spell through the raid lead's own order (so native's
+        switch covers it). An addressee he named who is not here is refused, never replaced (P3-1)."""
         roles = self._roles()
-        shamans = [g for g in (targets or sorted(roles)) if g in roles and roles[g][2] == 7
-                   and g not in self._dead]
+        if order.who == "member" and order.member not in roles:
+            await self._refuse(speaker, "not_here", name=self._name(order.member))
+            return
+        pool = targets if order.who != "everyone" else sorted(roles)
+        shamans = [g for g in pool if g in roles and roles[g][2] == 7 and g not in self._dead]
         if not shamans:
             await self._refuse(speaker, "no_shaman")
             return
         shaman = shamans[0]
-        faction = faction_known(roles[shaman][3])
-        if faction is None:
-            await self._refuse(speaker, "no_shaman")
-            return
-        spell = "bloodlust" if faction == "horde" else "heroism"
-        result = await self._job(BotDo(uuid4().hex, (shaman,), "cast", spell))
+        result = await self._job(BotDo(uuid4().hex, (shaman,), "order", "lust"))
         if result is None:
             return
         done, missed = result
         if not done:
             await self._refuse(speaker, missed[0][1] if missed else "failed")
             return
-        words = C.order_words("lust", spell=spell.capitalize())
+        faction = faction_known(roles[shaman][3])
+        spell = "Heroism" if faction == "alliance" else "Bloodlust"
+        words = C.order_words("lust", spell=spell)
         self._last = (words, self._name(shaman), self.app.clock.now())
         self._propose(self._ack_speaker(order, done), C.ack(
             self.app.guild.ports.human_name(), words, self._name(shaman), [self._name(shaman)], []),
@@ -480,33 +629,34 @@ class RaidLeadService:
         if (order.who == "member" and self._speakable(order.member)
                 and (not done or order.member in done) and not self._in_fight()):
             return order.member
-        if self._speakable(self.lead_guid):
-            return self.lead_guid
+        if self._speakable(self.lead()):
+            return self.lead()
         return next((g for g in done if self._speakable(g)), None)
 
-    async def _unclear(self, intent: Unclear, line_id, ev):
-        """An order attempt no pattern resolved. The model maps it onto the list when it is sure;
-        when it is not, she asks; when the model is not loaded (or paused), cannot answer, or is
-        sure it is no order, the line goes back to talk as if never held."""
-        names = self._names()
-        answer = await self._classify(ev.text, names)
-        speaker = self._ack_speaker(Order("hold", intent.who, intent.member))
+    async def _unclear(self, held: _Held):
+        """An order attempt no pattern resolved, once the model has read it. It maps it onto the
+        list when it is sure; when it is not, she asks; when the model is not loaded (or paused),
+        cannot answer, or is sure it is no order, the line goes back to talk as if never held."""
+        intent, answer = held.intent, held.answer
+        speaker = self._ack_speaker(Order("follow", intent.who, intent.member))
         if answer is None or answer[0] is None and answer[1] >= CONFIDENT:
             log_event("raidlead_unclear", reason="talk" if answer else "no_model")
-            await self.app.release_to_talk(ev, line_id)
+            await self.app.release_to_talk(held.ev, held.line_id)
             return
         order, confidence = answer
         if order is None or confidence < CONFIDENT:
             log_event("raidlead_unclear", reason="confidence")
             if speaker is not None:
-                self._propose(speaker, C.clarify(self.app.guild.ports.human_name()), line_id)
+                self.app.signal_his_line(held.ev, held.line_id, command=True)
+                self._propose(speaker, C.clarify(self.app.guild.ports.human_name()), held.line_id)
             else:
-                await self.app.release_to_talk(ev, line_id)
+                await self.app.release_to_talk(held.ev, held.line_id)
             return
         if intent.who != "everyone" and order.who == "everyone":
             order = Order(order.action, intent.who, intent.member, order.on, by_model=True)
         log_event("raidlead_model_order", action=order.action, who=order.who)
-        await self._order(order, line_id)
+        self.app.signal_his_line(held.ev, held.line_id, command=True)
+        await self._order(order, held.line_id)
 
     async def _classify(self, text: str, names: dict[str, int]):
         """The live model's reading of an order attempt, restricted to ORDERS by its schema; None
@@ -548,11 +698,11 @@ class RaidLeadService:
     # -- callouts ----------------------------------------------------------------------------------
 
     async def _ready(self, intent: Ready, line_id):
+        """His ready check: native's raid_control with him as its leader (no assistant flag)."""
         human = self.app.human_guid
-        leader = self.lead_guid if self.raid and self.lead_guid is not None and self.assisted == self.lead_guid else human
         speaker = intent.member if self._speakable(intent.member) else (
-            self.lead_guid if self._speakable(self.lead_guid) else None)
-        ok, error = await self._native(RaidControl(uuid4().hex, human, "ready_check", leader))
+            self.lead() if self._speakable(self.lead()) else None)
+        ok, error = await self._native(RaidControl(uuid4().hex, human, "ready_check", human))
         if not ok:
             await self._refuse(speaker, error)
             return
@@ -562,7 +712,7 @@ class RaidLeadService:
 
     def _start_countdown(self, intent: Countdown):
         speaker = intent.member if self._speakable(intent.member) else (
-            self.lead_guid if self._speakable(self.lead_guid) else None)
+            self.lead() if self._speakable(self.lead()) else None)
         if speaker is None:
             return
         if self._countdown is not None and not self._countdown.done():
@@ -580,15 +730,15 @@ class RaidLeadService:
 
     def _plan(self, intent: AskPlan, line_id):
         speaker = intent.member if self._speakable(intent.member) else (
-            self.lead_guid if self._speakable(self.lead_guid) else None)
+            self.lead() if self._speakable(self.lead()) else None)
         if speaker is None:
             return
         human = self.app.guild.ports.human_name()
         roles = self._roles()
         count = {r: sum(1 for v in roles.values() if v[0] == r) for r in ("tank", "healer", "damage")}
         facts = []
-        if self.lead_guid is not None:
-            facts.append(f"{self._name(self.lead_guid)} calls the raid; {human} keeps the group.")
+        if self.lead() is not None:
+            facts.append(f"{self._name(self.lead())} calls the raid; {human} keeps the group.")
         facts.append(f"The group: {count['tank']} tanks, {count['healer']} healers, "
                      f"{count['damage']} damage dealers.")
         if self._last is not None and self.app.clock.now() - self._last[2] < 600:
@@ -602,17 +752,6 @@ class RaidLeadService:
         else:
             facts.append("No boss plan on file for here yet.")
         self._propose(speaker, C.plan(human, facts), line_id)
-
-    async def _wipe(self, map_id, boss_id, name):
-        dead = sorted(self._dead & self.members)
-        released = 0
-        if dead:
-            result = await self._job(BotDo(uuid4().hex, tuple(dead), "order", "release"))
-            if result is not None:
-                released = len(result[0])
-                self._dead -= set(result[0])
-        if self._speakable(self.lead_guid):
-            self._propose(self.lead_guid, C.wipe(name, released), None, kind=TurnKind.URGENT)
 
     # -- speech and the bridge --------------------------------------------------------------------
 
@@ -633,14 +772,14 @@ class RaidLeadService:
         self.app.guild.source.add(turn)
         return True
 
-    async def _refuse(self, guid, code):
+    async def _refuse(self, guid, code, *, name=""):
         """A plain "can't do that one": no model, so nothing can turn it into an "on it"."""
         code = code or "failed"
         log_event("raidlead_refused", reason=_code(code))
         if code in ("raidlead_off", "disabled", "unsupported") or not self._speakable(guid):
             return  # native's switch is off: the operator's to fix, nothing for him to hear
         kind = TurnKind.URGENT if self._in_fight() else TurnKind.CALLOUT
-        await self.app.guild.ports.say(guid, self._channel(), C.refusal(code), kind=kind)
+        await self.app.guild.ports.say(guid, self._channel(), C.refusal(code, name), kind=kind)
 
     async def _native(self, cmd) -> tuple[bool, str]:
         """A command native answers in its ack alone (raid_lead, raid_control)."""
@@ -652,7 +791,7 @@ class RaidLeadService:
             return False, type(exc).__name__
         return (True, "") if ack.ok else (False, ack.error or "refused")
 
-    async def _job(self, cmd: BotDo):
+    async def _job(self, cmd: BotDo, *, quiet=False):
         """A bot_do and its terminal: (done guids, [(guid, reason)]) once the game's job confirms;
         a refusal at the ack is ([], [(each guid, error)]); None when nothing came back, so
         nothing is said either way."""
@@ -668,6 +807,7 @@ class RaidLeadService:
             return None
         if not ack.ok:
             await ports.wait_job(cmd.id, 0)
+            self._native_answer(False, ack.error)
             log_event("raidlead_order", action=cmd.param, count=len(cmd.guids), outcome="refused",
                       error=_code(ack.error))
             return [], [(g, ack.error or "failed") for g in cmd.guids]
@@ -680,8 +820,9 @@ class RaidLeadService:
         wanted = set(cmd.guids)
         done = [g for g in job.guids if g in wanted]
         missed = [(s.guid, s.reason) for s in job.skipped if s.guid in wanted]
-        log_event("raidlead_order", action=cmd.param, count=len(cmd.guids), done=len(done),
-                  outcome="done")
+        if not quiet or missed:
+            log_event("raidlead_order", action=cmd.param, count=len(cmd.guids), done=len(done),
+                      outcome="done")
         return done, missed
 
     # -- the console ---------------------------------------------------------------------------------
@@ -697,8 +838,8 @@ class RaidLeadService:
                                "officer": persona.play.guild_role == "officer",
                                "online": guid in self.app.world.online})
         return {"lead": self.lead_guid, "source": self.source, "his": self.his,
-                "assistant": self.lead_guid is not None and self.assisted == self.lead_guid,
-                "raid": self.raid, "blocked": self.blocked(), "candidates": candidates}
+                "native": self.native, "raid": self.raid, "blocked": self.blocked(),
+                "candidates": candidates}
 
     async def console_action(self, args: dict) -> dict:
         why = self.blocked()
@@ -714,21 +855,27 @@ class RaidLeadService:
         if not self._speakable(guid):
             return {"ok": False, "error": "Only a member of your group who is online can lead it."}
         self._set(guid, "console")
-        await self._reconcile_assist()
         self._propose(guid, C.designated(self.app.guild.ports.human_name()), None,
                       kind=TurnKind.CALLOUT)
         return {"ok": True, "message": f"{self._name(guid)} leads your group's raid now."}
 
     async def close(self):
         self.stopping = True
+        for held in self._pending:
+            if held.task is not None and not held.task.done():
+                held.task.cancel()
+        tasks = [h.task for h in self._pending if h.task is not None]
         if self._countdown is not None and not self._countdown.done():
             self._countdown.cancel()
-            await asyncio.gather(self._countdown, return_exceptions=True)
+            tasks.append(self._countdown)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 BLOCKED = {
     "stopping": "The mind is stopping.",
     "unsupported": "The game server has no raid lead yet (it needs the native rebuild) or is not connected.",
+    "native_off": "The game server's raid lead is off (Leeroy.RaidLead.Enable).",
     "offline": "You're not in game.",
     "no_group": "You're not leading a group.",
     "no_guild": "Guild life is not running in this mind.",

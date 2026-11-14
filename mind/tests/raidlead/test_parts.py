@@ -89,3 +89,16 @@ def test_the_ops_switches_list_the_raid_lead(tmp_path, text, state):
     rows = opsview.switches_view(tmp_path, time.monotonic() + 10, mind_started=None)["rows"]
     [row] = [r for r in rows if r["table"] == "raidlead"]
     assert row["state"] == state
+
+
+def test_raids_she_led_because_he_named_her_are_no_nights_led(store):
+    """P3-9: only raid nights the mind called count toward her nights led (and last_led)."""
+    from leeroy_mind.guild.store import NAMED_LEAD_KEY, last_led
+    conn = store.conn
+    for lead in (102, 103):
+        conn.execute("INSERT INTO guild_raid(started,raid_key,size,heroic,offline,lead_guid,tank_guid,"
+                     "loot_guid) VALUES (1,'icc',10,0,0,?,?,?)", (lead, lead, lead))
+    conn.execute("INSERT INTO meta(key,value) VALUES (?, '102')", (NAMED_LEAD_KEY.format(raid_id=1),))
+    conn.commit()
+    assert nights(conn, [102, 103]) == {102: (0, 0), 103: (1, 0)}
+    assert 102 not in last_led(conn) and 103 in last_led(conn)

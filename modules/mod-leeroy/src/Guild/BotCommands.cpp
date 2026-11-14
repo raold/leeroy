@@ -358,8 +358,8 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
         return Fail("disabled");
     if (command->action == "playstyle" && !LeeroyModule::Instance().Config().playStyleEnable)
         return Fail("playstyle_off");
-    if (command->action == "order" && !RaidLeadEnabled())
-        return Fail("raidlead_off");
+    if (command->action == "order" && command->param != "lift" && !RaidLeadEnabled())
+        return Fail("raidlead_off"); // lifting a hold is cleanup: it runs with the switch off too
     // Formation is the tier-one alias that can replace a journaled value.
     bool const fishing = command->action == "do" && command->param == "go fishing";
     if (!command->trainingRun.empty() && !Training::ScopedBotMutationAllowed(command->action))
@@ -442,9 +442,10 @@ void TickBotCommands()
         {
             Player* bot = FindOnline(guid);
             failure = BotFailure(bot);
-            // A release is the one order for the dead (RaidLead.cpp); every other action keeps refusing them.
+            // A release, and lifting a hold, are the orders for the dead (RaidLead.cpp); every other action keeps
+            // refusing them.
             bool const order = job.command.action == "order";
-            if (failure == "dead" && order && job.command.param == "release")
+            if (failure == "dead" && order && (job.command.param == "release" || job.command.param == "lift"))
                 failure.clear();
             if (failure.empty())
             {

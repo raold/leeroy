@@ -151,6 +151,7 @@ function renderRaid(j) {
 var LEAD_SOURCE = { console: "set here", chat: "named in chat", "default": "the guild's pick" };
 var LEAD_BLOCKED = { offline: "you're not in game", no_group: "you're not leading a group",
                      unsupported: "the game server needs the raid lead rebuild",
+                     native_off: "the game server's raid lead is off (Leeroy.RaidLead.Enable)",
                      offline_raid: "an offline raid holds the guild", forming: "a raid is being formed",
                      raid_led: "tonight's raid has its own lead", stopping: "the mind is stopping" };
 var leadReady = "";
@@ -178,9 +179,9 @@ function renderLead(view, m, off) {
     });
     if (keep) { pick.value = keep; }
   }
-  var now = rl.lead ? who(view, rl.lead) + " leads (" + (LEAD_SOURCE[rl.source] || str(rl.source)) + ")"
-    + (rl.raid ? (rl.assistant ? ", raid assistant" : ", not yet assistant") : "")
-    : rl.his ? "you lead: nobody calls it" : "nobody leads yet";
+  var now = rl.his ? "you lead: nobody calls it"
+    : rl.lead ? who(view, rl.lead) + " leads (" + (LEAD_SOURCE[rl.source] || str(rl.source)) + ")"
+    : "nobody leads yet";
   var why = rl.blocked ? LEAD_BLOCKED[rl.blocked] || str(rl.blocked) : "";
   setText("r-leadnow", now + (why ? " · " + why : ""));
   $("r-leadgo").disabled = !!(off || why);

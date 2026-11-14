@@ -1,7 +1,8 @@
 """Who calls his group's raid when he names nobody: a code-built rule, never the model.
 
-The default lead is the officer in his group with the most raid nights led (guild_raid rows the
-mind recorded with her as lead, offline raids aside), then the most raid nights attended
+The default lead is the officer in his group with the most raid nights led (guild_raid rows of
+raid nights the mind called with her as lead: offline raids, and his own groups' raids she led
+because he named her, aside), then the most raid nights attended
 (guild_attendance 'raided'), then an officer whose title says raid lead, then the lowest guid.
 A group with no officer in it has no default lead.
 """
@@ -16,7 +17,8 @@ def nights(conn, guids: Iterable[int]) -> dict[int, tuple[int, int]]:
     if not guids:
         return out
     marks = ",".join("?" * len(guids))
-    led = dict(conn.execute(f"SELECT lead_guid,COUNT(*) FROM guild_raid WHERE offline=0 "
+    from leeroy_mind.guild.store import _NOT_NAMED
+    led = dict(conn.execute(f"SELECT lead_guid,COUNT(*) FROM guild_raid WHERE offline=0 AND {_NOT_NAMED} "
                             f"AND lead_guid IN ({marks}) GROUP BY lead_guid", guids))
     attended = dict(conn.execute(f"SELECT guid,COUNT(DISTINCT raid_id) FROM guild_attendance "
                                  f"WHERE status='raided' AND guid IN ({marks}) GROUP BY guid", guids))

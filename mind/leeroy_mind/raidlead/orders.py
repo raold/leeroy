@@ -1,19 +1,21 @@
 """His words as raid orders: a fixed list the bodies can carry out, never anything else.
 
-Deterministic patterns come first. A line that only looks like an order attempt (a clear order
-word, or an addressee and an order word, and no question) and that no pattern resolves goes to
-the live model, whose JSON answer is restricted to this list plus "none" by an enum
-(`schema`): it can never invent an action. Everything here is pure; nothing logs his words.
+An order needs an explicit addressee (everyone, all, raid, tanks, healers, dps, melee, ranged or
+a member's name) or one of a few unambiguous phrases ("wait for my pull", "stack on me", "spread
+out", "tanks swap", "lust now", "back off"); a single word or a short everyday phrase alone is
+never an order. Deterministic patterns come first. An addressed line led by an order word that
+no pattern resolves goes to the live model, whose JSON answer is restricted to this list plus
+"none" by an enum (`schema`): it can never invent an action. Everything here is pure; nothing
+logs his words.
 """
 
 from dataclasses import dataclass
 import re
 
-# The fixed list. Every order but "lust" is mod-leeroy's bot_do "order" (RaidLead.cpp,
-# LeeroyRaidLeadPolicy.h kRaidOrders); Bloodlust/Heroism is the existing bot_do "cast".
+# The fixed list, each mod-leeroy's bot_do "order" of that name (RaidLead.cpp, LeeroyRaidLeadPolicy.h
+# kRaidOrders). Native's "lift" (undo a hold) is the raid lead's own, never his words.
 ORDERS = ("follow", "come_back", "stay", "stack", "spread", "run_out", "back_off", "hold",
           "attack", "kill_skull", "taunt", "lust", "release")
-NATIVE_ORDERS = frozenset(ORDERS) - {"lust"}
 # Who an order is for: the whole group, a role, the damage dealers by range, or one member.
 WHO = ("everyone", "tanks", "healers", "damage", "melee", "ranged", "member")
 MAX_CHARS = 200
@@ -23,7 +25,7 @@ MAX_WORDS = 12
 MEANING = {
     "follow": "follow him", "come_back": "come back to him", "stay": "stay where they are",
     "stack": "stack on one spot", "spread": "spread out", "run_out": "run out of the group",
-    "back_off": "stop fighting and fall back to him", "hold": "hold, no attacking until his pull",
+    "back_off": "fall back to his side and fight on", "hold": "damage dealers hold their attacks until his pull",
     "attack": "attack his target", "kill_skull": "kill the skull-marked target",
     "taunt": "swap tanks: a tank not holding his target taunts it",
     "lust": "Bloodlust or Heroism now", "release": "the dead release and run back",
@@ -82,7 +84,7 @@ _TAIL_FILLER = re.compile(r"(?:[ ,]+(?:now|please|pls|asap|quick|quickly|right n
 _PUNCT = re.compile(r"[.!]+$")
 
 _P = {
-    "kill_skull": r"(?:(?:kill|nuke|focus|attack|dps|burn|hit|go|on) (?:the )?skull(?: first)?|skull(?: first| it)?)",
+    "kill_skull": r"(?:(?:kill|nuke|focus|attack|dps|burn|hit|go|on) (?:the )?skull(?: first)?|skull(?: first| it)?|kill skull first)",
     "lust": r"(?:(?:pop|use|cast|hit) )?(?:blood ?lust|lust|hero(?:ism)?|bl|time warp)",
     "taunt": r"(?:(?:tanks? )?swap(?: tanks?)?|tank swap|taunt(?: (?:it|him|her|that|the boss|now|swap))?)",
     "release": r"(?:release(?:,? (?:and )?run (?:back|in))?|rel and run(?: back)?|run back(?: in)?)",
@@ -91,7 +93,7 @@ _P = {
     "stack": r"(?:(?:stack|collapse|group up|clump)(?: up)?(?: (?:on|at|to) (?P<on>[^\W\d_][\w'-]*))?|on (?P<on2>[^\W\d_][\w'-]*))",
     "spread": r"(?:spread(?: out| apart| up)?|split up)",
     "run_out": r"(?:run out|get out(?: of (?:the )?(?:raid|group|there|it))?|move out)",
-    "back_off": r"(?:back off|back up|fall back|get back|range up|go range|move back|step back|disengage)",
+    "back_off": r"(?:back off|fall back)",
     "stay": r"(?:stay(?: here| put| there| back)?|hold (?:position|here|this spot)|stand (?:here|still)|(?:don't|dont|do not) move|stop moving)",
     "hold": r"(?:hold(?: on| up| dps| fire| damage)?|wait(?: for (?:my|the) pull| for me| for it)?|stop(?: attacking| dps(?:ing)?| damage| hitting(?: it)?)?|(?:don't|dont|do not) (?:attack|pull|dps|touch it)(?: yet)?|no dps)",
     "attack": r"(?:attack(?: (?:my target|it|that|this|him|her|them))?|kill (?:it|that|this|my target|him|her|them)|nuke(?: it| that| him| her)?|burn(?: it| him| her| that)?|dps(?: it| my target)?|focus(?: my target)?|engage|go(?: go(?: go)?)?|charge)",
@@ -100,6 +102,24 @@ _P = {
 _ORDER_RE = tuple((name, re.compile(_P[name])) for name in (
     "kill_skull", "lust", "taunt", "release", "come_back", "follow", "stack", "spread",
     "run_out", "back_off", "stay", "hold", "attack"))
+# Without an addressee only these whole phrases are orders (P2-2): every one is two words or more
+# and has no everyday meaning in a raid's chat. "follow me" and "stay here" stay playerbots' own.
+_PLAIN = {
+    "hold": r"(?:wait for (?:my|the) pull|stop attacking|stop dps(?:ing)?|hold (?:your )?dps|hold (?:your )?damage|no dps until (?:my|the) pull)",
+    "stack": r"(?:(?:stack|collapse|group)(?: up)? on (?P<on>[^\W\d_][\w'-]*))",
+    "spread": r"(?:spread out|spread apart)",
+    "taunt": r"(?:tanks? swap|swap tanks|taunt swap)",
+    "lust": r"(?:(?:blood ?lust|lust|hero(?:ism)?|bl) now|pop (?:blood ?lust|lust|hero(?:ism)?|bl))",
+    "back_off": r"(?:back off|fall back)",
+    "kill_skull": r"(?:kill (?:the )?skull(?: first)?|focus (?:the )?skull|skull first)",
+    "release": r"(?:release(?:,| and) run (?:back|in))",
+    "come_back": r"(?:come back to me|regroup on me|get back here)",
+    "stay": r"(?:hold (?:your )?position)",
+    "attack": r"(?:(?:attack|kill|focus|nuke) my target)",
+}
+_PLAIN_RE = tuple((name, re.compile(_PLAIN[name])) for name in (
+    "kill_skull", "lust", "taunt", "release", "come_back", "stay", "stack", "spread", "back_off",
+    "hold", "attack"))
 # Order words: a line led by one (after an addressee) is an order attempt the model may map.
 _STRONG = frozenset({"stack", "spread", "taunt", "swap", "lust", "bloodlust", "heroism", "hero",
                      "bl", "release", "collapse", "regroup", "nuke", "focus", "kill", "attack",
@@ -107,23 +127,22 @@ _STRONG = frozenset({"stack", "spread", "taunt", "swap", "lust", "bloodlust", "h
 _WEAK = frozenset({"go", "get", "come", "run", "move", "stop", "back", "fall", "range", "wait",
                    "stand", "group", "pop", "use", "dps", "don't", "dont", "pull", "kite"})
 
-_READY = re.compile(r"(?:rc|ready check\??|(?:are )?(?:we|you|y'?all|everyone|everybody|all) ready\??|ready\?)")
-_COUNT = re.compile(r"(?:pull(?:ing)?(?: in| on)? (?P<n>\d{1,2})(?: ?s(?:ec(?:ond)?s?)?)?"
-                    r"|(?P<n2>\d{1,2}) (?:sec(?:ond)?s? )?(?:to|till|until|and) pull"
-                    r"|(?:pull(?:ing)?(?: now| it)?|let's pull|lets pull))")
+_READY = re.compile(r"(?:rc|ready check)")
+_COUNT = re.compile(r"(?:pull(?:ing)?(?: in| on) (?P<n>\d{1,2})(?: ?s(?:ec(?:ond)?s?)?)?"
+                    r"|(?P<n2>\d{1,2}) (?:sec(?:ond)?s? )?(?:to|till|until) pull)")
 _PLAN = re.compile(r"(?:(?:what's|whats|what is) (?:the|our) (?:plan|strat(?:egy)?|tactics?)"
                    r"(?: (?:here|now|for (?:this|the) (?:one|boss|fight)))?\??"
                    r"|(?:plan|strat|tactics)\?|how do we do (?:this|the boss|this boss|this fight)\??"
                    r"|what do we do(?: here| now)?\?|how does (?:this|the) (?:boss|fight) work\??"
                    r"|explain (?:the )?(?:fight|boss|plan|strat))")
-_HE_LEADS = re.compile(r"(?:i'?ll (?:lead|call(?: it)?)|i'?m (?:leading|calling(?: it)?)|i lead|my (?:lead|call)"
-                       r"|nobody leads|no raid lead)(?: tonight| now)?")
+# Only these explicit phrases take the lead back; "i'm calling it" (calling it a night) never does.
+_HE_LEADS = re.compile(r"(?:i'?ll lead|i'?m leading|i lead)(?: (?:it|this|the raid))?(?: tonight| now)?")
 _TIME = r"(?: tonight| now| this one| today| from now on)?"
 _LEADS = (
-    r"(?P<n>{name}),? (?:you're|you are|youre) (?:leading|the lead|lead|raid lead|the raid lead|in charge|calling(?: it)?)" + _TIME,
-    r"(?P<n>{name}),? (?:you lead|you call(?: it)?|you take (?:the )?lead|take (?:the )?lead|lead (?:us|the raid|this))" + _TIME,
-    r"(?P<n>{name})(?:'s| is) (?:leading|the lead|lead|raid lead|the raid lead|in charge|calling(?: it)?)" + _TIME,
-    r"(?P<n>{name}) (?:leads|takes (?:the )?lead|calls(?: it)?|has (?:the )?lead)" + _TIME,
+    r"(?P<n>{name}),? (?:you're|you are|youre) (?:leading|the lead|raid lead|the raid lead|in charge)" + _TIME,
+    r"(?P<n>{name}),? (?:you lead|you take (?:the )?lead|take (?:the )?lead|lead (?:us|the raid|this))" + _TIME,
+    r"(?P<n>{name})(?:'s| is) (?:leading|the lead|raid lead|the raid lead|in charge)" + _TIME,
+    r"(?P<n>{name}) (?:leads|takes (?:the )?lead|has (?:the )?lead)" + _TIME,
     r"(?:you lead|you're leading|take (?:the )?lead),? (?P<n>{name})" + _TIME,
     r"(?:new )?(?:raid )?lead(?: is|:)? (?P<n>{name})" + _TIME,
     r"let (?P<n>{name}) lead" + _TIME,
@@ -178,10 +197,14 @@ def _address(text: str, names: dict[str, int]) -> list[tuple[str, int | None, st
     return out
 
 
-def _order(rest: str, who: str, member: int | None, names: dict[str, int]) -> Order | None:
+def _order(rest: str, who: str, member: int | None, names: dict[str, int], *,
+           plain: bool = False) -> Order | None:
+    """The order in `rest`: any pattern after an explicit addressee, only an unambiguous whole
+    phrase (_PLAIN) without one."""
+    whole = _PUNCT.sub("", _LEAD_FILLER.sub("", rest.strip(" ,"))).strip(" ,")  # "lust now" keeps its now
     rest = _strip(rest)
-    for name, pattern in _ORDER_RE:
-        match = pattern.fullmatch(rest)
+    for name, pattern in (_PLAIN_RE if plain else _ORDER_RE):
+        match = pattern.fullmatch(rest) or pattern.fullmatch(whole)
         if match is None:
             continue
         on = None
@@ -218,7 +241,9 @@ def parse(text: str, names: dict[str, int]) -> Intent | None:
     if (found := _designation(text, names)) is not None:
         return found
     text = _LEAD_FILLER.sub("", text) or text  # "ok tanks, taunt": the addressee comes after
-    for who, member, rest in _address(text, names):
+    readings = _address(text, names)
+    for index, (who, member, rest) in enumerate(readings):
+        plain = index == len(readings) - 1  # the whole line, with no addressee
         bare = _strip(rest)
         if who in ("everyone", "member"):
             if _READY.fullmatch(bare):
@@ -226,11 +251,11 @@ def parse(text: str, names: dict[str, int]) -> Intent | None:
             if _PLAN.fullmatch(bare):
                 return AskPlan(member)
             if (count := _COUNT.fullmatch(bare)) is not None:
-                seconds = int(count["n"] or count["n2"] or 3)
+                seconds = int(count["n"] or count["n2"])
                 return Countdown(seconds, member) if 1 <= seconds <= 10 else None
         if "?" in rest:
             continue
-        if (order := _order(rest, who, member, names)) is not None:
+        if (order := _order(rest, who, member, names, plain=plain)) is not None:
             return order
     if "?" in text:
         return None

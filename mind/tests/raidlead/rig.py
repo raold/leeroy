@@ -115,10 +115,14 @@ def make_app(store, clock, tmp_path, *, llm=None):
     personas = PersonaCache(store)
     raid = RaidState(world=world, personas=personas.get, clock=clock)
     ports = Ports(clock)
-    released = []
+    released, signals = [], []
 
     async def release_to_talk(ev, line_id):
+        signals.append((line_id, False))
         released.append(line_id)
+
+    def signal_his_line(ev, line_id, *, command):
+        signals.append((line_id, command))
     llm = llm or FakeLLM(lambda model, messages: "{}")
     app = SimpleNamespace(
         store=store, clock=clock, data_dir=tmp_path, human_guid=HUMAN, world=world, raid=raid,
@@ -127,7 +131,7 @@ def make_app(store, clock, tmp_path, *, llm=None):
                               raid_night=SimpleNamespace(state=SimpleNamespace(value="idle"), run=None)),
         scheduler=LLMScheduler(llm, clock=clock), arbiter=Arbiter(),
         cfg=SimpleNamespace(models=SimpleNamespace(live=LIVE)), release_to_talk=release_to_talk,
-        released=released, llm=llm)
+        released=released, signal_his_line=signal_his_line, signals=signals, llm=llm)
     return app
 
 
@@ -139,12 +143,18 @@ async def ready(app, *, raid=True, members=tuple(CAST)):
     group = Group(0, HUMAN, raid, (HUMAN, *members))
     app.world.set_group(group)
     await service.event(group)
+    await service._probe()  # native answers its switch: on
     return service
 
 
 async def drain(service):
-    """The worker's work, without its loop: one tick, then everything queued."""
+    """The worker's work, without its loop: one tick, the model's readings, then everything queued."""
     await service._tick()
+    for held in list(service._pending):
+        if held.task is not None:
+            await asyncio.gather(held.task, return_exceptions=True)
+    await service._settle_pending()
     while service._queue:
-        await service._handle(service._queue.popleft())
+        generation, item = service._queue.popleft()
+        await service._handle(generation, item)
     await asyncio.sleep(0)
