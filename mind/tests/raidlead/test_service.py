@@ -726,9 +726,10 @@ def test_plan_question_answers_from_facts(app):
     run(main())
 
 
-def test_boss_brief_is_the_playbook_hook_and_returns_none_for_now():
+def test_boss_brief_is_the_playbook_hook_and_boss_plan_the_standing_call():
     context = C.BossContext(631, 0, "Lord Marrowgar", 25, False)
-    assert C.boss_brief(context) is None
+    assert C.boss_brief(context).startswith("Lord Marrowgar, 25 normal: ")
+    assert C.boss_brief(C.BossContext(631, 0, "Lord Marrowgar")) is None  # size not known
     assert C.boss_plan(context).startswith("marrowgar")
     assert C.boss_plan(C.BossContext(1, 99)) is None
 
