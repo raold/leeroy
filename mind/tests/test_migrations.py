@@ -71,6 +71,9 @@ def test_discord_photos_preserves_messages_threads_reactions_and_snaps(tmp_path,
             if table == 'discord_message':
                 for row in after:
                     assert row.pop('bot') is None
+            if table == 'selfie_snap':
+                for row in after:
+                    assert row.pop('request') is None
             assert after == before[table]
         assert not conn.execute('PRAGMA foreign_key_check').fetchall()
         assert conn.execute('PRAGMA foreign_keys').fetchone()[0] == 1
@@ -304,7 +307,7 @@ def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= 18
         names = {r[0]: r[1] for r in conn.execute(
             "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_%' "
-            "AND name NOT LIKE 'selfie_snap%'")}
+            "AND name NOT LIKE 'selfie_snap%' AND name NOT LIKE 'selfie_request%'")}
         assert names == {"selfie_set": "table", "selfie_candidate": "table",
                          "selfie_pick": "table", "selfie_current": "table",
                          "selfie_set_one_queued": "index", "selfie_embedding": "table"}
@@ -380,7 +383,7 @@ def test_the_snaps_migration_adds_selfie_snap(tmp_path, monkeypatch):
         names = {r[0]: r[1] for r in conn.execute(
             "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_snap%'")}
         assert names == {"selfie_snap": "table", "selfie_snap_open": "index",
-                         "selfie_snap_sent": "index"}
+                         "selfie_snap_sent": "index", "selfie_snap_request": "index"}
         assert conn.execute("SELECT count(*) FROM selfie_snap").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM tuning_change").fetchone()[0] == 1
     finally:
