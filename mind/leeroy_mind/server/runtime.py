@@ -31,6 +31,7 @@ async def snapshot(app, now, *, include_seeds=False):
     photos_on = getattr(app, 'photos', None) is not None
     photo_dial = app.cfg.talk.selfies if photos_on else 0
     groups_config = getattr(getattr(app,'groups',None),'config',None)
+    decisions_on = getattr(app, 'decisions', None) is not None
     def read():
         deadline = time.monotonic() + 2
         worker_store = Store(connect(path), clock=app.clock)
@@ -64,7 +65,8 @@ async def snapshot(app, now, *, include_seeds=False):
                 human_name = getattr(cast.get(human), 'name', '')
                 source = gather(conn, now=now, local=local, cast=personas, officers=officers,
                                 human=human, human_name=human_name, trial_rank=trial_rank,
-                                culture_enabled=culture_on, culture_store=worker_store, ident=identity)
+                                culture_enabled=culture_on, culture_store=worker_store, ident=identity,
+                                decisions_enabled=decisions_on)
                 seeds = fresh(conn, source, now=now)
                 if photos_on:
                     from leeroy_mind.photos.send import photo_seeds

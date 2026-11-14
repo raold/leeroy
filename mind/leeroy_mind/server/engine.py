@@ -344,7 +344,8 @@ class ServerEngine:
                 purpose = definition.topic
                 if conversation.seed.kind == 'purpose':
                     opener = 'Talk about this topic in your own way: '
-                elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day'}:
+                elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day',
+                                                'decision'}:
                     opener = 'Start a conversation about this real event in your own way: '
                 else:
                     opener = 'Start a conversation using only what is known: '

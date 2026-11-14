@@ -14,7 +14,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
-              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke')
+              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke', 'decision')
 FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
@@ -249,7 +249,8 @@ def _purpose(conn, c):
 
 def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            officers: frozenset[int], human: int, human_name: str, trial_rank: int,
-           culture_enabled: bool = False, culture_store=None, ident=None) -> list[Seed]:
+           culture_enabled: bool = False, culture_store=None, ident=None,
+           decisions_enabled: bool = False) -> list[Seed]:
     names = {g: p.character_name for g, p in cast.items()}
     for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
         if guid in cast or guid == human:
@@ -268,6 +269,9 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
             raise ValueError("Culture gathering requires the connection's owning Store")
         result += _read("joke", lambda: culture_seeds(culture_store, now=now, local=local,
                                                    personas=cast, human=human, ident=ident))
+    if decisions_enabled:
+        from leeroy_mind.decisions.seeds import decision_seeds
+        result += _read('decision', lambda: decision_seeds(conn, now=now, personas=cast, officers=officers))
     return result
 
 
