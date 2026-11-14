@@ -149,6 +149,7 @@ class RequestPhotos:
         place = row['channel'] if layout.dm_peer(row['channel']) is not None else CHANNEL_PREFIX + row['channel']
         request = None
         outcome = 'words'
+        retry = False
         try:
             async with self._typing(guid, place):
                 p = app.personas.get(guid)
@@ -157,6 +158,11 @@ class RequestPhotos:
                     asked_channel=row['channel'], thread=row['thread'],
                     photo_channel=f'dm:{guid}' if private else row['channel'],
                     audience='him' if private else 'anyone', now=app.clock.now())
+                # The post's other members answered on the first try; a retry is hers alone.
+                retry = outcome == 'existing'
+                if request is not None and not records.attempt(app.store, message, 'initial', now=app.clock.now()):
+                    outcome = 'retry_limit'
+                    return
                 if request is not None:
                     await self._prepare(request, row['text'], immediate=outcome == 'accepted')
                     request = records.get(app.store, message)
@@ -172,7 +178,7 @@ class RequestPhotos:
             log('selfie_request', guid=guid, channel_kind='dm' if layout.dm_peer(row['channel']) else 'discord', outcome=outcome)
         if not self._closed and not app.stopping and (request is None or self._source_open(request)):
             self._retry_after(message, 180)
-            answer = app.discord_talk.on_his_post(message, immediate=True)
+            answer = app.discord_talk.on_his_post(message, immediate=True, speakers=(guid,) if retry else None)
             if answer is not None:
                 # Preparation and its ordinary reply have one owner. The retry timer
                 # must not admit a second reply while the first still owns its photo.
@@ -194,8 +200,13 @@ class RequestPhotos:
             return
         p, pick = ready
         if request.fresh_snap is None:
+            from leeroy_mind.llm.client import GpuPaused
             from leeroy_mind.selfies.request_scene import choose_scene
-            scene = await choose_scene(app, request.guid, words, request.audience)
+            try:
+                scene = await choose_scene(app, request.guid, words, request.audience)
+            except GpuPaused:
+                # A pause (or one his post is ending) refuses the model, never the request.
+                scene = await choose_scene(app, request.guid, words, request.audience, model=False)
             if not self._source_open(request):
                 self._cancel(request)
                 return
@@ -214,7 +225,9 @@ class RequestPhotos:
             reserve_fallback(app, request, now=app.clock.now())
 
     async def _render(self, request, photo):
-        from leeroy_mind.nightly.gpu import LiveLeaseHeld, PausedRoom
+        from leeroy_mind.llm.borrow import LiveReloadFailed
+        from leeroy_mind.llm.client import GpuPaused
+        from leeroy_mind.nightly.gpu import LiveLeaseHeld
         from leeroy_mind.selfies.request_render import render_request
         app = self.app
         if not self.known_offline() or app.gpu.paused or app.nightly.running is not None:
@@ -234,7 +247,7 @@ class RequestPhotos:
                 if outcome != 'ready':
                     records.fail(app.store, request.message, result.code or 'render_failed', now=app.clock.now())
                 return outcome == 'ready'
-        except (LiveLeaseHeld, PausedRoom):
+        except (LiveLeaseHeld, GpuPaused):
             return False
         except asyncio.CancelledError:
             outcome = 'cancelled'
@@ -249,6 +262,9 @@ class RequestPhotos:
             # Losing presence during a borrow leaves the plan available after logout.
             if type(error).__name__ == 'BorrowInterrupted':
                 outcome = 'interrupted'
+                return False
+            # Admission found an earlier reload still failed: nothing was rendered.
+            if room is None and isinstance(error, LiveReloadFailed):
                 return False
             outcome = 'timeout' if isinstance(error, TimeoutError) else 'render_failed'
             records.fail(app.store, request.message, outcome, now=app.clock.now())
@@ -422,6 +438,10 @@ class RequestPhotos:
                                         else row.fresh_message is None and row.fallback_message is None)
         meta.still_valid = valid
         meta.on_discord_record = receipt
+        if part != 'private' and not records.attempt(app.store, latest.message, part, now=app.clock.now()):
+            log('selfie_request', guid=latest.guid, channel_kind='dm' if latest.audience == 'him' else 'discord',
+                outcome='retry_limit')
+            return
         app.discord_talk.begin_photo()
         await app.engine.speak_meta(turn, meta)
 

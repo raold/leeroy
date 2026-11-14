@@ -1,6 +1,7 @@
 """Live list maintenance against real stored sources; no network or model calls."""
 import asyncio
 from dataclasses import replace
+import hashlib
 import math
 from types import SimpleNamespace
 
@@ -234,6 +235,83 @@ def test_semantic_match_reuses_existing_claim_vector_and_threshold(app, channel,
         assert records.get(app.store, item.id).ended == ended
         assert app.embedder.calls == [[text]]  # stored source vector, no second embedding
         assert app.outreach.eligible(101)
+    asyncio.run(go())
+
+
+def his_line(app, text, *, channel='guild', to=0, readers=(1, 101, 102, 103)):
+    ev = Chat(ts=int(app.clock.now()*1000), channel=channel, from_guid=1, from_name='Owner',
+              to_guid=to, text=text, map=0, zone=0)
+    line = app.store.insert_chat_line(ev, session_id=None, origin='human', audience=readers)
+    if channel.startswith(('discord:', 'gdm:')):
+        message = discord.post(app.store, channel=channel.removeprefix('discord:'), author=1,
+                               origin='human', text=text, now=app.clock.now())
+        app.store.set_meta(f'discord:line:{message}', str(line))
+    return line
+
+
+@pytest.mark.parametrize('channel', ['guild', 'party', 'discord:general'])
+@pytest.mark.parametrize('text,to,closed', [
+    ('How is the outing going, everyone?', 0, set()),
+    ('Arkon, how is your outing going?', 0, {101}),
+    ('How is your outing going?', 101, {101})])
+def test_his_public_line_closes_only_the_item_of_the_member_it_is_to(app, channel, text, to, closed):
+    async def go():
+        items = {g: plan(app, guid=g) for g in (101, 102)}
+        app.embedder.query = vector(.9)
+        app.outreach.on_his_line(his_line(app, text, channel=channel, to=to))
+        assert {g for g in items if not app.outreach.eligible(g)} == closed
+        await settle(app)
+        assert {g for g, i in items.items() if records.get(app.store, i.id).ended == 'he_raised'} == closed
+        assert app.embedder.calls == ([[text]] if closed else [])
+    asyncio.run(go())
+
+
+def test_his_group_dm_line_is_to_everyone_in_it(app):
+    async def go():
+        items = {g: plan(app, guid=g) for g in (101, 102, 103)}
+        app.embedder.query = vector(.9)
+        app.outreach.on_his_line(his_line(app, 'How is the outing going?', channel='gdm:1',
+                                          readers=(1, 101, 102)))
+        await settle(app)
+        assert {g for g, i in items.items() if records.get(app.store, i.id).ended == 'he_raised'} == {101, 102}
+    asyncio.run(go())
+
+
+def test_his_discord_line_is_checked_through_its_receipt_index(app):
+    line = his_line(app, 'How is the outing going?', channel='discord:general')
+    statements = []
+    app.store.conn.set_trace_callback(statements.append)
+    try:
+        assert app.outreach._line_alive(app.store.chat_lines([line])[0])
+    finally:
+        app.store.conn.set_trace_callback(None)
+    query = next(s for s in statements if 'discord_message' in s)
+    plan = ' '.join(row[3] for row in app.store.conn.execute('EXPLAIN QUERY PLAN ' + query))
+    assert 'meta_discord_line_value' in plan and 'SCAN' not in plan
+
+
+def test_his_line_reuses_a_vector_the_live_review_already_holds(app):
+    async def go():
+        item = plan(app)
+        text = 'How is your outing going?'
+        app.engine.live_review = SimpleNamespace(vectors={hashlib.sha256(text.encode()).digest(): vector(.7)})
+        line, _ = chat(app, text, channel='dm:101')
+        app.outreach.on_his_line(line)
+        await settle(app)
+        assert records.get(app.store, item.id).ended == 'he_raised'
+        assert app.embedder.calls == []
+    asyncio.run(go())
+
+
+def test_his_repeated_line_is_embedded_once(app):
+    async def go():
+        plan(app)
+        app.embedder.query = vector(.5)
+        for _ in range(2):
+            line, _ = chat(app, 'How is your outing going?', channel='dm:101')
+            app.outreach.on_his_line(line)
+            await settle(app)
+        assert app.embedder.calls == [['How is your outing going?']]
     asyncio.run(go())
 
 

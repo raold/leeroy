@@ -639,7 +639,7 @@ class Reactions(Pipeline):
         item = outreach.select(g, 'whisper') if outreach is not None and trigger == START else None
         kind = whisper_kind(p)
         they, them, their = self.human.forms
-        what = (item.about if item else START_WHAT[kind].format(topic=self._open_topic(p, now), they=they, them=them,
+        what = ("" if item else START_WHAT[kind].format(topic=self._open_topic(p, now), they=they, them=them,
                                        their=their))
         told = " ".join(x for x in (WHISPER_WHY[trigger].format(about=about),
                                     START_WHISPER.format(them=them), what) if x)

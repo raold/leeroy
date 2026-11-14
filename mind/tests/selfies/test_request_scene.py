@@ -172,6 +172,11 @@ def test_model_failure_uses_fallback_without_repeating_failed_service(app):
     assert len(app.llm.calls) == 1
 
 
+def test_without_model_takes_the_screened_everyday_choice(app):
+    assert run(choose_scene(app, 101, "photo please", "him", model=False)).setting == "in a living room"
+    assert app.llm.calls == []
+
+
 @pytest.mark.parametrize("error", [GpuPaused("paused"), asyncio.CancelledError()])
 def test_pause_or_cancellation_is_not_converted_to_a_scene(app, error):
     app.llm.answers = [error]

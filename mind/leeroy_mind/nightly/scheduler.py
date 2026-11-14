@@ -157,14 +157,15 @@ class NightScheduler:
 
     # -- the night's run ---------------------------------------------------------------------------
 
-    def due(self) -> str | None:
+    def due(self, *, gate: bool = True) -> str | None:
         """The night to run when the module docstring's conditions all hold, else None. It does
-        not ask whether a run is under way; tick() does."""
+        not ask whether a run is under way; tick() does. gate=False leaves out a requested photo's
+        closed live admission."""
         s = self.settings
         local = self.clock.local()
         if s.quiet is not None and not in_window(local, s.quiet):
             return None
-        if not self.arbiter.reflection_allowed():
+        if not self.arbiter.reflection_allowed(gate=gate):
             return None
         if self.presence.offline_seconds() < s.grace_minutes * 60:
             return None
@@ -199,6 +200,16 @@ class NightScheduler:
                 return
         self._abandon_stale()
         night = self.due()
+        gate = self.arbiter.live_admission
+        if (night is None and gate is not None and gate.blocked and self.arbiter.borrow_holder is None
+                and self.due(gate=False) is not None):
+            # A photo borrow's failed reload keeps admission closed until something recovers it;
+            # with nobody online nothing else would, so the night tries once each tick.
+            try:
+                await self.arbiter.recover_borrow()
+            except Exception as e:
+                log("nightly_borrow_recovery_failed", level=logging.WARNING, error=type(e).__name__)
+            night = self.due()
         if night is not None:
             self._start(night)
 
