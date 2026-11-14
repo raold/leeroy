@@ -99,23 +99,25 @@ async def test_ab_alternates_by_pull_and_starts_on_other_side_each_raid(fake):
 
 @_run_async
 async def test_rotating_offline_raids_compare_each_boss_on_both_sides(fake):
-    # Guild life rotates four offline raids, least recently run first, so a
-    # raid's next visit is four raids later. Parity counted over all raids
+    # Guild life rotates its offline raids, least recently run first, so a
+    # raid's next visit is a full rotation later. Parity counted over all raids
     # would keep every boss on one side and the gate could never decide.
     gate, last = Gate(fake), {}
     sides = {}
-    for ident in range(1, 9):
-        key = next_raid_key(GuildConfig().offline_rotation, last)
+    rotation = GuildConfig().offline_rotation
+    bosses = -(-12 // len(rotation))  # Twelve compared contexts, whatever the rotation's length.
+    for ident in range(1, 2 * len(rotation) + 1):
+        key = next_raid_key(rotation, last)
         raid, size, heroic = split_key(key)
         run = run_for(fake, ident, size=size, heroic=heroic, map_id=raid.map_id, instance=100 + ident)
         await gate.on_start(run)
-        for index in range(3):
+        for index in range(bosses):
             sides.setdefault((key, index), []).append(gate.record_flag(run, index))
             await family_fight(fake, gate, run, index)
         last[key] = fake.clock.now()
-    assert all(sorted(seen) == [False, True] for seen in sides.values()) and len(sides) == 12
+    assert all(sorted(seen) == [False, True] for seen in sides.values()) and len(sides) == bosses * len(rotation)
     assert gate.verdict() == ("passed", 0.0)
-    assert metadata(fake)["raids"] == 8
+    assert metadata(fake)["raids"] == 2 * len(rotation)
     restarted = Gate(fake)
     assert restarted.verdict() == ("passed", 0.0)
 
