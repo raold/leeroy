@@ -26,6 +26,10 @@ PROMPT = ('Review one adult guild member\'s conversational style with the owner.
     'is observational, not proof of causation. Reinforce or drop only displayed lesson IDs '
     'when their with/without counts support it; otherwise abstain. Arm proposals, if supported, '
     'must use only a displayed family and its closed parameters. New proposals are inactive.')
+# Added only when the weekly cycle has a report: its numbers are observational too.
+CYCLE_NOTE = (' weekly_cycle is last week\'s numeric review: the arm parameters promoted, retired or '
+    'rolled back, this member\'s lesson IDs promoted, retired or rolled back, and guild detector rates. '
+    'Prefer proposals near promoted parameters and away from retired ones; it is not proof of causation.')
 
 
 def registry(conn):
@@ -233,7 +237,14 @@ async def stage(ctx):
             shape=response_schema(arms is not None)
             payload={'scope':audience,'dials':dials,'exchanges':exchanges,'lesson_feedback':info,
                      'arm_examples':arms.PRESETS if arms else {}}
-            system=system_prompt(STAGE,PROMPT,ctx.settings.data_dir,human=ctx.ident)
+            weekly=None
+            if cfg.cycle:
+                from .cycle import coach_input
+                weekly=await read_work(ctx,lambda c:coach_input(c.store.conn,guid))
+                if weekly is not None:
+                    payload['weekly_cycle']=weekly
+            system=system_prompt(STAGE,PROMPT+(CYCLE_NOTE if weekly is not None else ''),
+                                 ctx.settings.data_dir,human=ctx.ident)
             fitted=fit_payload(payload,system,shape)
             if fitted is None:
                 ctx.skip(STAGE,unit)

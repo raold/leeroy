@@ -49,6 +49,7 @@ class RaidState:
         self._wipes: dict[tuple[int, int, str], int] = {}
         self._fights: dict[tuple[int, int], tuple[str, float | None]] = {}  # last_fight
         self._lead_override: int | None = None
+        self._designated: int | None = None
 
     def on_group(self, ev: Group) -> None:
         old = self._world.group
@@ -109,7 +110,15 @@ class RaidState:
         """The P1d extension point: an explicit lead wins over the group's."""
         self._lead_override = guid
 
+    def set_designated(self, guid: int | None) -> None:
+        """The raid lead he named for his own group (leeroy_mind.raidlead): she leads the talk
+        (callouts in combat, the wipe debrief) while he stays the game's leader. The raid lead
+        sets it only while no raid the mind leads is under way; None while it is off."""
+        self._designated = guid
+
     def lead(self) -> int | None:
+        if self._designated is not None:
+            return self._designated
         if self._lead_override is not None:
             return self._lead_override
         g = self._world.group

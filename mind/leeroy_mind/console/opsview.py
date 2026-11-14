@@ -414,6 +414,7 @@ SWITCHES = (
     ('callbacks','enabled','Memory callbacks',''), ('learn','enabled','Rewards',''),
     ('learn','bandit','Bandit credit','learn.enabled'), ('learn','coach','Talk coach','learn.enabled'),
     ('learn','capture_preferences','Preference capture','learn.enabled'), ('banter','enabled','Banter',''),
+    ('learn','cycle','Weekly learning cycle','learn.enabled'),
     ('server','enabled','24/7 server','nights only inside its quiet window'),
     ('romance','activities','Romance activities','realm.enabled; native rebuild'),
     ('photos','enabled','Discord photos','restart the console too'), ('selfies','enabled','Selfies',''),
@@ -425,7 +426,8 @@ SWITCHES = (
     ('realm','enabled','The Realm','Leeroy.Realm.Enable = 1; realm/blocklist.txt'),
     ('training','enabled','Training',''), ('decisions','enabled','Decisions','server.enabled'),
     ('training','playbooks','Raid playbook checks','training.enabled'),
-    ('control','ops_actions','Ops actions','restart the console too'))
+    ('control','ops_actions','Ops actions','restart the console too'),
+    ('raidlead','enabled','Raid lead','Leeroy.RaidLead.Enable = 1; native rebuild'))
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:

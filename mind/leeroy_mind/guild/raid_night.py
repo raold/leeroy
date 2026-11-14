@@ -24,7 +24,7 @@ from .pick import Decline, Hangout, Lead, LeadOnly, Pick, is_end, parse
 from .protocol import ClearLockout, FormRaid, RaidControl, SetLootMaster, Summon
 from .raids import CATALOG, validate
 from .session import RaidPlan, RaidSession
-from .store import attendance_counts, bench_streaks, last_led
+from .store import NAMED_LEAD_KEY, attendance_counts, bench_streaks, last_led
 
 
 log = logging.getLogger(__name__)
@@ -163,10 +163,16 @@ class RaidNight:
                                attendance_counts(self.ports.conn, members, self.ports.clock.now() - 30 * 86400),
                                away=set())
 
-    def _leaders(self, candidates, lead=None):
+    def _leaders(self, candidates, lead=None, *, speaker=None):
         return choose_leads(candidates, requested=lead.guid if lead else None,
                             rotate=bool(lead and lead.rotate), human_leads=bool(lead and lead.human),
-                            human_guid=self.ports.human_guid, last_led=last_led(self.ports.conn))
+                            human_guid=self.ports.human_guid, last_led=last_led(self.ports.conn),
+                            speaker=speaker)
+
+    def _designated(self):
+        """The member he named to lead his own group (raidlead), when the raid lead is on; else None."""
+        designated = getattr(self.ports, "designated_lead", None)
+        return designated() if designated is not None else None
 
     def _lineup(self):
         """Tonight's posted raid lineup (the guild's decisions), or None: decisions off, or none."""
@@ -229,7 +235,8 @@ class RaidNight:
 
     def _speaker(self):
         if self.run:
-            return self.run.plan.tank_guid if self.run.lead_is_human else self.run.plan.lead_guid
+            plan = self.run.plan
+            return plan.tank_guid if plan.lead_guid == self.ports.human_guid else plan.lead_guid
         try:
             return self._leaders(self._candidates()).lead_guid
         except NoTankError:
@@ -671,10 +678,12 @@ class RaidNight:
             if formed:
                 self._disband = (self.ports.clock.now(), self._epoch)
 
-    async def _begin(self, plan, epoch, on_time, late, *, instance_id=None):
+    async def _begin(self, plan, epoch, on_time, late, *, instance_id=None, lead_is_human=None):
         """Every raid night's start: the record with its attendance and DKP, then assembly.
         instance_id: the instance the raid is already in (his own group's raid), whose on_time
-        members the server has just proved inside it."""
+        members the server has just proved inside it. lead_is_human: he drives the raid (no
+        dungeon-clear), which by default is whether he is its lead; his own group with a member
+        he named to call it has her as lead and him driving."""
         session = await self._open_session(plan, epoch)
         if epoch != self._epoch or not self._present or not self.ports.human_online():
             self._closing.append((session, None, "logout" if not self._present else "cancelled", deque(), False))
@@ -683,7 +692,8 @@ class RaidNight:
             self._closing.append((session, None, "failed", deque(), False))
             raise _Failed("the raid's instance could not be bound")
         self.session = session
-        self.run = RaidRun(session.plan, session, True, plan.lead_guid == self.ports.human_guid)
+        self.run = RaidRun(session.plan, session, True,
+                           plan.lead_guid == self.ports.human_guid if lead_is_human is None else lead_is_human)
         now = self.ports.clock.now()
         inside = instance_id is not None
         self._on_time, self._late = list(on_time), [(g, now + delay) for g, delay in late]
@@ -718,11 +728,16 @@ class RaidNight:
             candidates = [c for c in candidates if c.guid in arrived]
             if not candidates:
                 raise _Failed("nobody arrived in his instance")
-            leaders = self._leaders(candidates, Lead(True))
+            # A member he named to lead his group calls the raid (raidlead); he still drives it.
+            leaders = self._leaders(candidates, Lead(True), speaker=self._designated())
             plan = RaidPlan(raid_key, size, heroic, False, leaders.lead_guid, leaders.tank_guid,
                             leaders.loot_guid, [c.guid for c in candidates], [], True)
             await self._send(SetLootMaster(uuid4().hex, self.ports.human_guid, leaders.loot_guid), epoch)
-            await self._begin(plan, epoch, plan.members, [], instance_id=instance_id)
+            await self._begin(plan, epoch, plan.members, [], instance_id=instance_id, lead_is_human=True)
+            if plan.lead_guid != self.ports.human_guid:
+                # Her raid because he named her: it counts as no raid night the mind led (last_led).
+                with self.ports.conn:
+                    _put(self.ports.conn, NAMED_LEAD_KEY.format(raid_id=self.session.raid_id), plan.lead_guid)
             self._call_due = self._call_deadline = None
             self._adopted = True
         except (_Stale, NoTankError, ValueError, _Failed) as error:
@@ -802,7 +817,7 @@ class RaidNight:
                 await self._notify("on_start", self.run, epoch=epoch)
             if self._zone_revision != revision or self._assembly_revision != phase_revision:
                 return
-            self.ports.set_lead(self.ports.human_guid)
+            self.ports.set_lead(plan.lead_guid)  # his, or the member he named to call it
             self.state = State.RUNNING
             return
         if self._dc_due is not None:
