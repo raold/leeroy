@@ -52,9 +52,11 @@ is called by the filler.
 | `miss_you` | Woman aged 25+, drawn/lust, quiet with him in whispers and DMs for 2 days | Pair | Romance lift × forward, bounded 0.1–10 | 1 day |
 | `dm_nudge` | A witnessed login and her newest unanswered ordinary DM under 3 days old | Pair, whisper only | 6 | That login; ready after 2–10 minutes |
 
-Native `LootWon` receipts do not contain a witness list. For those receipts,
-outreach uses the latest preceding `Group` event by timestamp and ID in the same
-non-null game session, requiring both him and her in its captured membership.
+Native `LootWon` receipts do not contain a witness list. Loot someone else won is
+refused before any witness lookup. For his own receipts, outreach uses the latest
+preceding `Group` event by timestamp and ID in the same non-null game session, at
+most a day before the loot (a bounded walk of the timestamp index), requiring both
+him and her in its captured membership.
 Changed, empty, malformed, absent or unrelated-session groups cannot supply
 witnesses. An explicit receipt membership list is checked directly. Current
 world membership never supplies historical witnesses. Item names come from the

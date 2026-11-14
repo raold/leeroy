@@ -124,17 +124,19 @@ def follow_memory(store, guid, ref):
 
 def his_day(store, eid, guid, human, *, now=None, library=None, ident=None):
     row = store.conn.execute("SELECT * FROM game_event WHERE id=?", (eid,)).fetchone()
-    if row is None or now is not None and row["ts"] > now:
+    if (row is None or now is not None and row["ts"] > now
+            or row["type"] == "loot_won" and row["guid"] != human):
         return None
     try:
         data = json.loads(row["payload"])
         members = data.get("members")
         if row["type"] == "loot_won" and "members" not in data and row["session_id"] is not None:
             # Native LootWon has no audience. Its prior captured group in this
-            # session supplies witnesses; a later/current roster never does.
-            group = store.conn.execute("SELECT payload FROM game_event WHERE type='group' AND session_id=? "
-                "AND (ts<? OR (ts=? AND id<?)) ORDER BY ts DESC,id DESC LIMIT 1",
-                (row["session_id"], row["ts"], row["ts"], row["id"])).fetchone()
+            # session, at most a day before it, supplies witnesses; a later/current
+            # roster never does. The ts range walks game_event_ts back from the loot.
+            group = store.conn.execute("SELECT payload FROM game_event WHERE ts<=? AND ts>=? "
+                "AND type='group' AND session_id=? AND (ts<? OR id<?) ORDER BY ts DESC,id DESC LIMIT 1",
+                (row["ts"], row["ts"] - DAY, row["session_id"], row["ts"], row["id"])).fetchone()
             members = json.loads(group[0]).get("members") if group else None
         if (not isinstance(members, list) or any(type(g) is not int or g <= 0 for g in members)
                 or guid not in members or human not in members):
