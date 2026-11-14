@@ -41,6 +41,9 @@ does not reload the live model until use resumes.
 
 While the owner is in WoW, presence is unknown, or borrowing is unavailable, the member
 uses an audience-fit retained photo if available: a ready snap first, then her gallery.
+A Free GPU pause, or a live-model reload still failing from an earlier borrow, makes
+borrowing unavailable; it never fails the request. A scene the paused model cannot choose is
+the screened everyday choice, picked without a model.
 The retained image is copied; its original is never moved or consumed. Its caption describes
 that retained photo, not the new scene being planned. The new photo waits for ten continuous
 minutes of confirmed offline presence and no running night. Unrendered requests expire

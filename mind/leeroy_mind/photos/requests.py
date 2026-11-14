@@ -200,8 +200,13 @@ class RequestPhotos:
             return
         p, pick = ready
         if request.fresh_snap is None:
+            from leeroy_mind.llm.client import GpuPaused
             from leeroy_mind.selfies.request_scene import choose_scene
-            scene = await choose_scene(app, request.guid, words, request.audience)
+            try:
+                scene = await choose_scene(app, request.guid, words, request.audience)
+            except GpuPaused:
+                # A pause (or one his post is ending) refuses the model, never the request.
+                scene = await choose_scene(app, request.guid, words, request.audience, model=False)
             if not self._source_open(request):
                 self._cancel(request)
                 return
@@ -220,7 +225,9 @@ class RequestPhotos:
             reserve_fallback(app, request, now=app.clock.now())
 
     async def _render(self, request, photo):
-        from leeroy_mind.nightly.gpu import LiveLeaseHeld, PausedRoom
+        from leeroy_mind.llm.borrow import LiveReloadFailed
+        from leeroy_mind.llm.client import GpuPaused
+        from leeroy_mind.nightly.gpu import LiveLeaseHeld
         from leeroy_mind.selfies.request_render import render_request
         app = self.app
         if not self.known_offline() or app.gpu.paused or app.nightly.running is not None:
@@ -240,7 +247,7 @@ class RequestPhotos:
                 if outcome != 'ready':
                     records.fail(app.store, request.message, result.code or 'render_failed', now=app.clock.now())
                 return outcome == 'ready'
-        except (LiveLeaseHeld, PausedRoom):
+        except (LiveLeaseHeld, GpuPaused):
             return False
         except asyncio.CancelledError:
             outcome = 'cancelled'
@@ -255,6 +262,9 @@ class RequestPhotos:
             # Losing presence during a borrow leaves the plan available after logout.
             if type(error).__name__ == 'BorrowInterrupted':
                 outcome = 'interrupted'
+                return False
+            # Admission found an earlier reload still failed: nothing was rendered.
+            if room is None and isinstance(error, LiveReloadFailed):
                 return False
             outcome = 'timeout' if isinstance(error, TimeoutError) else 'render_failed'
             records.fail(app.store, request.message, outcome, now=app.clock.now())
