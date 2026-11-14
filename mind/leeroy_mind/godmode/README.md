@@ -13,7 +13,9 @@ enabled = true
 Restart the mind and the console after changing it. Missing, `false` or invalid (a non-boolean
 value or an unknown key) means off; an invalid table logs `godmode_config_invalid` once. Run
 `db migrate` with the mind stopped first: migration `0046_strings.sql` adds `godmode_intent`.
-This part is mind-only (no native rebuild).
+Edits and Discord strings are mind-only. Strings in game (Part B) also need the native rebuild
+and `Leeroy.Strings.Enable = 1` in `mod_leeroy.conf` (default 0, `.reload config`); without it
+they are reported `off`, and an older worldserver's as `unsupported`.
 
 With it off:
 
@@ -98,19 +100,50 @@ no longer fits: `away`, `gone`, `feud` (a feud with whom it touches), `stance` (
 loving reaction toward a rival, a DM when she dislikes you), `claims` (it reverses a claim of
 hers), `deleted` (the message is gone), `reactions_off`, `dms_off` (`[server] dms_per_day = 0`),
 `chattiness_off`, or the store's own refusal code. He can cancel a
-waiting one. Group DMs and game lines never carry out or show a Discord string. The game kinds
-(`come_to_me`, `join_group`, `follow`, `duel_me`, `emote`, `sit`) are Part B's native strings
-and are refused `not_yet` here. Discord strings need the guild Discord's engine
-(`[server] enabled`, `server_off` otherwise).
+waiting one. Group DMs and game lines never carry out or show a Discord string. Discord strings
+need the guild Discord's engine (`[server] enabled`, `server_off` otherwise).
+
+### In game (Part B)
+
+| Kind | What she does | Native refuses (besides the shared codes) |
+| --- | --- | --- |
+| `come_to_me` | comes to his side; outside his group she then stays there 10 minutes | `bad_area` (he is not in a city or rest area), `grouped` |
+| `join_group` | joins the party he leads (never a raid) and comes to him | `in_group`, `lfg_group`, `not_leader`, `in_raid`, `group_full`, the add command's own fences |
+| `follow` {} | follows him; the same string again stops it and she waits | `not_in_group`, `busy:raid_owner` (his raid) |
+| `duel_me` | challenges him to a duel (accepting is his) | `in_group`, `busy:duel`, `too_far`, `bad_area` |
+| `emote` {emote} | one of 16 friendly emotes, at him | `bad_emote`, `too_far` |
+| `sit` | sits near him for up to 5 minutes while he stays near | `too_far` |
+
+Shared codes: `off`, `human_offline`, `not_cast`, `not_online`, a fence (`busy:realm_owner`,
+`busy:training_owner`, ...), `dead`, `combat` (hers or his: never inside his fight), `in_instance`
+(never in or onto an instance copy), `in_bg`, `queued`, `travelling`, `human_dead`. The mind
+settles some before or instead of native: `human_offline` (he is not in game), `no_link`,
+`no_answer`, `unsupported` (an older worldserver), `away`, `gone` and `stance` (a duel from one
+who dislikes him, affinity -30 or below; a kiss or a flirt only from a woman drawn to him or in
+lust, a hug or a wink from a fond one too).
+
+A game string goes at once, in the console's request: the mind checks her fit, him in game and the
+bridge, sends one `string_do` and settles the string `taken` with what she did (native's done job:
+`came`, `joined`, `following`, `stopped`, `challenged`, `emoted`, `sat`) or `not_taken` with the
+code. It is never retried: one refused in his fight stays refused. One a crash left in flight
+expires after 10 minutes. For the next half hour her card (game channels with him: party, raid,
+say, yell, emote, a whisper with him; and her DM with him) says what she did, as her own past
+("You joined his group because he asked."), or that she could not ("He asked you to come over, but
+you couldn't just then."); never in guild or officer chat, a server channel or a group DM, and
+nothing for a refusal she would not have known of (the server, the link, his own state, her being
+offline). The card needs `[talk] aware = true`, as Part A's lines do. Nothing here takes a Realm
+body-ledger rank; native's fences and journal are in `modules/mod-leeroy/README.md`.
 
 The console's Personas member detail has a Strings panel (her strings, their state and reason,
-Cancel, and a form for the Discord kinds) and, beside her dials, her godmode edits with Retire
-and a form for every kind. `POST /api/string` relays to the mind's `string` op under the same
+Cancel, a form for the Discord kinds, and "In game": a button for each game kind, the emote with
+its list; the answer says what she did or why not) and, beside her dials, her godmode edits with
+Retire and a form for every kind. `POST /api/string` relays to the mind's `string` op under the same
 key, Origin and `--no-control` gates as Board replies.
 
 ## Not reachable here
 
-- Strings in the game (Part B, a native rebuild), day plans (Part C), members' heroics (Part D).
+- Day plans (Part C), members' heroics (Part D); an arena queue and "go to a place" strings.
+- A string that brings a member into his instance, or anything inside one: refused by design.
 - "Stands in fire" inside instances waits for the dojo's policy work; `skill` changes only what
   the play-style map can say outdoors.
 - Romance between members: the persona content rule allows romance only toward his character, so
@@ -121,5 +154,6 @@ key, Origin and `--no-control` gates as Board replies.
 ```sh
 python -m pytest -q tests/tuning/test_edits.py tests/tuning/test_behaviour_edits.py \
   tests/tuning/test_edits_invariant.py tests/godmode tests/console/test_console_godmode.py
-node --test tests/console/js/godmode.test.mjs
+node --test tests/console/js/godmode.test.mjs tests/console/js/strings.test.mjs
+python -m pytest -q tests/console/e2e/test_flows.py -k strings   # needs Playwright
 ```

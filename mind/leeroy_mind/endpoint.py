@@ -66,7 +66,9 @@ connection closes.
                     logged
     string {action} create {member, kind, args} | cancel {id} | list [{member}]: his strings,
                     intents a member carries out in her own way (leeroy_mind.godmode), only with
-                    [godmode] enabled; one change at a time
+                    [godmode] enabled; one change at a time. A game kind (come_to_me,
+                    join_group, follow, duel_me, emote, sit) goes to native at once and answers
+                    {state: taken|not_taken, reason} with its words
     ops {action}    opt-in operator actions: inspect, status, offline_stop {id}, render,
                     snapshot {label}. Realm release is inspected here but is executed only
                     through the console's clean stop/CLI/restart procedure. New work needs

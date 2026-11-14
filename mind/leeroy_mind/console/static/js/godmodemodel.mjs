@@ -52,6 +52,18 @@ export const STRING_KINDS = {
     { name: "channel", label: "Channel (optional)", type: "text", optional: true }] },
 };
 
+// Strings in game (D6 Part B): carried out at once by the game server, or refused with a code.
+export const GAME_KINDS = {
+  come_to_me: { label: "Come to me" },
+  join_group: { label: "Join my group" },
+  follow: { label: "Follow me / stop" },
+  duel_me: { label: "Duel me" },
+  sit: { label: "Sit" },
+};
+// native's kStringEmotes (LeeroyStrings.h)
+export const GAME_EMOTES = ["applaud", "bow", "cheer", "dance", "flirt", "hello", "highfive", "hug", "kiss",
+  "laugh", "salute", "shy", "smile", "thank", "wave", "wink"];
+
 const CODES = {
   off: "Godmode is off in mind.toml.", age: "Nothing may make anyone read as young.",
   looks: "Looks are never edited.", name: "Names are never edited.", identity: "Identity is never edited.",
@@ -63,8 +75,32 @@ const CODES = {
   owner: "You cancelled it.", sent: "Done.", mentioned: "She brought it up.", reacted: "Done.",
   not_yet: "Strings in the game come with a later update.", server_off: "The guild Discord's engine is off.",
   cap: "Too many waiting.", audience: "She cannot read there.", channel: "Not a conversation channel.",
+  came: "She's on her way to you.", joined: "She joined your group.",
+  joined_far: "She joined your group; the game could not bring her to you.", following: "She's following you.",
+  stopped: "She stopped following you and waits there.", challenged: "She challenged you to a duel.",
+  emoted: "Done.", sat: "She sat down near you.", done: "Done.",
+  unsupported: "The game server needs the rebuild that adds strings.", human_offline: "You are not in game.",
+  human_dead: "You are dead.", no_link: "The game server is not connected.", no_answer: "The game server did not answer.",
+  not_cast: "She is not a pinned member of the cast.", not_online: "She is not online.", dead: "She is dead.",
+  combat: "Someone is in a fight.", in_instance: "Not in or into an instance.", in_bg: "Not in a battleground or arena.",
+  queued: "She is queued for something.", travelling: "Someone is travelling.", grouped: "She is in another group.",
+  bad_area: "Not here: a city or rest area for come to me, a place duels are allowed for a duel.",
+  in_group: "You are already grouped.", lfg_group: "Not into a Dungeon Finder or battleground group.",
+  not_leader: "You do not lead your group.", in_raid: "Your group is a raid.", group_full: "Your party is full.",
+  not_in_group: "She is not in your party.", "busy:raid_owner": "Your raid holds her.",
+  "busy:duel": "Someone is already duelling.", too_far: "She is too far from you.",
+  bad_emote: "Choose one of the emotes offered.", muted: "She cannot speak just now.",
+  teleport_failed: "The game could not bring her.", duel_failed: "The game refused the duel.",
+  follow_failed: "She could not follow you.", sit_failed: "She could not sit.",
+  group_failed: "The game could not make your group.", locked: "She is saved to another copy of your instance.",
+  other_team: "She is of the other faction.", invalid: "The game server refused the request.",
+  refused: "The game server refused it.",
 };
-export function codeText(code, fallback) { return CODES[code] || str(fallback) || str(code) || "refused"; }
+export function codeText(code, fallback) {
+  if (CODES[code]) return CODES[code];
+  if (str(code).startsWith("busy:")) return "Someone else is using her just now.";
+  return str(fallback) || str(code) || "refused";
+}
 
 function list(v) { return str(v).split(";").map(s => s.trim()).filter(Boolean); }
 function weights(v) {
@@ -122,6 +158,35 @@ export function editArgs(kind, member, values, verb = "set") {
   return { action: "edit", verb, kind, args };
 }
 
+// A string in game: {action: "create", member, kind, args}; an emote names one of GAME_EMOTES
+export function gameArgs(kind, member, emote) {
+  if (kind === "emote") {
+    if (!GAME_EMOTES.includes(emote)) throw new Error("Choose an emote.");
+    return { action: "create", member: Number(member), kind, args: { emote } };
+  }
+  if (!GAME_KINDS[kind]) throw new Error("Choose a string.");
+  return { action: "create", member: Number(member), kind, args: {} };
+}
+
+// The buttons of the in-game strings, with the emote's last: all off, saying why, unless live
+export function gameButtons(live, why) {
+  const title = live ? "" : str(why) || "Unavailable";
+  return [...Object.entries(GAME_KINDS).map(([kind, s]) => ({ kind, label: s.label, disabled: !live, title })),
+    { kind: "emote", label: "Emote", disabled: !live, title }];
+}
+
+// The string op's answer to a string in game, in words: what she did, or why not
+export function gameOutcome(r) {
+  r = obj(r);
+  if (r.ok !== true) return codeText(r.code, r.error);
+  if (r.state === "taken") return codeText(r.reason, r.message);
+  if (r.state === "not_taken") return "Not taken: " + codeText(r.reason, r.message);
+  return str(r.message) || "Saved.";
+}
+
+export function cancelArgs(id) { return { action: "cancel", id: Number(id) }; }
+export function canCancel(i) { return obj(i).status === "pending"; }
+
 // The string op: {action: "create", member, kind, args}
 export function stringArgs(kind, member, values) {
   const spec = STRING_KINDS[kind];
@@ -156,8 +221,9 @@ export function editsFor(view, guid) {
 // One string's state, in words
 export function stringState(i, now = Date.now() / 1000) {
   if (i.status === "pending") {
-    const h = Math.max(0, Math.ceil((num(i.due) - now) / 3600));
-    return `waiting (${h} h left)`;
+    const left = Math.max(0, num(i.due) - now);
+    if (left < 3600) return `waiting (${Math.ceil(left / 60)} min left)`;
+    return `waiting (${Math.ceil(left / 3600)} h left)`;
   }
   const words = { taken: "done", not_taken: "not taken", expired: "expired", cancelled: "cancelled" }[i.status] || str(i.status);
   return i.reason ? `${words}: ${codeText(i.reason)}` : words;
@@ -172,6 +238,12 @@ export function stringText(i) {
     case "react": return `React ${str(a.emoji)} to message #${a.message}`;
     case "dm_him": return `DM you about ${str(a.about)}`;
     case "bring_up": return `Bring up ${str(a.topic)}` + (a.channel ? ` in #${str(a.channel)}` : "");
+    case "come_to_me": return "Come to you";
+    case "join_group": return "Join your group";
+    case "follow": return "Follow you (or stop)";
+    case "duel_me": return "Duel you";
+    case "emote": return `Emote at you: ${str(a.emote)}`;
+    case "sit": return "Sit down near you";
     default: return str(i.kind);
   }
 }
