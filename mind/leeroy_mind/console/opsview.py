@@ -425,7 +425,8 @@ SWITCHES = (
     ('realm','enabled','The Realm','Leeroy.Realm.Enable = 1; realm/blocklist.txt'),
     ('training','enabled','Training',''), ('decisions','enabled','Decisions','server.enabled'),
     ('training','playbooks','Raid playbook checks','training.enabled'),
-    ('control','ops_actions','Ops actions','restart the console too'))
+    ('control','ops_actions','Ops actions','restart the console too'),
+    ('raidlead','enabled','Raid lead','Leeroy.RaidLead.Enable = 1; native rebuild'))
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:

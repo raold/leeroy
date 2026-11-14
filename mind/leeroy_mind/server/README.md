@@ -28,6 +28,8 @@ An unavailable owner leaves the seed unused; a dropped restricted opener ends
 the conversation. Later speakers see only what was actually posted. Officer
 meetings stay in officer chat. Purpose seeds are topics, and rival activity carries
 no invented contents.
+With `[decisions]` on, each guild decision seeds one conversation per stage (proposed, poll
+open, settled) with a code-built fact and its stakeholders as `about` (`decisions/seeds.py`).
 New and running conversations stop during raid holds and his login quiet period.
 The inherited login quiet period is 180 seconds. The D2 plan's ten-minute review
 target is not implemented or certified by this rehearsal.

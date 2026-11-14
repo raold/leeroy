@@ -44,7 +44,8 @@ var VIEWS = { state: ["rooms", "array"], feed: ["lines", "array"], "feed/history
   dojo: ["setup", "boolean"], library: ["setup", "boolean"], health: ["mind", "object"],
   tuning: ["view", "object"], selfies: ["view", "object"], ops: ["panels", "object"],
   discord: ["categories", "array"], "persona/insight": ["claims", "object"],
-  "ops/badge": ["counts", "object"], "ops/action": ["enabled", "boolean"], lab: ['freeze','boolean'] };
+  "ops/badge": ["counts", "object"], "ops/action": ["enabled", "boolean"], lab: ['freeze','boolean'],
+  decisions: ["decisions", "array"] };
 export function validView(path, value) {
   var route = path.split("?")[0].slice(5), rule = VIEWS[route];
   if (!rule) { return true; }
@@ -92,6 +93,9 @@ export function validView(path, value) {
   }
   if (route === "feed/history") {
     return Array.isArray(value.lines) && value.lines.every(record);
+  }
+  if (route === "decisions") {
+    return Array.isArray(value.polls) && value.polls.every(record) && Array.isArray(value.missing);
   }
   if (route === "guild") {
     return ["ladder", "loot", "awards", "chronicle"].every(k => value[k] === undefined ||
