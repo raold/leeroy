@@ -365,6 +365,55 @@ against current positions, so neighbours may step twice; a bot with no clear rea
 stays. Encounter multipliers that zero movement actions zero this one too.
 **Native rebuild required, with the playerbots patch applied first.**
 
+# The owner's strings in game
+
+His strings (D6 godmode, `mind/leeroy_mind/godmode/README.md`): from a member's detail in the guild console the
+mind sends one `string_do {guid, kind, target_guid, emote}` (`Guild/Strings.cpp`, pure policy
+`Lib/LeeroyStrings.h`). Native carries it out at once on the world thread and acks it, publishing first a done
+`job` (kind `string_do`) whose `reason` says what she did (`came`, `joined`, `joined_far`, `following`,
+`stopped`, `challenged`, `emoted`, `sat`); or it refuses with one code in the ack and changes nothing.
+
+`Leeroy.Strings.Enable` (default 0, `.reload config`; `off` while 0). Every kind needs him online and alive, the
+member a pinned cast member of his guild on a random-bot account run by playerbots, and her body free of every
+ownership fence: a Realm lease, training, an offline raid, a pending bot command (`MutationReason`; a member of
+his own group under every fence but the one that holds his group for him, as his add command treats her). Never
+in a fight (`combat`: hers, his or his group's on his map), in or onto an instance (`in_instance`, hers or his), in a battleground or
+arena (`in_bg`), a queue (`queued`) or while either travels (`travelling`). Then per kind:
+
+- `come_to_me`: only while he stands in a city or rest area (a capital and its parts, a town with an inn, a
+  faction rest zone, or wherever the core has him resting; else `bad_area`), never out of someone else's group
+  (`grouped`). She is put beside him (the add command's teleport); one outside his group then keeps
+  playerbots' `stay` for 10 minutes once she has landed, so her routine does not walk her off. For that window
+  she is fenced: `NativeOwnershipReason` answers `busy:string` (`StringStayHeld`), so Realm moves (the bond's
+  inn visits included), queues, offline raids and dummy trials (`busy:string:<guid>`, which the mind's planner
+  retries in 15 minutes instead of leaving her out of the day) refuse her, while his own asks (his strings, his
+  add command) pass it (`StringWaiver`). The fence ends with the stay: its 10 minutes, the key at 0, his
+  logout, or her joining a group. If he is hovering on a flying mount she lands beside him in the air and falls,
+  as the add command's teleport does.
+- `join_group`: into the party he leads (made now when he has none), never a raid or a Dungeon Finder group,
+  at most five (`in_group`, `lfg_group`, `not_leader`, `in_raid`, `group_full`), under the add command's own
+  member fences for a party of his (`grouped`, `locked`, ...). She joins with the raid night's habits
+  (`RaidHabits`: him as master, hazards) and comes to him.
+- `follow`: in his party only (`not_in_group`; his raid `busy:raid_owner`). Him as her master with playerbots'
+  `follow`; the same string again stops it and she waits where she is (playerbots' `stay`). Both last while that
+  group does; a stop in a party that becomes a raid is lifted by the tick and her follow given back, since the
+  string can no longer undo it there.
+- `duel_me`: neither in a group with the other (`in_group`), nobody duelling (`busy:duel`), the same zone within
+  30 yards (`too_far`), both where the core allows a duel and outside a sanctuary (`bad_area`). The core's duel
+  spell is cast at him; accepting is his.
+- `emote`: one of 16 friendly emotes (`bad_emote`), within 25 yards (`too_far`), aimed at him as bridge speech.
+- `sit`: within 20 yards (`too_far`); #244's social seat keeps her sitting up to 5 minutes while he stays near
+  and nobody in his group fights. A later come_to_me, join_group, follow or duel_me stands her up first.
+
+None of these takes a Realm body-ledger rank (they are his own asks; come_to_me's window is a native fence
+instead), and the Realm keeps refusing a body in his group as before. What a string changed is journalled per
+body, AI and session (pure decisions `StringHoldFences`, `DecideStringHold`): the world tick (once a second) lifts
+only the `stay` it added (after come_to_me's 10 minutes or his logout, when the follow's group ends or turns into a
+raid, or when the key goes to 0) and stands a seated member up when her seat ends; a body another owner holds, or
+in combat, is never touched and waits; a relog, an AI replacement or (come_to_me) a group join drops the hold
+untouched. Logs: `string_done guid= kind=
+outcome=`, `string_refused guid= kind= code=`, `string_stay_lifted guid=`. **Native rebuild required.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a
@@ -497,6 +546,39 @@ this change is different: the new mind stores `changed` (and `skipped`, `skipped
 `realm_action` evidence, and an older mind cannot read such a row (its journal reads fail, so the Realm stops moving bodies until the
 key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
 native rebuild and an updated mind are needed for the new proof to take effect.
+
+# Calendar writes take no body fence
+
+A calendar post, update or signup changes CalendarMgr rows and sends calendar packets. It never
+touches a body (strategies, group, master, position, DC settings), so native refuses one only for
+identity (`CalendarMemberAdmission`, `LeeroyRealmCalendar.h`): `realm_off`; `no_event` unless the
+character is a cast member, not the owner, and its character cache row, live body (a bot between
+maps counts) and roster entry all name the configured guild and one account; `not_bot` off a
+random-bot account. The event's creator is checked the same way (`CalendarAuthorityReason` first),
+the event must exist, and each write's own checks stay (packet hooks, time, caps, invite lock,
+`calendar_authority_changed` when an identity fence moved mid-write). No body fence refuses one:
+not the training cleanup (`TrainingCleanupPending()`, `OfflineTrainingCleanupPending()`), not a
+training, offline-raid, Realm or raid owner, not pending bot commands, not the queue fence.
+
+Before this, `MemberReason` reused the body-move admission (`MutationReason`). On 2026-11-10 a
+twelve-hour training cleanup refused all nine raid-night posts (three nights, three creators each)
+and 361 signups `busy:training_cleanup`; the mind gave each post up after three tries, so none of
+that week's raid nights reached the calendar. No offline-raid post ever succeeded either: its
+creators were inside the running raid (`busy:training_owner`).
+
+`calendar_signup` is now a direct command like a post: one synchronous write on the world thread
+that reserves, pins and queues nothing (`IsQueued` no longer lists it). The signer and the event's
+creator are each held to their identity fence (`CreatorFence`/`ExactCreator`) across the write.
+It acks as before and still publishes `realm_job` `calendar_signup` (the member as `guid`, value 0)
+once the write was attempted; a refusal is the ack's alone, as for a post. A write that threw or
+failed its readback after native entered it answers `calendar_write_unknown` (ack and job); the
+mind settles that as unknown and never sends it again. The first write of each
+kind past each body fence code is logged once per process:
+`realm calendar_signup by guid=<n> went past body fence busy:training_cleanup (...)`.
+
+Body moves, `NativeOwnershipReason` and `OfflineTrainingCleanupPending()` (still unbounded) are
+unchanged. Ship with a native rebuild (`ac-release.sh --native`); the mind needs no change for it,
+and its desk separately never spends a try on an older worldserver's `busy:` refusal.
 
 # World persona roster and speech
 

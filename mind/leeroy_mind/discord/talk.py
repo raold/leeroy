@@ -564,12 +564,15 @@ class DiscordTalk:
         from leeroy_mind.photos.notes import by_messages
         photos = by_messages(conn, [r[2] for r in rows],
             uploads=getattr(self.app.engine,'photos_enabled',False),
-            members=getattr(self.app.engine,'photos_send',False))
+            members=getattr(self.app.engine,'photos_send',False),
+            memes=getattr(self.app.engine,'culture_memes',False))
         return [f"{self._name(a)}: {fold(t)}" + (' ' + photos[mid] if mid in photos else '')
                 for a, t, mid in reversed(rows)]
 
     def _name(self, g: int) -> str:
         app = self.app
+        if g == 0:
+            return "a server bot"  # culture.bots' posts: author 0, never a member
         if g == app.human_guid:
             return app.engine.human.called
         m = app.world.discord_members().get(g)

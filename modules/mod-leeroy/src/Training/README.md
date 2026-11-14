@@ -41,7 +41,8 @@ during an already registered raid. Job teardown retains its receipt if restorati
 a refusal is not completed restoration. Failed cleanup blocks new training mutations and is retried.
 The cleanup pass logs which adapters keep it pending (`training cleanup pending: dummy_trial(<id> unreturned=..),
 journals(N)`, on change and at most once a minute) and `training cleanup verified` when they clear. While it is
-pending, `TrainingCleanupPending()` fences every body (Realm `busy:training_cleanup`, play style, queue fence) for
+pending, `TrainingCleanupPending()` fences every body (Realm `busy:training_cleanup`, play style, queue fence; never a
+calendar write, which moves no body) for
 at most ten minutes (`LeeroyTrainingFence.h`); then `training cleanup fence released` is logged once and only the
 per-body fences hold: job owners, journals, DC runs and pending bot commands. New training stays refused
 (`cleanup_pending`) until a pass proves every adapter clean; that all-clear reads `training cleanup released, not

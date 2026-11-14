@@ -32,6 +32,21 @@ when there is one, MAX_TRIES times per ref. One that may have been done (unknown
 with no event id, like every row from before migration 0016: never posted again, never
 updated, and nobody signs up for it.
 
+A refusal for a body fence (native's busy:<owner>, stored busy_<owner>: a training cleanup, a
+training, raid or Realm owner) says nothing about the post: a calendar write moves no body, and
+native no longer refuses one for a fence, though an older worldserver did (2026-11-10: a
+twelve-hour training cleanup refused all of a week's raid nights, which then ran out of tries).
+So a busy refusal never uses up one of MAX_TRIES. The post waits RETRY_S, doubling with each busy
+refusal in a row up to BUSY_MAX_S, and is tried again until its event is too close to post (an
+offline raid's, while the raid runs), at most ROWS_MAX attempts in all. Its creator is passed
+over next time unless the fence was the training cleanup, which holds every creator at once.
+A signup's and an update's tries follow the same rule; their busy refusals (count, run and last
+send) are kept in meta under BUSY_KEY<ref>, so a restart neither resets ROWS_MAX nor cuts a pause
+short, and are dropped BUSY_KEEP_S after the last send. A write native entered and cannot prove
+(calendar_write_unknown) settles unknown in the direct ledger: never sent again. An offline raid's
+post leaves the raid's own roster out of its creators: the raid-lead rotation first, else the
+social chain.
+
 Signups follow a schedule seeded by the event and the member, so it is the same after any
 restart: 1-8 hours after the post, never after the event; a conscientiousness of 3 or less
 signs up late or, half the time, tentative; a decline only for an event that does not need
@@ -60,6 +75,7 @@ from leeroy_mind.guild.raids import CATALOG
 
 from .calendar_time import product_period
 from .config import LIMITS
+from .direct import busy
 from .ledger import former_members_in_unit
 from .protocol import CalendarPost, CalendarRsvp, CalendarSignup, CalendarUpdate, RealmJob
 
@@ -78,6 +94,10 @@ POST_AHEAD_S = 900  # A night, meeting or birthday closer than this is not poste
 OFFLINE_AHEAD_S = 120  # An offline raid's entry starts just after its start: native refuses the past.
 RETRY_S = 600
 MAX_TRIES = 3
+BUSY_MAX_S = 3600  # A busy refusal's pause: RETRY_S, doubling with each one in a row, up to this.
+ROWS_MAX = 24  # Attempts one ref may take in all, busy refusals included.
+BUSY_KEY = "realm:calendar:busy:"  # + a signup's or update's ref: its busy refusals, across restarts.
+BUSY_KEEP_S = 30 * 86400
 HISTORY_S = 28 * 86400
 NIGHTS_MAX = 4
 DEFAULT_NIGHTS = (1, 2, 3)  # Tuesday, Wednesday, Thursday (Monday is 0).
@@ -196,6 +216,29 @@ def _clip(text, limit):
     return data.decode("utf-8", "ignore")
 
 
+def busy_pause(refusals) -> int:
+    """How long a ref waits after its `refusals`-th busy refusal in a row."""
+    return min(RETRY_S * 2 ** max(refusals - 1, 0), BUSY_MAX_S)
+
+
+def _guids(values) -> set[int]:
+    if type(values) not in (list, tuple):
+        return set()
+    return {g for g in values if type(g) is int and 0 < g <= _U32}
+
+
+def offline_roster(owned, guids=()) -> set[int]:
+    """The guild's own offline raid's members: its plans' members and leads, the members native
+    accepted, and those its job names."""
+    roster = _guids(guids) | _guids(owned.get("accepted"))
+    for key in ("plan", "actual_plan"):
+        plan = owned.get(key)
+        if type(plan) is dict:
+            roster |= _guids(plan.get("members"))
+            roster |= _guids([plan.get("lead_guid"), plan.get("tank_guid"), plan.get("loot_guid")])
+    return roster
+
+
 class CalendarDesk:
     """The Realm part that keeps the guild's calendar. Synchronous apart from its sends."""
 
@@ -205,10 +248,14 @@ class CalendarDesk:
         self.realm = realm
         self._next = None
         self._sending = None
-        self._tries = {}  # ref -> (tries, not before): a refused signup's or update's pacing.
+        # ref -> (tries, busy refusals, busy refusals in a row, last sent, last outcome unread):
+        # a signup's or an update's pacing. A busy refusal hands its try back (_may_try).
+        self._tries = {}
         self._plans = {}
         self._noted = set()
         self._failing = {}  # step -> the error it last failed with.
+        self._busy_loaded = False
+        self._busy_pruned = None
 
     # -- what it reads ----------------------------------------------------------------------
 
@@ -269,6 +316,10 @@ class CalendarDesk:
             self._reconcile(now)
         except Exception as error:  # Never the Realm loop's failure.
             log.warning("realm_calendar_failed step=reconcile error=%s", type(error).__name__)
+        try:
+            self._prune_busy(now)
+        except Exception as error:
+            log.warning("realm_calendar_failed step=prune error=%s", type(error).__name__)
         if self._sending is None or self._sending.done():
             self._pass(now, context, prepared)
         self._send(prepared)
@@ -443,14 +494,25 @@ class CalendarDesk:
         """Prepare the post of a ref that has none live, and its 'pending' row, in one unit."""
         store, ledger = self._store, self._ledger()
         with store.transaction():
-            rows = store.conn.execute("SELECT state,creator,updated FROM realm_calendar WHERE ref=?",
-                                      (post.ref,)).fetchall()
+            # Each attempt's ledger row says why it failed (the ledger keeps a post's refusals).
+            rows = store.conn.execute(
+                "SELECT c.state,c.creator,c.updated,d.state AS outcome,d.reason FROM realm_calendar c "
+                "LEFT JOIN realm_direct d ON d.command_id=c.command_id WHERE c.ref=? ORDER BY c.id",
+                (post.ref,)).fetchall()
             if any(row["state"] in ("pending", "posted") for row in rows):
                 return None
             failed = [row for row in rows if row["state"] == "failed"]
-            if len(failed) >= MAX_TRIES or (failed and now < max(row["updated"] for row in failed) + RETRY_S):
+            fenced = [row["outcome"] == "refused" and busy(row["reason"]) for row in failed]
+            if len(failed) - sum(fenced) >= MAX_TRIES or len(failed) >= ROWS_MAX:
                 return None
-            creator = self._pick(post, now, {row["creator"] for row in failed})
+            if failed:
+                streak = next((n for n, b in enumerate(reversed(fenced)) if not b), len(fenced))
+                wait = busy_pause(streak) if streak else RETRY_S
+                if now < max(row["updated"] for row in failed) + wait:
+                    return None
+            # The training cleanup holds every creator at once: no reason to pass one over for it.
+            creator = self._pick(post, now, {row["creator"] for row in failed
+                                             if row["reason"] != "busy_training_cleanup"})
             if creator is None:
                 self._note("realm_calendar_no_creator", post.kind)
                 return None
@@ -519,9 +581,12 @@ class CalendarDesk:
         title = (f"{raid.name} {size}{' heroic' if plan.get('heroic') is True else ''}, offline"
                  if raid is not None and size else "Offline raid")
         now = self._clock.now()
-        rotation, _ = self._chains(self._former(self._human()))
+        rotation, social = self._chains(self._former(self._human()))
+        # Nobody inside the raid posts it: native held each of them as the raid's (busy:training_owner).
+        roster = offline_roster(owned, ev.guids)
+        chain = tuple(g for g in rotation if g not in roster) or tuple(g for g in social if g not in roster)
         post = Post("offline", f"offline:{ev.id}", int(now) + OFFLINE_AHEAD_S, _clip(title, 64), "raid",
-                    rotation, by_load=True)
+                    chain, by_load=True)
         cmd = self._prepare_post(post, now, self.realm.action_context())
         if cmd is not None:
             self._send([cmd])
@@ -550,17 +615,68 @@ class CalendarDesk:
 
     # -- updates ----------------------------------------------------------------------------
 
+    def _load_busy(self):
+        """The busy refusals an earlier process kept (BUSY_KEY), once; a bad entry is skipped."""
+        if self._busy_loaded:
+            return
+        self._busy_loaded = True
+        for key, value in self._store.conn.execute(
+                "SELECT key,value FROM meta WHERE substr(key,1,?)=?", (len(BUSY_KEY), BUSY_KEY)).fetchall():
+            try:
+                fenced, streak, sent = json.loads(value)
+            except (ValueError, TypeError):
+                continue
+            if all(type(n) is int and 0 <= n <= ROWS_MAX for n in (fenced, streak)) \
+                    and type(sent) in (int, float):
+                self._tries.setdefault(key[len(BUSY_KEY):], (0, fenced, streak, float(sent), False))
+
+    def _keep_busy(self, ref, fenced, streak, sent):
+        with self._store.transaction():
+            self._store.conn.execute(
+                "INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (BUSY_KEY + ref, json.dumps([fenced, streak, sent])))
+
+    def _forget_busy(self, ref):
+        """In the caller's unit when it has one: the ref is done, or maybe done."""
+        self._store.conn.execute("DELETE FROM meta WHERE key=?", (BUSY_KEY + ref,))
+
+    def _prune_busy(self, now):
+        if self._busy_pruned is not None and now - self._busy_pruned < 3600:
+            return
+        self._busy_pruned = now
+        with self._store.transaction():
+            for key, value in self._store.conn.execute(
+                    "SELECT key,value FROM meta WHERE substr(key,1,?)=?", (len(BUSY_KEY), BUSY_KEY)).fetchall():
+                try:
+                    sent = json.loads(value)[2]
+                    old = type(sent) not in (int, float) or sent < now - BUSY_KEEP_S
+                except (ValueError, TypeError, IndexError, KeyError):
+                    old = True
+                if old:
+                    self._store.conn.execute("DELETE FROM meta WHERE key=?", (key,))
+
     def _may_try(self, ref, now, settled) -> bool:
         if settled is not None and settled[0] in _LIVE:
             return False
-        tries, not_before = self._tries.get(ref, (0, 0.0))
-        return tries < MAX_TRIES and now >= not_before
+        self._load_busy()
+        tries, fenced, streak, sent, unread = self._tries.get(ref, (0, 0, 0, 0.0, False))
+        if unread:  # The last try's outcome, read once: a busy refusal hands that try back.
+            if settled is not None and settled[0] == "refused" and busy(settled[1]):
+                tries, fenced, streak = tries - 1, fenced + 1, streak + 1
+            else:
+                streak = 0
+            self._tries[ref] = (tries, fenced, streak, sent, False)
+            if fenced:  # Kept across restarts: ROWS_MAX, and the pause, hold for the ref's life.
+                self._keep_busy(ref, fenced, streak, sent)
+        wait = busy_pause(streak) if streak else RETRY_S
+        return tries < MAX_TRIES and tries + fenced < ROWS_MAX and now >= sent + wait
 
     def _tried(self, ref, now):
         if len(self._tries) > 4096:
             self._tries.clear()
-        tries, _ = self._tries.get(ref, (0, 0.0))
-        self._tries[ref] = (tries + 1, now + RETRY_S)
+            self._busy_loaded = False  # Kept busy refusals come back at the next look.
+        tries, fenced, streak, _, _ = self._tries.get(ref, (0, 0, 0, 0.0, False))
+        self._tries[ref] = (tries + 1, fenced, streak, now, True)
 
     def _updates(self, now, context, out):
         ledger = self._ledger()
@@ -636,6 +752,7 @@ class CalendarDesk:
                     with self._store.transaction():  # Done, or maybe done: never sent again.
                         conn.execute("INSERT INTO realm_rsvp(event,guid,status,ts) VALUES (?,?,?,?) "
                                      "ON CONFLICT(event,guid) DO NOTHING", (event, guid, plan[1], now))
+                        self._forget_busy(ref)
                     taken.add(guid)
                 elif settled is not None and settled[0] in _LIVE:
                     taken.add(guid)  # On its way.

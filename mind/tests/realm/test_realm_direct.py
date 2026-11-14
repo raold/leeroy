@@ -283,6 +283,53 @@ def test_direct_prune_keeps_live(ledger, store):
             ledger.prune(keep=keep)
 
 
+@pytest.mark.parametrize("job_first", [False, True])
+def test_a_write_native_cannot_prove_is_unknown_never_refused(ledger, store, job_first):
+    # ApplyCalendarWrite: native entered the write, then it threw or its readback failed. It may
+    # have been done, so the ref stays taken for good, whichever of ack and job comes first.
+    post = _dispatched(ledger, _post(), "raid:2026-11-15", owner="calendar", expects_job=True)
+    job = _job(post, state="failed", value=0, reason="calendar_write_unknown")
+    ack = _ack(post, ok=False, error="calendar_write_unknown")
+    for answer in ((job, ack) if job_first else (ack, job)):
+        (ledger.on_job if answer is job else lambda a: ledger.on_ack(post, a))(answer)
+    assert ledger.state("calendar", "raid:2026-11-15") == ("unknown", "calendar_write_unknown", None)
+    assert ledger.prepare(_post(), owner="calendar", ref="raid:2026-11-15", context=LIVE, expects_job=True) is None
+    # A signup's job after an ok ack (an older worldserver's queued signup) settles the same way.
+    signup = _dispatched(ledger, _post(), "signup:4242:201", owner="calendar", expects_job=True)
+    ledger.on_ack(signup, _ack(signup))
+    ledger.on_job(_job(signup, state="failed", value=0, reason="calendar_write_unknown"))
+    assert ledger.state("calendar", "signup:4242:201")[0] == "unknown"
+    assert ledger.prune(keep=0) == 0  # Unknown rows are never pruned.
+    # Any other failure is still a refusal: the owner may ask again.
+    other = _dispatched(ledger, _post(), "raid:2026-11-16", owner="calendar", expects_job=True)
+    ledger.on_ack(other, _ack(other, ok=False, error="calendar_full"))
+    assert ledger.state("calendar", "raid:2026-11-16") == ("refused", "calendar_full", None)
+
+
+def test_direct_prune_keeps_a_calendar_posts_refusals_for_its_desk(ledger, store, clock):
+    # The calendar desk reads a post's refusal reason to tell a busy one from a real one.
+    posts = []
+    for n in range(2):
+        post = _dispatched(ledger, _post(), f"raid:2026-11-1{n}", owner="calendar", expects_job=True)
+        ledger.on_ack(post, _ack(post, ok=False, error="busy:training_cleanup"))
+        posts.append(post)
+    for n in range(3):
+        cmd = _dispatched(ledger, _say(), f"line:{n}")
+        ledger.on_ack(cmd, _ack(cmd, ok=False, error="busy"))
+    assert ledger.prune(keep=0) == 3  # Every other refusal goes; the posts' stay.
+    assert [row[2:5] for row in _rows(store)] == [
+        ("raid:2026-11-10", "refused", "busy_training_cleanup"),
+        ("raid:2026-11-11", "refused", "busy_training_cleanup")]
+    clock._t += 30 * 86400 - 1
+    assert ledger.prune(keep=0) == 0
+    clock._t += 2
+    assert ledger.prune(keep=1) == 1  # A month on, they are ordinary refusals again.
+    assert [row[0] for row in _rows(store)] == [posts[1].id]
+    live = _dispatched(ledger, _post(), "raid:2026-12-01", owner="calendar", expects_job=True)
+    clock._t += 31 * 86400
+    assert ledger.prune(keep=0) == 1 and [row[0] for row in _rows(store)] == [live.id]  # Live: never.
+
+
 def test_direct_attach_is_a_part_without_io(store, clock):
     realm = SimpleNamespace(app=SimpleNamespace(store=store, clock=clock), _process_id=PROCESS)
     changes = store.conn.total_changes

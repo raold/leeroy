@@ -256,7 +256,7 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'
        "frame-ancestors 'none'")
 STATIC_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".mjs": "text/javascript; charset=utf-8", ".woff2": "font/woff2",
-                ".txt": "text/plain; charset=utf-8"}
+                ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml"}
 
 SELFIE_DOWN = "The mind isn't running, so it can't set photos. Start it from the Mind tab."
 SELFIE_OLD_MIND = ("The running mind is older than this console and cannot set photos: restart "
@@ -358,6 +358,7 @@ class ConsoleApp:
         from ..culture.config import load_culture_config
         culture = load_culture_config(settings.data_dir / 'mind.toml')
         self.item_tooltips = culture.enabled and culture.loot
+        self.custom_emoji = culture.enabled and culture.emoji  # [culture] emoji: the guild's own
         self._voice_uploads = []
         self._voice_day = None
         self._voice_day_total = 0
@@ -963,7 +964,10 @@ class ConsoleApp:
         if found is None:
             return text(404, "Not found.")
         body, kind = found
-        return Response(200, body, kind, [("Cross-Origin-Resource-Policy", "same-origin")])
+        headers = [("Cross-Origin-Resource-Policy", "same-origin")]
+        if kind == "image/svg+xml":  # the guild's emoji: pictures only, never a document that runs
+            headers.append(("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'"))
+        return Response(200, body, kind, headers)
 
     # -- the endpoints -----------------------------------------------------------------------
 
@@ -1852,6 +1856,8 @@ class ConsoleApp:
             items=self.s.data_dir / 'library.db' if self.item_tooltips else None)
         view['photos'] = self.photos.enabled and self.controls.enabled
         view['voice_notes'] = self.voice_notes.enabled and self.controls.enabled
+        if self.custom_emoji:
+            view['custom_emoji'] = True
         fp = None
         if channel is not None and not view["missing"]:
             fp = discordview.watched(conn, channel, thread)
@@ -2037,6 +2043,10 @@ class ConsoleApp:
             args = endpoint.discord_args(req.json())  # checked and cleaned exactly as the mind will
         except endpoint.BadRequest as e:
             return json_response(400, {"ok": False, "error": str(e)})
+        from ..discord.custom_emoji import is_custom
+        if is_custom(args.get("emoji")) and not self.custom_emoji:
+            from ..discord.desk import WORDS as DISCORD_WORDS
+            return json_response(400, {"ok": False, "error": DISCORD_WORDS["not_emoji"]})
         from ..discord.channels import is_group
         if (args['action'].startswith('group_') or is_group(args.get('channel',''))) and not self.groups.enabled:
             return json_response(409,{'ok':False,'error':'Group chats are turned off. Enable groups and restart the mind and console.'})

@@ -318,7 +318,7 @@ LEEROY_TEST(Realm_PvpOwnerTokenAndSelectorsAreStrictAndBounded)
 LEEROY_TEST(Realm_QueuedAndValue)
 {
     std::set<std::string_view> queued = {"realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue", "duel",
-        "craft", "equip", "set_profession", "transmog_set", "calendar_signup", "mail_send", "bank_deposit",
+        "craft", "equip", "set_profession", "transmog_set", "mail_send", "bank_deposit",
         "bank_withdraw", "bank_stock", "guild_grow", "arena_team"};
     std::set<std::string_view> values = {"arena_team", "item_count", "calendar_post"};
     for (auto type : kCommandTypes)
@@ -326,6 +326,8 @@ LEEROY_TEST(Realm_QueuedAndValue)
         CHECK_EQ(IsQueued(type), queued.contains(type)); CHECK_EQ(ReturnsValue(type), values.contains(type));
     }
     CHECK(!IsQueued("")); CHECK(!IsQueued("unknown")); CHECK(!ReturnsValue("unknown"));
+    // Calendar writes change no body, so none of them goes through the body queue.
+    for (auto type : {"calendar_post", "calendar_update", "calendar_signup"}) CHECK(!IsQueued(type));
 }
 
 LEEROY_TEST(Realm_DefaultsAndConditionalFields)

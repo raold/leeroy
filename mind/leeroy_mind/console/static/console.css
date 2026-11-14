@@ -791,3 +791,8 @@ td > div.who { color: var(--ink); font-weight: 600; }
   .line-feedback > button, .feedback-reasons summary, .feedback-chip { min-height:44px; }
   .lab-weight-fields { grid-template-columns:minmax(0,1fr); }
 }
+
+/* The guild's own emoji and its server bots ([culture] emoji, bots) */
+.dc-emoji { width: 20px; height: 20px; vertical-align: -5px; }
+.dc-reaction .dc-emoji { width: 16px; height: 16px; vertical-align: -3px; }
+.dc-bot-tag { font: 600 10px/1 var(--f-mono); color: var(--accent-ink); background: var(--accent); border-radius: 3px; padding: 2px 4px; margin-left: 6px; }

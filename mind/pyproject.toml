@@ -21,7 +21,7 @@ include = ["leeroy_mind*"]
 "leeroy_mind.library" = ["migrations/*.sql"]
 "leeroy_mind.raidplay" = ["data/*.toml"]
 "leeroy_mind.console" = ["page.html", "static/*.css", "static/*.js", "static/js/*.mjs",
-                         "static/js/comms/*.mjs", "static/fonts/*"]
+                         "static/js/comms/*.mjs", "static/fonts/*", "static/emoji/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

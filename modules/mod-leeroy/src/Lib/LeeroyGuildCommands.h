@@ -14,10 +14,10 @@
 
 namespace Leeroy::Guild
 {
-inline constexpr std::array<std::string_view, 14> kCommandTypes = {
+inline constexpr std::array<std::string_view, 15> kCommandTypes = {
     "form_raid", "summon", "clear_lockout", "set_loot_master", "give_loot",
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
-    "bot_do", "stock_items", "offline_raid_stop", "guild_add_roster"
+    "bot_do", "stock_items", "offline_raid_stop", "string_do", "guild_add_roster"
 };
 inline constexpr std::array<std::string_view, 12> kBotStrategyAdd = {
     "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",

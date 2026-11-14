@@ -260,3 +260,27 @@ def test_theme_persists_key_does_not_and_origin_gate(rehearsal):
             assert KEY not in str(stored)
             assert not r.errors, r.errors
     asyncio.run(run())
+
+
+def test_strings_in_game_taken_and_refused_in_his_fight(rehearsal):
+    """D6 Part B: a member's in-game strings are buttons; each goes to native once, and its
+    answer (what she did, or native's refusal in his fight) is shown in words, never retried."""
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(godmode=True) as r:
+            await open_console(r)
+            await visit(r.page, "personas")
+            await r.page.get_by_role("button", name="Profile of Arkon", exact=True).click()
+            strings = r.page.locator("#p-strings")
+            await expect(strings.get_by_role("button", name="Duel me", exact=True)).to_be_enabled()
+            taken = await submit(r, strings.get_by_role("button", name="Come to me", exact=True), "/api/string")
+            assert (taken["state"], taken["reason"]) == ("taken", "came"), taken
+            await expect(strings).to_contain_text("She's on her way to you.")
+            r.bridge.strings["sit"] = "combat"
+            refused = await submit(r, strings.get_by_role("button", name="Sit", exact=True), "/api/string")
+            assert (refused["state"], refused["reason"]) == ("not_taken", "combat"), refused
+            await expect(strings).to_contain_text("Someone is in a fight.")
+            sent = [(c["guid"], c["kind"]) for c in r.bridge.commands if c.get("type") == "string_do"]
+            assert sent == [(101, "come_to_me"), (101, "sit")]
+            assert not r.errors, r.errors
+    asyncio.run(run())
