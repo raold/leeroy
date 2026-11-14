@@ -12,7 +12,7 @@ import math
 import re
 from dataclasses import replace
 
-from leeroy_mind.discord.channels import is_discord
+from leeroy_mind.discord.channels import is_discord, is_private
 from leeroy_mind.llm.presets import Preset
 from leeroy_mind.text import EMOJI_RE
 
@@ -24,13 +24,33 @@ SPARE_TOKENS = 24
 _SENTENCE_END = re.compile(r"(?:[.!?…]+[\"'”’)\]]*|" + EMOJI_RE.pattern + r")(?=\s|$)")
 
 
+# Channels (and group DMs) mix lengths the way a group chat does (owner, 2026-11-13): most
+# messages a quick line, some a couple of sentences, now and then a paragraph of discord_words.
+# His DMs are as full as she likes, up to dm_words. (draws below this edge, words; 0 is the
+# setting itself): 55% quick, 30% a couple of sentences, 15% a paragraph.
+CHANNEL_BANDS = ((0.55, 20), (0.85, 45), (1.0, 0))
+QUICK_WORDS, FEW_WORDS = 25, 50  # the wording each band reads (prompt.discord_length)
+
+
 def words_for(talk, channel) -> int:
-    """The words a turn on `channel` may run to under `talk` (MindConfig.talk): its
-    discord_words on a Discord channel, else 0 (the game, or the setting at 0: one short line)."""
+    """The most words a turn on `channel` may run to under `talk` (MindConfig.talk): dm_words in
+    a DM with him (discord_words for a config without it), discord_words on another Discord
+    channel, else 0 (the game, or the setting at 0: one short line)."""
     if not is_discord(channel):
         return 0
     n = getattr(talk, "discord_words", 0)
+    if is_private(channel):
+        n = getattr(talk, "dm_words", n)
     return n if type(n) is int and n > 0 else 0
+
+
+def band(cap: int, draw: float) -> int:
+    """A channel message's words for its `draw` in [0, 1): its CHANNEL_BANDS band, never over
+    `cap` (the setting)."""
+    for edge, words in CHANNEL_BANDS:
+        if draw < edge:
+            return min(cap, words or cap)
+    return cap
 
 
 def num_predict(words: int, floor: int = 80) -> int:

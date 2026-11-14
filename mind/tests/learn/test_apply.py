@@ -362,7 +362,7 @@ def test_every_live_transport_applies_and_credits_the_recipe(rig,monkeypatch,cha
     from leeroy_mind.learn import weights
     select(monkeypatch,length='length.0.v1',questions='questions.0.v1')
     rig.script('the harbor path sounds pleasant')
-    turn=Turn(TurnKind.REPLY_HUMAN,101,channel,to_guid=1,addressee=1,max_lines=1)
+    turn=Turn(TurnKind.REPLY_HUMAN,101,channel,to_guid=1,addressee=1,max_lines=1,discord_draw=.99)
     meta=TurnMeta(rig.engine._new_id(),answers_human=True,why=why)
     async def run():
         task=asyncio.create_task(rig.engine.speak_meta(turn,meta))
@@ -376,7 +376,7 @@ def test_every_live_transport_applies_and_credits_the_recipe(rig,monkeypatch,cha
     assert rig.sync(run())
     from leeroy_mind.llm.presets import LIVE
     from leeroy_mind.talk.discord_length import preset_for
-    expected = preset_for(LIVE, rig.engine.cfg.talk.discord_words).options['num_predict'] if is_discord(channel) else 40
+    expected = preset_for(LIVE, rig.engine._discord_words(turn)).options['num_predict'] if is_discord(channel) else 40
     assert rig.chat_calls()[-1]['options']['num_predict']==expected
     rows=rig.store.conn.execute('SELECT p.*,c.channel FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id').fetchall()
     assert len(rows)==1 and rows[0]['channel']==channel
@@ -485,7 +485,9 @@ def test_party_lesson_and_typing_history_apply_with_the_owner_present(rig,monkey
 def test_discord_length_draw_keeps_channel_instruction_and_allowance(rig,monkeypatch,channel,words):
     from leeroy_mind.llm.presets import LIVE
     from leeroy_mind.talk.discord_length import preset_for
-    rig.engine.cfg=replace(rig.engine.cfg,talk=replace(rig.engine.cfg.talk,discord_words=words))
+    rig.engine.cfg=replace(rig.engine.cfg,talk=replace(rig.engine.cfg.talk,discord_words=words,dm_words=words))
+    from types import SimpleNamespace
+    rig.engine._length_rng=SimpleNamespace(random=lambda: .99)  # a channel turn's paragraph band
     select(monkeypatch,length='length.2.v1')
     turn,meta,c=compose(rig,channel)
     turn.deadline=rig.clock.now()+60
