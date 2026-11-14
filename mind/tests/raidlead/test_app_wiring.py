@@ -50,7 +50,8 @@ def test_an_order_is_carried_out_then_acknowledged(tmp_path, clock):
             assert h.app.raidlead is not None
             await h.wait(lambda: h.app.world.online and h.app.raidlead.supported)
             await h.bridge.push(group(101, 102, 103, 104, 105))
-            await h.wait(lambda: h.app.raidlead.members)
+            # native's switch answers its sync first: until then the raid lead holds nothing
+            await h.until(lambda: h.app.raidlead.native is True and h.app.raidlead.members)
             await h.bridge.push(chat("Arkon leads", channel="raid"))
             await h.wait(lambda: h.app.raidlead.lead() == 101)
             await h.advance(30)
