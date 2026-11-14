@@ -342,7 +342,8 @@ def test_health_reuses_checks_but_suppresses_private_diagnostics(tmp_path):
         calls.append((root, data))
         return [Check("server-log", "ok", "Server.log: cast 120 members, pinned 120"),
                 Check("health-config", "fail", SECRET), Check("endpoint", "fail", SECRET),
-                Check("ollama-models", "note", SECRET)]
+                Check("ollama-models", "note", SECRET),
+                Check("training-gate", "note", f"training gate: not checked ({SECRET})")]
     got = ops.health_view(tmp_path, tmp_path, fake)
     assert calls == [(tmp_path, tmp_path)] and got["fails"] == 2
     assert got["checks"][0]["text"] == "Server.log: cast 120 members, pinned 120"

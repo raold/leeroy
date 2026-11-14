@@ -136,6 +136,24 @@ def put_pull(conn, rec, ctx, roles, *, received, scoreable=None,
     return True
 
 
+def full_since_ms(conn):
+    """From when stored his and offline pulls are every pull rather than the overhead gate's
+    A/B sample: the ms the gate passed (meta tg_gate ``passed_at``). 0 for a gate that passed
+    before it recorded the time; None while it measures, after it failed or when unreadable,
+    when stored pulls are a sample and no best or record may be claimed from them."""
+    row = conn.execute("SELECT value FROM meta WHERE key='tg_gate'").fetchone()
+    try:
+        gate = json.loads(row[0]) if row else None
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(gate, dict) or gate.get("phase") != "passed":
+        return None
+    passed = gate.get("passed_at")
+    if passed is None:
+        return 0
+    return int(passed * 1000) if _finite(passed) and passed >= 0 else None
+
+
 def pull_rows(conn, *, context=None, kinds=None, since_ms=None, scoreable=None):
     where, params = [], []
     for key, value, op in (("context", context, "="), ("start_ms", since_ms, ">="),

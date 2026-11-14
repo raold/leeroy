@@ -79,6 +79,16 @@ paraphrased by the night's reflection into her memories, so a temporary mood may
 its nudge. To prevent that, set `nudge_memories = false` in `[tuning]` of `mind.toml`
 (read at the mind's start) before the nudge ends.
 
+## Godmode edits
+
+With `[godmode] enabled = true`, the same change log also holds the owner's edits of a
+member's mind (`tuning/edits.py`: traits, feelings, mood, life events, memory implants and
+erasures, feud starts and ends, hangouts, skill and day-plan activities). Their receipts live in
+`meta` beside the nudges' (`tuning:edit:value:<id>`, `tuning:edit:change:<change>`); undo and
+revert fold them in, and the history lists each change's edits by id, kind and state. The tune
+op's form is `action: "edit"` with `verb: "set" | "retire" | "list" | "preview"`. Read them with
+`python -m leeroy_mind tuning --data-dir D edits`. See `mind/leeroy_mind/godmode/README.md`.
+
 ## Isolated validation
 
 ```sh

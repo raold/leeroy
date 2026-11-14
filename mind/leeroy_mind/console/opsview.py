@@ -643,7 +643,7 @@ def health_view(root, data, run_checks=health.run_checks):
         name, state = code(c.name), c.status if c.status in {"ok", "fail", "note"} else "note"
         text = c.text
         if (name in private or (name in {"endpoint", "mind"} and state == "fail")
-                or name == "telemetry" and "not checked" in text):
+                or name in {"telemetry", "training-gate"} and "not checked" in text):
             text = f"{name}: {health.MARK[state].strip()} (details available in the local health CLI)."
         for path, word in ((data, "<mind-data>"), (root, "<install>")):
             text = text.replace(str(path), word).replace(path.as_posix(), word)

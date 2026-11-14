@@ -1,4 +1,4 @@
-import { num, obj, plural, str } from "./core.mjs";
+import { arr, num, obj, plural, str } from "./core.mjs";
 
 // How the Training tab words what /api/training holds. No DOM here: node imports this file.
 
@@ -71,4 +71,63 @@ export function scopeText(x) {
 export function trialText(t) {
   t = obj(t);
   return plural(num(t.arms), "arm") + ", " + plural(num(t.observations), "observation");
+}
+
+// -- what hurt them (the `hurt` report): each boss's numbers as short lines ------------------------
+
+// A spell by its stored name, else its id
+export function spellText(s) {
+  s = obj(s);
+  return str(s.name) || "spell " + num(s.spell);
+}
+
+function who(m) {
+  m = obj(m);
+  return str(m.name) || "#" + num(m.guid);
+}
+
+// The boss's heading line: pulls, kills, wipes, kinds and deaths a pull
+export function hurtHead(c) {
+  c = obj(c);
+  var kinds = Object.keys(obj(c.by_kind)).sort().map(function (k) { return k + " " + num(c.by_kind[k]); });
+  var parts = [plural(num(c.pulls), "pull") + " (" + plural(num(c.kills), "kill") + ", " + plural(num(c.wipes), "wipe") + ")"];
+  if (kinds.length) { parts.push(kinds.join(", ")); }
+  var deaths = obj(c.deaths);
+  parts.push((typeof deaths.per_pull === "number" ? deaths.per_pull.toFixed(2) : "-") + " deaths a pull");
+  if (num(c.incomplete_pulls)) { parts.push(plural(num(c.incomplete_pulls), "incomplete pull") + " not read"); }
+  return parts.join(" · ");
+}
+
+// Deaths by killing spell: "Vile Gas ×9 (6 members)"; "" when nobody died
+export function deathsBy(c, n) {
+  return arr(obj(obj(c).deaths).by_spell).slice(0, n || 3).map(function (d) {
+    return spellText(d) + " ×" + num(d.deaths) + " (" + plural(num(d.members), "member") + ")";
+  }).join(", ");
+}
+
+// The spells that hit the cast hardest, as shares of recorded (requested) damage
+export function hitHardest(c, n) {
+  return arr(obj(obj(c).damage_taken).top).slice(0, n || 3).map(function (t) {
+    var share = typeof t.share === "number" ? " " + Math.round(t.share * 100) + "%" : "";
+    return spellText(t) + share;
+  }).join(", ");
+}
+
+// Failed mechanics the checks proved, with the member who failed each most
+export function mechanicsText(c, n) {
+  return arr(obj(c).mechanics).slice(0, n || 3).map(function (m) {
+    var worst = arr(m.worst)[0];
+    return str(m.key) + " (" + str(m.kind) + ") ×" + num(m.count) + (worst ? ", most " + who(worst) + " ×" + num(worst.count) : "");
+  }).join("; ");
+}
+
+// Avoidable effects: who the records show hit, and how often past the allowance
+export function avoidText(c, n) {
+  return arr(obj(c).avoidable).filter(function (a) { return num(a.hits) > 0 || !a.resolved; }).map(function (a) {
+    var label = arr(a.names).join(" / ");
+    if (!a.resolved) { return label + ": spell not named yet"; }
+    return label + ": " + arr(a.members).slice(0, n || 3).map(function (m) {
+      return who(m) + " " + plural(num(m.hits), "hit") + (num(m.over_allowance) ? " (" + num(m.over_allowance) + " over)" : "");
+    }).join(", ");
+  });
 }

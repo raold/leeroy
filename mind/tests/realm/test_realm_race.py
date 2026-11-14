@@ -135,9 +135,12 @@ def guild_kill(store, when, *, map_=631, boss=0, difficulty=1, private=False):
 
 def guild_pull(store, pull_id, end, seconds, *, map_=631, boss=0, difficulty=1, kind="his",
                members=(1, 101, 102, 103), outcome="killed"):
-    """A measured training-ground pull of his (or an offline) raid, with its members."""
+    """A measured training-ground pull of his (or an offline) raid, with its members. Its
+    overhead gate has passed (before it records the time), so stored pulls are every pull."""
     size = 25 if difficulty & 1 else 10
     with store.transaction():
+        store.conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES ('tg_gate',?)",
+                           (json.dumps({"phase": "passed", "raids": 4, "verdict_ms": 0.2}),))
         store.conn.execute(
             "INSERT INTO tg_pull(id,context,map,instance_id,boss_id,difficulty,size,outcome,start_ms,end_ms,"
             "members,assisted,boss_entry,upd_mean_ms,kind,complete,scoreable,received) "
@@ -376,6 +379,26 @@ def test_benchmark_loss_is_a_story(race, realm, store, clock):
     assert race.on_benchmark(pull) == "seen"
     assert len(facts(store, "benchmark_loss_v1")) == 1 and len(boasts) == 1
     assert store.conn.execute("SELECT sum(points) FROM realm_grudge").fetchone()[0] == 3.0
+
+
+@pytest.mark.parametrize("gate", [{"phase": "ab", "raids": 3, "verdict_ms": None},
+                                  {"phase": "failed", "raids": 4, "verdict_ms": 1.5},
+                                  {"phase": "passed", "raids": 4, "verdict_ms": 0.2, "passed_at": T0 - 5 * DAY}],
+                         ids=["ab", "failed", "passed_since"])
+def test_no_faster_than_us_from_the_gates_sampled_pulls(race, realm, store, clock, gate):
+    # His kill of 300 s was stored while the gate measured: only every other pull was, so a
+    # rival's 250 s cannot be called faster than the guild's best.
+    guild_pull(store, "his:1", T0 - 10 * DAY, 300.0, boss=0)
+    store.set_meta("tg_gate", json.dumps(gate))
+    pull = benchmark(1, at(clock, T0), kills=((0, 250.0),))
+    assert race.on_benchmark(pull) == "counted"
+    assert facts(store, "benchmark_loss_v1") == []
+    assert store.conn.execute("SELECT count(*) FROM realm_match").fetchone()[0] == 0
+    assert store.conn.execute("SELECT count(*) FROM realm_grudge").fetchone()[0] == 0
+    if gate["phase"] == "passed":  # a kill since the pass is every pull: the loss stands
+        guild_pull(store, "his:2", T0 - 2 * DAY, 280.0, boss=0)
+        assert race.on_benchmark(benchmark(2, at(clock, T0 + 60), kills=((0, 250.0),))) == "counted"
+        assert [json.loads(m[0])["guild_s"] for m in store.conn.execute("SELECT detail FROM realm_match")] == [280]
 
 
 def test_a_slower_benchmark_is_progress_only(race, realm, store, clock):

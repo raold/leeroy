@@ -332,7 +332,7 @@ class Movement:
         if (not ext.comms.available() or room is None or ext.rooms.human_room() in (*PRIVATE, "afk", None)
                 or app.world.human_afk or str(app.raid.phase(now)) in _BUSY or self.invites):
             return
-        candidates = {g: (app.personas.get(g), app.store.get_relationship(g, app.human_guid))
+        candidates = {g: (app.personas.get(g), app.store.get_relationship(g, app.human_guid, lens=True))
                       for g in self._members() if app.personas.get(g) is not None}
         guid = app.engine.whispers.maybe(now, "idle", candidates)
         if guid not in candidates:
