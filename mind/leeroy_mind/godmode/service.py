@@ -95,20 +95,25 @@ class Godmode:
             self.jobs.expect(wire)
             cmd = StringDo(id=wire, guid=row["member"], kind=row["kind"],
                            target_guid=app.human_guid or 0, emote=row["args"].get("emote", ""))
+            job = None
             try:
                 ack = await bridge.send(cmd, preserve_id=True)
             except AckTimeout:
-                status, reason = "not_taken", "no_answer"
+                # Native publishes its done job before the ack: one that came is proof it was done.
+                job = await self.jobs.wait(wire, 0)
+                status, reason = ("taken", "") if job is not None else ("not_taken", "no_answer")
             except BridgeError:
                 status, reason = "not_taken", "no_link"
             else:
                 if ack.ok:
                     job = await self.jobs.wait(wire, JOB_WAIT_S)
-                    done = getattr(job, "reason", "")
-                    status, reason = "taken", done if _CODE.fullmatch(done or "") else "done"
+                    status, reason = "taken", ""
                 else:
                     status, reason = "not_taken", native_code(ack.error)
-            if status != "taken":
+            if status == "taken":
+                done = getattr(job, "reason", "") or ""
+                reason = done if _CODE.fullmatch(done) else "done"
+            else:
                 await self.jobs.wait(wire, 0)  # no done job comes: free its mailbox entry
         finally:
             self._busy.discard(ident)

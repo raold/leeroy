@@ -127,6 +127,20 @@ def test_the_link_failing_or_an_older_worldserver_reports_it(app, failure, reaso
     assert not app.godmode._busy and not app.godmode.jobs._jobs
 
 
+def test_a_lost_ack_after_native_s_done_job_is_still_taken(app):
+    """Native's done job comes before its ack: when the ack is lost, the job alone proves it."""
+    wire = app.bridge = Wire(app, {"sit": (True, "", "sat")})
+    real = wire.send
+
+    async def lose_ack(cmd, *, preserve_id=False):
+        await real(cmd, preserve_id=preserve_id)
+        raise AckTimeout("no ack")
+    wire.send = lose_ack
+    reply = pull(app, 102, "sit")
+    assert (reply["state"], reply["reason"]) == ("taken", "sat")
+    assert not app.godmode.jobs._jobs
+
+
 def test_a_done_ack_without_its_job_is_taken_as_done(app, monkeypatch):
     monkeypatch.setattr("leeroy_mind.godmode.service.JOB_WAIT_S", 0.01)
     app.bridge = Wire(app, {"sit": (True, "", None)})
