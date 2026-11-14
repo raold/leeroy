@@ -504,17 +504,87 @@ async def test_training_pre_call_resolves_encounter_index_from_validated_boss_na
 
 
 @_run_async
-async def test_pre_calls_ask_the_raid_playbook_hook_first(setup, monkeypatch):
-    """raidlead.callouts.boss_brief: None keeps the standing call; a playbook's brief replaces it."""
+async def test_pre_calls_ask_the_raid_playbook_hook_only_with_the_briefs_on(setup, monkeypatch):
+    """raidlead.callouts.boss_brief: off ([raidlead] briefs), it is never asked and the standing
+    call is said as before; on, its lines replace it, each said word for word (an exact line)."""
     from leeroy_mind.raidlead import callouts
     ports, run, calls = await start(setup)
+    seen = []
+    monkeypatch.setattr(callouts, "boss_brief", lambda context: seen.append(context) or "spores: stack\nthen burn")
     await calls.on_dc_status(dc(ports))
     assert ports.said[-1][2] == "festergut: ranged spread, stack on gas spores"
-    seen = []
-    monkeypatch.setattr(callouts, "boss_brief", lambda context: seen.append(context) or "spores: stack")
+    assert seen == [] and ports.exact == []
+    calls.briefs = True
     await calls.on_dc_status(dc(ports, "Rotface", 36627))
-    assert ports.said[-1][2] == "spores: stack"
+    assert [s[2] for s in ports.said[-2:]] == ["spores: stack", "then burn"]
+    assert ports.exact == ["spores: stack", "then burn"]
     assert (seen[0].map_id, seen[0].boss_id, seen[0].size, seen[0].heroic) == (631, 5, 10, False)
+    # the run's roles as the playbooks name them: 101 and 107 tank, 102 heals, 104 is melee
+    assert seen[0].roles == ("healer", "melee", "ranged", "ranged", "ranged", "ranged", "ranged",
+                             "tank", "tank")
+
+
+@_run_async
+async def test_the_pre_pull_brief_is_the_playbooks_word_for_word(setup):
+    from leeroy_mind.raidlead.briefs import build
+    ports, run, calls = await start(setup)
+    calls.briefs = True
+    await calls.on_dc_status(dc(ports))
+    brief = build(631, 4, 0, calls_roles(calls))
+    assert brief is not None and [s[2] for s in ports.said] == list(brief.lines)
+    assert all(s[0] == run.plan.lead_guid and s[1] == "raid" for s in ports.said)
+    assert ports.said[0][2].startswith("Festergut, 10 normal: ")
+
+
+@_run_async
+async def test_a_pull_stops_the_rest_of_the_brief_and_lust_is_never_held_behind_it(setup, monkeypatch):
+    from leeroy_mind.raidlead import callouts
+    ports, run, calls = await start(setup)
+    calls.briefs = True
+    monkeypatch.setattr(callouts, "boss_brief", lambda context: "spores: stack\nthen burn")
+    real_say = ports.say
+
+    async def say(guid, channel, text, **kw):
+        said = await real_say(guid, channel, text, **kw)
+        if len(ports.said) == 1:  # the boss is engaged while her first line is typed
+            await calls.on_boss(boss(ports, run, boss_id=4))
+        return said
+    ports.say = say
+    await calls.on_dc_status(dc(ports))
+    assert ports.exact == ["spores: stack"]  # "then burn" never started: the pull had begun
+    assert [s[2] for s in ports.said] == ["spores: stack", "lust now"]
+    assert [c.param for c in ports.sent if c.action == "cast"] == ["bloodlust"]
+
+
+@_run_async
+async def test_the_training_pre_call_still_wins_over_a_brief(setup):
+    ports, run, calls = await start(setup)
+    calls.briefs = True
+    calls.pre_call = lambda map_id, boss_id: "use the tested formation"
+    await calls.on_dc_status(dc(ports))
+    assert [s[2] for s in ports.said] == ["use the tested formation"] and ports.exact == []
+
+
+@_run_async
+async def test_a_raid_without_a_playbook_keeps_its_standing_call(setup, monkeypatch):
+    """No playbook for the boss (or none readable): the standing call, as before."""
+    from leeroy_mind import raidplay
+    from leeroy_mind.guild.boss_calls import HEROIC_CALLS
+    from leeroy_mind.raidlead import callouts
+    ports, run, calls = await start(setup)
+    calls.briefs = True
+    assert len(BOSS_CALLS) and len(HEROIC_CALLS)  # read from the playbooks before they break
+    monkeypatch.setattr(callouts, "_UNAVAILABLE", [])
+    monkeypatch.setattr(raidplay, "load", lambda: (_ for _ in ()).throw(raidplay.PlaybookError("x")))
+    await calls.on_dc_status(dc(ports))
+    assert [s[2] for s in ports.said] == ["festergut: ranged spread, stack on gas spores"]
+    assert ports.exact == []
+
+
+def calls_roles(calls):
+    from leeroy_mind.raidlead.briefs import playbook_role
+    cast = calls.ports.cast()
+    return tuple(sorted(playbook_role(r, cast[g].class_, cast[g].spec_tab) for g, r in calls._roles.items()))
 
 
 @_run_async

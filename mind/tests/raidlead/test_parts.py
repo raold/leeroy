@@ -87,7 +87,7 @@ def test_the_ops_switches_list_the_raid_lead(tmp_path, text, state):
     from leeroy_mind.console import opsview
     (tmp_path / "mind.toml").write_text(text, encoding="utf-8")
     rows = opsview.switches_view(tmp_path, time.monotonic() + 10, mind_started=None)["rows"]
-    [row] = [r for r in rows if r["table"] == "raidlead"]
+    [row] = [r for r in rows if r["table"] == "raidlead" and r["key"] == "enabled"]
     assert row["state"] == state
 
 
