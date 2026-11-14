@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ordered, initial, step, swipe, coverWhy, SWIPE_PX } from "../../../leeroy_mind/console/static/js/gallerymodel.mjs";
+import { ordered, initial, step, swipe, coverWhy, lookWords, SWIPE_PX } from "../../../leeroy_mind/console/static/js/gallerymodel.mjs";
 
 test("photos stay newest first and start at the cover without reordering", function () {
   const rows = [{ id: "a", rendered: 1, cover: true }, { id: "b", rendered: 3 }, { id: "c", rendered: 2 }];
@@ -32,4 +32,10 @@ test("cover controls say why they are disabled", function () {
   assert.match(coverWhy({ kind: "snap" }, state), /cannot be a cover/);
   assert.match(coverWhy({ ...p, cover: true }, state), /current cover/);
   assert.match(coverWhy(p, state, true), /Saving/);
+});
+test("a varied set's candidate names its look, other photos nothing", function () {
+  assert.equal(lookWords({ look: { category: "swim", view: "behind", label: "swimwear, from behind" } }), "swimwear, from behind");
+  assert.equal(lookWords({ kind: "candidate" }), "");
+  assert.equal(lookWords({ look: { label: 7 } }), "");
+  assert.equal(lookWords(null), "");
 });
