@@ -288,7 +288,10 @@ output in `patches/`:
 - **`.playerbots bot add5|add10|add25|add40`**: fills your group to a 5-man
   party or a 10/25/40-man raid with a sensible tank/healer/damage mix at your
   level, with proper specs and gear. For the player, mod-leeroy fills it from
-  his guild instead.
+  his guild instead. It leaves out members saved to another copy of a raid or
+  heroic he is saved to at that size, and when he takes the group into an
+  instance, members saved to another copy of it (whom the core would turn away)
+  are named, leave his group and are replaced from the guild.
 - **Raid habits**: those bots follow in arrow formation, and damage dealers
   hold a few seconds into a pull so the tank gets threat.
 - **Bots past level 80**: bots that take the level of a master above 80 get the
