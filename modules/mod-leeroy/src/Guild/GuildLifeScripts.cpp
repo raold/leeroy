@@ -10,6 +10,7 @@
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
 #include "OwnerSay.h"
+#include "RaidLead.h"
 #include "PlayStyle.h"
 #include "ScriptMgr.h"
 #include "Player.h"
@@ -37,6 +38,7 @@ public:
         Leeroy::Guild::RegisterBotCommandHandlers();
         Leeroy::Guild::RegisterOfflineRaidHandler();
         Leeroy::Guild::RegisterOwnerSayHandler();
+        Leeroy::Guild::RegisterRaidLeadHandler();
     }
 
     void OnUpdate(uint32 diff) override

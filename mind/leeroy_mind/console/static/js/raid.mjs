@@ -19,7 +19,7 @@ var LOOT_STATES = { pending: "open for claims", sending: "being given", acknowle
                     uncertain: "uncertain", cancelled: "cancelled" };
 var ROLE_ORDER = { tank: 0, healer: 1, damage: 2 };
 var RAID_LABEL = { call: "call the raid", summon: "summon", start: "start the run",
-                   stop: "stop the run", end: "end", form: "form the raid" };
+                   stop: "stop the run", end: "end", form: "form the raid", lead: "raid lead" };
 var R = null, raidTimer = null, raidBusy = false;
 var formReady = "";
 
@@ -141,11 +141,58 @@ function renderRaid(j) {
   var formWhy = !live ? str(m.error) || "unavailable" : off || actions.form;
   $("r-go").disabled = !!formWhy;
   $("r-go").title = formWhy ? str(formWhy) : "";
+  renderLead(view, m, off);
   renderRaidMembers(view, open, run);
   renderRaidLoot(view, open);
   renderRaidDkp(view, open);
   renderRecent(view);
 }
+// The raid lead (the mind's [raidlead]): who calls his group's raid while he keeps the group.
+var LEAD_SOURCE = { console: "set here", chat: "named in chat", "default": "the guild's pick" };
+var LEAD_BLOCKED = { offline: "you're not in game", no_group: "you're not leading a group",
+                     unsupported: "the game server needs the raid lead rebuild",
+                     offline_raid: "an offline raid holds the guild", forming: "a raid is being formed",
+                     raid_led: "tonight's raid has its own lead", stopping: "the mind is stopping" };
+var leadReady = "";
+function renderLead(view, m, off) {
+  var form = $("r-leadform"), rl = m.ok ? m.raid_lead : null;
+  form.hidden = !rl;
+  if (!rl) { return; }
+  var pick = $("r-raidlead"), keep = pick.value, cands = arr(rl.candidates);
+  var key = JSON.stringify(cands.map(function (c) { return [c.guid, c.online]; }));
+  if (key !== leadReady) {
+    leadReady = key;
+    clear(pick);
+    var first = [["", "the guild's pick"]];
+    if (view.human) { first.push([String(view.human), "me (nobody calls it)"]); }
+    first.forEach(function (p) {
+      var o = el("option", "", p[1]);
+      o.value = p[0];
+      pick.appendChild(o);
+    });
+    cands.forEach(function (c) {
+      var o = el("option", "", str(c.name) + (c.officer ? " (officer)" : "") + (c.online ? "" : " (offline)"));
+      o.value = String(c.guid);
+      o.disabled = !c.online;
+      pick.appendChild(o);
+    });
+    if (keep) { pick.value = keep; }
+  }
+  var now = rl.lead ? who(view, rl.lead) + " leads (" + (LEAD_SOURCE[rl.source] || str(rl.source)) + ")"
+    + (rl.raid ? (rl.assistant ? ", raid assistant" : ", not yet assistant") : "")
+    : rl.his ? "you lead: nobody calls it" : "nobody leads yet";
+  var why = rl.blocked ? LEAD_BLOCKED[rl.blocked] || str(rl.blocked) : "";
+  setText("r-leadnow", now + (why ? " · " + why : ""));
+  $("r-leadgo").disabled = !!(off || why);
+  $("r-leadgo").title = off || why || "";
+}
+$("r-leadform").addEventListener("submit", function (ev) {
+  ev.preventDefault();
+  if ($("r-leadgo").disabled) { return; }
+  var v = $("r-raidlead").value;
+  raidAct("lead", v ? { action: "set", guid: Number(v) } : { action: "clear" }, "/api/raidlead");
+});
+
 function renderRaidMembers(view, open, run) {
   var body = $("r-members"), members = arr(open ? open.members : run ? run.members : []);
   var inside = {}, late = {};
@@ -252,11 +299,11 @@ function pollRaid() {
   }).then(function (j) { if (j) { renderRaid(j); } }, function () { /* the strip says it */ })
     .then(function () { raidBusy = false; });
 }
-function raidAct(action, body) {
+function raidAct(action, body, path) {
   var why = $("r-why");
   why.textContent = RAID_LABEL[action] + ": sent to the mind…";
   why.classList.remove("bad");
-  post("/api/raid", body).then(function (j) {
+  post(path || "/api/raid", body).then(function (j) {
     why.textContent = j.ok ? str(j.message) : str(j.error) || "it did not work";
     why.classList.toggle("bad", !j.ok);
     pollRaid();

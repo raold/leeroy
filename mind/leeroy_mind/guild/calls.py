@@ -63,10 +63,17 @@ class RaidCalls:
                 "dead": {str(g): ts for g, ts in self._dead.items()},
                 "resurrected": {str(g): ts for g, ts in self._resurrected.items()}, "last_pre": self._last_pre})
 
+    def _speaker(self):
+        """Who calls it: the run's lead, or the member he names to lead later in a raid he drives
+        (raidlead, through the ports' speaking_lead); his own lead_guid means nobody does."""
+        speaking = getattr(self.ports, "speaking_lead", None)
+        guid = speaking(self._run) if speaking is not None else None
+        return guid if guid is not None else self._run.plan.lead_guid
+
     def _valid(self, epoch, *, instance=True):
         run = self._run
-        if (run is None or epoch != self._epoch or run.lead_is_human
-                or run.plan.lead_guid == self.ports.human_guid or self._human != self.ports.human_guid
+        if (run is None or epoch != self._epoch
+                or self._speaker() == self.ports.human_guid or self._human != self.ports.human_guid
                 or bool(self.ports.human_online()) == bool(run.plan.offline)
                 or run.session._closing or asdict(run.plan) != self._plan
                 or asdict(run.session.plan) != self._plan):
@@ -80,7 +87,7 @@ class RaidCalls:
                          or ctx.instance_id != self._instance
                          or _get(self.ports.conn, f"guild:raid:{self._raid_id}:instance") != ctx.instance_id):
             return False
-        return self._eligible(run.plan.lead_guid, living=False) and self._eligible(run.plan.tank_guid, living=False)
+        return self._eligible(self._speaker(), living=False) and self._eligible(run.plan.tank_guid, living=False)
 
     def _eligible(self, guid, *, living=True):
         member = self.ports.cast().get(guid)
@@ -103,7 +110,7 @@ class RaidCalls:
             return False
         # Reserve the shared gap before awaiting another listener's potential say.
         self.gap.mark(now)
-        said = await self.ports.say(self._run.plan.lead_guid, "raid", public_text(self.ports, text))
+        said = await self.ports.say(self._speaker(), "raid", public_text(self.ports, text))
         return said is True and self._valid(epoch)
 
     async def _action(self, guids, action, param, epoch, *, key, target=0):
@@ -229,6 +236,11 @@ class RaidCalls:
             text = call.pre
             indexes = [boss for (map_id, boss), known in BOSS_NAMES.items()
                        if map_id == self._map and known == name]
+            if len(indexes) == 1:
+                # The raid playbooks' brief, when there is one (raidlead.callouts.boss_brief).
+                from leeroy_mind.raidlead.callouts import BossContext, boss_brief
+                plan = self._run.plan
+                text = boss_brief(BossContext(self._map, indexes[0], name, plan.size, plan.heroic)) or text
             if self.pre_call is not None and len(indexes) == 1:
                 replacement = self.pre_call(self._map, indexes[0])
                 if replacement:

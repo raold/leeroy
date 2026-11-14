@@ -372,3 +372,31 @@ async def test_someone_elses_or_an_offline_owners_group_is_ignored(setup):
     await night.on_guild_group(group_event(ports))
     await night.tick()
     assert records(ports) == [] and ports.sent == []
+
+
+@_run_async
+async def test_a_member_he_named_calls_his_groups_raid_while_he_drives_it(setup):
+    """raidlead: the member he named to lead his group is the raid's lead (its record, the talk's
+    lead), while he still drives it: no ready check, no countdown, no dungeon-clear."""
+    ports, _, night = setup
+    ports.designated_lead = lambda: 103
+    await adopted(setup)
+    run = night.run
+    assert night.state is State.RUNNING and run.lead_is_human and run.plan.lead_guid == 103
+    [(raid_id, size, heroic, offline, lead, ended, _)] = records(ports)
+    assert lead == 103 and ended is None
+    assert ports.leads[-1] == 103
+    assert [type(c) for c in ports.sent] == [Summon, SetLootMaster]
+    for _ in range(3):
+        await advance(ports, 60)
+        await night.tick()
+    assert not any(isinstance(c, RaidControl) for c in ports.sent)
+    assert night.console_refusal("start") == "you lead tonight: dungeon-clear runs only under a bot lead"
+
+
+@_run_async
+async def test_a_named_lead_outside_the_raid_leaves_him_its_lead(setup):
+    ports, _, night = setup
+    ports.designated_lead = lambda: 999
+    await adopted(setup)
+    assert night.run.lead_is_human and night.run.plan.lead_guid == 1

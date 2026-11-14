@@ -489,6 +489,8 @@ class MindApp:
         self.photos = attach_photos(self)
         from .outreach.attach import attach as attach_outreach
         self.outreach = attach_outreach(self)
+        from .raidlead.service import attach as attach_raidlead
+        self.raidlead = attach_raidlead(self)  # None while [raidlead] is off
 
     # -- extension points --------------------------------------------------------------------
 
@@ -1008,11 +1010,18 @@ class MindApp:
             return True  # game lines are kept in the log only
         self._note_human_name(ev.from_name)
         command = self.voice.echoes_command(ev) or his_command(ev.channel, ev.text)
+        raidlead = getattr(self, "raidlead", None)
+        if not command and not backlog and raidlead is not None:
+            command = raidlead.claims(ev, line_id)  # an order to his group, not talk
         if not backlog and self.signals is not None:
             self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
         if command:
             self.world.apply(ev, now)  # he is active, but a bot command is not talk
             return True
+        await self._his_talk(ev, line_id, now, at, backlog)
+        return True
+
+    async def _his_talk(self, ev: Chat, line_id: int, now: float, at, backlog: bool) -> None:
         row = self.store.chat_lines([line_id])[0]
         self.world.add_line(row, now)
         # A replayed line is threaded at the time he typed it (the server's clock, the same
@@ -1022,7 +1031,12 @@ class MindApp:
             if self.outreach is not None:
                 self.outreach.on_his_line(line_id)
             await self.engine.on_human_chat(row)
-        return True
+
+    async def release_to_talk(self, ev: Chat, line_id: int) -> None:
+        """A line of his the raid lead held as a possible order and found to be none: it goes on
+        as the talk he meant, as if never held (raidlead.service)."""
+        if not self._stopping:
+            await self._his_talk(ev, line_id, self.clock.now(), None, False)
 
     def _record_only(self, ev: Event, name: str) -> None:
         """While stopping: keep what still arrives in the log and start nothing."""

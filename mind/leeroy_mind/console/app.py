@@ -49,6 +49,8 @@ run nothing else.
                        "raid", "size", "heroic", "lead"}: checked as the endpoint checks it,
                        then on to the mind's control endpoint (mindlink); refused with
                        --no-control, while a start or stop runs, or while the mind is not up
+    POST /api/raidlead {"action": "set", "guid"} or {"action": "clear"}: who calls his group's raid
+                       (the mind's raidlead op, the raid actions' gates); 409 while it is off
     GET  /api/face     ?guid=<guid>&size=sm|md|lg: the member's chosen photo (mind-data/selfies/
                        <guid>/chosen.jpg) as it is, or 404; the browser scales it
     GET  /api/tuning   the Personas tab's dials: world, groups and each member's values, and
@@ -915,6 +917,7 @@ class ConsoleApp:
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action,
+                  ("POST", "/api/raidlead"): self._api_raidlead_action,
                   ("POST", "/api/say"): self._api_say,
                   ("POST", "/api/board"): self._api_board_reply}
         route = routes.get((req.method, req.path))
@@ -1004,9 +1007,12 @@ class ConsoleApp:
             return {"ok": False, "error": str(reply.get("error") or "refused")[:200]}
         raid = reply.get("raid")
         world = reply.get("world")
-        return {"ok": True, "stopping": reply.get("stopping") is True,
-                "raid": raid if isinstance(raid, dict) else None,
-                "world": world if isinstance(world, dict) else None}
+        status = {"ok": True, "stopping": reply.get("stopping") is True,
+                  "raid": raid if isinstance(raid, dict) else None,
+                  "world": world if isinstance(world, dict) else None}
+        if isinstance(reply.get("raid_lead"), dict):  # only while the mind's raid lead is on
+            status["raid_lead"] = reply["raid_lead"]
+        return status
 
     # -- the raid and guild tabs ---------------------------------------------------------------
 
@@ -1603,6 +1609,28 @@ class ConsoleApp:
                                        "error": str(reply.get("error") or "refused")[:300]})
         message = str(reply.get("message") or "done")[:300]
         self.broadcast("raid", {"action": args["action"], "message": message})
+        return json_response(200, {"ok": True, "message": message})
+
+    async def _api_raidlead_action(self, req: Request):
+        """Who calls his group's raid ({"action": "set", "guid"} or {"action": "clear"}), through
+        the mind's raidlead op behind the raid actions' gates."""
+        try:
+            args = endpoint.raidlead_args(req.json())
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._raid_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "raidlead", args,
+                                            timeout=RAID_S)
+        except LinkError as e:
+            return json_response(409, {"ok": False, "error": str(e)})
+        if reply.get("ok") is not True:
+            return json_response(409, {"ok": False,
+                                       "error": str(reply.get("error") or "refused")[:300]})
+        message = str(reply.get("message") or "done")[:300]
+        self.broadcast("raid", {"action": "lead", "message": message})
         return json_response(200, {"ok": True, "message": message})
 
     # -- the reply box -------------------------------------------------------------------------

@@ -82,6 +82,44 @@ fighting nearby restarts that clock. Inside an instance it waits for a rez, as b
 Reloadable with `.reload config`. Logs carry guids, spell ids and result codes only.
 **Native rebuild required.**
 
+# The raid lead (his orders to his own group)
+
+`Leeroy.RaidLead.Enable` (default 0, reloadable with `.reload config`) is the native half of the
+mind's `[raidlead]` (`mind/leeroy_mind/raidlead/README.md`). Pure policy is
+`Lib/LeeroyRaidLeadPolicy.*` (unit tests `TestRaidLeadPolicy.cpp`); the world-thread side is
+`Guild/RaidLead.cpp`. Hello lists `features: [..., "raidlead"]` so the mind knows the build has it;
+with the key at 0 both commands are refused `raidlead_off`.
+
+- **`bot_do` action `"order"`**, param one of the fixed list `kRaidOrders`: `follow`, `come_back`,
+  `stay`, `stack` (`target_guid` a member of his group, or 0 for him), `spread`, `run_out`,
+  `back_off`, `hold`, `attack`, `kill_skull`, `taunt`, `release`. Anything else fails the parser
+  (`bad field: param`); co/nc strategy strings keep their own signed whitelist. Each order is
+  built from existing playerbots strategies and values only: the strategy strings of
+  playerbots' own Follow/Stay/MoveFromGroup/Flee chat shortcuts (without their whisper to the
+  master), its `stay`/`return` positions (at the bot, at him or at the named member), `passive`
+  on or off, the `rti` value `skull`, its `attack my target` action, each class's taunt
+  (`taunt`, `hand of reckoning`, `dark command`, `growl`) on his hostile selection unless that
+  tank already holds it (`has_aggro`), and for `release` the repop GroupRezJob uses (the one
+  order for a dead bot; `alive`/`released` otherwise). Bloodlust/Heroism stays the existing
+  `cast`. The job's terminal lists the bots it changed in `guids` and the rest in `skipped` with
+  the reason; every "+x"/"-x" of an order is checked on the bot afterwards.
+- **Fences at the mutation boundary** (TickBotCommands, after the ack): he is online and leads a
+  group that is no battleground or battlefield group, the bot is in that group and on his map
+  (`not_leader`, `not_in_group`, `elsewhere`), no Realm lease on it or its group
+  (`busy:realm_owner`), and `NativeOwnershipReason` (offline raid, dummy trial, training cleanup,
+  journals, pending bot jobs: `busy:training_*`). A bot the order needs as his own gets him as
+  master, as RaidHabits does; the leader flag is never touched, so playerbots never resets
+  every bot's strategies.
+- **`raid_lead`** `{action: "assist"|"unassist", guid}` sets or clears the assistant flag of the
+  cast member he named (never him, never anyone outside his group, never the leader flag; only
+  in a raid group: `not_raid`). `{action: "mark", guid, icon}` puts a raid icon (kRtiIcons, skull
+  is 7) on his hostile selection, set by `guid`: a raid assistant, him, or any member of a party
+  (`not_assistant`, `no_target`). The ack is the result; the mind's `icon: ""` on assist and
+  unassist is no icon. The ready check stays the existing `raid_control ready_check` with her as
+  `leader_guid` once she is assistant.
+
+Logs carry ids, guids and codes only. **Native rebuild required** (`ac-release.sh --native`).
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a
