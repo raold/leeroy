@@ -172,7 +172,11 @@ class RequestPhotos:
             log('selfie_request', guid=guid, channel_kind='dm' if layout.dm_peer(row['channel']) else 'discord', outcome=outcome)
         if not self._closed and not app.stopping and (request is None or self._source_open(request)):
             self._retry_after(message, 180)
-            app.discord_talk.on_his_post(message, immediate=True)
+            answer = app.discord_talk.on_his_post(message, immediate=True)
+            if answer is not None:
+                # Preparation and its ordinary reply have one owner. The retry timer
+                # must not admit a second reply while the first still owns its photo.
+                await answer
 
     async def _prepare(self, request, words, *, immediate=False):
         app = self.app

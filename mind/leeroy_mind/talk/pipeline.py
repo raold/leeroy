@@ -768,7 +768,8 @@ class Pipeline:
                 del self._cancelling[task]
                 task.uncancel()
 
-    def _queue(self, items: list[tuple[Turn, TurnMeta]]) -> None:
+    def _queue(self, items: list[tuple[Turn, TurnMeta]]) -> asyncio.Task | None:
+        """Queue the complete turn chain and return its terminal job to an optional owner."""
         if items:
             for turn, meta in items:
                 self._mark_borrow(meta)
@@ -787,6 +788,7 @@ class Pipeline:
                     for _, meta in items:
                         outreach.release(meta)
             task.add_done_callback(done)
+            return task
 
     def _answer_queued(self, turn: Turn, meta: TurnMeta) -> None:
         """An answer owed to him frees this speaker's background review lock."""
