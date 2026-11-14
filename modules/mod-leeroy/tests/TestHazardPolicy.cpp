@@ -2,7 +2,10 @@
 #include "LeeroyHazardPolicy.h"
 #include "TestHarness.h"
 
+#include <algorithm>
 #include <cmath>
+#include <optional>
+#include <vector>
 
 using namespace Leeroy::Guild;
 
@@ -376,25 +379,182 @@ LEEROY_TEST(Hazard_PastTheMiddleTheExitFinishesTheCrossingTowardHisSide)
 LEEROY_TEST(Hazard_AnExitLoopWithAnotherMoverYieldsOnTheThirdEntry)
 {
     HazardExitGuard guard;
-    CHECK(!NoteHazardExit(guard, 7, 1000));
-    CHECK(!HazardExitYielded(guard, 7, 1000));
-    CHECK(!NoteHazardExit(guard, 7, 3000));
-    CHECK(NoteHazardExit(guard, 7, 5000)); // a mover keeps walking it back in: let it through
-    CHECK(HazardExitYielded(guard, 7, 5000));
-    CHECK(HazardExitYielded(guard, 7, 5000 + kHazardYieldMs - 1));
-    CHECK(!HazardExitYielded(guard, 8, 6000)); // another hazard is still stepped out of
-    CHECK(!HazardExitYielded(guard, 7, 5000 + kHazardYieldMs));
-    CHECK(!NoteHazardExit(guard, 7, 5000 + kHazardYieldMs + 1)); // a fresh window afterwards
+    std::vector<std::uint64_t> const seven{7};
+    CHECK(NoteHazardEntry(guard, seven, 1000) == HazardEntry::Exit);
+    CHECK(!HazardExitYielded(guard, seven, 1000));
+    CHECK(NoteHazardEntry(guard, seven, 3000) == HazardEntry::Exit);
+    CHECK(NoteHazardEntry(guard, seven, 5000) == HazardEntry::YieldStarts); // a mover keeps walking it back in
+    CHECK(HazardExitYielded(guard, seven, 5000));
+    CHECK(HazardExitYielded(guard, seven, 5000 + kHazardYieldMs - 1));
+    CHECK(NoteHazardEntry(guard, seven, 6000) == HazardEntry::Yielded);
+    CHECK(!HazardExitYielded(guard, {8}, 6000)); // another hazard is still stepped out of
+    CHECK(!HazardExitYielded(guard, {7, 8}, 6000)); // so is a spot where it overlaps a yielded one
+    CHECK(!HazardExitYielded(guard, seven, 5000 + kHazardYieldMs));
+    CHECK(NoteHazardEntry(guard, seven, 5000 + kHazardYieldMs + 1) == HazardEntry::Exit); // a fresh window
+    CHECK(!HazardExitYielded(guard, {}, 0));
 }
 
-LEEROY_TEST(Hazard_SlowOrDifferentEntriesNeverYield)
+LEEROY_TEST(Hazard_SlowEntriesNeverYield)
 {
     HazardExitGuard guard;
-    CHECK(!NoteHazardExit(guard, 7, 0));
-    CHECK(!NoteHazardExit(guard, 7, kHazardExitWindowMs - 1));
-    CHECK(!NoteHazardExit(guard, 7, 3 * kHazardExitWindowMs)); // the window ran out: counting again
-    CHECK(!NoteHazardExit(guard, 8, 3 * kHazardExitWindowMs + 1));
-    CHECK(!NoteHazardExit(guard, 7, 3 * kHazardExitWindowMs + 2));
-    CHECK(!NoteHazardExit(guard, 8, 3 * kHazardExitWindowMs + 3));
-    CHECK(!HazardExitYielded(guard, 7, 3 * kHazardExitWindowMs + 4));
+    std::vector<std::uint64_t> const seven{7};
+    CHECK(NoteHazardEntry(guard, seven, 0) == HazardEntry::Exit);
+    CHECK(NoteHazardEntry(guard, seven, kHazardExitWindowMs - 1) == HazardEntry::Exit);
+    CHECK(NoteHazardEntry(guard, seven, 3 * kHazardExitWindowMs) == HazardEntry::Exit); // counting again
+    CHECK(NoteHazardEntry(guard, seven, 4 * kHazardExitWindowMs + 1) == HazardEntry::Exit);
+    CHECK(!HazardExitYielded(guard, seven, 4 * kHazardExitWindowMs + 2));
+}
+
+// Re-review of #296, R-P3-1: a route through two overlapping hazards enters them by turns; each is counted on
+// its own, so both yield and the bot is let through.
+LEEROY_TEST(Hazard_OverlappingHazardsEnteredByTurnsBothYield)
+{
+    HazardExitGuard guard;
+    std::uint64_t now = 1000;
+    std::vector<std::vector<std::uint64_t>> const turns{{2}, {1}, {2, 1}, {1}, {2}, {1, 2}};
+    std::vector<HazardEntry> seen;
+    for (auto const& inside : turns)
+        seen.push_back(NoteHazardEntry(guard, inside, now += 1000));
+    CHECK(seen[0] == HazardEntry::Exit);
+    CHECK(seen[1] == HazardEntry::Exit);
+    CHECK(seen[2] == HazardEntry::Exit);
+    CHECK(seen[3] == HazardEntry::YieldStarts); // zone 1's third entry
+    CHECK(seen[4] == HazardEntry::YieldStarts); // zone 2's third entry
+    CHECK(seen[5] == HazardEntry::Yielded);
+    CHECK(HazardExitYielded(guard, {1, 2}, now));
+}
+
+// Re-review of #296, R-P2-1: a second zone shuts the shorter way round a degree or two from the bot, so the
+// farthest clear step there is its own spot. It must be skipped for the other way round.
+LEEROY_TEST(Hazard_ADetourNeverStallsOnTheBotsOwnSpot)
+{
+    std::vector<HazardZone> zones{{-20.4f, 18.0f, 0, 9.3f, 1}, {-29.8f, 18.5f, 0, 10.6f, 2}};
+    HazardPoint const from{-22.1f, 30.83f, 0};
+    HazardPoint const goal{-21.2f, -5.0f, 0};
+    for (float reach : {0.5f, 1.0f, 1.5f})
+    {
+        for (auto const& w : HazardDetour(from, goal, zones, reach))
+            CHECK(Dist(from, w) >= kHazardDetourMinStepYards);
+        int legs = 0;
+        WalkRound(from, goal, zones, reach, legs);
+        CHECK(legs < 20);
+    }
+}
+
+namespace
+{
+// A fixed generator, so the layouts are the same on every compiler.
+struct Layouts
+{
+    std::uint32_t state;
+    float Next(float low, float high)
+    {
+        state = state * 1664525u + 1013904223u;
+        return low + (high - low) * static_cast<float>(state >> 8) / static_cast<float>(1u << 24);
+    }
+};
+
+enum class Walk { Reached, Stalled, Wandered };
+
+// Follow as the filter drives it: a waypoint is kept until the bot is within `step` of it, a new one comes from
+// HazardDetour, and with none the bot walks straight at its goal; 0.7 yards a tick. Stalled means follow would
+// stand still (target within its 1.5-yard follow distance) short of the goal.
+Walk FollowWalk(HazardPoint bot, HazardPoint goal, std::vector<HazardZone> const& zones, float reach, float step,
+    int& noProgress)
+{
+    std::optional<HazardPoint> kept;
+    HazardDetourTrack track;
+    for (int tick = 0; tick < 4000; ++tick)
+    {
+        if (Dist(bot, goal) <= 1.5f)
+            return Walk::Reached;
+        if (kept && (Dist(bot, *kept) <= step || !HazardSegmentClear(bot, *kept, zones, reach)))
+            kept.reset();
+        if (!kept && !HazardSegmentClear(bot, goal, zones, reach) && !HazardAt(bot, zones, reach)
+            && HazardDetourAllowed(track, bot, goal))
+        {
+            auto const waypoints = HazardDetour(bot, goal, zones, reach, step);
+            if (!waypoints.empty())
+            {
+                kept = waypoints.front();
+                if (Dist(bot, *kept) < step - 0.001f)
+                    ++noProgress;
+            }
+        }
+        HazardPoint const target = kept.value_or(goal);
+        float const left = Dist(bot, target);
+        if (left <= 1.5f)
+            return Walk::Stalled;
+        float const move = std::min(0.7f, left);
+        bot.x += (target.x - bot.x) / left * move;
+        bot.y += (target.y - bot.y) / left * move;
+    }
+    return Walk::Wandered;
+}
+}
+
+LEEROY_TEST(Hazard_RandomFieldsNeverStallAFollower)
+{
+    Layouts random{20261114u};
+    int reached = 0, stalled = 0, wandered = 0, noProgress = 0, runs = 0;
+    for (int layout = 0; layout < 4000; ++layout)
+    {
+        std::vector<HazardZone> zones;
+        int const count = 1 + static_cast<int>(random.Next(0.0f, 3.999f));
+        for (int i = 0; i < count; ++i)
+            zones.push_back({random.Next(-30, 30), random.Next(-30, 30), 0, random.Next(2, 12),
+                static_cast<std::uint64_t>(i + 1)});
+        float const reach = random.Next(0.4f, 1.5f);
+        auto const clearPoint = [&]() -> std::optional<HazardPoint>
+        {
+            for (int tries = 0; tries < 50; ++tries)
+            {
+                HazardPoint const p{random.Next(-50, 50), random.Next(-50, 50), 0};
+                if (HazardClear(p, zones, reach))
+                    return p;
+            }
+            return std::nullopt;
+        };
+        auto const start = clearPoint();
+        auto const goal = clearPoint();
+        if (!start || !goal || Dist(*start, *goal) < 10.0f)
+            continue;
+        ++runs;
+        switch (FollowWalk(*start, *goal, zones, reach, kHazardDetourMinStepYards, noProgress))
+        {
+            case Walk::Reached: ++reached; break;
+            case Walk::Stalled: ++stalled; break;
+            case Walk::Wandered: ++wandered; break;
+        }
+    }
+    CHECK(runs > 3000);
+    CHECK_EQ(noProgress, 0);
+    CHECK_EQ(stalled, 0);
+    CHECK_EQ(wandered, 0);
+    CHECK_EQ(reached, runs);
+}
+
+LEEROY_TEST(Hazard_DetoursGiveUpOnlyWhenTheyStopGainingOnTheGoal)
+{
+    HazardDetourTrack track;
+    HazardPoint const goal{100, 0, 0};
+    CHECK(HazardDetourAllowed(track, {0, 0, 0}, goal));
+    for (int leg = 1; leg <= 10; ++leg) // steady gains never give up
+        CHECK(HazardDetourAllowed(track, {static_cast<float>(leg) * 5.0f, 3, 0}, goal));
+    for (std::uint32_t leg = 0; leg < kHazardDetourIdleLegs; ++leg) // circling at the same distance
+        CHECK(HazardDetourAllowed(track, {50, leg % 2 ? 4.0f : -4.0f, 0}, goal));
+    CHECK(!HazardDetourAllowed(track, {50, 4, 0}, goal));
+    CHECK(!HazardDetourAllowed(track, {10, 0, 0}, goal)); // given up for this goal
+    CHECK(HazardDetourAllowed(track, {50, 4, 0}, {100, 10, 0})); // he moved: a fresh start
+}
+
+// A pocket between four hazards from the random fields: the greedy waypoints alternated for ever.
+LEEROY_TEST(Hazard_APocketBetweenHazardsEndsInAStraightWalk)
+{
+    std::vector<HazardZone> zones{{6.8f, -20.5f, 0, 6.1f, 1}, {-4.4f, 11.7f, 0, 7.1f, 2}, {5.4f, -7.1f, 0, 10.3f, 3},
+        {-12.3f, -15.7f, 0, 7.4f, 4}};
+    int noProgress = 0;
+    CHECK(FollowWalk({-23.7f, 31.1f, 0}, {41.0f, -41.7f, 0}, zones, 1.33f, kHazardDetourMinStepYards, noProgress)
+        == Walk::Reached);
+    CHECK_EQ(noProgress, 0);
 }

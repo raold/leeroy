@@ -118,15 +118,20 @@ training state or pending bot command leaves the body to its owner (nothing adde
   rings of 2 yards up to 40 yards, ties toward the bot), checked against the navmesh. While the straight walk
   from the bot to that spot (moved or not) would cross a zone, follow walks to a waypoint round it instead: on a
   ring 1 yard beyond the clearance, the shorter way round first, as far round as a clear straight line reaches
-  (at most 90 degrees a step), navmesh-checked and kept until the bot is near it. A bot behind a hazard he
-  walked through goes round it; with no clear way round, it walks straight as stock.
+  (at most 90 degrees a step), at least 2.5 yards (and beyond the follow distance) from the bot, navmesh-checked
+  and kept until the bot is near it. A bot behind a hazard he walked through goes round it. With no way round
+  that makes progress (a second hazard shutting both ways), or once six waypoints in a row gain less than a
+  yard on the goal (a pocket between hazards, where greedy steps would circle), it walks straight as stock until
+  his spot moves 3 yards.
 - **Exits.** `avoid aoe` (after its three stock cases, in combat as well) walks a bot standing in a zone to the
   nearest clear spot and keeps that exit while it stays clear. Out of combat the exit ranks by the follow goal:
   one from which the goal is in plain view (his side) beats a nearer one unless the nearer saves more than 4
   yards, so a bot just inside the near edge steps back and goes round, and one past the middle finishes the
   crossing. In combat, ties go toward him. An exit never loops with a lower-relevance mover (follow, or
-  dungeon-clear's `.dc on` route at relevance 15-57) that walks the bot back into the same hazard: the third
-  entry within 20 seconds yields that hazard to the bot's own movers for 20 seconds (`hazard_exit_yield guid=`).
+  dungeon-clear's `.dc on` route at relevance 15-57) that walks the bot back into the same hazard: entries are
+  counted per hazard, and a hazard's third entry within 20 seconds yields it to the bot's own movers for 20
+  seconds; a bot standing only in yielded hazards is let through, overlapping ones included
+  (`hazard_exit_yield guid= zones=`).
 - Logs once a minute while it acts: `hazards_minute aware= zones= spot_members= detour_members= exit_members=`.
 
 **Larger hazards (measured, 2026-11-14).** From the live `Spell.dbc`/`SpellRadius.dbc` and the core's raid

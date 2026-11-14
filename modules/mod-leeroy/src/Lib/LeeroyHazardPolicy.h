@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,8 @@ inline constexpr float kHazardSideSlackYards = 4.0f;
 inline constexpr float kHazardDetourOutsetYards = 1.0f;
 inline constexpr float kHazardDetourMaxDegrees = 90.0f;
 inline constexpr float kHazardDetourStepDegrees = 5.0f;
+// A waypoint nearer the bot than this is no progress (follow would not even start): skip it.
+inline constexpr float kHazardDetourMinStepYards = 2.5f;
 // Stepped out of the same hazard this many times within the window: another mover wants the bot through it.
 inline constexpr std::uint32_t kHazardExitsPerWindow = 3;
 inline constexpr std::uint64_t kHazardExitWindowMs = 20000;
@@ -93,25 +96,53 @@ std::vector<HazardPoint> HazardExitSpots(HazardPoint at, std::optional<HazardPoi
 
 // Where to walk first when the straight line from a bot outside every zone to its clear goal crosses one: a
 // waypoint round the first zone in the way, the shorter way round first, then the other way. Each is outside
-// every zone, reached by a clear straight line, and as far round as kHazardDetourMaxDegrees allows. Empty when
-// the line is clear, the bot stands in a zone (stepping out comes first), or neither way round is clear.
+// every zone, reached by a clear straight line, at least `minStep` from the bot (no stalling on its own spot)
+// and as far round as kHazardDetourMaxDegrees allows. Empty when the line is clear, the bot stands in a zone
+// (stepping out comes first), or neither way round makes progress: then it walks straight, as stock.
 std::vector<HazardPoint> HazardDetour(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones,
-    float reach);
+    float reach, float minStep = kHazardDetourMinStepYards);
 
-// One bot's recent exits, so an exit never loops with another mover (follow, dungeon-clear's route) that walks
-// it back into the same hazard.
-struct HazardExitGuard
+// Detours toward one follow goal (it counts as the same until it moves kHazardDetourGoalMoveYards). A new
+// waypoint that does not bring the bot kHazardDetourGainYards nearer the goal than its best is an idle leg; past
+// kHazardDetourIdleLegs it gives up and walks straight, as stock (a pocket between hazards has no way round, and
+// greedy steps would circle in it).
+inline constexpr float kHazardDetourGoalMoveYards = 3.0f;
+inline constexpr float kHazardDetourGainYards = 1.0f;
+inline constexpr std::uint32_t kHazardDetourIdleLegs = 6;
+struct HazardDetourTrack
 {
-    std::uint64_t zone = 0;
+    HazardPoint goal;
+    float best = 0;
+    std::uint32_t idleLegs = 0;
+    bool started = false;
+    bool givenUp = false;
+};
+// Called before taking a new waypoint; false once detours toward this goal stopped making progress.
+bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint goal);
+
+// One bot's recent exits, counted per hazard, so an exit never loops with another mover (follow, dungeon-clear's
+// route) that walks it back into the same hazards, overlapping ones included.
+struct HazardExitCount
+{
     std::uint32_t exits = 0;
     std::uint64_t since = 0;
     std::uint64_t yieldUntil = 0;
 };
-// While yielded the bot's own movers take it through that zone.
-bool HazardExitYielded(HazardExitGuard const& guard, std::uint64_t zone, std::uint64_t now);
-// Notes a fresh exit from `zone`; true when this one is the kHazardExitsPerWindow-th in the window: no exit
-// then, and the zone is yielded for kHazardYieldMs.
-bool NoteHazardExit(HazardExitGuard& guard, std::uint64_t zone, std::uint64_t now);
+struct HazardExitGuard
+{
+    std::map<std::uint64_t, HazardExitCount> zones;
+};
+// Every zone the bot stands in is yielded: its own movers take it through.
+bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now);
+enum class HazardEntry : std::uint8_t
+{
+    Exit,        // step out
+    Yielded,     // every zone it stands in is yielded already
+    YieldStarts, // this entry was the kHazardExitsPerWindow-th into the last zone not yet yielded
+};
+// Notes a fresh entry into the zones the bot stands in, each counted on its own; a zone's
+// kHazardExitsPerWindow-th entry in the window yields it for kHazardYieldMs.
+HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now);
 
 // A body the tick looks at: one of the owner's group, or one whose non-combat avoid aoe it added.
 struct HazardMemberFacts

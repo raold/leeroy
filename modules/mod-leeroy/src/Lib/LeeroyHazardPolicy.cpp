@@ -218,7 +218,7 @@ std::vector<HazardPoint> HazardExitSpots(HazardPoint at, std::optional<HazardPoi
 }
 
 std::vector<HazardPoint> HazardDetour(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones,
-    float reach)
+    float reach, float minStep)
 {
     if (HazardAt(from, zones, reach) || HazardSegmentClear(from, goal, zones, reach))
         return {};
@@ -259,7 +259,9 @@ std::vector<HazardPoint> HazardDetour(HazardPoint from, HazardPoint goal, std::v
         {
             float const angle = fromAngle + static_cast<float>(direction) * step;
             HazardPoint const waypoint{zone.x + ring * std::cos(angle), zone.y + ring * std::sin(angle), from.z};
-            if (HazardClear(waypoint, zones, reach) && HazardSegmentClear(from, waypoint, zones, reach))
+            // A step of a degree or two where a second zone shuts the way is the bot's own spot: no progress.
+            if (Distance2d(from, waypoint.x, waypoint.y) >= minStep && HazardClear(waypoint, zones, reach)
+                && HazardSegmentClear(from, waypoint, zones, reach))
             {
                 waypoints.push_back(waypoint);
                 break;
@@ -269,24 +271,64 @@ std::vector<HazardPoint> HazardDetour(HazardPoint from, HazardPoint goal, std::v
     return waypoints;
 }
 
-bool HazardExitYielded(HazardExitGuard const& guard, std::uint64_t zone, std::uint64_t now)
+bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint goal)
 {
-    return guard.zone == zone && now < guard.yieldUntil;
-}
-
-bool NoteHazardExit(HazardExitGuard& guard, std::uint64_t zone, std::uint64_t now)
-{
-    if (guard.zone != zone || now - guard.since > kHazardExitWindowMs)
+    float const left = Distance2d(at, goal.x, goal.y);
+    if (!track.started || Distance2d(track.goal, goal.x, goal.y) > kHazardDetourGoalMoveYards)
     {
-        guard = {zone, 1, now, 0};
+        track = {goal, left, 0, true, false};
+        return true;
+    }
+    if (track.givenUp)
+        return false;
+    if (left < track.best - kHazardDetourGainYards)
+    {
+        track.best = left;
+        track.idleLegs = 0;
+        return true;
+    }
+    if (++track.idleLegs > kHazardDetourIdleLegs)
+    {
+        track.givenUp = true;
         return false;
     }
-    if (++guard.exits < kHazardExitsPerWindow)
-        return false;
-    guard.exits = 0;
-    guard.since = now;
-    guard.yieldUntil = now + kHazardYieldMs;
     return true;
+}
+
+bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+{
+    if (zones.empty())
+        return false;
+    for (std::uint64_t zone : zones)
+    {
+        auto const found = guard.zones.find(zone);
+        if (found == guard.zones.end() || now >= found->second.yieldUntil)
+            return false;
+    }
+    return true;
+}
+
+HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+{
+    if (HazardExitYielded(guard, zones, now))
+        return HazardEntry::Yielded;
+    // Forget hazards neither counting nor yielded any more.
+    std::erase_if(guard.zones, [&](auto const& item)
+        { return now - item.second.since > kHazardExitWindowMs && now >= item.second.yieldUntil; });
+    for (std::uint64_t zone : zones)
+    {
+        HazardExitCount& count = guard.zones[zone];
+        if (now < count.yieldUntil)
+            continue;
+        if (count.exits == 0 || now - count.since > kHazardExitWindowMs)
+        {
+            count = {1, now, 0};
+            continue;
+        }
+        if (++count.exits >= kHazardExitsPerWindow)
+            count = {0, now, now + kHazardYieldMs};
+    }
+    return HazardExitYielded(guard, zones, now) ? HazardEntry::YieldStarts : HazardEntry::Exit;
 }
 
 bool HazardEligible(HazardMemberFacts const& facts)
