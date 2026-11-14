@@ -20,10 +20,17 @@ def style(persona) -> Style:
     the other bucket keeps stock use (never disables it). Native rechecks actual
     role, preserves longer active holds and defers entirely to instance/raid owners.
     """
+    from leeroy_mind.tuning.effective import edits_of
     jitter = ((persona.guid * 1103515245 + 12345) & 0xFFFFFFFF) % 3
     careful = int(persona.big_five.neuroticism.score >= 7)
     reliable = int(persona.big_five.conscientiousness.score >= 7)
     damage = persona.play.raid_role in ('melee','ranged')
     wait = min(6, 2 + careful + reliable + jitter) if damage else 0
-    potions = persona.big_five.conscientiousness.score >= 6 or persona.play.skill == 'clutch'
+    # The owner's godmode skill edit (tuning.edits): star is clutch, middle solid, fire sloppy,
+    # within what this map can already say outdoors. Fire waits longest and drinks nothing.
+    skill = edits_of(persona).skill
+    if skill == 'fire':
+        return Style(6 if damage else 0, False)
+    played = {'star': 'clutch', 'middle': 'solid'}.get(skill, persona.play.skill)
+    potions = persona.big_five.conscientiousness.score >= 6 or played == 'clutch'
     return Style(wait, potions)

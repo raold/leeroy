@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Mapping
 
+from . import edits as E
 from . import groups as G
 from . import nudges as N
 from .dials import MEMBER_DIALS, WORLD_DIALS, applies, base_value, bounds
@@ -39,10 +40,11 @@ class Tuning:
     pin_versions: Mapping[tuple, int | None] = field(default_factory=lambda: _frozen({}))
     human: int = 0
     nudges: tuple[N.Nudge, ...] = ()
+    edits: tuple[dict, ...] = ()  # godmode persona overlays in force (tuning.edits.load)
 
     @property
     def empty(self) -> bool:
-        return not (self.world or self.offsets or self.pins or self.nudges)
+        return not (self.world or self.offsets or self.pins or self.nudges or self.edits)
 
     @property
     def needs_cast(self) -> bool:
@@ -84,7 +86,8 @@ class Tuning:
         return cls(version=int(row[0] or 0), world=_frozen(world), groups=_frozen(groups),
                    offsets=_frozen({t: _frozen(d) for t, d in offsets.items()}),
                    pins=_frozen({g: _frozen(d) for g, d in pins.items()}),
-                   pin_versions=_frozen(versions), human=human, nudges=N.load(conn, time.time() if now is None else now))
+                   pin_versions=_frozen(versions), human=human, nudges=N.load(conn, time.time() if now is None else now),
+                   edits=E.load(conn, time.time() if now is None else now))
 
     # -- folding -------------------------------------------------------------------------------
 
@@ -120,11 +123,16 @@ class Tuning:
             return NEUTRAL
         return MemberTuning(_frozen(values), frozenset(d for d in pins if d in values))
 
-    def apply(self, p, member=None):
-        """The effective persona (the stored object itself when nothing reaches it)."""
-        from .effective import with_nudges
-        return with_nudges(effective(p, self.member(p, member)),
-                           N.for_member(self.nudges, p, member, self.groups, self.human))
+    def apply(self, p, member=None, *, edits: bool = True):
+        """The effective persona (the stored object itself when nothing reaches it). `edits`
+        False leaves the owner's godmode edits out: the night reads her as stored and dialled,
+        the edits being a lens for talk only."""
+        from .effective import with_edits, with_nudges
+        q = with_nudges(effective(p, self.member(p, member)),
+                        N.for_member(self.nudges, p, member, self.groups, self.human))
+        if not edits or not self.edits or p is None or p.guid == self.human:
+            return q
+        return with_edits(q, E.member_edits(self.edits, p.guid))
 
     # -- candidates (the preview's "after") ------------------------------------------------------
 

@@ -143,6 +143,68 @@ class Reactor:
         except discord_store.DiscordRefused as error:
             log.info('server_reaction_skipped message=%d code=%s',mid,error.code)
 
+    def intent_react(self, intent, *, settle):
+        """A react intent (godmode): her reaction with his emoji, after her presence's own delay,
+        under the live checks a reaction has (audience, presence, play, away), and taken in the
+        reaction's transaction (`settle`, DB-only). None when reactions are off; the intent then
+        waits for its tick."""
+        if not self._ready():
+            return None
+        return self._intent_write(intent, settle)
+
+    async def _intent_write(self, intent, settle):
+        guid, mid, emoji = intent['member'], intent['args']['message'], intent['args']['emoji']
+        p = self.app.personas.get(guid)
+        if p is None:
+            return
+        presence = presence_of(p, local=local_time(self.app.clock.local(), p.identity.region),
+            body_online=guid in self.app.world.online,
+            body_zone=getattr(self.app.world.discord_members().get(guid), 'zone', 0),
+            rng_seed=RNG_SEED).state
+        if presence not in {'online', 'idle'}:
+            return
+        low = sum(DELAY_S) / 2 if presence == 'idle' else DELAY_S[0]
+        await self.app.clock.sleep(self.rng.uniform(low, DELAY_S[1]))
+        if not self._ready():
+            return
+        now = self.app.clock.now()
+        p = self.app.personas.get(guid)
+        member = self.app.world.discord_members().get(guid)
+        if p is None or member is None or presence_of(
+                p, local=local_time(self.app.clock.local(), p.identity.region),
+                body_online=guid in self.app.world.online, body_zone=member.zone,
+                rng_seed=RNG_SEED).state not in {'online', 'idle'}:
+            return  # gone offline meanwhile: the intent waits for a later tick
+        from leeroy_mind.godmode.intents import fit, get as get_intent, settle as settle_intent
+        current = get_intent(self.app.store.conn, intent['id'])
+        if current is not None and current['status'] == 'pending':
+            ok, why = fit(self.app.store.conn, current, self.app.personas, now=now)
+            if not ok:
+                settle_intent(self.app.store, intent['id'], status='not_taken', reason=why, now=now)
+                return
+        row = self.app.store.conn.execute('SELECT author,channel,deleted FROM discord_message '
+                                          'WHERE id=?', (mid,)).fetchone()
+        from leeroy_mind.godmode.intents import waiting
+        if row is None or row[2] is not None or not waiting(self.app.store.conn, intent['id']):
+            return
+        app, world = self.app, self.app.world
+        cast = world.discord_members()
+        officers = {g for g in cast if world.is_officer(g)}
+        if (guid in pulled_into_play(app) or guid not in cast
+                or guid not in layout.audience(row[1], cast=cast, officers=officers,
+                                               human=app.human_guid)
+                or app.store.conn.execute('SELECT 1 FROM away WHERE guid=? AND returned_at IS NULL '
+                    'AND (returns_at IS NULL OR returns_at>?) LIMIT 1', (guid, now)).fetchone()):
+            return
+        try:
+            with app.store.transaction():
+                discord_store.react(app.store, mid, member=guid, emoji=emoji, now=now)
+                settle(intent['id'], now)
+        except discord_store.DiscordRefused as error:
+            log.info('server_reaction_skipped message=%d code=%s', mid, error.code)
+            from leeroy_mind.godmode.intents import settle as settle_intent
+            settle_intent(app.store, intent['id'], status='not_taken', reason=error.code, now=now)
+
     async def close(self) -> None:
         self._closed = True
         tasks = tuple(self._tasks)
