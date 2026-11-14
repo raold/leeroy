@@ -914,7 +914,7 @@ class TalkEngine(EmoteReactions):
         delay *= self._effects(speaker).delay_mult
         whose, bday = self._birthday_tonight(speaker) or ("", 0)
         bit = self.bits.pick(p, context=self._bit_context(now), raid=self.raid.phase(now),
-                             mood=self.store.get_state(speaker).mood, local=self.clock.local(),
+                             mood=self.store.get_state(speaker, lens=True).mood, local=self.clock.local(),
                              birthday=whose or None)
         if bit is not None and bit.lines <= room:
             if whose and is_birthday_bit(bit):

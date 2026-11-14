@@ -155,11 +155,11 @@ bool AttackCounts(bool attacked, bool alreadyOnIt, bool inSight)
     return attacked || alreadyOnIt || !inSight;
 }
 
-HoldStep DecideHold(RaidHold const& hold, std::uint64_t now, bool groupFighting, bool online, bool inHisGroup,
+HoldStep DecideHold(RaidHold const& hold, std::uint64_t now, bool groupFighting, bool inWorld, bool inHisGroup,
     bool enabled)
 {
-    if (!online)
-        return HoldStep::Drop;
+    if (!inWorld)
+        return HoldStep::Keep;
     if (!inHisGroup || !enabled || now >= hold.until || groupFighting != hold.groupFought)
         return HoldStep::Lift;
     return HoldStep::Keep;

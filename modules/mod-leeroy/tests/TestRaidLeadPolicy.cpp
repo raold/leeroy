@@ -198,7 +198,10 @@ LEEROY_TEST(RaidLead_AHoldEndsAtHisPullAtFightsEndOrAfterThirtySeconds)
     CHECK(DecideHold(during, 1000, false, true, true, true) == HoldStep::Lift);      // the fight ended
     CHECK(DecideHold(before, 1000, false, true, true, false) == HoldStep::Lift);     // the switch went off
     CHECK(DecideHold(before, 1000, false, true, false, true) == HoldStep::Lift);     // it left his group
-    CHECK(DecideHold(before, 1000, false, false, false, true) == HoldStep::Drop);    // logged out
+    // Between maps or logged out: kept, whatever else holds, and lifted once it is back.
+    CHECK(DecideHold(before, 1000, false, false, false, true) == HoldStep::Keep);
+    CHECK(DecideHold(before, 1000 + kRaidHoldMs, true, false, false, false) == HoldStep::Keep);
+    CHECK(DecideHold(before, 1000 + kRaidHoldMs, true, true, false, false) == HoldStep::Lift);
 }
 
 LEEROY_TEST(RaidLead_IconsCountFromStarToSkull)

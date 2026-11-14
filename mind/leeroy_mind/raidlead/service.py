@@ -48,8 +48,8 @@ SPEECH_S = 30.0
 QUEUE = 16
 CLAIMED = 32
 HOLD_S = 30.0  # native lifts a hold by then too (kRaidHoldMs)
-LIFT_RETRY_S = 5.0
-LIFT_GIVE_UP_S = 90.0
+LIFT_RETRY_S = 5.0  # a lift a member skipped is tried again after this, doubling up to LIFT_MAX_S
+LIFT_MAX_S = 120.0
 PROBE_S = 60.0  # native's switch is asked again this often while he plays
 PROBE_UNKNOWN_S = 5.0
 SOURCES = ("console", "chat", "default")
@@ -110,7 +110,9 @@ class RaidLeadService:
         self._last: tuple[str, str, float] | None = None  # (order words, who words, when)
         self._countdown: asyncio.Task | None = None
         self._probe_at = float("-inf")
-        self._lift_at = float("-inf")
+        self._lift_next = float("-inf")
+        self._lift_wait = LIFT_RETRY_S
+        self._lines_done: deque[int] = deque(maxlen=64)  # his lines already carried out
         self.stopping = False
 
     # -- state ---------------------------------------------------------------------------------
@@ -294,6 +296,7 @@ class RaidLeadService:
             self.supported = FEATURE in ev.features
             self.native = None
             self._probe_at = float("-inf")  # a new worldserver: ask its switch, and for his group
+            self._lift_wait, self._lift_next = LIFT_RETRY_S, float("-inf")
             if self.held:
                 self._enqueue(("lift", "hello"))
         elif isinstance(ev, Group):
@@ -389,9 +392,13 @@ class RaidLeadService:
 
     async def before_his_line(self):
         """His next line is about to be handled: a line still held for the model goes to talk
-        first, so his lines reach talk in the order he wrote them (P3-3)."""
-        if any(not h.done for h in self._pending):
-            await self._release_pending(unread_only=True)
+        first, so his lines reach talk in the order he wrote them (P3-3). Any failure here leaves
+        his new line to go on as usual."""
+        try:
+            if any(not h.done for h in self._pending):
+                await self._release_pending(unread_only=True)
+        except Exception as exc:
+            log_event("raidlead_release_failed", level=logging.WARNING, error=type(exc).__name__)
 
     async def _release_pending(self, *, unread_only=False):
         keep = deque()
@@ -482,30 +489,40 @@ class RaidLeadService:
             self._sync_talk()
 
     async def _lift_due(self):
-        """Holds older than HOLD_S, and lifts that failed, tried again (native lifts them too)."""
+        """Holds older than HOLD_S, and lifts a member skipped, tried again: after 5 s, doubling up
+        to 2 min, never while the bridge is down (native lifts them itself as well)."""
+        if not (self.connected and self.supported):
+            return
         now = self.app.clock.now()
         due = sorted(g for g, since in self.held.items() if now - since >= HOLD_S)
-        if due and now - self._lift_at >= LIFT_RETRY_S:
+        if due and now >= self._lift_next:
             await self._lift(due, "timer")
 
     async def _lift(self, guids, why):
-        if not guids:
-            return
-        self._lift_at = self.app.clock.now()
+        if not guids or not (self.connected and self.supported):
+            return  # the bridge is down: the next hello lifts them
         result = await self._job(BotDo(uuid4().hex, tuple(guids), "order", "lift"), quiet=True)
         now = self.app.clock.now()
         if result is None:
+            self._back_off(now)
             return
         done, missed = result
         for guid in done:
             self.held.pop(guid, None)
         for guid, reason in missed:
-            gone = reason in ("not_in_group", "offline", "raidlead_off", "not_cast", "not_bot")
-            if gone or now - self.held.get(guid, now) >= LIFT_GIVE_UP_S:
-                self.held.pop(guid, None)  # native lifts or resets it itself
+            if reason in ("not_in_group", "offline", "raidlead_off", "not_cast", "not_bot"):
+                self.held.pop(guid, None)  # native keeps its own record and lifts it when it can
                 log_event("raidlead_lift_dropped", guid=guid, reason=_code(reason))
+        if any(g in self.held for g in guids):
+            self._back_off(now)
+        else:
+            self._lift_wait, self._lift_next = LIFT_RETRY_S, float("-inf")
         self._save()
         log_event("raidlead_lift", why=why, count=len(guids), done=len(done))
+
+    def _back_off(self, now):
+        self._lift_next = now + self._lift_wait
+        self._lift_wait = min(self._lift_wait * 2, LIFT_MAX_S)
 
     async def _handle(self, generation, item):
         kind = item[0]
@@ -516,6 +533,9 @@ class RaidLeadService:
             return  # queued for a group that broke, or the raid lead stopped (P3-2)
         if kind == "line":
             _, intent, line_id, ev = item
+            if line_id in self._lines_done:
+                return  # one line of his is carried out once
+            self._lines_done.append(line_id)
             await self._line(intent, line_id, ev)
 
     async def _line(self, intent, line_id, ev):
@@ -565,6 +585,11 @@ class RaidLeadService:
         if result is None:
             return
         done, missed = result
+        if order.action == "release":
+            # playerbots reads his typed "release ..." as its own command too: one already released
+            # did what he asked, so there is no second "already released" line
+            done = [*done, *(g for g, r in missed if r == "released")]
+            missed = [(g, r) for g, r in missed if r != "released"]
         if order.action == "hold":
             now = self.app.clock.now()
             for guid in done:

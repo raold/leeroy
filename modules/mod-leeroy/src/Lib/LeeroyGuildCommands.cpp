@@ -414,6 +414,7 @@ json MakeJobEvent(JobEvent const& e)
     if (e.membersInInstance) out["members_in_instance"] = *e.membersInInstance;
     if (e.lastProgressTs) out["last_progress_ts"] = *e.lastProgressTs;
     if (e.bossEngaged) out["boss_engaged"] = *e.bossEngaged;
+    if (e.dcState) out["dc_state"] = *e.dcState;
     return out;
 }
 

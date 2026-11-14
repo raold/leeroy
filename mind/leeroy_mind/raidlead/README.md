@@ -110,8 +110,12 @@ one member by name; "taunt" defaults to the tanks, "lust" to a shaman of the gro
   (playerbots' own "move from group", or a move to his side) that leave nothing passive behind.
   A hold lifts on the first of: his group's fight starting (his pull) or ending, a later stay,
   stack, follow, come back or attack order on that member, or 30 seconds. Native lifts it itself
-  on its world tick; the mind also sends a `lift` order on a boss engage, after 30 seconds and at
-  each hello (the members on hold persist in meta), and retries one that a member skipped.
+  on its world tick (a bot between maps or logged out keeps its hold until it is back, then it is
+  lifted; never dropped unlifted); the mind also sends a `lift` order on a boss engage, after 30
+  seconds and at each hello (the members on hold persist in meta), and retries one a member
+  skipped after 5 s, doubling up to 2 minutes, never while the bridge is down.
+- **Each line of his is carried out once.** A member playerbots already released (his typed
+  "release ..." reaches playerbots too) counts as released, so there is no second line about it.
 - **Acknowledgement only after the game confirms**: she (or the member he named, out of a fight)
   acknowledges in her own words wrapped around the facts of the job's terminal: who did it, who
   did not and why. No terminal, nothing is said. A refused or impossible order gets a plain

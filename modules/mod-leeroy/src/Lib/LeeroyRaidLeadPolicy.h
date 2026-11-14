@@ -83,10 +83,11 @@ struct RaidHold
     std::uint64_t until = 0;
     bool groupFought = false; // someone in his group was fighting when the hold was given
 };
-enum class HoldStep { Keep, Lift, Drop };
-// Drop: the bot logged out (its AI is made anew). Lift: it left his group (or he is offline), the switch is off,
-// the time is up, or his group's fight started (his pull) or ended since the hold.
-HoldStep DecideHold(RaidHold const& hold, std::uint64_t now, bool groupFighting, bool online, bool inHisGroup,
+enum class HoldStep { Keep, Lift };
+// Never dropped unlifted: a bot out of the world (between maps, or logged out: playerbots keeps its strategies) keeps
+// its hold until it is back. Lift: it left his group (or he is offline), the switch is off, the time is up, or his
+// group's fight started (his pull) or ended since the hold.
+HoldStep DecideHold(RaidHold const& hold, std::uint64_t now, bool groupFighting, bool inWorld, bool inHisGroup,
     bool enabled);
 
 // raid_lead {action: "mark", guid, icon}: the icon on his hostile target, set by guid (the lead he named, or him).

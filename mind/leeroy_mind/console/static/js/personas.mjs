@@ -6,6 +6,8 @@ import { appendInsightBadges, pollInsight, selectInsight } from "./insight.mjs";
 import { memberOutreachModel } from "./outreachmodel.mjs";
 import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
+import { godmodePanel, renderStrings } from "./godmode.mjs";
+import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
@@ -342,6 +344,7 @@ function renderMember(j) {
     box.appendChild(el("div", "r", when(r.ts) + "  " + (LEDGER_KINDS[r.kind] || str(r.kind)) + ": " + str(r.text) + (r.undone ? "  (undone)" : "")));
   });
   if (!arr(j.ledger).length) { box.appendChild(el("div", "muted", j.ledger ? "No ledger rows yet." : "Unavailable in this mind.db.")); }
+  renderStrings(j, m.guid, tuneLive(), tuneWhy());
   if (reveal) { reveal = false; $("p-detail").scrollIntoView({ block: "start" }); }
 }
 function pollMember() {
@@ -555,6 +558,7 @@ function renderTuning() {
     d.appendChild(el("div", "", "#" + c.id + " " + when(c.ts) + " · " + str(c.source) + " · " + str(c.label)
                      + (c.previewed ? " · previewed" : "") + (c.undone_by ? " · undone by #" + c.undone_by : "")));
     arr(c.rows).forEach(function (r) { d.appendChild(el("div", "muted", "  " + rowText(v, r))); });
+    historyEdits(c).forEach(function (t) { d.appendChild(el("div", "muted", "  " + t)); });
     var acts = el("div", "acts");
     [["Undo", { action: "undo", change: c.id }, "undo #" + c.id], ["Revert to here", { action: "revert", to: c.id }, "revert to #" + c.id]]
       .forEach(function (b) {
@@ -603,6 +607,7 @@ function renderDials(guid) {
   });
   setText("p-dialsum", mine ? plural(mine, "value") + " of your own" : "nothing of your own set");
   nudgePanel(box, v, "member", String(guid), tuneLive(), tuneWhy(), tuneAsk);
+  godmodePanel(box, v, guid, tuneLive(), tuneWhy(), tuneAsk, obj(TUNE).godmode === true, obj(v.names));
   restoreFocus();
 }
 function fillValues() {
@@ -645,6 +650,7 @@ function pollTuning() {
 }
 whereText();
 
+on("string", function () { if (S.tab === "personas") { pollMember(); } });
 on("tuning", function (d) {
   emit("note", "dials: change #" + num(d.change) + " saved");
   if (S.tab === "personas") { pollTuning(); }

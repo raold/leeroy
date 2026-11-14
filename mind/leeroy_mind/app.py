@@ -489,6 +489,8 @@ class MindApp:
         self.photos = attach_photos(self)
         from .outreach.attach import attach as attach_outreach
         self.outreach = attach_outreach(self)
+        from .godmode.attach import attach as attach_godmode
+        self.godmode = attach_godmode(self)  # [godmode]: off adds nothing
         from .raidlead.service import attach as attach_raidlead
         self.raidlead = attach_raidlead(self)  # None while [raidlead] is off
 
@@ -765,6 +767,8 @@ class MindApp:
         if not is_discord(chat.channel):
             self._spoke_at[chat.from_guid] = self.clock.now()
         self._queue_closed(self.threads.on_line_sent(line_id, chat))
+        if (godmode := getattr(self, "godmode", None)) is not None:
+            godmode.on_line(line_id, chat)  # a line that carries out one of his intents
 
     def on_his_discord_line(self, line_id: int, chat: Chat, ts: float) -> None:
         """The desk's hook for his Discord post's chat line (discord.desk): it joins its thread
@@ -1015,7 +1019,10 @@ class MindApp:
         if not command and not backlog and raidlead is not None:
             # An order to his group is the raid lead's before playerbots' command words; a line it
             # holds for the model goes to talk later, after any line it held before (raidlead).
-            await raidlead.before_his_line()
+            try:
+                await raidlead.before_his_line()
+            except Exception:  # never in the way of his line: it fails open to talk
+                log.warning("raidlead_before_line_failed")
             claim = raidlead.claims(ev, line_id)
             command, held = claim == "order", claim == "held"
         if not command and not held:

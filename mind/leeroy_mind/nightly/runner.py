@@ -254,7 +254,13 @@ class NightContext:
         frozen = self.tuning
         if frozen is not None and frozen is not getattr(self.personas, "tuning", frozen):
             base = self.base(guid)
-            p = frozen.apply(base, self._roster().get(guid) if frozen.needs_cast else None)
+            p = frozen.apply(base, self._roster().get(guid) if frozen.needs_cast else None,
+                             edits=False)
+        elif getattr(p, "edits", None) is not None:
+            # the owner's godmode edits are a lens for talk; the night reads her as stored
+            t = self.personas.tuning
+            p = t.apply(self.base(guid), self._roster().get(guid) if t.needs_cast else None,
+                        edits=False)
         return p
 
     def base(self, guid: int) -> Persona:

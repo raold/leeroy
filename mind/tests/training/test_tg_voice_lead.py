@@ -20,7 +20,7 @@ def rig(fake):
     fake.say = AsyncMock(return_value=True)
     fake.on_comms = lambda guid: True
     ground = SimpleNamespace(listener=SimpleNamespace(run=run),
-        gate=SimpleNamespace(recording=lambda: True), book=lambda: SimpleNamespace(name=lambda id: "Defile"))
+        gate=SimpleNamespace(recording=lambda: True, phase="passed"), book=lambda: SimpleNamespace(name=lambda id: "Defile"))
     return VoiceLead(fake, ground), run
 
 
@@ -51,7 +51,7 @@ async def test_cast_is_queued_without_inline_speech_and_targets_called_name(fake
     fake.say.assert_awaited_once_with(101, "raid", "defile on Testy, move", kind=TurnKind.URGENT)
 
 
-@pytest.mark.parametrize("bad", ["offline", "human_lead", "wrong_instance", "old_pull", "gate", "unknown_target", "ended"])
+@pytest.mark.parametrize("bad", ["offline", "human_lead", "wrong_instance", "old_pull", "gate", "gate_ab", "unknown_target", "ended"])
 @_run_async
 async def test_callout_rejects_wrong_or_unknown_fight(fake, bad):
     voice, run = rig(fake)
@@ -68,6 +68,8 @@ async def test_callout_rejects_wrong_or_unknown_fight(fake, bad):
         event = replace(event, pull=f"{ev.ts-1}-100-12")
     elif bad == "gate":
         voice.ground.gate.recording = lambda: False
+    elif bad == "gate_ab":
+        voice.ground.gate.phase = "ab"  # an armed A/B pull is evidence only, never a callout
     elif bad == "unknown_target":
         event = replace(event, target=0)
     else:
@@ -271,6 +273,7 @@ async def test_service_routes_cast_without_waiting_for_speech_then_drains_voice(
     ground.listener.run = run_for(fake, offline=False)
     ground._book = SimpleNamespace(name=lambda spell: "Defile")
     ground.gate.recording = lambda: True
+    ground.gate._phase = "passed"
     event = boss(fake, 12)
     await ground.voice.on_boss(event)
     await asyncio.wait_for(ground.on_event(cast(fake, event.ts)), .1)

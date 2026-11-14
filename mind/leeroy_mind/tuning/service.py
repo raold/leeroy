@@ -57,15 +57,18 @@ class TuningService:
         try:
             if action == "nudge":
                 return await self._nudge(args)
+            if action == "edit":
+                return self._edit(args)
             if action == "status":
                 return self.status()
             if action == "preview":
                 from .preview import preview
                 return await preview(self.app, args)
             return self._write(action, args)
-        except (C.TuneError, G.GroupError) as e:
-            log_event("tune_refused", action=action)
-            return {"ok": False, "error": str(e)}
+        except (C.TuneError, G.GroupError, ValueError) as e:
+            code = getattr(e, "code", "")
+            log_event("tune_refused", action=action, **({"code": code} if code else {}))
+            return {"ok": False, "error": str(e), **({"code": code} if code else {})}
 
     async def _nudge(self, args):
         from . import nudges as N
@@ -89,6 +92,47 @@ class TuningService:
                 "version": app.personas.tuning.version,
                 "message": f"Saved as change #{r.change}." if r.change else "Already retired."}
 
+    def _dial(self) -> int:
+        """[life] wow_vs_life, which a life event's on-mind line reads as the night does."""
+        from leeroy_mind.nightly.settings import load_life
+        try:
+            return load_life(self.app.data_dir / "mind.toml")
+        except Exception:
+            return 5
+
+    def _edit(self, args):
+        """Godmode edits (tuning.edits): list at any time, retire while off too (a cleanup);
+        set and preview only with [godmode] enabled. Logs carry the kind, the ids and the
+        outcome, never the edit's text."""
+        from leeroy_mind.godmode.config import app_enabled
+        from . import edits as E
+        verb, app = args["verb"], self.app
+        now = app.clock.now()
+        if verb == "list":
+            return {"ok": True, **E.view(app.store.conn, now=now)}
+        if verb in ("set", "preview") and not app_enabled(app):
+            return {"ok": False, "code": "off", "error": "Godmode is off: set [godmode] enabled = "
+                    "true in mind.toml and restart the mind."}
+        if verb == "preview":
+            out = E.preview(app.store, args, human=app.engine.human, now=now, pic=self.picture())
+            log_event("tune_previewed", action="edit", kind=args["kind"])
+            return out
+        if verb == "set":
+            r = E.set_edit(app.store, args, human=app.engine.human, source="console", now=now,
+                           pic=self.picture(), dial=self._dial())
+        else:
+            pic = self.picture()
+            r = E.retire(app.store, args["id"], source="console", now=now, human=pic.human,
+                         dial=self._dial())
+        self.refresh()
+        log_event("tune_written", action="edit_" + verb, kind=r["kind"], change=r["change"] or 0,
+                  edit=r["id"])
+        return {"ok": True, "change": r["change"], "id": r["id"], "rows": r["rows"],
+                "version": app.personas.tuning.version,
+                "message": (f"Saved as change #{r['change']}." + (
+                    " The night had moved what it changed, so that stays as the night left it."
+                    if r.get("moved") else "")) if r["change"] else "Already retired."}
+
     def status(self) -> dict:
         t = self.app.personas.tuning
         return {"ok": True, "version": t.version, "pinned_members": len(t.pins),
@@ -107,9 +151,11 @@ class TuningService:
                              previewed=args["previewed"])
             reach = self.reach(s.scope, s.target, s.dial, pic)
         elif action == "undo":
-            r = C.undo(app.store, args["change"], pic, source="console", now=now)
+            r = C.undo(app.store, args["change"], pic, source="console", now=now,
+                       life_dial=self._dial())
         elif action == "revert":
-            r = C.revert_to(app.store, args["to"], pic, source="console", now=now)
+            r = C.revert_to(app.store, args["to"], pic, source="console", now=now,
+                            life_dial=self._dial())
         elif action == "group":
             r = C.save_group(app.store, args["id"], args["name"], args["where"],
                              source="console", now=now)
@@ -123,7 +169,9 @@ class TuningService:
             reach = self.reach("group", str(self._group_id(r.change)), "talkative")
         log_event("tune_written", action=action, change=r.change or 0, rows=r.rows)
         message = ("Nothing to change: it already stands that way." if r.change is None
-                   else f"Saved as change #{r.change}.")
+                   else f"Saved as change #{r.change}." + (
+                       f" {r.moved} edit{'' if r.moved == 1 else 's'} the night had moved since "
+                       "stayed as the night left them." if r.moved else ""))
         return {"ok": True, "change": r.change, "rows": r.rows, "reach": reach,
                 "version": t.version, "message": message}
 
@@ -141,6 +189,7 @@ class TuningService:
         before = app.personas.tuning
         t = load_tuning(app.store, app.clock.now())
         app.personas.set_tuning(t)
+        app.store.reload_edits()  # godmode feelings and moods (tuning.edits)
         if dict(t.world) != dict(before.world):
             from .world import merge
             app.cfg = merge(getattr(app, "file_cfg", app.cfg), t)

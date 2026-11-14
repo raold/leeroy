@@ -4,6 +4,7 @@ after the game's job, holds for damage dealers only and always lifted, plain ref
 model fallback and its order with talk, and the callouts."""
 
 import asyncio
+import itertools
 import json
 from types import SimpleNamespace
 
@@ -41,8 +42,13 @@ def line(text, *, channel="raid", from_guid=HUMAN):
                 text=text, map=631, zone=4812)
 
 
-async def say(service, text, *, line_id=7, settle=True, **kw):
-    """His line as the app hands it over: claimed (or not), then its chat event."""
+LINE_IDS = itertools.count(1000)
+
+
+async def say(service, text, *, line_id=None, settle=True, **kw):
+    """His line as the app hands it over: claimed (or not), then its chat event. Each call is a
+    line of its own unless line_id says otherwise."""
+    line_id = next(LINE_IDS) if line_id is None else line_id
     ev = line(text, **kw)
     claimed = service.claims(ev, line_id)
     await service.event(ev)
@@ -751,3 +757,75 @@ def test_on_attaches_its_handlers(store, clock, tmp_path):
     app.register_connection_hook = app.register_background = app.register_shutdown_drain = lambda h: None
     assert isinstance(attach(app), RaidLeadService)
     assert {"chat", "group", "guild_group", "boss", "death", "hello"} <= set(events)
+
+
+# -- the second review's P3s ---------------------------------------------------------------------
+
+def test_lift_retries_back_off_and_stop_while_the_bridge_is_down(app):
+    async def main():
+        service = await ready(app)
+        await drain(service)
+        await say(service, "dps, hold")
+        app.guild.ports.sent.clear()
+        stuck = lambda cmd: done(cmd, skip=[(104, "busy:training_state")])  # noqa: E731
+        for _ in range(8):
+            app.guild.ports.jobs.append(stuck)
+        await app.clock.advance(31)
+        await drain(service)
+        tries = [app.clock.now()]
+        for _ in range(140):
+            await app.clock.advance(1)
+            before = len(app.guild.ports.sent)
+            await drain(service)
+            if len(app.guild.ports.sent) > before:
+                tries.append(app.clock.now())
+        gaps = [round(b - a) for a, b in zip(tries, tries[1:])]
+        assert gaps[:4] == [5, 10, 20, 40]
+        assert set(service.held) == {104}
+        await service.connection(False)
+        sent = len(app.guild.ports.sent)
+        await app.clock.advance(300)
+        await drain(service)
+        assert len(app.guild.ports.sent) == sent  # nothing while the bridge is down
+        app.guild.ports.jobs.clear()  # the member is free again
+        await service.connection(True)
+        await service.event(Hello(0, "mod-leeroy", "1", 21, HUMAN, ("raidlead",)))
+        await drain(service)
+        assert app.guild.ports.sent[-1].param == "lift" and service.held == {}
+    run(main())
+
+
+def test_one_line_is_carried_out_once(app):
+    async def main():
+        service = await ready(app)
+        await drain(service)
+        await say(service, "release and run back", line_id=31)
+        await say(service, "release and run back", line_id=31)
+        assert orders(app) == [("order", "release", set(CAST))]
+    run(main())
+
+
+def test_members_playerbots_already_released_count_as_done(app):
+    """His typed "release ..." reaches playerbots too: one already a ghost did what he asked, so
+    there is no second "already released" line."""
+    async def main():
+        service = await ready(app)
+        await drain(service)
+        app.guild.ports.jobs.append(lambda cmd: done(cmd, skip=[(g, "released") for g in cmd.guids]))
+        await say(service, "release and run back")
+        assert app.guild.ports.said == []
+        [(speaker, kind, text)] = said_by(app)
+        assert speaker == 101 and "Done, confirmed by the game" in text and "Not for" not in text
+    run(main())
+
+
+def test_before_his_line_fails_open(app, monkeypatch):
+    async def main():
+        service = await ready(app)
+        await drain(service)
+        service._pending.append(SimpleNamespace(done=False))
+        async def broken(**kw):
+            raise RuntimeError("boom")
+        monkeypatch.setattr(service, "_release_pending", broken)
+        await service.before_his_line()  # no exception: his line goes on as usual
+    run(main())

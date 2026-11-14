@@ -149,7 +149,7 @@ class PhotoSender:
                 continue
             if audience == 'him':
                 p = app.personas.get(turn.speaker)
-                weight = ration.send_weight(p, app.store.get_relationship(turn.speaker, app.human_guid))
+                weight = ration.send_weight(p, app.store.get_relationship(turn.speaker, app.human_guid, lens=True))
                 if self.rng.random() >= ration.chance('reply' if meta.why == 'discord:reply' else 'whisper', weight):
                     return None
             self._in_flight[snap.id] = audience

@@ -315,26 +315,21 @@ void TickRaidLead()
     for (auto it = held.begin(); it != held.end();)
     {
         uint32 const guid = it->first;
+        // FindOnline is empty between maps and after a logout; the hold waits for the body to be back.
         Player* bot = FindOnline(guid);
-        PlayerbotAI* ai = bot ? GET_PLAYERBOT_AI(bot) : nullptr;
-        HoldStep const step = DecideHold(it->second, now, fighting, ai != nullptr,
+        HoldStep const step = DecideHold(it->second, now, fighting, bot != nullptr,
             bot && group && bot->GetGroup() == group, enabled);
-        if (step == HoldStep::Keep)
+        if (step == HoldStep::Keep || Realm::RealmOwns(guid))
         {
-            ++it;
+            ++it; // never touch a body a Realm lease holds; try again next tick
             continue;
         }
-        if (step == HoldStep::Lift)
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(bot))
         {
-            if (Realm::RealmOwns(guid))
-            {
-                ++it; // never touch a body a Realm lease holds; try again next tick
-                continue;
-            }
             Lift(ai);
             LOG_INFO("module.leeroy", "mod-leeroy: raidlead_hold_lifted guid={}", guid);
         }
-        it = held.erase(it);
+        it = held.erase(it); // lifted, or no bot AI left to hold anything
     }
 }
 
