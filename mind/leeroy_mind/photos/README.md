@@ -49,7 +49,9 @@ after 24 hours; a rendered photo survives restart until its delivery receipt com
 Requested photos have separate limits: one request per member per ten minutes, six admitted
 borrows per hour and thirty per local date across the guild. They skip and do not spend the
 spontaneous photo draw, two-day gap or weekly/daily ration. The selfies dial at zero still
-means no photo. A retained image is not repeated to the same audience within thirty days.
+means no photo. A retained image is not repeated to the same audience within thirty days,
+by a request or by a spontaneous photo: a snap copied for a request stays ready, but no
+opener, answer or channel seed offers it to that audience again in that time.
 The attachment, chat mirror, snap and request delivery receipts commit together. A failed
 render gets one ordinary answer in the member's words. No retained photo file is deleted.
 

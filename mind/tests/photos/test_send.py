@@ -330,3 +330,55 @@ def test_channel_seed_waits_out_her_member_gap(tmp_path):
             TurnMeta('',why='server:photo',photo_seed=sid),now) is None
         assert [s.key for s in photo_seeds(app.store.conn,now=now+60,local=local,dial=3)]==[f'photo:{sid}']
     finally:app.store.close()
+
+
+@pytest.mark.parametrize('audience',['him','anyone'])
+def test_request_copy_of_a_snap_is_never_offered_again_to_that_audience(tmp_path,audience):
+    """A request's fallback copies a ready snap and leaves the original ready. The spontaneous
+    path must still treat that image as sent to that audience for thirty days."""
+    from leeroy_mind.photos import request_stock, request_store as records
+    from photos.test_request_storage import deliver
+    from photos.test_images import jpeg
+    app=setup(tmp_path);sid=stock(app,audience=audience)
+    for thumb in (False,True):
+        files.snap(app.data_dir,101,sid,thumb=thumb).write_bytes(jpeg()+b'original')
+    history=files.history(app.data_dir,101,current(app.store,101).pick)
+    history.parent.mkdir(parents=True,exist_ok=True)
+    history.write_bytes(files.candidate(app.data_dir,101,1,0).read_bytes())
+    channel='dm:101' if audience=='him' else 'general'
+    def spontaneous(now):
+        if audience=='him':
+            out,turns=[],[(Turn(TurnKind.OPEN,101,'dm:101',to_guid=app.human_guid,addressee=app.human_guid),
+                           TurnMeta('',why='server:dm')),reply(app)]
+        else:
+            out=[s.key for s in photo_seeds(app.store.conn,now=now,local=app.clock.local(),dial=3)]
+            turns=[(Turn(TurnKind.OPEN,101,'discord:pets'),TurnMeta('',why='server:photo',photo_seed=sid))]
+        for turn,meta in turns:
+            out.append(photo:=app.photos.offer(turn,meta,now))
+            if photo:
+                photo.release()
+        return out
+    try:
+        held=app.photos.offer(*reply(app),app.clock.now()) if audience=='him' else None
+        mid=dstore.post(app.store,channel=channel,author=app.human_guid,origin='human',text='send me a selfie',now=app.clock.now())
+        request,_=records.claim(app.store,message=mid,guid=101,asked_channel=channel,thread=None,
+            photo_channel='dm:101' if audience=='him' else channel,audience=audience,now=app.clock.now())
+        if held is not None:
+            held.release()
+        copy=request_stock.reserve_fallback(app,request)
+        assert files.snap(app.data_dir,101,copy.id).read_bytes()==files.snap(app.data_dir,101,sid).read_bytes()
+        if audience=='him':
+            # A spontaneous offer reserved before the copy went out is refused at delivery.
+            held=app.photos.offer(*reply(app),app.clock.now())
+            assert held and held.snap.id==sid
+        deliver(app,request,copy,'fallback')
+        if held is not None:
+            assert not held.valid()
+            held.release()
+        assert app.store.conn.execute('SELECT status FROM selfie_snap WHERE id=?',(sid,)).fetchone()[0]=='ready'
+        app.clock._t+=records.REPEAT_WINDOW-60
+        assert not any(spontaneous(app.clock.now()))
+        app.clock._t+=120
+        offered=spontaneous(app.clock.now())
+        assert offered[-1] and offered[-1].snap.id==sid
+    finally:app.store.close()

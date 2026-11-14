@@ -17,6 +17,7 @@ from leeroy_mind.selfies.scene_choices import channel_for
 from leeroy_mind.selfies.store import current
 from leeroy_mind.talk.budget import day_phase
 from .offer import PhotoOffer
+from .request_store import REPEAT_WINDOW, image_sent
 
 MAX_IN_FLIGHT = 1
 
@@ -87,6 +88,13 @@ class PhotoSender:
             return False
         return request or day_phase(app.clock.local()).value in snap.phases
 
+    def _copied(self, snap, now):
+        """A request delivered a copy of this image to its audience in the last thirty days."""
+        app = self.app
+        data = read_image(files.snap(app.data_dir, snap.guid, snap.id), app.data_dir)
+        return data is not None and image_sent(app.store, guid=snap.guid, audience=snap.audience,
+            identity=f'snap:{snap.id}', digest=hashlib.sha256(data).hexdigest(), now=now)
+
     def _attachment(self, snap):
         app = self.app
         path = files.snap(app.data_dir, snap.guid, snap.id)
@@ -131,7 +139,7 @@ class PhotoSender:
             if snap.audience != audience or (audience == 'anyone' and
                     (snap.id != meta.photo_seed or channel_id(turn.channel) != channel_for(snap.scene))):
                 continue
-            if not self._fresh(snap, now):
+            if not self._fresh(snap, now) or self._copied(snap, now):
                 continue
             shows = snap.scene.get('shows')
             if not isinstance(shows, str) or not shows:
@@ -162,7 +170,8 @@ class PhotoSender:
                 row = app.store.conn.execute('SELECT status FROM selfie_snap WHERE id=?', (snap.id,)).fetchone()
                 last = snaps.last_sent(app.store, turn.speaker)
                 return bool(row and row[0] == 'ready' and (last is None or moment-last >= ration.MEMBER_GAP_S)
-                            and self._fresh(snap, moment) and self._attachment(snap) is not None)
+                            and self._fresh(snap, moment) and not self._copied(snap, moment)
+                            and self._attachment(snap) is not None)
             def sent(line_id, msg_id):
                 if not snaps.mark_sent(app.store, snap.id, sender=turn.speaker,
                                        channel='dm' if audience == 'him' else 'discord',
@@ -186,12 +195,16 @@ def photo_seeds(conn, *, now, local, dial, today=None):
     date = local.date().isoformat()
     if not ration.channel_room(dial, today=channel_count(conn,date) if today is None else today, draw=day_draw(date)):
         return []
-    # Her member gap (offer() checks it too): a seed its opener cannot post is no seed.
+    # Her member gap (offer() checks it too): a seed its opener cannot post is no seed. Nor is
+    # an image a request already posted as its copy (offer() also compares the bytes).
     rows = conn.execute(f'SELECT {snaps._COLS} FROM selfie_snap s WHERE kind=\'situation\' '
         "AND source!='request' AND audience='anyone' AND status='ready' AND not_before<=? AND expires>? "
         "AND NOT EXISTS (SELECT 1 FROM selfie_snap t WHERE t.kind='situation' AND t.status='sent' "
-        "AND t.source!='request' AND t.sender=s.guid AND t.sent>?) ORDER BY expires,id LIMIT 200",
-        (now,now,now-ration.MEMBER_GAP_S)).fetchall()
+        "AND t.source!='request' AND t.sender=s.guid AND t.sent>?) "
+        "AND NOT EXISTS (SELECT 1 FROM selfie_request_image i JOIN selfie_snap c ON c.id=i.snap "
+        "WHERE i.identity='snap:'||s.id AND c.audience=s.audience AND c.status='sent' AND c.sent>?) "
+        "ORDER BY expires,id LIMIT 200",
+        (now,now,now-ration.MEMBER_GAP_S,now-REPEAT_WINDOW)).fetchall()
     out = []
     for row in rows:
         try:
