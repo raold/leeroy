@@ -265,9 +265,9 @@ class GpuArbiter:
     def holders(self) -> frozenset[str]:
         return frozenset(self._holders)
 
-    def reflection_allowed(self) -> bool:
+    def reflection_allowed(self, *, gate: bool = True) -> bool:
         return (not self.paused and not self._holders and
-                not (self.live_admission is not None and self.live_admission.blocked))
+                not (gate and self.live_admission is not None and self.live_admission.blocked))
 
     def hold(self, holder: str) -> bool:
         """Take a live lease now, with no await: `holders` and `reflection_allowed()` show it

@@ -37,7 +37,9 @@ drain, unload, worker startup and rendering. Worker shutdown and live-model relo
 finish safely even after that timeout. Waiting turns receive deadline credit for the full
 admission wait, including cleanup, so that wait alone cannot expire an answer. A login,
 hard GPU lease, Free GPU pause or shutdown interrupts the render. Free GPU pause wins and
-does not reload the live model until use resumes.
+does not reload the live model until use resumes. A reload that still fails keeps chat
+waiting until a live turn, the next borrow or the night recovers it: while that closed
+admission alone holds a due night back, the night scheduler retries the recovery each tick.
 
 While the owner is in WoW, presence is unknown, or borrowing is unavailable, the member
 uses an audience-fit retained photo if available: a ready snap first, then her gallery.
