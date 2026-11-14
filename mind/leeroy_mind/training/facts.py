@@ -70,12 +70,16 @@ class TalkHook:
 
     Turns without explicit event identity keep their original guards. Reading at
     composition allows the header-last telemetry to arrive during the delay.
-    This hook does not install itself or change members' reactions.
+    This hook does not install itself or change members' reactions. ``live`` says
+    whether his recorded pulls may speak: while the overhead gate still measures,
+    his armed pulls are evidence only.
     """
 
-    def __init__(self, ports, *, change_for: Callable[[str], str] = lambda context: ""):
+    def __init__(self, ports, *, change_for: Callable[[str], str] = lambda context: "",
+                 live: Callable[[], bool] = lambda: True):
         self.ports = ports
         self.change_for = change_for
+        self.live = live
 
     def __call__(self, turn, meta, instruction):
         if turn.kind is TurnKind.CALLOUT and meta.why.startswith("wipe:"):
@@ -83,6 +87,8 @@ class TalkHook:
         elif turn.kind is TurnKind.KILL and meta.why.startswith("kill:"):
             outcome = "killed"
         else:
+            return instruction
+        if not self.live():
             return instruction
         now_ms = int(self.ports.clock.now() * 1000)
         end_ms = meta.fight_end_ms

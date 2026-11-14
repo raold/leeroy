@@ -42,6 +42,10 @@ def test_attach_registers_without_tasks_or_data_load(app_stub, monkeypatch):
     assert app_stub.connections == [ground.on_connection]
     assert TG_EVENT_TYPES <= app_stub.skip_event_rows
     assert len(app_stub.hooks) == 1
+    # His recorded pulls speak in the lead's calls only once the overhead gate has passed.
+    assert app_stub.hooks[0].live() is False
+    ground.gate._phase = "passed"
+    assert app_stub.hooks[0].live() is True
     assert ground.book() is None and ground.watch_ids() == () and ground.training_members() == set()
 
 
@@ -94,6 +98,26 @@ async def test_checks_and_score_precede_downstream_and_rescore_restores(fake):
     await ground.ledger.on_event(member(h))
     await ground.ledger.on_event(h)
     assert seen[0]["checks_version"] == 1 and seen[0]["score"] is not None
+
+
+@_run_async
+async def test_scored_pulls_leave_spell_names_for_readers_without_the_book(fake, tmp_path, monkeypatch):
+    from leeroy_mind.training import protocol as tp
+    from leeroy_mind.training.hurt import stored_names
+    from .test_tg_hurt import book
+    ground = service.TrainingGround(SimpleNamespace(data_dir=tmp_path), fake)
+    h = header(fake)
+    await ground.ledger.on_event(member(h, taken_by=(tp.TakenTotal(900, 0, 10, 1),)))
+    await ground.ledger.on_event(h)
+    assert stored_names(fake.conn) == {}  # no book loaded yet: nothing named
+    ground._connected = ground._presence_known = True
+    monkeypatch.setattr(service, "load_book", lambda path: book())
+    await asyncio.wait_for(ground._load(), 2)
+    assert stored_names(fake.conn) == {900: "Vile Gas"}
+    h = header(fake, start=h.start_ms + 100_000)
+    await ground.ledger.on_event(member(h, taken_by=(tp.TakenTotal(901, 0, 10, 1), tp.TakenTotal(5, 0, 1, 1))))
+    await ground.ledger.on_event(h)
+    assert stored_names(fake.conn) == {900: "Vile Gas", 901: "Gas Spore"}  # an unknown spell is left out
 
 
 @_run_async

@@ -24,7 +24,8 @@ What it looks at:
 - Ollama's GET /api/ps, which loads nothing, and the models it has resident;
 - activity in mind.db, opened read-only: telemetry on and the training overhead gate passed but
   no tg_pull in 48 h (a note while the gate is in its A/B phase, which records only alternate
-  bosses of offline raids, or has failed), a realm body hold or an unknown root older than 1 h,
+  pulls of his raids and offline raids, or has failed), the gate still in its A/B phase with no
+  new A/B evidence for 7 days (a note), a realm body hold or an unknown root older than 1 h,
   cast members without a persona. A table an older mind.db lacks is unavailable, a note;
 - the Realm on in mind.toml with a screen that cannot be ready (no realm/blocklist.txt entry, or
   no cached guild name: a FAIL), the newest weekly evaluation incomplete, no secret probe ever
@@ -76,6 +77,7 @@ CONSOLE_PORT = 7881
 OK, FAIL, NOTE = "ok", "fail", "note"
 MARK = {OK: "ok  ", FAIL: "FAIL", NOTE: "note"}
 PULL_S = 48 * 3600  # telemetry on: a tg_pull at least this often
+GATE_STALL_S = 7 * 86400  # the gate in ab: new A/B evidence at least this often
 HOLD_S = 3600  # a realm body hold or unknown root older than this is stuck
 OFFLINE_OVERDUE_S = 30 * 60
 RAID_OPEN_S = 6 * 3600
@@ -655,14 +657,60 @@ def _telemetry(conn, root: Path, data: Path, now: float) -> Check:
                                       f"(gate {phase})")
     if phase == "ab":
         return Check("telemetry", NOTE, "telemetry: overhead gate in phase ab (A/B, "
-                     f"{raids} offline raid{'s' if raids != 1 else ''} counted): only alternate "
-                     "bosses of offline raids are recorded, so no tg_pull in 48 h is expected "
-                     f"(last {seen})")
+                     f"{raids} raid{'s' if raids != 1 else ''} counted): only alternate "
+                     "pulls of his raids and offline raids are recorded, so no tg_pull in 48 h "
+                     f"is expected (last {seen})")
     if phase == "failed":
         return Check("telemetry", NOTE, "telemetry: overhead gate failed (or its state is "
                      f"unreadable), so nothing is recorded; no pulls expected (last {seen})")
     return Check("telemetry", FAIL, f"telemetry: on and the overhead gate passed, but no tg_pull "
                                     f"in 48 h (last {seen})")
+
+
+def _gate_stall(conn, data: Path, now: float) -> Check:
+    """The overhead gate still in its A/B phase with no new evidence for 7 days: a note, so a gate
+    that collects nothing cannot stall unseen (it once sat in ab for a week of failed offline raids
+    while his raids were not measured). Evidence is a stored A/B fight (a gate fight's tg_perf row);
+    before the first, the clock starts at the first raid the gate counted."""
+    from .training.config import load_training_config
+    try:
+        t = load_training_config(data / "mind.toml")
+    except ConfigError as e:
+        return Check("training-gate", NOTE, f"training gate: not checked ({e})")
+    if not (t.enabled and t.telemetry):
+        return Check("training-gate", OK, "training gate: not measuring ([training] or its "
+                                          "telemetry is off in mind.toml)")
+    phase, raids = _gate_phase(conn)
+    if phase != "ab":
+        return Check("training-gate", OK, f"training gate: {phase}")
+    try:
+        last, fights = conn.execute("SELECT max(ts), count(*) FROM tg_perf "
+                                    "WHERE fight GLOB 'gate:*'").fetchone()
+        pairs = conn.execute("SELECT count(*) FROM (SELECT 1 FROM tg_perf WHERE fight GLOB 'gate:*' "
+                             "GROUP BY kind, context HAVING count(DISTINCT armed) = 2)").fetchone()[0]
+        ids = [int(key.rsplit(":", 1)[1]) for (key,) in conn.execute(
+            "SELECT key FROM meta WHERE key GLOB 'tg_gate:raid:[0-9]*'") if key.rsplit(":", 1)[1].isdigit()]
+        first = conn.execute("SELECT min(started) FROM guild_raid WHERE raid_id IN ("
+                             + ",".join("?" * len(ids)) + ")", ids).fetchone()[0] if ids else None
+    except sqlite3.Error as e:
+        if _unavailable(e):
+            return Check("training-gate", NOTE, "training gate: unavailable (this mind.db has no "
+                                                "tg_perf or guild_raid)")
+        return Check("training-gate", FAIL, f"training gate: its evidence cannot be read "
+                                            f"({type(e).__name__})")
+    since = last if last is not None else first
+    progress = (f"{fights} A/B fight{'s' if fights != 1 else ''}, {pairs} of {t.gate_pulls} boss "
+                f"contexts with both sides, {raids} raid{'s' if raids != 1 else ''} counted")
+    if since is None:
+        return Check("training-gate", OK, "training gate: measuring (phase ab); no raid counted yet")
+    if now - since < GATE_STALL_S:
+        when = (f"last A/B fight {_ago(now - since)} ago" if last is not None
+                else f"no A/B fight yet, first counted raid {_ago(now - since)} ago")
+        return Check("training-gate", OK, f"training gate: measuring (phase ab), {when} ({progress})")
+    what = "A/B fight" if last is not None else "counted raid with no A/B fight since"
+    return Check("training-gate", NOTE, f"training gate: still measuring (phase ab) with no new A/B "
+                 f"evidence for {int((now - since) // 86400)} days (last {what} {_when(since)}; "
+                 f"{progress}): see `training gate` and `training hurt`")
 
 
 def _gate_phase(conn) -> tuple[str, int]:
@@ -1180,6 +1228,7 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
     conn.row_factory = sqlite3.Row
     try:
         return [_guarded("telemetry", _telemetry, conn, root, data, now),
+                _guarded("training-gate", _gate_stall, conn, data, now),
                 _guarded("realm-holds", _realm_holds, conn, now),
                 _guarded("offline-raid", _offline_raid, conn, now),
                 _guarded("guild-raids", _guild_raids, conn, now),

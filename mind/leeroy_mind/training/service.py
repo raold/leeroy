@@ -18,6 +18,7 @@ from .experiment_lifecycle import ExperimentLifecycle
 from .experiments import Experimenter
 from .facts import TalkHook
 from .gate import Gate
+from .hurt import referenced_spells, remember_names
 from .ledger import Ledger
 from .ledger import combat_role
 from .jobs import TrainingJobs
@@ -233,7 +234,16 @@ class TrainingGround:
         roles = {row["guid"]: row["role"] for row in store.member_rows(self.ports.conn, rec.header.id)}
         result = run_checks(rec, roles, self._book)
         await score_pull(self.ports, rec, ctx, result)
+        self._name_spells((rec.header.id,))
         await self.listener.after_pull(rec, ctx, result)
+
+    def _name_spells(self, pulls):
+        """Keep the names of the spells stored pulls name (meta tg:spell_names) for readers
+        without the spell book; best effort, never a reason a pull is not scored."""
+        try:
+            remember_names(self.ports.conn, self._book, referenced_spells(self.ports.conn, pulls))
+        except Exception as error:
+            log.warning("training_spell_names_failed error=%s", type(error).__name__)
 
     def submit(self, name, args=(), kwargs=None, run=None):
         if self._stopping or not self._connected:
@@ -423,6 +433,10 @@ class TrainingGround:
             # shielded worker until it actually ends, even after repeated cancel.
             raise
         await rescore_stored(self.ports, self._book)
+        ids = [row[0] for row in self.ports.conn.execute("SELECT id FROM tg_pull ORDER BY start_ms, id")]
+        for start in range(0, len(ids), 20):  # bounded steps; the loop stays responsive
+            self._name_spells(ids[start:start + 20])
+            await asyncio.sleep(0)
         self.experiments.replay_again()
 
     def _guild_busy(self):
@@ -507,6 +521,7 @@ def attach_training(app):
             ground.listener.lust_provider = calls.lust
     hook = TalkHook(ground.ports)
     hook.change_for = ground.listener.change_for
+    hook.live = lambda: ground.gate.phase == "passed"
     app.engine.add_instruction_hook(hook)
     facts = getattr(app.engine, "facts", None)
     if facts is not None:

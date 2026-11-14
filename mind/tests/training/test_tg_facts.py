@@ -136,6 +136,15 @@ def test_hook_only_for_the_leads_calls(fake):
     assert hook(turn, meta, INSTRUCTION).endswith(NO_CAUSE)
 
 
+def test_his_pull_adds_no_fact_while_the_gate_measures(fake):
+    rec = save(fake, record(fake), checked=True)
+    phase = ["ab"]
+    hook = TalkHook(fake, live=lambda: phase[0] == "passed")
+    assert hook(*lead(rec), INSTRUCTION) == INSTRUCTION
+    phase[0] = "passed"
+    assert hook(*lead(rec), INSTRUCTION).endswith(NO_CAUSE)
+
+
 def test_fact_swaps_the_wipe_wording_only_with_complete_checks(fake):
     rec = save(fake, record(fake), checked=True)
     text = TalkHook(fake)(*lead(rec), INSTRUCTION)

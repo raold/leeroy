@@ -54,3 +54,43 @@ preserved unchanged. Independent deaths, casts, elapsed time, and observed
 positions remain available; incomplete or aborted pulls and non-fight steps
 never become scoreable. Future metric producers must apply the per-metric
 restrictions documented in `store.py` and the C++ training README.
+
+# The overhead gate measures his raids too
+
+While the gate is in `ab` it measures his raids (raid nights and the add-command
+groups the raid night adopts) as well as offline raids. Each kind keeps its own
+per-family parity counter (`tg_gate:family:<map>:<difficulty bits>` for offline
+raids, `tg_gate:family:his:<map>:<difficulty bits>` for his) and its own
+`tg_perf` rows; the verdict pairs an armed and an unarmed fight only within one
+kind and one boss context, so his presence can neither stand in for telemetry
+cost nor hide it. The fail-closed verdict is unchanged: the mean of at least
+`gate_pulls` per-context differences, `passed` at most `gate_max_ms`, `failed`
+final, after which nothing is armed.
+
+A raid led by a bot sends dungeon-clear's muster naming the next boss, and
+alternates by boss index as offline raids do. A raid he leads sends no muster,
+so the gate musters itself at the run's start and after every finished pull and
+alternates by pull: the pull's ordinal in the run takes the boss index's place,
+so a wipe's retry falls on the other side. The same self-muster arms every pull
+of his lead once the gate has `passed` (before, a raid he led was never armed).
+
+While the gate measures, an armed pull of his raid is evidence only: cast-timed
+callouts (`voice_lead`) and the combat-log facts in the lead's kill and wipe
+calls (`facts.TalkHook`) wait for `passed`, and tactics still need the applier's
+`passed` gate and observation month. Health notes a gate in `ab` with no new A/B
+fight for 7 days (`training-gate`).
+
+# What hurt them
+
+`python -m leeroy_mind training hurt [--context MAP:BOSS:DIFFICULTY|MAP:*:DIFFICULTY]
+[--last N] [--kind his|offline|benchmark]` reads stored pulls (read-only, never
+migrates): per boss context, newest first, deaths by the killing blow's spell,
+the spells that hit cast members hardest (requested damage, ranked by share),
+the failed mechanics the checks proved (`tg_failure`) and, for the boss's
+avoidable effects in `mechanics.py`, which members the records show hit and how
+often past the mechanic's allowance. Kinds default to his and offline raids;
+`--last` keeps each context's newest N pulls. Only complete killed or wiped
+pulls are read. Spell names come from the client's Spell.dbc (local files, no
+database login); without it, from meta `tg:spell_names`, which the training
+ground fills with the names of the spells its stored pulls name. The console's
+Training tab shows the same report for the 12 most recently fought bosses.
