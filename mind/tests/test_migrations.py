@@ -430,3 +430,31 @@ def test_culture_preserves_old_lexicon_and_reserves_meme_table(tmp_path, monkeyp
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("UPDATE lexicon SET origin_refs='invalid'")
     conn.close()
+
+
+def test_migration_from_an_older_db(tmp_path, monkeypatch):
+    path = tmp_path / "mind.db"
+    conn = db_before("decisions", path, tmp_path, monkeypatch)
+    conn.execute("INSERT INTO meta(key, value) VALUES ('keep', 'me')")
+    conn.execute("INSERT INTO guild_raid VALUES (7,1,2,'icc',10,0,0,101,101,102,3,2,NULL)")
+    conn.commit()
+    conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= migration_number("decisions")
+        assert conn.execute("SELECT value FROM meta WHERE key = 'keep'").fetchone()[0] == "me"
+        assert conn.execute("SELECT raid_key FROM guild_raid").fetchone()[0] == "icc"
+        for table in ("guild_decision", "guild_poll", "guild_poll_vote"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+        conn.execute("INSERT INTO guild_decision(kind,subject,value,status,proposed) VALUES ('rank','rank:101','{}','proposed',1)")
+        for bad in ("kind='gold'", "status='maybe'", "value='not json'", "overruled_by_owner=2"):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(f"UPDATE guild_decision SET {bad}")
+        with pytest.raises(sqlite3.IntegrityError):  # one live decision per kind and subject
+            conn.execute("INSERT INTO guild_decision(kind,subject,value,status,proposed) "
+                         "VALUES ('rank','rank:101','{}','in_effect',2)")
+        with pytest.raises(sqlite3.IntegrityError):  # 2-6 options
+            conn.execute("INSERT INTO guild_poll(channel,question,options,voters,opened,closes,status) "
+                         "VALUES ('officer-chat','q','[\"a\"]','[]',1,2,'open')")
+    finally:
+        conn.close()
