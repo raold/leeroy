@@ -60,6 +60,24 @@ struct GuildAddBody
 // Empty when the member is free to join his group.
 std::string GuildAddSkipReason(GuildAddBody const& body);
 
+// One permanent save: the copy of a map and difficulty a character is locked to until its reset, and that copy's
+// player cap (MapDifficulty's, else the map's).
+struct GuildAddSave
+{
+    std::uint32_t map = 0;
+    std::uint8_t difficulty = 0;
+    std::uint32_t instance = 0;
+    std::uint32_t players = 0;
+};
+// Outside an instance he could be going anywhere, but a group of size goes to the copy he is saved to for that map:
+// true when the member is saved to another copy of a map and difficulty he holds a save of that size for. The core
+// would turn such a member away at the door.
+bool GuildAddSavedElsewhere(std::vector<GuildAddSave> const& his, std::vector<GuildAddSave> const& member,
+    std::uint32_t size);
+// He entered with members saved to another copy of this instance, so the core keeps them out: the line naming them
+// before their places are filled from the guild. Empty for nobody.
+std::string GuildAddSwapLine(std::vector<std::string> const& names);
+
 // The raid buffs and debuffs a member's bot applies in WotLK 3.3.5 (talents, and what playerbots' default strategies
 // for that tree cast), one bit each. Same-kind effects do not stack, so one source covers the raid; Replenishment
 // reaches 10 members, so a 25 or 40 wants two sources.

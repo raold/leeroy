@@ -11,6 +11,7 @@
 #include "AiFactory.h"
 #include "Chat.h"
 #include "ChatCommand.h"
+#include "DBCStores.h"
 #include "Group.h"
 #include "InstanceSaveMgr.h"
 #include "LFGMgr.h"
@@ -103,8 +104,27 @@ GuildAddPlace PlaceOf(Map* map)
     return instance ? GuildAddPlace{instance->GetMaxPlayers(), instance->IsRaid()} : GuildAddPlace{};
 }
 
+// A character's permanent saves, each with its copy's player cap as InstanceMap::GetMaxPlayers reckons it.
+std::vector<GuildAddSave> SavesOf(ObjectGuid guid)
+{
+    std::vector<GuildAddSave> saves;
+    for (uint8 difficulty = 0; difficulty < MAX_DIFFICULTY; ++difficulty)
+        for (auto const& [mapId, bind] : sInstanceSaveMgr->PlayerGetBoundInstances(guid, Difficulty(difficulty)))
+        {
+            if (!bind.perm || !bind.save)
+                continue;
+            MapDifficulty const* data = GetMapDifficultyData(mapId, Difficulty(difficulty));
+            MapEntry const* entry = sMapStore.LookupEntry(mapId);
+            uint32 const players = data && data->maxPlayers ? data->maxPlayers : entry ? entry->maxPlayers : 0;
+            saves.push_back({mapId, difficulty, bind.save->GetInstanceId(), players});
+        }
+    return saves;
+}
+
 // hisGroup: a member of the group he leads, whom only the add command's other fences can keep out.
-GuildAddBody BodyOf(uint32 guid, Player* bot, Player* human, uint32 guildId, bool hisGroup = false)
+// outside: his own saves while he stands outside any instance, measured against an add of size.
+GuildAddBody BodyOf(uint32 guid, Player* bot, Player* human, uint32 guildId, bool hisGroup = false,
+    std::vector<GuildAddSave> const* outside = nullptr, uint32 size = 0)
 {
     GuildAddBody body;
     if (!bot)
@@ -141,6 +161,8 @@ GuildAddBody BodyOf(uint32 guid, Player* bot, Player* human, uint32 guildId, boo
         if (InstancePlayerBind const* bind = sInstanceSaveMgr->PlayerGetBoundInstance(bot->GetGUID(), his->GetId(),
                 his->GetDifficulty()))
             body.locked = bind->perm && bind->save && bind->save->GetInstanceId() != his->GetInstanceId();
+    if (!his->IsDungeon() && outside && !outside->empty())
+        body.locked = GuildAddSavedElsewhere(*outside, SavesOf(bot->GetGUID()), size);
     return body;
 }
 
@@ -229,6 +251,9 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         connected.push_back({RoleOf(human), human->getClass(), TabOf(human)});
 
     uint32 const guildId = LeeroyModule::Instance().GuildId();
+    // Outside an instance, his saves say where a group of this size is headed: inside, his copy says it.
+    std::vector<GuildAddSave> const outside = human->GetMap()->IsDungeon() ? std::vector<GuildAddSave>{}
+        : SavesOf(human->GetGUID());
     std::vector<GuildAddCandidate> candidates;
     std::map<std::string, std::uint32_t> unavailable;
     for (uint32 guid : CastMembers())
@@ -236,7 +261,7 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         if (guid == HumanGuid())
             continue;
         Player* bot = FindOnline(guid);
-        if (auto reason = GuildAddSkipReason(BodyOf(guid, bot, human, guildId)); !reason.empty())
+        if (auto reason = GuildAddSkipReason(BodyOf(guid, bot, human, guildId, false, &outside, size)); !reason.empty())
         {
             ++unavailable[reason];
             continue;
@@ -258,7 +283,7 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         {
             // Every fence again at the mutation boundary: each join runs group hooks.
             Player* bot = FindOnline(pick.guid);
-            if (!bot || !GuildAddSkipReason(BodyOf(pick.guid, bot, human, guildId)).empty())
+            if (!bot || !GuildAddSkipReason(BodyOf(pick.guid, bot, human, guildId, false, &outside, size)).empty())
                 continue;
             // His group only once someone can join it, and a raid only once a party is full.
             if (!group && !(group = LeaderGroup(human)))
@@ -300,6 +325,43 @@ std::vector<std::string> Fill(Player* human, uint32 size)
     if (auto missing = GuildAddMissingLine(plan, added, covered); !missing.empty())
         messages.push_back(std::move(missing));
     return messages;
+}
+
+// He took the group he built into an instance, and some of its guild members are saved to another copy of it: the
+// core turns them away at the door. They leave his group and the add command fills their places from the guild,
+// into his copy only. A body the Realm, training or an offline raid owns is theirs to move and stays.
+void SwapSavedElsewhere(Player* human, Group* group)
+{
+    uint32 const guildId = LeeroyModule::Instance().GuildId();
+    std::vector<ObjectGuid> out;
+    std::vector<std::string> names;
+    for (auto const& slot : group->GetMemberSlots())
+    {
+        uint32 const guid = slot.guid.GetCounter();
+        Player* bot = guid == HumanGuid() ? nullptr : FindOnline(guid);
+        if (!bot || bot->GetMap() == human->GetMap())
+            continue;
+        GuildAddBody const body = BodyOf(guid, bot, human, guildId, true);
+        if (body.cast && body.fence.empty() && body.locked)
+        {
+            out.push_back(slot.guid);
+            names.push_back(bot->GetName());
+        }
+    }
+    if (out.empty())
+        return;
+    ChatHandler handler(human->GetSession());
+    handler.PSendSysMessage("{}", GuildAddSwapLine(names));
+    // The last removal can disband his group, which deletes it: read it afresh each time.
+    for (ObjectGuid const& guid : out)
+        if (Group* now = human->GetGroup())
+            now->RemoveMember(guid);
+    LOG_INFO("module.leeroy", "mod-leeroy: add{} entry took {} members saved to another copy out of his group",
+        builtSize, out.size());
+    if (!GuildAddSizeRefusal(builtSize, PlaceOf(human->GetMap())).empty())
+        return;
+    for (auto const& message : Fill(human, builtSize))
+        handler.PSendSysMessage("{}", message);
 }
 
 class GuildAddCommandScript : public AllCommandScript
@@ -348,8 +410,13 @@ public:
             if (auto why = GuildAddEntryRefusal(group->GetMembersCount(), PlaceOf(map)); !why.empty())
                 ChatHandler(player->GetSession()).PSendSysMessage("{}", why);
             else
+            {
                 BringIn(player, group);
-            PublishGuildGroup("entered", player, group, {});
+                SwapSavedElsewhere(player, group);
+            }
+            // The swap may have disbanded his group, or the fill made him a new one.
+            if (Group* now = player->GetGroup(); now && now->GetGUID() == builtGroup)
+                PublishGuildGroup("entered", player, now, {});
         }
     }
 };
