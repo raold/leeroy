@@ -46,6 +46,8 @@ uses an audience-fit retained photo if available: a ready snap first, then her g
 A Free GPU pause, or a live-model reload still failing from an earlier borrow, makes
 borrowing unavailable; it never fails the request. A scene the paused model cannot choose is
 the screened everyday choice, picked without a model.
+Gallery photos come only from her cover's set and sets rendered from a persona at least as
+new, so a set from before a looks change is not sent once her cover shows the new looks.
 The retained image is copied; its original is never moved or consumed. Its caption describes
 that retained photo, not the new scene being planned. The new photo waits for ten continuous
 minutes of confirmed offline presence and no running night. Unrendered requests expire

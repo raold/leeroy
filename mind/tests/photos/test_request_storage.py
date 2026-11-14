@@ -349,6 +349,29 @@ def test_gallery_copy_rechecks_current_identity_and_content_at_send(app, change)
     assert files.snap(app.data_dir, 101, photo.id, thumb=True).exists()
 
 
+def test_gallery_fallback_skips_sets_older_than_her_cover(app):
+    # Her looks changed (a re-roll), set 2 was rendered from the newer persona and is her cover.
+    ready(app.store, app.data_dir, 101, 2)
+    for index in range(4):
+        for thumb in (False, True):
+            files.candidate(app.data_dir, 101, 2, index, thumb=thumb).write_bytes(
+                jpeg() + f'/101/2/{index}/{thumb}'.encode())
+    with app.store.transaction():
+        app.store.conn.execute('UPDATE selfie_set SET persona_version=set_no WHERE guid=101')
+    chosen = pick(app.store, 101, 2, 0, source='console', now=app.clock.now())
+    files.history(app.data_dir, 101, chosen).write_bytes(files.candidate(app.data_dir, 101, 2, 0).read_bytes())
+    old = {files.candidate(app.data_dir, 101, 1, i).read_bytes() for i in range(4)}
+    sent = []
+    for n in range(5):
+        request, _ = claim(app, now=app.clock.now() + n * 600)
+        copy = request_stock.reserve_fallback(app, request, now=request.created)
+        if copy is None:
+            break
+        sent.append(files.snap(app.data_dir, 101, copy.id).read_bytes())
+        deliver(app, request, copy, 'fallback')
+    assert len(sent) == 4 and not old & set(sent)
+
+
 def test_lust_gallery_never_selected_while_member_is_plain(app):
     app.store.set_meta('selfies:set-lust:101:1', '1')
     req, _ = claim(app)
