@@ -5,7 +5,7 @@ to deliver jobs/logout while the independent ticker awaits bridge commands.
 """
 
 import asyncio
-from collections import deque
+from collections import Counter, deque
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 import logging
@@ -167,6 +167,65 @@ class RaidNight:
         return choose_leads(candidates, requested=lead.guid if lead else None,
                             rotate=bool(lead and lead.rotate), human_leads=bool(lead and lead.human),
                             human_guid=self.ports.human_guid, last_led=last_led(self.ports.conn))
+
+    def _lineup(self):
+        """Tonight's posted raid lineup (the guild's decisions), or None: decisions off, or none."""
+        lineup = getattr(self.ports, "lineup", None)
+        if lineup is None:
+            return None
+        try:
+            return lineup()
+        except Exception:
+            log.warning("lineup_unread")
+            return None
+
+    def _from_lineup(self, lineup, size, candidates, required, seed):
+        """The roster from a posted lineup: its available members go in first (within capacity and
+        each role's seats), its bench only when nobody else can fill a role, and select_comp fills
+        what its unavailable members leave, as without one."""
+        by = {c.guid: c for c in candidates}
+        targets = dict(zip(("tank", "healer", "damage"), TARGETS[size]))
+        targets["damage"] -= 1  # his seat
+        must = sorted(required)
+        counts = Counter(by[g].role for g in must if g in by)
+        missing = 0
+        for guid in lineup.members:
+            candidate = by.get(guid)
+            if guid in must:
+                continue
+            if candidate is None or candidate.available is not True:
+                missing += 1
+                continue
+            if len(must) < size - 1 and counts[candidate.role] < targets[candidate.role]:
+                must.append(guid)
+                counts[candidate.role] += 1
+        def benched(short):
+            return [replace(c, available=False) if c.guid in lineup.bench and c.guid not in must
+                    and c.role not in short else c for c in candidates]
+        try:
+            comp = select_comp(size, benched(()), must_include=must, human_in_raid=True, seed=seed)
+        except NoTankError:
+            comp = None
+        if comp is None or comp.shortfall:
+            # The bench is the last resort: only for a role nobody else can fill
+            short = set(comp.shortfall) if comp is not None else {"tank"}
+            comp = select_comp(size, benched(short), must_include=must, human_in_raid=True, seed=seed)
+        members = list(comp.members)
+        bench = list(comp.bench) + [g for g in sorted(lineup.bench) if g in by and by[g].available is True
+                                    and g not in members and g not in comp.bench
+                                    and by[g].guild_role in ("officer", "raider")]
+        if missing:
+            log.info("lineup_partial id=%d missing=%d", lineup.decision, missing)
+        return members, bench
+
+    def _lineup_formed(self, lineup):
+        formed = getattr(self.ports, "lineup_formed", None)
+        if formed is None or self.session is None:
+            return
+        try:
+            formed(lineup, self.session.raid_id)
+        except Exception:
+            log.warning("lineup_effect_unrecorded id=%d", lineup.decision)
 
     def _speaker(self):
         if self.run:
@@ -527,9 +586,14 @@ class RaidNight:
             candidates = self._candidates()
             leaders = self._leaders(candidates, pick.lead)
             required = {leaders.tank_guid, leaders.lead_guid, leaders.loot_guid} - {self.ports.human_guid}
-            comp = select_comp(pick.size, candidates, must_include=sorted(required), human_in_raid=True,
-                               seed=self.rng.getrandbits(64))
-            members, bench = list(comp.members), list(comp.bench)
+            lineup = self._lineup()
+            if lineup is None:
+                comp = select_comp(pick.size, candidates, must_include=sorted(required), human_in_raid=True,
+                                   seed=self.rng.getrandbits(64))
+                members, bench = list(comp.members), list(comp.bench)
+            else:
+                members, bench = self._from_lineup(lineup, pick.size, candidates, required,
+                                                   self.rng.getrandbits(64))
             by_guid = {c.guid: c for c in candidates}
             clear = ClearLockout(uuid4().hex, raid.map_id, tuple([*members, self.ports.human_guid]))
             ack = await self._ack(clear, epoch)
@@ -597,6 +661,8 @@ class RaidNight:
             plan = RaidPlan(raid.key, pick.size, pick.heroic, False, leaders.lead_guid, leaders.tank_guid,
                             leaders.loot_guid, members, bench, True)
             await self._begin(plan, epoch, on_time, late)
+            if lineup is not None:
+                self._lineup_formed(lineup)
         except (NoTankError, ValueError, _Failed) as error:
             self._check(epoch)
             reason = str(error) if isinstance(error, _Failed) else "the available roster cannot fill this raid"

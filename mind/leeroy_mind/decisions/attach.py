@@ -11,5 +11,7 @@ def attach_decisions(app):
     apply.load_builtin()
     service = DecisionsService(app, config)
     app.engine.decisions_enabled = True
+    app.register_event_handler('hello', service.on_hello)
+    app.register_connection_hook(service.on_connection)
     app.register_background(service.run)
     return service

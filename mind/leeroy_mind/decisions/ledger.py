@@ -191,6 +191,14 @@ def expire(store, id, *, now) -> None:
     log.info('decision_expired id=%d kind=%s', id, row['kind'])
 
 
+def retire(store, id, *, now) -> None:
+    """A decision in effect whose time has passed (a raid night's lineup once its night is over): it
+    stops being live and keeps its record (status expired, with its effect time and what it
+    changed). Nothing is put back: it replaced nothing still in force."""
+    row = _move(store, id, ('in_effect',), "status='expired', ended=?", (_time(now),))
+    log.info('decision_retired id=%d kind=%s', id, row['kind'])
+
+
 def fail(store, id, *, reason: str, now) -> None:
     """Its effect could not be carried out (or its outcome is unknown and never resent)."""
     if not isinstance(reason, str) or not CODE.fullmatch(reason):

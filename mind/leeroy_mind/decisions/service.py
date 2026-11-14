@@ -61,6 +61,34 @@ class DecisionsService:
         await self.deliver()
         for ident in sorted(self._unrecorded):
             await self._record_undo(ident)
+        await self.kinds(now)
+
+    async def kinds(self, now: float) -> None:
+        """Each registered kind's own minute work (proposing, posting, taking effect, ending): a
+        kind that fails is logged and the others still run."""
+        for kind in ledger.KINDS:
+            hook = getattr(apply.rules_for(kind), 'tick', None)
+            if hook is None:
+                continue
+            try:
+                await hook(self.app, now)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                log.warning('decisions_kind_tick_failed kind=%s error=%s', kind, type(error).__name__)
+
+    async def on_hello(self, ev) -> None:
+        """A worldserver (re)connected: kinds holding state in game send it again."""
+        for kind in ledger.KINDS:
+            hook = getattr(apply.rules_for(kind), 'on_hello', None)
+            if hook is not None:
+                hook(ev)
+
+    async def on_connection(self, connected: bool) -> None:
+        for kind in ledger.KINDS:
+            hook = getattr(apply.rules_for(kind), 'on_connection', None)
+            if hook is not None:
+                hook(connected)
 
     async def deliver(self) -> None:
         """Hand each closed poll's result to its kind, once. A kind should write

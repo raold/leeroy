@@ -7,7 +7,7 @@ only. SELECT-only."""
 import json
 
 from leeroy_mind.discord import layout
-from leeroy_mind.server.seeds import FRESH_DEFAULT_S, Seed
+from leeroy_mind.server.seeds import FRESH_DEFAULT_S, Seed, _item_name
 from .apply import LABELS, OFFICER_KINDS, channels_of, officers_only, positions_private, stakeholders, summary
 from .positions import facts_text, member_facts
 from .polls import options_of, positions_of
@@ -76,4 +76,35 @@ def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
         about = tuple(sorted(p['guid'] for p in positions if p['guid'] in personas))
         out.append(Seed(f"decision:p{poll['id']}:poll", 'decision', (poll['channel'],), fact, about,
                         channel.officers_only))
+    return out
+
+
+HIS_LOOT_S = 7 * 86400.0
+
+
+def his_loot_seeds(conn, *, now, names, human, cast) -> list[Seed]:
+    """His claims of the last week over a member who wanted the item (a charged receipt with his
+    claim and its unique debit to him): the guild grumbles about it in #loot-and-dkp. Built from
+    the receipt; the member who lost it is its stakeholder."""
+    out = []
+    for lid, note, item_id in conn.execute(
+            "SELECT id,note,item_id FROM dkp_ledger WHERE reason='item' AND guid=? AND ts BETWEEN ? AND ? "
+            "AND (note GLOB 'guild:loot:*' OR note GLOB 'council:guild:loot:*') ORDER BY ts DESC,id DESC LIMIT 32",
+            (human, now - HIS_LOOT_S, now)).fetchall():
+        row = conn.execute('SELECT value FROM meta WHERE key=?', (note.removeprefix('council:'),)).fetchone()
+        try:
+            record = json.loads(row[0]) if row else None
+            award = record['award']
+            runner = award.get('runner_up')
+            if (record.get('state') != 'charged' or record.get('human_claimed') is not True
+                    or award.get('guid') != human or type(runner) is not int or runner not in cast):
+                continue
+        except (TypeError, ValueError, KeyError, AttributeError):
+            continue
+        item = _item_name(conn, item_id)
+        bid = award.get('runner_up_bid')
+        fact = (f"{names.get(human, 'The guild master')} claimed [{item}] in the raid over "
+                f"{names.get(runner, 'a guild member')}, who wanted it"
+                + (f' and bid {bid:g} DKP' if type(bid) in (int, float) and bid > 0 else ''))
+        out.append(Seed(f'his_loot:{lid}', 'his_loot', ('loot-and-dkp',), fact, (runner,)))
     return out
