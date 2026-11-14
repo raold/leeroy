@@ -17,7 +17,8 @@ constexpr float kPi = 3.14159265358979f;
 json Rule(std::string const& id = "icc.deathwhisper.death_and_decay", std::string const& kind = "avoid_ground",
     std::string const& area = "dest")
 {
-    return json{{"id", id}, {"kind", kind}, {"area", area}, {"roles", json::array({"tank", "healer", "melee", "ranged"})},
+    return json{{"id", id}, {"kind", kind}, {"area", area},
+        {"roles", json::array({"tank", "healer", "melee", "ranged"})},
         {"spells", json::array({72110})}, {"radius", 8}, {"range", 0}, {"angle", 0}, {"duration", 0}};
 }
 
@@ -341,14 +342,17 @@ LEEROY_TEST(Mechanic_LinesAndConesPointAtTheTargetElseTheDestinationElseTheFacin
 LEEROY_TEST(Mechanic_DutiesPerKind)
 {
     MechanicCast const cast = CastAt({0, 0, 0}, HazardPoint{5, 0, 0});
-    auto stack = MechanicDutyFor(Make(MechanicKind::Stack, MechanicArea::Dest, 8), cast, {0, 0, 0}, HazardPoint{6, 1, 0});
+    auto stack =
+        MechanicDutyFor(Make(MechanicKind::Stack, MechanicArea::Dest, 8), cast, {0, 0, 0}, HazardPoint{6, 1, 0});
     CHECK(stack->gather.has_value());
     CHECK_EQ(stack->gather->x, 6.0f); // the tank moved: gather where it is now
     CHECK_EQ(stack->gatherRadius, 8.0f);
-    auto spread = MechanicDutyFor(Make(MechanicKind::Spread, MechanicArea::Group, 0, 10), cast, {0, 0, 0}, std::nullopt);
+    auto spread =
+        MechanicDutyFor(Make(MechanicKind::Spread, MechanicArea::Group, 0, 10), cast, {0, 0, 0}, std::nullopt);
     CHECK_EQ(spread->spacing, 10.0f);
     CHECK(!spread->leave.has_value());
-    auto run = MechanicDutyFor(Make(MechanicKind::RunOutDebuff, MechanicArea::Target, 10), cast, {0, 0, 0}, std::nullopt);
+    auto run =
+        MechanicDutyFor(Make(MechanicKind::RunOutDebuff, MechanicArea::Target, 10), cast, {0, 0, 0}, std::nullopt);
     CHECK_EQ(run->spacing, 10.0f);
     auto hide = MechanicDutyFor(Make(MechanicKind::Los, MechanicArea::Caster, 0), cast, {0, 0, 0}, std::nullopt);
     CHECK(hide->hide);

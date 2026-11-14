@@ -318,6 +318,9 @@ unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
   3 seconds, never under 1.5 or over 20 seconds (at most 64 at once). A `run_out_debuff` needs a player target;
   when the debuff (a rule spell) lands on a player as an aura, that starts or extends it too. Nothing is moved
   for an instant spell before it hits, but its area is still left for the linger (the next cast comes soon).
+  When the boss stops a covered cast before it lands, or breaks off a channel (`OnSpellCastCancel`: Hellfire
+  interrupted), what that cast started ends at once (`cancelled=1`; a debuff already on a member stays), and an
+  area round the caster ends with the caster.
 - **Moving.** Playerbots' `mechanic move` trigger (in every class combat strategy) asks the guard whether a
   mechanic in force binds the bot (its role, and for a run out only the debuffed member); the `mechanic move`
   action (`ACTION_RAID + 9`: above stock's raid positioning while it lasts, below every emergency and stock's own
@@ -327,12 +330,13 @@ unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
   straight out first, then rings of 2 yards up to 40 yards (spreading: away from the others' middle between
   equals), clear of the ground hazards `HazardJob` measures (scanned round the responders while a mechanic is in
   force, whatever `Leeroy.Hazards.Enable` says) and checked against the navmesh. The chosen spot is kept while it
-  still holds. Meanwhile `MoveTo` refuses an ordinary (not forced) move that would break a duty: back into an
+  still holds; a search that found nothing is tried again after a second (the others and the targets move). Meanwhile `MoveTo` refuses an ordinary (not forced) move that would break a duty: back into an
   area, off the gather spot, within the spacing. A forced move, a stock raid strategy's own included, is never
   refused. When the mechanic ends nothing is restored: no strategy, value or master was changed, and the bot
   plays on as stock.
-- Logs: `mechanic_response id=<playbook mechanic> spell= kind= members=<moved> map= instance=` when each ends
-  (the training ground's per-mechanic checks measure the effect), and once a minute while there are responders,
+- Logs: `mechanic_response id=<playbook mechanic> spell= kind= members=<moved> map= instance= cancelled=` when
+  each ends, `members` counting the bots whose forced move was issued (playerbots reports it through
+  `MechanicMoved`; the training ground's per-mechanic checks measure the effect), and once a minute while there are responders,
   `mechanics_minute responders= instances= held= fenced= dropped=`. Ids, counts and codes only.
 
 Limits: a spell whose place is chosen after cast start (Putricide's bombs, the Beasts' slime pools, Icehowl's

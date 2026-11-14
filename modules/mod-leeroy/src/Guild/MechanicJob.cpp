@@ -110,6 +110,8 @@ struct Event
     std::uint32_t debuffed = 0;
     std::uint64_t start = 0;
     std::uint64_t end = 0;
+    bool fromAura = false;  // started by the debuff landing, not by a cast
+    bool cancelled = false; // the boss stopped the cast or the channel: released early
 };
 std::mutex eventLock;
 std::vector<Event> events;
@@ -282,14 +284,39 @@ void AuraApplied(Unit* unit, Aura* aura)
         event.debuffed = player->GetGUID().GetCounter();
         event.start = now;
         event.end = now + MechanicLifetimeMs(rule, 0, event.cast.spellDurationMs);
+        event.fromAura = true;
         AddEvent(std::move(event));
     }
+}
+
+// Map thread: the boss stopped a covered cast before it landed, or broke off a channel (Hellfire): what that cast
+// started ends now. A debuff already on a member, and anything its aura started, stays.
+void CastCancelled(Unit* caster, SpellInfo const* info)
+{
+    if (!enabled.load(std::memory_order_relaxed) || !anyActive.load(std::memory_order_acquire) || !caster || !info
+        || !caster->IsInWorld() || !caster->ToCreature())
+        return;
+    MapKey const key = KeyOf(caster);
+    std::uint64_t const now = NowMs();
+    std::lock_guard<std::mutex> lock(eventLock);
+    bool changed = false;
+    for (Event& event : events)
+        if (event.key == key && event.caster == caster->GetGUID() && event.spell == info->Id && !event.fromAura
+            && event.table && event.table->rules[event.rule].kind != MechanicKind::RunOutDebuff && now < event.end)
+        {
+            event.end = now;
+            event.cancelled = true;
+            changed = true;
+        }
+    if (changed)
+        ++eventVersion;
 }
 
 // Map threads: each bot's last answer, reused while the mechanics in force and its own place hold.
 struct Memo
 {
     std::uint64_t version = 0;
+    std::uint64_t at = 0; // when it was worked out
     HazardPoint asked;
     bool found = false;
     HazardPoint spot;
@@ -301,6 +328,7 @@ std::unordered_map<std::uint32_t, Memo> memos;
 constexpr float kOthersYards = 60.0f;  // members farther than this never crowd a spot
 constexpr std::size_t kCandidates = 6; // spots tried against the navmesh per answer
 constexpr float kMemoYards = 0.5f;
+constexpr std::uint64_t kRetryMs = 1000; // a failed search is tried again this soon: the others and targets move
 
 // Map thread: what the mechanics in force ask of one bot now.
 struct Plan
@@ -342,20 +370,26 @@ bool Resolve(Player* bot, bool full, Plan& plan)
     if (bound.empty())
         return false;
     if (!full)
+    {
+        for (Event const& event : bound)
+            plan.serials.push_back(event.serial);
         return true;
+    }
 
     bool spacing = false;
     for (Event const& event : bound)
     {
         Creature* caster = !event.caster.IsEmpty() ? ObjectAccessor::GetCreature(*bot, event.caster) : nullptr;
-        if (caster && !caster->IsInWorld())
+        if (caster && (!caster->IsInWorld() || !caster->IsAlive()))
             caster = nullptr;
+        MechanicRule const& rule = event.table->rules[event.rule];
+        if (rule.area == MechanicArea::Caster && !caster)
+            continue; // a whirl or a hellfire ends with its caster
         Unit* target = !event.target.IsEmpty() ? ObjectAccessor::GetUnit(*bot, event.target) : nullptr;
         std::optional<HazardPoint> targetNow;
         if (target && target->IsInWorld() && target->IsAlive())
             targetNow = PointOf(target);
-        auto duty = MechanicDutyFor(event.table->rules[event.rule], event.cast,
-            caster ? PointOf(caster) : event.cast.caster, targetNow);
+        auto duty = MechanicDutyFor(rule, event.cast, caster ? PointOf(caster) : event.cast.caster, targetNow);
         if (!duty)
             continue;
         if (duty->hide && caster)
@@ -442,7 +476,8 @@ public:
             if (found != memos.end() && found->second.version == plan.version)
             {
                 Memo const& memo = found->second;
-                if (!memo.found && std::hypot(memo.asked.x - at.x, memo.asked.y - at.y) < kMemoYards)
+                if (!memo.found && NowMs() < memo.at + kRetryMs
+                    && std::hypot(memo.asked.x - at.x, memo.asked.y - at.y) < kMemoYards)
                     return false; // nothing reachable a moment ago
                 if (memo.found && std::hypot(memo.spot.x - at.x, memo.spot.y - at.y) <= kMechanicMaxShiftYards
                     && MechanicKept(memo.spot, plan.duties, plan.others, reach, nullptr)
@@ -455,7 +490,7 @@ public:
                 }
             }
         }
-        Memo memo{plan.version, at, false, at};
+        Memo memo{plan.version, NowMs(), at, false, at};
         for (HazardPoint const& candidate :
              MechanicSpots(at, plan.duties, plan.others, plan.hazards, reach, kCandidates, hidden))
         {
@@ -479,11 +514,18 @@ public:
         }
         if (!memo.found)
             return false;
-        NoteMoved(plan, guid);
         x = memo.spot.x;
         y = memo.spot.y;
         z = memo.spot.z;
         return true;
+    }
+
+    // Counted for mechanic_response only once the move was issued.
+    void MechanicMoved(Player* bot) override
+    {
+        Plan plan;
+        if (Resolve(bot, false, plan))
+            NoteMoved(plan, bot->GetGUID().GetCounter());
     }
 
     bool MechanicRefuses(Player* bot, float x, float y, float z) override
@@ -635,6 +677,7 @@ void TickMechanics(std::uint32_t diffMs)
         MechanicKind kind;
         std::size_t members;
         MapKey key;
+        bool cancelled;
     };
     std::vector<Ended> ended;
     std::set<MapKey> inForce;
@@ -652,7 +695,7 @@ void TickMechanics(std::uint32_t diffMs)
             MechanicRule const& rule = event.table->rules[event.rule];
             auto const found = moved.find(event.serial);
             ended.push_back({rule.id, event.spell, rule.kind, found == moved.end() ? 0 : found->second.size(),
-                event.key});
+                event.key, event.cancelled});
             moved.erase(event.serial);
             return true;
         });
@@ -663,8 +706,9 @@ void TickMechanics(std::uint32_t diffMs)
         }
     }
     for (Ended const& end : ended)
-        LOG_INFO("module.leeroy", "mechanic_response id={} spell={} kind={} members={} map={} instance={}", end.id,
-            end.spell, MechanicKindName(end.kind), end.members, end.key.first, end.key.second);
+        LOG_INFO("module.leeroy", "mechanic_response id={} spell={} kind={} members={} map={} instance={} cancelled={}",
+            end.id, end.spell, MechanicKindName(end.kind), end.members, end.key.first, end.key.second,
+            end.cancelled ? 1 : 0);
 
     // Spots keep clear of the ground hazards there while a mechanic is in force.
     for (MapKey const& key : inForce)
@@ -732,9 +776,15 @@ namespace
 class MechanicSpellScript : public AllSpellScript
 {
 public:
-    MechanicSpellScript() : AllSpellScript("LeeroyMechanicSpellScript", {ALLSPELLHOOK_ON_PREPARE}) { }
+    MechanicSpellScript()
+        : AllSpellScript("LeeroyMechanicSpellScript", {ALLSPELLHOOK_ON_PREPARE, ALLSPELLHOOK_ON_CAST_CANCEL}) { }
 
     void OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* info) override { CastStart(spell, caster, info); }
+
+    void OnSpellCastCancel(Spell* /*spell*/, Unit* caster, SpellInfo const* info, bool /*bySelf*/) override
+    {
+        CastCancelled(caster, info);
+    }
 };
 
 class MechanicUnitScript : public UnitScript

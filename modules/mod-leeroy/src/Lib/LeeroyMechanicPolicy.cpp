@@ -549,7 +549,8 @@ std::vector<HazardPoint> MechanicSpots(HazardPoint at, std::vector<MechanicDuty>
             float const dy = at.y - sy / static_cast<float>(near);
             float const length = std::hypot(dx, dy);
             if (length > 0.01f)
-                toward = {at.x + dx / length * kMechanicMaxShiftYards, at.y + dy / length * kMechanicMaxShiftYards, at.z};
+                toward = {at.x + dx / length * kMechanicMaxShiftYards, at.y + dy / length * kMechanicMaxShiftYards,
+                    at.z};
         }
     }
 
