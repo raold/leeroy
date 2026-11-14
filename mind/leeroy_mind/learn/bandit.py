@@ -206,8 +206,9 @@ def retirement_candidates(conn, *, settings=LearnCfg()):
     return result
 
 
-def retire(conn, candidates):
+def retire(conn, candidates, *, now=None):
     """Night-only bounded write after retirement_candidates runs off the event loop."""
+    from .control import decide
     cfg = effective(conn)
     if cfg.freeze:
         return
@@ -217,6 +218,7 @@ def retire(conn, candidates):
             continue
         changed=conn.execute("UPDATE learn_arm SET status='retired' WHERE id=? AND status='active'",(aid,)).rowcount
         if changed:
+            decide(conn, 'arm', aid, 'guard_retire', now=time.time() if now is None else now)
             log('bandit_guard_retired',arm_id=aid,attempts=n,control_attempts=cn,rate=rate,control_rate=control)
 
 

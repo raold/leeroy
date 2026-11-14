@@ -67,6 +67,33 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.tuning.lines import tuned_card
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
+
+class NightPersonas:
+    """The night's view of the persona cache: her persona as stored and dialled, never the
+    owner's godmode edits (a lens for talk only). Every other attribute is the cache's."""
+
+    def __init__(self, cache):
+        self._cache = cache
+        self._seen: dict = {}
+
+    def get(self, guid):
+        p = self._cache.get(guid)
+        if p is None or getattr(p, "edits", None) is None:
+            return p
+        kept = self._seen.get(guid)
+        if kept is not None and kept[0] is p:
+            return kept[1]
+        from leeroy_mind.tuning.effective import base_of, dials_of, effective, with_nudges
+        plain = with_nudges(effective(base_of(p), dials_of(p)), getattr(p, "nudges", ()))
+        self._seen[guid] = (p, plain)
+        return plain
+
+    def all(self):
+        return {g: q for g in self._cache.all() if (q := self.get(g)) is not None}
+
+    def __getattr__(self, name):
+        return getattr(self._cache, name)
+
 # The romance stances that are an attitude toward the owner (owner, 2026-10-30), and generic,
 # non-explicit words for each. The owner's nightly_reflect overlay may say more.
 ATTITUDES = ("fond", "drawn", "lust")
@@ -125,6 +152,11 @@ class NightContext:
     # waits for the next night; None: whatever `personas` holds when asked.
     tuning: object | None = None
     _memo: dict = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        # Every night reader sees personas without the owner's godmode edits (a talk lens).
+        if self.personas is not None and not isinstance(self.personas, NightPersonas):
+            self.personas = NightPersonas(self.personas)
 
     @property
     def human(self) -> int:
@@ -256,11 +288,6 @@ class NightContext:
             base = self.base(guid)
             p = frozen.apply(base, self._roster().get(guid) if frozen.needs_cast else None,
                              edits=False)
-        elif getattr(p, "edits", None) is not None:
-            # the owner's godmode edits are a lens for talk; the night reads her as stored
-            t = self.personas.tuning
-            p = t.apply(self.base(guid), self._roster().get(guid) if t.needs_cast else None,
-                        edits=False)
         return p
 
     def base(self, guid: int) -> Persona:

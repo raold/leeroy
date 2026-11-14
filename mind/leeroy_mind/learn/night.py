@@ -145,6 +145,8 @@ def attach(runner,data_dir,store=None):
         attach_bandit(runner,data_dir,store)
         from .coach import attach as attach_coach
         attach_coach(runner,data_dir,store)
+        from .cycle import attach as attach_cycle
+        attach_cycle(runner,data_dir,store)
 
 
 async def stage_rewards(ctx):

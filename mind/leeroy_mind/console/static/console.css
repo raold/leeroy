@@ -678,6 +678,12 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .nudge-field textarea, .nudge-field input, .nudge-field select { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }
 .nudge-row { margin-block: .7rem; overflow-wrap: anywhere; }
 .nudges > button, .nudge-row > button { margin: .25rem .5rem .25rem 0; }
+/* D6: godmode edits beside the nudges, and her strings: their own regions, the same layout. */
+.godmode-edits { margin-block: 1rem; padding-block: .75rem; border-top: 1px solid var(--line); min-width: 0; }
+.godmode-field { display: flex; flex-direction: column; gap: .35rem; margin-block: .6rem; }
+.godmode-field textarea, .godmode-field input, .godmode-field select { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }
+.godmode-row { margin-block: .7rem; overflow-wrap: anywhere; }
+.godmode-edits button, .godmode-row > button, #p-strings-box > button { margin: .25rem .5rem .25rem 0; }
 
 /* Ops: independent read-only panels, including narrow screens in either theme. */
 #tab-ops .ops-panel { min-width: 0; }

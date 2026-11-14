@@ -302,7 +302,8 @@ def test_global_and_family_freeze_apply_to_bandit_without_enabling_it(store,cloc
     {'action':'freeze','frozen':1}, {'action':'family','family':[],'frozen':True},
     {'action':'weights','values':dict(weights.DEFAULTS,quality=float('nan')),'version':0},
     {'action':'lesson','id':True,'verb':'approve'}, {'action':'arm','id':'a','verb':[]},
-    {'action':'freeze','frozen':True,'extra':'private text'}])
+    {'action':'freeze','frozen':True,'extra':'private text'}, {'action':'rollback'},
+    {'action':'rollback','version':-1}, {'action':'rollback','version':'latest'}])
 def test_invalid_actions_fail_in_parser(args):
     with pytest.raises(endpoint.BadRequest): endpoint.learn_args(args)
 
@@ -321,6 +322,7 @@ def test_endpoint_uses_wall_clock_and_refuses_disabled_or_stopping(store,clock):
 
 
 @pytest.mark.parametrize('path,args', [('/api/learn',{'action':'freeze','frozen':True}),
+    ('/api/learn',{'action':'rollback','version':3,'weights':False}),
     ('/api/feedback',{'line_id':1,'value':-1,'reasons':['wrong-facts']})])
 def test_console_mutation_gates_and_forwarding(store,path,args):
     data=data_path(store); link=FakeLink({'ok':True,'message':'Saved.'})
@@ -345,3 +347,52 @@ def test_console_mutation_gates_and_forwarding(store,path,args):
             assert link.calls[-1][1:]==(path.removeprefix('/api/'),args)
         finally: await app.close()
     asyncio.run(run())
+
+
+def test_weekly_report_keeps_ids_and_numbers_and_lists_saved_versions(store,clock):
+    from leeroy_mind.learn import cycle
+    now=clock.now()
+    with store.transaction():
+        arms.ensure(store.conn,now=now); weights.ensure(store.conn,now=now)
+        version=cycle.save_version(store.conn,cycle.state(store.conn,now=now),reason='cycle',now=now,week='2026-W44')
+    store.set_meta(control.REPORT_KEY,json.dumps({'version':1,'week':'2026-W44','note':'Invented free text',
+        'promoted':[{'kind':'arm','id':'length.1.v1','context':['guild','none','natural'],'probability':.95}],
+        'rates':{'week':{'repetition':.1}}}))
+    result=labview.read(data_path(store),now=now)
+    report=result['report']
+    assert report['week']=='2026-W44' and report['note'] is None
+    assert report['promoted'][0]=={'kind':'arm','id':'length.1.v1','context':['guild','none','natural'],'probability':.95}
+    assert result['versions']==[{'version':version,'created':now,'reason':'cycle','week':'2026-W44','restored_from':None}]
+    assert result['cycle'] is False and 'Invented' not in json.dumps(result)
+
+
+def test_lab_rollback_goes_through_the_learn_op(store,clock):
+    from leeroy_mind.learn import cycle
+    now=clock.now()
+    with store.transaction():
+        arms.ensure(store.conn,now=now); weights.ensure(store.conn,now=now)
+        version=cycle.save_version(store.conn,cycle.state(store.conn,now=now),reason='cycle',now=now,week='2026-W44')
+        store.conn.execute("UPDATE learn_arm SET status='retired' WHERE id='length.1.v1'")
+    app=SimpleNamespace(store=store,clock=clock,data_dir=data_path(store),stopping=False)
+    control_endpoint=endpoint.ControlEndpoint(app,endpoint.ControlCfg(enabled=True),clock=lambda:12)
+    store.set_meta(control.PREFIX+'freeze','true')  # an explicit owner restore still works while frozen
+    result=asyncio.run(control_endpoint.learn({'action':'rollback','version':version,'weights':False}))
+    assert result['ok'] and f'version {version}' in result['message']
+    assert store.conn.execute("SELECT status FROM learn_arm WHERE id='length.1.v1'").fetchone()[0]=='active'
+    refused=asyncio.run(control_endpoint.learn({'action':'rollback','version':999,'weights':False}))
+    assert not refused['ok'] and refused['error']=='That learning-state version is not saved.'
+
+
+def test_promoted_arms_and_lessons_are_listed(store,clock):
+    now=clock.now(); key=bandit.Context('guild').key
+    with store.transaction():
+        arms.ensure(store.conn,now=now)
+        store.conn.execute('INSERT INTO bandit_share VALUES (?,?,3)',(key,'length.1.v1'))
+        store.conn.execute("INSERT INTO learn_promotion VALUES ('arm','length.1.v1',?,'promoted','2026-W44',?,?)",(key,now,now))
+    note=lesson(store,now,status='active')
+    with store.transaction():
+        store.conn.execute("INSERT INTO learn_promotion VALUES ('lesson',?,'','promoted','2026-W44',?,?)",(str(note),now,now))
+    result=labview.read(data_path(store),now=now)
+    flags={(c['arm_id'],tuple(c['context'])):c['promoted'] for c in result['arms']['contexts']}
+    assert flags[('length.1.v1',tuple(json.loads(key)))] and not flags[('length.0.v1',tuple(json.loads(key)))]
+    assert [n['promoted'] for n in result['lessons']['items']]==[True]

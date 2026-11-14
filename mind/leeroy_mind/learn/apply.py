@@ -133,7 +133,11 @@ async def prepare(engine, turn, meta, persona, *, now):
         notes = []
         visibility = audience.Visibility(conn, guid=turn.speaker, channel=turn.channel,
             to_guid=turn.to_guid, readers=readers, officer=officer, human_guid=human)
-        for note in lessons.read(conn, guid=turn.speaker, now=now):
+        stored = lessons.read(conn, guid=turn.speaker, now=now)
+        if cfg.cycle:  # promoted lessons first, so trimming drops trial ones before them
+            from .cycle import promoted_first
+            stored = promoted_first(conn, stored)
+        for note in stored:
             if note['status'] != 'active' or vetoed(conn, 'lesson', note['id']):
                 continue
             if not visibility.visible(audience.saved(conn, note['id'])):

@@ -203,3 +203,34 @@ def test_newer_feedback_event_survives_a_delayed_older_http_reply(rehearsal):
                 release.set()
                 await r.page.unroute_all(behavior='wait')
     asyncio.run(run())
+
+
+def test_weekly_report_and_rollback_through_the_page(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        from leeroy_mind.learn import cycle
+        async with rehearsal(learning=True,width=390) as r:
+            store=r.app.store; now=r.app.clock.now()
+            with store.transaction():
+                arms.ensure(store.conn,now=now); weights.ensure(store.conn,now=now)
+                version=cycle.save_version(store.conn,cycle.state(store.conn,now=now),reason='cycle',now=now,week='2026-W44')
+                store.conn.execute("UPDATE learn_arm SET status='retired' WHERE id='length.1.v1'")
+            store.set_meta(control.REPORT_KEY,json.dumps({'version':1,'week':'2026-W44','previous_week':'2026-W43',
+                'state_version':version,'rates':{'week':{'lines':12,'repetition':.25},'previous':{'lines':10,'repetition':.1}},
+                'measured':{'contradiction':0},'diversity':{'ok':0,'repetition_rose':1,'stock_rose':0},
+                'promoted':[],'retired':[],'rolled_back':[{'kind':'arm','id':'tease.1.v1','context':['guild','none','natural'],
+                'reasons':['repetition']}],'held':{'count':0,'items':[]}}))
+            await open_console(r); await visit(r.page,'lab')
+            report=r.page.locator('#lab-report')
+            await expect(report).to_contain_text('Week 2026-W44, compared with 2026-W43')
+            await expect(report).to_contain_text('Repetition 25.0% (week before 10.0%)')
+            await report.locator('[data-detail="report-rolled_back"] > summary').click()
+            await expect(report).to_contain_text('arm tease.1.v1 in guild / none / natural')
+            await report.locator('[data-detail="report-versions"] > summary').click()
+            await report.get_by_role('button',name=f'Roll back to version {version}').click()
+            await expect(r.page.locator('#lab-confirm-words')).to_contain_text('vetoes and freezes stay')
+            await submit(r,r.page.locator('#lab-confirm-save'),'/api/learn')
+            await expect(r.page.locator('#lab-result')).to_contain_text(f'Learning restored to version {version}')
+            assert store.conn.execute("SELECT status FROM learn_arm WHERE id='length.1.v1'").fetchone()[0]=='active'
+            assert not r.errors,r.errors
+    asyncio.run(run())

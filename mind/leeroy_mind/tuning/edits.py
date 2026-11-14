@@ -877,10 +877,15 @@ def mood_parts(conn) -> dict:
 
 
 def mood_overlay(conn, guid, now) -> float:
-    """The member's mood offset in force now (summed over edits not yet ended, within
-    [-1, 1]); 0.0 when none."""
-    total = sum(off for off, ends in mood_parts(conn).get(guid, ()) if now < ends)
-    return max(-1.0, min(1.0, total))
+    """The member's mood offset in force now: the sum over her mood edits not yet ended
+    (unclamped; fold_mood clamps the folded mood once); 0.0 when none."""
+    return sum(off for off, ends in mood_parts(conn).get(guid, ()) if now < ends)
+
+
+def fold_mood(stored: float, offset: float) -> float:
+    """Her mood through the lens: the stored mood plus the offset in force, clamped to [-1, 1]
+    once. Every lens reader folds with this (Store.get_state(lens=True), culture.tease)."""
+    return max(-1.0, min(1.0, stored + offset))
 
 
 def feeling(offsets, base: float, dim: str) -> float:
