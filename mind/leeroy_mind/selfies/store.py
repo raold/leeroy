@@ -11,6 +11,7 @@ photo is in force.
 
 Each writer runs in `store.transaction()`. A refusal is SelfieError, its text the answer. The
 mind writes; the console reads (`picks` and `counts` take a plain connection for that)."""
+import json
 from dataclasses import dataclass
 
 SOURCES = ("console", "cli")
@@ -221,6 +222,63 @@ def counts(conn) -> dict[str, int]:
 # -- the style a set was rendered under ---------------------------------------------------------
 
 LUST_SET_KEY = "selfies:set-lust:{guid}:{set_no}"
+# A varied set's plan (varied.py): its four candidates' looks, by slot, as JSON {"v", "day",
+# "looks"}; written when it is queued, dropped when it rendered as an ordinary set instead. A
+# pick of one of its candidates records that candidate's look under the change's id.
+VARIED_SET_KEY = "selfies:set-varied:{guid}:{set_no}"
+PICK_LOOK_KEY = "selfies:pick-look:{pick}"
+
+
+def varied_look(conn, guid: int, set_no: int, idx: int) -> dict | None:
+    """Candidate `idx`'s look as the set's plan stores it, or None (no plan, or unreadable).
+    Reads any connection."""
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key=?",
+                           (VARIED_SET_KEY.format(guid=guid, set_no=set_no),)).fetchone()
+        looks = json.loads(row[0])["looks"] if row else None
+        look = looks[idx] if isinstance(looks, list) and len(looks) == len(SLOTS) else None
+    except Exception:  # no meta table, or a plan that is not one
+        return None
+    return look if isinstance(look, dict) else None
+
+
+# The views of a varied candidate whose face can stand for her (never one from behind)
+FACE_VIEWS = ("front", "side")
+
+
+def face_pick(conn, guid: int, cover_pick: int) -> tuple[int, str | None] | None:
+    """The change whose photo is her identity reference while `cover_pick` put her cover in
+    force: the newest change up to it whose photo is an ordinary candidate (framing None: her
+    kind's) or a varied FACE_VIEWS one (its own framing); None when there is none. Reads any
+    connection."""
+    try:
+        rows = conn.execute("SELECT id, after_set, after_idx FROM selfie_pick WHERE guid=? "
+                            "AND id<=? AND after_set IS NOT NULL ORDER BY id DESC",
+                            (guid, cover_pick)).fetchall()
+    except Exception:
+        return None
+    for row in rows:
+        look = varied_look(conn, guid, row[1], row[2])
+        if look is None:
+            return row[0], None
+        if look.get("view") in FACE_VIEWS and isinstance(look.get("framing"), str):
+            return row[0], look["framing"]
+    return None
+
+
+def cover_look(conn, guid: int) -> dict | None:
+    """The varied look recorded by the pick that put her cover in force (PICK_LOOK_KEY), or
+    None."""
+    try:
+        row = conn.execute("SELECT pick FROM selfie_current WHERE guid=?", (guid,)).fetchone()
+        raw = None if row is None else conn.execute(
+            "SELECT value FROM meta WHERE key=?", (PICK_LOOK_KEY.format(pick=row[0]),)).fetchone()
+        look = json.loads(raw[0]) if raw else None
+    except Exception:
+        return None
+    return look if isinstance(look, dict) else None
+
+
 LUST_COVER_REFUSED = ("this set was rendered in the lust style and she no longer has it (or her "
                       "looks now code young), so none of its photos can be her face")
 
@@ -265,6 +323,9 @@ def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float,
             (float(now), guid, source, *(before or (None, None)), set_no, idx)).lastrowid
         if row["decided"] is not None:
             store.set_meta(f"selfie:pick-decided:{change}", row["decided"])
+        look = varied_look(conn, guid, set_no, idx)
+        if look is not None:
+            store.set_meta(PICK_LOOK_KEY.format(pick=change), json.dumps(look, sort_keys=True))
         _set_photo(conn, guid, (set_no, idx), change)
         _decide(conn, guid, set_no, "picked")
         return change

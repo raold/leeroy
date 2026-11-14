@@ -23,7 +23,7 @@ from .scene import build_scene_prompt, ref_crop, scene_from, scene_renderable
 from .scene_choices import RECIPE
 from .slot import SetRefused, TRIES, render_slot
 from .snaps import looks_hash, mark_rendered
-from .store import current
+from .store import current, face_pick
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
 
 SIZE = 1024
@@ -79,6 +79,17 @@ def _fresh(app, snap):
     return p, None
 
 
+def _face(app, p, guid: int, pick: int):
+    """(the reference file, its framing) while her cover is change `pick`: the newest photo up to
+    it that shows her face (store.face_pick), never one from behind; None when there is none."""
+    with app.store.transaction():
+        got = face_pick(app.store.conn, guid, pick)
+    if got is None:
+        return None
+    face, framing = got
+    return files.history(app.data_dir, guid, face).absolute(), framing or p.photo.framing
+
+
 async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutcome:
     """Render once with the existing three-seed/NSFW/OOM rules; caller changes failure state.
 
@@ -99,8 +110,10 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         return RenderOutcome("failed", "files_exist")
     scene = scene_from(snap.scene)
     spec = build_scene_prompt(p, scene)
-    identity = Identity(files.history(app.data_dir, snap.guid, snap.pick).absolute(),
-                        ref_crop(p.photo.framing), cfg.identity_scale)
+    face = _face(app, p, snap.guid, snap.pick)
+    if face is None or not face[0].is_file():
+        return RenderOutcome("failed", "no_face_ref" if face is None else "missing")
+    identity = Identity(face[0], ref_crop(face[1]), cfg.identity_scale)
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{snap.id}.request-", dir=out.parent))
     staged, small = stage / "photo.jpg", stage / "thumb.jpg"

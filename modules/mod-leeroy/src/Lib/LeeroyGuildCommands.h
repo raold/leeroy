@@ -14,10 +14,10 @@
 
 namespace Leeroy::Guild
 {
-inline constexpr std::array<std::string_view, 13> kCommandTypes = {
+inline constexpr std::array<std::string_view, 14> kCommandTypes = {
     "form_raid", "summon", "clear_lockout", "set_loot_master", "give_loot",
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
-    "bot_do", "stock_items", "offline_raid_stop"
+    "bot_do", "stock_items", "offline_raid_stop", "guild_add_roster"
 };
 inline constexpr std::array<std::string_view, 12> kBotStrategyAdd = {
     "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",
@@ -143,7 +143,8 @@ nlohmann::json MakeJobEvent(JobEvent const&);
 // The owner's `.playerbots bot addN` filled his group from the guild. reason "built": this run added members (added,
 // with their roles); "entered": he then reached an instance map leading that same group. map, instance_id and
 // difficulty are where he is at that moment (instance_id 0 outside an instance); members are the guild's cast in his
-// group now, him excluded.
+// group now, him excluded. roster_followed: the picker used the posted roster (guild_add_roster) for at least one of
+// the members it added to this group, so the guild's posted lineup took effect through his add.
 struct GuildGroupEvent
 {
     std::string reason;
@@ -153,6 +154,7 @@ struct GuildGroupEvent
     std::uint8_t difficulty = 0;
     std::vector<std::pair<std::uint32_t, std::string>> added;
     std::vector<std::uint32_t> members;
+    bool rosterFollowed = false;
 };
 nlohmann::json MakeGuildGroupEvent(GuildGroupEvent const&);
 }

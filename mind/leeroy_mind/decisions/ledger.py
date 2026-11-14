@@ -191,6 +191,23 @@ def expire(store, id, *, now) -> None:
     log.info('decision_expired id=%d kind=%s', id, row['kind'])
 
 
+def announce(store, id, message: int) -> bool:
+    """The post that announced a decision, when it is posted after the decision was settled (a post
+    held back by the server's quiet window); set once."""
+    _ref(message)
+    with store.transaction():
+        return store.conn.execute('UPDATE guild_decision SET message=? WHERE id=? AND message IS NULL',
+                                  (message, id)).rowcount == 1
+
+
+def retire(store, id, *, now) -> None:
+    """A decision in effect whose time has passed (a raid night's lineup once its night is over): it
+    stops being live and keeps its record (status expired, with its effect time and what it
+    changed). Nothing is put back: it replaced nothing still in force."""
+    row = _move(store, id, ('in_effect',), "status='expired', ended=?", (_time(now),))
+    log.info('decision_retired id=%d kind=%s', id, row['kind'])
+
+
 def fail(store, id, *, reason: str, now) -> None:
     """Its effect could not be carried out (or its outcome is unknown and never resent)."""
     if not isinstance(reason, str) or not CODE.fullmatch(reason):
