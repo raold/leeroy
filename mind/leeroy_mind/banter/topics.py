@@ -1,6 +1,7 @@
 """Bounded public evidence. Private chats and ungrounded trait claims never enter topics."""
 from dataclasses import dataclass
 import json
+import math
 
 from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.nightly import lexicon
@@ -26,12 +27,28 @@ def item_name(app,ident,given=''):
     return given.strip() or 'an item'
 
 
-def joke_uses(store,key):
+def joke_uses(store,key,*,durable=False):
+    if durable:
+        fold = 'culture:banter-fold:' + key
+        if store.get_meta(fold) is None:
+            at, count = joke_uses(store, key)
+            if not math.isfinite(at):
+                count = lexicon.RETIRE_USES
+                at = 0
+            # History beyond retirement cannot extend a joke's allowance. Bound the
+            # Python integer before SQLite binding, including damaged huge receipts.
+            count = min(count, lexicon.RETIRE_USES)
+            store.conn.execute("UPDATE lexicon SET uses_total=uses_total+?,last_used=max(last_used,?) WHERE id=?",
+                               (count, at, int(key[5:])))
+            store.set_meta(fold, '1')
+        row = store.conn.execute("SELECT last_used,uses_total FROM lexicon WHERE id=?", (int(key[5:]),)).fetchone()
+        return (row[0], row[1]) if row else (float('inf'),12)
+
     try:
         value=json.loads(store.get_meta('banter:joke-use:'+key) or '{}')
         at,count=float(value.get('at',0)),int(value.get('count',0))
         return at,max(0,count)
-    except (TypeError,ValueError,AttributeError):
+    except (TypeError,ValueError,AttributeError,OverflowError):
         return float('inf'),4  # damaged usage never resets its allowance
 
 

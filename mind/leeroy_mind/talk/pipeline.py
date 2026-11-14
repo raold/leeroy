@@ -346,6 +346,9 @@ class TurnMeta:
     fight_end_ms: int = 0
     # An optional owner fence; omitted by ordinary engine callers.
     still_valid: Callable[[], bool] | None = None
+    # Optional DB-only receipt writer. Runs with the Discord post and chat mirror in
+    # one transaction; it must not mutate memory-only delivery state before commit.
+    on_discord_record: Callable[[int, int, float], None] | None = None
     # initiates: the turn starts a conversation with him unprompted (whisper:<trigger>,
     # burst:to_him): its silence is asked again once (SILENT_START_HINT), and a chain never
     # stops it, since its own clock paces it. casual: an opener to him in party or guild,
@@ -2538,13 +2541,15 @@ class Pipeline:
         from leeroy_mind.server.records import BadDayCounter
         stage = 'store'
         photo = meta.photo if not meta.said else None
+        atomic_record = photo is not None or meta.on_discord_record is not None
         after_commit = []
         try:
-            with self.store.transaction() if (server_turn or photo is not None
+            with self.store.transaction() if (server_turn or atomic_record
                                               or meta.voice_note is not None) else nullcontext():
                 if photo is not None and (meta.photo_finished or not photo.valid()):
                     return 'photo_stale'
-                message = store_line(self.store, turn, meta, text, self.clock.now(),
+                posted_at = self.clock.now()
+                message = store_line(self.store, turn, meta, text, posted_at,
                                      audience=self.world.audience(
                                          turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
                 stage = 'record'
@@ -2555,16 +2560,19 @@ class Pipeline:
                            dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
                 if meta.voice_note is not None:
                     self.voice_notes.record(message,turn.speaker,meta.voice_note)
-                if photo is not None:
+                if atomic_record:
                     line = self._record(turn, meta, p, text, memory_ids, discord_id=message,
                                         after_commit=after_commit)
+                    if meta.on_discord_record is not None:
+                        meta.on_discord_record(line, message, posted_at)
             # The post and its budget are durable before _record updates memory-only
             # guards, chain state and hooks. Those effects cannot survive a rollback.
-            if photo is None:
+            if not atomic_record:
                 self._record(turn, meta, p, text, memory_ids, discord_id=message)
             else:
-                meta.photo_finished = True
-                log.info('photo_sent snap=%d line=%d', photo.snap.id, line)
+                if photo is not None:
+                    meta.photo_finished = True
+                    log.info('photo_sent snap=%d line=%d', photo.snap.id, line)
                 for effect in after_commit:
                     effect()
         except DiscordRefused as e:
@@ -2666,7 +2674,7 @@ class Pipeline:
 
     def _after_record(self, turn, meta, p, text, memory_ids, *, line_id, chat, now,
                       discord, heard, sid, zone, map_id, ack, discord_id):
-        """Memory-only guards and hooks run only after an atomic photo post commits."""
+        """Memory-only guards and hooks run only after an atomic post commits."""
         if self.cfg.talk.realism:
             meta.realism_sequence = self.realism.record_line(turn.speaker,credit=not meta.realism_correction)
             if meta.realism_planned and not meta.realism_correction and meta.words:

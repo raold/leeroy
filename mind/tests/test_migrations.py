@@ -410,3 +410,20 @@ def test_an_older_db_gains_the_discord_tables_and_keeps_its_rows(tmp_path, monke
                              "VALUES ('g', ?, ?, ?, 1)", (row["author"], row["origin"], row["text"]))
     finally:
         conn.close()
+
+
+def test_culture_preserves_old_lexicon_and_reserves_meme_table(tmp_path, monkeypatch):
+    path = tmp_path / "mind.db"
+    conn = db_before("culture", path, tmp_path, monkeypatch)
+    conn.execute("INSERT INTO lexicon(kind,term,target,origin_ref,originator,born,last_used) "
+                 "VALUES('joke','floor inspector',0,'chat:1',101,1,2)")
+    conn.commit()
+    conn.close()
+    conn = open_db(path)
+    row = conn.execute("SELECT * FROM lexicon").fetchone()
+    assert (row["term"], row["origin_ref"], row["butt"], row["origin_kind"], row["origin_refs"],
+            row["uses_total"], row["retired"]) == ("floor inspector", "chat:1", 0, "line", "[]", 0, None)
+    assert conn.execute("SELECT count(*) FROM discord_meme").fetchone()[0] == 0
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE lexicon SET origin_refs='invalid'")
+    conn.close()

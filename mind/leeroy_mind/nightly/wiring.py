@@ -21,7 +21,9 @@ from leeroy_mind.tuning.world import merge as merge_world
 def attach(app):
     startup = app.cfg
     cfg = startup
-    settings = load_settings(cfg, app.data_dir)
+    from leeroy_mind.culture.config import load_culture_config
+    app.culture_config = load_culture_config(app.data_dir / "mind.toml")
+    settings = load_settings(cfg, app.data_dir, culture=app.culture_config)
     admin = HttpOllamaAdmin(startup.ollama.url) if isinstance(app.llm, OllamaClient) else NullAdmin()
     arbiter = GpuArbiter(admin, settings)
     restart_warned = None
@@ -44,7 +46,7 @@ def attach(app):
             candidate = replace(candidate,
                 ollama=replace(candidate.ollama, url=startup.ollama.url),
                 models=replace(candidate.models, embedding=startup.models.embedding))
-            updated = replace(load_settings(candidate, app.data_dir),
+            updated = replace(load_settings(candidate, app.data_dir, culture=app.culture_config),
                               learn_enabled=settings.learn_enabled, quiet=settings.quiet)
             # The server lease's clock is a startup choice. Keep both owners on
             # that clock until restart, even when runtime dials are reloaded.
