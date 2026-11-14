@@ -150,12 +150,14 @@ def _candidates(app, request, *, now, member):
         if images is not None:
             yield (f'snap:{photo.id}', *images, photo.scene, photo.seed, photo.tries,
                    photo.nsfw, photo.prompt)
-    p, _ = member
+    p, cur = member
     with app.store.transaction():
+        # A set rendered from an older persona than her cover's set may show looks she no longer has.
         rows = app.store.conn.execute('SELECT c.* FROM selfie_candidate c JOIN selfie_set s '
             "ON s.guid=c.guid AND s.set_no=c.set_no WHERE c.guid=? AND s.status='ready' "
-            'ORDER BY s.rendered DESC,c.set_no DESC,c.idx LIMIT ?',
-            (request.guid, MAX_GALLERY_CANDIDATES)).fetchall()
+            'AND COALESCE(s.persona_version,0)>=COALESCE((SELECT persona_version FROM selfie_set '
+            'WHERE guid=? AND set_no=?),0) ORDER BY s.rendered DESC,c.set_no DESC,c.idx LIMIT ?',
+            (request.guid, request.guid, cur.set_no, MAX_GALLERY_CANDIDATES)).fetchall()
     for row in rows:
         was_lust = lust_set(app.store.conn, request.guid, row['set_no'])
         if (not _score(row['nsfw'], app.selfies.cfg.nsfw_max)

@@ -37,21 +37,36 @@ drain, unload, worker startup and rendering. Worker shutdown and live-model relo
 finish safely even after that timeout. Waiting turns receive deadline credit for the full
 admission wait, including cleanup, so that wait alone cannot expire an answer. A login,
 hard GPU lease, Free GPU pause or shutdown interrupts the render. Free GPU pause wins and
-does not reload the live model until use resumes.
+does not reload the live model until use resumes. A reload that still fails keeps chat
+waiting until a live turn, the next borrow or the night recovers it: while that closed
+admission alone holds a due night back, the night scheduler retries the recovery each tick.
 
 While the owner is in WoW, presence is unknown, or borrowing is unavailable, the member
 uses an audience-fit retained photo if available: a ready snap first, then her gallery.
+A Free GPU pause, or a live-model reload still failing from an earlier borrow, makes
+borrowing unavailable; it never fails the request. A scene the paused model cannot choose is
+the screened everyday choice, picked without a model.
+Gallery photos come only from her cover's set and sets rendered from a persona at least as
+new, so a set from before a looks change is not sent once her cover shows the new looks.
 The retained image is copied; its original is never moved or consumed. Its caption describes
 that retained photo, not the new scene being planned. The new photo waits for ten continuous
 minutes of confirmed offline presence and no running night. Unrendered requests expire
 after 24 hours; a rendered photo survives restart until its delivery receipt commits.
 
-Requested photos have separate limits: one request per member per ten minutes, six admitted
+Requested photos have separate limits: one request per member per two minutes, six admitted
 borrows per hour and thirty per local date across the guild. They skip and do not spend the
 spontaneous photo draw, two-day gap or weekly/daily ration. The selfies dial at zero still
-means no photo. A retained image is not repeated to the same audience within thirty days.
+means no photo. A retained image is not repeated to the same audience within thirty days,
+by a request or by a spontaneous photo: a snap copied for a request stays ready, but no
+opener, answer or channel seed offers it to that audience again in that time.
 The attachment, chat mirror, snap and request delivery receipts commit together. A failed
 render gets one ordinary answer in the member's words. No retained photo file is deleted.
+
+A dropped answer is retried for the asked member only; other members named in the same post
+answer it once. Her first answer, the fresh photo's follow-up and a failure notice each get
+their first try and at most two retries (about three minutes apart for the first answer, one
+minute for the others). After that the request ends (`passed`, failure `retry_limit` unless a
+failure was already recorded) and its unsent photos are closed; their files stay.
 
 `selfie_request` logs ids, channel kinds and outcome codes. `selfie_request_render` reports
 total, unload, startup, render, stop and reload timings, without words or prompts. Rehearsal
