@@ -15,6 +15,19 @@ void RegisterStringsHandler();
 void TickStrings(std::uint32_t diffMs);
 // At her logout: her holds and seat end with that life.
 void ForgetStrings(std::uint32_t guid);
+// World thread: a live come_to_me stay holds her for its 10 minutes (StringHoldFences). NativeOwnershipReason
+// answers busy:string for it, so the Realm (its moves, the bond's inn visits), training and offline raids refuse her.
+// False inside a StringWaiver.
+bool StringStayHeld(std::uint32_t guid);
+// His own asks pass that fence: his strings, and his add command filling or bringing his group. World thread.
+class StringWaiver
+{
+public:
+    StringWaiver();
+    ~StringWaiver();
+    StringWaiver(StringWaiver const&) = delete;
+    StringWaiver& operator=(StringWaiver const&) = delete;
+};
 }
 
 #endif

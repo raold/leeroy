@@ -80,6 +80,9 @@ const CODES = {
   stopped: "She stopped following you and waits there.", challenged: "She challenged you to a duel.",
   emoted: "Done.", sat: "She sat down near you.", done: "Done.",
   unsupported: "The game server needs the rebuild that adds strings.", human_offline: "You are not in game.",
+  strings_off: "Strings in game are off (Leeroy.Strings.Enable in mod_leeroy.conf).",
+  unknown: "The game server did not answer; her strings list shows the outcome once it does.",
+  raid_quiet: "Your raid is in its wipe silence or debrief.",
   human_dead: "You are dead.", no_link: "The game server is not connected.", no_answer: "The game server did not answer.",
   not_cast: "She is not a pinned member of the cast.", not_online: "She is not online.", dead: "She is dead.",
   combat: "Someone is in a fight.", in_instance: "Not in or into an instance.", in_bg: "Not in a battleground or arena.",
@@ -181,6 +184,7 @@ export function gameOutcome(r) {
   if (r.ok !== true) return codeText(r.code, r.error);
   if (r.state === "taken") return codeText(r.reason, r.message);
   if (r.state === "not_taken") return "Not taken: " + codeText(r.reason, r.message);
+  if (r.state === "pending") return codeText(r.reason, r.message);
   return str(r.message) || "Saved.";
 }
 

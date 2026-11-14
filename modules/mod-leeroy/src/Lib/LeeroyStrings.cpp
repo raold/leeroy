@@ -131,6 +131,28 @@ std::optional<StringDoCmd> ParseStringDo(json const& msg, std::string& error)
     return cmd;
 }
 
+bool StringHoldFences(StringHoldState const& hold)
+{
+    return !hold.group && !hold.follow && hold.until;
+}
+
+StringHoldStep DecideStringHold(StringHoldState const& hold, StringHoldFacts const& f)
+{
+    if (!hold.group)
+    {
+        if (f.group)
+            return StringHoldStep::Drop;
+        bool const due = !f.on || !f.humanOnline || (hold.until && f.now >= hold.until)
+            || (hold.arriveBy && f.now >= hold.arriveBy);
+        return due ? StringHoldStep::Lift : StringHoldStep::Keep;
+    }
+    if (f.group != hold.group)
+        return StringHoldStep::Lift;
+    if (!f.on || f.raid)
+        return hold.unfollowed ? StringHoldStep::LiftFollow : StringHoldStep::Lift;
+    return StringHoldStep::Keep;
+}
+
 std::string StringRefusal(StringKind kind, StringFacts const& f)
 {
     if (!f.enabled) return "off";

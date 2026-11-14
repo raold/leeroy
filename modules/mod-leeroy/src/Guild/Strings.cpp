@@ -47,6 +47,7 @@ constexpr float kArrivedYards = 50.0f;
 
 bool enabled = false;   // Leeroy.Strings.Enable, world thread
 std::uint32_t untilTick = 0;
+int waived = 0;          // StringWaiver depth: his own asks pass come_to_me's fence (world thread)
 
 std::uint64_t SteadyMs()
 {
@@ -62,11 +63,7 @@ struct Hold
     PlayerbotAI* ai = nullptr;
     WorldSession* session = nullptr;
     std::uint32_t guild = 0, human = 0;
-    std::uint64_t until = 0;      // a come_to_me stay's end; 0 for one that lasts while the group does
-    std::uint64_t group = 0;      // the group the hold lasts with, 0 for none
-    std::uint64_t arriveBy = 0;   // come_to_me: the stay starts on arrival, by this time
-    bool stay = false;            // we added playerbots' stay and take it back at the end
-    bool follow = false;          // a follow string of ours is in force
+    StringHoldState state;   // what it added and how long it lasts (LeeroyStrings.h)
 };
 std::map<std::uint32_t, Hold> holds;   // world thread
 Realm::SocialSeats seats;                  // #244's lease, keyed by the string's command id
@@ -98,7 +95,8 @@ bool InHisGroup(Player* bot)
 }
 
 // The ownership fences. A member of his own group is under every fence but the one that holds his group for him
-// (busy:raid_owner), as his add command treats her; anyone else under the Realm's MutationReason.
+// (busy:raid_owner), as his add command treats her; anyone else under the Realm's MutationReason. Called inside a
+// StringWaiver: the strings' own come_to_me fence never holds his next string back.
 std::string Fence(std::uint32_t guid, Player* bot)
 {
     if (!InHisGroup(bot))
@@ -147,6 +145,18 @@ void ResetStay(PlayerbotAI* ai)
 {
     PositionMap& positions = ai->GetAiObjectContext()->GetValue<PositionMap&>("position")->Get();
     positions["stay"].Reset();
+}
+
+// A string that moves her ends her string seat first: she stands for what he asked next.
+void EndSeat(Player* bot)
+{
+    std::uint32_t const guid = bot->GetGUID().GetCounter();
+    auto const seat = seats.Entries().find(guid);
+    if (seat == seats.Entries().end())
+        return;
+    seats.End(guid, std::string(seat->second.token));
+    if (bot->getStandState() == UNIT_STAND_STATE_SIT)
+        bot->SetStandState(UNIT_STAND_STATE_STAND);
 }
 
 StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot)
@@ -210,10 +220,10 @@ std::string ComeToMe(Player* bot, Player* human, std::string& outcome)
     {
         Hold& hold = Own(bot->GetGUID().GetCounter(), bot);
         std::uint64_t const now = SteadyMs();
-        hold.until = now + kStringStayMs;
-        hold.arriveBy = now + kArriveMs;
-        hold.group = 0;
-        hold.follow = false;
+        hold.state.until = now + kStringStayMs;
+        hold.state.arriveBy = now + kArriveMs;
+        hold.state.group = 0;
+        hold.state.follow = hold.state.unfollowed = false;
     }
     outcome = "came";
     return {};
@@ -247,15 +257,18 @@ std::string Follow(Player* bot, Player* human, std::string& outcome)
     std::uint32_t const guid = bot->GetGUID().GetCounter();
     std::uint64_t const group = bot->GetGroup()->GetGUID().GetRawValue();
     auto const it = holds.find(guid);
-    if (it != holds.end() && Same(it->second, bot) && it->second.follow && it->second.group == group)
+    if (it != holds.end() && Same(it->second, bot) && it->second.state.follow && it->second.state.group == group)
     {
+        StringHoldState& state = it->second.state;
         bool const had = ai->HasStrategy("stay", BOT_STATE_NON_COMBAT);
+        bool const following = ai->HasStrategy("follow", BOT_STATE_NON_COMBAT);
         ai->ChangeStrategy("-follow,+stay", BOT_STATE_NON_COMBAT);
         if (!ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
             return "follow_failed";
         SetStay(ai, bot);
-        it->second.follow = false;
-        it->second.stay = it->second.stay || !had;
+        state.follow = false;
+        state.stay = state.stay || !had;
+        state.unfollowed = state.unfollowed || following;
         outcome = "stopped";
         return {};
     }
@@ -267,10 +280,9 @@ std::string Follow(Player* bot, Player* human, std::string& outcome)
     if (!ai->HasStrategy("follow", BOT_STATE_NON_COMBAT) || ai->GetMaster() != human)
         return "follow_failed";
     Hold& hold = Own(guid, bot);
-    hold.follow = true;
-    hold.stay = false;   // his ask took any stay off
-    hold.group = group;
-    hold.until = hold.arriveBy = 0;
+    hold.state = StringHoldState();
+    hold.state.follow = true;   // his ask took any stay off
+    hold.state.group = group;
     outcome = "following";
     return {};
 }
@@ -337,6 +349,8 @@ std::string Sit(Player* bot, Player* human, std::string const& id, std::string& 
 
 std::string Carry(StringDoCmd const& cmd, std::string const& id, Player* human, Player* bot, std::string& outcome)
 {
+    if (cmd.kind != StringKind::Emote && cmd.kind != StringKind::Sit)
+        EndSeat(bot);
     switch (cmd.kind)
     {
         case StringKind::ComeToMe: return ComeToMe(bot, human, outcome);
@@ -358,6 +372,7 @@ LeeroyCommandResult HandleStringDo(nlohmann::json const& message)
     if (cmd->targetGuid && cmd->targetGuid != HumanGuid())
         return {false, "bad field: target_guid"};
     std::string const id = message.at("id").get<std::string>();
+    StringWaiver const waiver;   // his own ask passes his earlier come_to_me's fence
     Player* human = FindOnline(HumanGuid());
     Player* bot = cmd->guid == HumanGuid() ? nullptr : FindOnline(cmd->guid);
     std::string why = StringRefusal(cmd->kind, ReadFacts(*cmd, human, bot));
@@ -414,11 +429,12 @@ void TickHolds(std::uint64_t now, bool on, Player* human)
     {
         std::uint32_t const guid = it->first;
         Hold& hold = it->second;
+        StringHoldState& state = hold.state;
         Player* bot = FindOnline(guid);
         if (!bot)
         {
             // Between maps the hold waits for the same body; a logout or a stay that ran out drops it.
-            std::uint64_t const end = hold.arriveBy ? hold.arriveBy : hold.until;
+            std::uint64_t const end = state.arriveBy ? state.arriveBy : state.until;
             it = end && now >= end + kArriveMs ? holds.erase(it) : std::next(it);
             continue;
         }
@@ -427,51 +443,65 @@ void TickHolds(std::uint64_t now, bool on, Player* human)
             it = holds.erase(it);   // another life: never write over its baseline
             continue;
         }
+        StringHoldFacts facts;
+        facts.now = now;
+        facts.on = on;
+        facts.humanOnline = human != nullptr;
         Group* group = bot->GetGroup();
-        std::uint64_t const groupNow = group ? group->GetGUID().GetRawValue() : 0;
-        if (!hold.group && groupNow)
+        facts.group = group ? group->GetGUID().GetRawValue() : 0;
+        facts.raid = group && group->isRaidGroup();
+        StringHoldStep const step = DecideStringHold(state, facts);
+        if (step == StringHoldStep::Drop)
         {
-            it = holds.erase(it);   // come_to_me's stay: joining a group resets her strategies, ours with them
+            it = holds.erase(it);   // she joined a group: its join reset her strategies, ours with them
             continue;
         }
-        bool const due = !on || (hold.group && groupNow != hold.group) || (hold.until && now >= hold.until)
-            || (hold.arriveBy && now >= hold.arriveBy);
-        // Another owner holds her (a Realm lease, training, an offline raid): never touched, the hold waits.
+        // Another owner holds her: never touched, the hold waits. Its own come_to_me fence kept the
+        // Realm, training and offline raids out, so that is only an owner that never asks (a raid night's group).
         if (!Fence(guid, bot).empty() || bot->IsInCombat())
         {
             ++it;
             continue;
         }
-        if (hold.arriveBy && !due)
+        if (step == StringHoldStep::Keep)
         {
-            if (human && bot->GetMap() == human->GetMap() && !bot->IsBeingTeleported()
+            if (state.arriveBy && human && bot->GetMap() == human->GetMap() && !bot->IsBeingTeleported()
                 && bot->IsWithinDistInMap(human, kArrivedYards))
             {
                 if (!hold.ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
                 {
                     hold.ai->ChangeStrategy("+stay", BOT_STATE_NON_COMBAT);
-                    hold.stay = hold.ai->HasStrategy("stay", BOT_STATE_NON_COMBAT);
+                    state.stay = hold.ai->HasStrategy("stay", BOT_STATE_NON_COMBAT);
                 }
                 SetStay(hold.ai, bot);
-                hold.arriveBy = 0;
+                state.arriveBy = 0;
             }
             ++it;
             continue;
         }
-        if (!due)
-        {
-            ++it;
-            continue;
-        }
-        if (hold.stay && hold.ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
+        if (state.stay && hold.ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
         {
             hold.ai->ChangeStrategy("-stay", BOT_STATE_NON_COMBAT);
             ResetStay(hold.ai);
             LOG_INFO("module.leeroy", "mod-leeroy: string_stay_lifted guid={}", guid);
         }
+        // A stop inside a party that has since become a raid: she follows him again, as his raid's members do.
+        if (step == StringHoldStep::LiftFollow && !hold.ai->HasStrategy("follow", BOT_STATE_NON_COMBAT))
+            hold.ai->ChangeStrategy("+follow", BOT_STATE_NON_COMBAT);
         it = holds.erase(it);
     }
 }
+}
+
+StringWaiver::StringWaiver() { ++waived; }
+StringWaiver::~StringWaiver() { --waived; }
+
+bool StringStayHeld(std::uint32_t guid)
+{
+    if (waived)
+        return false;
+    auto const it = holds.find(guid);
+    return it != holds.end() && StringHoldFences(it->second.state);
 }
 
 void ReloadStrings() { enabled = sConfigMgr->GetOption<bool>("Leeroy.Strings.Enable", false); }
@@ -495,6 +525,7 @@ void TickStrings(std::uint32_t diffMs)
         return;
     }
     untilTick = 1000;
+    StringWaiver const waiver;   // the strings' own holds are theirs to lift
     std::uint64_t const now = SteadyMs();
     bool const on = LeeroyModule::Instance().Enabled() && enabled;
     Player* human = FindOnline(HumanGuid());

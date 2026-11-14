@@ -1,4 +1,5 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
+#include "LeeroyRealmFailure.h"
 #include "LeeroyStrings.h"
 #include "TestHarness.h"
 
@@ -262,4 +263,84 @@ LEEROY_TEST(Strings_ListedEmotesAreTheCoresNamesWithNoRudeOnes)
     CHECK(StringEmoteAllowed("kiss"));
     CHECK(!StringEmoteAllowed(""));
     CHECK(!StringEmoteAllowed("Wave"));
+}
+
+namespace
+{
+StringHoldState ComeHold(std::uint64_t now)
+{
+    StringHoldState h;
+    h.until = now + kStringStayMs;
+    h.arriveBy = now + 30000;
+    return h;
+}
+
+StringHoldFacts Tick(std::uint64_t now, std::uint64_t group = 0, bool raid = false)
+{
+    StringHoldFacts f;
+    f.now = now;
+    f.on = f.humanOnline = true;
+    f.group = group;
+    f.raid = raid;
+    return f;
+}
+}
+
+LEEROY_TEST(Strings_ComeToMeStayFencesHerForItsWholeWindowOnly)
+{
+    // Review P2-1: from the string until its ten minutes end, busy:string keeps every other owner out.
+    auto h = ComeHold(1000);
+    CHECK(StringHoldFences(h));                 // on her way
+    h.arriveBy = 0; h.stay = true;
+    CHECK(StringHoldFences(h));                 // landed, stay on
+    h.stay = false;
+    CHECK(StringHoldFences(h));                 // landed beside a stay someone else gave: still his ask
+    StringHoldState follow;
+    follow.group = 77; follow.follow = true;
+    CHECK(!StringHoldFences(follow));           // in his group: the Realm refuses her there anyway
+    follow.follow = false; follow.stay = true;  // a stopped follow
+    CHECK(!StringHoldFences(follow));
+    CHECK(!StringHoldFences(StringHoldState{}));
+}
+
+LEEROY_TEST(Strings_ComeToMeHoldEndsWithItsStayHisLogoutTheKeyOrAGroup)
+{
+    auto h = ComeHold(1000);
+    CHECK(DecideStringHold(h, Tick(2000)) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Tick(1000 + 30000)) == StringHoldStep::Lift);   // never landed
+    h.arriveBy = 0; h.stay = true;
+    CHECK(DecideStringHold(h, Tick(1000 + kStringStayMs - 1)) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Tick(1000 + kStringStayMs)) == StringHoldStep::Lift);
+    auto off = Tick(2000);
+    off.on = false;
+    CHECK(DecideStringHold(h, off) == StringHoldStep::Lift);
+    auto gone = Tick(2000);
+    gone.humanOnline = false;
+    CHECK(DecideStringHold(h, gone) == StringHoldStep::Lift);
+    CHECK(DecideStringHold(h, Tick(2000, 55)) == StringHoldStep::Drop);   // a join reset her strategies
+}
+
+LEEROY_TEST(Strings_FollowHoldEndsWithItsGroupAndGivesFollowBackInARaid)
+{
+    StringHoldState h;
+    h.group = 77; h.follow = true;
+    CHECK(DecideStringHold(h, Tick(5, 77)) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Tick(5, 0)) == StringHoldStep::Lift);
+    CHECK(DecideStringHold(h, Tick(5, 78)) == StringHoldStep::Lift);
+    // Review P3-3: a stop in a party that became a raid is lifted natively, her follow given back.
+    h.follow = false; h.stay = true; h.unfollowed = true;
+    CHECK(DecideStringHold(h, Tick(5, 77)) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Tick(5, 77, true)) == StringHoldStep::LiftFollow);
+    auto off = Tick(5, 77);
+    off.on = false;
+    CHECK(DecideStringHold(h, off) == StringHoldStep::LiftFollow);
+    CHECK(DecideStringHold(h, Tick(5, 0)) == StringHoldStep::Lift);   // the group is gone: no follow given back
+    h.unfollowed = false;
+    CHECK(DecideStringHold(h, Tick(5, 77, true)) == StringHoldStep::Lift);
+}
+
+LEEROY_TEST(Strings_ComeToMeFenceIsOneMembersOwnForARearm)
+{
+    // A rearm leaves her out at its ack instead of refusing every member with her.
+    CHECK(Leeroy::Realm::MemberSkipReason("busy:string"));
 }

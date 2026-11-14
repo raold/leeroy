@@ -36,6 +36,14 @@ test("the answer says what she did, or why not, from codes", () => {
   assert.equal(gameOutcome({ ok: false, code: "off", error: "Godmode is off" }), "Godmode is off in mind.toml.");
   assert.equal(gameOutcome({ ok: false, error: "The mind's own words" }), "The mind's own words");
   assert.equal(codeText("too_far"), "She is too far from you.");
+  // native's own switch names mod_leeroy.conf; godmode's names mind.toml
+  assert.equal(gameOutcome({ ok: true, state: "not_taken", reason: "strings_off" }),
+    "Not taken: Strings in game are off (Leeroy.Strings.Enable in mod_leeroy.conf).");
+  assert.ok(!gameOutcome({ ok: true, state: "not_taken", reason: "strings_off" }).includes("mind.toml"));
+  assert.equal(gameOutcome({ ok: true, state: "pending", reason: "unknown" }),
+    "The game server did not answer; her strings list shows the outcome once it does.");
+  assert.equal(gameOutcome({ ok: true, state: "not_taken", reason: "raid_quiet" }),
+    "Not taken: Your raid is in its wipe silence or debrief.");
 });
 
 test("her strings list reads game strings in words, and only a waiting one can be cancelled", () => {

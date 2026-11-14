@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "OfflineRaidJob.h"
+#include "Strings.h"
 #include "BotCommands.h"
 #include "PlayStyle.h"
 #include "GuildPorts.h"
@@ -1625,6 +1626,7 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
         if (auto* player = FindOnline(low); player && GroupHasRealmOwner(player->GetGroup()))
             return Fail("busy:realm_group:" + std::to_string(low));
         if (Training::DummyTrialOwns(low)) return Fail("busy:" + std::to_string(low));
+        if (StringStayHeld(low)) return Fail("busy:" + std::to_string(low));   // his come_to_me's stay
         if (benchmark)
         {
             if (IsCast(low)) return Fail("cast:" + std::to_string(low));

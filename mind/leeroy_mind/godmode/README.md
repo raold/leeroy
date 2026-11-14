@@ -109,31 +109,37 @@ need the guild Discord's engine (`[server] enabled`, `server_off` otherwise).
 
 | Kind | What she does | Native refuses (besides the shared codes) |
 | --- | --- | --- |
-| `come_to_me` | comes to his side; outside his group she then stays there 10 minutes | `bad_area` (he is not in a city or rest area), `grouped` |
+| `come_to_me` | comes to his side; outside his group she then stays there 10 minutes, fenced from the Realm, training and offline raids (`busy:string`) | `bad_area` (he is not in a city or rest area), `grouped` |
 | `join_group` | joins the party he leads (never a raid) and comes to him | `in_group`, `lfg_group`, `not_leader`, `in_raid`, `group_full`, the add command's own fences |
 | `follow` {} | follows him; the same string again stops it and she waits | `not_in_group`, `busy:raid_owner` (his raid) |
 | `duel_me` | challenges him to a duel (accepting is his) | `in_group`, `busy:duel`, `too_far`, `bad_area` |
 | `emote` {emote} | one of 16 friendly emotes, at him | `bad_emote`, `too_far` |
-| `sit` | sits near him for up to 5 minutes while he stays near | `too_far` |
+| `sit` | sits near him for up to 5 minutes while he stays near; a later string that moves her stands her up | `too_far` |
 
 Shared codes: `off`, `human_offline`, `not_cast`, `not_online`, a fence (`busy:realm_owner`,
 `busy:training_owner`, ...), `dead`, `combat` (hers, his or his group's: never inside his fight), `in_instance`
-(never in or onto an instance copy), `in_bg`, `queued`, `travelling`, `human_dead`. The mind
-settles some before or instead of native: `human_offline` (he is not in game), `no_link`,
-`no_answer`, `unsupported` (an older worldserver), `away`, `gone` and `stance` (a duel from one
-who dislikes him, affinity -30 or below; a kiss or a flirt only from a woman drawn to him or in
-lust, a hug or a wink from a fond one too).
+(never in or onto an instance copy), `in_bg`, `queued`, `travelling`, `human_dead`; native's own
+switch at 0 is stored as `strings_off` (the console names `mod_leeroy.conf`). The mind settles
+some before or instead of native: `human_offline` (he is not in game), `no_link` (nothing was
+sent), `combat` and `raid_quiet` (his raid fights, keeps its wipe silence or holds its debrief),
+`unsupported` (an older worldserver), `away`, `gone` and `stance` (a duel from one who dislikes
+him, affinity -30 or below; a kiss or a flirt only from a woman drawn to him or in lust, a hug or a
+wink from a fond one too).
 
 A game string goes at once, in the console's request: the mind checks her fit, him in game and the
 bridge, sends one `string_do` and settles the string `taken` with what she did (native's done job:
 `came`, `joined`, `following`, `stopped`, `challenged`, `emoted`, `sat`) or `not_taken` with the
-code. It is never retried: one refused in his fight stays refused. One a crash left in flight
-expires after 10 minutes. For the next half hour her card (game channels with him: party, raid,
-say, yell, emote, a whisper with him; and her DM with him) says what she did, as her own past
-("You joined his group because he asked."), or that she could not ("He asked you to come over, but
-you couldn't just then."); never in guild or officer chat, a server channel or a group DM, and
-nothing for a refusal she would not have known of (the server, the link, his own state, her being
-offline). The card needs `[talk] aware = true`, as Part A's lines do. Nothing here takes a Realm
+code. It is never retried: one refused in his fight stays refused. A lost ack or link
+(`AckTimeout`, `ConnectionLost`) may hide what she did, so it is never `not_taken`: native's
+done job (sent before its ack, or with the outbox at the next greeting) settles it `taken`, and
+without one it stays pending and expires after 10 minutes as `expired`/`unknown`. For the next
+half hour her card (game channels with him: party, raid, say, yell, emote, a whisper with him; and
+her DM with him) says what she did, as her own past ("You joined his group because he asked."),
+or that she could not ("He asked you to come over, but you couldn't just then."): only her newest
+string of each kind (a stop replaces the follow it ended), and a follow's line goes once she is no
+longer in his group. Never in guild or officer chat, a server channel or a group DM, and nothing
+for a refusal she would not have known of (the server, the link, his own state, her being offline,
+a join while she is already with him). The card needs `[talk] aware = true`, as Part A's lines do. Nothing here takes a Realm
 body-ledger rank; native's fences and journal are in `modules/mod-leeroy/README.md`.
 
 The console's Personas member detail has a Strings panel (her strings, their state and reason,

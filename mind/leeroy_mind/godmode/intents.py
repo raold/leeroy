@@ -64,16 +64,18 @@ _EMOTE_DONE = {"applaud": "applauded him", "bow": "bowed to him", "cheer": "chee
 _TAKEN = {"came": "You went over to him because he asked you to come.",
           "joined": "You joined his group because he asked.",
           "joined_far": "You joined his group because he asked.",
-          "following": "You're following him because he asked.",
+          "following": "You started following him because he asked.",
           "stopped": "You stopped following him and waited, because he asked.",
           "challenged": "You challenged him to a duel because he asked for one.",
           "sat": "You sat down near him because he asked."}
 _ASKED = {"come_to_me": "to come over", "join_group": "to join his group", "follow": "to follow him",
           "duel_me": "for a duel", "emote": "for a little gesture", "sit": "to sit with him"}
 # Refusals she would not know of (the server, the link, his own state, her being offline): no line.
-_UNSEEN = frozenset({"off", "human_offline", "human_dead", "not_online", "not_cast", "no_link",
-                     "no_answer", "unsupported", "invalid", "refused", "gone", "due", "owner",
-                     "away"})
+_UNSEEN = frozenset({"off", "strings_off", "human_offline", "human_dead", "not_online", "not_cast",
+                     "no_link", "no_answer", "unknown", "unsupported", "invalid", "refused", "gone",
+                     "due", "owner", "away"})
+# And by kind: a join refused because she is already in his group says nothing of a refusal.
+_UNSEEN_KIND = frozenset({("join_group", "in_group")})
 
 
 class IntentRefused(ValueError):
@@ -395,7 +397,9 @@ GAME_WORDS = {
     "following": "She's following you.", "stopped": "She stopped following you and waits there.",
     "challenged": "She challenged you to a duel.", "emoted": "Done.", "sat": "She sat down near you.",
     "done": "Done.",
-    "off": "Strings in game are off (Leeroy.Strings.Enable in mod_leeroy.conf).",
+    "strings_off": "Strings in game are off (Leeroy.Strings.Enable in mod_leeroy.conf).",
+    "unknown": "The game server did not answer; her strings list shows the outcome once it does.",
+    "raid_quiet": "Your raid is in its wipe silence or debrief.",
     "unsupported": "The game server needs the rebuild that adds strings.",
     "human_offline": "You are not in game.", "human_dead": "You are dead.",
     "no_link": "The game server is not connected.", "no_answer": "The game server did not answer.",
@@ -459,13 +463,15 @@ def in_place(intent, cid, *, to_guid=0, human=0) -> bool:
 _WITH_HIM = ("party", "raid", "say", "yell", "emote")
 
 
-def game_lines(conn, guid, channel, *, to_guid=0, human=0, now) -> list[str]:
+def game_lines(conn, guid, channel, *, to_guid=0, human=0, now, group=None) -> list[str]:
     """What she did for him in game in the last GAME_CARD_S, as her own past ("You joined his
     group because he asked."), or that she could not ("He asked you to come over, but you
-    couldn't just then."), newest first, at most two. Only where she talks with him: his group's
-    chat, near him, a whisper with him or her DM with him; never guild or officer chat, a server
-    channel or a group DM. A refusal she would not have known of (the server, the link, his own
-    state, her being offline) says nothing."""
+    couldn't just then."), newest first, at most two, and only the newest of each kind (a stop
+    supersedes the follow it ended). Only where she talks with him: his group's chat, near him, a
+    whisper with him or her DM with him; never guild or officer chat, a server channel or a group
+    DM. A refusal she would not have known of (the server, the link, his own state, her being
+    offline, a join while already with him) says nothing. `group`, his group's guids when known:
+    a follow ends with that group, so its line goes once she is no longer in it."""
     from leeroy_mind.discord.channels import is_discord
     if is_discord(channel):
         if channel != f"dm:{guid}" or to_guid not in (0, human):
@@ -480,16 +486,22 @@ def game_lines(conn, guid, channel, *, to_guid=0, human=0, now) -> list[str]:
             (guid, *GAME_KINDS, now - GAME_CARD_S)).fetchall()
     except Exception:
         return []  # an older mind.db without the table
-    out = []
+    out, kinds = [], set()
     for r in map(_row, rows):
         reason = r["reason"] or ""
-        if r["status"] == "taken":
+        if r["kind"] in kinds:
+            continue  # only her newest of each kind is her present
+        kinds.add(r["kind"])
+        if r["status"] == "taken" and reason == "following" and group is not None \
+                and guid not in group:
+            line = ""  # the follow ended with his group
+        elif r["status"] == "taken":
             if r["kind"] == "emote":
                 done = _EMOTE_DONE.get(r["args"].get("emote", ""))
                 line = f"You {done} because he asked." if done else ""
             else:
                 line = _TAKEN.get(reason, "")
-        elif reason in _UNSEEN or r["kind"] not in _ASKED:
+        elif reason in _UNSEEN or (r["kind"], reason) in _UNSEEN_KIND or r["kind"] not in _ASKED:
             line = ""
         elif reason == "stance":
             line = f"He asked you {_ASKED[r['kind']]}, but you didn't feel like it."
@@ -500,13 +512,13 @@ def game_lines(conn, guid, channel, *, to_guid=0, human=0, now) -> list[str]:
     return out[:2]
 
 
-def card_lines(conn, guid, channel, *, to_guid=0, human=0, now=None) -> list[str]:
+def card_lines(conn, guid, channel, *, to_guid=0, human=0, now=None, group=None) -> list[str]:
     """Her pending intents as her own plans ("You meant to ..."), only where she would carry
     them out (in_place), then (given `now`) what she did for him in game lately (game_lines).
     Never in a group DM, never a thread or a reaction."""
     from leeroy_mind.discord.channels import channel_id, is_discord, is_group
     game = [] if now is None else game_lines(conn, guid, channel, to_guid=to_guid, human=human,
-                                             now=now)
+                                             now=now, group=group)
     if not is_discord(channel) or is_group(channel):
         return game
     cid = channel_id(channel)

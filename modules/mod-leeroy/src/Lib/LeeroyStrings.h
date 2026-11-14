@@ -107,6 +107,42 @@ struct StringFacts
 //   emote       bad_emote, too_far (beyond kStringEmoteYards or another map);
 //   sit         too_far (beyond kStringSitYards or another map).
 std::string StringRefusal(StringKind kind, StringFacts const& facts);
+
+// What a string of ours holds on one body until it ends (Guild/Strings.cpp journals one per body, AI and session).
+struct StringHoldState
+{
+    std::uint64_t until = 0;      // come_to_me's stay end; 0 for a follow hold, which lasts with its group
+    std::uint64_t group = 0;      // the group a follow hold lasts with; 0 for come_to_me's
+    std::uint64_t arriveBy = 0;   // come_to_me: the stay starts once she has landed, by this time
+    bool stay = false;            // we added playerbots' stay, and take only that back
+    bool follow = false;          // a follow string of ours is in force
+    bool unfollowed = false;      // a stop took her follow off: given back when lifted inside that group
+};
+// A live come_to_me hold (from her arrival until its 10 minutes end) is a native fence, busy:string: the Realm,
+// training and offline raids refuse her until it ends. His own asks (his add command, his strings) pass it. A follow hold never fences:
+// she is in his group, which the Realm already refuses.
+bool StringHoldFences(StringHoldState const& hold);
+
+// The world tick's view of one held body.
+struct StringHoldFacts
+{
+    std::uint64_t now = 0;
+    bool on = false;            // Leeroy.Enable and Leeroy.Strings.Enable
+    bool humanOnline = false;
+    std::uint64_t group = 0;    // her group now, 0 for none
+    bool raid = false;          // that group is a raid
+};
+enum class StringHoldStep : std::uint8_t
+{
+    Keep,
+    Lift,          // take back what the hold added (its stay), then forget it
+    LiftFollow,    // the same, and give her follow back: still in the group a stop was made in
+    Drop,          // forget it untouched: she joined a group, whose join reset her strategies, ours with them
+};
+// come_to_me's hold: Drop once she is in any group; Lift when the switch is off, he is offline, its 10 minutes are up
+// or she never landed. A follow hold: Lift once her group is another (or none); LiftFollow when the switch is off or
+// his party became a raid, where a follow string can no longer undo the stop.
+StringHoldStep DecideStringHold(StringHoldState const& hold, StringHoldFacts const& facts);
 }
 
 #endif

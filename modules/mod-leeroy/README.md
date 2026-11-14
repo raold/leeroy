@@ -296,25 +296,34 @@ arena (`in_bg`), a queue (`queued`) or while either travels (`travelling`). Then
 - `come_to_me`: only while he stands in a city or rest area (a capital and its parts, a town with an inn, a
   faction rest zone, or wherever the core has him resting; else `bad_area`), never out of someone else's group
   (`grouped`). She is put beside him (the add command's teleport); one outside his group then keeps
-  playerbots' `stay` for 10 minutes once she has landed, so her routine does not walk her off.
+  playerbots' `stay` for 10 minutes once she has landed, so her routine does not walk her off. For that window
+  she is fenced: `NativeOwnershipReason` answers `busy:string` (`StringStayHeld`), so Realm moves (the bond's
+  inn visits included), queues, offline raids and dummy trials refuse her, while his own asks (his strings, his
+  add command) pass it (`StringWaiver`). The fence ends with the stay: its 10 minutes, the key at 0, his
+  logout, or her joining a group. If he is hovering on a flying mount she lands beside him in the air and falls,
+  as the add command's teleport does.
 - `join_group`: into the party he leads (made now when he has none), never a raid or a Dungeon Finder group,
   at most five (`in_group`, `lfg_group`, `not_leader`, `in_raid`, `group_full`), under the add command's own
   member fences for a party of his (`grouped`, `locked`, ...). She joins with the raid night's habits
   (`RaidHabits`: him as master, hazards) and comes to him.
 - `follow`: in his party only (`not_in_group`; his raid `busy:raid_owner`). Him as her master with playerbots'
   `follow`; the same string again stops it and she waits where she is (playerbots' `stay`). Both last while that
-  group does.
+  group does; a stop in a party that becomes a raid is lifted by the tick and her follow given back, since the
+  string can no longer undo it there.
 - `duel_me`: neither in a group with the other (`in_group`), nobody duelling (`busy:duel`), the same zone within
   30 yards (`too_far`), both where the core allows a duel and outside a sanctuary (`bad_area`). The core's duel
   spell is cast at him; accepting is his.
 - `emote`: one of 16 friendly emotes (`bad_emote`), within 25 yards (`too_far`), aimed at him as bridge speech.
-- `sit`: within 20 yards (`too_far`); #244's social seat keeps her sitting up to 5 minutes while he stays near.
+- `sit`: within 20 yards (`too_far`); #244's social seat keeps her sitting up to 5 minutes while he stays near
+  and nobody in his group fights. A later come_to_me, join_group, follow or duel_me stands her up first.
 
-None of these takes a Realm body-ledger rank (they are his own asks), and the Realm keeps refusing a body in his
-group as before. What a string changed is journalled per body, AI and session: the world tick (once a second)
-lifts only the `stay` it added (after come_to_me's 10 minutes, when the follow's group ends, or when the key goes
-to 0) and stands a seated member up when her seat ends; a body another owner holds, or in combat, is never
-touched and waits; a relog or an AI replacement drops the hold untouched. Logs: `string_done guid= kind=
+None of these takes a Realm body-ledger rank (they are his own asks; come_to_me's window is a native fence
+instead), and the Realm keeps refusing a body in his group as before. What a string changed is journalled per
+body, AI and session (pure decisions `StringHoldFences`, `DecideStringHold`): the world tick (once a second) lifts
+only the `stay` it added (after come_to_me's 10 minutes or his logout, when the follow's group ends or turns into a
+raid, or when the key goes to 0) and stands a seated member up when her seat ends; a body another owner holds, or
+in combat, is never touched and waits; a relog, an AI replacement or (come_to_me) a group join drops the hold
+untouched. Logs: `string_done guid= kind=
 outcome=`, `string_refused guid= kind= code=`, `string_stay_lifted guid=`. **Native rebuild required.**
 
 # Realm job receipts

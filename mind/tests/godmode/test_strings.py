@@ -10,7 +10,7 @@ import pytest
 from conftest import run
 from selfies.fakes import OWNER, mind_app
 from leeroy_mind.awareness.card import CardContext, card
-from leeroy_mind.bridge import AckTimeout, NotConnected
+from leeroy_mind.bridge import AckTimeout, ConnectionLost, NotConnected
 from leeroy_mind.endpoint import BadRequest, string_args
 from leeroy_mind.godmode import intents as I
 from leeroy_mind.godmode.service import native_code
@@ -117,14 +117,105 @@ def test_native_codes_are_kept_and_its_text_never_is():
     assert native_code("") == "refused"
 
 
-@pytest.mark.parametrize("failure,reason", [
-    (AckTimeout("no ack"), "no_answer"), (NotConnected("down"), "no_link"),
-    ((False, "unknown type: string_do", None), "unsupported")])
-def test_the_link_failing_or_an_older_worldserver_reports_it(app, failure, reason):
+@pytest.mark.parametrize("failure,state,reason", [
+    (AckTimeout("no ack"), "pending", "unknown"), (ConnectionLost("reset"), "pending", "unknown"),
+    (NotConnected("down"), "not_taken", "no_link"),
+    ((False, "unknown type: string_do", None), "not_taken", "unsupported"),
+    ((False, "off", None), "not_taken", "strings_off")])
+def test_the_link_failing_or_an_older_worldserver_reports_it(app, failure, state, reason):
+    """A lost ack or link may hide what she did: never "not taken", the outcome stays unknown."""
     app.bridge = Wire(app, {"sit": failure})
     reply = pull(app, 102, "sit")
-    assert (reply["state"], reply["reason"]) == ("not_taken", reason)
+    assert (reply["state"], reply["reason"]) == (state, reason)
+    assert I.get(app.store.conn, reply["id"])["status"] == state
     assert not app.godmode._busy and not app.godmode.jobs._jobs
+    if reason == "strings_off":
+        assert "mod_leeroy.conf" in reply["message"]
+
+
+def test_a_lost_link_after_native_s_done_job_is_taken(app):
+    """Review P3-1: the link drops after native published its done job: she did it."""
+    wire = app.bridge = Wire(app, {"follow": (True, "", "following")})
+    real = wire.send
+
+    async def drop(cmd, *, preserve_id=False):
+        await real(cmd, preserve_id=preserve_id)
+        raise ConnectionLost("reset")
+    wire.send = drop
+    reply = pull(app, 102, "follow")
+    assert (reply["state"], reply["reason"]) == ("taken", "following")
+
+
+def test_an_unanswered_string_takes_its_late_job_or_expires_unknown(app):
+    """Review P3-1: no answer at all leaves it pending; a done job arriving later (the outbox at the
+    next greeting) settles it taken; without one it expires `unknown`, never `not_taken`."""
+    wire = app.bridge = Wire(app, {"come_to_me": AckTimeout("no ack"), "sit": AckTimeout("no ack")})
+    late = pull(app, 102, "come_to_me")
+    never = pull(app, 103, "sit")
+    assert late["state"] == never["state"] == "pending"
+    run(app.godmode.tick(app.clock.now() + 30))  # not sent again, not settled by the tick
+    assert len(wire.sent) == 2 and I.get(app.store.conn, late["id"])["status"] == "pending"
+    cmd = wire.sent[0]
+    app.godmode.on_job(Job(ts=0, id=cmd.id, kind="string_do", state="done", reason="came",
+                           stage="", guids=(102,), skipped=(), kills=0, wipes=0, instance_id=0,
+                           guid=102, level=0, avg_ilvl=0))
+    row = I.get(app.store.conn, late["id"])
+    assert (row["status"], row["reason"]) == ("taken", "came")
+    run(app.godmode.tick(app.clock.now() + I.GAME_DUE_S + 1))
+    row = I.get(app.store.conn, never["id"])
+    assert (row["status"], row["reason"]) == ("expired", "unknown")
+    assert not app.godmode._inflight and len(wire.sent) == 2
+    assert I.card_lines(app.store.conn, 103, "say", human=OWNER, now=app.clock.now()) == []
+
+
+def test_her_card_keeps_only_her_newest_follow_and_drops_it_with_his_group(app):
+    """Review P2-2: follow then stop leaves only the stop; a follow's line goes once she is no longer
+    in his group (the follow ended with it); one line per kind."""
+    from leeroy_mind.protocol import Group
+    conn = app.store.conn
+    app.bridge = Wire(app, {"follow": (True, "", "following")})
+    pull(app, 102, "follow")
+    app.world.group = Group(ts=0, leader_guid=OWNER, raid=False, members=(OWNER, 102))
+    assert app.godmode.card_lines(102, "party") == ["You started following him because he asked."]
+    app.world.group = Group(ts=0, leader_guid=OWNER, raid=False, members=(OWNER, 103))
+    assert app.godmode.card_lines(102, "party") == []
+    app.world.group = None
+    assert app.godmode.card_lines(102, "say") == []
+    app.world.group = Group(ts=0, leader_guid=OWNER, raid=False, members=(OWNER, 102))
+    app.bridge = Wire(app, {"follow": (True, "", "stopped")})
+    pull(app, 102, "follow")
+    assert app.godmode.card_lines(102, "party") == [
+        "You stopped following him and waited, because he asked."]
+    app.bridge = Wire(app, {"emote": (True, "", "emoted")})
+    pull(app, 102, "emote", emote="wave")
+    pull(app, 102, "emote", emote="bow")
+    assert app.godmode.card_lines(102, "party") == [
+        "You bowed to him because he asked.", "You stopped following him and waited, because he asked."]
+    assert not any("following him because" in line and "stopped" not in line
+                   for line in I.card_lines(conn, 102, "party", human=OWNER, now=app.clock.now()))
+
+
+def test_a_join_while_already_with_him_puts_nothing_on_her_card(app):
+    app.bridge = Wire(app, {"join_group": (False, "in_group", None), "duel_me": (False, "in_group", None)})
+    pull(app, 102, "join_group")
+    assert I.card_lines(app.store.conn, 102, "party", human=OWNER, now=app.clock.now()) == []
+    pull(app, 103, "duel_me")  # grouped with him: a duel was refused, which she knows
+    assert I.card_lines(app.store.conn, 103, "party", human=OWNER, now=app.clock.now()) == [
+        "He asked you for a duel, but you couldn't just then."]
+
+
+@pytest.mark.parametrize("phase,reason", [("combat", "combat"), ("wipe_silence", "raid_quiet"),
+                                          ("wipe_debrief", "raid_quiet")])
+def test_strings_wait_out_his_raid_s_fight_silence_and_debrief(app, monkeypatch, phase, reason):
+    """Review P3-6: the mind refuses a string while his raid fights, keeps its wipe silence or
+    holds its debrief; nothing is sent."""
+    from leeroy_mind.talk.raid import RaidPhase
+    wire = app.bridge = Wire(app)
+    monkeypatch.setattr(app.raid, "phase", lambda now: RaidPhase(phase))
+    reply = pull(app, 102, "emote", emote="wave")
+    assert (reply["state"], reply["reason"]) == ("not_taken", reason) and not wire.sent
+    monkeypatch.setattr(app.raid, "phase", lambda now: RaidPhase.KILL)
+    assert pull(app, 102, "emote", emote="wave")["state"] == "taken"
 
 
 def test_a_lost_ack_after_native_s_done_job_is_still_taken(app):
