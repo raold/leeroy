@@ -1,40 +1,67 @@
 """What the raid lead says: model-written words wrapped around facts the code built, and the
 plain lines that need no model. Nothing here holds persona text, and nothing explicit.
 
-`boss_brief` is the single hook for the raid playbooks (a later PR adds
-mind/leeroy_mind/raidplay/): a boss's plan in a few code-built words, or None. It returns None
-for now; `boss_plan` asks it first and falls back to the guild's standing pre-pull call
-(guild/boss_calls.BOSS_CALLS), and guild/calls.RaidCalls asks it before its own call too.
+`boss_brief` is the single hook for the raid playbooks (mind/leeroy_mind/raidplay/): a boss's
+pre-pull plan built by code (briefs.py), said word for word, or None. Its callers ask it only
+while `[raidlead] briefs` is on (guild/calls.RaidCalls before its pre-pull call, the service for
+his questions about the plan); otherwise, or when it is None, `boss_plan`, the guild's standing
+pre-pull call (guild/boss_calls.BOSS_CALLS), answers as before.
 """
 
 from dataclasses import dataclass
+import logging
 
+from leeroy_mind.logs import log as log_event
+
+from . import briefs as B
 from .orders import MEANING
 
 
 @dataclass(frozen=True, slots=True)
 class BossContext:
-    """The fight a brief is for: the core's encounter index on that map."""
+    """The fight a brief is for: the core's encounter index on that map, its size (10 or 25; 0
+    not known) and heroic, and `roles`: the playbook role (tank, healer, melee, ranged) of each
+    member of his group whose role is known, empty when none is."""
     map_id: int
     boss_id: int
     boss_name: str = ""
     size: int = 0
     heroic: bool = False
+    roles: tuple[str, ...] = ()
+
+    @property
+    def difficulty(self) -> int | None:
+        return B.difficulty(self.size, self.heroic)
+
+    @property
+    def context_id(self) -> str:
+        """MAP:BOSS:DIFFICULTY for the logs (the difficulty "-" when not known)."""
+        diff = self.difficulty
+        return f"{self.map_id}:{self.boss_id}:{'-' if diff is None else diff}"
+
+
+_UNAVAILABLE = []
 
 
 def boss_brief(context: BossContext) -> str | None:
-    """The raid playbooks' brief for this boss (mind/leeroy_mind/raidplay/, not yet here):
-    None until they exist."""
-    return None
+    """The playbook's brief for this boss at its difficulty, one line per text line (at most
+    briefs.MAX_LINES of at most briefs.LINE_BYTES bytes each), built by code and said as it is;
+    None when the raid has no playbook for it, the difficulty is not known, no mechanic is for
+    the roles given, or the playbook data cannot be read (logged once, then the standing call)."""
+    try:
+        brief = B.build(context.map_id, context.boss_id, context.difficulty, context.roles)
+    except Exception as exc:
+        if not _UNAVAILABLE:
+            _UNAVAILABLE.append(True)
+            log_event("raidlead_brief_unavailable", level=logging.WARNING, error=type(exc).__name__)
+        return None
+    return "\n".join(brief.lines) if brief is not None else None
 
 
 def boss_plan(context: BossContext) -> str | None:
-    """What the lead tells him about a boss: the playbook's brief, else the guild's standing
-    pre-pull call for that encounter, else None."""
+    """The guild's standing pre-pull call for that encounter (its heroic call on heroic), else
+    None."""
     from leeroy_mind.guild.boss_calls import BOSS_CALLS, HEROIC_CALLS
-    brief = boss_brief(context)
-    if brief:
-        return brief
     key = (context.map_id, context.boss_id)
     call = (HEROIC_CALLS.get(key) if context.heroic else None) or BOSS_CALLS.get(key)
     return call.pre if call is not None else None
@@ -107,6 +134,15 @@ def ready(human: str) -> str:
 def plan(human: str, facts: list[str]) -> str:
     return (f"{human} asked about the plan. Facts: {' '.join(facts)} Answer {human} in one or two "
             f"short lines from these facts only; invent no mechanics.")
+
+
+def briefed(human: str, boss: str, facts: list[str]) -> str:
+    """Her words after the boss plan she just posted word for word (the brief): the plan is not
+    in the instruction, so the model can neither repeat nor change it."""
+    return (f"{human} asked about the plan, and you just posted the plan for {boss} to the group, "
+            f"word for word from the guild's playbook. Facts: {' '.join(facts)} Add one short line "
+            f"for {human} in your own voice from these facts only; do not repeat the plan, and "
+            f"name no mechanic or tactic.")
 
 
 COUNTDOWN = "pulling in {seconds}"

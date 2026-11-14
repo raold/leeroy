@@ -50,7 +50,7 @@ class Ports:
 
     def __init__(self, clock):
         self.clock = clock
-        self.sent, self.said = [], []
+        self.sent, self.said, self.exact = [], [], []
         self.acks = deque()  # (ok, error) per send; default ok
         self.jobs = deque()  # Job, a callable(cmd) -> Job, or None (no terminal)
         self.waits = []
@@ -72,7 +72,11 @@ class Ports:
         result = script(cmd) if callable(script) else script
         return None if result is None else replace(result, id=cmd_id)
 
-    async def say(self, guid, channel, text, *, kind=None, to_guid=0):
+    async def say(self, guid, channel, text, *, kind=None, to_guid=0, before_transport=None):
+        if before_transport is not None:  # an exact line (the boss briefs): its barrier decides
+            self.exact.append(text)
+            if before_transport() is not True:
+                return False
         self.said.append((guid, channel, text, kind))
         return True
 

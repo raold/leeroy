@@ -55,6 +55,7 @@ class FakePorts:
         self.sent = []
         self.proposed = []
         self.said = []
+        self.exact = []
         self.memories = []
         self.lost = []
         self.leads = []
@@ -105,7 +106,11 @@ class FakePorts:
     def propose(self, guid, channel, instruction, *, kind=TurnKind.CALLOUT):
         self.proposed.append((guid, channel, instruction, kind))
 
-    async def say(self, guid, channel, text):
+    async def say(self, guid, channel, text, *, before_transport=None):
+        if before_transport is not None:  # an exact line (the boss briefs): its barrier decides
+            self.exact.append(text)
+            if before_transport() is not True:
+                return False
         self.said.append((guid, channel, text))
         return True
 
