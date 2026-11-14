@@ -76,3 +76,16 @@ def test_control_op_arguments(args, out):
 def test_control_op_refuses_anything_else(args):
     with pytest.raises(BadRequest):
         raidlead_args(args)
+
+
+@pytest.mark.parametrize("text, state", [
+    ("[raidlead]\nenabled = true\n", "on"), ("", "off"), ('[raidlead]\nenabled = "x"\n', "invalid"),
+    ("[raidlead]\nenabled = true\nmore = 1\n", "invalid"),
+])
+def test_the_ops_switches_list_the_raid_lead(tmp_path, text, state):
+    import time
+    from leeroy_mind.console import opsview
+    (tmp_path / "mind.toml").write_text(text, encoding="utf-8")
+    rows = opsview.switches_view(tmp_path, time.monotonic() + 10, mind_started=None)["rows"]
+    [row] = [r for r in rows if r["table"] == "raidlead"]
+    assert row["state"] == state

@@ -34,7 +34,9 @@ A raid lead is a cast member of his current group, chosen:
 It lasts until he changes it or the group breaks: he leaves it, it disbands (`group` events), or
 she leaves it (`group`/`guild_group` events). It persists in meta `raidlead:state` (lead, source,
 his own lead, the assistant flag we set, his group's members and raid flag), so a restart keeps
-it. In a raid group native makes her **raid assistant** (`raid_lead assist`) and takes the flag
+it. The game reports his group only when it changes (`group`, and `guild_group` for his add
+command), so after the first restart with the switch on it knows his group from the next change:
+someone joining or leaving, or his `.playerbots bot addN`. In a raid group native makes her **raid assistant** (`raid_lead assist`) and takes the flag
 off a lead he replaced; a party has no assistant flag.
 
 ## What she does
