@@ -45,7 +45,8 @@ _KINDS = {"selfie": "phone selfie", "mirror_selfie": "mirror selfie",
 _FRAMINGS = {"face": "close-up of the face", "head_and_shoulders": "head and shoulders",
              "upper_body": "waist-up shot, upper body",
              # face, bust, waist and hips in frame (owner, 2026-11-08)
-             "three_quarter": "three-quarter shot from mid-thigh up, waist and hips in frame"}  # the waist in frame, so the figure shows
+             "three_quarter": "three-quarter shot from mid-thigh up, waist and hips in frame",  # the waist in frame, so the figure shows
+             "full_body": "full-body shot"}  # a varied set's candidate only (no photo kind has it)
 _LENGTHS = {"short": "short", "chin": "chin-length", "shoulder": "shoulder-length",
             "long": "long", "very_long": "very long"}
 _HEADSHOT_TAIL = "recent photo, natural skin texture, unretouched"
@@ -163,6 +164,72 @@ def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int
     """The face as the looks describe it: hair and skin (1), then eyes and face details (2).
     Free text holding a name in name_re is left out."""
     return hair_skin(p, name_re) + eyes_face(p, name_re)
+
+
+# A varied set's candidates (varied.py, owner 2026-11-14): each its own look and pose, said in
+# short plain photography terms. The pose, the framing, who she is, her build and the outfit with
+# its setting are always priority 0, so the worker's 75-token fit keeps every one of them: at most
+# 60 tokens, measured with the real tokenizers. Her hair and skin join them at priority 0 while
+# the whole required set still counts at most REQUIRED_MAX (tokens.estimate, never below the
+# real count): 5 tokens under the worker's limit. The thong and g-string negatives join the lust
+# ones.
+VARIED_VIEW_WORDS = {"behind": "from behind, looking over her shoulder",
+                     "rear_three_quarter": "three-quarter rear view",
+                     "side": "side profile",
+                     "front": "front view"}
+VARIED_FRAMING_WORDS = {"full_body": "full-body shot", "three_quarter": "three-quarter shot"}
+VARIED_NEGATIVE: tuple[tuple[str, int], ...] = LUST_NEGATIVE + (("thong, g-string", 0),)
+REQUIRED_MAX = 70
+
+
+def varied_parts(look, outfit: str) -> dict[str, str]:
+    """The phrases a varied look puts in a prompt beside her own (view, framing, the joined
+    outfit and setting, expression), by field; `look` is a mapping or has the attributes.
+    The screens (kind.screen_lust, varied) read exactly these."""
+    get = (look.get if isinstance(look, dict) else lambda k: getattr(look, k))
+    return {"view": VARIED_VIEW_WORDS[get("view")], "framing": VARIED_FRAMING_WORDS[get("framing")],
+            "setting": _clean(get("setting")), "outfit": _clean(outfit),
+            "expression": _clean(get("expression")),
+            "wearing": f"wearing {_clean(outfit)}, {_clean(get('setting'))}"}
+
+
+def build_varied_prompt(p: Persona, look) -> PromptSpec:
+    """The prompt for one candidate of a varied set: `look` (varied.Look) in her body, face and
+    build. Only for a woman who has the lust style now (style.suggestive: lust, 25 or older,
+    looks that code nobody as young); ValueError otherwise, or when a phrase would hold one of
+    her names (the caller renders her ordinary set instead)."""
+    if p is None or p.appearance is None:
+        raise ValueError("no looks yet")
+    if p.identity.age < MIN_AGE or not suggestive(p):
+        raise ValueError(LUST_HELD)
+    parts = varied_parts(look, look.phrase)
+    name_re = names_re(p)
+    if name_re is not None and any(name_re.search(t) for t in parts.values()):
+        raise ValueError(LUST_NAMED)
+    from .tokens import estimate, joined
+    build = BUILD_WORDS.get(p.appearance.build, f"{p.appearance.build} build")
+    required = [parts["view"], parts["framing"], subject_phrase(p)[0], build, parts["wearing"]]
+    face = hair_skin(p, name_re)  # hair, then skin: at 0 while they fit, the hair first
+    room = REQUIRED_MAX - joined(required)
+    for n, (text, _) in enumerate(face):
+        cost = estimate(text) + 1
+        if cost > room:
+            face[n:] = [(t, 1) for t, _ in face[n:]]
+            break
+        face[n] = (text, 0)
+        room -= cost
+    out: list[tuple[str, int]] = []
+    add = phrase_adder(out, name_re)
+    add(parts["view"], 0)
+    add(parts["framing"], 0)
+    add(*subject_phrase(p))
+    add(build, 0)
+    out += face
+    add(parts["wearing"], 0, True)
+    add(parts["expression"], 1, True)
+    out += eyes_face(p, name_re)
+    add(_PHONE_TAIL, 2)
+    return PromptSpec(tuple(out), VARIED_NEGATIVE)
 
 
 def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> PromptSpec:
