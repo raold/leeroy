@@ -250,7 +250,8 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
     assert {n: c.status for n, c in checks.items()} == {
         "authserver": OK, "worldserver": OK, "server-log": OK, "realm-lists": OK, "mind": OK,
         "mind-log": OK, "mind-critical": OK, "endpoint": OK, "console": OK, "voice": OK,
-        "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "realm-holds": OK, "unvoiced": OK,
+        "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "training-gate": OK, "realm-holds": OK,
+        "unvoiced": OK,
         "offline-raid": OK, "guild-raids": OK, "night-failures": NOTE,
         "evidence-cycles": OK, "selfie-queue": OK, "realm-screen": OK, "weekly-eval": OK,
         "secret-gate": OK, "offline-days": OK, "training-lab": OK, "gpu-pause": OK}
@@ -271,11 +272,11 @@ def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, ca
     argv = ["--root", str(rig.root), "--data-dir", str(rig.data)]
     assert health.main(argv, probes=rig.probes()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 26 and lines[0].startswith("ok   authserver.exe running")
+    assert len(lines) == 27 and lines[0].startswith("ok   authserver.exe running")
     assert all(line[:5] in ("ok   ", "note ") for line in lines)
     assert health.main(argv + ["--json"], probes=rig.probes()) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and len(out["checks"]) == 26
+    assert out["ok"] is True and len(out["checks"]) == 27
     assert out["checks"][0] == {"name": "authserver", "status": "ok",
                                 "text": out["checks"][0]["text"]}
     rig.servers = [s for s in rig.servers if s.image != "authserver.exe"]
@@ -615,16 +616,72 @@ def test_in_the_gates_ab_phase_no_pull_in_48_hours_is_a_note(rig):
     checks = rig.run()  # no tg_gate yet: phase ab, as `training gate` reads it
     assert checks["telemetry"].status == NOTE
     assert checks["telemetry"].text == (
-        "telemetry: overhead gate in phase ab (A/B, 0 offline raids counted): only alternate "
-        "bosses of offline raids are recorded, so no tg_pull in 48 h is expected (last never)")
+        "telemetry: overhead gate in phase ab (A/B, 0 raids counted): only alternate "
+        "pulls of his raids and offline raids are recorded, so 48 h without a tg_pull is "
+        "expected when neither raided (last never)")
     gate(rig, "ab", raids=3, verdict_ms=None)
     rig.pull(NOW - 49 * 3600)
     checks = rig.run()
-    assert checks["telemetry"].status == NOTE and "3 offline raids counted" in checks[
+    assert checks["telemetry"].status == NOTE and "3 raids counted" in checks[
         "telemetry"].text
     rig.pull(NOW - 3600)
     checks = rig.run()
     assert checks["telemetry"].status == OK and checks["telemetry"].text.endswith("(gate ab)")
+
+
+def counted(rig, raid_id, started) -> None:
+    """A raid the gate counted in ab (meta tg_gate:raid:<id>), with its guild_raid row."""
+    rig.db("INSERT INTO guild_raid (raid_id, started, raid_key, size, heroic, offline, lead_guid, "
+           "tank_guid, loot_guid) VALUES (?, ?, 'icc', 10, 0, 0, 1, 101, 101)", (raid_id, started))
+    rig.db("INSERT INTO meta (key, value) VALUES (?, ?)",
+           (f"tg_gate:raid:{raid_id}", json.dumps({"family": "his:631:0", "index": 0})))
+
+
+def perf(rig, fight, ts, context="631:0:0", armed=1, kind="his") -> None:
+    rig.db("INSERT INTO tg_perf (ts, fight, context, kind, armed, mean_ms) VALUES (?, ?, ?, ?, ?, 40)",
+           (ts, fight, context, kind, armed))
+
+
+def test_a_gate_in_ab_without_new_evidence_for_a_week_is_a_note(rig):
+    check = rig.run()["training-gate"]
+    assert check.status == OK and check.text == "training gate: measuring (phase ab); no raid counted yet"
+    gate(rig, "ab", raids=2, verdict_ms=None)
+    counted(rig, 2, NOW - 8 * 86400)  # counted, but its fights never gave the gate a sample
+    counted(rig, 7, NOW - 2 * 86400)
+    check = rig.run()["training-gate"]
+    assert check.status == NOTE
+    assert check.text == (
+        f"training gate: still measuring (phase ab) with no new A/B evidence for 8 days (last "
+        f"counted raid with no A/B fight since {health._when(NOW - 8 * 86400)}; 0 A/B fights, 0 of 12 "
+        "boss contexts with both sides, 2 raids counted): see `training gate` and `training hurt`")
+    perf(rig, "gate:a:1", NOW - 9 * 86400)
+    perf(rig, "gate:a:2", NOW - 7.5 * 86400, armed=0)
+    perf(rig, "orphan", NOW - 3600)  # not a gate fight: no evidence
+    check = rig.run()["training-gate"]
+    assert check.status == NOTE and "for 7 days (last A/B fight" in check.text
+    assert "2 A/B fights, 1 of 12 boss contexts with both sides" in check.text
+    perf(rig, "gate:b:1", NOW - 3600, context="631:1:0")
+    check = rig.run()["training-gate"]
+    assert check.status == OK and check.text.startswith("training gate: measuring (phase ab), last "
+                                                        "A/B fight 60 min ago (3 A/B fights")
+    rig.db("DELETE FROM tg_perf")
+    rig.db("DELETE FROM guild_raid WHERE raid_id=2")  # the first raid it counted is now raid 7
+    assert rig.run()["training-gate"].text == (
+        "training gate: measuring (phase ab), no A/B fight yet, first counted raid 48 h ago (0 A/B "
+        "fights, 0 of 12 boss contexts with both sides, 2 raids counted)")
+
+
+def test_a_gate_that_decided_or_is_off_never_stalls(rig):
+    counted(rig, 2, NOW - 30 * 86400)
+    gate(rig, "passed")
+    assert rig.run()["training-gate"].text == "training gate: passed"
+    gate(rig, "failed", verdict_ms=3.5)
+    assert rig.run()["training-gate"].status == OK
+    rig.db("INSERT OR REPLACE INTO meta (key, value) VALUES ('tg_gate', 'not json')")
+    assert rig.run()["training-gate"].text == "training gate: failed"  # unreadable reads as failed
+    rig.toml = "[voice]\nenabled = true\n"
+    rig.write_toml()
+    assert rig.run()["training-gate"].status == OK
 
 
 def test_a_failed_or_unreadable_gate_records_nothing_and_is_a_note(rig):

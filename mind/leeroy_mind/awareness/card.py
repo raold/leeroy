@@ -66,6 +66,7 @@ class CardContext:
     server: bool = False
     here: tuple[str, ...] = ()
     self_line: str = ''
+    holidays: bool = False  # culture's server calendar ([culture] calendar): its events join Upcoming
 
 
 @dataclass(frozen=True)
@@ -461,6 +462,21 @@ def _directed_emotes(reader, guid, human, ctx, now):
     return lines
 
 
+def _holidays(reader, ctx, now):
+    """The server's own events from culture's cached calendar and the bridge's start/stop."""
+    from leeroy_mind.culture import wowcal
+    values = {r["key"]: r["value"] for r in reader.rows(("meta",), "SELECT key,value FROM meta WHERE key IN "
+              "(SELECT value FROM json_each(?))", (json.dumps(wowcal.META_KEYS),))}
+    lines = []
+    for event, on in wowcal.from_meta(values, now=now, ahead_days=wowcal.CARD_AHEAD_DAYS)[:wowcal.CARD_ROWS]:
+        if on:
+            lines.append(f"Server event: {event.name}, on now" +
+                         (f", ends {_when(ctx, event.ends, now)}" if event.ends is not None else ""))
+        elif event.starts <= now + wowcal.CARD_AHEAD_DAYS * DAY_S:
+            lines.append(f"Server event: {event.name}, starts {_when(ctx, event.starts, now)}")
+    return lines
+
+
 def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     """Read one member's card. The caller owns the connection and its snapshot/transaction."""
     if type(guid) is not int or not 0 < guid <= 0xFFFFFFFF:
@@ -533,7 +549,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     add("calendar", "Upcoming calendar", [f"{'Next raid' if r['id']==next_raid else 'Event'}" +
         (f" #{r['id']} " if context.names is None else " ") +
         f"{_when(context,r['at'],now)}: {_text(r['title'])}; signups (up to {SIGNUPS_PER_EVENT}) " + ", ".join(
-            f"{_person(context,g)} {_text(status, 40)}" for g, status in _json(r['signups'], [])) for r in calendar])
+            f"{_person(context,g)} {_text(status, 40)}" for g, status in _json(r['signups'], [])) for r in calendar]
+        + (_holidays(reader, context, now) if context.holidays else []))
     standing = []
     dkp = reader.rows(("dkp_ledger",), "WITH b AS (SELECT guid,sum(delta) AS balance FROM dkp_ledger "
         "GROUP BY guid) SELECT balance,1+(SELECT count(*) FROM b other WHERE other.balance>b.balance) "
