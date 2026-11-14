@@ -270,6 +270,25 @@ class LivePorts:
     def set_lead(self, guid):
         self.app.raid.set_lead(guid)
 
+    def designated_lead(self):
+        """The cast member he named (or the raid lead's rule picked) to call his own group's raid;
+        None while the raid lead (leeroy_mind.raidlead) is off, its native switch is off, or he
+        leads it himself."""
+        raidlead = getattr(self.app, "raidlead", None)
+        return raidlead.lead() if raidlead is not None else None
+
+    def speaking_lead(self, run):
+        """Who calls a raid he drives: the designated lead while she is one of its members; him
+        (so nobody calls) when the run's lead is a member he named but he took it back, named
+        someone outside the raid, or the raid lead stopped; else None (the run's own lead). A raid
+        the mind leads keeps its lead."""
+        if run is None or not run.lead_is_human:
+            return None
+        guid = self.designated_lead()
+        if guid is not None and guid in run.plan.members:
+            return guid
+        return self.human_guid if run.plan.lead_guid != self.human_guid else None
+
     async def remember(self, candidate):
         return await self.app.writer.write(candidate, enforce_limits=False)
 
