@@ -13,7 +13,7 @@ from typing import BinaryIO
 
 from . import protocol
 from .fit import PromptTooLong
-from .protocol import Embed, Grid, Quit, Render, RenderFailed, Retry
+from .protocol import Caption, Embed, Grid, Quit, Render, RenderFailed, Retry
 from .render import ReadyError, Renderer
 
 _EOF = object()
@@ -97,7 +97,8 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
     says the start asked for the adapter (worker --identity); a renderer that did not load it
     then answers ready ok false, model. Ready says identity only for a renderer that has the
     adapter, and such a worker refuses a render without an identity reference (bad_request);
-    one without it refuses a render with one (identity_unavailable). Either composites a grid.
+    one without it refuses a render with one (identity_unavailable). Either composites a grid
+    and draws a caption.
     The reader runs from the start, so the end of stdin calls on_eof (the worker's: os._exit)
     at once, during the load, a wait for a retry or a render too."""
     lines: queue.Queue = queue.Queue()
@@ -142,6 +143,9 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
         if isinstance(req, Grid):
             _send(out, _grid_answer(renderer, req))
             continue
+        if isinstance(req, Caption):
+            _send(out, _caption_answer(renderer, req))
+            continue
         if (req.identity is not None) != has_adapter:
             error = "bad_request" if has_adapter else "identity_unavailable"
             _send(out, {"id": req.id, "ok": False, "error": error})
@@ -160,6 +164,21 @@ def _grid_answer(renderer: Renderer, req: Grid) -> dict:
             return {"id": req.id, **answer}
         error = answer["error"]
     _log(f"{req.id} failed {error}")
+    return {"id": req.id, "ok": False, "error": error}
+
+
+def _caption_answer(renderer: Renderer, req: Caption) -> dict:
+    try:
+        fields = renderer.caption(req)
+    except RenderFailed as e:
+        error = str(e)
+    except Exception as e:
+        error = type(e).__name__
+    else:
+        _log(f"{req.id} caption flagged={fields.get('flagged')} nsfw={fields.get('nsfw')} "
+             f"lines={fields.get('lines')} seconds={fields.get('seconds')}")
+        return {"id": req.id, "ok": True, "error": "", **fields}
+    _log(f"{req.id} caption failed {error}")
     return {"id": req.id, "ok": False, "error": error}
 
 

@@ -55,7 +55,13 @@ _EMOJI = re.compile(
     rf"|{_UNIT}(?:‍{_UNIT})*)")
 
 
-def is_one_emoji(s: str) -> bool:
+def is_one_emoji(s: str, *, custom: bool = False) -> bool:
+    """One Unicode emoji; with `custom` ([culture] emoji on) also one registered custom shortcode
+    (discord.custom_emoji), never an unregistered one."""
+    if custom:
+        from .custom_emoji import is_custom
+        if is_custom(s):
+            return True
     return _EMOJI.fullmatch(s) is not None
 
 

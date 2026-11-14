@@ -29,7 +29,7 @@ from leeroy_mind.logs import log
 
 from .job import ProcessTree, WorkerError
 
-__all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Gridded", "Identity", "Ready",
+__all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Captioned", "Gridded", "Identity", "Ready",
            "RenderRequest", "Rendered", "SelfieWorker", "WorkerError", "to_the_end"]
 
 START_S = 180.0  # loading the pipeline and the classifier
@@ -94,6 +94,15 @@ class Gridded:
     height: int
     seconds: float
     similarity: dict | None = None  # optional, for older/fake workers; scores only
+
+
+@dataclass(frozen=True)
+class Captioned:
+    flagged: bool  # the captioned image scored nsfw_max or more: nothing was written
+    nsfw: float
+    width: int
+    height: int
+    seconds: float
 
 
 class _Malformed(ValueError):
@@ -326,6 +335,37 @@ class SelfieWorker:
         except _Malformed:
             similarity = None  # a best-effort diagnostic never fails a good grid
         return Gridded(width, height, seconds, similarity)
+
+    async def caption(self, base: Path, *, top: str, bottom: str, out: Path, nsfw_max: float,
+                      rid: str | None = None) -> Captioned:
+        """A meme: the worker draws `top` and `bottom` over the JPEG at `base` and writes `out`
+        unless the result scores nsfw_max or more (Captioned.flagged). An ok false answer
+        (missing_base, bad_request, ...) raises WorkerError(<error>) and leaves the worker
+        running. The caption is drawn, never sent as a prompt; it is never logged."""
+        self._sequence += 1
+        rid = f"c{self._sequence}" if rid is None else rid
+        if type(rid) is not str or not 1 <= len(rid) <= 32:
+            raise ValueError("a request id is 1-32 characters")
+        line = json.dumps({"id": rid, "op": "caption", "base_path": str(base), "top": top,
+                           "bottom": bottom, "out_path": str(out), "nsfw_max": nsfw_max}
+                          ).encode("utf-8") + b"\n"
+        if len(line) - 1 > MAX_LINE:
+            raise WorkerError("bad_request")
+        tree = self._tree
+        if not self.running:
+            if tree is not None and tree.process.returncode is not None:
+                await self._end_failed(tree)
+            raise WorkerError("gone")
+        answer = await self._answer(tree, rid, self._render_s, line)
+        if not answer["ok"]:
+            raise WorkerError(_reason(answer))
+        try:
+            return Captioned(_field(answer, "flagged", bool), float(_field(answer, "nsfw", int, float)),
+                             _field(answer, "width", int), _field(answer, "height", int),
+                             float(_field(answer, "seconds", int, float)))
+        except _Malformed:
+            await self._end_failed(tree)
+            raise WorkerError("gone") from None
 
     async def embed(self, ref: Path) -> tuple[float, ...]:
         """One chosen JPEG, with bounded numeric-only output from the pinned encoder."""

@@ -717,7 +717,9 @@ def discord_args(args) -> dict:
                 raise BadRequest(WORDS[e.code]) from None
     if "emoji" in shape:
         emoji = args["emoji"]
-        if not isinstance(emoji, str) or not is_one_emoji(emoji) or len(emoji) > 16:
+        # A registered custom shortcode passes the shape; whether the guild's own emoji are on
+        # ([culture] emoji) is the console's and the mind's own check.
+        if not isinstance(emoji, str) or not is_one_emoji(emoji, custom=True) or len(emoji) > 16:
             raise BadRequest(WORDS["not_emoji"])
         out["emoji"] = emoji
     if "name" in shape:

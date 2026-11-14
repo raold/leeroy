@@ -15,7 +15,7 @@ from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
               'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke',
-              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision', 'his_loot')
+              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision', 'his_loot', 'meme', 'meme_image')
 # An intent (godmode.intents) is tried again half an hour after an opener that was dropped.
 # A decision's stage is argued once (its keys name the stage): never fresh again once used
 FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loot_close': 7 * 86400.0,
@@ -273,7 +273,8 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            officers: frozenset[int], human: int, human_name: str, trial_rank: int,
            culture_enabled: bool = False, culture_store=None, ident=None,
            culture_calendar: bool = False, culture_loot: bool = False,
-           intents_enabled: bool = False, decisions_enabled: bool = False) -> list[Seed]:
+           intents_enabled: bool = False, decisions_enabled: bool = False,
+           culture_memes: bool = False) -> list[Seed]:
     names = {g: p.character_name for g, p in cast.items()}
     for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
         if guid in cast or guid == human:
@@ -303,6 +304,10 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
             result = [seed for seed in result if seed.key not in raised] + close
             result += _read('loot_wish', lambda: culture.loot_wish_seeds(conn, now=now, cast=cast,
                                                                          names=names, human=human, ident=ident))
+        if culture_memes:  # Part C: text memes, and the night's ready image memes
+            for kind, source in (('meme', culture.meme_seeds), ('meme_image', culture.meme_image_seeds)):
+                result += _read(kind, lambda source=source: source(culture_store, now=now, local=local,
+                                                                   personas=cast, human=human, ident=ident))
     if intents_enabled:
         result += _read('intent', lambda: _intent(conn, c))
     if decisions_enabled:

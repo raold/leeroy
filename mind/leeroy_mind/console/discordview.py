@@ -118,7 +118,10 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
     notes=voice_rows(conn,[m['id'] for m in rows])
     from .decisionsview import poll_cards
     polls = poll_cards(conn, [m['id'] for m in rows], human_guid(conn))
-    return [{**m, **({'poll': polls[m['id']]} if m['id'] in polls else {}), "reactions": react.get(m["id"], []),
+    # A server bot's post (culture.bots) names its bot; nothing else gains a field.
+    bots = store.bots(conn, [m['id'] for m in rows if m.get('origin') == 'bot'])
+    return [{**m, **({'poll': polls[m['id']]} if m['id'] in polls else {}),
+             **({'bot': bots[m['id']]} if m['id'] in bots else {}), "reactions": react.get(m["id"], []),
              'voice_note': ({'url':f"/api/discord/voice?id={m['id']}",
                  'ms':notes[m['id']]['ms'],'bytes':notes[m['id']]['bytes'],
                  'transcript_ok':bool(notes[m['id']]['transcript_ok']),'origin':notes[m['id']]['origin']}
@@ -232,5 +235,10 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
                           "deleted": r[3]} for r in views.rows(conn,
             "SELECT id, author, text, deleted FROM discord_message WHERE channel = ? "
             "AND id IN (SELECT value FROM json_each(?))", (channel, json.dumps(parents)))] if parents else []
+        if any(q["author"] == 0 for q in out["quotes"]):  # a reply to a server bot's post
+            quoted = store.bots(conn, [q["id"] for q in out["quotes"] if q["author"] == 0])
+            for q in out["quotes"]:
+                if q["id"] in quoted:
+                    q["bot"] = quoted[q["id"]]
         return _bounded_window(out, after=after)
     return out
