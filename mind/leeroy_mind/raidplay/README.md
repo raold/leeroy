@@ -45,16 +45,30 @@ Per mechanic (`[[boss.mechanic]]`):
 - `kind`: one of `avoid_ground`, `move_out_cone`, `spread`, `stack`, `soak`, `run_out_debuff`,
   `interrupt`, `dispel`, `tank_swap_at_stacks`, `switch_adds`, `kill_order`, `los`, `face_away`,
   `positional`, `kite`, `raid_cooldowns`, `use_object`, `heal_target`, `enrage_timer`, `stop_casting`.
-- `roles`: who it is for (`tank`, `healer`, `melee`, `ranged`); `phase` (a phase id or `all`).
-- `spells`: what the encounter casts (what a responder watches for); `hits`: what lands on
-  players when that differs (what scoring sees). Either a list for every difficulty or a table
-  per difficulty; a missing heroic key falls back to the same size's normal value.
+- `roles`: who it is for (`tank`, `healer`, `melee`, `ranged`); `phase`: `all`, one phase id or
+  a list of them.
+- `spells`: what the encounter casts (what a responder watches for at cast start); `hits`: what
+  lands on players when that differs (the damage or debuff, never a summon or the caster's own
+  aura; what scoring sees). Either a list for every difficulty or a table per difficulty; a
+  missing heroic key falls back to the same size's normal value. `spells` may be empty only
+  for a `positional` or `kill_order` rule or when `adds` names the creatures.
+- `adds`: creature entries of the adds it is about, with their difficulty entries.
 - `only`: the difficulties where it exists (default all of the raid's).
 - Numbers, each a value or a per-difficulty table: `radius` and `range` (yards), `stacks`,
-  `first`, `every`, `duration`, `cast` (seconds), `targets`.
-- `handled_by`: `playerbots` when the stock strategy in `mod-playerbots/src/Ai/Raid/<Raid>/`
-  already reacts to it (then `playerbots` names the stock action), else `none`. Playerbots has
-  no Trial of the Crusader strategy.
+  `first`, `every`, `duration`, `cast` (seconds), `targets`. Every body-moving kind
+  (`avoid_ground`, `move_out_cone`, `spread`, `stack`, `soak`, `run_out_debuff`, `los`) must give a
+  `radius` or `range` for each of its difficulties; they come from Spell.dbc's effect radius (with
+  the core's `SpellInfoCorrections`) or, where the script sets it, the script.
+- `handled_by`: what stock playerbots already does about it, which is the responder's gate:
+  - `playerbots`: the raid strategy in `mod-playerbots/src/Ai/Raid/<Raid>/` (or a stock strategy
+    every such bot has, such as `behind` for melee damage dealers) handles it for the roles named;
+  - `partial`: only for some roles or under some conditions, said in `handled_note` (for example
+    the generic `avoid aoe`, which steps out after an effect lands and only for bots with a
+    real-player master, so never in all-bot offline raids; class interrupts and cures, which need
+    that class in the raid);
+  - `none`: nothing in stock playerbots does it.
+  `playerbots` lists the registered stock action or strategy names; `raidplay check
+  --playerbots-src` proves each is registered. Playerbots has no Trial of the Crusader strategy.
 - `explain`: one line for the raid lead, in our own words.
 - `check`: the training check it maps to: a boss check id, a generic check (`behind`, `aggro`,
   `tank_range`, `healer_oom`) or `none`.
@@ -75,10 +89,13 @@ m = raidplay.mechanic("icc.sindragosa.frost_bomb")
 m.spell_ids("25h"), m.hit_ids("25h"), m.number("every", "25"), m.kind, m.roles, m.handled_by
 pb.boss(533, 2).enrage                   # {"10": 360, "25": 360}
 pb.covered_maps(), pb.bosses(), pb.check("icc.marrowgar.check_avoid_coldflame")
+raidplay.mechanics_for_spell(71055)      # every mechanic casting or landing that id, any difficulty
 ```
 
-`raidplay.playbook_for(map_id, boss_index, difficulty)` and `raidplay.mechanic(id)` are the
-module-level shortcuts. Everything returned is frozen; mappings are read-only.
+`raidplay.playbook_for(map_id, boss_index, difficulty)`, `raidplay.mechanic(id)` and
+`raidplay.mechanics_for_spell(spell_id)` are the module-level shortcuts (the last is a
+responder's lookup from a cast start: check the mechanic's `spell_ids(difficulty)` for the
+instance's difficulty). Everything returned is frozen; mappings are read-only.
 
 ## Training
 
@@ -90,14 +107,24 @@ so scoring is byte-for-byte what it was (`tests/raidplay/test_training_parity.py
 `training rescore` and `training spells check`) scores every check of every covered raid
 (checks version 2: the Naxxramas rows and the new no-behind bosses Heigan, Thaddius, Gothik and
 the Four Horsemen). Stored pulls checked under version 1 are rechecked once at the next mind
-start. Today's checker turns `avoid` and `adds` rows into coverage notes, not failures; the new
-rows that can fail are Gluth's Mortal Wound stacks on tanks and the Four Horsemen's mark stacks.
+start.
+
+What it changes today: nothing in any stored or new score. The checker turns `avoid` and `adds`
+rows into coverage notes, not failures. The new rows that can record a failure (Gluth's Mortal
+Wound stacks on tanks, the Four Horsemen's mark stacks) write `tg_failure` rows, but both bosses
+also have an `avoid` or `adds` row, so their pulls never count as fully checked and the score
+ignores failed mechanics for them (`training/score.py`). The switch is groundwork for when avoid
+damage is measured; ICC and Trial of the Crusader rows are unchanged either way. The version 1
+avoid rows keep their original names (some name the cast, not the hit) for parity; the checker
+never resolves an avoid row's names, and the mechanics' `hits` carry the ids that land.
 
 ## Raid lead calls
 
-`guild/boss_calls.py`'s `BOSS_CALLS` is built from each boss's `call` and `lust`; `call_for` is
-unchanged. The 18 ICC and Trial of the Crusader calls moved here verbatim; Naxxramas bosses have
-no call yet, so they keep the generic one.
+`guild/boss_calls.py`'s `BOSS_CALLS` is read from each boss's `call` and `lust` on first use;
+`call_for` is unchanged. The 18 ICC and Trial of the Crusader calls moved here verbatim;
+Naxxramas bosses have no call yet, so they keep the generic one. If the playbook data cannot be
+read, `BOSS_CALLS` falls back to those 18 calls as they were (log `boss_calls_fallback`, once)
+so guild life never fails with it; a test keeps the two equal.
 
 ## Commands
 
@@ -111,14 +138,17 @@ python -m leeroy_mind raidplay dbm-extract --addons F:/azerothcore/Wow355a/Inter
 ```
 
 `check` reads only `Spell.dbc` from the worldserver's `DataDir` (`--dbc DIR` to name it,
-`--no-book` to skip it); never the world database. Exit 0 clean, 1 errors, 2 no spell book.
+`--no-book` to skip it); never the world database. `--playerbots-src
+F:/azerothcore/azerothcore-wotlk/modules/mod-playerbots/src` also checks that every stock action
+or strategy named is registered there. Exit 0 clean, 1 errors, 2 no spell book.
 
 ## DBM facts (local only)
 
 `dbm-extract` reads the installed Deadly Boss Mods Lua files (never runs them) and writes numeric
 facts only (creature ids, spell ids, the kind of each warning or timer, timer seconds) to
-`<data-dir>/raidplay/dbm.json`. It refuses an output path inside the git checkout other than
-the data dir. Nothing from DBM is ever committed. When that file exists, `check --notes` lists
+`<data-dir>/raidplay/dbm.json`. It refuses any output that git would track (the live `mind-data`
+sits inside the checkout but is ignored) and a data dir that is or holds the checkout. Nothing
+from DBM is ever committed: its test fixture is made up, with invented ids and numbers. When that file exists, `check --notes` lists
 spell ids DBM watches that no mechanic names and berserk timers that differ from the scripts.
 They are notes for a person to look at; the scripts win where they disagree.
 

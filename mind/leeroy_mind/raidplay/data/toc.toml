@@ -13,6 +13,7 @@ index = 0
 name = "the Northrend Beasts"
 slug = "beasts"
 creatures = [34796, 35144, 34799, 34797]
+enrage = { "10h" = 520, "25h" = 520 }
 script = "boss_northrend_beasts.cpp"
 call = "beasts: kill the snakes, dodge icehowl's charge"
 phase = [
@@ -29,6 +30,7 @@ phase = "gormok"
 roles = ["tank"]
 spells = { "10" = [66331], "25" = [67477], "10h" = [67478], "25h" = [67479] }
 handled_by = "none"
+range = 10
 explain = "Gormok's Impale leaves a bleed that stacks; tanks swap at about three stacks."
 check = "none"
 stacks = 3
@@ -41,21 +43,37 @@ kind = "switch_adds"
 phase = "gormok"
 roles = ["melee", "ranged"]
 spells = [66406]
-hits = [66313]
+hits = { "10" = [66317, 66320], "25" = [66317, 67472], "10h" = [66317, 67473], "25h" = [66317, 67475] }
 handled_by = "none"
-explain = "Snobolds jump onto players and throw fire bombs; kill each snobold and step out of the fire."
-check = "toc.beasts.check_avoid"
+explain = "Snobolds jump onto players; kill each snobold off its victim."
+check = "none"
 every = 20
+
+[[boss.mechanic]]
+id = "toc.beasts.fire_bomb"
+name = "Fire Bomb"
+kind = "avoid_ground"
+phase = "gormok"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [66313]
+hits = { "10" = [66317, 66320], "25" = [66317, 67472], "10h" = [66317, 67473], "25h" = [66317, 67475] }
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
+explain = "Snobolds throw fire bombs that leave burning patches; step out of the fire."
+check = "toc.beasts.check_avoid"
+radius = 2
 
 [[boss.mechanic]]
 id = "toc.beasts.staggering_stomp"
 name = "Staggering Stomp"
-kind = "interrupt"
+kind = "positional"
 phase = "gormok"
 roles = ["healer", "ranged"]
 spells = { "10" = [66330], "25" = [67647], "10h" = [67648], "25h" = [67649] }
 handled_by = "none"
-explain = "His stomp interrupts casters next to him; casters stand back from Gormok."
+range = 20
+explain = "His half-second stomp interrupts and dazes casters within twenty yards; casters stand back from Gormok."
 check = "none"
 every = 20
 
@@ -67,6 +85,8 @@ phase = "worms"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [66883], "25" = [67641], "10h" = [67642], "25h" = [67643] }
 handled_by = "none"
+hits = { "10" = [66881], "25" = [67638], "10h" = [67639], "25h" = [67640] }
+radius = 30
 explain = "The worms leave slime pools that grow; keep fighting away from them."
 check = "toc.beasts.check_avoid"
 every = 12
@@ -74,13 +94,14 @@ every = 12
 [[boss.mechanic]]
 id = "toc.beasts.paralytic_toxin"
 name = "Paralytic Toxin"
-kind = "dispel"
+kind = "stack"
 phase = "worms"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [66901, 66824], "25" = [67615, 67612], "10h" = [67616, 67613], "25h" = [67617, 67614] }
 hits = { "10" = [66823], "25" = [67618], "10h" = [67619], "25h" = [67620] }
 handled_by = "none"
-explain = "Acidmaw's toxin slows to a stop; a player with Burning Bile runs to the toxined one to cure it."
+radius = 10
+explain = "Acidmaw's toxin slows to a stop and no dispel removes it; the toxined player meets a Burning Bile carrier, whose bile cures it."
 check = "toc.beasts.check_toxin"
 
 [[boss.mechanic]]
@@ -92,7 +113,7 @@ roles = ["healer", "melee", "ranged"]
 spells = { "10" = [66902, 66879], "25" = [67627, 67624], "10h" = [67628, 67625], "25h" = [67629, 67626] }
 hits = [66869]
 handled_by = "none"
-explain = "Dreadscale's bile burns but cleanses Paralytic Toxin from players it touches; bile carriers seek out the toxined."
+explain = "Dreadscale's bile burns, but it also removes Paralytic Toxin from players near the carrier; bile carriers go to the toxined."
 check = "toc.beasts.check_toxin"
 
 [[boss.mechanic]]
@@ -101,9 +122,10 @@ name = "Acidmaw and Dreadscale"
 kind = "kill_order"
 phase = "worms"
 roles = ["melee", "ranged"]
-spells = { "10" = [66880, 66818, 66821], "25" = [67606, 66818, 66821], "10h" = [67607, 66818, 66821], "25h" = [67608, 66818, 66821] }
+spells = []
 handled_by = "none"
-explain = "Kill the two worms within a few seconds of each other, or the survivor enrages."
+adds = [35144, 35511, 35512, 35513, 34799, 35514, 35515, 35516]
+explain = "When one worm dies the other enrages; bring both low and kill them close together."
 check = "none"
 
 [[boss.mechanic]]
@@ -114,7 +136,9 @@ phase = "icehowl"
 roles = ["healer", "melee", "ranged"]
 spells = [66688]
 handled_by = "none"
-explain = "Icehowl breathes frost in front of him; only the tank stands there."
+hits = { "10" = [66689], "25" = [67650], "10h" = [67651], "25h" = [67652] }
+range = 90
+explain = "Icehowl breathes frost at a random player within ninety yards; others keep out of the line between him and that player."
 check = "none"
 every = 25
 
@@ -126,6 +150,7 @@ phase = "icehowl"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [66683, 66734], "25" = [67660, 66734], "10h" = [67661, 66734], "25h" = [67662, 66734] }
 handled_by = "none"
+radius = 12
 explain = "After Massive Crash he glares at a player and charges; everyone runs out of his line, and a miss stuns him."
 check = "toc.beasts.check_avoid"
 every = 40
@@ -133,12 +158,13 @@ every = 40
 [[boss.mechanic]]
 id = "toc.beasts.whirl"
 name = "Whirl"
-kind = "spread"
+kind = "positional"
 phase = "icehowl"
-roles = ["melee"]
+roles = ["healer", "ranged"]
 spells = { "10" = [67345], "25" = [67663], "10h" = [67664], "25h" = [67665] }
 handled_by = "none"
-explain = "Whirl hits everyone near Icehowl; melee keep their distance when he spins."
+range = 15
+explain = "Whirl instantly hits and knocks back everyone within fifteen yards; healers and ranged stay outside it."
 check = "none"
 every = 16
 
@@ -172,7 +198,9 @@ name = "Fel Fireball"
 kind = "interrupt"
 roles = ["melee", "ranged"]
 spells = { "10" = [66532], "25" = [66963], "10h" = [66964], "25h" = [66965] }
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
 explain = "Kick every Fel Fireball he casts at the tank."
 check = "none"
 every = 12
@@ -184,7 +212,10 @@ kind = "run_out_debuff"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [66197], "25" = [68123], "10h" = [68124], "25h" = [68125] }
 hits = { "10" = [66877], "25" = [67070], "10h" = [67071], "25h" = [67072] }
-handled_by = "none"
+handled_by = "partial"
+radius = 3
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
 explain = "The flamed player runs to the room's edge, trailing fire away from the raid."
 check = "toc.jaraxxus.check_avoid"
 every = 30
@@ -206,10 +237,25 @@ name = "Nether Power"
 kind = "dispel"
 roles = ["healer", "ranged"]
 spells = { "10" = [66228], "25" = [67106], "10h" = [67107], "25h" = [67108] }
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["purge", "spellsteal"]
+handled_note = "a shaman's Purge or a mage's Spellsteal removes stacks when one is in the raid"
 explain = "Spellsteal or purge his Nether Power stacks; they raise his spell damage."
 check = "none"
-every = 30
+every = 35
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.infernal_eruption"
+name = "Infernal Eruption"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [66258], "25" = [67901], "10h" = [67902], "25h" = [67903] }
+hits = [66255]
+handled_by = "none"
+radius = 10
+explain = "A volcano erupts and its infernals' blasts burn the ground; stay out of the eruptions."
+check = "toc.jaraxxus.check_avoid"
+every = 120
 
 [[boss.mechanic]]
 id = "toc.jaraxxus.infernal_volcano"
@@ -217,20 +263,33 @@ name = "Infernal Volcano"
 kind = "switch_adds"
 roles = ["melee", "ranged"]
 spells = { "10" = [66258], "25" = [67901], "10h" = [67902], "25h" = [67903] }
-hits = { "10" = [66252], "25" = [67067], "10h" = [67068], "25h" = [67069] }
+only = ["10h", "25h"]
 handled_by = "none"
-explain = "Kill the volcano before it spits more infernals; stay out of their eruptions."
-check = "toc.jaraxxus.check_avoid"
+explain = "On heroic the volcano can be attacked; kill it before it spits out more infernals."
+check = "none"
 every = 120
 
 [[boss.mechanic]]
 id = "toc.jaraxxus.nether_portal"
 name = "Nether Portal"
 kind = "switch_adds"
-roles = ["tank", "melee", "ranged"]
+roles = ["melee", "ranged"]
 spells = { "10" = [66269], "25" = [67898], "10h" = [67899], "25h" = [67900] }
 handled_by = "none"
-explain = "Burn the portal or tank the Mistress of Pain it brings and kill her away from the healers."
+only = ["10h", "25h"]
+explain = "On heroic the portal can be attacked; burn it before the Mistress of Pain steps through."
+check = "none"
+every = 120
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.mistress_of_pain"
+name = "Mistress of Pain"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = { "10" = [66269], "25" = [67898], "10h" = [67899], "25h" = [67900] }
+adds = [34826, 35270, 35271, 35272]
+handled_by = "none"
+explain = "A Mistress of Pain comes through each portal; a tank holds her and the raid kills her away from the healers."
 check = "toc.jaraxxus.check_adds"
 every = 120
 
@@ -241,6 +300,7 @@ kind = "spread"
 roles = ["ranged", "healer"]
 spells = { "10" = [66528], "25" = [67029], "10h" = [67030], "25h" = [67031] }
 handled_by = "none"
+radius = 10
 explain = "Fel Lightning chains between nearby players; ranged spread out."
 check = "none"
 every = 12
@@ -263,7 +323,7 @@ max_share = 0.2
 index = 2
 name = "the Faction Champions"
 slug = "champions"
-creatures = [34461, 34458]
+creatures = [34461, 34460, 34469, 34467, 34468, 34465, 34471, 34466, 34473, 34472, 34463, 34470, 34474, 34475, 34458, 34451, 34459, 34448, 34449, 34445, 34456, 34447, 34441, 34454, 34455, 34444, 34450, 34453]
 script = "boss_faction_champions.cpp"
 melee_behind = false
 no_behind_since = 1
@@ -286,7 +346,9 @@ name = "Interrupt heals"
 kind = "interrupt"
 roles = ["melee", "ranged"]
 spells = { "10" = [66113, 66067, 66086], "25" = [68008, 67968, 67974], "10h" = [68009, 67969, 67975], "25h" = [68010, 67970, 67976] }
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
 explain = "Interrupt their big heals and Tranquility."
 check = "none"
 
@@ -296,19 +358,33 @@ name = "Dispel their buffs"
 kind = "dispel"
 roles = ["healer", "ranged"]
 spells = [66009, 66010, 66063]
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["purge", "spellsteal", "dispel magic", "mass dispel"]
+handled_note = "stock purges and dispels fire when a shaman, mage or priest is in the raid"
 explain = "Purge or mass dispel shields and Hand of Protection on the focus target."
 check = "none"
 
 [[boss.mechanic]]
 id = "toc.champions.bladestorm"
-name = "Bladestorm and Hellfire"
-kind = "spread"
-roles = ["healer", "ranged"]
-spells = { "10" = [65947, 65816], "25" = [65947, 68145], "10h" = [65947, 68146], "25h" = [65947, 68147] }
+name = "Bladestorm"
+kind = "avoid_ground"
+roles = ["melee"]
+spells = [65947]
 handled_by = "none"
-explain = "Back away from a bladestorming warrior and from Hellfire."
+radius = 8
+explain = "A warrior bladestorms when three or more players are within eight yards; melee step away while it spins."
 check = "none"
+
+[[boss.mechanic]]
+id = "toc.champions.hellfire"
+name = "Hellfire"
+kind = "avoid_ground"
+roles = ["melee"]
+spells = { "10" = [65816], "25" = [68145], "10h" = [68146], "25h" = [68147] }
+handled_by = "none"
+explain = "A warlock channelling Hellfire burns everyone within ten yards; melee step out or interrupt it."
+check = "none"
+radius = 10
 
 [[boss]]
 index = 3
@@ -327,7 +403,7 @@ kind = "positional"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [65686, 65684], "25" = [67222, 67176], "10h" = [67223, 67177], "25h" = [67224, 67178] }
 handled_by = "none"
-explain = "Everyone takes the essence of the twin they attack; it lets you take matching orbs and vortexes safely."
+explain = "Each player takes one essence and attacks the twin of the other colour (Light essence hits Eydis, Dark essence hits Fjola); the essence also makes matching orbs and vortexes safe."
 check = "none"
 
 [[boss.mechanic]]
@@ -337,9 +413,11 @@ kind = "avoid_ground"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [65795, 65808], "25" = [67238, 67172], "10h" = [67239, 67173], "25h" = [67240, 67174] }
 handled_by = "none"
+first = 12
+radius = 6
 explain = "Touch orbs of your own colour for a buff and dodge the other colour."
 check = "toc.twins.check_avoid"
-every = 45
+every = 10
 
 [[boss.mechanic]]
 id = "toc.twins.vortex"
@@ -348,9 +426,9 @@ kind = "positional"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [66046, 66058], "25" = [67206, 67182], "10h" = [67207, 67183], "25h" = [67208, 67184] }
 handled_by = "none"
-explain = "When a vortex is cast, everyone with the other essence swaps to the vortex colour before it lands."
+first = 45
+explain = "Every 45 s one twin casts a special; on a vortex everyone with the other essence switches to the vortex colour before it lands."
 check = "none"
-every = 45
 
 [[boss.mechanic]]
 id = "toc.twins.twin_pact"
@@ -358,11 +436,12 @@ name = "Twin's Pact"
 kind = "interrupt"
 roles = ["melee", "ranged"]
 spells = { "10" = [65876, 65875], "25" = [67306, 67303], "10h" = [67307, 67304], "25h" = [67308, 67305] }
-hits = { "10" = [65858, 65874], "25" = [67259, 67256], "10h" = [67260, 67257], "25h" = [67261, 67258] }
-handled_by = "none"
-explain = "The shielded twin casts a heal; break the shield and interrupt it."
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+first = 45
+explain = "A shielded twin casts Twin's Pact to heal; break her shield and interrupt the cast."
 check = "none"
-every = 45
 
 [[boss.mechanic]]
 id = "toc.twins.twin_spike"
@@ -371,6 +450,7 @@ kind = "soak"
 roles = ["tank"]
 spells = { "10" = [66075, 66069], "25" = [67312, 67309], "10h" = [67313, 67310], "25h" = [67314, 67311] }
 handled_by = "none"
+range = 5
 explain = "Each twin hits her tank hard; tanks keep the twins apart and active mitigation up."
 check = "none"
 every = 9
@@ -383,9 +463,10 @@ roles = ["healer", "melee", "ranged"]
 spells = { "10" = [65950, 66001], "25" = [67296, 67281], "10h" = [67297, 67282], "25h" = [67298, 67283] }
 only = ["10h", "25h"]
 handled_by = "none"
-explain = "On heroic a touch of the other colour burns you until you swap your essence to match it."
+first = 15
+explain = "On heroic a touch of the other colour hurts its target and everyone holding the opposite essence until the target swaps essence to match it."
 check = "none"
-every = 20
+every = 47
 
 [[boss.check]]
 id = "toc.twins.check_avoid"
@@ -411,13 +492,13 @@ phase = [
 [[boss.mechanic]]
 id = "toc.anubarak.penetrating_cold"
 name = "Penetrating Cold"
-kind = "dispel"
+kind = "raid_cooldowns"
 roles = ["healer"]
 spells = { "10" = [66013], "25" = [67700], "10h" = [68509], "25h" = [68510] }
 handled_by = "none"
 explain = "Penetrating Cold cannot be dispelled; healers keep its targets up."
 check = "toc.anubarak.check_penetrating_cold"
-every = 15
+every = 18
 targets = { "10" = 2, "25" = 5 }
 
 [[boss.mechanic]]
@@ -457,11 +538,12 @@ every = 45
 id = "toc.anubarak.freezing_slash"
 name = "Freezing Slash"
 kind = "soak"
-phase = "ground"
+phase = ["ground", "three"]
 roles = ["tank"]
 spells = [66012]
 handled_by = "none"
-explain = "Freezing Slash roots the tank; healers keep him topped."
+range = 5
+explain = "Freezing Slash stuns the tank for three seconds; healers keep him topped through it."
 check = "none"
 every = 18
 
@@ -484,7 +566,9 @@ kind = "interrupt"
 roles = ["melee", "ranged"]
 spells = [66134]
 only = ["10h", "25h"]
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
 explain = "On heroic, burrowers wind up Shadow Strike on a player; stun or interrupt it."
 check = "none"
 

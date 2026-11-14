@@ -38,11 +38,16 @@ def test_every_mechanic_is_well_formed():
         for m in boss.mechanics:
             assert m.id.startswith(f"{raid.key}.{boss.slug}.") and m.kind in KINDS
             assert m.roles and set(m.roles) <= {"tank", "healer", "melee", "ranged"}
-            assert all(m.spell_ids(d) for d in m.only) and set(m.only) <= set(raid.difficulties)
+            assert set(m.only) <= set(raid.difficulties)
+            assert all(m.spell_ids(d) or m.adds or m.kind in ("positional", "kill_order") for d in m.only)
+            if m.kind in raidplay.MOVEMENT_KINDS:
+                assert all(m.number("radius", d) or m.number("range", d) for d in m.only)
             assert "\n" not in m.explain and 0 < len(m.explain) <= 200
-            assert (m.handled_by == "playerbots") == bool(m.playerbots)
+            assert (m.handled_by != "none") == bool(m.playerbots)
+            assert (m.handled_by == "partial") == bool(m.handled_note) or m.handled_by == "playerbots"
     assert sum(m.handled_by == "playerbots" for m in pb.mechanics()) > 50
-    assert all(m.handled_by == "none" for b in pb.raids[649].bosses for m in b.mechanics)
+    # Playerbots has no Trial of the Crusader strategy: only generic stock behaviour applies there.
+    assert all(m.handled_by != "playerbots" for b in pb.raids[649].bosses for m in b.mechanics)
 
 
 def test_playbook_for_resolves_a_training_context():
@@ -63,6 +68,17 @@ def test_playbook_for_resolves_a_training_context():
     assert raidplay.playbook_for(631, 99, 0) is None
     assert raidplay.mechanic("nope") is None
     assert raidplay.load().check("icc.marrowgar.check_avoid_coldflame").tag == "coldflame"
+
+
+def test_lookup_by_spell_covers_every_difficulty():
+    found = raidplay.mechanics_for_spell(71055)              # 25-man heroic Frost Bomb
+    assert [m.id for m in found] == ["icc.sindragosa.frost_bomb"]
+    assert [m.id for m in raidplay.mechanics_for_spell(74297)] == ["icc.lichking.harvest_soul"]
+    assert raidplay.mechanic("icc.lichking.harvest_soul").spell_ids("25h") == (74297,)
+    assert raidplay.mechanics_for_spell(1) == ()
+    defile = raidplay.mechanic("icc.lichking.defile")
+    assert defile.handled_by == "playerbots" and defile.phase == ("two", "three")
+    assert raidplay.mechanic("icc.lichking.shadow_trap").handled_by == "partial"
 
 
 def test_hits_fall_back_to_spells():
@@ -92,6 +108,7 @@ spells = SPELLS
 handled_by = "none"
 explain = "Do the thing."
 check = "CHECK"
+radius = 3
 EXTRA
 '''
 
@@ -123,6 +140,18 @@ def test_an_invented_document_loads():
 def test_schema_errors_name_the_problem(doc, why):
     with pytest.raises(PlaybookError, match=why):
         load_files(doc)
+
+
+def test_movement_needs_a_distance_and_partial_needs_a_note():
+    with pytest.raises(PlaybookError, match="radius or range"):
+        load_files({"toc.toml": _doc()["toc.toml"].replace(b"radius = 3\n", b"")})
+    partial = _doc()["toc.toml"].replace(b'handled_by = "none"', b'handled_by = "partial"\nplayerbots = ["x"]')
+    with pytest.raises(PlaybookError, match="handled_note"):
+        load_files({"toc.toml": partial})
+    ok = load_files({"toc.toml": partial.replace(b'playerbots = ["x"]', b'playerbots = ["x"]\nhandled_note = "only tanks"')})
+    assert ok.mechanic("toc.anubarak.thing").handled_note == "only tanks"
+    rule = _doc(kind="positional", spells="[]")["toc.toml"].replace(b"radius = 3\n", b"")
+    assert load_files({"toc.toml": rule}).mechanic("toc.anubarak.thing").spell_ids("10") == ()
 
 
 def test_roles_and_handlers_are_closed():

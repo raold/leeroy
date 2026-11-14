@@ -1,10 +1,14 @@
 """Pre-pull plans keyed by the core's encounter indexes, not creature entries."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import logging
 import re
 
 from leeroy_mind import raidplay
 from leeroy_mind.wow import BOSS_NAMES
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -13,9 +17,57 @@ class BossCall:
     lust: bool = True
 
 
-# The stock pre-pull calls are kept with each boss in the raid playbooks (leeroy_mind/raidplay).
-BOSS_CALLS: dict[tuple[int, int], BossCall] = {
-    boss.key: BossCall(boss.call, boss.lust) for boss in raidplay.load().bosses() if boss.call is not None}
+# The calls as they were before they moved into the raid playbooks; used only when the playbook
+# data cannot be read, so guild life's calls never fail with it.
+_FALLBACK = {
+    (631, 0): BossCall("marrowgar: spread out, kill spikes, run from coldflame"),
+    (631, 1): BossCall("deathwhisper: kill adds fast, interrupt frostbolts"),
+    (631, 2): BossCall("gunship: jump over, kill the mage, then back to the ship", False),
+    (631, 3): BossCall("saurfang: ranged spread, kill blood beasts fast"),
+    (631, 4): BossCall("festergut: ranged spread, stack on gas spores"),
+    (631, 5): BossCall("rotface: kite the big ooze, merge the little ones"),
+    (631, 6): BossCall("putricide: kite the oozes, stay out of puddles"),
+    (631, 7): BossCall("princes: ranged spread, shoot the kinetic bombs"),
+    (631, 8): BossCall("blood queen: spread, bite on time, take swarm out"),
+    (631, 9): BossCall("svalna: grab a spear, free whoever she impales"),
+    (631, 10): BossCall("valithria: heal her to full, dps kill the adds", False),
+    (631, 11): BossCall("sindragosa: spread, hide behind ice tombs for bombs"),
+    (631, 12): BossCall("lich king: stack for infest, move out of defile"),
+    (649, 0): BossCall("beasts: kill the snakes, dodge icehowl's charge"),
+    (649, 1): BossCall("jaraxxus: interrupt, kill portals and volcanoes"),
+    (649, 2): BossCall("champions: focus the healers, cc what you can"),
+    (649, 3): BossCall("twins: match your orb colour, swap on vortex"),
+    (649, 4): BossCall("anub'arak: kite the spike over frost patches"),
+}
+
+
+class _Calls(Mapping):
+    """The stock pre-pull calls, kept with each boss in the raid playbooks and read on first use."""
+
+    def __init__(self):
+        self._calls = None
+
+    def _read(self) -> dict:
+        if self._calls is None:
+            try:
+                self._calls = {boss.key: BossCall(boss.call, boss.lust)
+                               for boss in raidplay.load().bosses() if boss.call is not None}
+            except Exception as exc:
+                log.warning("boss_calls_fallback error=%s", type(exc).__name__)
+                self._calls = dict(_FALLBACK)
+        return self._calls
+
+    def __getitem__(self, key):
+        return self._read()[key]
+
+    def __iter__(self):
+        return iter(self._read())
+
+    def __len__(self):
+        return len(self._read())
+
+
+BOSS_CALLS: Mapping[tuple[int, int], BossCall] = _Calls()
 GENERIC = BossCall("{boss} next. drink up, then on the tank")
 
 

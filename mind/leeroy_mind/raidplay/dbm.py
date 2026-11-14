@@ -18,8 +18,8 @@ MAX_FILE_BYTES = 1024 * 1024
 MAX_FILES = 2000
 
 _NEWMOD = re.compile(r'DBM:NewMod\(\s*"([^"\n]{1,80})"\s*,\s*"(DBM-[A-Za-z0-9-]{1,40})"')
-_CREATURES = re.compile(r'mod:SetCreatureID\(([0-9,\s]*)\)')
-_OBJECT = re.compile(r'mod:New([A-Za-z]{1,40})\(([^)\n]*)\)')
+_CREATURES = re.compile(r'\b[A-Za-z_]\w*:SetCreatureID\(([0-9,\s]*)\)')
+_OBJECT = re.compile(r'\b[A-Za-z_]\w*:New([A-Za-z]{1,40})\(([^)\n]*)\)')
 _IS_SPELL = re.compile(r'IsSpellID\(([0-9,\s]*)\)')
 _SPELL_EQ = re.compile(r'spellId\s*==\s*([0-9]+)')
 _NUMBER = re.compile(r'-?[0-9]+(?:\.[0-9]+)?')

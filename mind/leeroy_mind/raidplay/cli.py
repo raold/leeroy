@@ -46,9 +46,13 @@ def boss_lines(boss: Boss, difficulty: str | None) -> list[str]:
         ids = m.spell_ids(difficulty) if difficulty else sorted(m.all_ids())
         numbers = " ".join(f"{n}={_number(m, n, difficulty or m.only[0])}" for n in m.numbers
                            if _number(m, n, difficulty or m.only[0]))
-        lines.append(f"  - {m.id} [{m.kind}] {m.name}; roles {'/'.join(m.roles)}; phase {m.phase}; "
-                     f"handled by {m.handled_by}; check {m.check}")
-        lines.append(f"      spells {', '.join(map(str, ids))}" + (f"; {numbers}" if numbers else "")
+        stock = f" ({', '.join(m.playerbots)})" if m.playerbots else ""
+        lines.append(f"  - {m.id} [{m.kind}] {m.name}; roles {'/'.join(m.roles)}; phase {'/'.join(m.phase)}; "
+                     f"handled by {m.handled_by}{stock}; check {m.check}")
+        if m.handled_note:
+            lines.append(f"      stock: {m.handled_note}")
+        adds = f"; adds {', '.join(map(str, m.adds))}" if m.adds else ""
+        lines.append(f"      spells {', '.join(map(str, ids)) or '-'}{adds}" + (f"; {numbers}" if numbers else "")
                      + ("" if m.only == boss_only(boss) else f"; only {', '.join(m.only)}"))
         lines.append(f"      {m.explain}")
     for c in boss.checks:
@@ -65,9 +69,10 @@ def boss_json(boss: Boss, difficulty: str | None) -> dict:
     return {"map": boss.map_id, "index": boss.index, "name": boss.name, "slug": boss.slug,
             "creatures": list(boss.creatures), "enrage": dict(boss.enrage), "call": boss.call,
             "melee_behind": boss.melee_behind, "phases": [p.__dict__ for p in boss.phases],
-            "mechanics": [{"id": m.id, "name": m.name, "kind": m.kind, "phase": m.phase,
+            "mechanics": [{"id": m.id, "name": m.name, "kind": m.kind, "phase": list(m.phase),
                            "roles": list(m.roles), "only": list(m.only), "handled_by": m.handled_by,
-                           "playerbots": m.playerbots, "check": m.check, "explain": m.explain,
+                           "playerbots": list(m.playerbots), "handled_note": m.handled_note,
+                           "adds": list(m.adds), "check": m.check, "explain": m.explain,
                            "spells": ({difficulty: list(m.spell_ids(difficulty))} if difficulty
                                       else {k: list(v) for k, v in m.spells.items()}),
                            "hits": {k: list(v) for k, v in m.hits.items()},
@@ -133,11 +138,16 @@ def _check(args, data_dir: Path) -> int:
             return 2
     dbm_path = Path(args.dbm) if args.dbm else data_dir / "raidplay" / "dbm.json"
     facts = dbm.read(dbm_path) if dbm_path.is_file() else None
-    found = check.validate(playbooks, book, dbm=facts)
+    stock = check.registered_names(Path(args.playerbots_src)) if args.playerbots_src else None
+    if stock is not None and not stock:
+        print("raidplay check: no registered playerbots names under --playerbots-src")
+        return 2
+    found = check.validate(playbooks, book, dbm=facts, stock=stock)
     errors = [f for f in found if f.level == "error"]
     summary = {"raids": len(playbooks.raids), "bosses": len(playbooks.bosses()),
                "mechanics": len(playbooks.mechanics()), "spell_book": book is not None,
-               "dbm": facts is not None, "errors": len(errors), "notes": len(found) - len(errors)}
+               "dbm": facts is not None, "playerbots_src": stock is not None,
+               "errors": len(errors), "notes": len(found) - len(errors)}
     if args.json:
         print(json.dumps({"summary": summary, "findings": [f.__dict__ for f in found]}, indent=2))
     else:
@@ -157,14 +167,35 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
+def _git_tracks(path: Path) -> bool:
+    """Whether git could commit this path: inside a work tree and not ignored. Unknown is True."""
+    import subprocess
+    folder = path.parent
+    while not folder.exists():
+        folder = folder.parent
+    try:
+        top = subprocess.run(["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=10)
+        if top.returncode != 0:
+            return False
+        ignored = subprocess.run(["git", "-C", top.stdout.strip(), "check-ignore", "-q", str(path)],
+                                 capture_output=True, timeout=10)
+        return ignored.returncode != 0
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
 def _extract(args, data_dir: Path) -> int:
     addons = Path(args.addons)
     if not addons.is_dir():
         print("raidplay dbm-extract: --addons must be an existing Interface/AddOns folder")
         return 2
     out = (Path(args.out) if args.out else data_dir / "raidplay" / "dbm.json").resolve()
-    if _inside(out, REPO_ROOT) and not _inside(out, data_dir.resolve()):
-        print("raidplay dbm-extract: refusing to write inside the git checkout; DBM facts stay local")
+    # DBM facts must never be committable: refuse any path git would track (the live mind-data
+    # sits inside the checkout but is ignored), and a data dir that is or holds this checkout.
+    if _inside(REPO_ROOT, data_dir.resolve()) or _git_tracks(out):
+        print("raidplay dbm-extract: refusing a path inside a git checkout that git would track; "
+              "DBM facts stay local")
         return 2
     facts = dbm.extract(addons)
     dbm.write(facts, out)
@@ -189,6 +220,7 @@ def raidplay_main(argv=None) -> int:
     chk.add_argument("--dbc", help="the server's dbc folder (default: DataDir from worldserver.conf)")
     chk.add_argument("--no-book", action="store_true", help="skip the spell book")
     chk.add_argument("--dbm", help="local DBM facts (default: <data-dir>/raidplay/dbm.json if present)")
+    chk.add_argument("--playerbots-src", help="mod-playerbots/src: every stock action named must be registered")
     chk.add_argument("--notes", action="store_true", help="print notes as well as errors")
     chk.add_argument("--json", action="store_true")
     _add_data_dir(chk, after_action=True)

@@ -168,3 +168,18 @@ def test_the_switch_is_off_by_default():
     assert playbooks_on(object()) is False
     assert playbooks_on(type("P", (), {"cfg": TrainingConfig(playbooks=True)})()) is True
     assert playbooks_on(type("P", (), {"cfg": TrainingConfig()})()) is False
+
+
+def test_calls_fall_back_to_the_old_values_when_the_data_cannot_load(monkeypatch, caplog):
+    from leeroy_mind import raidplay
+    from leeroy_mind.guild import boss_calls
+    assert boss_calls._FALLBACK == dict(BOSS_CALLS) == OLD_BOSS_CALLS
+
+    def broken():
+        raise raidplay.PlaybookError("invented failure")
+    monkeypatch.setattr(raidplay, "load", broken)
+    calls = boss_calls._Calls()
+    with caplog.at_level("WARNING"):
+        assert dict(calls) == OLD_BOSS_CALLS and len(calls) == 18
+        assert calls[631, 0].pre.startswith("marrowgar")
+    assert [r.getMessage() for r in caplog.records] == ["boss_calls_fallback error=PlaybookError"]

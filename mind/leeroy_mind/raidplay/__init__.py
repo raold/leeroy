@@ -2,8 +2,8 @@
 native responder and the training ground's per-mechanic scoring. See README.md."""
 
 from .model import (CHECK_KINDS, DIFFICULTIES, DIFFICULTY_KEYS, GENERIC_CHECKS, HANDLERS, KINDS,
-                    ROLES, Boss, BossPlaybook, Check, Mechanic, Phase, PlaybookError, Playbooks, Raid,
-                    load, load_files)
+                    MOVEMENT_KINDS, ROLES, Boss, BossPlaybook, Check, Mechanic, Phase, PlaybookError,
+                    Playbooks, Raid, load, load_files)
 
 
 def playbook_for(map_id: int, boss_index: int, difficulty: int) -> BossPlaybook | None:
@@ -15,6 +15,12 @@ def mechanic(mechanic_id: str) -> Mechanic | None:
     return load().mechanic(mechanic_id)
 
 
+def mechanics_for_spell(spell_id: int) -> tuple[Mechanic, ...]:
+    """Every repo mechanic that casts or lands this spell id, at any difficulty."""
+    return load().mechanics_for_spell(spell_id)
+
+
 __all__ = ["CHECK_KINDS", "DIFFICULTIES", "DIFFICULTY_KEYS", "GENERIC_CHECKS", "HANDLERS", "KINDS",
-           "ROLES", "Boss", "BossPlaybook", "Check", "Mechanic", "Phase", "PlaybookError",
-           "Playbooks", "Raid", "load", "load_files", "mechanic", "playbook_for"]
+           "MOVEMENT_KINDS", "ROLES", "Boss", "BossPlaybook", "Check", "Mechanic", "Phase", "PlaybookError",
+           "Playbooks", "Raid", "load", "load_files", "mechanic", "mechanics_for_spell",
+           "playbook_for"]

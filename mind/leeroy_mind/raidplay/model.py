@@ -46,7 +46,15 @@ KINDS = frozenset({
     "stop_casting",       # stop casting or attacking before a stacking debuff gets too high
 })
 ROLES = ("tank", "healer", "melee", "ranged")
-HANDLERS = frozenset({"playerbots", "none"})
+# playerbots: the stock raid strategy (or a stock strategy every such bot has) moves or handles the
+# bodies for every role the mechanic names; partial: only for some roles or conditions, said in
+# handled_note; none: nothing in stock playerbots does it.
+HANDLERS = frozenset({"playerbots", "partial", "none"})
+# Kinds that move bodies need a distance: radius (around the danger) or range (how far to go).
+MOVEMENT_KINDS = frozenset({"avoid_ground", "move_out_cone", "spread", "stack", "soak",
+                            "run_out_debuff", "los"})
+# Kinds that may have no triggering spell (a standing rule, or adds summoned without a spell).
+NO_SPELL_KINDS = frozenset({"positional", "kill_order"})
 # Checks run on the whole pull without a playbook row of their own (training/checks.py).
 GENERIC_CHECKS = frozenset({"behind", "aggro", "tank_range", "healer_oom"})
 CHECK_KINDS = frozenset({"avoid", "debuff", "buff", "adds", "spread"})
@@ -104,16 +112,18 @@ class Mechanic:
     id: str
     name: str
     kind: str
-    phase: str
+    phase: tuple[str, ...]   # phase ids, or ("all",)
     roles: tuple[str, ...]
     spells: Mapping[str, tuple[int, ...]]
     hits: Mapping[str, tuple[int, ...]]
     only: tuple[str, ...]
     handled_by: str
-    playerbots: str
+    playerbots: tuple[str, ...]
     explain: str
     check: str
     numbers: Mapping[str, Mapping[str, float]] = field(default_factory=lambda: MappingProxyType({}))
+    adds: tuple[int, ...] = ()
+    handled_note: str = ""
 
     def applies(self, difficulty: str) -> bool:
         return difficulty in self.only
@@ -129,6 +139,9 @@ class Mechanic:
 
     def all_ids(self) -> frozenset[int]:
         return frozenset(i for table in (self.spells, self.hits) for ids in table.values() for i in ids)
+
+    def all_hit_ids(self) -> frozenset[int]:
+        return frozenset(i for d in self.only for i in self.hit_ids(d))
 
 
 @dataclass(frozen=True)
@@ -199,6 +212,11 @@ class Playbooks:
                 checks[c.id] = c
         self._mechanics = MappingProxyType(mechanics)
         self._checks = MappingProxyType(checks)
+        by_spell: dict[int, list[Mechanic]] = {}
+        for m in mechanics.values():
+            for spell in sorted(m.all_ids()):
+                by_spell.setdefault(spell, []).append(m)
+        self._by_spell = MappingProxyType({k: tuple(v) for k, v in by_spell.items()})
 
     def covered_maps(self) -> tuple[int, ...]:
         return tuple(sorted(self.raids))
@@ -220,6 +238,11 @@ class Playbooks:
 
     def mechanic(self, mechanic_id: str) -> Mechanic | None:
         return self._mechanics.get(mechanic_id)
+
+    def mechanics_for_spell(self, spell_id: int) -> tuple[Mechanic, ...]:
+        """Every mechanic that casts or lands this spell id, at any difficulty (a responder's
+        lookup from a cast start); check a mechanic's own spell_ids(d) for the difficulty."""
+        return self._by_spell.get(spell_id, ())
 
     def check(self, check_id: str) -> Check | None:
         return self._checks.get(check_id)
@@ -322,7 +345,7 @@ def _mechanic(raw, where: str, diffs: tuple[str, ...], phases: set[str], slug_pr
     if not isinstance(raw, dict):
         _fail(where, "expected a table")
     _known(raw, {"id", "name", "kind", "phase", "roles", "spells", "hits", "only", "handled_by",
-                 "playerbots", "explain", "check", *NUMBERS}, where)
+                 "playerbots", "handled_note", "explain", "check", "adds", *NUMBERS}, where)
     mid = _text(raw.get("id"), f"{where}.id")
     if (not mid.startswith(slug_prefix) or mid.startswith(slug_prefix + "check_")
             or not _ID.fullmatch(mid[len(slug_prefix):])):
@@ -332,8 +355,9 @@ def _mechanic(raw, where: str, diffs: tuple[str, ...], phases: set[str], slug_pr
     if kind not in KINDS:
         _fail(where, f"kind {kind!r} is not a known kind")
     phase = raw.get("phase", "all")
-    if phase != "all" and phase not in phases:
-        _fail(where, f"phase {phase!r} is not one of the boss's phases")
+    phase = tuple(phase) if isinstance(phase, list) else (phase,)
+    if phase != ("all",) and (not phase or any(p not in phases for p in phase) or len(set(phase)) != len(phase)):
+        _fail(where, "phase must be all, or one or more of the boss's phase ids")
     roles = raw.get("roles")
     if not isinstance(roles, list) or not roles or any(r not in ROLES for r in roles) \
             or len(set(roles)) != len(roles):
@@ -343,28 +367,42 @@ def _mechanic(raw, where: str, diffs: tuple[str, ...], phases: set[str], slug_pr
         _fail(where, f"only must list difficulties of the raid: {', '.join(diffs)}")
     ids = functools.partial(_ints, lo=1, hi=10**6)
     if "spells" not in raw:
-        _fail(where, "spells is required")
+        _fail(where, "spells is required (an empty list for a rule or adds without a spell)")
     spells = _per_difficulty(raw["spells"], f"{where}.spells", diffs, ids)
     hits = _per_difficulty(raw["hits"], f"{where}.hits", diffs, ids) if "hits" in raw else {}
+    adds = _ints(raw.get("adds", []), f"{where}.adds")
     for d in only:
-        if not spells.get(d):
-            _fail(where, f"no spell ids for difficulty {d}")
+        if not spells.get(d) and not adds and kind not in NO_SPELL_KINDS:
+            _fail(where, f"no spell ids for difficulty {d} (only adds or a positional or "
+                         "kill_order rule may have none)")
     handled = raw.get("handled_by")
     if handled not in HANDLERS:
-        _fail(where, "handled_by must be playerbots or none")
-    playerbots = _text(raw.get("playerbots", ""), f"{where}.playerbots", empty=True)
-    if (handled == "playerbots") != bool(playerbots.strip()):
-        _fail(where, "playerbots names the stock action exactly when handled_by is playerbots")
+        _fail(where, "handled_by must be playerbots, partial or none")
+    stock = raw.get("playerbots", [])
+    if not isinstance(stock, list):
+        _fail(where, "playerbots must be a list of stock action or strategy names")
+    playerbots = tuple(_text(a, f"{where}.playerbots", limit=60) for a in stock)
+    if (handled != "none") != bool(playerbots) or len(set(playerbots)) != len(playerbots):
+        _fail(where, "playerbots names the stock actions exactly when handled_by is playerbots or partial")
+    note = _text(raw.get("handled_note", ""), f"{where}.handled_note", empty=True)
+    if handled == "partial" and not note.strip() or handled == "none" and note:
+        _fail(where, "handled_note says whom and when stock covers: required for partial, "
+                     "not allowed for none")
     numbers = {}
     for name in NUMBERS:
         if name in raw:
-            numbers[name] = MappingProxyType(_per_difficulty(raw[name], f"{where}.{name}", diffs, _number))
+            values = _per_difficulty(raw[name], f"{where}.{name}", diffs, _number)
+            numbers[name] = MappingProxyType({d: v for d, v in values.items() if d in only})
+    if kind in MOVEMENT_KINDS:
+        for d in only:
+            if not any(d in numbers.get(n, {}) for n in ("radius", "range")):
+                _fail(where, f"a {kind} mechanic needs a radius or range (yards) for difficulty {d}")
     return Mechanic(mid, _text(raw.get("name"), f"{where}.name", limit=80), kind, phase, tuple(roles),
-                    MappingProxyType({d: spells[d] for d in only if d in spells}),
+                    MappingProxyType({d: spells[d] for d in only if spells.get(d)}),
                     MappingProxyType({d: hits[d] for d in only if d in hits}), only, handled,
                     playerbots, _text(raw.get("explain"), f"{where}.explain"),
                     _text(raw.get("check", "none"), f"{where}.check", limit=80),
-                    MappingProxyType(numbers))
+                    MappingProxyType(numbers), adds, note)
 
 
 def _boss(raw, where: str, raid_key: str, map_id: int, diffs: tuple[str, ...]) -> Boss:

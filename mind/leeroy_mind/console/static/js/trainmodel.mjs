@@ -91,9 +91,10 @@ export function playbookGroups(v) {
       bosses: arr(r.bosses).map(function (b) {
         b = obj(b);
         var mechs = arr(b.mechanics), stock = mechs.filter(function (m) { return obj(m).handled_by === "playerbots"; }).length;
+        var partial = mechs.filter(function (m) { return obj(m).handled_by === "partial"; }).length;
         return {
           title: str(b.name),
-          detail: plural(mechs.length, "mechanic") + ", " + stock + " handled by playerbots",
+          detail: plural(mechs.length, "mechanic") + ", " + stock + " handled by playerbots" + (partial ? ", " + partial + " partly" : ""),
           call: str(b.call),
           mechanics: mechs.map(function (m) {
             m = obj(m);
@@ -102,7 +103,8 @@ export function playbookGroups(v) {
               title: str(m.name),
               tag: KIND_WORDS[m.kind] || str(m.kind),
               who: arr(m.roles).join(", ") + only,
-              stock: m.handled_by === "playerbots",
+              stock: m.handled_by === "playerbots" ? "playerbots" : m.handled_by === "partial" ? "partly playerbots" : "",
+              note: str(m.handled_note),
               text: str(m.explain)
             };
           })
@@ -115,6 +117,6 @@ export function playbookGroups(v) {
 export function playbookTotals(v) {
   var t = obj(obj(v).totals);
   return plural(num(t.raids), "raid") + " · " + plural(num(t.bosses), "boss", "bosses") + " · "
-    + plural(num(t.mechanics), "mechanic") + " · " + num(t.playerbots) + " handled by playerbots · "
-    + num(t.checked) + " scored by the training ground";
+    + plural(num(t.mechanics), "mechanic") + " · " + num(t.playerbots) + " handled by playerbots, " + num(t.partial) + " partly · "
+    + plural(num(t.scored), "check row") + " can fail by default (" + num(t.scored_playbooks) + " with playbook checks on)";
 }

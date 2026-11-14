@@ -1,13 +1,17 @@
 """`raidplay check`: the playbooks against the spell book and wow.BOSS_NAMES.
 
 Errors: a covered raid's boss without a playbook, a spell id the spell book does not know, a
-check name that resolves to no spell. Notes (never errors): a check whose names share no id
-with the mechanics that map to it, and the optional DBM cross-check (spell ids DBM watches
-that no mechanic lists, berserk timers that differ). Findings carry ids and numbers only.
+check name that resolves to no spell, a stock playerbots action or strategy name that mod-playerbots
+does not register (when its source is given). Notes (never errors): a check whose names resolve to
+none of the ids that hit players in the mechanics mapped to it, and the optional DBM cross-check
+(spell ids DBM watches that no mechanic lists, berserk timers that differ). Findings carry ids and
+numbers only.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Protocol
 
 from leeroy_mind.wow import BOSS_NAMES, is_raid_fight
@@ -51,10 +55,29 @@ def spells(playbooks: Playbooks, book: Book) -> list[Finding]:
                 if not ids:
                     out.append(Finding("error", "check_name_unresolved", c.id))
                 resolved |= ids
-            mapped = set().union(*(m.all_ids() for m in boss.mechanics if m.check == c.id))
-            if c.names and resolved and not resolved & mapped:
+            mapped = set().union(*(m.all_hit_ids() for m in boss.mechanics if m.check == c.id))
+            # The original version 1 avoid rows keep their transcription for parity; the checker
+            # never resolves an avoid row's names (it records unverified damage instead).
+            legacy = c.since == 1 and c.kind == "avoid"
+            if c.names and resolved and not resolved & mapped and not legacy:
                 out.append(Finding("note", "check_names_disjoint", c.id))
     return out
+
+
+_CREATOR = re.compile(r'creators\["([^"\n]{1,80})"\]')
+
+
+def registered_names(src: Path) -> frozenset[str]:
+    """Action and strategy names mod-playerbots registers (`creators["name"]`) under src/Ai."""
+    names = set()
+    for path in sorted(p for p in Path(src).rglob("*") if p.suffix in (".h", ".cpp")):
+        names.update(_CREATOR.findall(path.read_text(encoding="utf-8", errors="replace")))
+    return frozenset(names)
+
+
+def stock_actions(playbooks: Playbooks, names: frozenset[str]) -> list[Finding]:
+    return [Finding("error", "stock_action_unknown", m.id, a) for m in playbooks.mechanics()
+            for a in m.playerbots if a not in names]
 
 
 def _dbm_mods(facts) -> Iterable[dict]:
@@ -92,10 +115,13 @@ def dbm_cross_check(playbooks: Playbooks, facts) -> list[Finding]:
     return out
 
 
-def validate(playbooks: Playbooks, book: Book | None = None, *, dbm=None) -> list[Finding]:
+def validate(playbooks: Playbooks, book: Book | None = None, *, dbm=None,
+             stock: frozenset[str] | None = None) -> list[Finding]:
     found = coverage(playbooks)
     if book is not None:
         found += spells(playbooks, book)
+    if stock is not None:
+        found += stock_actions(playbooks, stock)
     if dbm is not None:
         found += dbm_cross_check(playbooks, dbm)
     return found

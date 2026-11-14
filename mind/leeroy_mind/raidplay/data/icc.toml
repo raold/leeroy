@@ -28,7 +28,8 @@ phase = "main"
 roles = ["tank"]
 spells = { "10" = [69055], "25" = [70814], "10h" = [69055], "25h" = [70814] }
 handled_by = "playerbots"
-playerbots = "icc lm tank position"
+playerbots = ["icc lm tank position"]
+radius = 5
 explain = "Both tanks stand stacked in front of him so his cleave splits between them."
 check = "none"
 first = 10
@@ -40,7 +41,10 @@ kind = "avoid_ground"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = [69140, 72705]
 hits = { "10" = [69146], "25" = [70823], "10h" = [70824], "25h" = [70825] }
-handled_by = "none"
+handled_by = "partial"
+radius = 3
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
 explain = "A line of cold fire runs out from him; step sideways out of its path, never along it."
 check = "icc.marrowgar.check_avoid_coldflame"
 first = 5
@@ -50,13 +54,13 @@ every = 5
 id = "icc.marrowgar.bone_spike"
 name = "Bone Spike Graveyard"
 kind = "switch_adds"
-phase = "main"
+phase = "all"
 roles = ["melee", "ranged"]
 spells = { "10" = [69057], "25" = [70826], "10h" = [72088], "25h" = [72089] }
 hits = [69065]
 handled_by = "playerbots"
-playerbots = "icc spike"
-explain = "Bone spikes impale players; damage dealers break them at once to free the victim."
+playerbots = ["icc spike"]
+explain = "Bone spikes impale players (on heroic also during Bone Storm); damage dealers break them at once to free the victim."
 check = "icc.marrowgar.check_impaled"
 first = 10
 every = 18
@@ -68,8 +72,11 @@ kind = "spread"
 phase = "bone_storm"
 roles = ["healer", "ranged"]
 spells = [69076]
-handled_by = "none"
-explain = "He whirls around the room; ranged and healers spread out so he hits as few as possible."
+handled_by = "playerbots"
+playerbots = ["icc lm tank position"]
+hits = { "10" = [69075], "25" = [70834], "10h" = [70835], "25h" = [70836] }
+range = 30
+explain = "He whirls around the room and the closer he is the more it hurts; ranged and healers stay apart and well away from him."
 check = "icc.marrowgar.check_avoid_bone_storm"
 duration = { "10" = 20, "25" = 30 }
 every = 90
@@ -127,8 +134,11 @@ name = "Death and Decay"
 kind = "avoid_ground"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [71001], "25" = [72108], "10h" = [72109], "25h" = [72110] }
-handled_by = "none"
-explain = "A dark circle grows under a random player; walk out of it straight away."
+handled_by = "partial"
+radius = 8
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
+explain = "A fixed eight-yard circle of decay appears under a random player; walk out of it at once."
 check = "icc.deathwhisper.check_avoid_death_and_decay"
 first = 10
 every = 22
@@ -137,15 +147,16 @@ every = 22
 id = "icc.deathwhisper.cult_adds"
 name = "Cult Fanatics and Adherents"
 kind = "switch_adds"
-phase = "barrier"
+phase = "all"
 roles = ["tank", "melee", "ranged"]
-spells = [70895, 70896]
+spells = []
 handled_by = "playerbots"
-playerbots = "icc adds lady deathwhisper"
-explain = "Waves of cultists arrive from both sides; tanks pick them up and damage kills them before the boss."
+playerbots = ["icc adds lady deathwhisper"]
+adds = [37890, 38393, 38628, 38629, 37949, 38394, 38625, 38626]
+explain = "Waves of cultists arrive from the sides (on heroic every 45 s and also after the barrier falls); tanks pick them up and damage kills them before the boss."
 check = "icc.deathwhisper.check_adds"
 first = 5
-every = 60
+every = { "10" = 60, "25" = 60, "10h" = 45, "25h" = 45 }
 
 [[boss.mechanic]]
 id = "icc.deathwhisper.dominate_mind"
@@ -154,7 +165,9 @@ kind = "dispel"
 roles = ["healer", "melee", "ranged"]
 spells = [71289]
 only = ["25", "10h", "25h"]
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["icc adds lady deathwhisper"]
+handled_note = "a druid bot cyclones the dominated player; without a druid nothing does"
 explain = "She mind controls a player; crowd control or break it rather than killing them."
 check = "icc.deathwhisper.check_dominate_mind"
 first = 30
@@ -167,11 +180,13 @@ kind = "interrupt"
 phase = "drained"
 roles = ["melee", "ranged"]
 spells = { "10" = [71420], "25" = [72007], "10h" = [72501], "25h" = [72502] }
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
 explain = "Kick every Frostbolt she casts once the barrier is down; it hits the tank very hard."
 check = "none"
 cast = 2
-every = 11
+every = 12
 
 [[boss.mechanic]]
 id = "icc.deathwhisper.vengeful_shades"
@@ -182,10 +197,10 @@ roles = ["healer", "melee", "ranged"]
 spells = [71363]
 hits = { "10" = [71544], "25" = [72010], "10h" = [72011], "25h" = [72012] }
 handled_by = "playerbots"
-playerbots = "icc shade lady deathwhisper"
+playerbots = ["icc shade lady deathwhisper"]
 explain = "A shade drifts to one player and explodes; that player walks it away from the group."
 check = "none"
-every = 18
+every = 12
 
 [[boss.mechanic]]
 id = "icc.deathwhisper.touch_of_insignificance"
@@ -194,8 +209,9 @@ kind = "tank_swap_at_stacks"
 phase = "drained"
 roles = ["tank"]
 spells = [71204]
-handled_by = "none"
-explain = "Her touch cuts the tank's threat; the second tank taunts when it stacks up."
+handled_by = "playerbots"
+playerbots = ["icc adds lady deathwhisper"]
+explain = "Her touch cuts the tank's threat as it stacks; let it drop or change tanks, though on heroic she cannot be taunted once the barrier is gone."
 check = "none"
 stacks = 3
 
@@ -239,8 +255,9 @@ kind = "use_object"
 roles = ["ranged"]
 spells = [69399, 70172]
 handled_by = "playerbots"
-playerbots = "icc gunship enter cannon"
-explain = "Two players man the cannons and fire at the enemy ship and its boarders."
+playerbots = ["icc gunship enter cannon"]
+targets = { "10" = 2, "25" = 4 }
+explain = "Players man the ship's cannons (two in 10-man, four in 25) and fire at the enemy ship and its boarders."
 check = "none"
 
 [[boss.mechanic]]
@@ -250,7 +267,7 @@ kind = "use_object"
 roles = ["ranged"]
 spells = [69487]
 handled_by = "playerbots"
-playerbots = "icc cannon fire"
+playerbots = ["icc cannon fire"]
 explain = "A cannon that fires too fast overheats and stops; gunners pace their shots."
 check = "none"
 
@@ -261,10 +278,9 @@ kind = "switch_adds"
 roles = ["melee", "ranged"]
 spells = [69705]
 handled_by = "playerbots"
-playerbots = "icc gunship rocket jump"
+playerbots = ["icc gunship rocket jump"]
 explain = "The enemy mage freezes the cannons; a boarding team rocket-jumps over and kills the mage."
 check = "none"
-every = 35
 
 [[boss.mechanic]]
 id = "icc.gunship.rocket_pack"
@@ -273,7 +289,7 @@ kind = "use_object"
 roles = ["tank", "healer", "melee"]
 spells = [70348]
 handled_by = "playerbots"
-playerbots = "icc gunship rocket pack setup"
+playerbots = ["icc gunship rocket pack setup"]
 explain = "The boarding team equips rocket packs to cross between the ships and come back."
 check = "none"
 
@@ -282,8 +298,10 @@ id = "icc.gunship.rocket_artillery"
 name = "Rocket Artillery"
 kind = "avoid_ground"
 roles = ["tank", "healer", "melee", "ranged"]
-spells = [70609, 69678]
+spells = [70609, 69678, 69679]
 handled_by = "none"
+hits = { "10" = [69680], "25" = [69687], "10h" = [69688], "25h" = [69689] }
+radius = 5
 explain = "Artillery marks spots on your deck; step out of the circle before the shell lands."
 check = "none"
 
@@ -307,7 +325,7 @@ kind = "tank_swap_at_stacks"
 roles = ["tank"]
 spells = [72410]
 handled_by = "playerbots"
-playerbots = "icc dbs tank position"
+playerbots = ["icc dbs tank position"]
 explain = "Rune of Blood heals him from the tank; the other tank taunts as soon as it lands."
 check = "none"
 first = 20
@@ -321,7 +339,8 @@ kind = "switch_adds"
 roles = ["melee", "ranged"]
 spells = [72172, 72356]
 handled_by = "playerbots"
-playerbots = "icc adds dbs"
+playerbots = ["icc adds dbs"]
+adds = [38508, 38596, 38597, 38598]
 explain = "Blood beasts come every forty seconds; ranged slow and kill them before they reach the raid."
 check = "icc.saurfang.check_adds"
 first = 30
@@ -335,7 +354,8 @@ kind = "spread"
 roles = ["ranged", "healer"]
 spells = { "10" = [72378], "25" = [73058], "10h" = [72378], "25h" = [73058] }
 hits = { "10" = [72380], "25" = [72438], "10h" = [72439], "25h" = [72440] }
-handled_by = "none"
+handled_by = "playerbots"
+playerbots = ["icc dbs tank position"]
 explain = "Blood Nova splashes around its target; ranged keep apart so each nova hits one player."
 check = "icc.saurfang.check_spread"
 radius = 12
@@ -348,9 +368,9 @@ name = "Mark of the Fallen Champion"
 kind = "raid_cooldowns"
 roles = ["healer"]
 spells = [72293]
-hits = [72256]
+hits = { "10" = [72255], "25" = [72444], "10h" = [72445], "25h" = [72446] }
 handled_by = "none"
-explain = "Each mark is a player who takes damage from all his attacks; fewer marks means fewer beasts reach the raid."
+explain = "At full Blood Power he marks a player, who then takes damage from each of his attacks until they die; kill beasts fast to slow the Blood Power."
 check = "icc.saurfang.check_mark"
 
 [[boss.mechanic]]
@@ -372,8 +392,9 @@ kind = "kite"
 roles = ["ranged"]
 spells = [72769]
 only = ["10h", "25h"]
-handled_by = "none"
-explain = "On heroic the beasts speed up after a while; slow them and keep them off the cloth."
+handled_by = "playerbots"
+playerbots = ["icc dbs tank position"]
+explain = "On heroic a beast's Scent of Blood slows nearby players and triples the beasts' damage; slow or stun the beasts and keep them off the cloth wearers."
 check = "none"
 
 [[boss.check]]
@@ -415,7 +436,8 @@ roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [69278], "25" = [71221], "10h" = [69278], "25h" = [71221] }
 hits = { "10" = [69291], "25" = [72101], "10h" = [72102], "25h" = [72103] }
 handled_by = "playerbots"
-playerbots = "icc festergut spore"
+playerbots = ["icc festergut spore"]
+radius = 8
 explain = "Spored players gather with the raid so their burst grants everyone Inoculated."
 check = "icc.festergut.check_inoculated"
 first = 20
@@ -429,7 +451,8 @@ kind = "spread"
 roles = ["ranged", "healer"]
 spells = { "10" = [69240], "25" = [71218], "10h" = [73019], "25h" = [73020] }
 handled_by = "playerbots"
-playerbots = "icc festergut group position"
+playerbots = ["icc festergut group position"]
+radius = 8
 explain = "Vile Gas lands on ranged; they spread in a wide circle so it hits only one."
 check = "icc.festergut.check_avoid_vile_gas"
 first = 30
@@ -442,7 +465,7 @@ kind = "spread"
 roles = ["ranged"]
 spells = { "10" = [69278], "25" = [71221], "10h" = [69278], "25h" = [71221] }
 handled_by = "playerbots"
-playerbots = "icc festergut group position"
+playerbots = ["icc festergut group position"]
 explain = "Outside a spore burst, ranged keep eight yards apart."
 check = "icc.festergut.check_spread"
 radius = 8
@@ -454,10 +477,10 @@ kind = "raid_cooldowns"
 roles = ["healer"]
 spells = { "10" = [69195], "25" = [71219], "10h" = [73031], "25h" = [73032] }
 handled_by = "none"
-explain = "After three inhales he releases a raid-wide blight; healers save cooldowns for it."
+explain = "After his third inhale he releases a raid-wide blight (about every two minutes); healers save cooldowns for it."
 check = "none"
 cast = 3
-every = 102
+every = 136
 
 [[boss.mechanic]]
 id = "icc.festergut.gastric_bloat"
@@ -465,7 +488,8 @@ name = "Gastric Bloat"
 kind = "tank_swap_at_stacks"
 roles = ["tank"]
 spells = { "10" = [72219], "25" = [72551], "10h" = [72552], "25h" = [72553] }
-handled_by = "none"
+handled_by = "playerbots"
+playerbots = ["icc festergut group position"]
 explain = "Bloat stacks on the tank and bursts at ten; the other tank taunts at about six."
 check = "none"
 stacks = 6
@@ -479,7 +503,9 @@ roles = ["healer", "melee", "ranged"]
 spells = [72296]
 only = ["10h", "25h"]
 handled_by = "playerbots"
-playerbots = "icc festergut avoid malleable goo"
+playerbots = ["icc festergut avoid malleable goo"]
+hits = { "10" = [72297], "25" = [72548], "10h" = [72549], "25h" = [72550] }
+radius = 5
 explain = "On heroic Putricide lobs goo from the balcony; move off the marked spot."
 check = "none"
 every = 18
@@ -523,7 +549,11 @@ name = "Slime Spray"
 kind = "move_out_cone"
 roles = ["healer", "melee", "ranged"]
 spells = [69508]
-handled_by = "none"
+handled_by = "partial"
+hits = { "10" = [69507], "25" = [71213], "10h" = [73189], "25h" = [73190] }
+radius = 50
+playerbots = ["icc rotface group position"]
+handled_note = "on normal ranged and healers move under him during the spray; heroic keeps its spread grid"
 explain = "He sprays slime in a cone at one player; everyone in front moves to his side."
 check = "icc.rotface.check_avoid"
 first = 20
@@ -536,7 +566,8 @@ kind = "run_out_debuff"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [69674], "25" = [71224], "10h" = [73022], "25h" = [73023] }
 handled_by = "playerbots"
-playerbots = "icc rotface group position"
+playerbots = ["icc rotface group position"]
+radius = 10
 explain = "An infected player walks to the off-tank so the little ooze that spawns can be merged."
 check = "none"
 first = 14
@@ -549,7 +580,7 @@ kind = "kite"
 roles = ["tank"]
 spells = [69552, 69611]
 handled_by = "playerbots"
-playerbots = "icc rotface tank position"
+playerbots = ["icc rotface tank position"]
 explain = "The off-tank kites the big ooze around the room's edge and feeds it little oozes."
 check = "none"
 
@@ -560,7 +591,9 @@ kind = "avoid_ground"
 roles = ["healer", "melee", "ranged"]
 spells = [69839]
 handled_by = "playerbots"
-playerbots = "icc rotface move away from explosion"
+playerbots = ["icc rotface move away from explosion"]
+hits = { "10" = [69833], "25" = [71209], "10h" = [73029], "25h" = [73030] }
+radius = 6
 explain = "At five merges the big ooze explodes and throws blobs; dodge where they land."
 check = "icc.rotface.check_avoid"
 
@@ -570,7 +603,11 @@ name = "Sticky Ooze"
 kind = "avoid_ground"
 roles = ["tank", "melee"]
 spells = [69774]
-handled_by = "none"
+handled_by = "partial"
+hits = { "10" = [69778], "25" = [71208], "10h" = [69778], "25h" = [71208] }
+radius = 6
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
 explain = "Sticky Ooze leaves a slowing puddle under the tank; step out of it."
 check = "icc.rotface.check_avoid"
 every = 15
@@ -583,7 +620,8 @@ roles = ["ranged", "healer"]
 spells = { "10" = [69240], "25" = [71218], "10h" = [73019], "25h" = [73020] }
 only = ["10h", "25h"]
 handled_by = "playerbots"
-playerbots = "icc rotface avoid vile gas"
+playerbots = ["icc rotface avoid vile gas"]
+radius = 8
 explain = "On heroic Putricide's gas lands on ranged; keep spread so it touches one."
 check = "none"
 every = 18
@@ -616,7 +654,8 @@ kind = "kite"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [70351], "25" = [71966], "10h" = [71967], "25h" = [71968] }
 handled_by = "playerbots"
-playerbots = "icc putricide volatile ooze; icc putricide gas cloud"
+playerbots = ["icc putricide volatile ooze", "icc putricide gas cloud"]
+phase = ["one", "two"]
 explain = "Each experiment frees an ooze or a gas cloud; stack on the volatile ooze's target and kite the gas cloud."
 check = "icc.putricide.check_adds"
 first = 30
@@ -629,7 +668,9 @@ kind = "stack"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [70447], "25" = [72836], "10h" = [72837], "25h" = [72838] }
 handled_by = "playerbots"
-playerbots = "icc putricide volatile ooze"
+playerbots = ["icc putricide volatile ooze"]
+hits = { "10" = [70492], "25" = [72505], "10h" = [72624], "25h" = [72625] }
+radius = 10
 explain = "The ooze glues itself to a player; everyone stacks on them to split the eruption, then kills it."
 check = "icc.putricide.check_adds"
 
@@ -640,7 +681,7 @@ kind = "kite"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [70672], "25" = [72455], "10h" = [72832], "25h" = [72833] }
 handled_by = "playerbots"
-playerbots = "icc putricide gas cloud"
+playerbots = ["icc putricide gas cloud"]
 explain = "The gas cloud chases its target, who runs away while ranged burn the cloud."
 check = "none"
 
@@ -650,10 +691,11 @@ name = "Slime Puddle"
 kind = "avoid_ground"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = [70341]
-hits = [70343]
+hits = { "10" = [70346], "25" = [72456], "10h" = [72868], "25h" = [72869] }
 handled_by = "playerbots"
-playerbots = "icc putricide growing ooze puddle"
-explain = "Growing puddles spawn under players; step out and keep them at the room's edge."
+playerbots = ["icc putricide growing ooze puddle"]
+radius = 5
+explain = "Puddles spawn under players and grow; step out and keep them at the room's edge."
 check = "icc.putricide.check_avoid"
 first = 10
 every = 35
@@ -662,11 +704,13 @@ every = 35
 id = "icc.putricide.malleable_goo"
 name = "Malleable Goo"
 kind = "avoid_ground"
-phase = "two"
+phase = ["two", "three"]
 roles = ["healer", "melee", "ranged"]
 spells = [70852]
 handled_by = "playerbots"
-playerbots = "icc putricide avoid malleable goo"
+playerbots = ["icc putricide avoid malleable goo"]
+hits = { "10" = [70853], "25" = [72458], "10h" = [72873], "25h" = [72874] }
+radius = 5
 explain = "He throws goo at a spot; move off the marked spot before it lands."
 check = "icc.putricide.check_avoid"
 
@@ -674,10 +718,14 @@ check = "icc.putricide.check_avoid"
 id = "icc.putricide.choking_gas_bomb"
 name = "Choking Gas Bomb"
 kind = "avoid_ground"
-phase = "two"
+phase = ["two", "three"]
 roles = ["tank", "healer", "melee", "ranged"]
 spells = [71255]
-handled_by = "none"
+handled_by = "partial"
+hits = { "10" = [71278, 71279], "25" = [72460, 72459], "10h" = [72619, 72621], "25h" = [72620, 72622] }
+radius = 10
+playerbots = ["icc putricide avoid malleable goo"]
+handled_note = "only tanks keep fifteen yards from the bombs; other roles are not moved"
 explain = "Gas bombs land around him and burst; walk away from the bomb canisters."
 check = "icc.putricide.check_avoid"
 
@@ -689,7 +737,7 @@ phase = "three"
 roles = ["tank"]
 spells = { "10" = [72451], "25" = [72463], "10h" = [72671], "25h" = [72672] }
 handled_by = "playerbots"
-playerbots = "icc putricide mutated plague"
+playerbots = ["icc putricide mutated plague"]
 explain = "Each plague stack hurts the whole raid; tanks swap at about four stacks."
 check = "none"
 stacks = 4
@@ -698,11 +746,11 @@ stacks = 4
 id = "icc.putricide.abomination"
 name = "Mutated Abomination"
 kind = "use_object"
-phase = "one"
+phase = ["one", "two"]
 roles = ["melee"]
 spells = [70311]
 handled_by = "playerbots"
-playerbots = "icc putricide abomination"
+playerbots = ["icc putricide abomination"]
 explain = "One player drinks the green potion and slows the oozes with the abomination's abilities."
 check = "none"
 
@@ -713,7 +761,9 @@ kind = "run_out_debuff"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [70911], "25" = [72854], "10h" = [72855], "25h" = [72856] }
 only = ["10h", "25h"]
-handled_by = "none"
+handled_by = "playerbots"
+playerbots = ["icc putricide avoid malleable goo"]
+radius = 3
 explain = "On heroic, pass Unbound Plague to someone far from the group before it ramps up."
 check = "none"
 first = 20
@@ -750,7 +800,7 @@ kind = "kill_order"
 roles = ["tank", "melee", "ranged"]
 spells = [70952, 70981, 70982]
 handled_by = "playerbots"
-playerbots = "icc bpc main tank"
+playerbots = ["icc bpc main tank"]
 explain = "Only the empowered prince takes real damage; switch to him each time the invocation moves."
 check = "none"
 first = 45
@@ -762,8 +812,11 @@ name = "Shock Vortex"
 kind = "avoid_ground"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [72037, 72039], "25" = [72037, 73037], "10h" = [72037, 73038], "25h" = [72037, 73039] }
-handled_by = "playerbots"
-playerbots = "icc bpc empowered vortex"
+handled_by = "partial"
+playerbots = ["icc bpc empowered vortex"]
+handled_note = "only Empowered vortexes, while Valanar holds the invocation; normal vortexes are not avoided"
+hits = { "10" = [71944, 72038], "25" = [72812, 72815], "10h" = [72813, 72816], "25h" = [72814, 72817] }
+radius = 13
 explain = "Valanar drops vortexes that knock players around; step away from them, and spread for the empowered one."
 check = "icc.council.check_avoid"
 first = 15
@@ -777,7 +830,7 @@ roles = ["ranged"]
 spells = [72053]
 hits = { "10" = [72052], "25" = [72800], "10h" = [72801], "25h" = [72802] }
 handled_by = "playerbots"
-playerbots = "icc bpc kinetic bomb"
+playerbots = ["icc bpc kinetic bomb"]
 explain = "Bombs drift down slowly; ranged keep hitting them so they float back up instead of landing."
 check = "icc.council.check_adds"
 every = { "10" = 30, "25" = 20 }
@@ -790,7 +843,7 @@ roles = ["healer", "ranged"]
 spells = [71718, 72040]
 hits = { "10" = [71393], "25" = [72789], "10h" = [72790], "25h" = [72791] }
 handled_by = "playerbots"
-playerbots = "icc bpc ball of flame"
+playerbots = ["icc bpc ball of flame"]
 explain = "Taldaram's flame ball chases one player, who runs it away from the group."
 check = "none"
 every = 20
@@ -802,7 +855,7 @@ kind = "positional"
 roles = ["tank"]
 spells = { "10" = [71405, 71815], "25" = [72804, 72809], "10h" = [72805, 72810], "25h" = [72806, 72811] }
 handled_by = "playerbots"
-playerbots = "icc bpc keleseth tank"
+playerbots = ["icc bpc keleseth tank"]
 explain = "Keleseth is tanked by a caster at range; his lance hits whoever holds him."
 check = "none"
 
@@ -812,10 +865,11 @@ name = "Spread for vortexes"
 kind = "spread"
 roles = ["ranged"]
 spells = { "10" = [72039], "25" = [73037], "10h" = [73038], "25h" = [73039] }
-handled_by = "none"
-explain = "Ranged keep eight yards apart so one vortex knocks one player."
+handled_by = "playerbots"
+playerbots = ["icc bpc empowered vortex"]
+explain = "Ranged and healers keep at least twelve yards apart so one empowered vortex knocks back one player."
 check = "icc.council.check_spread"
-radius = 8
+radius = 12
 
 [[boss.check]]
 id = "icc.council.check_avoid"
@@ -847,7 +901,7 @@ enrage = 330
 call = "blood queen: spread, bite on time, take swarm out"
 phase = [
   { id = "ground", name = "Ground phase" },
-  { id = "air", name = "Air phase: Bloodbolt Whirl", after = 124 },
+  { id = "air", name = "Air phase: Bloodbolt Whirl (127 s on 25-man)", after = 124 },
 ]
 
 [[boss.mechanic]]
@@ -859,7 +913,7 @@ roles = ["melee", "ranged"]
 spells = { "10" = [71726], "25" = [71727], "10h" = [71728], "25h" = [71729] }
 hits = { "10" = [70877], "25" = [71474], "10h" = [70877], "25h" = [71474] }
 handled_by = "playerbots"
-playerbots = "icc bql vampiric bite"
+playerbots = ["icc bql vampiric bite"]
 explain = "A bitten player must bite another damage dealer before the frenzy ends, or they turn on the raid."
 check = "none"
 first = 15
@@ -873,7 +927,8 @@ roles = ["healer", "melee", "ranged"]
 spells = [71340]
 hits = [71341]
 handled_by = "playerbots"
-playerbots = "icc bql pact of darkfallen"
+playerbots = ["icc bql pact of darkfallen"]
+radius = 5
 explain = "Linked players run together until they touch, which breaks the pact."
 check = "icc.lanathel.check_spread"
 first = 20
@@ -888,7 +943,8 @@ roles = ["healer", "melee", "ranged"]
 spells = [71264]
 hits = { "10" = [71277], "25" = [72638], "10h" = [72639], "25h" = [72640] }
 handled_by = "playerbots"
-playerbots = "icc bql group position"
+playerbots = ["icc bql group position"]
+radius = 4
 explain = "The shadowed player walks to the edge, dropping the shadow trail away from the raid."
 check = "icc.lanathel.check_avoid_swarming_shadows"
 first = 30
@@ -901,9 +957,9 @@ kind = "spread"
 phase = "ground"
 roles = ["healer", "ranged"]
 spells = [71445]
-hits = { "10" = [71818], "25" = [71819], "10h" = [71820], "25h" = [71821] }
+hits = { "10" = [71818, 71447], "25" = [71819, 71481], "10h" = [71820, 71482], "25h" = [71821, 71483] }
 handled_by = "playerbots"
-playerbots = "icc bql group position"
+playerbots = ["icc bql group position"]
 explain = "Bloodbolts splash around their targets; ranged keep apart."
 check = "icc.lanathel.check_spread"
 radius = 6
@@ -916,8 +972,10 @@ kind = "spread"
 phase = "air"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = [71772]
-hits = { "10" = [71446], "25" = [71478], "10h" = [71479], "25h" = [71480] }
-handled_by = "none"
+hits = { "10" = [71446, 71447], "25" = [71478, 71481], "10h" = [71479, 71482], "25h" = [71480, 71483] }
+handled_by = "playerbots"
+playerbots = ["icc bql group position"]
+radius = 6
 explain = "In the air phase she fears and bolts everyone; spread out and heal through it."
 check = "icc.lanathel.check_avoid_bloodbolt_whirl"
 every = { "10" = 120, "25" = 100 }
@@ -929,7 +987,9 @@ kind = "soak"
 phase = "ground"
 roles = ["tank"]
 spells = { "10" = [71623], "25" = [71624], "10h" = [71625], "25h" = [71626] }
-handled_by = "none"
+handled_by = "playerbots"
+playerbots = ["icc bql group position"]
+range = 10
 explain = "The off-tank stands next to the main tank to take the slash meant for the second threat."
 check = "none"
 every = 20
@@ -972,8 +1032,8 @@ kind = "use_object"
 roles = ["melee", "ranged"]
 spells = [71463]
 handled_by = "playerbots"
-playerbots = "icc valkyre spear"
-explain = "Her shield breaks only to a thrown spear; pick up a spear from a dead captain and hurl it at her."
+playerbots = ["icc sister svalna"]
+explain = "Her shield breaks only to a hurled spear; take the spear that appears on an impaled player and throw it at her."
 check = "none"
 
 [[boss.mechanic]]
@@ -983,20 +1043,20 @@ kind = "switch_adds"
 roles = ["melee", "ranged"]
 spells = [71443]
 handled_by = "playerbots"
-playerbots = "icc sister svalna"
-explain = "She pins a player with a spear; break the spear at once to free them."
+playerbots = ["icc valkyre spear"]
+explain = "She pins a player with a spear; click the spear on them at once to free them and take it."
 check = "none"
 first = 15
 every = 20
 
 [[boss.mechanic]]
-id = "icc.svalna.caress_of_death"
-name = "Caress of Death"
-kind = "raid_cooldowns"
-roles = ["healer"]
-spells = [70078]
+id = "icc.svalna.revived_captains"
+name = "Revive Champion"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [70053]
 handled_by = "none"
-explain = "She resurrects the fallen captains as enemies; kill captains away from her."
+explain = "She kills the Argent captains and raises them against you; tanks pick each up and the raid kills them away from her."
 check = "none"
 
 [[boss]]
@@ -1018,7 +1078,7 @@ kind = "heal_target"
 roles = ["healer"]
 spells = [71189]
 handled_by = "playerbots"
-playerbots = "icc valithria heal"
+playerbots = ["icc valithria heal"]
 explain = "Healers heal Valithria to full health; that is the win."
 check = "none"
 
@@ -1027,9 +1087,9 @@ id = "icc.valithria.dream_portals"
 name = "Dream Portals"
 kind = "use_object"
 roles = ["healer"]
-spells = { "10" = [71301, 72224], "25" = [71301, 72224], "10h" = [71301, 72480], "25h" = [71301, 72480] }
+spells = { "10" = [71301, 72224], "25" = [71301, 72224], "10h" = [71977, 72480], "25h" = [71977, 72480] }
 handled_by = "playerbots"
-playerbots = "icc valithria portal; icc valithria dream cloud"
+playerbots = ["icc valithria portal", "icc valithria dream cloud"]
 explain = "Healers enter the portals and fly through the green clouds for a big healing buff."
 check = "none"
 first = 45
@@ -1042,7 +1102,8 @@ kind = "switch_adds"
 roles = ["tank", "melee", "ranged"]
 spells = [70915, 70912, 70914, 70916, 70913]
 handled_by = "playerbots"
-playerbots = "icc valithria group"
+playerbots = ["icc valithria group"]
+adds = [37868, 38167, 38725, 38735, 36791, 38169, 38721, 38722, 37863, 38171, 38727, 38737, 37934, 38170, 38723, 38733, 37886, 38166, 38724, 38734]
 explain = "Tanks and damage kill the adds pouring from the four doors; suppressers first."
 check = "none"
 
@@ -1053,7 +1114,7 @@ kind = "kite"
 roles = ["melee", "ranged"]
 spells = { "10" = [70744], "25" = [71733], "10h" = [72017], "25h" = [72018] }
 handled_by = "playerbots"
-playerbots = "icc valithria zombie kite"
+playerbots = ["icc valithria zombie kite"]
 explain = "Zombies burst in acid when they die; kill them away from the healers."
 check = "none"
 
@@ -1064,7 +1125,9 @@ kind = "avoid_ground"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [70704], "25" = [71747], "10h" = [70704], "25h" = [71747] }
 hits = { "10" = [70702], "25" = [71746], "10h" = [72019], "25h" = [72020] }
-handled_by = "none"
+handled_by = "playerbots"
+playerbots = ["icc valithria group"]
+radius = 3
 explain = "Archmages mark a spot that erupts in frost; step off it."
 check = "none"
 
@@ -1074,7 +1137,10 @@ name = "Mana Void"
 kind = "avoid_ground"
 roles = ["healer", "ranged"]
 spells = { "10" = [71179], "25" = [71741], "10h" = [71179], "25h" = [71741] }
-handled_by = "none"
+handled_by = "playerbots"
+playerbots = ["icc valithria group"]
+hits = { "10" = [71086], "25" = [71743], "10h" = [72029], "25h" = [72030] }
+radius = 6
 explain = "Mana voids drain mana from anyone inside; casters step out."
 check = "none"
 
@@ -1095,13 +1161,12 @@ phase = [
 [[boss.mechanic]]
 id = "icc.sindragosa.unchained_magic"
 name = "Unchained Magic"
-kind = "spread"
+kind = "stop_casting"
 roles = ["healer", "ranged"]
 spells = [69762]
-hits = [69766]
 handled_by = "playerbots"
-playerbots = "icc sindragosa unchained magic"
-explain = "Casters with Unchained Magic pause casting at a few stacks and stay apart so the backlash hits only them."
+playerbots = ["icc sindragosa unchained magic"]
+explain = "Unchained Magic marks casters; every spell they cast adds Instability, so they slow down and stop before it stacks high."
 check = "icc.sindragosa.check_unchained_magic"
 first = 9
 every = 32
@@ -1112,10 +1177,10 @@ name = "Instability"
 kind = "stop_casting"
 roles = ["healer", "ranged"]
 spells = [69766]
-hits = { "10" = [69770], "25" = [71044], "10h" = [71045], "25h" = [71046] }
+hits = { "10" = [69766, 69770], "25" = [69766, 71044], "10h" = [69766, 71045], "25h" = [69766, 71046] }
 handled_by = "playerbots"
-playerbots = "icc sindragosa unchained magic"
-explain = "Each spell cast under Unchained Magic adds Instability; stop casting before five stacks."
+playerbots = ["icc sindragosa unchained magic"]
+explain = "When Instability ends, Backlash hits the caster for each stack, and on heroic everyone within twenty yards; stop casting before five stacks."
 check = "icc.sindragosa.check_instability"
 stacks = 5
 
@@ -1123,12 +1188,12 @@ stacks = 5
 id = "icc.sindragosa.blistering_cold"
 name = "Blistering Cold"
 kind = "run_out_debuff"
-phase = "ground"
+phase = ["ground", "three"]
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [70117, 70123], "25" = [70117, 71047], "10h" = [70117, 71048], "25h" = [70117, 71049] }
 handled_by = "playerbots"
-playerbots = "icc sindragosa blistering cold"
-explain = "Icy Grip pulls everyone in; run twenty-five yards out before Blistering Cold goes off."
+playerbots = ["icc sindragosa blistering cold"]
+explain = "Icy Grip pulls everyone to her; run twenty-five yards out before Blistering Cold goes off (each landing and every minute or so in the last phase)."
 check = "icc.sindragosa.check_avoid"
 radius = 25
 first = 33
@@ -1141,7 +1206,7 @@ kind = "positional"
 roles = ["healer", "melee", "ranged"]
 spells = [70126]
 handled_by = "playerbots"
-playerbots = "icc sindragosa frost beacon"
+playerbots = ["icc sindragosa frost beacon"]
 explain = "Beaconed players move to set spots apart so their ice tombs make a wall to hide behind."
 check = "none"
 
@@ -1153,7 +1218,8 @@ phase = "air"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [69845], "25" = [71053], "10h" = [71054], "25h" = [71055] }
 handled_by = "playerbots"
-playerbots = "icc sindragosa frost bomb"
+playerbots = ["icc sindragosa frost bomb"]
+radius = 500
 explain = "In the air phase hide behind an ice tomb so it blocks each falling bomb."
 check = "icc.sindragosa.check_avoid"
 
@@ -1165,7 +1231,8 @@ phase = "three"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = [70128]
 handled_by = "playerbots"
-playerbots = "icc sindragosa mystic buffet"
+playerbots = ["icc sindragosa mystic buffet"]
+radius = 200
 explain = "In the last phase her buffet stacks on everyone; hide behind a tomb to drop the stacks."
 check = "none"
 
@@ -1176,7 +1243,8 @@ kind = "move_out_cone"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [69649, 73061], "25" = [71056, 73062], "10h" = [71057, 73063], "25h" = [71058, 73064] }
 handled_by = "playerbots"
-playerbots = "icc sindragosa group position"
+playerbots = ["icc sindragosa group position"]
+radius = 60
 explain = "Her breath hits in front; only the tank faces her."
 check = "none"
 every = 22
@@ -1189,9 +1257,9 @@ phase = "ground"
 roles = ["melee"]
 spells = [71077]
 handled_by = "playerbots"
-playerbots = "icc sindragosa group position"
-explain = "Her tail knocks back anyone behind her; melee stand at her flanks."
-check = "behind"
+playerbots = ["icc sindragosa group position"]
+explain = "Her tail knocks back anyone standing behind her; melee stand at her flanks, not at her back."
+check = "none"
 every = 25
 
 [[boss.mechanic]]
@@ -1201,7 +1269,7 @@ kind = "stop_casting"
 roles = ["melee"]
 spells = [70106]
 handled_by = "playerbots"
-playerbots = "icc sindragosa chilled to the bone"
+playerbots = ["icc sindragosa chilled to the bone"]
 explain = "Melee hits stack a damage-taken debuff; melee stop attacking when it gets high."
 check = "none"
 
@@ -1212,10 +1280,10 @@ kind = "spread"
 roles = ["ranged"]
 spells = [69762]
 handled_by = "playerbots"
-playerbots = "icc sindragosa group position"
-explain = "Ranged keep eight yards apart all fight."
+playerbots = ["icc sindragosa group position"]
+explain = "Ranged keep apart all fight: eight yards on normal, twenty on heroic, where Backlash hits allies near an Unchained Magic player."
 check = "icc.sindragosa.check_spread"
-radius = 8
+radius = { "10" = 8, "25" = 8, "10h" = 20, "25h" = 20 }
 
 [[boss.check]]
 id = "icc.sindragosa.check_instability"
@@ -1267,6 +1335,7 @@ kind = "raid_cooldowns"
 roles = ["healer"]
 spells = { "10" = [70541], "25" = [73779], "10h" = [73780], "25h" = [73781] }
 handled_by = "none"
+phase = ["one", "winter_one", "two"]
 explain = "Infest ticks harder until a player is above ninety percent health; healers top everyone right after it."
 check = "none"
 first = 5
@@ -1281,7 +1350,7 @@ roles = ["healer"]
 spells = { "10" = [70337], "25" = [73912], "10h" = [73913], "25h" = [73914] }
 hits = { "10" = [70338], "25" = [73785], "10h" = [73786], "25h" = [73787] }
 handled_by = "playerbots"
-playerbots = "icc lich king necrotic plague"
+playerbots = ["icc lich king necrotic plague"]
 explain = "The plagued player walks to a shambling horror, then healers dispel it so it jumps to the add."
 check = "icc.lichking.check_necrotic_plague"
 first = 30
@@ -1292,9 +1361,10 @@ id = "icc.lichking.adds"
 name = "Shambling Horrors, Raging Spirits and Val'kyr"
 kind = "switch_adds"
 roles = ["tank", "melee", "ranged"]
-spells = [70372, 69200, 69037]
+spells = { "10" = [70372, 69200, 69037], "25" = [70372, 69200, 69037, 74361], "10h" = [70372, 69200, 69037], "25h" = [70372, 69200, 69037, 74361] }
 handled_by = "playerbots"
-playerbots = "icc lich king adds"
+playerbots = ["icc lich king adds"]
+adds = [37698, 39299, 39300, 39301, 36701, 39302, 39303, 39304, 36609, 39120, 39121, 39122]
 explain = "Tanks grab horrors and spirits; damage switches to Val'kyr before they carry players off the edge."
 check = "icc.lichking.check_adds"
 
@@ -1304,9 +1374,9 @@ name = "Remorseless Winter"
 kind = "positional"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [68981, 72259], "25" = [74270, 74273], "10h" = [74271, 74274], "25h" = [74272, 74275] }
-hits = { "10" = [72133], "25" = [73788], "10h" = [73789], "25h" = [73790] }
+hits = { "10" = [68983, 72133], "25" = [73791, 73788], "10h" = [73792, 73789], "25h" = [73793, 73790] }
 handled_by = "playerbots"
-playerbots = "icc lich king winter"
+playerbots = ["icc lich king winter"]
 explain = "During the winters stay at the platform's edge, kill the ice spheres and avoid the Pain and Suffering cone."
 check = "none"
 duration = 60
@@ -1315,11 +1385,13 @@ duration = 60
 id = "icc.lichking.defile"
 name = "Defile"
 kind = "avoid_ground"
-phase = "two"
+phase = ["two", "three"]
 roles = ["tank", "healer", "melee", "ranged"]
 spells = [72762]
 hits = { "10" = [72754], "25" = [73708], "10h" = [73709], "25h" = [73710] }
-handled_by = "none"
+handled_by = "playerbots"
+playerbots = ["icc lich king adds"]
+radius = 10
 explain = "Defile grows each time it hits someone; its target runs out at once and nobody stands in it."
 check = "icc.lichking.check_avoid"
 cast = 2
@@ -1335,8 +1407,10 @@ roles = ["healer", "melee", "ranged"]
 spells = [73539]
 hits = [73529]
 only = ["10h", "25h"]
-handled_by = "playerbots"
-playerbots = "icc lich king shadow trap"
+handled_by = "partial"
+playerbots = ["icc lich king shadow trap"]
+handled_note = "only the main tank steps off a trap; other roles are not moved"
+radius = 10
 explain = "On heroic a trap appears under a player; step off it before it knocks everyone near it off the edge."
 check = "icc.lichking.check_avoid"
 first = 15
@@ -1349,6 +1423,7 @@ kind = "tank_swap_at_stacks"
 roles = ["tank"]
 spells = { "10" = [69409], "25" = [73797], "10h" = [73798], "25h" = [73799] }
 handled_by = "none"
+phase = ["two", "three"]
 explain = "Soul Reaper hits the tank hard after five seconds; the other tank taunts as it lands."
 check = "none"
 first = 40
@@ -1364,7 +1439,7 @@ roles = ["ranged"]
 spells = [70498]
 hits = { "10" = [70503], "25" = [73806], "10h" = [73807], "25h" = [73808] }
 handled_by = "playerbots"
-playerbots = "icc lich king spirit bomb"
+playerbots = ["icc lich king adds"]
 explain = "Spirits drift into the raid and burst; ranged kill them as they rise."
 check = "none"
 every = 30
@@ -1375,11 +1450,11 @@ name = "Harvest Soul"
 kind = "raid_cooldowns"
 phase = "three"
 roles = ["healer"]
-spells = { "10" = [68980], "25" = [74325], "10h" = [74326], "25h" = [74327] }
+spells = { "10" = [68980], "25" = [74325], "10h" = [74296], "25h" = [74297] }
 handled_by = "none"
-explain = "A harvested player is pulled into Frostmourne and must fight their way out; heal them hard as it starts."
+explain = "On normal he pulls one player into Frostmourne every 75 s, who fights their way out; on heroic he pulls the whole raid in every 100 to 110 s."
 check = "none"
-every = 75
+every = { "10" = 75, "25" = 75, "10h" = 105, "25h" = 105 }
 
 [[boss.check]]
 id = "icc.lichking.check_avoid"

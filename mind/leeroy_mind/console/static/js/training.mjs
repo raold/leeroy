@@ -107,7 +107,8 @@ function renderPlaybooks(v) {
         r.appendChild(el("strong", "", m.title));
         r.appendChild(el("span", "chip", m.tag));
         r.appendChild(el("span", "muted", m.who));
-        if (m.stock) { r.appendChild(el("span", "chip", "playerbots")); }
+        if (m.stock) { r.appendChild(el("span", "chip", m.stock)); }
+        if (m.note) { r.appendChild(el("span", "muted", m.note)); }
         r.appendChild(el("span", "", m.text));
         d.appendChild(r);
       });
