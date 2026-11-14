@@ -25,13 +25,13 @@ inline constexpr std::size_t kMechanicMaxSpells = 16; // per rule
 inline constexpr std::size_t kMechanicMaxTables = 16; // map and difficulty pairs held at once
 inline constexpr std::size_t kMechanicMaxIdBytes = 64;
 inline constexpr float kMechanicMaxYards = 100.0f;
-inline constexpr float kMechanicMaxDurationSeconds = 30.0f;
-// A response lasts the spell's cast time plus how long it lingers: the rule's duration, else the spell's own up to
-// kMechanicMaxLingerMs, else kMechanicDefaultLingerMs; always within the lifetime bounds.
+inline constexpr float kMechanicMaxDurationSeconds = 120.0f;
+// A response lasts the spell's cast time plus how long its hazard lingers: the rule's duration, else the spell's own
+// up to kMechanicMaxLingerMs, else kMechanicDefaultLingerMs; always within the lifetime bounds.
 inline constexpr std::uint32_t kMechanicDefaultLingerMs = 3000;
-inline constexpr std::uint32_t kMechanicMaxLingerMs = 15000;
+inline constexpr std::uint32_t kMechanicMaxLingerMs = 120000;
 inline constexpr std::uint32_t kMechanicMinLifetimeMs = 1500;
-inline constexpr std::uint32_t kMechanicMaxLifetimeMs = 20000;
+inline constexpr std::uint32_t kMechanicMaxLifetimeMs = 120000;
 // A spot keeps this clear of an area's edge (beyond the bot's reach) and beyond the spacing it keeps from others,
 // so that a bot that reached it is not asked to move again.
 inline constexpr float kMechanicMarginYards = 1.5f;
@@ -43,6 +43,8 @@ inline constexpr float kMechanicRingStepYards = 2.0f;
 inline constexpr int kMechanicRingDirections = 16;
 // A cast's destination this near its caster is no place of its own (a spell aimed at the caster's feet).
 inline constexpr float kMechanicSelfYards = 0.5f;
+// A stack binds only a member this near its point: one farther off fights elsewhere (a horseman's own tank).
+inline constexpr float kMechanicGatherReachYards = 20.0f;
 
 enum class MechanicKind : std::uint8_t
 {
@@ -62,6 +64,7 @@ enum class MechanicArea : std::uint8_t
     Cone,   // `angle` degrees wide, `range` (else `radius`) long, from the caster toward its target (or its facing)
     Group,  // spread: the other members
     Target, // run_out_debuff: the member the cast or its aura lands on
+    Ring,   // a ring `range` from the cast's destination (else its target), `radius` either side: Infernal Eruption
 };
 
 inline constexpr std::uint8_t kMechanicTank = 1;
@@ -78,6 +81,7 @@ struct MechanicRule
     std::uint8_t roles = 0;
     std::vector<std::uint32_t> spells;
     float radius = 0, range = 0, angle = 0, duration = 0; // yards, degrees (whole cone), seconds
+    bool landing = false; // the place is known only when the cast completes (a random offset): nothing binds before
 };
 
 // raid_mechanics {map, difficulty, mechanics: [...]}: the instance's whole table, replacing the last one.
@@ -112,6 +116,23 @@ struct MechanicMemberFacts
 // "" when it responds, else why not: off, not_cast, not_bot, not_in_group, fenced, held, dead, busy, no_table.
 std::string_view MechanicSkipReason(MechanicMemberFacts const& facts);
 
+// An offline raid's fighter is fenced by any owner but that raid itself. The raid registers its own training DC
+// job over its whole group (and its training run journals what it changes on its bodies), so those never count.
+struct MechanicOfflineFence
+{
+    bool realm = false;      // a Realm lease
+    bool dummy = false;      // a dummy trial
+    bool cleanup = false;    // the global training cleanup fence
+    bool pendingJob = false; // a pending bot command
+    std::vector<std::uint32_t> dcOwners; // the leaders whose training DC run or job holds the body
+    std::uint32_t raidLeader = 0;        // the running offline raid's leader
+};
+bool MechanicOfflineFenced(MechanicOfflineFence const& fence);
+
+// A stock raid strategy moved the bot with a forced move of its own since the mechanic began: the responder yields
+// it for the rest of that mechanic instead of pushing it back out (never fight stock).
+bool MechanicYieldsToStock(bool lastMoveForced, bool sinceMechanicBegan, bool lastMoveOurs);
+
 // What the map thread saw when the boss started the cast.
 struct MechanicCast
 {
@@ -132,14 +153,15 @@ enum class MechanicShapeType : std::uint8_t
     Circle,
     Band,
     Cone,
+    Ring,
 };
 
 struct MechanicShape
 {
     MechanicShapeType type = MechanicShapeType::Circle;
     HazardPoint origin;
-    float radius = 0;    // circle radius; half the band's width
-    float length = 0;    // band and cone
+    float radius = 0;    // circle radius; half the band's or the ring's width
+    float length = 0;    // band and cone; the ring's radius
     float facing = 0;    // band and cone, radians
     float halfAngle = 0; // cone, radians
 };
@@ -157,8 +179,9 @@ struct MechanicDuty
     std::optional<MechanicShape> leave;
     std::optional<HazardPoint> gather;
     float gatherRadius = 0;
-    float spacing = 0; // keep this far from every other member
-    bool hide = false; // out of the caster's sight
+    float spacing = 0;      // keep this far from every other member, plus
+    std::uint8_t bodies = 0; // this many bodies' reach: a chain jumps between both (2), a burst reaches one (1)
+    bool hide = false;      // out of the caster's sight
 };
 
 // The duty a bound rule gives; nullopt when it gives none (no place known, nothing to gather on).
@@ -166,21 +189,26 @@ struct MechanicDuty
 std::optional<MechanicDuty> MechanicDutyFor(MechanicRule const& rule, MechanicCast const& cast, HazardPoint casterNow,
     std::optional<HazardPoint> targetNow);
 
+// A duty binds a member where it stands: a stack only within kMechanicGatherReachYards of its point.
+bool MechanicDutyReaches(MechanicDuty const& duty, HazardPoint at);
+
 // True when the point is hidden from the caster (los duties); a refusal never asks it.
 using MechanicSightFn = std::function<bool(HazardPoint)>;
 
-// The bot at `at` keeps every duty: it need not move. `others`: the other members on its map.
+// The bot at `at` keeps every duty and stands in none of the known ground hazards: it need not move. `others`: the
+// other members on its map.
 bool MechanicKept(HazardPoint at, std::vector<MechanicDuty> const& duties, std::vector<HazardPoint> const& others,
-    float reach, MechanicSightFn const& hidden);
+    std::vector<HazardZone> const& hazards, float reach, MechanicSightFn const& hidden);
 // Spots that keep every duty with kMechanicMarginYards to spare and lie clear of the known ground hazards, nearest
 // the bot first (spreading: away from the others' middle between equals); at most `limit`, none farther than
 // kMechanicMaxShiftYards. Empty when the bot keeps them already or nothing near does.
 std::vector<HazardPoint> MechanicSpots(HazardPoint at, std::vector<MechanicDuty> const& duties,
     std::vector<HazardPoint> const& others, std::vector<HazardZone> const& hazards, float reach, std::size_t limit,
     MechanicSightFn const& hidden);
-// An ordinary move to `to` would break a duty: into an area left, off the gather spot, or within the spacing.
-bool MechanicRefusesMove(HazardPoint to, std::vector<MechanicDuty> const& duties,
-    std::vector<HazardPoint> const& others, float reach);
+// An ordinary move from `at` to `to` would take the bot into an area it leaves. Never while it stands in a known
+// ground hazard (stock's own way out comes first), and never for spacing or a gather: the mechanic move serves those.
+bool MechanicRefusesMove(HazardPoint at, HazardPoint to, std::vector<MechanicDuty> const& duties,
+    std::vector<HazardZone> const& hazards, float reach);
 }
 
 #endif

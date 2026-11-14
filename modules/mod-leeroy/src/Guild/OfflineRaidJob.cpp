@@ -1779,12 +1779,13 @@ bool OfflineRaidOwns([[maybe_unused]] uint32 guid)
 #endif
 }
 
-std::vector<std::uint32_t> OfflineRaidFighters()
+OfflineFighters OfflineRaidFighters()
 {
-    std::vector<std::uint32_t> out;
+    OfflineFighters out;
 #if LEEROY_HAS_DUNGEON_CLEAR
     if (!active || Benchmark(*active) || active->stage != Stage::Running || !active->event.instanceId)
         return out;
+    out.leader = active->command.leaderGuid;
     for (Member const& member : active->members)
     {
         if (member.finished || member.abandoned)
@@ -1792,7 +1793,7 @@ std::vector<std::uint32_t> OfflineRaidFighters()
         Player* player = FindOnline(member.guid);
         if (InJobGroup(*active, player) && player->GetMapId() == active->command.mapId
             && player->GetInstanceId() == active->event.instanceId)
-            out.push_back(member.guid);
+            out.guids.push_back(member.guid);
     }
 #endif
     return out;

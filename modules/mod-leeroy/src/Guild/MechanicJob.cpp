@@ -18,6 +18,7 @@
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
+#include "Timer.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -33,6 +34,7 @@
 
 // The trigger, action and move refusal come from the local playerbots patch 0012; without it nobody moves.
 #if __has_include("PlayerbotMechanicGuard.h")
+#include "LastMovementValue.h"
 #include "PlayerbotMechanicGuard.h"
 #define LEEROY_HAS_MECHANIC_GUARD 1
 #else
@@ -51,6 +53,7 @@ constexpr std::uint32_t kPassesPerSummary = 240; // a minute
 constexpr std::size_t kMaxEvents = 64;           // in force at once, every instance together
 constexpr std::uint64_t kRepeatMs = 2000;        // a run out started again this soon is the same one
 constexpr float kAnchorYards = 15.0f;            // a responder this far from every hazard scan centre gets its own
+constexpr std::uint64_t kOrderYieldMs = 10000;   // the raid lead's spread, run out or back off owns the bot this long
 
 std::atomic<bool> enabled{false};
 std::uint32_t untilPass = 0;
@@ -110,8 +113,10 @@ struct Event
     std::uint32_t debuffed = 0;
     std::uint64_t start = 0;
     std::uint64_t end = 0;
+    std::uint32_t startTick = 0; // getMSTime() at the start, the clock playerbots stamps its moves with
     bool fromAura = false;  // started by the debuff landing, not by a cast
     bool cancelled = false; // the boss stopped the cast or the channel: released early
+    bool landed = false;    // the cast completed and its targets were read again
 };
 std::mutex eventLock;
 std::vector<Event> events;
@@ -193,6 +198,7 @@ void AddEvent(Event event)
         return;
     }
     event.serial = ++nextSerial;
+    event.startTick = getMSTime();
     events.push_back(std::move(event));
     ++eventVersion;
     RefreshKeys();
@@ -312,6 +318,53 @@ void CastCancelled(Unit* caster, SpellInfo const* info)
         ++eventVersion;
 }
 
+// Map thread: a covered cast completed. Its targets are chosen now (a destination offset from the target, as Shock
+// Vortex lands 13 yards off its victim in a random direction), so the place is read again; a rule that waits for
+// the landing binds from here on.
+void CastLanded(Spell* spell, Unit* caster, SpellInfo const* info)
+{
+    if (!enabled.load(std::memory_order_relaxed) || !anyActive.load(std::memory_order_acquire) || !spell || !caster
+        || !info || !caster->IsInWorld() || !caster->ToCreature())
+        return;
+    MapKey const key = KeyOf(caster);
+    std::optional<HazardPoint> dest;
+    if (spell->m_targets.HasDst())
+        if (WorldLocation const* where = spell->m_targets.GetDstPos())
+            dest = HazardPoint{where->GetPositionX(), where->GetPositionY(), where->GetPositionZ()};
+    Unit* target = spell->m_targets.GetUnitTarget();
+    std::optional<HazardPoint> at;
+    if (target && target != caster && target->IsInWorld() && target->GetMap() == caster->GetMap())
+        at = PointOf(target);
+    std::uint64_t const now = NowMs();
+    std::lock_guard<std::mutex> lock(eventLock);
+    bool changed = false;
+    for (Event& event : events)
+        if (event.key == key && event.caster == caster->GetGUID() && event.spell == info->Id && !event.fromAura
+            && !event.landed && now < event.end && now <= event.start + event.cast.castMs + 1000)
+        {
+            if (dest)
+                event.cast.dest = dest;
+            if (at)
+                event.cast.target = at;
+            event.landed = true;
+            changed = true;
+        }
+    if (changed)
+        ++eventVersion;
+}
+
+// The raid lead's own move orders, by guid: the responder leaves those bots until then (world thread writes, map
+// threads read).
+std::mutex yieldLock;
+std::unordered_map<std::uint32_t, std::uint64_t> orderYields;
+
+[[maybe_unused]] bool OrderYielded(std::uint32_t guid)
+{
+    std::lock_guard<std::mutex> lock(yieldLock);
+    auto const found = orderYields.find(guid);
+    return found != orderYields.end() && NowMs() < found->second;
+}
+
 // Map threads: each bot's last answer, reused while the mechanics in force and its own place hold.
 struct Memo
 {
@@ -323,6 +376,10 @@ struct Memo
 };
 std::mutex memoLock;
 std::unordered_map<std::uint32_t, Memo> memos;
+// Under memoLock: the stamp of the last forced move the guard issued per bot, and the mechanics each bot was
+// yielded from because a stock raid strategy moved it with a forced move of its own.
+std::unordered_map<std::uint32_t, std::uint32_t> issued;
+std::unordered_map<std::uint32_t, std::set<std::uint64_t>> yielded;
 
 #if LEEROY_HAS_MECHANIC_GUARD
 constexpr float kOthersYards = 60.0f;  // members farther than this never crowd a spot
@@ -356,6 +413,8 @@ bool Resolve(Player* bot, bool full, Plan& plan)
     if (instance == hold->instances.end())
         return false;
 
+    if (OrderYielded(guid))
+        return false; // the raid lead's spread, run out or back off is his: never refused, never pushed back
     std::vector<Event> bound;
     {
         std::lock_guard<std::mutex> lock(eventLock);
@@ -364,8 +423,27 @@ bool Resolve(Player* bot, bool full, Plan& plan)
         for (Event const& event : events)
             if (event.key == member->second.key && now < event.end && event.table
                 && event.rule < event.table->rules.size()
+                && (event.landed || !event.table->rules[event.rule].landing)
                 && MechanicBinds(event.table->rules[event.rule], member->second.role, guid, event.debuffed))
                 bound.push_back(event);
+    }
+    if (bound.empty())
+        return false;
+    // Never fight stock: a forced move of a stock raid strategy's own since a mechanic began yields the bot from it.
+    if (PlayerbotAI* ai = GET_PLAYERBOT_AI(bot))
+    {
+        LastMovement const& last = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get();
+        bool const forced = last.priority == MovementPriority::MOVEMENT_FORCED;
+        std::lock_guard<std::mutex> lock(memoLock);
+        auto const ours = issued.find(guid);
+        std::set<std::uint64_t>& skip = yielded[guid];
+        for (Event const& event : bound)
+            if (MechanicYieldsToStock(forced, static_cast<std::int32_t>(last.msTime - event.startTick) >= 0,
+                    ours != issued.end() && ours->second == last.msTime))
+                skip.insert(event.serial);
+        std::erase_if(bound, [&](Event const& event) { return skip.contains(event.serial); });
+        if (skip.empty())
+            yielded.erase(guid);
     }
     if (bound.empty())
         return false;
@@ -390,8 +468,8 @@ bool Resolve(Player* bot, bool full, Plan& plan)
         if (target && target->IsInWorld() && target->IsAlive())
             targetNow = PointOf(target);
         auto duty = MechanicDutyFor(rule, event.cast, caster ? PointOf(caster) : event.cast.caster, targetNow);
-        if (!duty)
-            continue;
+        if (!duty || !MechanicDutyReaches(*duty, PointOf(bot)))
+            continue; // nothing to do, or a stack whose point lies where another fight is
         if (duty->hide && caster)
             plan.sightCasters.push_back(caster);
         spacing = spacing || duty->spacing > 0;
@@ -465,7 +543,7 @@ public:
         float const reach = bot->GetCombatReach();
         HazardPoint const at = PointOf(bot);
         MechanicSightFn const hidden = SightOf(plan);
-        if (MechanicKept(at, plan.duties, plan.others, reach, hidden))
+        if (MechanicKept(at, plan.duties, plan.others, plan.hazards, reach, hidden))
         {
             Forget(guid);
             return false;
@@ -480,7 +558,7 @@ public:
                     && std::hypot(memo.asked.x - at.x, memo.asked.y - at.y) < kMemoYards)
                     return false; // nothing reachable a moment ago
                 if (memo.found && std::hypot(memo.spot.x - at.x, memo.spot.y - at.y) <= kMechanicMaxShiftYards
-                    && MechanicKept(memo.spot, plan.duties, plan.others, reach, nullptr)
+                    && MechanicKept(memo.spot, plan.duties, plan.others, plan.hazards, reach, nullptr)
                     && HazardClear(memo.spot, plan.hazards, reach))
                 {
                     x = memo.spot.x; // keep walking to the spot already chosen: no new path every tick
@@ -501,7 +579,7 @@ public:
                 continue;
             HazardPoint const landed{cx, cy, cz};
             if (std::hypot(landed.x - at.x, landed.y - at.y) > kMechanicMaxShiftYards
-                || !MechanicKept(landed, plan.duties, plan.others, reach, hidden)
+                || !MechanicKept(landed, plan.duties, plan.others, plan.hazards, reach, hidden)
                 || !HazardClear(landed, plan.hazards, reach))
                 continue;
             memo.found = true;
@@ -520,9 +598,15 @@ public:
         return true;
     }
 
-    // Counted for mechanic_response only once the move was issued.
+    // Counted for mechanic_response only once the move was issued; its stamp tells our forced moves from stock's.
     void MechanicMoved(Player* bot) override
     {
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(bot))
+        {
+            LastMovement const& last = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get();
+            std::lock_guard<std::mutex> lock(memoLock);
+            issued[bot->GetGUID().GetCounter()] = last.msTime;
+        }
         Plan plan;
         if (Resolve(bot, false, plan))
             NoteMoved(plan, bot->GetGUID().GetCounter());
@@ -531,17 +615,24 @@ public:
     bool MechanicRefuses(Player* bot, float x, float y, float z) override
     {
         Plan plan;
-        return Resolve(bot, true, plan)
-            && MechanicRefusesMove(HazardPoint{x, y, z}, plan.duties, plan.others, bot->GetCombatReach());
+        return Resolve(bot, true, plan) && MechanicRefusesMove(PointOf(bot), HazardPoint{x, y, z}, plan.duties,
+            plan.hazards, bot->GetCombatReach());
     }
 };
 #endif
 
-// World thread. Whether a body holding an offline raid's lease is fenced by anything but that raid.
-bool OfflineFenced(std::uint32_t guid)
+// World thread. Whether a body holding an offline raid's lease is fenced by anything but that raid: its own
+// training DC job and its training run's journals are the raid's.
+bool OfflineFenced(std::uint32_t guid, std::uint32_t raidLeader)
 {
-    return Realm::RealmOwns(guid) || Training::DummyTrialOwns(guid) || Training::TrainingCleanupPending()
-        || HasPendingBotCommands({guid}) || Training::HasTrainingJournal(guid) || Training::TrainingDcOwns(guid);
+    MechanicOfflineFence fence;
+    fence.realm = Realm::RealmOwns(guid);
+    fence.dummy = Training::DummyTrialOwns(guid);
+    fence.cleanup = Training::TrainingCleanupPending();
+    fence.pendingJob = HasPendingBotCommands({guid});
+    fence.dcOwners = Training::TrainingDcOwners(guid);
+    fence.raidLeader = raidLeader;
+    return MechanicOfflineFenced(fence);
 }
 
 struct Collected
@@ -550,7 +641,7 @@ struct Collected
     std::map<std::string_view, std::uint32_t> skipped;
 };
 
-void Consider(Player* player, bool ownerGroup, bool offline, Snapshot& next, Collected& out)
+void Consider(Player* player, bool ownerGroup, std::uint32_t offlineLeader, Snapshot& next, Collected& out)
 {
     std::uint32_t const guid = player->GetGUID().GetCounter();
     PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
@@ -560,8 +651,8 @@ void Consider(Player* player, bool ownerGroup, bool offline, Snapshot& next, Col
     facts.cast = guid != HumanGuid() && IsCast(guid);
     facts.bot = ai && !IsSelfBot(player);
     facts.ownerGroup = ownerGroup;
-    facts.offlineRaid = offline;
-    facts.fenced = offline ? OfflineFenced(guid)
+    facts.offlineRaid = offlineLeader != 0;
+    facts.fenced = offlineLeader ? OfflineFenced(guid, offlineLeader)
         : Realm::RealmOwns(guid) || !Realm::NativeOwnershipReason(guid).empty();
     facts.held = ai && (ai->HasStrategy("stay", BOT_STATE_COMBAT) || ai->HasStrategy("passive", BOT_STATE_COMBAT));
     facts.alive = player->IsAlive();
@@ -597,13 +688,14 @@ void Collect(Snapshot& next, Collected& out)
                 continue;
             party[KeyOf(member)].insert(member->GetGUID().GetCounter());
             if (member != owner)
-                Consider(member, true, false, next, out);
+                Consider(member, true, 0, next, out);
         }
-    for (std::uint32_t guid : OfflineRaidFighters())
+    OfflineFighters const fighters = OfflineRaidFighters();
+    for (std::uint32_t guid : fighters.guids)
         if (Player* player = FindOnline(guid))
         {
             party[KeyOf(player)].insert(guid);
-            Consider(player, false, true, next, out);
+            Consider(player, false, fighters.leader, next, out);
         }
     for (auto& [key, instance] : next.instances)
         if (auto const found = party.find(key); found != party.end())
@@ -732,6 +824,13 @@ void TickMechanics(std::uint32_t diffMs)
     {
         std::lock_guard<std::mutex> lock(memoLock);
         std::erase_if(memos, [&](auto const& item) { return !next->members.contains(item.first); });
+        std::erase_if(issued, [&](auto const& item) { return !next->members.contains(item.first); });
+        std::erase_if(yielded, [&](auto const& item) { return !next->members.contains(item.first); });
+    }
+    {
+        std::lock_guard<std::mutex> lock(yieldLock);
+        std::uint64_t const now = NowMs();
+        std::erase_if(orderYields, [&](auto const& item) { return now >= item.second; });
     }
     responders.store(!next->instances.empty(), std::memory_order_relaxed);
     {
@@ -744,6 +843,12 @@ void TickMechanics(std::uint32_t diffMs)
         passes = 0;
         Summarise(members, instances, collected);
     }
+}
+
+void MechanicYield(std::uint32_t guid)
+{
+    std::lock_guard<std::mutex> lock(yieldLock);
+    orderYields[guid] = NowMs() + kOrderYieldMs;
 }
 
 void RegisterMechanicsHandler()
@@ -777,9 +882,15 @@ class MechanicSpellScript : public AllSpellScript
 {
 public:
     MechanicSpellScript()
-        : AllSpellScript("LeeroyMechanicSpellScript", {ALLSPELLHOOK_ON_PREPARE, ALLSPELLHOOK_ON_CAST_CANCEL}) { }
+        : AllSpellScript("LeeroyMechanicSpellScript",
+              {ALLSPELLHOOK_ON_PREPARE, ALLSPELLHOOK_ON_CAST, ALLSPELLHOOK_ON_CAST_CANCEL}) { }
 
     void OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* info) override { CastStart(spell, caster, info); }
+
+    void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* info, bool /*skipCheck*/) override
+    {
+        CastLanded(spell, caster, info);
+    }
 
     void OnSpellCastCancel(Spell* /*spell*/, Unit* caster, SpellInfo const* info, bool /*bySelf*/) override
     {

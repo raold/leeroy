@@ -171,7 +171,8 @@ LEEROY_TEST(Mechanic_RefusesABadRule)
     CHECK_EQ(with("radius", 101), std::string("bad field: radius"));
     CHECK_EQ(with("radius", "8"), std::string("bad field: radius"));
     CHECK_EQ(with("radius", 0), std::string("bad field: radius")); // a ground area needs one
-    CHECK_EQ(with("duration", 31), std::string("bad field: duration"));
+    CHECK_EQ(with("duration", 121), std::string("bad field: duration"));
+    CHECK_EQ(with("landing", "yes"), std::string("bad field: landing"));
     CHECK_EQ(with("angle", 361), std::string("bad field: angle"));
 }
 
@@ -259,9 +260,10 @@ LEEROY_TEST(Mechanic_LifetimeIsTheCastPlusItsLinger)
     MechanicRule rule = Make(MechanicKind::AvoidGround, MechanicArea::Dest, 8);
     CHECK_EQ(MechanicLifetimeMs(rule, 1000, 0), 1000u + kMechanicDefaultLingerMs);
     CHECK_EQ(MechanicLifetimeMs(rule, 0, 10000), 10000u);                  // Death and Decay lasts 10 s
-    CHECK_EQ(MechanicLifetimeMs(rule, 1500, 90000), 1500u + kMechanicMaxLingerMs); // a void zone, capped
+    CHECK_EQ(MechanicLifetimeMs(rule, 1500, 90000), 91500u);                // a void zone lasts its 90 s
+    CHECK_EQ(MechanicLifetimeMs(rule, 0, 600000), kMechanicMaxLingerMs);   // capped
     CHECK_EQ(MechanicLifetimeMs(rule, 0, 200), kMechanicMinLifetimeMs);
-    CHECK_EQ(MechanicLifetimeMs(rule, 60000, 0), kMechanicMaxLifetimeMs);
+    CHECK_EQ(MechanicLifetimeMs(rule, 200000, 0), kMechanicMaxLifetimeMs);
     rule.duration = 12;
     CHECK_EQ(MechanicLifetimeMs(rule, 0, 2000), 12000u); // the playbook's own number wins
 }
@@ -364,12 +366,12 @@ LEEROY_TEST(Mechanic_AvoidGroundStepsOutOfTheCircleAndClearOfKnownHazards)
 {
     std::vector<MechanicDuty> const duties{Leave(Circle({0, 0, 0}, 8))};
     HazardPoint const at{2, 0, 0};
-    CHECK(!MechanicKept(at, duties, {}, kReach, nullptr));
+    CHECK(!MechanicKept(at, duties, {}, {}, kReach, nullptr));
     auto spots = MechanicSpots(at, duties, {}, {}, kReach, 6, nullptr);
     CHECK(!spots.empty());
     CHECK(Dist(spots.front(), {0, 0, 0}) >= 8 + kReach + kMechanicMarginYards);
     CHECK(Dist(spots.front(), at) < 10.0f); // straight out, the short way
-    CHECK(MechanicKept(spots.front(), duties, {}, kReach, nullptr));
+    CHECK(MechanicKept(spots.front(), duties, {}, {}, kReach, nullptr));
 
     // A Death and Decay on the near side: the spot lies past it too.
     std::vector<HazardZone> const hazards{{10.5f, 0, 0, 3, 7}};
@@ -381,7 +383,7 @@ LEEROY_TEST(Mechanic_AvoidGroundStepsOutOfTheCircleAndClearOfKnownHazards)
 
     // Out already: no spot, no move.
     CHECK(MechanicSpots({20, 0, 0}, duties, {}, {}, kReach, 6, nullptr).empty());
-    CHECK(MechanicKept({20, 0, 0}, duties, {}, kReach, nullptr));
+    CHECK(MechanicKept({20, 0, 0}, duties, {}, {}, kReach, nullptr));
 }
 
 LEEROY_TEST(Mechanic_ConeSpotsLieOutsideTheCone)
@@ -419,17 +421,18 @@ LEEROY_TEST(Mechanic_SpreadKeepsTheDistanceFromEveryOther)
 {
     MechanicDuty spread;
     spread.spacing = 10;
+    spread.bodies = 2; // a chain jumps between two bodies' edges
     std::vector<HazardPoint> const others{{0, 0, 0}, {3, 3, 0}, {-30, 0, 0}};
     HazardPoint const at{2, -1, 0};
-    CHECK(!MechanicKept(at, {spread}, others, kReach, nullptr));
+    CHECK(!MechanicKept(at, {spread}, others, {}, kReach, nullptr));
     auto spots = MechanicSpots(at, {spread}, others, {}, kReach, 6, nullptr);
     CHECK(!spots.empty());
     for (auto const& spot : spots)
         for (auto const& other : others)
-            CHECK(Dist(spot, other) >= 10 + kMechanicMarginYards);
-    CHECK(MechanicKept(spots.front(), {spread}, others, kReach, nullptr));
+            CHECK(Dist(spot, other) >= 10 + 2 * kReach + kMechanicMarginYards);
+    CHECK(MechanicKept(spots.front(), {spread}, others, {}, kReach, nullptr));
     // Others on another floor do not count.
-    CHECK(MechanicKept(at, {spread}, {{0, 0, 30}}, kReach, nullptr));
+    CHECK(MechanicKept(at, {spread}, {{0, 0, 30}}, {}, kReach, nullptr));
 }
 
 LEEROY_TEST(Mechanic_StackGathersWithinTheRadius)
@@ -438,25 +441,26 @@ LEEROY_TEST(Mechanic_StackGathersWithinTheRadius)
     stack.gather = HazardPoint{0, 0, 0};
     stack.gatherRadius = 8;
     HazardPoint const at{20, 0, 0};
-    CHECK(!MechanicKept(at, {stack}, {}, kReach, nullptr));
+    CHECK(!MechanicKept(at, {stack}, {}, {}, kReach, nullptr));
     auto spots = MechanicSpots(at, {stack}, {}, {}, kReach, 6, nullptr);
     CHECK(!spots.empty());
     for (auto const& spot : spots)
         CHECK(Dist(spot, {0, 0, 0}) <= 8 - kMechanicGatherSlackYards + 0.01f);
     CHECK(Dist(spots.front(), at) <= 15.0f); // the near edge of the circle
-    CHECK(MechanicKept({3, 0, 0}, {stack}, {}, kReach, nullptr));
+    CHECK(MechanicKept({3, 0, 0}, {stack}, {}, {}, kReach, nullptr));
 }
 
 LEEROY_TEST(Mechanic_TheDebuffedRunsAwayFromTheRaid)
 {
     MechanicDuty run;
     run.spacing = 10;
+    run.bodies = 1; // the burst reaches the other member's edge
     std::vector<HazardPoint> const raid{{1, 0, 0}, {-1, 1, 0}, {0, -2, 0}, {2, 2, 0}};
     HazardPoint const at{0, 0, 0};
     auto spots = MechanicSpots(at, {run}, raid, {}, kReach, 6, nullptr);
     CHECK(!spots.empty());
     for (auto const& other : raid)
-        CHECK(Dist(spots.front(), other) >= 10 + kMechanicMarginYards);
+        CHECK(Dist(spots.front(), other) >= 10 + kReach + kMechanicMarginYards);
     CHECK(Dist(spots.front(), at) <= kMechanicMaxShiftYards);
 }
 
@@ -465,12 +469,12 @@ LEEROY_TEST(Mechanic_LosHidesBehindSomething)
     MechanicDuty hide;
     hide.hide = true;
     auto behindPillar = [](HazardPoint p) { return p.x > 6.0f; }; // a wall at x = 6
-    CHECK(!MechanicKept({0, 0, 0}, {hide}, {}, kReach, behindPillar));
+    CHECK(!MechanicKept({0, 0, 0}, {hide}, {}, {}, kReach, behindPillar));
     auto spots = MechanicSpots({0, 0, 0}, {hide}, {}, {}, kReach, 3, behindPillar);
     CHECK(!spots.empty());
     CHECK(spots.front().x > 6.0f);
-    CHECK(MechanicKept({8, 0, 0}, {hide}, {}, kReach, behindPillar));
-    CHECK(!MechanicRefusesMove({0, 0, 0}, {hide}, {}, kReach)); // no sight test per move
+    CHECK(MechanicKept({8, 0, 0}, {hide}, {}, {}, kReach, behindPillar));
+    CHECK(!MechanicRefusesMove({8, 0, 0}, {0, 0, 0}, {hide}, {}, kReach)); // no sight test per move
 }
 
 LEEROY_TEST(Mechanic_NoSpotFartherThanTheMaximumShift)
@@ -479,21 +483,161 @@ LEEROY_TEST(Mechanic_NoSpotFartherThanTheMaximumShift)
     CHECK(MechanicSpots({0, 0, 0}, duties, {}, {}, kReach, 6, nullptr).empty());
 }
 
-LEEROY_TEST(Mechanic_OrdinaryMovesBackInAreRefused)
+LEEROY_TEST(Mechanic_OnlyMovesIntoAnAreaAreRefused)
 {
     std::vector<MechanicDuty> const duties{Leave(Circle({0, 0, 0}, 8))};
-    CHECK(MechanicRefusesMove({3, 0, 0}, duties, {}, kReach));
-    CHECK(!MechanicRefusesMove({15, 0, 0}, duties, {}, kReach));
+    CHECK(MechanicRefusesMove({20, 0, 0}, {3, 0, 0}, duties, {}, kReach));
+    CHECK(!MechanicRefusesMove({20, 0, 0}, {15, 0, 0}, duties, {}, kReach));
+    // Spacing and a gather never refuse a move: the mechanic move serves them.
     MechanicDuty spread;
     spread.spacing = 10;
-    CHECK(MechanicRefusesMove({4, 0, 0}, {spread}, {{0, 0, 0}}, kReach));
-    CHECK(!MechanicRefusesMove({12, 0, 0}, {spread}, {{0, 0, 0}}, kReach));
+    spread.bodies = 2;
+    CHECK(!MechanicRefusesMove({20, 0, 0}, {4, 0, 0}, {spread}, {}, kReach));
     MechanicDuty stack;
     stack.gather = HazardPoint{0, 0, 0};
     stack.gatherRadius = 8;
-    CHECK(MechanicRefusesMove({12, 0, 0}, {stack}, {}, kReach));
-    CHECK(!MechanicRefusesMove({5, 0, 0}, {stack}, {}, kReach));
-    CHECK(!MechanicRefusesMove({50, 0, 0}, {}, {}, kReach)); // nothing in force: nothing refused
+    CHECK(!MechanicRefusesMove({5, 0, 0}, {30, 0, 0}, {stack}, {}, kReach));
+    CHECK(!MechanicRefusesMove({60, 0, 0}, {50, 0, 0}, {}, {}, kReach)); // nothing in force: nothing refused
+}
+
+LEEROY_TEST(Mechanic_ABotInAKnownHazardIsNeverRefused)
+{
+    // Jaraxxus: a healer running out with Legion Flame stands in a flame patch; stock avoid aoe's one way out
+    // lies toward a neighbour, and even into the run-out's own area it is let through.
+    std::vector<HazardZone> const patch{{0, 0, 0, 3, 1}};
+    MechanicDuty run;
+    run.spacing = 15;
+    run.bodies = 1;
+    std::vector<MechanicDuty> const both{run, Leave(Circle({6, 0, 0}, 4))};
+    CHECK(!MechanicRefusesMove({0, 0, 0}, {5, 0, 0}, both, patch, kReach));
+    CHECK(MechanicRefusesMove({20, 0, 0}, {5, 0, 0}, both, patch, kReach)); // outside the patch: refused as before
+    // A bound bot in the patch is not kept, though it keeps its spacing: the responder moves it out of the fire.
+    CHECK(!MechanicKept({0, 0, 0}, {run}, {{40, 0, 0}}, patch, kReach, nullptr));
+    auto spots = MechanicSpots({0, 0, 0}, {run}, {{40, 0, 0}}, patch, kReach, 3, nullptr);
+    CHECK(!spots.empty());
+    for (auto const& spot : spots)
+        CHECK(HazardClear(spot, patch, kReach));
+    // Nothing bound: a hazard alone is stock's to handle.
+    CHECK(MechanicKept({0, 0, 0}, {}, {}, patch, kReach, nullptr));
+}
+
+LEEROY_TEST(Mechanic_HorsemenSwapIsNeverRefusedBySpacing)
+{
+    // Every 67.5 s the attractors swap to each other's spot; Holy Wrath's spread binds them meanwhile. Their walk to
+    // an occupied spot goes through.
+    MechanicDuty spread;
+    spread.spacing = 10;
+    spread.bodies = 2;
+    CHECK(!MechanicRefusesMove({0, 0, 0}, {40, 0, 0}, {spread}, {}, kReach));
+}
+
+LEEROY_TEST(Mechanic_ChainsAndBurstsCountTheBodies)
+{
+    float const reach = 1.5f; // a player's combat reach
+    MechanicDuty chain;
+    chain.spacing = 10;
+    chain.bodies = 2; // Holy Wrath and Fel Lightning jump within 10 of both edges: 13 yards
+    CHECK(!MechanicKept({12.5f, 0, 0}, {chain}, {{0, 0, 0}}, {}, reach, nullptr));
+    CHECK(MechanicKept({13.5f, 0, 0}, {chain}, {{0, 0, 0}}, {}, reach, nullptr));
+    MechanicDuty burst;
+    burst.spacing = 10;
+    burst.bodies = 1; // Mana Detonation reaches 10 plus the other's edge: 11.5
+    CHECK(!MechanicKept({10.5f, 0, 0}, {burst}, {{0, 0, 0}}, {}, reach, nullptr));
+    CHECK(MechanicKept({12.0f, 0, 0}, {burst}, {{0, 0, 0}}, {}, reach, nullptr));
+    auto spots = MechanicSpots({3, 0, 0}, {chain}, {{0, 0, 0}}, {}, reach, 1, nullptr);
+    CHECK(!spots.empty());
+    CHECK(Dist(spots.front(), {0, 0, 0}) >= 13.0f + kMechanicMarginYards);
+    // The duties carry their bodies.
+    MechanicCast const cast = CastAt({0, 0, 0});
+    CHECK_EQ(int(MechanicDutyFor(Make(MechanicKind::Spread, MechanicArea::Group, 10), cast, {0, 0, 0},
+        std::nullopt)->bodies), 2);
+    CHECK_EQ(int(MechanicDutyFor(Make(MechanicKind::RunOutDebuff, MechanicArea::Target, 10), cast, {0, 0, 0},
+        std::nullopt)->bodies), 1);
+}
+
+LEEROY_TEST(Mechanic_AStackBindsOnlyTheFightAroundIt)
+{
+    MechanicDuty stack;
+    stack.gather = HazardPoint{0, 0, 0};
+    stack.gatherRadius = 8;
+    CHECK(MechanicDutyReaches(stack, {15, 0, 0}));
+    CHECK(!MechanicDutyReaches(stack, {60, 0, 0})); // a horseman's tank in another corner
+    CHECK(!MechanicDutyReaches(stack, {5, 0, 30}));
+    CHECK(MechanicDutyReaches(Leave(Circle({0, 0, 0}, 8)), {90, 0, 0})); // only a gather is scoped
+}
+
+LEEROY_TEST(Mechanic_AnEruptionRingIsNeverAPlaceToStand)
+{
+    // Infernal Eruption: each eruption lands 15 yards from the volcano and hits 10 round it.
+    MechanicRule const rule = Make(MechanicKind::AvoidGround, MechanicArea::Ring, 10, 15);
+    auto ring = MechanicLeaveArea(rule, CastAt({30, 0, 0}, std::nullopt, HazardPoint{0, 0, 0}), {30, 0, 0});
+    CHECK(ring.has_value());
+    CHECK(ring->type == MechanicShapeType::Ring);
+    float const reach = 1.5f;
+    CHECK(!InMechanicShape({2, 0, 0}, *ring, reach));  // on the volcano
+    CHECK(InMechanicShape({4, 0, 0}, *ring, reach));
+    CHECK(InMechanicShape({26, 0, 0}, *ring, reach));
+    CHECK(!InMechanicShape({27, 0, 0}, *ring, reach));
+    for (float d = 4; d <= 26; d += 2)
+    {
+        auto spots = MechanicSpots({d, 0, 0}, {Leave(*ring)}, {}, {}, reach, 3, nullptr);
+        CHECK(!spots.empty());
+        for (auto const& spot : spots)
+        {
+            float const away = Dist(spot, {0, 0, 0});
+            CHECK(away < 15 - 10 - reach || away > 15 + 10 + reach);
+        }
+    }
+    json eruption = Rule("toc.jaraxxus.infernal_eruption", "avoid_ground", "ring");
+    eruption["radius"] = 10;
+    CHECK_EQ(Refused(Table(json::array({eruption}))), std::string("bad field: range"));
+    eruption["range"] = 15;
+    CHECK_EQ(Refused(Table(json::array({eruption}))), std::string("accepted"));
+}
+
+LEEROY_TEST(Mechanic_ALandingRuleIsRead)
+{
+    json vortex = Rule("icc.council.shock_vortex");
+    vortex["landing"] = true;
+    std::string error;
+    auto table = ParseRaidMechanics(Table(json::array({vortex})), error);
+    CHECK(table.has_value());
+    CHECK(table->rules[0].landing);
+    CHECK(!ParseRaidMechanics(Table(json::array({Rule()})), error)->rules[0].landing);
+}
+
+LEEROY_TEST(Mechanic_AnOfflineRaidIsNotFencedByItself)
+{
+    MechanicOfflineFence fence;
+    fence.raidLeader = 3112;
+    CHECK(!MechanicOfflineFenced(fence));
+    fence.dcOwners = {3112}; // the raid's own training DC job covers its whole group
+    CHECK(!MechanicOfflineFenced(fence));
+    fence.dcOwners = {3112, 251}; // another leader's run holds the body too
+    CHECK(MechanicOfflineFenced(fence));
+    fence.dcOwners = {3112};
+    fence.realm = true;
+    CHECK(MechanicOfflineFenced(fence));
+    fence.realm = false;
+    fence.dummy = true;
+    CHECK(MechanicOfflineFenced(fence));
+    fence.dummy = false;
+    fence.cleanup = true;
+    CHECK(MechanicOfflineFenced(fence));
+    fence.cleanup = false;
+    fence.pendingJob = true;
+    CHECK(MechanicOfflineFenced(fence));
+    MechanicOfflineFence unknown;
+    unknown.dcOwners = {3112}; // no raid leader known: every owner counts
+    CHECK(MechanicOfflineFenced(unknown));
+}
+
+LEEROY_TEST(Mechanic_AStockForcedMoveYieldsTheBot)
+{
+    CHECK(MechanicYieldsToStock(true, true, false));   // stock forced it since the mechanic began
+    CHECK(!MechanicYieldsToStock(true, true, true));   // that forced move was ours
+    CHECK(!MechanicYieldsToStock(true, false, false)); // before the mechanic
+    CHECK(!MechanicYieldsToStock(false, true, false)); // an ordinary move
 }
 
 LEEROY_TEST(Mechanic_KindNamesMatchTheWire)

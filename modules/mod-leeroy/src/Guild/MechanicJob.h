@@ -16,8 +16,11 @@ void InstallMechanicGuard();
 void TickMechanics(std::uint32_t diffMs);
 // raid_mechanics {map, difficulty, mechanics}: one instance's table from the connected mind.
 void RegisterMechanicsHandler();
-// The cast-start and aura hooks.
+// The cast-start, cast-completion, cast-cancel and aura hooks.
 void AddMechanicScripts();
+// World thread: the raid lead's spread, run out or back off order is about to move this bot; the responder leaves
+// it alone for a while, so neither refuses nor undoes the other.
+void MechanicYield(std::uint32_t guid);
 }
 
 #endif

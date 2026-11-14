@@ -62,7 +62,9 @@ playerbots = ["avoid aoe"]
 handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
 explain = "Snobolds throw fire bombs that leave burning patches; step out of the fire."
 check = "toc.beasts.check_avoid"
-radius = 2
+radius = 8
+# The bomb's impact (66317) hits within 8 yards; the 5-yard patch it leaves (66320) is a ground
+# hazard the hazard scan and stock avoid aoe see.
 respond_roles = ["tank", "healer", "melee", "ranged"]
 
 [[boss.mechanic]]
@@ -147,8 +149,8 @@ range = 90
 explain = "Icehowl breathes frost at a random player within ninety yards; others keep out of the line between him and that player."
 check = "none"
 every = 25
-angle = 24
-duration = 5
+# Instant: its cone targets are chosen at launch and frozen in place (spell_cone 60 degrees).
+area = "none"
 
 [[boss.mechanic]]
 id = "toc.beasts.trample"
@@ -230,6 +232,10 @@ handled_note = "stock avoid aoe steps out after the effect lands, and only for b
 explain = "The flamed player runs to the room's edge, trailing fire away from the raid."
 check = "toc.jaraxxus.check_avoid"
 every = 30
+range = 15
+duration = 6
+# The flame (66197) starts a 6 s trail (66199) dropping 3-yard patches (66877): the flamed member
+# keeps 15 yards from everyone while it burns.
 respond_roles = ["healer", "melee", "ranged"]
 
 [[boss.mechanic]]
@@ -268,6 +274,11 @@ radius = 10
 explain = "A volcano erupts and its infernals' blasts burn the ground; stay out of the eruptions."
 check = "toc.jaraxxus.check_avoid"
 every = 120
+range = 15
+duration = 15
+# The volcano erupts every 5 s for 15 s, each eruption (66255, 10 yards) landing exactly 15 yards
+# from it in a random direction: never stand on that ring (on the volcano, or well clear of it).
+area = "ring"
 
 [[boss.mechanic]]
 id = "toc.jaraxxus.infernal_volcano"

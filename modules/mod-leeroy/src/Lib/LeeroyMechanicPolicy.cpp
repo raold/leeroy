@@ -33,6 +33,7 @@ struct AreaName
 constexpr AreaName kAreas[] = {
     {"dest", MechanicArea::Dest}, {"caster", MechanicArea::Caster}, {"line", MechanicArea::Line},
     {"cone", MechanicArea::Cone}, {"group", MechanicArea::Group}, {"target", MechanicArea::Target},
+    {"ring", MechanicArea::Ring},
 };
 
 struct RoleName
@@ -50,7 +51,8 @@ bool AreaFits(MechanicKind kind, MechanicArea area)
     switch (kind)
     {
         case MechanicKind::AvoidGround:
-            return area == MechanicArea::Dest || area == MechanicArea::Caster || area == MechanicArea::Line;
+            return area == MechanicArea::Dest || area == MechanicArea::Caster || area == MechanicArea::Line
+                || area == MechanicArea::Ring;
         case MechanicKind::MoveOutCone:
             return area == MechanicArea::Cone;
         case MechanicKind::Spread:
@@ -72,7 +74,8 @@ bool NumbersFit(MechanicRule const& rule)
     switch (rule.kind)
     {
         case MechanicKind::AvoidGround:
-            return rule.radius > 0 && (rule.area != MechanicArea::Line || rule.range > 0);
+            return rule.radius > 0
+                && ((rule.area != MechanicArea::Line && rule.area != MechanicArea::Ring) || rule.range > 0);
         case MechanicKind::MoveOutCone:
             return either > 0 && rule.angle > 0;
         case MechanicKind::Spread:
@@ -152,6 +155,11 @@ bool TooClose(HazardPoint p, std::vector<HazardPoint> const& others, float spaci
     return false;
 }
 
+float Spacing(MechanicDuty const& duty, float reach)
+{
+    return duty.spacing + static_cast<float>(duty.bodies) * reach;
+}
+
 // A spot with the margins: what MechanicSpots offers.
 bool SpotKeeps(HazardPoint c, std::vector<MechanicDuty> const& duties, std::vector<HazardPoint> const& others,
     float reach)
@@ -163,7 +171,7 @@ bool SpotKeeps(HazardPoint c, std::vector<MechanicDuty> const& duties, std::vect
         if (duty.gather && Distance2d(c, *duty.gather)
             > std::max(duty.gatherRadius - kMechanicGatherSlackYards, duty.gatherRadius * 0.5f))
             return false;
-        if (duty.spacing > 0 && TooClose(c, others, duty.spacing + kMechanicMarginYards))
+        if (duty.spacing > 0 && TooClose(c, others, Spacing(duty, reach) + kMechanicMarginYards))
             return false;
     }
     return true;
@@ -197,6 +205,19 @@ std::optional<HazardPoint> DirectExit(HazardPoint at, MechanicShape const& shape
             }
             float const out = shape.radius + clear;
             return HazardPoint{shape.origin.x + dx / length * out, shape.origin.y + dy / length * out, at.z};
+        }
+        case MechanicShapeType::Ring:
+        {
+            // Inside the ring or outside it, whichever edge is nearer.
+            float dx = at.x - shape.origin.x;
+            float dy = at.y - shape.origin.y;
+            float length = std::hypot(dx, dy);
+            if (length < 0.01f)
+                return std::nullopt; // on the centre: clear already
+            float const inner = shape.length - shape.radius - clear;
+            float const outer = shape.length + shape.radius + clear;
+            float const to = inner > 0 && length - inner < outer - length ? inner : outer;
+            return HazardPoint{shape.origin.x + dx / length * to, shape.origin.y + dy / length * to, at.z};
         }
         case MechanicShapeType::Band:
         case MechanicShapeType::Cone:
@@ -311,9 +332,16 @@ std::optional<MechanicTable> ParseRaidMechanics(nlohmann::json const& message, s
                 return bad(key);
             *field = static_cast<float>(number);
         }
+        if (auto landing = item.find("landing"); landing != item.end())
+        {
+            if (!landing->is_boolean())
+                return bad("landing");
+            rule.landing = landing->get<bool>();
+        }
         if (!NumbersFit(rule))
             return bad(rule.kind == MechanicKind::MoveOutCone && rule.angle <= 0 ? "angle"
-                : rule.area == MechanicArea::Line && rule.range <= 0 ? "range" : "radius");
+                : (rule.area == MechanicArea::Line || rule.area == MechanicArea::Ring) && rule.range <= 0 ? "range"
+                : "radius");
         out.rules.push_back(std::move(rule));
     }
     return out;
@@ -365,6 +393,19 @@ std::string_view MechanicSkipReason(MechanicMemberFacts const& facts)
     return {};
 }
 
+bool MechanicOfflineFenced(MechanicOfflineFence const& fence)
+{
+    if (fence.realm || fence.dummy || fence.cleanup || fence.pendingJob)
+        return true;
+    return std::any_of(fence.dcOwners.begin(), fence.dcOwners.end(), [&](std::uint32_t leader)
+        { return !fence.raidLeader || leader != fence.raidLeader; });
+}
+
+bool MechanicYieldsToStock(bool lastMoveForced, bool sinceMechanicBegan, bool lastMoveOurs)
+{
+    return lastMoveForced && sinceMechanicBegan && !lastMoveOurs;
+}
+
 std::uint32_t MechanicLifetimeMs(MechanicRule const& rule, std::uint32_t castMs, std::uint32_t spellDurationMs)
 {
     std::uint64_t linger = kMechanicDefaultLingerMs;
@@ -409,6 +450,8 @@ bool InMechanicShape(HazardPoint p, MechanicShape const& shape, float reach)
             float const bearing = std::atan2(dy, dx);
             return AngleBetween(bearing, shape.facing) <= shape.halfAngle + std::atan2(reach, distance);
         }
+        case MechanicShapeType::Ring:
+            return std::fabs(distance - shape.length) <= shape.radius + reach;
     }
     return false;
 }
@@ -422,12 +465,18 @@ std::optional<MechanicShape> MechanicLeaveArea(MechanicRule const& rule, Mechani
     switch (rule.area)
     {
         case MechanicArea::Dest:
+        case MechanicArea::Ring:
         {
             std::optional<HazardPoint> const centre = cast.dest ? cast.dest : cast.target;
             if (!centre)
                 return std::nullopt;
             shape.origin = *centre;
             shape.radius = rule.radius;
+            if (rule.area == MechanicArea::Ring)
+            {
+                shape.type = MechanicShapeType::Ring;
+                shape.length = rule.range;
+            }
             return shape;
         }
         case MechanicArea::Caster:
@@ -470,6 +519,7 @@ std::optional<MechanicDuty> MechanicDutyFor(MechanicRule const& rule, MechanicCa
         case MechanicKind::Spread:
         case MechanicKind::RunOutDebuff:
             duty.spacing = std::max(rule.radius, rule.range);
+            duty.bodies = rule.kind == MechanicKind::Spread ? 2 : 1;
             return duty;
         case MechanicKind::Stack:
             duty.gather = targetNow ? targetNow : cast.target ? cast.target : cast.dest;
@@ -484,16 +534,23 @@ std::optional<MechanicDuty> MechanicDutyFor(MechanicRule const& rule, MechanicCa
     return std::nullopt;
 }
 
-bool MechanicKept(HazardPoint at, std::vector<MechanicDuty> const& duties, std::vector<HazardPoint> const& others,
-    float reach, MechanicSightFn const& hidden)
+bool MechanicDutyReaches(MechanicDuty const& duty, HazardPoint at)
 {
+    return !duty.gather || (SameFloor(at, *duty.gather) && Distance2d(at, *duty.gather) <= kMechanicGatherReachYards);
+}
+
+bool MechanicKept(HazardPoint at, std::vector<MechanicDuty> const& duties, std::vector<HazardPoint> const& others,
+    std::vector<HazardZone> const& hazards, float reach, MechanicSightFn const& hidden)
+{
+    if (!duties.empty() && HazardAt(at, hazards, reach))
+        return false; // a bound bot standing in fire is moved out with the rest
     for (MechanicDuty const& duty : duties)
     {
         if (duty.leave && InMechanicShape(at, *duty.leave, reach))
             return false;
         if (duty.gather && Distance2d(at, *duty.gather) > duty.gatherRadius)
             return false;
-        if (duty.spacing > 0 && TooClose(at, others, duty.spacing))
+        if (duty.spacing > 0 && TooClose(at, others, Spacing(duty, reach)))
             return false;
         if (duty.hide && hidden && !hidden(at))
             return false;
@@ -505,7 +562,7 @@ std::vector<HazardPoint> MechanicSpots(HazardPoint at, std::vector<MechanicDuty>
     std::vector<HazardPoint> const& others, std::vector<HazardZone> const& hazards, float reach, std::size_t limit,
     MechanicSightFn const& hidden)
 {
-    if (limit == 0 || MechanicKept(at, duties, others, reach, hidden))
+    if (limit == 0 || MechanicKept(at, duties, others, hazards, reach, hidden))
         return {};
 
     std::vector<HazardPoint> candidates;
@@ -525,7 +582,7 @@ std::vector<HazardPoint> MechanicSpots(HazardPoint at, std::vector<MechanicDuty>
                 Ring(candidates, *duty.gather, ring, kMechanicRingDirections, at.z);
         }
         hide = hide || duty.hide;
-        spacing = std::max(spacing, duty.spacing);
+        spacing = std::max(spacing, duty.spacing > 0 ? Spacing(duty, reach) : 0.0f);
     }
     for (float ring = kMechanicRingStepYards; ring <= kMechanicMaxShiftYards + 0.001f; ring += kMechanicRingStepYards)
         Ring(candidates, at, ring, kMechanicRingDirections, at.z);
@@ -578,18 +635,14 @@ std::vector<HazardPoint> MechanicSpots(HazardPoint at, std::vector<MechanicDuty>
     return spots;
 }
 
-bool MechanicRefusesMove(HazardPoint to, std::vector<MechanicDuty> const& duties,
-    std::vector<HazardPoint> const& others, float reach)
+bool MechanicRefusesMove(HazardPoint at, HazardPoint to, std::vector<MechanicDuty> const& duties,
+    std::vector<HazardZone> const& hazards, float reach)
 {
+    if (HazardAt(at, hazards, reach))
+        return false;
     for (MechanicDuty const& duty : duties)
-    {
         if (duty.leave && InMechanicShape(to, *duty.leave, reach))
             return true;
-        if (duty.gather && Distance2d(to, *duty.gather) > duty.gatherRadius)
-            return true;
-        if (duty.spacing > 0 && TooClose(to, others, duty.spacing))
-            return true;
-    }
     return false;
 }
 }

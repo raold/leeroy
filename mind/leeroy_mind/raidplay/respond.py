@@ -24,7 +24,7 @@ FEATURE = "mechanics"
 MAX_RULES = 64
 MAX_SPELLS = 16
 MAX_YARDS = 100.0
-MAX_DURATION = 30.0
+MAX_DURATION = 120.0
 _CODE = re.compile(r"[A-Za-z0-9_:.,-]{1,64}")
 
 
@@ -40,6 +40,7 @@ class MechanicRule:
     range_: float = 0.0
     angle: float = 0.0
     duration: float = 0.0
+    landing: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,11 +70,11 @@ def actionable(playbooks: Playbooks, map_id: int, difficulty: int) -> tuple[Mech
             if not roles or not spells:
                 continue
             angle = m.number("angle", key) or (DEFAULT_CONE_DEGREES if m.area == "cone" else 0)
-            # A spread holds until the next cast; anything else lingers as long as its spell (native).
-            duration = m.number("duration", key) or (m.number("every", key) if m.kind == "spread" else 0) or 0
+            # The playbook's own hazard time, else native takes the spell's (a spread ends with its cast's).
+            duration = m.number("duration", key) or 0
             rules.append(MechanicRule(m.id, m.kind, m.area, roles, spells, _yards(m.number("radius", key)),
                                       _yards(m.number("range", key)), float(min(angle, 360)),
-                                      float(min(duration, MAX_DURATION))))
+                                      float(min(duration, MAX_DURATION)), m.landing))
     return tuple(rules[:MAX_RULES])
 
 

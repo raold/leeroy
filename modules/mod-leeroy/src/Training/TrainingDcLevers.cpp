@@ -256,6 +256,23 @@ bool TrainingDcOwns(std::uint32_t guid)
 #endif
 }
 
+std::vector<std::uint32_t> TrainingDcOwners(std::uint32_t guid)
+{
+    std::vector<std::uint32_t> owners;
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (!guid) return owners;
+    for (auto const& [leader, run] : runs)
+        if (OwnsBody(run.scope, run.manifest, guid)) owners.push_back(leader);
+    for (auto leader : jobs.Leaders())
+        if (auto* job = jobs.Find(leader); job && (guid == leader || job->manifest.Owns(guid)
+            || OwnsBody(job->scope, job->manifest, guid)))
+            owners.push_back(leader);
+#else
+    (void)guid;
+#endif
+    return owners;
+}
+
 std::uint64_t MarkJobRun(std::uint32_t guid)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR

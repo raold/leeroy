@@ -73,14 +73,17 @@ Per mechanic (`[[boss.mechanic]]`):
   --playerbots-src` proves each is registered. Playerbots has no Trial of the Crusader strategy.
 - The responder's reading (`respond.py`, see The responder): `area`, where the danger lies when the spell
   starts, for the kinds it responds to: `avoid_ground` `dest` (default: round the cast's destination, else its
-  target), `caster` (round the caster, following it) or `line` (a band `radius` either side and `range` long from
-  the caster toward its target, else its facing; both numbers required); `move_out_cone` `cone` (with `angle`,
-  the whole cone in degrees, else the core's 60); `spread` `group`; `stack` `dest`; `run_out_debuff` `target`;
-  `los` `caster`; and `none` for any of them when the cast start does not say where (the responder leaves it).
-  A `partial` mechanic of those kinds names `respond_roles`, the roles its `handled_note` says stock leaves (`[]`
-  when moving them would fight stock; without it the responder leaves the mechanic), and may name
-  `respond_spells` (a list or per-difficulty table, among its `spells`) when stock covers some of its casts.
-  Both are refused on a `none` or `playerbots` mechanic.
+  target), `caster` (round the caster, following it), `line` (a band `radius` either side and `range` long from
+  the caster toward its target, else its facing) or `ring` (a ring `range` from the destination, `radius` either
+  side; both numbers required for a line or a ring); `move_out_cone` `cone` (with `angle`, the whole cone in
+  degrees, as `spell_cone` gives it, else the core's 60); `spread` `group`; `stack` `dest`; `run_out_debuff`
+  `target`; `los` `caster`; and `none` for any of them when the cast start does not say where or the cast has hit
+  before any hook can run (the responder leaves it). `landing = true` (a `dest` or `ring` area) waits for the cast
+  to complete and reads the place then (a random offset from the target). A `partial` mechanic of those kinds
+  names `respond_roles`, the roles its `handled_note` says stock leaves (`[]` when moving them would fight stock;
+  without it the responder leaves the mechanic). `respond_spells` (a list or per-difficulty table, among its
+  `spells`; not on a `playerbots` mechanic) names the casts the responder answers: the ones stock leaves, or the
+  ones that can be answered before they hit (Impale's 10-man cast; the 25-man one is instant).
 - `explain`: one line for the raid lead, in our own words.
 - `check`: the training check it maps to: a boss check id, a generic check (`behind`, `aggro`,
   `tank_range`, `healer_oom`) or `none`.
@@ -124,10 +127,12 @@ no handler, no task, no command, and native has no table, so it moves nobody (ex
 (`avoid_ground`, `move_out_cone`, `spread`, `stack`, `run_out_debuff`, `los`; `soak` is later work) with an
 `area` other than `none` and roles stock leaves (`responder_roles()`: every role of a `none` mechanic, the
 `respond_roles` of a `partial` one, none of a `playerbots` one), with its casts at that difficulty
-(`responder_spells`), `radius`, `range`, `angle` (cones default to 60) and `duration` (the playbook's; a spread
-holds for its `every`, until the next cast; otherwise native takes the spell's own duration). It is bounded to
-native's limits (64 rules, 16 spells, 100 yards, 30 seconds), and each table fits one bridge line many times
-over. Today 18 mechanics qualify across the ten covered raid difficulties.
+(`responder_spells`), `radius`, `range`, `angle` (cones default to 60), `duration` (the playbook's hazard time,
+else native takes the spell's own, a spread's ending with its cast) and `landing`. It is bounded to native's
+limits (64 rules, 16 spells, 100 yards, 120 seconds), and each table fits one bridge line many times over. Today
+14 mechanics qualify (45 rules across the ten covered raid difficulties): Impale (10-man), Void Zone, Meteor,
+Holy Wrath, Detonate Mana, Coldflame, Death and Decay, Shock Vortex, Fire Bomb, Legion Flame, Infernal
+Eruption, Fel Lightning, Bladestorm and Hellfire.
 
 `MechanicFeed` sends every covered map and difficulty as one `raid_mechanics` command at each hello from a
 worldserver whose hello lists the `mechanics` feature (an older one gets nothing: `raidplay_respond_unsupported`),
@@ -139,11 +144,17 @@ difficulty= mechanics=`, `raidplay_respond_refused map= difficulty= error=<code>
 `Leeroy.Mechanics.Enable = 1` as its needs). `raidplay show` adds a `responder:` line to each mechanic it acts on.
 
 Which mechanics the data leaves (`area = "none"` or `respond_roles = []`), and why, is said in a comment beside
-each in `data/*.toml`: Rotface's Slime Spray and Loatheb's spores (moving them would fight stock's own placing),
-Putricide's Choking Gas Bomb, the gunship's Rocket Artillery (the deck is a transport), the Beasts' Slime Pool,
-Paralytic Toxin and Trample, and the twins' orbs (no place known at cast start). Coldflame is answered for the
-targeted cast only (`respond_spells = [69140]`; Bone Storm's four lines are not one area), along a 70-yard line;
-the Blood Council's vortex for the ordinary one only (stock dodges the empowered one).
+each in `data/*.toml`: Rotface's Slime Spray and Sticky Ooze, Loatheb's spores and the heroic Lich King's Shadow
+Trap (stock moves those bodies itself, often with forced moves), Grobbulus's Slime Spray, Icehowl's Arctic Breath
+and the 25-man Impale (instant: they hit before any hook runs), Putricide's Choking Gas Bomb, the gunship's
+Rocket Artillery (the deck is a transport), the Beasts' Slime Pool, Paralytic Toxin and Trample, and the twins'
+orbs (no place known at cast start). The numbers follow what the core hits, from `Spell.dbc`, `spell_cone` and
+the scripts: Coldflame is answered for the targeted cast only (`respond_spells = [69140]`; Bone Storm's four
+lines are not one area), along a 70-yard line 5 yards either side (its patches' radius) for the 9 seconds the
+trail burns; Fire Bomb by its 8-yard impact (the patch it leaves is a ground hazard); Shock Vortex for the
+ordinary one only (stock dodges the empowered one), where it lands, 12 yards round for its 30 seconds; Legion
+Flame's run-out lasts its 6-second trail, 15 yards from everyone; Infernal Eruption is a ring 15 yards from the
+volcano, 10 either side; Detonate Mana binds every mana user's role.
 
 ## Training
 

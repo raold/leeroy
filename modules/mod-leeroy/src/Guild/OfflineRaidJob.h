@@ -15,9 +15,14 @@ LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message);
 LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message);
 // Reservations include requested members before grouping and survive unresolved teardown.
 bool OfflineRaidOwns(std::uint32_t guid);
-// The members a running offline raid (never a benchmark) holds in its group inside its instance: the mechanic
-// responder's offline bodies. Empty in every other stage.
-std::vector<std::uint32_t> OfflineRaidFighters();
+// The members a running offline raid (never a benchmark) holds in its group inside its instance, and its leader
+// (whose training DC job covers them): the mechanic responder's offline bodies. Empty in every other stage.
+struct OfflineFighters
+{
+    std::uint32_t leader = 0;
+    std::vector<std::uint32_t> guids;
+};
+OfflineFighters OfflineRaidFighters();
 std::string AdmitTrainingRun(std::string const& handle, std::vector<std::uint32_t> const& guids,
     std::uint32_t leader = 0);
 LeeroyCommandResult HandleGetTrainingCleanup(nlohmann::json const&);

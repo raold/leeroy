@@ -42,19 +42,21 @@ roles = ["tank", "healer", "melee", "ranged"]
 spells = [69140, 72705]
 hits = { "10" = [69146], "25" = [70823], "10h" = [70824], "25h" = [70825] }
 handled_by = "partial"
-radius = 3
+radius = 5
 playerbots = ["avoid aoe"]
 handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
 explain = "A line of cold fire runs out from him; step sideways out of its path, never along it."
 check = "icc.marrowgar.check_avoid_coldflame"
 first = 5
 every = 5
-# The responder reacts to the targeted Coldflame only: Bone Storm's four diagonal lines are not
-# one area it can name at cast start. The flame runs from him along his facing toward the target.
+range = 70
+duration = 9
+# The responder reacts to the targeted Coldflame only (Bone Storm's four diagonal lines are not one
+# area it can name at cast start). The flame runs from him along his facing toward the target, 5
+# yards a step for 12 s, each patch (69146) burning 5 yards round for 3 s: 70 yards burn for 9 s.
 respond_roles = ["tank", "healer", "melee", "ranged"]
 respond_spells = [69140]
 area = "line"
-range = 70
 
 [[boss.mechanic]]
 id = "icc.marrowgar.bone_spike"
@@ -623,7 +625,9 @@ handled_note = "stock avoid aoe steps out after the effect lands, and only for b
 explain = "Sticky Ooze leaves a slowing puddle under the tank; step out of it."
 check = "icc.rotface.check_avoid"
 every = 15
-respond_roles = ["tank", "melee"]
+# Stock moves exactly these bodies with forced moves (infected merges on the assist tank, the ooze
+# kite), and the puddle lands 23 yards along the ooze's facing: the responder leaves it.
+respond_roles = []
 
 [[boss.mechanic]]
 id = "icc.rotface.vile_gas"
@@ -832,14 +836,18 @@ handled_by = "partial"
 playerbots = ["icc bpc empowered vortex"]
 handled_note = "only Empowered vortexes, while Valanar holds the invocation; normal vortexes are not avoided"
 hits = { "10" = [71944, 72038], "25" = [72812, 72815], "10h" = [72813, 72816], "25h" = [72814, 72817] }
-radius = 13
+radius = 12
 explain = "Valanar drops vortexes that knock players around; step away from them, and spread for the empowered one."
 check = "icc.council.check_avoid"
 first = 15
 every = 20
-# Stock leaves the ordinary vortex (72037) only; the empowered one is its own.
+duration = 30
+# Stock leaves the ordinary vortex (72037) only; the empowered one is its own. The vortex lands 13
+# yards from the target in a random direction, read when the cast completes (landing), arms after
+# 4.5 s and knocks within 12 yards every 1.5 s for its 30 s.
 respond_roles = ["healer", "melee", "ranged"]
 respond_spells = [72037]
+landing = true
 
 [[boss.mechanic]]
 id = "icc.council.kinetic_bomb"
@@ -1434,7 +1442,9 @@ explain = "On heroic a trap appears under a player; step off it before it knocks
 check = "icc.lichking.check_avoid"
 first = 15
 every = 15
-respond_roles = ["healer", "melee", "ranged"]
+# On heroic stock stacks every non-tank on the main tank with forced moves and steps the main tank
+# off the trap; the stack follows it, so the responder leaves it.
+respond_roles = []
 
 [[boss.mechanic]]
 id = "icc.lichking.soul_reaper"

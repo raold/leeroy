@@ -60,7 +60,7 @@ RESPOND_KINDS = frozenset({"avoid_ground", "move_out_cone", "spread", "stack", "
 # Where a responded kind's danger lies when its spell starts (the responder's `area`), each kind's choices with its
 # default first; "none": the cast does not say where, so the responder leaves it (README).
 AREAS = MappingProxyType({
-    "avoid_ground": ("dest", "caster", "line", "none"),
+    "avoid_ground": ("dest", "caster", "line", "ring", "none"),
     "move_out_cone": ("cone", "none"),
     "spread": ("group", "none"),
     "stack": ("dest", "none"),
@@ -143,6 +143,7 @@ class Mechanic:
     area: str = ""
     respond_roles: tuple[str, ...] | None = None
     respond_spells: Mapping[str, tuple[int, ...]] | None = None
+    landing: bool = False   # its place is read when the cast completes; nothing binds before
 
     def applies(self, difficulty: str) -> bool:
         return difficulty in self.only
@@ -386,7 +387,7 @@ def _mechanic(raw, where: str, diffs: tuple[str, ...], phases: set[str], slug_pr
         _fail(where, "expected a table")
     _known(raw, {"id", "name", "kind", "phase", "roles", "spells", "hits", "only", "handled_by",
                  "playerbots", "handled_note", "explain", "check", "adds", "area", "respond_roles",
-                 "respond_spells", *NUMBERS}, where)
+                 "respond_spells", "landing", *NUMBERS}, where)
     mid = _text(raw.get("id"), f"{where}.id")
     if (not mid.startswith(slug_prefix) or mid.startswith(slug_prefix + "check_")
             or not _ID.fullmatch(mid[len(slug_prefix):])):
@@ -448,8 +449,9 @@ def _mechanic(raw, where: str, diffs: tuple[str, ...], phases: set[str], slug_pr
 
 
 def _respond(raw, where, kind, handled, roles, only, spells, numbers):
-    """The responder's fields: area (each kind's default when absent), and for a partial mechanic the
-    roles and casts stock does not cover (no respond_roles: the responder leaves it)."""
+    """The responder's fields: area (each kind's default when absent), for a partial mechanic the roles
+    stock does not cover (no respond_roles: the responder leaves it), the casts it answers (respond_spells,
+    the ones stock leaves or that can be answered before they hit) and whether it waits for the landing."""
     choices = AREAS.get(kind)
     allowed = choices or ("none",)
     area = raw.get("area", choices[0] if choices else "")
@@ -457,16 +459,22 @@ def _respond(raw, where, kind, handled, roles, only, spells, numbers):
         _fail(where, f"area must be one of {', '.join(allowed)} for a {kind} mechanic")
     if not choices:
         area = ""
-    if area == "line":
+    if area in ("line", "ring"):
         for d in only:
             if d not in numbers.get("range", {}) or d not in numbers.get("radius", {}):
-                _fail(where, f"a line needs a radius (half its width) and a range (its length) for difficulty {d}")
+                _fail(where, f"a {area} needs a radius (half its width) and a range (its length or its radius) "
+                             f"for difficulty {d}")
     if "angle" in numbers and area != "cone":
         _fail(where, "angle (degrees) is for a cone")
     if any(not 0 < v <= 360 for v in numbers.get("angle", {}).values()):
         _fail(where, "angle must be more than 0 and at most 360 degrees")
-    if ("respond_roles" in raw or "respond_spells" in raw) and handled != "partial":
-        _fail(where, "respond_roles and respond_spells are only for a partial mechanic")
+    if "respond_roles" in raw and handled != "partial":
+        _fail(where, "respond_roles is only for a partial mechanic")
+    if "respond_spells" in raw and handled == "playerbots":
+        _fail(where, "respond_spells is not for a mechanic stock handles")
+    landing = raw.get("landing", False)
+    if type(landing) is not bool or landing and area not in ("dest", "ring"):
+        _fail(where, "landing (true or false) is for a dest or ring area")
     respond_roles = None
     if "respond_roles" in raw:
         value = raw["respond_roles"]
@@ -482,7 +490,7 @@ def _respond(raw, where, kind, handled, roles, only, spells, numbers):
             if any(i not in spells.get(d, ()) for i in chosen):
                 _fail(where, f"respond_spells for difficulty {d} must be among its spells")
         respond_spells = MappingProxyType({d: table[d] for d in only if table.get(d)})
-    return area, respond_roles, respond_spells
+    return area, respond_roles, respond_spells, landing
 
 
 def _boss(raw, where: str, raid_key: str, map_id: int, diffs: tuple[str, ...]) -> Boss:

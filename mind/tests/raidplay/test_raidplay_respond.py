@@ -36,29 +36,38 @@ def test_only_the_mechanics_stock_leaves_reach_native():
             if m.handled_by == "partial":
                 assert rule.roles == m.respond_roles               # only the roles its note says stock leaves
     # A partial mechanic's tank, covered by stock, is never moved; nor are its ranged when stock places them.
-    shadow_trap = next(r for r in actionable(pb, 631, 3) if r.id == "icc.lichking.shadow_trap")
-    assert "tank" not in shadow_trap.roles
     vortex = next(r for r in actionable(pb, 631, 3) if r.id == "icc.council.shock_vortex")
-    assert vortex.spells == (72037,)                               # stock dodges the empowered one itself
+    assert vortex.spells == (72037,) and "tank" not in vortex.roles  # stock dodges the empowered one itself
+    assert vortex.landing and vortex.radius == 12 and vortex.duration == 30  # read where it lands, 13 yd off
     coldflame = next(r for r in actionable(pb, 631, 1) if r.id == "icc.marrowgar.coldflame")
     assert coldflame.spells == (69140,) and coldflame.area == "line" and coldflame.range_ == 70
+    assert coldflame.radius == 5 and coldflame.duration == 9       # 69146 patches burn 5 yd round for 3 s
     assert "icc.rotface.slime_spray" not in _ids(631, 1)           # respond_roles = []
+    assert "icc.rotface.sticky_ooze" not in _ids(631, 1)           # stock forces those bodies
+    assert "icc.lichking.shadow_trap" not in _ids(631, 3)          # stock stacks them on the main tank
+    assert "naxx.grobbulus.slime_spray" not in _ids(533, 0)        # instant: hit before any hook
+    assert "toc.beasts.arctic_breath" not in _ids(649, 0)
+    assert "naxx.anubrekhan.impale" in _ids(533, 0) and "naxx.anubrekhan.impale" not in _ids(533, 1)
     assert "naxx.loatheb.spores" not in _ids(533, 1)
     assert "icc.putricide.choking_gas_bomb" not in _ids(631, 1)    # area none: nowhere known at cast start
     assert "icc.gunship.rocket_artillery" not in _ids(631, 1)
     assert "toc.beasts.slime_pool" not in _ids(649, 0)
     assert "icc.sindragosa.frost_bomb" not in _ids(631, 3)         # stock's los
     assert "naxx.patchwerk.hateful_strike" not in _ids(533, 0)     # soak is not responded yet
-    assert "icc.lichking.shadow_trap" not in _ids(631, 0)          # heroic only
 
 
 def test_each_kind_carries_what_native_needs():
     pb = raidplay.load()
     by_id = {r.id: r for rules in tables(pb).values() for r in rules}
-    assert by_id["naxx.anubrekhan.impale"].angle == 24 and by_id["naxx.anubrekhan.impale"].range_ == 45
-    assert by_id["naxx.horsemen.holy_wrath"].duration == 15        # a spread holds until the next one
-    assert by_id["toc.jaraxxus.fel_lightning"].duration == 12
-    assert by_id["toc.beasts.arctic_breath"].duration == 5
+    assert by_id["naxx.anubrekhan.impale"].angle == 29 and by_id["naxx.anubrekhan.impale"].range_ == 45
+    assert by_id["naxx.horsemen.holy_wrath"].duration == 0         # a spread ends with its cast's linger
+    assert by_id["toc.jaraxxus.fel_lightning"].duration == 0
+    assert by_id["toc.beasts.fire_bomb"].radius == 8                # the impact, not the patch
+    flame = by_id["toc.jaraxxus.legion_flame"]
+    assert flame.range_ == 15 and flame.duration == 6               # the 6 s trail, run well out
+    eruption = by_id["toc.jaraxxus.infernal_eruption"]
+    assert eruption.area == "ring" and eruption.range_ == 15 and eruption.radius == 10
+    assert set(by_id["naxx.kelthuzad.detonate_mana"].roles) == {"healer", "melee", "ranged"}
     assert by_id["toc.champions.bladestorm"].area == "caster" and by_id["toc.champions.bladestorm"].roles == ("melee",)
     assert by_id["naxx.kelthuzad.detonate_mana"].area == "target"
     assert by_id["naxx.horsemen.meteor"].kind == "stack" and by_id["naxx.horsemen.meteor"].radius == 8
@@ -81,7 +90,8 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
         wire = json.loads(line)
         assert wire["type"] == "raid_mechanics" and wire["map"] == map_id and wire["difficulty"] == difficulty
         assert set(wire["mechanics"][0]) == {"id", "kind", "area", "roles", "spells", "radius", "range", "angle",
-                                             "duration"}
+                                             "duration", "landing"}
+    assert sum(len(rules) for rules in found.values()) == 45  # 14 mechanics over the difficulties they exist in
 
 
 def test_actionable_answers_nothing_for_an_uncovered_place():
@@ -272,7 +282,9 @@ def test_every_partial_mechanic_of_a_responded_kind_says_what_stock_leaves():
         if m.handled_by == "partial" and m.kind in raidplay.model.RESPOND_KINDS:
             assert m.respond_roles is not None, m.id
         if m.handled_by != "partial":
-            assert m.respond_roles is None and m.respond_spells is None, m.id
+            assert m.respond_roles is None, m.id
+        if m.handled_by == "playerbots":
+            assert m.respond_spells is None, m.id
 
 
 def test_the_model_reads_the_responder_fields():
@@ -293,10 +305,19 @@ def test_the_model_reads_the_responder_fields():
     assert m.area == "cone" and m.number("angle", "10") == 24
     m = load_files(_doc(kind="interrupt")).mechanic("toc.anubarak.thing")
     assert m.area == "" and m.responder_roles() == ()
+    m = load_files(_doc(extra='respond_spells = { "10" = [1] }')).mechanic("toc.anubarak.thing")
+    assert m.responder_spells("10") == (1,) and m.responder_spells("25") == ()   # a none mechanic's answerable cast
+    m = load_files(_doc(extra='range = 15\narea = "ring"\nlanding = true')).mechanic("toc.anubarak.thing")
+    assert m.area == "ring" and m.landing
 
 
 @pytest.mark.parametrize("doc, why", [
     (_doc(extra='respond_roles = ["tank"]'), "only for a partial"),
+    (_doc(handled="playerbots", extra='playerbots = ["avoid aoe"]\nrespond_spells = [1]'), "not for a mechanic"),
+    (_doc(extra='respond_spells = [9]'), "among its spells"),
+    (_doc(kind="move_out_cone", extra="angle = 24\nlanding = true"), "landing"),
+    (_doc(extra='landing = "yes"'), "landing"),
+    (_doc(extra='area = "ring"'), "a ring needs"),
     (_doc(handled="partial", extra=PARTIAL + 'respond_roles = ["healer"]'), "respond_roles lists"),
     (_doc(handled="partial", extra=PARTIAL + 'respond_roles = ["tank", "tank"]'), "respond_roles lists"),
     (_doc(handled="partial", extra=PARTIAL + 'respond_roles = []\nrespond_spells = [9]'), "among its spells"),
