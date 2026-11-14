@@ -9,6 +9,7 @@ import pytest
 from conftest import HUMAN, run
 from engine_rig import engine_clock, make_rig
 from photos.test_pipeline_photo import finish
+from selfies.fakes import ready_snap
 from server.test_dms import fixture as dm_fixture, due
 from tuning.scenario import GOLDEN, golden, record
 from leeroy_mind.outreach import store as records
@@ -16,9 +17,14 @@ from leeroy_mind.outreach.service import Outreach
 from leeroy_mind.outreach.attach import attach
 from leeroy_mind.outreach.sources import BIRTHDAY_ABOUT, member_local
 from leeroy_mind.bridge import AckTimeout
+from leeroy_mind.discord import store as ds
+from leeroy_mind.discord.store import AttachmentIn
+from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.guards import Verdict
 from leeroy_mind.personas.io import save_persona
+from leeroy_mind.photos.offer import PhotoOffer
 from leeroy_mind.protocol import Chat, Group
+from leeroy_mind.selfies import files, snaps
 from leeroy_mind.talk.pipeline import ECHO_WAIT_S, TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 
@@ -50,7 +56,7 @@ def rig(store,clock,tmp_path):
     rig.close()
 
 
-def plan(rig, *, guid=101, about=TOPIC):
+def plan(rig, *, guid=101, about=TOPIC, days=1):
     store, now = rig.store, rig.clock.now()
     source = store.insert_chat_line(Chat(ts=int((now-30)*1000),channel='whisper',
         from_guid=guid,from_name='Arkon',to_guid=HUMAN,text=about,map=0,zone=10),
@@ -59,9 +65,9 @@ def plan(rig, *, guid=101, about=TOPIC):
     cid = store.conn.execute('INSERT INTO member_claim(guid,kind,subject,text,polarity,source,'
         'source_line,first_seen,last_seen,expires,embedding) '
         "VALUES (?,'plan','weekend',?,1,'chat',?,?,?,?,zeroblob(2048))",
-        (guid,about,source,now-30,now-30,now+86400)).lastrowid
+        (guid,about,source,now-30,now-30,now+days*86400)).lastrowid
     item = records.add(store,guid=guid,kind='plan',ref=f'plan:{cid}',about=about,
-        audience='pair',weight=2,created=now,not_before=now,expires=now+86400)
+        audience='pair',weight=2,created=now,not_before=now,expires=now+days*86400)
     assert item is not None
     return item
 
@@ -222,7 +228,8 @@ def test_whisper_consumer_uses_item_and_public_opener_keeps_pair_topic_out(rig,t
     rig.engine._queue_whisper(101,'start',rig.clock.now())
     assert len(queued)==1
     turn,meta = queued[0]
-    assert meta.outreach_item==item.id and meta.single_line and TOPIC in meta.topic
+    assert meta.outreach_item==item.id and meta.single_line and meta.recall_query==TOPIC
+    assert TOPIC not in meta.topic+turn.instruction
     app.outreach.release(meta)
     queued.clear()
     monkeypatch.setattr(rig.engine,'_candidates',lambda *a,**k:[101])
@@ -261,9 +268,18 @@ def test_dm_consumer_skips_ineligible_member_before_legacy_fallback(store,clock,
     assert not calls
 
 
-def test_real_dm_opener_delivers_selected_item_through_pipeline(rig,tmp_path,monkeypatch):
-    app=app_for(rig,tmp_path)
-    item=plan(rig)
+def birthday(rig):
+    p=rig.engine.personas.get(101)
+    local=member_local(rig.clock.local(),p)
+    p=replace(p,real_life=replace(p.real_life,birthday=local.strftime('%m-%d')))
+    save_persona(rig.store,p,source='seed',ts=rig.clock.now(),race='Orc',class_name='Warrior')
+    rig.engine.personas.invalidate(101)
+    return records.add(rig.store,guid=101,kind='birthday',ref=f'birthday:{local.date()}',
+        about=BIRTHDAY_ABOUT,audience='guild',weight=5,created=rig.clock.now(),
+        not_before=rig.clock.now(),expires=rig.clock.now()+3600)
+
+
+def dm_opener(rig,app,monkeypatch):
     opener,snap,_=dm_fixture(rig.store,rig.clock,monkeypatch)
     opener.app=app
     app.guild=None
@@ -277,29 +293,27 @@ def test_real_dm_opener_delivers_selected_item_through_pipeline(rig,tmp_path,mon
     async def approve(*args,**kwargs):
         return Verdict('send')
     monkeypatch.setattr(rig.engine.live_review,'check',approve)
-    async def go():
-        try:
+    def open_once():
+        async def go():
             await finish(rig,asyncio.create_task(due(opener,rig.clock)))
-        finally:
-            await opener.close()
-    rig.sync(go())
+        rig.sync(go())
+    return opener,open_once
+
+
+def test_real_dm_opener_delivers_selected_item_through_pipeline(rig,tmp_path,monkeypatch):
+    app=app_for(rig,tmp_path)
+    item=plan(rig)
+    opener,open_once=dm_opener(rig,app,monkeypatch)
+    try:
+        open_once()
+    finally:
+        rig.sync(opener.close())
     told=records.get(rig.store,item.id)
     assert told.state=='told' and told.told_via=='dm'
     assert TOPIC in rig.prompts()[-1]
     assert len(rig.store.conn.execute('SELECT id FROM discord_message').fetchall())==1
     assert not rig.sent.says() and not app.outreach._held
     assert app.outreach.select(101,'whisper') is None
-
-
-def birthday(rig):
-    p=rig.engine.personas.get(101)
-    local=member_local(rig.clock.local(),p)
-    p=replace(p,real_life=replace(p.real_life,birthday=local.strftime('%m-%d')))
-    save_persona(rig.store,p,source='seed',ts=rig.clock.now(),race='Orc',class_name='Warrior')
-    rig.engine.personas.invalidate(101)
-    return records.add(rig.store,guid=101,kind='birthday',ref=f'birthday:{local.date()}',
-        about=BIRTHDAY_ABOUT,audience='guild',weight=5,created=rig.clock.now(),
-        not_before=rig.clock.now(),expires=rig.clock.now()+3600)
 
 
 def test_real_public_opener_uses_guild_item_and_records_its_delivery(rig,tmp_path,monkeypatch):
@@ -339,6 +353,92 @@ def test_public_item_stays_typed_while_she_sits_in_his_voice_room(rig,tmp_path,m
     assert list(rig.engine._to_him_at)==[101]
     assert [tuple(r) for r in rig.store.conn.execute('SELECT channel,dropped FROM utterance WHERE guid=101')]==[(channel,None)]
     assert not app.outreach._held and app.outreach.select(101,'whisper') is None
+
+
+def him_photo(rig,tmp_path):
+    """A ready `him` snap of 101's, offered as PhotoSender offers one: to a DM opener or an
+    answer to his DM, while it is still unsent."""
+    sid=ready_snap(rig.store,tmp_path,101,audience='him')
+    snap=snaps.ready_for(rig.store,101,now=rig.clock.now(),phase='evening')[0]
+    path=files.snap(tmp_path,101,sid)
+    asked=[]
+    def offer(turn,meta,now):
+        asked.append(meta.why)
+        status=rig.store.conn.execute('SELECT status FROM selfie_snap WHERE id=?',(sid,)).fetchone()[0]
+        if meta.why not in ('server:dm','discord:reply') or status!='ready':
+            return None
+        def sent(line,mid):
+            assert snaps.mark_sent(rig.store,sid,sender=101,channel='dm',line_id=line,now=rig.clock.now())
+        return PhotoOffer(snap,'You are posting a photo of an invented garden. Write a short caption.',
+            sent,lambda:None,AttachmentIn('snap',path.relative_to(tmp_path).as_posix(),832,1216,path.stat().st_size,sid))
+    rig.engine.attach_photos(offer)
+    return sid,asked
+
+
+def attached(rig):
+    return [tuple(r) for r in rig.store.conn.execute('SELECT m.id,a.snap FROM discord_message m '
+        'LEFT JOIN discord_attachment a ON a.message=m.id ORDER BY m.id')]
+
+
+def test_dm_opener_sends_her_photo_first_and_tells_the_item_on_a_later_opener(rig,tmp_path,monkeypatch):
+    app=app_for(rig,tmp_path)
+    item=plan(rig,days=3)
+    sid,asked=him_photo(rig,tmp_path)
+    opener,open_once=dm_opener(rig,app,monkeypatch)
+    rig.script('the garden finally looks like something','the rosemary pot is ready for the weekend')
+    told_here='This is the one thing you mean to tell him now'
+    try:
+        open_once()
+        assert asked==['server:dm'] and [snap for _,snap in attached(rig)]==[sid]
+        assert 'invented garden' in rig.prompts()[-1] and told_here not in rig.prompts()[-1]
+        assert records.get(rig.store,item.id).state=='open' and not app.outreach._held
+        rig.sync(rig.clock.advance(49*3600,49*3600))
+        open_once()
+    finally:
+        rig.sync(opener.close())
+    assert asked==['server:dm','server:dm'] and [snap for _,snap in attached(rig)]==[sid,None]
+    told=records.get(rig.store,item.id)
+    assert told.state=='told' and told.told_via=='dm'
+    assert 'invented garden' not in rig.prompts()[-1] and told_here+', in your own words: '+TOPIC in rig.prompts()[-1]
+    assert not app.outreach._held
+
+
+def test_answer_to_his_dm_keeps_its_photo_beside_an_open_item(rig,tmp_path):
+    app=app_for(rig,tmp_path)
+    item=plan(rig)
+    sid,asked=him_photo(rig,tmp_path)
+    mid=ds.post(rig.store,channel='dm:101',author=HUMAN,origin='human',text='how is your day?',now=rig.clock.now())
+    turn=Turn(TurnKind.REPLY_HUMAN,101,'dm:101',to_guid=HUMAN,addressee=HUMAN)
+    lines=speak(rig,turn,TurnMeta('reply',why='discord:reply',discord=DiscordTarget(mid,None)))
+    assert lines and asked==['discord:reply'] and attached(rig)[-1][1]==sid
+    assert records.get(rig.store,item.id).state=='open' and not app.outreach._held
+
+
+@pytest.mark.parametrize('consumer',['whisper','guild','dm'])
+def test_each_consumer_puts_the_item_text_in_its_prompt_once(rig,tmp_path,monkeypatch,consumer):
+    app=app_for(rig,tmp_path)
+    item=birthday(rig)
+    rig.script('another birthday means another excuse for cake')
+    if consumer=='dm':
+        opener,open_once=dm_opener(rig,app,monkeypatch)
+        try:
+            open_once()
+        finally:
+            rig.sync(opener.close())
+    else:
+        queued=[]
+        monkeypatch.setattr(rig.engine,'_queue',queued.extend)
+        monkeypatch.setattr(rig.engine,'_candidates',lambda *a,**k:[101])
+        if consumer=='whisper':
+            rig.engine._queue_whisper(101,'start',rig.clock.now())
+            speak(rig,*queued[0])
+        else:
+            async def go():
+                await finish(rig,asyncio.create_task(rig.engine._open_to_him()))
+            rig.sync(go())
+    told=records.get(rig.store,item.id)
+    assert told.state=='told' and told.told_via==consumer
+    assert rig.prompts()[-1].count(BIRTHDAY_ABOUT)==1
 
 
 def test_off_keeps_seeded_dm_speakers_and_topics(store,tmp_path,monkeypatch):

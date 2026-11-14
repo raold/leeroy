@@ -15,6 +15,7 @@ from . import store as records
 from .sources import source_alive, source_embedding
 
 NUDGE = "You sent him a DM he hasn't answered. Ask whether he saw it, without repeating the message."
+TOPIC = "bring up the one thing you mean to tell {them}"
 
 
 def _named_item(about, text):
@@ -26,6 +27,7 @@ class Outreach:
     def __init__(self, app):
         self.app = app
         self._held = {}
+        self._bound = {}
         self._tasks = set()
         self._checking = {}
         self._vectors = {}
@@ -127,16 +129,29 @@ class Outreach:
         if item.id in self._held:
             return False
         self._held[item.id] = meta.turn_id
+        previous = meta.still_valid
+        self._bound[meta.turn_id] = (meta.topic, meta.recall_query, meta.server_anchor,
+                                     meta.single_line, previous)
         meta.outreach_item = item.id
         meta.single_line = True
-        meta.topic = item.about
+        # The instruction hook alone puts the item's words in the prompt; recall still looks for them.
+        meta.topic = TOPIC.format(them=self.app.engine.human.forms[1])
+        meta.recall_query = item.about
         if via in {'guild', 'party'}:
             meta.keep_channel = True  # typed where its receipt can name it, never moved into a voice room
         if is_discord(turn.channel):
             meta.server_anchor = item.about
-        previous = meta.still_valid
         meta.still_valid = lambda: (self.valid(turn, meta) and (previous is None or previous()))
         return True
+
+    def unbind(self, meta):
+        """A photo goes out on this turn instead: the item stays open for a later one."""
+        saved = self._bound.get(meta.turn_id)
+        if meta.outreach_item is None or saved is None:
+            return
+        self.release(meta)
+        meta.outreach_item = None
+        meta.topic, meta.recall_query, meta.server_anchor, meta.single_line, meta.still_valid = saved
 
     def valid(self, turn, meta):
         item = records.get(self.app.store, meta.outreach_item)
@@ -190,6 +205,7 @@ class Outreach:
             return
         if pending and any(parts[2] is meta for parts in self.app.engine._unacked.values()):
             return  # native may still confirm this exact delivery by echo
+        self._bound.pop(meta.turn_id, None)
         if self._held.get(meta.outreach_item) == meta.turn_id:
             self._held.pop(meta.outreach_item, None)
 

@@ -793,7 +793,7 @@ class TalkEngine(EmoteReactions):
                     max_lines=1,
                     delay=self.rng.uniform(*OPEN_S) * self._effects(g).delay_mult)
         item = outreach.select(g, turn.channel) if outreach is not None else None
-        meta = TurnMeta(self._new_id(), topic=item.about if item else self._to_him_topic(self.personas.get(g), now),
+        meta = TurnMeta(self._new_id(), topic='' if item else self._to_him_topic(self.personas.get(g), now),
                         why="burst:to_him", initiates=True, casual=True)
         if item is not None and not outreach.bind(turn, meta, item):
             return mult

@@ -185,10 +185,11 @@ class DmOpeners:
         own = [s for s in snap.seeds if s.kind in {'life','plan'} and guid in s.about and not s.officers_only]
         if outreach is not None:
             own = [s for s in own if outreach.fallback_seed(guid, s)]
-        topic = item.about if item else (self.rng.choice(own).fact if own else self.app.engine._to_him_topic(p,now))
+        topic = self.rng.choice(own).fact if own else self.app.engine._to_him_topic(p,now)
+        # A bound item's words come from its own hook; this topic is the opener's if a photo takes it.
         turn = Turn(TurnKind.OPEN,guid,f'dm:{guid}',to_guid=snap.human,addressee=snap.human,
             priority=Priority.BACKGROUND,max_lines=1,
-            instruction='Start a private Discord message to him in your own words. '+topic)
+            instruction='Start a private Discord message to him in your own words.'+('' if item else ' '+topic))
         meta = TurnMeta(self.app.engine._new_id(),why='server:dm',initiates=True,
             casual=whisper_kind(p)=='casual' or forward(p)<=0,topic=topic,server_anchor=topic,
             discord=DiscordTarget(None,None),single_line=True,review_required=True)

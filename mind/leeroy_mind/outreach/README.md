@@ -26,6 +26,11 @@ zero leaves the list filling but prevents delivery. A member who owes him a
 deferred DM answer cannot start outreach. Outreach never advances a game clock
 or counts Discord activity as game activity.
 
+Member photos (`[photos] send`) keep their rate. A DM opener is offered her photo
+first, exactly as with outreach off; when a photo goes out on it, the opener's
+item is not attached and stays open for a later turn. An answer to his DM carries
+no item and keeps its photo offer as before.
+
 The console shows counts by kind and state under **Means to tell you**, and a
 ready count on Tonight. It deliberately omits the things members intend to say.
 Logs contain member IDs, kinds, delivery media and ending codes, never item text.
@@ -78,7 +83,10 @@ The nudge's exact verified DM can appear in the labelled pair-history block even
 when it is older than that block's normal one-day window; row and token limits
 remain unchanged, and unrelated old DMs are not brought in with it.
 
-One turn carries at most one item. Its delivered chat line and `told` receipt share
+One turn carries at most one item, and its words appear once in the prompt, in the
+item's own instruction line; the turn's recall still searches for them. A photo
+offered to a DM opener takes the turn instead, and the item is left open. Its
+delivered chat line and `told` receipt share
 a transaction; a refused or dropped draft leaves the item open. Receipt checks
 exclude only the line being recorded and its linked Discord message from the
 `miss_you` silence check, preserving intervening contact in either medium.
