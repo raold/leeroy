@@ -44,7 +44,7 @@ from .scenes import GUILD_MIN
 from .slot import SetRefused, render_slot
 from .snaps import SnapRow, expire, looks_hash, mark_rendered, planned
 from .stage import CONTENDED, RoomFailed, _unleased, seed_for, start_worker
-from .store import current
+from .store import current, picked_framing
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError, to_the_end
 
 if TYPE_CHECKING:
@@ -135,6 +135,13 @@ def _looks_of(p: Persona | None) -> str | None:
 
 def _reference(ctx: "NightContext", guid: int, pick: int) -> Path:
     return files.history(ctx.settings.data_dir, guid, pick).absolute()
+
+
+def _framing(ctx: "NightContext", p: Persona, pick: int) -> str:
+    """How the reference photo is framed: a varied set's look when that is her cover (its own
+    framing), else her photo kind's."""
+    with ctx.store.transaction():
+        return picked_framing(ctx.store.conn, pick) or p.photo.framing
 
 
 def _moved(store, row: SnapRow, p: Persona | None) -> str | None:
@@ -285,7 +292,7 @@ async def _situation(ctx: "NightContext", r: SnapRenderer, row: SnapRow, began: 
     try:
         got, seed, tries = await r.image(
             snap_id=row.id, guid=row.guid, idx=0, spec=build_scene_prompt(p, scene_from(row.scene)),
-            ref=_reference(ctx, row.guid, row.pick), framing=p.photo.framing, out=out,
+            ref=_reference(ctx, row.guid, row.pick), framing=_framing(ctx, p, row.pick), out=out,
             thumb=thumb, thumb_size=SNAP_THUMB_PX, shape="portrait", rid=f"s{row.id}")
     except SetRefused:
         return "expired" if _expiry(ctx, row, "flagged") else "failed"
@@ -327,7 +334,7 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
         try:
             got, _, tries = await r.image(
                 snap_id=row.id, guid=guid, idx=i, spec=build_tile_prompt(p),
-                ref=_reference(ctx, guid, pick), framing=p.photo.framing, out=tile,
+                ref=_reference(ctx, guid, pick), framing=_framing(ctx, p, pick), out=tile,
                 thumb=part / f"t{i}.thumb.jpg", thumb_size=_TILE_THUMB_PX, shape="square",
                 rid=f"g{row.id}:{i}")
         except SetRefused:

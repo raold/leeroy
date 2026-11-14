@@ -8,7 +8,7 @@ from pathlib import Path
 
 from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.selfies import files
-from leeroy_mind.selfies.store import lust_set
+from leeroy_mind.selfies.store import lust_set, varied_look
 from leeroy_mind.selfies.style import suggestive
 
 from .faces import MAX_FACE_BYTES, image_info, read_image
@@ -99,6 +99,9 @@ def gallery(conn, data_dir, guid: int) -> dict:
                 continue  # a lust-style set of a member who left that style: not listed
             entry = _entry(data_dir, guid, "candidate", row[0], row[1], row[2], is_cover)
             if entry:
+                look = _look(conn, guid, row[0], row[1])
+                if look is not None:
+                    entry["look"] = look
                 photos.append(entry)
     if "selfie_snap" in have:
         for row in conn.execute("SELECT id, rendered FROM selfie_snap WHERE guid=? "
@@ -108,6 +111,21 @@ def gallery(conn, data_dir, guid: int) -> dict:
                 photos.append(entry)
     photos.sort(key=lambda p: (-(p["rendered"] or 0), p["id"]))
     return out
+
+
+def _look(conn, guid, set_no, idx) -> dict | None:
+    """A varied set's candidate: its look as codes and a few plain words (selfies.varied)."""
+    from leeroy_mind.selfies import varied
+    raw = varied_look(conn, guid, set_no, idx)
+    try:
+        look = varied.Look(**raw) if raw is not None else None
+        codes = look.codes() if look is not None else None
+    except (TypeError, ValueError, KeyError):
+        return None
+    if codes is None:
+        return None
+    return {"category": codes["category"], "view": codes["view"], "framing": codes["framing"],
+            "label": varied.label(look)}
 
 
 def _is_cover(conn, have, guid, number, index) -> bool:

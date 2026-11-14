@@ -30,6 +30,7 @@ class SelfieCfg:
     identity_scale: float = 0.6  # how strongly the adapter holds the reference face
     identity_min_free_gib: float = 13.5  # the identity worker loads the adapter too
     variety: bool = False  # balanced lust choices and recent plain-photo observations
+    varied_sets: bool = False  # varied.py: four looks and poses in one set for the lust style
 
 
 def _bool(v) -> bool:
@@ -66,6 +67,7 @@ _RULES = {
     "identity_scale": (_num(0.3, 0.9), "a number 0.3-0.9"),
     "identity_min_free_gib": (_num(4, 23), "a number 4-23"),
     "variety": (_bool, "true or false"),
+    "varied_sets": (_bool, "true or false"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib"}
 _PATHS = {"python", "data"}
@@ -99,6 +101,7 @@ def load_selfie_config(path: Path) -> SelfieCfg:
     assert set(values) <= {f.name for f in fields(SelfieCfg)}
     if set(table) - _RULES.keys():
         values["variety"] = False  # an invalid/unknown table never opts into new behaviour
+        values["varied_sets"] = False
     return SelfieCfg(**values)
 
 

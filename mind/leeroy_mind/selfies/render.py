@@ -22,8 +22,9 @@ from .config import SelfieCfg
 from .kind import chosen_style
 from .style import LUST, PLAIN
 from .slot import SetRefused, TRIES, render_slot
-from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, renderable
-from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
+from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, build_varied_prompt, renderable
+from .store import (VARIED_SET_KEY, Candidate, ensure_first_sets, mark_ready, needing_first,
+                    queued_sets)
 from .worker import RenderRequest, SelfieWorker, WorkerError
 
 if TYPE_CHECKING:
@@ -67,20 +68,25 @@ def seed_for(night: str, guid: int, set_no: int, idx: int, attempt: int) -> int:
     return int.from_bytes(digest[:4], "big")
 
 
-async def render_candidates(worker, spec: PromptSpec, out_dir: Path, *, night: str, guid: int,
+async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], out_dir: Path, *,
+                            night: str, guid: int,
                             set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
                             leases: Callable[[], frozenset[str]] | None = None
                             ) -> list[Candidate]:
-    """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each. `leases`
+    """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each: every slot
+    from `spec`, or slot i from spec[i] when it is a tuple of four (a varied set). `leases`
     (the arbiter's live holders) is asked before each render: while one is held, LiveLeaseHeld
     and nothing is sent. Raises SetRefused when a slot is flagged TRIES times, RoomFailed when
     make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot, an
     image answered as written whose two files are not both there ("unwritten") or any other
     worker failure, and LiveLeaseHeld."""
     out_dir = Path(out_dir).absolute()
+    specs = (spec,) * SET_SIZE if isinstance(spec, PromptSpec) else tuple(spec)
+    if len(specs) != SET_SIZE:
+        raise ValueError("a set renders four candidates")
     made = []
     for idx in range(SET_SIZE):
-        made.append(await _slot(worker, spec, out_dir, idx, night=night, guid=guid,
+        made.append(await _slot(worker, specs[idx], out_dir, idx, night=night, guid=guid,
                                 set_no=set_no, cfg=cfg, make_room=make_room, leases=leases))
     return made
 
@@ -248,26 +254,55 @@ def _discard(ctx: "NightContext", guid: int, set_no: int) -> None:
         files.clear_stale(ctx.settings.data_dir, guid, set_no)
 
 
+def _varied_specs(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int,
+                  set_no: int) -> tuple[PromptSpec, ...] | None:
+    """A varied set's four prompts (varied.py) while the switch is on and its plan still holds
+    for her; None renders the set as an ordinary one (logged by code when it had a plan)."""
+    from . import varied
+    if not getattr(cfg, "varied_sets", False):
+        return None
+    looks = varied.looks_for(ctx.store, p, guid, set_no)
+    if looks is None:
+        with ctx.store.transaction():
+            planned = varied.plan_of(ctx.store.conn, guid, set_no) is not None
+        if planned:
+            log("selfies_varied_ordinary", night=ctx.night, guid=guid, set=set_no)
+        return None
+    try:
+        return tuple(build_varied_prompt(p, look) for look in looks)
+    except ValueError:
+        log("selfies_varied_ordinary", night=ctx.night, guid=guid, set=set_no)
+        return None
+
+
 async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, p: Persona,
-                      guid: int, set_no: int) -> list[Candidate]:
+                      guid: int, set_no: int) -> tuple[list[Candidate], bool]:
+    """The set's candidates, and whether it rendered as a varied set."""
     data = ctx.settings.data_dir
     files.clear_stale(data, guid, set_no)
     staging = files.staging_dir(data, guid, set_no)
     staging.mkdir(parents=True)
     from .photo_extra import light_for
-    spec = build_prompt(p, kind_style=chosen_style(ctx.store, p), light=light_for(ctx.store,p))
+    specs = _varied_specs(ctx, cfg, p, guid, set_no)
+    spec = specs if specs is not None else build_prompt(
+        p, kind_style=chosen_style(ctx.store, p), light=light_for(ctx.store,p))
     made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders)
     files.publish_set(data, guid, set_no)
-    return made
+    return made, specs is not None
 
 
 def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate],
-           lust: bool = False):
+           lust: bool = False, varied: bool = False):
+    """Mark the set ready; a set that did not render as a varied one loses its plan, so a ready
+    set's plan is always what its candidates show."""
     def write(store) -> None:
         mark_ready(store, guid, set_no, made, now=ctx.clock.now(), night=ctx.night,
                    persona_version=store.persona_versions(tier=None)[guid], lust=lust)
+        if not varied:
+            store.conn.execute("DELETE FROM meta WHERE key=?",
+                               (VARIED_SET_KEY.format(guid=guid, set_no=set_no),))
     return write
 
 
@@ -318,7 +353,8 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         began = time.monotonic()
         try:
             lust = chosen_style(ctx.store, p) == LUST
-            made = await _render_set(ctx, cfg, worker, p, guid, set_no)
+            made, varied = await _render_set(ctx, cfg, worker, p, guid, set_no)
+            lust = lust or varied  # a varied set's looks are the lust style's
         except LiveLeaseHeld:
             raise
         except WorkerError as e:  # RoomFailed too: contention either way
@@ -359,10 +395,11 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         if not allows(ctx,guid):
             _discard(ctx,guid,set_no)
             continue
-        if ctx.commit(policy.stage, unit, _ready(ctx, guid, set_no, made, lust)):
+        if ctx.commit(policy.stage, unit, _ready(ctx, guid, set_no, made, lust, varied)):
             tally["ready"] += 1
             log("selfies_set_ready", night=ctx.night, guid=guid, set=set_no,
-                seconds=round(time.monotonic() - began, 1), tries=sum(c.tries for c in made))
+                seconds=round(time.monotonic() - began, 1), tries=sum(c.tries for c in made),
+                **({"varied": True} if varied else {}))
         else:
             tally["failed"] += 1
     return True

@@ -23,7 +23,7 @@ from .scene import build_scene_prompt, ref_crop, scene_from, scene_renderable
 from .scene_choices import RECIPE
 from .slot import SetRefused, TRIES, render_slot
 from .snaps import looks_hash, mark_rendered
-from .store import current
+from .store import current, picked_framing
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
 
 SIZE = 1024
@@ -79,6 +79,12 @@ def _fresh(app, snap):
     return p, None
 
 
+def _framing(app, p, pick: int) -> str:
+    """A varied set's look framing when that photo is her cover, else her photo kind's."""
+    with app.store.transaction():
+        return picked_framing(app.store.conn, pick) or p.photo.framing
+
+
 async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutcome:
     """Render once with the existing three-seed/NSFW/OOM rules; caller changes failure state.
 
@@ -100,7 +106,7 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
     scene = scene_from(snap.scene)
     spec = build_scene_prompt(p, scene)
     identity = Identity(files.history(app.data_dir, snap.guid, snap.pick).absolute(),
-                        ref_crop(p.photo.framing), cfg.identity_scale)
+                        ref_crop(_framing(app, p, snap.pick)), cfg.identity_scale)
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{snap.id}.request-", dir=out.parent))
     staged, small = stage / "photo.jpg", stage / "thumb.jpg"

@@ -11,6 +11,7 @@ photo is in force.
 
 Each writer runs in `store.transaction()`. A refusal is SelfieError, its text the answer. The
 mind writes; the console reads (`picks` and `counts` take a plain connection for that)."""
+import json
 from dataclasses import dataclass
 
 SOURCES = ("console", "cli")
@@ -221,6 +222,39 @@ def counts(conn) -> dict[str, int]:
 # -- the style a set was rendered under ---------------------------------------------------------
 
 LUST_SET_KEY = "selfies:set-lust:{guid}:{set_no}"
+# A varied set's plan (varied.py): its four candidates' looks, by slot, as JSON {"v", "day",
+# "looks"}; written when it is queued, dropped when it rendered as an ordinary set instead. A
+# pick of one of its candidates records that candidate's look under the change's id.
+VARIED_SET_KEY = "selfies:set-varied:{guid}:{set_no}"
+PICK_LOOK_KEY = "selfies:pick-look:{pick}"
+
+
+def varied_look(conn, guid: int, set_no: int, idx: int) -> dict | None:
+    """Candidate `idx`'s look as the set's plan stores it, or None (no plan, or unreadable).
+    Reads any connection."""
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key=?",
+                           (VARIED_SET_KEY.format(guid=guid, set_no=set_no),)).fetchone()
+        looks = json.loads(row[0])["looks"] if row else None
+        look = looks[idx] if isinstance(looks, list) and len(looks) == len(SLOTS) else None
+    except Exception:  # no meta table, or a plan that is not one
+        return None
+    return look if isinstance(look, dict) else None
+
+
+def picked_framing(conn, pick_id: int) -> str | None:
+    """The framing of the varied look a pick or undo put in force (by its after photo), or None
+    when that photo is not from a varied set."""
+    try:
+        row = conn.execute("SELECT guid, after_set, after_idx FROM selfie_pick WHERE id=?",
+                           (pick_id,)).fetchone()
+    except Exception:
+        return None
+    if row is None or row[1] is None:
+        return None
+    look = varied_look(conn, row[0], row[1], row[2])
+    framing = look.get("framing") if look else None
+    return framing if isinstance(framing, str) else None
 LUST_COVER_REFUSED = ("this set was rendered in the lust style and she no longer has it (or her "
                       "looks now code young), so none of its photos can be her face")
 
@@ -265,6 +299,9 @@ def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float,
             (float(now), guid, source, *(before or (None, None)), set_no, idx)).lastrowid
         if row["decided"] is not None:
             store.set_meta(f"selfie:pick-decided:{change}", row["decided"])
+        look = varied_look(conn, guid, set_no, idx)
+        if look is not None:
+            store.set_meta(PICK_LOOK_KEY.format(pick=change), json.dumps(look, sort_keys=True))
         _set_photo(conn, guid, (set_no, idx), change)
         _decide(conn, guid, set_no, "picked")
         return change

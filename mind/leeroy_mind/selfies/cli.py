@@ -1,11 +1,16 @@
-"""python -m leeroy_mind selfies status | try (P2 Task 14).
+"""python -m leeroy_mind selfies status | try (P2 Task 14) | vary.
 
 status is read-only (a mode=ro connection, never a migration): the queue's counts and the
 latest night's selfie stages. try is the acceptance run before enabling: it holds the mind's
 instance lock (a fresh arbiter here cannot see the running mind's live leases, so it could
 unload the live model in his session), copies the database, and renders one set for each chosen
 member into <data>/scratch/selfies-try/<guid>/. Nothing is written to the live data. Output
-carries counts, guids, timings and paths; never a prompt, persona text or a name."""
+carries counts, guids, timings and paths; never a prompt, persona text or a name.
+
+vary --stance lust plans (the default, read-only) or queues (--go) a varied set (varied.py) for
+every cast member of the lust style. With the mind stopped --go holds its instance lock and
+writes the rows itself; while it runs, --go asks the running mind's `selfie` op (`vary`), the
+one writer of photo rows then. Rendering stays the night's and the booth's."""
 import argparse
 import json
 import asyncio
@@ -14,6 +19,7 @@ import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
 
 from leeroy_mind.app import AlreadyRunning
 from leeroy_mind.clock import SystemClock
@@ -39,6 +45,12 @@ from .store import current
 from .worker import SelfieWorker, WorkerError, to_the_end
 
 DEFAULT_LIMIT = 2
+VARY_S = 30.0  # the running mind's answer to a vary: one transaction of queue rows
+
+
+def varied_stances():
+    from .varied import STANCES
+    return STANCES
 TRY_DIR = "selfies-try"
 GUILD_TILES = 4
 
@@ -64,6 +76,12 @@ def _parser():
     mode = sub.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
     mode.add_argument("--go", action="store_true", help="save choices and queue fresh sets")
+    sub = subs.add_parser("vary", help="plan or queue a varied set (four looks and poses) for "
+                          "every member of a stance's photo style")
+    sub.add_argument("--stance", choices=varied_stances(), required=True)
+    mode = sub.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
+    mode.add_argument("--go", action="store_true", help="queue the sets for the night")
     sub = subs.add_parser("variety", help="plan or re-roll similar chosen faces (mind stopped)")
     sub.add_argument("--top", type=_positive, default=30)
     sub.add_argument("--release", type=lambda text: tuple(_positive(g) for g in text.split(",")),
@@ -367,11 +385,65 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
         return int(not guids or rendered != len(guids) or (args.guild and not tiles))
 
 
-def selfies_main(argv=None, *, make_llm=None, make_worker=None) -> int:
+def _call_running_mind(root, args: dict) -> dict:
+    """The running mind's answer to one `selfie` op, through its control endpoint, located as the
+    console locates it (this checkout's mind process family, control.json, the TCP table)."""
+    from leeroy_mind import lifecycle
+    from leeroy_mind.console.mindlink import MindLink
+    checkout = Path(lifecycle.__file__).resolve().parents[2]
+    found = lifecycle.family(lifecycle.WindowsProcesses().snapshot(),
+                             lifecycle.venv_python(checkout),
+                             lifecycle.mind_base_python(checkout), root)
+    return MindLink(root).call([p.pid for p in found], "selfie", args, timeout=VARY_S)
+
+
+def _vary(root, clock, args, call_mind) -> int:
+    from . import varied
+    from leeroy_mind.storage.db import open_db
+    from leeroy_mind.storage.store import Store
+    cfg = load_config(root / "mind.toml")
+    scfg = load_selfie_config(root / "mind.toml")
+    if not args.go:
+        with _read_store(root / "mind.db", clock) as store:
+            report = varied.queue(store, human=_identity(cfg, store).guid, now=clock.now(),
+                                  day=clock.local().date().isoformat(), go=False,
+                                  stance=args.stance)
+        _print({**report, "switch": scfg.varied_sets})
+        return 0
+    if not (scfg.enabled and scfg.varied_sets):
+        print("selfies vary: needs [selfies] enabled = true and varied_sets = true in mind.toml",
+              file=sys.stderr)
+        return 1
+    try:
+        with _exclusive(root, gpu=False):
+            from leeroy_mind.__main__ import _snapshot_file
+            _snapshot_file(root / "mind.db", root / "snapshots", "pre-vary")  # open_db migrates
+            with closing(Store(open_db(root / "mind.db"), clock=clock)) as store:
+                report = varied.queue(store, human=_identity(cfg, store).guid, now=clock.now(),
+                                      day=clock.local().date().isoformat(), go=True,
+                                      stance=args.stance)
+            _print(report)
+            return 0
+    except AlreadyRunning:
+        pass
+    from leeroy_mind.console.mindlink import LinkError
+    from leeroy_mind.lifecycle import OwnershipError
+    try:
+        reply = (call_mind or _call_running_mind)(root, {"action": "vary", "go": True})
+    except (LinkError, OwnershipError, OSError) as e:
+        print(f"selfies vary: the mind is running and could not be asked ({e})", file=sys.stderr)
+        return 1
+    _print(reply)
+    return 0 if reply.get("ok") is True else 1
+
+
+def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) -> int:
     args = _parser().parse_args(argv)
     clock = SystemClock()
     try:
         root = _root(args)
+        if args.action == "vary":
+            return _vary(root, clock, args, call_mind)
         if args.action == "status":
             with _read_store(root / "mind.db", clock) as store:
                 _print(_status(store, clock))

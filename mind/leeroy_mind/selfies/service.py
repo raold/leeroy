@@ -9,6 +9,9 @@ Actions, with args as endpoint.selfie_args returns them:
 - undo {pick}: that change reversed, only while the photo is still what it left (store.undo);
 - more {guid}: his "4 more", a set queued for tonight's render and every waiting set of his
   passed; needs rendering on and the member's looks and photo kind.
+- vary {go}: a varied set (varied.py) for every cast member of the lust style, written as "4
+  more" writes it, plus each set's four looks; go false plans only. Needs rendering and
+  `[selfies] varied_sets` on to queue; once per member per local day.
 
 Only cast members have photos: on the stored roster at the cast's level, not the owner, with a
 stored persona. Each change commits first, on the loop; then that member's files are made to
@@ -39,7 +42,7 @@ from .style import suggestive
 from .store import (SelfieError, counts, current, member_of, photos, pick, picks, queue_more,
                     undo)
 
-ACTIONS = ("status", "pick", "undo", "more")
+ACTIONS = ("status", "pick", "undo", "more", "vary")
 SOURCE = "console"
 _GUID_DIR = re.compile(r"[1-9][0-9]{0,9}")
 _GUID_MAX = (1 << 32) - 1
@@ -66,6 +69,8 @@ class SelfieService:
                 reply = await self._pick(args["guid"], args["set"], args["index"])
             elif action == "undo":
                 reply = await self._undo(args["pick"])
+            elif action == "vary":
+                reply = self._vary(args["go"])
             else:
                 reply = self._more(args["guid"])
         except SelfieError as e:
@@ -121,6 +126,21 @@ class SelfieService:
         said = ("Four more are queued; they wait until her photo kind is chosen again for her "
                 "photo style." if why in HELD else "Four more will be rendered tonight.")
         return {"ok": True, "set": queued.set_no, "guid": guid, "message": said}
+
+    def _vary(self, go: bool) -> dict:
+        from . import varied
+        if go and not self.cfg.enabled:
+            raise SelfieError("rendering is off in mind.toml ([selfies] enabled = false)")
+        if go and not self.cfg.varied_sets:
+            raise SelfieError("varied sets are off in mind.toml ([selfies] varied_sets = false)")
+        app = self.app
+        report = varied.queue(app.store, human=app.human_guid, now=app.clock.now(),
+                              day=app.clock.local().date().isoformat(), go=go)
+        n = len(report["queued"])
+        log("selfies_varied", go=go, queued=n, skipped=len(report["skipped"]))
+        said = (f"{n} varied sets will be rendered at night." if go
+                else f"{n} varied sets would be queued.")
+        return {"ok": True, **varied.summary(report), "message": said}
 
     async def _synced(self, guid: int, said: str) -> str:
         """`said`, once the member's files agree with what was just committed (off the loop:

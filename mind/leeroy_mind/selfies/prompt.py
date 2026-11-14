@@ -165,6 +165,56 @@ def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int
     return hair_skin(p, name_re) + eyes_face(p, name_re)
 
 
+# A varied set's candidates (varied.py, owner 2026-11-14): each its own look and pose, said in
+# plain photography terms. The pose, the framing, who she is, her build and the outfit with its
+# setting are all priority 0, so the worker's 75-token fit keeps every one of them (the longest
+# required set is about 65 tokens); the thong and g-string negatives join the lust ones.
+VARIED_VIEW_WORDS = {"behind": "photographed from behind, looking back over her shoulder",
+                     "rear_three_quarter": "three-quarter rear view, glancing back",
+                     "side": "side profile view",
+                     "front": "front view, facing the camera"}
+VARIED_FRAMING_WORDS = {"full_body": "full-body shot, head to toe",
+                        "three_quarter": "three-quarter shot, waist and hips in frame"}
+VARIED_NEGATIVE: tuple[tuple[str, int], ...] = LUST_NEGATIVE + (("thong, g-string", 0),)
+
+
+def varied_parts(look, outfit: str) -> dict[str, str]:
+    """The phrases a varied look puts in a prompt beside her own (view, framing, the joined
+    outfit and setting, expression), by field; `look` is a mapping or has the attributes.
+    The screens (kind.screen_lust, varied) read exactly these."""
+    get = (look.get if isinstance(look, dict) else lambda k: getattr(look, k))
+    return {"view": VARIED_VIEW_WORDS[get("view")], "framing": VARIED_FRAMING_WORDS[get("framing")],
+            "setting": _clean(get("setting")), "outfit": _clean(outfit),
+            "expression": _clean(get("expression")),
+            "wearing": f"wearing {_clean(outfit)}, {_clean(get('setting'))}"}
+
+
+def build_varied_prompt(p: Persona, look) -> PromptSpec:
+    """The prompt for one candidate of a varied set: `look` (varied.Look) in her body, face and
+    build. Only for a woman who has the lust style now (style.suggestive: lust, 25 or older,
+    looks that code nobody as young); ValueError otherwise, or when a phrase would hold one of
+    her names (the caller renders her ordinary set instead)."""
+    if p is None or p.appearance is None:
+        raise ValueError("no looks yet")
+    if p.identity.age < MIN_AGE or not suggestive(p):
+        raise ValueError(LUST_HELD)
+    parts = varied_parts(look, look.phrase)
+    name_re = names_re(p)
+    if name_re is not None and any(name_re.search(t) for t in parts.values()):
+        raise ValueError(LUST_NAMED)
+    out: list[tuple[str, int]] = []
+    add = phrase_adder(out, name_re)
+    add(parts["view"], 0)
+    add(parts["framing"], 0)
+    add(*subject_phrase(p))
+    add(BUILD_WORDS.get(p.appearance.build, f"{p.appearance.build} build"), 0)
+    out += looks_phrases(p, name_re)
+    add(parts["wearing"], 0, True)
+    add(parts["expression"], 3, True)
+    add(_PHONE_TAIL, 1)
+    return PromptSpec(tuple(out), VARIED_NEGATIVE)
+
+
 def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> PromptSpec:
     """The prompt for p's photo kind. `kind_style` is the style whose rules chose the kind
     (kind.chosen_style; PLAIN for a kind set by hand or with no record): the lust prompt for a

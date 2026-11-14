@@ -75,3 +75,50 @@ the lust lists, even if an old record was labelled plain. The history
 does not read chat or game activity, and neither it nor the lighting phrases are
 logged. Turning automatic variety off preserves existing manually saved lighting
 and queued work, while disabling new automatic assignments and history writes.
+
+## Varied sets
+
+`[selfies] varied_sets = true` (default false; read at the mind's start; an invalid or
+unknown-key table keeps it off) allows a varied set for each woman of the lust style: one set
+whose four candidates each have their own look and pose, composed by code (`varied.py`) from
+fixed lists in `kind.py` (`VARIED_LOOKS`, `VARIED_VIEWS`, `VARIED_FRAMINGS`), never by a model:
+
+- slot 0 swimwear (bikini or swimsuit) at a water setting (not the hot tub),
+- slot 1 gym wear at the gym,
+- slot 2 a casual or street outfit (jeans, shorts, a sundress),
+- slot 3 a going-out outfit (separates, a mini or cut-out dress; no cocktail or formal dress).
+
+Each slot gets a different pose (from behind looking back over her shoulder, a three-quarter
+rear view, side profile, front view), framed full-length or three-quarter (front and side are
+always full-length), and its own colour and expression. The prompt puts the pose, the framing,
+who she is, her build and the outfit with its setting at priority 0; the longest such set is
+68 of the worker's 75 tokens with the real tokenizers. The negative is the lust one plus
+`thong, g-string`. `screen_lust(..., varied=True)` is the only place swimwear may be framed
+full-length or three-quarter and shot from behind; it keeps swimwear at the water, gym wear at
+the gym and the hot tub swimwear-only, runs the age guard and her name screen on every composed
+phrase (pose and framing included) and refuses a pose anywhere outside a varied set. The night's
+photo-kind pass, `LUST_SCHEMA` and every existing prompt are unchanged.
+
+Queue one for every current lust-styled member (`--dry-run` is the default and writes nothing):
+
+```powershell
+python -m leeroy_mind selfies vary --stance lust --data-dir PATH
+python -m leeroy_mind selfies vary --stance lust --go --data-dir PATH
+```
+
+`--go` needs `enabled` and `varied_sets` on. With the mind stopped it holds the instance lock,
+snapshots (`pre-vary`) and writes; while the mind runs it asks the mind's `selfie` op
+(`{"action": "vary", "go": true}`, also reachable as `POST /api/selfie` from the console). It
+writes what "4 more" writes (waiting sets passed, one `more` set queued) plus the set's plan
+(meta `selfies:set-varied:<guid>:<set>`) and the day (`selfies:varied:day:<guid>`): once per
+member per local day, and a member with a set already queued, or no renderable photo kind, is
+skipped by code. Output carries guids, codes and list indices only.
+
+The night's `selfies` stage (within `selfie_per_night`) and the booth render them under their
+existing GPU and NSFW rules. A set renders varied only while the switch is on, she still has the
+lust style and every look still passes the screens; otherwise it renders as an ordinary set of
+her own kind and loses its plan. A varied set counts as a lust set for the pick rules. Her photo
+kind and cover are unchanged; picking a varied candidate records its look
+(`selfies:pick-look:<change>`), the gallery caption names each candidate's look, and the
+situational photos then cut her face from that cover by its framing (`full_body` has its own
+crop). Images stay square (`size`); full-length poses are not portrait-shaped.

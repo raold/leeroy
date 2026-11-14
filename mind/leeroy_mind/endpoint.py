@@ -32,9 +32,9 @@ connection closes.
                     and in force from the next read; a preview's text goes only to the caller;
                     edit {verb: set|preview {kind, args} | retire {id} | list}: godmode edits
                     (leeroy_mind.tuning.edits), set and preview only with [godmode] enabled
-    selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid}: profile
-                    photos (leeroy_mind.selfies), written by this mind only, one change at a
-                    time until its files are written; status at any time
+    selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid} | vary {go}:
+                    profile photos (leeroy_mind.selfies), written by this mind only, one change
+                    at a time until its files are written; status at any time
     say {channel, text[, to]}
                     guild | officer | group | whisper (to: a cast member's guid): the owner's
                     own line, said in game as his through native owner_say
@@ -122,12 +122,13 @@ TUNE_SHAPES = {
     "preview": {"action", "scope", "target", "dial", "value"},
 }
 TUNE_SCOPES = ("world", "group", "member")
-SELFIE_ACTIONS = ("status", "pick", "more", "undo")
+SELFIE_ACTIONS = ("status", "pick", "more", "undo", "vary")
 SELFIE_SHAPES = {
     "status": {"action"},
     "pick": {"action", "guid", "set", "index"},
     "more": {"action", "guid"},
     "undo": {"action", "pick"},
+    "vary": {"action", "go"},
 }
 SAY_CHANNELS = ("guild", "officer", "group", "whisper")
 MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
@@ -579,7 +580,9 @@ def selfie_args(args) -> dict:
             raise BadRequest("selfie pick: index is a photo's place in its set, 0-3")
     if action == "undo" and not (type(args["pick"]) is int and 1 <= args["pick"] < 1 << 63):
         raise BadRequest("selfie undo: pick is a change's number")
-    return {k: args[k] for k in ("action", "guid", "set", "index", "pick") if k in shape}
+    if action == "vary" and type(args["go"]) is not bool:
+        raise BadRequest("selfie vary: go is true or false")
+    return {k: args[k] for k in ("action", "guid", "set", "index", "pick", "go") if k in shape}
 
 
 def say_args(args) -> dict:

@@ -18,3 +18,8 @@ export function coverWhy(photo, state, saving) {
   if (photo.cover) { return "This is the current cover."; }
   return whyOff(state);
 }
+// A varied set's candidate says its look (what she wears, how she was photographed); others nothing
+export function lookWords(photo) {
+  var look = photo && photo.look;
+  return look && typeof look.label === "string" ? look.label.slice(0, 80) : "";
+}
