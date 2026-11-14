@@ -100,11 +100,6 @@ def choose(conn, guid, context, *, rng=None, now=None):
     row = conn.execute("SELECT turns,exploratory FROM bandit_turn WHERE guid=?", (guid,)).fetchone()
     turns, explored = (row[0]+1, row[1]) if row else (1, 0)
     can_explore = explored+1 <= turns//5
-    # With the weekly cycle on, only an arm it promoted in this context leaves the trial.
-    promoted = None
-    if cfg.cycle:
-        from .cycle import promoted_arms
-        promoted = promoted_arms(conn, key)
     used_exploration = False
     for family, control in result.items():
         if family in cfg.frozen_families:
@@ -125,8 +120,7 @@ def choose(conn, guid, context, *, rng=None, now=None):
             if stats["uses"] < 30 and 2*(shares.get(arm.id,0)+1) > family_turns+1:
                 continue
             qualified = (stats["uses"] >= 30 and stats["alpha"]/(stats["alpha"]+stats["beta"])
-                         > base["alpha"]/(base["alpha"]+base["beta"])
-                         and (promoted is None or arm.id in promoted))
+                         > base["alpha"]/(base["alpha"]+base["beta"]))
             if qualified or can_explore:
                 candidates.append(arm.id)
                 if not qualified:
@@ -212,8 +206,9 @@ def retirement_candidates(conn, *, settings=LearnCfg()):
     return result
 
 
-def retire(conn, candidates):
+def retire(conn, candidates, *, now=None):
     """Night-only bounded write after retirement_candidates runs off the event loop."""
+    from .control import decide
     cfg = effective(conn)
     if cfg.freeze:
         return
@@ -223,6 +218,7 @@ def retire(conn, candidates):
             continue
         changed=conn.execute("UPDATE learn_arm SET status='retired' WHERE id=? AND status='active'",(aid,)).rowcount
         if changed:
+            decide(conn, 'arm', aid, 'guard_retire', now=time.time() if now is None else now)
             log('bandit_guard_retired',arm_id=aid,attempts=n,control_attempts=cn,rate=rate,control_rate=control)
 
 

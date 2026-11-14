@@ -1,5 +1,6 @@
 """The weekly cycle on invented members only (101-103, owner 1); no model and no live data."""
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 import itertools
 import json
@@ -40,11 +41,11 @@ def fresh():
     return ' '.join(f'w{n}x{k}' for k in range(6))
 
 
-def gen(store, ts, *, arm=None, lesson=None, guid=101, channel='guild', verdict='send', text=None,
+def gen(store, ts, *, arm=None, ids=None, lesson=None, guid=101, channel='guild', verdict='send', text=None,
         value=None, key=KEY):
     lid = store.insert_chat_line(Chat(0, channel, guid, 'Invented', 0, text or fresh(), 0, 10),
                                  session_id=None, origin='mind', ts=ts)
-    ids = [arm] if arm else []
+    ids = list(ids) if ids else [arm] if arm else []
     with store.transaction():
         arms.ensure(store.conn, now=ts)
         store.conn.execute('INSERT INTO talk_recipe VALUES (?,?,?,?,?,?,?,?,?)',
@@ -58,21 +59,13 @@ def gen(store, ts, *, arm=None, lesson=None, guid=101, channel='guild', verdict=
     return lid
 
 
-def credit(store, lid, aid, ts, *, success, failure, bad=0, key=KEY, guid=101):
-    with store.transaction():
-        store.conn.execute('INSERT INTO bandit_credit VALUES (?,?,?,?,?,?,?,?,?)',
-                           (lid, aid, guid, key, 0, ts, success, failure, bad))
-
-
-def winning(store, arm=ARM, *, n=30, start=START + 3600, text=None, key=KEY):
-    """An arm that clearly beats its family control in the evaluated week."""
+def winning(store, arm=ARM, *, n=30, start=START + 3600, text=None, key=KEY, guid=101):
+    """An arm whose whole per-line rewards clearly beat its family control's in the week."""
     control_id = arms.controls()[arm.split('.')[0]]
     for i in range(n):
         ts = start + i * 600
-        credit(store, gen(store, ts, arm=arm, value=1., text=text(i) if text else None, key=key), arm, ts,
-               success=1., failure=0., key=key)
-        credit(store, gen(store, ts + 60, arm=control_id, value=0., key=key), control_id, ts + 60,
-               success=.5, failure=.5, key=key)
+        gen(store, ts, arm=arm, value=1., text=text(i) if text else None, key=key, guid=guid)
+        gen(store, ts + 60, arm=control_id, value=0., key=key, guid=guid)
 
 
 def lesson(store, *, guid=101, status='active', expires=NOW + 86400, text='She keeps replies brief.'):
@@ -104,6 +97,10 @@ def tally(lines=1, kinds=(), trips=0):
     return t
 
 
+def status(store, aid):
+    return store.conn.execute('SELECT status FROM learn_arm WHERE id=?', (aid,)).fetchone()[0]
+
+
 # -- timing, the posterior and the gates at their boundaries --------------------------------------
 
 def test_the_cycle_is_due_after_the_sunday_evaluation_and_never_on_sunday():
@@ -132,25 +129,71 @@ def test_posterior_probability_is_deterministic_and_ordered():
     (dict(carrier=tally(2, trips=1)), ['guard']),
     (dict(guard_worse=True), ['guard']),
     (dict(vetoed=True), ['veto']),
-    (dict(rolled_back=True), ['rolled_back']),
-    (dict(rose=['repetition']), ['diversity']),
+    (dict(held='rolled_back'), ['rolled_back']),
+    (dict(rose=[('game', 'repetition')]), ['diversity']),
 ])
 def test_promotion_gates_at_their_boundaries(over, reasons):
     args = dict(uses=30, probability=.95, carrier=tally(2), comparison=tally(2)) | over
     assert cycle.gate(**args) == reasons
 
 
-# -- promotion, the veto and freezes --------------------------------------------------------------
+@pytest.mark.parametrize('before,after,rose', [
+    ((0, 1000), (9, 1000), False),        # nine more flagged lines: under ten
+    ((0, 1000), (10, 1000), True),        # ten more, +1.0 point, significant
+    ((100, 1000), (110, 1000), False),    # ten more and +1.0 point, but noise at this level
+    ((0, 10000), (10, 10000), False),     # ten more, significant, but only +0.1 point
+    ((1, 1602), (13, 1723), True),        # the live W45 -> W46 repetition counts
+    ((0, 0), (20, 100), False),           # nothing measured the week before
+])
+def test_a_rise_needs_significance_half_a_point_and_ten_lines(before, after, rose):
+    assert cycle.significant_rise(before[0], before[1], after[0], after[1]) is rose
+
+
+# -- promotion on whole rewards, the veto and freezes ----------------------------------------------
 
 def test_a_clear_winner_is_promoted_in_its_context_and_reported_without_text(store):
     winning(store)
     value = run(store)
     assert [(p['kind'], p['id'], p['context']) for p in value['promoted']] == [('arm', ARM, json.loads(KEY))]
-    assert cycle.promoted_arms(store.conn, KEY) == {ARM}
+    assert cycle.promoted(store.conn) == {('arm', ARM, KEY)}
     assert value['promoted'][0]['probability'] > .9 and value['promoted'][0]['uses'] == 30
     stored = store.get_meta(control.REPORT_KEY) + store.conn.execute('SELECT state FROM learn_version').fetchone()[0]
     for text in (r[0] for r in store.conn.execute("SELECT text FROM chat_line")):
         assert text not in stored
+
+
+def test_live_like_seven_family_rewards_reach_promotion_without_touching_the_bandit(store):
+    """Seven ids per recipe and mostly-zero rewards (max 0.7), credited through bandit.update:
+    the bandit's split credit (1/7 a line) could never pass 0.9; whole rewards can."""
+    others = [arms.controls()[f] for f in arms.FAMILIES if f != 'length']
+    pattern, control_pattern = (0., 0., 0., .5, .7), (0.,) * 9 + (.3,)
+    lines = []
+    for i in range(100):
+        lines.append(gen(store, START + 3600 + i * 1800, ids=[ARM, *others], value=pattern[i % 5]))
+    for i in range(200):
+        lines.append(gen(store, START + 4500 + i * 900, ids=list(arms.controls().values()),
+                         value=control_pattern[i % 10]))
+    with store.transaction():
+        for lid in lines:
+            bandit.update(store.conn, lid, settings=ON, now=NOW)
+    split = bandit.posterior(store.conn, None, KEY, now=NOW)
+    assert cycle.beats((split[ARM]['alpha'], split[ARM]['beta']),
+                       (split[CONTROL]['alpha'], split[CONTROL]['beta'])) < .9
+    plan = evaluate(store)
+    promoted = [p for p in plan['promote'] if p['id'] == ARM]
+    assert promoted and promoted[0]['uses'] == 100 and promoted[0]['probability'] > .9
+    run(store)
+    assert cycle.promoted(store.conn) == {('arm', ARM, KEY)}
+
+    # Promotion is a status only: the bandit samples exactly as it does with the cycle off.
+    def picks(cfg):
+        rng = random.Random(11)
+        with store.transaction():
+            store.conn.execute('DELETE FROM bandit_turn')
+            store.conn.execute('DELETE FROM bandit_share')
+            return [bandit.choose(store.conn, 101, bandit.Context('guild', settings=cfg), rng=rng, now=NOW)
+                    for _ in range(60)]
+    assert picks(ON) == picks(replace(ON, cycle=False))
 
 
 def test_29_rewarded_uses_wait(store):
@@ -171,18 +214,29 @@ def test_the_owner_veto_is_honoured(store):
     store.set_meta(control.PREFIX + 'veto:arm:' + ARM, str(NOW))
     plan = evaluate(store)
     assert 'veto' in next(h for h in plan['held'] if h['id'] == ARM)['reasons']
-    assert not run(store)['promoted'] and not cycle.promoted_arms(store.conn, KEY)
+    assert not run(store)['promoted'] and not cycle.promoted(store.conn)
+
+
+def lesson_week(store, lid, *, verdict='send', guid=101):
+    for i in range(30):
+        gen(store, START + 3600 + i * 600, lesson=lid, value=1., verdict=verdict, guid=guid)
+        gen(store, START + 3900 + i * 600, value=0., guid=guid)
 
 
 def test_a_vetoed_lesson_is_never_promoted(store):
     lid = lesson(store)
-    for i in range(30):
-        gen(store, START + 3600 + i * 600, lesson=lid, value=1.)
-        gen(store, START + 3900 + i * 600, value=0.)
+    lesson_week(store, lid)
     plan = evaluate(store)
     assert [p['id'] for p in plan['promote'] if p['kind'] == 'lesson'] == [lid]
     store.set_meta(control.PREFIX + f'veto:lesson:{lid}', str(NOW))
     assert not [p for p in run(store)['promoted'] if p['kind'] == 'lesson']
+
+
+def test_a_lesson_respects_its_own_guard_trips(store):
+    lid = lesson(store)
+    lesson_week(store, lid, verdict='rewrite')
+    held = next(h for h in evaluate(store)['held'] if h['kind'] == 'lesson')
+    assert 'guard' in held['reasons']
 
 
 def test_a_promoted_lesson_leads_the_live_style_notes(store):
@@ -195,12 +249,17 @@ def test_a_promoted_lesson_leads_the_live_style_notes(store):
 def test_frozen_family_and_member_are_never_promoted(store):
     winning(store)
     lid = lesson(store)
-    for i in range(30):
-        gen(store, START + 3600 + i * 600, lesson=lid, value=1.)
-        gen(store, START + 3900 + i * 600, value=0.)
-    plan = evaluate(store, LearnCfg(enabled=True, bandit=True, cycle=True, frozen_families=('length',),
-                                    frozen_members=(101,)))
+    lesson_week(store, lid)
+    plan = evaluate(store, replace(ON, frozen_families=('length',), frozen_members=(101,)))
     assert not plan['promote'] and all(h['id'] != ARM for h in plan['held'])
+
+
+def test_a_frozen_members_lines_do_not_count_toward_an_arms_gate(store):
+    winning(store, n=20)
+    winning(store, n=20, start=START + 2 * 86400, guid=102)
+    assert [p['id'] for p in evaluate(store)['promote']] == [ARM]
+    held = next(h for h in evaluate(store, replace(ON, frozen_members=(102,)))['held'] if h['id'] == ARM)
+    assert held['uses'] == 20 and 'uses' in held['reasons']
 
 
 def test_global_freeze_runs_nothing(context, store, tmp_path, caplog):
@@ -220,26 +279,49 @@ def test_global_freeze_runs_nothing(context, store, tmp_path, caplog):
 
 # -- retirement -----------------------------------------------------------------------------------
 
-@pytest.mark.parametrize('week_controls,last_controls,retired', [(24, 24, True), (19, 24, False),
-                                                                 (24, 15, False)])
-def test_share_under_five_percent_for_two_weeks_retires_a_measured_arm(store, week_controls, last_controls, retired):
-    for i in range(30):  # long-measured: 30 rewarded uses before both weeks
+def measured_arm(store, value, control_value=0.):
+    """Thirty rewarded uses before both weeks, against controls with their own rewards."""
+    for i in range(30):
         ts = LAST_START - 86400 - i * 60
-        credit(store, gen(store, ts, arm=ARM, value=0.), ARM, ts, success=.5, failure=.5)
+        gen(store, ts, arm=ARM, value=value)
+        gen(store, ts - 30, arm=CONTROL, value=control_value)
+
+
+def small_shares(store, week_controls=24, last_controls=24):
     for begin, controls in ((START, week_controls), (LAST_START, last_controls)):
         gen(store, begin + 3600, arm=ARM)
         for i in range(controls):
             gen(store, begin + 7200 + i * 60, arm=CONTROL)
+
+
+@pytest.mark.parametrize('week_controls,last_controls,retired', [(24, 24, True), (19, 24, False),
+                                                                 (24, 15, False)])
+def test_share_under_five_percent_for_two_weeks_retires_a_measured_loser(store, week_controls, last_controls, retired):
+    measured_arm(store, 0., control_value=.3)
+    small_shares(store, week_controls, last_controls)
     value = run(store)
-    assert any(r['id'] == ARM and r['reason'] == 'share' for r in value['retired']) is retired
-    status = store.conn.execute('SELECT status FROM learn_arm WHERE id=?', (ARM,)).fetchone()[0]
-    assert status == ('retired' if retired else 'active')
+    entry = next((r for r in value['retired'] if r['id'] == ARM), None)
+    assert (entry is not None) is retired
+    if retired:
+        assert entry['reason'] == 'share' and entry['probability'] < .5 and entry['uses'] == 30
+    assert status(store, ARM) == ('retired' if retired else 'active')
 
 
-def test_contexts_where_an_arm_was_never_measured_do_not_dilute_its_share(store):
-    for i in range(30):
-        ts = LAST_START - 86400 - i * 60
-        credit(store, gen(store, ts, arm=ARM, value=0.), ARM, ts, success=.5, failure=.5)
+def test_a_small_share_never_retires_an_arm_that_is_not_losing(store):
+    measured_arm(store, .3, control_value=0.)
+    small_shares(store)
+    assert not run(store)['retired'] and status(store, ARM) == 'active'
+
+
+def test_a_promoted_arm_is_never_retired_for_its_share(store):
+    measured_arm(store, 0., control_value=.3)
+    small_shares(store)
+    promote(store, 'arm', ARM, KEY, at=LAST_START)
+    assert not run(store)['retired'] and status(store, ARM) == 'active'
+
+
+def test_contexts_where_an_arm_was_never_used_do_not_dilute_its_share(store):
+    measured_arm(store, 0., control_value=.3)
     discord = bandit.Context('discord:general').key
     for begin in (START, LAST_START):
         gen(store, begin + 3600, arm=ARM)
@@ -253,11 +335,20 @@ def test_contexts_where_an_arm_was_never_measured_do_not_dilute_its_share(store)
 
 
 def test_a_young_arm_with_a_small_share_stays_on_trial(store):
-    for begin in (START, LAST_START):
-        gen(store, begin + 3600, arm=ARM)
-        for i in range(30):
-            gen(store, begin + 7200 + i * 60, arm=CONTROL)
+    small_shares(store, 30, 30)
     assert not run(store)['retired']
+
+
+def test_a_retired_arm_can_be_accepted_again_from_the_lab(store):
+    measured_arm(store, 0., control_value=.3)
+    small_shares(store)
+    run(store)
+    assert status(store, ARM) == 'retired'
+    reply = control.change(store, {'action': 'arm', 'id': ARM, 'verb': 'accept'}, now=NOW)
+    assert reply == {'ok': True, 'message': 'Arm accepted again.'} and status(store, ARM) == 'active'
+    control.change(store, {'action': 'arm', 'id': ARM, 'verb': 'retire'}, now=NOW + 1)
+    control.change(store, {'action': 'arm', 'id': ARM, 'verb': 'accept'}, now=NOW + 2)
+    assert status(store, ARM) == 'active' and not control.vetoed(store.conn, 'arm', ARM)
 
 
 def test_a_lesson_not_reinforced_in_14_days_is_retired_with_its_promotion(store):
@@ -270,41 +361,68 @@ def test_a_lesson_not_reinforced_in_14_days_is_retired_with_its_promotion(store)
 
 # -- the diversity floor --------------------------------------------------------------------------
 
-def test_rising_repetition_rolls_back_only_the_newest_correlated_promotions(store):
+SAME, OTHER_SAME = 'the very same words about the boss tonight', 'another repeated line about the dungeon run'
+
+
+def repeating_week(store, *, arm_text=SAME, other_text=OTHER_SAME, channel='guild', key=KEY):
+    """Two lines a day for seven days per arm; the evaluated week repeats them across days."""
     for begin, repeat in ((LAST_START, False), (START, True)):
-        for day in range(4):
-            ts = begin + 3600 + day * 86400
-            text = 'the very same words about the boss tonight' if repeat else None
-            gen(store, ts, arm=ARM, text=text)
-            gen(store, ts + 60, arm=OTHER, text='another repeated line about the dungeon run' if repeat else None)
-            gen(store, ts + 120, arm=CONTROL)
-            gen(store, ts + 180, arm=arms.controls()['questions'])
+        for day in range(7):
+            for slot in range(2):
+                ts = begin + 3600 + day * 86400 + slot * 600
+                gen(store, ts, arm=ARM, text=arm_text if repeat else None, channel=channel, key=key)
+                gen(store, ts + 60, arm=OTHER, text=other_text if repeat else None, channel=channel, key=key)
+                gen(store, ts + 120, arm=CONTROL, channel=channel, key=key)
+                gen(store, ts + 180, arm=arms.controls()['questions'], channel=channel, key=key)
+
+
+def test_a_significant_rise_rolls_back_only_the_newest_correlated_promotion(store):
+    repeating_week(store)
     clean = lesson(store)
-    promote(store, 'arm', ARM, KEY, at=NOW - 86400, week=LAST)        # newest, correlated
+    promote(store, 'arm', ARM, KEY, at=NOW - 86400, week=LAST)              # newest, correlated
     promote(store, 'arm', OTHER, KEY, at=NOW - 8 * 86400, week='2026-W42')  # older, correlated
-    promote(store, 'lesson', str(clean), '', at=NOW - 86400, week=LAST)    # newest, not correlated
+    promote(store, 'lesson', str(clean), '', at=NOW - 86400, week=LAST)     # newest, no lines
     winning(store, 'humour.1.v1', start=START + 5 * 86400)
     plan = evaluate(store)
-    assert plan['rose'] == ['repetition']
+    assert plan['rose'] == [('game', 'repetition')]
     assert 'diversity' in next(h for h in plan['held'] if h['id'] == 'humour.1.v1')['reasons']
     value = run(store)
     assert [(r['kind'], r['id']) for r in value['rolled_back']] == [('arm', ARM)]
-    assert value['diversity'] == {'ok': 0, 'repetition_rose': 1, 'stock_rose': 0}
+    assert value['diversity'] == {'ok': 0, 'repetition_rose': 1, 'stock_rose': 0, 'rose': ['game:repetition']}
+    assert set(value['rates']['mediums']) == {'game', 'discord', 'dm'}
     states = dict(store.conn.execute('SELECT ident,status FROM learn_promotion'))
     assert states == {ARM: 'rolled_back', OTHER: 'promoted', str(clean): 'promoted'}
     assert not value['promoted']
-    # A rolled-back promotion is never promoted again by the cycle.
-    assert cycle.gate(uses=30, probability=1, carrier=tally(), comparison=tally(), rolled_back=True)
+    assert tuple(store.conn.execute('SELECT reason,since FROM learn_hold WHERE ident=?', (ARM,)).fetchone()) == ('diversity', NOW)
+
+
+def test_a_rise_in_discord_does_not_blame_a_game_promotion(store):
+    discord = bandit.Context('discord:general').key
+    repeating_week(store, channel='discord:general', key=discord)
+    promote(store, 'arm', ARM, KEY, at=NOW - 86400)  # a game context: none of its lines rose
+    plan = evaluate(store)
+    assert plan['rose'] == [('discord', 'repetition')] and not plan['rollback']
+
+
+def test_a_diversity_rollback_waits_two_weeks_and_30_new_uses(store):
+    winning(store)
+    with store.transaction():
+        store.conn.execute("INSERT INTO learn_promotion VALUES ('arm',?,?,'rolled_back','2026-W42',0,?)",
+                           (ARM, KEY, START - 86400))
+        store.conn.execute("INSERT INTO learn_hold VALUES ('arm',?,?,'diversity',?)", (ARM, KEY, START - 86400))
+    assert 'rolled_back' in next(h for h in evaluate(store)['held'] if h['id'] == ARM)['reasons']
+    with store.transaction():
+        store.conn.execute('UPDATE learn_hold SET since=?', (START - 15 * 86400,))
+    assert [p['id'] for p in evaluate(store)['promote']] == [ARM]  # 30 uses since, and two weeks
+    run(store)
+    assert cycle.promoted(store.conn) == {('arm', ARM, KEY)}
+    assert not store.conn.execute('SELECT count(*) FROM learn_hold').fetchone()[0]
 
 
 def test_a_frozen_family_is_never_rolled_back(store):
-    for begin, repeat in ((LAST_START, False), (START, True)):
-        for day in range(4):
-            gen(store, begin + 3600 + day * 86400, arm=ARM,
-                text='the very same words about the boss tonight' if repeat else None)
-            gen(store, begin + 3700 + day * 86400, arm=CONTROL)
+    repeating_week(store)
     promote(store, 'arm', ARM, KEY, at=NOW - 86400)
-    value = run(store, LearnCfg(enabled=True, bandit=True, cycle=True, frozen_families=('length',)))
+    value = run(store, replace(ON, frozen_families=('length',)))
     assert not value['rolled_back'] and value['frozen'] == {'families': ['length'], 'members': 0}
 
 
@@ -320,8 +438,11 @@ def test_report_contents_numbers_and_ids_with_every_medium_counted(store):
     value = run(store)
     assert value['week'] == WEEK and value['previous_week'] == LAST
     assert value['rates']['week']['lines'] == 6 and value['rates']['previous']['lines'] == 1
+    mediums = value['rates']['mediums']
+    assert (mediums['game']['week']['lines'], mediums['discord']['week']['lines'], mediums['dm']['week']['lines']) == (3, 2, 1)
     assert set(value['rates']['week']) == {'lines', 'flagged', *cycle.DETECTORS, 'guard', 'guard_screened'}
-    assert value['measured']['contradiction'] == 0 and value['measured']['repetition'] == 1
+    assert value['measured'] == {'repetition': 'measured', 'stock': 'measured', 'nonsequitur': 'partial',
+                                 'unawareness': 'partial', 'contradiction': 'not_measured', 'guard': 'measured'}
     assert value['state_version'] == store.conn.execute('SELECT max(version) FROM learn_version').fetchone()[0]
     assert set(value) >= {'promoted', 'retired', 'rolled_back', 'held', 'arms', 'lessons', 'diversity'}
     stored = store.get_meta(control.REPORT_KEY) + store.conn.execute('SELECT state FROM learn_version').fetchone()[0]
@@ -342,6 +463,17 @@ def test_report_contents_numbers_and_ids_with_every_medium_counted(store):
 
 # -- rollback ---------------------------------------------------------------------------------------
 
+def base_state(store, t0):
+    with store.transaction():
+        arms.ensure(store.conn, now=t0)
+        weights.ensure(store.conn, now=t0)
+
+
+def save(store, at):
+    with store.transaction():
+        return cycle.save_version(store.conn, cycle.state(store.conn, now=at), reason='cycle', now=at, week=WEEK)
+
+
 def changed_state(store, now):
     with store.transaction():
         store.conn.execute("UPDATE learn_arm SET status='retired' WHERE id='humour.1.v1'")
@@ -358,53 +490,104 @@ def changed_state(store, now):
 
 def test_rollback_restores_the_state_exactly_and_can_itself_be_undone(store):
     t0 = START + 86400
-    with store.transaction():
-        arms.ensure(store.conn, now=t0)
-        weights.ensure(store.conn, now=t0)
+    base_state(store, t0)
     lesson(store, status='proposed', expires=NOW + 3 * 86400)
     lesson(store, text='She jokes about wipes.', expires=NOW + 4 * 86400)
     promote(store, 'arm', ARM, KEY, at=t0)
-    lid = gen(store, t0, arm=ARM, value=1.)
-    credit(store, lid, ARM, t0, success=1., failure=0.)
-    with store.transaction():
-        version = cycle.save_version(store.conn, cycle.state(store.conn, now=t0), reason='cycle', now=t0, week=WEEK)
+    gen(store, t0, arm=ARM, value=1.)
+    version = save(store, t0)
     target = json.loads(store.conn.execute('SELECT state FROM learn_version WHERE version=?', (version,)).fetchone()[0])
     proposal = changed_state(store, t0 + 3600)
     before = cycle.governed(cycle.state(store.conn, now=NOW))
-    evidence = store.conn.execute('SELECT * FROM bandit_credit').fetchall()
+    evidence = store.conn.execute('SELECT * FROM talk_reward').fetchall()
     with store.transaction():
-        restored, saved = cycle.rollback(store.conn, now=NOW)
-    assert restored == version
+        done = cycle.rollback(store.conn, now=NOW, with_weights=True)
+    assert done['restored'] == version and done['weights'] is True and done['kept'] == 0
     after = cycle.governed(cycle.state(store.conn, now=NOW))
     wanted = cycle.governed(target)
     assert {k: after['arms'][k] for k in wanted['arms']} == wanted['arms']
-    assert after['arms'][proposal] == 'retired'  # not live in that state
+    assert after['arms'][proposal] == 'proposed'  # not live in that state, still reversible
     assert after['lessons'] == wanted['lessons'] and after['promotions'] == wanted['promotions']
     assert after['weights'] == wanted['weights'] == dict(weights.DEFAULTS)
-    assert store.conn.execute('SELECT * FROM bandit_credit').fetchall() == evidence  # evidence untouched
+    assert store.conn.execute('SELECT * FROM talk_reward').fetchall() == evidence  # evidence untouched
     with store.transaction():
-        cycle.rollback(store.conn, saved, now=NOW)
+        cycle.rollback(store.conn, done['saved'], now=NOW, with_weights=True)
     assert cycle.governed(cycle.state(store.conn, now=NOW)) == before
+
+
+def test_rollback_keeps_current_weights_unless_asked(store):
+    t0 = START + 86400
+    base_state(store, t0)
+    save(store, t0)
+    control.change(store, {'action': 'weights', 'values': dict(explicit=.7, engagement=.1, emote=.1, quality=.1),
+                           'version': 1}, now=t0 + 60)
+    reply = control.change(store, {'action': 'rollback', 'version': None, 'weights': False}, now=NOW)
+    assert 'Reward weights were kept as they are' in reply['message']
+    assert weights.read(store.conn, at=NOW).values['explicit'] == .7
+
+
+def test_rollback_applies_later_guard_and_owner_decisions_again(store):
+    t0 = START + 86400
+    base_state(store, t0)
+    with store.transaction():
+        rejected = arms.propose(store.conn, 'questions', {'rate': .4}, now=t0)
+    expired = lesson(store, expires=NOW + 86400)
+    approved = lesson(store, status='proposed', text='She asks one question.', expires=NOW + 86400)
+    save(store, t0)
+    with store.transaction():
+        bandit.retire(store.conn, [('humour.2.v1', 20, 20, .5, .1)], now=t0 + 10)
+    control.change(store, {'action': 'arm', 'id': rejected, 'verb': 'reject'}, now=t0 + 20)
+    control.change(store, {'action': 'lesson', 'id': expired, 'verb': 'expire'}, now=t0 + 30)
+    with store.transaction():
+        later = arms.propose(store.conn, 'questions', {'rate': .25}, now=t0 + 40)
+    control.change(store, {'action': 'arm', 'id': later, 'verb': 'accept'}, now=t0 + 50)
+    lesson(store, text='A newer note about pacing.', expires=NOW + 86400)
+    with store.transaction():
+        newest = store.conn.execute('SELECT max(id) FROM talk_lesson').fetchone()[0]
+        store.conn.execute("UPDATE talk_lesson SET status='proposed' WHERE id=?", (newest,))
+    control.change(store, {'action': 'lesson', 'id': approved, 'verb': 'approve'}, now=t0 + 60)
+    control.change(store, {'action': 'lesson', 'id': newest, 'verb': 'approve'}, now=t0 + 70)
+    reply = control.change(store, {'action': 'rollback', 'version': None, 'weights': False}, now=NOW)
+    assert reply['ok'] and '6 later decisions' in reply['message']
+    assert status(store, 'humour.2.v1') == 'retired'  # the guards' retirement stands
+    assert status(store, rejected) == 'retired'       # his rejection stands
+    assert status(store, later) == 'active'           # his later accept stands
+    rows = dict(store.conn.execute('SELECT id,status||":"||(expires>?) FROM talk_lesson', (NOW,)))
+    assert rows[expired] == 'active:0' and rows[approved] == 'active:1' and rows[newest] == 'active:1'
 
 
 def test_rollback_keeps_the_owners_vetoes(store):
     t0 = START + 86400
-    with store.transaction():
-        arms.ensure(store.conn, now=t0)
-        weights.ensure(store.conn, now=t0)
+    base_state(store, t0)
     lid = lesson(store, expires=NOW + 86400)
-    with store.transaction():
-        cycle.save_version(store.conn, cycle.state(store.conn, now=t0), reason='cycle', now=t0, week=WEEK)
+    save(store, t0)
     control.change(store, {'action': 'arm', 'id': ARM, 'verb': 'retire'}, now=t0 + 60)
     control.change(store, {'action': 'lesson', 'id': lid, 'verb': 'veto'}, now=t0 + 60)
-    reply = control.change(store, {'action': 'rollback', 'version': None}, now=NOW)
+    reply = control.change(store, {'action': 'rollback', 'version': None, 'weights': False}, now=NOW)
     assert reply['ok'] and 'vetoes' in reply['message']
-    assert store.conn.execute('SELECT status FROM learn_arm WHERE id=?', (ARM,)).fetchone()[0] == 'retired'
+    assert status(store, ARM) == 'retired'
     assert store.conn.execute('SELECT expires FROM talk_lesson WHERE id=?', (lid,)).fetchone()[0] == t0 + 60
 
 
-@pytest.mark.parametrize('args', [{'action': 'rollback'}, {'action': 'rollback', 'version': 0},
-                                  {'action': 'rollback', 'version': '3'}, {'action': 'rollback', 'version': 1, 'x': 1}])
+def test_an_owner_rollback_is_sticky_until_30_new_uses(store):
+    winning(store)
+    run(store)
+    assert cycle.promoted(store.conn) == {('arm', ARM, KEY)}
+    reply = control.change(store, {'action': 'rollback', 'version': None, 'weights': False}, now=NOW + 60)
+    assert reply['ok'] and not cycle.promoted(store.conn)
+    with store.transaction():
+        store.conn.execute('DELETE FROM night_step')
+    assert 'owner_rollback' in next(h for h in evaluate(store, now=NOW + 120)['held'] if h['id'] == ARM)['reasons']
+    winning(store, start=NOW + 3600)
+    later = NOW + 30 * 600 + 7200
+    assert [p['id'] for p in cycle.evaluate(store.conn, week=WEEK, cfg=ON, now=later, tz=UTC, owner=1)['promote']] == [ARM]
+
+
+@pytest.mark.parametrize('args', [{'action': 'rollback'}, {'action': 'rollback', 'version': None},
+                                  {'action': 'rollback', 'version': 0, 'weights': False},
+                                  {'action': 'rollback', 'version': '3', 'weights': False},
+                                  {'action': 'rollback', 'version': 3, 'weights': 'no'},
+                                  {'action': 'rollback', 'version': 1, 'weights': False, 'x': 1}])
 def test_the_lab_rollback_action_is_strict(args):
     with pytest.raises(ValueError):
         control.arguments(args)
@@ -412,17 +595,15 @@ def test_the_lab_rollback_action_is_strict(args):
 
 def test_a_missing_version_is_refused_in_words(store):
     with pytest.raises(ValueError, match='No weekly'):
-        control.change(store, {'action': 'rollback', 'version': None}, now=NOW)
+        control.change(store, {'action': 'rollback', 'version': None, 'weights': False}, now=NOW)
     with pytest.raises(ValueError, match='not saved'):
-        control.change(store, {'action': 'rollback', 'version': 99}, now=NOW)
+        control.change(store, {'action': 'rollback', 'version': 99, 'weights': False}, now=NOW)
 
 
 def test_cli_rollback_holds_the_service_lock_and_lists_versions(store, tmp_path, capsys):
+    base_state(store, START)
+    version = save(store, START)
     with store.transaction():
-        arms.ensure(store.conn, now=START)
-        weights.ensure(store.conn, now=START)
-        version = cycle.save_version(store.conn, cycle.state(store.conn, now=START), reason='cycle', now=START,
-                                     week=WEEK)
         store.conn.execute("UPDATE learn_arm SET status='retired' WHERE id=?", (ARM,))
     lock = acquire_instance_lock(tmp_path)
     try:
@@ -431,11 +612,14 @@ def test_cli_rollback_holds_the_service_lock_and_lists_versions(store, tmp_path,
     finally:
         lock.release()
     assert learn_main(['rollback', '--data-dir', str(tmp_path), '--to', str(version)]) == 0
-    assert json.loads(capsys.readouterr().out)['restored'] == version
-    assert store.conn.execute('SELECT status FROM learn_arm WHERE id=?', (ARM,)).fetchone()[0] == 'active'
+    result = json.loads(capsys.readouterr().out)
+    assert result['restored'] == version and result['weights'] is False
+    assert status(store, ARM) == 'active'
+    assert learn_main(['rollback', '--data-dir', str(tmp_path), '--to', str(version), '--with-weights']) == 0
+    assert json.loads(capsys.readouterr().out)['weights'] is True
     assert learn_main(['versions', '--data-dir', str(tmp_path)]) == 0
     listed = json.loads(capsys.readouterr().out)['versions']
-    assert [v['reason'] for v in listed] == ['rollback', 'cycle'] and listed[0]['restored_from'] == version
+    assert [v['reason'] for v in listed] == ['rollback', 'rollback', 'cycle'] and listed[0]['restored_from'] == version
 
 
 # -- the stage, its switch and the live consumers ----------------------------------------------------
@@ -470,25 +654,6 @@ def test_stage_runs_once_per_week_and_logs_counts_only(context, store, tmp_path,
     assert store.conn.execute('SELECT count(*) FROM learn_version').fetchone()[0] == 1
     assert cycle.done(store.conn, WEEK) and cycle.report(store.conn)['promoted']
     assert 'learn_cycle_done' in caplog.text and 'w1x' not in caplog.text
-
-
-def test_with_the_cycle_on_only_a_promoted_arm_leaves_the_trial(store, clock):
-    with store.transaction():
-        arms.ensure(store.conn, now=clock.now())
-    for i in range(30):
-        ts = clock.now() - 3600 + i
-        credit(store, gen(store, ts, arm=ARM, value=1.), ARM, ts, success=1., failure=0.)
-
-    def picks(cfg):
-        rng = random.Random(7)
-        with store.transaction():
-            store.conn.execute('DELETE FROM bandit_turn')
-            return [bandit.choose(store.conn, 101, bandit.Context('guild', settings=cfg), rng=rng,
-                                  now=clock.now())['length'] for _ in range(100)].count(ARM)
-    assert picks(LearnCfg(enabled=True, bandit=True)) > 50  # cycle off: unchanged
-    assert picks(ON) <= 20  # on, unpromoted: exploration only
-    promote(store, 'arm', ARM, KEY, at=clock.now())
-    assert picks(ON) > 50
 
 
 def test_coach_receives_last_weeks_report_only_with_the_cycle_on(context, store, tmp_path):

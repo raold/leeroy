@@ -46,9 +46,12 @@ supports:
 - `weights`: `{values: {explicit, engagement, emote, quality}, version}`. Values
   must be finite, between zero and one, and sum to one. The page shows a
   confirmation; the mind rejects an edit based on a stale version.
-- `rollback`: `{version}` restores a saved learning state (the weekly cycle's, see
-  `learn/README.md`), after a confirmation. It saves the current state first, keeps
-  the owner's vetoes and freezes, and works while learning is frozen.
+- `rollback`: `{version, weights}` restores a saved learning state (the weekly
+  cycle's, see `learn/README.md`), after a confirmation. It saves the current state
+  first, applies later guard and owner decisions again, keeps the owner's vetoes and
+  freezes, restores reward weights only when `weights` is true (the checkbox), and
+  works while learning is frozen.
+- `arm` `accept` also takes a retired arm back into the trial (its veto is lifted).
 
 Freeze overrides live in `meta` under `learn:control:` and survive restarts.
 They add to the corresponding `learn.freeze` / `frozen_families` choices and
@@ -70,7 +73,9 @@ held back with its reasons. The view keeps bounded nested numbers and plain
 identifiers (arm ids, weeks, context parts, codes); any other string is dropped.
 Without a report it says **Not set up yet** and whether `[learn] cycle` is on. Below
 it, **Saved learning states** lists the newest 20 versions, each with its rollback
-button. The cycle honors `learn:control:veto:*` when deciding promotions.
+button, and the checkbox that also restores reward weights. The cycle honors
+`learn:control:veto:*` when deciding promotions. Arms show "promoted by the weekly
+cycle" in the contexts where they were promoted, and lessons show "promoted".
 
 Validation uses scratch databases, the fake mind/bridge/model browser rehearsal,
 keyboard actions, 390 px layouts and both themes. No live service or model is

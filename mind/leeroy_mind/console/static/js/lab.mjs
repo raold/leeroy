@@ -1,10 +1,10 @@
 import { $, api, clear, el, on, post, refused } from "./core.mjs";
 import { S } from "./state.mjs";
 import { pollTab } from "./tabkit.mjs";
-import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel } from "./labmodel.mjs";
+import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords } from "./labmodel.mjs";
 import { BoundedMap } from "./resilience.mjs";
 
-let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null;
+let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null, withWeights=false;
 const readLines=new BoundedMap(100), options={path:'/api/lab',ms:30000,render};
 const dialog=$('lab-confirm');
 function button(text,action) {
@@ -72,11 +72,11 @@ function arms(view) {
     if (!view.available) { empty(d); }
     view.arms.filter(a => a.family===f).forEach(a => {
       const arm=details(a.id+' · '+a.status,'arm-'+a.id); arm.appendChild(el('p','mono',JSON.stringify(a.params)));
-      const verbs=a.status==='proposed' ? ['accept','reject'] : a.status==='active' ? ['retire'] : [];
-      verbs.forEach(verb => arm.appendChild(button(verb[0].toUpperCase()+verb.slice(1),() =>
-        confirm(verb[0].toUpperCase()+verb.slice(1)+' arm '+a.id+'?',() => mutate({action:'arm',id:a.id,verb})))));
+      const verbs=a.status==='proposed' ? ['accept','reject'] : a.status==='active' ? ['retire'] : a.status==='retired' ? ['accept'] : [];
+      verbs.forEach(verb => { const label=a.status==='retired' ? 'Accept again' : verb[0].toUpperCase()+verb.slice(1);
+        arm.appendChild(button(label,() => confirm(label+' arm '+a.id+'?',() => mutate({action:'arm',id:a.id,verb})))); });
       const contexts=view.contexts.filter(c => c.arm_id===a.id);
-      contexts.forEach(c => arm.appendChild(el('p','lab-stat',c.context.join(' / ')+' · posterior '+score(c.alpha)+' / '+score(c.beta)
+      contexts.forEach(c => arm.appendChild(el('p','lab-stat',c.context.join(' / ')+(c.promoted ? ' · promoted by the weekly cycle' : '')+' · posterior '+score(c.alpha)+' / '+score(c.beta)
         +' · '+c.uses+' uses · '+c.turns+' turns ('+percent(c.share)+') · '+c.bad+' guarded / '+c.attempts+' checked')));
       if (!contexts.length) { empty(arm,'No measured turns yet. Posterior starts at 1 / 1.'); }
       d.appendChild(arm);
@@ -100,7 +100,7 @@ function lessons(view) {
   nav.append(previous,el('span','hint',view.total ? 'Lessons '+(view.offset+1)+'–'+(view.offset+view.items.length)+' of '+view.total : 'No current lessons'),next); box.appendChild(nav);
   if (!view.items.length) { empty(box,'No active or proposed lessons yet.'); }
   view.items.forEach(l => {
-    const d=details(l.name+' · '+l.scope+' · '+l.status,'lesson-'+l.id); d.appendChild(el('p','',l.text));
+    const d=details(l.name+' · '+l.scope+' · '+l.status+(l.promoted ? ' · promoted' : ''),'lesson-'+l.id); d.appendChild(el('p','',l.text));
     d.appendChild(el('p','hint','Reinforced '+l.reinforced+' times · expires '+new Date(l.expires*1000).toLocaleString()));
     (l.status==='proposed' ? ['approve','veto','expire'] : ['veto','expire']).forEach(verb =>
       d.appendChild(button(verb==='expire' ? 'Expire now' : verb[0].toUpperCase()+verb.slice(1),() =>
@@ -138,12 +138,14 @@ function weekly(value) {
   }
   const saved=Array.isArray(value.versions) ? value.versions : [];
   const d=details('Saved learning states ('+saved.length+')','report-versions');
-  d.appendChild(el('p','hint','A rollback restores arm statuses, promotions, lessons and reward weights. Your vetoes and freezes stay, and the current state is saved first.'));
+  d.appendChild(el('p','hint','A rollback restores arm statuses, promotions and lessons. Later decisions of yours and the guards, your vetoes and freezes stay, and the current state is saved first. What it reverts waits for 30 new rewarded uses.'));
+  const label=el('label','','Also restore that version’s reward weights '), check=el('input'); check.type='checkbox';
+  check.id='lab-rollback-weights'; check.checked=withWeights; check.addEventListener('change',() => { withWeights=check.checked; });
+  label.htmlFor=check.id; d.append(label,check);
   saved.forEach(v => {
     d.appendChild(el('p','lab-stat',versionLabel(v)+' · '+new Date(v.created*1000).toLocaleString()));
-    d.appendChild(button('Roll back to version '+v.version,() => confirm('Roll back learning to version '+v.version+
-      '? Arm statuses, promotions, lessons and reward weights return to that state; your vetoes and freezes stay. The current state is saved as a new version first.',
-      () => mutate({action:'rollback',version:v.version}))));
+    d.appendChild(button('Roll back to version '+v.version,() => { const weights=withWeights;
+      confirm(rollbackWords(v.version,weights),() => mutate({action:'rollback',version:v.version,weights})); }));
   });
   if (!saved.length) { empty(d,'No saved states yet.'); } box.appendChild(d);
 }

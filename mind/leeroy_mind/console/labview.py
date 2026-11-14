@@ -111,7 +111,7 @@ def _arms(conn, now):
     registry = arms.read(conn)[:LIMIT]
     keys = conn.execute('SELECT context FROM bandit_share UNION SELECT context FROM bandit_credit '
                         'UNION SELECT context FROM bandit_rejection LIMIT 65').fetchall()
-    contexts = []
+    contexts, promoted = [], cycle.promoted(conn)
     for (key,) in keys[:64]:
         if not bandit.valid_key(key):
             continue
@@ -121,7 +121,7 @@ def _arms(conn, now):
         for arm in registry:
             p = stats.get(arm.id, {'alpha': 1., 'beta': 1., 'uses': 0, 'bad': 0, 'attempts': 0})
             contexts.append({'context': json.loads(key), 'arm_id': arm.id, **p,
-                             'turns': shares.get(arm.id, 0),
+                             'promoted': ('arm', arm.id, key) in promoted, 'turns': shares.get(arm.id, 0),
                              'share': shares.get(arm.id, 0)/max(1, totals[arm.family])})
     return {'available': True, 'arms': [asdict(a) for a in registry], 'contexts': contexts,
             'limited': len(keys)>64 or len(registry)==LIMIT}
@@ -168,8 +168,10 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
         notes = [dict(zip(('id','guid','scope','text','status','reinforced','expires','origin_night'), r))
                  for r in conn.execute('SELECT * FROM talk_lesson WHERE expires>? AND guid=? ORDER BY id LIMIT 50 OFFSET ?',
                                        (now, member, offset))]
+        promoted = cycle.promoted(conn)
         for note in notes:
             note['name'] = names.get(note['guid'], f'#{note["guid"]}')
+            note['promoted'] = ('lesson', str(note['id']), '') in promoted
     report = None
     if 'meta' in tables:
         row = conn.execute('SELECT value FROM meta WHERE key=?', (control.REPORT_KEY,)).fetchone()

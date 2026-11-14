@@ -57,6 +57,8 @@ def learn_main(argv=None):
     rollback_command.add_argument("--data-dir", default=argparse.SUPPRESS)
     rollback_command.add_argument("--to", type=int, metavar="VERSION",
                                   help="the version to restore (default: the newest weekly one)")
+    rollback_command.add_argument("--with-weights", action="store_true",
+                                  help="also restore that version's reward weights (default: keep the current ones)")
     from .preference_cli import add_parsers, run
     add_parsers(sub)
     args = parser.parse_args(argv)
@@ -68,7 +70,7 @@ def learn_main(argv=None):
         parser.error('--to must be positive')
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
     if args.action == 'rollback':
-        return rollback_main(root, args.to)
+        return rollback_main(root, args.to, with_weights=args.with_weights)
     if args.action not in ('report', 'lessons', 'arms', 'versions'):
         return run(args,root)
     try:
@@ -110,7 +112,7 @@ def arms_report(conn, *, now=None):
     return {"available":True,"arms":[asdict(a) for a in registry],"contexts":contexts}
 
 
-def rollback_main(root, version=None):
+def rollback_main(root, version=None, *, with_weights=False):
     """With the mind stopped: hold mind.lock throughout, never create or migrate mind.db."""
     from leeroy_mind.app import AlreadyRunning, acquire_instance_lock
     from leeroy_mind.logs import log
@@ -124,12 +126,13 @@ def rollback_main(root, version=None):
                 return 1
             try:
                 with conn:
-                    restored, saved = rollback(conn, version, now=time.time())
+                    result = rollback(conn, version, now=time.time(), with_weights=with_weights)
             except ValueError as error:  # fixed words only; nothing typed is echoed
                 print(f"learn rollback refused: {error}")
                 return 1
-        log("learn_rollback", restored=restored, saved=saved, source="cli")
-        print(json.dumps({"restored": restored, "saved": saved}, sort_keys=True))
+        log("learn_rollback", restored=result["restored"], saved=result["saved"], kept=result["kept"],
+            weights=int(result["weights"]), source="cli")
+        print(json.dumps(result, sort_keys=True))
         return 0
     except AlreadyRunning:
         print("learn rollback: mind.lock is held; stop the mind before restoring a learning state")

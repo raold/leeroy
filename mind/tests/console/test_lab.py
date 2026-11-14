@@ -322,7 +322,7 @@ def test_endpoint_uses_wall_clock_and_refuses_disabled_or_stopping(store,clock):
 
 
 @pytest.mark.parametrize('path,args', [('/api/learn',{'action':'freeze','frozen':True}),
-    ('/api/learn',{'action':'rollback','version':3}),
+    ('/api/learn',{'action':'rollback','version':3,'weights':False}),
     ('/api/feedback',{'line_id':1,'value':-1,'reasons':['wrong-facts']})])
 def test_console_mutation_gates_and_forwarding(store,path,args):
     data=data_path(store); link=FakeLink({'ok':True,'message':'Saved.'})
@@ -376,8 +376,23 @@ def test_lab_rollback_goes_through_the_learn_op(store,clock):
     app=SimpleNamespace(store=store,clock=clock,data_dir=data_path(store),stopping=False)
     control_endpoint=endpoint.ControlEndpoint(app,endpoint.ControlCfg(enabled=True),clock=lambda:12)
     store.set_meta(control.PREFIX+'freeze','true')  # an explicit owner restore still works while frozen
-    result=asyncio.run(control_endpoint.learn({'action':'rollback','version':version}))
+    result=asyncio.run(control_endpoint.learn({'action':'rollback','version':version,'weights':False}))
     assert result['ok'] and f'version {version}' in result['message']
     assert store.conn.execute("SELECT status FROM learn_arm WHERE id='length.1.v1'").fetchone()[0]=='active'
-    refused=asyncio.run(control_endpoint.learn({'action':'rollback','version':999}))
+    refused=asyncio.run(control_endpoint.learn({'action':'rollback','version':999,'weights':False}))
     assert not refused['ok'] and refused['error']=='That learning-state version is not saved.'
+
+
+def test_promoted_arms_and_lessons_are_listed(store,clock):
+    now=clock.now(); key=bandit.Context('guild').key
+    with store.transaction():
+        arms.ensure(store.conn,now=now)
+        store.conn.execute('INSERT INTO bandit_share VALUES (?,?,3)',(key,'length.1.v1'))
+        store.conn.execute("INSERT INTO learn_promotion VALUES ('arm','length.1.v1',?,'promoted','2026-W44',?,?)",(key,now,now))
+    note=lesson(store,now,status='active')
+    with store.transaction():
+        store.conn.execute("INSERT INTO learn_promotion VALUES ('lesson',?,'','promoted','2026-W44',?,?)",(str(note),now,now))
+    result=labview.read(data_path(store),now=now)
+    flags={(c['arm_id'],tuple(c['context'])):c['promoted'] for c in result['arms']['contexts']}
+    assert flags[('length.1.v1',tuple(json.loads(key)))] and not flags[('length.0.v1',tuple(json.loads(key)))]
+    assert [n['promoted'] for n in result['lessons']['items']]==[True]

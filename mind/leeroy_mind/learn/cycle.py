@@ -2,8 +2,10 @@
 
 It reads numbers and ids only and writes no text: the report and every learning-state
 version hold arm ids, lesson ids, member guids, context keys, counts, rates and codes.
-It never changes reward weights, guardrails, personas or talk history. Only the owner's
-rollback (CLI or Lab) restores weights, as part of a whole saved state.
+It never changes reward weights, guardrails, personas or talk history, and it never changes
+how the bandit samples: a promotion is a status the report, the Lab and the coach read, and
+it keeps an arm from share retirement and puts a lesson first in the style block. Only the
+owner's rollback (CLI or Lab) restores weights, and only when he asks for it.
 """
 from datetime import date, timedelta
 import json
@@ -11,19 +13,22 @@ import math
 import sqlite3
 from types import SimpleNamespace
 
+from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.settings import iso_week, week_bounds
 from . import arms, bandit, lessons, weights
 from .config import load_learn_config
 from .control import REPORT_KEY, effective, vetoed
-from .reward import decayed
+from .reward import DAY, decayed
 
 STAGE = 'learn_cycle'
 REPORT_VERSION = 1
-PROBABILITY = .9  # posterior probability of beating control
-USES = 30  # rewarded uses before promotion
-SHARE = .05  # an arm under this weekly share for two weeks is retired
+PROBABILITY = .9  # posterior probability of beating control, for a promotion
+LOSING = .5  # an arm retired for its share must also be under this probability
+USES = 30  # rewarded uses before promotion or share retirement, and new uses after a rollback
+SHARE = .05  # an arm under this weekly share for two weeks may be retired
+HOLD_DAYS = 14  # a diversity rollback waits at least this long before a new promotion
 KEEP_VERSIONS = 52
 LIST_CAP = 100
 REPORT_BYTES = 60000  # under the Lab's 64 KiB read
@@ -31,6 +36,11 @@ CONTEXT_CAP = 200
 GRID = 4000
 DETECTORS = ('repetition', 'stock', 'nonsequitur', 'unawareness')
 DIVERSITY = ('repetition', 'stock')
+MEDIUMS = ('game', 'discord', 'dm')
+RISE_P = .05  # one-sided two-proportion test
+RISE_POINTS = .005  # at least half a percentage point
+RISE_LINES = 10  # and at least ten more flagged lines
+MIN_CARRIER = 10  # lines before a promotion can be blamed for a rise
 TRIPS = frozenset({'rewrite', 'react', 'drop'})
 SCREENED = TRIPS | {'send'}
 REPETITION_RULES = frozenset({'member_across_days', 'guild_evening_phrase'})
@@ -44,8 +54,9 @@ class _Frozen(Exception):
 
 def have(conn):
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    return ({'learn_version', 'learn_promotion', 'meta', 'night_step'} <= names and weights.available(conn)
-            and arms.available(conn) and lessons.available(conn) and 'bandit_credit' in names)
+    return ({'learn_version', 'learn_promotion', 'learn_decision', 'learn_hold', 'meta', 'night_step',
+             'bandit_credit', 'bandit_rejection'} <= names
+            and weights.available(conn) and arms.available(conn) and lessons.available(conn))
 
 
 def due_week(night):
@@ -66,6 +77,12 @@ def previous_week(week):
 def done(conn, week):
     return conn.execute('SELECT 1 FROM night_step WHERE stage=? AND unit=? LIMIT 1',
                         (STAGE, week)).fetchone() is not None
+
+
+def medium(channel):
+    """The diversity floor's three mediums: Discord DMs, other Discord rooms (group DMs
+    included) and the game (whispers, officer and voice included)."""
+    return 'dm' if channel.startswith('dm:') else 'discord' if is_discord(channel) else 'game'
 
 
 # -- the posterior gate ---------------------------------------------------------------------------
@@ -89,13 +106,27 @@ def beats(a, b, *, grid=GRID):
 
 
 def _mass(rows, now):
-    """Beta(1,1) plus decayed reward mass, mapped as the bandit maps it."""
+    """Beta(1,1) plus each line's whole, decayed reward, mapped as the bandit maps it but never
+    divided among the families the line carried."""
     alpha = beta = 1.
-    for value, cap, ts in rows:
-        weight = cap if value > 0 else 1.
-        alpha += decayed(weight * (1 + value) / 2, age_seconds=max(0., now - ts))
-        beta += decayed(weight * (1 - value) / 2, age_seconds=max(0., now - ts))
+    for row in rows:
+        weight = row.cap if row.value > 0 else 1.
+        alpha += decayed(weight * (1 + row.value) / 2, age_seconds=max(0., now - row.ts))
+        beta += decayed(weight * (1 - row.value) / 2, age_seconds=max(0., now - row.ts))
     return alpha, beta
+
+
+def significant_rise(before, before_lines, after, after_lines):
+    """A rate rose only when it is a real rise: at least RISE_LINES more flagged lines, at
+    least RISE_POINTS higher, and a one-sided two-proportion test under RISE_P."""
+    if not before_lines or not after_lines or after - before < RISE_LINES:
+        return False
+    p1, p2 = before / before_lines, after / after_lines
+    if p2 - p1 < RISE_POINTS - EPSILON:
+        return False
+    pooled = (before + after) / (before_lines + after_lines)
+    spread = math.sqrt(pooled * (1 - pooled) * (1 / before_lines + 1 / after_lines))
+    return spread > 0 and .5 * math.erfc((p2 - p1) / spread / math.sqrt(2)) < RISE_P
 
 
 # -- the held-out evaluation ----------------------------------------------------------------------
@@ -145,7 +176,9 @@ def measure(conn, since, until, owner):
 
     Every medium counts (game, whispers, officer, voice, Discord channels, DMs and group DMs):
     only counts leave this function, so no line or audience is exposed by the result.
-    Contradiction needs a model and is never measured here.
+    Contradiction needs a model and is never measured here; non sequiturs are only the filler
+    rule (relevance needs embeddings); unawareness checks only full-sentence claims against
+    verified kills, raids and places.
     """
     from leeroy_mind.eval.talk import nonsequitur, repetition, unawareness
     from leeroy_mind.eval.talk.common import mark_scratch, read_lines
@@ -164,12 +197,13 @@ def measure(conn, since, until, owner):
             kinds[flag.line_id].add('stock')
     for flag in nonsequitur.detect(lines, context, {})[0]:
         kinds[flag.line_id].add('nonsequitur')
-    measured = dict(repetition=1, stock=1, nonsequitur=1, unawareness=1, contradiction=0, guard=1)
+    measured = dict(repetition='measured', stock='measured', nonsequitur='partial', unawareness='partial',
+                    contradiction='not_measured', guard='measured')
     try:
         for flag in unawareness.detect(conn, lines)[0]:
             kinds[flag.line_id].add('unawareness')
     except sqlite3.OperationalError:
-        measured['unawareness'] = 0
+        measured['unawareness'] = 'not_measured'
     recipes = {}
     for lid, anchor, arm_ids, lesson_ids, verdict, key in conn.execute(
             "SELECT c.id,coalesce(m.recipe_line_id,c.id),p.arm_ids,p.lesson_ids,p.guard_verdict,p.bandit_context "
@@ -180,8 +214,9 @@ def measure(conn, since, until, owner):
     rows = []
     for line in lines:
         anchor, arm_ids, lesson_ids, verdict, key = recipes.get(line.id, (None, (), (), None, None))
-        rows.append(SimpleNamespace(id=line.id, guid=line.guid, channel=line.channel, kinds=kinds[line.id],
-                                    anchor=anchor, arms=arm_ids, lessons=lesson_ids, verdict=verdict, key=key))
+        rows.append(SimpleNamespace(id=line.id, guid=line.guid, channel=line.channel, medium=medium(line.channel),
+                                    kinds=kinds[line.id], anchor=anchor, arms=arm_ids, lessons=lesson_ids,
+                                    verdict=verdict, key=key))
     return rows, measured
 
 
@@ -193,10 +228,22 @@ def _tally(rows, keep=lambda row: True):
     return tally
 
 
-def _shares(rows, registry, frozen_members, credited):
+def rises(this, last):
+    """(medium, metric) pairs whose repetition or stock rate rose significantly."""
+    out = []
+    for name in MEDIUMS:
+        now_tally = _tally(this, lambda r: r.medium == name)
+        then_tally = _tally(last, lambda r: r.medium == name)
+        for metric in DIVERSITY:
+            if significant_rise(then_tally.hits[metric], then_tally.lines, now_tally.hits[metric], now_tally.lines):
+                out.append((name, metric))
+    return out
+
+
+def _shares(rows, registry, frozen_members, contexts):
     """Each arm's share of its family's generations that week, in the bandit contexts where
-    it has been measured (a length arm is never offered on Discord, so Discord does not
-    dilute it), frozen members left out. None when the family had no generation there."""
+    it has been used (a length arm is never offered on Discord, so Discord does not dilute
+    it), frozen members left out. None when the family had no generation there."""
     family_turns, arm_turns = {}, {}
     for anchor, (arm_ids, key) in {row.anchor: (row.arms, row.key) for row in rows
                                    if row.anchor is not None and row.arms and row.guid not in frozen_members}.items():
@@ -208,7 +255,7 @@ def _shares(rows, registry, frozen_members, credited):
             arm_turns[aid, key] = arm_turns.get((aid, key), 0) + 1
     out = {}
     for aid, arm in registry.items():
-        keys = credited.get(aid, ())
+        keys = contexts.get(aid, ())
         total = sum(family_turns.get((arm.family, key), 0) for key in keys)
         out[aid] = sum(arm_turns.get((aid, key), 0) for key in keys) / total if total else None
     return out
@@ -218,15 +265,15 @@ def _not_worse(carrier, comparison):
     return all(carrier.rate(k) <= comparison.rate(k) + EPSILON for k in DETECTORS)
 
 
-def gate(*, uses, probability, carrier, comparison, guard_worse=False, vetoed=False, rolled_back=False,
-         rose=()):
+def gate(*, uses, probability, carrier, comparison, guard_worse=False, vetoed=False, held=None, rose=()):
     """Why a candidate waits; an empty list promotes it. Every gate must pass:
     30 rewarded uses, a posterior probability above 0.9 of beating its comparison, last
     week's lines with no detector rate above the comparison's, no guard regression, no
-    owner veto, no earlier rollback, and no rise in guild repetition or stock phrases."""
+    owner veto, no unmet hold from an earlier rollback, and no significant rise in
+    repetition or stock phrases."""
     reasons = []
-    if rolled_back:
-        reasons.append('rolled_back')
+    if held:
+        reasons.append(held)
     if vetoed:
         reasons.append('veto')
     if uses < USES:
@@ -246,6 +293,18 @@ def gate(*, uses, probability, carrier, comparison, guard_worse=False, vetoed=Fa
     return reasons
 
 
+def held(hold, rows, now):
+    """None when no hold applies, else its reason code. A diversity rollback waits two
+    weeks and 30 new rewarded uses; an owner rollback waits for 30 new rewarded uses."""
+    if hold is None:
+        return None
+    reason, since = hold
+    code = 'rolled_back' if reason == 'diversity' else 'owner_rollback'
+    if reason == 'diversity' and now - since < HOLD_DAYS * DAY:
+        return code
+    return code if sum(row.ts > since for row in rows) < USES else None
+
+
 def _key(encoded):
     try:
         return json.loads(encoded) if bandit.valid_key(encoded) else None
@@ -258,21 +317,65 @@ def _promotions(conn):
             for r in conn.execute('SELECT kind,ident,context,status,week,promoted,changed FROM learn_promotion')}
 
 
-def _lesson_rewards(conn, lesson_id, guid):
-    used = conn.execute(
-        "SELECT r.value,r.cap_weight,c.ts,c.channel FROM talk_reward r JOIN talk_recipe p ON p.line_id=r.line_id "
-        "JOIN chat_line c ON c.id=r.line_id WHERE r.guid=? AND EXISTS "
-        "(SELECT 1 FROM json_each(p.lesson_ids) j WHERE j.value=?)", (guid, lesson_id)).fetchall()
+def _holds(conn):
+    return {(r[0], r[1], r[2]): (r[3], r[4])
+            for r in conn.execute('SELECT kind,ident,context,reason,since FROM learn_hold')}
+
+
+def _rewarded(conn, frozen_members):
+    """Every rewarded generation with arms, its whole reward (never the bandit's split)."""
+    return [SimpleNamespace(key=key, arms=_ids(arm_ids, str), value=value, cap=cap, ts=ts, guid=guid)
+            for key, arm_ids, value, cap, ts, guid in conn.execute(
+                "SELECT p.bandit_context,p.arm_ids,r.value,r.cap_weight,c.ts,r.guid FROM talk_reward r "
+                "JOIN talk_recipe p ON p.line_id=r.line_id JOIN chat_line c ON c.id=r.line_id "
+                "WHERE p.bandit_context IS NOT NULL AND p.arm_ids!='[]'")
+            if guid not in frozen_members]
+
+
+def _guard_history(conn, frozen_members):
+    """Screened generations and trips per (arm, context), unsent rejections included."""
+    out = {}
+    for key, arm_ids, verdict, guid in conn.execute(
+            "SELECT p.bandit_context,p.arm_ids,p.guard_verdict,c.from_guid FROM talk_recipe p "
+            "JOIN chat_line c ON c.id=p.line_id WHERE p.bandit_context IS NOT NULL AND p.arm_ids!='[]'"):
+        if guid in frozen_members or verdict not in SCREENED:
+            continue
+        for aid in _ids(arm_ids, str):
+            item = out.setdefault((aid, key), [0, 0])
+            item[0] += 1
+            item[1] += verdict in TRIPS
+    for aid, key, guid, count in conn.execute(
+            'SELECT arm_id,context,guid,count(*) FROM bandit_rejection GROUP BY arm_id,context,guid'):
+        if guid not in frozen_members:
+            item = out.setdefault((aid, key), [0, 0])
+            item[0] += count
+            item[1] += count
+    return out
+
+
+def _worse(mine, theirs):
+    """(screened, trips) pairs: any trip at a higher rate than the comparison's is worse."""
+    return bool(mine[1]) and (not theirs[0] or mine[1] / mine[0] > theirs[1] / theirs[0] + EPSILON)
+
+
+def _lesson_evidence(conn, lesson_id, guid):
+    """The member's rewarded and screened generations with and without the lesson, in the
+    rooms where it was used and since its first use."""
+    rows = [SimpleNamespace(lessons=_ids(ids, int), verdict=verdict, channel=channel, ts=ts, value=value, cap=cap)
+            for ids, verdict, channel, ts, value, cap in conn.execute(
+                "SELECT p.lesson_ids,p.guard_verdict,c.channel,c.ts,r.value,r.cap_weight FROM talk_recipe p "
+                "JOIN chat_line c ON c.id=p.line_id LEFT JOIN talk_reward r ON r.line_id=p.line_id "
+                "WHERE c.from_guid=?", (guid,))]
+    used = [r for r in rows if lesson_id in r.lessons]
     if not used:
-        return [], []
-    channels = sorted({r[3] for r in used})
-    first = min(r[2] for r in used)
-    without = conn.execute(
-        "SELECT r.value,r.cap_weight,c.ts FROM talk_reward r JOIN talk_recipe p ON p.line_id=r.line_id "
-        "JOIN chat_line c ON c.id=r.line_id WHERE r.guid=? AND c.ts>=? AND c.channel IN "
-        f"({','.join('?' for _ in channels)}) AND NOT EXISTS "
-        "(SELECT 1 FROM json_each(p.lesson_ids) j WHERE j.value=?)", (guid, first, *channels, lesson_id)).fetchall()
-    return [r[:3] for r in used], without
+        return None
+    rooms, first = {r.channel for r in used}, min(r.ts for r in used)
+    without = [r for r in rows if r.channel in rooms and r.ts >= first and lesson_id not in r.lessons]
+
+    def screened(items):
+        return (sum(r.verdict in SCREENED for r in items), sum(r.verdict in TRIPS for r in items))
+    return ([r for r in used if r.value is not None], [r for r in without if r.value is not None],
+            _worse(screened(used), screened(without)))
 
 
 def evaluate(conn, *, week, cfg, now, tz, owner):
@@ -283,89 +386,107 @@ def evaluate(conn, *, week, cfg, now, tz, owner):
     this, measured = measure(conn, start, end, owner)
     last, _ = measure(conn, last_start, last_end, owner)
     overall, before = _tally(this), _tally(last)
-    rose = [m for m in DIVERSITY if overall.lines and before.lines and overall.rate(m) > before.rate(m) + EPSILON]
+    rose = rises(this, last)
     frozen_members = set(cfg.frozen_members)
     frozen_families = set(cfg.frozen_families)
     mine = [row for row in this if row.guid not in frozen_members]
     registry = {a.id: a for a in arms.read(conn)}
     controls = arms.controls()
-    promotions = _promotions(conn)
+    promotions, holds = _promotions(conn), _holds(conn)
     in_force = {k: v for k, v in promotions.items() if v['status'] == 'promoted'}
     plan = dict(week=week, previous_week=last_week, measured=measured, rose=rose,
-                rates=dict(week=overall.summary(), previous=before.summary()),
+                rates=dict(week=overall.summary(), previous=before.summary(),
+                           mediums={m: dict(week=_tally(this, lambda r: r.medium == m).summary(),
+                                            previous=_tally(last, lambda r: r.medium == m).summary())
+                                    for m in MEDIUMS}),
                 promote=[], held=[], retire_arms=[], lapsed=[], rollback=[], arms=[], lessons=[])
 
-    # Arms: evidence and gates per bandit context, the bandit's own granularity.
-    posteriors, credited = {}, {}
-    pairs = conn.execute('SELECT DISTINCT context,arm_id FROM bandit_credit ORDER BY context,arm_id').fetchall()
-    for key, aid in pairs:
-        credited.setdefault(aid, set()).add(key)
-    for key in sorted({k for k, _ in pairs})[:CONTEXT_CAP]:
+    # The bandit's own posteriors (split credit) are kept in the version for inspection only.
+    posteriors = {}
+    keys = sorted({r[0] for r in conn.execute('SELECT DISTINCT context FROM bandit_credit')})
+    for key in keys[:CONTEXT_CAP]:
         posteriors[key] = bandit.posterior(conn, None, key, now=now)
     plan['posteriors'] = [dict(context=_key(key), arm_id=aid, **{k: round(v, 9) if type(v) is float else v
                                                                   for k, v in stats.items()})
                           for key, stats in posteriors.items() for aid, stats in sorted(stats.items())
                           if _key(key) is not None][:2000]
-    for aid in sorted(credited):
+
+    # Arms: per bandit context, on each line's whole reward (frozen members left out).
+    rewarded = _rewarded(conn, frozen_members)
+    by_key = {}
+    for row in rewarded:
+        by_key.setdefault(row.key, []).append(row)
+    history = _guard_history(conn, frozen_members)
+    contexts = {}
+    for row in rewarded:
+        for aid in row.arms:
+            contexts.setdefault(aid, set()).add(row.key)
+    for aid in sorted(contexts):
         arm = registry.get(aid)
         if arm is None or arm.status != 'active' or arm.family in frozen_families:
             continue
         control = controls[arm.family]
-        for key in sorted(credited[aid]):
-            if key not in posteriors or _key(key) is None:
+        for key in sorted(contexts[aid]):
+            if _key(key) is None or ('arm', aid, key) in in_force:
                 continue
-            if ('arm', aid, key) in in_force:
-                continue
-            stats = posteriors[key].get(aid)
-            base = posteriors[key].get(control, dict(alpha=1., beta=1., uses=0, bad=0, attempts=0))
+            used = [r for r in by_key[key] if aid in r.arms]
+            base = [r for r in by_key[key] if control in r.arms]
+            probability = beats(_mass(used, now), _mass(base, now))
             carrier = _tally(mine, lambda r: r.key == key and aid in r.arms)
             comparison = _tally(mine, lambda r: r.key == key and control in r.arms)
-            probability = beats((stats['alpha'], stats['beta']), (base['alpha'], base['beta']))
-            # Guard trips over all its screened attempts (rejected drafts too) against control's.
-            ever_worse = bool(stats['bad']) and (not base['attempts'] or stats['bad'] / stats['attempts']
-                                                 > base['bad'] / base['attempts'] + EPSILON)
-            reasons = gate(uses=stats['uses'], probability=probability, carrier=carrier, comparison=comparison,
-                           guard_worse=ever_worse, vetoed=vetoed(conn, 'arm', aid), rose=rose,
-                           rolled_back=promotions.get(('arm', aid, key), {}).get('status') == 'rolled_back')
+            reasons = gate(uses=len(used), probability=probability, carrier=carrier, comparison=comparison,
+                           guard_worse=_worse(history.get((aid, key), (0, 0)), history.get((control, key), (0, 0))),
+                           vetoed=vetoed(conn, 'arm', aid), rose=rose,
+                           held=held(holds.get(('arm', aid, key)), used, now))
             entry = dict(kind='arm', id=aid, context=_key(key), probability=round(probability, 6),
-                         uses=stats['uses'], rate=round(carrier.rate(), 6), control_rate=round(comparison.rate(), 6))
+                         uses=len(used), rate=round(carrier.rate(), 6), control_rate=round(comparison.rate(), 6))
             if reasons:
                 plan['held'].append(dict(entry, reasons=reasons))
             else:
                 plan['promote'].append(dict(entry, key=key))
 
     # Lessons: with-versus-without for the same member in the same rooms.
-    for lid, guid, status, expires in conn.execute(
-            "SELECT id,guid,status,expires FROM talk_lesson WHERE status='active' AND expires>? ORDER BY id", (now,)):
+    for lid, guid in conn.execute(
+            "SELECT id,guid FROM talk_lesson WHERE status='active' AND expires>? ORDER BY id", (now,)).fetchall():
         if guid in frozen_members or ('lesson', str(lid), '') in in_force:
             continue
-        used, without = _lesson_rewards(conn, lid, guid)
-        if not used:
+        evidence = _lesson_evidence(conn, lid, guid)
+        if evidence is None or not evidence[0]:
             continue
+        used, without, guard_worse = evidence
         carrier = _tally(mine, lambda r: lid in r.lessons)
         rooms = {r.channel for r in mine if lid in r.lessons}
         comparison = _tally(mine, lambda r: r.guid == guid and r.channel in rooms and r.anchor is not None
                             and lid not in r.lessons)
         probability = beats(_mass(used, now), _mass(without, now))
         reasons = gate(uses=len(used), probability=probability, carrier=carrier, comparison=comparison,
-                       vetoed=vetoed(conn, 'lesson', lid), rose=rose,
-                       rolled_back=promotions.get(('lesson', str(lid), ''), {}).get('status') == 'rolled_back')
+                       guard_worse=guard_worse, vetoed=vetoed(conn, 'lesson', lid), rose=rose,
+                       held=held(holds.get(('lesson', str(lid), '')), used, now))
         entry = dict(kind='lesson', id=lid, guid=guid, probability=round(probability, 6), uses=len(used),
                      rate=round(carrier.rate(), 6), control_rate=round(comparison.rate(), 6))
         (plan['held'] if reasons else plan['promote']).append(dict(entry, reasons=reasons) if reasons else entry)
 
-    # Retirement: an arm the bandit has measured that stays under 5% of its family's
-    # generations for both weeks; a lesson whose 14-day reinforcement window has passed.
-    shares, last_shares = (_shares(rows, registry, frozen_members, credited) for rows in (this, last))
-    uses = dict(conn.execute('SELECT arm_id,count(*) FROM bandit_credit GROUP BY arm_id'))
-    in_force_arms = {ident for kind, ident, _ in in_force if kind == 'arm'}
+    # Retirement: a measured loser the bandit has stopped choosing. Thirty rewarded uses, under
+    # 0.5 probability of beating control on whole rewards, and under 5% of its family's
+    # generations in both weeks; never a promoted arm, nor one an owner rollback restored
+    # until it has 30 new uses. A lesson's own 14-day expiry retires it.
+    shares, last_shares = (_shares(rows, registry, frozen_members, contexts) for rows in (this, last))
+    promoted_ids = {ident for kind, ident, _ in in_force if kind == 'arm'}
     for aid, arm in sorted(registry.items()):
-        if arm.status != 'active' or arm.family in frozen_families:
+        if arm.status != 'active' or arm.family in frozen_families or aid in promoted_ids:
             continue
         share, previous = shares.get(aid), last_shares.get(aid)
-        if (share is not None and previous is not None and share < SHARE and previous < SHARE
-                and (uses.get(aid, 0) >= USES or aid in in_force_arms)):
-            plan['retire_arms'].append(dict(id=aid, share=round(share, 6), share_previous=round(previous, 6)))
+        if share is None or previous is None or share >= SHARE or previous >= SHARE:
+            continue
+        used = [r for r in rewarded if aid in r.arms]
+        if len(used) < USES or held(holds.get(('arm', aid, '')), used, now):
+            continue
+        rooms = {r.key for r in used}
+        probability = beats(_mass(used, now), _mass([r for r in rewarded if r.key in rooms
+                                                      and controls[arm.family] in r.arms], now))
+        if probability < LOSING:
+            plan['retire_arms'].append(dict(id=aid, share=round(share, 6), share_previous=round(previous, 6),
+                                            probability=round(probability, 6), uses=len(used)))
     # Lapsed during the evaluated week, so each lapse is reported by exactly one cycle.
     for lid, guid in conn.execute(
             "SELECT id,guid FROM talk_lesson WHERE status='active' AND expires>? AND expires<=? ORDER BY id",
@@ -373,27 +494,35 @@ def evaluate(conn, *, week, cfg, now, tz, owner):
         if guid not in frozen_members and not vetoed(conn, 'lesson', lid):
             plan['lapsed'].append(dict(id=lid, guid=guid))
 
-    # The diversity floor: when repetition or stock phrases rose, roll back the most recent
-    # promotions whose carriers ran higher on what rose than their comparison lines.
+    # The diversity floor: after a significant rise, roll back the most recent promotions whose
+    # own lines, in the medium that rose, ran higher on what rose than their comparison lines.
     if rose:
+        risen = {}
+        for name, metric in rose:
+            risen.setdefault(metric, set()).add(name)
         correlated = []
         for (kind, ident, key), item in in_force.items():
             if kind == 'arm':
                 arm = registry.get(ident)
                 if arm is None or arm.family in frozen_families:
                     continue
-                carrier = _tally(mine, lambda r: r.key == key and ident in r.arms)
-                comparison = _tally(mine, lambda r: r.key == key and controls[arm.family] in r.arms)
+                carrier = [r for r in mine if r.key == key and ident in r.arms]
+                comparison = [r for r in mine if r.key == key and controls[arm.family] in r.arms]
             else:
                 row = conn.execute('SELECT guid FROM talk_lesson WHERE id=?', (int(ident),)).fetchone()
                 if row is None or row[0] in frozen_members:
                     continue
                 lid = int(ident)
-                carrier = _tally(mine, lambda r: lid in r.lessons)
-                rooms = {r.channel for r in mine if lid in r.lessons}
-                comparison = _tally(mine, lambda r: r.guid == row[0] and r.channel in rooms
-                                    and r.anchor is not None and lid not in r.lessons)
-            hit = [m for m in rose if carrier.lines and carrier.rate(m) > comparison.rate(m) + EPSILON]
+                carrier = [r for r in mine if lid in r.lessons]
+                rooms = {r.channel for r in carrier}
+                comparison = [r for r in mine if r.guid == row[0] and r.channel in rooms
+                              and r.anchor is not None and lid not in r.lessons]
+            hit = []
+            for metric, names in sorted(risen.items()):
+                ours = _tally(carrier, lambda r: r.medium in names)
+                theirs = _tally(comparison, lambda r: r.medium in names)
+                if ours.lines >= MIN_CARRIER and ours.rate(metric) > theirs.rate(metric) + EPSILON:
+                    hit.append(metric)
             if hit:
                 correlated.append((item['promoted'], kind, ident, key, hit))
         if correlated:
@@ -439,11 +568,12 @@ def state(conn, *, now, posteriors=()):
                                        'FROM talk_lesson WHERE expires>? ORDER BY id', (now,))],
         promotions=[dict(kind=k[0], ident=k[1], context=k[2], **v) for k, v in sorted(_promotions(conn).items())],
         weights=dict(version=current.version, values=current.values),
+        decisions_upto=conn.execute('SELECT coalesce(max(id),0) FROM learn_decision').fetchone()[0],
         posteriors=list(posteriors))
 
 
 def governed(snapshot):
-    """What a rollback restores exactly; posteriors are evidence and stay as they are."""
+    """What a rollback restores; posteriors are evidence and stay as they are."""
     return dict(arms={a['id']: a['status'] for a in snapshot['arms']},
                 lessons={l['id']: (l['status'], l['reinforced'], l['expires']) for l in snapshot['lessons']},
                 promotions=sorted((p['kind'], p['ident'], p['context'], p['status'], p['week'], p['promoted'],
@@ -471,6 +601,7 @@ def versions(conn, *, limit=20):
 def _valid(snapshot):
     try:
         return (type(snapshot) is dict and snapshot.get('version') == 1
+                and type(snapshot['decisions_upto']) is int
                 and all(type(a['id']) is str and a['status'] in arms.STATES for a in snapshot['arms'])
                 and all(type(l['id']) is int and l['status'] in ('active', 'proposed')
                         and type(l['reinforced']) is int and l['reinforced'] >= 0
@@ -483,12 +614,16 @@ def _valid(snapshot):
         return False
 
 
-def rollback(conn, version=None, *, now):
-    """Restore a saved state; the caller owns the transaction. Returns (restored, saved).
+def rollback(conn, version=None, *, now, with_weights=False):
+    """Restore a saved state; the caller owns the transaction.
 
     The current state is saved first as a new version, so a rollback can itself be undone.
-    The owner's vetoes win: a vetoed arm stays retired and a vetoed lesson stays expired.
-    Freezes, personas, talk history and the bandit's evidence are never touched.
+    Every guard or owner decision made after the version (guard retirements, his accepts,
+    rejects, retires, approvals, vetoes and expiries) is applied again, and his vetoes win.
+    What the rollback reverted (a promotion, or a cycle retirement) waits for 30 new
+    rewarded uses before the cycle decides it again. Reward weights are restored only with
+    `with_weights`. Freezes, personas, talk history and the bandit's evidence are never
+    touched. Returns {restored, saved, kept, weights}.
     """
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='learn_version'").fetchone() is None:
         raise ValueError('No learning-state versions are saved in this database yet.')
@@ -504,19 +639,22 @@ def rollback(conn, version=None, *, now):
         target = None
     if not _valid(target):
         raise ValueError('That learning-state version cannot be read.')
-    saved = save_version(conn, state(conn, now=now), reason='rollback', now=now, restored_from=row[0])
-    restore(conn, target, now=now)
-    return row[0], saved
+    before = state(conn, now=now)
+    saved = save_version(conn, before, reason='rollback', now=now, restored_from=row[0])
+    kept, restored_weights = restore(conn, target, now=now, before=before, with_weights=with_weights)
+    return dict(restored=row[0], saved=saved, kept=kept, weights=restored_weights)
 
 
-def restore(conn, target, *, now):
+def restore(conn, target, *, now, before, with_weights=False):
+    """Returns (decisions applied again, whether the weights were restored)."""
     statuses = {a['id']: a['status'] for a in target['arms']}
     for aid, status in conn.execute('SELECT id,status FROM learn_arm').fetchall():
         if status == 'control':
             continue
-        want = statuses.get(aid, 'retired' if status == 'active' else status)
-        if want == 'control' or want == 'active' and vetoed(conn, 'arm', aid):
-            want = 'retired' if want == 'active' else status
+        # An arm the version lacks was not live then: a proposal again, reversible from the Lab.
+        want = statuses.get(aid, 'proposed' if status == 'active' else status)
+        if want == 'control':
+            want = status
         if want != status:
             conn.execute('UPDATE learn_arm SET status=? WHERE id=?', (want, aid))
     saved = {l['id']: l for l in target['lessons']}
@@ -535,20 +673,41 @@ def restore(conn, target, *, now):
     for p in target['promotions']:
         conn.execute('INSERT INTO learn_promotion VALUES (?,?,?,?,?,?,?)',
                      (p['kind'], p['ident'], p['context'], p['status'], p['week'], p['promoted'], p['changed']))
+    # Later guard and owner decisions stand: apply them again, in order.
+    lived = {l['id']: l['expires'] for l in before['lessons']}
+    kept = 0
+    for ts, kind, ident, action in conn.execute('SELECT ts,kind,ident,action FROM learn_decision WHERE id>? '
+                                                'ORDER BY id', (target['decisions_upto'],)).fetchall():
+        kept += 1
+        if kind == 'arm':
+            conn.execute("UPDATE learn_arm SET status=? WHERE id=? AND status!='control'",
+                         ('active' if action == 'accept' else 'retired', ident))
+        elif action == 'approve':
+            conn.execute("UPDATE talk_lesson SET status='active',expires=max(expires,?) WHERE id=?",
+                         (lived.get(int(ident), 0), int(ident)))
+        else:
+            conn.execute('UPDATE talk_lesson SET expires=min(expires,?) WHERE id=?', (ts, int(ident)))
+    for (aid,) in conn.execute("SELECT id FROM learn_arm WHERE status='active'").fetchall():
+        if vetoed(conn, 'arm', aid):
+            conn.execute("UPDATE learn_arm SET status='retired' WHERE id=?", (aid,))
+    # What this rollback reverted waits for new evidence, so the next cycle does not redo it.
+    now_promoted = {(p['kind'], p['ident'], p['context']) for p in target['promotions'] if p['status'] == 'promoted'}
+    for p in before['promotions']:
+        key = (p['kind'], p['ident'], p['context'])
+        if p['status'] == 'promoted' and key not in now_promoted:
+            conn.execute("INSERT OR REPLACE INTO learn_hold VALUES (?,?,?,'rollback',?)", (*key, now))
+    was = {a['id']: a['status'] for a in before['arms']}
+    for (aid,) in conn.execute("SELECT id FROM learn_arm WHERE status='active'").fetchall():
+        if was.get(aid) == 'retired':
+            conn.execute("INSERT OR REPLACE INTO learn_hold VALUES ('arm',?,'','rollback',?)", (aid, now))
     values = weights.validate(target['weights']['values'])
-    if weights.read(conn, at=now, schema_available=True).values != values:
+    restored = with_weights and weights.read(conn, at=now, schema_available=True).values != values
+    if restored:
         weights.change(conn, values, now=now)
+    return kept, with_weights
 
 
 # -- live consumers (only with [learn] cycle on) --------------------------------------------------
-
-def promoted_arms(conn, key):
-    try:
-        return {r[0] for r in conn.execute("SELECT ident FROM learn_promotion WHERE kind='arm' AND context=? "
-                                           "AND status='promoted'", (key,))}
-    except sqlite3.OperationalError:
-        return set()
-
 
 def promoted_first(conn, notes):
     """Promoted lessons lead the style block, so they are the last trimmed."""
@@ -558,6 +717,15 @@ def promoted_first(conn, notes):
     except sqlite3.OperationalError:
         return notes
     return sorted(notes, key=lambda note: note['id'] not in promoted)
+
+
+def promoted(conn):
+    """{(kind, ident, context)} in force, for the Lab; empty on an older schema."""
+    try:
+        return {(r[0], r[1], r[2]) for r in conn.execute(
+            "SELECT kind,ident,context FROM learn_promotion WHERE status='promoted'")}
+    except sqlite3.OperationalError:
+        return set()
 
 
 def report(conn):
@@ -612,7 +780,7 @@ def _apply(conn, plan, *, now, settings, posteriors):
     version = save_version(conn, state(conn, now=now, posteriors=posteriors), reason='cycle', now=now, week=week)
     frozen_families, frozen_members = set(cfg.frozen_families), set(cfg.frozen_members)
     registry = {a.id: a for a in arms.read(conn)}
-    promoted, retired, rolled = [], [], []
+    promoted_items, retired, rolled = [], [], []
 
     def lesson_live(lid):
         row = conn.execute("SELECT guid FROM talk_lesson WHERE id=? AND status='active' AND expires>?",
@@ -633,6 +801,7 @@ def _apply(conn, plan, *, now, settings, posteriors):
             entry.update(id=int(ident), guid=row[0])
         if conn.execute("UPDATE learn_promotion SET status='rolled_back',changed=? WHERE kind=? AND ident=? "
                         "AND context=? AND status='promoted'", (now, kind, ident, key)).rowcount:
+            conn.execute("INSERT OR REPLACE INTO learn_hold VALUES (?,?,?,'diversity',?)", (kind, ident, key, now))
             rolled.append(entry)
     for item in plan['promote']:
         if item['kind'] == 'arm':
@@ -647,18 +816,20 @@ def _apply(conn, plan, *, now, settings, posteriors):
             ident, key = str(item['id']), ''
         if conn.execute('INSERT INTO learn_promotion VALUES (?,?,?,?,?,?,?) ON CONFLICT(kind,ident,context) '
                         "DO UPDATE SET status='promoted',week=excluded.week,promoted=excluded.promoted,"
-                        "changed=excluded.changed WHERE learn_promotion.status='retired'",
+                        "changed=excluded.changed WHERE learn_promotion.status!='promoted'",
                         (item['kind'], ident, key, 'promoted', week, now, now)).rowcount:
-            promoted.append({k: v for k, v in item.items() if k != 'key'})
+            conn.execute('DELETE FROM learn_hold WHERE kind=? AND ident=? AND context=?', (item['kind'], ident, key))
+            promoted_items.append({k: v for k, v in item.items() if k != 'key'})
     for item in plan['retire_arms']:
         arm = registry.get(item['id'])
         if arm is None or arm.family in frozen_families:
             continue
-        if conn.execute("UPDATE learn_arm SET status='retired' WHERE id=? AND status='active'", (arm.id,)).rowcount:
-            conn.execute("UPDATE learn_promotion SET status='retired',changed=? WHERE kind='arm' AND ident=? "
-                         "AND status='promoted'", (now, arm.id))
+        if conn.execute("UPDATE learn_arm SET status='retired' WHERE id=? AND status='active' AND NOT EXISTS "
+                        "(SELECT 1 FROM learn_promotion WHERE kind='arm' AND ident=? AND status='promoted')",
+                        (arm.id, arm.id)).rowcount:
             retired.append(dict(kind='arm', id=arm.id, reason='share', share=item['share'],
-                                share_previous=item['share_previous']))
+                                share_previous=item['share_previous'], probability=item['probability'],
+                                uses=item['uses']))
     # A lesson past its 14-day reinforcement window has lapsed: its promotion ends with it.
     for ident, in conn.execute("SELECT ident FROM learn_promotion WHERE kind='lesson' AND status='promoted'").fetchall():
         row = conn.execute('SELECT guid,expires FROM talk_lesson WHERE id=?', (int(ident),)).fetchone()
@@ -671,8 +842,10 @@ def _apply(conn, plan, *, now, settings, posteriors):
     rose = plan['rose']
     value = dict(version=REPORT_VERSION, week=week, previous_week=plan['previous_week'], at=now,
                  state_version=version, measured=plan['measured'], rates=plan['rates'],
-                 diversity=dict(ok=int(not rose), **{f'{m}_rose': int(m in rose) for m in DIVERSITY}),
-                 promoted=promoted[:LIST_CAP], retired=retired[:LIST_CAP], rolled_back=rolled[:LIST_CAP],
+                 diversity=dict(ok=int(not rose), **{f'{m}_rose': int(any(x == m for _, x in rose))
+                                                     for m in DIVERSITY},
+                                rose=[f'{name}:{metric}' for name, metric in rose]),
+                 promoted=promoted_items[:LIST_CAP], retired=retired[:LIST_CAP], rolled_back=rolled[:LIST_CAP],
                  held=dict(count=len(plan['held']), items=plan['held'][:LIST_CAP]),
                  arms=plan['arms'][:LIST_CAP], lessons=plan['lessons'][:LIST_CAP],
                  frozen=dict(families=sorted(frozen_families), members=len(frozen_members)))

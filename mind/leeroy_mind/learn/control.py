@@ -41,13 +41,22 @@ def vetoed(conn, kind, ident):
                         (PREFIX+f'veto:{kind}:{ident}',)).fetchone() is not None
 
 
+def decide(conn, kind, ident, action, *, now):
+    """An owner or guard decision a later rollback must not undo (learn/cycle.py replays it)."""
+    try:
+        conn.execute('INSERT INTO learn_decision(ts,kind,ident,action) VALUES (?,?,?,?)',
+                     (now, kind, str(ident), action))
+    except sqlite3.OperationalError:
+        pass  # an older schema without the weekly cycle keeps no decision log
+
+
 def arguments(args):
     if type(args) is not dict or type(args.get('action')) is not str:
         raise ValueError('Choose a learning action.')
     action = args['action']
     keys = {'freeze': {'frozen'}, 'family': {'family', 'frozen'},
             'arm': {'id', 'verb'}, 'lesson': {'id', 'verb'}, 'weights': {'values', 'version'},
-            'rollback': {'version'}}
+            'rollback': {'version', 'weights'}}
     if action not in keys or set(args) != {'action', *keys[action]}:
         raise ValueError('The learning action has missing or unexpected fields.')
     if action in ('freeze', 'family'):
@@ -66,6 +75,8 @@ def arguments(args):
     elif action == 'rollback':
         if args['version'] is not None and (type(args['version']) is not int or not 0 < args['version'] < 2**63):
             raise ValueError('Choose a saved learning-state version.')
+        if type(args['weights']) is not bool:
+            raise ValueError('Say whether the reward weights are restored too.')
     else:
         try:
             weights.validate(args['values'])
@@ -101,7 +112,9 @@ def change(store, args, *, now):
             if arm is None or arm.status == 'control':
                 raise ValueError('Choose a stored arm other than the control.')
             verb = args['verb']
-            if arm.status != ('active' if verb == 'retire' else 'proposed'):
+            # A retired arm (the guards', the weekly cycle's or his own) can be accepted again.
+            if arm.status not in {'retire': ('active',), 'reject': ('proposed',),
+                                  'accept': ('proposed', 'retired')}[verb]:
                 raise ValueError('The arm changed. Refresh its status first.')
             if verb == 'accept' and not arms.valid(arm.family, arm.params):
                 raise ValueError('This arm does not pass the parameter bounds.')
@@ -109,13 +122,21 @@ def change(store, args, *, now):
                          ('active' if verb == 'accept' else 'retired', arm.id))
             if verb in ('retire', 'reject'):
                 store.set_meta(PREFIX+'veto:arm:'+arm.id, str(now))
-            message = {'accept': 'Arm accepted.', 'reject': 'Arm rejected.', 'retire': 'Arm retired.'}[verb]
+            elif arm.status == 'retired':
+                conn.execute('DELETE FROM meta WHERE key=?', (PREFIX+'veto:arm:'+arm.id,))
+            decide(conn, 'arm', arm.id, verb, now=now)
+            message = {'accept': 'Arm accepted again.' if arm.status == 'retired' else 'Arm accepted.',
+                       'reject': 'Arm rejected.', 'retire': 'Arm retired.'}[verb]
         elif action == 'rollback':
             # The owner's explicit restore: it works while frozen and keeps his vetoes and freezes.
             from .cycle import rollback
-            restored, saved = rollback(conn, args['version'], now=now)
-            message = (f'Learning restored to version {restored}. Your vetoes and freezes still hold. '
-                       f'The state before it was saved as version {saved}.')
+            done = rollback(conn, args['version'], now=now, with_weights=args['weights'])
+            restored, saved = done['restored'], done['saved']
+            message = (f'Learning restored to version {restored}: arm statuses, promotions and lessons. '
+                       f'{done["kept"]} later decisions of yours and the guards were applied again; '
+                       'your vetoes and freezes still hold. Reward weights were '
+                       + ('restored too. ' if done['weights'] else 'kept as they are. ')
+                       + f'The state before it was saved as version {saved}.')
         else:
             if not lessons.available(conn):
                 raise ValueError('Lessons are not set up yet.')
@@ -135,8 +156,10 @@ def change(store, args, *, now):
                 conn.execute('UPDATE talk_lesson SET expires=? WHERE id=?', (now, args['id']))
                 if verb == 'veto':
                     store.set_meta(PREFIX+f'veto:lesson:{args["id"]}', str(now))
+            decide(conn, 'lesson', args['id'], verb, now=now)
             message = {'approve': 'Lesson approved.', 'veto': 'Lesson vetoed.', 'expire': 'Lesson expired.'}[verb]
     if action == 'rollback':
         from leeroy_mind.logs import log
-        log('learn_rollback', restored=restored, saved=saved, source='lab')
+        log('learn_rollback', restored=restored, saved=saved, kept=done['kept'], weights=int(done['weights']),
+            source='lab')
     return {'ok': True, 'message': message}
