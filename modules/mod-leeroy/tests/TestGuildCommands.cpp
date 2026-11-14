@@ -113,7 +113,10 @@ LEEROY_TEST(Guild_DefaultsFilled)
     if (lockout) CHECK(lockout->difficulties == std::vector<std::uint8_t>({0, 1, 2, 3}));
     auto gear = ParseGearUp(Message("gear_up_defaults"), error);
     CHECK(gear.has_value());
-    if (gear) { CHECK_EQ(gear->ilvl, 264); CHECK_EQ(gear->levelTo, 80); }
+    if (gear) { CHECK_EQ(gear->ilvl, 264); CHECK_EQ(gear->levelTo, 80); CHECK(!gear->regear); }
+    gear = ParseGearUp(Message("gear_up_regear"), error);
+    CHECK(gear.has_value());
+    if (gear) { CHECK_EQ(gear->ilvl, 245); CHECK(gear->regear); }
     auto raid = ParseOfflineRaid(Message("start_offline_raid_defaults"), error);
     CHECK(raid.has_value());
     if (raid)
@@ -191,6 +194,9 @@ LEEROY_TEST(Guild_MakeJobEventMatchesFixture)
     event.membersInInstance = 2; event.lastProgressTs = 1700000000000; event.bossEngaged = false;
     event.dcState = "door";
     CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeJobEvent(event))), Message("job_offline_raid_progress"));
+    event = {"t13", "gear_up", "progress", "", "", {}, {}, 0, 0, 0, 1101, 80, 243};
+    event.kept = 1;
+    CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeJobEvent(event))), Message("job_gear_up_regear_progress"));
     event = {"job", "gear_up", "progress", "", "", {}, {}, 2, 3, 7, 1101, 80, 264};
     auto progress = MakeJobEvent(event);
     CHECK(progress.at("guids").is_array() && progress.at("guids").empty());
@@ -199,6 +205,7 @@ LEEROY_TEST(Guild_MakeJobEventMatchesFixture)
     CHECK_EQ(progress.at("instance_id"), 7); CHECK_EQ(progress.at("guid"), 1101);
     CHECK_EQ(progress.at("level"), 80); CHECK_EQ(progress.at("avg_ilvl"), 264);
     CHECK(!progress.contains("v") && !progress.contains("ts"));
+    CHECK(!progress.contains("kept")); // only a regear's progress carries it
 }
 
 LEEROY_TEST(Guild_MakeGuildGroupEventMatchesFixture)
@@ -303,7 +310,7 @@ LEEROY_TEST(Guild_BoundsAndRequiredFields)
              {"set_loot_master_ok", "threshold", 2, 5}, {"give_loot_ok", "index", 0, 255},
              {"start_offline_raid_ok", "max_wipes", 1, 20}, {"start_offline_raid_ok", "max_wipes_per_boss", 1, 10},
              {"start_offline_raid_ok", "timeout_min", 10, 360}, {"start_offline_raid_ok", "min_members", 1, 10},
-             {"gear_up_ok", "ilvl", 1, 400}, {"gear_up_ok", "level_to", 1, 80},
+             {"gear_up_ok", "ilvl", 1, 400}, {"gear_up_ok", "level_to", 1, 80}, {"gear_up_regear", "ilvl", 200, 300},
              {"set_spec_ok", "spec_no", 0, 9}, {"stock_items_ok", "count", 1, 20}})
     {
         for (auto good : {low, high})

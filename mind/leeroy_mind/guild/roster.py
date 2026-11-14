@@ -2,8 +2,17 @@
 
 Gear progress belongs to a persisted command, not merely to a familiar GUID.
 An interrupted/unknown send keeps that ownership until actual evidence resolves
-it. Friends require a read-only snapshot to distinguish our additions from the
+it (its terminal, or a hello from a worldserver started after it was sent).
+Friends require a read-only snapshot to distinguish our additions from the
 owner's existing friends; AddFriend's idempotent ack alone cannot do that.
+
+The regear ([guild] regear_to) takes the cast's bots down to an item level once
+per value (meta guild:regear:<ilvl>), in the same windows as gear-up, through
+gear_up's regear mode (native, LeeroyGearUpPolicy.h). Never the owner, never a
+member outside the cast (under 80, rank 0, left the guild), never a character
+native finds on a player's account. A native whose hello lists "regear" caps
+every gear-up at its ilvl, so every gear-up's receipt is then the capped band:
+an average from ilvl - REGEAR_BELOW to ilvl + REGEAR_ABOVE.
 """
 
 import asyncio
@@ -29,6 +38,14 @@ FRIEND_DELAY = 120
 FRIEND_PERIOD = 1800
 MAX_SPECS = 10
 MAX_BATCH = 40
+REGEAR_FEATURE = "regear"  # mod-leeroy's hello: gear_up understands "regear" and caps every gear-up
+REGEAR_LEVEL = 80          # native's cast: guild members at 80 and above, the owner excluded
+REGEAR_GAP = 120           # seconds between regear batches
+REGEAR_WAIT = 1800         # a member native skipped, or regeared out of bounds, waits this long
+REGEAR_TRIES = 3           # regeared out of bounds (or failed) this often: given up, reported
+REGEAR_BELOW = 20          # a regeared average may land this far under the target
+REGEAR_ABOVE = 6           # and no further above it (a slot kept above the cap adds about 1)
+REGEAR_DROP = frozenset({"owner", "not_cast", "not_bot"})  # native's refusals of who a member is
 _LOCKS = WeakValueDictionary()
 
 
@@ -53,6 +70,40 @@ def gear_up_targets(members, avg_ilvl, geared, cfg):
     return [m.guid for m in sorted(_members(members), key=lambda m: m.guid)
             if m.online and m.rank != 0 and m.guid not in geared
             and (m.level < cfg.level_to or avg_ilvl.get(m.guid, 0) < cfg.gear_up_below_avg_ilvl)]
+
+
+def regear_key(ilvl):
+    return f"guild:regear:{ilvl}"
+
+
+def regear_members(members, human_guid):
+    """Whom a regear may take: the cast's members, never the owner, a rank-0 row or anyone under 80."""
+    return sorted(m.guid for m in _members(members)
+                  if m.guid != human_guid and m.rank != 0 and m.level >= REGEAR_LEVEL)
+
+
+def regear_target(persona, cfg):
+    """A theorycrafter stays a little ahead: theorycrafter_ilvl when that is above regear_to."""
+    tc = cfg.theorycrafter_ilvl
+    if tc and persona is not None and persona.game.thinks_as == "theorycrafter":
+        return max(cfg.regear_to, tc)
+    return cfg.regear_to
+
+
+def regear_pending(state):
+    done, closed = state["done"], set(state["gave_up"]) | set(state["dropped"])
+    return [g for g in state["members"] if str(g) not in done and g not in closed]
+
+
+def _regear_state(raw):
+    """The stored regear, or None when it is not one this code wrote (then nothing runs)."""
+    keys = {"ilvl": int, "state": str, "started": (int, float), "members": list, "done": dict,
+            "kept": dict, "gave_up": list, "dropped": list, "tries": dict, "wait": dict}
+    if not isinstance(raw, dict) or any(not isinstance(raw.get(k), t) for k, t in keys.items()):
+        return None
+    if raw["state"] not in {"running", "done"} or any(type(g) is not int for g in raw["members"]):
+        return None
+    return raw
 
 
 def spec_changes(members, persona_of, premade):
@@ -120,6 +171,8 @@ class Roster:
         self._epoch = 0
         self._ranks_due = True
         self._ticking = False
+        self._regear_native = False  # the last hello listed "regear"
+        self._started_ms = 0         # the last hello's worldserver start
 
     def _get(self, name):
         return _get(self.ports.conn, self._prefix + name)
@@ -160,6 +213,16 @@ class Roster:
 
     async def on_hello(self, ev):
         self._ranks_due = True
+        self._regear_native = REGEAR_FEATURE in getattr(ev, "features", ())
+        started = getattr(ev, "started_ms", 0)
+        self._started_ms = started if type(started) is int and started > 0 else 0
+        record = self._get("gear") if self._same_owner() else None
+        sent = record.get("started_ms") if isinstance(record, dict) else None
+        if type(sent) is int and 0 < sent < self._started_ms:
+            # The worldserver that took this job has restarted: the job, and any terminal, went with it.
+            with self.ports.conn:
+                self._put("gear", None)
+            log.info("gear_job_released mode=%s reason=restart", record.get("mode"))
         self._presence(self.ports.human_online())
 
     async def on_login(self, ev):
@@ -192,6 +255,7 @@ class Roster:
                 await self.sync_ranks()
             if self._maintenance(self._epoch):
                 await self.sync_specs()
+                await self.maybe_regear()
                 await self.maybe_gear_up()
                 await self.maybe_gear_theorycrafters()
             if (self._friend_due is not None and self.ports.clock.now() >= self._friend_due
@@ -325,14 +389,19 @@ class Roster:
         if targets:
             await self._gear(targets[:MAX_SPECS], "role", self.cfg.gear_up_ilvl, epoch)
 
-    async def _gear(self, targets, mode, ilvl, epoch):
+    async def _gear(self, targets, mode, ilvl, epoch, *, regear=None):
         if not targets or self._get("gear") or not self._maintenance(epoch):
-            return
-        command = GearUp(uuid4().hex, tuple(targets), ilvl, self.cfg.level_to)
+            return None
+        command = GearUp(uuid4().hex, tuple(targets), ilvl, self.cfg.level_to, regear=regear is not None)
         record = {"id": command.id, "mode": mode, "guids": targets, "state": "sending", "completed": [], "seen": [],
                   "level": self.cfg.level_to, "minimum": ilvl - 6 if mode == "tc_geared"
                   else self.cfg.gear_up_below_avg_ilvl,
-                  "snapshots": {str(g): self._snapshot(g) for g in targets}}
+                  "snapshots": {str(g): self._snapshot(g) for g in targets}, "started_ms": self._started_ms}
+        if regear is not None or self._regear_native:
+            # A capped gear-up lands near its ilvl, never above it: one band for every mode.
+            record.update(ilvl=ilvl, minimum=ilvl - REGEAR_BELOW, maximum=ilvl + REGEAR_ABOVE)
+        if regear is not None:
+            record["regear"] = regear
         with self.ports.conn:
             self._put("gear", record)
         try:
@@ -344,7 +413,7 @@ class Roster:
         # on_job can run during send; never replace its recorded progress or resurrect a completed job.
         current = self._get("gear")
         if current is None or current["id"] != command.id:
-            return
+            return None
         valid = isinstance(ack, Ack) and ack.id == command.id and type(ack.ok) is bool
         with self.ports.conn:
             if valid and not ack.ok and not current["seen"]:
@@ -352,11 +421,144 @@ class Roster:
             else:
                 current["state"] = "accepted" if valid and ack.ok else "unknown"
                 self._put("gear", current)
+        return ack if valid else None
+
+    def _regear_running(self):
+        """A regear this native can run and that has not finished: gear-up and the theorycrafters wait for it."""
+        if not self.cfg.regear_to or not self._regear_native:
+            return False
+        state = _regear_state(_get(self.ports.conn, regear_key(self.cfg.regear_to)))
+        return state is None or state["state"] != "done"
+
+    async def maybe_regear(self):
+        target = self.cfg.regear_to
+        if not target or not self._regear_native:
+            return
+        async with self._lock:
+            epoch = self._epoch
+            if not self._maintenance(epoch) or self._get("gear"):
+                return
+            conn, now, key = self.ports.conn, self.ports.clock.now(), regear_key(target)
+            raw = _get(conn, key)
+            state = _regear_state(raw)
+            if raw is not None and state is None:
+                if not getattr(self, "_regear_bad", False):
+                    self._regear_bad = True
+                    log.warning("regear_state_unreadable ilvl=%d", target)
+                return
+            if state is not None and state["state"] == "done":
+                return
+            if state is None:
+                members = regear_members(self._cast(), self._human)
+                if not members:
+                    return
+                state = {"ilvl": target, "state": "running", "started": now, "finished": None,
+                         "members": members, "done": {}, "kept": {}, "gave_up": [], "dropped": [],
+                         "tries": {}, "wait": {}}
+                with conn:
+                    _put(conn, key, state)
+                log.info("regear_started ilvl=%d members=%d", target, len(members))
+            if not self._due("regear", REGEAR_GAP):
+                return
+            cast = self._cast()
+            for guid in regear_pending(state):
+                m = cast.get(guid)
+                if m is None or m.level < REGEAR_LEVEL or guid == self._human:
+                    state["dropped"].append(guid)  # left the cast: the regear never reaches past it
+                    log.info("regear_dropped guid=%d reason=not_cast", guid)
+                elif state["tries"].get(str(guid), 0) >= REGEAR_TRIES:
+                    state["gave_up"].append(guid)
+                    log.info("regear_gave_up guid=%d tries=%d", guid, state["tries"][str(guid)])
+            pending = regear_pending(state)
+            if not pending:
+                self._regear_finish(state, now)
+                with conn:
+                    _put(conn, key, state)
+                return
+            ready = [g for g in pending if cast[g].online and state["wait"].get(str(g), 0) <= now]
+            batch = []
+            if ready:
+                ilvl = regear_target(self.ports.persona(ready[0]), self.cfg)
+                batch = [g for g in ready if regear_target(self.ports.persona(g), self.cfg) == ilvl][:MAX_BATCH]
+            with conn:
+                _put(conn, key, state)
+            if not batch:
+                return
+            log.info("regear_batch ilvl=%d guids=%d pending=%d", ilvl, len(batch), len(pending))
+            ack = await self._gear(batch, "regear", ilvl, epoch, regear=key)
+            reason, _, named = (ack.error if ack is not None and not ack.ok else "").partition(":")
+            if reason in REGEAR_DROP and named.isdigit() and int(named) in batch:
+                # Native refused the whole batch for who one member is; nothing changed. Leave that one out.
+                with conn:
+                    state = _regear_state(_get(conn, key))
+                    if state is not None and int(named) not in state["dropped"]:
+                        state["dropped"].append(int(named))
+                        _put(conn, key, state)
+                log.info("regear_dropped guid=%s reason=%s", named, reason)
+
+    def _regear_finish(self, state, now):
+        state["state"], state["finished"] = "done", now
+        averages = list(state["done"].values())
+        log.info("regear_done ilvl=%d guids=%d avg=%d gave_up=%d dropped=%d kept=%d", state["ilvl"], len(averages),
+                 round(sum(averages) / len(averages)) if averages else 0, len(state["gave_up"]),
+                 len(state["dropped"]), sum(state["kept"].values()))
+
+    def _regear_progress(self, record, ev, first):
+        """In the gear receipt's transaction: one member's regear landed in bounds, or it did not."""
+        conn, now = self.ports.conn, self.ports.clock.now()
+        state = _regear_state(_get(conn, record["regear"]))
+        if state is None or state["state"] != "running" or ev.guid not in state["members"]:
+            return
+        if str(ev.guid) in state["done"] or not first:
+            return
+        if ev.level >= record["level"] and record["minimum"] <= ev.avg_ilvl <= record["maximum"]:
+            # The regear supersedes the gear-up that set the old flags; a theorycrafter is now at their level.
+            conn.execute("DELETE FROM guild_flag WHERE kind IN ('geared','tc_geared') AND guid=?", (ev.guid,))
+            _flag(conn, "geared", ev.guid, now, record["ilvl"])
+            snapshot = record["snapshots"].get(str(ev.guid)) or [None] * 4
+            if snapshot[3] == "theorycrafter":
+                _flag(conn, "tc_geared", ev.guid, now, record["ilvl"])
+            state["done"][str(ev.guid)] = ev.avg_ilvl
+            kept = ev.kept if type(ev.kept) is int and ev.kept > 0 else 0
+            if kept:
+                state["kept"][str(ev.guid)] = kept
+            if ev.guid not in record["completed"]:
+                record["completed"].append(ev.guid)
+            log.info("regear_member guid=%d ilvl=%d avg=%d kept=%d", ev.guid, record["ilvl"], ev.avg_ilvl, kept)
+        else:
+            state["tries"][str(ev.guid)] = state["tries"].get(str(ev.guid), 0) + 1
+            state["wait"][str(ev.guid)] = now + REGEAR_WAIT
+            log.info("regear_out_of_bounds guid=%d ilvl=%d avg=%d", ev.guid, record["ilvl"], ev.avg_ilvl)
+        _put(conn, record["regear"], state)
+        self._put("gear", record)
+
+    def _regear_terminal(self, record, ev):
+        """In the terminal's transaction: members native skipped wait before they are sent again."""
+        conn, now = self.ports.conn, self.ports.clock.now()
+        state = _regear_state(_get(conn, record["regear"]))
+        if state is None or state["state"] != "running":
+            return
+        for skip in ev.skipped:
+            key = str(skip.guid)
+            if key in state["done"] or skip.guid not in state["members"]:
+                continue
+            if skip.reason in REGEAR_DROP:
+                if skip.guid not in state["dropped"]:
+                    state["dropped"].append(skip.guid)
+                continue
+            if skip.reason == "failed":
+                state["tries"][key] = state["tries"].get(key, 0) + 1
+            if skip.reason != "owner_online":  # his login: the next window takes them at once
+                state["wait"][key] = now + REGEAR_WAIT
+        _put(conn, record["regear"], state)
+        log.info("regear_batch_done ilvl=%d done=%d skipped=%d reason=%s", record["ilvl"], len(ev.guids),
+                 len(ev.skipped), ev.reason or "-")
 
     async def maybe_gear_up(self):
         async with self._lock:
             epoch = self._epoch
-            if not self._maintenance(epoch) or self._get("gear") or not self._due("gear"):
+            if (not self._maintenance(epoch) or self._get("gear") or self._regear_running()
+                    or not self._due("gear")):
                 return
             members = self._cast()
             before = {g: self._snapshot(g) for g in members}
@@ -377,7 +579,7 @@ class Roster:
         async with self._lock:
             epoch = self._epoch
             if (not self.cfg.theorycrafter_ilvl or not self._maintenance(epoch) or self._get("gear")
-                    or not self._due("theorycrafter")):
+                    or self._regear_running() or not self._due("theorycrafter")):
                 return
             targets = theorycrafter_targets(self._cast(), self.ports.persona, flags(self.ports.conn, "tc_geared"))
             await self._gear(targets[:MAX_BATCH], "tc_geared", self.cfg.theorycrafter_ilvl, epoch)
@@ -397,10 +599,15 @@ class Roster:
                     or self._snapshot(ev.guid) != record["snapshots"].get(str(ev.guid))):
                 return
             with self.ports.conn:
-                if ev.guid not in record["seen"]:
+                first = ev.guid not in record["seen"]
+                if first:
                     record["seen"].append(ev.guid)
                 self._put("gear", record)
-                if ev.level < record["level"] or ev.avg_ilvl < record["minimum"]:
+                if record["mode"] == "regear":
+                    self._regear_progress(record, ev, first)
+                    return
+                if (ev.level < record["level"] or ev.avg_ilvl < record["minimum"]
+                        or ev.avg_ilvl > record.get("maximum", ev.avg_ilvl)):
                     return
                 kind = "tc_geared" if record["mode"] == "tc_geared" else "geared"
                 _flag(self.ports.conn, kind, ev.guid, self.ports.clock.now())
@@ -420,6 +627,8 @@ class Roster:
                 return
             with self.ports.conn:
                 self._put("gear", None)
+                if record["mode"] == "regear":
+                    self._regear_terminal(record, ev)
 
     async def _friends(self):
         if self.friends_of is None:

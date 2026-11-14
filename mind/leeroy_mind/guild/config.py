@@ -51,9 +51,12 @@ class GuildConfig:
     friends_cap: int = 40
     friends_add: float = 0.45
     friends_remove: float = 0.30
-    gear_up_ilvl: int = 264
-    gear_up_below_avg_ilvl: int = 245
-    theorycrafter_ilvl: int = 277
+    # 245 (the owner, 2026-11-14): ICC drops stay upgrades. Theorycrafters stay a little ahead.
+    gear_up_ilvl: int = 245
+    gear_up_below_avg_ilvl: int = 232
+    theorycrafter_ilvl: int = 251
+    # A one-time regear of the cast's bots to this item level (0: never), once per value (meta guild:regear:<ilvl>).
+    regear_to: int = 0
     level_to: int = 80
     late_summon_s: tuple[int, int] = (60, 180)
     ranks: Mapping[str, int] = field(default_factory=lambda: {
@@ -141,9 +144,10 @@ def load_guild_config(path: Path) -> GuildConfig:
                         ("level_to", 1, 80)):
         if not _int(guild[key], lo, hi):
             _bad("guild", key, f"an integer {lo}-{hi}")
-    value = guild["theorycrafter_ilvl"]
-    if not (_int(value, 200, 300) or type(value) is int and value == 0):
-        _bad("guild", "theorycrafter_ilvl", "0 or an integer 200-300")
+    for key in ("theorycrafter_ilvl", "regear_to"):
+        value = guild[key]
+        if not (_int(value, 200, 300) or type(value) is int and value == 0):
+            _bad("guild", key, "0 or an integer 200-300")
     for key in ("friends_add", "friends_remove"):
         if not _number(guild[key], 0, 1):
             _bad("guild", key, "a finite number 0-1")

@@ -98,6 +98,8 @@ class GearUp:
     guids: tuple[int, ...]
     ilvl: int = 264
     level_to: int = 80
+    # Take the cast's bots down to ilvl (the [guild] regear_to one-shot); only to a hello listing "regear".
+    regear: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +173,8 @@ class Job:
     # What dungeon-clear's leader run is doing (offline running heartbeats): unknown, off, on,
     # paused, door. Absent from older worldservers.
     dc_state: str | None = None
+    # A capped gear-up's progress: slots that kept an item above the cap (nothing capped could fill them).
+    kept: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

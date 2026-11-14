@@ -1242,7 +1242,8 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("secret-gate", _secret_gate, conn),
                 _guarded("offline-days", _offline_days, conn, now),
                 _guarded("training-lab", _training_lab, conn, now),
-                _guarded("gpu-pause", _gpu_pause, conn, now)]
+                _guarded("gpu-pause", _gpu_pause, conn, now),
+                _guarded("regear", _regear, conn)]
     finally:
         conn.close()
 
@@ -1457,4 +1458,35 @@ def _training_lab(conn, now: float) -> Check:
             return Check(name, NOTE, text)
         return Check(name, FAIL, text + "; once native's dummy_cleanup receipt or a worldserver restart is "
                      "recorded (training lab shows them), with the mind stopped: training lab-clear")
+    return _table_check(name, check)
+
+
+def _regear(conn) -> Check:
+    """The newest one-time regear ([guild] regear_to, meta guild:regear:<ilvl>): members done of the total."""
+    name = "regear"
+
+    def check():
+        newest = None
+        for key, value in conn.execute("SELECT key, value FROM meta WHERE key LIKE 'guild:regear:%'"):
+            try:
+                state = json.loads(value)
+                members, done = state["members"], state["done"]
+                started = state["started"]
+                if (not isinstance(members, list) or not isinstance(done, dict)
+                        or type(started) not in (int, float) or state["state"] not in {"running", "done"}):
+                    raise ValueError
+                closed = len(state["gave_up"]) + len(state["dropped"])
+            except (ValueError, TypeError, KeyError, RecursionError):
+                return Check(name, NOTE, f"regear: {key} cannot be read")
+            if newest is None or started > newest[0]:
+                newest = (started, key.rpartition(":")[2], state, closed)
+        if newest is None:
+            return Check(name, OK, "regear: none run")
+        _, ilvl, state, closed = newest
+        total, done = len(state["members"]), len(state["done"])
+        extra = f", {len(state['gave_up'])} gave up, {len(state['dropped'])} dropped" if closed else ""
+        if state["state"] == "done":
+            return Check(name, OK, f"regear {ilvl}: done, {done} of {total} members{extra}")
+        return Check(name, NOTE, f"regear {ilvl}: {done} of {total} members done{extra}; batches run while "
+                     "he is offline")
     return _table_check(name, check)
