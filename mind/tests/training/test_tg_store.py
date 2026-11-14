@@ -127,7 +127,7 @@ def test_config_defaults_and_extension_are_off_and_unwired(tmp_path):
     ("gate_max_ms", "0.09"), ("gate_max_ms", "10.1"), ("lab_window", '["24:00", "01:00"]'),
     ("benchmark_window", '["8:00", "12:00"]'), ("benchmark_raids", '["voa10"]'),
     ("benchmark_raids", '["icc11"]'), ("benchmark_raids", "[]"), ("benchmark_raids", "[4]"),
-    ("core_dir", '""'), ("unknown", "true"),
+    ("core_dir", '""'), ("unknown", "true"), ("playbooks", '"yes"'),
 ])
 def test_config_rejects_bad_values_without_echoing_them(tmp_path, key, value):
     path = tmp_path / "mind.toml"
