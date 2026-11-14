@@ -53,17 +53,24 @@ def test_close_loot_seed_from_receipts(store, cast):
     on = gather(store, cast, culture_enabled=True, culture_store=store, culture_loot=True)
     close = [s for s in on if s.kind == "loot_close"]
     assert [(s.key, s.fact, s.channels, s.about) for s in close] == [
-        (f"loot_close:{ledger}", "Arkon beat Belra to [Invented Blade] by 4 DKP", ("loot-and-dkp",), (101, 102))]
+        (f"loot_close:{ledger}", "Arkon beat Belra to [Invented Blade] by 1 DKP", ("loot-and-dkp",), (101, 102))]
     assert not any(s.kind == "loot" for s in on)  # one subject a drop, not two
     assert not any(s.officers_only for s in close)
 
 
-@pytest.mark.parametrize("case", ["not_close", "no_debit", "too_old", "talked_about", "runner_gone"])
+@pytest.mark.parametrize("case", ["not_close", "no_debit", "too_old", "talked_about", "runner_gone", "his", "joke"])
 def test_close_loot_needs_a_true_recent_close_award(store, cast, case):
     ledger = receipt(store, close=case != "not_close", debit=case != "no_debit",
                      age=8 * 86400 if case == "too_old" else 3600, runner=999 if case == "runner_gone" else 102)
     if case == "talked_about":
         store.set_meta(f"server:seed:loot:{ledger}", "1")
+    if case == "his":  # never a subject about him, even as the runner-up
+        record = json.loads(store.get_meta(KEY))
+        record["award"]["runner_up"] = 1
+        store.set_meta(KEY, json.dumps(record))
+    if case == "joke":  # Part A made this receipt a running joke: one subject, not two
+        store.conn.execute("INSERT INTO lexicon(kind,term,target,origin_ref,originator,born,uses,heat,last_used,status) "
+                           "VALUES ('joke','invented label',0,?,101,0,0,1,0,'active')", ("loot:close_loot:" + KEY,))
     assert not any(s.kind == "loot_close"
                    for s in gather(store, cast, culture_enabled=True, culture_store=store, culture_loot=True))
 
@@ -187,3 +194,52 @@ def test_wish_tick_waits_while_he_plays_and_logs_only_codes(tmp_path, caplog):
         assert "culture_loot_wish_failed code=RuntimeError" in caplog.text and "invented" not in caplog.text
     finally:
         run(app.stop())
+
+
+def test_close_loot_casts_the_runner_up_only_through_the_kindness_gate():
+    import random
+    from leeroy_mind.server.rhythm import choose_cast
+    from conftest import make_persona
+    people = {g: make_persona(g, f"Member{g}") for g in (101, 102, 103)}
+    states = {g: SimpleNamespace(presence=SimpleNamespace(state="online")) for g in people}
+    seed = seeds.Seed("loot_close:1", "loot_close", ("loot-and-dkp",), "A close one", (101, 102))
+    args = dict(officers=frozenset(), human=1, in_play=frozenset(), ties=lambda a, b: 1, rng=random.Random(3))
+    asked = []
+    assert choose_cast("loot-and-dkp", seed, states, people, **args,
+                       tease=lambda a, b: asked.append((a, b)) or False) == []
+    assert {b for _, b in asked} == {102}  # the runner-up is the one the gate protects
+    for _ in range(20):
+        cast = choose_cast("loot-and-dkp", seed, states, people, **args, tease=lambda a, b: True)
+        assert cast and cast[0] != 102
+
+
+def test_a_delivered_close_thread_spends_the_runner_ups_allowance_once(tmp_path):
+    from leeroy_mind.culture.tease import TEASED_KEY
+    from leeroy_mind.server.engine import Conversation
+    from selfies.fakes import mind_app
+    app = mind_app(tmp_path, toml="[server]\nenabled=true\n[culture]\nenabled=true\nloot=true\n")
+    try:
+        seed = seeds.Seed("loot_close:1", "loot_close", ("loot-and-dkp",), "A close one", (101, 102))
+        talk = Conversation("c1", "loot-and-dkp", seed, [101, 103], app.clock.now(), 5)
+        engine = app.server.engine
+        engine._record_close(talk, 1, 1, app.clock.now())
+        engine._record_close(talk, 2, 2, app.clock.now() + 60)
+        key = TEASED_KEY.format(date=app.clock.local().date().isoformat(), guid=102)
+        assert app.store.get_meta(key) == str(app.clock.now())
+        engine._settle_joke(talk, None)
+        assert talk.teased
+    finally:
+        run(app.stop())
+
+
+def test_wishes_follow_his_raids_before_the_members_offline_ones(store, cast):
+    raid_ahead(store)  # his ICC 10, three days ago
+    now = store.clock.now()
+    store.conn.execute("INSERT INTO guild_raid(raid_id,started,ended,raid_key,size,heroic,offline,lead_guid,"
+                       "tank_guid,loot_guid,kills,wipes) VALUES (10,?,?,'ulduar',25,0,1,103,103,104,9,1)",
+                       (now - 86400, now - 80000))
+    store.conn.execute("INSERT INTO guild_attendance VALUES (10,104,'raided')")
+    assert loot.target_raid(store.conn, now).raid_key == "icc"
+    assert loot.raiders(store.conn, 1) == [101, 102]
+    store.conn.execute("UPDATE guild_raid SET offline=1 WHERE raid_id=9")
+    assert loot.target_raid(store.conn, now).raid_key == "ulduar"

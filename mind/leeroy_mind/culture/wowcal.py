@@ -14,11 +14,14 @@ import re
 from leeroy_mind.text import strip_wow_markup
 
 CAL_KEY = "culture:wowcal"            # {"fetched": ts, "events": [row, ...]}
-ACTIVE_KEY = "culture:wowcal:active"  # {entry: started_ts} from the bridge's game_event start
+ACTIVE_KEY = "culture:wowcal:active"  # {entry: {"first", "last"}} from the bridge's game_event start
 STOPPED_KEY = "culture:wowcal:stopped"  # {entry: stopped_ts} from the bridge's game_event stop
+BOOT_KEY = "culture:wowcal:boot"     # {"started", "seen"}: the worldserver boot the last hello named
+META_KEYS = (CAL_KEY, ACTIVE_KEY, STOPPED_KEY, BOOT_KEY)
 FETCH_AT = (8, 5)                     # the daily read, local time
 RETRY_S = 3600.0
 STALE_SLACK_S = 6 * 3600.0            # a start whose stop was never seen ages out after its length
+BOOT_GRACE_S = 300.0                  # a new boot's replayed starts are in by then
 SEED_AHEAD_DAYS = 3
 CARD_AHEAD_DAYS = 7
 CARD_ROWS = 4
@@ -160,7 +163,7 @@ def load_calendar(raw) -> tuple[float | None, list[CalendarRow]] | None:
 
 
 def load_times(raw) -> dict[int, float]:
-    """ACTIVE_KEY or STOPPED_KEY: {entry: ts}, bad items left out."""
+    """STOPPED_KEY: {entry: ts}, bad items left out."""
     value = _json(raw)
     out = {}
     if isinstance(value, dict):
@@ -175,10 +178,57 @@ def _times_value(times: dict[int, float]) -> str:
     return json.dumps({str(k): times[k] for k in sorted(times)}, sort_keys=True)
 
 
+def load_active(raw) -> dict[int, tuple[float, float]]:
+    """ACTIVE_KEY: {entry: (first, last)}: the run's first start, which a start the core
+    publishes again at a worldserver boot never moves, and the latest start seen."""
+    value = _json(raw)
+    out = {}
+    if isinstance(value, dict):
+        for key, run in value.items():
+            if not (isinstance(key, str) and key.isdecimal() and 0 < int(key) <= MAX_ENTRY):
+                continue
+            if type(run) in (int, float):
+                run = {"first": run, "last": run}
+            if (isinstance(run, dict) and all(type(run.get(k)) in (int, float) and math.isfinite(run[k])
+                                              for k in ("first", "last")) and run["first"] <= run["last"]):
+                out[int(key)] = (float(run["first"]), float(run["last"]))
+    return out
+
+
+def _active_value(active: dict[int, tuple[float, float]]) -> str:
+    return json.dumps({str(k): {"first": active[k][0], "last": active[k][1]} for k in sorted(active)},
+                      sort_keys=True)
+
+
+def load_boot(raw) -> tuple[float, float] | None:
+    """BOOT_KEY: (the worldserver process's start, when the mind first saw that boot)."""
+    value = _json(raw)
+    if (isinstance(value, dict) and all(type(value.get(k)) in (int, float) and math.isfinite(value[k])
+                                        for k in ("started", "seen"))):
+        return float(value["started"]), float(value["seen"])
+    return None
+
+
+def note_boot(store, started_ms, now: float) -> bool:
+    """A hello's started_ms; True when it names a worldserver process the mind had not seen.
+    0 (an older native) changes nothing."""
+    if type(started_ms) is not int or started_ms <= 0:
+        return False
+    started = started_ms / 1000
+    with store.transaction():
+        boot = load_boot(store.get_meta(BOOT_KEY))
+        if boot is not None and boot[0] == started:
+            return False
+        store.set_meta(BOOT_KEY, json.dumps({"started": started, "seen": now}, sort_keys=True))
+    return True
+
+
 def record(store, entry, state, ts: float) -> bool | None:
     """The bridge's game_event start/stop into meta, in one transaction, for the cached
     calendar's entries only (the server's many trivial events write nothing). None: no
-    calendar is cached yet, so the caller keeps the event until the first read."""
+    calendar is cached yet, so the caller keeps the event until the first read. A start of a
+    run that is still within its length (the core starts every running event again at each
+    worldserver boot) keeps the run's first start and only moves its latest one."""
     if type(entry) is not int or not 0 < entry <= MAX_ENTRY or state not in ("start", "stop"):
         return False
     if type(ts) not in (int, float) or not math.isfinite(ts):
@@ -187,17 +237,22 @@ def record(store, entry, state, ts: float) -> bool | None:
         cached = load_calendar(store.get_meta(CAL_KEY))
         if cached is None:
             return None
-        if entry not in {r.entry for r in cached[1]}:
+        row = next((r for r in cached[1] if r.entry == entry), None)
+        if row is None:
             return False
-        active, stopped = load_times(store.get_meta(ACTIVE_KEY)), load_times(store.get_meta(STOPPED_KEY))
+        active, stopped = load_active(store.get_meta(ACTIVE_KEY)), load_times(store.get_meta(STOPPED_KEY))
         if state == "start":
-            if active.get(entry) == ts:
+            run = active.get(entry)
+            if run is not None and run[1] == ts:
                 return False
-            active[entry] = ts
+            if run is not None and run[0] <= ts <= run[0] + row.length * 60 + STALE_SLACK_S:
+                active[entry] = (run[0], max(run[1], ts))
+            else:
+                active[entry] = (ts, ts)
         else:
             active.pop(entry, None)
             stopped[entry] = ts
-        store.set_meta(ACTIVE_KEY, _times_value(active))
+        store.set_meta(ACTIVE_KEY, _active_value(active))
         store.set_meta(STOPPED_KEY, _times_value(stopped))
     return True
 
@@ -208,10 +263,12 @@ def store_calendar(store, rows: list[CalendarRow], fetched: float, pending=()) -
     known = {r.entry for r in rows}
     with store.transaction():
         store.set_meta(CAL_KEY, calendar_value(rows, fetched))
-        for key in (ACTIVE_KEY, STOPPED_KEY):
-            times = load_times(store.get_meta(key))
-            if times and set(times) - known:
-                store.set_meta(key, _times_value({k: v for k, v in times.items() if k in known}))
+        active = load_active(store.get_meta(ACTIVE_KEY))
+        if active and set(active) - known:
+            store.set_meta(ACTIVE_KEY, _active_value({k: v for k, v in active.items() if k in known}))
+        stopped = load_times(store.get_meta(STOPPED_KEY))
+        if stopped and set(stopped) - known:
+            store.set_meta(STOPPED_KEY, _times_value({k: v for k, v in stopped.items() if k in known}))
         for entry, state, ts in pending:
             record(store, entry, state, ts)
 
@@ -237,10 +294,16 @@ def occurrences(rows, *, now: float, ahead_days: int = 21) -> list[WowEvent]:
     return sorted(out, key=lambda e: (e.starts, e.entry))
 
 
-def schedule(rows, active: dict[int, float], stopped: dict[int, float], *, now: float,
-             ahead_days: int) -> list[tuple[WowEvent, bool]]:
+def schedule(rows, active: dict[int, tuple[float, float]], stopped: dict[int, float], *, now: float,
+             ahead_days: int, boot: tuple[float, float] | None = None) -> list[tuple[WowEvent, bool]]:
     """Each entry's running or next occurrence as (event, on). The bridge wins: a start it saw
-    is on whatever the table says, and a stop it saw after an occurrence began ends it."""
+    is on whatever the table says, and a stop it saw after an occurrence began ends it.
+
+    A run needs the current worldserver boot to have started it, once BOOT_GRACE_S after that
+    boot's hello has let its replay in: an event that ended while the server was down gets no
+    stop, the boot just never starts it again. A run never outlives its length plus
+    STALE_SLACK_S from its first start. A run the table also dates keeps the table's start, so
+    "starts" and "on" of one occurrence are one subject."""
     by_entry = {r.entry: r for r in rows}
     found: dict[int, tuple[WowEvent, bool]] = {}
     for event in occurrences(rows, now=now, ahead_days=ahead_days):
@@ -251,28 +314,29 @@ def schedule(rows, active: dict[int, float], stopped: dict[int, float], *, now: 
         if event.ends <= now:
             continue
         found.setdefault(event.entry, (event, on))
-    for entry, started in active.items():
+    for entry, (first, last) in active.items():
         row = by_entry.get(entry)
         stop = stopped.get(entry)
-        if row is None or started > now or stop is not None and stop >= started:
+        if row is None or first > now or stop is not None and stop >= first:
             continue
-        if started + row.length * 60 + STALE_SLACK_S < now:
-            continue  # a start whose stop the mind never saw (a worldserver restart)
+        if first + row.length * 60 + STALE_SLACK_S < now:
+            continue  # a run whose stop the mind never saw
+        if boot is not None and last < boot[0] - 1 and now - boot[1] >= BOOT_GRACE_S:
+            continue  # the current boot never started it: it ended while the server was down
         known = found.get(entry)
-        ends = known[0].ends if known and known[1] else None
-        if ends is not None and ends <= now:
-            ends = None
-        found[entry] = (WowEvent(entry, row.name, started, ends), True)
+        dated = known[0] if known and known[1] and known[0].starts - STALE_SLACK_S <= first else None
+        ends = dated.ends if dated is not None and dated.ends > now else None
+        found[entry] = (WowEvent(entry, row.name, dated.starts if dated is not None else first, ends), True)
     return sorted(found.values(), key=lambda pair: (not pair[1], pair[0].starts, pair[0].entry))
 
 
 def from_meta(values: dict, *, now: float, ahead_days: int) -> list[tuple[WowEvent, bool]]:
-    """schedule() over the three meta values as read ({key: value})."""
+    """schedule() over the META_KEYS values as read ({key: value})."""
     cached = load_calendar(values.get(CAL_KEY))
     if cached is None:
         return []
-    return schedule(cached[1], load_times(values.get(ACTIVE_KEY)), load_times(values.get(STOPPED_KEY)),
-                    now=now, ahead_days=ahead_days)
+    return schedule(cached[1], load_active(values.get(ACTIVE_KEY)), load_times(values.get(STOPPED_KEY)),
+                    now=now, ahead_days=ahead_days, boot=load_boot(values.get(BOOT_KEY)))
 
 
 def _day(moment: datetime, local: datetime, *, at: bool) -> str:

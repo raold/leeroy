@@ -28,8 +28,11 @@ export function itemSegments(text, items) {
 }
 
 // The popover's lines: name, then quality and item level, then the slot when the library has one.
+// A name several copies share, with no way to tell which, lists their levels instead of one.
 export function itemTip(it) {
-  var level = Number.isInteger(it.ilvl) && it.ilvl > 0 ? " · Item level " + it.ilvl : "";
+  var levels = Array.isArray(it.ilvls) ? it.ilvls.filter(function (n) { return Number.isInteger(n) && n > 0; }) : [];
+  var level = Number.isInteger(it.ilvl) && it.ilvl > 0 ? " · Item level " + it.ilvl
+    : levels.length ? " · Item level " + levels.join(" / ") : "";
   return [it.name, qualityName(it.quality) + level].concat(typeof it.slot === "string" && it.slot ? [it.slot] : []);
 }
 

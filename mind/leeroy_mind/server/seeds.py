@@ -272,15 +272,15 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
                                                    personas=cast, human=human, ident=ident))
         from leeroy_mind.culture import seeds as culture
         if culture_calendar:
-            result += _read('wow_event', lambda: culture.wow_event_seeds(conn, now=now, local=local))
+            result += _read('wow_event', lambda: culture.wow_event_seeds(conn, now=now, local=local, ident=ident))
         if culture_loot:
             close = _read('loot_close', lambda: culture.loot_close_seeds(conn, now=now, cast=cast,
-                                                                         names=names, human=human))
+                                                                         names=names, human=human, ident=ident))
             # A close award is that drop's subject; it is never raised twice as plain loot too.
             raised = {'loot:' + seed.key.split(':', 1)[1] for seed in close}
             result = [seed for seed in result if seed.key not in raised] + close
             result += _read('loot_wish', lambda: culture.loot_wish_seeds(conn, now=now, cast=cast,
-                                                                         names=names, human=human))
+                                                                         names=names, human=human, ident=ident))
     return result
 
 

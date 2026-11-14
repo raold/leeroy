@@ -109,7 +109,9 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
     if sum(w > 0 for w in weights.values()) < 2:
         return []
     openers = {g:w for g,w in weights.items() if seed.openers is None or g in seed.openers}
-    butt = seed.about[0] if seed.kind == 'joke' and seed.about else 0
+    # A close loot award stings its runner-up: who talks about it passes the same kindness gate.
+    butt = (seed.about[0] if seed.kind == 'joke' and seed.about else
+            seed.about[1] if seed.kind == 'loot_close' and len(seed.about) > 1 else 0)
     if butt:
         openers = {g:w for g,w in openers.items() if g != butt and tease is not None and tease(g, butt)}
         weights = {g:w for g,w in weights.items() if g == butt or tease is not None and tease(g, butt)}

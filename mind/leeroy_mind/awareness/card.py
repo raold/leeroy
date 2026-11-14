@@ -465,8 +465,8 @@ def _directed_emotes(reader, guid, human, ctx, now):
 def _holidays(reader, ctx, now):
     """The server's own events from culture's cached calendar and the bridge's start/stop."""
     from leeroy_mind.culture import wowcal
-    values = {r["key"]: r["value"] for r in reader.rows(("meta",), "SELECT key,value FROM meta WHERE key IN (?,?,?)",
-              (wowcal.CAL_KEY, wowcal.ACTIVE_KEY, wowcal.STOPPED_KEY))}
+    values = {r["key"]: r["value"] for r in reader.rows(("meta",), "SELECT key,value FROM meta WHERE key IN "
+              "(SELECT value FROM json_each(?))", (json.dumps(wowcal.META_KEYS),))}
     lines = []
     for event, on in wowcal.from_meta(values, now=now, ahead_days=wowcal.CARD_AHEAD_DAYS)[:wowcal.CARD_ROWS]:
         if on:

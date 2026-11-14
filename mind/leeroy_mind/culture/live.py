@@ -62,6 +62,16 @@ class CultureLive:
         except Exception as error:
             log.warning("culture_wowcal_event_failed code=%s", type(error).__name__)
 
+    async def on_hello(self, ev):
+        """A hello from another worldserver process: runs it does not start again end."""
+        if self._closed or not self.calendar:
+            return
+        try:
+            if wowcal.note_boot(self.app.store, getattr(ev, "started_ms", 0), self.app.clock.now()):
+                log.info("culture_wowcal_boot")
+        except Exception as error:
+            log.warning("culture_wowcal_boot_failed code=%s", type(error).__name__)
+
     # -- the daily read --------------------------------------------------------------------------
 
     async def calendar_tick(self, now: float) -> None:
@@ -154,6 +164,7 @@ def attach_culture(app) -> CultureLive | None:
         return None
     live = CultureLive(app, calendar=calendar, loot_talk=loot_talk)
     if calendar:
+        app.register_event_handler("hello", live.on_hello)
         app.register_event_handler("game_event", live.on_game_event)
         app.engine.culture_calendar = True  # the awareness card lists the server's events
     app.register_background(live.run)

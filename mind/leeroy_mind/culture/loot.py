@@ -40,9 +40,10 @@ def next_raid(conn, now: float) -> int | None:
 
 def target_raid(conn, now: float) -> Target | None:
     """A raid night names no instance; the guild's newest raid within RAID_RECENT_S says which
-    raid it is running now."""
+    raid it is running now. Raid nights are his, so his raids (offline = 0) come first and the
+    members' own offline raids count only when he has none in that time."""
     row = conn.execute("SELECT raid_key,size,heroic FROM guild_raid WHERE started BETWEEN ? AND ? "
-                       "ORDER BY started DESC,raid_id DESC LIMIT 1", (now - RAID_RECENT_S, now)).fetchone()
+                       "ORDER BY offline,started DESC,raid_id DESC LIMIT 1", (now - RAID_RECENT_S, now)).fetchone()
     raid = CATALOG.get(row[0]) if row and isinstance(row[0], str) else None
     if raid is None or row[1] not in raid.sizes or not any(m == raid.map_id for m, _ in BOSS_NAMES):
         return None
@@ -50,9 +51,13 @@ def target_raid(conn, now: float) -> Target | None:
 
 
 def raiders(conn, human: int) -> list[int]:
-    """Members who raided in the guild's last RAIDERS_FROM ended raids."""
-    ids = [r[0] for r in conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NOT NULL "
-                                      "ORDER BY ended DESC,raid_id DESC LIMIT ?", (RAIDERS_FROM,))]
+    """Members who raided in his last RAIDERS_FROM ended raids (the members' own offline raids
+    when he has none)."""
+    ids = [r[0] for r in conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NOT NULL AND offline=? "
+                                      "ORDER BY ended DESC,raid_id DESC LIMIT ?", (0, RAIDERS_FROM))]
+    if not ids:
+        ids = [r[0] for r in conn.execute("SELECT raid_id FROM guild_raid WHERE ended IS NOT NULL "
+                                          "ORDER BY ended DESC,raid_id DESC LIMIT ?", (RAIDERS_FROM,))]
     if not ids:
         return []
     rows = conn.execute("SELECT DISTINCT guid FROM guild_attendance WHERE status='raided' AND raid_id IN "

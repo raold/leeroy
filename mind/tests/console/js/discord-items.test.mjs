@@ -25,3 +25,8 @@ test("the popover says name, quality, item level and slot", () => {
   assert.equal(qualityName(5), "Legendary"); assert.equal(qualityName(99), "Item");
   assert.equal(qualityClass(4), "q4"); assert.equal(qualityClass("4"), "q1");
 });
+
+test("a name several copies share, unresolved, lists their levels", () => {
+  assert.deepEqual(itemTip({ name: "Invented Blade", quality: 4, ilvl: null, ilvls: [251, 264], slot: "" }),
+    ["Invented Blade", "Epic · Item level 251 / 264"]);
+});

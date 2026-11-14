@@ -90,39 +90,57 @@ mind never dates them ahead. Rows the core schedules from the table (stage 0 wit
 start, such as the weekly fishing contests) get their occurrences by the core's own rule.
 The bridge's `game_event` start/stop (native publishes it while `Leeroy.Realm.Enable = 1`;
 no native change) goes into `culture:wowcal:active` and `culture:wowcal:stopped` for the
-cached entries only, and wins over the table: a start means on now (a holiday's end is then
-unknown and never stated), a stop after an occurrence began ends it. A start with no stop
-ages out after the event's length plus six hours. Discord gets `wow_event` seeds in
-#achievements-and-mounts and #general (fishing also in #professions-and-gold, Call to Arms
-in #pvp-arena): "<name> is on until <day>", "<name> is on now" or "<name> starts <day>"
-within three days, plus the library event page's first sentence when it has one of at most
-140 characters. The awareness card's Upcoming calendar lists up to four server events within
-a week. Synthetic apps (an injected model client) never read the game database.
+cached entries only (events seen before the first read wait in memory), and wins over the
+table: a start means on now (a holiday's end is then unknown and never stated), a stop after
+an occurrence began ends it. The core starts every running event again at each worldserver
+boot, so a run keeps its first start (a start within its length only moves its latest one)
+and a boot is no new subject. Each hello's `started_ms` is kept in `culture:wowcal:boot`:
+five minutes after a hello from a new worldserver process (its replay is in by then), a run
+that boot did not start again is over, since an event that ended while the server was down
+gets no stop. A run never outlives its length plus six hours from its first start. Discord
+gets one `wow_event` subject an occurrence (its "starts" and "on" share the key) in
+#achievements-and-mounts and #general (fishing in #professions-and-gold and
+#achievements-and-mounts, Call to Arms in #pvp-arena and #general): "<name> is on until
+<day>", "<name> is on now" or "<name> starts <day>" within three days, in the mind's local
+time, plus the library event page's first sentence when it has one of at most 140
+characters that names no time or date (the computed local time is the only one stated).
+Event names and page sentences pass the real-name screen. The awareness card's Upcoming
+calendar lists up to four server events within a week. Synthetic apps (an injected model
+client) never read the game database.
 
 **Loot.** `loot_close` seeds come from charged guild loot receipts with their unique matching
-DKP debit (the rule Part A's origins use) whose award was close, within seven days: "<winner>
-beat <runner-up> to [<item>] by <n> DKP" (n is the winning bid over the runner-up's) in
-#loot-and-dkp. That drop's plain `loot` seed is then dropped, and a drop already talked about
-as plain loot is not raised again; a close award is held for its whole week. `loot_wish`
-seeds need a raid night the calendar desk posted within three days. Raid nights name no
-instance, so the target raid is the guild's newest raid within 14 days; the raiders are the
-members who raided in its last four ended raids. Off the event loop and only while he is out
-of game, the mind reads that raid's bosses' drops of its size and difficulty from library.db,
-then the items and the raiders' equipment through the guild armory, and keeps for each raider
-the largest `upgrade_gain` (the loot system's own rule; ties to the lower item id) in
+DKP debit (the rule Part A's origins use) whose award was close, within seven days, as raid
+chat announced them: "<winner> beat <runner-up> to [<item>] by <n> DKP", where n is the price
+paid over the runner-up's bid, in #loot-and-dkp. That drop's plain `loot` seed is then
+dropped; a drop already talked about as plain loot, or one Part A made a `close_loot` joke,
+is not raised again; a close award is held for its whole week. The runner-up is the subject's
+sore point, so the conversation passes Part A's kindness gate with the runner-up as target
+(`tease_ok` for the opener and each speaker; the runner-up may answer), and a delivered
+thread spends the runner-up's teasing allowance for the day once (receipt
+`culture:server-close:<conversation>`). `loot_wish` seeds need a raid night the calendar desk
+posted within three days. Raid nights name no instance, so the target raid is his newest raid
+within 14 days (the members' own offline raids only when he has none); the raiders are the
+members who raided in his last four ended raids (likewise). Off the event loop and only while
+he is out of game, the mind reads that raid's bosses' drops of its size and difficulty from
+library.db (a chunk counts only when its title names the boss), then the items and the
+raiders' equipment through the guild armory, and keeps for each raider the largest
+`upgrade_gain` (the loot system's own rule; ties to the lower item id) in
 `culture:loot:wish`, recomputed every 12 hours or when the raid night changes. A raider
 whose equipment cannot be read wishes for nothing. Each wish seeds "<name> needs [<item>]
 from <boss>" in #loot-and-dkp and the member's class channel, opened by that member; all
-wishes together weigh about three ordinary subjects. Legendary progress and BiS lists are not
-reachable: no data for either exists. Loot from native `loot_won` events is still not used
-(they name no members). None of these seeds reach group DMs (they are not public kinds there),
-DMs or officer channels.
+wishes together weigh about three ordinary subjects. Item names pass the real-name screen.
+Legendary progress and BiS lists are not reachable: no data for either exists. Loot from
+native `loot_won` events is still not used (they name no members). None of these seeds
+reach group DMs (they are not public kinds there), DMs or officer channels.
 
 **Tooltips.** With `loot` on, the console's Discord view gives each message the bracketed
 names that the library's item table holds exactly (any case, at most eight a message; junk,
 test items and boss, raid, dungeon, class and race names never), read-only; the page shows
 them quality-coloured with a popover of name, quality, item level and slot. A miss stays
-plain text. A name several items share shows the highest item level.
+plain text. Several items share many names (10/25, normal/heroic): the guild's own item wins
+(an id its loot receipts and awards of the last 30 days or its wishes name), else the copy
+that drops at its raid's size and difficulty by the library's loot chunks; failing both the
+popover lists the levels ("Item level 264 / 277") rather than guessing one.
 
 No migration, no native change and no model call. Release is mind and console only
 (`bash scripts/ac-release.sh <commit>`).

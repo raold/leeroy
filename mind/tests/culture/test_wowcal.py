@@ -207,7 +207,8 @@ def test_attach_adds_nothing_until_a_part_b_switch(tmp_path):
         assert live.query is None  # a synthetic model client never reaches the game database
         cache(on.store, [row()])
         run(live.on_game_event(GameEvent(ts=int(on.clock.now() * 1000), event_id=15, state="start")))
-        assert json.loads(on.store.get_meta(wowcal.ACTIVE_KEY)) == {"15": on.clock.now()}
+        assert wowcal.load_active(on.store.get_meta(wowcal.ACTIVE_KEY)) == {15: (on.clock.now(), on.clock.now())}
+        assert live.on_hello in on._handlers["hello"]
     finally:
         run(on.stop())
 
@@ -251,8 +252,71 @@ def test_the_daily_read_caches_once_and_keeps_bridge_times_of_known_entries(tmp_
         assert fake_query.calls[0][:2] == ("acore_world", "invented-secret")  # this test's conf only
         fetched, rows = wowcal.load_calendar(app.store.get_meta(wowcal.CAL_KEY))
         assert fetched == now and [r.entry for r in rows] == [3, 15]
-        assert wowcal.load_times(app.store.get_meta(wowcal.ACTIVE_KEY)) == {3: now - 60}  # 99 is no calendar event
+        assert wowcal.load_active(app.store.get_meta(wowcal.ACTIVE_KEY)) == {3: (now - 60, now - 60)}  # 99 is no event
         assert wowcal.load_times(app.store.get_meta(wowcal.STOPPED_KEY)) == {15: now - 60} and not live._pending
         assert "secret" not in caplog.text
     finally:
         run(app.stop())
+
+
+def keys(store, now):
+    return [s.key for s in seeds.gather(store.conn, now=now, local=datetime.fromtimestamp(now, UTC), cast={},
+                                        officers=frozenset(), human=1, human_name='', trial_rank=4,
+                                        culture_enabled=True, culture_store=store, culture_calendar=True)
+            if s.kind == "wow_event"]
+
+
+def test_a_start_republished_at_boot_keeps_the_run_and_its_subject(store):
+    brew = row(24, "Invented Brewing Fair", start=None, holiday=372, stage=2, length=21600)
+    cache(store, [brew])
+    first = store.clock.now() - 3 * 86400
+    wowcal.record(store, 24, "start", first)
+    before = keys(store, first + 3600)
+    # the worldserver restarts: the core starts every running event again, and native publishes it
+    assert wowcal.note_boot(store, int((first + 86400) * 1000), first + 86400 + 5)
+    assert wowcal.record(store, 24, "start", first + 86400 + 2)
+    assert wowcal.load_active(store.get_meta(wowcal.ACTIVE_KEY)) == {24: (first, first + 86400 + 2)}
+    assert before == keys(store, first + 86400 + 3600) == [f"wow_event:24:{int(first)}"]
+    # the same hello again (a mind restart, not a worldserver one) changes nothing
+    assert not wowcal.note_boot(store, int((first + 86400) * 1000), first + 2 * 86400)
+
+
+def test_a_stop_missed_across_a_restart_ends_the_run_once_the_boot_replay_is_in(store):
+    cache(store, [row(24, "Invented Brewing Fair", start=None, holiday=372, stage=2, length=21600),
+                  row(26, "Invented Harvest Fair", start=None, holiday=404, stage=1, length=21600)])
+    first = store.clock.now() - 14 * 86400
+    wowcal.record(store, 24, "start", first)
+    wowcal.record(store, 26, "start", first)
+    wowcal.note_boot(store, int((first + 13 * 86400) * 1000), first + 13 * 86400)
+    wowcal.record(store, 24, "start", first + 13 * 86400 + 1)
+    wowcal.record(store, 26, "start", first + 13 * 86400 + 1)
+    # both fairs end while the server is down; the next boot starts only the harvest fair again
+    boot = first + 14 * 86400
+    wowcal.note_boot(store, int(boot * 1000), boot + 10)
+    wowcal.record(store, 26, "start", boot + 2)
+    def on(now):
+        values = {k: store.get_meta(k) for k in wowcal.META_KEYS}
+        return {e.entry for e, running in wowcal.from_meta(values, now=now, ahead_days=7) if running}
+    assert on(boot + 60) == {24, 26}  # the replay may still be arriving
+    assert on(boot + 10 + wowcal.BOOT_GRACE_S) == {26}
+    # with no later boot, the brewing fair is never on again; the harvest fair runs to its length
+    assert on(boot + 18 * 3600) == {26} and on(boot + 2 * 86400) == set()
+
+
+def test_one_subject_a_fishing_occurrence_and_no_page_clock(store):
+    store.conn.execute("ATTACH DATABASE ':memory:' AS library")
+    store.conn.execute("CREATE TABLE library.chunks(id INTEGER PRIMARY KEY, kind TEXT, title TEXT, text TEXT)")
+    store.conn.execute("INSERT INTO library.chunks(kind,title,text) VALUES ('event','Invented Fishing Contest',"
+                       "'The Invented Fishing Contest is held every Saturday between 14:00 and 15:00 server time.')")
+    now = store.clock.now()
+    cache(store, [row(start=now + 3600)])
+    soon = keys(store, now)
+    wowcal.record(store, 15, "start", now + 3602)  # the bridge's start, a moment after the table's
+    running = keys(store, now + 3700)
+    assert soon == running == [f"wow_event:15:{int(now + 3600)}"]
+    found = [s for s in seeds.gather(store.conn, now=now, local=store.clock.local(), cast={},
+                                     officers=frozenset(), human=1, human_name='', trial_rank=4,
+                                     culture_enabled=True, culture_store=store, culture_calendar=True)
+             if s.kind == "wow_event"]
+    assert [s.fact for s in found] == ["Invented Fishing Contest starts today at 21:00"]
+    assert found[0].channels == ("professions-and-gold", "achievements-and-mounts")
