@@ -425,6 +425,7 @@ SWITCHES = (
     ('realm','enabled','The Realm','Leeroy.Realm.Enable = 1; realm/blocklist.txt'),
     ('training','enabled','Training',''), ('decisions','enabled','Decisions','server.enabled'),
     ('training','playbooks','Raid playbook checks','training.enabled'),
+    ('raidplay','respond','Mechanic responder','training.playbooks; Leeroy.Mechanics.Enable = 1'),
     ('control','ops_actions','Ops actions','restart the console too'))
 
 

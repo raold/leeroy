@@ -52,6 +52,15 @@ Leeroy.GroupRez.ReleaseSeconds = 60
 # Reloadable with .reload config; 0 takes back the avoid aoe it added.
 Leeroy.Hazards.Enable = 0
 
+# Boss mechanics at cast start (the mind's [raidplay] respond sends each covered raid's table at hello). When a boss
+# starts casting a spell the raid playbooks list and stock playerbots does not handle, the cast bots of the owner's
+# group and of a running offline raid it binds leave its area, its frontal cone, stack, spread or run out with the
+# debuff, to navmesh-checked spots clear of known ground hazards, until it ends; ordinary moves back in are refused
+# meanwhile. Needs the local playerbots patch (PlayerbotMechanicGuard). Random bots, anyone outside his group or the
+# offline raid, bots held by stay or passive, and Realm and training ownership are left alone.
+# Reloadable with .reload config; 0 moves nobody.
+Leeroy.Mechanics.Enable = 0
+
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
 

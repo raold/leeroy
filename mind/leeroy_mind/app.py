@@ -491,6 +491,8 @@ class MindApp:
         self.outreach = attach_outreach(self)
         from .godmode.attach import attach as attach_godmode
         self.godmode = attach_godmode(self)  # [godmode]: off adds nothing
+        from .raidplay.respond import attach as attach_mechanics
+        self.mechanics = attach_mechanics(self)  # [raidplay] respond: off adds nothing
 
     # -- extension points --------------------------------------------------------------------
 

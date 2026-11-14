@@ -95,6 +95,7 @@ explain = "His spray covers the area in front of him and spawns slimes from thos
 check = "naxx.grobbulus.check_avoid"
 first = 10
 every = 20
+angle = 24
 
 [[boss.mechanic]]
 id = "naxx.grobbulus.fallout_slime"
@@ -364,6 +365,9 @@ explain = "A spore spawns every thirty-five seconds; a group stands in its burst
 check = "none"
 first = 15
 every = 35
+# Bursting a spore on a group is a rotation; moving every melee and ranged onto each spore would
+# pull them all off the boss.
+respond_roles = []
 
 [[boss.mechanic]]
 id = "naxx.loatheb.inevitable_doom"
@@ -428,6 +432,7 @@ explain = "Impale strikes in a line toward a player; do not stand between him an
 check = "naxx.anubrekhan.check_avoid"
 first = 15
 every = 20
+angle = 24
 
 [[boss.mechanic]]
 id = "naxx.anubrekhan.crypt_guards"

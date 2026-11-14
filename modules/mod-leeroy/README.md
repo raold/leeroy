@@ -231,6 +231,71 @@ multipliers that silence `avoid aoe` during a mechanic silence the exit too, and
 target stands in a hazard can step back in to reach it (after two exits the yield lets it stay). Logs carry
 guids, counts and reason codes only. **Native rebuild required, with the playerbots patch applied first.**
 
+# Boss mechanics at cast start (the mechanic responder)
+
+Stock playerbots meets most boss mechanics only after standing in them: `avoid aoe` steps out once an effect has
+landed (and only with a real-player master), and nothing at all handles the mechanics the raid playbooks mark
+`handled_by = "none"`. `Leeroy.Mechanics.Enable` (default 0, `.reload config`) moves the cast bots of the owner's
+group and of a running offline raid when the boss **starts casting**, from the playbooks
+(`mind/leeroy_mind/raidplay/README.md`, the mind's `[raidplay] respond`). The world side is `Guild/MechanicJob.*`,
+pure policy and geometry `Lib/LeeroyMechanicPolicy.*` (unit tests `TestMechanicPolicy.cpp`); the bodies move
+through the local playerbots patch `0012` (`PlayerbotMechanicGuard`; without it the start log says the guard is
+unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
+
+- **`raid_mechanics {map, difficulty, mechanics: [{id, kind, area, roles, spells, radius, range, angle,
+  duration}]}`**: one instance's whole table (difficulty 0 10, 1 25, 2 10 heroic, 3 25 heroic), replacing the last
+  one for that map and difficulty; at most 64 rules of at most 16 spell ids each, 16 tables, yards up to 100,
+  `duration` up to 30 seconds. Kinds and their areas: `avoid_ground` (`dest`: a circle round the cast's
+  destination, else its target, where it was cast; `caster`: round the caster, following it; `line`: a band
+  `radius` either side and `range` long from the caster toward its target, else its destination, else its
+  facing), `move_out_cone` (`cone`: `angle` degrees wide and `range`, else `radius`, long, aimed the same way),
+  `spread` (`group`), `stack` (`dest`: gather within `radius` of the cast's target, following it, else its
+  destination), `run_out_debuff` (`target`: the member the cast or its aura lands on keeps `radius` from every
+  other member) and `los` (`caster`: out of its sight). A malformed field is refused `bad field: <key>`. The
+  table is accepted with the switch off too (the switch gates only the responses), and it belongs to the mind
+  connection that sent it: a new connection, or none, drops it (`mechanic_tables_dropped tables=`), and the new
+  mind sends its own at hello, or nothing when its switch is off. Each accepted table logs
+  `mechanic_table map= difficulty= rules=`.
+- **Who moves.** Every 250 ms the world tick takes the members of his group (no battleground or battlefield
+  group) and of a running offline raid (its members in its group inside its instance; never a benchmark) on a
+  raid map whose map and difficulty have a table. A member responds while it is a cast bot (not a self-bot, never
+  him), alive, in the world, not teleporting, on no vehicle or transport (the gunship's deck), and not fenced:
+  for his group a Realm lease or `NativeOwnershipReason` (training, an offline raid, a pending bot job), for an
+  offline raid any of those but that raid itself. A bot with `stay` or `passive` in its combat strategies is
+  held (his own stay, the raid lead's `stay` or `hold`, a dungeon-clear camp hold) and is left where it is. Its
+  role is playerbots' reading of its spec (tank, healer, ranged, melee). Random bots and anyone outside his
+  group or the offline raid are never in the snapshot, and a bot not in it is answered at once.
+- **Cast start.** On every spell's `OnSpellPrepare` (map thread; an atomic check first) a creature casting in a
+  raid instance with responders looks the spell up in the table; each rule it starts becomes a mechanic in force
+  for the cast time plus its linger: the rule's `duration`, else the spell's own duration up to 15 seconds, else
+  3 seconds, never under 1.5 or over 20 seconds (at most 64 at once). A `run_out_debuff` needs a player target;
+  when the debuff (a rule spell) lands on a player as an aura, that starts or extends it too. Nothing is moved
+  for an instant spell before it hits, but its area is still left for the linger (the next cast comes soon).
+- **Moving.** Playerbots' `mechanic move` trigger (in every class combat strategy) asks the guard whether a
+  mechanic in force binds the bot (its role, and for a run out only the debuffed member); the `mechanic move`
+  action (`ACTION_RAID + 9`: above stock's raid positioning while it lasts, below every emergency and stock's own
+  `ACTION_EMERGENCY` mechanic moves) then makes a forced move to the nearest spot that keeps every duty with 1.5
+  yards to spare: out of each area (beyond the bot's reach), within the stack radius less 2 yards, 1.5 yards
+  beyond the spacing from every other member of the group or raid within 60 yards, out of the caster's sight;
+  straight out first, then rings of 2 yards up to 40 yards (spreading: away from the others' middle between
+  equals), clear of the ground hazards `HazardJob` measures (scanned round the responders while a mechanic is in
+  force, whatever `Leeroy.Hazards.Enable` says) and checked against the navmesh. The chosen spot is kept while it
+  still holds. Meanwhile `MoveTo` refuses an ordinary (not forced) move that would break a duty: back into an
+  area, off the gather spot, within the spacing. A forced move, a stock raid strategy's own included, is never
+  refused. When the mechanic ends nothing is restored: no strategy, value or master was changed, and the bot
+  plays on as stock.
+- Logs: `mechanic_response id=<playbook mechanic> spell= kind= members=<moved> map= instance=` when each ends
+  (the training ground's per-mechanic checks measure the effect), and once a minute while there are responders,
+  `mechanics_minute responders= instances= held= fenced= dropped=`. Ids, counts and codes only.
+
+Limits: a spell whose place is chosen after cast start (Putricide's bombs, the Beasts' slime pools, Icehowl's
+charge, the twins' orbs) or a stack on a moving pair (Paralytic Toxin) is marked `area = "none"` in the
+playbooks and not responded to; `soak` (the off-tanks' Hateful Strike and the like) and the non-movement kinds
+(`interrupt`, `dispel`, `tank_swap_at_stacks`, `switch_adds`, `kill_order`) are later work. Spots are planned
+against current positions, so two spreading bots can pick neighbouring spots and step again; a bot with no clear
+reachable spot within 40 yards stays. Encounter multipliers that zero movement actions zero this one too.
+**Native rebuild required, with the playerbots patch applied first.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a

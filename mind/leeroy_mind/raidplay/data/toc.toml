@@ -63,6 +63,7 @@ handled_note = "stock avoid aoe steps out after the effect lands, and only for b
 explain = "Snobolds throw fire bombs that leave burning patches; step out of the fire."
 check = "toc.beasts.check_avoid"
 radius = 2
+respond_roles = ["tank", "healer", "melee", "ranged"]
 
 [[boss.mechanic]]
 id = "toc.beasts.staggering_stomp"
@@ -90,6 +91,9 @@ radius = 30
 explain = "The worms leave slime pools that grow; keep fighting away from them."
 check = "toc.beasts.check_avoid"
 every = 12
+# The pool grows from the worm over its life: a cast-start circle of its full size would pull the
+# tank and melee off the worm.
+area = "none"
 
 [[boss.mechanic]]
 id = "toc.beasts.paralytic_toxin"
@@ -103,6 +107,8 @@ handled_by = "none"
 radius = 10
 explain = "Acidmaw's toxin slows to a stop and no dispel removes it; the toxined player meets a Burning Bile carrier, whose bile cures it."
 check = "toc.beasts.check_toxin"
+# Toxined players meet a Burning Bile carrier; nothing at cast start says where.
+area = "none"
 
 [[boss.mechanic]]
 id = "toc.beasts.burning_bile"
@@ -141,6 +147,8 @@ range = 90
 explain = "Icehowl breathes frost at a random player within ninety yards; others keep out of the line between him and that player."
 check = "none"
 every = 25
+angle = 24
+duration = 5
 
 [[boss.mechanic]]
 id = "toc.beasts.trample"
@@ -154,6 +162,8 @@ radius = 12
 explain = "After Massive Crash he glares at a player and charges; everyone runs out of his line, and a miss stuns him."
 check = "toc.beasts.check_avoid"
 every = 40
+# Massive Crash stuns everyone first; the charge's path is chosen afterwards.
+area = "none"
 
 [[boss.mechanic]]
 id = "toc.beasts.whirl"
@@ -220,6 +230,7 @@ handled_note = "stock avoid aoe steps out after the effect lands, and only for b
 explain = "The flamed player runs to the room's edge, trailing fire away from the raid."
 check = "toc.jaraxxus.check_avoid"
 every = 30
+respond_roles = ["healer", "melee", "ranged"]
 
 [[boss.mechanic]]
 id = "toc.jaraxxus.incinerate_flesh"
@@ -375,6 +386,7 @@ handled_by = "none"
 radius = 8
 explain = "A warrior bladestorms when three or more players are within eight yards; melee step away while it spins."
 check = "none"
+area = "caster"
 
 [[boss.mechanic]]
 id = "toc.champions.hellfire"
@@ -386,6 +398,7 @@ handled_by = "none"
 explain = "A warlock channelling Hellfire burns everyone within ten yards; melee step out or interrupt it."
 check = "none"
 radius = 10
+area = "caster"
 
 [[boss]]
 index = 3
@@ -419,6 +432,8 @@ radius = 6
 explain = "Touch orbs of your own colour for a buff and dodge the other colour."
 check = "toc.twins.check_avoid"
 every = 10
+# The orbs drift and burst when touched; no cast start names a place.
+area = "none"
 
 [[boss.mechanic]]
 id = "toc.twins.vortex"

@@ -49,6 +49,12 @@ explain = "A line of cold fire runs out from him; step sideways out of its path,
 check = "icc.marrowgar.check_avoid_coldflame"
 first = 5
 every = 5
+# The responder reacts to the targeted Coldflame only: Bone Storm's four diagonal lines are not
+# one area it can name at cast start. The flame runs from him along his facing toward the target.
+respond_roles = ["tank", "healer", "melee", "ranged"]
+respond_spells = [69140]
+area = "line"
+range = 70
 
 [[boss.mechanic]]
 id = "icc.marrowgar.bone_spike"
@@ -142,6 +148,7 @@ explain = "A fixed eight-yard circle of decay appears under a random player; wal
 check = "icc.deathwhisper.check_avoid_death_and_decay"
 first = 10
 every = 22
+respond_roles = ["tank", "healer", "melee", "ranged"]
 
 [[boss.mechanic]]
 id = "icc.deathwhisper.cult_adds"
@@ -304,6 +311,8 @@ hits = { "10" = [69680], "25" = [69687], "10h" = [69688], "25h" = [69689] }
 radius = 5
 explain = "Artillery marks spots on your deck; step out of the circle before the shell lands."
 check = "none"
+# The deck is a transport the responder never moves anyone on.
+area = "none"
 
 [[boss]]
 index = 3
@@ -558,6 +567,9 @@ explain = "He sprays slime in a cone at one player; everyone in front moves to h
 check = "icc.rotface.check_avoid"
 first = 20
 every = 20
+# Stock places ranged and healers under him on normal and keeps its heroic grid: moving them
+# would fight it, and melee are under him already.
+respond_roles = []
 
 [[boss.mechanic]]
 id = "icc.rotface.mutated_infection"
@@ -611,6 +623,7 @@ handled_note = "stock avoid aoe steps out after the effect lands, and only for b
 explain = "Sticky Ooze leaves a slowing puddle under the tank; step out of it."
 check = "icc.rotface.check_avoid"
 every = 15
+respond_roles = ["tank", "melee"]
 
 [[boss.mechanic]]
 id = "icc.rotface.vile_gas"
@@ -728,6 +741,9 @@ playerbots = ["icc putricide avoid malleable goo"]
 handled_note = "only tanks keep fifteen yards from the bombs; other roles are not moved"
 explain = "Gas bombs land around him and burst; walk away from the bomb canisters."
 check = "icc.putricide.check_avoid"
+# The bombs land round him where the summon puts them; nothing at cast start says where.
+respond_roles = ["healer", "melee", "ranged"]
+area = "none"
 
 [[boss.mechanic]]
 id = "icc.putricide.mutated_plague"
@@ -821,6 +837,9 @@ explain = "Valanar drops vortexes that knock players around; step away from them
 check = "icc.council.check_avoid"
 first = 15
 every = 20
+# Stock leaves the ordinary vortex (72037) only; the empowered one is its own.
+respond_roles = ["healer", "melee", "ranged"]
+respond_spells = [72037]
 
 [[boss.mechanic]]
 id = "icc.council.kinetic_bomb"
@@ -1415,6 +1434,7 @@ explain = "On heroic a trap appears under a player; step off it before it knocks
 check = "icc.lichking.check_avoid"
 first = 15
 every = 15
+respond_roles = ["healer", "melee", "ranged"]
 
 [[boss.mechanic]]
 id = "icc.lichking.soul_reaper"

@@ -1,0 +1,266 @@
+From 1cb21f9075f1959da6b6ff8ff91985085436ffe0 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 08:26:51 -0500
+Subject: [PATCH] Let other modules move bots out of a boss mechanic as it is
+ cast
+
+A module may install a PlayerbotMechanicGuard. Every combat strategy then
+has a "mechanic move" trigger and action: while the guard has a mechanic
+in force that binds the bot, the bot makes a forced move to the spot the
+guard names (out of the mechanic's area, onto its stack point, away from
+the others), and MoveTo refuses an ordinary move back into it. Forced
+moves, a raid strategy's own included, are never refused. Nothing changes
+until a guard is installed.
+---
+ src/Ai/Base/ActionContext.h                  |  2 +
+ src/Ai/Base/Actions/MovementActions.cpp      | 31 +++++++++++++
+ src/Ai/Base/Actions/MovementActions.h        | 11 +++++
+ src/Ai/Base/Actions/PlayerbotMechanicGuard.h | 48 ++++++++++++++++++++
+ src/Ai/Base/Strategy/CombatStrategy.cpp      | 10 ++++
+ src/Ai/Base/Trigger/GenericTriggers.cpp      |  7 +++
+ src/Ai/Base/Trigger/GenericTriggers.h        |  9 ++++
+ src/Ai/Base/TriggerContext.h                 |  2 +
+ 8 files changed, 120 insertions(+)
+ create mode 100644 src/Ai/Base/Actions/PlayerbotMechanicGuard.h
+
+diff --git a/src/Ai/Base/ActionContext.h b/src/Ai/Base/ActionContext.h
+index 7e1bb342..f0f4f5a4 100644
+--- a/src/Ai/Base/ActionContext.h
++++ b/src/Ai/Base/ActionContext.h
+@@ -98,6 +98,7 @@ public:
+         creators["flee"] = &ActionContext::flee;
+         creators["flee with pet"] = &ActionContext::flee_with_pet;
+         creators["avoid aoe"] = &ActionContext::avoid_aoe;
++        creators["mechanic move"] = &ActionContext::mechanic_move;
+         creators["wake on combat start"] = &ActionContext::wake_on_combat_start;
+         creators["combat formation move"] = &ActionContext::combat_formation_move;
+         creators["tank face"] = &ActionContext::tank_face;
+@@ -322,6 +323,7 @@ private:
+     static Action* flee(PlayerbotAI* botAI) { return new FleeAction(botAI); }
+     static Action* flee_with_pet(PlayerbotAI* botAI) { return new FleeWithPetAction(botAI); }
+     static Action* avoid_aoe(PlayerbotAI* botAI) { return new AvoidAoeAction(botAI); }
++    static Action* mechanic_move(PlayerbotAI* botAI) { return new MechanicMoveAction(botAI); }
+     static Action* wake_on_combat_start(PlayerbotAI* botAI) { return new WakeOnCombatStartAction(botAI); }
+     static Action* combat_formation_move(PlayerbotAI* botAI) { return new CombatFormationMoveAction(botAI); }
+     static Action* tank_face(PlayerbotAI* botAI) { return new TankFaceAction(botAI); }
+diff --git a/src/Ai/Base/Actions/MovementActions.cpp b/src/Ai/Base/Actions/MovementActions.cpp
+index e1ce1eb3..a7e232f7 100644
+--- a/src/Ai/Base/Actions/MovementActions.cpp
++++ b/src/Ai/Base/Actions/MovementActions.cpp
+@@ -21,6 +21,7 @@
+ #include "PlayerbotAI.h"
+ #include "PlayerbotAIConfig.h"
+ #include "PlayerbotHazardFilter.h"
++#include "PlayerbotMechanicGuard.h"
+ #include "Playerbots.h"
+ #include "Position.h"
+ #include "PositionValue.h"
+@@ -170,6 +171,15 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
+ bool MovementAction::MoveTo(uint32 mapId, float x, float y, float z, bool /*idle*/, bool /*react*/, bool normal_only,
+                             bool exact_waypoint, MovementPriority priority, bool lessDelay, bool backwards)
+ {
++    // A module keeps the bot out of a boss mechanic in force: no ordinary move takes it back in. Forced moves (a raid
++    // strategy's own, or the mechanic move itself) are never refused.
++    if (priority != MovementPriority::MOVEMENT_FORCED && mapId == bot->GetMapId())
++    {
++        PlayerbotMechanicGuard* guard = PlayerbotMechanicGuard::Get();
++        if (guard && guard->Active() && guard->MechanicRefuses(bot, x, y, z))
++            return false;
++    }
++
+     UpdateMovementState();
+     if (!IsMovingAllowed())
+     {
+@@ -1821,6 +1831,27 @@ bool FleeWithPetAction::Execute(Event /*event*/)
+     return Flee(AI_VALUE(Unit*, "current target"));
+ }
+ 
++bool MechanicMoveAction::isUseful()
++{
++    PlayerbotMechanicGuard* guard = PlayerbotMechanicGuard::Get();
++    float x = 0.0f;
++    float y = 0.0f;
++    float z = 0.0f;
++    return guard && guard->Active() && guard->MechanicSpot(bot, x, y, z);
++}
++
++bool MechanicMoveAction::Execute(Event /*event*/)
++{
++    PlayerbotMechanicGuard* guard = PlayerbotMechanicGuard::Get();
++    float x = 0.0f;
++    float y = 0.0f;
++    float z = 0.0f;
++    if (!guard || !guard->Active() || !guard->MechanicSpot(bot, x, y, z))
++        return false;
++
++    return MoveTo(bot->GetMapId(), x, y, z, false, false, false, false, MovementPriority::MOVEMENT_FORCED, true);
++}
++
+ bool AvoidAoeAction::isUseful()
+ {
+     if (getMSTime() - moveInterval < uint32(lastMoveTimer))
+diff --git a/src/Ai/Base/Actions/MovementActions.h b/src/Ai/Base/Actions/MovementActions.h
+index ffaf6aae..adb7e075 100644
+--- a/src/Ai/Base/Actions/MovementActions.h
++++ b/src/Ai/Base/Actions/MovementActions.h
+@@ -102,6 +102,17 @@ public:
+     bool Execute(Event event) override;
+ };
+ 
++// Moves the bot where a module's PlayerbotMechanicGuard says a boss mechanic in force wants it (out of its area,
++// onto its stack point, away from the others), as a forced move so ordinary movement waits for it.
++class MechanicMoveAction : public MovementAction
++{
++public:
++    MechanicMoveAction(PlayerbotAI* botAI) : MovementAction(botAI, "mechanic move") {}
++
++    bool isUseful() override;
++    bool Execute(Event event) override;
++};
++
+ class AvoidAoeAction : public MovementAction
+ {
+ public:
+diff --git a/src/Ai/Base/Actions/PlayerbotMechanicGuard.h b/src/Ai/Base/Actions/PlayerbotMechanicGuard.h
+new file mode 100644
+index 00000000..d6d55ec9
+--- /dev/null
++++ b/src/Ai/Base/Actions/PlayerbotMechanicGuard.h
+@@ -0,0 +1,48 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++
++#ifndef PLAYERBOTS_PLAYERBOTMECHANICGUARD_H
++#define PLAYERBOTS_PLAYERBOTMECHANICGUARD_H
++
++#include <atomic>
++
++class Player;
++
++// Lets another module move the bots it chooses out of a boss mechanic when the boss starts casting it, and keep
++// them out while it lasts. Nothing changes until a module installs a guard (once, before maps update). The calls
++// run on the bot's map thread for every bot in combat (MechanicSpot) or about to move (MechanicRefuses), so a guard
++// answers Active() from an atomic and false at once for a bot it does not handle.
++class PlayerbotMechanicGuard
++{
++public:
++    virtual ~PlayerbotMechanicGuard() = default;
++
++    // True while the module has a mechanic in force anywhere; every caller asks this first.
++    virtual bool Active() const = 0;
++
++    // A lookup, no geometry: a mechanic in force binds this bot (the trigger's question).
++    virtual bool Binds(Player* bot) = 0;
++
++    // Where the bot must move now for a mechanic in force: out of its area, onto its stack point or away from the
++    // others. Returns true when it must move.
++    virtual bool MechanicSpot(Player* bot, float& x, float& y, float& z) = 0;
++
++    // True when a move to (x, y, z) would take the bot back into a mechanic it keeps out of now. Forced moves (a
++    // stock raid strategy's own, or this guard's) are never asked.
++    virtual bool MechanicRefuses(Player* bot, float x, float y, float z) = 0;
++
++    static PlayerbotMechanicGuard* Get() { return Slot().load(std::memory_order_acquire); }
++    static void Set(PlayerbotMechanicGuard* guard) { Slot().store(guard, std::memory_order_release); }
++
++private:
++    static std::atomic<PlayerbotMechanicGuard*>& Slot()
++    {
++        static std::atomic<PlayerbotMechanicGuard*> slot{nullptr};
++        return slot;
++    }
++};
++
++#endif
+diff --git a/src/Ai/Base/Strategy/CombatStrategy.cpp b/src/Ai/Base/Strategy/CombatStrategy.cpp
+index 6d14608f..49cdd10c 100644
+--- a/src/Ai/Base/Strategy/CombatStrategy.cpp
++++ b/src/Ai/Base/Strategy/CombatStrategy.cpp
+@@ -34,6 +34,16 @@ void CombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+             }
+         )
+     );
++    // A boss mechanic another module has in force (PlayerbotMechanicGuard): above the raid strategies' positioning
++    // while it lasts, below every emergency. Nothing fires until a module installs a guard.
++    triggers.push_back(
++        new TriggerNode(
++            "mechanic move",
++            {
++                NextAction("mechanic move", ACTION_RAID + 9)
++            }
++        )
++    );
+     triggers.push_back(
+         new TriggerNode(
+             "combat stuck",
+diff --git a/src/Ai/Base/Trigger/GenericTriggers.cpp b/src/Ai/Base/Trigger/GenericTriggers.cpp
+index d144882d..dfa8629f 100644
+--- a/src/Ai/Base/Trigger/GenericTriggers.cpp
++++ b/src/Ai/Base/Trigger/GenericTriggers.cpp
+@@ -14,6 +14,7 @@
+ #include "Player.h"
+ #include "PlayerbotAI.h"
+ #include "PlayerbotAIConfig.h"
++#include "PlayerbotMechanicGuard.h"
+ #include "Playerbots.h"
+ #include "PositionValue.h"
+ #include "SharedDefines.h"
+@@ -158,6 +159,12 @@ bool NoAttackersTrigger::IsActive()
+     return !AI_VALUE(Unit*, "current target") && AI_VALUE(uint8, "my attacker count") > 0;
+ }
+ 
++bool MechanicMoveTrigger::IsActive()
++{
++    PlayerbotMechanicGuard* guard = PlayerbotMechanicGuard::Get();
++    return guard && guard->Active() && guard->Binds(bot);
++}
++
+ bool InvalidTargetTrigger::IsActive() { return AI_VALUE2(bool, "invalid target", "current target"); }
+ 
+ bool NoTargetTrigger::IsActive() { return !AI_VALUE(Unit*, "current target"); }
+diff --git a/src/Ai/Base/Trigger/GenericTriggers.h b/src/Ai/Base/Trigger/GenericTriggers.h
+index 37dbc379..743551d0 100644
+--- a/src/Ai/Base/Trigger/GenericTriggers.h
++++ b/src/Ai/Base/Trigger/GenericTriggers.h
+@@ -366,6 +366,15 @@ public:
+     bool IsActive() override;
+ };
+ 
++// A module's PlayerbotMechanicGuard has a boss mechanic in force that binds this bot.
++class MechanicMoveTrigger : public Trigger
++{
++public:
++    MechanicMoveTrigger(PlayerbotAI* botAI) : Trigger(botAI, "mechanic move") {}
++
++    bool IsActive() override;
++};
++
+ class InvalidTargetTrigger : public Trigger
+ {
+ public:
+diff --git a/src/Ai/Base/TriggerContext.h b/src/Ai/Base/TriggerContext.h
+index cc725af7..c1ee9f44 100644
+--- a/src/Ai/Base/TriggerContext.h
++++ b/src/Ai/Base/TriggerContext.h
+@@ -215,6 +215,7 @@ public:
+         creators["move stuck"] = &TriggerContext::move_stuck;
+         creators["move long stuck"] = &TriggerContext::move_long_stuck;
+         creators["combat stuck"] = &TriggerContext::combat_stuck;
++        creators["mechanic move"] = &TriggerContext::mechanic_move;
+         creators["combat long stuck"] = &TriggerContext::combat_long_stuck;
+ 
+         creators["petition signed"] = &TriggerContext::petition_signed;
+@@ -432,6 +433,7 @@ private:
+     static Trigger* move_stuck(PlayerbotAI* botAI) { return new MoveStuckTrigger(botAI); }
+     static Trigger* move_long_stuck(PlayerbotAI* botAI) { return new MoveLongStuckTrigger(botAI); }
+     static Trigger* combat_stuck(PlayerbotAI* botAI) { return new CombatStuckTrigger(botAI); }
++    static Trigger* mechanic_move(PlayerbotAI* botAI) { return new MechanicMoveTrigger(botAI); }
+     static Trigger* combat_long_stuck(PlayerbotAI* botAI) { return new CombatLongStuckTrigger(botAI); }
+     static Trigger* player_wants_in_bg(PlayerbotAI* botAI) { return new PlayerWantsInBattlegroundTrigger(botAI); }
+     static Trigger* petition_signed(PlayerbotAI* botAI) { return new PetitionTurnInTrigger(botAI); }
+-- 
+2.56.0.windows.2
+

@@ -6,7 +6,7 @@ training check scores it. One table for three consumers, so that what a member s
 bodies do and what the training ground scores are the same thing:
 
 - the raid lead's callouts (the stock pre-pull call per boss lives here too, see below);
-- a native responder that can move bodies at cast start (a later PR);
+- the native responder that moves bodies at cast start (`[raidplay] respond`, see The responder);
 - the training ground's per-mechanic scoring (`training/checks.py`, now).
 
 Nothing here calls a model, opens `mind.db` or talks to the bridge.
@@ -71,6 +71,16 @@ Per mechanic (`[[boss.mechanic]]`):
   - `none`: nothing in stock playerbots does it.
   `playerbots` lists the registered stock action or strategy names; `raidplay check
   --playerbots-src` proves each is registered. Playerbots has no Trial of the Crusader strategy.
+- The responder's reading (`respond.py`, see The responder): `area`, where the danger lies when the spell
+  starts, for the kinds it responds to: `avoid_ground` `dest` (default: round the cast's destination, else its
+  target), `caster` (round the caster, following it) or `line` (a band `radius` either side and `range` long from
+  the caster toward its target, else its facing; both numbers required); `move_out_cone` `cone` (with `angle`,
+  the whole cone in degrees, else the core's 60); `spread` `group`; `stack` `dest`; `run_out_debuff` `target`;
+  `los` `caster`; and `none` for any of them when the cast start does not say where (the responder leaves it).
+  A `partial` mechanic of those kinds names `respond_roles`, the roles its `handled_note` says stock leaves (`[]`
+  when moving them would fight stock; without it the responder leaves the mechanic), and may name
+  `respond_spells` (a list or per-difficulty table, among its `spells`) when stock covers some of its casts.
+  Both are refused on a `none` or `playerbots` mechanic.
 - `explain`: one line for the raid lead, in our own words.
 - `check`: the training check it maps to: a boss check id, a generic check (`behind`, `aggro`,
   `tank_range`, `healer_oom`) or `none`.
@@ -89,6 +99,7 @@ book = pb.playbook_for(631, 11, 3)       # BossPlaybook for 25 heroic Sindragosa
 book.mechanics                           # only the mechanics that exist at that difficulty
 m = raidplay.mechanic("icc.sindragosa.frost_bomb")
 m.spell_ids("25h"), m.hit_ids("25h"), m.number("every", "25"), m.kind, m.roles, m.handled_by
+m.area, m.responder_roles(), m.responder_spells("25h")   # what the native responder acts on
 pb.boss(533, 2).enrage                   # {"10": 360, "25": 360}
 pb.covered_maps(), pb.bosses(), pb.check("icc.marrowgar.check_avoid_coldflame")
 raidplay.mechanics_for_spell(71055)      # every mechanic casting or landing that id, any difficulty
@@ -98,6 +109,41 @@ raidplay.mechanics_for_spell(71055)      # every mechanic casting or landing tha
 `raidplay.mechanics_for_spell(spell_id)` are the module-level shortcuts (the last is a
 responder's lookup from a cast start: check the mechanic's `spell_ids(difficulty)` for the
 instance's difficulty). Everything returned is frozen; mappings are read-only.
+
+## The responder
+
+`[raidplay] respond = true` in `mind.toml` (default false; read at mind start; an invalid table, or one with keys
+other than `respond`, means off) sends native the playbooks' actionable mechanics; native's
+`Leeroy.Mechanics.Enable = 1` (`.reload config`) then moves the bodies at cast start
+(`modules/mod-leeroy/README.md`, "Boss mechanics at cast start"). It needs `[training] playbooks = true`: the
+training ground scores the playbooks' checks that measure it (log `raidplay_respond_off reason=needs_playbooks`
+otherwise; `invalid` and `playbook_error` likewise). Restart the mind after changing it. Off, nothing is attached:
+no handler, no task, no command, and native has no table, so it moves nobody (exactly today's behaviour).
+
+`respond.actionable(playbooks, map, difficulty)` is the table for one instance: each mechanic of a responded kind
+(`avoid_ground`, `move_out_cone`, `spread`, `stack`, `run_out_debuff`, `los`; `soak` is later work) with an
+`area` other than `none` and roles stock leaves (`responder_roles()`: every role of a `none` mechanic, the
+`respond_roles` of a `partial` one, none of a `playerbots` one), with its casts at that difficulty
+(`responder_spells`), `radius`, `range`, `angle` (cones default to 60) and `duration` (the playbook's; a spread
+holds for its `every`, until the next cast; otherwise native takes the spell's own duration). It is bounded to
+native's limits (64 rules, 16 spells, 100 yards, 30 seconds), and each table fits one bridge line many times
+over. Today 18 mechanics qualify across the ten covered raid difficulties.
+
+`MechanicFeed` sends every covered map and difficulty as one `raid_mechanics` command at each hello from a
+worldserver whose hello lists the `mechanics` feature (an older one gets nothing: `raidplay_respond_unsupported`),
+and an instance's table again when his group enters it (the `guild_group` `entered` event, once per instance id
+and connection). Native keeps the tables for the connection that sent them, so offline raids and his called raid
+nights are covered from hello on. Logs: `raidplay_respond_on tables= mechanics=`, `raidplay_respond_sent map=
+difficulty= mechanics=`, `raidplay_respond_refused map= difficulty= error=<code>`,
+`raidplay_respond_transport`. The Ops tab's Switches lists it (`training.playbooks` and
+`Leeroy.Mechanics.Enable = 1` as its needs). `raidplay show` adds a `responder:` line to each mechanic it acts on.
+
+Which mechanics the data leaves (`area = "none"` or `respond_roles = []`), and why, is said in a comment beside
+each in `data/*.toml`: Rotface's Slime Spray and Loatheb's spores (moving them would fight stock's own placing),
+Putricide's Choking Gas Bomb, the gunship's Rocket Artillery (the deck is a transport), the Beasts' Slime Pool,
+Paralytic Toxin and Trample, and the twins' orbs (no place known at cast start). Coldflame is answered for the
+targeted cast only (`respond_spells = [69140]`; Bone Storm's four lines are not one area), along a 70-yard line;
+the Blood Council's vortex for the ordinary one only (stock dodges the empowered one).
 
 ## Training
 
