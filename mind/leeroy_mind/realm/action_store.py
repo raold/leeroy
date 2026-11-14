@@ -28,7 +28,7 @@ STATES = frozenset({"prepared", "dispatched", "unknown", "conflict", *TERMINAL})
 # reserves anyone. One fenced body refuses the whole command at its ack: nobody was moved.
 BODY_FENCES = frozenset({"not_actor", "not_bot", "busy:realm_owner", "busy:raid_owner",
                          "busy:body_unavailable", "busy:training_owner", "busy:training_cleanup",
-                         "busy:training_state"})
+                         "busy:training_state", "busy:string"})  # busy:string: his come_to_me's stay
 REFUSALS = frozenset({"realm_off", "realm_not_started", "unsupported", "busy:queue_full",
                       "busy:body_identity", "pin_rejected", "bad field: queued_operation", *BODY_FENCES})
 # guild_grow's admission refusals (RealmGuild.cpp GrowAdmission, LeeroyRealmGuild.h): native

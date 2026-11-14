@@ -32,9 +32,10 @@ connection closes.
                     and in force from the next read; a preview's text goes only to the caller;
                     edit {verb: set|preview {kind, args} | retire {id} | list}: godmode edits
                     (leeroy_mind.tuning.edits), set and preview only with [godmode] enabled
-    selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid}: profile
-                    photos (leeroy_mind.selfies), written by this mind only, one change at a
-                    time until its files are written; status at any time
+    selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid} |
+                    vary {go[, guids]}:
+                    profile photos (leeroy_mind.selfies), written by this mind only, one change
+                    at a time until its files are written; status at any time
     say {channel, text[, to]}
                     guild | officer | group | whisper (to: a cast member's guid): the owner's
                     own line, said in game as his through native owner_say
@@ -66,7 +67,9 @@ connection closes.
                     logged
     string {action} create {member, kind, args} | cancel {id} | list [{member}]: his strings,
                     intents a member carries out in her own way (leeroy_mind.godmode), only with
-                    [godmode] enabled; one change at a time
+                    [godmode] enabled; one change at a time. A game kind (come_to_me,
+                    join_group, follow, duel_me, emote, sit) goes to native at once and answers
+                    {state: taken|not_taken, reason} with its words
     ops {action}    opt-in operator actions: inspect, status, offline_stop {id}, render,
                     snapshot {label}. Realm release is inspected here but is executed only
                     through the console's clean stop/CLI/restart procedure. New work needs
@@ -122,12 +125,13 @@ TUNE_SHAPES = {
     "preview": {"action", "scope", "target", "dial", "value"},
 }
 TUNE_SCOPES = ("world", "group", "member")
-SELFIE_ACTIONS = ("status", "pick", "more", "undo")
+SELFIE_ACTIONS = ("status", "pick", "more", "undo", "vary")
 SELFIE_SHAPES = {
     "status": {"action"},
     "pick": {"action", "guid", "set", "index"},
     "more": {"action", "guid"},
     "undo": {"action", "pick"},
+    "vary": {"action", "go"},
 }
 SAY_CHANNELS = ("guild", "officer", "group", "whisper")
 MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
@@ -566,6 +570,8 @@ def selfie_args(args) -> dict:
         raise BadRequest("selfie: an action, one of " + ", ".join(SELFIE_ACTIONS))
     action = args["action"]
     shape = SELFIE_SHAPES[action]
+    if action == "vary" and set(args) == shape | {"guids"}:
+        shape = shape | {"guids"}
     if set(args) != shape:
         if action == "status":
             raise BadRequest("selfie status: takes no arguments")
@@ -579,7 +585,13 @@ def selfie_args(args) -> dict:
             raise BadRequest("selfie pick: index is a photo's place in its set, 0-3")
     if action == "undo" and not (type(args["pick"]) is int and 1 <= args["pick"] < 1 << 63):
         raise BadRequest("selfie undo: pick is a change's number")
-    return {k: args[k] for k in ("action", "guid", "set", "index", "pick") if k in shape}
+    if action == "vary" and type(args["go"]) is not bool:
+        raise BadRequest("selfie vary: go is true or false")
+    if "guids" in shape and not (isinstance(args["guids"], list) and 1 <= len(args["guids"]) <= 256
+                                 and all(_count(g, 1) for g in args["guids"])):
+        raise BadRequest("selfie vary: guids is a list of 1-256 members' guids")
+    return {k: args[k] for k in ("action", "guid", "set", "index", "pick", "go", "guids")
+            if k in shape}
 
 
 def say_args(args) -> dict:

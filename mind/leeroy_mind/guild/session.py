@@ -113,6 +113,9 @@ class RaidSession:
                 if attend:
                     _record_attendance(ports, cfg, plan, raid_id, now)
                 _put(ports.conn, f"guild:raid:{raid_id}:plan", saved_plan)
+                fix = getattr(ports, "fix_loot_rule", None)
+                if fix is not None:
+                    fix(raid_id)  # the guild's loot rule for this raid (decisions), in this unit
         session = cls(ports, cfg, armory, plan, raid_id)
         if decay:
             await session._say_decay()

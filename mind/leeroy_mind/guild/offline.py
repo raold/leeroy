@@ -121,7 +121,8 @@ def refused_member(error: str, plan: RaidPlan) -> int | None:
     """The member of the sent roster a refusal names, or None when it names nobody in it.
 
     `leader_unavailable:<why>` names the leader, the plan's tank. `busy:<guid>` is a body a
-    training dummy trial owns. A setup failure is read as its inner refusal. A guid outside the
+    training dummy trial owns. `busy:string:<guid>` (his come_to_me's stay, at most 10 minutes)
+    names nobody: the start is retried (retry_after), she is not left out of the day. A setup failure is read as its inner refusal. A guid outside the
     roster is a disagreement this cannot fix by leaving someone out, so it names nobody.
     """
     parts = error.split(":", 2)

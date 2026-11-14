@@ -29,6 +29,7 @@ class Candidate:
     bench_streak: int
     attended_30d: int
     available: bool
+    ilvl: int = 0  # average item level from the armory; 0 when unread (a lineup reads it)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,33 @@ class Leads:
 
 class NoTankError(Exception):
     """The proposed group has no available tank with a playable tank spec."""
+
+
+# The raid-wide buffs a lineup should not lack, as mod-leeroy's add picker weighs them
+# (GuildAddSpecFacts): Bloodlust/Heroism from any shaman; Replenishment from a Retribution
+# paladin, Survival hunter, Shadow priest, Frost mage or Destruction warlock. Replenishment
+# reaches 10 members, so a 25 wants two sources.
+_REPLENISHMENT = frozenset({(2, 2), (3, 2), (5, 2), (8, 2), (9, 2)})
+RAID_BUFFS = ("bloodlust", "replenishment")
+
+
+def raid_buffs(candidate: Candidate) -> frozenset[str]:
+    out = set()
+    if candidate.cls == 7:
+        out.add("bloodlust")
+    if candidate.role == "damage" and (candidate.cls, candidate.spec_tab) in _REPLENISHMENT:
+        out.add("replenishment")
+    return frozenset(out)
+
+
+def wanted_sources(buff: str, size: int) -> int:
+    return 2 if buff == "replenishment" and size >= 25 else 1
+
+
+def coverage(size: int, chosen: Iterable[Candidate]) -> list[str]:
+    """The lineup's coverage codes: each raid buff it has enough sources of, else no_<buff>."""
+    have = Counter(buff for c in chosen for buff in raid_buffs(c))
+    return [buff if have[buff] >= wanted_sources(buff, size) else "no_" + buff for buff in RAID_BUFFS]
 
 
 def _priority(candidate: Candidate) -> tuple[int, int, int]:
@@ -70,13 +98,15 @@ def _unique(cands: Iterable[Candidate]) -> dict[int, Candidate]:
 
 
 def select_comp(size: int, cands: Iterable[Candidate], *, must_include: Iterable[int],
-                human_in_raid: bool, seed: int) -> Comp:
+                human_in_raid: bool, seed: int, buff_ties: bool = False) -> Comp:
     """Keep mandatory members, then fill role targets fairly without overbooking.
 
     Mandatory members may exceed role targets or soft class caps, but not total
     capacity. Missing/unavailable mandatory GUIDs and impossible capacity raise
     ValueError rather than silently weakening the request. The human occupies a
     damage seat and is not included in the returned bot GUIDs or role mapping.
+    buff_ties (a posted lineup, decisions.lineup): among candidates of equal priority, one adding
+    a Bloodlust or Replenishment source the picks still lack comes first, then the better gear.
     """
     if type(size) is not int or size not in TARGETS:
         raise ValueError("raid size must be 10 or 25")
@@ -114,12 +144,18 @@ def select_comp(size: int, cands: Iterable[Candidate], *, must_include: Iterable
         if candidate.role == "damage":
             damage_classes[candidate.cls] += 1
 
+    def adds(candidate: Candidate) -> int:
+        have = Counter(buff for c in chosen for buff in raid_buffs(c))
+        return sum(have[buff] < wanted_sources(buff, size) for buff in raid_buffs(candidate))
+
     def next_of(role: str) -> Candidate | None:
         remaining = [c for c in ranked if c.guid not in selected and c.role == role]
         if role == "damage":
             diverse = [c for c in remaining if damage_classes[c.cls] < class_cap]
             if diverse:
                 remaining = diverse
+        if buff_ties and remaining:
+            return min(remaining, key=lambda c: (*_priority(c), -adds(c), -c.ilvl, ties[c.guid], c.guid))
         return remaining[0] if remaining else None
 
     for role in _ROLES:

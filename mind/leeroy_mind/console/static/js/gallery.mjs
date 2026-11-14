@@ -2,7 +2,7 @@
 // only the shown full image and its neighbours are retained. Closing revokes every blob URL.
 import { api, clear, el, emit, on, post, refused, str } from "./core.mjs";
 import { face } from "./faces.mjs";
-import { coverWhy, initial, ordered, step, swipe } from "./gallerymodel.mjs";
+import { coverWhy, initial, lookWords, ordered, step, swipe } from "./gallerymodel.mjs";
 
 var active = null;
 
@@ -201,7 +201,7 @@ function draw(g) {
   g.make.disabled = !!why;
   g.why.textContent = why;
   g.badge.hidden = !p || !p.cover;
-  g.caption.textContent = p ? (g.at + 1) + " / " + g.photos.length + " · " + new Date(p.rendered * 1000).toLocaleString() : "";
+  g.caption.textContent = p ? (g.at + 1) + " / " + g.photos.length + " · " + new Date(p.rendered * 1000).toLocaleString() + (lookWords(p) ? " · " + lookWords(p) : "") : "";
   Array.from(g.strip.children).forEach(function (b) { b.setAttribute("aria-current", String(Number(b.dataset.photoIndex) === g.at)); });
   if (g.image.dataset.photo === (p && p.id)) { return; }
   var selected = g.strip.children[g.at - g.stripStart];

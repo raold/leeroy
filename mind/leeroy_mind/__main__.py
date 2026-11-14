@@ -1312,8 +1312,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser('fingerprint', help='read-only typing style profile')
     sub.add_parser("signals", help="read-only response signal counts")
     sub.add_parser("learn", help="read-only reward report")
-    sub.add_parser("selfies", help="profile photos: status, and a trial render with the mind "
-                   "stopped")
+    sub.add_parser("selfies", help="profile photos: status, a trial render with the mind "
+                   "stopped, and varied sets (vary)")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
                                    "mind's health, start and stop)")
     sub.add_parser("health", help="a read-only check of the live install: the servers, the "

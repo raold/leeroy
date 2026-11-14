@@ -201,7 +201,7 @@ class ServerEngine:
                          human=self.app.human_guid, now=self.app.clock.now(), allowance=allowance)[0]
 
     def _joke_valid(self, conversation, speaker):
-        if conversation.seed.kind == 'loot_close' and len(conversation.seed.about) > 1:
+        if conversation.seed.kind in ('loot_close', 'his_loot') and len(conversation.seed.about) > 1:
             return self._gate(conversation, speaker, conversation.seed.about[1])
         if conversation.seed.kind not in ("joke", "meme", "meme_image"):
             return True
@@ -309,17 +309,22 @@ class ServerEngine:
 
     def _record_close(self, conversation, line, message, now):
         """A delivered close-loot thread spends its runner-up's teasing allowance for the day,
-        once, inside the pipeline's post/chat transaction, as a joke's does."""
-        from leeroy_mind.culture.tease import mark_teased
+        once, inside the pipeline's post/chat transaction, as a joke's does; one about his claim
+        (his_loot) spends his, and his evening's, as a joke at him does."""
+        from leeroy_mind.culture.tease import mark_teased, OWNER_KEY
+        from leeroy_mind.clock import local_at, night_of
         receipt = f'culture:server-close:{conversation.id}'
         with self.app.store.transaction():
             if self.app.store.get_meta(receipt) is None:
-                mark_teased(self.app.store, conversation.seed.about[1], now=now)
+                target = conversation.seed.about[1]
+                mark_teased(self.app.store, target, now=now)
+                if target == self.app.human_guid:
+                    self.app.store.set_meta(OWNER_KEY, night_of(local_at(now)))
                 self.app.store.set_meta(receipt, str(message))
 
     def _settle_joke(self, conversation, meta):
         """Read the committed receipt after success or shielded cancellation."""
-        kind = 'close' if conversation.seed.kind == 'loot_close' else 'joke'
+        kind = 'close' if conversation.seed.kind in ('loot_close', 'his_loot') else 'joke'
         conversation.teased = self.app.store.get_meta(f'culture:server-{kind}:{conversation.id}') is not None
 
     async def _conversation(self, conversation):
@@ -389,7 +394,7 @@ class ServerEngine:
                 elif conversation.seed.kind == 'meme_image':
                     opener = 'You made a meme picture about this running joke and are posting it now: '
                 elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day',
-                                                'decision','wow_event','loot_close'}:
+                                                'decision','wow_event','loot_close','his_loot'}:
                     opener = 'Start a conversation about this real event in your own way: '
                 else:
                     opener = 'Start a conversation using only what is known: '
@@ -402,7 +407,8 @@ class ServerEngine:
                     person = observed.personas.get(target)
                     name = app.engine.human.called if target == app.human_guid else person.character_name
                     instruction += f" Tease {name} about it the way friends do; keep it kind."
-                if conversation.seed.kind in ('joke', 'loot_close', 'meme', 'meme_image') and conversation.teaser is None:
+                if (conversation.seed.kind in ('joke', 'loot_close', 'his_loot', 'meme', 'meme_image')
+                        and conversation.teaser is None):
                     conversation.teaser = speaker
                 turn = Turn(TurnKind.OPEN if parent is None else TurnKind.CONTINUE, speaker,
                     conversation.channel if is_group(conversation.channel) else 'discord:'+conversation.channel,
@@ -419,7 +425,7 @@ class ServerEngine:
                 from leeroy_mind.culture.seeds import joke_of
                 if joke_of(conversation.seed) is not None:  # a joke, or a meme about one
                     meta.on_discord_record = lambda line,message,now:self._record_joke(conversation,line,message,now)
-                elif conversation.seed.kind == 'loot_close' and len(conversation.seed.about) > 1:
+                elif conversation.seed.kind in ('loot_close', 'his_loot') and len(conversation.seed.about) > 1:
                     meta.on_discord_record = lambda line,message,now:self._record_close(conversation,line,message,now)
                 if conversation.seed.kind == 'intent' and parent is None:
                     from leeroy_mind.godmode.service import intent_of
@@ -442,7 +448,7 @@ class ServerEngine:
                     await app.engine.speak_meta(turn, meta)
                 finally:
                     conversation.in_flight = conversation.in_flight_turn = None
-                    if conversation.seed.kind in ("joke", "loot_close", "meme", "meme_image"):
+                    if conversation.seed.kind in ("joke", "loot_close", "his_loot", "meme", "meme_image"):
                         self._settle_joke(conversation, meta)
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]

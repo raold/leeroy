@@ -12,6 +12,12 @@ Leeroy.Enable = 1
 # Optional persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
 Leeroy.PlayStyle.Enable = 0
 
+# The owner's .playerbots bot addN follows the raid lineup the guild posted (the mind's [decisions], guild_add_roster):
+# within each role its members first, its bench only when nobody else free fits. 0 picks exactly as without one.
+# The roster lives in memory until its raid night ends (at most 12 h); the mind sends it again on hello.
+# Reloadable with .reload config.
+Leeroy.GuildAdd.FollowRoster = 0
+
 # The raid lead (mind [raidlead]): his orders to his own group's bots (bot_do "order", Bloodlust included)
 # and the raid icon of the member he names to lead on his target (raid_lead). No assistant flag is set.
 # 0 refuses all of it (raidlead_off) and lifts any hold at once. Reloadable with .reload config.
@@ -56,6 +62,16 @@ Leeroy.GroupRez.ReleaseSeconds = 60
 # Random bots and anyone outside his group are never touched; Realm and training ownership is honoured.
 # Reloadable with .reload config; 0 takes back the avoid aoe it added.
 Leeroy.Hazards.Enable = 0
+
+# The owner's strings in game, sent from the guild console by the mind (string_do): one pinned cast member comes
+# to him (only while he is in a city or a rest area; one outside his group then stays there 10 minutes), joins the
+# party he leads (never a raid; under his add command's own fences), follows him or stops (in his party), challenges
+# him to a duel, emotes at him or sits near him. Each is his own ask and takes no Realm lease, but every Realm,
+# training and offline-raid fence holds, and nothing is done in a fight (hers, his or his group's), in or onto an
+# instance, in a battleground or a queue. A come_to_me stay fences her (busy:string) from the Realm, training and
+# offline raids for its 10 minutes. Reloadable with .reload config; 0 refuses new strings and takes back the stays
+# and seats it added.
+Leeroy.Strings.Enable = 0
 
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1

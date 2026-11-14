@@ -46,8 +46,29 @@ class RehearsalOps(opsview.OpsView):
         return super()._source(name, deadline, runtime)
 
 
+# What native's string_do says she did, by kind (Guild/Strings.cpp).
+STRING_DONE = {"come_to_me": "came", "join_group": "joined", "follow": "following",
+               "duel_me": "challenged", "emote": "emoted", "sit": "sat"}
+
+
 class Bridge(FakeBridge):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.strings = {}  # string_do kind -> native's refusal code; others are carried out
+        self._ack = self._answer
+
+    def _answer(self, command):
+        if command.get("type") == "string_do" and command.get("kind") in self.strings:
+            return False, self.strings[command["kind"]]
+        return True, ""
+
     async def _command(self, writer, command):
+        if command.get("type") == "string_do" and command.get("kind") not in self.strings:
+            # Native publishes the done job before its ack.
+            await self._write(writer, {"type": "job", "id": command.get("id"), "kind": "string_do",
+                "state": "done", "reason": STRING_DONE.get(command.get("kind"), ""), "stage": "",
+                "guids": [command.get("guid")], "skipped": [], "kills": 0, "wipes": 0,
+                "instance_id": 0, "guid": command.get("guid"), "level": 0, "avg_ilvl": 0})
         await super()._command(writer, command)
         if command.get("type") == "owner_say":
             await self._write(writer, {"type": "chat", "channel": command["channel"],
@@ -81,7 +102,8 @@ class Rehearsal:
         self.ports = set()
         self.worker = None
 
-    async def start(self, state="running", *, photos=False, learning=False, voice_notes=False):
+    async def start(self, state="running", *, photos=False, learning=False, voice_notes=False,
+                    godmode=False):
         cast = []
         for member in members():
             row = asdict(member)
@@ -98,7 +120,8 @@ class Rehearsal:
             f'worldserver_conf = "{(self.root / "absent.conf").as_posix()}"\n'
             f'[photos]\nenabled = {str(photos).lower()}\n'
             + ('[signals]\nenabled = true\n[learn]\nenabled = true\n' if learning else '')
-            + ('[voice_notes]\nenabled = true\n' if voice_notes else ''), encoding="utf-8")
+            + ('[voice_notes]\nenabled = true\n' if voice_notes else '')
+            + ('[godmode]\nenabled = true\n' if godmode else ''), encoding="utf-8")
         seed(self.data)
         command, env = fake_command(self.root)
         self.worker = SelfieWorker(command, env=env)

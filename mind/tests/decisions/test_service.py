@@ -102,10 +102,29 @@ def test_a_hook_that_keeps_failing_is_given_up_after_its_tries(store, clock, loo
     assert 'decisions_poll_hook_gave_up' in caplog.text
 
 
-def test_a_poll_whose_kind_has_no_hook_waits_for_one(store, clock, loot_poll):
-    at = [clock.now() + 86400]
+def test_a_poll_whose_kind_has_no_hook_waits_for_one(store, clock):
+    # Ranks have no rules until Part C (the loot rule's are shipped since Part B)
+    now = clock.now()
+    store.set_meta('human_guid', '1')
+    poll = polls.open_poll(store, channel='officer-chat', question='Promote?', options=('promote', 'keep'),
+                           voters=(102, 104), closes=now + 86400, now=now, kind='rank', subject='rank:103')
+    at = [now + 86400]
     asyncio.run(service(store, at).tick())
-    assert [r['id'] for r in polls.unhandled(store.conn)] == [loot_poll]
+    assert [r['id'] for r in polls.unhandled(store.conn)] == [poll]
+
+
+def test_each_service_holds_its_own_kinds(store, clock):
+    first, second = service(store, [clock.now()]), service(store, [clock.now()])
+    assert set(first.rules) == {'lineup', 'loot_rule'}
+    assert all(first.rules[k] is not second.rules[k] for k in first.rules)
+    # A stand-in registered for a test goes ahead of a service's own
+    stand_in = Kind(store)
+    apply.register(stand_in)
+    try:
+        assert first.rules_for('loot_rule') is stand_in and first.rules_for('lineup') is first.rules['lineup']
+    finally:
+        apply.unregister('loot_rule')
+    assert first.rules_for('loot_rule') is first.rules['loot_rule']
 
 
 def test_presence_is_the_servers_without_its_database_reads(store, clock):

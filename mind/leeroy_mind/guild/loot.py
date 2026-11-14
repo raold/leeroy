@@ -78,6 +78,15 @@ class LootMaster:
             self._lock = asyncio.Lock()
             _LOCKS[lock_key] = self._lock
         self._closed = False
+        self._rule = None
+
+    def _loot_rule(self):
+        """The guild's loot rule for this raid (decisions.loot_rules, fixed when it opened), or
+        None while the guild's decisions are off: today's DKP."""
+        if self._rule is None:
+            hook = getattr(self.ports, "loot_rule", None)
+            self._rule = hook(self.ctx.raid_id) if hook is not None else None
+        return self._rule
 
     def _records(self):
         rows = self.ports.conn.execute("SELECT key,value FROM meta WHERE key LIKE ? ORDER BY key",
@@ -120,6 +129,10 @@ class LootMaster:
                 asyncio.to_thread(self.armory.equipped, members))
             if not self._active() or self.ctx.instance_id != ev.instance_id:
                 return
+            rule = self._loot_rule()
+            if rule is not None:
+                from leeroy_mind.decisions.loot_rules import loot_role, price_of, shares_of
+                shares = shares_of(self.ports.conn, members, now=self.ports.clock.now())
             for key, slot in fresh:
                 if not self._active():
                     break
@@ -136,6 +149,9 @@ class LootMaster:
                                             equipment.get(guid, {}))
                         bids.append({"guid": guid, "gain": gain,
                                      "wanted": wants_item(persona.game.wants, item.name)})
+                        if rule is not None:
+                            bids[-1].update(role=loot_role(member.class_, member.spec_tab, persona.play.raid_role),
+                                            share=round(shares.get(guid, 0.0), 4))
                 now = self.ports.clock.now()
                 ordinal = max((row.get("ordinal", 0) for _, row in self._records()), default=0) + 1
                 record = dict(state="pending", map=ev.map, instance_id=ev.instance_id,
@@ -146,6 +162,11 @@ class LootMaster:
                               due=now + (self.cfg.dkp.claim_window_s if self.ctx.plan.human_in_raid else 3),
                               received=now, ordinal=ordinal,
                               command_id="guild-loot:" + str(self.ctx.raid_id) + ":" + key[-24:])
+                if rule is not None:
+                    # The guild's rule: its price for the slot, and the slot its role priorities name
+                    record.update(mode=rule.mode, slot=price_category(item) if item else "other")
+                    if item is not None:
+                        record["price"] = price_of(rule, record["slot"], self.cfg.dkp.prices)
                 with self.ports.conn:
                     inserted = self.ports.conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES (?,?)",
                                                        (key, json.dumps(record))).rowcount
@@ -165,20 +186,27 @@ class LootMaster:
 
     async def _finish(self, key, record):
         result = Award(**record["award"])
+        # A loot council charges nothing: its row says so (decisions.loot_rules)
+        council = record.get("mode") == "loot_council"
         with self.ports.conn:
             current = _get(self.ports.conn, key)
             if current is None or current["state"] != "acknowledged":
                 return
-            _insert_ledger(self.ports.conn, [LedgerEntry(self.ports.clock.now(), result.guid, -result.paid,
-                                                       "item", self.ctx.raid_id, record["item_id"], key)])
+            _insert_ledger(self.ports.conn, [LedgerEntry(self.ports.clock.now(), result.guid,
+                                                       0.0 if council else -result.paid, "item", self.ctx.raid_id,
+                                                       record["item_id"], "council:" + key if council else key)])
             current["state"] = "charged"
             _put(self.ports.conn, key, current)
         facts = dict(item=record["name"], winner=member_name(self.ports, result.guid), paid=result.paid)
         if result.close:
             facts.update(runner_up=member_name(self.ports, result.runner_up), runner_bid=result.runner_up_bid)
-        await self.ports.say(self.ctx.plan.loot_guid, "raid",
-                             template("loot_award_close" if result.close else "loot_award", **facts))
+        line = "loot_award_council" if council else "loot_award_close" if result.close else "loot_award"
+        await self.ports.say(self.ctx.plan.loot_guid, "raid", template(line, **facts))
         if result.close and result.runner_up is not None:
+            await self.ports.loot_lost(result.runner_up, record["name"])
+        elif (record.get("mode") is not None and record.get("human_claimed") is True
+              and result.guid == self.ports.human_guid and result.runner_up is not None):
+            # His claim over a member who wanted it: she remembers losing it (decisions)
             await self.ports.loot_lost(result.runner_up, record["name"])
 
     async def tick(self):
@@ -202,8 +230,22 @@ class LootMaster:
                 cast = self.ports.cast()
                 bidders = [Bidder(b["guid"], current_balances.get(b["guid"], 0), b["gain"], b["wanted"])
                            for b in record["bidders"] if b["guid"] in cast and cast[b["guid"]].online]
-                result = (award(record["price"], bidders, human_claimed=record["human_claimed"],
-                                human_guid=self.ports.human_guid) if record["known"] else None)
+                if not record["known"]:
+                    result = None
+                elif record.get("mode") is None:
+                    result = award(record["price"], bidders, human_claimed=record["human_claimed"],
+                                   human_guid=self.ports.human_guid)
+                else:
+                    from leeroy_mind.decisions.loot_rules import award_with, rule_for_raid, rule_from_value
+                    # A drop recorded under the guild's rule is awarded under it, switch or no switch
+                    rule = (self._loot_rule() or rule_for_raid(self.ports.conn, self.ctx.raid_id)
+                            or rule_from_value({"mode": record["mode"]}))
+                    rows = {b["guid"]: b for b in record["bidders"]}
+                    result = award_with(rule, record["price"], bidders,
+                                        human_claimed=record["human_claimed"], human_guid=self.ports.human_guid,
+                                        slot=record.get("slot", "other"),
+                                        roles={g: b.get("role") for g, b in rows.items()},
+                                        shares={g: b.get("share", 0.0) for g, b in rows.items()})
                 with self.ports.conn:
                     current = _get(self.ports.conn, key)
                     if current["state"] != "pending":

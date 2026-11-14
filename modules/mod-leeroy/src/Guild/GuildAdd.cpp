@@ -2,6 +2,7 @@
 
 #include "GuildAdd.h"
 #include "GuildPorts.h"
+#include "Strings.h"
 #include "OfflineRaidJob.h"
 #include "RaidAssembly.h"
 #include "Realm/RealmModule.h"
@@ -11,6 +12,7 @@
 #include "AiFactory.h"
 #include "Chat.h"
 #include "ChatCommand.h"
+#include "Config.h"
 #include "DBCStores.h"
 #include "Group.h"
 #include "InstanceSaveMgr.h"
@@ -37,6 +39,12 @@ namespace
 // instance, the mind is told, so a raid built this way can count like a called one.
 ObjectGuid builtGroup;
 uint32 builtSize = 0;
+// Whether a fill of that group followed the posted roster: its guild_group events say so, built and entered.
+bool builtFollowed = false;
+// World thread. The posted raid lineup (guild_add_roster), in memory only: a worldserver start clears it and the mind
+// sends it again on hello. Followed only while Leeroy.GuildAdd.FollowRoster is on.
+GuildAddRoster postedRoster;
+bool followRoster = false;
 
 GuildAddRole RoleOf(Player* player)
 {
@@ -219,6 +227,7 @@ void PublishGuildGroup(std::string reason, Player* human, Group* group,
     event.instanceId = human->GetInstanceId();
     event.difficulty = static_cast<std::uint8_t>(human->GetMap()->GetDifficulty());
     event.added = std::move(added);
+    event.rosterFollowed = builtFollowed;
     for (auto const& slot : group->GetMemberSlots())
         if (uint32 const guid = slot.guid.GetCounter(); guid != event.leaderGuid && IsCast(guid))
             event.members.push_back(guid);
@@ -269,7 +278,11 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         candidates.push_back({guid, RoleOf(bot), bot->getClass(), TabOf(bot), GearOf(bot)});
     }
 
-    auto const plan = PlanGuildAdd(size, members, connected, std::move(candidates));
+    auto const roster = GuildAddRosterInForce(followRoster, postedRoster, NowUnixMs());
+    if (!roster.preferred.empty() || !roster.bench.empty())
+        LOG_INFO("module.leeroy", "mod-leeroy: add{} from the guild follows the posted roster ({} members, {} bench)",
+            size, roster.preferred.size(), roster.bench.size());
+    auto const plan = PlanGuildAdd(size, members, connected, std::move(candidates), roster);
     GuildAddCounts added{};
     GuildAddBuffs covered = plan.covered;
     std::uint32_t notBrought = 0;
@@ -315,6 +328,11 @@ std::vector<std::string> Fill(Player* human, uint32 size)
 
     if (!joined.empty())
     {
+        std::vector<std::uint32_t> guids;
+        for (auto const& [guid, role] : joined)
+            guids.push_back(guid);
+        // A top-up of the same group keeps what an earlier fill of it followed.
+        builtFollowed = (builtGroup == group->GetGUID() && builtFollowed) || GuildAddRosterFollowed(roster, guids);
         builtGroup = group->GetGUID();
         builtSize = size;
         PublishGuildGroup("built", human, group, joined);
@@ -364,6 +382,20 @@ void SwapSavedElsewhere(Player* human, Group* group)
         handler.PSendSysMessage("{}", message);
 }
 
+LeeroyCommandResult HandleGuildAddRoster(nlohmann::json const& message)
+{
+    std::string error;
+    auto roster = ParseGuildAddRoster(message, error);
+    if (!roster)
+        return {false, std::move(error)};
+    if (auto why = GuildAddRosterRefusal(*roster, NowUnixMs()); !why.empty())
+        return {false, std::move(why)};
+    postedRoster = std::move(*roster);
+    LOG_INFO("module.leeroy", "mod-leeroy: guild_add_roster held ({} members, {} bench)", postedRoster.preferred.size(),
+        postedRoster.bench.size());
+    return {true, {}};
+}
+
 class GuildAddCommandScript : public AllCommandScript
 {
 public:
@@ -387,6 +419,7 @@ public:
         uint32 const size = ParseGuildAddCommand(Acore::ChatCommands::GetAutoCompletionsFor(handler, command));
         if (!size)
             return true;
+        StringWaiver const waiver;   // his own ask: a member he pulled to him is his to add
         for (auto const& message : Fill(invoker, size))
             handler.PSendSysMessage("{}", message);
         return false; // Never playerbots' addclass bots for him.
@@ -402,6 +435,7 @@ public:
     {
         if (!player || builtGroup.IsEmpty() || !GuildEnabled() || player->GetGUID().GetCounter() != HumanGuid())
             return;
+        StringWaiver const waiver;   // his own group, his own ask
         Group* group = player->GetGroup();
         Map* map = player->GetMap();
         if (group && group->GetGUID() == builtGroup && group->IsLeader(player->GetGUID()) && map && map->IsDungeon())
@@ -421,6 +455,31 @@ public:
     }
 };
 }
+
+std::string GuildAddJoinRefusal(Player* human, Player* bot)
+{
+    if (!human || !bot || !human->GetMap())
+        return "offline";
+    if (Group* group = human->GetGroup())
+    {
+        if (GroupHasRealmOwner(group))
+            return "busy:realm_owner";
+        for (auto const& slot : group->GetMemberSlots())
+            if (OfflineRaidOwns(slot.guid.GetCounter()))
+                return "busy:training_owner";
+    }
+    constexpr uint32 kParty = 5;
+    std::vector<GuildAddSave> const outside = human->GetMap()->IsDungeon() ? std::vector<GuildAddSave>{}
+        : SavesOf(human->GetGUID());
+    return GuildAddSkipReason(BodyOf(bot->GetGUID().GetCounter(), bot, human, LeeroyModule::Instance().GuildId(),
+        false, &outside, kParty));
+}
+
+bool GuildAddBring(Player* bot, Player* human) { return Bring(bot, human, 0, 1); }
+
+void RegisterGuildAddRosterHandler() { RegisterCommand(std::string(kGuildAddRosterType), HandleGuildAddRoster); }
+
+void ReloadGuildAdd() { followRoster = sConfigMgr->GetOption<bool>("Leeroy.GuildAdd.FollowRoster", false); }
 
 void AddGuildAddScripts()
 {

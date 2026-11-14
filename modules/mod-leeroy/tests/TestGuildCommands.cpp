@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
+#include "LeeroyGuildAddPolicy.h"
 #include "LeeroyGuildCommands.h"
+#include "LeeroyStrings.h"
 #include "LeeroyProtocol.h"
 #include "TestHarness.h"
 #include <fstream>
@@ -49,6 +51,8 @@ bool Parse(std::string_view type, json const& j, std::string& error)
     if (type == "set_spec") return ParseSetSpec(j, error).has_value();
     if (type == "bot_do") return ParseBotDo(j, error).has_value();
     if (type == "stock_items") return ParseStockItems(j, error).has_value();
+    if (type == "string_do") return ParseStringDo(j, error).has_value();
+    if (type == "guild_add_roster") return ParseGuildAddRoster(j, error).has_value();
     throw std::runtime_error("unhandled P1d command type in test");
 }
 
@@ -210,7 +214,7 @@ LEEROY_TEST(Guild_MakeGuildGroupEventMatchesFixture)
     body.erase("v"); body.erase("ts");
     CHECK_EQ(MakeGuildGroupEvent(built), body);
     CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeGuildGroupEvent(built))), full);
-    GuildGroupEvent entered{"entered", 10, 1, true, 631, 77, 1, {}, {1101, 1102, 1103}};
+    GuildGroupEvent entered{"entered", 10, 1, true, 631, 77, 1, {}, {1101, 1102, 1103}, true};
     auto const event = MakeGuildGroupEvent(entered);
     CHECK(event.at("added").is_array() && event.at("added").empty());
     CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, event)), Message("guild_group_entered"));
