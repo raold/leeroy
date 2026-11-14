@@ -170,6 +170,7 @@ class LineupRules:
     def __init__(self):
         self._sent = None          # the roster native holds as far as the mind knows; None: unknown
         self._connected = False    # a hello since the bridge last connected
+        self._unbuilt = set()      # raid nights no lineup could be built for (logged once each)
 
     def reversible(self, row) -> bool:
         return False
@@ -210,7 +211,9 @@ class LineupRules:
             value = build_lineup(app.store.conn, gear, event, now=now, members=members, personas=personas,
                                  human_guid=app.human_guid, away=away)
             if value is None:
-                log.info('lineup_unbuilt event=%d reason=no_tank', event['id'])
+                if event['id'] not in self._unbuilt:
+                    self._unbuilt.add(event['id'])
+                    log.info('lineup_unbuilt event=%d reason=no_tank', event['id'])
                 continue
             # Who objects first: the discussion seed shows the first few positions
             positions = sorted(lineup_positions(app.store.conn, value, personas, now=now),
