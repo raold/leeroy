@@ -109,7 +109,7 @@ MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library",
-       "ops", "claim_check", "feedback", "kit", "learn", "gpu", "decision", "string")
+       "ops", "claim_check", "feedback", "kit", "learn", "gpu", "decision", "string", "raidlead")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge", "edit")
 TUNE_SHAPES = {
@@ -766,6 +766,21 @@ def string_args(args):
         raise BadRequest(str(exc)) from None
 
 
+def raidlead_args(args) -> dict:
+    """The raid lead's arguments, exactly: {"action": "set", "guid": a member's guid} names who
+    calls his group's raid (his own guid: he does); {"action": "clear"} hands it back to the
+    guild's pick. BadRequest otherwise."""
+    if not isinstance(args, dict) or args.get("action") not in ("set", "clear"):
+        raise BadRequest("raidlead: an action, set or clear")
+    if args["action"] == "clear":
+        if set(args) != {"action"}:
+            raise BadRequest("raidlead clear: takes no arguments")
+        return {"action": "clear"}
+    if set(args) != {"action", "guid"} or type(args["guid"]) is not int or not 0 < args["guid"] < 1 << 32:
+        raise BadRequest("raidlead set: exactly a guid")
+    return {"action": "set", "guid": args["guid"]}
+
+
 def learn_args(args):
     from leeroy_mind.learn.control import arguments
     try:
@@ -803,8 +818,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
-                         "say, board, discord, library, ops, claim_check, feedback, learn, gpu "
-                         "or decision or string action)")
+                         "say, board, discord, library, ops, claim_check, feedback, learn, gpu, "
+                         "decision, string or raidlead action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -819,7 +834,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
                   "say": say_args, "board": board_args, "discord": discord_args,
                   "library": library_args, "claim_check": claim_check_args,
                   "feedback": feedback_args, "learn": learn_args, "gpu": gpu_args,
-                  "decision": decision_args, "string": string_args}.get(op)
+                  "decision": decision_args, "string": string_args, "raidlead": raidlead_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -1030,7 +1045,7 @@ class ControlEndpoint:
             return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
                        "board": self.board, "discord": self.discord, "decision": self.decision,
-                       "string": self.string}[op](args)
+                       "string": self.string, "raidlead": self.raidlead}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -1060,7 +1075,35 @@ class ControlEndpoint:
             world = None
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
                 "raid": raid, **self._health(), "world": world, "typing": self._typing(),
+                **({"raid_lead": self._raid_lead()} if getattr(self.app, "raidlead", None) is not None else {}),
                 "gpu": self.app.gpu.snapshot() if getattr(self.app, "gpu", None) is not None else None}
+
+    def _raid_lead(self) -> dict | None:
+        """The raid lead's state for the console's picker (raidlead.service.console_status), or
+        None while it is off."""
+        raidlead = getattr(self.app, "raidlead", None)
+        if raidlead is None or self.app.stopping:
+            return None
+        try:
+            return raidlead.console_status()
+        except Exception as e:
+            log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+            return None
+
+    async def raidlead(self, args: dict) -> dict:
+        raidlead = getattr(self.app, "raidlead", None)
+        if not self.cfg.enabled or self.app.stopping:
+            return {"ok": False, "error": "Control is off or the mind is stopping."}
+        if raidlead is None:
+            return {"ok": False, "error": "The raid lead is off ([raidlead] enabled in mind.toml)."}
+        if self._raid.locked():
+            return {"ok": False, "error": "another raid action is still running"}
+        async with self._raid:
+            try:
+                return await asyncio.wait_for(raidlead.console_action(args), self.raid_s)
+            except TimeoutError:
+                return {"ok": False, "error": "the raid lead is still waiting on the game; check "
+                                              "the raid tab before trying again"}
 
     def _typing(self) -> list:
         """Who is typing, for Comms' dots: the talk engine's turns being composed or typed

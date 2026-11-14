@@ -149,6 +149,53 @@ fighting nearby restarts that clock. Inside an instance it waits for a rez, as b
 Reloadable with `.reload config`. Logs carry guids, spell ids and result codes only.
 **Native rebuild required.**
 
+# The raid lead (his orders to his own group)
+
+`Leeroy.RaidLead.Enable` (default 0, reloadable with `.reload config`) is the native half of the
+mind's `[raidlead]` (`mind/leeroy_mind/raidlead/README.md`). Pure policy is
+`Lib/LeeroyRaidLeadPolicy.*` (unit tests `TestRaidLeadPolicy.cpp`); the world-thread side is
+`Guild/RaidLead.cpp`. Hello lists `features: [..., "raidlead"]` so the mind knows the build has it.
+With the key at 0 every raid lead action is refused `raidlead_off` (Bloodlust included) and every
+hold is lifted at once; only `lift` (undoing a hold) still runs. **No raid assistant flag is ever
+set**, and the leader flag is never touched.
+
+- **`bot_do` action `"order"`**, param one of the fixed list `kRaidOrders`: `follow`, `come_back`,
+  `stay`, `stack` (`target_guid` a member of his group, or 0 for him), `spread`, `run_out`,
+  `back_off`, `hold`, `attack`, `kill_skull`, `taunt`, `lust`, `release`, and the mind's own
+  `lift`. Anything else fails the parser (`bad field: param`); co/nc strategy strings keep their own
+  signed whitelist. Each order is built from existing playerbots strategies, values and actions:
+  the strategy strings of playerbots' Follow and Stay chat shortcuts (without their whisper), its
+  `stay`/`return` positions (at the bot, at him or at the named member), the `rti` value `skull`,
+  its `attack my target` action (a bot already on his target, or out of sight of it, counts as
+  done), each class's taunt (`taunt`, `hand of reckoning`, `dark command`, `growl`) on his hostile
+  selection unless that tank already holds it (`has_aggro`), the faction's `bloodlust`/`heroism`
+  on itself, and for `release` the repop GroupRezJob uses (the one order, with `lift`, for a dead
+  bot; `alive`/`released` otherwise). The job's terminal lists the bots it changed in `guids` and
+  the rest in `skipped` with the reason; every "+x"/"-x" of an order is checked afterwards.
+- **Only `hold` adds `passive`, and never on a tank or healer** (`PlayerbotAI::IsTank`/`IsHeal` by
+  spec: `not_damage`). `spread` and `run_out` are one playerbots `move from group` of 10 and 30
+  yards (a bot already that far from everyone is done); `back_off` is one move to just behind him.
+  None leaves the passive `move from group` strategy behind. A hold is recorded on the world
+  thread and lifted (`raidlead_hold_lifted guid=`) when his group's fight starts or ends after it,
+  after 30 seconds (`kRaidHoldMs`), when the bot leaves his group, or when the switch is off; a
+  later stay, stack, follow, come back, attack, kill skull or lift order clears it too. A bot out
+  of the world (between maps, or logged out: playerbots keeps its strategies) keeps its record
+  until it is back, then is lifted: a hold is never dropped unlifted.
+- **Fences at the mutation boundary** (TickBotCommands, after the ack): he is online and leads a
+  group that is no battleground or battlefield group, the bot is in that group and on his map
+  (`not_leader`, `not_in_group`, `elsewhere`), no Realm lease on it or its group
+  (`busy:realm_owner`), and `NativeOwnershipReason` (offline raid, dummy trial, training cleanup,
+  journals, pending bot jobs: `busy:training_*`). `lift` is cleanup and is fenced by Realm leases
+  only. A bot an order needs as his own gets him as master, as RaidHabits does.
+- **`raid_lead`** `{action: "mark", guid, icon}` puts a raid icon (kRtiIcons, skull is 7) on his
+  hostile selection, set server-side by `guid` (the lead he named, or him), who must be in his
+  group (`not_in_group`, `no_target`). `{action: "probe"}` answers whether the switch is on.
+  `{action: "sync"}` also publishes his group as a `group` event (nothing while he is in a
+  battleground's raid), so the mind knows his group without waiting for a change. The ack is the
+  result; the mind's `guid: 0` and `icon: ""` mean none. The ready check stays the existing
+  `raid_control ready_check` with him as `leader_guid`.
+
+Logs carry ids, guids and codes only. **Native rebuild required** (`ac-release.sh --native`).
 # Ground hazards in the owner's group
 
 Stock playerbots adds its `avoid aoe` strategy to the combat engine only (`AutoAvoidAoe` with a game-client
