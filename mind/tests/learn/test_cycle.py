@@ -313,6 +313,12 @@ def test_a_small_share_never_retires_an_arm_that_is_not_losing(store):
     assert not run(store)['retired'] and status(store, ARM) == 'active'
 
 
+def test_a_tie_with_control_is_not_a_loser(store):
+    measured_arm(store, 0., control_value=0.)  # both all-zero rewards: identical posteriors
+    small_shares(store)
+    assert not run(store)['retired'] and status(store, ARM) == 'active'
+
+
 def test_a_promoted_arm_is_never_retired_for_its_share(store):
     measured_arm(store, 0., control_value=.3)
     small_shares(store)

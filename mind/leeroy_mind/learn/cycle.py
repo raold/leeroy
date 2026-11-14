@@ -484,7 +484,7 @@ def evaluate(conn, *, week, cfg, now, tz, owner):
         rooms = {r.key for r in used}
         probability = beats(_mass(used, now), _mass([r for r in rewarded if r.key in rooms
                                                       and controls[arm.family] in r.arms], now))
-        if probability < LOSING:
+        if probability < LOSING - 1e-9:  # a tie (quadrature gives 0.4999999999999993) is not a loser
             plan['retire_arms'].append(dict(id=aid, share=round(share, 6), share_previous=round(previous, 6),
                                             probability=round(probability, 6), uses=len(used)))
     # Lapsed during the evaluated week, so each lapse is reported by exactly one cycle.
