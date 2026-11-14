@@ -292,7 +292,7 @@ _LIGHT = {"morning": "soft morning light", "day": "daylight", "evening": "warm e
 _LATE_TAIL = _PHONE_TAIL.replace("natural light, ", "")
 _CROPS = {"face": (0.0, 0.0, 1.0, 1.0), "head_and_shoulders": (0.125, 0.05, 0.875, 0.8),
           "upper_body": (0.25, 0.05, 0.75, 0.55), "three_quarter": (0.3, 0.02, 0.7, 0.42),
-          # a varied set's full-length candidate as her cover (varied.py; store.picked_framing)
+          # a varied front or side view as her face reference (varied.py; store.face_pick)
           "full_body": (0.375, 0.0, 0.625, 0.25)}
 
 PHASES = {"morning": ("morning",), "day": ("day",), "evening": ("evening",),

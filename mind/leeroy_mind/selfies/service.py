@@ -9,9 +9,10 @@ Actions, with args as endpoint.selfie_args returns them:
 - undo {pick}: that change reversed, only while the photo is still what it left (store.undo);
 - more {guid}: his "4 more", a set queued for tonight's render and every waiting set of his
   passed; needs rendering on and the member's looks and photo kind.
-- vary {go}: a varied set (varied.py) for every cast member of the lust style, written as "4
-  more" writes it, plus each set's four looks; go false plans only. Needs rendering and
-  `[selfies] varied_sets` on to queue; once per member per local day.
+- vary {go[, guids]}: a varied set (varied.py) for every cast member of the lust style (or only
+  those of guids), written as "4 more" writes it, plus each set's four looks; go false plans
+  only, with how many waiting sets each would pass. Needs rendering and `[selfies] varied_sets`
+  on to queue; once per member per local day.
 
 Only cast members have photos: on the stored roster at the cast's level, not the owner, with a
 stored persona. Each change commits first, on the loop; then that member's files are made to
@@ -70,7 +71,7 @@ class SelfieService:
             elif action == "undo":
                 reply = await self._undo(args["pick"])
             elif action == "vary":
-                reply = self._vary(args["go"])
+                reply = self._vary(args["go"], args.get("guids"))
             else:
                 reply = self._more(args["guid"])
         except SelfieError as e:
@@ -127,7 +128,7 @@ class SelfieService:
                 "photo style." if why in HELD else "Four more will be rendered tonight.")
         return {"ok": True, "set": queued.set_no, "guid": guid, "message": said}
 
-    def _vary(self, go: bool) -> dict:
+    def _vary(self, go: bool, guids=None) -> dict:
         from . import varied
         if go and not self.cfg.enabled:
             raise SelfieError("rendering is off in mind.toml ([selfies] enabled = false)")
@@ -135,7 +136,7 @@ class SelfieService:
             raise SelfieError("varied sets are off in mind.toml ([selfies] varied_sets = false)")
         app = self.app
         report = varied.queue(app.store, human=app.human_guid, now=app.clock.now(),
-                              day=app.clock.local().date().isoformat(), go=go)
+                              day=app.clock.local().date().isoformat(), go=go, guids=guids)
         n = len(report["queued"])
         log("selfies_varied", go=go, queued=n, skipped=len(report["skipped"]))
         said = (f"{n} varied sets will be rendered at night." if go

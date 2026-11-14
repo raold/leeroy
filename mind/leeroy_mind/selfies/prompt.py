@@ -45,7 +45,8 @@ _KINDS = {"selfie": "phone selfie", "mirror_selfie": "mirror selfie",
 _FRAMINGS = {"face": "close-up of the face", "head_and_shoulders": "head and shoulders",
              "upper_body": "waist-up shot, upper body",
              # face, bust, waist and hips in frame (owner, 2026-11-08)
-             "three_quarter": "three-quarter shot from mid-thigh up, waist and hips in frame"}  # the waist in frame, so the figure shows
+             "three_quarter": "three-quarter shot from mid-thigh up, waist and hips in frame",  # the waist in frame, so the figure shows
+             "full_body": "full-body shot"}  # a varied set's candidate only (no photo kind has it)
 _LENGTHS = {"short": "short", "chin": "chin-length", "shoulder": "shoulder-length",
             "long": "long", "very_long": "very long"}
 _HEADSHOT_TAIL = "recent photo, natural skin texture, unretouched"
@@ -166,16 +167,19 @@ def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int
 
 
 # A varied set's candidates (varied.py, owner 2026-11-14): each its own look and pose, said in
-# plain photography terms. The pose, the framing, who she is, her build and the outfit with its
-# setting are all priority 0, so the worker's 75-token fit keeps every one of them (the longest
-# required set is about 65 tokens); the thong and g-string negatives join the lust ones.
-VARIED_VIEW_WORDS = {"behind": "photographed from behind, looking back over her shoulder",
-                     "rear_three_quarter": "three-quarter rear view, glancing back",
-                     "side": "side profile view",
-                     "front": "front view, facing the camera"}
-VARIED_FRAMING_WORDS = {"full_body": "full-body shot, head to toe",
-                        "three_quarter": "three-quarter shot, waist and hips in frame"}
+# short plain photography terms. The pose, the framing, who she is, her build and the outfit with
+# its setting are always priority 0, so the worker's 75-token fit keeps every one of them: at most
+# 60 tokens, measured with the real tokenizers. Her hair and skin join them at priority 0 while
+# the whole required set still counts at most REQUIRED_MAX (tokens.estimate, never below the
+# real count): 5 tokens under the worker's limit. The thong and g-string negatives join the lust
+# ones.
+VARIED_VIEW_WORDS = {"behind": "from behind, looking over her shoulder",
+                     "rear_three_quarter": "three-quarter rear view",
+                     "side": "side profile",
+                     "front": "front view"}
+VARIED_FRAMING_WORDS = {"full_body": "full-body shot", "three_quarter": "three-quarter shot"}
 VARIED_NEGATIVE: tuple[tuple[str, int], ...] = LUST_NEGATIVE + (("thong, g-string", 0),)
+REQUIRED_MAX = 70
 
 
 def varied_parts(look, outfit: str) -> dict[str, str]:
@@ -202,16 +206,29 @@ def build_varied_prompt(p: Persona, look) -> PromptSpec:
     name_re = names_re(p)
     if name_re is not None and any(name_re.search(t) for t in parts.values()):
         raise ValueError(LUST_NAMED)
+    from .tokens import estimate, joined
+    build = BUILD_WORDS.get(p.appearance.build, f"{p.appearance.build} build")
+    required = [parts["view"], parts["framing"], subject_phrase(p)[0], build, parts["wearing"]]
+    face = hair_skin(p, name_re)  # hair, then skin: at 0 while they fit, the hair first
+    room = REQUIRED_MAX - joined(required)
+    for n, (text, _) in enumerate(face):
+        cost = estimate(text) + 1
+        if cost > room:
+            face[n:] = [(t, 1) for t, _ in face[n:]]
+            break
+        face[n] = (text, 0)
+        room -= cost
     out: list[tuple[str, int]] = []
     add = phrase_adder(out, name_re)
     add(parts["view"], 0)
     add(parts["framing"], 0)
     add(*subject_phrase(p))
-    add(BUILD_WORDS.get(p.appearance.build, f"{p.appearance.build} build"), 0)
-    out += looks_phrases(p, name_re)
+    add(build, 0)
+    out += face
     add(parts["wearing"], 0, True)
-    add(parts["expression"], 3, True)
-    add(_PHONE_TAIL, 1)
+    add(parts["expression"], 1, True)
+    out += eyes_face(p, name_re)
+    add(_PHONE_TAIL, 2)
     return PromptSpec(tuple(out), VARIED_NEGATIVE)
 
 

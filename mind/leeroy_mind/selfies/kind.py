@@ -142,11 +142,13 @@ _GYM_MORE = ("{colour} racerback sports top and leggings",
              "cropped {colour} sports top and high-waisted leggings",
              "fitted {colour} tank top and bike shorts")
 _CASUAL_MORE = ("fitted {colour} t-shirt and high-waisted jeans", "flowy {colour} sundress")
-VARIED_OUTFITS: dict[str, str] = {**LUST_OUTFITS,
-                                  **{_choice(t): t for t in _GYM_MORE + _CASUAL_MORE}}
+# No string bikini in a varied set: its swimwear is shot full-length, and from behind
+VARIED_OUTFITS: dict[str, str] = {
+    **{k: v for k, v in LUST_OUTFITS.items() if k != "string bikini"},
+    **{_choice(t): t for t in _GYM_MORE + _CASUAL_MORE}}
 VARIED_GYM_OUTFITS = GYM_OUTFITS | frozenset(_choice(t) for t in _GYM_MORE)
 VARIED_LOOKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {  # category: outfits, settings
-    "swim": (tuple(_choice(t) for t in _SWIM),
+    "swim": (tuple(_choice(t) for t in _SWIM if _choice(t) in VARIED_OUTFITS),
              tuple(s for s in WATER_SETTINGS if s not in SWIM_ONLY_SETTINGS)),
     "gym": (tuple(_choice(t) for t in _GYM + _GYM_MORE), GYM_SETTINGS),
     "casual": (("off-the-shoulder top and jeans", "crop top and high-waisted shorts",
@@ -165,6 +167,7 @@ VARIED_VIEWS = ("behind", "rear_three_quarter", "side", "front")
 BACK_VIEWS = ("behind", "rear_three_quarter")
 VARIED_FRAMINGS = ("full_body", "three_quarter")
 VIEW_OUTSIDE = "photo.view: a pose only in a varied set"
+SWIM_BACK = "photo.framing: swimwear from behind only full-length"
 # a composed part that holds her character or real name (a colour or a season can be one): the
 # prompt's name filter would drop the whole joined phrase, so the pick is asked once more
 NAME_CLASHES = tuple(f"photo.{f}: shares her name" for f in ("setting", "outfit", "expression"))
@@ -372,6 +375,8 @@ def screen_lust(p: Persona, data: dict, *, varied: bool = False) -> list[str]:
         problems.append(PAIRINGS[2])
     if swim and not varied and data.get("framing") != "upper_body":
         problems.append(PAIRINGS[3])
+    if swim and varied and data["view"] in BACK_VIEWS and data["framing"] != "full_body":
+        problems.append(SWIM_BACK)
     if swim and data.get("kind") == "headshot":
         problems.append(PAIRINGS[4])
     if problems:

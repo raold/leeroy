@@ -32,7 +32,7 @@ from . import files, photo_extra
 from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
 from .kind import _saver, chosen_style, kind_one
-from .prompt import build_prompt, renderable
+from .prompt import build_prompt, build_varied_prompt, renderable
 from .scene import ABOUT, build_scene_prompt, build_tile_prompt
 from .scenes import STAGE as SCENES_STAGE
 from .scenes import ask_scene
@@ -70,6 +70,8 @@ def _parser():
                      "scratch/selfies-try/snaps/")
     sub.add_argument("--guild", action="store_true",
                      help="with --snaps: also one grid of up to 4 of them")
+    sub.add_argument("--varied", action="store_true",
+                     help="a varied set (four looks and poses) for lust-styled members")
     sub = subs.add_parser("restyle", help="plan or save varied photo choices (mind stopped)")
     sub.add_argument("--lust-only", action="store_true")
     sub.add_argument("--include-owner", action="store_true", help="also replace hand-set photo choices")
@@ -79,6 +81,9 @@ def _parser():
     sub = subs.add_parser("vary", help="plan or queue a varied set (four looks and poses) for "
                           "every member of a stance's photo style")
     sub.add_argument("--stance", choices=varied_stances(), required=True)
+    sub.add_argument("--guid", type=lambda text: tuple(sorted({_positive(g) for g in
+                                                               text.split(",")})),
+                     help="only these members (comma-separated guids)")
     mode = sub.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
     mode.add_argument("--go", action="store_true", help="queue the sets for the night")
@@ -223,12 +228,27 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
     night = _default_night(clock)
     async with _context(root, store, cfg, clock, night, make_llm=make_llm,
                         live_locked=True) as ctx:
-        guids = _chosen(ctx, args)
-        tally = _Tally(members=len(guids))
-        if scfg.variety:
-            from .kind import _personas
-            photo_extra.seed(store,_personas(ctx),clock.now())
-        ready = await _kinds(ctx, store, guids, variety=scfg.variety)
+        plans = {}
+        if args.varied:  # no photo kind needed and no model call: the looks come from lists
+            from . import varied
+            from .style import suggestive
+            pool = [g for g in _chosen(ctx, argparse.Namespace(guid=args.guid, limit=10 ** 6))
+                    if suggestive(ctx.base(g))]
+            guids = pool if args.guid is not None else pool[:args.limit]
+            if args.guid is not None and not guids:
+                print(f"guid {args.guid}: not of the lust style", file=sys.stderr)
+            plans = {g: varied.compose(ctx.base(g), f"try:{g}:{night}") for g in guids}
+            for guid in [g for g in guids if plans[g] is None]:
+                print(f"guid {guid}: no safe varied look", file=sys.stderr)
+            ready = [g for g in guids if plans[g] is not None]
+            tally = _Tally(members=max(1, len(guids)) if args.guid is not None else len(guids))
+        else:
+            guids = _chosen(ctx, args)
+            tally = _Tally(members=len(guids))
+            if scfg.variety:
+                from .kind import _personas
+                photo_extra.seed(store,_personas(ctx),clock.now())
+            ready = await _kinds(ctx, store, guids, variety=scfg.variety)
         out_root = _child(_child(root, "scratch"), TRY_DIR)
         worker = _Measured(SelfieWorker(worker_command(scfg), env=worker_env(scfg)))
         if ready:
@@ -239,9 +259,13 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                     folder = out_root / str(guid)
                     folder.mkdir(parents=True, exist_ok=True)
                     try:
+                        p = ctx.base(guid)
+                        spec = (tuple(build_varied_prompt(p, x) for x in plans[guid])
+                                if args.varied else build_prompt(
+                                    p, kind_style=chosen_style(store, p),
+                                    light=photo_extra.light_for(store, p)))
                         await render_candidates(
-                            worker, build_prompt(ctx.base(guid), kind_style=chosen_style(
-                                store, ctx.base(guid)), light=photo_extra.light_for(store,ctx.base(guid))), folder, night=night,
+                            worker, spec, folder, night=night,
                             guid=guid, set_no=1, cfg=scfg, make_room=ctx.arbiter.make_room,
                             leases=lambda: ctx.arbiter.holders)
                         tally.sets += 1
@@ -256,7 +280,9 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                 await _room_after(ctx)
         _print({"members": tally.members, "sets": tally.sets, "flagged": worker.flagged,
                 "seconds_per_image": round(worker.seconds / worker.images, 2) if worker.images
-                else None, "peak_gib": worker.peak, "path": str(out_root)})
+                else None, "peak_gib": worker.peak, "path": str(out_root),
+                **({"looks": {str(g): [x.codes() for x in plans[g]] for g in ready}}
+                   if args.varied else {})})
         return int(tally.sets != tally.members)
 
 
@@ -407,7 +433,7 @@ def _vary(root, clock, args, call_mind) -> int:
         with _read_store(root / "mind.db", clock) as store:
             report = varied.queue(store, human=_identity(cfg, store).guid, now=clock.now(),
                                   day=clock.local().date().isoformat(), go=False,
-                                  stance=args.stance)
+                                  stance=args.stance, guids=args.guid)
         _print({**report, "switch": scfg.varied_sets})
         return 0
     if not (scfg.enabled and scfg.varied_sets):
@@ -421,7 +447,7 @@ def _vary(root, clock, args, call_mind) -> int:
             with closing(Store(open_db(root / "mind.db"), clock=clock)) as store:
                 report = varied.queue(store, human=_identity(cfg, store).guid, now=clock.now(),
                                       day=clock.local().date().isoformat(), go=True,
-                                      stance=args.stance)
+                                      stance=args.stance, guids=args.guid)
             _print(report)
             return 0
     except AlreadyRunning:
@@ -429,7 +455,9 @@ def _vary(root, clock, args, call_mind) -> int:
     from leeroy_mind.console.mindlink import LinkError
     from leeroy_mind.lifecycle import OwnershipError
     try:
-        reply = (call_mind or _call_running_mind)(root, {"action": "vary", "go": True})
+        ask = {"action": "vary", "go": True,
+               **({"guids": list(args.guid)} if args.guid else {})}
+        reply = (call_mind or _call_running_mind)(root, ask)
     except (LinkError, OwnershipError, OSError) as e:
         print(f"selfies vary: the mind is running and could not be asked ({e})", file=sys.stderr)
         return 1
@@ -484,6 +512,9 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             return 0
         if args.guild and not args.snaps:
             print("selfies try: --guild goes with --snaps", file=sys.stderr)
+            return 2
+        if args.varied and args.snaps:
+            print("selfies try: --varied renders profile sets, not --snaps", file=sys.stderr)
             return 2
         cfg = load_config(root / "mind.toml")
         scfg = load_selfie_config(root / "mind.toml")
