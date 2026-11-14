@@ -787,7 +787,8 @@ class Store:
         if not offset:
             return s
         values = {f.name: getattr(s, f.name) for f in fields(PersonaStateRow)}
-        values["mood"] = max(-1.0, min(1.0, s.mood + offset))
+        from leeroy_mind.tuning.edits import fold_mood
+        values["mood"] = fold_mood(s.mood, offset)
         return EffectiveState(**values)
 
     def put_state(self, s: PersonaStateRow) -> None:
