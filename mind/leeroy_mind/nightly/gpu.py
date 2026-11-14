@@ -40,6 +40,7 @@ import contextlib
 import http.client
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from typing import AsyncIterator, Awaitable, Callable
@@ -216,6 +217,11 @@ class GpuArbiter:
         self.on_login = None
         self.needs_live_reload = False
         self._shared_gpu = False  # an image stage began: a loaded live model may be split
+        self.live_admission = None  # opt-in requested-photo gate; absent leaves old paths alone
+        self.borrow_busy = None
+        self.borrow_timeout = 180.0
+        self._borrow = None
+        self._borrow_cleanup = None
 
     def reconfigure(self, settings: NightlySettings) -> bool:
         """Change the swappable names inline, without waiting for a model operation.
@@ -239,6 +245,7 @@ class GpuArbiter:
                 self._managed[norm(model)] = model
         if changed:
             self._revision += 1
+            self.cancel_borrow('models_changed')
         return changed
 
     def _prune_managed(self, listed: list[str]) -> None:
@@ -259,7 +266,8 @@ class GpuArbiter:
         return frozenset(self._holders)
 
     def reflection_allowed(self) -> bool:
-        return not self.paused and not self._holders
+        return (not self.paused and not self._holders and
+                not (self.live_admission is not None and self.live_admission.blocked))
 
     def hold(self, holder: str) -> bool:
         """Take a live lease now, with no await: `holders` and `reflection_allowed()` show it
@@ -267,13 +275,16 @@ class GpuArbiter:
         holder, or the same one again, gets False and has nothing more to do. A bridge handler
         calls this inline and runs hand_over() as a task; release_live then ends the lease
         inline, in event order."""
+        borrow_hard = self._borrow is not None and holder not in {'server', 'discord', self._borrow.holder}
+        if borrow_hard:
+            self.cancel_borrow('live_lease')
         if self.paused:
             if holder != 'human':
                 raise GpuPaused('The GPU is paused.')
             if self.on_login is not None:
                 self.on_login()
             self.paused = False
-        first = not self._holders or self.needs_live_reload
+        first = borrow_hard or not self._holders or self.needs_live_reload
         self.needs_live_reload = False
         self._holders.add(holder)
         return first
@@ -309,31 +320,191 @@ class GpuArbiter:
             if self.paused or not self._holders:
                 return
             await self._run_preempt()
-            while self._holders and not self.paused:
-                revision, target = self._revision, self._live
-                listed = await self.admin.loaded_models()
-                if revision != self._revision:
-                    continue
-                remaining = list(listed)
-                for name in listed:
-                    split = self._shared_gpu and norm(name) == norm(target)
-                    if split or (norm(name) in self._managed and norm(name) not in {
-                            norm(target), norm(self._embedding)}):
-                        await self.admin.unload(name)
-                        remaining.remove(name)
-                        if revision != self._revision:
-                            break
-                if revision != self._revision:
-                    continue
-                if self.paused or not self._holders:
-                    self._prune_managed(remaining)
-                    return
-                await self.admin.preload(target, -1,
-                                         options={"num_ctx": LIVE_PRESET.options["num_ctx"]})
-                if revision == self._revision:
-                    self._shared_gpu = False
-                    self._prune_managed([*remaining, target])
-                    return
+            if self.live_admission is not None and self.live_admission.blocked and self._borrow is None:
+                from leeroy_mind.selfies.worker import to_the_end
+                await to_the_end(self._recover_borrow_locked())
+            else:
+                await self._hand_over_locked()
+
+    async def _hand_over_locked(self, *, force=False):
+        """Shared reconciliation; a borrow's cleanup already owns the lock."""
+        while (self._holders or force) and not self.paused:
+            revision, target = self._revision, self._live
+            listed = await self.admin.loaded_models()
+            if revision != self._revision:
+                continue
+            remaining = list(listed)
+            for name in listed:
+                split = self._shared_gpu and norm(name) == norm(target)
+                if split or (norm(name) in self._managed and norm(name) not in {
+                        norm(target), norm(self._embedding)}):
+                    await self.admin.unload(name)
+                    remaining.remove(name)
+                    if revision != self._revision:
+                        break
+            if revision != self._revision:
+                continue
+            if self.paused or not (self._holders or force):
+                self._prune_managed(remaining)
+                return False
+            await self.admin.preload(target, -1,
+                                     options={"num_ctx": LIVE_PRESET.options["num_ctx"]})
+            if revision == self._revision:
+                self._shared_gpu = False
+                self._prune_managed([*remaining, target])
+                return not self.paused
+        return False
+
+    @property
+    def borrow_holder(self):
+        return self._borrow.holder if self._borrow is not None else None
+
+    def cancel_borrow(self, reason='cancelled'):
+        if self._borrow is not None:
+            self._borrow.cancel(reason)
+
+    async def wait_borrow(self):
+        room = self._borrow
+        if room is not None and room.owner is not asyncio.current_task():
+            await room.done.wait()
+
+    async def close_borrow(self):
+        self.cancel_borrow('shutdown')
+        await self.wait_borrow()
+        if self._borrow_cleanup is not None:
+            from leeroy_mind.selfies.worker import to_the_end
+            async with self._lock:
+                await to_the_end(self._borrow_cleanup.stop_workers())
+                self._borrow_cleanup = None
+
+    async def _recover_borrow_locked(self):
+        from leeroy_mind.llm.borrow import LiveReloadFailed
+        if self._borrow_cleanup is not None:
+            try:
+                await self._borrow_cleanup.stop_workers()
+            except Exception:
+                self.needs_live_reload = True
+                self.live_admission.fail('worker_stop_failed')
+                raise LiveReloadFailed('worker_stop_failed') from None
+            self._borrow_cleanup = None
+        if self.paused:
+            raise GpuPaused('The GPU is paused.')
+        # A transient load failure gets one bounded retry. Failed recovery keeps the
+        # gate closed; a later live_ready tries recovery before waiting on that gate.
+        for attempt in range(2):
+            try:
+                ready = await self._hand_over_locked(force=True)
+                if not ready:
+                    raise GpuPaused('The GPU is paused.')
+                self.needs_live_reload = False
+                self.live_admission.open()
+                return
+            except GpuPaused:
+                self.needs_live_reload = True
+                self.live_admission.fail('gpu_paused')
+                raise
+            except Exception:
+                self.needs_live_reload = True
+                if attempt:
+                    self.live_admission.fail()
+                    raise LiveReloadFailed('live_reload_failed') from None
+
+    async def recover_borrow(self):
+        gate = self.live_admission
+        if gate is None or not gate.blocked:
+            return
+        if self._borrow is not None:
+            await self.wait_borrow()
+        if gate.blocked:
+            from leeroy_mind.selfies.worker import to_the_end
+            async with self._lock:
+                if gate.blocked:
+                    await to_the_end(self._recover_borrow_locked())
+
+    @contextlib.asynccontextmanager
+    async def borrow(self, holder, *, on_admitted=None):
+        """Own an image pass, its worker teardown and live reload as one admission.
+
+        Only server/Discord leases may coexist. The 180s work cap covers active-chat
+        drain, unloading and the caller's render. Teardown/reload must still finish
+        safely afterward; all of that closed-admission time credits waiting turns.
+        """
+        from leeroy_mind.llm.borrow import BorrowInterrupted, LiveReloadFailed
+        from .borrow import BorrowRoom
+        gate = self.live_admission
+        if not isinstance(holder, str) or not holder or holder in {
+                'server', 'discord', 'human', 'offline_raid', 'voice_gpu'}:
+            raise ValueError('borrow needs its own request holder')
+        if gate is None:
+            raise LiveLeaseHeld(frozenset({'requests_disabled'}))
+        if self._borrow is not None:
+            raise LiveLeaseHeld(frozenset({self._borrow.holder}))
+        async with self._lock:
+            if self.paused:
+                raise PausedRoom()
+            if held := self.holders - {'server', 'discord'}:
+                raise LiveLeaseHeld(held)
+            if self.borrow_busy is not None and self.borrow_busy():
+                raise LiveLeaseHeld(frozenset({'image_work'}))
+            if gate.blocked:
+                from leeroy_mind.selfies.worker import to_the_end
+                await to_the_end(self._recover_borrow_locked())
+            if self.paused:
+                raise PausedRoom()
+            if held := self.holders - {'server', 'discord'}:
+                raise LiveLeaseHeld(held)
+            if self.borrow_busy is not None and self.borrow_busy():
+                raise LiveLeaseHeld(frozenset({'image_work'}))
+            if on_admitted is not None and on_admitted() is False:
+                raise LiveLeaseHeld(frozenset({'request_budget'}))
+            room = BorrowRoom(self, holder)
+            # Inline holder + gate close prevent a new night/booth or chat exchange
+            # between the busy checks and the first await.
+            self._borrow = room
+            self._holders.add(holder)
+            gate.close()
+            error = None
+            try:
+                async with asyncio.timeout(self.borrow_timeout):
+                    began = time.monotonic()
+                    await gate.drain()
+                    room.timings['drain_ms'] = round((time.monotonic() - began) * 1000)
+                    await room.make_room()
+                    yield room
+            except BaseException as caught:
+                error = caught
+            finally:
+                room.cleaning = True
+                cleanup = asyncio.create_task(room.finish(), name='selfie-borrow-cleanup')
+                cancelled = False
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                    except BaseException:
+                        break  # retrieve below, after the cleanup task has finished
+                cleanup_error = None
+                try:
+                    cleanup.result()
+                except BaseException as caught:
+                    cleanup_error = caught
+                    self._borrow_cleanup = room
+                    self.needs_live_reload = True
+                    gate.fail()
+                self._borrow = None
+                self._holders.discard(holder)
+                room.done.set()
+                if cancelled:
+                    raise asyncio.CancelledError()
+                if isinstance(error, asyncio.CancelledError) and room.cancelled_owner:
+                    room.owner.uncancel()
+                    if not room.owner.cancelling():
+                        error = BorrowInterrupted(room.reason)
+                if error is not None:
+                    raise error
+                if cleanup_error is not None:
+                    raise LiveReloadFailed('live_reload_failed') from cleanup_error
 
     async def acquire_live(self, holder: str) -> None:
         """hold(holder) and, for the first lease, hand_over(): it returns once the GPU is the live
@@ -361,7 +532,8 @@ class GpuArbiter:
         live requests use so it is not reloaded. It never loads a model, and a login that came
         first keeps the pin its hand-over set."""
         async with self._lock:
-            if self.paused or self._holders:
+            if (self.paused or self._holders or
+                    self.live_admission is not None and self.live_admission.blocked):
                 return
             for name in await self.admin.loaded_models():
                 if norm(name) == norm(self._live):
@@ -403,6 +575,9 @@ class GpuArbiter:
         async with self._lock:
             if self.paused:
                 raise GpuPaused('The GPU is paused.')
+            if self.live_admission is not None and self.live_admission.blocked:
+                from leeroy_mind.llm.borrow import LiveReloadFailed
+                raise LiveReloadFailed('live_recovery_pending')
             if revision != self._revision:
                 raise RuntimeError("nightly models changed during model admission")
             listed = await self.admin.loaded_models()
@@ -425,6 +600,8 @@ class GpuArbiter:
             raise PausedRoom()
         if self._holders:
             raise LiveLeaseHeld(frozenset(self._holders))
+        if self.live_admission is not None and self.live_admission.blocked:
+            raise LiveLeaseHeld(frozenset({'request_recovery'}))
 
     async def make_room(self) -> None:
         """Make room for a stage that needs the whole GPU: unload every model Ollama lists but

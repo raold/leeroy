@@ -5,7 +5,7 @@ members who answer look at it first.
 
 ## Switches
 
-`[photos]` in `mind.toml`; both default false, and an invalid table means off.
+`[photos]` in `mind.toml`; all three switches default false, and an invalid table means off.
 
 - `enabled = true` allows owner uploads. Restart both the mind and the console after
   changing it.
@@ -13,6 +13,51 @@ members who answer look at it first.
   It requires `[selfies] enabled = true`, `[selfies] snaps = true`, and `[server] enabled = true`.
   A missing prerequisite logs `photos_send_needs key=...` once at startup and leaves delivery off.
   It is independent of owner uploads: `enabled` may remain false with `send` true.
+- `requests = true` lets a member make a new selfie when the owner asks in Discord.
+  It requires `send` and all its prerequisites. Restart the mind after changing it.
+  With requests off, no request recognizer, queue, or GPU borrow gate is attached.
+
+## Requested photos
+
+Ask in the member's DM, or name/reply to the member in a guild channel: for example,
+"send me a selfie" or "pic?". An unnamed channel request and a question about a photo
+already sent keep the ordinary answer path. Group DMs are outside this feature.
+
+When the bridge confirms the owner is out of WoW, the member chooses a scene using the
+existing allowed choices and makes the photo before answering. Comms shows her composing
+while she prepares it. The request's words provide context to the live model; they never
+become image-prompt text. A plain member answers in the channel where asked. A lust-style
+member sends her photo privately and says so in her channel answer only after the private
+delivery commits. Adult age 25+, clothing, name, NSFW and caption checks still apply.
+
+The render temporarily borrows the GPU despite the server/Discord presence leases. All
+mind chat clients wait, including background extraction; embeddings remain available.
+Existing chat calls finish before any model unload. The work budget is 180 seconds for
+drain, unload, worker startup and rendering. Worker shutdown and live-model reload must
+finish safely even after that timeout. Waiting turns receive deadline credit for the full
+admission wait, including cleanup, so that wait alone cannot expire an answer. A login,
+hard GPU lease, Free GPU pause or shutdown interrupts the render. Free GPU pause wins and
+does not reload the live model until use resumes.
+
+While the owner is in WoW, presence is unknown, or borrowing is unavailable, the member
+uses an audience-fit retained photo if available: a ready snap first, then her gallery.
+The retained image is copied; its original is never moved or consumed. Its caption describes
+that retained photo, not the new scene being planned. The new photo waits for ten continuous
+minutes of confirmed offline presence and no running night. Unrendered requests expire
+after 24 hours; a rendered photo survives restart until its delivery receipt commits.
+
+Requested photos have separate limits: one request per member per ten minutes, six admitted
+borrows per hour and thirty per local date across the guild. They skip and do not spend the
+spontaneous photo draw, two-day gap or weekly/daily ration. The selfies dial at zero still
+means no photo. A retained image is not repeated to the same audience within thirty days.
+The attachment, chat mirror, snap and request delivery receipts commit together. A failed
+render gets one ordinary answer in the member's words. No retained photo file is deleted.
+
+`selfie_request` logs ids, channel kinds and outcome codes. `selfie_request_render` reports
+total, unload, startup, render, stop and reload timings, without words or prompts. Rehearsal
+timings use fake workers and model administration. For release, measure these phases on
+the actual machine, confirm the worker tree is gone before live preload, verify chat resumes,
+and inspect the live model's GPU residency after handback.
 
 ## Members' photos
 
@@ -77,8 +122,9 @@ members who answer look at it first.
 
 ## Storage
 
-Migration `0038_discord_photos.sql` already supplies `discord_attachment` and the `dm` and
-`discord` snap outlets. Member delivery needs no additional migration. The console serves a
+Migration `0038_discord_photos.sql` supplies `discord_attachment` and the `dm` and
+`discord` snap outlets. Migration `0044_selfie_requests.sql` adds request-owned snaps,
+destinations, delivery and borrow receipts. The console serves a
 photo with `GET /api/discord/image?id=&size=sm|lg`; a snap's small size uses its thumbnail.
 
 After release, post a photo of something known and check that the answer engages what it

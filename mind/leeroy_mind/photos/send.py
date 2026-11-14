@@ -56,12 +56,12 @@ class PhotoSender:
         date = app.clock.local().date().isoformat()
         return ration.channel_room(dial, today=channel_count(app.store.conn, date)+pending, draw=day_draw(date))
 
-    def _fresh(self, snap, now):
+    def _fresh(self, snap, now, *, request=False):
         app = self.app
         p = app.personas.get(snap.guid)
         cur = current(app.store, snap.guid)
         why = None
-        if not snap.not_before <= now < snap.expires:
+        if now < snap.not_before or (not request and now >= snap.expires):
             why = 'passed' if now >= snap.expires else None
             if why is None:
                 return False
@@ -85,7 +85,7 @@ class PhotoSender:
         if why is not None:
             snaps.expire(app.store, snap.id, why, now=now)
             return False
-        return day_phase(app.clock.local()).value in snap.phases
+        return request or day_phase(app.clock.local()).value in snap.phases
 
     def _attachment(self, snap):
         app = self.app
@@ -117,6 +117,9 @@ class PhotoSender:
         return None
 
     def offer(self, turn, meta, now):
+        requests = getattr(self, 'requests', None)
+        if requests is not None and meta.photo_request is not None:
+            return requests.offer(turn, meta, now)
         app, dial = self.app, self.app.cfg.talk.selfies
         audience = self._channel(turn, meta)
         if not self._enabled() or audience is None or dial <= 0 or len(self._in_flight) >= MAX_IN_FLIGHT or not self._room(audience, now):
@@ -185,9 +188,9 @@ def photo_seeds(conn, *, now, local, dial, today=None):
         return []
     # Her member gap (offer() checks it too): a seed its opener cannot post is no seed.
     rows = conn.execute(f'SELECT {snaps._COLS} FROM selfie_snap s WHERE kind=\'situation\' '
-        "AND audience='anyone' AND status='ready' AND not_before<=? AND expires>? "
+        "AND source!='request' AND audience='anyone' AND status='ready' AND not_before<=? AND expires>? "
         "AND NOT EXISTS (SELECT 1 FROM selfie_snap t WHERE t.kind='situation' AND t.status='sent' "
-        "AND t.sender=s.guid AND t.sent>?) ORDER BY expires,id LIMIT 200",
+        "AND t.source!='request' AND t.sender=s.guid AND t.sent>?) ORDER BY expires,id LIMIT 200",
         (now,now,now-ration.MEMBER_GAP_S)).fetchall()
     out = []
     for row in rows:

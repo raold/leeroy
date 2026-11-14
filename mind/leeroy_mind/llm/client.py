@@ -108,6 +108,7 @@ class OllamaClient:
         self._timeout = timeout
         self._warned_truncate = False
         self.gpu_gate = None
+        self.live_borrow = None
 
     def _request(self, path: str, body: dict | None, timeout: float, attempt: _Attempt) -> dict:
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -169,9 +170,13 @@ class OllamaClient:
         return out
 
     async def _call(self, path: str, body: dict | None, timeout: float | None) -> dict:
+        async def admitted():
+            if self.live_borrow is not None and path in ('/api/chat', '/api/generate'):
+                return await self.live_borrow.run(lambda: self._exchange(path, body, timeout))
+            return await self._exchange(path, body, timeout)
         if self.gpu_gate is not None and path in ('/api/chat', '/api/generate', '/api/embed'):
-            return await self.gpu_gate.run(lambda: self._exchange(path, body, timeout))
-        return await self._exchange(path, body, timeout)
+            return await self.gpu_gate.run(admitted)
+        return await admitted()
 
     async def _exchange(self, path: str, body: dict | None, timeout: float | None) -> dict:
         """Run the exchange in a thread without blocking the loop.

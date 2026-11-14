@@ -20,4 +20,9 @@ def attach_photos(app):
     app.engine.attach_photos(sender.offer)
     app.engine.photos_send = True
     set_pictures_available(True)
+    if config.requests:
+        from leeroy_mind.nightly.wiring import enable_borrow
+        from .requests import RequestPhotos
+        enable_borrow(app)
+        sender.requests = RequestPhotos(app, sender)
     return sender

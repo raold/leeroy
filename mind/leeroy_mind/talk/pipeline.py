@@ -349,6 +349,9 @@ class TurnMeta:
     # Optional DB-only receipt writer. Runs with the Discord post and chat mirror in
     # one transaction; it must not mutate memory-only delivery state before commit.
     on_discord_record: Callable[[int, int, float], None] | None = None
+    photo_request: int | None = None
+    photo_request_part: str = 'initial'
+    borrow_credit: object | None = None
     # initiates: the turn starts a conversation with him unprompted (whisper:<trigger>,
     # burst:to_him): its silence is asked again once (SILENT_START_HINT), and a chain never
     # stops it, since its own clock paces it. casual: an opener to him in party or guild,
@@ -606,7 +609,7 @@ class Pipeline:
         photo it cannot carry before any line was said: the answer goes on without the photo.
         An opener (server:dm, server:photo) has nothing owed and is dropped with it."""
         return (meta.photo is not None and not meta.photo_finished and meta.said == 0
-                and (meta.why == DISCORD_REPLY_WHY or self._answers_his_dm(turn, meta)))
+                and (meta.why in (DISCORD_REPLY_WHY, 'selfie:request') or self._answers_his_dm(turn, meta)))
 
     async def _answer_without_photo(self, turn: Turn, meta: TurnMeta, reason: str) -> list[str]:
         """His answer's photo was refused (its caption tripped the screens) or went stale at
@@ -764,9 +767,11 @@ class Pipeline:
                 del self._cancelling[task]
                 task.uncancel()
 
-    def _queue(self, items: list[tuple[Turn, TurnMeta]]) -> None:
+    def _queue(self, items: list[tuple[Turn, TurnMeta]]) -> asyncio.Task | None:
+        """Queue the complete turn chain and return its terminal job to an optional owner."""
         if items:
             for turn, meta in items:
+                self._mark_borrow(meta)
                 self._answer_queued(turn, meta)
                 self._admit_timing(meta)
             tokens = tuple(meta.timing_trace for _, meta in items)
@@ -779,6 +784,7 @@ class Pipeline:
                 self._behind.pop(t, None)
                 self.timing.queued_done(tokens, cancelled=t.cancelled())
             task.add_done_callback(done)
+            return task
 
     def _answer_queued(self, turn: Turn, meta: TurnMeta) -> None:
         """An answer owed to him frees this speaker's background review lock."""
@@ -1453,6 +1459,7 @@ class Pipeline:
         return Priority.SOCIAL
 
     async def _speak(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        self._mark_borrow(meta)
         self._answer_queued(turn, meta)
         self._admit_timing(meta)
         self.timing.dequeued(meta.timing_trace)
@@ -1497,6 +1504,7 @@ class Pipeline:
         if turn.deadline <= 0:
             turn.deadline = now + (DISCORD_DEADLINE_S if is_discord(turn.channel)
                                    else DEADLINE_S.get(turn.priority, OTHER_DEADLINE_S))
+            self._mark_borrow(meta, reset=True)
         if not turn.channel:
             turn.channel = choose_channel(turn.kind, speaker=turn.speaker, world=self.world,
                                           raid=self.raid, now=now, rng=self.rng) or ""
@@ -1645,7 +1653,7 @@ class Pipeline:
             meta.realism_review_lines = tuple(s.plain for s in lines)
             baseline = [typing_delay(s.line, p.typing.chars_per_sec, delay_mult, self.rng)
                         for s in lines]
-            baseline[0] = self._first_typing(turn, baseline[0])
+            baseline[0] = self._first_typing(turn, baseline[0], meta)
             plan = self.realism.plan(self, turn, meta, p, lines, baseline)
             if not plan.burst:  # a busy plan may retain only the first complete line
                 meta.realism_review_lines = meta.realism_review_lines[:len(plan.lines)]
@@ -1664,7 +1672,7 @@ class Pipeline:
                 if turn.template is None:
                     self._phase(turn, TYPING)
                 with self.timing.span(meta.timing_trace, "typing"):
-                    wait = self._first_typing(turn, typing) if i == 0 else typing
+                    wait = self._first_typing(turn, typing, meta) if i == 0 else typing
                     if plan:
                         await self._realistic_sleep(turn, wait)
                     else:
@@ -1756,7 +1764,7 @@ class Pipeline:
                 verdicts.append(verdict)
                 if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
                     return self._drop(turn, meta, "scope_changed")
-                if self.scheduler.expired(turn.deadline):
+                if self.scheduler.expired(self._deadline(turn, meta)):
                     return self._drop(turn, meta, "expired")
             keep(lines,verdicts)
             for verdict in verdicts:
@@ -1951,14 +1959,24 @@ class Pipeline:
             if not ack.ok:
                 log.info("emote_dropped: guid=%d reason=%s", turn.speaker, ack.error)
 
-    def _first_typing(self, turn: Turn, typing: float) -> float:
+    def _mark_borrow(self, meta: TurnMeta, *, reset=False) -> None:
+        gate = getattr(self, 'live_borrow', None)
+        if gate is not None and (reset or meta.borrow_credit is None):
+            meta.borrow_credit = gate.mark()
+
+    @staticmethod
+    def _deadline(turn: Turn, meta: TurnMeta | None = None) -> float:
+        credit = meta.borrow_credit if meta is not None else None
+        return credit.deadline(turn.deadline) if credit is not None else turn.deadline
+
+    def _first_typing(self, turn: Turn, typing: float, meta: TurnMeta | None = None) -> float:
         """The first line's typing, capped so it goes out within the turn's deadline: typed
         faster, never dropped, when the model answered in time (rehearsal 2, finding 5: three
         lines the model gave in half a second were lost to typing alone). A longer Discord
         message ([talk] discord_words) types for DISCORD_TYPING_S at most, not minutes."""
         if self._discord_words(turn):
             typing = min(typing, DISCORD_TYPING_S)
-        left = turn.deadline - self.clock.now() - SEND_MARGIN_S
+        left = self._deadline(turn, meta) - self.clock.now() - SEND_MARGIN_S
         return min(typing, max(MIN_TYPING_S, left)) if turn.deadline > 0 else typing
 
     def _blocked(self, turn: Turn, meta: TurnMeta, now: float, *, first: bool,
@@ -1992,7 +2010,7 @@ class Pipeline:
             if p is None or flirt_chance(p, 1.0) <= 0:
                 return "flirt_stance"  # and only from a woman who wants him
         if first and deadline:
-            expired = self.scheduler.expired(turn.deadline)
+            expired = self.scheduler.expired(self._deadline(turn, meta))
             self.timing.deadline_check(meta.timing_trace, "mind_before_generation", expired=expired)
             if expired:
                 return "expired"
@@ -2058,7 +2076,7 @@ class Pipeline:
                         self.timing.model(trace, attempt, "started")
                 if not _scope_valid(meta):
                     raise _ScopeChanged("scope_changed")
-                expired = self.scheduler.expired(turn.deadline)
+                expired = self.scheduler.expired(self._deadline(turn, meta))
                 self.timing.deadline_check(trace, "mind_readiness_admission", expired=expired)
                 if expired:
                     raise Expired(turn.deadline)
@@ -2094,7 +2112,9 @@ class Pipeline:
         self.timing.model(trace, attempt, "queue")
         outcome = "completed"
         try:
-            result = await self.scheduler.submit(turn.priority, job, deadline=turn.deadline)
+            credit = meta.borrow_credit if meta is not None else None
+            extra = {'credit': credit} if credit is not None else {}
+            result = await self.scheduler.submit(turn.priority, job, deadline=turn.deadline, **extra)
         except asyncio.CancelledError:
             outcome = "cancelled"
             raise
@@ -2172,7 +2192,7 @@ class Pipeline:
                 meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
             if not _scope_valid(meta):
                 return raw, "scope_changed"
-            expired = self.scheduler.expired(turn.deadline)
+            expired = self.scheduler.expired(self._deadline(turn, meta))
             self.timing.deadline_check(meta.timing_trace, "mind_after_generation", expired=expired)
             if expired:
                 return raw, "expired"

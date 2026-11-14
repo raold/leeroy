@@ -282,7 +282,11 @@ def test_mind_bridge_and_voice_down_up_are_words_on_every_tab(rehearsal):
                     await visit(r.page, tab)
                     await expect(r.page.locator("#s-bridge")).to_contain_text("down")
                 await r.bridge.come_up()
-                await until(lambda: r.app.world.online, 10)
+                # The roster's online set survives disconnect. Wait for the greeted
+                # transport that this fixture's tcp() reports to the status strip.
+                # Backoff.next() caps its jitter at _maximum; allow the greeting too.
+                await until(lambda: r.bridge._client is not None and r.bridge._client_ready.is_set(),
+                            r.app.bridge._backoff._maximum + 2)
                 await expect(r.page.locator("#s-bridge")).not_to_contain_text("down")
                 await fake.close()
                 await expect(r.page.locator("#s-vlink")).to_contain_text("voice service down")

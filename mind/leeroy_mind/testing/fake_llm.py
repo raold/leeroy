@@ -41,6 +41,7 @@ class FakeLLM:
         self.inflight = 0
         self.inflight_peak = 0
         self._fail = 0
+        self.live_borrow = None
 
     def fail_next(self, n: int = 1) -> None:
         self._fail += n
@@ -60,6 +61,14 @@ class FakeLLM:
 
     async def chat(self, model, messages, *, options, think=None, format=None, keep_alive=None,
                    timeout=None):
+        if self.live_borrow is not None:
+            return await self.live_borrow.run(lambda: self._chat(model,messages,options=options,
+                think=think,format=format,keep_alive=keep_alive,timeout=timeout))
+        return await self._chat(model,messages,options=options,think=think,format=format,
+                                keep_alive=keep_alive,timeout=timeout)
+
+    async def _chat(self, model, messages, *, options, think=None, format=None, keep_alive=None,
+                    timeout=None):
         self.calls.append({"model": model, "messages": copy.deepcopy(messages),
                            "options": json.loads(json.dumps(dict(options))), "think": think,
                            "format": copy.deepcopy(format), "keep_alive": keep_alive})

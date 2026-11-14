@@ -179,7 +179,9 @@ class DiscordDesk:
                     hook.begin_photo()
                     self._spawn_photo(self._look_then_answer(mid))
                 else:
-                    hook.on_his_post(mid)
+                    requests = getattr(getattr(app, 'photos', None), 'requests', None)
+                    if requests is None or not requests.begin(mid):
+                        hook.on_his_post(mid)
             return {"ok": True, "id": mid}
         message = args["message"]
         channel_row = store.conn.execute('SELECT channel FROM discord_message WHERE id=?',(message,)).fetchone()
@@ -231,7 +233,9 @@ class DiscordDesk:
         if look:
             dstore.set_look(app.store, message, look, now=app.clock.now())
         if not app.stopping:
-            app.discord_talk.on_his_post(message)
+            requests = getattr(getattr(app, 'photos', None), 'requests', None)
+            if requests is None or not requests.begin(message):
+                app.discord_talk.on_his_post(message)
 
     def remember_photo(self, member: int, message: int) -> None:
         if not self.photos.enabled or (member, message) in self._photo_memories:

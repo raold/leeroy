@@ -24,6 +24,7 @@ class OllamaPins:
     def __init__(self, url: str):
         self.url = url.rstrip("/")
         self.gpu_gate = None
+        self.live_borrow = None
 
     async def pin(self, live: str, embed: str) -> None:
         await self._keep(live, embed, -1)
@@ -34,17 +35,27 @@ class OllamaPins:
     async def _keep(self, live: str, embed: str, keep_alive) -> None:
         """Raises OSError (urllib's errors are) when Ollama fails a call; does nothing when
         /api/ps cannot be read or does not list a model."""
+        if self.live_borrow is not None:
+            return await self.live_borrow.run(lambda: self._keep_admitted(live, embed, keep_alive, joined=True))
+        return await self._keep_admitted(live, embed, keep_alive)
+
+    async def _keep_admitted(self, live, embed, keep_alive, *, joined=False):
+        async def work(fn, *args):
+            if joined:
+                from leeroy_mind.selfies.worker import to_the_end
+                return await to_the_end(asyncio.to_thread(fn, *args))
+            return await asyncio.to_thread(fn, *args)
         if self.gpu_gate is not None:
             self.gpu_gate.check()
-        names = await asyncio.to_thread(self._loaded)
+        names = await work(self._loaded)
         if names is None:
             return
         if _listed(names, live):
-            await asyncio.to_thread(self._post, "/api/chat", {
+            await work(self._post, "/api/chat", {
                 "model": live, "messages": [], "stream": False, "think": LIVE.think,
                 "options": dict(LIVE.options), "keep_alive": keep_alive})
         if _listed(names, embed):
-            await asyncio.to_thread(self._post, "/api/embed", {
+            await work(self._post, "/api/embed", {
                 "model": embed, "input": ["."], "dimensions": EMBED_DIMENSIONS,
                 "keep_alive": keep_alive, "options": {"num_ctx": EMBED_NUM_CTX}})
 
