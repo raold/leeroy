@@ -22,9 +22,11 @@ constexpr auto kU32Max = std::numeric_limits<std::uint32_t>::max();
 constexpr auto kU64Max = std::numeric_limits<std::uint64_t>::max();
 constexpr auto kMaxTimestamp = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
 constexpr std::uint64_t kMaxWireUnixMs = kMaxFightStartedAtMs; // 9999-12-31, the mind's Unix-ms bound.
-constexpr std::array<std::string_view, 18> kQueued = {
+// Kinds the paced body queue runs. A calendar signup is not one: it is a direct command, as a
+// post and an update are, since it changes CalendarMgr rows and never a body.
+constexpr std::array<std::string_view, 17> kQueued = {
     "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue", "duel", "craft", "equip",
-    "set_profession", "transmog_set", "calendar_signup", "mail_send", "bank_deposit", "bank_withdraw",
+    "set_profession", "transmog_set", "mail_send", "bank_deposit", "bank_withdraw",
     "bank_stock", "guild_grow", "arena_team"
 };
 constexpr std::array<std::string_view, 3> kArenaActions = {"create", "add", "drop"};
