@@ -42,6 +42,15 @@ Leeroy.CastDeathLoop.Enable = 0
 Leeroy.GroupRez.Enable = 1
 Leeroy.GroupRez.ReleaseSeconds = 60
 
+# Ground hazards in the owner's group. Cast bots of his group with him as master get playerbots'
+# avoid aoe out of combat as well (stock adds it to the combat engine only); with the local playerbots
+# patch (PlayerbotHazardFilter) their follow spots also skip a hazard for the nearest safe spot, and a bot
+# standing in one steps out. A hazard is a hostile damaging area, trap or trigger npc up to
+# Playerbots.MaxAoeAvoidRadius, plus a measured few larger ones a player walks out of (at most 35 yards).
+# Random bots and anyone outside his group are never touched; Realm and training ownership is honoured.
+# Reloadable with .reload config; 0 takes back the avoid aoe it added.
+Leeroy.Hazards.Enable = 0
+
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
 

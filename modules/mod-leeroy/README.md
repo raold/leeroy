@@ -82,6 +82,66 @@ fighting nearby restarts that clock. Inside an instance it waits for a rez, as b
 Reloadable with `.reload config`. Logs carry guids, spell ids and result codes only.
 **Native rebuild required.**
 
+# Ground hazards in the owner's group
+
+Stock playerbots adds its `avoid aoe` strategy to the combat engine only (`AutoAvoidAoe` with a game-client
+master). Between pulls the non-combat engine runs, including while a bot takes damage from a hazard it never
+attacked, and `follow` walks it to its formation spot beside him, through and into fire or poison. Stock
+`avoid aoe` is also reactive (a dynamic object's area only once its aura is on the bot; a trap or trigger npc
+only when its centre is within 15 yards) and ignores anything above `Playerbots.MaxAoeAvoidRadius` (15).
+
+`Leeroy.Hazards.Enable` (default 0, `.reload config`) changes that for the cast bots of his group only
+(`HazardJob`, pure policy `LeeroyHazardPolicy`). A member qualifies while it is a cast bot (not a self-bot),
+in his group (not a battleground or battlefield group) with him as its master; a Realm lease, offline raid,
+training state or pending bot command leaves the body to its owner (nothing added or removed).
+
+- **Out of combat too.** Every 500 ms the world tick adds `avoid aoe` to a qualifying member's non-combat engine
+  where it is absent, and so does `RaidHabits` right after its strategy reset (the owner's `add5/10/25/40`, a
+  raid night he leads). The journal holds only additions this job made, per body, AI and session: a strategy
+  someone else added is never removed, a reset that dropped ours is forgotten and re-added while the member
+  still qualifies (`hazard_avoid_readded`, the first and every 50th), and a member who stops qualifying (left
+  his group, another master, key off) loses only ours (`hazard_avoid_off guid= reason=`). A logout forgets it;
+  a member between maps is decided when it lands.
+- **Follow spots and exits** (needs the local playerbots patch `0011`, `PlayerbotHazardFilter`; without it the
+  start log says the filter is unavailable and only the non-combat strategy works). Each pass scans 70 yards
+  around him and around any member farther than 15 yards from him for the three kinds stock knows, measured
+  as stock measures them: a hostile persistent area dealing damage (`DynamicObject` radius; dummy marker areas
+  are left to stock's reactive case), a damaging trap that a player can see (half its diameter), and an
+  unselectable hostile trigger npc whose periodic aura triggers a damage spell (that spell's radius). Each
+  counts up to `Playerbots.MaxAoeAvoidRadius`, never one on `Playerbots.AoeAvoidSpellWhitelist`, plus the
+  allow-list below. Map threads read that snapshot: `FollowAction` moves a formation spot that lies within a
+  zone's radius plus the bot's reach plus 1.5 yards to the nearest spot clear of every zone (straight out
+  first, then rings of 2 yards up to 40 yards, ties toward the bot), checked against the navmesh; `avoid aoe`
+  (after its three stock cases, in combat as well) walks a bot standing in a zone to the nearest such spot,
+  ties toward him, and keeps that exit while it stays clear. Logs once a minute while it acts:
+  `hazards_minute aware= zones= spot_members= exit_members=`.
+
+**Larger hazards (measured, 2026-11-14).** From the live `Spell.dbc`/`SpellRadius.dbc` and the core's raid
+scripts and world SQL for Naxxramas, Ulduar, Trial of the Crusader, Icecrown Citadel, the Obsidian Sanctum, the
+Eye of Eternity and the Vault of Archavon, the ground-effect damage spells with a radius above 15 and up to 35:
+
+| Spell (aura -> damage) | Where | Radius | Decision |
+|---|---|---|---|
+| 28158 -> 28241 Poison | Naxx, Grobbulus's cloud | 30 (script hits within the cloud's reach, 2 -> 17 over 60 s) | **allowed**, radius = the cloud's combat reach |
+| 69788 -> 69789 Ooze Flood (71215, 71587, 71588) | ICC, Rotface's flooded corner | 25 | **allowed** |
+| 57428 -> 57429 Static Field | EoE, Malygos phase 3 | 30 | no: the raid rides drakes |
+| 70460 -> 70461 Coldflame Trap | ICC, jets after Saurfang | 25 (cone target) | no: a jet line, not a circle |
+| 62016 -> 62017 Lightning Shock | Ulduar, Thorim's charged pillar | 35 | no: arena mechanic |
+| 62393 -> 62392 Lightning Destruction | Ulduar, Thorim's gauntlet orb | 35 | no: an orb sweeping a corridor |
+| 29350 -> 30122 Plague Cloud, 61887/61869 Tendrils/Overload, 62546 Scorch, 64167 Lunatic Gaze, 65084 Self Destruct | Heigan, Brundir, Ignis, Yogg-Saron, a mob | 18-30 | no: on a selectable boss or mob, not a ground hazard |
+
+No dynamic object in those raids exceeds 15 yards in the DBC (the largest are 13: Rune of Death, Ulduar trash
+Blizzard). Putricide's Slime Puddle (70346, 2.5 x the puddle's scale) and the Lich King's Defile (72754, 10 x its
+scale) are sized by their scripts with DBC radii of 100 and 200; playerbots' own ICC strategies handle them, so
+the generic rule leaves them alone. Above 35 (Shroud of Sorrow 40, Remorseless Winter 45, Unholy Aura 45, the
+spews 55, ...) nothing is ever fled. Allowed spells still stop at 35 yards.
+
+Limits: the path a follow move takes is not checked (only where it ends); `melee` and `queue` formations follow
+a unit, not a spot, so only their reactive avoid aoe applies; encounter multipliers that silence `avoid aoe`
+during a mechanic silence the exit too; in combat a melee bot whose target stands in a hazard can still step back
+in to reach it, as with stock's own flee. Logs carry guids, counts and reason codes only. **Native rebuild
+required, with the playerbots patch applied first.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a
