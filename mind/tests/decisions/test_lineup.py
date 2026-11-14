@@ -197,3 +197,19 @@ def test_the_post_is_built_from_rows():
                        at=datetime(2026, 11, 3, 20, tzinfo=timezone.utc))
     assert text == ('Lineup for Raid night, Tuesday 20:00 (25-man heroic):\nTanks: Aa\nHealers: Bb\nDamage: Cc\n'
                     'Bench: nobody\nMissing: Replenishment')
+
+
+def test_never_posted_in_the_servers_quiet_window(store, clock, cast):
+    from datetime import time
+    members, personas = cast
+    now = clock.now()
+    event(store, now + 10 * HOUR)
+    ident = ledger.propose(store, kind='lineup', subject=subject_of(7), value={'members': [201], 'bench': [],
+                           'lead': 201, 'tanks': [201], 'healers': []}, positions=[], now=now - SETTLE_AFTER_S)
+    app = app_for(store, clock, personas)
+    app.server = SimpleNamespace(config=SimpleNamespace(quiet_window=(time(19, 0), time(21, 0))))
+    run(LineupRules(), app)
+    assert ledger.get(store.conn, ident)['status'] == 'proposed'
+    app.server = None
+    run(LineupRules(), app)
+    assert ledger.get(store.conn, ident)['status'] == 'settled'

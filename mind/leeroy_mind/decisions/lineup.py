@@ -225,11 +225,8 @@ class LineupRules:
 
     def _settle(self, app, now):
         store = app.store
-        server = getattr(getattr(app, 'server', None), 'config', None)
-        if server is not None:
-            from leeroy_mind.server.clock import in_window
-            if in_window(app.clock.local(), server.quiet_window):
-                return  # posted when the server is awake
+        if server_quiet(app):
+            return  # posted when the server is awake
         for row in store.conn.execute("SELECT * FROM guild_decision WHERE kind='lineup' AND status='proposed' "
                                       'AND proposed<=? ORDER BY id', (now - SETTLE_AFTER_S,)).fetchall():
             event = _event(store.conn, row['subject'])
@@ -295,6 +292,15 @@ class LineupRules:
             log.warning('guild_add_roster_refused error=%s', error or 'none')
             return
         log.info('guild_add_roster_sent members=%d bench=%d', len(members), len(bench))
+
+
+def server_quiet(app) -> bool:
+    """The server's quiet window ([server] quiet_window): no decision is posted in it."""
+    server = getattr(getattr(app, 'server', None), 'config', None)
+    if server is None:
+        return False
+    from leeroy_mind.server.clock import in_window
+    return in_window(app.clock.local(), server.quiet_window)
 
 
 def _event(conn, subject):

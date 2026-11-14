@@ -282,3 +282,14 @@ def test_live_ports_fix_the_rule_when_a_raid_opens_and_only_with_decisions_on(st
     with store.conn:
         on.fix_loot_rule(6)
     assert rule_for_raid(store.conn, 6).decision == ident
+
+
+def test_no_poll_opens_in_the_servers_quiet_window(store, clock, guild, kind):
+    from datetime import time
+    app = app_for(store, clock, guild)
+    app.server = SimpleNamespace(config=SimpleNamespace(quiet_window=(time(19, 0), time(21, 0))))
+    asyncio.run(service(app).tick())
+    assert polls.open_polls(store.conn) == []
+    app.server = SimpleNamespace(config=SimpleNamespace(quiet_window=(time(3, 0), time(8, 0))))
+    asyncio.run(service(app).tick())
+    assert len(polls.open_polls(store.conn)) == 1

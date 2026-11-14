@@ -329,7 +329,8 @@ class LootRules:
         config = getattr(app.decisions, "config", None)
         days = getattr(config, "loot_poll_days", 14)
         self._close_when_all_voted(app, now)
-        if poll_due(app.store.conn, now=now, poll_days=days, human=app.human_guid):
+        from .lineup import server_quiet
+        if not server_quiet(app) and poll_due(app.store.conn, now=now, poll_days=days, human=app.human_guid):
             self._open(app, now)
         self._take_effect(app, now)
 
