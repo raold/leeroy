@@ -226,7 +226,9 @@ class RaidCalls:
         state = parse_dc_status(ev.payload)
         if state is None or state.state not in {"resting", "idle"} or not state.next_entry or not state.next_name.strip():
             return
-        name, call = call_for(self._map, state.next_name)
+        plan = self._run.plan
+        # the instance difficulty (25 is 1, heroic adds 2): a heroic run gets its heroic call
+        name, call = call_for(self._map, state.next_name, int(plan.size == 25) + 2 * int(plan.heroic))
         async with self._lock:
             if not self._valid(epoch) or not self._fresh(ev.ts) or name == self._last_pre or self._pull is not None:
                 return

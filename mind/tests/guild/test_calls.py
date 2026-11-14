@@ -515,3 +515,15 @@ async def test_pre_calls_ask_the_raid_playbook_hook_first(setup, monkeypatch):
     await calls.on_dc_status(dc(ports, "Rotface", 36627))
     assert ports.said[-1][2] == "spores: stack"
     assert (seen[0].map_id, seen[0].boss_id, seen[0].size, seen[0].heroic) == (631, 5, 10, False)
+
+
+@_run_async
+async def test_a_heroic_run_gets_the_heroic_pre_pull_call(setup, monkeypatch):
+    """call_for with the run's difficulty: a heroic plan's pre-pull call is the heroic one."""
+    from leeroy_mind.guild import calls as calls_module
+    ports, run, calls = await start(setup)
+    seen = []
+    real = calls_module.call_for
+    monkeypatch.setattr(calls_module, "call_for", lambda *a: seen.append(a) or real(*a))
+    await calls.on_dc_status(dc(ports))
+    assert seen and seen[0][2] == 0  # this 10-player normal run

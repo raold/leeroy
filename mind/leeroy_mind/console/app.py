@@ -80,6 +80,7 @@ run nothing else.
                        op `library`, a read: it works with --no-control); the query is never logged
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/training/playbooks  the raid playbooks per boss (leeroy_mind.raidplay), read-only
     GET  /api/ops/badge  the Ops tab badge's two counts (health FAILs, held members), polled while any tab is open
     GET  /api/ops      eight independently budgeted read-only operations panels (opsview)
     GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
@@ -153,6 +154,7 @@ from .. import clock as mind_clock, endpoint
 from ..discord import layout as discord_layout, store as discord_store
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
 from . import opsview
+from . import playbookview
 from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview, views, insightview)
@@ -904,6 +906,7 @@ class ConsoleApp:
                   ("POST", "/api/learn"): self._api_learning_action,
                   ("POST", "/api/feedback"): self._api_learning_action,
                   ("GET", "/api/training"): self._api_training,
+                  ("GET", "/api/training/playbooks"): self._api_playbooks,
                   ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/ops/badge"): self._api_ops_badge,
                   ("GET", "/api/ops/action"): self._api_ops_action_status,
@@ -1301,6 +1304,14 @@ class ConsoleApp:
 
     async def _api_ops_badge(self, req: Request):
         return json_response(200, await self._ops.badge({"mind": self.view.state}))
+
+    async def _api_playbooks(self, req: Request):
+        try:
+            view = await asyncio.to_thread(playbookview.playbook_view)
+        except Exception as e:
+            log.warning("console_playbooks_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"the playbooks could not be read ({type(e).__name__})"})
+        return json_response(200, view)
 
     async def _api_dojo(self, req: Request):
         view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)

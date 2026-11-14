@@ -102,3 +102,13 @@ def test_raids_she_led_because_he_named_her_are_no_nights_led(store):
     conn.commit()
     assert nights(conn, [102, 103]) == {102: (0, 0), 103: (1, 0)}
     assert 102 not in last_led(conn) and 103 in last_led(conn)
+
+
+def test_boss_plan_prefers_the_heroic_call_on_heroic():
+    from leeroy_mind.guild.boss_calls import BOSS_CALLS, HEROIC_CALLS
+    from leeroy_mind.raidlead.callouts import BossContext, boss_plan
+    key = next((k for k in HEROIC_CALLS if k in BOSS_CALLS and HEROIC_CALLS[k].pre != BOSS_CALLS[k].pre), None)
+    if key is None:
+        pytest.skip("no boss with a distinct heroic call in this build")
+    assert boss_plan(BossContext(*key, heroic=True)) == HEROIC_CALLS[key].pre
+    assert boss_plan(BossContext(*key)) == BOSS_CALLS[key].pre

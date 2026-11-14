@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { adaptText, gateText, changeText, deathsText, coverageText, evidenceNotes, trialText, scopeText,
-  spellText, hurtHead, deathsBy, hitHardest, mechanicsText, avoidText }
+  spellText, hurtHead, deathsBy, hitHardest, mechanicsText, avoidText, playbookGroups, playbookTotals }
   from "../../../leeroy_mind/console/static/js/trainmodel.mjs";
 
 test("days until tactics may adapt", () => {
@@ -47,6 +47,19 @@ test("a trial's or a card group's scope reads as its boss and mode", () => {
   assert.equal(scopeText({ scope: "631:0:1", boss: "Lord Marrowgar", mode: "25-man" }), "Lord Marrowgar · 25-man");
   assert.equal(scopeText({ scope: "odd", boss: "odd", mode: "" }), "odd");
   assert.equal(scopeText({ scope: "631:0:1" }), "631:0:1");
+});
+test("the raid playbooks read as raids, bosses and mechanics", () => {
+  const v = { totals: { raids: 1, bosses: 1, mechanics: 2, playerbots: 1, partial: 0, scored: 1, scored_playbooks: 3 },
+    raids: [{ name: "Naxxramas", difficulties: ["10", "25"], bosses: [{ name: "Gluth", call: null, mechanics: [
+      { name: "Mortal Wound", kind: "tank_swap_at_stacks", roles: ["tank"], only: [], handled_by: "playerbots", explain: "Swap." },
+      { name: "Enrage", kind: "dispel", roles: ["ranged"], only: ["25"], handled_by: "partial", handled_note: "with a hunter", explain: "Soothe." }] }] }] };
+  const g = playbookGroups(v);
+  assert.equal(g[0].title, "Naxxramas (10, 25)");
+  assert.equal(g[0].bosses[0].detail, "2 mechanics, 1 handled by playerbots, 1 partly");
+  assert.deepEqual(g[0].bosses[0].mechanics.map(m => [m.tag, m.who, m.stock, m.note]),
+    [["tank swap", "tank", "playerbots", ""], ["dispel", "ranged · only 25", "partly playerbots", "with a hunter"]]);
+  assert.equal(playbookTotals(v), "1 raid · 1 boss · 2 mechanics · 1 handled by playerbots, 0 partly · 1 check row can fail by default (3 with playbook checks on)");
+  assert.deepEqual(playbookGroups(null), []);
 });
 
 test("what hurt them reads as short lines of numbers and spell names", () => {

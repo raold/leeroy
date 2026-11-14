@@ -31,11 +31,12 @@ def boss_brief(context: BossContext) -> str | None:
 def boss_plan(context: BossContext) -> str | None:
     """What the lead tells him about a boss: the playbook's brief, else the guild's standing
     pre-pull call for that encounter, else None."""
-    from leeroy_mind.guild.boss_calls import BOSS_CALLS
+    from leeroy_mind.guild.boss_calls import BOSS_CALLS, HEROIC_CALLS
     brief = boss_brief(context)
     if brief:
         return brief
-    call = BOSS_CALLS.get((context.map_id, context.boss_id))
+    key = (context.map_id, context.boss_id)
+    call = (HEROIC_CALLS.get(key) if context.heroic else None) or BOSS_CALLS.get(key)
     return call.pre if call is not None else None
 
 
