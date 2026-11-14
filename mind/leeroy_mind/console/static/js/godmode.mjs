@@ -116,6 +116,7 @@ export function renderStrings(j, guid, live, why) {
   });
   if (!rows.length) box.appendChild(el("p", "muted", "No strings yet."));
   gameRow(box, guid, live, why);
+  box.appendChild(el("p", "muted", "In Discord"));
   const draft = stringDrafts.get(guid) || {};
   stringDrafts.set(guid, draft);
   const f = form(box, STRING_KINDS, live, why, draft);
