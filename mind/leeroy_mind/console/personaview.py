@@ -259,7 +259,7 @@ def _card(p) -> dict:
             "appearance": d["appearance"], "photo": d.get("photo")}
 
 
-def member_view(conn, guid: int, *, now: float) -> dict | None:
+def member_view(conn, guid: int, *, now: float, outreach_enabled=False) -> dict | None:
     """One member in detail: the roster's entry, the persona card summary, every tie (the
     strongest DETAIL_TIES), active memories by kind and the newest LEDGER ledger rows. None
     when mind.db knows no such member (or it is the owner)."""
@@ -283,6 +283,10 @@ def member_view(conn, guid: int, *, now: float) -> dict | None:
                   for r in conn.execute("SELECT id, ts, kind, text FROM persona_ledger "
                                         "WHERE guid = ? ORDER BY ts DESC, id DESC LIMIT ?",
                                         (guid, LEDGER))]
-    return {"human": v["human"], "names": v["names"], "missing": v["missing"],
+    result = {"human": v["human"], "names": v["names"], "missing": v["missing"],
             "recent_days": RECENT_DAYS, "member": member,
             "card": _card(p) if p is not None else None, "memories": kinds, "ledger": ledger}
+    if outreach_enabled:
+        from .outreachview import member_view as outreach_view
+        result['outreach'] = outreach_view(conn, guid)
+    return result

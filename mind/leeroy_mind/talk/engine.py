@@ -769,7 +769,10 @@ class TalkEngine(EmoteReactions):
         now, hg = self.clock.now(), self.human.guid
         if not hg or not self.world.human_online:
             return None
+        outreach = getattr(self, 'outreach', None)
         every = [g for g in self._candidates() if self.raid.allows(g, TurnKind.OPEN, now)]
+        if outreach is not None:
+            every = [g for g in every if outreach.eligible(g)]
         if not every:
             log.info("open_to_him_skipped: reason=no_candidates")
             return None
@@ -789,8 +792,11 @@ class TalkEngine(EmoteReactions):
         turn = Turn(kind=TurnKind.OPEN, speaker=g, channel=self._to_him_channel(g), addressee=hg,
                     max_lines=1,
                     delay=self.rng.uniform(*OPEN_S) * self._effects(g).delay_mult)
-        meta = TurnMeta(self._new_id(), topic=self._to_him_topic(self.personas.get(g), now),
+        item = outreach.select(g, turn.channel) if outreach is not None else None
+        meta = TurnMeta(self._new_id(), topic=item.about if item else self._to_him_topic(self.personas.get(g), now),
                         why="burst:to_him", initiates=True, casual=True)
+        if item is not None and not outreach.bind(turn, meta, item):
+            return mult
         await self._speak(turn, meta)
         return mult
 
@@ -813,7 +819,7 @@ class TalkEngine(EmoteReactions):
         n = self._opens.get(key, 0)
         self._opens[key] = n + 1
         options = list(TO_HIM_TOPICS)
-        lately = self._lately_line(p.guid, now)
+        lately = self._lately_line(p.guid, now, outreach=True)
         if lately:
             options.append(TO_HIM_TONIGHT)
         event = self._guild_event(now)

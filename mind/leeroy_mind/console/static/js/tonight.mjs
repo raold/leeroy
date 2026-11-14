@@ -8,7 +8,7 @@ function renderTonight(value) {
   const box = $('tonight-cards');
   clear(box);
   SECTIONS.forEach(name => {
-    const model = cardModel(name,value.sections?.[name]), card = el('article','panel');
+    const model = cardModel(name,value.sections?.[name],value.sections?.outreach), card = el('article','panel');
     const header = el('header',''); header.appendChild(el('h3','',model.title)); card.appendChild(header);
     model.lines.forEach(line => {
       const r = el('p','tonight-line');

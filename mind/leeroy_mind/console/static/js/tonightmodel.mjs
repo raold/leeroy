@@ -1,4 +1,5 @@
 import { pausedWords } from "./gpumodel.mjs";
+import { tonightOutreachLine } from "./outreachmodel.mjs";
 export const SECTIONS = ['raid','waiting','loot','bank','kit','week','guild'];
 export const INTRO = 'Your raid, replies and supplies at a glance. Read-only; nothing here sends a message or changes the game.';
 const TITLES = {raid:'Raid tonight',waiting:'Waiting for you',loot:'Due an item',bank:'Bank shortages',kit:'Your kit',week:'This week',guild:'Guild now'};
@@ -10,10 +11,14 @@ const why = {mind_down:'The mind is not running.',mind_stopping:'The mind is sto
   no_link:'The console has no link to the mind.',slow:'This source is taking too long. Try again shortly.'};
 const row = (text,href,people=[]) => ({text,href,people});
 
-export function cardModel(name, value) {
+export function cardModel(name, value, outreach) {
   const p = value || {}, lines = [], title = TITLES[name] || name;
-  if (p.status === 'not_set_up') { return {title,lines:[row('Not set up yet.')]}; }
-  if (p.status !== 'ok') { return {title,lines:[row(why[p.why] || 'This source is unavailable just now.')]}; }
+  const finish = lines => {
+    const extra = name === 'waiting' ? tonightOutreachLine(outreach) : null;
+    return {title,lines:extra ? [...lines,row(extra,'#personas')] : lines};
+  };
+  if (p.status === 'not_set_up') { return finish([row('Not set up yet.')]); }
+  if (p.status !== 'ok') { return finish([row(why[p.why] || 'This source is unavailable just now.')]); }
   if (name === 'raid') {
     arr(p.events).forEach(e => {
       lines.push(row(String(e.title)+' · '+at(e.at),'#calendar'));
@@ -46,5 +51,5 @@ export function cardModel(name, value) {
     lines.push(row('Cast online: '+count(p.cast_online)));
     lines.push(row(p.night ? 'Last finished night: '+String(p.night.date)+' · '+count(p.night.failed_units)+' failed units' : 'No finished night is recorded.','#ops'));
   }
-  return {title,lines};
+  return finish(lines);
 }

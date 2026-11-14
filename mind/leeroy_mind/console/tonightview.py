@@ -134,6 +134,9 @@ def _guild(conn,status):
 
 def section_view(name,conn,data_dir,*,now,status,kit,kit_why):
     try:
+        if name == 'outreach':
+            from .outreachview import tonight_view as outreach_view
+            return outreach_view(conn,now=now)
         if name in ('raid','week'):
             return _calendar(conn,now,name)
         if name == 'waiting':
@@ -177,9 +180,10 @@ def section_view(name,conn,data_dir,*,now,status,kit,kit_why):
         return result('unavailable','read_failed')
 
 
-def tonight_view(conn,data_dir: Path,*,now: float,status: dict | None,kit: dict | None,kit_why: str | None) -> dict:
+def tonight_view(conn,data_dir: Path,*,now: float,status: dict | None,kit: dict | None,kit_why: str | None,
+                 outreach_enabled=False) -> dict:
     sections = {}
-    for name in SECTIONS:
+    for name in (*SECTIONS, *(('outreach',) if outreach_enabled else ())):
         deadline = time.monotonic()+1
         conn.set_progress_handler(lambda: time.monotonic()>=deadline,1000)
         try:
@@ -191,8 +195,9 @@ def tonight_view(conn,data_dir: Path,*,now: float,status: dict | None,kit: dict 
 
 class TonightView(OpsView):
     """Use the Ops single-flight daemon workers so a stalled read cannot accumulate."""
-    def __init__(self,data,*,clock=time.time):
-        super().__init__(data,data,budgets={n:2.8 if n=='kit' else 1.0 for n in SECTIONS},clock=clock)
+    def __init__(self,data,*,clock=time.time,outreach_enabled=False):
+        self.sections = (*SECTIONS, *(('outreach',) if outreach_enabled else ()))
+        super().__init__(data,data,budgets={n:2.8 if n=='kit' else 1.0 for n in self.sections},clock=clock)
 
     def _source(self,name,deadline,runtime):
         kit,why = (runtime['kit_read']() if name=='kit' else (None,None))
@@ -200,9 +205,9 @@ class TonightView(OpsView):
             return section_view(name,conn,self.data,now=runtime['now'],status=runtime['status'],kit=kit,kit_why=why)
 
     async def snapshot(self,runtime):
-        values = await asyncio.gather(*(self._one(n,runtime) for n in SECTIONS))
+        values = await asyncio.gather(*(self._one(n,runtime) for n in self.sections))
         sections = {}
-        for name,value in zip(SECTIONS,values):
+        for name,value in zip(self.sections,values):
             if value['status'] in ('missing','error'):
                 value = result('not_set_up' if value['status']=='missing' else 'unavailable',
                                'slow' if value.get('skipped')=='budget' else 'missing_source' if value['status']=='missing' else 'read_failed')

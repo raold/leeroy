@@ -333,6 +333,8 @@ class ConsoleApp:
         self.voice_notes = load_voice_notes(settings.data_dir / 'mind.toml')
         from ..groups.config import load_groups_config
         self.groups = load_groups_config(settings.data_dir / 'mind.toml')
+        from ..outreach.config import load_outreach_config
+        self.outreach_enabled = load_outreach_config(settings.data_dir / 'mind.toml').enabled
         self._voice_uploads = []
         self._voice_day = None
         self._voice_day_total = 0
@@ -384,7 +386,8 @@ class ConsoleApp:
         self._server = None
         self._ops = opsview.OpsView(settings.root, settings.data_dir)
         from .tonightview import TonightView
-        self._tonight = TonightView(settings.data_dir,clock=self._clock)
+        self._tonight = TonightView(settings.data_dir,clock=self._clock,
+                                   outreach_enabled=self.outreach_enabled)
         from .opsactions import OpsActions
         self._ops_actions = OpsActions(self)
 
@@ -1323,7 +1326,8 @@ class ConsoleApp:
             return json_response(400, {"ok": False, "error": "guid: one member's guid"})
         try:
             view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
-                                           personaview.member_view, guid, now=self._clock())
+                                           personaview.member_view, guid, now=self._clock(),
+                                           outreach_enabled=self.outreach_enabled)
         except Exception as e:
             log.warning("console_persona_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "

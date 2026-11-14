@@ -487,6 +487,8 @@ class MindApp:
         self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.
         from .photos.attach import attach_photos
         self.photos = attach_photos(self)
+        from .outreach.attach import attach as attach_outreach
+        self.outreach = attach_outreach(self)
 
     # -- extension points --------------------------------------------------------------------
 
@@ -769,6 +771,8 @@ class MindApp:
         the bystander clock, his activity and any answer in the game stay as they were (ruling
         R11); the members' answers are discord.talk's."""
         self._queue_closed(self.threads.add(line_id, chat, ts))
+        if self.outreach is not None:
+            self.outreach.on_his_line(line_id)
 
     async def _call_hooks(self, kind: str, hooks: list, *args) -> None:
         for hook in list(hooks):
@@ -1015,6 +1019,8 @@ class MindApp:
         # machine's), so lines minutes apart are separate conversations.
         self._queue_closed(self.threads.add(line_id, ev, now if at is None else at))
         if not backlog:
+            if self.outreach is not None:
+                self.outreach.on_his_line(line_id)
             await self.engine.on_human_chat(row)
         return True
 

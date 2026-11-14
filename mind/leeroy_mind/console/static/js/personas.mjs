@@ -3,6 +3,7 @@ import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, plural
 import { face } from "./faces.mjs";
 import { pollWorld } from "./world.mjs";
 import { appendInsightBadges, pollInsight, selectInsight } from "./insight.mjs";
+import { memberOutreachModel } from "./outreachmodel.mjs";
 import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
@@ -302,6 +303,23 @@ function renderMember(j) {
   }
   if (!mem || !Object.keys(mem).length) { emptyRow(kinds, 3, mem ? "None held yet." : "Unavailable in this mind.db."); }
   setText("p-memn", m.memories && m.memories.total ? plural(m.memories.total, "memory", "memories") + " held" : "");
+  var outreach = memberOutreachModel(j.outreach), outreachRows = $("p-outreach-kinds");
+  $("p-outreach").hidden = outreach === null;
+  clear(outreachRows);
+  setText("p-outreach-why", outreach?.why || "");
+  if (outreach) {
+    outreach.rows.forEach(function (r) {
+      var tr = el("tr");
+      cell(tr, r.label);
+      r.values.forEach(function (n) { cell(tr, String(n), "num"); });
+      outreachRows.appendChild(tr);
+    });
+    if (outreach.totals && outreach.rows.length) {
+      var total = el("tr"); cell(total, "Total");
+      outreach.totals.forEach(function (n) { cell(total, String(n), "num"); });
+      outreachRows.appendChild(total);
+    }
+  }
   var ties = $("p-ties"), t = m.ties;
   clear(ties);
   arr(t && t.top).forEach(function (r) {
