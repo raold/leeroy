@@ -74,11 +74,14 @@ class FakeLibrary:
 
     def drops_from(self, boss):
         self.asked.append(boss)
-        chunk = lambda map_id, section, *ids: SimpleNamespace(map_id=map_id, section=section,
-                                                             ref_ids=tuple(f"item:{i}" for i in ids))
+        def chunk(map_id, section, *ids, title=boss):
+            return SimpleNamespace(map_id=map_id, section=section, title=title,
+                                   ref_ids=tuple(f"item:{i}" for i in ids))
         return {"Lord Marrowgar": [chunk(631, "10-player", 1001, 1002), chunk(631, "25-player", 1003),
                                    chunk(0, "10-player", 1004)],
-                "Lady Deathwhisper": [chunk(631, "10-player (part 2)", 1005)]}.get(boss, [])
+                "Lady Deathwhisper": [chunk(631, "10-player (part 2)", 1005)],
+                # a word-match fallback can hand back another source of the same raid
+                "Rotface": [chunk(631, "10-player", 1006, title="Invented Other Chest")]}.get(boss, [])
 
 
 class FakeArmory:

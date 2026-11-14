@@ -66,15 +66,22 @@ def _difficulty(section, size: int, heroic: bool) -> bool:
     return found is not None and int(found[1]) == size and bool(found[2]) == heroic
 
 
+def _bare(name) -> str:
+    return re.sub(r"^the\s+", "", " ".join(str(name).split()).casefold())
+
+
 def boss_drops(library, target: Target) -> dict[str, tuple[int, ...]]:
-    """{boss: item ids} from the library's loot chunks of that raid map and difficulty."""
+    """{boss: item ids} from the library's loot chunks of that raid map and difficulty whose
+    title names the boss (its loot or its chest): drops_from's word-match fallback can return
+    another source, and an item is never put on a boss that does not drop it."""
     out = {}
     for (map_id, _), boss in sorted(BOSS_NAMES.items()):
         if map_id != target.map_id:
             continue
         ids = []
         for chunk in library.drops_from(boss):
-            if chunk.map_id != target.map_id or not _difficulty(chunk.section, target.size, target.heroic):
+            if (chunk.map_id != target.map_id or _bare(boss) not in _bare(chunk.title)
+                    or not _difficulty(chunk.section, target.size, target.heroic)):
                 continue
             ids += [int(ref[5:]) for ref in chunk.ref_ids
                     if isinstance(ref, str) and re.fullmatch(r"item:[1-9][0-9]{0,9}", ref)]
