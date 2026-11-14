@@ -1,7 +1,7 @@
 From 7decec277b0bb5e36dbbbe1f037e6981ec03c996 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 14:34:42 -0400
-Subject: [PATCH 03/10] Give add10/add25/add40 bots raid habits
+Subject: [PATCH 03/11] Give add10/add25/add40 bots raid habits
 
 Bots added by add10/add25/add40 start in arrow formation, and the damage
 dealers get the "wait for attack" strategy with a 4 second hold so the

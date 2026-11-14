@@ -1,7 +1,7 @@
 From 41386b71b6ec92882fffaf06b540c589adc0364f Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 31 Oct 2026 13:18:19 -0400
-Subject: [PATCH 08/10] Keep pinned bots from whispering canned status lines
+Subject: [PATCH 08/11] Keep pinned bots from whispering canned status lines
 
 When the group leader changed, ResetAiAction whispered "AI was reset to
 defaults" and UpdateAIGroupMaster then added "Hello, I follow you!" or
