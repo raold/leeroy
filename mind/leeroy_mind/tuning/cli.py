@@ -5,6 +5,7 @@ instance lock throughout, refuse a database older than this code (run `db migrat
 take a snapshot before writing one change with source "cli". The running mind reads it at its
 next start."""
 import argparse
+import json
 import sqlite3
 import sys
 from contextlib import closing
@@ -30,6 +31,8 @@ def _parser() -> argparse.ArgumentParser:
     h.add_argument("--limit", type=int, default=30)
     n = sub.add_parser("nudges", help="active private nudges and their history, read-only")
     n.add_argument("--limit", type=int, default=30)
+    e = sub.add_parser("edits", help="godmode edits in force and their history, read-only")
+    e.add_argument("--limit", type=int, default=30)
     u = sub.add_parser("undo", help="reverse one change (the mind must be stopped)")
     u.add_argument("change", type=int)
     r = sub.add_parser("revert", help="every value back to right after a change (0: none)")
@@ -103,6 +106,9 @@ def _history(conn, limit: int) -> None:
                 a = "unset" if r["after"] is None else r["after"]
                 what = f"{who} {r['dial']} {b} -> {a}"
             print(f"    {what}")
+        for e in c.get("edits", ()):
+            print(f"    edit #{e['id']} {e['kind']} {names.get(e['member'], '?')} ({e['member']}): "
+                  f"{e['from']} -> {e['to']}")
 
 
 def _write(root: Path, args) -> int:
@@ -134,14 +140,19 @@ def _write(root: Path, args) -> int:
             pic = C.picture(store, {g: p for g in store.persona_versions()
                                     if (p := load_persona(store, g)) is not None})
             now = store.clock.now()
+            from leeroy_mind.nightly.settings import load_life
+            try:
+                dial = load_life(root / "mind.toml")
+            except Exception:
+                dial = 5
             try:
                 if args.action == "undo":
-                    r = C.undo(store, args.change, pic, source="cli", now=now)
+                    r = C.undo(store, args.change, pic, source="cli", now=now, dial=dial)
                     what = f"undo #{args.change}"
                 else:
-                    r = C.revert_to(store, args.to, pic, source="cli", now=now)
+                    r = C.revert_to(store, args.to, pic, source="cli", now=now, dial=dial)
                     what = f"revert to #{args.to}"
-            except C.TuneError as e:
+            except (C.TuneError, ValueError) as e:  # an edit's refusal (tuning.edits) too
                 print(f"{'undo' if args.action == 'undo' else 'revert'}: {e}", file=sys.stderr)
                 return 1
             print(f"{what}: " + (f"saved as change #{r.change}" if r.change
@@ -171,6 +182,20 @@ def tuning_main(argv=None) -> int:
             return 0
         if args.action == "status":
             _status(conn, cfg)
+        elif args.action == "edits":
+            from .edits import view as edit_view
+            names = _names(conn)
+            data = edit_view(conn, now=SystemClock().now(), limit=max(1, min(200, args.limit)))
+            for e in data["active"]:
+                ends = f" until {_when(e['ends'])}" if e.get("ends") else ""
+                print(f"#{e['id']} {e['kind']} {names.get(e['member'], '?')} ({e['member']}){ends}: "
+                      + json.dumps(e["args"], ensure_ascii=False, sort_keys=True))
+            if not data["active"]:
+                print("No edits in force.")
+            for c in data["history"]:
+                print(f"change #{c['change']} {_when(c['ts'])} {c['label']}")
+                for m in c["edits"]:
+                    print(f"  edit #{m['id']} {m['kind']}: {m['from']} -> {m['to']}")
         elif args.action == "nudges":
             from .nudges import view
             data = view(conn, now=SystemClock().now(), limit=max(1, min(200, args.limit)))

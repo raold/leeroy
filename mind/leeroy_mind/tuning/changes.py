@@ -10,7 +10,9 @@ moved, and tuning_value is kept current in the same transaction.
 
 A world change or a change to "everyone" is one row however many members it reaches. What an
 undo cannot undo is the guild's history: lines said, memories, jealousy accrued, feuds, rumours
-and trait samples recorded while a value was in force.
+and trait samples recorded while a value was in force. Godmode edits (tuning.edits) and nudges
+keep their receipts in meta under the same change ids; undo and revert fold them in, and an
+edit that wrote a night-owned row (a memory, a feud, a life thread) is put back exactly.
 
 Validation needs the live picture (the cast, the stored personas and the owner's own guid),
 which the caller passes in; nothing here reads persona text or logs a name."""
@@ -254,14 +256,15 @@ def _now_def(conn, target: str):
     return None if d is None else json.dumps(d, sort_keys=True, separators=(",", ":"))
 
 
-def undo(store, change: int, pic: Picture, *, source: str, now: float) -> Result:
-    from . import nudges
+def undo(store, change: int, pic: Picture, *, source: str, now: float, dial: int = 5) -> Result:
+    from . import edits, nudges
     with store.transaction():
         conn = store.conn
         if conn.execute("SELECT 1 FROM tuning_change WHERE id=?", (change,)).fetchone() is None:
             raise TuneError(f"there is no change #{change}")
         rows = _rows(conn, change)
         nudge_moves = nudges.undo_moves(conn, change)
+        edit_moves = edits.undo_moves(conn, change)
         moved = []
         for r in rows:
             scope, target, dial = r[0], r[1], r[2]
@@ -289,8 +292,9 @@ def undo(store, change: int, pic: Picture, *, source: str, now: float) -> Result
                     check_set(Set(scope, target, dial, r[3]), pic, live_groups(conn))
                 _write_value(conn, new, scope, target, dial, r[4], r[3], r[7])
         nudges.write_moves(conn, new, nudge_moves)
+        edits.write_moves(edits.Ctx(store, now, pic.human, dial), new, edit_moves)
         _stamp(conn, new)
-        return Result(new, len(rows) + len(nudge_moves))
+        return Result(new, len(rows) + len(nudge_moves) + len(edit_moves))
 
 
 def state_after(conn, change: int) -> tuple[dict, dict]:
@@ -305,10 +309,11 @@ def state_after(conn, change: int) -> tuple[dict, dict]:
     return values, defs
 
 
-def revert_to(store, change: int, pic: Picture, *, source: str, now: float) -> Result:
+def revert_to(store, change: int, pic: Picture, *, source: str, now: float,
+              dial: int = 5) -> Result:
     """Every value and group back to how they stood right after `change` (0: before any), as
     one change; nothing when they already are."""
-    from . import nudges
+    from . import edits, nudges
     with store.transaction():
         conn = store.conn
         if change and conn.execute("SELECT 1 FROM tuning_change WHERE id=?",
@@ -324,7 +329,8 @@ def revert_to(store, change: int, pic: Picture, *, source: str, now: float) -> R
         keys = sorted(set(then) | set(current))
         moves = [(k, current.get(k), then.get(k)) for k in keys if current.get(k) != then.get(k)]
         nudge_moves = nudges.revert_moves(conn, change)
-        if not moves and not def_moves and not nudge_moves:
+        edit_moves = edits.revert_moves(conn, change)
+        if not moves and not def_moves and not nudge_moves and not edit_moves:
             return Result(None)
         new = _new_change(conn, now, source, f"revert to #{change}")
         for target, before, after in def_moves:  # groups first: their offsets need them
@@ -335,15 +341,18 @@ def revert_to(store, change: int, pic: Picture, *, source: str, now: float) -> R
             version = pic.versions.get(int(target)) if scope == "member" else None
             _write_value(conn, new, scope, target, dial, before, after, version)
         nudges.write_moves(conn, new, nudge_moves)
+        edits.write_moves(edits.Ctx(store, now, pic.human, dial), new, edit_moves)
         _stamp(conn, new)
-        return Result(new, len(moves) + len(def_moves) + len(nudge_moves))
+        return Result(new, len(moves) + len(def_moves) + len(nudge_moves) + len(edit_moves))
 
 
 # -- reading the log ----------------------------------------------------------------------------
 
 def history(conn, limit: int = 50) -> list[dict]:
     """The newest changes first, each with its rows (values and group definitions), as the page
-    and the CLI show them. Nothing here is persona text."""
+    and the CLI show them, and each change's godmode edits (tuning.edits.summary: ids, kinds and
+    states, never their text). Nothing here is persona text."""
+    from . import edits
     out = []
     for c in conn.execute("SELECT id,ts,source,label,undoes,previewed FROM tuning_change "
                           "ORDER BY id DESC LIMIT ?", (limit,)).fetchall():
@@ -359,7 +368,8 @@ def history(conn, limit: int = 50) -> list[dict]:
                 row["before"], row["after"] = r[3], r[4]
             rows.append(row)
         out.append({"id": c[0], "ts": c[1], "source": c[2], "label": c[3], "undoes": c[4],
-                    "previewed": bool(c[5]), "undone_by": undone, "rows": rows})
+                    "previewed": bool(c[5]), "undone_by": undone, "rows": rows,
+                    "edits": edits.summary(conn, c[0])})
     return out
 
 

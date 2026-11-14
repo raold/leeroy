@@ -69,6 +69,16 @@ class Relationship:
 
 
 @dataclass(frozen=True, slots=True)
+class EffectiveRelationship(Relationship):
+    """A relationship read with the owner's godmode feelings folded in (tuning.edits). `read`
+    holds (dimension, value read) for each dimension an overlay moved, and `stage_read` the
+    romance stage the overlay set (""): Store.put_relationship turns a write of one back into
+    the stored row's own terms, so an overlay is never written into the table."""
+    read: tuple = ()
+    stage_read: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class PersonaStateRow:
     """Self-notes are {"text": str, "evidence": [str], "added": float (unix seconds)}.
     state_since and updated are mind-clock unix seconds."""
@@ -82,6 +92,13 @@ class PersonaStateRow:
     state_session: int = 0
     life_thread: str = ""
     updated: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveState(PersonaStateRow):
+    """A persona state read with a godmode mood edit folded in: `mood_read` is the mood that
+    was read. Store.put_state keeps the stored mood when a writer passes it on unchanged."""
+    mood_read: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

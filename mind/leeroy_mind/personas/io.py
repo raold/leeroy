@@ -78,7 +78,7 @@ def load_effective(store: Store, guid: int, *, tuning: Tuning | None = None) -> 
     if p is None:
         return None
     t = load_tuning(store) if tuning is None else tuning
-    if not (t.pins or t.offsets):
+    if not (t.pins or t.offsets or t.edits):
         return p
     return t.apply(p, store.cast().get(guid) if t.needs_cast else None)
 
@@ -257,7 +257,7 @@ class PersonaCache:
         if p is None:
             return None
         t = self.tuning
-        if t.pins or t.offsets or t.nudges:
+        if t.pins or t.offsets or t.nudges or t.edits:
             if t.needs_cast and self._cast is None:
                 self._cast = self._store.cast()
             p = t.apply(p, (self._cast or {}).get(guid))

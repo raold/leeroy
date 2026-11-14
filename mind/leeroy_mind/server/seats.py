@@ -32,8 +32,25 @@ def away_seats(personas: Mapping[int, Persona], presences: Mapping[int, Presence
         social = "kitchen" if 17 <= local.hour < 20 else "irl" if local.hour >= 23 or local.hour < 3 else "guild_hall"
         room = {"lore":"lore", "collector":"achievements", "competitor":"pvp",
                 "social":social, "theorycrafter":(class_rooms or {}).get(guid, "guild_hall")}[kind]
+        room = _her_room(persona, room)
+        if room is None:
+            continue
         rooms.setdefault(room, []).append(guid)
     return {room: tuple(guids) for room, guids in rooms.items()}
+
+
+def _her_room(persona, room):
+    """The owner's godmode hangout rooms (tuning.edits): the room she weighs highest, her usual
+    one on a tie; None when she avoids every room she would take."""
+    from leeroy_mind.tuning.effective import edits_of
+    edits = edits_of(persona)
+    if not edits.rooms:
+        return room
+    weights = {room: edits.room_weight(room), **{r: float(w) for r, w in edits.rooms.items()}}
+    best = max(weights.values())
+    if best <= 0:
+        return None
+    return room if weights[room] == best else min(r for r, w in weights.items() if w == best)
 
 
 def refresh_seats(app, now: float) -> None:

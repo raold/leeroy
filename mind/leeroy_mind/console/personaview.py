@@ -259,7 +259,8 @@ def _card(p) -> dict:
             "appearance": d["appearance"], "photo": d.get("photo")}
 
 
-def member_view(conn, guid: int, *, now: float, outreach_enabled=False) -> dict | None:
+def member_view(conn, guid: int, *, now: float, outreach_enabled=False,
+                godmode_enabled=False) -> dict | None:
     """One member in detail: the roster's entry, the persona card summary, every tie (the
     strongest DETAIL_TIES), active memories by kind and the newest LEDGER ledger rows. None
     when mind.db knows no such member (or it is the owner)."""
@@ -289,4 +290,14 @@ def member_view(conn, guid: int, *, now: float, outreach_enabled=False) -> dict 
     if outreach_enabled:
         from .outreachview import member_view as outreach_view
         result['outreach'] = outreach_view(conn, guid)
+    if godmode_enabled:
+        result['strings'] = _strings(conn, guid, have)
     return result
+
+
+def _strings(conn, guid, have):
+    """Her strings (godmode intents), newest first: his own words, shown only to him here."""
+    if "godmode_intent" not in have:
+        return None
+    from leeroy_mind.godmode.intents import listing
+    return listing(conn, member=guid, limit=20)

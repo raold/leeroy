@@ -396,6 +396,7 @@ class TurnMeta:
     server_anchor: str = ''
     server_thread: tuple[int, ...] = ()
     server_conversation: str = ''
+    godmode_intent: int | None = None  # the owner's intent this turn carries out (godmode)
 
 
 class _ScopeChanged(SchedulerError):
