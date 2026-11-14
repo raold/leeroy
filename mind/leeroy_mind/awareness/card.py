@@ -69,6 +69,7 @@ class CardContext:
     here: tuple[str, ...] = ()
     self_line: str = ''
     decisions: bool = False  # [decisions] enabled: the Decisions part (D4)
+    intents: tuple[str, ...] = ()  # her own plans from his strings (godmode), caller-filtered
     holidays: bool = False  # culture's server calendar ([culture] calendar): its events join Upcoming
 
 
@@ -569,6 +570,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         return Card(guid, ())
     conversation = _context(guid, officer, context)
     here = ([context.self_line] if context.self_line else []) + list(context.here[:6]) if context.server and discord else []
+    if discord:
+        here += list(context.intents[:2])
     if context.server and discord:
         conversation += _directed_emotes(reader,guid,human,context,now)
     if discord and (not context.server or is_private(context.channel)):
@@ -580,6 +583,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
                  ("drama","Your recent guild drama",_drama(reader,guid,officer,context,now)))
         return Card(guid,tuple(Part(k,title,tuple(lines)) for k,title,lines in parts if lines),tuple(sorted(reader.missing)))
     game, recent, human = ([], [], human) if discord else _game(reader, source, guid, meta, now, context)
+    if not discord:
+        game = [*game, *context.intents[:2]]
     if context.channel == "whisper" and context.to_guid == human and human:
         for row in reader.rows(("chat_line",), "SELECT text FROM chat_line WHERE channel='whisper' "
                 "AND from_guid=? AND to_guid=? AND ts BETWEEN ? AND ? ORDER BY ts DESC,id DESC LIMIT 3",

@@ -56,7 +56,7 @@ def role(app, guid, target, *, allowance=False, tease=True):
             personas=app.personas,human=app.human_guid,now=app.clock.now(),allowance=allowance)[0]:
         return "defend"
     p = app.personas.get(guid)
-    rel = app.store.get_relationship(guid,target) if target else None
+    rel = app.store.get_relationship(guid,target,lens=True) if target else None
     if target == app.human_guid and p.romance.stance in {"fond","drawn","lust"}:
         return "defend"
     if rel and rel.affinity < -10 and dials_of(p).level("drama") >= 4:
@@ -67,7 +67,7 @@ def role(app, guid, target, *, allowance=False, tease=True):
 def choose_cast(app, candidates, topic, rng):
     """Kindness, lived ties and the current social mood constrain humour weights."""
     weights = {}
-    if topic.target and app.store.get_state(topic.target).mood < -.3:
+    if topic.target and app.store.get_state(topic.target,lens=True).mood < -.3:
         return []
     for g in candidates:
         if teasing(topic) and culture_on(app) and not tease_ok(app.store.conn,g,topic.target,
@@ -75,11 +75,11 @@ def choose_cast(app, candidates, topic, rng):
             continue
         p = app.personas.get(g)
         dials = dials_of(p)
-        rel = app.store.get_relationship(g,topic.target) if topic.target else None
+        rel = app.store.get_relationship(g,topic.target,lens=True) if topic.target else None
         # A hostile/hurt relationship is not a licence for cruelty.
         if dials.level("humour") == 0 or dials.level('talkative') == 0 or (rel and rel.affinity < -50):
             continue
-        mood = app.store.get_state(g).mood
+        mood = app.store.get_state(g,lens=True).mood
         if mood < -.3:
             continue
         if topic.target:
@@ -103,7 +103,7 @@ def choose_cast(app, candidates, topic, rng):
         for g,w in weights.items():
             if g in picked:
                 continue
-            ties = [app.store.get_relationship(g,other) for other in picked]
+            ties = [app.store.get_relationship(g,other,lens=True) for other in picked]
             closeness = max((r.affinity for r in ties if r),default=0)
             tied[g] = w * (1+max(0,closeness)/50)
         picked += pick_speakers(tied,1,rng)

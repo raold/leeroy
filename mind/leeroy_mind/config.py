@@ -62,7 +62,8 @@ _WARNED: set[str] = set()  # invalid [talk] values already logged in this proces
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
-                                "banter", "photos", "voice_notes", "groups", "culture", "outreach", "decisions"})
+                                "banter", "photos", "voice_notes", "groups", "culture", "outreach",
+                                "godmode", "decisions"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 

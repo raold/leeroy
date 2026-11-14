@@ -114,6 +114,10 @@ run nothing else.
                        the endpoint checks it (400 with its words), refused 403 with --no-control and
                        409 while nothing can be saved, then on to the mind's decision op; a done one
                        is announced as a `decision` event {"action", "id"}
+    POST /api/string   {"action": "create", "member", "kind", "args"} | {"action": "cancel",
+                       "id"} | {"action": "list"}: his strings (godmode intents), gated as Board
+                       replies are, then on to the mind's string op ([godmode] enabled); a change
+                       is announced as a `string` event {"action", "id"}, never its text
     GET  /api/discord  the Discord tab: ?channel=<id>&after=<id>&thread=<id>, all optional. The
                        server (categories with their channels and last ids, DMs, members with
                        class, role and presence as the mind computes it, his guid and name) and,
@@ -345,6 +349,8 @@ class ConsoleApp:
         self.outreach_enabled = load_outreach_config(settings.data_dir / 'mind.toml').enabled
         from ..decisions.config import load_decisions_config
         self.decisions_enabled = load_decisions_config(settings.data_dir / 'mind.toml').enabled
+        from ..godmode.config import load_godmode_config
+        self.godmode_enabled = load_godmode_config(settings.data_dir / 'mind.toml').enabled
         from ..culture.config import load_culture_config
         culture = load_culture_config(settings.data_dir / 'mind.toml')
         self.item_tooltips = culture.enabled and culture.loot
@@ -931,7 +937,8 @@ class ConsoleApp:
                   ("POST", "/api/say"): self._api_say,
                   ("POST", "/api/board"): self._api_board_reply,
                   ("GET", "/api/decisions"): self._api_decisions,
-                  ("POST", "/api/decision"): self._api_decision}
+                  ("POST", "/api/decision"): self._api_decision,
+                  ("POST", "/api/string"): self._api_string}
         route = routes.get((req.method, req.path))
         if route is None:
             known = {path for _, path in routes}
@@ -1342,7 +1349,8 @@ class ConsoleApp:
         try:
             view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
                                            personaview.member_view, guid, now=self._clock(),
-                                           outreach_enabled=self.outreach_enabled)
+                                           outreach_enabled=self.outreach_enabled,
+                                           godmode_enabled=self.godmode_enabled)
         except Exception as e:
             log.warning("console_persona_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
@@ -1435,7 +1443,8 @@ class ConsoleApp:
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
         return json_response(200, {"view": view, "mind": await self._tune_status(),
-                                   "control": self.controls.describe()})
+                                   "control": self.controls.describe(),
+                                   "godmode": self.godmode_enabled})
 
     async def _api_tune(self, req: Request):
         try:
@@ -1752,6 +1761,38 @@ class ConsoleApp:
         self.broadcast("decision", {"action": args["action"], "id": ident})
         return json_response(200, {"ok": True, "message": str(reply.get("message") or "Saved.")[:300],
                                    "undone": reply.get("undone") is True})
+
+    # -- his strings (godmode intents) ---------------------------------------------------------
+
+    async def _api_string(self, req: Request):
+        """POST /api/string: create {member, kind, args}, cancel {id} or list, relayed to the
+        mind's string op after the same shape check; the mind screens and stores it. Never logs
+        or broadcasts its text."""
+        try:
+            args = endpoint.string_args(req.json())
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._board_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "string", args,
+                                            timeout=BOARD_S)
+        except LinkError as e:
+            words = str(e)
+            if e.unanswered:
+                return json_response(409, {"ok": False, "error": words[:1].upper() + words[1:]
+                                           + ". Look at her strings before sending it again."})
+            return json_response(409, {"ok": False, "error": f"Nothing was saved: {words}."})
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            return json_response(409, {"ok": False, "error": error[:300] or "The mind refused it.",
+                                       **({"code": str(reply["code"])[:40]}
+                                          if isinstance(reply.get("code"), str) else {})})
+        if args["action"] != "list":
+            self.broadcast("string", {"action": args["action"],
+                                      "id": reply.get("id") if type(reply.get("id")) is int else None})
+        return json_response(200, reply)
 
     # -- the guild's Discord --------------------------------------------------------------------
 
