@@ -397,6 +397,20 @@ LEEROY_TEST(Mechanic_ConeSpotsLieOutsideTheCone)
     CHECK(Dist(spots.front(), at) < 8.0f); // a side step, not a run to the far wall
 }
 
+LEEROY_TEST(Mechanic_AHalfCircleConeIsLeftBehindTheCaster)
+{
+    MechanicShape cone;
+    cone.type = MechanicShapeType::Cone;
+    cone.origin = {0, 0, 0};
+    cone.length = 20;
+    cone.facing = 0;
+    cone.halfAngle = kPi / 2; // 180 degrees: everything in front of him
+    auto spots = MechanicSpots({5, 0, 0}, {Leave(cone)}, {}, {}, kReach, 3, nullptr);
+    CHECK(!spots.empty());
+    for (auto const& spot : spots)
+        CHECK(!InMechanicShape(spot, cone, kReach + kMechanicMarginYards));
+}
+
 LEEROY_TEST(Mechanic_SpreadKeepsTheDistanceFromEveryOther)
 {
     MechanicDuty spread;

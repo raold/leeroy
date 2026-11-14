@@ -201,7 +201,10 @@ std::optional<HazardPoint> DirectExit(HazardPoint at, MechanicShape const& shape
         case MechanicShapeType::Band:
         case MechanicShapeType::Cone:
         {
-            // Sideways off the centre line, on the bot's own side.
+            // Sideways off the centre line, on the bot's own side; a cone near a half circle wide has no short
+            // sideways way out (the rings find one).
+            if (shape.type == MechanicShapeType::Cone && shape.halfAngle >= 1.4f)
+                return std::nullopt;
             float const dx = at.x - shape.origin.x;
             float const dy = at.y - shape.origin.y;
             float const side = -dx * std::sin(shape.facing) + dy * std::cos(shape.facing);
