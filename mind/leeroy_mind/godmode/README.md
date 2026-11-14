@@ -57,11 +57,13 @@ gains, breakups, weekends, the mood stage, notes, re-seeds). Only the readers th
 member says or who speaks see the lens: `get_relationship(..., lens=True)` and
 `get_state(..., lens=True)` in talk (speaker weights, relationship cards, the mood line, bits,
 reactions, banter, photo and voice-room choices), `server.state.tie_kind`, the server snapshot,
-`culture.tease`, `arc.live`'s rival line and the console's Personas and Social views. A lens row
+`culture.tease`, `arc.live` (her stage and rival line) and the console's Personas and Social
+views. Both mood folds add the edits in force to the stored mood and clamp once (`fold_mood`). A lens row
 (`EffectiveRelationship`, `EffectiveState`) is never written: `put_relationship` and `put_state`
 refuse one. Traits, hangouts, skill and activities ride on the effective persona for talk
 (`tuning.effective.edits_of`); the night reads her persona as stored and dialled
-(`NightContext.persona`, `load_effective`). So undoing an overlay edit leaves exactly what the
+(`NightContext.persona` and `ctx.personas`, a view of the cache without the edits, and
+`load_effective`). So undoing an overlay edit leaves exactly what the
 night would have produced without it (`tests/nightly/test_night_godmode_lens.py`, one test per
 writer). Feelings sum over the edits in force; each mood edit counts until its own end.
 

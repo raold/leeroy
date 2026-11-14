@@ -30,7 +30,7 @@ function form(parent, specs, live, why, draft) {
       input.addEventListener("input", () => { draft[key] = input.value; });
       input.disabled = !live;
       inputs[f.name] = input;
-      const wrap = el("label", "nudge-field", f.label);
+      const wrap = el("label", "godmode-field", f.label);
       wrap.appendChild(input);
       fields.appendChild(wrap);
     });
@@ -46,11 +46,15 @@ function form(parent, specs, live, why, draft) {
 
 const editDrafts = new Map();
 export function godmodePanel(box, view, guid, live, why, ask, enabled, names) {
-  const section = el("section", "nudges");
+  // Its own region beside the nudges panel: never a second ".nudges" (the nudges stay
+  // addressable on their own, by the page and by its browser tests)
+  const section = el("section", "godmode-edits");
+  section.setAttribute("role", "region");
+  section.setAttribute("aria-label", "Godmode edits");
   section.appendChild(el("h4", "", "Godmode edits"));
   const active = editsFor(view, guid);
   active.forEach(e => {
-    const row = el("div", "nudge-row");
+    const row = el("div", "godmode-row");
     row.appendChild(el("p", "", editText(e, names)));
     row.appendChild(el("p", "muted", `#${e.id} · ${str(e.kind).replace(/_/g, " ")}` + (e.ends ? " · until " + new Date(e.ends * 1000).toLocaleString() : "")));
     const b = el("button", "", "Retire");
@@ -103,7 +107,7 @@ export function renderStrings(j, guid, live, why) {
   setText("p-strings-n", rows.filter(i => i.status === "pending").length ? rows.filter(i => i.status === "pending").length + " waiting" : "");
   if (j.strings === null) { box.appendChild(el("p", "muted", "Unavailable in this mind.db (run db migrate).")); return; }
   rows.forEach(i => {
-    const row = el("div", "nudge-row");
+    const row = el("div", "godmode-row");
     row.appendChild(el("p", "", stringText(i)));
     row.appendChild(el("p", "muted", `#${i.id} · ${stringState(i)}`));
     if (canCancel(i)) {

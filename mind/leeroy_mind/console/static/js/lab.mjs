@@ -1,10 +1,10 @@
 import { $, api, clear, el, on, post, refused } from "./core.mjs";
 import { S } from "./state.mjs";
 import { pollTab } from "./tabkit.mjs";
-import { controlReason, WEIGHTS, weightValues, score, percent } from "./labmodel.mjs";
+import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords } from "./labmodel.mjs";
 import { BoundedMap } from "./resilience.mjs";
 
-let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null;
+let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null, withWeights=false;
 const readLines=new BoundedMap(100), options={path:'/api/lab',ms:30000,render};
 const dialog=$('lab-confirm');
 function button(text,action) {
@@ -72,11 +72,11 @@ function arms(view) {
     if (!view.available) { empty(d); }
     view.arms.filter(a => a.family===f).forEach(a => {
       const arm=details(a.id+' · '+a.status,'arm-'+a.id); arm.appendChild(el('p','mono',JSON.stringify(a.params)));
-      const verbs=a.status==='proposed' ? ['accept','reject'] : a.status==='active' ? ['retire'] : [];
-      verbs.forEach(verb => arm.appendChild(button(verb[0].toUpperCase()+verb.slice(1),() =>
-        confirm(verb[0].toUpperCase()+verb.slice(1)+' arm '+a.id+'?',() => mutate({action:'arm',id:a.id,verb})))));
+      const verbs=a.status==='proposed' ? ['accept','reject'] : a.status==='active' ? ['retire'] : a.status==='retired' ? ['accept'] : [];
+      verbs.forEach(verb => { const label=a.status==='retired' ? 'Accept again' : verb[0].toUpperCase()+verb.slice(1);
+        arm.appendChild(button(label,() => confirm(label+' arm '+a.id+'?',() => mutate({action:'arm',id:a.id,verb})))); });
       const contexts=view.contexts.filter(c => c.arm_id===a.id);
-      contexts.forEach(c => arm.appendChild(el('p','lab-stat',c.context.join(' / ')+' · posterior '+score(c.alpha)+' / '+score(c.beta)
+      contexts.forEach(c => arm.appendChild(el('p','lab-stat',c.context.join(' / ')+(c.promoted ? ' · promoted by the weekly cycle' : '')+' · posterior '+score(c.alpha)+' / '+score(c.beta)
         +' · '+c.uses+' uses · '+c.turns+' turns ('+percent(c.share)+') · '+c.bad+' guarded / '+c.attempts+' checked')));
       if (!contexts.length) { empty(arm,'No measured turns yet. Posterior starts at 1 / 1.'); }
       d.appendChild(arm);
@@ -100,7 +100,7 @@ function lessons(view) {
   nav.append(previous,el('span','hint',view.total ? 'Lessons '+(view.offset+1)+'–'+(view.offset+view.items.length)+' of '+view.total : 'No current lessons'),next); box.appendChild(nav);
   if (!view.items.length) { empty(box,'No active or proposed lessons yet.'); }
   view.items.forEach(l => {
-    const d=details(l.name+' · '+l.scope+' · '+l.status,'lesson-'+l.id); d.appendChild(el('p','',l.text));
+    const d=details(l.name+' · '+l.scope+' · '+l.status+(l.promoted ? ' · promoted' : ''),'lesson-'+l.id); d.appendChild(el('p','',l.text));
     d.appendChild(el('p','hint','Reinforced '+l.reinforced+' times · expires '+new Date(l.expires*1000).toLocaleString()));
     (l.status==='proposed' ? ['approve','veto','expire'] : ['veto','expire']).forEach(verb =>
       d.appendChild(button(verb==='expire' ? 'Expire now' : verb[0].toUpperCase()+verb.slice(1),() =>
@@ -117,6 +117,37 @@ function weights(view) {
   const box=$('lab-weight-history'); clear(box);
   view.history.forEach(w => box.appendChild(el('p','mono','Version '+w.version+' · '+new Date(w.created*1000).toLocaleString()+' · '+
     WEIGHTS.map(k => k+' '+w.values[k]).join(', '))));
+}
+function weekly(value) {
+  const box=$('lab-report'); clear(box); const view=reportView(value.report);
+  if (!view) {
+    empty(box,value.cycle ? 'Not set up yet. The first weekly cycle runs on the night after a Sunday.'
+      : 'Not set up yet. The weekly cycle is off ([learn] cycle in mind.toml).');
+  } else {
+    box.append(el('p','hint',view.heading),el('p','',view.lines),el('p','',view.diversity));
+    view.rates.forEach(r => box.appendChild(el('p','mono',r)));
+    [['promoted','Promoted'],['retired','Retired'],['rolled_back','Rolled back']].forEach(([key,title]) => {
+      const d=details(title+' ('+view[key].length+')','report-'+key);
+      view[key].forEach(t => d.appendChild(el('p','lab-stat',t)));
+      if (!view[key].length) { empty(d,'None this week.'); } box.appendChild(d);
+    });
+    const held=details('Held back ('+view.held.count+')','report-held');
+    view.held.items.forEach(t => held.appendChild(el('p','lab-stat',t)));
+    if (view.held.count>view.held.items.length) { empty(held,'Showing the first '+view.held.items.length+'.'); }
+    if (!view.held.count) { empty(held,'Nothing was waiting.'); } box.appendChild(held);
+  }
+  const saved=Array.isArray(value.versions) ? value.versions : [];
+  const d=details('Saved learning states ('+saved.length+')','report-versions');
+  d.appendChild(el('p','hint','A rollback restores arm statuses, promotions and lessons. Later decisions of yours and the guards, your vetoes and freezes stay, and the current state is saved first. What it reverts waits for 30 new rewarded uses.'));
+  const label=el('label','','Also restore that version’s reward weights '), check=el('input'); check.type='checkbox';
+  check.id='lab-rollback-weights'; check.checked=withWeights; check.addEventListener('change',() => { withWeights=check.checked; });
+  label.htmlFor=check.id; d.append(label,check);
+  saved.forEach(v => {
+    d.appendChild(el('p','lab-stat',versionLabel(v)+' · '+new Date(v.created*1000).toLocaleString()));
+    d.appendChild(button('Roll back to version '+v.version,() => { const weights=withWeights;
+      confirm(rollbackWords(v.version,weights),() => mutate({action:'rollback',version:v.version,weights})); }));
+  });
+  if (!saved.length) { empty(d,'No saved states yet.'); } box.appendChild(d);
 }
 $('lab-weights-form').addEventListener('submit',event => {
   event.preventDefault();
@@ -146,7 +177,7 @@ function render(value) {
   $('lab-freeze').disabled=!!value.config_freeze;
   $('lab-learning-state').textContent=value.config_freeze ? 'Learning is frozen in mind.toml ([learn] freeze). Change it there.' : value.freeze ? 'Learning is frozen.' : value.enabled ? 'Learning is enabled by its config.' : 'Learning is disabled in config. Controls do not enable it.';
   rewards(value.rewards); arms(value.arms); lessons(value.lessons); weights(value.weights);
-  $('lab-report').textContent=value.report===null ? 'Not set up yet.' : JSON.stringify(value.report,null,2);
+  weekly(value);
   $('tab-lab').querySelectorAll('details').forEach(d => {
     d.open=open.has(d.dataset.detail || d.id);
     d.querySelectorAll(':scope > button').forEach(b => { b.dataset.labFocus=(d.dataset.detail || d.id)+'-'+b.textContent; });
