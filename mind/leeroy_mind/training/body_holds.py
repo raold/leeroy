@@ -71,7 +71,8 @@ def session_evidence(conn, session, human, *, run=None, proof=False):
         raise ValueError("body ownership evidence unavailable")
     if run is not None and (run.session is not session or not _same(asdict(run.plan), saved)
             or run.human_in_raid is not plan.human_in_raid or type(run.lead_is_human) is not bool
-            or run.lead_is_human != (plan.lead_guid == human)):
+            # He drives a raid he leads; one whose lead is the member he named to call it is his too.
+            or plan.lead_guid == human and not run.lead_is_human):
         raise ValueError("body ownership evidence unavailable")
     instance = session.ctx.instance_id
     if proof:

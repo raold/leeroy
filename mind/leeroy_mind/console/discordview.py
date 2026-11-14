@@ -116,7 +116,9 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
               if 'discord_attachment' in views.tables(conn) else {})
     from leeroy_mind.voice_notes.service import rows as voice_rows
     notes=voice_rows(conn,[m['id'] for m in rows])
-    return [{**m, "reactions": react.get(m["id"], []),
+    from .decisionsview import poll_cards
+    polls = poll_cards(conn, [m['id'] for m in rows], human_guid(conn))
+    return [{**m, **({'poll': polls[m['id']]} if m['id'] in polls else {}), "reactions": react.get(m["id"], []),
              'voice_note': ({'url':f"/api/discord/voice?id={m['id']}",
                  'ms':notes[m['id']]['ms'],'bytes':notes[m['id']]['bytes'],
                  'transcript_ok':bool(notes[m['id']]['transcript_ok']),'origin':notes[m['id']]['origin']}

@@ -12,6 +12,7 @@
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
 #include "OwnerSay.h"
+#include "RaidLead.h"
 #include "PlayStyle.h"
 #include "ScriptMgr.h"
 #include "Player.h"
@@ -41,6 +42,7 @@ public:
         Leeroy::Guild::RegisterBotCommandHandlers();
         Leeroy::Guild::RegisterOfflineRaidHandler();
         Leeroy::Guild::RegisterOwnerSayHandler();
+        Leeroy::Guild::RegisterRaidLeadHandler();
         Leeroy::Guild::InstallHazardFilter();
         Leeroy::Guild::InstallMechanicGuard();
         Leeroy::Guild::RegisterMechanicsHandler();
@@ -51,6 +53,7 @@ public:
         Leeroy::Guild::TickSummons();
         Leeroy::Guild::TickGearUp();
         Leeroy::Guild::TickBotCommands();
+        Leeroy::Guild::TickRaidLead();
         Leeroy::Guild::TickTopUp(diff);
         Leeroy::Guild::TickDeathLoop(diff);
         Leeroy::Guild::TickGroupRez(diff);

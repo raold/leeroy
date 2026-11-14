@@ -12,6 +12,11 @@ Leeroy.Enable = 1
 # Optional persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
 Leeroy.PlayStyle.Enable = 0
 
+# The raid lead (mind [raidlead]): his orders to his own group's bots (bot_do "order", Bloodlust included)
+# and the raid icon of the member he names to lead on his target (raid_lead). No assistant flag is set.
+# 0 refuses all of it (raidlead_off) and lifts any hold at once. Reloadable with .reload config.
+Leeroy.RaidLead.Enable = 0
+
 # Guild id of the cast's guild.
 Leeroy.GuildId = 21
 

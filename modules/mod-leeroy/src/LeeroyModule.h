@@ -23,6 +23,7 @@ struct LeeroyConfig
     bool realmEnable = false;
     bool worldEnable = false;
     bool playStyleEnable = false;
+    bool raidLeadEnable = false;
     uint32 realmMaxActionsPerTick = 5;
     bool realmAnnounce = true;
     bool castGuard = false;
