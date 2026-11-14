@@ -11,6 +11,7 @@ _warned: set[tuple[Path, str]] = set()
 class PhotosConfig:
     enabled: bool = False
     send: bool = False
+    requests: bool = False
 
 
 def load_photos_config(path: Path) -> PhotosConfig:
@@ -24,7 +25,7 @@ def load_photos_config(path: Path) -> PhotosConfig:
         table, key = {}, 'file'
     if not isinstance(table, dict):
         key = 'photos'
-    elif set(table) - {'enabled', 'send'}:
+    elif set(table) - {'enabled', 'send', 'requests'}:
         key = 'unknown'
     else:
         key = key or next((k for k, v in table.items() if type(v) is not bool), None)

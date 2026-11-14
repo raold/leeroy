@@ -18,7 +18,7 @@ from ..personas.schema import Appearance
 WEEK_S = 7 * 86400.0
 _COLS = ("id, kind, guid, source, ref, night, status, ended, scene, audience, phases, members, "
          "pick, looks, created, not_before, expires, rendered, width, height, seed, tries, nsfw, "
-         "prompt, sent, sender, channel, line_id")
+         "prompt, sent, sender, channel, line_id, request")
 
 
 class SnapError(ValueError):
@@ -55,6 +55,7 @@ class SnapRow:
     sender: int | None
     channel: str | None
     line_id: int | None
+    request: int | None = None
 
 
 def _row(r) -> SnapRow:
@@ -84,24 +85,24 @@ def _tiles(members) -> str:
 
 
 def plan_snap(store, *, kind, guid, source, ref, night, scene, audience, phases, not_before,
-              expires, now, pick=None, looks=None, members=()) -> int | None:
+              expires, now, pick=None, looks=None, members=(), request=None) -> int | None:
     """A photo planned for the night to render; its id, or None when that guid and ref exist.
     The table's checks refuse the rest (sqlite3.IntegrityError)."""
     with store.transaction():
         cur = store.conn.execute(
             "INSERT INTO selfie_snap(kind, guid, source, ref, night, status, scene, "
-            "audience, phases, members, pick, looks, created, not_before, expires) "
-            "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "audience, phases, members, pick, looks, created, not_before, expires, request) "
+            "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guid, ref) DO NOTHING",
             (kind, guid, source, ref, night, json.dumps(scene, sort_keys=True), audience,
              json.dumps(list(phases)), _tiles(members) if kind == "guild" else None, pick,
-             looks, float(now), float(not_before), float(expires)))
+             looks, float(now), float(not_before), float(expires), request))
         return cur.lastrowid if cur.rowcount == 1 else None
 
 
 def planned(store, limit: int) -> list[SnapRow]:
     """Photos waiting for a render: guild photos first, then by id."""
-    return _read(store, f"SELECT {_COLS} FROM selfie_snap WHERE status='planned' "
+    return _read(store, f"SELECT {_COLS} FROM selfie_snap WHERE status='planned' AND source!='request' "
                  "ORDER BY kind='guild' DESC, id LIMIT ?", (int(limit),))
 
 
@@ -140,7 +141,7 @@ def sweep(store, *, now: float, pick_of: Callable[[int], int | None],
     gone: list[SnapRow] = []
     with store.transaction():
         for r in _read(store, f"SELECT {_COLS} FROM selfie_snap "
-                       "WHERE status IN ('planned','ready') ORDER BY id"):
+                       "WHERE status IN ('planned','ready') AND source!='request' ORDER BY id"):
             if r.expires <= now:
                 why = "passed"
             elif r.kind == "situation" and pick_of(r.guid) != r.pick:
@@ -154,12 +155,12 @@ def sweep(store, *, now: float, pick_of: Callable[[int], int | None],
     return gone
 
 
-def ready_for(store, guid: int, *, now: float, phase: str) -> list[SnapRow]:
-    """The member's ready situations that may go out now in `phase`, soonest expiry first."""
+def ready_for(store, guid: int, *, now: float, phase: str | None) -> list[SnapRow]:
+    """Spontaneous stock, soonest expiry first. A request may pass None for any phase."""
     return [r for r in _read(
         store, f"SELECT {_COLS} FROM selfie_snap WHERE kind='situation' AND guid=? "
-        "AND status='ready' AND not_before <= ? AND ? < expires ORDER BY expires, id",
-        (guid, now, now)) if phase in r.phases]
+        "AND source!='request' AND status='ready' AND not_before <= ? AND ? < expires ORDER BY expires, id",
+        (guid, now, now)) if phase is None or phase in r.phases]
 
 
 def ready_guild(store, *, now: float, phase: str) -> SnapRow | None:
@@ -182,7 +183,7 @@ def mark_sent(store, snap_id: int, *, sender: int, channel: str, line_id: int,
 
 def sent_count(store, since: float, *, to_him: bool = False) -> int:
     """Optionally count only the private ration, leaving channel posts independent."""
-    sql = "SELECT count(*) FROM selfie_snap WHERE status='sent' AND sent >= ?"
+    sql = "SELECT count(*) FROM selfie_snap WHERE status='sent' AND source!='request' AND sent >= ?"
     if to_him:
         sql += " AND channel IN ('whisper','dm')"
     return _one(store, sql, (since,))
@@ -191,7 +192,7 @@ def sent_count(store, since: float, *, to_him: bool = False) -> int:
 def last_sent(store, guid: int) -> float | None:
     """When the member last sent a situational photo, to anyone."""
     return _one(store, "SELECT max(sent) FROM selfie_snap WHERE kind='situation' "
-                "AND status='sent' AND sender=?", (guid,))
+                "AND status='sent' AND source!='request' AND sender=?", (guid,))
 
 
 def last_sent_to_him(store, guid: int, since: float) -> SnapRow | None:
@@ -204,7 +205,8 @@ def last_sent_to_him(store, guid: int, since: float) -> SnapRow | None:
 
 def open_stock(store, guid: int | None = None, *, audience: str | None = None) -> int:
     """Planned plus ready situations, one member's or everyone's."""
-    sql = "SELECT count(*) FROM selfie_snap WHERE kind='situation' AND status IN ('planned','ready')"
+    sql = ("SELECT count(*) FROM selfie_snap WHERE kind='situation' AND source!='request' "
+           "AND status IN ('planned','ready')")
     params = []
     if guid is not None:
         sql += ' AND guid=?'

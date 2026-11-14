@@ -142,7 +142,7 @@ class DiscordTalk:
 
     # -- his actions -----------------------------------------------------------------------
 
-    def on_his_post(self, message_id: int) -> None:
+    def on_his_post(self, message_id: int, *, immediate: bool = False) -> None:
         """His post was stored: take or keep the lease, then queue the answers."""
         self._take_lease()
         try:
@@ -158,9 +158,9 @@ class DiscordTalk:
                                                   (message_id,)).fetchone()
                 if row and row[1] == self.app.human_guid and row[2] is None:
                     server.engine.his_post(row[0])
-            if self.own_time() and self._already(message_id):
+            if not immediate and self.own_time() and self._already(message_id):
                 return
-            if self._later(message_id):
+            if not immediate and self._later(message_id):
                 return
             items = self.plan(message_id)
         except Exception as error:
@@ -469,6 +469,9 @@ class DiscordTalk:
                             discord_named=g in group_named if is_group(channel) else how == "named",
                             first_question_answer=not items and classify_human_line(text) == "question_all",
                             recall_query=self.recall_query(message_id) or "")
+            requests = getattr(getattr(app, 'photos', None), 'requests', None)
+            if requests is not None:
+                requests.decorate(turn, meta, message_id)
             items.append((turn, meta))
         log.info("discord_answers: message=%d channel=%s how=%s speakers=%s", message_id,
                  channel, how, ",".join(str(g) for g in chosen) or "-")

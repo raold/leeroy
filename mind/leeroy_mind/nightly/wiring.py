@@ -105,6 +105,11 @@ def attach(app):
     live = LiveAttraction(app.store, app.personas, app.clock, identity)
 
     async def live_ready():
+        gate = getattr(app, 'live_borrow', None)
+        if gate is not None:
+            # Park the scheduler slot around recovery too: it may be waiting for
+            # the active borrow, and embeddings must retain access to the queue.
+            await gate.wait(recover=arbiter.recover_borrow)
         await scheduler.handback()
         # Voice may have acquired the first lease, leaving the human's repeated
         # lease with no scheduler-owned handback of its own.
@@ -118,6 +123,11 @@ def attach(app):
         server = getattr(app, "server", None)
         if server is not None:
             await server.lease.handback()
+        gate = getattr(app, 'live_borrow', None)
+        if gate is not None:
+            # Failed handback leaves admission closed. Recovery must run before a
+            # wait, otherwise the next live turn could wait on its own repair.
+            await gate.wait(recover=arbiter.recover_borrow)
 
     app.engine.live_admission = live_ready
 
@@ -146,3 +156,37 @@ def attach(app):
     app.arbiter = arbiter
     app.register_background(scheduler.run_forever)
     return scheduler
+
+
+def enable_borrow(app):
+    """Called only by enabled photo requests, after all their prerequisites pass."""
+    from leeroy_mind.llm.borrow import BorrowGate
+    if getattr(app, 'live_borrow', None) is not None:
+        return app.live_borrow
+    gate = BorrowGate(app.clock)
+    app.live_borrow = app.engine.live_borrow = app.scheduler.live_borrow = gate
+    app.arbiter.live_admission = gate
+    if hasattr(app.llm, 'live_borrow'):
+        app.llm.live_borrow = gate
+    else:
+        # Custom/fake clients share the same instance with extraction and memory
+        # writers, so instrument that instance rather than replacing app.llm alone.
+        original = app.llm.chat
+        async def chat(*args, **kwargs):
+            return await gate.run(lambda: original(*args, **kwargs))
+        app.llm.chat = chat
+    pins = getattr(getattr(app, 'voice', None), 'gpu_pins', None)
+    if pins is not None and hasattr(pins, 'live_borrow'):
+        # Pin/unpin uses a direct admin chat request. Fence the residency snapshot
+        # as well, so it cannot race an unload and autoload live beside the worker.
+        pins.live_borrow = gate
+
+    def busy():
+        # Include winding-down passes: `running` deliberately omits them, but
+        # their worker tree may still own VRAM. A new pass is fenced by our lease.
+        owners = (app.night_scheduler, getattr(app, 'selfie_booth', None))
+        return any((task := getattr(owner, '_task', None)) is not None and not task.done()
+                   for owner in owners if owner is not None)
+    app.arbiter.borrow_busy = busy
+    app.register_shutdown_drain(app.arbiter.close_borrow)
+    return gate

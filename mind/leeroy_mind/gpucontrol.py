@@ -89,7 +89,7 @@ class GpuControl:
             return 'gpu_presence_unknown', UNKNOWN
         if 'offline_raid' in holders:
             return 'gpu_held', 'An offline raid holds the GPU. Stop it in the Raid tab first.'
-        other = holders - {'server', 'discord', 'voice_gpu'}
+        other = holders - {'server', 'discord', 'voice_gpu', app.arbiter.borrow_holder}
         if other:
             # No training job takes a GPU lease today: lab trials and benchmarks are native body
             # jobs with no model. The words stay as a defence should one ever take a lease.
@@ -192,6 +192,7 @@ class GpuControl:
         """The night's and the booth's own stop requests, with no await (the image stages are
         the night's, so their worker trees end with it). _finish then waits for the cleanup."""
         self.app.night_scheduler._stop_run()
+        self.app.arbiter.cancel_borrow('gpu_pause')
         booth = getattr(self.app, 'selfie_booth', None)
         if booth is not None:
             booth.stop()
@@ -203,6 +204,7 @@ class GpuControl:
         names, freed = [], 0
         arbiter = self.app.arbiter
         try:
+            await arbiter.wait_borrow()
             if arbiter._preempt is not None:
                 await arbiter._preempt()
             async with arbiter._lock:
