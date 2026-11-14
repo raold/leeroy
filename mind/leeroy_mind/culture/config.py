@@ -9,6 +9,8 @@ class CultureConfig:
     enabled: bool = False
     bots: bool = True
     memes_per_week: int = 3
+    calendar: bool = False
+    loot: bool = False
 
 
 def load_culture_config(path: Path) -> CultureConfig:
@@ -38,3 +40,15 @@ def enabled(ctx):
 def app_enabled(app):
     """The startup choice is shared by live and nightly callers until restart."""
     return getattr(app, "culture_config", CultureConfig()).enabled
+
+
+def app_calendar(app):
+    """Part B's server calendar: its own switch inside enabled culture."""
+    cfg = getattr(app, "culture_config", CultureConfig())
+    return cfg.enabled and cfg.calendar
+
+
+def app_loot(app):
+    """Part B's loot talk and item tooltips: its own switch inside enabled culture."""
+    cfg = getattr(app, "culture_config", CultureConfig())
+    return cfg.enabled and cfg.loot

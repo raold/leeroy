@@ -363,7 +363,8 @@ class LiveReview:
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
             discord_events=tuple(events[-4:]), now=now,names=names,
             romance_activities=bond[0] and not is_group(raw), jealousy=0 if is_group(raw) else bond[1], server=observed.server,
-            here=here, self_line=self_line, intents=intents)
+            here=here, self_line=self_line, holidays=getattr(e, 'culture_calendar', False),
+            intents=intents)
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):
             if not close:
