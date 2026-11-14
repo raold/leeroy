@@ -168,6 +168,9 @@ class Job:
     members_in_instance: int | None = None
     last_progress_ts: int | None = None
     boss_engaged: bool | None = None
+    # What dungeon-clear's leader run is doing (offline running heartbeats): unknown, off, on,
+    # paused, door. Absent from older worldservers.
+    dc_state: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

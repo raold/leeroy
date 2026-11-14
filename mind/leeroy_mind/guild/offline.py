@@ -32,6 +32,17 @@ MAX_ATTEMPTS = 8
 RETRY_S = 60
 BUSY_RETRY_S = 15 * 60
 NO_FRESH_RAID = "setup:starting:no_fresh_encounters"
+# Setup proved, before anyone fought, that this raid has nothing the runner can kill today: its copy
+# has no fresh boss, or dungeon-clear finds no boss on the map. The raid is passed over for the day.
+NOTHING_TO_KILL = frozenset({NO_FRESH_RAID, "setup:starting:dc_no_bosses"})
+# Raids the offline runner (dungeon-clear driving the tank bot) cannot run, with the code naming why.
+# toc: the herald's event summons every boss, none has a static spawn, so dungeon-clear's roster is
+# empty and `dc on` is refused (2026-11-11: setup:starting:timeout). ulduar: its first boss, Flame
+# Leviathan, is a siege-vehicle fight behind a gate only that event opens, and dungeon-clear pauses
+# in front of it (2026-11-13: stalled after 30 minutes without a boss). Never planned, whatever
+# the configured rotation says.
+UNSUPPORTED = {"toc": "dc_no_bosses", "ulduar": "dc_gate"}
+DC_STATES = frozenset({"unknown", "off", "on", "paused", "door"})
 CLEANUP_GRACE_S = 60
 # Native stops a run at its own timeout and then tears down (setup, return and cleanup waits are
 # a minute each). A terminal that has not come this long after the deadline is not coming: the
@@ -123,10 +134,21 @@ def refused_member(error: str, plan: RaidPlan) -> int | None:
     return guid if guid in plan.members else None
 
 
+def unsupported(rotation) -> dict[str, str]:
+    """The rotation's keys the offline runner cannot run, each with the code that names why."""
+    out = {}
+    for key in rotation:
+        raid, size, heroic = split_key(key)
+        if raid.key in UNSUPPORTED:
+            out[f"{raid.key}{size}{'h' if heroic else ''}"] = UNSUPPORTED[raid.key]
+    return out
+
+
 def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
     """Never-run first, then oldest; the configured order resolves ties.
 
-    Raids in `skip` proved today that they have no fresh boss to fight.
+    Raids in `skip` proved today that they have nothing to kill, and raids the runner cannot run
+    (UNSUPPORTED) are never chosen.
     """
     keys = []
     for key in rotation:
@@ -138,7 +160,7 @@ def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
             keys.append(canonical)
     if not keys:
         raise ValueError("offline rotation is empty")
-    keys = [key for key in keys if key not in skip]
+    keys = [key for key in keys if key not in skip and split_key(key)[0].key not in UNSUPPORTED]
     if not keys:
         raise ValueError("no offline raid left to try today")
 
@@ -147,6 +169,25 @@ def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
         return (1, value) if type(value) in (int, float) and math.isfinite(value) else (0, 0)
 
     return min(keys, key=rank)
+
+
+def stall_cause(progress, members: int) -> str:
+    """Why a run made no boss progress, from its last fresh heartbeat (a code, never text).
+
+    dungeon-clear's state comes first: it drives the run. With it on, members out of the instance
+    come next, then a run that walked and fought without reaching a boss. An older worldserver sends
+    no state: unknown.
+    """
+    dc = progress.get("dc")
+    if dc == "door":
+        return "dc_door_blocked"
+    if dc == "paused":
+        return "dc_paused"
+    if dc == "off":
+        return "dc_off"
+    if progress["inside"] < members:
+        return "members_out"
+    return "no_boss_reached" if dc == "on" else "unknown"
 
 
 class OfflineRaids:
@@ -164,6 +205,7 @@ class OfflineRaids:
         self._online = ports.human_online()
         self._lease = False
         self._gpu_waiting = False  # logged the owner's GPU pause holding the day's raid back
+        self._unsupported_logged = set()
         self._owned = _get(ports.conn, OWNED_KEY)
         # A restart must see a new native heartbeat before using any saved observation.
         self._progress = None
@@ -247,6 +289,10 @@ class OfflineRaids:
             log.info("offline_raid_waiting reason=gpu_paused")
 
     def _raid_key(self):
+        for key, why in unsupported(self.cfg.offline_rotation).items():
+            if key not in self._unsupported_logged:
+                self._unsupported_logged.add(key)
+                log.info("offline_raid_unsupported raid=%s reason=%s", key, why)
         return next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn),
                              set(self._day_state().get("skipped", [])))
 
@@ -431,7 +477,8 @@ class OfflineRaids:
         # Members leaving the instance is native's own stop (too_few, checked before a heartbeat is
         # sent); the mind has no scatter rule of its own.
         self._progress = dict(ts=ev.ts, received=now, last=ev.last_progress_ts / 1000,
-                              engaged=ev.boss_engaged, inside=ev.members_in_instance)
+                              engaged=ev.boss_engaged, inside=ev.members_in_instance,
+                              dc=ev.dc_state if ev.dc_state in DC_STATES else None)
 
     async def _watchdog(self):
         now = self.ports.clock.now()
@@ -455,9 +502,12 @@ class OfflineRaids:
         if reason is None or stop and stop["reason"] != reason:
             return  # New progress cancels automatic stall retries; still watch for their terminal.
         if not stop:
-            stop = self._owned["stop"] = dict(reason=reason, accepted=False)
-            log.info("offline_raid_stop raid_id=%s reason=%s inside=%d members=%d",
-                     self._owned.get("raid_id"), reason, progress["inside"], len(self._owned["accepted"]))
+            members = len(self._owned["accepted"])
+            cause = stall_cause(progress, members) if reason == "stalled" else "operator"
+            stop = self._owned["stop"] = dict(reason=reason, accepted=False, cause=cause)
+            log.info("offline_raid_stop raid_id=%s reason=%s cause=%s idle_s=%d inside=%d members=%d",
+                     self._owned.get("raid_id"), reason, cause, max(0, int(now - progress["last"])),
+                     progress["inside"], members)
         await self._send_stop(now, stop)
 
     def stop_problem(self, run_id):
@@ -489,7 +539,7 @@ class OfflineRaids:
             if stop and (stop.get("accepted") or stop.get("await_terminal")):
                 return
             if not stop:
-                stop = self._owned["stop"] = dict(reason="operator_stopped", accepted=False)
+                stop = self._owned["stop"] = dict(reason="operator_stopped", accepted=False, cause="operator")
             await self._send_stop(self.ports.clock.now(), stop)
 
     def operator_result(self, run_id):
@@ -812,8 +862,8 @@ class OfflineRaids:
             self._inputs.popleft()
 
     def _no_fresh_raid(self, terminal):
-        """Setup proved this raid's copy had no fresh boss before any boss was fought."""
-        return (terminal["state"] == "failed" and terminal["reason"] == NO_FRESH_RAID
+        """Setup proved this raid had nothing to kill (NOTHING_TO_KILL) before any boss was fought."""
+        return (terminal["state"] == "failed" and terminal["reason"] in NOTHING_TO_KILL
                 and not self._owned.get("started") and not self._owned.get("running_seen")
                 and not terminal.get("kills") and not terminal.get("wipes"))
 
@@ -857,8 +907,10 @@ class OfflineRaids:
         if terminal is None:
             return
         outcome = terminal["reason"] or terminal["state"]
+        cause = None
         if outcome == "stopped" and self._owned.get("stop"):
             outcome = self._owned["stop"]["reason"]
+            cause = self._owned["stop"].get("cause")
         # A restart may retain the terminal receipt but not the in-memory inbox.
         if self.session is None:
             from .protocol import Job, JobSkip
@@ -910,6 +962,11 @@ class OfflineRaids:
         if raided:
             await self._memories()
         raid_id = self.session.raid_id if self.session is not None else None
+        log.info("offline_raid_ended raid_id=%s outcome=%s cause=%s kills=%d wipes=%d raided=%s",
+                 raid_id, str(outcome)[:REASON_LIMIT], cause or "-", terminal.get("kills") or 0,
+                 terminal.get("wipes") or 0, raided)
+        if cause is not None and outcome == "stalled":
+            self._update_day(stall_cause=cause)
         if no_fresh:
             # Nobody fought, and the day's one raid is still to come.
             self._void_run(raid_id, RETRY_S, skip_raid=True)

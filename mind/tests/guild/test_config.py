@@ -16,7 +16,7 @@ def test_guild_config_defaults_and_absent_sections(tmp_path):
     assert load_guild_config(tmp_path / "missing.toml") == GuildConfig()
     assert config(tmp_path, '[human]\nnickname="Synthetic"\n') == GuildConfig()
     assert (GuildConfig().theorycrafter_ilvl, GuildConfig().late_summon_s) == (277, (60, 180))
-    assert GuildConfig().offline_rotation == ("icc25", "icc10", "toc25", "ulduar25")
+    assert GuildConfig().offline_rotation == ("icc25", "icc10", "naxx25", "naxx10")
     assert GuildConfig().ranks == {"officer": 1, "raider": 2, "social": 3}
     assert DkpConfig().prices == {"weapon_2h": 80, "weapon_1h": 50, "trinket": 50,
                                   "token": 40, "other": 30}

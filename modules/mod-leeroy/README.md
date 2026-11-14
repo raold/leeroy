@@ -29,8 +29,8 @@ The mind defaults to 30 minutes without progress (`[guild] offline_stall_minutes
 10-360). Members leaving the instance is native's own too_few stop, which fires
 before a heartbeat is sent, so the mind has no scatter rule. Stale,
 malformed or engaged observations never authorize a stop. The run closes through
-the existing terminal path as `stalled`; native cleanup errors keep
-their reason. Raid history already displays this outcome. Native's earlier
+the existing terminal path as `stalled`, with its cause in the log (below); native cleanup
+errors keep their reason. Raid history already displays this outcome. Native's earlier
 leader/member loss, wipe limits and timeouts keep their existing priority.
 
 Old native lacks these fields: the mind logs unsupported once per run and keeps
@@ -38,6 +38,51 @@ the existing timeout. A command-level unsupported response has the same fallback
 After mind restart no saved heartbeat authorizes a stop; fresh native evidence is
 required. Lost-terminal handling (deadline plus 15 minutes) is unchanged. No schema
 migration. **Deploying this feature requires a native rebuild and updated mind.**
+
+# Offline raids dungeon-clear cannot run, and named stalls
+
+Dungeon-clear drives the offline raid's tank, so a raid it cannot route is a raid the guild
+cannot do without the owner. Two rotation raids were such raids:
+
+- **Trial of the Crusader.** Dungeon-clear builds its boss list from static spawns of the map's
+  kill-credit encounters; the herald's event summons every ToC boss and none is spawned, so
+  `dc on` is refused ("No bosses found for this map") on every try. On 2026-11-11 a 25-man run
+  waited out the 60 s starting timer (`setup:starting:timeout`). Starting now checks the
+  leader's roster once (`DungeonBossesValue::AllWings`) and fails at once with
+  `setup:starting:dc_no_bosses` (pure policy `DcRosterRefusal`).
+- **Ulduar.** The first boss on its route, Flame Leviathan, is a siege-vehicle fight behind a
+  gate (194630) only that event opens. On 2026-11-13 a 25-man run fought courtyard trash for
+  21 minutes, then dungeon-clear logged `door-blocked: can't open ... -> auto-pausing` and held
+  there until the mind's 30-minute watchdog stopped it `stalled` with no kill.
+
+Every offline Running tick now reads dungeon-clear's leader run as a phase (`DcPhase`: off, on,
+paused, door; `dc_phase=<to> from=<from>` is logged on change, first 20 then every 50th). The
+heartbeat carries it as `dc_state`. A pause out of every boss fight (an encounter known to be
+disengaged) for `OfflineDcHoldStopMs` (5 minutes) stops the run under its own name,
+`dc_door_blocked` (paused at a door) or `dc_paused` (any other pause; the job turns WaitAtBoss
+off and nobody types `dc pause`, so this is dungeon-clear's null-door fallback). An engaged or
+unreadable encounter, or any other phase, restarts the clock; every existing stop and restart
+rule still wins. Benchmarks keep their own rules (the hold stop and phase are offline only; the
+roster check applies to both).
+
+The mind never plans `toc` or `ulduar` (`guild/offline.py` `UNSUPPORTED`, logged once per
+process as `offline_raid_unsupported raid= reason=`), whatever `[guild] offline_rotation` says,
+and the default rotation is now `icc25, icc10, naxx25, naxx10` (Naxxramas bosses all have
+static spawns; none sits behind a vehicle event before it). A rotation of only unsupported
+raids holds the day. `setup:starting:dc_no_bosses`, like `no_fresh_encounters`, voids the run
+and passes the raid over for the rest of the day. A stall the mind stops names its cause from
+the last fresh heartbeat: `offline_raid_stop raid_id= reason=stalled cause= idle_s= inside=
+members=`, with `cause` one of `dc_door_blocked`, `dc_paused`, `dc_off`, `members_out`,
+`no_boss_reached` (dungeon-clear on, no boss engaged) or `unknown` (an older worldserver sends
+no `dc_state`); an operator stop is `cause=operator`. The cause is kept in the owned stop
+receipt and the day receipt (`stall_cause`); the raid row keeps the stable outcome `stalled`.
+Every finished run logs `offline_raid_ended raid_id= outcome= cause= kills= wipes= raided=`.
+
+Every offline raid enters a new copy: Teleporting unbinds every member from the map's four
+difficulties before the leader's worldport, so a leader's earlier saves can never leave a
+planned raid with nothing fresh to kill (members saved to the owner's copy are already left
+out by the mind). `no_fresh_encounters` on 2026-11-05 was the TO_BE_DECIDED misreading fixed
+that day. **Native rebuild and updated mind required; no migration.**
 
 # Offline raid ownership and stuck cleanup
 

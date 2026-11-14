@@ -4,6 +4,7 @@
 
 #include "LeeroyRealmCleanup.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -35,6 +36,30 @@ std::uint32_t AdvanceElapsed(std::uint32_t elapsed, std::uint32_t diff);
 // A new copy keeps each boss at TO_BE_DECIDED (5) until that boss's own script loads with its grid, so
 // unloaded bosses are fresh. Only a recorded kill (DONE, 3) or a completed-encounter credit marks a used copy.
 bool FreshEncounters(std::vector<std::uint8_t> const& bossStates, std::uint32_t completedEncounterMask);
+
+// Dungeon-clear finds a raid's bosses by their static spawns. A map with none (Trial of the Crusader:
+// its herald's event summons every boss) has an empty roster, and `dc on` refuses it with "No bosses
+// found for this map" on every try, so setup names it at once instead of waiting out its timer.
+inline constexpr char const* OfflineNoDcBosses = "dc_no_bosses";
+std::string DcRosterRefusal(std::size_t bosses);
+
+// Dungeon-clear's leader run as the offline job reads it on a Running tick. In an offline raid only a
+// path dungeon-clear cannot pass pauses it (the job turns WaitAtBoss off and nobody types `dc pause`):
+// Door is its auto-pause in front of a door it cannot open, Paused any other hold.
+enum class DcPhase { Unknown, Off, On, Paused, Door };
+DcPhase ReadDcPhase(bool leaderPresent, bool enabled, bool paused, bool pausedAtDoor);
+char const* DcPhaseCode(DcPhase phase); // The heartbeat's dc_state: unknown, off, on, paused, door.
+
+// A hold out of every boss fight ends the run after this long, naming it (dc_door_blocked or
+// dc_paused). Nothing in an offline raid opens such a door: on 2026-11-13 Ulduar's Flame Leviathan
+// gate, which only the siege-vehicle event opens, held a 25-man run until the mind's 30-minute
+// watchdog stopped it. An engaged or unreadable encounter, or any other phase, resets the clock.
+inline constexpr std::uint32_t OfflineDcHoldStopMs = 300000;
+struct DcHold
+{
+    std::uint32_t heldMs = 0;
+    std::string Observe(DcPhase phase, std::optional<bool> bossEngaged, std::uint32_t diffMs);
+};
 
 // Empty error admits. Repeated stops during our teardown are no-ops; a finished or foreign job is refused.
 std::string OfflineStopError(bool connected, bool owned, bool finished, bool tearingDown,

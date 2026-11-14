@@ -47,6 +47,7 @@
 #include "Ai/Dungeon/DungeonClear/Settings/DcSettings.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcLeaderSignal.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
+#include "Ai/Dungeon/DungeonClear/Value/DungeonBossesValue.h"
 #include "DcStrategyGate.h"
 #include "TestRun/DcTestDriver.h"
 #include "TestRun/DcTestRunManager.h"
@@ -161,6 +162,10 @@ struct Job
     uint32 elapsed = 0, stageElapsed = 0, dcOff = 0, restarts = 0;
     uint32 progressElapsed = 0;
     std::int64_t lastProgressTs = 0;
+    DcPhase dcPhase = DcPhase::Unknown;
+    DcHold dcHold{};
+    uint32 dcPhaseChanges = 0;
+    bool dcRosterChecked = false;
     Stage stage = Stage::Grouping;
     bool announced = false, prepared = false, leaderSent = false, followersSent = false;
     bool dcIssued = false, cleanupFailed = false;
@@ -363,12 +368,14 @@ void Progress(Job& job)
         job.event.membersInInstance = inside;
         job.event.lastProgressTs = job.lastProgressTs;
         job.event.bossEngaged = BossEngaged(job);
+        job.event.dcState = DcPhaseCode(job.dcPhase);
     }
     else
     {
         job.event.membersInInstance.reset();
         job.event.lastProgressTs.reset();
         job.event.bossEngaged.reset();
+        job.event.dcState.reset();
     }
     PublishJob(job.event);
     job.announced = true;
@@ -856,6 +863,17 @@ void Starting(Job& job)
         SetupFailure(job, "no_fresh_encounters");
         return;
     }
+    if (!job.dcRosterChecked)
+    {
+        // `dc on` refuses a map whose roster is empty on every try (2026-11-11, Trial of the Crusader:
+        // setup:starting:timeout after 60 s of "No bosses found for this map").
+        if (auto const refusal = DcRosterRefusal(DungeonBossesValue::AllWings(leader).size()); !refusal.empty())
+        {
+            SetupFailure(job, refusal);
+            return;
+        }
+        job.dcRosterChecked = true;
+    }
     if (Enable(job, leader))
         Enter(job, Stage::Running);
 }
@@ -976,6 +994,21 @@ void Running(Job& job, uint32 diff)
             ++present;
     bool const enabled = leaderPresent && DcRun::Of(GET_PLAYERBOT_AI(leader)).enabled;
     job.dcOff = enabled ? 0 : AdvanceElapsed(job.dcOff, diff);
+    std::string held;
+    if (!Benchmark(job))
+    {
+        DcRunState const* run = leaderPresent ? &DcRun::Of(GET_PLAYERBOT_AI(leader)) : nullptr;
+        DcPhase const phase = ReadDcPhase(run != nullptr, enabled, run && run->paused,
+            run && !run->pausedDoor.IsEmpty());
+        if (phase != job.dcPhase)
+        {
+            if (++job.dcPhaseChanges <= 20 || job.dcPhaseChanges % 50 == 0)
+                LOG_INFO("module.leeroy", "leeroy: raid {} dc_phase={} from={} changes={} kills={}",
+                    job.event.id, DcPhaseCode(phase), DcPhaseCode(job.dcPhase), job.dcPhaseChanges, job.event.kills);
+            job.dcPhase = phase;
+        }
+        held = job.dcHold.Observe(phase, BossEngaged(job), diff);
+    }
     uint32 const mostWipes = job.bossWipes.empty() ? 0 : *std::max_element(job.bossWipes.begin(), job.bossWipes.end());
     OfflineRaidState const state{job.elapsed, HumanConnected(job.human), leaderPresent, present, job.event.wipes,
         mostWipes, job.event.kills, static_cast<uint32>(job.previousBossStates.size()),
@@ -990,6 +1023,8 @@ void Running(Job& job, uint32 diff)
             member.restartIssued = member.restartDropped = false;
         Enter(job, Stage::Restarting);
     }
+    else if (!held.empty())
+        Stop(job, held); // Only after every existing stop/restart rule chose to go on.
     else RecallStrays(job, leader, diff); // Existing stop/restart priorities always win.
 }
 

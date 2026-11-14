@@ -18,6 +18,40 @@ std::string OfflineStopError(bool connected, bool owned, bool finished, bool tea
     return {};
 }
 
+std::string DcRosterRefusal(std::size_t bosses)
+{
+    return bosses ? std::string{} : std::string(OfflineNoDcBosses);
+}
+
+DcPhase ReadDcPhase(bool leaderPresent, bool enabled, bool paused, bool pausedAtDoor)
+{
+    if (!leaderPresent) return DcPhase::Unknown;
+    if (!enabled) return DcPhase::Off;
+    if (!paused) return DcPhase::On;
+    return pausedAtDoor ? DcPhase::Door : DcPhase::Paused;
+}
+
+char const* DcPhaseCode(DcPhase phase)
+{
+    switch (phase)
+    {
+        case DcPhase::Off: return "off";
+        case DcPhase::On: return "on";
+        case DcPhase::Paused: return "paused";
+        case DcPhase::Door: return "door";
+        case DcPhase::Unknown: break;
+    }
+    return "unknown";
+}
+
+std::string DcHold::Observe(DcPhase phase, std::optional<bool> bossEngaged, std::uint32_t diffMs)
+{
+    bool const held = (phase == DcPhase::Door || phase == DcPhase::Paused) && bossEngaged == false;
+    heldMs = held ? AdvanceElapsed(heldMs, diffMs) : 0;
+    if (heldMs < OfflineDcHoldStopMs) return {};
+    return phase == DcPhase::Door ? "dc_door_blocked" : "dc_paused";
+}
+
 bool BossProgress(std::uint8_t before, std::uint8_t after)
 {
     return before != after && (after == 1 || after == 3 || IsWipe(before, after));

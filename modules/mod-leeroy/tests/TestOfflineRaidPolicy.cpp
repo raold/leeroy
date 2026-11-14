@@ -56,6 +56,9 @@ LEEROY_TEST(OfflineRaid_ProgressFieldsAreAdditiveAndPreserveZeroAndFalse)
     CHECK_EQ(j.at("members_in_instance"), 0);
     CHECK_EQ(j.at("last_progress_ts"), 123);
     CHECK_EQ(j.at("boss_engaged"), false);
+    CHECK(!j.contains("dc_state"));
+    e.dcState = "door";
+    CHECK_EQ(MakeJobEvent(e).at("dc_state"), "door");
 }
 
 namespace
@@ -427,4 +430,58 @@ LEEROY_TEST(OfflineRaid_StuckSlotStaysWhileAMemberIsProvablyHeld)
     CHECK(DecideSlotRelease(false, true, OfflineSlotReleaseMs, 1) == SlotRelease::Keep);
     CHECK(DecideSlotRelease(false, true, std::numeric_limits<std::uint32_t>::max(), 3) == SlotRelease::Keep);
     CHECK(DecideSlotRelease(true, true, OfflineSlotReleaseMs * 10, 0) == SlotRelease::Keep); // Never a benchmark.
+}
+
+LEEROY_TEST(OfflineRaid_EmptyDcRosterIsRefusedByNameNotByTimeout)
+{
+    CHECK_EQ(DcRosterRefusal(0), "dc_no_bosses");
+    CHECK_EQ(DcRosterRefusal(0), std::string(OfflineNoDcBosses));
+    CHECK(DcRosterRefusal(1).empty());
+    CHECK(DcRosterRefusal(12).empty());
+}
+
+LEEROY_TEST(OfflineRaid_DcPhaseNamesWhatDungeonClearIsDoing)
+{
+    CHECK(ReadDcPhase(false, true, true, true) == DcPhase::Unknown);
+    CHECK(ReadDcPhase(true, false, true, true) == DcPhase::Off);
+    CHECK(ReadDcPhase(true, true, false, true) == DcPhase::On);
+    CHECK(ReadDcPhase(true, true, true, false) == DcPhase::Paused);
+    CHECK(ReadDcPhase(true, true, true, true) == DcPhase::Door);
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Unknown)), "unknown");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Off)), "off");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::On)), "on");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Paused)), "paused");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Door)), "door");
+}
+
+LEEROY_TEST(OfflineRaid_DoorHoldOutOfEveryFightStopsTheRunByName)
+{
+    DcHold door;
+    CHECK(door.Observe(DcPhase::Door, false, OfflineDcHoldStopMs - 1).empty());
+    CHECK_EQ(door.Observe(DcPhase::Door, false, 1), "dc_door_blocked");
+    CHECK_EQ(door.Observe(DcPhase::Door, false, 1000), "dc_door_blocked"); // Stays named until the stop lands.
+    DcHold other;
+    CHECK(other.Observe(DcPhase::Paused, false, OfflineDcHoldStopMs - 1).empty());
+    CHECK_EQ(other.Observe(DcPhase::Paused, false, 1), "dc_paused");
+    DcHold saturated;
+    auto const maximum = std::numeric_limits<std::uint32_t>::max();
+    CHECK_EQ(saturated.Observe(DcPhase::Door, false, maximum), "dc_door_blocked");
+    CHECK_EQ(saturated.Observe(DcPhase::Door, false, maximum), "dc_door_blocked");
+    CHECK_EQ(saturated.heldMs, maximum);
+}
+
+LEEROY_TEST(OfflineRaid_HoldClockRestartsInAFightUnreadableEncounterOrAnyOtherPhase)
+{
+    struct Reset { DcPhase phase; std::optional<bool> engaged; };
+    for (auto const& reset : {Reset{DcPhase::Door, true}, Reset{DcPhase::Door, std::nullopt},
+        Reset{DcPhase::Paused, true}, Reset{DcPhase::On, false}, Reset{DcPhase::Off, false},
+        Reset{DcPhase::Unknown, false}})
+    {
+        DcHold hold;
+        CHECK(hold.Observe(DcPhase::Door, false, OfflineDcHoldStopMs - 1).empty());
+        CHECK(hold.Observe(reset.phase, reset.engaged, 1000).empty());
+        CHECK_EQ(hold.heldMs, 0u);
+        CHECK(hold.Observe(DcPhase::Door, false, OfflineDcHoldStopMs - 1).empty());
+        CHECK_EQ(hold.Observe(DcPhase::Door, false, 1), "dc_door_blocked");
+    }
 }

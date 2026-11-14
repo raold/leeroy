@@ -136,6 +136,7 @@ struct JobEvent
     std::optional<std::uint32_t> membersInInstance;
     std::optional<std::int64_t> lastProgressTs;
     std::optional<bool> bossEngaged;
+    std::optional<std::string> dcState; // Offline Running heartbeats: DcPhaseCode.
 };
 nlohmann::json MakeJobEvent(JobEvent const&);
 
