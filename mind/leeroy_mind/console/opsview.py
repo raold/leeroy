@@ -427,7 +427,8 @@ SWITCHES = (
     ('training','enabled','Training',''), ('decisions','enabled','Decisions','server.enabled'),
     ('training','playbooks','Raid playbook checks','training.enabled'),
     ('control','ops_actions','Ops actions','restart the console too'),
-    ('raidlead','enabled','Raid lead','Leeroy.RaidLead.Enable = 1; native rebuild'))
+    ('raidlead','enabled','Raid lead','Leeroy.RaidLead.Enable = 1; native rebuild'),
+    ('raidlead','briefs','Boss briefs','raidlead.enabled'))
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:

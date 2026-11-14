@@ -12,6 +12,9 @@ her raid icons are set server-side, so playerbots' assist-tank and assist-healer
   non-boolean value, or an unreadable `mind.toml`, is off). Read at the mind's start: restart the
   mind after changing it. Off, nothing is attached: no handler, task, op or prompt, and his lines
   go to talk as before.
+- `[raidlead] briefs = true` (default false; only with `enabled`; a non-boolean value makes the
+  whole table invalid, so the raid lead is off): the boss briefs below. Read at the mind's start.
+  Off, the pre-pull call and his plan questions are exactly what they were.
 - Native `Leeroy.RaidLead.Enable = 1` in `mod_leeroy.conf` (default 0, `.reload config`); see
   `modules/mod-leeroy/README.md`. The mind asks it: a `sync` at each hello (which also has native
   publish his group, so the group is known at once) and a `probe` a minute while he plays; any
@@ -69,9 +72,42 @@ Her own callouts, in raid or party chat:
   wait for a rez as GroupRez rules. The wipe's one line is the talk's own debrief, from her.
 - **The plan**: "what's the plan?", "how does this fight work?" (or asked of a member by name):
   she answers from code-built facts (who leads, the group's roles, the last order, the boss here)
-  and `callouts.boss_plan`, which asks `callouts.boss_brief(context)` first: the single hook for
-  the raid playbooks (`mind/leeroy_mind/raidplay/`, a later PR). It returns None for now, and
-  the guild's standing pre-pull call (`guild/boss_calls.BOSS_CALLS`) answers instead.
+  and the guild's standing pre-pull call for it (`callouts.boss_plan`, `guild/boss_calls.BOSS_CALLS`).
+  With the briefs on she answers with the boss's brief instead (below).
+
+## Boss briefs (`[raidlead] briefs`)
+
+A brief is the boss's plan built by code from the raid playbooks (`briefs.py`, read through the
+hook `callouts.boss_brief(context)`), never by a model, so no mechanic or tactic in it is made up:
+the playbook's 2-4 mechanics that matter most to his group at that difficulty, each said with its
+own playbook line (`explain`, whole and unchanged) after a header naming the boss and difficulty
+("Lord Jaraxxus, 25 heroic: ..."). Which ones: those only this difficulty has first (Jaraxxus's
+attackable volcano and portal on heroic), then by kind (adds and kill order, interrupts, ground to
+leave, run-outs and soaks, stacking and spreading, positions, then one role's job, then cooldowns
+and enrage), then by how many of his group each concerns, then the playbook's order. A mechanic is
+kept only when his group has one of its roles (tank, healer, melee, ranged; his own role counts);
+one that is only the tanks' only when tanks are named in his group. At most 3 raid chat lines of
+at most 255 bytes; a mechanic that does not fit whole is left out, never cut.
+
+- **Before the pull**: guild life's pre-pull call (`guild/calls.RaidCalls`, on dungeon-clear's next
+  boss in a raid night) says the brief in place of the standing call, from the run's lead, its
+  lines word for word (each an exact line: typed, unstyled, never voiced). One call under the
+  calls' 20 s gap, said outside the calls' lock so a pull's Bloodlust never waits behind it; a pull
+  starting, or the run ending, stops the lines not yet sent. The training ground's own pre-pull
+  call still wins over it.
+- **His questions**: "what's the plan?" for the boss here (the last his group engaged on his map),
+  or one he names: "what do we do on heigan", "what's the plan for the lich king?", "how does
+  sindragosa work?", "explain festergut", "anub'arak strat?" (a boss by its name, its playbook
+  slug or a word of its name no other boss shares; a named-boss question is talk while the briefs
+  are off). She posts the brief's lines word for word, then her own words in one short line from
+  the other facts (lead, roles, last order), told not to repeat the plan or name a mechanic. One
+  brief at a time; the same boss's not again within 20 s.
+- **Difficulty**: from the raid he drives (an adopted add-built group), else his group's last
+  `guild_group` event inside an instance on his map (`entered`, which carries the difficulty).
+  Not known (a group he formed by hand, or a boss he names in another raid), no brief.
+- **Fallback**: no playbook for the boss (Ulduar and the small raids today), the difficulty not
+  known, nobody in his group the mechanics are for, or the playbook data unreadable (logged once,
+  `raidlead_brief_unavailable error=`): the standing call, exactly as with the briefs off.
 
 ## His orders
 
@@ -135,5 +171,6 @@ failure inside the check gives the line to talk.
 `raidlead_order action= count= done= outcome= error=`, `raidlead_lift why= count= done=`,
 `raidlead_lift_dropped guid= reason=`, `raidlead_refused reason=`, `raidlead_unclear reason=`,
 `raidlead_model_order action= who=`, `raidlead_model_failed error=`, `raidlead_claim_failed error=`,
-`raidlead_failed error=`; native `raidlead_hold_lifted guid=`. Ids, counts and codes only, never
-his words, names or persona text.
+`raidlead_failed error=`, `raidlead_brief context=MAP:BOSS:DIFFICULTY lines= via=prepull|question
+outcome=said|cut|dropped|recent`, `raidlead_brief_unavailable error=`; native
+`raidlead_hold_lifted guid=`. Ids, counts and codes only, never his words, names or persona text.
