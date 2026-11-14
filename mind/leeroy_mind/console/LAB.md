@@ -46,6 +46,9 @@ supports:
 - `weights`: `{values: {explicit, engagement, emote, quality}, version}`. Values
   must be finite, between zero and one, and sum to one. The page shows a
   confirmation; the mind rejects an edit based on a stale version.
+- `rollback`: `{version}` restores a saved learning state (the weekly cycle's, see
+  `learn/README.md`), after a confirmation. It saves the current state first, keeps
+  the owner's vetoes and freezes, and works while learning is frozen.
 
 Freeze overrides live in `meta` under `learn:control:` and survive restarts.
 They add to the corresponding `learn.freeze` / `frozen_families` choices and
@@ -60,10 +63,14 @@ configured learners on their next eligible work; it does not start a night run.
 Family freeze pauses that family's selection, credit and automated arm changes.
 Vetoes persist independently of expiry; the coach cannot resurrect a vetoed note.
 
-The weekly report slot is reserved for task 43's numeric JSON object at
-`meta['learn:weekly-report']`. It accepts bounded nested numbers only; without a
-report it says **Not set up yet**. Task 43 must also honor `learn:control:veto:*`
-when deciding promotions. This task adds no migration or live configuration.
+The weekly report shows the cycle's numeric object at `meta['learn:weekly-report']`
+(`learn/README.md`, "The weekly cycle"): the weeks compared, the detector and guard
+rates of both, the diversity floor, and what was promoted, retired, rolled back or
+held back with its reasons. The view keeps bounded nested numbers and plain
+identifiers (arm ids, weeks, context parts, codes); any other string is dropped.
+Without a report it says **Not set up yet** and whether `[learn] cycle` is on. Below
+it, **Saved learning states** lists the newest 20 versions, each with its rollback
+button. The cycle honors `learn:control:veto:*` when deciding promotions.
 
 Validation uses scratch databases, the fake mind/bridge/model browser rehearsal,
 keyboard actions, 390 px layouts and both themes. No live service or model is

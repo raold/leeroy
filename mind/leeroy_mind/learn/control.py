@@ -46,7 +46,8 @@ def arguments(args):
         raise ValueError('Choose a learning action.')
     action = args['action']
     keys = {'freeze': {'frozen'}, 'family': {'family', 'frozen'},
-            'arm': {'id', 'verb'}, 'lesson': {'id', 'verb'}, 'weights': {'values', 'version'}}
+            'arm': {'id', 'verb'}, 'lesson': {'id', 'verb'}, 'weights': {'values', 'version'},
+            'rollback': {'version'}}
     if action not in keys or set(args) != {'action', *keys[action]}:
         raise ValueError('The learning action has missing or unexpected fields.')
     if action in ('freeze', 'family'):
@@ -62,6 +63,9 @@ def arguments(args):
         if (type(args['id']) is not int or not 0 < args['id'] < 2**63
                 or args['verb'] not in ('approve', 'veto', 'expire')):
             raise ValueError('Choose a lesson and approve, veto or expire.')
+    elif action == 'rollback':
+        if args['version'] is not None and (type(args['version']) is not int or not 0 < args['version'] < 2**63):
+            raise ValueError('Choose a saved learning-state version.')
     else:
         try:
             weights.validate(args['values'])
@@ -106,6 +110,12 @@ def change(store, args, *, now):
             if verb in ('retire', 'reject'):
                 store.set_meta(PREFIX+'veto:arm:'+arm.id, str(now))
             message = {'accept': 'Arm accepted.', 'reject': 'Arm rejected.', 'retire': 'Arm retired.'}[verb]
+        elif action == 'rollback':
+            # The owner's explicit restore: it works while frozen and keeps his vetoes and freezes.
+            from .cycle import rollback
+            restored, saved = rollback(conn, args['version'], now=now)
+            message = (f'Learning restored to version {restored}. Your vetoes and freezes still hold. '
+                       f'The state before it was saved as version {saved}.')
         else:
             if not lessons.available(conn):
                 raise ValueError('Lessons are not set up yet.')
@@ -126,4 +136,7 @@ def change(store, args, *, now):
                 if verb == 'veto':
                     store.set_meta(PREFIX+f'veto:lesson:{args["id"]}', str(now))
             message = {'approve': 'Lesson approved.', 'veto': 'Lesson vetoed.', 'expire': 'Lesson expired.'}[verb]
+    if action == 'rollback':
+        from leeroy_mind.logs import log
+        log('learn_rollback', restored=restored, saved=saved, source='lab')
     return {'ok': True, 'message': message}

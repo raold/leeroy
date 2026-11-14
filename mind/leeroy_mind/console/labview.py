@@ -3,12 +3,13 @@ from dataclasses import asdict
 from datetime import datetime
 from contextlib import closing
 import json
+import re
 import sqlite3
 import time
 
 from . import feed, views
 from .opsview import database, Missing
-from leeroy_mind.learn import arms, bandit, control, lessons, weights
+from leeroy_mind.learn import arms, bandit, control, cycle, lessons, weights
 from leeroy_mind.learn.config import load_learn_config
 from leeroy_mind.signals.store import REASONS
 from leeroy_mind.discord.channels import is_discord, channel_id
@@ -126,12 +127,18 @@ def _arms(conn, now):
             'limited': len(keys)>64 or len(registry)==LIMIT}
 
 
+IDENT = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}')
+
+
 def _numeric(value, depth=0):
+    """Numbers and plain identifiers only (arm ids, weeks, codes); any other text is dropped."""
     if depth > 5:
         return None
     if type(value) in (int, float):
         import math
         return value if math.isfinite(value) else None
+    if type(value) is str:
+        return value if IDENT.fullmatch(value) else None
     if type(value) is dict and len(value)<=100:
         return {k: _numeric(v, depth+1) for k, v in value.items() if type(k) is str and len(k)<=80}
     if type(value) is list and len(value)<=100:
@@ -173,7 +180,8 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
             except (ValueError, RecursionError):
                 pass
     base = config if config is not None else control.LearnCfg()
-    return {'at': now, 'freeze': cfg.freeze, 'families': list(arms.FAMILIES),
+    return {'at': now, 'freeze': cfg.freeze, 'families': list(arms.FAMILIES), 'cycle': bool(base.cycle),
+            'versions': cycle.versions(conn),
             'frozen_families': list(cfg.frozen_families), 'enabled': cfg.enabled,
             'config_freeze': bool(base.freeze), 'config_frozen_families': sorted(base.frozen_families),
             'rewards': _rewards(conn, now), 'arms': _arms(conn, now),

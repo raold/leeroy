@@ -1,7 +1,7 @@
 import { $, api, clear, el, on, post, refused } from "./core.mjs";
 import { S } from "./state.mjs";
 import { pollTab } from "./tabkit.mjs";
-import { controlReason, WEIGHTS, weightValues, score, percent } from "./labmodel.mjs";
+import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel } from "./labmodel.mjs";
 import { BoundedMap } from "./resilience.mjs";
 
 let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null;
@@ -118,6 +118,35 @@ function weights(view) {
   view.history.forEach(w => box.appendChild(el('p','mono','Version '+w.version+' · '+new Date(w.created*1000).toLocaleString()+' · '+
     WEIGHTS.map(k => k+' '+w.values[k]).join(', '))));
 }
+function weekly(value) {
+  const box=$('lab-report'); clear(box); const view=reportView(value.report);
+  if (!view) {
+    empty(box,value.cycle ? 'Not set up yet. The first weekly cycle runs on the night after a Sunday.'
+      : 'Not set up yet. The weekly cycle is off ([learn] cycle in mind.toml).');
+  } else {
+    box.append(el('p','hint',view.heading),el('p','',view.lines),el('p','',view.diversity));
+    view.rates.forEach(r => box.appendChild(el('p','mono',r)));
+    [['promoted','Promoted'],['retired','Retired'],['rolled_back','Rolled back']].forEach(([key,title]) => {
+      const d=details(title+' ('+view[key].length+')','report-'+key);
+      view[key].forEach(t => d.appendChild(el('p','lab-stat',t)));
+      if (!view[key].length) { empty(d,'None this week.'); } box.appendChild(d);
+    });
+    const held=details('Held back ('+view.held.count+')','report-held');
+    view.held.items.forEach(t => held.appendChild(el('p','lab-stat',t)));
+    if (view.held.count>view.held.items.length) { empty(held,'Showing the first '+view.held.items.length+'.'); }
+    if (!view.held.count) { empty(held,'Nothing was waiting.'); } box.appendChild(held);
+  }
+  const saved=Array.isArray(value.versions) ? value.versions : [];
+  const d=details('Saved learning states ('+saved.length+')','report-versions');
+  d.appendChild(el('p','hint','A rollback restores arm statuses, promotions, lessons and reward weights. Your vetoes and freezes stay, and the current state is saved first.'));
+  saved.forEach(v => {
+    d.appendChild(el('p','lab-stat',versionLabel(v)+' · '+new Date(v.created*1000).toLocaleString()));
+    d.appendChild(button('Roll back to version '+v.version,() => confirm('Roll back learning to version '+v.version+
+      '? Arm statuses, promotions, lessons and reward weights return to that state; your vetoes and freezes stay. The current state is saved as a new version first.',
+      () => mutate({action:'rollback',version:v.version}))));
+  });
+  if (!saved.length) { empty(d,'No saved states yet.'); } box.appendChild(d);
+}
 $('lab-weights-form').addEventListener('submit',event => {
   event.preventDefault();
   const values=weightValues(Object.fromEntries(WEIGHTS.map(k => [k,$('lab-weight-'+k).value.trim()==='' ? NaN : Number($('lab-weight-'+k).value)])));
@@ -146,7 +175,7 @@ function render(value) {
   $('lab-freeze').disabled=!!value.config_freeze;
   $('lab-learning-state').textContent=value.config_freeze ? 'Learning is frozen in mind.toml ([learn] freeze). Change it there.' : value.freeze ? 'Learning is frozen.' : value.enabled ? 'Learning is enabled by its config.' : 'Learning is disabled in config. Controls do not enable it.';
   rewards(value.rewards); arms(value.arms); lessons(value.lessons); weights(value.weights);
-  $('lab-report').textContent=value.report===null ? 'Not set up yet.' : JSON.stringify(value.report,null,2);
+  weekly(value);
   $('tab-lab').querySelectorAll('details').forEach(d => {
     d.open=open.has(d.dataset.detail || d.id);
     d.querySelectorAll(':scope > button').forEach(b => { b.dataset.labFocus=(d.dataset.detail || d.id)+'-'+b.textContent; });

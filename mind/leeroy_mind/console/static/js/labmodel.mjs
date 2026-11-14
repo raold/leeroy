@@ -22,3 +22,42 @@ export function reconcileVote(current, incoming) {
 }
 export function score(value) { return Number.isFinite(value) ? value.toFixed(3) : 'Not scored yet'; }
 export function percent(value) { return Number.isFinite(value) ? (100*value).toFixed(1)+'%' : '—'; }
+export const RATES = [['repetition','Repetition'],['stock','Stock phrases'],['nonsequitur','Non sequiturs'],
+  ['unawareness','Unawareness'],['guard','Guard trips']];
+const REASONS_HELD = {uses:'under 30 rewarded uses', probability:'not yet 90% likely to beat control',
+  no_week_lines:'no lines last week', no_control_lines:'nothing to compare with', detectors:'detector rates worse',
+  guard:'guard trips worse', veto:'vetoed', diversity:'diversity floor', rolled_back:'rolled back before'};
+const ROSE = {repetition:'repetition', stock:'stock phrases'};
+function context(value) { return Array.isArray(value) && value.length ? ' in '+value.join(' / ') : ''; }
+function subject(item) {
+  return item.kind==='lesson' ? 'lesson '+item.id+(Number.isFinite(item.guid) ? ' (member #'+item.guid+')' : '')
+    : 'arm '+item.id+context(item.context);
+}
+// The weekly cycle's numeric report as plain sentences. Nothing here is chat text.
+export function reportView(report) {
+  if (!report || typeof report !== 'object' || typeof report.week !== 'string') { return null; }
+  const week=report.rates?.week || {}, previous=report.rates?.previous || {};
+  const rates=RATES.map(([key,label]) => label+' '+percent(week[key])+' (week before '+percent(previous[key])+')');
+  if (report.measured?.contradiction === 0) { rates.push('Contradiction: not measured (it needs a model).'); }
+  if (report.measured?.unawareness === 0) { rates.push('Unawareness: not measured on this database.'); }
+  const rose=Object.keys(ROSE).filter(k => report.diversity?.[k+'_rose']===1).map(k => ROSE[k]);
+  const list=(items,line) => (Array.isArray(items) ? items : []).filter(x => x && typeof x==='object').map(line);
+  return {
+    heading:'Week '+report.week+(report.previous_week ? ', compared with '+report.previous_week : '')+'. '+
+      (Number.isSafeInteger(report.state_version) ? 'The learning state before it is version '+report.state_version+'.' : ''),
+    lines: (week.lines ?? 0)+' lines last week, '+(previous.lines ?? 0)+' the week before.',
+    diversity: rose.length ? 'Guild '+rose.join(' and ')+' rose: nothing was promoted and the newest correlated promotions were rolled back.'
+      : 'The diversity floor held.',
+    rates,
+    promoted: list(report.promoted, x => subject(x)+' · P '+score(x.probability)+' · '+(x.uses ?? 0)+' uses'),
+    retired: list(report.retired, x => subject(x)+(x.reason==='share' ? ' · share '+percent(x.share)+', week before '+percent(x.share_previous)
+      : ' · not reinforced in 14 days')),
+    rolled_back: list(report.rolled_back, x => subject(x)+' · '+(Array.isArray(x.reasons) ? x.reasons.map(r => ROSE[r] || r).join(', ') : '')),
+    held: {count: Number.isSafeInteger(report.held?.count) ? report.held.count : 0,
+      items: list(report.held?.items, x => subject(x)+' · '+(Array.isArray(x.reasons) ? x.reasons.map(r => REASONS_HELD[r] || r).join(', ') : ''))},
+  };
+}
+export function versionLabel(v) {
+  return 'Version '+v.version+' · '+(v.reason==='cycle' ? 'before the weekly cycle'+(v.week ? ' for '+v.week : '')
+    : 'saved before a rollback'+(Number.isSafeInteger(v.restored_from) ? ' to '+v.restored_from : ''));
+}
