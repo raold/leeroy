@@ -93,7 +93,10 @@ exclude only the line being recorded and its linked Discord message from the
 Existing source vectors can identify a topic he raises first; named item matches
 also end it as `he_raised`. Only his line to her counts: his whisper or DM to her,
 a group DM she is in, or a public line addressed to her or naming her. A public
-line to nobody in particular ends nobody's item. Matching uses the configured embedding service, caches
+line to nobody in particular ends nobody's item. Matching reuses a vector the live
+guard review already holds for his line's words, or one outreach cached for the
+same words; otherwise it embeds his line once with the configured embedding
+service (chat lines keep no vector, so a new line usually needs one). It caches
 bounded topic vectors when a source has none, and rechecks source and owner-line
 validity after waiting. While matching runs, her spontaneous outreach waits; her
 ordinary answers can continue. Ended items never return through either list

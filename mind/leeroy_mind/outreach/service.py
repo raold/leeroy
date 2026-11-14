@@ -301,24 +301,28 @@ class Outreach:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    async def _vector(self, text):
+        """A vector the live review or this service already holds for these words, else a new one."""
+        key = hashlib.sha256(text.encode()).digest()
+        review = getattr(getattr(self.app.engine, 'live_review', None), 'vectors', None) or {}
+        vector = review.get(key) or self._vectors.get(key)
+        if vector is None:
+            vector = (await self.app.embedder.embed([text], Priority.EXTRACTION))[0]
+            self._vectors[key] = vector
+            while len(self._vectors) > 256:
+                self._vectors.pop(next(iter(self._vectors)))
+        return vector
+
     async def _raised(self, row, items, guids):
         try:
-            query = (await self.app.embedder.embed([row.text], Priority.EXTRACTION))[0]
+            query = await self._vector(row.text)
             for item in items:
                 if not self._line_alive(row):
                     return
                 current = records.get(self.app.store, item.id)
                 if current is None or current.state != 'open' or not self._alive(current):
                     continue
-                vector = source_embedding(self.app.store, current)
-                key = hashlib.sha256(current.about.encode()).digest()
-                if vector is None:
-                    vector = self._vectors.get(key)
-                if vector is None:
-                    vector = (await self.app.embedder.embed([current.about], Priority.EXTRACTION))[0]
-                    self._vectors[key] = vector
-                    while len(self._vectors) > 256:
-                        self._vectors.pop(next(iter(self._vectors)))
+                vector = source_embedding(self.app.store, current) or await self._vector(current.about)
                 score = cosine(unpack_vec(query), unpack_vec(vector))
                 if math.isfinite(score) and score >= .6 and self._line_alive(row) and self._alive(current):
                     records.drop(self.app.store, item.id, 'he_raised')

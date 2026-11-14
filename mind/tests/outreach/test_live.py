@@ -1,6 +1,7 @@
 """Live list maintenance against real stored sources; no network or model calls."""
 import asyncio
 from dataclasses import replace
+import hashlib
 import math
 from types import SimpleNamespace
 
@@ -287,6 +288,31 @@ def test_his_discord_line_is_checked_through_its_receipt_index(app):
     query = next(s for s in statements if 'discord_message' in s)
     plan = ' '.join(row[3] for row in app.store.conn.execute('EXPLAIN QUERY PLAN ' + query))
     assert 'meta_discord_line_value' in plan and 'SCAN' not in plan
+
+
+def test_his_line_reuses_a_vector_the_live_review_already_holds(app):
+    async def go():
+        item = plan(app)
+        text = 'How is your outing going?'
+        app.engine.live_review = SimpleNamespace(vectors={hashlib.sha256(text.encode()).digest(): vector(.7)})
+        line, _ = chat(app, text, channel='dm:101')
+        app.outreach.on_his_line(line)
+        await settle(app)
+        assert records.get(app.store, item.id).ended == 'he_raised'
+        assert app.embedder.calls == []
+    asyncio.run(go())
+
+
+def test_his_repeated_line_is_embedded_once(app):
+    async def go():
+        plan(app)
+        app.embedder.query = vector(.5)
+        for _ in range(2):
+            line, _ = chat(app, 'How is your outing going?', channel='dm:101')
+            app.outreach.on_his_line(line)
+            await settle(app)
+        assert app.embedder.calls == [['How is your outing going?']]
+    asyncio.run(go())
 
 
 @pytest.mark.parametrize('change', ['deleted', 'edited', 'not_owner'])
