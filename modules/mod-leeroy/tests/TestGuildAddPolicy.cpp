@@ -267,6 +267,36 @@ LEEROY_TEST(Guild_AddBringsNobodyIntoACopyTooSmallForHisGroup)
         "brought in");
 }
 
+LEEROY_TEST(Guild_AddSkipsMembersSavedToAnotherCopyOfHisSaves)
+{
+    // Naxxramas (533) 25-man is difficulty 1, 10-man difficulty 0.
+    std::vector<GuildAddSave> const his{{533, 1, 230, 25}, {603, 0, 51, 10}};
+    // Saved to his copy, or not saved at all: free.
+    CHECK(!GuildAddSavedElsewhere(his, {}, 25));
+    CHECK(!GuildAddSavedElsewhere(his, {{533, 1, 230, 25}}, 25));
+    // Another copy of the 25-man he is saved to: the core would send them home at the door.
+    CHECK(GuildAddSavedElsewhere(his, {{533, 1, 1772, 25}}, 25));
+    CHECK(GuildAddSavedElsewhere(his, {{631, 1, 9, 25}, {533, 1, 1772, 25}}, 25));
+    // Another difficulty or another map is another lockout.
+    CHECK(!GuildAddSavedElsewhere(his, {{533, 0, 1772, 10}}, 25));
+    CHECK(!GuildAddSavedElsewhere(his, {{631, 1, 9, 25}}, 25));
+    // Only his saves of the size asked for count: an add10 is not headed for his Naxxramas 25.
+    CHECK(!GuildAddSavedElsewhere(his, {{533, 1, 1772, 25}}, 10));
+    CHECK(GuildAddSavedElsewhere(his, {{603, 0, 52, 10}}, 10));
+    CHECK(!GuildAddSavedElsewhere(his, {{603, 0, 52, 10}}, 25));
+    // Not saved anywhere himself: nothing to measure against.
+    CHECK(!GuildAddSavedElsewhere({}, {{533, 1, 1772, 25}}, 25));
+}
+
+LEEROY_TEST(Guild_AddNamesMembersSavedElsewhereBeforeSwappingThem)
+{
+    CHECK(GuildAddSwapLine({}).empty());
+    CHECK_EQ(GuildAddSwapLine({"Ana"}), "1 member is saved to another copy of this instance and cannot come in: Ana. "
+        "Taking them out of your group and filling the place from the guild");
+    CHECK_EQ(GuildAddSwapLine({"Ana", "Bo", "Cy"}), "3 members are saved to another copy of this instance and cannot "
+        "come in: Ana, Bo and Cy. Taking them out of your group and filling their places from the guild");
+}
+
 LEEROY_TEST(Guild_AddSkipsEveryBusyOrUnsuitableMember)
 {
     CHECK(GuildAddSkipReason(Free()).empty());

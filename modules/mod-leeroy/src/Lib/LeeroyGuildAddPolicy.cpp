@@ -335,6 +335,27 @@ std::string GuildAddSkipReason(GuildAddBody const& body)
     return {};
 }
 
+bool GuildAddSavedElsewhere(std::vector<GuildAddSave> const& his, std::vector<GuildAddSave> const& member,
+    std::uint32_t size)
+{
+    for (auto const& mine : his)
+        if (mine.players == size)
+            for (auto const& theirs : member)
+                if (theirs.map == mine.map && theirs.difficulty == mine.difficulty && theirs.instance != mine.instance)
+                    return true;
+    return false;
+}
+
+std::string GuildAddSwapLine(std::vector<std::string> const& names)
+{
+    if (names.empty())
+        return {};
+    return Count(static_cast<std::uint32_t>(names.size()), "member", "members")
+        + (names.size() == 1 ? " is" : " are") + " saved to another copy of this instance and cannot come in: "
+        + Join(names) + ". Taking them out of your group and filling "
+        + (names.size() == 1 ? "the place" : "their places") + " from the guild";
+}
+
 GuildAddPlan PlanGuildAdd(std::uint32_t size, std::uint32_t members, std::vector<GuildAddMember> const& connected,
     std::vector<GuildAddCandidate> candidates)
 {
