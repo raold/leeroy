@@ -1,4 +1,4 @@
-import { num, obj, plural, str } from "./core.mjs";
+import { arr, num, obj, plural, str } from "./core.mjs";
 
 // How the Training tab words what /api/training holds. No DOM here: node imports this file.
 
@@ -71,4 +71,50 @@ export function scopeText(x) {
 export function trialText(t) {
   t = obj(t);
   return plural(num(t.arms), "arm") + ", " + plural(num(t.observations), "observation");
+}
+
+var KIND_WORDS = {
+  avoid_ground: "avoid the ground", move_out_cone: "out of the cone", spread: "spread", stack: "stack",
+  soak: "soak", run_out_debuff: "run out", interrupt: "interrupt", dispel: "dispel",
+  tank_swap_at_stacks: "tank swap", switch_adds: "switch to adds", kill_order: "kill order",
+  los: "line of sight", face_away: "face away", positional: "position", kite: "kite",
+  raid_cooldowns: "cooldowns", use_object: "use it", heal_target: "heal it", enrage_timer: "enrage",
+  stop_casting: "stop casting"
+};
+
+// The raid playbooks (/api/training/playbooks) as words: one group per raid, one line per boss
+export function playbookGroups(v) {
+  return arr(obj(v).raids).map(function (r) {
+    r = obj(r);
+    return {
+      title: str(r.name) + " (" + arr(r.difficulties).join(", ") + ")",
+      bosses: arr(r.bosses).map(function (b) {
+        b = obj(b);
+        var mechs = arr(b.mechanics), stock = mechs.filter(function (m) { return obj(m).handled_by === "playerbots"; }).length;
+        return {
+          title: str(b.name),
+          detail: plural(mechs.length, "mechanic") + ", " + stock + " handled by playerbots",
+          call: str(b.call),
+          mechanics: mechs.map(function (m) {
+            m = obj(m);
+            var only = arr(m.only).length ? " · only " + arr(m.only).join(", ") : "";
+            return {
+              title: str(m.name),
+              tag: KIND_WORDS[m.kind] || str(m.kind),
+              who: arr(m.roles).join(", ") + only,
+              stock: m.handled_by === "playerbots",
+              text: str(m.explain)
+            };
+          })
+        };
+      })
+    };
+  });
+}
+
+export function playbookTotals(v) {
+  var t = obj(obj(v).totals);
+  return plural(num(t.raids), "raid") + " · " + plural(num(t.bosses), "boss", "bosses") + " · "
+    + plural(num(t.mechanics), "mechanic") + " · " + num(t.playerbots) + " handled by playerbots · "
+    + num(t.checked) + " scored by the training ground";
 }

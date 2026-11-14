@@ -17,7 +17,7 @@ from leeroy_mind.wow import BOSS_NAMES, is_raid_fight
 from .config import load_training_config
 from .experiments import Experimenter
 from .inspect import cards_view, checklist, gate_state, trials_view
-from .mechanics import BOSS_MECHANICS
+from .mechanics import boss_mechanics
 from .report import training_section
 from .service import load_book, rescore_stored
 from . import store
@@ -85,8 +85,9 @@ def _lab_owned(conn):
 
 
 async def _rescore(conn, root):
+    playbooks = load_training_config(root / "mind.toml").playbooks
     book = await asyncio.to_thread(load_book, root)
-    return await rescore_stored(SimpleNamespace(conn=conn), book)
+    return await rescore_stored(SimpleNamespace(conn=conn), book, playbooks=playbooks)
 
 
 def training_main(argv=None):
@@ -170,7 +171,8 @@ def training_main(argv=None):
                     async def read():
                         return await asyncio.to_thread(load_book, root)
                     book = asyncio.run(read())
-                    names = sorted({name for rows in BOSS_MECHANICS.values() for row in rows
+                    table = boss_mechanics(load_training_config(root / "mind.toml").playbooks)
+                    names = sorted({name for rows in table.values() for row in rows
                                     for name in (*row.names, *row.exempt)})
                     result = {"loaded": sorted(book.loaded), "spells": {name: sorted(book.ids(name)) for name in names}}
                 else:

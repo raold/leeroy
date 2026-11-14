@@ -1,0 +1,502 @@
+# Trial of the Crusader playbooks. Spell ids, timers and phases come from this server's boss
+# scripts (script_dir); the explanations are our own words. Playerbots has no Trial of the
+# Crusader raid strategy, so nothing here is handled by its stock scripts. Checks with
+# since = 1 are the training ground's original rows.
+map = 649
+key = "toc"
+difficulties = ["10", "25", "10h", "25h"]
+script_dir = "src/server/scripts/Northrend/CrusadersColiseum/TrialOfTheCrusader"
+playerbots_dir = ""
+
+[[boss]]
+index = 0
+name = "the Northrend Beasts"
+slug = "beasts"
+creatures = [34796, 35144, 34799, 34797]
+script = "boss_northrend_beasts.cpp"
+call = "beasts: kill the snakes, dodge icehowl's charge"
+phase = [
+  { id = "gormok", name = "Gormok the Impaler" },
+  { id = "worms", name = "Acidmaw and Dreadscale" },
+  { id = "icehowl", name = "Icehowl" },
+]
+
+[[boss.mechanic]]
+id = "toc.beasts.impale"
+name = "Impale"
+kind = "tank_swap_at_stacks"
+phase = "gormok"
+roles = ["tank"]
+spells = { "10" = [66331], "25" = [67477], "10h" = [67478], "25h" = [67479] }
+handled_by = "none"
+explain = "Gormok's Impale leaves a bleed that stacks; tanks swap at about three stacks."
+check = "none"
+stacks = 3
+every = 10
+
+[[boss.mechanic]]
+id = "toc.beasts.snobolds"
+name = "Snobold Vassal"
+kind = "switch_adds"
+phase = "gormok"
+roles = ["melee", "ranged"]
+spells = [66406]
+hits = [66313]
+handled_by = "none"
+explain = "Snobolds jump onto players and throw fire bombs; kill each snobold and step out of the fire."
+check = "toc.beasts.check_avoid"
+every = 20
+
+[[boss.mechanic]]
+id = "toc.beasts.staggering_stomp"
+name = "Staggering Stomp"
+kind = "interrupt"
+phase = "gormok"
+roles = ["healer", "ranged"]
+spells = { "10" = [66330], "25" = [67647], "10h" = [67648], "25h" = [67649] }
+handled_by = "none"
+explain = "His stomp interrupts casters next to him; casters stand back from Gormok."
+check = "none"
+every = 20
+
+[[boss.mechanic]]
+id = "toc.beasts.slime_pool"
+name = "Slime Pool"
+kind = "avoid_ground"
+phase = "worms"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [66883], "25" = [67641], "10h" = [67642], "25h" = [67643] }
+handled_by = "none"
+explain = "The worms leave slime pools that grow; keep fighting away from them."
+check = "toc.beasts.check_avoid"
+every = 12
+
+[[boss.mechanic]]
+id = "toc.beasts.paralytic_toxin"
+name = "Paralytic Toxin"
+kind = "dispel"
+phase = "worms"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [66901, 66824], "25" = [67615, 67612], "10h" = [67616, 67613], "25h" = [67617, 67614] }
+hits = { "10" = [66823], "25" = [67618], "10h" = [67619], "25h" = [67620] }
+handled_by = "none"
+explain = "Acidmaw's toxin slows to a stop; a player with Burning Bile runs to the toxined one to cure it."
+check = "toc.beasts.check_toxin"
+
+[[boss.mechanic]]
+id = "toc.beasts.burning_bile"
+name = "Burning Bile"
+kind = "positional"
+phase = "worms"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [66902, 66879], "25" = [67627, 67624], "10h" = [67628, 67625], "25h" = [67629, 67626] }
+hits = [66869]
+handled_by = "none"
+explain = "Dreadscale's bile burns but cleanses Paralytic Toxin from players it touches; bile carriers seek out the toxined."
+check = "toc.beasts.check_toxin"
+
+[[boss.mechanic]]
+id = "toc.beasts.worms_together"
+name = "Acidmaw and Dreadscale"
+kind = "kill_order"
+phase = "worms"
+roles = ["melee", "ranged"]
+spells = { "10" = [66880, 66818, 66821], "25" = [67606, 66818, 66821], "10h" = [67607, 66818, 66821], "25h" = [67608, 66818, 66821] }
+handled_by = "none"
+explain = "Kill the two worms within a few seconds of each other, or the survivor enrages."
+check = "none"
+
+[[boss.mechanic]]
+id = "toc.beasts.arctic_breath"
+name = "Arctic Breath"
+kind = "move_out_cone"
+phase = "icehowl"
+roles = ["healer", "melee", "ranged"]
+spells = [66688]
+handled_by = "none"
+explain = "Icehowl breathes frost in front of him; only the tank stands there."
+check = "none"
+every = 25
+
+[[boss.mechanic]]
+id = "toc.beasts.trample"
+name = "Trample"
+kind = "avoid_ground"
+phase = "icehowl"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [66683, 66734], "25" = [67660, 66734], "10h" = [67661, 66734], "25h" = [67662, 66734] }
+handled_by = "none"
+explain = "After Massive Crash he glares at a player and charges; everyone runs out of his line, and a miss stuns him."
+check = "toc.beasts.check_avoid"
+every = 40
+
+[[boss.mechanic]]
+id = "toc.beasts.whirl"
+name = "Whirl"
+kind = "spread"
+phase = "icehowl"
+roles = ["melee"]
+spells = { "10" = [67345], "25" = [67663], "10h" = [67664], "25h" = [67665] }
+handled_by = "none"
+explain = "Whirl hits everyone near Icehowl; melee keep their distance when he spins."
+check = "none"
+every = 16
+
+[[boss.check]]
+id = "toc.beasts.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Slime Pool", "Fire Bomb", "Trample"]
+max_hits = 1
+
+[[boss.check]]
+id = "toc.beasts.check_toxin"
+kind = "debuff"
+since = 1
+names = ["Paralytic Toxin", "Burning Bile"]
+max_count = 1
+
+[[boss]]
+index = 1
+name = "Lord Jaraxxus"
+slug = "jaraxxus"
+creatures = [34780]
+script = "boss_lord_jaraxxus.cpp"
+enrage = 600
+call = "jaraxxus: interrupt, kill portals and volcanoes"
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.fel_fireball"
+name = "Fel Fireball"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = { "10" = [66532], "25" = [66963], "10h" = [66964], "25h" = [66965] }
+handled_by = "none"
+explain = "Kick every Fel Fireball he casts at the tank."
+check = "none"
+every = 12
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.legion_flame"
+name = "Legion Flame"
+kind = "run_out_debuff"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [66197], "25" = [68123], "10h" = [68124], "25h" = [68125] }
+hits = { "10" = [66877], "25" = [67070], "10h" = [67071], "25h" = [67072] }
+handled_by = "none"
+explain = "The flamed player runs to the room's edge, trailing fire away from the raid."
+check = "toc.jaraxxus.check_avoid"
+every = 30
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.incinerate_flesh"
+name = "Incinerate Flesh"
+kind = "heal_target"
+roles = ["healer"]
+spells = { "10" = [66237], "25" = [67049], "10h" = [67050], "25h" = [67051] }
+handled_by = "none"
+explain = "Healers burn through the Incinerate Flesh absorb on its target before it ends."
+check = "none"
+every = 22
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.nether_power"
+name = "Nether Power"
+kind = "dispel"
+roles = ["healer", "ranged"]
+spells = { "10" = [66228], "25" = [67106], "10h" = [67107], "25h" = [67108] }
+handled_by = "none"
+explain = "Spellsteal or purge his Nether Power stacks; they raise his spell damage."
+check = "none"
+every = 30
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.infernal_volcano"
+name = "Infernal Volcano"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = { "10" = [66258], "25" = [67901], "10h" = [67902], "25h" = [67903] }
+hits = { "10" = [66252], "25" = [67067], "10h" = [67068], "25h" = [67069] }
+handled_by = "none"
+explain = "Kill the volcano before it spits more infernals; stay out of their eruptions."
+check = "toc.jaraxxus.check_avoid"
+every = 120
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.nether_portal"
+name = "Nether Portal"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = { "10" = [66269], "25" = [67898], "10h" = [67899], "25h" = [67900] }
+handled_by = "none"
+explain = "Burn the portal or tank the Mistress of Pain it brings and kill her away from the healers."
+check = "toc.jaraxxus.check_adds"
+every = 120
+
+[[boss.mechanic]]
+id = "toc.jaraxxus.fel_lightning"
+name = "Fel Lightning"
+kind = "spread"
+roles = ["ranged", "healer"]
+spells = { "10" = [66528], "25" = [67029], "10h" = [67030], "25h" = [67031] }
+handled_by = "none"
+explain = "Fel Lightning chains between nearby players; ranged spread out."
+check = "none"
+every = 12
+
+[[boss.check]]
+id = "toc.jaraxxus.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Legion Flame", "Infernal Eruption"]
+max_hits = 1
+
+[[boss.check]]
+id = "toc.jaraxxus.check_adds"
+kind = "adds"
+since = 1
+entries = [34815, 35262, 35263, 35264, 34826, 35270, 35271, 35272]
+max_share = 0.2
+
+[[boss]]
+index = 2
+name = "the Faction Champions"
+slug = "champions"
+creatures = [34461, 34458]
+script = "boss_faction_champions.cpp"
+melee_behind = false
+no_behind_since = 1
+call = "champions: focus the healers, cc what you can"
+phase = [{ id = "main", name = "Arena fight" }]
+
+[[boss.mechanic]]
+id = "toc.champions.healers_first"
+name = "Kill the healers"
+kind = "kill_order"
+roles = ["melee", "ranged"]
+spells = { "10" = [66112, 66104, 66055, 66066], "25" = [68011, 68023, 68115, 67965], "10h" = [68012, 68024, 68116, 67966], "25h" = [68013, 68025, 68117, 67967] }
+handled_by = "none"
+explain = "Focus the enemy healers one at a time; crowd control the rest."
+check = "none"
+
+[[boss.mechanic]]
+id = "toc.champions.interrupt_heals"
+name = "Interrupt heals"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = { "10" = [66113, 66067, 66086], "25" = [68008, 67968, 67974], "10h" = [68009, 67969, 67975], "25h" = [68010, 67970, 67976] }
+handled_by = "none"
+explain = "Interrupt their big heals and Tranquility."
+check = "none"
+
+[[boss.mechanic]]
+id = "toc.champions.dispel"
+name = "Dispel their buffs"
+kind = "dispel"
+roles = ["healer", "ranged"]
+spells = [66009, 66010, 66063]
+handled_by = "none"
+explain = "Purge or mass dispel shields and Hand of Protection on the focus target."
+check = "none"
+
+[[boss.mechanic]]
+id = "toc.champions.bladestorm"
+name = "Bladestorm and Hellfire"
+kind = "spread"
+roles = ["healer", "ranged"]
+spells = { "10" = [65947, 65816], "25" = [65947, 68145], "10h" = [65947, 68146], "25h" = [65947, 68147] }
+handled_by = "none"
+explain = "Back away from a bladestorming warrior and from Hellfire."
+check = "none"
+
+[[boss]]
+index = 3
+name = "the Twin Val'kyr"
+slug = "twins"
+creatures = [34497, 34496]
+script = "boss_twin_valkyr.cpp"
+enrage = { "10" = 600, "25" = 600, "10h" = 360, "25h" = 360 }
+call = "twins: match your orb colour, swap on vortex"
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "toc.twins.essence"
+name = "Light and Dark Essence"
+kind = "positional"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [65686, 65684], "25" = [67222, 67176], "10h" = [67223, 67177], "25h" = [67224, 67178] }
+handled_by = "none"
+explain = "Everyone takes the essence of the twin they attack; it lets you take matching orbs and vortexes safely."
+check = "none"
+
+[[boss.mechanic]]
+id = "toc.twins.orbs"
+name = "Concentrated Light and Dark"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [65795, 65808], "25" = [67238, 67172], "10h" = [67239, 67173], "25h" = [67240, 67174] }
+handled_by = "none"
+explain = "Touch orbs of your own colour for a buff and dodge the other colour."
+check = "toc.twins.check_avoid"
+every = 45
+
+[[boss.mechanic]]
+id = "toc.twins.vortex"
+name = "Light and Dark Vortex"
+kind = "positional"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [66046, 66058], "25" = [67206, 67182], "10h" = [67207, 67183], "25h" = [67208, 67184] }
+handled_by = "none"
+explain = "When a vortex is cast, everyone with the other essence swaps to the vortex colour before it lands."
+check = "none"
+every = 45
+
+[[boss.mechanic]]
+id = "toc.twins.twin_pact"
+name = "Twin's Pact"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = { "10" = [65876, 65875], "25" = [67306, 67303], "10h" = [67307, 67304], "25h" = [67308, 67305] }
+hits = { "10" = [65858, 65874], "25" = [67259, 67256], "10h" = [67260, 67257], "25h" = [67261, 67258] }
+handled_by = "none"
+explain = "The shielded twin casts a heal; break the shield and interrupt it."
+check = "none"
+every = 45
+
+[[boss.mechanic]]
+id = "toc.twins.twin_spike"
+name = "Twin Spike"
+kind = "soak"
+roles = ["tank"]
+spells = { "10" = [66075, 66069], "25" = [67312, 67309], "10h" = [67313, 67310], "25h" = [67314, 67311] }
+handled_by = "none"
+explain = "Each twin hits her tank hard; tanks keep the twins apart and active mitigation up."
+check = "none"
+every = 9
+
+[[boss.mechanic]]
+id = "toc.twins.touch"
+name = "Touch of Light and Touch of Darkness"
+kind = "positional"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [65950, 66001], "25" = [67296, 67281], "10h" = [67297, 67282], "25h" = [67298, 67283] }
+only = ["10h", "25h"]
+handled_by = "none"
+explain = "On heroic a touch of the other colour burns you until you swap your essence to match it."
+check = "none"
+every = 20
+
+[[boss.check]]
+id = "toc.twins.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Unleashed Light", "Unleashed Dark"]
+max_hits = 2
+
+[[boss]]
+index = 4
+name = "Anub'arak"
+slug = "anubarak"
+creatures = [34564]
+script = "boss_anubarak_trial.cpp"
+enrage = 600
+call = "anub'arak: kite the spike over frost patches"
+phase = [
+  { id = "ground", name = "Ground phase" },
+  { id = "burrow", name = "Burrowed: the spike chases" },
+  { id = "three", name = "Leeching Swarm", hp_below = 30 },
+]
+
+[[boss.mechanic]]
+id = "toc.anubarak.penetrating_cold"
+name = "Penetrating Cold"
+kind = "dispel"
+roles = ["healer"]
+spells = { "10" = [66013], "25" = [67700], "10h" = [68509], "25h" = [68510] }
+handled_by = "none"
+explain = "Penetrating Cold cannot be dispelled; healers keep its targets up."
+check = "toc.anubarak.check_penetrating_cold"
+every = 15
+targets = { "10" = 2, "25" = 5 }
+
+[[boss.mechanic]]
+id = "toc.anubarak.pursuing_spike"
+name = "Pursued by Anub'arak"
+kind = "kite"
+phase = "burrow"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [67574]
+hits = { "10" = [65919], "25" = [67858], "10h" = [67859], "25h" = [67860] }
+handled_by = "none"
+explain = "The marked player runs the spike over a frost patch to stop it; everyone else stays off its path."
+check = "toc.anubarak.check_impale"
+
+[[boss.mechanic]]
+id = "toc.anubarak.frost_spheres"
+name = "Frost Sphere"
+kind = "switch_adds"
+roles = ["ranged"]
+spells = { "10" = [66193], "25" = [67855], "10h" = [67856], "25h" = [67857] }
+handled_by = "none"
+explain = "Ranged shoot frost spheres down where the spike will run; they leave Permafrost patches."
+check = "none"
+
+[[boss.mechanic]]
+id = "toc.anubarak.burrowers"
+name = "Nerubian Burrower"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = { "10" = [66332], "25" = [67755], "10h" = [67756], "25h" = [67757] }
+handled_by = "none"
+explain = "Tank burrowers on Permafrost so they cannot dig in, and kill them."
+check = "none"
+every = 45
+
+[[boss.mechanic]]
+id = "toc.anubarak.freezing_slash"
+name = "Freezing Slash"
+kind = "soak"
+phase = "ground"
+roles = ["tank"]
+spells = [66012]
+handled_by = "none"
+explain = "Freezing Slash roots the tank; healers keep him topped."
+check = "none"
+every = 18
+
+[[boss.mechanic]]
+id = "toc.anubarak.leeching_swarm"
+name = "Leeching Swarm"
+kind = "raid_cooldowns"
+phase = "three"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [66118], "25" = [67630], "10h" = [68646], "25h" = [68647] }
+hits = [66240]
+handled_by = "none"
+explain = "Below thirty percent the swarm drains everyone to heal him; burn him fast with all cooldowns."
+check = "none"
+
+[[boss.mechanic]]
+id = "toc.anubarak.shadow_strike"
+name = "Shadow Strike"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = [66134]
+only = ["10h", "25h"]
+handled_by = "none"
+explain = "On heroic, burrowers wind up Shadow Strike on a player; stun or interrupt it."
+check = "none"
+
+[[boss.check]]
+id = "toc.anubarak.check_penetrating_cold"
+kind = "debuff"
+since = 1
+names = ["Penetrating Cold"]
+max_count = 1
+
+[[boss.check]]
+id = "toc.anubarak.check_impale"
+kind = "avoid"
+since = 1
+names = ["Impale"]

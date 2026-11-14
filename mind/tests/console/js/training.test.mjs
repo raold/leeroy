@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adaptText, gateText, changeText, deathsText, coverageText, evidenceNotes, trialText, scopeText }
+import { adaptText, gateText, changeText, deathsText, coverageText, evidenceNotes, trialText, scopeText, playbookGroups, playbookTotals }
   from "../../../leeroy_mind/console/static/js/trainmodel.mjs";
 
 test("days until tactics may adapt", () => {
@@ -46,4 +46,17 @@ test("a trial's or a card group's scope reads as its boss and mode", () => {
   assert.equal(scopeText({ scope: "631:0:1", boss: "Lord Marrowgar", mode: "25-man" }), "Lord Marrowgar · 25-man");
   assert.equal(scopeText({ scope: "odd", boss: "odd", mode: "" }), "odd");
   assert.equal(scopeText({ scope: "631:0:1" }), "631:0:1");
+});
+test("the raid playbooks read as raids, bosses and mechanics", () => {
+  const v = { totals: { raids: 1, bosses: 1, mechanics: 2, playerbots: 1, checked: 1 },
+    raids: [{ name: "Naxxramas", difficulties: ["10", "25"], bosses: [{ name: "Gluth", call: null, mechanics: [
+      { name: "Mortal Wound", kind: "tank_swap_at_stacks", roles: ["tank"], only: [], handled_by: "playerbots", explain: "Swap." },
+      { name: "Enrage", kind: "dispel", roles: ["ranged"], only: ["25"], handled_by: "none", explain: "Soothe." }] }] }] };
+  const g = playbookGroups(v);
+  assert.equal(g[0].title, "Naxxramas (10, 25)");
+  assert.equal(g[0].bosses[0].detail, "2 mechanics, 1 handled by playerbots");
+  assert.deepEqual(g[0].bosses[0].mechanics.map(m => [m.tag, m.who, m.stock]),
+    [["tank swap", "tank", true], ["dispel", "ranged · only 25", false]]);
+  assert.equal(playbookTotals(v), "1 raid · 1 boss · 2 mechanics · 1 handled by playerbots · 1 scored by the training ground");
+  assert.deepEqual(playbookGroups(null), []);
 });

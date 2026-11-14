@@ -12,7 +12,7 @@ from leeroy_mind.guild.loot import _get, _once
 
 from . import protocol, store
 from .applier import Applier, ApplierState
-from .checks import CHECKS_VERSION, _restore, run_checks
+from .checks import _restore, checks_version, run_checks
 from .config import load_training_config
 from .experiment_lifecycle import ExperimentLifecycle
 from .experiments import Experimenter
@@ -58,14 +58,20 @@ def load_book(data_dir):
     return load_spellbook(folder, world=world)
 
 
-async def rescore_stored(ports, book):
+def playbooks_on(ports) -> bool:
+    """[training] playbooks: score the raid playbooks' version 2 checks too."""
+    return getattr(getattr(ports, "cfg", None), "playbooks", False) is True
+
+
+async def rescore_stored(ports, book, *, playbooks=None):
     """Checks invalidate scores; always restore the matching score in this pass."""
+    playbooks = playbooks_on(ports) if playbooks is None else playbooks
     count = 0
     for row in store.pull_rows(ports.conn, scoreable=True):
-        if row["checks_version"] >= CHECKS_VERSION and row["score"] is not None:
+        if row["checks_version"] >= checks_version(playbooks) and row["score"] is not None:
             continue
         record, roles = _restore(ports.conn, row)
-        result = run_checks(record, roles, book)
+        result = run_checks(record, roles, book, playbooks=playbooks)
         if await score_pull(ports, record, None, result) is not None:
             count += 1
         await asyncio.sleep(0)
@@ -116,7 +122,8 @@ class TrainingGround:
         return self._book
 
     def watch_ids(self):
-        return tuple(sorted({id for name in watch_names() for id in self._book.ids(name)})) if self._book else ()
+        return (tuple(sorted({id for name in watch_names(playbooks_on(self.ports)) for id in self._book.ids(name)}))
+                if self._book else ())
 
     def training_members(self):
         return self.jobs.members()
@@ -231,7 +238,7 @@ class TrainingGround:
         if self._book is None:
             return
         roles = {row["guid"]: row["role"] for row in store.member_rows(self.ports.conn, rec.header.id)}
-        result = run_checks(rec, roles, self._book)
+        result = run_checks(rec, roles, self._book, playbooks=playbooks_on(self.ports))
         await score_pull(self.ports, rec, ctx, result)
         await self.listener.after_pull(rec, ctx, result)
 

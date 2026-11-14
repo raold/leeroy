@@ -1,0 +1,1076 @@
+# Naxxramas playbooks. Spell ids, timers and phases come from this server's boss scripts
+# (script_dir); the explanations are our own words. Per-difficulty spell ids follow the core's
+# spell difficulty table. Every check here is since = 2: the training ground scores them only
+# with [training] playbooks on.
+map = 533
+key = "naxx"
+difficulties = ["10", "25"]
+script_dir = "src/server/scripts/Northrend/Naxxramas"
+playerbots_dir = "src/Ai/Raid/Naxx"
+
+[[boss]]
+index = 0
+name = "Patchwerk"
+slug = "patchwerk"
+creatures = [16028]
+script = "boss_patchwerk.cpp"
+enrage = 360
+phase = [
+  { id = "main", name = "Tank and spank" },
+  { id = "frenzy", name = "Frenzy", hp_below = 5 },
+]
+
+[[boss.mechanic]]
+id = "naxx.patchwerk.hateful_strike"
+name = "Hateful Strike"
+kind = "soak"
+roles = ["tank"]
+spells = { "10" = [41926], "25" = [59192] }
+handled_by = "none"
+explain = "Hateful Strike hits the highest-threat player in melee beside the main tank; two or three tanks stand in melee to soak it."
+check = "none"
+every = 1
+targets = { "10" = 1, "25" = 2 }
+
+[[boss.mechanic]]
+id = "naxx.patchwerk.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [26662]
+hits = [32309]
+handled_by = "none"
+explain = "He berserks at six minutes and starts slime bolting the raid; it is a damage race."
+check = "none"
+first = 360
+
+[[boss.mechanic]]
+id = "naxx.patchwerk.melee_position"
+name = "Melee position"
+kind = "positional"
+roles = ["melee"]
+spells = { "10" = [41926], "25" = [59192] }
+handled_by = "none"
+explain = "Damage dealers in melee stand behind him so only the soak tanks are in front."
+check = "behind"
+
+[[boss]]
+index = 1
+name = "Grobbulus"
+slug = "grobbulus"
+creatures = [15931]
+script = "boss_grobbulus.cpp"
+enrage = { "10" = 720, "25" = 540 }
+phase = [{ id = "main", name = "Kite around the room" }]
+
+[[boss.mechanic]]
+id = "naxx.grobbulus.mutating_injection"
+name = "Mutating Injection"
+kind = "run_out_debuff"
+roles = ["healer", "melee", "ranged"]
+spells = [28169]
+hits = [28206]
+handled_by = "playerbots"
+playerbots = "grobbulus move away; grobbulus go behind the boss"
+explain = "An injected player walks away from the raid before it bursts into a poison cloud."
+check = "naxx.grobbulus.check_avoid"
+first = 20
+duration = 10
+
+[[boss.mechanic]]
+id = "naxx.grobbulus.poison_cloud"
+name = "Poison Cloud"
+kind = "kite"
+roles = ["tank"]
+spells = [28240]
+hits = { "10" = [28158], "25" = [54362] }
+handled_by = "playerbots"
+playerbots = "rotate grobbulus"
+explain = "The tank drags him around the room's rim so his poison clouds trail behind, away from the raid."
+check = "naxx.grobbulus.check_avoid"
+first = 15
+every = 15
+
+[[boss.mechanic]]
+id = "naxx.grobbulus.slime_spray"
+name = "Slime Spray"
+kind = "move_out_cone"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [28157], "25" = [54364] }
+handled_by = "none"
+explain = "His spray covers the area in front of him and spawns slimes from those it hits; only the tank faces him."
+check = "naxx.grobbulus.check_avoid"
+first = 10
+every = 20
+
+[[boss.mechanic]]
+id = "naxx.grobbulus.fallout_slime"
+name = "Fallout Slime"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = { "10" = [28157], "25" = [54364] }
+handled_by = "none"
+explain = "Kill the slimes the spray spawns before they reach the healers."
+check = "none"
+
+[[boss.check]]
+id = "naxx.grobbulus.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Slime Spray", "Mutagen Explosion", "Poison Cloud"]
+max_hits = 1
+
+[[boss]]
+index = 2
+name = "Gluth"
+slug = "gluth"
+creatures = [15932]
+script = "boss_gluth.cpp"
+enrage = 360
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "naxx.gluth.mortal_wound"
+name = "Mortal Wound"
+kind = "tank_swap_at_stacks"
+roles = ["tank"]
+spells = [25646]
+handled_by = "playerbots"
+playerbots = "taunt spell (gluth main tank mortal wound)"
+explain = "Mortal Wound cuts the tank's healing with each stack; the other tank taunts by about five stacks."
+check = "naxx.gluth.check_mortal_wound"
+first = 10
+every = 10
+stacks = 5
+
+[[boss.mechanic]]
+id = "naxx.gluth.zombie_chow"
+name = "Zombie Chow"
+kind = "kite"
+roles = ["tank", "ranged"]
+spells = [28404]
+handled_by = "playerbots"
+playerbots = "gluth choose target; gluth position; gluth slowdown"
+explain = "Zombies stream in every ten seconds; slow and kite them so he cannot eat them to heal."
+check = "naxx.gluth.check_adds"
+every = 10
+
+[[boss.mechanic]]
+id = "naxx.gluth.decimate"
+name = "Decimate"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = { "10" = [28374], "25" = [54426] }
+hits = [28375]
+handled_by = "playerbots"
+playerbots = "gluth choose target"
+explain = "Decimate drops everyone to five percent health; heal up and kill the weakened zombies at once."
+check = "none"
+every = { "10" = 110, "25" = 90 }
+
+[[boss.mechanic]]
+id = "naxx.gluth.enrage"
+name = "Enrage"
+kind = "dispel"
+roles = ["ranged"]
+spells = { "10" = [28371], "25" = [54427] }
+handled_by = "none"
+explain = "Tranquilize or soothe his enrage as soon as it lands; it raises his damage on the tank."
+check = "none"
+first = 22
+every = 22
+
+[[boss.check]]
+id = "naxx.gluth.check_mortal_wound"
+kind = "debuff"
+since = 2
+names = ["Mortal Wound"]
+roles = ["tank"]
+max_stack = 5
+
+[[boss.check]]
+id = "naxx.gluth.check_adds"
+kind = "adds"
+since = 2
+entries = [16360, 30303]
+max_share = 0.3
+
+[[boss]]
+index = 3
+name = "Noth the Plaguebringer"
+slug = "noth"
+creatures = [15954]
+script = "boss_noth.cpp"
+phase = [
+  { id = "ground", name = "Ground phase" },
+  { id = "balcony", name = "Balcony phase: waves of adds", after = 110 },
+]
+
+[[boss.mechanic]]
+id = "naxx.noth.curse"
+name = "Curse of the Plaguebringer"
+kind = "dispel"
+phase = "ground"
+roles = ["healer", "ranged"]
+spells = { "10" = [29213], "25" = [54835] }
+handled_by = "none"
+explain = "Remove his curse at once; left on, it bursts and damages everyone near the victim."
+check = "none"
+first = 15
+every = 25
+targets = { "10" = 3, "25" = 10 }
+
+[[boss.mechanic]]
+id = "naxx.noth.blink"
+name = "Blink"
+kind = "positional"
+phase = "ground"
+roles = ["tank"]
+spells = { "10" = [29208, 29212], "25" = [29208, 54814] }
+only = ["25"]
+handled_by = "none"
+explain = "He blinks away and drops his threat; the tanks pick him up again where he lands."
+check = "none"
+first = 26
+every = 30
+
+[[boss.mechanic]]
+id = "naxx.noth.plagued_adds"
+name = "Plagued Warriors, Champions and Guardians"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [29237]
+handled_by = "none"
+explain = "Adds rise from the corners every thirty seconds; tanks gather them and the raid kills them."
+check = "naxx.noth.check_adds"
+every = 30
+
+[[boss.check]]
+id = "naxx.noth.check_adds"
+kind = "adds"
+since = 2
+entries = [16984, 29632, 16983, 29633, 16981, 29634]
+max_share = 0.25
+
+[[boss]]
+index = 4
+name = "Heigan the Unclean"
+slug = "heigan"
+creatures = [15936]
+script = "boss_heigan.cpp"
+melee_behind = false
+no_behind_since = 2
+phase = [
+  { id = "slow", name = "Slow dance on the floor" },
+  { id = "fast", name = "Fast dance: he is on his platform", after = 90 },
+]
+
+[[boss.mechanic]]
+id = "naxx.heigan.eruption"
+name = "Eruption"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [29371]
+handled_by = "playerbots"
+playerbots = "heigan dance melee; heigan dance ranged"
+explain = "The floor erupts in sections that sweep back and forth; move into the section that just erupted."
+check = "naxx.heigan.check_avoid"
+every = 10
+
+[[boss.mechanic]]
+id = "naxx.heigan.fast_dance"
+name = "Plague Cloud"
+kind = "avoid_ground"
+phase = "fast"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [29350]
+handled_by = "playerbots"
+playerbots = "heigan dance melee; heigan dance ranged"
+explain = "On his platform he fills the room with plague and the sections erupt every four seconds; keep dancing."
+check = "naxx.heigan.check_avoid"
+duration = 45
+every = 4
+
+[[boss.mechanic]]
+id = "naxx.heigan.decrepit_fever"
+name = "Decrepit Fever"
+kind = "dispel"
+phase = "slow"
+roles = ["healer"]
+spells = { "10" = [29998], "25" = [55011] }
+handled_by = "none"
+explain = "Cure the disease he spreads; it halves healing on its targets."
+check = "none"
+first = 17
+every = 23
+
+[[boss.mechanic]]
+id = "naxx.heigan.spell_disruption"
+name = "Spell Disruption"
+kind = "positional"
+phase = "slow"
+roles = ["healer", "ranged"]
+spells = [29310]
+handled_by = "none"
+explain = "His disruption slows casts near him; healers and ranged stay on the far platform."
+check = "none"
+every = 10
+
+[[boss.check]]
+id = "naxx.heigan.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Eruption"]
+max_hits = 1
+
+[[boss]]
+index = 5
+name = "Loatheb"
+slug = "loatheb"
+creatures = [16011]
+script = "boss_loatheb.cpp"
+enrage = 720
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "naxx.loatheb.necrotic_aura"
+name = "Necrotic Aura"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = [55593]
+handled_by = "playerbots"
+playerbots = "loatheb position (Loatheb multiplier holds heals)"
+explain = "Healing is blocked for seventeen of every twenty seconds; healers land their heals in the short window."
+check = "none"
+first = 10
+every = 20
+duration = 17
+
+[[boss.mechanic]]
+id = "naxx.loatheb.spores"
+name = "Summon Spore"
+kind = "stack"
+roles = ["melee", "ranged"]
+spells = [29234]
+handled_by = "playerbots"
+playerbots = "loatheb choose target"
+explain = "A spore spawns every thirty-five seconds; a group stands in its burst for a critical-strike buff."
+check = "none"
+first = 15
+every = 35
+
+[[boss.mechanic]]
+id = "naxx.loatheb.inevitable_doom"
+name = "Inevitable Doom"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [29204], "25" = [55052] }
+handled_by = "none"
+explain = "Doom lands on everyone and hits hard when it ends; time healing cooldowns to it, faster after five minutes."
+check = "none"
+first = 120
+every = 30
+
+[[boss.mechanic]]
+id = "naxx.loatheb.deathbloom"
+name = "Deathbloom"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [29865], "25" = [55053] }
+handled_by = "none"
+explain = "Deathbloom ticks and then blooms on everyone; top the raid before it blooms."
+check = "none"
+first = 5
+every = 30
+
+[[boss]]
+index = 6
+name = "Anub'Rekhan"
+slug = "anubrekhan"
+creatures = [15956]
+script = "boss_anubrekhan.cpp"
+enrage = 600
+phase = [
+  { id = "main", name = "Main fight" },
+  { id = "swarm", name = "Locust Swarm", after = 70 },
+]
+
+[[boss.mechanic]]
+id = "naxx.anubrekhan.locust_swarm"
+name = "Locust Swarm"
+kind = "kite"
+phase = "swarm"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [28785], "25" = [54021] }
+hits = [28786]
+handled_by = "playerbots"
+playerbots = "anub'rekhan position"
+explain = "The tank kites him around the room during Locust Swarm while everyone stays out of the swarm."
+check = "naxx.anubrekhan.check_avoid"
+every = 90
+duration = 20
+
+[[boss.mechanic]]
+id = "naxx.anubrekhan.impale"
+name = "Impale"
+kind = "move_out_cone"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [28783], "25" = [56090] }
+handled_by = "none"
+explain = "Impale strikes in a line toward a player; do not stand between him and others."
+check = "naxx.anubrekhan.check_avoid"
+first = 15
+every = 20
+
+[[boss.mechanic]]
+id = "naxx.anubrekhan.crypt_guards"
+name = "Crypt Guard"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [29105, 28864]
+handled_by = "none"
+explain = "An off-tank takes the crypt guards and the raid kills them away from the swarm path."
+check = "naxx.anubrekhan.check_adds"
+
+[[boss.check]]
+id = "naxx.anubrekhan.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Locust Swarm", "Impale"]
+max_hits = 2
+
+[[boss.check]]
+id = "naxx.anubrekhan.check_adds"
+kind = "adds"
+since = 2
+entries = [16573, 29256]
+max_share = 0.2
+
+[[boss]]
+index = 7
+name = "Grand Widow Faerlina"
+slug = "faerlina"
+creatures = [15953]
+script = "boss_faerlina.cpp"
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "naxx.faerlina.rain_of_fire"
+name = "Rain of Fire"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [28794], "25" = [54099] }
+handled_by = "playerbots"
+playerbots = "avoid aoe (faerlina)"
+explain = "Walk out of Rain of Fire as soon as it starts under you."
+check = "naxx.faerlina.check_avoid"
+first = 8
+every = 13
+
+[[boss.mechanic]]
+id = "naxx.faerlina.frenzy"
+name = "Frenzy"
+kind = "use_object"
+roles = ["healer"]
+spells = { "10" = [28798], "25" = [54100] }
+hits = { "10" = [28732], "25" = [54097] }
+handled_by = "none"
+explain = "When she frenzies, a worshipper is killed or sacrificed next to her; Widow's Embrace ends the frenzy."
+check = "none"
+first = 60
+every = 60
+
+[[boss.mechanic]]
+id = "naxx.faerlina.poison_bolt_volley"
+name = "Poison Bolt Volley"
+kind = "dispel"
+roles = ["healer"]
+spells = { "10" = [28796], "25" = [54098] }
+handled_by = "none"
+explain = "Her volley poisons players near the tank; cure poisons and keep ranged out of reach."
+check = "none"
+first = 7
+every = 11
+
+[[boss.mechanic]]
+id = "naxx.faerlina.followers"
+name = "Worshippers and Followers"
+kind = "kill_order"
+roles = ["tank", "melee", "ranged"]
+spells = { "10" = [28732], "25" = [54097] }
+handled_by = "none"
+explain = "Tank the followers away from her and save the worshippers for her frenzies."
+check = "naxx.faerlina.check_adds"
+
+[[boss.check]]
+id = "naxx.faerlina.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Rain of Fire"]
+max_hits = 1
+
+[[boss.check]]
+id = "naxx.faerlina.check_adds"
+kind = "adds"
+since = 2
+entries = [16506, 29274, 16505, 29273]
+max_share = 0.2
+
+[[boss]]
+index = 8
+name = "Maexxna"
+slug = "maexxna"
+creatures = [15952]
+script = "boss_maexxna.cpp"
+phase = [
+  { id = "main", name = "Main fight" },
+  { id = "frenzy", name = "Frenzy", hp_below = 30 },
+]
+
+[[boss.mechanic]]
+id = "naxx.maexxna.web_wrap"
+name = "Web Wrap"
+kind = "switch_adds"
+roles = ["ranged"]
+spells = [28622]
+handled_by = "playerbots"
+playerbots = "rear flank; avoid aoe (maexxna)"
+explain = "Wrapped players hang on the wall; ranged break the cocoons to free them."
+check = "naxx.maexxna.check_adds"
+first = 20
+every = 40
+targets = { "10" = 1, "25" = 2 }
+
+[[boss.mechanic]]
+id = "naxx.maexxna.web_spray"
+name = "Web Spray"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [29484], "25" = [54125] }
+handled_by = "none"
+explain = "Web Spray stuns everyone for several seconds; shield and heal-over-time the tank right before it."
+check = "none"
+first = 40
+every = 40
+
+[[boss.mechanic]]
+id = "naxx.maexxna.spiderlings"
+name = "Maexxna Spiderling"
+kind = "switch_adds"
+roles = ["ranged"]
+spells = { "10" = [29484], "25" = [54125] }
+handled_by = "none"
+explain = "Kill the spiderling swarm with area damage as it hatches."
+check = "naxx.maexxna.check_adds"
+first = 30
+every = 40
+
+[[boss.mechanic]]
+id = "naxx.maexxna.necrotic_poison"
+name = "Necrotic Poison"
+kind = "dispel"
+roles = ["healer"]
+spells = { "10" = [54121], "25" = [28776] }
+handled_by = "none"
+explain = "Cure the poison on the tank at once; it cuts healing taken sharply."
+check = "none"
+first = 5
+every = 30
+
+[[boss.mechanic]]
+id = "naxx.maexxna.poison_shock"
+name = "Poison Shock"
+kind = "move_out_cone"
+roles = ["melee"]
+spells = { "10" = [28741], "25" = [54122] }
+handled_by = "playerbots"
+playerbots = "rear flank"
+explain = "Her poison shock hits around her front; melee attack from behind."
+check = "behind"
+first = 10
+every = 10
+
+[[boss.check]]
+id = "naxx.maexxna.check_adds"
+kind = "adds"
+since = 2
+entries = [17055, 29279, 16486, 30183]
+max_share = 0.2
+
+[[boss]]
+index = 9
+name = "Thaddius"
+slug = "thaddius"
+creatures = [15928, 15929, 15930]
+script = "boss_thaddius.cpp"
+enrage = 360
+melee_behind = false
+no_behind_since = 2
+phase = [
+  { id = "pets", name = "Stalagg and Feugen" },
+  { id = "thaddius", name = "Thaddius" },
+]
+
+[[boss.mechanic]]
+id = "naxx.thaddius.pets_together"
+name = "Stalagg and Feugen"
+kind = "kill_order"
+phase = "pets"
+roles = ["tank", "melee", "ranged"]
+spells = { "10" = [54529, 28135], "25" = [28134, 54528] }
+handled_by = "playerbots"
+playerbots = "thaddius attack nearest pet"
+explain = "Split the raid across both platforms and kill the two within seconds of each other, or the first revives."
+check = "none"
+
+[[boss.mechanic]]
+id = "naxx.thaddius.magnetic_pull"
+name = "Magnetic Pull"
+kind = "tank_swap_at_stacks"
+phase = "pets"
+roles = ["tank"]
+spells = [28337]
+handled_by = "playerbots"
+playerbots = "taunt spell (thaddius phase pet lose aggro)"
+explain = "Every twenty seconds the tanks are swapped between platforms; each taunts its new add at once."
+check = "none"
+every = 20
+
+[[boss.mechanic]]
+id = "naxx.thaddius.polarity_shift"
+name = "Polarity Shift"
+kind = "positional"
+phase = "thaddius"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [28089]
+hits = [28059, 28084]
+handled_by = "playerbots"
+playerbots = "thaddius move polarity"
+explain = "After each shift, positive charges go to one side and negative to the other; never stand with the opposite charge."
+check = "none"
+first = 20
+every = 30
+
+[[boss.mechanic]]
+id = "naxx.thaddius.ball_lightning"
+name = "Ball Lightning"
+kind = "positional"
+phase = "thaddius"
+roles = ["tank", "melee"]
+spells = [28299]
+handled_by = "none"
+explain = "He throws ball lightning when nobody is in melee range; keep the tank and melee on him."
+check = "none"
+
+[[boss.mechanic]]
+id = "naxx.thaddius.platform_jump"
+name = "Platform jump"
+kind = "positional"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [28136]
+handled_by = "playerbots"
+playerbots = "thaddius move to platform"
+explain = "When the pets die, everyone jumps down to his platform before he wakes."
+check = "none"
+
+[[boss]]
+index = 10
+name = "Instructor Razuvious"
+slug = "razuvious"
+creatures = [16061]
+script = "boss_razuvious.cpp"
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "naxx.razuvious.understudies"
+name = "Obedience Crystal"
+kind = "use_object"
+roles = ["tank"]
+spells = [29060]
+handled_by = "playerbots"
+playerbots = "razuvious use obedience crystal"
+explain = "Mind-controlled understudies tank him, taunting and shielding in turn; players never take his strike."
+check = "none"
+
+[[boss.mechanic]]
+id = "naxx.razuvious.unbalancing_strike"
+name = "Unbalancing Strike"
+kind = "soak"
+roles = ["tank"]
+spells = [55470]
+handled_by = "playerbots"
+playerbots = "razuvious use obedience crystal"
+explain = "His strike would kill a player tank; an understudy shields before it lands."
+check = "none"
+first = 20
+every = 20
+
+[[boss.mechanic]]
+id = "naxx.razuvious.disrupting_shout"
+name = "Disrupting Shout"
+kind = "positional"
+roles = ["healer", "ranged"]
+spells = { "10" = [55543], "25" = [29107] }
+handled_by = "none"
+explain = "His shout burns mana around him; casters stay at range."
+check = "none"
+first = 15
+every = 15
+
+[[boss.mechanic]]
+id = "naxx.razuvious.jagged_knife"
+name = "Jagged Knife"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = [55550]
+handled_by = "none"
+explain = "He throws a bleeding knife at a random player; heal the bleed."
+check = "none"
+first = 10
+every = 10
+
+[[boss]]
+index = 11
+name = "Gothik the Harvester"
+slug = "gothik"
+creatures = [16060]
+script = "boss_gothik.cpp"
+melee_behind = false
+no_behind_since = 2
+phase = [
+  { id = "waves", name = "Waves of the living and the dead" },
+  { id = "gothik", name = "Gothik comes down", after = 274 },
+]
+
+[[boss.mechanic]]
+id = "naxx.gothik.split_sides"
+name = "Living and dead sides"
+kind = "positional"
+phase = "waves"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [27892, 27928, 27935]
+handled_by = "none"
+explain = "Split the raid across the gate: the live side kills the living, and each kill sends a spirit to the dead side."
+check = "none"
+
+[[boss.mechanic]]
+id = "naxx.gothik.riders"
+name = "Unrelenting Rider"
+kind = "kill_order"
+phase = "waves"
+roles = ["melee", "ranged"]
+spells = { "10" = [27935, 27831], "25" = [27935, 55638] }
+handled_by = "none"
+explain = "Riders hit hardest; kill them first on either side, and interrupt their volleys."
+check = "none"
+
+[[boss.mechanic]]
+id = "naxx.gothik.harvest_soul"
+name = "Harvest Soul"
+kind = "enrage_timer"
+phase = "gothik"
+roles = ["melee", "ranged"]
+spells = [28679]
+handled_by = "none"
+explain = "Once he comes down, each Harvest Soul lowers everyone's stats; kill him quickly."
+check = "none"
+every = 15
+
+[[boss.mechanic]]
+id = "naxx.gothik.teleport"
+name = "Teleport"
+kind = "positional"
+phase = "gothik"
+roles = ["tank"]
+spells = [28025, 28026]
+handled_by = "none"
+explain = "He jumps sides every twenty seconds; a tank waits on each side."
+check = "none"
+every = 20
+
+[[boss]]
+index = 12
+name = "the Four Horsemen"
+slug = "horsemen"
+creatures = [30549, 16063, 16065, 16064]
+script = "boss_four_horsemen.cpp"
+enrage = 600
+melee_behind = false
+no_behind_since = 2
+phase = [{ id = "main", name = "Four corners" }]
+
+[[boss.mechanic]]
+id = "naxx.horsemen.marks"
+name = "Marks of the Horsemen"
+kind = "tank_swap_at_stacks"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [28832, 28833, 28834, 28835]
+hits = [28836]
+handled_by = "playerbots"
+playerbots = "four horsemen attract alternatively; four horsemen attack in order"
+explain = "Each horseman's mark stacks and hurts more; tanks and the raid rotate corners before three or four stacks."
+check = "naxx.horsemen.check_marks"
+first = 24
+every = 12
+stacks = 4
+
+[[boss.mechanic]]
+id = "naxx.horsemen.void_zone"
+name = "Void Zone"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [28863], "25" = [57463] }
+handled_by = "none"
+explain = "Blaumeux drops void zones; step out of them."
+check = "naxx.horsemen.check_avoid"
+every = 15
+
+[[boss.mechanic]]
+id = "naxx.horsemen.meteor"
+name = "Meteor"
+kind = "stack"
+roles = ["tank", "melee"]
+spells = { "10" = [28884], "25" = [57467] }
+handled_by = "none"
+explain = "Korth'azz's meteor is split among those near his target; melee stack on his tank to share it."
+check = "none"
+every = 15
+
+[[boss.mechanic]]
+id = "naxx.horsemen.holy_wrath"
+name = "Holy Wrath"
+kind = "spread"
+roles = ["healer", "ranged"]
+spells = { "10" = [28883], "25" = [57466] }
+handled_by = "none"
+explain = "Zeliek's Holy Wrath chains between players; those on him spread out."
+check = "none"
+every = 15
+
+[[boss.mechanic]]
+id = "naxx.horsemen.unholy_shadow"
+name = "Unholy Shadow"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [28882], "25" = [57369] }
+handled_by = "none"
+explain = "Rivendare's shadow hits his tank hard; keep a healer on that corner."
+check = "none"
+every = 15
+
+[[boss.check]]
+id = "naxx.horsemen.check_marks"
+kind = "debuff"
+since = 2
+names = ["Mark of Korth'azz", "Mark of Blaumeux", "Mark of Rivendare", "Mark of Zeliek"]
+max_stack = 4
+
+[[boss.check]]
+id = "naxx.horsemen.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Void Zone"]
+max_hits = 1
+
+[[boss]]
+index = 13
+name = "Sapphiron"
+slug = "sapphiron"
+creatures = [15989]
+script = "boss_sapphiron.cpp"
+enrage = 900
+phase = [
+  { id = "ground", name = "Ground phase" },
+  { id = "air", name = "Air phase: ice blocks and Frost Breath", after = 45 },
+]
+
+[[boss.mechanic]]
+id = "naxx.sapphiron.frost_breath"
+name = "Frost Breath"
+kind = "los"
+phase = "air"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [30101]
+hits = [28524]
+handled_by = "playerbots"
+playerbots = "sapphiron flight position"
+explain = "In the air he entombs players in ice; everyone hides behind an ice block before his breath lands."
+check = "naxx.sapphiron.check_avoid"
+
+[[boss.mechanic]]
+id = "naxx.sapphiron.icebolt"
+name = "Icebolt"
+kind = "spread"
+phase = "air"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [28526]
+hits = [28522]
+handled_by = "playerbots"
+playerbots = "sapphiron flight position"
+explain = "Spread out when he lifts off so each ice block holds one player and gives cover to many."
+check = "none"
+targets = { "10" = 2, "25" = 3 }
+
+[[boss.mechanic]]
+id = "naxx.sapphiron.blizzard"
+name = "Chill"
+kind = "avoid_ground"
+phase = "ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [28560]
+hits = { "10" = [28547], "25" = [55699] }
+handled_by = "playerbots"
+playerbots = "sapphiron ground position"
+explain = "Blizzards drift across the floor; step out of them."
+check = "naxx.sapphiron.check_avoid"
+first = 17
+every = { "10" = 8, "25" = 6.5 }
+
+[[boss.mechanic]]
+id = "naxx.sapphiron.life_drain"
+name = "Life Drain"
+kind = "dispel"
+phase = "ground"
+roles = ["healer", "ranged"]
+spells = { "10" = [28542], "25" = [55665] }
+handled_by = "none"
+explain = "Remove the Life Drain curse fast; it heals him."
+check = "none"
+first = 17
+every = 24
+targets = { "10" = 2, "25" = 5 }
+
+[[boss.mechanic]]
+id = "naxx.sapphiron.tail_sweep"
+name = "Tail Sweep and Cleave"
+kind = "positional"
+phase = "ground"
+roles = ["melee"]
+spells = { "10" = [55697, 19983], "25" = [55696, 19983] }
+handled_by = "playerbots"
+playerbots = "sapphiron ground position"
+explain = "He cleaves in front and sweeps behind; melee stand at his sides."
+check = "none"
+every = 10
+
+[[boss.check]]
+id = "naxx.sapphiron.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Chill", "Frost Breath"]
+max_hits = 1
+
+[[boss]]
+index = 14
+name = "Kel'Thuzad"
+slug = "kelthuzad"
+creatures = [15990]
+script = "boss_kelthuzad.cpp"
+enrage = 900
+phase = [
+  { id = "adds", name = "Phase one: the alcoves' adds" },
+  { id = "kelthuzad", name = "Phase two: Kel'Thuzad", after = 228 },
+  { id = "guardians", name = "Phase three: Guardians of Icecrown", hp_below = 45 },
+]
+
+[[boss.mechanic]]
+id = "naxx.kelthuzad.phase_one_adds"
+name = "Soldiers, Abominations and Soul Weavers"
+kind = "switch_adds"
+phase = "adds"
+roles = ["tank", "melee", "ranged"]
+spells = [29423]
+handled_by = "playerbots"
+playerbots = "kel'thuzad position; kel'thuzad choose target"
+explain = "Hold the room's center; ranged shoot soldiers before they reach the raid and tanks take the abominations."
+check = "none"
+duration = 228
+
+[[boss.mechanic]]
+id = "naxx.kelthuzad.frostbolt"
+name = "Frostbolt"
+kind = "interrupt"
+phase = "kelthuzad"
+roles = ["melee", "ranged"]
+spells = { "10" = [28478], "25" = [55802] }
+handled_by = "none"
+explain = "Interrupt his single-target Frostbolt every time; it hits the tank very hard."
+check = "none"
+cast = 2
+every = 6
+
+[[boss.mechanic]]
+id = "naxx.kelthuzad.shadow_fissure"
+name = "Shadow Fissure"
+kind = "avoid_ground"
+phase = "kelthuzad"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [27810]
+hits = [27812]
+handled_by = "playerbots"
+playerbots = "kel'thuzad position"
+explain = "A red fissure opens under a player and blasts a few seconds later; move off it at once."
+check = "naxx.kelthuzad.check_avoid"
+first = 25
+every = 25
+
+[[boss.mechanic]]
+id = "naxx.kelthuzad.detonate_mana"
+name = "Detonate Mana"
+kind = "run_out_debuff"
+phase = "kelthuzad"
+roles = ["healer", "ranged"]
+spells = [27819]
+hits = [27820]
+handled_by = "none"
+explain = "A caster with Detonate Mana steps away from others so the burst hits only them."
+check = "none"
+first = 30
+every = 30
+
+[[boss.mechanic]]
+id = "naxx.kelthuzad.frost_blast"
+name = "Frost Blast"
+kind = "raid_cooldowns"
+phase = "kelthuzad"
+roles = ["healer"]
+spells = [27808]
+handled_by = "none"
+explain = "Frost Blast freezes players next to each other and drains their health; heal them out fast and keep spread."
+check = "none"
+first = 45
+every = 45
+
+[[boss.mechanic]]
+id = "naxx.kelthuzad.chains"
+name = "Chains of Kel'Thuzad"
+kind = "use_object"
+phase = "kelthuzad"
+roles = ["healer", "melee", "ranged"]
+spells = [28410]
+only = ["25"]
+handled_by = "none"
+explain = "He mind controls players; crowd control them without killing them until it fades."
+check = "none"
+first = 90
+every = 90
+
+[[boss.mechanic]]
+id = "naxx.kelthuzad.guardians"
+name = "Guardian of Icecrown"
+kind = "switch_adds"
+phase = "guardians"
+roles = ["tank"]
+spells = [28470]
+handled_by = "playerbots"
+playerbots = "kel'thuzad choose target"
+explain = "Guardians arrive below forty-five percent; an off-tank picks each up and nobody else touches them."
+check = "none"
+targets = { "10" = 2, "25" = 4 }
+
+[[boss.check]]
+id = "naxx.kelthuzad.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Void Blast"]
+max_hits = 1

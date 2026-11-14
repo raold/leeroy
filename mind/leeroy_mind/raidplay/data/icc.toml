@@ -1,0 +1,1402 @@
+# Icecrown Citadel playbooks. Spell ids, timers and phases come from this server's boss scripts
+# (script_dir); the explanations are our own words. Per-difficulty spell ids follow the core's
+# spell difficulty table. Checks with since = 1 are the training ground's original rows.
+map = 631
+key = "icc"
+difficulties = ["10", "25", "10h", "25h"]
+script_dir = "src/server/scripts/Northrend/IcecrownCitadel"
+playerbots_dir = "src/Ai/Raid/ICC"
+
+[[boss]]
+index = 0
+name = "Lord Marrowgar"
+slug = "marrowgar"
+creatures = [36612]
+script = "boss_lord_marrowgar.cpp"
+enrage = 600
+call = "marrowgar: spread out, kill spikes, run from coldflame"
+phase = [
+  { id = "main", name = "Melee phase" },
+  { id = "bone_storm", name = "Bone Storm whirl", after = 45 },
+]
+
+[[boss.mechanic]]
+id = "icc.marrowgar.bone_slice"
+name = "Bone Slice"
+kind = "soak"
+phase = "main"
+roles = ["tank"]
+spells = { "10" = [69055], "25" = [70814], "10h" = [69055], "25h" = [70814] }
+handled_by = "playerbots"
+playerbots = "icc lm tank position"
+explain = "Both tanks stand stacked in front of him so his cleave splits between them."
+check = "none"
+first = 10
+
+[[boss.mechanic]]
+id = "icc.marrowgar.coldflame"
+name = "Coldflame"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [69140, 72705]
+hits = { "10" = [69146], "25" = [70823], "10h" = [70824], "25h" = [70825] }
+handled_by = "none"
+explain = "A line of cold fire runs out from him; step sideways out of its path, never along it."
+check = "icc.marrowgar.check_avoid_coldflame"
+first = 5
+every = 5
+
+[[boss.mechanic]]
+id = "icc.marrowgar.bone_spike"
+name = "Bone Spike Graveyard"
+kind = "switch_adds"
+phase = "main"
+roles = ["melee", "ranged"]
+spells = { "10" = [69057], "25" = [70826], "10h" = [72088], "25h" = [72089] }
+hits = [69065]
+handled_by = "playerbots"
+playerbots = "icc spike"
+explain = "Bone spikes impale players; damage dealers break them at once to free the victim."
+check = "icc.marrowgar.check_impaled"
+first = 10
+every = 18
+
+[[boss.mechanic]]
+id = "icc.marrowgar.bone_storm"
+name = "Bone Storm"
+kind = "spread"
+phase = "bone_storm"
+roles = ["healer", "ranged"]
+spells = [69076]
+handled_by = "none"
+explain = "He whirls around the room; ranged and healers spread out so he hits as few as possible."
+check = "icc.marrowgar.check_avoid_bone_storm"
+duration = { "10" = 20, "25" = 30 }
+every = 90
+
+[[boss.mechanic]]
+id = "icc.marrowgar.enrage"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [26662]
+handled_by = "none"
+explain = "He enrages after ten minutes; spend cooldowns early and keep damage on him."
+check = "none"
+first = 600
+
+[[boss.check]]
+id = "icc.marrowgar.check_avoid_coldflame"
+kind = "avoid"
+since = 1
+names = ["Coldflame"]
+tag = "coldflame"
+
+[[boss.check]]
+id = "icc.marrowgar.check_avoid_bone_storm"
+kind = "avoid"
+since = 1
+names = ["Bone Storm"]
+roles = ["ranged", "healer"]
+max_hits = 6
+tag = "spread"
+
+[[boss.check]]
+id = "icc.marrowgar.check_impaled"
+kind = "debuff"
+since = 1
+names = ["Impaled"]
+max_count = 2
+
+[[boss]]
+index = 1
+name = "Lady Deathwhisper"
+slug = "deathwhisper"
+creatures = [36855]
+script = "boss_lady_deathwhisper.cpp"
+enrage = 600
+call = "deathwhisper: kill adds fast, interrupt frostbolts"
+phase = [
+  { id = "barrier", name = "Mana Barrier: adds and shadow bolts" },
+  { id = "drained", name = "Barrier down: she fights in melee" },
+]
+
+[[boss.mechanic]]
+id = "icc.deathwhisper.death_and_decay"
+name = "Death and Decay"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [71001], "25" = [72108], "10h" = [72109], "25h" = [72110] }
+handled_by = "none"
+explain = "A dark circle grows under a random player; walk out of it straight away."
+check = "icc.deathwhisper.check_avoid_death_and_decay"
+first = 10
+every = 22
+
+[[boss.mechanic]]
+id = "icc.deathwhisper.cult_adds"
+name = "Cult Fanatics and Adherents"
+kind = "switch_adds"
+phase = "barrier"
+roles = ["tank", "melee", "ranged"]
+spells = [70895, 70896]
+handled_by = "playerbots"
+playerbots = "icc adds lady deathwhisper"
+explain = "Waves of cultists arrive from both sides; tanks pick them up and damage kills them before the boss."
+check = "icc.deathwhisper.check_adds"
+first = 5
+every = 60
+
+[[boss.mechanic]]
+id = "icc.deathwhisper.dominate_mind"
+name = "Dominate Mind"
+kind = "dispel"
+roles = ["healer", "melee", "ranged"]
+spells = [71289]
+only = ["25", "10h", "25h"]
+handled_by = "none"
+explain = "She mind controls a player; crowd control or break it rather than killing them."
+check = "icc.deathwhisper.check_dominate_mind"
+first = 30
+every = 40
+
+[[boss.mechanic]]
+id = "icc.deathwhisper.frostbolt"
+name = "Frostbolt"
+kind = "interrupt"
+phase = "drained"
+roles = ["melee", "ranged"]
+spells = { "10" = [71420], "25" = [72007], "10h" = [72501], "25h" = [72502] }
+handled_by = "none"
+explain = "Kick every Frostbolt she casts once the barrier is down; it hits the tank very hard."
+check = "none"
+cast = 2
+every = 11
+
+[[boss.mechanic]]
+id = "icc.deathwhisper.vengeful_shades"
+name = "Vengeful Shade"
+kind = "kite"
+phase = "drained"
+roles = ["healer", "melee", "ranged"]
+spells = [71363]
+hits = { "10" = [71544], "25" = [72010], "10h" = [72011], "25h" = [72012] }
+handled_by = "playerbots"
+playerbots = "icc shade lady deathwhisper"
+explain = "A shade drifts to one player and explodes; that player walks it away from the group."
+check = "none"
+every = 18
+
+[[boss.mechanic]]
+id = "icc.deathwhisper.touch_of_insignificance"
+name = "Touch of Insignificance"
+kind = "tank_swap_at_stacks"
+phase = "drained"
+roles = ["tank"]
+spells = [71204]
+handled_by = "none"
+explain = "Her touch cuts the tank's threat; the second tank taunts when it stacks up."
+check = "none"
+stacks = 3
+
+[[boss.check]]
+id = "icc.deathwhisper.check_avoid_death_and_decay"
+kind = "avoid"
+since = 1
+names = ["Death and Decay"]
+max_hits = 1
+
+[[boss.check]]
+id = "icc.deathwhisper.check_adds"
+kind = "adds"
+since = 1
+entries = [37890, 38393, 38628, 38629, 37949, 38394, 38625, 38626, 38222]
+max_share = 0.25
+
+[[boss.check]]
+id = "icc.deathwhisper.check_dominate_mind"
+kind = "debuff"
+since = 1
+names = ["Dominate Mind"]
+max_count = 1
+
+[[boss]]
+index = 2
+name = "the Gunship Battle"
+slug = "gunship"
+creatures = [36939, 36948]
+script = "boss_icecrown_gunship_battle.cpp"
+melee_behind = false
+no_behind_since = 1
+call = "gunship: jump over, kill the mage, then back to the ship"
+lust = false
+phase = [{ id = "main", name = "Ship to ship" }]
+
+[[boss.mechanic]]
+id = "icc.gunship.cannons"
+name = "Ship cannons"
+kind = "use_object"
+roles = ["ranged"]
+spells = [69399, 70172]
+handled_by = "playerbots"
+playerbots = "icc gunship enter cannon"
+explain = "Two players man the cannons and fire at the enemy ship and its boarders."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.gunship.overheat"
+name = "Overheat"
+kind = "use_object"
+roles = ["ranged"]
+spells = [69487]
+handled_by = "playerbots"
+playerbots = "icc cannon fire"
+explain = "A cannon that fires too fast overheats and stops; gunners pace their shots."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.gunship.below_zero"
+name = "Below Zero"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = [69705]
+handled_by = "playerbots"
+playerbots = "icc gunship rocket jump"
+explain = "The enemy mage freezes the cannons; a boarding team rocket-jumps over and kills the mage."
+check = "none"
+every = 35
+
+[[boss.mechanic]]
+id = "icc.gunship.rocket_pack"
+name = "Rocket Pack"
+kind = "use_object"
+roles = ["tank", "healer", "melee"]
+spells = [70348]
+handled_by = "playerbots"
+playerbots = "icc gunship rocket pack setup"
+explain = "The boarding team equips rocket packs to cross between the ships and come back."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.gunship.rocket_artillery"
+name = "Rocket Artillery"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [70609, 69678]
+handled_by = "none"
+explain = "Artillery marks spots on your deck; step out of the circle before the shell lands."
+check = "none"
+
+[[boss]]
+index = 3
+name = "Deathbringer Saurfang"
+slug = "saurfang"
+creatures = [37813]
+script = "boss_deathbringer_saurfang.cpp"
+enrage = { "10" = 480, "25" = 480, "10h" = 360, "25h" = 360 }
+call = "saurfang: ranged spread, kill blood beasts fast"
+phase = [
+  { id = "main", name = "Main fight" },
+  { id = "frenzy", name = "Frenzy", hp_below = 30 },
+]
+
+[[boss.mechanic]]
+id = "icc.saurfang.rune_of_blood"
+name = "Rune of Blood"
+kind = "tank_swap_at_stacks"
+roles = ["tank"]
+spells = [72410]
+handled_by = "playerbots"
+playerbots = "icc dbs tank position"
+explain = "Rune of Blood heals him from the tank; the other tank taunts as soon as it lands."
+check = "none"
+first = 20
+every = 22
+stacks = 1
+
+[[boss.mechanic]]
+id = "icc.saurfang.blood_beasts"
+name = "Call Blood Beast"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = [72172, 72356]
+handled_by = "playerbots"
+playerbots = "icc adds dbs"
+explain = "Blood beasts come every forty seconds; ranged slow and kill them before they reach the raid."
+check = "icc.saurfang.check_adds"
+first = 30
+every = 40
+targets = { "10" = 2, "25" = 5 }
+
+[[boss.mechanic]]
+id = "icc.saurfang.blood_nova"
+name = "Blood Nova"
+kind = "spread"
+roles = ["ranged", "healer"]
+spells = { "10" = [72378], "25" = [73058], "10h" = [72378], "25h" = [73058] }
+hits = { "10" = [72380], "25" = [72438], "10h" = [72439], "25h" = [72440] }
+handled_by = "none"
+explain = "Blood Nova splashes around its target; ranged keep apart so each nova hits one player."
+check = "icc.saurfang.check_spread"
+radius = 12
+first = 17
+every = 22
+
+[[boss.mechanic]]
+id = "icc.saurfang.mark"
+name = "Mark of the Fallen Champion"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = [72293]
+hits = [72256]
+handled_by = "none"
+explain = "Each mark is a player who takes damage from all his attacks; fewer marks means fewer beasts reach the raid."
+check = "icc.saurfang.check_mark"
+
+[[boss.mechanic]]
+id = "icc.saurfang.boiling_blood"
+name = "Boiling Blood"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [72385], "25" = [72441], "10h" = [72442], "25h" = [72443] }
+handled_by = "none"
+explain = "Boiling Blood ticks on random players; healers keep them topped."
+check = "none"
+first = 15
+every = 17
+
+[[boss.mechanic]]
+id = "icc.saurfang.scent_of_blood"
+name = "Scent of Blood"
+kind = "kite"
+roles = ["ranged"]
+spells = [72769]
+only = ["10h", "25h"]
+handled_by = "none"
+explain = "On heroic the beasts speed up after a while; slow them and keep them off the cloth."
+check = "none"
+
+[[boss.check]]
+id = "icc.saurfang.check_mark"
+kind = "debuff"
+since = 1
+names = ["Mark of the Fallen Champion"]
+max_count = 3
+scope = "raid"
+
+[[boss.check]]
+id = "icc.saurfang.check_adds"
+kind = "adds"
+since = 1
+entries = [38508, 38596, 38597, 38598]
+max_share = 0.15
+
+[[boss.check]]
+id = "icc.saurfang.check_spread"
+kind = "spread"
+since = 1
+roles = ["ranged"]
+
+[[boss]]
+index = 4
+name = "Festergut"
+slug = "festergut"
+creatures = [36626]
+script = "boss_festergut.cpp"
+enrage = 300
+call = "festergut: ranged spread, stack on gas spores"
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "icc.festergut.gas_spore"
+name = "Gas Spore"
+kind = "stack"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [69278], "25" = [71221], "10h" = [69278], "25h" = [71221] }
+hits = { "10" = [69291], "25" = [72101], "10h" = [72102], "25h" = [72103] }
+handled_by = "playerbots"
+playerbots = "icc festergut spore"
+explain = "Spored players gather with the raid so their burst grants everyone Inoculated."
+check = "icc.festergut.check_inoculated"
+first = 20
+every = 40
+targets = { "10" = 2, "25" = 3 }
+
+[[boss.mechanic]]
+id = "icc.festergut.vile_gas"
+name = "Vile Gas"
+kind = "spread"
+roles = ["ranged", "healer"]
+spells = { "10" = [69240], "25" = [71218], "10h" = [73019], "25h" = [73020] }
+handled_by = "playerbots"
+playerbots = "icc festergut group position"
+explain = "Vile Gas lands on ranged; they spread in a wide circle so it hits only one."
+check = "icc.festergut.check_avoid_vile_gas"
+first = 30
+every = 30
+
+[[boss.mechanic]]
+id = "icc.festergut.ranged_spread"
+name = "Spread for spores"
+kind = "spread"
+roles = ["ranged"]
+spells = { "10" = [69278], "25" = [71221], "10h" = [69278], "25h" = [71221] }
+handled_by = "playerbots"
+playerbots = "icc festergut group position"
+explain = "Outside a spore burst, ranged keep eight yards apart."
+check = "icc.festergut.check_spread"
+radius = 8
+
+[[boss.mechanic]]
+id = "icc.festergut.pungent_blight"
+name = "Pungent Blight"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [69195], "25" = [71219], "10h" = [73031], "25h" = [73032] }
+handled_by = "none"
+explain = "After three inhales he releases a raid-wide blight; healers save cooldowns for it."
+check = "none"
+cast = 3
+every = 102
+
+[[boss.mechanic]]
+id = "icc.festergut.gastric_bloat"
+name = "Gastric Bloat"
+kind = "tank_swap_at_stacks"
+roles = ["tank"]
+spells = { "10" = [72219], "25" = [72551], "10h" = [72552], "25h" = [72553] }
+handled_by = "none"
+explain = "Bloat stacks on the tank and bursts at ten; the other tank taunts at about six."
+check = "none"
+stacks = 6
+every = 15
+
+[[boss.mechanic]]
+id = "icc.festergut.malleable_goo"
+name = "Malleable Goo"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = [72296]
+only = ["10h", "25h"]
+handled_by = "playerbots"
+playerbots = "icc festergut avoid malleable goo"
+explain = "On heroic Putricide lobs goo from the balcony; move off the marked spot."
+check = "none"
+every = 18
+
+[[boss.check]]
+id = "icc.festergut.check_inoculated"
+kind = "buff"
+since = 1
+names = ["Inoculated"]
+min_stack = 3
+min_pull_s = 150
+
+[[boss.check]]
+id = "icc.festergut.check_avoid_vile_gas"
+kind = "avoid"
+since = 1
+names = ["Vile Gas"]
+roles = ["ranged"]
+max_hits = 1
+
+[[boss.check]]
+id = "icc.festergut.check_spread"
+kind = "spread"
+since = 1
+roles = ["ranged"]
+exempt = ["Gas Spore"]
+exempt_s = 12
+
+[[boss]]
+index = 5
+name = "Rotface"
+slug = "rotface"
+creatures = [36627]
+script = "boss_rotface.cpp"
+call = "rotface: kite the big ooze, merge the little ones"
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "icc.rotface.slime_spray"
+name = "Slime Spray"
+kind = "move_out_cone"
+roles = ["healer", "melee", "ranged"]
+spells = [69508]
+handled_by = "none"
+explain = "He sprays slime in a cone at one player; everyone in front moves to his side."
+check = "icc.rotface.check_avoid"
+first = 20
+every = 20
+
+[[boss.mechanic]]
+id = "icc.rotface.mutated_infection"
+name = "Mutated Infection"
+kind = "run_out_debuff"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [69674], "25" = [71224], "10h" = [73022], "25h" = [73023] }
+handled_by = "playerbots"
+playerbots = "icc rotface group position"
+explain = "An infected player walks to the off-tank so the little ooze that spawns can be merged."
+check = "none"
+first = 14
+every = 14
+
+[[boss.mechanic]]
+id = "icc.rotface.big_ooze"
+name = "Big Ooze"
+kind = "kite"
+roles = ["tank"]
+spells = [69552, 69611]
+handled_by = "playerbots"
+playerbots = "icc rotface tank position"
+explain = "The off-tank kites the big ooze around the room's edge and feeds it little oozes."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.rotface.unstable_ooze_explosion"
+name = "Unstable Ooze Explosion"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = [69839]
+handled_by = "playerbots"
+playerbots = "icc rotface move away from explosion"
+explain = "At five merges the big ooze explodes and throws blobs; dodge where they land."
+check = "icc.rotface.check_avoid"
+
+[[boss.mechanic]]
+id = "icc.rotface.sticky_ooze"
+name = "Sticky Ooze"
+kind = "avoid_ground"
+roles = ["tank", "melee"]
+spells = [69774]
+handled_by = "none"
+explain = "Sticky Ooze leaves a slowing puddle under the tank; step out of it."
+check = "icc.rotface.check_avoid"
+every = 15
+
+[[boss.mechanic]]
+id = "icc.rotface.vile_gas"
+name = "Vile Gas"
+kind = "spread"
+roles = ["ranged", "healer"]
+spells = { "10" = [69240], "25" = [71218], "10h" = [73019], "25h" = [73020] }
+only = ["10h", "25h"]
+handled_by = "playerbots"
+playerbots = "icc rotface avoid vile gas"
+explain = "On heroic Putricide's gas lands on ranged; keep spread so it touches one."
+check = "none"
+every = 18
+
+[[boss.check]]
+id = "icc.rotface.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Slime Spray", "Unstable Ooze Explosion", "Sticky Ooze"]
+max_hits = 1
+
+[[boss]]
+index = 6
+name = "Professor Putricide"
+slug = "putricide"
+creatures = [36678]
+script = "boss_professor_putricide.cpp"
+enrage = 600
+call = "putricide: kite the oozes, stay out of puddles"
+phase = [
+  { id = "one", name = "Phase one" },
+  { id = "two", name = "Phase two", hp_below = 80 },
+  { id = "three", name = "Phase three", hp_below = 35 },
+]
+
+[[boss.mechanic]]
+id = "icc.putricide.unstable_experiment"
+name = "Unstable Experiment"
+kind = "kite"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [70351], "25" = [71966], "10h" = [71967], "25h" = [71968] }
+handled_by = "playerbots"
+playerbots = "icc putricide volatile ooze; icc putricide gas cloud"
+explain = "Each experiment frees an ooze or a gas cloud; stack on the volatile ooze's target and kite the gas cloud."
+check = "icc.putricide.check_adds"
+first = 30
+every = 37
+
+[[boss.mechanic]]
+id = "icc.putricide.volatile_ooze"
+name = "Volatile Ooze Adhesive"
+kind = "stack"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [70447], "25" = [72836], "10h" = [72837], "25h" = [72838] }
+handled_by = "playerbots"
+playerbots = "icc putricide volatile ooze"
+explain = "The ooze glues itself to a player; everyone stacks on them to split the eruption, then kills it."
+check = "icc.putricide.check_adds"
+
+[[boss.mechanic]]
+id = "icc.putricide.gaseous_bloat"
+name = "Gaseous Bloat"
+kind = "kite"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [70672], "25" = [72455], "10h" = [72832], "25h" = [72833] }
+handled_by = "playerbots"
+playerbots = "icc putricide gas cloud"
+explain = "The gas cloud chases its target, who runs away while ranged burn the cloud."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.putricide.slime_puddle"
+name = "Slime Puddle"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [70341]
+hits = [70343]
+handled_by = "playerbots"
+playerbots = "icc putricide growing ooze puddle"
+explain = "Growing puddles spawn under players; step out and keep them at the room's edge."
+check = "icc.putricide.check_avoid"
+first = 10
+every = 35
+
+[[boss.mechanic]]
+id = "icc.putricide.malleable_goo"
+name = "Malleable Goo"
+kind = "avoid_ground"
+phase = "two"
+roles = ["healer", "melee", "ranged"]
+spells = [70852]
+handled_by = "playerbots"
+playerbots = "icc putricide avoid malleable goo"
+explain = "He throws goo at a spot; move off the marked spot before it lands."
+check = "icc.putricide.check_avoid"
+
+[[boss.mechanic]]
+id = "icc.putricide.choking_gas_bomb"
+name = "Choking Gas Bomb"
+kind = "avoid_ground"
+phase = "two"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [71255]
+handled_by = "none"
+explain = "Gas bombs land around him and burst; walk away from the bomb canisters."
+check = "icc.putricide.check_avoid"
+
+[[boss.mechanic]]
+id = "icc.putricide.mutated_plague"
+name = "Mutated Plague"
+kind = "tank_swap_at_stacks"
+phase = "three"
+roles = ["tank"]
+spells = { "10" = [72451], "25" = [72463], "10h" = [72671], "25h" = [72672] }
+handled_by = "playerbots"
+playerbots = "icc putricide mutated plague"
+explain = "Each plague stack hurts the whole raid; tanks swap at about four stacks."
+check = "none"
+stacks = 4
+
+[[boss.mechanic]]
+id = "icc.putricide.abomination"
+name = "Mutated Abomination"
+kind = "use_object"
+phase = "one"
+roles = ["melee"]
+spells = [70311]
+handled_by = "playerbots"
+playerbots = "icc putricide abomination"
+explain = "One player drinks the green potion and slows the oozes with the abomination's abilities."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.putricide.unbound_plague"
+name = "Unbound Plague"
+kind = "run_out_debuff"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [70911], "25" = [72854], "10h" = [72855], "25h" = [72856] }
+only = ["10h", "25h"]
+handled_by = "none"
+explain = "On heroic, pass Unbound Plague to someone far from the group before it ramps up."
+check = "none"
+first = 20
+every = 90
+
+[[boss.check]]
+id = "icc.putricide.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Malleable Goo", "Slime Puddle", "Choking Gas Bomb"]
+max_hits = 1
+
+[[boss.check]]
+id = "icc.putricide.check_adds"
+kind = "adds"
+since = 1
+entries = [37562, 38602, 38760, 38761, 37697, 38604, 38758, 38759]
+max_share = 0.2
+
+[[boss]]
+index = 7
+name = "the Blood Prince Council"
+slug = "council"
+creatures = [37970, 37972, 37973]
+script = "boss_blood_prince_council.cpp"
+enrage = 600
+call = "princes: ranged spread, shoot the kinetic bombs"
+phase = [{ id = "main", name = "Three princes, one empowered" }]
+
+[[boss.mechanic]]
+id = "icc.council.invocation"
+name = "Invocation of Blood"
+kind = "kill_order"
+roles = ["tank", "melee", "ranged"]
+spells = [70952, 70981, 70982]
+handled_by = "playerbots"
+playerbots = "icc bpc main tank"
+explain = "Only the empowered prince takes real damage; switch to him each time the invocation moves."
+check = "none"
+first = 45
+every = 46
+
+[[boss.mechanic]]
+id = "icc.council.shock_vortex"
+name = "Shock Vortex"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [72037, 72039], "25" = [72037, 73037], "10h" = [72037, 73038], "25h" = [72037, 73039] }
+handled_by = "playerbots"
+playerbots = "icc bpc empowered vortex"
+explain = "Valanar drops vortexes that knock players around; step away from them, and spread for the empowered one."
+check = "icc.council.check_avoid"
+first = 15
+every = 20
+
+[[boss.mechanic]]
+id = "icc.council.kinetic_bomb"
+name = "Kinetic Bomb"
+kind = "switch_adds"
+roles = ["ranged"]
+spells = [72053]
+hits = { "10" = [72052], "25" = [72800], "10h" = [72801], "25h" = [72802] }
+handled_by = "playerbots"
+playerbots = "icc bpc kinetic bomb"
+explain = "Bombs drift down slowly; ranged keep hitting them so they float back up instead of landing."
+check = "icc.council.check_adds"
+every = { "10" = 30, "25" = 20 }
+
+[[boss.mechanic]]
+id = "icc.council.ball_of_flame"
+name = "Ball of Flame"
+kind = "kite"
+roles = ["healer", "ranged"]
+spells = [71718, 72040]
+hits = { "10" = [71393], "25" = [72789], "10h" = [72790], "25h" = [72791] }
+handled_by = "playerbots"
+playerbots = "icc bpc ball of flame"
+explain = "Taldaram's flame ball chases one player, who runs it away from the group."
+check = "none"
+every = 20
+
+[[boss.mechanic]]
+id = "icc.council.shadow_lance"
+name = "Shadow Lance"
+kind = "positional"
+roles = ["tank"]
+spells = { "10" = [71405, 71815], "25" = [72804, 72809], "10h" = [72805, 72810], "25h" = [72806, 72811] }
+handled_by = "playerbots"
+playerbots = "icc bpc keleseth tank"
+explain = "Keleseth is tanked by a caster at range; his lance hits whoever holds him."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.council.ranged_spread"
+name = "Spread for vortexes"
+kind = "spread"
+roles = ["ranged"]
+spells = { "10" = [72039], "25" = [73037], "10h" = [73038], "25h" = [73039] }
+handled_by = "none"
+explain = "Ranged keep eight yards apart so one vortex knocks one player."
+check = "icc.council.check_spread"
+radius = 8
+
+[[boss.check]]
+id = "icc.council.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Shock Vortex", "Empowered Shock Vortex"]
+max_hits = 1
+
+[[boss.check]]
+id = "icc.council.check_adds"
+kind = "adds"
+since = 1
+entries = [38454, 38775, 38776, 38777]
+max_share = 0.1
+
+[[boss.check]]
+id = "icc.council.check_spread"
+kind = "spread"
+since = 1
+roles = ["ranged"]
+
+[[boss]]
+index = 8
+name = "Blood-Queen Lana'thel"
+slug = "lanathel"
+creatures = [37955]
+script = "boss_blood_queen_lana_thel.cpp"
+enrage = 330
+call = "blood queen: spread, bite on time, take swarm out"
+phase = [
+  { id = "ground", name = "Ground phase" },
+  { id = "air", name = "Air phase: Bloodbolt Whirl", after = 124 },
+]
+
+[[boss.mechanic]]
+id = "icc.lanathel.vampiric_bite"
+name = "Vampiric Bite"
+kind = "positional"
+phase = "ground"
+roles = ["melee", "ranged"]
+spells = { "10" = [71726], "25" = [71727], "10h" = [71728], "25h" = [71729] }
+hits = { "10" = [70877], "25" = [71474], "10h" = [70877], "25h" = [71474] }
+handled_by = "playerbots"
+playerbots = "icc bql vampiric bite"
+explain = "A bitten player must bite another damage dealer before the frenzy ends, or they turn on the raid."
+check = "none"
+first = 15
+
+[[boss.mechanic]]
+id = "icc.lanathel.pact"
+name = "Pact of the Darkfallen"
+kind = "stack"
+phase = "ground"
+roles = ["healer", "melee", "ranged"]
+spells = [71340]
+hits = [71341]
+handled_by = "playerbots"
+playerbots = "icc bql pact of darkfallen"
+explain = "Linked players run together until they touch, which breaks the pact."
+check = "icc.lanathel.check_spread"
+first = 20
+every = 30
+
+[[boss.mechanic]]
+id = "icc.lanathel.swarming_shadows"
+name = "Swarming Shadows"
+kind = "run_out_debuff"
+phase = "ground"
+roles = ["healer", "melee", "ranged"]
+spells = [71264]
+hits = { "10" = [71277], "25" = [72638], "10h" = [72639], "25h" = [72640] }
+handled_by = "playerbots"
+playerbots = "icc bql group position"
+explain = "The shadowed player walks to the edge, dropping the shadow trail away from the raid."
+check = "icc.lanathel.check_avoid_swarming_shadows"
+first = 30
+every = 30
+
+[[boss.mechanic]]
+id = "icc.lanathel.twilight_bloodbolt"
+name = "Twilight Bloodbolt"
+kind = "spread"
+phase = "ground"
+roles = ["healer", "ranged"]
+spells = [71445]
+hits = { "10" = [71818], "25" = [71819], "10h" = [71820], "25h" = [71821] }
+handled_by = "playerbots"
+playerbots = "icc bql group position"
+explain = "Bloodbolts splash around their targets; ranged keep apart."
+check = "icc.lanathel.check_spread"
+radius = 6
+every = 13
+
+[[boss.mechanic]]
+id = "icc.lanathel.bloodbolt_whirl"
+name = "Bloodbolt Whirl"
+kind = "spread"
+phase = "air"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [71772]
+hits = { "10" = [71446], "25" = [71478], "10h" = [71479], "25h" = [71480] }
+handled_by = "none"
+explain = "In the air phase she fears and bolts everyone; spread out and heal through it."
+check = "icc.lanathel.check_avoid_bloodbolt_whirl"
+every = { "10" = 120, "25" = 100 }
+
+[[boss.mechanic]]
+id = "icc.lanathel.delirious_slash"
+name = "Delirious Slash"
+kind = "soak"
+phase = "ground"
+roles = ["tank"]
+spells = { "10" = [71623], "25" = [71624], "10h" = [71625], "25h" = [71626] }
+handled_by = "none"
+explain = "The off-tank stands next to the main tank to take the slash meant for the second threat."
+check = "none"
+every = 20
+
+[[boss.check]]
+id = "icc.lanathel.check_avoid_swarming_shadows"
+kind = "avoid"
+since = 1
+names = ["Swarming Shadows"]
+max_hits = 1
+
+[[boss.check]]
+id = "icc.lanathel.check_avoid_bloodbolt_whirl"
+kind = "avoid"
+since = 1
+names = ["Bloodbolt Whirl"]
+max_hits = 2
+
+[[boss.check]]
+id = "icc.lanathel.check_spread"
+kind = "spread"
+since = 1
+roles = ["ranged"]
+exempt = ["Pact of the Darkfallen"]
+exempt_s = 15
+
+[[boss]]
+index = 9
+name = "Sister Svalna"
+slug = "svalna"
+creatures = [37126]
+script = "icecrown_citadel.cpp"
+call = "svalna: grab a spear, free whoever she impales"
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "icc.svalna.aether_shield"
+name = "Aether Shield"
+kind = "use_object"
+roles = ["melee", "ranged"]
+spells = [71463]
+handled_by = "playerbots"
+playerbots = "icc valkyre spear"
+explain = "Her shield breaks only to a thrown spear; pick up a spear from a dead captain and hurl it at her."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.svalna.impaling_spear"
+name = "Impaling Spear"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = [71443]
+handled_by = "playerbots"
+playerbots = "icc sister svalna"
+explain = "She pins a player with a spear; break the spear at once to free them."
+check = "none"
+first = 15
+every = 20
+
+[[boss.mechanic]]
+id = "icc.svalna.caress_of_death"
+name = "Caress of Death"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = [70078]
+handled_by = "none"
+explain = "She resurrects the fallen captains as enemies; kill captains away from her."
+check = "none"
+
+[[boss]]
+index = 10
+name = "Valithria Dreamwalker"
+slug = "valithria"
+creatures = [36789]
+script = "boss_valithria_dreamwalker.cpp"
+melee_behind = false
+no_behind_since = 1
+call = "valithria: heal her to full, dps kill the adds"
+lust = false
+phase = [{ id = "main", name = "Heal her up" }]
+
+[[boss.mechanic]]
+id = "icc.valithria.heal"
+name = "Heal Valithria"
+kind = "heal_target"
+roles = ["healer"]
+spells = [71189]
+handled_by = "playerbots"
+playerbots = "icc valithria heal"
+explain = "Healers heal Valithria to full health; that is the win."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.valithria.dream_portals"
+name = "Dream Portals"
+kind = "use_object"
+roles = ["healer"]
+spells = { "10" = [71301, 72224], "25" = [71301, 72224], "10h" = [71301, 72480], "25h" = [71301, 72480] }
+handled_by = "playerbots"
+playerbots = "icc valithria portal; icc valithria dream cloud"
+explain = "Healers enter the portals and fly through the green clouds for a big healing buff."
+check = "none"
+first = 45
+every = 46
+
+[[boss.mechanic]]
+id = "icc.valithria.adds"
+name = "The Green Dragonflight's foes"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [70915, 70912, 70914, 70916, 70913]
+handled_by = "playerbots"
+playerbots = "icc valithria group"
+explain = "Tanks and damage kill the adds pouring from the four doors; suppressers first."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.valithria.blistering_zombie"
+name = "Blistering Zombie"
+kind = "kite"
+roles = ["melee", "ranged"]
+spells = { "10" = [70744], "25" = [71733], "10h" = [72017], "25h" = [72018] }
+handled_by = "playerbots"
+playerbots = "icc valithria zombie kite"
+explain = "Zombies burst in acid when they die; kill them away from the healers."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.valithria.column_of_frost"
+name = "Column of Frost"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [70704], "25" = [71747], "10h" = [70704], "25h" = [71747] }
+hits = { "10" = [70702], "25" = [71746], "10h" = [72019], "25h" = [72020] }
+handled_by = "none"
+explain = "Archmages mark a spot that erupts in frost; step off it."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.valithria.mana_void"
+name = "Mana Void"
+kind = "avoid_ground"
+roles = ["healer", "ranged"]
+spells = { "10" = [71179], "25" = [71741], "10h" = [71179], "25h" = [71741] }
+handled_by = "none"
+explain = "Mana voids drain mana from anyone inside; casters step out."
+check = "none"
+
+[[boss]]
+index = 11
+name = "Sindragosa"
+slug = "sindragosa"
+creatures = [36853]
+script = "boss_sindragosa.cpp"
+enrage = 600
+call = "sindragosa: spread, hide behind ice tombs for bombs"
+phase = [
+  { id = "ground", name = "Ground phase" },
+  { id = "air", name = "Air phase: tombs and bombs", after = 50 },
+  { id = "three", name = "Last phase", hp_below = 35 },
+]
+
+[[boss.mechanic]]
+id = "icc.sindragosa.unchained_magic"
+name = "Unchained Magic"
+kind = "spread"
+roles = ["healer", "ranged"]
+spells = [69762]
+hits = [69766]
+handled_by = "playerbots"
+playerbots = "icc sindragosa unchained magic"
+explain = "Casters with Unchained Magic pause casting at a few stacks and stay apart so the backlash hits only them."
+check = "icc.sindragosa.check_unchained_magic"
+first = 9
+every = 32
+
+[[boss.mechanic]]
+id = "icc.sindragosa.instability"
+name = "Instability"
+kind = "stop_casting"
+roles = ["healer", "ranged"]
+spells = [69766]
+hits = { "10" = [69770], "25" = [71044], "10h" = [71045], "25h" = [71046] }
+handled_by = "playerbots"
+playerbots = "icc sindragosa unchained magic"
+explain = "Each spell cast under Unchained Magic adds Instability; stop casting before five stacks."
+check = "icc.sindragosa.check_instability"
+stacks = 5
+
+[[boss.mechanic]]
+id = "icc.sindragosa.blistering_cold"
+name = "Blistering Cold"
+kind = "run_out_debuff"
+phase = "ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [70117, 70123], "25" = [70117, 71047], "10h" = [70117, 71048], "25h" = [70117, 71049] }
+handled_by = "playerbots"
+playerbots = "icc sindragosa blistering cold"
+explain = "Icy Grip pulls everyone in; run twenty-five yards out before Blistering Cold goes off."
+check = "icc.sindragosa.check_avoid"
+radius = 25
+first = 33
+every = 67
+
+[[boss.mechanic]]
+id = "icc.sindragosa.frost_beacon"
+name = "Frost Beacon"
+kind = "positional"
+roles = ["healer", "melee", "ranged"]
+spells = [70126]
+handled_by = "playerbots"
+playerbots = "icc sindragosa frost beacon"
+explain = "Beaconed players move to set spots apart so their ice tombs make a wall to hide behind."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.sindragosa.frost_bomb"
+name = "Frost Bomb"
+kind = "los"
+phase = "air"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [69845], "25" = [71053], "10h" = [71054], "25h" = [71055] }
+handled_by = "playerbots"
+playerbots = "icc sindragosa frost bomb"
+explain = "In the air phase hide behind an ice tomb so it blocks each falling bomb."
+check = "icc.sindragosa.check_avoid"
+
+[[boss.mechanic]]
+id = "icc.sindragosa.mystic_buffet"
+name = "Mystic Buffet"
+kind = "los"
+phase = "three"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [70128]
+handled_by = "playerbots"
+playerbots = "icc sindragosa mystic buffet"
+explain = "In the last phase her buffet stacks on everyone; hide behind a tomb to drop the stacks."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.sindragosa.frost_breath"
+name = "Frost Breath"
+kind = "move_out_cone"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [69649, 73061], "25" = [71056, 73062], "10h" = [71057, 73063], "25h" = [71058, 73064] }
+handled_by = "playerbots"
+playerbots = "icc sindragosa group position"
+explain = "Her breath hits in front; only the tank faces her."
+check = "none"
+every = 22
+
+[[boss.mechanic]]
+id = "icc.sindragosa.tail_smash"
+name = "Tail Smash"
+kind = "positional"
+phase = "ground"
+roles = ["melee"]
+spells = [71077]
+handled_by = "playerbots"
+playerbots = "icc sindragosa group position"
+explain = "Her tail knocks back anyone behind her; melee stand at her flanks."
+check = "behind"
+every = 25
+
+[[boss.mechanic]]
+id = "icc.sindragosa.chilled_to_the_bone"
+name = "Chilled to the Bone"
+kind = "stop_casting"
+roles = ["melee"]
+spells = [70106]
+handled_by = "playerbots"
+playerbots = "icc sindragosa chilled to the bone"
+explain = "Melee hits stack a damage-taken debuff; melee stop attacking when it gets high."
+check = "none"
+
+[[boss.mechanic]]
+id = "icc.sindragosa.ranged_spread"
+name = "Spread for magic"
+kind = "spread"
+roles = ["ranged"]
+spells = [69762]
+handled_by = "playerbots"
+playerbots = "icc sindragosa group position"
+explain = "Ranged keep eight yards apart all fight."
+check = "icc.sindragosa.check_spread"
+radius = 8
+
+[[boss.check]]
+id = "icc.sindragosa.check_instability"
+kind = "debuff"
+since = 1
+names = ["Instability"]
+max_stack = 5
+
+[[boss.check]]
+id = "icc.sindragosa.check_unchained_magic"
+kind = "debuff"
+since = 1
+names = ["Unchained Magic"]
+max_count = 1
+
+[[boss.check]]
+id = "icc.sindragosa.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Frost Bomb", "Blistering Cold"]
+
+[[boss.check]]
+id = "icc.sindragosa.check_spread"
+kind = "spread"
+since = 1
+roles = ["ranged"]
+
+[[boss]]
+index = 12
+name = "the Lich King"
+slug = "lichking"
+creatures = [36597]
+script = "boss_the_lich_king.cpp"
+enrage = 900
+call = "lich king: stack for infest, move out of defile"
+phase = [
+  { id = "one", name = "Phase one: horrors and ghouls" },
+  { id = "winter_one", name = "First Remorseless Winter", hp_below = 70 },
+  { id = "two", name = "Phase two: Val'kyr and Defile" },
+  { id = "winter_two", name = "Second Remorseless Winter", hp_below = 40 },
+  { id = "three", name = "Phase three: Vile Spirits and Harvest Soul" },
+  { id = "fury", name = "Fury of Frostmourne", hp_below = 10 },
+]
+
+[[boss.mechanic]]
+id = "icc.lichking.infest"
+name = "Infest"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [70541], "25" = [73779], "10h" = [73780], "25h" = [73781] }
+handled_by = "none"
+explain = "Infest ticks harder until a player is above ninety percent health; healers top everyone right after it."
+check = "none"
+first = 5
+every = 22
+
+[[boss.mechanic]]
+id = "icc.lichking.necrotic_plague"
+name = "Necrotic Plague"
+kind = "dispel"
+phase = "one"
+roles = ["healer"]
+spells = { "10" = [70337], "25" = [73912], "10h" = [73913], "25h" = [73914] }
+hits = { "10" = [70338], "25" = [73785], "10h" = [73786], "25h" = [73787] }
+handled_by = "playerbots"
+playerbots = "icc lich king necrotic plague"
+explain = "The plagued player walks to a shambling horror, then healers dispel it so it jumps to the add."
+check = "icc.lichking.check_necrotic_plague"
+first = 30
+every = 30
+
+[[boss.mechanic]]
+id = "icc.lichking.adds"
+name = "Shambling Horrors, Raging Spirits and Val'kyr"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [70372, 69200, 69037]
+handled_by = "playerbots"
+playerbots = "icc lich king adds"
+explain = "Tanks grab horrors and spirits; damage switches to Val'kyr before they carry players off the edge."
+check = "icc.lichking.check_adds"
+
+[[boss.mechanic]]
+id = "icc.lichking.remorseless_winter"
+name = "Remorseless Winter"
+kind = "positional"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [68981, 72259], "25" = [74270, 74273], "10h" = [74271, 74274], "25h" = [74272, 74275] }
+hits = { "10" = [72133], "25" = [73788], "10h" = [73789], "25h" = [73790] }
+handled_by = "playerbots"
+playerbots = "icc lich king winter"
+explain = "During the winters stay at the platform's edge, kill the ice spheres and avoid the Pain and Suffering cone."
+check = "none"
+duration = 60
+
+[[boss.mechanic]]
+id = "icc.lichking.defile"
+name = "Defile"
+kind = "avoid_ground"
+phase = "two"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [72762]
+hits = { "10" = [72754], "25" = [73708], "10h" = [73709], "25h" = [73710] }
+handled_by = "none"
+explain = "Defile grows each time it hits someone; its target runs out at once and nobody stands in it."
+check = "icc.lichking.check_avoid"
+cast = 2
+first = 38
+every = 32
+
+[[boss.mechanic]]
+id = "icc.lichking.shadow_trap"
+name = "Shadow Trap"
+kind = "avoid_ground"
+phase = "one"
+roles = ["healer", "melee", "ranged"]
+spells = [73539]
+hits = [73529]
+only = ["10h", "25h"]
+handled_by = "playerbots"
+playerbots = "icc lich king shadow trap"
+explain = "On heroic a trap appears under a player; step off it before it knocks everyone near it off the edge."
+check = "icc.lichking.check_avoid"
+first = 15
+every = 15
+
+[[boss.mechanic]]
+id = "icc.lichking.soul_reaper"
+name = "Soul Reaper"
+kind = "tank_swap_at_stacks"
+roles = ["tank"]
+spells = { "10" = [69409], "25" = [73797], "10h" = [73798], "25h" = [73799] }
+handled_by = "none"
+explain = "Soul Reaper hits the tank hard after five seconds; the other tank taunts as it lands."
+check = "none"
+first = 40
+every = 30
+stacks = 1
+
+[[boss.mechanic]]
+id = "icc.lichking.vile_spirits"
+name = "Vile Spirits"
+kind = "switch_adds"
+phase = "three"
+roles = ["ranged"]
+spells = [70498]
+hits = { "10" = [70503], "25" = [73806], "10h" = [73807], "25h" = [73808] }
+handled_by = "playerbots"
+playerbots = "icc lich king spirit bomb"
+explain = "Spirits drift into the raid and burst; ranged kill them as they rise."
+check = "none"
+every = 30
+
+[[boss.mechanic]]
+id = "icc.lichking.harvest_soul"
+name = "Harvest Soul"
+kind = "raid_cooldowns"
+phase = "three"
+roles = ["healer"]
+spells = { "10" = [68980], "25" = [74325], "10h" = [74326], "25h" = [74327] }
+handled_by = "none"
+explain = "A harvested player is pulled into Frostmourne and must fight their way out; heal them hard as it starts."
+check = "none"
+every = 75
+
+[[boss.check]]
+id = "icc.lichking.check_avoid"
+kind = "avoid"
+since = 1
+names = ["Defile", "Shadow Trap"]
+
+[[boss.check]]
+id = "icc.lichking.check_necrotic_plague"
+kind = "debuff"
+since = 1
+names = ["Necrotic Plague"]
+max_count = 1
+
+[[boss.check]]
+id = "icc.lichking.check_adds"
+kind = "adds"
+since = 1
+entries = [36609, 39120, 39121, 39122, 36701, 39302, 39303, 39304, 37799, 39284, 39285, 39286]
+max_share = 0.2
