@@ -71,7 +71,8 @@ the reachable clear and the phase are offline only; the roster check applies to 
 
 Naxxramas's Sapphiron and Kel'Thuzad (instance bosses 13 and 14) are reached only by the hub's
 teleporter after the four wings, which dungeon-clear does not use: its route stalls there with
-the run still enabled. When every other boss is done and one of those is not, native ends the run
+the run still enabled. When every other boss is done and one of those is not (and neither is
+engaged, failed or mid-event, as a manual `dc skip` could make it), native ends the run
 `cleared_reachable` (pure `DcUnreachableBosses`, `ClearedReachable`; logged
 `cleared_reachable kills= out_of_reach=13,14`) instead of idling into the mind's stall stop or
 the timeout.

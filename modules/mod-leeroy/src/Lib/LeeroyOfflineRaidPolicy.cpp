@@ -65,7 +65,9 @@ bool ClearedReachable(std::vector<std::uint8_t> const& bossStates, std::vector<s
     for (std::uint32_t boss : unreachable)
     {
         if (boss >= bossStates.size()) return false;
-        outOfReachLeft = outOfReachLeft || bossStates[boss] != 3;
+        std::uint8_t const state = bossStates[boss];
+        if (state == 1 || state == 2 || state == 4) return false; // Engaged, failed or mid-event: reached after all.
+        outOfReachLeft = outOfReachLeft || state != 3;
     }
     for (std::size_t index = 0; index < bossStates.size(); ++index)
         if (bossStates[index] != 3

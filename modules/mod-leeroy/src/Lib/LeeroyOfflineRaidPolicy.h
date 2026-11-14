@@ -70,7 +70,8 @@ struct DcHold
 std::vector<std::uint32_t> DcUnreachableBosses(std::uint32_t mapId);
 // Every boss dungeon-clear can reach is done and some boss it cannot reach is not: the run ends as
 // cleared_reachable instead of idling until the stall watchdog or the timeout. Empty states, an
-// empty table or an out-of-range index never claim it.
+// empty table, an out-of-range index or an "unreachable" boss that is in progress, failed or in a
+// special phase (a manual `dc skip` or a teleporter used after all opened the way) never claim it.
 bool ClearedReachable(std::vector<std::uint8_t> const& bossStates, std::vector<std::uint32_t> const& unreachable);
 inline constexpr char const* OfflineClearedReachable = "cleared_reachable";
 

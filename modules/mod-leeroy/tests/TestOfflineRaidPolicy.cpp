@@ -513,3 +513,20 @@ LEEROY_TEST(OfflineRaid_EveryReachableBossDoneEndsTheRunAsClearedReachable)
     CHECK(!ClearedReachable({}, {13, 14}));
     CHECK(!ClearedReachable(std::vector<std::uint8_t>(13, 3), {13, 14})); // Index outside the roster.
 }
+
+LEEROY_TEST(OfflineRaid_AnOutOfReachBossInProgressIsNeverClearedReachable)
+{
+    std::vector<std::uint8_t> naxx(15, 3);
+    naxx[13] = 1; naxx[14] = 0;                  // Sapphiron engaged: the way to him was open after all.
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[13] = 3; naxx[14] = 1;                  // Kel'Thuzad engaged.
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 2;                                // A failed attempt on him: the run goes on under the wipe caps.
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 4;
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 5;                                // Never loaded: still out of reach.
+    CHECK(ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 0;
+    CHECK(ClearedReachable(naxx, {13, 14}));
+}
