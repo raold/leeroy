@@ -49,6 +49,7 @@ class Designate:
 @dataclass(frozen=True, slots=True)
 class AskPlan:
     member: int | None = None  # who he asked; None: the lead answers
+    boss: tuple[int, int] | None = None  # the boss he named (map, encounter index); None: the one here
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +136,14 @@ _PLAN = re.compile(r"(?:(?:what's|whats|what is) (?:the|our) (?:plan|strat(?:egy
                    r"|(?:plan|strat|tactics)\?|how do we do (?:this|the boss|this boss|this fight)\??"
                    r"|what do we do(?: here| now)?\?|how does (?:this|the) (?:boss|fight) work\??"
                    r"|explain (?:the )?(?:fight|boss|plan|strat))")
+# A question about the plan for a boss he names ("what do we do on heigan"): only with the boss
+# briefs on ([raidlead] briefs), and only when the name is exactly one of `bosses`.
+_PLAN_FOR = re.compile(r"(?:(?:what's|whats|what is) (?:the|our) (?:plan|strat(?:egy)?|tactics?) (?:for|on|against)"
+                       r"|what do we do (?:on|for|at|against|with|about)"
+                       r"|how do we (?:do|kill|beat|handle|deal with)"
+                       r"|explain) (?:the )?(?P<b>[^?]+?)\??"
+                       r"|how does (?:the )?(?P<b2>[^?]+?) work\??"
+                       r"|(?P<b3>[^?]+?) (?:plan|strat|strategy|tactics)\?")
 # Only these explicit phrases take the lead back; "i'm calling it" (calling it a night) never does.
 _HE_LEADS = re.compile(r"(?:i'?ll lead|i'?m leading|i lead)(?: (?:it|this|the raid))?(?: tonight| now)?")
 _TIME = r"(?: tonight| now| this one| today| from now on)?"
@@ -231,10 +240,20 @@ def _designation(text: str, names: dict[str, int]) -> Designate | None:
     return None
 
 
-def parse(text: str, names: dict[str, int]) -> Intent | None:
+def _boss_asked(bare: str, bosses) -> tuple[int, int] | None:
+    match = _PLAN_FOR.fullmatch(bare)
+    if match is None:
+        return None
+    name = " ".join((match["b"] or match["b2"] or match["b3"] or "").split())
+    return bosses.get(name.removeprefix("the "))
+
+
+def parse(text: str, names: dict[str, int], bosses=None) -> Intent | None:
     """What his line asks of the raid, or None for anything else (talk). `names` are the cast
     members of his group by lower-case name. A question is no order, but a ready check or a
-    question about the plan is."""
+    question about the plan is. `bosses` (raid bosses by what he may call them,
+    briefs.boss_aliases) adds questions about the plan for a boss he names; None (the boss
+    briefs off) adds nothing."""
     text = normalize(text)
     if not text or len(text.split()) > MAX_WORDS:
         return None
@@ -250,6 +269,8 @@ def parse(text: str, names: dict[str, int]) -> Intent | None:
                 return Ready(member)
             if _PLAN.fullmatch(bare):
                 return AskPlan(member)
+            if bosses is not None and (boss := _boss_asked(bare, bosses)) is not None:
+                return AskPlan(member, boss)
             if (count := _COUNT.fullmatch(bare)) is not None:
                 seconds = int(count["n"] or count["n2"])
                 return Countdown(seconds, member) if 1 <= seconds <= 10 else None

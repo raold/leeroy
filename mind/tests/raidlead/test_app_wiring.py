@@ -131,3 +131,46 @@ def test_playerbots_own_words_still_pass_through(tmp_path, clock, text):
             row = h.rows("SELECT thread_id FROM chat_line WHERE text = ?", (text,))[0]
             assert row["thread_id"] is None  # playerbots' command, as before: no talk either
     run(main())
+
+
+def test_a_boss_brief_reaches_the_game_word_for_word(tmp_path, clock):
+    """[raidlead] briefs through the real talk pipeline: each line of the playbook's brief goes
+    out exactly as built (typed, unstyled, whole: no word cap, no case or typos), then her words."""
+    from leeroy_mind.raidlead import callouts as C
+    from test_app import HUMAN_ROW
+    me = {"guid": HUMAN, "name": HUMAN_ROW.name, "race": HUMAN_ROW.race, "class": HUMAN_ROW.class_,
+          "gender": 0, "level": 80, "rank": 0, "online": True, "map": 649, "zone": 4722, "spec_tab": 0}
+
+    async def main():
+        bridge = FakeBridge([{**hello(HUMAN), "features": ["item_links", "playstyle", "raidlead"]},
+                             {**CAST, "members": [*CAST["members"], me]}])
+        port = await bridge.start()
+        (tmp_path / "mind.toml").write_text(
+            toml(port) + "\n[raidlead]\nenabled = true\nbriefs = true\n", encoding="utf-8")
+        seed_db(tmp_path / "mind.db", clock)
+        app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path,
+                      llm=FakeLLM(script, models={ORION}), clock=clock, rng_seed=1)
+        task = asyncio.create_task(app.run())
+        h = Harness(app, bridge, app.llm, clock, task)
+        try:
+            await h.wait(lambda: h.app.world.online and h.app.raidlead.supported)
+            assert h.app.raidlead.briefs and h.app.guild.calls.briefs
+            await h.bridge.push(group(101, 102, 103, 104, 105))
+            await h.until(lambda: h.app.raidlead.native is True and h.app.raidlead.members)
+            await h.bridge.push(chat("Arkon leads", channel="raid", map=649))
+            await h.wait(lambda: h.app.raidlead.lead() == 101)
+            await h.advance(30)
+            h.app.raidlead._modes[649] = 3  # his group's guild_group from 25 heroic
+            brief = C.boss_brief(h.app.raidlead._context(649, 1, "Lord Jaraxxus")).split("\n")
+            assert len(brief) >= 2 and len(brief[0]) > 150
+            await h.bridge.push(chat("what do we do on jaraxxus?", channel="raid", map=649))
+            await h.until(lambda: [s["text"] for s in h.says() if s["guid"] == 101][-len(brief):] == brief,
+                          timeout=60)
+            said = [s for s in h.says() if s["guid"] == 101 and s["text"] in brief]
+            assert [s["text"] for s in said] == brief and {s["channel"] for s in said} == {"raid"}
+            await h.until(lambda: h.says()[-1]["text"] not in brief, timeout=60)  # her own words
+        finally:
+            await app.stop()
+            await asyncio.wait({task}, timeout=5.0)
+            await bridge.stop()
+    run(main())
