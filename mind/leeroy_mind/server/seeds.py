@@ -15,8 +15,10 @@ from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
               'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke',
-              'wow_event', 'loot_close', 'loot_wish')
-FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loot_close': 7 * 86400.0}
+              'wow_event', 'loot_close', 'loot_wish', 'intent')
+# An intent (godmode.intents) is tried again half an hour after an opener that was dropped.
+FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loot_close': 7 * 86400.0,
+           'intent': 1800.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
 log = logging.getLogger(__name__)
@@ -37,7 +39,7 @@ class Seed:
     @property
     def openers(self) -> tuple[int, ...] | None:
         """Who already knows a subject before any of it is posted in the channel."""
-        if self.kind in ('life', 'photo', 'group_start', 'loot_wish'):
+        if self.kind in ('life', 'photo', 'group_start', 'loot_wish', 'intent'):
             return self.about
         if self.kind == 'his_day':
             return self.witnesses
@@ -248,10 +250,27 @@ def _purpose(conn, c):
                        officers_only=channel.officers_only)
 
 
+def _intent(conn, c):
+    """His pending post, thread and bring_up intents (godmode.intents), each opened by its
+    member in its own channel (bring_up without one: general or irl). The fact is his ask in
+    her terms, screened when he made it."""
+    from leeroy_mind.godmode.intents import BRING_UP_CHANNELS, SEED_WEIGHT, seed_rows
+    for ident, member, kind, args in seed_rows(conn, now=c.now):
+        if member not in c.cast:
+            continue
+        channel = args.get('channel')
+        channels = (channel,) if channel else BRING_UP_CHANNELS
+        definition = layout.channel(channels[0])
+        yield Seed(f'intent:{ident}:{kind}', 'intent', channels,
+                   args.get('about') or args.get('topic') or '', (member,),
+                   officers_only=bool(definition and definition.officers_only), weight=SEED_WEIGHT)
+
+
 def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            officers: frozenset[int], human: int, human_name: str, trial_rank: int,
            culture_enabled: bool = False, culture_store=None, ident=None,
-           culture_calendar: bool = False, culture_loot: bool = False) -> list[Seed]:
+           culture_calendar: bool = False, culture_loot: bool = False,
+           intents_enabled: bool = False) -> list[Seed]:
     names = {g: p.character_name for g, p in cast.items()}
     for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
         if guid in cast or guid == human:
@@ -281,6 +300,8 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
             result = [seed for seed in result if seed.key not in raised] + close
             result += _read('loot_wish', lambda: culture.loot_wish_seeds(conn, now=now, cast=cast,
                                                                          names=names, human=human, ident=ident))
+    if intents_enabled:
+        result += _read('intent', lambda: _intent(conn, c))
     return result
 
 

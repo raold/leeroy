@@ -20,7 +20,6 @@ away_now is every member on an open away row, whoever wrote it: the pipeline nev
 The texts are templates over {name} (his called name), {they}, {them} and {their} (his forms),
 filled by talk.romance as the scene notes are. Built-in, non-explicit, naming no place; her guilt
 about home is hers and never turned on him (arc.texts scans them). Nothing here logs."""
-import json
 import random
 from dataclasses import dataclass
 
@@ -156,14 +155,16 @@ def _fit(plan: list[str], home: str, rival: str, cooling: bool, forms: tuple[str
 def _rival(store: Store, guid: int, human: int, names: dict[int, str]) -> str:
     """The woman she minds most (her strongest rivalry row at RIVAL_LINE_LEVEL or more) whose
     own arc with him the guild can tell (a NOTICED stage), or ""."""
+    from leeroy_mind.tuning.edits import feeling_overlay
     with store.transaction():
         rows = store.conn.execute(
-            "SELECT j.target FROM jealousy j JOIN relationship r ON r.a = j.target AND r.b = ? "
+            "SELECT j.target, r.romance_stage FROM jealousy j JOIN relationship r "
+            "ON r.a = j.target AND r.b = ? "
             "WHERE j.holder = ? AND j.kind = 'rivalry' AND j.level >= ? AND j.target != ? "
-            "AND r.romance_stage IN (SELECT value FROM json_each(?)) "
-            "ORDER BY j.level DESC, j.target", (human, guid, RIVAL_LINE_LEVEL, human,
-                                                 json.dumps(sorted(NOTICED)))).fetchall()
-    return next((names[r[0]] for r in rows if names.get(r[0])), "")
+            "ORDER BY j.level DESC, j.target", (human, guid, RIVAL_LINE_LEVEL, human)).fetchall()
+        lens = feeling_overlay(store.conn)  # her stage as the guild sees it (godmode lens)
+    return next((names[r[0]] for r in rows if names.get(r[0])
+                 and lens.get((r[0], human), {}).get("romance_stage", r[1]) in NOTICED), "")
 
 
 def _cooling(store: Store, guid: int) -> bool:

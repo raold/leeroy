@@ -260,7 +260,7 @@ class Reactions(Pipeline):
         picked = pick_speakers(weights, self.rng.randint(*GREETERS), self.rng, pool)
         if not picked:
             return
-        known = {g: self.store.get_relationship(g, hg).familiarity for g in picked}
+        known = {g: self.store.get_relationship(g, hg, lens=True).familiarity for g in picked}
         best = max(picked, key=lambda g: known[g])
         items = []
         for g in [best] + [g for g in picked if g != best]:
@@ -600,7 +600,7 @@ class Reactions(Pipeline):
         start one."""
         hg, busy = self.human.guid, self._whisper_threads(now)
         outreach = getattr(self, 'outreach', None)
-        return {g: (self.personas.get(g), self.store.get_relationship(g, hg))
+        return {g: (self.personas.get(g), self.store.get_relationship(g, hg, lens=True))
                 for g in self._candidates(hearable=False) if g not in busy
                 and (outreach is None or outreach.eligible(g))}
 
