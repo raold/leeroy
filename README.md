@@ -42,10 +42,17 @@ What the player sees:
   group from the guild rather than with strangers.
 - **Voice rooms**: members speak aloud, each in a voice of her own, and he
   answers with push-to-talk.
+- **The guild's Discord**, a private server inside the console: members talk
+  there around the clock, in and out of game, about their raids, their days
+  and the guild's running jokes. They DM him, answer his DMs at length, send
+  him their photos (and a fresh selfie when he asks for one) and voice notes,
+  and bring up what they meant to tell him. He can start group DMs with a few
+  of them.
 - **The guild console**, a browser page beside the game (and on his phone over
-  his tailnet): the guild's chat and its own Discord, the raid night, the
-  roster and DKP, the members' profiles and photos, the guild's drama, the
-  forum, the bank and the health of everything behind it.
+  his tailnet): tonight at a glance, the guild's chat and its Discord, the raid
+  night, the roster and DKP, the members' profiles and photos, the guild's
+  drama, the forum, the bank, what the guild is learning and the health of
+  everything behind it.
 - **While he is away**, the guild lives on. At night members gossip, make and
   break friendships, remember and forget, write stories and a chronicle, and
   pose for new profile photos. The guild runs raids of its own. Rival guilds
@@ -95,18 +102,26 @@ Each guild member has a persona card, memories with privacy scopes, moods and
 relationships. The mind decides who speaks and when, and writes each line in
 that member's own voice and typing style, without letting a member say what she
 could not know: whispers stay with their pair, officer chat with the officers,
-and a member knows only what she saw, was told or overheard.
+and a member knows only what she saw, was told or overheard. Each member has
+one mind across game and Discord: her whispers and her DMs with him are one
+conversation, officer chat and the officers' Discord channels are one officer
+audience, and a group DM is shared only with those who were in it.
 
 - **Talk**: guild chat, whispers and replies to the player, conversations
-  members start with him, answers to his emotes, and reactions to raids, loot
-  and what happens in game.
+  members start with him, things each member means to tell him, answers to his
+  emotes, and reactions to raids, loot and what happens in game. Members keep
+  their own typing rhythm, banter, and share running jokes born from things
+  that really happened, teasing only where they are friends. Before a line is
+  sent, guards check it against what she knows and recently said, and drop
+  repeats, filler and a reply that only says his message back.
 - **Guild life**: raid nights from call to loot (a fair composition, a rotating
   raid lead, summons, the dungeon-clear run, DKP and an MVP vote), offline
   raids the guild runs on its own while he is away, a group he fills with
   `.playerbots bot addN` counted like a called raid night, and the ranks,
-  specs, gear, flask and feast habits kept current between raids. Optional
-  play styles let members use potions and hold a moment before a pull in their
-  own way outdoors, never in instances or raids.
+  specs, gear, flask and feast habits kept current between raids. A healer in
+  his group rezzes the dead out of combat. Optional play styles let members use
+  potions and hold a moment before a pull in their own way outdoors, never in
+  instances or raids.
 - **Nights**: once he is offline and the GPU is idle, the mind consolidates and
   forgets old memories, spreads gossip and corrects rumours, moves
   relationships, feuds and mentorships along, lets jokes, nicknames and slang
@@ -131,36 +146,48 @@ and a member knows only what she saw, was told or overheard.
 
 ### Learning
 
-These are the first pieces of a self-improvement loop, in which the guild
-learns from how the player responds. Each is off by default, and none writes
-chat text to its logs.
+A self-improvement loop in which the guild learns from how the player
+responds. Each piece is off by default, and none writes chat text to its logs.
 
 - **Member claims** (`[claims]`): a night stage remembers each member's own
   facts, opinions and plans, with a model-free contradiction check. See the
   [claims guide](mind/leeroy_mind/claims/README.md).
 - **Signals** (`[signals]`): numbers only on how the player responds to each
   member's line (a reply, how soon, how long), plus his thumbs.
+- **Rewards** (`[learn]`): each member line gets a score from his measured
+  response, with quality defects deducted; silence scores zero.
+- **Variants and a bandit** (`[learn] bandit`): variants of how a line is
+  written, and a learner that keeps the ones that land.
+- **A nightly coach** (`[learn] coach`): lessons from each member's best and
+  worst exchanges, held for the player's approval.
+- **Live use** (`[learn] apply`): learned variants and approved lessons shape
+  live lines, each within its own audience.
 - **Typing style** (`[fingerprint]`): each member's measured way of typing, so
   she keeps her own voice.
 - **Shared memories** (`[callbacks]`): picks a fitting memory for a member to
   bring up, within the same privacy rules.
+- **Preference data** (`learn export`, `learn evalset`): private preference
+  pairs and an evaluation set for an optional fine-tune, never committed.
 
-Rewards, a learner that tries variants and keeps what lands, and a nightly
-coach are next.
+The console's Lab tab shows the rewards, variants and lessons, puts thumbs on
+every member line, and can freeze learning. See the
+[learning guide](mind/leeroy_mind/learn/README.md).
 
 ## The guild console
 
 `python -m leeroy_mind console` serves one local browser page on
 `127.0.0.1:7881`, dark by default with a remembered light/dark switch and a
-Hide photos switch. Its 14 tabs:
+Hide photos switch. A Free GPU button in its top bar unloads every model so the
+player can play something else, until he resumes or logs into WoW. Its 16 tabs:
 
 | Tab | What |
 |---|---|
-| Comms | The voice rooms and the game's chat in one feed with the members' faces, channels, whispers, mute and deafen, a reply box that speaks in game as the player, and **the guild's Discord**: channels, private DMs, emoji, reactions, reply quotes, threads and pins. Members answer there even while he is out of game; DMs are as private as whispers, and nothing in it becomes WoW chat. |
+| Tonight | Tonight at a glance: raids and sign-ups, what is waiting for him (DMs, letters, photo picks, polls), who is due loot, bank items running low, his own flasks, potions and food, the week ahead and the last night; plus which feature switches are on |
+| Comms | The voice rooms and the game's chat in one feed with the members' faces, channels, whispers, a voice transcript, mute and deafen, a reply box that speaks in game as the player, and **the guild's Discord**: channels, private DMs and group DMs, emoji, reactions, reply quotes, threads, pins, photos and voice notes both ways. Members talk there on their own around the clock and answer even while he is out of game; DMs are as private as whispers, nothing in it becomes WoW chat, and every conversation is kept |
 | Raid | The raid night as it happens (call, composition, members, loot, DKP), recent raids, and the raid actions: call, form, summon, start, stop, end |
 | Guild | Roster, DKP ladder and stats (attendance, who is due an item), loot history, season awards, the chronicle |
 | Social | Feuds, jealousy, romances, how members feel about him, rumours, the guild mood |
-| Personas | The cast as a wall of faces or a table: mood, stance, ties, memories, persona versions; their insight (claims, awareness, talk quality); tuning dials at world, group and member level with undo; temporary nudges; choosing profile photos and browsing each member's gallery |
+| Personas | The cast as a wall of faces or a table: mood, stance, ties, memories, persona versions, what each means to tell him; their insight (claims, awareness, talk quality); tuning dials at world, group and member level with undo; temporary nudges; choosing profile photos and browsing each member's gallery |
 | Board | The Realm's forum, letters and write-ups, where he can reply |
 | Calendar | Raid nights, the officers' meeting, birthdays and sign-ups |
 | Bank | The guild bank's gold, tabs and money log, read through the mind so the database password stays with it |
@@ -168,6 +195,7 @@ Hide photos switch. Its 14 tabs:
 | Training | The training ground's fights, gate, trials and cards |
 | Dojo | The dojo's builds, baselines and runs, read from its own files |
 | Library | Search of the game library, text first, the mind's semantic search as a fallback |
+| Lab | What the guild is learning: line rewards, variants and lessons (approve, veto, retire), reward weights, and a freeze; thumbs on every member line feed it |
 | Ops | Health, nights, held Realm moves, raids, photos, backups and release drift; optional actions, each previewed and confirmed |
 | Mind | The game server, the mind and the voice service, with start, restart and stop |
 
@@ -182,7 +210,8 @@ lost; a logon task (`scripts/ac-console-schedule.ps1`) keeps it running.
 The voice service speaks the guild's lines aloud in voice rooms, each member in
 a voice of her own, and turns the player's push-to-talk into text for the mind.
 It runs beside the mind; if it is down, the guild types in chat as before.
-Playback keeps each engine's native sound. Every voice is a blend of synthetic
+It also renders members' voice notes for Discord DMs and transcribes the ones
+he records back. Playback keeps each engine's native sound. Every voice is a blend of synthetic
 stock voices, none cloned from a real person.
 
 Its default loopback ports are 7879 for the mind and 7880 for its browser
@@ -214,8 +243,12 @@ never anyone's likeness. See [selfie/README.md](selfie/README.md).
 
 With `snaps = true` as well, the night plans and renders situational photos
 from members' days and a guild photo after a raid night, each keeping the
-member's face through an IP-Adapter. They are made and stocked only; sending
-them comes with the guild Discord's photo phase.
+member's face through an IP-Adapter. With `[photos] send = true` members send
+them: to him in a DM, or posted in the Discord channel the scene fits, rationed
+by a weekly dial, and never a private one in a channel. With `requests = true`,
+a member he asks for a photo of herself sends a fresh one, rendered on request
+while he is out of WoW (his words never reach the image prompt). He can post
+his own photos in the Discord too, and members look at them.
 
 ## Teaching the bots to fight
 
