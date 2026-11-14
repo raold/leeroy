@@ -301,8 +301,9 @@ def test_intent_text_is_screened_and_never_logged(app, caplog):
                                         "args": args}))
         assert not reply["ok"] and reply["code"] == code
         assert "nude" not in caplog.text and "Reeve" not in caplog.text
+    # Part B: a game string is carried out at once, here reported back (he is not in game).
     reply = run(app.godmode.handle({"action": "create", "member": 101, "kind": "sit", "args": {}}))
-    assert reply["code"] == "not_yet"
+    assert reply["ok"] and (reply["state"], reply["reason"]) == ("not_taken", "human_offline")
     listed = run(app.godmode.handle({"action": "list", "member": 102}))
     assert listed["intents"][0]["id"] == ident
     run(app.godmode.handle({"action": "cancel", "id": ident}))

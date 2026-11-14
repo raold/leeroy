@@ -9,6 +9,7 @@
 #include "LeeroyPinSet.h"
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
+#include "Guild/Strings.h"
 #include "TrainingCommands.h"
 #include "BattlefieldMgr.h"
 #include "CharacterCache.h"
@@ -187,6 +188,9 @@ inline std::string NativeOwnershipReason(std::uint32_t guid)
     if (Leeroy::Guild::HasPendingBotCommands({guid}) || Leeroy::Training::HasTrainingJournal(guid)
         || Leeroy::Training::TrainingDcOwns(guid))
         return "busy:training_state";
+    // His come_to_me keeps her beside him for its stay (Guild/Strings.h); his own asks pass it.
+    if (Leeroy::Guild::StringStayHeld(guid))
+        return "busy:string";
     return "";
 }
 inline std::string NativeMutationReason(std::uint32_t guid)

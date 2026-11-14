@@ -2,6 +2,7 @@
 
 #include "GuildAdd.h"
 #include "GuildPorts.h"
+#include "Strings.h"
 #include "OfflineRaidJob.h"
 #include "RaidAssembly.h"
 #include "Realm/RealmModule.h"
@@ -418,6 +419,7 @@ public:
         uint32 const size = ParseGuildAddCommand(Acore::ChatCommands::GetAutoCompletionsFor(handler, command));
         if (!size)
             return true;
+        StringWaiver const waiver;   // his own ask: a member he pulled to him is his to add
         for (auto const& message : Fill(invoker, size))
             handler.PSendSysMessage("{}", message);
         return false; // Never playerbots' addclass bots for him.
@@ -433,6 +435,7 @@ public:
     {
         if (!player || builtGroup.IsEmpty() || !GuildEnabled() || player->GetGUID().GetCounter() != HumanGuid())
             return;
+        StringWaiver const waiver;   // his own group, his own ask
         Group* group = player->GetGroup();
         Map* map = player->GetMap();
         if (group && group->GetGUID() == builtGroup && group->IsLeader(player->GetGUID()) && map && map->IsDungeon())
@@ -452,6 +455,27 @@ public:
     }
 };
 }
+
+std::string GuildAddJoinRefusal(Player* human, Player* bot)
+{
+    if (!human || !bot || !human->GetMap())
+        return "offline";
+    if (Group* group = human->GetGroup())
+    {
+        if (GroupHasRealmOwner(group))
+            return "busy:realm_owner";
+        for (auto const& slot : group->GetMemberSlots())
+            if (OfflineRaidOwns(slot.guid.GetCounter()))
+                return "busy:training_owner";
+    }
+    constexpr uint32 kParty = 5;
+    std::vector<GuildAddSave> const outside = human->GetMap()->IsDungeon() ? std::vector<GuildAddSave>{}
+        : SavesOf(human->GetGUID());
+    return GuildAddSkipReason(BodyOf(bot->GetGUID().GetCounter(), bot, human, LeeroyModule::Instance().GuildId(),
+        false, &outside, kParty));
+}
+
+bool GuildAddBring(Player* bot, Player* human) { return Bring(bot, human, 0, 1); }
 
 void RegisterGuildAddRosterHandler() { RegisterCommand(std::string(kGuildAddRosterType), HandleGuildAddRoster); }
 

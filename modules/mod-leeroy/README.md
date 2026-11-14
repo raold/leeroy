@@ -278,6 +278,55 @@ multipliers that silence `avoid aoe` during a mechanic silence the exit too, and
 target stands in a hazard can step back in to reach it (after two exits the yield lets it stay). Logs carry
 guids, counts and reason codes only. **Native rebuild required, with the playerbots patch applied first.**
 
+# The owner's strings in game
+
+His strings (D6 godmode, `mind/leeroy_mind/godmode/README.md`): from a member's detail in the guild console the
+mind sends one `string_do {guid, kind, target_guid, emote}` (`Guild/Strings.cpp`, pure policy
+`Lib/LeeroyStrings.h`). Native carries it out at once on the world thread and acks it, publishing first a done
+`job` (kind `string_do`) whose `reason` says what she did (`came`, `joined`, `joined_far`, `following`,
+`stopped`, `challenged`, `emoted`, `sat`); or it refuses with one code in the ack and changes nothing.
+
+`Leeroy.Strings.Enable` (default 0, `.reload config`; `off` while 0). Every kind needs him online and alive, the
+member a pinned cast member of his guild on a random-bot account run by playerbots, and her body free of every
+ownership fence: a Realm lease, training, an offline raid, a pending bot command (`MutationReason`; a member of
+his own group under every fence but the one that holds his group for him, as his add command treats her). Never
+in a fight (`combat`: hers, his or his group's on his map), in or onto an instance (`in_instance`, hers or his), in a battleground or
+arena (`in_bg`), a queue (`queued`) or while either travels (`travelling`). Then per kind:
+
+- `come_to_me`: only while he stands in a city or rest area (a capital and its parts, a town with an inn, a
+  faction rest zone, or wherever the core has him resting; else `bad_area`), never out of someone else's group
+  (`grouped`). She is put beside him (the add command's teleport); one outside his group then keeps
+  playerbots' `stay` for 10 minutes once she has landed, so her routine does not walk her off. For that window
+  she is fenced: `NativeOwnershipReason` answers `busy:string` (`StringStayHeld`), so Realm moves (the bond's
+  inn visits included), queues, offline raids and dummy trials (`busy:string:<guid>`, which the mind's planner
+  retries in 15 minutes instead of leaving her out of the day) refuse her, while his own asks (his strings, his
+  add command) pass it (`StringWaiver`). The fence ends with the stay: its 10 minutes, the key at 0, his
+  logout, or her joining a group. If he is hovering on a flying mount she lands beside him in the air and falls,
+  as the add command's teleport does.
+- `join_group`: into the party he leads (made now when he has none), never a raid or a Dungeon Finder group,
+  at most five (`in_group`, `lfg_group`, `not_leader`, `in_raid`, `group_full`), under the add command's own
+  member fences for a party of his (`grouped`, `locked`, ...). She joins with the raid night's habits
+  (`RaidHabits`: him as master, hazards) and comes to him.
+- `follow`: in his party only (`not_in_group`; his raid `busy:raid_owner`). Him as her master with playerbots'
+  `follow`; the same string again stops it and she waits where she is (playerbots' `stay`). Both last while that
+  group does; a stop in a party that becomes a raid is lifted by the tick and her follow given back, since the
+  string can no longer undo it there.
+- `duel_me`: neither in a group with the other (`in_group`), nobody duelling (`busy:duel`), the same zone within
+  30 yards (`too_far`), both where the core allows a duel and outside a sanctuary (`bad_area`). The core's duel
+  spell is cast at him; accepting is his.
+- `emote`: one of 16 friendly emotes (`bad_emote`), within 25 yards (`too_far`), aimed at him as bridge speech.
+- `sit`: within 20 yards (`too_far`); #244's social seat keeps her sitting up to 5 minutes while he stays near
+  and nobody in his group fights. A later come_to_me, join_group, follow or duel_me stands her up first.
+
+None of these takes a Realm body-ledger rank (they are his own asks; come_to_me's window is a native fence
+instead), and the Realm keeps refusing a body in his group as before. What a string changed is journalled per
+body, AI and session (pure decisions `StringHoldFences`, `DecideStringHold`): the world tick (once a second) lifts
+only the `stay` it added (after come_to_me's 10 minutes or his logout, when the follow's group ends or turns into a
+raid, or when the key goes to 0) and stands a seated member up when her seat ends; a body another owner holds, or
+in combat, is never touched and waits; a relog, an AI replacement or (come_to_me) a group join drops the hold
+untouched. Logs: `string_done guid= kind=
+outcome=`, `string_refused guid= kind= code=`, `string_stay_lifted guid=`. **Native rebuild required.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a
