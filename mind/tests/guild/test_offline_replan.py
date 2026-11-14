@@ -59,6 +59,15 @@ def test_refused_member_reads_only_a_roster_member(error, guid):
     assert refused_member(error, PLAN) == guid
 
 
+def test_his_come_to_me_stay_is_retried_not_a_days_exclusion():
+    """busy:string:<guid> (Guild/Strings.cpp): a 10-minute fence, so the start is retried and she
+    stays in the day's plans."""
+    from leeroy_mind.guild.offline import BUSY_RETRY_S, retry_after
+    for error in ("busy:string:113", "setup:grouping:busy:string:113"):
+        assert refused_member(error, PLAN) is None
+    assert retry_after("busy:string:113") == BUSY_RETRY_S
+
+
 @_run_async
 async def test_a_refused_member_is_replaced_from_the_bench(setup):
     ports, _, controller = setup

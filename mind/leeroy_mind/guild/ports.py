@@ -274,6 +274,40 @@ class LivePorts:
     def set_lead(self, guid):
         self.app.raid.set_lead(guid)
 
+    def lineup(self):
+        """Tonight's posted raid lineup (decisions.lineup) a formation forms from; None while the
+        guild's decisions are off or no lineup is posted for a raid night now."""
+        if getattr(self.app, "decisions", None) is None:
+            return None
+        from leeroy_mind.decisions.lineup import tonight
+        return tonight(self.conn, self.clock.now())
+
+    def lineup_formed(self, lineup, raid_id, *, via=None):
+        """A raid was formed from that lineup (via "add": his add followed its roster): it is in
+        effect, with the raid."""
+        if getattr(self.app, "decisions", None) is None:
+            return False
+        from leeroy_mind.decisions.lineup import formed
+        return formed(self.app.store, lineup.decision, raid_id, now=self.clock.now(), via=via)
+
+    def loot_rule(self, raid_id):
+        """The loot rule this raid runs under (decisions.loot_rules), fixed when it opened; None
+        while the guild's decisions are off, so loot is today's DKP."""
+        if getattr(self.app, "decisions", None) is None:
+            return None
+        from leeroy_mind.decisions.loot_rules import rule_for_raid, snapshot
+        rule = rule_for_raid(self.conn, raid_id)
+        if rule is None:
+            with self.conn:
+                rule = snapshot(self.conn, raid_id)
+        return rule
+
+    def fix_loot_rule(self, raid_id):
+        """Inside the caller's transaction that opens the raid: the rule it will run under."""
+        if getattr(self.app, "decisions", None) is not None:
+            from leeroy_mind.decisions.loot_rules import snapshot
+            snapshot(self.conn, raid_id)
+
     def designated_lead(self):
         """The cast member he named (or the raid lead's rule picked) to call his own group's raid;
         None while the raid lead (leeroy_mind.raidlead) is off, its native switch is off, or he

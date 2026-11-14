@@ -12,6 +12,12 @@ Leeroy.Enable = 1
 # Optional persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
 Leeroy.PlayStyle.Enable = 0
 
+# The owner's .playerbots bot addN follows the raid lineup the guild posted (the mind's [decisions], guild_add_roster):
+# within each role its members first, its bench only when nobody else free fits. 0 picks exactly as without one.
+# The roster lives in memory until its raid night ends (at most 12 h); the mind sends it again on hello.
+# Reloadable with .reload config.
+Leeroy.GuildAdd.FollowRoster = 0
+
 # The raid lead (mind [raidlead]): his orders to his own group's bots (bot_do "order", Bloodlust included)
 # and the raid icon of the member he names to lead on his target (raid_lead). No assistant flag is set.
 # 0 refuses all of it (raidlead_off) and lifts any hold at once. Reloadable with .reload config.

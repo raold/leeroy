@@ -689,7 +689,7 @@ LeeroyCommandResult HandleDummyTrial(nlohmann::json const& message)
         if (!Guild::IsCast(guid) || guid == Guild::HumanGuid()) return {false, "not_cast:" + std::to_string(guid)};
         if (Realm::RealmOwns(guid)) return {false, "busy:realm_owner:" + std::to_string(guid)};
         if (Guild::OfflineRaidOwns(guid)) return {false, "busy:" + std::to_string(guid)};
-        if (Guild::StringStayHeld(guid)) return {false, "busy:" + std::to_string(guid)};
+        if (Guild::StringStayHeld(guid)) return {false, "busy:string:" + std::to_string(guid)};
         if (HasNonPermanentBind(guid)) return {false, "instance_bound:" + std::to_string(guid)};
     }
     auto readiness = DcTestDriver::Ensure(&error);

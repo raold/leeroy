@@ -16,6 +16,11 @@ void AddGuildAddScripts();
 // and the add command's teleport beside him.
 std::string GuildAddJoinRefusal(Player* human, Player* bot);
 bool GuildAddBring(Player* bot, Player* human);
+// guild_add_roster: the posted raid lineup the owner's add picker follows while Leeroy.GuildAdd.FollowRoster is on.
+// World thread (OnStartup).
+void RegisterGuildAddRosterHandler();
+// Re-reads Leeroy.GuildAdd.FollowRoster (OnAfterConfigLoad, so .reload config applies it).
+void ReloadGuildAdd();
 }
 
 #endif

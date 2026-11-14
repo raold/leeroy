@@ -132,14 +132,26 @@ def _sent(app, request, *, identity, image, now, cache=None):
     return prior is None or identity in prior[0] or digest in prior[1]
 
 
-def _gallery_scene(p, audience, was_lust):
+def _gallery_scene(p, audience, was_lust, look=None):
     # A gallery has no situational scene. Describe only what is known: a profile photo.
-    # The current profile kind supplies the vetted stored shape, never a fresh-request wish.
+    # The current profile kind supplies the vetted stored shape, never a fresh-request wish;
+    # a varied set's candidate (selfies.varied) records its own composed look instead.
+    if look is not None:
+        return scene_json(Scene(kind='snapshot', framing=look.framing, setting=look.setting,
+            activity='posing for a profile photo', outfit=look.phrase,
+            expression=look.expression, when='any', audience=audience,
+            shows='a profile photo', style=LUST, recipe=RECIPE))
     photo = p.photo
     return scene_json(Scene(kind='snapshot', framing=photo.framing, setting=photo.setting,
         activity='posing for a profile photo', outfit=photo.outfit, expression=photo.expression,
         when='any', audience=audience, shows='a profile photo',
         style=LUST if was_lust else PLAIN, recipe=RECIPE))
+
+
+def _varied_look(conn, guid, set_no, idx):
+    from leeroy_mind.selfies import varied
+    looks = varied.plan_of(conn, guid, set_no)
+    return None if looks is None else looks[idx]
 
 
 def _candidates(app, request, *, now, member):
@@ -174,7 +186,9 @@ def _candidates(app, request, *, now, member):
             check_jpeg(thumb)
         except ImageRefused:
             continue
-        scene = _gallery_scene(p, request.audience, was_lust)
+        scene = _gallery_scene(p, request.audience, was_lust,
+                               _varied_look(app.store.conn, request.guid, row['set_no'],
+                                            row['idx']))
         if scene_renderable(p, scene_from(scene)) is not None:
             continue
         yield (f"gallery:{request.guid}:{row['set_no']}:{row['idx']}", image, thumb,

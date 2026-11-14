@@ -78,6 +78,11 @@ def test_guild_group_fixtures_parse_as_the_server_writes_them():
         ev = bridge.parse_event(json.dumps(msg))
         assert json.loads(json.dumps(dataclasses.asdict(ev))) == {
             key: value for key, value in msg.items() if key not in ("v", "type")}
+    # roster_followed: the picker followed the guild's posted lineup; older worldservers omit it
+    assert (built.roster_followed, entered.roster_followed) == (False, True)
+    older = dict(rows["guild_group_entered"])
+    del older["roster_followed"]
+    assert bridge.parse_event(json.dumps(older)).roster_followed is False
     missing = dict(rows["guild_group_entered"])
     del missing["difficulty"]
     with pytest.raises(bridge.ProtocolError):
