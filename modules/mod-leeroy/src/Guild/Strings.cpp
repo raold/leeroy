@@ -119,6 +119,18 @@ bool Travelling(Player* player)
     return player->IsBeingTeleported() || player->IsInFlight() || player->GetTransport() || player->GetVehicle();
 }
 
+// His fight: him, or anyone of his group on his map, in combat (RaidLead's own test of his group's fight).
+bool HisFight(Player* human)
+{
+    if (human->IsInCombat())
+        return true;
+    if (Group* group = human->GetGroup())
+        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+            if (Player* member = ref->GetSource(); member && member->GetMap() == human->GetMap() && member->IsInCombat())
+                return true;
+    return false;
+}
+
 bool Battleground(Player* player)
 {
     Map* map = player->GetMap();
@@ -147,7 +159,7 @@ StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot)
     {
         f.humanOnline = true;
         f.humanAlive = human->IsAlive();
-        f.humanCombat = human->IsInCombat();
+        f.humanCombat = HisFight(human);
         f.humanTravelling = Travelling(human);
         f.humanInstance = !human->GetMap() || human->GetMap()->IsDungeon();
         f.humanBattleground = Battleground(human);
@@ -379,7 +391,7 @@ void TickSeats(std::uint64_t now, bool on, Player* human)
     {
         Player* bot = FindOnline(guid);
         bool const free = bot && Fence(guid, bot).empty();
-        bool const ready = on && free && human && bot->IsAlive() && !bot->IsInCombat() && !human->IsInCombat()
+        bool const ready = on && free && human && bot->IsAlive() && !bot->IsInCombat() && !HisFight(human)
             && !bot->IsBeingTeleported() && bot->GetMap() == human->GetMap()
             && bot->GetDistance(human) <= kStringSitYards;
         if (!seats.Current(seat, now, ready, LeeroyModule::Instance().GuildId(), HumanGuid()))

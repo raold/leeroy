@@ -68,7 +68,8 @@ struct StringFacts
 {
     bool enabled = false;          // Leeroy.Enable and Leeroy.Strings.Enable
     // him
-    bool humanOnline = false, humanAlive = false, humanCombat = false;
+    bool humanOnline = false, humanAlive = false;
+    bool humanCombat = false;      // his fight: him, or anyone of his group on his map, in combat
     bool humanTravelling = false;  // teleporting, on a taxi, a transport or a vehicle
     bool humanInstance = false, humanBattleground = false, humanDuel = false;
     bool humanResting = false;     // the core has him resting (an inn or a city)

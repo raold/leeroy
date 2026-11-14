@@ -115,7 +115,7 @@ need the guild Discord's engine (`[server] enabled`, `server_off` otherwise).
 | `sit` | sits near him for up to 5 minutes while he stays near | `too_far` |
 
 Shared codes: `off`, `human_offline`, `not_cast`, `not_online`, a fence (`busy:realm_owner`,
-`busy:training_owner`, ...), `dead`, `combat` (hers or his: never inside his fight), `in_instance`
+`busy:training_owner`, ...), `dead`, `combat` (hers, his or his group's: never inside his fight), `in_instance`
 (never in or onto an instance copy), `in_bg`, `queued`, `travelling`, `human_dead`. The mind
 settles some before or instead of native: `human_offline` (he is not in game), `no_link`,
 `no_answer`, `unsupported` (an older worldserver), `away`, `gone` and `stance` (a duel from one

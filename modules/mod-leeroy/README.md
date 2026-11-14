@@ -290,7 +290,7 @@ mind sends one `string_do {guid, kind, target_guid, emote}` (`Guild/Strings.cpp`
 member a pinned cast member of his guild on a random-bot account run by playerbots, and her body free of every
 ownership fence: a Realm lease, training, an offline raid, a pending bot command (`MutationReason`; a member of
 his own group under every fence but the one that holds his group for him, as his add command treats her). Never
-in a fight (`combat`, hers or his), in or onto an instance (`in_instance`, hers or his), in a battleground or
+in a fight (`combat`: hers, his or his group's on his map), in or onto an instance (`in_instance`, hers or his), in a battleground or
 arena (`in_bg`), a queue (`queued`) or while either travels (`travelling`). Then per kind:
 
 - `come_to_me`: only while he stands in a city or rest area (a capital and its parts, a town with an inn, a
