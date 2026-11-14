@@ -10,7 +10,7 @@ import pytest
 from leeroy_mind.guild.config import GuildConfig
 from leeroy_mind.guild.protocol import GearUp, JobSkip
 from leeroy_mind.guild.roster import (
-    REGEAR_TRIES, REGEAR_WAIT, Roster, regear_key, regear_members, regear_target,
+    REGEAR_DEADLINE, REGEAR_TRIES, REGEAR_WAIT, Roster, regear_key, regear_members, regear_target,
 )
 from leeroy_mind.guild.store import flags, new_raid, set_flag
 from leeroy_mind.protocol import Hello, Login, Logout
@@ -104,7 +104,7 @@ async def test_off_by_default_and_never_sent_to_a_native_without_the_feature(cas
     await roster.tick()
     assert not regears(cast) and state(cast) is None
     # An older native leaves gear-up as it was: the regear never holds it back.
-    assert not roster._regear_running()
+    assert roster._regear_pending() == set()
 
 
 @_run_async
@@ -134,7 +134,7 @@ async def test_one_batch_of_the_cast_never_the_owner_and_flags_superseded(cast):
     await advance(cast, 3600)
     await roster.maybe_regear()
     assert len(regears(cast)) == 1
-    assert not roster._regear_running()
+    assert roster._regear_pending() == set()
 
 
 @_run_async
@@ -360,27 +360,78 @@ async def test_members_who_leave_the_cast_are_dropped(cast):
 
 
 @_run_async
-async def test_gear_up_and_theorycrafters_wait_for_an_unfinished_regear(cast):
-    cast.members[101] = member(101, "Aster", 5, 1, level=70)  # an under-80 member gear-up would take
+async def test_a_running_regear_holds_only_the_members_it_has_not_reached(cast):
+    cast.members[106] = member(106, "Fern", 4, 1, level=70)  # under 80: gear-up's, never the regear's
+    cast.personas[106] = persona(106, "Fern")
     cast.personas[103].game.thinks_as = "theorycrafter"
+    cast.personas[106].game.thinks_as = "theorycrafter"
     roster = await regearing(cast)
-    await roster.maybe_gear_up()
-    await roster.maybe_gear_theorycrafters()
-    assert not cast.sent
     await roster.maybe_regear()
-    for command in regears(cast):
-        await finish(roster, command)
-    for _ in range(2):
-        await advance(cast, 120)
-        await roster.maybe_regear()
-        for command in regears(cast)[-1:]:
-            if roster._get("gear"):
-                await finish(roster, command)
-    assert state(cast)["state"] == "done"
-    await advance(cast, 3600)
+    first = regears(cast)[-1]
+    await roster.on_job(done(first, guids=(), skipped=[JobSkip(g, "grouped") for g in first.guids]))
+    assert roster._regear_pending() == {101, 102, 103, 104, 105}
+    # Skipped members wait for the regear; gear-up and the theorycrafter pass go on for everyone else.
     await roster.maybe_gear_up()
     gear = [c for c in cast.sent if isinstance(c, GearUp) and not c.regear]
-    assert gear and gear[-1].guids == (101,) and gear[-1].ilvl == 245
+    assert gear[-1].guids == (106,) and gear[-1].ilvl == 245
+    await roster.on_job(progress(gear[-1], 106, avg=240))
+    await roster.on_job(done(gear[-1]))
+    await roster.maybe_gear_theorycrafters()
+    tc = [c for c in cast.sent if isinstance(c, GearUp) and not c.regear and c.ilvl == 251]
+    assert tc[-1].guids == (106,)
+
+
+@_run_async
+async def test_with_nobody_eligible_the_regear_is_done_at_once(cast):
+    cast.members = {g: member(g, f"M{g}", 4, 1, level=70) for g in (101, 102)}
+    roster = await regearing(cast)
+    await roster.maybe_regear()
+    assert not regears(cast)
+    stored = state(cast)
+    assert stored["state"] == "done" and stored["members"] == [] and roster._regear_pending() == set()
+    await roster.maybe_gear_up()
+    assert [c for c in cast.sent if isinstance(c, GearUp)][-1].guids == (101, 102)
+
+
+@_run_async
+async def test_a_member_never_reached_is_given_up_at_the_deadline(cast):
+    cast.members = {g: cast.members[g] for g in (101, 102)}
+    roster = await regearing(cast)
+    await roster.maybe_regear()
+    command = regears(cast)[-1]
+    await roster.on_job(progress(command, 101))
+    await roster.on_job(done(command, guids=(101,), skipped=[JobSkip(102, "grouped")]))
+    for _ in range(REGEAR_DEADLINE // REGEAR_WAIT - 1):
+        await advance(cast, REGEAR_WAIT)
+        await roster.maybe_regear()
+        command = regears(cast)[-1]
+        if roster._get("gear"):
+            await roster.on_job(done(command, guids=(), skipped=[JobSkip(102, "grouped")]))
+    assert state(cast)["state"] == "running"
+    await advance(cast, REGEAR_WAIT)
+    await roster.maybe_regear()
+    stored = state(cast)
+    assert stored["state"] == "done" and stored["gave_up"] == [102] and list(stored["done"]) == ["101"]
+
+
+@_run_async
+async def test_a_member_given_up_out_of_bounds_loses_its_geared_flag(cast):
+    cast.members = {101: cast.members[101]}
+    set_flag(cast.conn, "geared", 101, cast.clock.now())
+    roster = await regearing(cast)
+    for _ in range(REGEAR_TRIES):
+        await roster.maybe_regear()
+        command = regears(cast)[-1]
+        await roster.on_job(progress(command, 101, avg=212))
+        await roster.on_job(done(command))
+        await advance(cast, REGEAR_WAIT)
+    assert 101 in flags(cast.conn, "geared")
+    await roster.maybe_regear()
+    assert state(cast)["gave_up"] == [101] and not flags(cast.conn, "geared")
+    # Gear-up takes it from there, by its average.
+    await advance(cast, 3600)
+    await roster.maybe_gear_up()
+    assert [c for c in cast.sent if isinstance(c, GearUp) and not c.regear][-1].guids == (101,)
 
 
 @_run_async
@@ -396,7 +447,7 @@ async def test_an_unreadable_receipt_runs_nothing(cast):
 async def test_the_owner_is_never_sent_even_from_a_stored_member_list(cast):
     with cast.conn:
         cast.conn.execute("INSERT INTO meta(key,value) VALUES (?,?)", (KEY, json.dumps({
-            "ilvl": 245, "state": "running", "started": 0, "finished": None, "members": [1, 101],
+            "ilvl": 245, "state": "running", "started": cast.clock.now(), "finished": None, "members": [1, 101],
             "done": {}, "kept": {}, "gave_up": [], "dropped": [], "tries": {}, "wait": {}})))
     cast.members[1] = member(1, "Testmage", 8, 2)
     roster = await regearing(cast)
@@ -404,10 +455,11 @@ async def test_the_owner_is_never_sent_even_from_a_stored_member_list(cast):
     assert regears(cast)[-1].guids == (101,) and state(cast)["dropped"] == [1]
 
 
-@pytest.mark.parametrize(("avg", "lands"), [(230, False), (231, True), (240, True), (257, True), (258, False)])
+@pytest.mark.parametrize(("avg", "lands"), [(230, False), (231, True), (240, True), (258, True), (280, True)])
 @_run_async
-async def test_a_capped_theorycrafter_pass_takes_the_capped_band(cast, avg, lands):
+async def test_a_capped_theorycrafter_pass_takes_a_floor_and_no_ceiling(cast, avg, lands):
     # Capped at 251, a theorycrafter averages a little under it: the old 245 floor would refuse 240 every hour.
+    # Loot it keeps can lift its average past the cap: that still lands.
     cast.personas[102].game.thinks_as = "theorycrafter"
     roster = await regearing(cast, GuildConfig())
     await roster.maybe_gear_theorycrafters()
@@ -421,14 +473,15 @@ async def test_a_capped_theorycrafter_pass_takes_the_capped_band(cast, avg, land
     assert len([c for c in cast.sent if isinstance(c, GearUp)]) == (1 if lands else 2)
 
 
-@pytest.mark.parametrize(("avg", "lands"), [(224, False), (225, True), (251, True), (252, False)])
+@pytest.mark.parametrize(("avg", "lands"), [(224, False), (225, True), (252, True), (270, True)])
 @_run_async
-async def test_a_capped_gear_up_takes_the_capped_band(cast, avg, lands):
+async def test_a_capped_gear_up_takes_a_floor_and_no_ceiling(cast, avg, lands):
     cast.members = {101: cast.members[101]}
     roster = await regearing(cast, GuildConfig())
     await roster.maybe_gear_up()
     command = cast.sent[-1]
     assert command.guids == (101,) and command.ilvl == 245 and not command.regear
+    assert "maximum" not in roster._get("gear") and roster._get("gear")["minimum"] == 225
     await roster.on_job(progress(command, 101, avg))
     assert (101 in flags(cast.conn, "geared")) is lands
 

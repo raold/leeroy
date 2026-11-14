@@ -183,3 +183,34 @@ LEEROY_TEST(regear_counts_kept_slots_above_the_cap_outside_shirt_and_tabard)
     CHECK_EQ(RegearKept(slots, 245), 2u);
     CHECK_EQ(RegearKept(slots, 277), 0u);
 }
+
+LEEROY_TEST(gear_up_skips_every_fence_in_every_mode_after_the_body_checks)
+{
+    CHECK(GearUpFencedSkipReason(Ready(), "").empty());
+    CHECK_EQ(GearUpFencedSkipReason(Ready(), "busy:training_owner"), "busy:training_owner");
+    CHECK_EQ(GearUpFencedSkipReason(Ready(), "busy:training_cleanup"), "busy:training_cleanup");
+    CHECK_EQ(GearUpFencedSkipReason(Ready(), "busy:training_state"), "busy:training_state");
+    CHECK_EQ(GearUpFencedSkipReason(Ready(), "busy:realm_owner"), "busy:realm_owner");
+    auto state = Ready();
+    state.inCombat = true;
+    CHECK_EQ(GearUpFencedSkipReason(state, "busy:realm_owner"), "in_combat");
+}
+
+LEEROY_TEST(ordinary_gear_up_returns_loot_at_or_above_its_cap_and_never_strips_what_the_bot_had)
+{
+    std::uint32_t const cap = 245;
+    // DKP loot (ICC 264, or exactly the cap) the capped pass swapped for a capped item goes back.
+    CHECK(GearUpSlotStep(0, At(1, 264), At(2, 245), cap) == GearUpStep::Return);
+    CHECK(GearUpSlotStep(0, At(1, 245), At(2, 245), cap) == GearUpStep::Return);
+    CHECK(GearUpSlotStep(0, At(1, 264), {}, cap) == GearUpStep::Return);
+    // Loot the pass left alone stays, however high.
+    CHECK(GearUpSlotStep(0, At(1, 277), At(1, 277), cap) == GearUpStep::Leave);
+    // Under the cap: filled or upgraded as the pass chose.
+    CHECK(GearUpSlotStep(4, At(3, 200), At(4, 245), cap) == GearUpStep::Leave);
+    CHECK(GearUpSlotStep(4, {}, At(4, 232), cap) == GearUpStep::Leave);
+    // Something this gear-up put on above its cap comes off.
+    CHECK(GearUpSlotStep(4, At(3, 200), At(5, 264), cap) == GearUpStep::Strip);
+    CHECK(GearUpSlotStep(4, {}, At(5, 251), cap) == GearUpStep::Strip);
+    for (std::uint8_t slot : {kRegearSlotBody, kRegearSlotTabard, kRegearSlots})
+        CHECK(GearUpSlotStep(slot, At(1, 264), At(2, 300), cap) == GearUpStep::Leave);
+}

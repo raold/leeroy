@@ -72,17 +72,16 @@ GearUpState StateFor(uint32 guid, GearJob const& job, Player* bot)
     return state;
 }
 
+// Every mode: the body checks, then every Realm/training fence (MutationReason, whose holder check is RealmOwns).
 std::string SkipFor(uint32 guid, GearJob const& job, Player* bot)
 {
-    if (Realm::RealmOwns(guid))
-        return "busy:realm_owner";
+    std::string const fence = Realm::RealmModule::Instance().MutationReason(guid);
     if (!job.command.regear)
-        return std::string(GearUpSkipReason(StateFor(guid, job, bot)));
+        return std::string(GearUpFencedSkipReason(StateFor(guid, job, bot), fence));
     RegearTarget target;
     target.human = guid == job.human || guid == HumanGuid();
     target.cast = IsCast(guid);
     target.randomAccount = Realm::IsOnRandomBotAccount(guid);
-    std::string const fence = bot ? Realm::RealmModule::Instance().MutationReason(guid) : std::string{};
     return std::string(RegearSkipReason(target, FindOnline(job.human) != nullptr, StateFor(guid, job, bot), fence));
 }
 
@@ -96,6 +95,15 @@ std::array<RegearSlotItem, kRegearSlots> Equipped(Player* bot)
             if (ItemTemplate const* proto = item->GetTemplate())
                 slots[slot] = {item->GetEntry(), proto->ItemLevel};
     return slots;
+}
+
+std::array<ObjectGuid, kRegearSlots> EquippedGuids(Player* bot)
+{
+    std::array<ObjectGuid, kRegearSlots> guids{};
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            guids[slot] = item->GetGUID();
+    return guids;
 }
 
 // The backpack and the four bags; never the bank.
@@ -124,14 +132,14 @@ uint32 DestroyBagItemsAbove(Player* bot, uint32 cap)
 
 struct CapOutcome
 {
-    uint32 stripped = 0, restored = 0, empty = 0, destroyed = 0, kept = 0;
+    uint32 stripped = 0, restored = 0, returned = 0, empty = 0, destroyed = 0, kept = 0;
 };
 
-// Every gear-up, after its gear pass (autogear bis <cap>, else AutoGear at the cap): that pass puts replaced items in
+// The regear only, after its gear pass (autogear bis <cap>, else AutoGear at the cap): that pass puts replaced items in
 // the bags, keeps an item when the bags are full or the capped search has nothing for its slot, and a BiS list holds
-// items above its tier. Nothing above the gear-up's ilvl stays equipped or in the bags: strip it, refill from the
+// items above its tier. Nothing above the regear's ilvl stays equipped or in the bags: strip it, refill from the
 // capped search, give back what cannot be filled.
-CapOutcome GearToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegearSlots> const& before)
+CapOutcome RegearToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegearSlots> const& before)
 {
     CapOutcome out;
     out.destroyed = DestroyBagItemsAbove(bot, cap);
@@ -173,6 +181,52 @@ CapOutcome GearToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegear
     return out;
 }
 
+// An ordinary gear-up: one capped incremental pass, which fills empty slots and upgrades slots under the cap, never
+// autogear bis (which destroys everything) and never a destroyed bag item. What the pass replaced at or above the cap
+// goes back in its slot, enchants and all; what this gear-up put on above the cap comes off and the slot is refilled.
+CapOutcome GearUpToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegearSlots> const& before,
+    std::array<ObjectGuid, kRegearSlots> const& beforeGuids)
+{
+    CapOutcome out;
+    PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, cap, /*incremental*/ true);
+    auto const now = Equipped(bot);
+    bool refill = false;
+    for (uint8 slot = 0; slot < kRegearSlots; ++slot)
+    {
+        GearUpStep const step = GearUpSlotStep(slot, before[slot], now[slot], cap);
+        if (step == GearUpStep::Return)
+        {
+            Item* old = bot->GetItemByGuid(beforeGuids[slot]);
+            uint16 dest = 0;
+            if (old && !old->IsEquipped() && Player::IsInventoryPos(old->GetPos())
+                && bot->CanEquipItem(slot, dest, old, true) == EQUIP_ERR_OK)
+            {
+                if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                    bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true); // made by this pass, at or under the cap
+                bot->RemoveItem(old->GetBagSlot(), old->GetSlot(), true);
+                bot->EquipItem(dest, old, true);
+                bot->AutoUnequipOffhandIfNeed();
+                ++out.returned;
+            }
+        }
+        else if (step == GearUpStep::Strip)
+        {
+            bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true); // made by this gear-up, above its cap
+            ++out.stripped;
+            refill = true;
+        }
+    }
+    if (refill)
+        PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, cap, /*incremental*/ true);
+    auto const after = Equipped(bot);
+    for (uint8 slot = 0; slot < kRegearSlots; ++slot)
+        if (slot != kRegearSlotBody && slot != kRegearSlotTabard && before[slot].entry && !after[slot].entry
+            && (slot != EQUIPMENT_SLOT_OFFHAND || !bot->IsTwoHandUsed()))
+            ++out.empty;
+    out.kept = RegearKept(after, cap);
+    return out;
+}
+
 void Finish(std::string const& failure = {})
 {
     GearJob& job = *active;
@@ -206,7 +260,8 @@ LeeroyCommandResult HandleGearUp(nlohmann::json const& message)
     if (command->regear && FindOnline(job.human))
         return {false, "owner_online"};
     // IsCast is level-80-only. Gear-up must also accept under-level members of this same owned guild; a regear takes
-    // only the cast's bots. Validate the entire request before queuing it; a non-bot never reaches a factory.
+    // only the cast's bots. Validate who each member is before queuing; a non-bot never reaches a factory. A member a
+    // Realm lease or a training fence holds is skipped by the tick (SkipFor), never a reason to refuse the batch.
     for (uint32 guid : command->guids)
     {
         if (command->regear)
@@ -218,7 +273,6 @@ LeeroyCommandResult HandleGearUp(nlohmann::json const& message)
             if (auto const refusal = RegearRefusal(target); !refusal.empty())
                 return {false, std::string(refusal) + ":" + std::to_string(guid)};
         }
-        if (Realm::RealmOwns(guid)) return {false, "busy:realm_owner"};
         if (!InOwnedGuild(guid, job.guild, job.human))
             return {false, "not_cast:" + std::to_string(guid)};
         if (Player* bot = FindOnline(guid))
@@ -280,9 +334,16 @@ void TickGearUp()
             else
             {
                 auto const before = Equipped(bot);
+                auto const beforeGuids = EquippedGuids(bot);
                 CapOutcome capped;
                 auto const gearFailure = [&]() -> std::string
                 {
+                    if (!job.command.regear)
+                    {
+                        capped = GearUpToCap(bot, job.command.ilvl, before, beforeGuids);
+                        bot = FindOnline(guid);
+                        return bot ? std::string{} : std::string("offline");
+                    }
                     PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
                     // silent suppresses wrapper feedback. The installed BiS action may still TellMaster internally;
                     // changing global chat settings or temporarily changing the bot's master would be unsafe here.
@@ -298,7 +359,7 @@ void TickGearUp()
                     }
                     if (auto failure = SkipFor(guid, job, bot); !failure.empty())
                         return failure;
-                    capped = GearToCap(bot, job.command.ilvl, before);
+                    capped = RegearToCap(bot, job.command.ilvl, before);
                     bot = FindOnline(guid);
                     return bot ? std::string{} : std::string("offline");
                 }();
@@ -320,10 +381,10 @@ void TickGearUp()
                     float const average = bot->GetAverageItemLevel();
                     progress.avgIlvl = std::isfinite(average) && average > 0 ? static_cast<uint32>(average) : 0;
                     progress.kept = capped.kept;
-                    LOG_INFO("module.leeroy", "mod-leeroy: {} guid={} ilvl={} avg={} stripped={} restored={} empty={} "
-                        "kept={} destroyed={}", job.command.regear ? "regear_member" : "gear_up_member", guid,
-                        job.command.ilvl, progress.avgIlvl, capped.stripped, capped.restored, capped.empty,
-                        capped.kept, capped.destroyed);
+                    LOG_INFO("module.leeroy", "mod-leeroy: {} guid={} ilvl={} avg={} stripped={} restored={} "
+                        "returned={} empty={} kept={} destroyed={}", job.command.regear ? "regear_member"
+                        : "gear_up_member", guid, job.command.ilvl, progress.avgIlvl, capped.stripped, capped.restored,
+                        capped.returned, capped.empty, capped.kept, capped.destroyed);
                     PublishJob(progress);
                 }
             }

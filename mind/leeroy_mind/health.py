@@ -1243,7 +1243,7 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("offline-days", _offline_days, conn, now),
                 _guarded("training-lab", _training_lab, conn, now),
                 _guarded("gpu-pause", _gpu_pause, conn, now),
-                _guarded("regear", _regear, conn)]
+                _guarded("regear", _regear, conn, now)]
     finally:
         conn.close()
 
@@ -1461,7 +1461,10 @@ def _training_lab(conn, now: float) -> Check:
     return _table_check(name, check)
 
 
-def _regear(conn) -> Check:
+REGEAR_STUCK_S = 2 * 86400  # a regear running longer than this has stopped making progress
+
+
+def _regear(conn, now: float) -> Check:
     """The newest one-time regear ([guild] regear_to, meta guild:regear:<ilvl>): members done of the total."""
     name = "regear"
 
@@ -1487,6 +1490,9 @@ def _regear(conn) -> Check:
         extra = f", {len(state['gave_up'])} gave up, {len(state['dropped'])} dropped" if closed else ""
         if state["state"] == "done":
             return Check(name, OK, f"regear {ilvl}: done, {done} of {total} members{extra}")
-        return Check(name, NOTE, f"regear {ilvl}: {done} of {total} members done{extra}; batches run while "
-                     "he is offline")
+        started = newest[0]
+        text = f"regear {ilvl}: {done} of {total} members done{extra}, started {_when(started)}"
+        if now - started > REGEAR_STUCK_S:
+            return Check(name, FAIL, text + "; running over two days: see regear_* lines in mind.log")
+        return Check(name, NOTE, text + "; batches run while he is offline")
     return _table_check(name, check)

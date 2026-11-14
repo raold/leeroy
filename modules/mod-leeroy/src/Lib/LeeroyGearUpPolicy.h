@@ -63,18 +63,23 @@ inline std::string_view RegearRefusal(RegearTarget const& t)
     return {};
 }
 
-// Before each member: who it is, then his presence (his login ends the job), the gear-up's own body checks, and the
-// Realm/training fences (Realm leases, offline raids, training, pending bot jobs: RealmModule::MutationReason).
+// Every gear-up, before each member: the body checks, then the Realm/training fences (Realm leases, offline raids,
+// training ownership, cleanup and journals, pending bot jobs, his group: RealmModule::MutationReason).
+inline std::string_view GearUpFencedSkipReason(GearUpState const& state, std::string_view fence)
+{
+    if (auto skip = GearUpSkipReason(state); !skip.empty()) return skip;
+    return fence;
+}
+
+// A regear adds who the member is and his presence (his login ends the job) before those.
 inline std::string_view RegearSkipReason(RegearTarget const& target, bool ownerOnline, GearUpState const& state,
     std::string_view fence)
 {
     if (auto refusal = RegearRefusal(target); !refusal.empty()) return refusal;
     if (ownerOnline) return "owner_online";
-    if (auto skip = GearUpSkipReason(state); !skip.empty()) return skip;
-    return fence;
+    return GearUpFencedSkipReason(state, fence);
 }
 
-// The cap pass every gear-up runs (GearToCap): nothing above the gear-up's ilvl stays equipped or in the bags.
 // Equipment slots as the core numbers them (EquipmentSlots). The shirt and the tabard are never touched.
 inline constexpr std::uint8_t kRegearSlots = 19, kRegearSlotBody = 3, kRegearSlotTabard = 18;
 
@@ -85,8 +90,9 @@ struct RegearSlotItem
 
 enum class RegearStep : std::uint8_t { Leave, Strip, Refill };
 
-// After the capped gear pass, one slot: an item still above the cap (the capped search found nothing for the slot,
-// the bags were full, or a BiS list item sat above it) is stripped; a slot the pass emptied is refilled.
+// The regear alone removes and destroys gear above its cap (RegearToCap). After its capped gear pass, one slot: an
+// item still above the cap (the capped search found nothing for the slot, the bags were full, or a BiS list item sat
+// above it) is stripped; a slot the pass emptied is refilled.
 inline RegearStep RegearSlotStep(std::uint8_t slot, RegearSlotItem before, RegearSlotItem now, std::uint32_t cap)
 {
     if (slot >= kRegearSlots || slot == kRegearSlotBody || slot == kRegearSlotTabard) return RegearStep::Leave;
@@ -113,6 +119,21 @@ inline std::uint32_t RegearRestoreEntry(RegearSlotItem after, std::uint32_t oldE
 inline bool RegearDestroysBagItem(bool weaponOrArmor, std::uint32_t ilvl, std::uint32_t cap)
 {
     return weaponOrArmor && ilvl > cap;
+}
+
+// An ordinary gear-up (role, under level, below average, theorycrafter) runs only a capped incremental pass: it fills
+// empty slots and upgrades slots whose item is under the cap. After it, one slot: an item the bot had at or above the
+// cap that the pass replaced goes back (DKP loot is never lost), and an item this gear-up put on above the cap comes
+// off; anything else stays as the pass left it.
+enum class GearUpStep : std::uint8_t { Leave, Return, Strip };
+
+inline GearUpStep GearUpSlotStep(std::uint8_t slot, RegearSlotItem before, RegearSlotItem now, std::uint32_t cap)
+{
+    if (slot >= kRegearSlots || slot == kRegearSlotBody || slot == kRegearSlotTabard) return GearUpStep::Leave;
+    if (now.entry == before.entry) return GearUpStep::Leave;
+    if (before.entry && before.ilvl >= cap) return GearUpStep::Return;
+    if (now.entry && now.ilvl > cap) return GearUpStep::Strip;
+    return GearUpStep::Leave;
 }
 
 template <typename Slots>

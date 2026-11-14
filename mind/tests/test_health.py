@@ -1418,3 +1418,31 @@ def test_an_unreadable_lab_record_fails_without_contents(rig):
     rig.db("INSERT INTO meta(key,value) VALUES ('tg:lab:owned','PRIVATE_SENTINEL')")
     result = readonly_check(rig, health._training_lab, NOW)
     assert result.status == FAIL and "invalid lab record" in result.text
+
+
+def _regear_db(*states):
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+    for ilvl, state in states:
+        conn.execute("INSERT INTO meta VALUES (?,?)", (f"guild:regear:{ilvl}", json.dumps(state)))
+    return conn
+
+
+def _regear_state(state, started, done=(), gave_up=()):
+    return {"ilvl": 245, "state": state, "started": started, "members": [101, 102, 103],
+            "done": {str(g): 243 for g in done}, "kept": {}, "gave_up": list(gave_up), "dropped": [],
+            "tries": {}, "wait": {}}
+
+
+def test_regear_line_shows_progress_and_fails_after_two_days():
+    with closing(_regear_db()) as conn:
+        assert health._regear(conn, NOW).status == OK
+    with closing(_regear_db((245, _regear_state("running", NOW - 3600, done=(101,))))) as conn:
+        check = health._regear(conn, NOW)
+        assert check.status == NOTE and "1 of 3 members done" in check.text
+    with closing(_regear_db((245, _regear_state("running", NOW - 2 * 86400 - 1, done=(101,))))) as conn:
+        check = health._regear(conn, NOW)
+        assert check.status == FAIL and "over two days" in check.text
+    with closing(_regear_db((245, _regear_state("done", NOW - 9 * 86400, done=(101, 102), gave_up=(103,))))) as conn:
+        check = health._regear(conn, NOW)
+        assert check.status == OK and "done, 2 of 3 members, 1 gave up" in check.text

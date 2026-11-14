@@ -10,9 +10,12 @@ The regear ([guild] regear_to) takes the cast's bots down to an item level once
 per value (meta guild:regear:<ilvl>), in the same windows as gear-up, through
 gear_up's regear mode (native, LeeroyGearUpPolicy.h). Never the owner, never a
 member outside the cast (under 80, rank 0, left the guild), never a character
-native finds on a player's account. A native whose hello lists "regear" caps
-every gear-up at its ilvl, so every gear-up's receipt is then the capped band:
-an average from ilvl - REGEAR_BELOW to ilvl + REGEAR_ABOVE.
+native finds on a player's account. The regear alone removes gear above its
+cap; its receipt is a band, ilvl - REGEAR_BELOW to ilvl + REGEAR_ABOVE. A native
+whose hello lists "regear" runs every other gear-up as a capped incremental pass
+that keeps the loot a bot holds, so their receipt is that floor and no ceiling.
+A member the regear has not reached yet is left out of gear-up's passes; anyone
+else is geared as usual while it runs.
 """
 
 import asyncio
@@ -38,13 +41,14 @@ FRIEND_DELAY = 120
 FRIEND_PERIOD = 1800
 MAX_SPECS = 10
 MAX_BATCH = 40
-REGEAR_FEATURE = "regear"  # mod-leeroy's hello: gear_up understands "regear" and caps every gear-up
+REGEAR_FEATURE = "regear"  # mod-leeroy's hello: gear_up understands "regear"; other gear-ups keep loot, capped
 REGEAR_LEVEL = 80          # native's cast: guild members at 80 and above, the owner excluded
 REGEAR_GAP = 120           # seconds between regear batches
 REGEAR_WAIT = 1800         # a member native skipped, or regeared out of bounds, waits this long
 REGEAR_TRIES = 3           # regeared out of bounds (or failed) this often: given up, reported
 REGEAR_BELOW = 20          # a regeared average may land this far under the target
 REGEAR_ABOVE = 6           # and no further above it (a slot kept above the cap adds about 1)
+REGEAR_DEADLINE = 3 * 86400  # members still pending this long after the start are given up, reported
 REGEAR_DROP = frozenset({"owner", "not_cast", "not_bot"})  # native's refusals of who a member is
 _LOCKS = WeakValueDictionary()
 
@@ -397,11 +401,12 @@ class Roster:
                   "level": self.cfg.level_to, "minimum": ilvl - 6 if mode == "tc_geared"
                   else self.cfg.gear_up_below_avg_ilvl,
                   "snapshots": {str(g): self._snapshot(g) for g in targets}, "started_ms": self._started_ms}
-        if regear is not None or self._regear_native:
-            # A capped gear-up lands near its ilvl, never above it: one band for every mode.
-            record.update(ilvl=ilvl, minimum=ilvl - REGEAR_BELOW, maximum=ilvl + REGEAR_ABOVE)
         if regear is not None:
-            record["regear"] = regear
+            # The regear lands near its ilvl, never above it.
+            record.update(regear=regear, ilvl=ilvl, minimum=ilvl - REGEAR_BELOW, maximum=ilvl + REGEAR_ABOVE)
+        elif self._regear_native:
+            # A capped incremental gear-up keeps the loot a bot holds: a floor, no ceiling.
+            record.update(ilvl=ilvl, minimum=ilvl - REGEAR_BELOW)
         with self.ports.conn:
             self._put("gear", record)
         try:
@@ -423,12 +428,12 @@ class Roster:
                 self._put("gear", current)
         return ack if valid else None
 
-    def _regear_running(self):
-        """A regear this native can run and that has not finished: gear-up and the theorycrafters wait for it."""
+    def _regear_pending(self):
+        """Members a running regear has yet to reach: gear-up's passes leave them to it, and only them."""
         if not self.cfg.regear_to or not self._regear_native:
-            return False
+            return set()
         state = _regear_state(_get(self.ports.conn, regear_key(self.cfg.regear_to)))
-        return state is None or state["state"] != "done"
+        return set(regear_pending(state)) if state is not None and state["state"] == "running" else set()
 
     async def maybe_regear(self):
         target = self.cfg.regear_to
@@ -450,14 +455,16 @@ class Roster:
                 return
             if state is None:
                 members = regear_members(self._cast(), self._human)
-                if not members:
-                    return
                 state = {"ilvl": target, "state": "running", "started": now, "finished": None,
                          "members": members, "done": {}, "kept": {}, "gave_up": [], "dropped": [],
                          "tries": {}, "wait": {}}
+                log.info("regear_started ilvl=%d members=%d", target, len(members))
+                if not members:  # nobody eligible: nothing to do, and nothing holds gear-up
+                    self._regear_finish(state, now)
                 with conn:
                     _put(conn, key, state)
-                log.info("regear_started ilvl=%d members=%d", target, len(members))
+                if not members:
+                    return
             if not self._due("regear", REGEAR_GAP):
                 return
             cast = self._cast()
@@ -468,7 +475,14 @@ class Roster:
                     log.info("regear_dropped guid=%d reason=not_cast", guid)
                 elif state["tries"].get(str(guid), 0) >= REGEAR_TRIES:
                     state["gave_up"].append(guid)
-                    log.info("regear_gave_up guid=%d tries=%d", guid, state["tries"][str(guid)])
+                    # Its gear is whatever the last pass left: gear-up looks at it again, by its average.
+                    with conn:
+                        conn.execute("DELETE FROM guild_flag WHERE kind IN ('geared','tc_geared') AND guid=?",
+                                     (guid,))
+                    log.info("regear_gave_up guid=%d reason=tries tries=%d", guid, state["tries"][str(guid)])
+                elif now - state["started"] >= REGEAR_DEADLINE:
+                    state["gave_up"].append(guid)  # never reached in time (offline, grouped, held): reported
+                    log.info("regear_gave_up guid=%d reason=deadline", guid)
             pending = regear_pending(state)
             if not pending:
                 self._regear_finish(state, now)
@@ -557,8 +571,7 @@ class Roster:
     async def maybe_gear_up(self):
         async with self._lock:
             epoch = self._epoch
-            if (not self._maintenance(epoch) or self._get("gear") or self._regear_running()
-                    or not self._due("gear")):
+            if not self._maintenance(epoch) or self._get("gear") or not self._due("gear"):
                 return
             members = self._cast()
             before = {g: self._snapshot(g) for g in members}
@@ -572,16 +585,20 @@ class Roster:
             current = {g: m for g, m in self._cast().items()
                        if g in before and self._snapshot(g) == before[g]}
             averages = {g: average_item_level(equipped.get(g, {})) for g in current}
-            targets = gear_up_targets(current, averages, flags(self.ports.conn, "geared"), self.cfg)
+            held = self._regear_pending()
+            targets = [g for g in gear_up_targets(current, averages, flags(self.ports.conn, "geared"), self.cfg)
+                       if g not in held]
             await self._gear(targets[:MAX_BATCH], "geared", self.cfg.gear_up_ilvl, epoch)
 
     async def maybe_gear_theorycrafters(self):
         async with self._lock:
             epoch = self._epoch
             if (not self.cfg.theorycrafter_ilvl or not self._maintenance(epoch) or self._get("gear")
-                    or self._regear_running() or not self._due("theorycrafter")):
+                    or not self._due("theorycrafter")):
                 return
-            targets = theorycrafter_targets(self._cast(), self.ports.persona, flags(self.ports.conn, "tc_geared"))
+            held = self._regear_pending()
+            targets = [g for g in theorycrafter_targets(self._cast(), self.ports.persona,
+                                                        flags(self.ports.conn, "tc_geared")) if g not in held]
             await self._gear(targets[:MAX_BATCH], "tc_geared", self.cfg.theorycrafter_ilvl, epoch)
 
     async def on_job(self, ev):
