@@ -5,10 +5,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from tuning.scenario import GOLDEN, golden, record
+from tuning.scenario import GOLDEN, engine_clock, golden, record
 from leeroy_mind.decisions import ledger, polls
 from leeroy_mind.decisions.attach import attach_decisions
 from leeroy_mind.decisions.service import DecisionsService
+
+
+
+@pytest.fixture
+def clock():
+    """The golden scenario's own clock: each step settles by yielding, never by real time."""
+    return engine_clock()
 
 
 def app(tmp_path, *, server=True):
