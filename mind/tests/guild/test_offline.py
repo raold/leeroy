@@ -80,10 +80,10 @@ def test_is_due_overnight_empty_window_and_dst_elapsed_absence():
 
 
 def test_next_raid_key_never_run_then_oldest_stable_ties():
-    assert next_raid_key(("icc25", "icc10", "toc25"), {"icc25": 100, "toc25": 50}) == "icc10"
-    assert next_raid_key(("icc25", "toc25"), {"icc25": 100, "toc25": 50}) == "toc25"
-    assert next_raid_key(("TOC25", "icc25"), {}) == "toc25"
-    assert next_raid_key(("toc25", "icc25"), {"icc25": 1, "toc25": 1}) == "toc25"
+    assert next_raid_key(("icc25", "icc10", "naxx25"), {"icc25": 100, "naxx25": 50}) == "icc10"
+    assert next_raid_key(("icc25", "naxx25"), {"icc25": 100, "naxx25": 50}) == "naxx25"
+    assert next_raid_key(("NAXX25", "icc25"), {}) == "naxx25"
+    assert next_raid_key(("naxx25", "icc25"), {"icc25": 1, "naxx25": 1}) == "naxx25"
     for keys in ((), ("voa25",), ("icc20",)):
         with pytest.raises(ValueError):
             next_raid_key(keys, {})
@@ -450,8 +450,8 @@ def raids_today(ports):
 
 
 def test_next_raid_key_skips_raids_proved_unusable_today():
-    assert next_raid_key(("icc25", "icc10", "toc25"), {}, skip={"icc25"}) == "icc10"
-    assert next_raid_key(("icc25", "toc25"), {"toc25": 50}, skip={"icc25"}) == "toc25"
+    assert next_raid_key(("icc25", "icc10", "naxx25"), {}, skip={"icc25"}) == "icc10"
+    assert next_raid_key(("icc25", "naxx25"), {"naxx25": 50}, skip={"icc25"}) == "naxx25"
     with pytest.raises(ValueError):
         next_raid_key(("icc25",), {}, skip={"icc25"})
 
@@ -708,7 +708,7 @@ def decay_lines(ports):
 @_run_async
 async def test_owner_copy_fence_that_leaves_too_few_skips_to_the_next_raid_that_day(setup):
     ports, armory, controller = setup
-    controller.cfg = replace(controller.cfg, offline_rotation=("icc25", "toc25"))
+    controller.cfg = replace(controller.cfg, offline_rotation=("icc25", "naxx25"))
     armory.binds = {guid: {(631, 14)} for guid in (1, *range(101, 123))}  # his copy holds 22 of 30
     await controller.tick()
     assert not ports.sent and not ports.gpu
@@ -719,8 +719,8 @@ async def test_owner_copy_fence_that_leaves_too_few_skips_to_the_next_raid_that_
     assert not ports.sent
     await advance(ports, 1)
     await controller.tick()
-    assert len(ports.sent) == 1 and (ports.sent[0].map_id, ports.sent[0].size) == (649, 25)
-    assert [c[2] for c in armory.calls if c[0] == "bound_with"] == [631, 649]
+    assert len(ports.sent) == 1 and (ports.sent[0].map_id, ports.sent[0].size) == (533, 25)
+    assert [c[2] for c in armory.calls if c[0] == "bound_with"] == [631, 533]
     assert not controller._day_state()["blocked"]
 
 

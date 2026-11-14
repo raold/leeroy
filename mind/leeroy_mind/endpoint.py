@@ -109,7 +109,7 @@ MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library",
-       "ops", "claim_check", "feedback", "kit", "learn", "gpu", "string")
+       "ops", "claim_check", "feedback", "kit", "learn", "gpu", "decision", "string")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge", "edit")
 TUNE_SHAPES = {
@@ -774,6 +774,24 @@ def learn_args(args):
         raise BadRequest(str(exc)) from None
 
 
+DECISION_SHAPES = {"vote": {"action", "poll", "option"}, "overrule": {"action", "id"}}
+
+
+def decision_args(args) -> dict:
+    """His decision action: {"action": "vote", "poll", "option"} (a poll id and one of its option
+    codes) or {"action": "overrule", "id"} (a decision id)."""
+    from leeroy_mind.decisions.ledger import CODE
+    if (not isinstance(args, dict) or args.get("action") not in DECISION_SHAPES
+            or set(args) != DECISION_SHAPES[args["action"]]):
+        raise BadRequest("A decision action is vote {poll, option} or overrule {id}.")
+    for key in ("poll", "id"):
+        if key in args and (type(args[key]) is not int or not 1 <= args[key] < 2**63):
+            raise BadRequest(f"{key} is a positive whole number.")
+    if "option" in args and (not isinstance(args["option"], str) or not CODE.fullmatch(args["option"])):
+        raise BadRequest("option is one of the poll's option codes.")
+    return dict(args)
+
+
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     """(op, args) from one request line; Forbidden for a wrong key, BadRequest otherwise."""
     if not line.endswith(b"\n") or len(line) > MAX_LINE:
@@ -786,7 +804,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
                          "say, board, discord, library, ops, claim_check, feedback, learn, gpu "
-                         "or string action)")
+                         "or decision or string action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -801,7 +819,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
                   "say": say_args, "board": board_args, "discord": discord_args,
                   "library": library_args, "claim_check": claim_check_args,
                   "feedback": feedback_args, "learn": learn_args, "gpu": gpu_args,
-                  "string": string_args}.get(op)
+                  "decision": decision_args, "string": string_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -881,6 +899,7 @@ class ControlEndpoint:
         self._say = asyncio.Lock()  # one line of his in flight
         self._board = asyncio.Lock()  # one Board reply or withdrawal at a time
         self._discord = asyncio.Lock()  # one Discord action of his at a time
+        self._decision = asyncio.Lock()  # one vote or overrule of his at a time
         self._library = asyncio.Lock()  # one library search in flight
         self._claim_check = asyncio.Lock()  # one ephemeral read in flight
         self._string = asyncio.Lock()  # one string (godmode intent) change at a time
@@ -1010,7 +1029,8 @@ class ControlEndpoint:
                       outcome="ok" if reply["ok"] else "refused")
             return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
-                       "board": self.board, "discord": self.discord, "string": self.string}[op](args)
+                       "board": self.board, "discord": self.discord, "decision": self.decision,
+                       "string": self.string}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -1393,6 +1413,23 @@ class ControlEndpoint:
                 return await desk.handle(args)
             except Exception as e:  # its text can carry a message or a name
                 log_event("control_discord_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False, "error": f"That could not be saved ({type(e).__name__})."}
+
+    async def decision(self, args: dict) -> dict:
+        """His vote in a poll or his overrule of a decision (leeroy_mind.decisions.service), one at
+        a time: a second while one is being saved is refused, never queued."""
+        service = getattr(self.app, "decisions", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "The mind is stopping."}
+        if service is None:
+            return {"ok": False, "error": "Decisions are off in this mind."}
+        if self._decision.locked():
+            return {"ok": False, "error": "Another decision action is still being saved."}
+        async with self._decision:
+            try:
+                return await service.handle(args)
+            except Exception as e:
+                log_event("control_decision_failed", level=logging.WARNING, error=type(e).__name__)
                 return {"ok": False, "error": f"That could not be saved ({type(e).__name__})."}
 
 

@@ -1,9 +1,14 @@
 """Pre-pull plans keyed by the core's encounter indexes, not creature entries."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import logging
 import re
 
+from leeroy_mind import raidplay
 from leeroy_mind.wow import BOSS_NAMES
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -12,7 +17,9 @@ class BossCall:
     lust: bool = True
 
 
-BOSS_CALLS: dict[tuple[int, int], BossCall] = {
+# The calls as they were before they moved into the raid playbooks; used only when the playbook
+# data cannot be read, so guild life's calls never fail with it.
+_FALLBACK = {
     (631, 0): BossCall("marrowgar: spread out, kill spikes, run from coldflame"),
     (631, 1): BossCall("deathwhisper: kill adds fast, interrupt frostbolts"),
     (631, 2): BossCall("gunship: jump over, kill the mage, then back to the ship", False),
@@ -27,11 +34,50 @@ BOSS_CALLS: dict[tuple[int, int], BossCall] = {
     (631, 11): BossCall("sindragosa: spread, hide behind ice tombs for bombs"),
     (631, 12): BossCall("lich king: stack for infest, move out of defile"),
     (649, 0): BossCall("beasts: kill the snakes, dodge icehowl's charge"),
-    (649, 1): BossCall("jaraxxus: interrupt, kill portals and volcanoes"),
+    (649, 1): BossCall("jaraxxus: interrupt, dodge eruptions, kill the mistress"),
     (649, 2): BossCall("champions: focus the healers, cc what you can"),
     (649, 3): BossCall("twins: match your orb colour, swap on vortex"),
     (649, 4): BossCall("anub'arak: kite the spike over frost patches"),
 }
+
+
+# Heroic calls where heroic differs (on normal the volcano and portal cannot be targeted).
+_FALLBACK_HEROIC = {
+    (649, 1): BossCall("jaraxxus: interrupt, kill portals and volcanoes"),
+}
+
+
+class _Calls(Mapping):
+    """The stock pre-pull calls, kept with each boss in the raid playbooks and read on first use;
+    heroic=True holds only the bosses whose heroic call differs."""
+
+    def __init__(self, heroic: bool = False):
+        self._calls = None
+        self._heroic = heroic
+
+    def _read(self) -> dict:
+        if self._calls is None:
+            try:
+                self._calls = {boss.key: BossCall(boss.heroic_call if self._heroic else boss.call, boss.lust)
+                               for boss in raidplay.load().bosses()
+                               if (boss.heroic_call if self._heroic else boss.call) is not None}
+            except Exception as exc:
+                log.warning("boss_calls_fallback error=%s", type(exc).__name__)
+                self._calls = dict(_FALLBACK_HEROIC if self._heroic else _FALLBACK)
+        return self._calls
+
+    def __getitem__(self, key):
+        return self._read()[key]
+
+    def __iter__(self):
+        return iter(self._read())
+
+    def __len__(self):
+        return len(self._read())
+
+
+BOSS_CALLS: Mapping[tuple[int, int], BossCall] = _Calls()
+HEROIC_CALLS: Mapping[tuple[int, int], BossCall] = _Calls(heroic=True)
 GENERIC = BossCall("{boss} next. drink up, then on the tank")
 
 
@@ -40,10 +86,12 @@ def _name(name):
     return name[4:] if name.startswith("the ") else name
 
 
-def call_for(map_id, name) -> tuple[str, BossCall]:
+def call_for(map_id, name, difficulty=None) -> tuple[str, BossCall]:
+    """The boss's stock call; difficulty 2 or 3 (heroic) picks its heroic call when it has one."""
     for key, known in BOSS_NAMES.items():
         if key[0] == map_id and _name(known) == _name(name):
-            return known, BOSS_CALLS.get(key, BossCall(GENERIC.pre.format(boss=known)))
+            call = BOSS_CALLS.get(key, BossCall(GENERIC.pre.format(boss=known)))
+            return known, (HEROIC_CALLS.get(key, call) if difficulty in (2, 3) else call)
     return name, BossCall(GENERIC.pre.format(boss=name))
 
 

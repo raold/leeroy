@@ -7,6 +7,7 @@
 #include "TopUpJob.h"
 #include "DeathLoopJob.h"
 #include "GroupRezJob.h"
+#include "HazardJob.h"
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
 #include "OwnerSay.h"
@@ -26,6 +27,7 @@ public:
         Leeroy::PlayStyle::Reload();
         Leeroy::Guild::ReloadDeathLoop();
         Leeroy::Guild::ReloadGroupRez();
+        Leeroy::Guild::ReloadHazards();
     }
 
     void OnStartup() override
@@ -37,6 +39,7 @@ public:
         Leeroy::Guild::RegisterBotCommandHandlers();
         Leeroy::Guild::RegisterOfflineRaidHandler();
         Leeroy::Guild::RegisterOwnerSayHandler();
+        Leeroy::Guild::InstallHazardFilter();
     }
 
     void OnUpdate(uint32 diff) override
@@ -47,6 +50,7 @@ public:
         Leeroy::Guild::TickTopUp(diff);
         Leeroy::Guild::TickDeathLoop(diff);
         Leeroy::Guild::TickGroupRez(diff);
+        Leeroy::Guild::TickHazards(diff);
         Leeroy::Guild::TickOfflineRaid(diff);
         if (diff >= _styleCleanup)
         {

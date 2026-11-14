@@ -56,6 +56,9 @@ LEEROY_TEST(OfflineRaid_ProgressFieldsAreAdditiveAndPreserveZeroAndFalse)
     CHECK_EQ(j.at("members_in_instance"), 0);
     CHECK_EQ(j.at("last_progress_ts"), 123);
     CHECK_EQ(j.at("boss_engaged"), false);
+    CHECK(!j.contains("dc_state"));
+    e.dcState = "door";
+    CHECK_EQ(MakeJobEvent(e).at("dc_state"), "door");
 }
 
 namespace
@@ -427,4 +430,103 @@ LEEROY_TEST(OfflineRaid_StuckSlotStaysWhileAMemberIsProvablyHeld)
     CHECK(DecideSlotRelease(false, true, OfflineSlotReleaseMs, 1) == SlotRelease::Keep);
     CHECK(DecideSlotRelease(false, true, std::numeric_limits<std::uint32_t>::max(), 3) == SlotRelease::Keep);
     CHECK(DecideSlotRelease(true, true, OfflineSlotReleaseMs * 10, 0) == SlotRelease::Keep); // Never a benchmark.
+}
+
+LEEROY_TEST(OfflineRaid_EmptyDcRosterIsRefusedByNameNotByTimeout)
+{
+    CHECK_EQ(DcRosterRefusal(0), "dc_no_bosses");
+    CHECK_EQ(DcRosterRefusal(0), std::string(OfflineNoDcBosses));
+    CHECK(DcRosterRefusal(1).empty());
+    CHECK(DcRosterRefusal(12).empty());
+}
+
+LEEROY_TEST(OfflineRaid_DcPhaseNamesWhatDungeonClearIsDoing)
+{
+    CHECK(ReadDcPhase(false, true, true, true) == DcPhase::Unknown);
+    CHECK(ReadDcPhase(true, false, true, true) == DcPhase::Off);
+    CHECK(ReadDcPhase(true, true, false, true) == DcPhase::On);
+    CHECK(ReadDcPhase(true, true, true, false) == DcPhase::Paused);
+    CHECK(ReadDcPhase(true, true, true, true) == DcPhase::Door);
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Unknown)), "unknown");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Off)), "off");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::On)), "on");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Paused)), "paused");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Door)), "door");
+}
+
+LEEROY_TEST(OfflineRaid_DoorHoldOutOfEveryFightStopsTheRunByName)
+{
+    DcHold door;
+    CHECK(door.Observe(DcPhase::Door, false, OfflineDcHoldStopMs - 1).empty());
+    CHECK_EQ(door.Observe(DcPhase::Door, false, 1), "dc_door_blocked");
+    CHECK_EQ(door.Observe(DcPhase::Door, false, 1000), "dc_door_blocked"); // Stays named until the stop lands.
+    DcHold other;
+    CHECK(other.Observe(DcPhase::Paused, false, OfflineDcHoldStopMs - 1).empty());
+    CHECK_EQ(other.Observe(DcPhase::Paused, false, 1), "dc_paused");
+    DcHold saturated;
+    auto const maximum = std::numeric_limits<std::uint32_t>::max();
+    CHECK_EQ(saturated.Observe(DcPhase::Door, false, maximum), "dc_door_blocked");
+    CHECK_EQ(saturated.Observe(DcPhase::Door, false, maximum), "dc_door_blocked");
+    CHECK_EQ(saturated.heldMs, maximum);
+}
+
+LEEROY_TEST(OfflineRaid_HoldClockRestartsInAFightUnreadableEncounterOrAnyOtherPhase)
+{
+    struct Reset { DcPhase phase; std::optional<bool> engaged; };
+    for (auto const& reset : {Reset{DcPhase::Door, true}, Reset{DcPhase::Door, std::nullopt},
+        Reset{DcPhase::Paused, true}, Reset{DcPhase::On, false}, Reset{DcPhase::Off, false},
+        Reset{DcPhase::Unknown, false}})
+    {
+        DcHold hold;
+        CHECK(hold.Observe(DcPhase::Door, false, OfflineDcHoldStopMs - 1).empty());
+        CHECK(hold.Observe(reset.phase, reset.engaged, 1000).empty());
+        CHECK_EQ(hold.heldMs, 0u);
+        CHECK(hold.Observe(DcPhase::Door, false, OfflineDcHoldStopMs - 1).empty());
+        CHECK_EQ(hold.Observe(DcPhase::Door, false, 1), "dc_door_blocked");
+    }
+}
+
+LEEROY_TEST(OfflineRaid_NaxxSapphironAndKelThuzadAreOutOfDungeonClearsReach)
+{
+    CHECK(DcUnreachableBosses(533) == std::vector<std::uint32_t>({13, 14}));
+    CHECK(DcUnreachableBosses(631).empty());
+    CHECK(DcUnreachableBosses(603).empty());
+}
+
+LEEROY_TEST(OfflineRaid_EveryReachableBossDoneEndsTheRunAsClearedReachable)
+{
+    // NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3, TO_BE_DECIDED 5. Naxxramas has 15 bosses.
+    std::vector<std::uint8_t> naxx(15, 3);
+    naxx[13] = 0; naxx[14] = 5;
+    CHECK(ClearedReachable(naxx, {13, 14}));
+    naxx[13] = 3;
+    CHECK(ClearedReachable(naxx, {13, 14}));    // Sapphiron somehow down, Kel'Thuzad still out of reach.
+    naxx[14] = 3;
+    CHECK(!ClearedReachable(naxx, {13, 14}));   // All fifteen: Decide's own "cleared".
+    naxx[14] = 0; naxx[12] = 1;
+    CHECK(!ClearedReachable(naxx, {13, 14}));   // The Four Horsemen are still being fought.
+    naxx[12] = 2;
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[12] = 3;
+    CHECK(ClearedReachable(naxx, {13, 14}));
+    CHECK(!ClearedReachable(naxx, {}));          // A map with no table never claims it.
+    CHECK(!ClearedReachable({}, {13, 14}));
+    CHECK(!ClearedReachable(std::vector<std::uint8_t>(13, 3), {13, 14})); // Index outside the roster.
+}
+
+LEEROY_TEST(OfflineRaid_AnOutOfReachBossInProgressIsNeverClearedReachable)
+{
+    std::vector<std::uint8_t> naxx(15, 3);
+    naxx[13] = 1; naxx[14] = 0;                  // Sapphiron engaged: the way to him was open after all.
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[13] = 3; naxx[14] = 1;                  // Kel'Thuzad engaged.
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 2;                                // A failed attempt on him: the run goes on under the wipe caps.
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 4;
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 5;                                // Never loaded: still out of reach.
+    CHECK(ClearedReachable(naxx, {13, 14}));
+    naxx[14] = 0;
+    CHECK(ClearedReachable(naxx, {13, 14}));
 }

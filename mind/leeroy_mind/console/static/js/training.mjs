@@ -1,7 +1,7 @@
-import { $, arr, clear, el, num, obj, plural, str } from "./core.mjs";
+import { $, api, arr, clear, el, num, obj, plural, refused, str } from "./core.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
 import { adaptText, avoidText, changeText, coverageText, deathsBy, deathsText, evidenceNotes, gateText, hitHardest, hurtHead,
-  mechanicsText, scopeText, trialText } from "./trainmodel.mjs";
+  mechanicsText, playbookGroups, playbookTotals, scopeText, trialText } from "./trainmodel.mjs";
 import { when } from "./words.mjs";
 
 // -- the training tab: mind.db only, read-only -----------------------------------------------------
@@ -114,4 +114,42 @@ function renderHurt(box, h) {
   }
 }
 
-pollTab("training", { path: "/api/training", ms: TRAINING_MS, render: renderTraining });
+// The raid playbooks are the repo's data: read once a page, kept while it stays open
+var playbooks = null;
+
+function renderPlaybooks(v) {
+  var box = $("training-playbooks");
+  clear(box);
+  box.appendChild(el("p", "note", playbookTotals(v)));
+  playbookGroups(v).forEach(function (raid) {
+    box.appendChild(el("h4", "", raid.title));
+    raid.bosses.forEach(function (b) {
+      var d = el("details", ""), s = el("summary", "");
+      s.appendChild(el("strong", "", b.title));
+      s.appendChild(el("span", "muted", " " + b.detail));
+      d.appendChild(s);
+      if (b.call) { d.appendChild(el("p", "note", "Call: " + b.call)); }
+      b.mechanics.forEach(function (m) {
+        var r = row();
+        r.appendChild(el("strong", "", m.title));
+        r.appendChild(el("span", "chip", m.tag));
+        r.appendChild(el("span", "muted", m.who));
+        if (m.stock) { r.appendChild(el("span", "chip", m.stock)); }
+        if (m.note) { r.appendChild(el("span", "muted", m.note)); }
+        r.appendChild(el("span", "", m.text));
+        d.appendChild(r);
+      });
+      box.appendChild(d);
+    });
+  });
+}
+
+function loadPlaybooks() {
+  if (playbooks) { return; }
+  playbooks = api("/api/training/playbooks", { poll: true }).then(function (r) {
+    if (refused(r) || r.status !== 200) { playbooks = null; return null; }
+    return r.json().then(renderPlaybooks);
+  }).catch(function () { playbooks = null; });
+}
+
+pollTab("training", { path: "/api/training", ms: TRAINING_MS, render: function (v) { renderTraining(v); loadPlaybooks(); } });
