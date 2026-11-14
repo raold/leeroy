@@ -149,6 +149,7 @@ class RequestPhotos:
         place = row['channel'] if layout.dm_peer(row['channel']) is not None else CHANNEL_PREFIX + row['channel']
         request = None
         outcome = 'words'
+        retry = False
         try:
             async with self._typing(guid, place):
                 p = app.personas.get(guid)
@@ -157,6 +158,11 @@ class RequestPhotos:
                     asked_channel=row['channel'], thread=row['thread'],
                     photo_channel=f'dm:{guid}' if private else row['channel'],
                     audience='him' if private else 'anyone', now=app.clock.now())
+                # The post's other members answered on the first try; a retry is hers alone.
+                retry = outcome == 'existing'
+                if request is not None and not records.attempt(app.store, message, 'initial', now=app.clock.now()):
+                    outcome = 'retry_limit'
+                    return
                 if request is not None:
                     await self._prepare(request, row['text'], immediate=outcome == 'accepted')
                     request = records.get(app.store, message)
@@ -172,7 +178,7 @@ class RequestPhotos:
             log('selfie_request', guid=guid, channel_kind='dm' if layout.dm_peer(row['channel']) else 'discord', outcome=outcome)
         if not self._closed and not app.stopping and (request is None or self._source_open(request)):
             self._retry_after(message, 180)
-            answer = app.discord_talk.on_his_post(message, immediate=True)
+            answer = app.discord_talk.on_his_post(message, immediate=True, speakers=(guid,) if retry else None)
             if answer is not None:
                 # Preparation and its ordinary reply have one owner. The retry timer
                 # must not admit a second reply while the first still owns its photo.
@@ -422,6 +428,10 @@ class RequestPhotos:
                                         else row.fresh_message is None and row.fallback_message is None)
         meta.still_valid = valid
         meta.on_discord_record = receipt
+        if part != 'private' and not records.attempt(app.store, latest.message, part, now=app.clock.now()):
+            log('selfie_request', guid=latest.guid, channel_kind='dm' if latest.audience == 'him' else 'discord',
+                outcome='retry_limit')
+            return
         app.discord_talk.begin_photo()
         await app.engine.speak_meta(turn, meta)
 

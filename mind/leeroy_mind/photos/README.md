@@ -55,6 +55,12 @@ opener, answer or channel seed offers it to that audience again in that time.
 The attachment, chat mirror, snap and request delivery receipts commit together. A failed
 render gets one ordinary answer in the member's words. No retained photo file is deleted.
 
+A dropped answer is retried for the asked member only; other members named in the same post
+answer it once. Her first answer, the fresh photo's follow-up and a failure notice each get
+their first try and at most two retries (about three minutes apart for the first answer, one
+minute for the others). After that the request ends (`passed`, failure `retry_limit` unless a
+failure was already recorded) and its unsent photos are closed; their files stay.
+
 `selfie_request` logs ids, channel kinds and outcome codes. `selfie_request_render` reports
 total, unload, startup, render, stop and reload timings, without words or prompts. Rehearsal
 timings use fake workers and model administration. For release, measure these phases on

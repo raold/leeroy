@@ -142,8 +142,10 @@ class DiscordTalk:
 
     # -- his actions -----------------------------------------------------------------------
 
-    def on_his_post(self, message_id: int, *, immediate: bool = False) -> asyncio.Task | None:
-        """Queue his post's answers; return their job so an asynchronous source can own it."""
+    def on_his_post(self, message_id: int, *, immediate: bool = False,
+                    speakers=None) -> asyncio.Task | None:
+        """Queue his post's answers; return their job so an asynchronous source can own it.
+        `speakers` keeps only those members' answers (a retry of one owed answer)."""
         self._take_lease()
         try:
             row = self.app.store.conn.execute('SELECT channel FROM discord_message WHERE id=?',(message_id,)).fetchone()
@@ -163,6 +165,8 @@ class DiscordTalk:
             if not immediate and self._later(message_id):
                 return
             items = self.plan(message_id)
+            if speakers is not None:
+                items = [(turn, meta) for turn, meta in items if turn.speaker in speakers]
         except Exception as error:
             log.warning("discord_plan_failed: message=%d error=%s", message_id, type(error).__name__)
             return
