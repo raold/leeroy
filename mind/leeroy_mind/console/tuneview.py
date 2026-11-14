@@ -69,7 +69,8 @@ def tuning_view(conn, *, file_values: dict | None = None, now: float = 0.0) -> d
     fields = {k: list(v[0]) for k, v in G.FIELDS.items()}
     out = {"available": not missing, "missing": missing, "dials": dials, "fields": fields,
            "version": 0, "pinned_members": 0, "world_dials": [], "groups": [], "members": [],
-           "history": [], "nudges": {"active": [], "history": []}}
+           "history": [], "nudges": {"active": [], "history": []},
+           "edits": {"active": [], "history": []}}
     t = Tuning.load(conn, now=now) if not missing else Tuning(human=human_guid(conn) or 0)
     files = file_values or {}
     out["world_dials"] = [{"name": d.name, "label": d.label, "lo": d.lo, "hi": d.hi,
@@ -109,5 +110,7 @@ def tuning_view(conn, *, file_values: dict | None = None, now: float = 0.0) -> d
     if not missing:
         out["history"] = C.history(conn, HISTORY)
         out["nudges"] = N.view(conn, now=now)
+        from leeroy_mind.tuning import edits as E
+        out["edits"] = E.view(conn, now=now)
     out["names"] = {str(g): cast[g].name for g in cast_members}
     return out

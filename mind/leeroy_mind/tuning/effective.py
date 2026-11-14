@@ -55,6 +55,7 @@ class EffectivePersona(Persona):
     tuned = NEUTRAL
     base = None
     nudges = ()
+    edits = None  # tuning.edits.MemberEdits: the owner's godmode overlays in force
 
 
 def is_effective(p) -> bool:
@@ -81,6 +82,43 @@ def with_nudges(p, nudges):
     object.__setattr__(out, "tuned", dials_of(p))
     object.__setattr__(out, "base", base_of(p))
     object.__setattr__(out, "nudges", tuple(nudges))
+    object.__setattr__(out, "edits", getattr(p, "edits", None))
+    return out
+
+
+def edits_of(p):
+    """The member's godmode overlays (tuning.edits.MemberEdits); NO_EDITS for a stored persona,
+    None or a member with none in force."""
+    from .edits import NO_EDITS
+    e = getattr(p, "edits", None) if isinstance(p, EffectivePersona) else None
+    return NO_EDITS if e is None else e
+
+
+def with_edits(p, edits):
+    """`p` with the owner's godmode overlays (MemberEdits) folded in: trait edits replace the
+    persona's values at their whitelisted paths (a trait edit wins over a dial on the same
+    score), and the overlays ride along for their readers (edits_of). `p` itself when there are
+    none. The stored persona stays `base`, so a writer never saves an overlay."""
+    if p is None or edits is None or edits.empty:
+        return p
+    q = p
+    if edits.traits:
+        from leeroy_mind.personas.schema import persona_from_dict, persona_to_dict
+        data = persona_to_dict(p)
+        for path, value in edits.traits.items():
+            node, keys = data, path.split(".")
+            for k in keys[:-1]:
+                node = node[k]
+            node[keys[-1]] = value
+        try:
+            q = persona_from_dict(data)
+        except ValueError:
+            q = p  # a stored persona that no longer takes the edit: the persona as it is
+    out = EffectivePersona(**{f.name: getattr(q, f.name) for f in fields(Persona)})
+    object.__setattr__(out, "tuned", dials_of(p))
+    object.__setattr__(out, "base", base_of(p))
+    object.__setattr__(out, "nudges", tuple(getattr(p, "nudges", ())))
+    object.__setattr__(out, "edits", edits)
     return out
 
 

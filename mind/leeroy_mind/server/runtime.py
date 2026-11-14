@@ -32,6 +32,7 @@ async def snapshot(app, now, *, include_seeds=False):
     photos_on = getattr(app, 'photos', None) is not None
     photo_dial = app.cfg.talk.selfies if photos_on else 0
     groups_config = getattr(getattr(app,'groups',None),'config',None)
+    intents_on = getattr(app, 'godmode', None) is not None
     def read():
         deadline = time.monotonic() + 2
         worker_store = Store(connect(path), clock=app.clock)
@@ -48,6 +49,9 @@ async def snapshot(app, now, *, include_seeds=False):
                               'AND (returns_at IS NULL OR returns_at>?)', (now,)))
             feud = {frozenset((r[0], r[1])) for r in conn.execute('SELECT a,b FROM feud WHERE ended IS NULL')}
             rows = {(r['a'], r['b']): dict(r) for r in conn.execute('SELECT * FROM relationship')}
+            from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay
+            for pair, offsets in feeling_overlay(conn).items():  # the owner's godmode feelings
+                rows[pair] = apply_feelings(rows.get(pair, {'a': pair[0], 'b': pair[1]}), offsets)
             ties = {}
             for a in personas:
                 for b in (*personas, human):
@@ -66,7 +70,8 @@ async def snapshot(app, now, *, include_seeds=False):
                 source = gather(conn, now=now, local=local, cast=personas, officers=officers,
                                 human=human, human_name=human_name, trial_rank=trial_rank,
                                 culture_enabled=culture_on, culture_store=worker_store, ident=identity,
-                                culture_calendar=calendar_on, culture_loot=loot_on)
+                                culture_calendar=calendar_on, culture_loot=loot_on,
+                                intents_enabled=intents_on)
                 seeds = fresh(conn, source, now=now)
                 if photos_on:
                     from leeroy_mind.photos.send import photo_seeds

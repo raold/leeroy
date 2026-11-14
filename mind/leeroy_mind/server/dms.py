@@ -215,6 +215,93 @@ class DmOpeners:
             self._pending = None
             self._pending_guid = None
 
+    def intent_valid(self, turn) -> bool:
+        """An opener he asked for (godmode dm_him): the clocks' own gates (he is away, the lease,
+        the guards, chattiness, his newer post), her presence and freedom, and no answer she still
+        owes him; not the day's budget or the 48-hour spacing, which pace her own openers."""
+        app = self.app
+        if (app.world.human_online or self._closed or not self.config.enabled
+                or app.engine.cfg.talk.chattiness <= 0 or getattr(app, 'stopping', False)
+                or app.human_guid <= 0 or getattr(app, 'server', None) is None
+                or not app.server.lease.ready()
+                or in_window(app.clock.local(), self.config.quiet_window)
+                or not app.engine.live_review.config.enabled):
+            return False
+        guid, now = turn.speaker, app.clock.now()
+        if turn.to_guid != app.human_guid or turn.addressee != app.human_guid:
+            return False
+        from leeroy_mind.godmode.intents import DM_FLOOR_S
+        opened = _number(app.store.get_meta(OPEN_KEY.format(guid=guid)))
+        if opened is not None and now - opened < DM_FLOOR_S:
+            return False  # never right on top of an opener of her own
+        if now < self._human_until.get(guid, 0):
+            return False
+        if any(queued.speaker == guid for queued in app.engine.planned_turns()):
+            return False
+        if guid in app.engine.active_speakers(exclude_task=self._pending):
+            return False
+        owes = getattr(getattr(app, 'discord_talk', None), 'owes', None)
+        if owes is not None and owes(guid):
+            return False
+        p, member = app.personas.get(guid), app.world.discord_members().get(guid)
+        if p is None or member is None or guid in pulled_into_play(app):
+            return False
+        presence = presence_of(p, local=local_time(app.clock.local(), p.identity.region),
+            body_online=guid in app.world.online, body_zone=member.zone, rng_seed=RNG_SEED)
+        if presence.state not in {'online', 'idle'}:
+            return False
+        return app.store.conn.execute('SELECT 1 FROM away WHERE guid=? AND returned_at IS NULL '
+            'AND (returns_at IS NULL OR returns_at>?) LIMIT 1', (guid, now)).fetchone() is None
+
+    def intent_opener(self, intent, *, settled):
+        """A dm_him intent on this DM path: one opener in her own words about his ask, with no
+        outreach item (one thing to say a turn), taken when it is sent (`settled`, DB-only in
+        its post's transaction). None when she cannot open now; the tick asks again."""
+        guid = intent['member']
+        if self._lock.locked() or self._pending is not None:
+            return None
+        turn = Turn(TurnKind.OPEN, guid, f'dm:{guid}', to_guid=self.app.human_guid,
+                    addressee=self.app.human_guid, priority=Priority.BACKGROUND, max_lines=1,
+                    instruction=("Start a private Discord message to him in your own words. You'd "
+                                 "meant to message him about this; bring it up as your own idea: "
+                                 + intent['args']['about']))
+        if not self.intent_valid(turn):
+            return None
+        p = self.app.personas.get(guid)
+        about = intent['args']['about']
+        meta = TurnMeta(self.app.engine._new_id(), why='server:dm', initiates=True,
+                        casual=whisper_kind(p) == 'casual' or forward(p) <= 0, topic=about,
+                        server_anchor=about, discord=DiscordTarget(None, None), single_line=True,
+                        review_required=True)
+        meta.guards = self._guards
+        meta.keep_channel = True
+        meta.godmode_intent = intent['id']
+        meta.on_discord_record = lambda line, message, now: settled(intent['id'], message, now)
+        generation = self._human_generation.get(guid, 0)
+        from leeroy_mind.godmode.intents import waiting
+        meta.still_valid = lambda: (self._human_generation.get(guid, 0) == generation
+                                    and self.intent_valid(turn)
+                                    and waiting(self.app.store.conn, intent['id']))
+        return self._speak_intent(guid, turn, meta)
+
+    async def _speak_intent(self, guid, turn, meta) -> bool:
+        """True when the opener was composed (sent or dropped), False when it never ran."""
+        async with self._lock:
+            if self._pending is not None or not meta.still_valid():
+                return False
+            self._pending_guid = guid
+            self._pending = asyncio.create_task(self.app.engine.speak_meta(turn, meta))
+            try:
+                await self._pending
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                return False
+            finally:
+                self._pending = None
+                self._pending_guid = None
+            return True
+
     async def close(self) -> None:
         self._closed = True
         if self._pending is not None:
