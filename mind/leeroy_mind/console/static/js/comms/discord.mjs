@@ -73,6 +73,7 @@ export class Discord {
     this.windows = new Map(); this.error = ""; this.loaded = false; this.missing = [];
       this.photos = false;
     this.voice_notes = false;
+    this.custom_emoji = false;
     this.groups = []; this.groups_enabled = false;
   }
   channels() {
@@ -83,6 +84,7 @@ export class Discord {
   adopt(data, thread) {
     this.photos = data.photos === true;
     this.voice_notes = data.voice_notes === true;
+    this.custom_emoji = data.custom_emoji === true;
     this.groups_enabled = data.groups_enabled === true;
     this.groups = this.groups_enabled ? arr(data.groups) : [];
     this.voice_seats = data.voice_seats && {...data.voice_seats,
@@ -132,6 +134,10 @@ export class Discord {
     return out;
   }
 }
+// The server bots' names (culture/bots.py NAMES): a bot's post says which bot wrote it.
+export var BOT_NAMES = { signups: "Raid Signups", loot: "Loot Bot", logs: "Logs Bot",
+  birthday: "Birthday Bot", firsts: "Guild Firsts", reminders: "Reminders" };
+export function botName(bot) { return Object.prototype.hasOwnProperty.call(BOT_NAMES, bot) ? BOT_NAMES[bot] : "Server bot"; }
 export function memberStatus(member) {
   const lines = [];
   if (typeof member.status === 'string' && member.status.length <= 80 && member.status) { lines.push(member.status); }

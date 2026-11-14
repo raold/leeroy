@@ -15,6 +15,7 @@ class ServerExt:
     reactions: object = None
     dms: object = None
     culture: object = None
+    extras: object = None  # Part C: the server bots and the meme stages (culture/attach.py)
 
 
 def attach_server(app) -> ServerExt | None:
@@ -62,4 +63,6 @@ def attach_server(app) -> ServerExt | None:
     app.register_shutdown_drain(lease.close)
     from leeroy_mind.culture.live import attach_culture
     culture = attach_culture(app)  # Part B's calendar and loot; None with their switches off
-    return ServerExt(config, lease, engine, reactions, dms, culture)
+    from leeroy_mind.culture.attach import attach_part_c
+    extras = attach_part_c(app, config)  # Part C's bots and memes; None with their switches off
+    return ServerExt(config, lease, engine, reactions, dms, culture, extras)

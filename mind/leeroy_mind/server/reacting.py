@@ -24,6 +24,17 @@ PALETTE = {'joke':('😂','💀','🤣'), 'question':('👀','🤔'), 'raid':('�
            'gear':('🔥','🎉','👏'), 'complaint':('😬','🫂','😢'), 'plan':('👍','🙋'),
            'compliment':('❤️','😊'), 'tease':('😂','🙄'), None:('👍','💯','😄')}
 LOVE = frozenset({'❤️','😍','😊','🫂'})
+# The role palette of a signup post (culture.bots, [culture] bots): each member's role from their
+# real calendar signup, never a random pick. The guild's own emoji with [culture] emoji on, else
+# one Unicode emoji each.
+ROLE_PALETTE = (':tank:', ':healer:', ':dps:')
+UNICODE_ROLES = {':tank:': '🛡️', ':healer:': '⛑️', ':dps:': '⚔️'}
+
+
+def role_emoji(raid_role: str, *, custom: bool) -> str:
+    from leeroy_mind.discord.custom_emoji import role_code
+    code = role_code(raid_role)
+    return code if custom else UNICODE_ROLES[code]
 
 
 def pick_emoji(text: str, tie: str, rng: random.Random) -> str | None:

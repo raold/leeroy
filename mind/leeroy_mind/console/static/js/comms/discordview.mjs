@@ -3,9 +3,9 @@ import { S, roomName } from "../state.mjs";
 import { feedbackButtons } from "./feedback.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { currentView, openView } from "./feedview.mjs";
-import { channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel, voiceSeats } from "./discord.mjs";
+import { botName, channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel, voiceSeats } from "./discord.mjs";
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
-import { PICKER, isOneEmoji } from "./emoji.mjs";
+import { CUSTOM_PICKER, PICKER, customSegments, customUrl, isCustom, isOneEmoji } from "./emoji.mjs";
 import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
 import { voiceBox, retainVoicePlayers } from "./voiceplayer.mjs";
 import { voiceDraft, voicePreparing, clearVoice, prepareVoice, renderVoiceDraft, setupVoiceComposer } from "./voicerecorder.mjs";
@@ -21,6 +21,25 @@ function active() { return !!channelOf(currentView()); }
 function privateDm() { return /^dm:[1-9]\d{0,9}$/.test(channelOf(shown)) && !thread; }
 function windowData() { return DISCORD.window(currentView(), thread); }
 function name(guid) { return guid === 0 ? 'System' : DISCORD.name(guid); }
+function author(m) { return m.bot ? botName(m.bot) : name(m.author); }
+// The guild's own emoji ([culture] emoji): each SVG fetched once into a blob: URL (the page's
+// CSP takes images only from blob: and data:), drawn where a registered shortcode stands.
+var emojiUrls = new Map();
+function emojiImg(code) {
+  var img = el("img", "dc-emoji"); img.alt = code; img.title = code; img.width = 20; img.height = 20;
+  if (!emojiUrls.has(code)) {
+    emojiUrls.set(code, fetch(customUrl(code)).then(function (r) { return r.ok ? r.blob() : null; })
+      .then(function (b) { return b ? URL.createObjectURL(b) : ""; }).catch(function () { emojiUrls.delete(code); return ""; }));
+  }
+  emojiUrls.get(code).then(function (url) { if (url) { img.src = url; } });
+  return img;
+}
+function emojiText(parent, text) {
+  if (!DISCORD.custom_emoji) { parent.appendChild(document.createTextNode(text)); return; }
+  customSegments(text).forEach(function (seg) {
+    parent.appendChild(seg.code ? emojiImg(seg.code) : document.createTextNode(seg.text));
+  });
+}
 function focusKey(root) {
   var a = document.activeElement;
   return a && root.contains(a) && a.dataset.focus ? a.dataset.focus : "";
@@ -120,7 +139,7 @@ function renderMembers() {
 function messageBody(m) {
   var body = el("div", "body");
   itemSegments(str(m.text), m.items).forEach(function (seg, i) {
-    if (!seg.item) { body.appendChild(document.createTextNode(seg.text)); return; }
+    if (!seg.item) { emojiText(body, seg.text); return; }
     var wrap = el("span", "dc-item-wrap"), id = "dc-item-" + m.id + "-" + i;
     var name = el("button", "dc-item " + qualityClass(seg.item.quality), seg.text); name.type = "button";
     name.setAttribute("aria-describedby", id);
@@ -136,21 +155,25 @@ function messageRow(item, data) {
     + (mentionsHim(m.text, DISCORD.human.name) ? " dc-mentioned" : ""));
   row.dataset.id = m.id;
   if (!item.grouped) {
-    var portrait = mine ? face(m.author, name(m.author), "feed", { you: true }) : faceButton(m.author, name(m.author), "feed");
-    if (!mine) { portrait.dataset.focus = m.id + ":card"; } row.appendChild(portrait);
+    var portrait = m.bot ? face(0, author(m), "feed") : mine ? face(m.author, name(m.author), "feed", { you: true }) : faceButton(m.author, name(m.author), "feed");
+    if (!mine && !m.bot) { portrait.dataset.focus = m.id + ":card"; } row.appendChild(portrait);
   }
   else { row.appendChild(el("span", "dc-time-small", clock(m.ts * 1000).slice(0, 5))); }
   var content = el("div", "dc-content");
   if (!item.grouped) {
-    var head = el("header", "h"), who = el("span", "who", mine ? "You" : name(m.author)); head.appendChild(who);
+    var head = el("header", "h"), who = el("span", "who", mine ? "You" : author(m)); head.appendChild(who);
+    if (m.bot) { head.appendChild(el("span", "dc-bot-tag", "BOT")); }
     var time = el("time", "t", clock(m.ts * 1000)); time.dateTime = new Date(m.ts * 1000).toISOString();
     time.title = new Date(m.ts * 1000).toLocaleString(); head.appendChild(time); content.appendChild(head);
   }
-  var quote = quoteOf(m, (data.quotes || []).concat(data.messages), name);
+  var quote = quoteOf(m, (data.quotes || []).concat(data.messages), function (guid) {
+    var q = (data.quotes || []).concat(data.messages).find(function (x) { return x.id === m.reply_to; });
+    return q && q.bot ? botName(q.bot) : name(guid);
+  });
   if (quote) { var q = el("blockquote", "dc-quote"); q.appendChild(el("b", "", quote.name)); q.appendChild(el("span", "", quote.text)); content.appendChild(q); }
   if (!deleted && m.voice_note && privateDm()) { content.appendChild(voiceBox(m, mine ? 'you' : name(m.author), mine)); }
   else { content.appendChild(deleted ? el("div", "body", "Message deleted") : messageBody(m)); }
-  if (!deleted && m.image) { content.appendChild(photoBox(m, name(m.author))); }
+  if (!deleted && m.image) { content.appendChild(photoBox(m, author(m))); }
   if (!deleted && !mine && m.origin==='mind') {
     var feedback = feedbackButtons(m,name(m.author));
     content.appendChild(feedback || el('small','hint','Feedback unavailable: this older message has no unique stored chat line.'));
@@ -160,7 +183,9 @@ function messageRow(item, data) {
   if (!deleted) {
     var reactions = el("div", "dc-reactions");
     reactionBar(m.reactions, DISCORD.human.guid, name).forEach(function (r) {
-      var b = button(r.emoji + " " + r.count, "dc-reaction"); b.title = r.who;
+      var custom = DISCORD.custom_emoji && isCustom(r.emoji);
+      var b = button(custom ? "" : r.emoji + " " + r.count, "dc-reaction"); b.title = r.who;
+      if (custom) { b.appendChild(emojiImg(r.emoji)); b.appendChild(document.createTextNode(" " + r.count)); }
       b.setAttribute("aria-pressed", String(r.mine)); b.setAttribute("aria-label", r.emoji + ": " + r.who);
       b.dataset.action = r.mine ? "unreact" : "react-emoji"; b.dataset.emoji = r.emoji;
       b.dataset.message = m.id; b.dataset.focus = m.id + ":" + r.emoji;
@@ -170,7 +195,7 @@ function messageRow(item, data) {
     [["reply", "Reply"], ["react", "React"], [m.pinned ? "unpin" : "pin", m.pinned ? "Unpin" : "Pin"], ["thread", "Thread"]]
       .concat(mine ? [["edit", "Edit"], ["delete", "Delete"]] : []).forEach(function (a) {
         var b = button(a[1]); b.dataset.action = a[0]; b.dataset.message = m.id; b.dataset.focus = m.id + ":" + a[0];
-        b.setAttribute("aria-label", a[1] + " message by " + name(m.author));
+        b.setAttribute("aria-label", a[1] + " message by " + author(m));
         b.disabled = !!groupReason(currentView()) || !!discordReason() || discordBusy; actions.appendChild(b);
       }); content.appendChild(actions);
     (data.threads || []).filter(function (t) { return t.parent === m.id; }).forEach(function (t) {
@@ -299,9 +324,13 @@ function openDialog(mode, m, trigger) {
   $("dc-dialog-submit").textContent = mode === "delete" ? "Delete message" : "Save";
   $("dc-delete-hint").hidden = mode !== "delete";
   var emojis = $("dc-emoji-groups"); clear(emojis); emojis.hidden = mode !== "emoji" && mode !== "react";
-  if (!emojis.hidden) { PICKER.forEach(function (g) {
+  if (!emojis.hidden) { PICKER.concat(DISCORD.custom_emoji ? [CUSTOM_PICKER] : []).forEach(function (g) {
     emojis.appendChild(el("h4", "", g.name)); var grid = el("div", "dc-emoji-grid");
-    g.emoji.forEach(function (emoji) { var b = button(emoji); b.dataset.pickEmoji = emoji; b.setAttribute("aria-label", emoji); grid.appendChild(b); }); emojis.appendChild(grid);
+    g.emoji.forEach(function (emoji) {
+      var custom = isCustom(emoji), b = button(custom ? "" : emoji);
+      if (custom) { b.appendChild(emojiImg(emoji)); }
+      b.dataset.pickEmoji = emoji; b.setAttribute("aria-label", emoji); grid.appendChild(b);
+    }); emojis.appendChild(grid);
   }); }
   $("dc-dialog").showModal();
   if (!$("dc-dialog-value").hidden) { $("dc-dialog-value").focus(); }
@@ -314,7 +343,7 @@ function submitDialog(emoji) {
   if (!dialog || discordBusy) { return; }
   var mode = dialog.mode, value = emoji || $("dc-dialog-value").value, m = dialog.message;
   if (mode === "emoji") { insertEmoji(value); return; }
-  if (mode === "react" && (!isOneEmoji(value) || Array.from(value).length > 16)) { $("dc-dialog-error").textContent = "Choose or paste one emoji."; return; }
+  if (mode === "react" && (!isOneEmoji(value, DISCORD.custom_emoji) || Array.from(value).length > 16)) { $("dc-dialog-error").textContent = "Choose or paste one emoji."; return; }
   if (mode === "thread" && (!value.trim() || Array.from(value.trim()).length > 60)) { $("dc-dialog-error").textContent = "Use a thread name of 1 to 60 characters."; return; }
   var body = { action: mode, message: m.id };
   if (mode === "react") { body.emoji = value; } if (mode === "edit") { body.text = value; } if (mode === "thread") { body.name = value; }
