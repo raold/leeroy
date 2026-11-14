@@ -142,8 +142,8 @@ class DiscordTalk:
 
     # -- his actions -----------------------------------------------------------------------
 
-    def on_his_post(self, message_id: int, *, immediate: bool = False) -> None:
-        """His post was stored: take or keep the lease, then queue the answers."""
+    def on_his_post(self, message_id: int, *, immediate: bool = False) -> asyncio.Task | None:
+        """Queue his post's answers; return their job so an asynchronous source can own it."""
         self._take_lease()
         try:
             row = self.app.store.conn.execute('SELECT channel FROM discord_message WHERE id=?',(message_id,)).fetchone()
@@ -168,7 +168,7 @@ class DiscordTalk:
             return
         if items:
             self._answered(message_id)
-            self.app.engine._queue(items)
+            return self.app.engine._queue(items)
 
     # -- replies on her own time -------------------------------------------------------------
 
