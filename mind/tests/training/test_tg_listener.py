@@ -612,3 +612,28 @@ async def test_real_applier_arm_baseline_change_during_apply_reverts_and_decline
     assert len(ports.sent) == sent
     assert await listener.on_before_end(run)
     assert await ports.applier.close()
+
+
+@_run_async
+async def test_his_lead_reaches_the_gate_without_a_dungeon_clear_muster(fake):
+    from leeroy_mind.training.gate import Gate
+    from leeroy_mind.training.protocol import Telemetry
+    from .test_tg_gate import his_run
+    listener, _ = setup(fake, acting=False)
+    listener.gate = Gate(fake)
+    run = his_run(fake)
+    await listener.on_start(run)
+    for index, outcome in ((0, "wiped"), (0, "killed"), (1, "killed")):
+        await fake.clock.advance(1, step=1)
+        await listener.on_boss(boss(fake, index))
+        await fake.clock.advance(1, step=1)
+        await listener.on_boss(boss(fake, index, outcome))
+        await fake.clock.advance(10, step=10)
+        await listener.gate.sample()  # the sampler's ticker sends a held disarm
+    # No dc_status ever arrived. The gate armed his first pull and disarmed its retry; the kill
+    # kept that side for boss 1's first pull (kills + wipes since the last kill), then re-armed.
+    assert [c.record for c in fake.sent if isinstance(c, Telemetry)] == [True, False, True]
+    listener.applier.apply.assert_not_awaited()
+    listener.applier.hold.assert_not_awaited()
+    await listener.on_end("ended", run=run)
+    assert [c.record for c in fake.sent if isinstance(c, Telemetry)][-1] is False

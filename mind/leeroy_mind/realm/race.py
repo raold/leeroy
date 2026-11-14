@@ -440,10 +440,17 @@ class Race:
 
     @staticmethod
     def _guild_best(conn, key, before_ms):
-        """The guild's fastest measured kill of this mode before the benchmark: (seconds, pull)."""
+        """The guild's fastest measured kill of this mode before the benchmark: (seconds, pull).
+
+        Only from pulls recorded since the overhead gate passed: before then the stored kills
+        are its A/B sample, and a faster kill may have gone unrecorded, so no best is claimed."""
+        from leeroy_mind.training.store import full_since_ms
+        since = full_since_ms(conn)
+        if since is None:
+            return None
         row = conn.execute(f"SELECT id,end_ms-start_ms AS ms FROM tg_pull WHERE {_TG_KILLS} AND map=? "
-                           "AND boss_id=? AND difficulty=? AND end_ms<=? ORDER BY ms,end_ms,id LIMIT 1",
-                           (*key, before_ms)).fetchone()
+                           "AND boss_id=? AND difficulty=? AND end_ms<=? AND start_ms>=? "
+                           "ORDER BY ms,end_ms,id LIMIT 1", (*key, before_ms, since)).fetchone()
         return None if row is None else (max(1, int(round(row["ms"] / 1000))), row["id"])
 
     def _loss(self, conn, ctx, human, pull, gid, name, key, kill_s, ended, mine, now):
