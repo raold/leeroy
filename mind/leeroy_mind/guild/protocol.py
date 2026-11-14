@@ -173,7 +173,7 @@ class Job:
     # What dungeon-clear's leader run is doing (offline running heartbeats): unknown, off, on,
     # paused, door. Absent from older worldservers.
     dc_state: str | None = None
-    # A regear's progress: slots that kept an item above the cap (nothing capped could fill them).
+    # A capped gear-up's progress: slots that kept an item above the cap (nothing capped could fill them).
     kept: int | None = None
 
 

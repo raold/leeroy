@@ -10,7 +10,9 @@ The regear ([guild] regear_to) takes the cast's bots down to an item level once
 per value (meta guild:regear:<ilvl>), in the same windows as gear-up, through
 gear_up's regear mode (native, LeeroyGearUpPolicy.h). Never the owner, never a
 member outside the cast (under 80, rank 0, left the guild), never a character
-native finds on a player's account.
+native finds on a player's account. A native whose hello lists "regear" caps
+every gear-up at its ilvl, so every gear-up's receipt is then the capped band:
+an average from ilvl - REGEAR_BELOW to ilvl + REGEAR_ABOVE.
 """
 
 import asyncio
@@ -36,7 +38,7 @@ FRIEND_DELAY = 120
 FRIEND_PERIOD = 1800
 MAX_SPECS = 10
 MAX_BATCH = 40
-REGEAR_FEATURE = "regear"  # mod-leeroy's hello: gear_up understands "regear"
+REGEAR_FEATURE = "regear"  # mod-leeroy's hello: gear_up understands "regear" and caps every gear-up
 REGEAR_LEVEL = 80          # native's cast: guild members at 80 and above, the owner excluded
 REGEAR_GAP = 120           # seconds between regear batches
 REGEAR_WAIT = 1800         # a member native skipped, or regeared out of bounds, waits this long
@@ -395,8 +397,11 @@ class Roster:
                   "level": self.cfg.level_to, "minimum": ilvl - 6 if mode == "tc_geared"
                   else self.cfg.gear_up_below_avg_ilvl,
                   "snapshots": {str(g): self._snapshot(g) for g in targets}, "started_ms": self._started_ms}
+        if regear is not None or self._regear_native:
+            # A capped gear-up lands near its ilvl, never above it: one band for every mode.
+            record.update(ilvl=ilvl, minimum=ilvl - REGEAR_BELOW, maximum=ilvl + REGEAR_ABOVE)
         if regear is not None:
-            record.update(regear=regear, ilvl=ilvl, minimum=ilvl - REGEAR_BELOW, maximum=ilvl + REGEAR_ABOVE)
+            record["regear"] = regear
         with self.ports.conn:
             self._put("gear", record)
         try:
@@ -601,7 +606,8 @@ class Roster:
                 if record["mode"] == "regear":
                     self._regear_progress(record, ev, first)
                     return
-                if ev.level < record["level"] or ev.avg_ilvl < record["minimum"]:
+                if (ev.level < record["level"] or ev.avg_ilvl < record["minimum"]
+                        or ev.avg_ilvl > record.get("maximum", ev.avg_ilvl)):
                     return
                 kind = "tc_geared" if record["mode"] == "tc_geared" else "geared"
                 _flag(self.ports.conn, kind, ev.guid, self.ports.clock.now())

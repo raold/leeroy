@@ -402,3 +402,44 @@ async def test_the_owner_is_never_sent_even_from_a_stored_member_list(cast):
     roster = await regearing(cast)
     await roster.maybe_regear()
     assert regears(cast)[-1].guids == (101,) and state(cast)["dropped"] == [1]
+
+
+@pytest.mark.parametrize(("avg", "lands"), [(230, False), (231, True), (240, True), (257, True), (258, False)])
+@_run_async
+async def test_a_capped_theorycrafter_pass_takes_the_capped_band(cast, avg, lands):
+    # Capped at 251, a theorycrafter averages a little under it: the old 245 floor would refuse 240 every hour.
+    cast.personas[102].game.thinks_as = "theorycrafter"
+    roster = await regearing(cast, GuildConfig())
+    await roster.maybe_gear_theorycrafters()
+    [command] = [c for c in cast.sent if isinstance(c, GearUp)]
+    assert command.guids == (102,) and command.ilvl == 251 and not command.regear
+    await roster.on_job(progress(command, 102, avg))
+    assert (102 in flags(cast.conn, "tc_geared")) is lands
+    await roster.on_job(done(command))
+    await advance(cast, 3600)
+    await roster.maybe_gear_theorycrafters()
+    assert len([c for c in cast.sent if isinstance(c, GearUp)]) == (1 if lands else 2)
+
+
+@pytest.mark.parametrize(("avg", "lands"), [(224, False), (225, True), (251, True), (252, False)])
+@_run_async
+async def test_a_capped_gear_up_takes_the_capped_band(cast, avg, lands):
+    cast.members = {101: cast.members[101]}
+    roster = await regearing(cast, GuildConfig())
+    await roster.maybe_gear_up()
+    command = cast.sent[-1]
+    assert command.guids == (101,) and command.ilvl == 245 and not command.regear
+    await roster.on_job(progress(command, 101, avg))
+    assert (101 in flags(cast.conn, "geared")) is lands
+
+
+@_run_async
+async def test_an_uncapped_native_keeps_the_old_floor_and_no_ceiling(cast):
+    cast.members = {101: cast.members[101]}
+    roster = await regearing(cast, GuildConfig(), features=())
+    await roster.maybe_gear_up()
+    command = cast.sent[-1]
+    await roster.on_job(progress(command, 101, 231))
+    assert not flags(cast.conn, "geared")  # under gear_up_below_avg_ilvl, as before
+    await roster.on_job(progress(command, 101, 280))
+    assert flags(cast.conn, "geared") == {101}  # no ceiling without the cap pass

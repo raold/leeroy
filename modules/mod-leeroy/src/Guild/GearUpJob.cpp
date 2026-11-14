@@ -122,17 +122,18 @@ uint32 DestroyBagItemsAbove(Player* bot, uint32 cap)
     return destroyed;
 }
 
-struct RegearOutcome
+struct CapOutcome
 {
     uint32 stripped = 0, restored = 0, empty = 0, destroyed = 0, kept = 0;
 };
 
-// After the capped gear pass (autogear bis <cap>, else AutoGear at the cap): that pass puts replaced items in the bags,
-// keeps an item when the bags are full or the capped search has nothing for its slot, and a BiS list may hold items
-// above its tier. Strip what is still above the cap, refill from the capped search, give back what cannot be filled.
-RegearOutcome RegearToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegearSlots> const& before)
+// Every gear-up, after its gear pass (autogear bis <cap>, else AutoGear at the cap): that pass puts replaced items in
+// the bags, keeps an item when the bags are full or the capped search has nothing for its slot, and a BiS list holds
+// items above its tier. Nothing above the gear-up's ilvl stays equipped or in the bags: strip it, refill from the
+// capped search, give back what cannot be filled.
+CapOutcome GearToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegearSlots> const& before)
 {
-    RegearOutcome out;
+    CapOutcome out;
     out.destroyed = DestroyBagItemsAbove(bot, cap);
     auto const now = Equipped(bot);
     std::array<uint32, kRegearSlots> old{};
@@ -279,7 +280,7 @@ void TickGearUp()
             else
             {
                 auto const before = Equipped(bot);
-                RegearOutcome regear;
+                CapOutcome capped;
                 auto const gearFailure = [&]() -> std::string
                 {
                     PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
@@ -295,9 +296,9 @@ void TickGearUp()
                         PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, job.command.ilvl, false);
                         bot = FindOnline(guid);
                     }
-                    if (auto failure = SkipFor(guid, job, bot); !failure.empty() || !job.command.regear)
+                    if (auto failure = SkipFor(guid, job, bot); !failure.empty())
                         return failure;
-                    regear = RegearToCap(bot, job.command.ilvl, before);
+                    capped = GearToCap(bot, job.command.ilvl, before);
                     bot = FindOnline(guid);
                     return bot ? std::string{} : std::string("offline");
                 }();
@@ -318,13 +319,11 @@ void TickGearUp()
                     progress.level = bot->GetLevel();
                     float const average = bot->GetAverageItemLevel();
                     progress.avgIlvl = std::isfinite(average) && average > 0 ? static_cast<uint32>(average) : 0;
-                    if (job.command.regear)
-                    {
-                        progress.kept = regear.kept;
-                        LOG_INFO("module.leeroy", "mod-leeroy: regear_member guid={} ilvl={} avg={} stripped={} "
-                            "restored={} empty={} kept={} destroyed={}", guid, job.command.ilvl, progress.avgIlvl,
-                            regear.stripped, regear.restored, regear.empty, regear.kept, regear.destroyed);
-                    }
+                    progress.kept = capped.kept;
+                    LOG_INFO("module.leeroy", "mod-leeroy: {} guid={} ilvl={} avg={} stripped={} restored={} empty={} "
+                        "kept={} destroyed={}", job.command.regear ? "regear_member" : "gear_up_member", guid,
+                        job.command.ilvl, progress.avgIlvl, capped.stripped, capped.restored, capped.empty,
+                        capped.kept, capped.destroyed);
                     PublishJob(progress);
                 }
             }

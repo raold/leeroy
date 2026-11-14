@@ -74,6 +74,7 @@ inline std::string_view RegearSkipReason(RegearTarget const& target, bool ownerO
     return fence;
 }
 
+// The cap pass every gear-up runs (GearToCap): nothing above the gear-up's ilvl stays equipped or in the bags.
 // Equipment slots as the core numbers them (EquipmentSlots). The shirt and the tabard are never touched.
 inline constexpr std::uint8_t kRegearSlots = 19, kRegearSlotBody = 3, kRegearSlotTabard = 18;
 
