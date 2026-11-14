@@ -454,10 +454,8 @@ def test_discord_resume_while_server_tick_waits_keeps_new_lease(tmp_path):
 
 def test_real_app_bridge_server_dm_and_booth_rest_then_answer_his_post(tmp_path):
     from leeroy_mind.app import GUILD_ID
-    from leeroy_mind.bridge import BridgeClient
     from leeroy_mind.testing.fake_bridge import FakeBridge
-    from leeroy_mind.protocol import Member
-    from selfies.fakes import OWNER, until
+    from selfies.fakes import until
     from selfies.test_photo_booth import MemoryWorker
     async def go():
         bridge = FakeBridge([{'type': 'hello', 'server': 'mod-leeroy', 'version': '0.1.0',
@@ -474,9 +472,23 @@ def test_real_app_bridge_server_dm_and_booth_rest_then_answer_his_post(tmp_path)
         app.llm._script = lambda model, messages: 'The spare flasks are ready for the next raid.'
         worker = MemoryWorker()
         app.selfie_booth.worker = lambda: worker
+        hello_waiting, release_hello, hello_processed = (asyncio.Event() for _ in range(3))
+        async def hold_hello(ev):
+            hello_waiting.set()
+            await release_hello.wait()
+        async def processed_hello(ev):
+            hello_processed.set()
+        app.register_event_handler('hello', hold_hello, before=True)
+        app.register_event_handler('hello', processed_hello)
         task = asyncio.create_task(app.run())
         try:
             await until(lambda: app.bridge.greeted, 5)
+            await asyncio.wait_for(hello_waiting.wait(), 5)
+            # The reader is greeted before the queued hello has established the
+            # app's presence. Hold that dispatch to reproduce the CI ordering.
+            assert app.gpu.refusal()[0] == 'gpu_presence_unknown'
+            release_hello.set()
+            await asyncio.wait_for(hello_processed.wait(), 5)
             assert (await app.gpu.action({'action': 'pause'}))['ok']
             assert not app.arbiter.admin.models
             # Long offline: only the pause keeps the booth from rendering now.
@@ -498,6 +510,7 @@ def test_real_app_bridge_server_dm_and_booth_rest_then_answer_his_post(tmp_path)
             assert sum(c[0] == 'preload' for c in app.arbiter.admin.calls) == 1
             assert not [c for c in bridge.commands if c['type'] in ('say', 'emote')]
         finally:
+            release_hello.set()
             await app.stop()
             await asyncio.wait_for(task, 5)
             await bridge.stop()

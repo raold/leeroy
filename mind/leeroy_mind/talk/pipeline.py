@@ -70,8 +70,8 @@ from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.budget import PHASE_MODS, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
-from leeroy_mind.talk.discord_length import (TYPING_CAP_S as DISCORD_TYPING_S, preset_for,
-                                             trim_to_sentence, words_for)
+from leeroy_mind.talk.discord_length import (FEW_WORDS, QUICK_WORDS, TYPING_CAP_S as DISCORD_TYPING_S,
+                                             band, preset_for, trim_to_sentence, words_for)
 from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, is_silence,
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
@@ -164,6 +164,7 @@ SILENT_START_HINT = "Start the conversation with {human} in {length}, in your ow
 # And for her answer to his Discord DM (ruling R9).
 SILENT_DM_HINT = "Answer {human}'s message in {length}, in your own voice."
 DISCORD_SILENT_LENGTH = "a few sentences"  # a longer Discord message's {length} above
+DISCORD_SILENT_SHORT = {QUICK_WORDS: "a sentence", FEW_WORDS: "a couple of sentences"}  # by band
 # A move she just made with this person, made again (filters.move_repeat: "move repeat:
 # <move>"; "clause", her final clause again, takes REPEAT_HINT): the phrase carries the
 # pronoun (moves.MOVE_PHRASES). A summons out of the game (filters "summons").
@@ -574,6 +575,7 @@ class Pipeline:
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
+        self._length_rng = random.Random()  # a channel message's length band (_discord_words)
         # what each member did with each counterpart, kept in mind.db across restarts
         self.moves = MoveLog(self.store)
         self.notes = PairNotes(self.store)
@@ -2207,7 +2209,7 @@ class Pipeline:
                             else SILENT_WHISPER_HINT)
                     messages = asking(hint.format(
                         human=self.human.called,
-                        length=(DISCORD_SILENT_LENGTH if self._discord_words(turn)
+                        length=(self._silent_length(self._discord_words(turn)) if self._discord_words(turn)
                                 else "a line or two" if meta.two_lines else "a line")))
                     continue
                 return raw, "silent"
@@ -2303,11 +2305,26 @@ class Pipeline:
         return " ".join(hints)
 
     def _discord_words(self, turn: Turn) -> int:
-        """The words a longer Discord message of this turn's holds ([talk] discord_words,
-        talk/discord_length.py); 0 for a game turn, which never reads it, or with it at 0."""
+        """The words a longer Discord message of this turn's holds (talk/discord_length.py): a DM
+        with him its [talk] dm_words, another Discord channel its discord_words cut to the band
+        the turn drew once (so its wording, room, typing and trim agree); 0 for a game turn,
+        which never reads it, or with the setting at 0."""
         if not is_discord(turn.channel):
             return 0
-        return words_for(getattr(self.cfg, "talk", None), turn.channel)
+        words = words_for(getattr(self.cfg, "talk", None), turn.channel)
+        if not words or is_private(turn.channel):
+            return words
+        if turn.discord_draw is None:
+            turn.discord_draw = self._length_rng.random()
+        return band(words, turn.discord_draw)
+
+    @staticmethod
+    def _silent_length(words: int) -> str:
+        """The {length} a silent Discord answer is asked again for, by its band."""
+        for most, length in sorted(DISCORD_SILENT_SHORT.items()):
+            if words <= most:
+                return length
+        return DISCORD_SILENT_LENGTH
 
     def _word_budget(self, turn: Turn, p: Persona, two_lines: bool = False) -> int:
         """How many words this turn's lines hold for the speaker now: a longer Discord
