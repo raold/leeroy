@@ -617,8 +617,8 @@ def test_in_the_gates_ab_phase_no_pull_in_48_hours_is_a_note(rig):
     assert checks["telemetry"].status == NOTE
     assert checks["telemetry"].text == (
         "telemetry: overhead gate in phase ab (A/B, 0 raids counted): only alternate "
-        "pulls of his raids and offline raids are recorded, so no tg_pull in 48 h is expected "
-        "(last never)")
+        "pulls of his raids and offline raids are recorded, so 48 h without a tg_pull is "
+        "expected when neither raided (last never)")
     gate(rig, "ab", raids=3, verdict_ms=None)
     rig.pull(NOW - 49 * 3600)
     checks = rig.run()

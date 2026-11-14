@@ -13,9 +13,9 @@ from leeroy_mind.guild.raids import split_key
 from leeroy_mind.guild.session import RaidPlan
 from leeroy_mind.protocol import Ack, Boss
 from leeroy_mind.storage.store import Store
-from leeroy_mind.training.gate import Gate
+from leeroy_mind.training.gate import HOLD_S, Gate
 from leeroy_mind.training.protocol import GetStats, ServerStats, Telemetry
-from leeroy_mind.training.store import perf_rows, put_perf
+from leeroy_mind.training.store import full_since_ms, perf_rows, put_perf
 
 
 def _run_async(test):
@@ -43,7 +43,13 @@ async def family_fight(fake, gate, run, index):
     await gate.on_boss(boss(fake, index, **at))
     await collect(fake, gate, gate.record_flag(run, index))
     await gate.on_boss(boss(fake, index, "killed", **at))
-    await fake.clock.advance(1, step=1)
+    await settle(fake, gate)
+
+
+async def settle(fake, gate):
+    """After a terminal: the hold on a disarm ends and the sampler's ticker sends it."""
+    await fake.clock.advance(HOLD_S, step=HOLD_S)
+    await gate.sample()
 
 
 def stats(fake, record, value=41, **kw):
@@ -62,7 +68,7 @@ async def fight(fake, gate, run, index=0, values=(41, 41), outcome="killed"):
     await gate.on_boss(boss(fake, index))
     await collect(fake, gate, gate.record_flag(run, index), values)
     await gate.on_boss(boss(fake, index, outcome))
-    await fake.clock.advance(1, step=1)
+    await settle(fake, gate)
 
 
 def metadata(fake, key="tg_gate"):
@@ -574,13 +580,13 @@ def his_run(fake, ident=1, *, instance=100, size=10, heroic=False, map_id=631, l
 
 async def his_pull(fake, gate, index=0, outcome="killed", values=(41, 41)):
     """One pull of his lead: no muster; the gate's own flag decides armed or not."""
-    armed = fake.sent[-1].record
+    armed = flags(fake)[-1]
     ctx = gate._run.session.ctx
     at = dict(map=ctx.map_id, instance_id=ctx.instance_id)
     await gate.on_boss(boss(fake, index, **at))
     await collect(fake, gate, armed, values)
     await gate.on_boss(boss(fake, index, outcome, **at))
-    await fake.clock.advance(1, step=1)
+    await settle(fake, gate)
     return armed
 
 
@@ -589,18 +595,19 @@ def flags(fake):
 
 
 @_run_async
-async def test_his_lead_alternates_by_pull_without_a_muster(fake):
+async def test_his_lead_alternates_by_kill_position_without_a_muster(fake):
     gate, run = Gate(fake), his_run(fake)
     await gate.on_start(run)
     assert flags(fake) == [True] and gate.recording()
+    # Slot = kills so far + wipes since the last kill: the wipe's retry is on the other side,
+    # and each boss's first pull keeps its kill position (boss 1 at slot 1, boss 2 at slot 2).
     sides = [await his_pull(fake, gate, 0, "wiped"), await his_pull(fake, gate, 0),
              await his_pull(fake, gate, 1), await his_pull(fake, gate, 2, "wiped")]
-    # The wipe's retry falls on the other side, so one boss gets both sides in one night.
-    assert sides == [True, False, True, False]
-    assert flags(fake) == [True, False, True, False, True]
+    assert sides == [True, False, False, True]
+    assert flags(fake) == [True, False, True, False]
     rows = perf_rows(fake.conn, kind="his")
     assert [(r["context"], r["armed"]) for r in rows] == [
-        ("631:0:0", 1), ("631:0:0", 0), ("631:1:0", 1), ("631:2:0", 0)]
+        ("631:0:0", 1), ("631:0:0", 0), ("631:1:0", 0), ("631:2:0", 1)]
     assert all(gate._eligible(r) for r in rows) and not perf_rows(fake.conn)
     await gate.on_end("ended", run=run)
     assert flags(fake)[-1] is False and not gate.recording()
@@ -611,6 +618,30 @@ async def test_his_lead_alternates_by_pull_without_a_muster(fake):
     assert metadata(fake) == dict(phase="ab", raids=2, verdict_ms=None)
 
 
+ICC = (0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)  # the twelve fights; 2 (the gunship) left out
+
+
+@_run_async
+async def test_a_repeated_route_pairs_in_two_nights_whatever_the_wipes(fake):
+    fake.cfg = replace(fake.cfg, gate_pulls=12)
+    gate = Gate(fake)
+    for night, wipe in ((1, 1), (2, None)):  # one wipe on the second boss, first night only
+        run = his_run(fake, night, instance=100 + night)
+        await gate.on_start(run)
+        for index in ICC:
+            if index == wipe:
+                await his_pull(fake, gate, index, "wiped")
+            await his_pull(fake, gate, index)
+        if gate.phase == "ab":
+            await gate.on_end("ended", run=run)
+    sides = {}
+    for row in perf_rows(fake.conn, kind="his"):
+        sides.setdefault(row["context"], set()).add(row["armed"])
+    assert sorted(sides) == sorted(f"631:{i}:0" for i in ICC)
+    assert all(seen == {0, 1} for seen in sides.values())
+    assert gate.verdict() == ("passed", 0.0)
+
+
 @_run_async
 async def test_his_lead_terminal_without_engage_or_foreign_boss_does_not_advance(fake):
     gate, run = Gate(fake), his_run(fake)
@@ -619,12 +650,75 @@ async def test_his_lead_terminal_without_engage_or_foreign_boss_does_not_advance
     await gate.on_boss(boss(fake, 13))  # a non-fight step is never a pull
     await gate.on_boss(boss(fake, 0, map=649))
     await gate.on_boss(boss(fake, 13, "killed"))
+    await settle(fake, gate)
     assert flags(fake) == [True]
     await gate.on_boss(boss(fake, 3))
     await gate.on_boss(boss(fake, 4, "killed"))  # another boss's terminal is not this pull's
+    await settle(fake, gate)
     assert flags(fake) == [True]
     await gate.on_boss(boss(fake, 3, "killed"))
+    await settle(fake, gate)
     assert flags(fake) == [True, False]
+
+
+def header(fake, index, engaged_ms, *, instance=100):
+    return SimpleNamespace(map=631, instance_id=instance, boss_id=index, start_ms=engaged_ms + 200)
+
+
+@_run_async
+async def test_a_disarm_waits_for_the_armed_pulls_record(fake):
+    gate, run = Gate(fake), his_run(fake)
+    await gate.on_start(run)
+    engaged = boss(fake, 0)
+    await gate.on_boss(engaged)
+    await fake.clock.advance(60, step=60)
+    await gate.on_boss(boss(fake, 0, "killed"))
+    assert flags(fake) == [True]  # never on the terminal itself: native may still be encoding it
+    await fake.clock.advance(5, step=5)
+    await gate.sample()
+    gate.pull_stored(header(fake, 0, engaged.ts, instance=101))  # another instance's pull
+    gate.pull_stored(header(fake, 1, engaged.ts))                # another boss's pull
+    await gate.sample()
+    assert flags(fake) == [True]
+    gate.pull_stored(header(fake, 0, engaged.ts))  # its header is stored: the disarm may go
+    await gate.sample()
+    assert flags(fake) == [True, False]
+    # Arming is never held: the unarmed pull's kill arms the next one at once.
+    await gate.on_boss(boss(fake, 1))
+    await fake.clock.advance(60, step=60)
+    await gate.on_boss(boss(fake, 1, "killed"))
+    assert flags(fake) == [True, False, True]
+    # Without a stored header the hold ends after HOLD_S; ending the run is held too.
+    await fake.clock.advance(1, step=1)
+    await gate.on_boss(boss(fake, 2))
+    await fake.clock.advance(60, step=60)
+    await gate.on_boss(boss(fake, 2, "killed"))
+    await gate.on_end("ended", run=run)
+    await fake.clock.advance(HOLD_S - 1, step=1)
+    await gate.sample()
+    assert flags(fake) == [True, False, True]
+    await fake.clock.advance(1, step=1)
+    await gate.sample()
+    assert flags(fake) == [True, False, True, False]
+    await gate.sample()
+    assert flags(fake) == [True, False, True, False]
+
+
+@_run_async
+async def test_a_dungeon_clear_muster_after_an_armed_kill_holds_its_disarm(fake):
+    gate, run = Gate(fake), run_for(fake)
+    await gate.on_start(run)
+    await gate.on_muster(run, 0)
+    await gate.on_boss(boss(fake, 0))
+    await collect(fake, gate, True)
+    await gate.on_boss(boss(fake, 0, "killed"))
+    await gate.on_muster(run, 1)  # the tank rests with the next boss named
+    assert flags(fake) == [True] and not gate.recording()
+    await gate.on_boss(boss(fake, 1))  # pulled within the hold: no unarmed sample from it
+    await settle(fake, gate)
+    assert flags(fake) == [True, False]
+    await gate.on_boss(boss(fake, 1, "killed"))
+    assert len(perf_rows(fake.conn)) == 1
 
 
 @_run_async
@@ -665,7 +759,12 @@ async def test_verdict_pairs_only_within_one_kind(fake):
     await gate.on_end("ended", run=first)
     await his_night(3)  # his next visit starts on the other side
     assert gate.verdict() == ("passed", 1.0)
-    assert metadata(fake)["phase"] == "passed"
+    saved = metadata(fake)
+    assert saved["phase"] == "passed" and saved["passed_at"] <= fake.clock.now()
+    # The pass time survives a restart; from it on, stored pulls are every pull.
+    Gate(fake)._save()
+    assert metadata(fake)["passed_at"] == saved["passed_at"]
+    assert full_since_ms(fake.conn) == int(saved["passed_at"] * 1000)
 
 
 @_run_async

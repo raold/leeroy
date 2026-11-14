@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from leeroy_mind.training import cli, protocol as p, store
-from leeroy_mind.training.hurt import (MELEE, NAMES_KEY, SpellNames, hurt_report, referenced_spells,
-                                       remember_names, stored_names)
+from leeroy_mind.training.hurt import (MARK_KEY, MELEE, NAMES_KEY, SpellNames, avoidable_spells, hurt_report,
+                                       name_new_pulls, referenced_spells, remember_names, stored_names)
 
 VILE_GAS, GAS_SPORE, SLIME = 900, 901, 902
 NAMES = {VILE_GAS: "Vile Gas", GAS_SPORE: "Gas Spore", SLIME: "Slime Spray"}
@@ -134,6 +134,40 @@ def test_names_come_from_the_store_without_the_spell_book(pulls):
     # A book without Spell.dbc is no book: the stored names stand.
     empty = SimpleNamespace(loaded=frozenset(), info=lambda spell: None, ids=lambda name: frozenset())
     assert SpellNames(empty, stored_names(pulls.conn)).source == "stored_names"
+
+
+def test_the_owner_is_not_counted_in_failed_mechanics(pulls):
+    store.set_checks(pulls.conn, "2000-77-4", [dict(kind="debuff", key="Gas Spore", guid=OWNER, count=5, deaths=0,
+                                                    damage_share=0.0)], [], deaths=0, failed=1, version=1)
+    [gas] = by_context(hurt_report(pulls.conn))["631:4:0"]["mechanics"]
+    assert (gas["count"], gas["members"], gas["pulls"]) == (2, 1, 1)
+    assert [w["guid"] for w in gas["worst"]] == [101]
+
+
+def test_avoidable_effects_named_from_the_book_even_when_nobody_was_hit(pulls):
+    # A Marrowgar pull where nobody stood in Coldflame or Bone Storm.
+    save(pulls, "5000-77-0", boss=0, start=5_000_000, outcome="killed", members=((101, "ranged", ()),))
+    names = {**NAMES, 950: "Coldflame", 952: "Bone Storm"}
+    remember_names(pulls.conn, book(names), referenced_spells(pulls.conn))  # hit spells only
+    marrowgar = by_context(hurt_report(pulls.conn, spells=SpellNames(None, stored_names(pulls.conn))))["631:0:0"]
+    assert [m["resolved"] for m in marrowgar["avoidable"]] == [False, False]
+    assert {900, 902, 950, 952} == avoidable_spells(book(names))
+    remember_names(pulls.conn, book(names), avoidable_spells(book(names)))
+    marrowgar = by_context(hurt_report(pulls.conn, spells=SpellNames(None, stored_names(pulls.conn))))["631:0:0"]
+    assert [(m["names"], m["resolved"], m["hits"]) for m in marrowgar["avoidable"]] == [
+        (["Coldflame"], True, 0), (["Bone Storm"], True, 0)]
+
+
+def test_the_naming_pass_reads_only_new_pulls(pulls):
+    assert name_new_pulls(pulls.conn, book(), batch=2) == 2
+    assert name_new_pulls(pulls.conn, book(), batch=10) == 3
+    assert name_new_pulls(pulls.conn, book()) == 0
+    mark = pulls.conn.execute("SELECT value FROM meta WHERE key=?", (MARK_KEY,)).fetchone()[0]
+    assert int(mark) == pulls.conn.execute("SELECT max(rowid) FROM tg_pull").fetchone()[0]
+    assert stored_names(pulls.conn) == NAMES
+    save(pulls, "4000-77-4", start=4_000_000, members=((101, "ranged", ((960, 1, 1),)),))
+    assert name_new_pulls(pulls.conn, book({**NAMES, 960: "Gaseous Blight"})) == 1
+    assert stored_names(pulls.conn)[960] == "Gaseous Blight"
 
 
 def test_corrupt_stored_names_and_details_are_skipped(pulls):

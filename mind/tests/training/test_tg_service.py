@@ -113,11 +113,25 @@ async def test_scored_pulls_leave_spell_names_for_readers_without_the_book(fake,
     ground._connected = ground._presence_known = True
     monkeypatch.setattr(service, "load_book", lambda path: book())
     await asyncio.wait_for(ground._load(), 2)
-    assert stored_names(fake.conn) == {900: "Vile Gas"}
+    # The stored pull's spell, and every avoidable effect's spell the book names (hit or not).
+    assert stored_names(fake.conn) == {900: "Vile Gas", 902: "Slime Spray"}
+    assert fake.conn.execute("SELECT value FROM meta WHERE key='tg:spell_names:rowid'").fetchone()[0] == "1"
     h = header(fake, start=h.start_ms + 100_000)
     await ground.ledger.on_event(member(h, taken_by=(tp.TakenTotal(901, 0, 10, 1), tp.TakenTotal(5, 0, 1, 1))))
     await ground.ledger.on_event(h)
-    assert stored_names(fake.conn) == {900: "Vile Gas", 901: "Gas Spore"}  # an unknown spell is left out
+    # An unknown spell is left out.
+    assert stored_names(fake.conn) == {900: "Vile Gas", 901: "Gas Spore", 902: "Slime Spray"}
+
+
+@_run_async
+async def test_a_stored_pull_frees_the_gates_held_disarm(fake):
+    ground = service.TrainingGround(SimpleNamespace(), fake)
+    h = header(fake)
+    ground.gate._hold = (fake.clock.now() + 10, (h.map, h.instance_id, h.boss_id), h.start_ms)
+    await ground.ledger.on_event(member(h))
+    assert ground.gate._hold is not None
+    await ground.ledger.on_event(h)
+    assert ground.gate._hold is None
 
 
 @_run_async

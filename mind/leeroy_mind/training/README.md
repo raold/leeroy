@@ -64,21 +64,36 @@ raids, `tg_gate:family:his:<map>:<difficulty bits>` for his) and its own
 `tg_perf` rows; the verdict pairs an armed and an unarmed fight only within one
 kind and one boss context, so his presence can neither stand in for telemetry
 cost nor hide it. The fail-closed verdict is unchanged: the mean of at least
-`gate_pulls` per-context differences, `passed` at most `gate_max_ms`, `failed`
-final, after which nothing is armed.
+`gate_pulls` differences (each one boss context within one kind, so a boss
+measured in both kinds counts twice), `passed` at most `gate_max_ms`, `failed`
+final, after which nothing is armed. The pass time is saved (`tg_gate`
+`passed_at`).
 
 A raid led by a bot sends dungeon-clear's muster naming the next boss, and
 alternates by boss index as offline raids do. A raid he leads sends no muster,
-so the gate musters itself at the run's start and after every finished pull and
-alternates by pull: the pull's ordinal in the run takes the boss index's place,
-so a wipe's retry falls on the other side. The same self-muster arms every pull
-of his lead once the gate has `passed` (before, a raid he led was never armed).
+so the gate musters itself at the run's start and after every finished pull. Its
+parity slot is the kills so far plus the wipes since the last kill: a wipe's
+retry falls on the other side, and each boss's first pull keeps its kill
+position, so a repeated route puts every boss on the other side on the next
+visit whatever the wipes. The same self-muster arms every pull of his lead once
+the gate has `passed` (before, a raid he led was never armed).
+
+A disarm never follows an armed pull's terminal at once: native drops a pull
+whose epoch moves before it is confirmed and encoded. `record=false` waits until
+that pull's header is stored or 10 s pass, and the sampler's ticker sends it;
+arming is never held back.
 
 While the gate measures, an armed pull of his raid is evidence only: cast-timed
 callouts (`voice_lead`) and the combat-log facts in the lead's kill and wipe
 calls (`facts.TalkHook`) wait for `passed`, and tactics still need the applier's
 `passed` gate and observation month. Health notes a gate in `ab` with no new A/B
 fight for 7 days (`training-gate`).
+
+Before the gate passes, stored his and offline pulls are its sample, not every
+pull. Bests and records are therefore claimed only from pulls that started
+after `passed_at` (`store.full_since_ms`): the Realm's "faster than us"
+(`realm/race.py` `_guild_best`) and the lead's "fastest kill yet"
+(`facts.TalkHook`). Medians and descriptive counts may still use the sample.
 
 # What hurt them
 
@@ -88,9 +103,11 @@ migrates): per boss context, newest first, deaths by the killing blow's spell,
 the spells that hit cast members hardest (requested damage, ranked by share),
 the failed mechanics the checks proved (`tg_failure`) and, for the boss's
 avoidable effects in `mechanics.py`, which members the records show hit and how
-often past the mechanic's allowance. Kinds default to his and offline raids;
+often past the mechanic's allowance. The owner is left out of every section. Kinds default to his and offline raids;
 `--last` keeps each context's newest N pulls. Only complete killed or wiped
 pulls are read. Spell names come from the client's Spell.dbc (local files, no
 database login); without it, from meta `tg:spell_names`, which the training
-ground fills with the names of the spells its stored pulls name. The console's
-Training tab shows the same report for the 12 most recently fought bosses.
+ground fills with the names of the spells its stored pulls name and of every
+avoidable effect's spells. Its pass at each book load reads only pulls stored
+since the last one (meta `tg:spell_names:rowid`). The console's Training tab
+shows the same report for the 12 most recently fought bosses.

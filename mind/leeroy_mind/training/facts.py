@@ -134,11 +134,13 @@ class TalkHook:
                 failures=failures)
             fact = wipe_facts(rec, result, {}, book=None, change=self.change_for(context))
         else:
-            priors = self.ports.conn.execute(
+            # A record only against every kill since the gate passed, never its A/B sample.
+            since = store.full_since_ms(self.ports.conn)
+            priors = [] if since is None else self.ports.conn.execute(
                 "SELECT (end_ms-start_ms)/1000.0 FROM tg_pull WHERE context=? AND kind='his' "
                 "AND outcome='killed' AND complete=1 AND scoreable=1 "
-                "AND end_ms<=? AND end_ms>start_ms AND id<>?",
-                (context, row["start_ms"], row["id"])).fetchall()
+                "AND end_ms<=? AND end_ms>start_ms AND id<>? AND start_ms>=?",
+                (context, row["start_ms"], row["id"], since)).fetchall()
             fact = kill_facts(rec, [p[0] for p in priors], boss_name(row["map"], row["boss_id"], ""))
         if not fact:
             return instruction

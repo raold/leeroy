@@ -623,12 +623,15 @@ async def test_his_lead_reaches_the_gate_without_a_dungeon_clear_muster(fake):
     listener.gate = Gate(fake)
     run = his_run(fake)
     await listener.on_start(run)
-    for outcome in ("wiped", "killed"):
+    for index, outcome in ((0, "wiped"), (0, "killed"), (1, "killed")):
         await fake.clock.advance(1, step=1)
-        await listener.on_boss(boss(fake, 0))
+        await listener.on_boss(boss(fake, index))
         await fake.clock.advance(1, step=1)
-        await listener.on_boss(boss(fake, 0, outcome))
-    # No dc_status ever arrived: the gate armed his first pull, then alternated by pull.
+        await listener.on_boss(boss(fake, index, outcome))
+        await fake.clock.advance(10, step=10)
+        await listener.gate.sample()  # the sampler's ticker sends a held disarm
+    # No dc_status ever arrived. The gate armed his first pull and disarmed its retry; the kill
+    # kept that side for boss 1's first pull (kills + wipes since the last kill), then re-armed.
     assert [c.record for c in fake.sent if isinstance(c, Telemetry)] == [True, False, True]
     listener.applier.apply.assert_not_awaited()
     listener.applier.hold.assert_not_awaited()

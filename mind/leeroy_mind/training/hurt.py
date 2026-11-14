@@ -13,9 +13,10 @@ lost, so shares rank spells rather than measure them. An avoidable hit is a
 recorded hit by that effect's spell, not proof a member stood in it. Only
 complete killed or wiped pulls are read; incomplete ones are counted, not used.
 
-The mind keeps the names of the spells its stored pulls name in meta
-``tg:spell_names`` (``remember_names``), so a reader without the client's
-Spell.dbc (the console) can still name them.
+The mind keeps the names of the spells its stored pulls name, and of every
+avoidable effect's spells, in meta ``tg:spell_names`` (``remember_names``), so a
+reader without the client's Spell.dbc (the console) can still name them. Its
+naming pass at each book load reads only pulls stored since the last pass.
 """
 
 import json
@@ -27,6 +28,7 @@ from leeroy_mind.wow import boss_name, is_raid_fight
 from .mechanics import BOSS_MECHANICS
 
 NAMES_KEY = "tg:spell_names"
+MARK_KEY = "tg:spell_names:rowid"  # the last stored pull whose spells a naming pass read
 MAX_NAMES = 4096
 MAX_CONTEXTS = 60
 MAX_PULLS = 500
@@ -85,6 +87,13 @@ def referenced_spells(conn, pulls: Iterable[str] | None = None) -> set[int]:
     return spells
 
 
+def avoidable_spells(book) -> set[int]:
+    """Every spell id the book gives the avoidable effects' names, hit or not, so a reader with
+    only the stored names can tell an effect nobody stood in from one it cannot name."""
+    return {spell for rows in BOSS_MECHANICS.values() for mech in rows if mech.kind == "avoid"
+            for name in mech.names for spell in book.ids(name)}
+
+
 def stored_names(conn) -> dict[int, str]:
     raw = conn.execute("SELECT value FROM meta WHERE key=?", (NAMES_KEY,)).fetchone()
     names = _json(raw[0] if raw else None, {})
@@ -111,6 +120,25 @@ def remember_names(conn, book, spells: Iterable[int]) -> int:
             conn.execute("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE "
                          "SET value=excluded.value", (NAMES_KEY, json.dumps(merged, separators=(",", ":"))))
     return len(added)
+
+
+def name_new_pulls(conn, book, batch: int = 20) -> int:
+    """Name the spells of up to ``batch`` pulls stored since the last pass (meta MARK_KEY), then
+    move the mark past them; returns how many pulls were read (0 once caught up)."""
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (MARK_KEY,)).fetchone()
+    try:
+        mark = int(row[0]) if row else 0
+    except (TypeError, ValueError):
+        mark = 0
+    rows = conn.execute("SELECT rowid, id FROM tg_pull WHERE rowid>? ORDER BY rowid LIMIT ?",
+                        (mark, batch)).fetchall()
+    if not rows:
+        return 0
+    remember_names(conn, book, referenced_spells(conn, [r[1] for r in rows]))
+    with conn:
+        conn.execute("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE "
+                     "SET value=excluded.value", (MARK_KEY, str(rows[-1][0])))
+    return len(rows)
 
 
 class SpellNames:
@@ -257,6 +285,8 @@ def _context(conn, ctx, rows, incomplete, spells, names, owner, top):
     by_member = defaultdict(Counter)
     for f in conn.execute(f"SELECT pull, kind, key, guid, count, deaths FROM tg_failure "
                           f"WHERE pull IN ({marks}) AND count>0", ids):
+        if f["guid"] == owner:
+            continue  # his own failures are not the cast's
         entry = failures[f["kind"], f["key"]]
         entry[0] += f["count"]
         entry[2].add(f["pull"])

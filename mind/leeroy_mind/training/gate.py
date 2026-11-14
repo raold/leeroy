@@ -15,9 +15,16 @@ armed with an unarmed fight only within one kind and one boss context, so his
 presence can neither stand in for overhead nor hide it. A raid led by a bot has
 dungeon-clear's muster naming the next boss and alternates by boss index. A raid
 he leads has no such muster: the gate musters itself at the start and after
-every finished pull, and alternates by pull (the pull's ordinal in the run takes
-the boss index's place). After ``passed`` every pull is armed; after ``failed``
-none is.
+every finished pull. Its parity slot is the kills so far plus the wipes since
+the last kill, so each boss's first pull keeps its kill position (a repeated
+route puts every boss on the other side next visit, whatever the wipes) and a
+wipe's retry falls on the other side. After ``passed`` every pull is armed;
+after ``failed`` none is.
+
+A disarm never follows an armed pull's terminal at once: native drops a pull
+whose epoch moves before it is confirmed and encoded. ``record=false`` waits
+until that pull's header is stored (``pull_stored``) or ``HOLD_S`` pass, and the
+sampler's ticker sends it. Arming is never held back.
 """
 
 import asyncio
@@ -41,6 +48,7 @@ from .store import perf_rows, put_perf
 INTERVAL = 30.0
 MAX_SAMPLES = 256
 BASIS = "rolling_world_500_updates_v1"
+HOLD_S = 10.0  # a disarm waits this long after an armed pull's terminal, at most
 KINDS = ("offline", "his")
 
 
@@ -72,6 +80,7 @@ class Gate:
         self.ports, self.watch = ports, watch
         self.store = Store(ports.conn, clock=ports.clock)
         self._phase, self._raids, self._verdict_ms = "ab", 0, None
+        self._passed_at = None
         saved = self._read("tg_gate")
         if saved is not None:
             if (isinstance(saved, dict) and type(saved.get("phase")) is str
@@ -81,14 +90,19 @@ class Gate:
                     and (saved["phase"] != "passed" or _number(saved.get("verdict_ms")))):
                 self._phase, self._raids, self._verdict_ms = (
                     saved["phase"], saved["raids"], saved.get("verdict_ms"))
+                # When it passed: before then his and offline pulls are a sample (store.full_since_ms).
+                if _number(saved.get("passed_at")):
+                    self._passed_at = saved["passed_at"]
             else:
                 self._phase = "failed"  # Corrupt state cannot silently re-arm a final gate.
         self._run = self._raid_index = self._boss_index = None
         # The parity slot of the current muster: the named boss, or for a raid he
         # leads the pull's ordinal. None before the run's first muster.
         self._slot = None
-        self._pulls = 0
+        self._kills = self._wipes = 0
         self._pulling = None
+        self._hold = None       # (until, pull key, engage ms) after an armed pull's terminal
+        self._deferred = False  # a record=false held back by _hold, for the sampler's ticker
         self._muster_ms = 0
         self._connection_ms = -1
         self._record, self._watch, self._acked = False, (), False
@@ -109,8 +123,10 @@ class Gate:
             return False
 
     def _save(self):
-        self.store.set_meta("tg_gate", json.dumps(dict(
-            phase=self._phase, raids=self._raids, verdict_ms=self._verdict_ms), allow_nan=False))
+        saved = dict(phase=self._phase, raids=self._raids, verdict_ms=self._verdict_ms)
+        if self._passed_at is not None:
+            saved["passed_at"] = self._passed_at
+        self.store.set_meta("tg_gate", json.dumps(saved, allow_nan=False))
 
     @property
     def phase(self) -> Literal["ab", "passed", "failed"]:
@@ -127,7 +143,7 @@ class Gate:
             return
         self._fence()
         self._run, self._raid_index, self._boss_index = run, None, None
-        self._slot, self._pulls, self._pulling = None, 0, None
+        self._slot, self._kills, self._wipes, self._pulling = None, 0, 0, None
         self._record, self._last_boss_ms = False, -1
         if self.phase == "ab" and self._kind(run) is not None:
             self._count(run)
@@ -181,7 +197,7 @@ class Gate:
 
     def record_flag(self, run, boss_index: int) -> bool:
         """The flag for a pull. ``boss_index`` is the parity slot: the boss a muster
-        names, or for a raid he leads the pull's ordinal in the run."""
+        names, or for a raid he leads its kills so far plus wipes since the last kill."""
         if self.phase == "failed" or not self.ports.cfg.telemetry:
             return False
         if self.phase == "passed":
@@ -196,7 +212,14 @@ class Gate:
                     and self._record and self._acked and self.ports.cfg.telemetry
                     and self.phase != "failed")
 
+    def _held(self):
+        return self._hold is not None and self.ports.clock.now() < self._hold[0]
+
     async def _send(self):
+        if not self._record and self._held():
+            self._deferred = True  # the armed pull just ended: native may still be encoding it
+            return
+        self._deferred = False
         revision, run = self._revision, self._run
         async with self._send_lock:
             if revision != self._revision or run is not self._run:
@@ -225,10 +248,11 @@ class Gate:
             await self._send()
 
     async def _muster_next(self, run):
-        """His lead's next pull, whatever boss it is: the slot is the pull's ordinal."""
+        """His lead's next pull, whatever boss it is: the slot is the kills so far plus the
+        wipes since the last kill."""
         if run is not self._run or getattr(run.session, "_closing", False):
             return
-        slot = self._pulls
+        slot = self._kills + self._wipes
         record, watch = self.record_flag(run, slot), tuple(self.watch())
         changed = (record, watch) != (self._record, self._watch)
         self._fight = self._pulling = None
@@ -307,9 +331,12 @@ class Gate:
             return
         fight, pulling = self._fight, self._pulling
         ours = fight is not None and fight.key == key and ev.ts >= fight.start_ms
+        ended = pulling is not None and pulling[0] == key and ev.ts >= pulling[1]
+        if ended and self._record:
+            # Native may still be confirming and encoding this armed pull: hold any disarm.
+            self._hold = (self.ports.clock.now() + HOLD_S, key, pulling[1])
         # His lead's next pull is mustered once this one ends, armed or not.
-        advance = (self._self_musters(self._run) and pulling is not None
-                   and pulling[0] == key and ev.ts >= pulling[1])
+        advance = self._self_musters(self._run) and ended
         if not ours and not advance:
             return
         self._last_boss_ms = max(self._last_boss_ms, ev.ts)
@@ -333,13 +360,27 @@ class Gate:
             self.verdict()
             changed = self.phase != prior
         if advance and self._run is not None:
-            self._pulls += 1
+            if ev.state == "killed":
+                self._kills, self._wipes = self._kills + 1, 0
+            else:
+                self._wipes += 1
             await self._muster_next(self._run)
         elif changed:
             await self._send()
 
+    def pull_stored(self, header):
+        """The held pull's header is stored, so native has finished with it: the disarm may go.
+        Called inline from pull storage, so it never awaits; the sampler's ticker sends it."""
+        hold = self._hold
+        if (hold is not None and (header.map, header.instance_id, header.boss_id) == hold[1]
+                and abs(header.start_ms - hold[2]) <= 1000):
+            self._hold = None
+
     async def sample(self):
         """One throttled ticker step; no catch-up bursts and no concurrent polls."""
+        if self._deferred and not self._held():
+            self._hold = None
+            await self._send()
         fight, run, revision = self._fight, self._run, self._revision
         now = self.ports.clock.now()
         if (fight is None or fight.pending or now < fight.due or not self._acked
@@ -441,6 +482,8 @@ class Gate:
         if len(differences) >= self.ports.cfg.gate_pulls:
             self._verdict_ms = fmean(differences)
             self._phase = "passed" if self._verdict_ms <= self.ports.cfg.gate_max_ms else "failed"
+            if self._phase == "passed":
+                self._passed_at = self.ports.clock.now()
             self._fence()
             self._record = bool(self.phase == "passed" and self.ports.cfg.telemetry
                                 and self._run is not None and self._slot is not None)
