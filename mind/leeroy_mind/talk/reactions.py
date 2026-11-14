@@ -198,10 +198,15 @@ class Reactions(Pipeline):
         for g, what, text in notes:
             if g and g != hg:
                 self._lately.setdefault(g, {})[what] = (now, text)
+                outreach = getattr(self, 'outreach', None)
+                if outreach is not None:
+                    outreach.note_lately(g, what, ev)
 
-    def _lately_line(self, guid: int, now: float) -> str:
-        recent = sorted(((at, text) for at, text in self._lately.get(guid, {}).values()
-                         if now - at < LATELY_S), reverse=True)
+    def _lately_line(self, guid: int, now: float, *, outreach: bool = False) -> str:
+        intentions = getattr(self, 'outreach', None) if outreach else None
+        recent = sorted(((at, text) for what, (at, text) in self._lately.get(guid, {}).items()
+                         if now - at < LATELY_S and (intentions is None
+                             or intentions.fallback_lately(guid, what))), reverse=True)
         return ", ".join(text for _, text in recent[:LATELY_ITEMS])
 
     def _open_topic(self, p: Persona, now: float) -> str:
@@ -213,7 +218,7 @@ class Reactions(Pipeline):
         night = night_of(local)
         n = self._opens.get((p.guid, night), 0)
         self._opens[(p.guid, night)] = n + 1
-        options = open_topics(p, self._lately_line(p.guid, now),
+        options = open_topics(p, self._lately_line(p.guid, now, outreach=True),
                               substance=substance_of(p, self._altered_of(p.guid), local))
         holidays = holiday_topics(local, p.identity.region)
         seeded = random.Random(f"{p.guid}:{night}:open")
@@ -594,8 +599,10 @@ class Reactions(Pipeline):
         anywhere. A member already in a whisper with him (_whisper_threads) is not one to
         start one."""
         hg, busy = self.human.guid, self._whisper_threads(now)
+        outreach = getattr(self, 'outreach', None)
         return {g: (self.personas.get(g), self.store.get_relationship(g, hg))
-                for g in self._candidates(hearable=False) if g not in busy}
+                for g in self._candidates(hearable=False) if g not in busy
+                and (outreach is None or outreach.eligible(g))}
 
     def _maybe_whisper(self, trigger: str, now: float, *, about: str = "") -> None:
         """One WhisperPlanner draw for one event (a kill, a quiet stretch, the late hour)."""
@@ -626,16 +633,22 @@ class Reactions(Pipeline):
         brings up (START_WHAT by romance.whisper_kind, a topic of her own: _open_topic). A
         casual one (everyone but a drawn or lust woman) carries no romance."""
         hg, p = self.human.guid, self.personas.get(g)
+        outreach = getattr(self, 'outreach', None)
+        if outreach is not None and not outreach.eligible(g):
+            return
+        item = outreach.select(g, 'whisper') if outreach is not None and trigger == START else None
         kind = whisper_kind(p)
         they, them, their = self.human.forms
-        what = START_WHAT[kind].format(topic=self._open_topic(p, now), they=they, them=them,
-                                       their=their)
+        what = (item.about if item else START_WHAT[kind].format(topic=self._open_topic(p, now), they=they, them=them,
+                                       their=their))
         told = " ".join(x for x in (WHISPER_WHY[trigger].format(about=about),
                                     START_WHISPER.format(them=them), what) if x)
         turn = Turn(kind=TurnKind.WHISPER, speaker=g, channel="whisper", to_guid=hg,
                     addressee=hg, instruction=told, delay=self.rng.uniform(*WHISPER_S[trigger]))
-        self._queue([(turn, TurnMeta(self._new_id(), why=f"whisper:{trigger}",
-                                     initiates=True, casual=kind == "casual"))])
+        meta = TurnMeta(self._new_id(), why=f"whisper:{trigger}", initiates=True, casual=kind == "casual")
+        if item is not None and not outreach.bind(turn, meta, item):
+            return
+        self._queue([(turn, meta)])
 
     # -- after a line is said ------------------------------------------------------------------
 

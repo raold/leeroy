@@ -352,6 +352,7 @@ class TurnMeta:
     photo_request: int | None = None
     photo_request_part: str = 'initial'
     borrow_credit: object | None = None
+    outreach_item: int | None = None
     # initiates: the turn starts a conversation with him unprompted (whisper:<trigger>,
     # burst:to_him): its silence is asked again once (SILENT_START_HINT), and a chain never
     # stops it, since its own clock paces it. casual: an opener to him in party or guild,
@@ -783,6 +784,9 @@ class Pipeline:
                 run.close()  # release an unawaited chain if the wrapper never started
                 self._behind.pop(t, None)
                 self.timing.queued_done(tokens, cancelled=t.cancelled())
+                if (outreach := getattr(self, 'outreach', None)) is not None:
+                    for _, meta in items:
+                        outreach.release(meta)
             task.add_done_callback(done)
             return task
 
@@ -1143,6 +1147,9 @@ class Pipeline:
         if turn.kind is TurnKind.OPEN and hg:  # an opener never answers his line (rehearsal 3)
             recent = [r for r in recent if r.from_guid != hg]
         pair = [] if preview else self._pair_lines(turn, recent, now)
+        if not preview and meta.outreach_item is not None:
+            from leeroy_mind.outreach.context import nudge_lines
+            pair = nudge_lines(self.outreach, turn, meta, pair, recent, limit=PAIR_LINES)
         if meta.pushback_line and all(r.id != meta.pushback_line for r in recent):
             # her own line his pushback is about, older than the chat shown or one the bridge
             # reported, which only the log holds (fix wave G6)
@@ -1478,6 +1485,8 @@ class Pipeline:
             raise
         finally:
             self._release_photo(meta, outcome)
+            if meta.outreach_item is not None:
+                self.outreach.release(meta)
             self.timing.pipeline_done(meta.timing_trace, outcome)
             if self._current.get(task) is turn:
                 del self._current[task]
@@ -1519,7 +1528,7 @@ class Pipeline:
             return self._drop(turn, meta, "no_persona")
         offer = getattr(self, '_photo_offer', None)
         if (discord and turn.template is None and meta.before_transport is None
-                and not meta.photo_asked and offer is not None):
+                and not meta.photo_asked and offer is not None and meta.outreach_item is None):
             meta.photo_asked = True
             try:
                 meta.photo = offer(turn, meta, now)
@@ -2561,7 +2570,7 @@ class Pipeline:
         from leeroy_mind.server.records import BadDayCounter
         stage = 'store'
         photo = meta.photo if not meta.said else None
-        atomic_record = photo is not None or meta.on_discord_record is not None
+        atomic_record = photo is not None or meta.on_discord_record is not None or meta.outreach_item is not None
         after_commit = []
         try:
             with self.store.transaction() if (server_turn or atomic_record
@@ -2635,6 +2644,14 @@ class Pipeline:
         out of the game's chat state and clocks: the world's history, the quiet clock, the last
         line a member said there, the open thread with him and his game session, whose last
         activity a restart reads (no session id on its line or utterance; rulings R11)."""
+        if meta.outreach_item is not None and after_commit is None:
+            effects = []
+            with self.store.transaction():
+                line = self._record(turn, meta, p, text, memory_ids, ack=ack,
+                                    discord_id=discord_id, after_commit=effects)
+            for effect in effects:
+                effect()
+            return line
         now = self.clock.now()
         discord = is_discord(turn.channel)
         heard = discord or self.comms is None or not self._comms_says(
@@ -2682,6 +2699,8 @@ class Pipeline:
         if meta.photo is not None and discord_id is not None and not meta.said:
             with self.store.transaction():
                 meta.photo.on_sent(line_id, discord_id)
+        if meta.outreach_item is not None:
+            self.outreach.record(turn, meta, line_id, now)
         def finished():
             self._after_record(turn, meta, p, text, memory_ids, line_id=line_id, chat=chat,
                 now=now, discord=discord, heard=heard, sid=sid, zone=zone, map_id=map_id,
@@ -2695,6 +2714,8 @@ class Pipeline:
     def _after_record(self, turn, meta, p, text, memory_ids, *, line_id, chat, now,
                       discord, heard, sid, zone, map_id, ack, discord_id):
         """Memory-only guards and hooks run only after an atomic post commits."""
+        if meta.outreach_item is not None:
+            self.outreach.delivered(meta, line_id)
         if self.cfg.talk.realism:
             meta.realism_sequence = self.realism.record_line(turn.speaker,credit=not meta.realism_correction)
             if meta.realism_planned and not meta.realism_correction and meta.words:
@@ -2833,6 +2854,8 @@ class Pipeline:
             from leeroy_mind.learn.apply import rejected
             rejected(self, turn, meta, reason)
         self._release_photo(meta, reason)
+        if meta.outreach_item is not None:
+            self.outreach.release(meta)
         self.timing.decision(meta.timing_trace, reason)
         if reason.startswith("guard_"):
             text = ""

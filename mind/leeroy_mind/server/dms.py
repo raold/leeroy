@@ -93,6 +93,9 @@ class DmOpeners:
     def _can_open(self, guid, now, day, meta):
         if now<self._human_until.get(guid,0):
             return False
+        outreach = getattr(self.app, 'outreach', None)
+        if outreach is not None and not outreach.eligible(guid):
+            return False
         owes = getattr(getattr(self.app,'discord_talk',None),'owes',None)
         if owes is not None and owes(guid):
             return False  # she owes him an answer she has not seen yet: no opener on top
@@ -177,8 +180,12 @@ class DmOpeners:
         if guid is None:
             return
         p = snap.personas[guid]
+        outreach = getattr(self.app, 'outreach', None)
+        item = outreach.select(guid, 'dm') if outreach is not None else None
         own = [s for s in snap.seeds if s.kind in {'life','plan'} and guid in s.about and not s.officers_only]
-        topic = self.rng.choice(own).fact if own else self.app.engine._to_him_topic(p,now)
+        if outreach is not None:
+            own = [s for s in own if outreach.fallback_seed(guid, s)]
+        topic = item.about if item else (self.rng.choice(own).fact if own else self.app.engine._to_him_topic(p,now))
         turn = Turn(TurnKind.OPEN,guid,f'dm:{guid}',to_guid=snap.human,addressee=snap.human,
             priority=Priority.BACKGROUND,max_lines=1,
             instruction='Start a private Discord message to him in your own words. '+topic)
@@ -189,7 +196,11 @@ class DmOpeners:
         meta.keep_channel = True
         generation = generations.get(guid,0)
         meta.still_valid = lambda:(self._human_generation.get(guid,0)==generation and self.valid(turn,meta))
+        if item is not None and not outreach.bind(turn, meta, item):
+            return
         if not meta.still_valid():
+            if item is not None:
+                outreach.release(meta)
             return
         self._pending_guid = guid
         self._pending = asyncio.create_task(self.app.engine.speak_meta(turn,meta))
