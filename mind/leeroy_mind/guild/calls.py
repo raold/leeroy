@@ -10,6 +10,7 @@ from dataclasses import asdict
 import math
 from uuid import uuid4
 
+from leeroy_mind.logs import log as log_event
 from leeroy_mind.wow import BOSS_NAMES, boss_name, faction_known, is_raid_fight
 
 from .boss_calls import BOSS_CALLS, call_for, parse_dc_status
@@ -55,6 +56,7 @@ class RaidCalls:
         self._ended = {}
         self._killed = set()
         self._last_pre = None
+        self.briefs = False  # [raidlead] briefs (raidlead.service.attach): the playbooks' pre-pull brief
 
     def _save(self):
         with self.ports.conn:
@@ -229,6 +231,7 @@ class RaidCalls:
         plan = self._run.plan
         # the instance difficulty (25 is 1, heroic adds 2): a heroic run gets its heroic call
         name, call = call_for(self._map, state.next_name, int(plan.size == 25) + 2 * int(plan.heroic))
+        brief = None
         async with self._lock:
             if not self._valid(epoch) or not self._fresh(ev.ts) or name == self._last_pre or self._pull is not None:
                 return
@@ -238,16 +241,56 @@ class RaidCalls:
             text = call.pre
             indexes = [boss for (map_id, boss), known in BOSS_NAMES.items()
                        if map_id == self._map and known == name]
-            if len(indexes) == 1:
-                # The raid playbooks' brief, when there is one (raidlead.callouts.boss_brief).
-                from leeroy_mind.raidlead.callouts import BossContext, boss_brief
-                plan = self._run.plan
-                text = boss_brief(BossContext(self._map, indexes[0], name, plan.size, plan.heroic)) or text
+            if self.briefs and len(indexes) == 1:
+                brief = self._brief(indexes[0], name)
             if self.pre_call is not None and len(indexes) == 1:
                 replacement = self.pre_call(self._map, indexes[0])
                 if replacement:
-                    text = replacement
-            await self._say(text, epoch, key=f"pre:{state.next_entry}:{ev.ts}")
+                    text, brief = replacement, None
+            key = f"pre:{state.next_entry}:{ev.ts}"
+            if brief is None:
+                await self._say(text, epoch, key=key)
+                return
+            if not self._reserve(epoch, key=key):
+                return
+        await self._say_brief(*brief, epoch)
+
+    def _brief(self, boss_id, name) -> tuple[str, tuple[str, ...]] | None:
+        """The raid playbooks' brief for the next boss ([raidlead] briefs; raidlead.callouts
+        .boss_brief): its context id and its lines, cleaned as every public call is; None for the
+        standing call."""
+        from leeroy_mind.raidlead.briefs import LINE_BYTES, playbook_role
+        from leeroy_mind.raidlead.callouts import BossContext, boss_brief
+        plan, cast = self._run.plan, self.ports.cast()
+        roles = tuple(sorted(playbook_role(role, cast[g].class_, cast[g].spec_tab)
+                             for g, role in self._roles.items() if g in cast))
+        context = BossContext(self._map, boss_id, name, plan.size, plan.heroic, roles)
+        text = boss_brief(context)
+        lines = tuple(public_text(self.ports, line) for line in (text or "").split("\n"))
+        if not text or any(not line or len(line.encode("utf-8")) > LINE_BYTES for line in lines):
+            return None
+        return context.context_id, lines
+
+    def _reserve(self, epoch, *, key) -> bool:
+        """_say's checks for a call of several lines: the gap and its once-only receipt, once."""
+        now = self.ports.clock.now()
+        if not self._valid(epoch) or not self.gap.ok(now) or not _once(self.ports.conn, self._prefix + "line:" + key):
+            return False
+        self.gap.mark(now)
+        return True
+
+    async def _say_brief(self, context_id, lines, epoch):
+        """The brief's lines word for word, outside the lock so an engage is never held up behind
+        them; each goes out only while the run is valid and no pull has begun."""
+        def still():
+            return self._valid(epoch) and self._pull is None
+        said = 0
+        for line in lines:
+            if not still() or not await self.ports.say(self._speaker(), "raid", line, before_transport=still):
+                break
+            said += 1
+        log_event("raidlead_brief", context=context_id, lines=said, via="prepull",
+                  outcome="said" if said == len(lines) else "cut" if said else "dropped")
 
     async def on_boss(self, ev):
         epoch = self._epoch
