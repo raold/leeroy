@@ -35,8 +35,9 @@ def discord_turn(rig, speaker: int, channel: str, to: int = 0) -> Turn:
     """A member's answer to him in the guild's Discord: `channel` a layout id ("general") or a
     DM ("dm:<guid>")."""
     place = channel if channel.startswith("dm:") else f"discord:{channel}"
+    # A channel turn takes the paragraph band (discord_length.band); a DM never draws.
     return Turn(kind=TurnKind.REPLY_HUMAN, speaker=speaker, channel=place, to_guid=to,
-                addressee=HUMAN)
+                addressee=HUMAN, discord_draw=0.99)
 
 
 def speak(rig, turn: Turn, meta: TurnMeta | None = None, seconds: float = 60.0) -> list[str]:

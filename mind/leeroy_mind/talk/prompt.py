@@ -289,6 +289,17 @@ DISCORD_LENGTH = ("This is Discord, not the game, so more than your usual one li
                   "you have something to say (at most about {words} words), a single quick "
                   "sentence when that's all it needs. One paragraph, no line breaks.")
 DISCORD_WHERE = {"dm": "a Discord DM thread", "channel": "Discord chat"}
+# A channel message drawn short (discord_length.band) reads as a quick line or a couple of
+# sentences; a DM with him is as full as she likes (owner, 2026-11-13: "DMs max expressive").
+DISCORD_QUICK = ("This is Discord chat, not the game: a quick message the way people type in a "
+                 "busy channel, a few words or one sentence (at most about {words} words). "
+                 "No line breaks.")
+DISCORD_FEW = ("This is Discord chat, not the game, so more than your usual one line: a couple "
+               "of sentences (at most about {words} words). One paragraph, no line breaks.")
+DISCORD_DM = ("This is your private Discord DM, not the game, so write as fully as you feel: "
+              "say everything you want to say, in your own voice, a whole paragraph when you "
+              "have something to say (at most about {words} words). One paragraph, no line "
+              "breaks.")
 DISCORD_DROPS = ((", in one short line", ""), (" in one short line", ""), (", one short line", ""),
                  ("One short line, the way", "Say it the way"), (", in a few words", ""))
 
@@ -296,10 +307,22 @@ DISCORD_DROPS = ((", in one short line", ""), (" in one short line", ""), (", on
 def discord_length(channel: str, words: int) -> str:
     """DISCORD_LENGTH for a turn on `channel` holding about `words`: a DM's or a channel's; ""
     for a game channel or with no words (the one short line, as before)."""
+    template = discord_template(channel, words)
+    if not template:
+        return ""
+    return template.format(where=DISCORD_WHERE["channel"], words=words)
+
+
+def discord_template(channel: str, words: int) -> str:
+    """The wording a Discord turn on `channel` of `words` reads: DISCORD_DM in a DM, else by its
+    band (discord_length.QUICK_WORDS, FEW_WORDS), DISCORD_LENGTH for a paragraph; "" for a game
+    channel or no words."""
+    from leeroy_mind.talk.discord_length import FEW_WORDS, QUICK_WORDS
     if words <= 0 or not is_discord(channel):
         return ""
-    where = DISCORD_WHERE["dm" if is_private(channel) else "channel"]
-    return DISCORD_LENGTH.format(where=where, words=words)
+    if is_private(channel):
+        return DISCORD_DM
+    return DISCORD_QUICK if words <= QUICK_WORDS else DISCORD_FEW if words <= FEW_WORDS else DISCORD_LENGTH
 
 
 def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
@@ -332,7 +355,7 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     from leeroy_mind.prompts import note_template
     note_template("talk.instruction."+kind.value,tmpl)
     if length:
-        note_template("talk.discord_length", DISCORD_LENGTH)
+        note_template("talk.discord_length", discord_template(channel, discord_words))
     if "{addressee}" in tmpl and not addressee:
         raise ValueError(f"a {kind} turn needs an addressee")
     extra = " ".join(extra.split())

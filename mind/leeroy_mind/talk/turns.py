@@ -39,3 +39,4 @@ class Turn:
     max_lines: int = 2
     delay: float = 0.0
     template: str | None = None
+    discord_draw: float | None = None  # a channel message's length band, drawn once (discord_length.band)

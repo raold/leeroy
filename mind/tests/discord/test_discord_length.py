@@ -1,7 +1,8 @@
-"""Longer member messages on the guild's Discord ([talk] discord_words, owner 2026-11-13: "Long
-and chatty"): every Discord turn, a DM or a channel, is told to write the way people write on
-Discord, gets the model room for it and keeps its words through every step after the model; every
-game turn is exactly as before. Invented cast and text, fake model and clock."""
+"""Longer member messages on the guild's Discord ([talk] discord_words and dm_words, owner
+2026-11-13: "Long and chatty", then channels a mix and "DMs max expressive"): every Discord turn,
+a DM or a channel, is told to write the way people write on Discord, gets the model room for it
+and keeps its words through every step after the model; a channel message draws its length band
+once; every game turn is exactly as before. Invented cast and text, fake model and clock."""
 import asyncio
 import logging
 import math
@@ -33,7 +34,9 @@ from leeroy_mind.storage.rows import ChatLineRow, pack_vec
 from leeroy_mind.talk import discord_length
 from leeroy_mind.talk.filters import find_tells, is_silence, repair
 from leeroy_mind.talk.pipeline import LONG_SLACK, TurnMeta
-from leeroy_mind.talk.prompt import (DISCORD_LENGTH, INSTRUCTIONS, LIVE_BUDGET, MORE_LINES,
+from leeroy_mind.talk.pipeline import Pipeline
+from leeroy_mind.talk.prompt import (DISCORD_DM, DISCORD_FEW, DISCORD_LENGTH, DISCORD_QUICK,
+                                     INSTRUCTIONS, LIVE_BUDGET, MORE_LINES, discord_template,
                                      render_instruction)
 from leeroy_mind.talk.realism import Realism
 from leeroy_mind.talk.states import EFFECTS, Altered
@@ -84,6 +87,23 @@ def test_discord_words_defaults_to_90_and_takes_0_to_200(tmp_path):
         assert _talk(tmp_path, f"discord_words = {n}").discord_words == n
 
 
+def test_dm_words_defaults_to_200_and_takes_0_to_200(tmp_path):
+    assert load_config(tmp_path / "absent.toml").talk.dm_words == 200
+    assert "dm_words = 200" in DEFAULT_TOML
+    for n in (0, 1, 90, 200):
+        assert _talk(tmp_path, f"dm_words = {n}").dm_words == n
+
+
+@pytest.mark.parametrize("value", ["-1", "201", '"90"', "9.5", "true"])
+def test_an_invalid_dm_words_is_the_default_logged_once(tmp_path, caplog, monkeypatch, value):
+    monkeypatch.setattr(config, "_WARNED", set())
+    caplog.set_level(logging.WARNING, logger="leeroy_mind")
+    assert _talk(tmp_path, f"dm_words = {value}").dm_words == 200
+    assert _talk(tmp_path, f"dm_words = {value}").dm_words == 200  # read again
+    found = [r for r in caplog.records if "talk_dm_words_invalid" in r.getMessage()]
+    assert len(found) == 1
+
+
 @pytest.mark.parametrize("value", ["-1", "201", '"90"', "9.5", "true"])
 def test_an_invalid_discord_words_is_the_default_logged_once(tmp_path, caplog, monkeypatch,
                                                             value):
@@ -97,12 +117,32 @@ def test_an_invalid_discord_words_is_the_default_logged_once(tmp_path, caplog, m
 
 def test_words_for_a_turn():
     talk = load_config(Path("absent.toml")).talk
-    assert discord_length.words_for(talk, "dm:102") == 90
+    assert discord_length.words_for(talk, "dm:102") == 200  # his DMs: as full as she likes
     assert discord_length.words_for(talk, "discord:general") == 90
+    assert discord_length.words_for(talk, "gdm:7") == 90  # a group DM is a chat, not a pair
     for channel in GAME_CHANNELS:
         assert discord_length.words_for(talk, channel) == 0
-    assert discord_length.words_for(replace(talk, discord_words=0), "dm:102") == 0
-    assert discord_length.words_for(object(), "dm:102") == 0  # a config without the key
+    assert discord_length.words_for(replace(talk, dm_words=0), "dm:102") == 0
+    assert discord_length.words_for(replace(talk, dm_words=0), "discord:general") == 90
+    assert discord_length.words_for(replace(talk, discord_words=0), "dm:102") == 200
+    assert discord_length.words_for(replace(talk, discord_words=0), "discord:general") == 0
+    assert discord_length.words_for(object(), "dm:102") == 0  # a config without the keys
+    from types import SimpleNamespace
+    assert discord_length.words_for(SimpleNamespace(discord_words=90), "dm:102") == 90
+
+
+def test_a_channel_message_draws_its_band():
+    """Most a quick line, some a couple of sentences, now and then the paragraph; never over
+    the setting."""
+    assert [discord_length.band(90, d) for d in (0.0, 0.54, 0.55, 0.84, 0.85, 0.999)] == [
+        20, 20, 45, 45, 90, 90]
+    assert [discord_length.band(30, d) for d in (0.1, 0.7, 0.9)] == [20, 30, 30]
+    assert [discord_length.band(10, d) for d in (0.1, 0.7, 0.9)] == [10, 10, 10]
+    rng = random.Random(7)
+    draws = [discord_length.band(90, rng.random()) for _ in range(10000)]
+    shares = {n: draws.count(n) / len(draws) for n in (20, 45, 90)}
+    assert abs(shares[20] - .55) < .03 and abs(shares[45] - .30) < .03
+    assert abs(shares[90] - .15) < .03
 
 
 # -- the instruction ---------------------------------------------------------------------------
@@ -119,8 +159,9 @@ VARIANTS = [{}, {"long": True}, {"to_him": True}, {"quiet": False}]
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_every_discord_turn_kind_has_the_new_wording_and_no_short_line(channel, kind, variant):
     text = render(kind, channel=channel, discord_words=90, **variant)
-    where = "a Discord DM thread" if channel.startswith("dm:") else "Discord chat"
-    assert DISCORD_LENGTH.format(where=where, words=90) in text
+    wording = (DISCORD_DM.format(words=90) if channel.startswith("dm:")
+               else DISCORD_LENGTH.format(where="Discord chat", words=90))
+    assert wording in text
     assert "at most about 90 words" in text and "One paragraph, no line breaks." in text
     assert "short line" not in text.casefold()
     assert "a few words" not in text and MORE_LINES not in text
@@ -129,8 +170,24 @@ def test_every_discord_turn_kind_has_the_new_wording_and_no_short_line(channel, 
 def test_the_wording_follows_the_setting_and_the_place():
     dm = render(TurnKind.REPLY_HUMAN, channel="dm:102", discord_words=150)
     channel = render(TurnKind.REPLY_HUMAN, channel="discord:raid-planning", discord_words=150)
-    assert "at most about 150 words" in dm and "Discord DM thread" in dm
-    assert "Discord chat" in channel and "DM thread" not in channel
+    assert "at most about 150 words" in dm and "private Discord DM" in dm
+    assert "write as fully as you feel" in dm and "single quick sentence" not in dm
+    assert "Discord chat" in channel and "private Discord DM" not in channel
+
+
+def test_a_channel_band_reads_its_own_wording_and_a_dm_never_changes():
+    quick = render(TurnKind.CONTINUE, channel="discord:general", discord_words=20)
+    few = render(TurnKind.CONTINUE, channel="discord:general", discord_words=45)
+    paragraph = render(TurnKind.CONTINUE, channel="discord:general", discord_words=90)
+    assert DISCORD_QUICK.format(words=20) in quick and "paragraph" not in quick
+    assert DISCORD_FEW.format(words=45) in few and "a couple of sentences" in few
+    assert DISCORD_LENGTH.format(where="Discord chat", words=90) in paragraph
+    assert render(TurnKind.CONTINUE, channel="gdm:7", discord_words=20) == quick
+    for words in (20, 45, 90, 200):
+        assert discord_template("dm:102", words) == DISCORD_DM
+        assert DISCORD_DM.format(words=words) in render(TurnKind.REPLY_HUMAN, channel="dm:102",
+                                                        discord_words=words)
+    assert discord_template("guild", 90) == "" and discord_template("discord:general", 0) == ""
 
 
 def test_each_template_reads_whole_without_its_game_length():
@@ -143,7 +200,7 @@ def test_each_template_reads_whole_without_its_game_length():
     assert render(TurnKind.WHISPER, channel="dm:102", discord_words=90).startswith(
         "You're whispering Zan privately. Say it the way you'd really whisper them.")
     assert render(TurnKind.GREET, channel="dm:102", discord_words=90).startswith(
-        "Zan just logged on. Greet them your way. This is Discord")
+        "Zan just logged on. Greet them your way. This is your private Discord DM")
 
 
 @pytest.mark.parametrize("channel", GAME_CHANNELS)
@@ -179,7 +236,7 @@ def test_the_wording_ends_the_template_before_what_she_answers_lately_and_her_ta
     before: what she answers stays last."""
     text = render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", lead="LEAD", extra="EXTRA",
                               after="AFTER", tail="TAIL", channel="dm:102", discord_words=90)
-    wording = DISCORD_LENGTH.format(where="a Discord DM thread", words=90)
+    wording = DISCORD_DM.format(words=90)
     assert text.startswith("LEAD Answer Zan's last line.")
     assert text.index("if it really fits.") < text.index(wording) < text.index("EXTRA")
     assert text.index("EXTRA") < text.index("AFTER") < text.index("TAIL")
@@ -188,7 +245,7 @@ def test_the_wording_ends_the_template_before_what_she_answers_lately_and_her_ta
 
 def test_a_long_extra_is_capped_but_the_wording_never_is():
     text = render(TurnKind.REPLY_HUMAN, extra="word " * 2000, channel="dm:102", discord_words=90)
-    assert DISCORD_LENGTH.format(where="a Discord DM thread", words=90) in text
+    assert DISCORD_DM.format(words=90) in text
 
 
 # -- room for the reply --------------------------------------------------------------------------
@@ -213,13 +270,17 @@ def test_the_longest_discord_reply_still_fits_the_live_context():
     assert LIVE.options["num_ctx"] - LIVE_BUDGET - discord_length.num_predict(90) == 2128
 
 
-def discord_turn(speaker: int, channel: str, *, kind=TurnKind.REPLY_HUMAN) -> Turn:
+def discord_turn(speaker: int, channel: str, *, kind=TurnKind.REPLY_HUMAN, draw=0.99) -> Turn:
+    """A channel turn draws the paragraph band unless `draw` says otherwise (a DM never draws)."""
     to = HUMAN if channel.startswith("dm:") else 0
-    return Turn(kind=kind, speaker=speaker, channel=channel, to_guid=to, addressee=HUMAN)
+    return Turn(kind=kind, speaker=speaker, channel=channel, to_guid=to, addressee=HUMAN,
+                discord_draw=draw)
 
 
 def with_words(rig, n: int):
-    rig.engine.cfg = replace(rig.engine.cfg, talk=replace(rig.engine.cfg.talk, discord_words=n))
+    """Both settings at `n`: a channel's discord_words and a DM's dm_words."""
+    rig.engine.cfg = replace(rig.engine.cfg, talk=replace(rig.engine.cfg.talk, discord_words=n,
+                                                          dm_words=n))
     return rig
 
 
@@ -230,10 +291,45 @@ def test_a_discord_turn_asks_for_room_and_a_game_turn_does_not(store, clock, tmp
     assert rig.speak_turn(Turn(kind=TurnKind.REPLY_HUMAN, speaker=103, channel="guild",
                                addressee=HUMAN), seconds=60)
     options = [c["options"] for c in rig.chat_calls()]
-    assert [o["num_predict"] for o in options] == [168, 168, 80]
+    assert [o["num_predict"] for o in options] == [344, 168, 80]  # his DM's 200 words, 90, game
     assert {o["num_ctx"] for o in options} == {4096}
     assert all(o["stop"] == ["\n\n"] for o in options)
     rig.close()
+
+
+@pytest.mark.parametrize("draw,words,room,wording", [
+    (0.1, 20, 80, DISCORD_QUICK), (0.6, 45, 96, DISCORD_FEW), (0.9, 90, 168, DISCORD_LENGTH)])
+def test_a_channel_turn_reads_and_asks_by_the_band_it_drew(store, clock, tmp_path, draw, words,
+                                                            room, wording):
+    rig = make_rig(store, clock, tmp_path, reply="sounds good, see you there")
+    turn = discord_turn(101, "discord:general", draw=draw)
+    assert rig.engine._discord_words(turn) == words
+    assert rig.speak_turn(turn, seconds=150)
+    [call] = rig.chat_calls()
+    assert call["options"]["num_predict"] == room
+    assert wording.format(where="Discord chat", words=words) in call["messages"][-1]["content"]
+    rig.close()
+
+
+def test_a_channel_turn_draws_once_and_a_dm_never_draws(store, clock, tmp_path):
+    rig = make_rig(store, clock, tmp_path)
+    rig.engine._length_rng = random.Random(3)
+    turn = Turn(kind=TurnKind.CONTINUE, speaker=101, channel="discord:general")
+    first = rig.engine._discord_words(turn)
+    assert turn.discord_draw is not None
+    assert {rig.engine._discord_words(turn) for _ in range(20)} == {first}
+    assert rig.engine._discord_words(replace(turn)) == first  # a copy keeps its draw
+    dm = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="dm:102", to_guid=HUMAN)
+    assert rig.engine._discord_words(dm) == 200 and dm.discord_draw is None
+    game = Turn(kind=TurnKind.CONTINUE, speaker=101, channel="guild")
+    assert rig.engine._discord_words(game) == 0 and game.discord_draw is None
+    rig.close()
+
+
+def test_a_silent_channel_answer_is_asked_again_for_its_band():
+    assert [Pipeline._silent_length(n) for n in (10, 20, 25, 45, 50, 90, 200)] == [
+        "a sentence", "a sentence", "a sentence", "a couple of sentences",
+        "a couple of sentences", "a few sentences", "a few sentences"]
 
 
 def test_discord_words_zero_asks_for_80(store, clock, tmp_path):
@@ -269,7 +365,7 @@ def test_the_discord_wording_is_in_her_instruction_the_last_thing_she_reads(stor
     turn.instruction = "You are in a private message with Zan\nAnswer his message: you around"
     assert rig.speak_turn(turn, seconds=150)
     user = rig.last_user()
-    wording = DISCORD_LENGTH.format(where="a Discord DM thread", words=90)
+    wording = DISCORD_DM.format(words=200)
     instruction = user.split("\n\n")[-1]
     assert instruction.endswith(f"{wording} You are in a private message with Zan Answer his "
                                 "message: you around")
