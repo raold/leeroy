@@ -14,6 +14,7 @@ class ServerExt:
     engine: object = None
     reactions: object = None
     dms: object = None
+    culture: object = None
 
 
 def attach_server(app) -> ServerExt | None:
@@ -59,4 +60,6 @@ def attach_server(app) -> ServerExt | None:
     app.register_shutdown_drain(dms.close)
     app.register_shutdown_drain(reactions.close)
     app.register_shutdown_drain(lease.close)
-    return ServerExt(config, lease, engine, reactions, dms)
+    from leeroy_mind.culture.live import attach_culture
+    culture = attach_culture(app)  # Part B's calendar and loot; None with their switches off
+    return ServerExt(config, lease, engine, reactions, dms, culture)

@@ -14,8 +14,9 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
-              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke')
-FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0}
+              'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke',
+              'wow_event', 'loot_close', 'loot_wish')
+FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loot_close': 7 * 86400.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
 log = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class Seed:
     @property
     def openers(self) -> tuple[int, ...] | None:
         """Who already knows a subject before any of it is posted in the channel."""
-        if self.kind in ('life', 'photo', 'group_start'):
+        if self.kind in ('life', 'photo', 'group_start', 'loot_wish'):
             return self.about
         if self.kind == 'his_day':
             return self.witnesses
@@ -249,7 +250,8 @@ def _purpose(conn, c):
 
 def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            officers: frozenset[int], human: int, human_name: str, trial_rank: int,
-           culture_enabled: bool = False, culture_store=None, ident=None) -> list[Seed]:
+           culture_enabled: bool = False, culture_store=None, ident=None,
+           culture_calendar: bool = False, culture_loot: bool = False) -> list[Seed]:
     names = {g: p.character_name for g, p in cast.items()}
     for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
         if guid in cast or guid == human:
@@ -268,6 +270,17 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
             raise ValueError("Culture gathering requires the connection's owning Store")
         result += _read("joke", lambda: culture_seeds(culture_store, now=now, local=local,
                                                    personas=cast, human=human, ident=ident))
+        from leeroy_mind.culture import seeds as culture
+        if culture_calendar:
+            result += _read('wow_event', lambda: culture.wow_event_seeds(conn, now=now, local=local, ident=ident))
+        if culture_loot:
+            close = _read('loot_close', lambda: culture.loot_close_seeds(conn, now=now, cast=cast,
+                                                                         names=names, human=human, ident=ident))
+            # A close award is that drop's subject; it is never raised twice as plain loot too.
+            raised = {'loot:' + seed.key.split(':', 1)[1] for seed in close}
+            result = [seed for seed in result if seed.key not in raised] + close
+            result += _read('loot_wish', lambda: culture.loot_wish_seeds(conn, now=now, cast=cast,
+                                                                         names=names, human=human, ident=ident))
     return result
 
 
