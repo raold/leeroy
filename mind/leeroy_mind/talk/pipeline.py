@@ -76,6 +76,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
+from leeroy_mind.guards.review import rewrite_hint
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
@@ -1754,12 +1755,17 @@ class Pipeline:
         best = None
         def keep(candidate,verdicts):
             nonlocal best
+            if any('echo_parent' in v.codes for v in verdicts):
+                return  # his own words said back are never the answer he is owed
             severity = {"send":0,"react":1,"rewrite":2,"drop":3}
             worst = max(verdicts,key=lambda v:severity[v.action])
             rank = (severity[worst.action],sum(len(v.codes) for v in verdicts))
             if best is None or rank<best[0]:
                 best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)))
         def fallback():
+            if best is None:
+                meta.guard_verdict = "drop"
+                return drop("guard_echo")
             meta.guard_verdict = best[2]
             meta.guard_codes = best[3]
             if ' '.join(' '.join(s.plain for s in best[1]).split()) == ' '.join(meta.preference_original.split()):
@@ -1798,7 +1804,7 @@ class Pipeline:
                 if getattr(self,'learn_capture_preferences',False):
                     meta.preference_original = ' '.join(s.plain for s in lines)[:4001]
                 composed = composed or await self._compose(turn, meta, live=True)
-                hint = "Rewrite once to fix these guard codes: " + ", ".join(verdict.codes)
+                hint = rewrite_hint(verdict.codes)
                 retry = replace(composed, messages=[*composed.messages,
                     {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
                     {"role": "user", "content": hint}])

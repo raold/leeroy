@@ -86,13 +86,25 @@ independent; shortening `repeat_seconds` does not disable the other checks.
 | Action | Caller responsibility |
 |---|---|
 | `send` | Deliver the draft, then record the confirmed delivery. |
-| `rewrite` | Request one screened new draft with the codes, then review again. |
+| `rewrite` | Request one screened new draft, telling the model what is wrong in words, then review again. |
 | `react` | Use a fixed nod/like or laughter reaction when no answer is owed. |
 | `drop` | Suppress an unsolicited line; retry once when an answer is owed to the owner. |
 
 For answers owed to the owner, a second unfavorable verdict is advisory: send
 the better screened candidate. React also prompts one attempt at a real answer.
 Existing hard content, name, slash and delivery gates still apply.
+
+`echo_parent` (owner, 2026-11-14) is a drop code that stays hard even when the
+answer is owed: a draft that says back the message it answers (the whole of a
+message of 6 or more words in the same mood, a question as a question or a statement
+as a statement, its letters 90% alike; or a run of 8 words copied from one of his
+statements; apostrophes ignored, her own lines never count) is never sent, and never
+chosen as the owed answer's fallback. When both drafts echo, the answer drops
+(`guard_echo`). The screened retry is told what is wrong in words
+(`review.rewrite_hint`), not by code names, which the model could not act on.
+Measured on the live history before the change: it flagged exactly the 3 echoes
+among 84 Discord replies to him and none of 683 whisper replies. Turning his
+question into its answer ("Are the flasks ready?" / "The flasks are ready.") is an answer.
 
 A rewrite takes priority over drop, which takes priority over react. The optional
 `await judge_relevance(reasoner, stores, draft)` is a separate model call that may
