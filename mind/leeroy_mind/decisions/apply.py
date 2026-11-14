@@ -1,6 +1,8 @@
 """The kind registry: how each kind of decision is carried in game and whether the game can undo
-it. Each kind registers its rules when its module attaches (Parts B and C of D4); a kind without
-rules is never reversible, so his overrule stops only its future effect. Also the words every
+it. The shipped kinds (BUILTIN) are built afresh for each decisions service (builtin_rules), so no
+state is shared between apps; the console, which only asks reversible(), loads one stateless set
+(load_builtin). register() puts a stand-in kind ahead of both (tests). A kind without rules is
+never reversible, so his overrule stops only its future effect. Also the words every
 reader shares (the card, the seeds, the console), built from a decision's stored value and its
 effect references, never from model text."""
 from collections.abc import Mapping
@@ -36,7 +38,8 @@ class KindRules(Protocol):
     async def undo(self, app, row) -> None: ...  # only when reversible; restores the prior state
 
 
-_RULES: dict[str, KindRules] = {}
+_RULES: dict[str, KindRules] = {}    # stand-ins put ahead of the shipped kinds (register)
+_LOOKUP: dict[str, KindRules] = {}   # the shipped kinds for readers that only ask reversible()
 
 
 def register(rules: KindRules) -> None:
@@ -49,22 +52,29 @@ def unregister(kind: str) -> None:
     _RULES.pop(kind, None)
 
 
-def rules_for(kind: str) -> KindRules | None:
-    return _RULES.get(kind)
+def rules_for(kind: str, own: dict | None = None) -> KindRules | None:
+    """A registered stand-in, else the caller's own instance (a service's), else the shared lookup."""
+    return _RULES.get(kind) or (own or {}).get(kind) or _LOOKUP.get(kind)
+
+
+def builtin_rules() -> list[KindRules]:
+    """Fresh instances of the shipped kinds: each decisions service holds its own."""
+    out = []
+    for spec in BUILTIN:
+        module, _, factory = spec.partition(':')
+        out.append(getattr(importlib.import_module(module), factory)())
+    return out
 
 
 def load_builtin() -> None:
-    """Register the shipped kinds (a reader outside the mind, such as the console, asks this)."""
-    for spec in BUILTIN:
-        module, _, factory = spec.partition(':')
-        rules = getattr(importlib.import_module(module), factory)()
-        if rules.kind not in _RULES:
-            register(rules)
+    """The shipped kinds for a reader outside the mind (the console asks reversible() only)."""
+    for rules in builtin_rules():
+        _LOOKUP.setdefault(rules.kind, rules)
 
 
-def reversible(row) -> bool:
+def reversible(row, rules: KindRules | None = None) -> bool:
     """Whether the game can undo what this decision changed: only an in-effect one whose kind says so."""
-    rules = rules_for(row['kind'])
+    rules = rules if rules is not None else rules_for(row['kind'])
     try:
         return bool(row['status'] == 'in_effect' and rules is not None and rules.reversible(row))
     except Exception:

@@ -149,6 +149,9 @@ std::string GuildAddRosterRefusal(GuildAddRoster const& roster, std::int64_t now
 // The roster the picker follows now: the stored one while follow is on and it has not expired; else an empty one,
 // which plans exactly as without a roster.
 GuildAddRoster GuildAddRosterInForce(bool follow, GuildAddRoster const& roster, std::int64_t nowMs);
+// Whether a fill followed the roster in force: one of the members it actually added is the roster's (a member or its
+// bench). False with no roster in force, however the picks fell.
+bool GuildAddRosterFollowed(GuildAddRoster const& inForce, std::vector<std::uint32_t> const& joined);
 
 struct GuildAddPlan
 {

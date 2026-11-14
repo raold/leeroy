@@ -212,7 +212,7 @@ LEEROY_TEST(Guild_MakeGuildGroupEventMatchesFixture)
     body.erase("v"); body.erase("ts");
     CHECK_EQ(MakeGuildGroupEvent(built), body);
     CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, MakeGuildGroupEvent(built))), full);
-    GuildGroupEvent entered{"entered", 10, 1, true, 631, 77, 1, {}, {1101, 1102, 1103}};
+    GuildGroupEvent entered{"entered", 10, 1, true, 631, 77, 1, {}, {1101, 1102, 1103}, true};
     auto const event = MakeGuildGroupEvent(entered);
     CHECK(event.at("added").is_array() && event.at("added").empty());
     CHECK_EQ(json::parse(Leeroy::EncodeEvent(0, event)), Message("guild_group_entered"));

@@ -287,6 +287,16 @@ std::string GuildAddRosterRefusal(GuildAddRoster const& roster, std::int64_t now
     return {};
 }
 
+bool GuildAddRosterFollowed(GuildAddRoster const& inForce, std::vector<std::uint32_t> const& joined)
+{
+    auto const listed = [&](std::uint32_t guid)
+    {
+        return std::find(inForce.preferred.begin(), inForce.preferred.end(), guid) != inForce.preferred.end()
+            || std::find(inForce.bench.begin(), inForce.bench.end(), guid) != inForce.bench.end();
+    };
+    return std::any_of(joined.begin(), joined.end(), listed);
+}
+
 GuildAddRoster GuildAddRosterInForce(bool follow, GuildAddRoster const& roster, std::int64_t nowMs)
 {
     if (!follow || roster.untilMs <= nowMs || (roster.preferred.empty() && roster.bench.empty()))

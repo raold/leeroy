@@ -193,9 +193,9 @@ def test_poll_cadence_and_an_early_poll_after_drama(store, clock, guild):
     assert polls.get_poll(store.conn, poll)['status'] == 'closed'
 
 
-def receipt(store, key, ts, *, winner, runner, close=False, claimed=False, council=False, bid=40.0):
+def receipt(store, key, ts, *, winner, runner, close=False, claimed=False, council=False, bid=40.0, wanted=True):
     record = {'state': 'charged', 'item_id': 50001, 'name': 'Testblade', 'human_claimed': claimed,
-              'bidders': [{'guid': runner, 'gain': 12, 'wanted': True}],
+              'bidders': [{'guid': runner, 'gain': 12, 'wanted': wanted}],
               'award': {'guid': winner, 'paid': 0.0 if council else 50.0, 'bid': 50.0, 'priority': -1 if claimed else 0,
                         'runner_up': runner, 'runner_up_bid': None if council else bid, 'close': close}}
     with store.transaction():
@@ -252,7 +252,9 @@ def test_his_claim_seeds_drama(store, clock, guild):
     names = {1: 'Testmage', 104: 'Dunna', 102: 'Belra'}
     lid = receipt(store, 'guild:loot:3:bb', now - 3600, winner=1, runner=104, claimed=True)
     [seed] = his_loot_seeds(store.conn, now=now, names=names, human=1, cast=guild)
-    assert (seed.key, seed.kind, seed.channels, seed.about) == (f'his_loot:{lid}', 'his_loot', ('loot-and-dkp',), (104,))
+    # Hers to grumble about, and about him: who talks passes culture's teasing gates for him
+    assert (seed.key, seed.kind, seed.channels, seed.about) == (f'his_loot:{lid}', 'his_loot', ('loot-and-dkp',),
+                                                                (104, 1))
     assert seed.fact == 'Testmage claimed [Item 50001] in the raid over Dunna, who wanted it and bid 40 DKP'
     assert drama_since(store.conn, now - DAY, 1) == 1
     # A council's zero row seeds too, without a bid
@@ -267,7 +269,11 @@ def test_his_claim_seeds_drama(store, clock, guild):
     off = {s.key for s in gather(store.conn, **args)}
     assert {f'his_loot:{lid}', f'his_loot:{council}'} <= on and not {f'loot:{lid}', f'loot:{council}'} & on
     assert {f'loot:{lid}', f'loot:{council}'} <= off and not any(k.startswith('his_loot') for k in off)
-    # Older than a week, or not his, or nobody wanted it: no seed
+    # At most one a member a local day: her newest
+    receipt(store, 'guild:loot:3:dd', now - 7200, winner=1, runner=104, claimed=True)
+    assert [s.key for s in his_loot_seeds(store.conn, now=now, names=names, human=1, cast=guild)] == [
+        f'his_loot:{council}', f'his_loot:{lid}']
+    # Older than a week: no seed
     move(clock, now + 8 * DAY)
     assert his_loot_seeds(store.conn, now=clock.now(), names=names, human=1, cast=guild) == []
 
@@ -293,3 +299,91 @@ def test_no_poll_opens_in_the_servers_quiet_window(store, clock, guild, kind):
     app.server = SimpleNamespace(config=SimpleNamespace(quiet_window=(time(3, 0), time(8, 0))))
     asyncio.run(service(app).tick())
     assert len(polls.open_polls(store.conn)) == 1
+
+
+def test_she_wanted_it_only_when_she_bid_wanting_it(store, clock, guild):
+    now = clock.now()
+    lid = receipt(store, 'guild:loot:3:ee', now - 60, winner=1, runner=104, claimed=True, wanted=False)
+    [seed] = his_loot_seeds(store.conn, now=now, names={1: 'Testmage', 104: 'Dunna'}, human=1, cast=guild)
+    assert seed.key == f'his_loot:{lid}'
+    assert seed.fact == 'Testmage claimed [Item 50001] in the raid over Dunna, who could use it and bid 40 DKP'
+
+
+def test_his_claim_grumbling_passes_the_teasing_gates():
+    from leeroy_mind.server.rhythm import choose_cast
+    from leeroy_mind.server.seeds import Seed
+    from conftest import make_persona
+    import random
+    personas = {g: make_persona(g, f'N{g}') for g in (101, 102, 103)}
+    states = {g: SimpleNamespace(presence=SimpleNamespace(state='online')) for g in personas}
+    seed = Seed('his_loot:9', 'his_loot', ('loot-and-dkp',), 'He claimed it', (101, 1))
+    ask = []
+
+    def tease(teaser, target):
+        ask.append((teaser, target))
+        return teaser != 102
+    cast = choose_cast('loot-and-dkp', seed, states, personas, officers=frozenset(), human=1,
+                       in_play=frozenset(), ties=lambda a, b: 1.0, rng=random.Random(4), tease=tease)
+    assert cast and 102 not in cast and all(target == 1 for _, target in ask)
+    assert not choose_cast('loot-and-dkp', seed, states, personas, officers=frozenset(), human=1,
+                           in_play=frozenset(), ties=lambda a, b: 1.0, rng=random.Random(4),
+                           tease=lambda a, b: False)
+
+
+def test_the_result_post_waits_out_the_quiet_window(store, clock, guild, kind):
+    from datetime import time
+    app = app_for(store, clock, guild)
+    svc = service(app)
+    asyncio.run(svc.tick())
+    [poll] = polls.open_polls(store.conn)
+    for member, option in ((1, 'loot_council'), (102, 'dkp'), (104, 'loot_council')):
+        polls.vote(store, poll['id'], member, option, now=clock.now())
+    asyncio.run(svc.tick())
+    app.server = SimpleNamespace(config=SimpleNamespace(quiet_window=(time(19, 0), time(21, 0))))
+    asyncio.run(svc.tick())
+    # The result is the kind's at once (settled, the poll handled); only its post waits
+    [row] = ledger.history(store.conn)
+    assert (row['status'], row['message']) == ('in_effect', None)
+    assert polls.get_poll(store.conn, poll['id'])['handled'] is not None
+    assert store.conn.execute("SELECT count(*) FROM discord_message WHERE channel='loot-and-dkp'").fetchone()[0] == 0
+    for _ in range(6):  # well past the hook's retry limit: nothing is lost
+        asyncio.run(svc.tick())
+    app.server = None
+    asyncio.run(svc.tick())
+    row = ledger.get(store.conn, row['id'])
+    post = store.conn.execute('SELECT channel,author,text FROM discord_message WHERE id=?', (row['message'],)).fetchone()
+    assert (post['channel'], post['author']) == ('loot-and-dkp', 102) and 'a loot council' in post['text']
+    asyncio.run(svc.tick())
+    assert store.conn.execute("SELECT count(*) FROM discord_message WHERE channel='loot-and-dkp'").fetchone()[0] == 1
+
+
+def test_a_poll_that_keeps_the_rule_in_force_makes_no_new_decision(store, clock, guild, kind):
+    app = app_for(store, clock, guild)
+    svc = service(app)
+    for round_ in range(2):
+        asyncio.run(svc.tick())
+        [poll] = polls.open_polls(store.conn)
+        for member in (102, 104):
+            polls.vote(store, poll['id'], member, 'dkp', now=clock.now())
+        asyncio.run(svc.tick())
+        asyncio.run(svc.tick())
+        assert ledger.history(store.conn) == [] and current_rule(store.conn) == LootRule()
+        assert polls.get_poll(store.conn, poll['id'])['handled'] is not None
+        move(clock, clock.now() + 15 * DAY)
+        with store.transaction():  # the guild keeps raiding, so polls keep their cadence
+            store.conn.execute("INSERT INTO guild_raid(started,ended,raid_key,size,heroic,offline,lead_guid,"
+                               "tank_guid,loot_guid) VALUES (?,?,'icc',10,0,0,102,101,102)",
+                               (clock.now() - DAY, clock.now() - DAY + 3600))
+    posts = [r[0] for r in store.conn.execute("SELECT text FROM discord_message WHERE channel='loot-and-dkp'")]
+    assert posts == ['Loot rules stay: DKP.', 'Loot rules stay: DKP.']
+    # A council in force voted again stays too, with its role priorities
+    ident = settled_rule(store, {'mode': 'loot_council'}, clock.now())
+    ledger.take_effect(store, ident, effect_ref={'rule': 'loot_council'}, now=clock.now())
+    asyncio.run(svc.tick())
+    [poll] = polls.open_polls(store.conn)
+    for member in (102, 104):
+        polls.vote(store, poll['id'], member, 'loot_council', now=clock.now())
+    asyncio.run(svc.tick())
+    asyncio.run(svc.tick())
+    assert [r['id'] for r in ledger.history(store.conn)] == [ident]
+    assert ledger.get(store.conn, ident)['status'] == 'in_effect'

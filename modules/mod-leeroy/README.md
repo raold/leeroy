@@ -436,5 +436,8 @@ the roster unexpired, the owner's `.playerbots bot addN` takes, within each role
 members first and its bench only when no other free member fits; every existing fence, the size
 template and the buff and gear rules still order the members within each tier (pure policy:
 `PlanGuildAdd`'s roster, `GuildAddRosterInForce`). At 0, or with the roster expired or empty, it
-picks exactly as before. Server.log: `guild_add_roster held (N members, M bench)` and `add<N> from
-the guild follows the posted roster (...)`, counts only. **Native rebuild required.**
+picks exactly as before. The `guild_group` events of a group he built carry `roster_followed`:
+true once a fill of that group added at least one of the roster's members or bench
+(`GuildAddRosterFollowed`), so the mind can record the lineup in effect through his add. Server.log:
+`guild_add_roster held (N members, M bench)` and `add<N> from the guild follows the posted roster
+(...)`, counts only. **Native rebuild required.**

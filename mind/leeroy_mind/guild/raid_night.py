@@ -224,12 +224,21 @@ class RaidNight:
             log.info("lineup_partial id=%d missing=%d", lineup.decision, missing)
         return members, bench
 
-    def _lineup_formed(self, lineup):
+    def _lineup_bench(self, lineup, raid):
+        """A lineup's bench as a raid's bench: its available raiders and officers outside the raid."""
+        everyone = {c.guid: c for c in self._candidates()}
+        return [g for g in sorted(lineup.bench) if g in everyone and everyone[g].available is True
+                and g not in raid and everyone[g].guild_role in ("officer", "raider")]
+
+    def _lineup_formed(self, lineup, via=None):
         formed = getattr(self.ports, "lineup_formed", None)
         if formed is None or self.session is None:
             return
         try:
-            formed(lineup, self.session.raid_id)
+            if via is None:
+                formed(lineup, self.session.raid_id)
+            else:
+                formed(lineup, self.session.raid_id, via=via)
         except Exception:
             log.warning("lineup_effect_unrecorded id=%d", lineup.decision)
 
@@ -422,7 +431,8 @@ class RaidNight:
                                       if type(g) is int and g > 0 and g != self.ports.human_guid))
         self._epoch += 1
         self._pick_return_state = self.state
-        self._adoption = (raid.key, *mode, ev.instance_id, members, frozenset(self._added_tanks))
+        self._adoption = (raid.key, *mode, ev.instance_id, members, frozenset(self._added_tanks),
+                          getattr(ev, "roster_followed", False) is True)
         self.state = State.FORMING
 
     def _instance_recorded(self, raid_key, instance_id):
@@ -709,7 +719,7 @@ class RaidNight:
         his copy as the called raid proves it, then the loot master, the record with its attendance
         for those who arrived, and assembly, with him leading. Nothing is formed or disbanded: the
         group stays as he built it."""
-        raid_key, size, heroic, instance_id, members, tanks = self._adoption
+        raid_key, size, heroic, instance_id, members, tanks, followed = self._adoption
         self._adoption = None
         try:
             if self._instance_recorded(raid_key, instance_id):
@@ -730,10 +740,16 @@ class RaidNight:
                 raise _Failed("nobody arrived in his instance")
             # A member he named to lead his group calls the raid (raidlead); he still drives it.
             leaders = self._leaders(candidates, Lead(True), speaker=self._designated())
+            # His add followed tonight's posted lineup: the lineup is in effect through it, and its
+            # bench stands by (standby DKP) as a formed raid's bench does
+            lineup = self._lineup() if followed else None
+            bench = self._lineup_bench(lineup, {c.guid for c in candidates}) if lineup is not None else []
             plan = RaidPlan(raid_key, size, heroic, False, leaders.lead_guid, leaders.tank_guid,
-                            leaders.loot_guid, [c.guid for c in candidates], [], True)
+                            leaders.loot_guid, [c.guid for c in candidates], bench, True)
             await self._send(SetLootMaster(uuid4().hex, self.ports.human_guid, leaders.loot_guid), epoch)
             await self._begin(plan, epoch, plan.members, [], instance_id=instance_id, lead_is_human=True)
+            if lineup is not None:
+                self._lineup_formed(lineup, via="add")
             if plan.lead_guid != self.ports.human_guid:
                 # Her raid because he named her: it counts as no raid night the mind led (last_led).
                 with self.ports.conn:

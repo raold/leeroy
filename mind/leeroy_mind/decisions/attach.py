@@ -6,10 +6,8 @@ def attach_decisions(app):
     config = load_decisions_config(app.data_dir / 'mind.toml')
     if not config.enabled or getattr(app, 'server', None) is None:
         return None
-    from . import apply
     from .service import DecisionsService
-    apply.load_builtin()
-    service = DecisionsService(app, config)
+    service = DecisionsService(app, config)  # with its own instances of the shipped kinds
     app.engine.decisions_enabled = True
     app.register_event_handler('hello', service.on_hello)
     app.register_connection_hook(service.on_connection)

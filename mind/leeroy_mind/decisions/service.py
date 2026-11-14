@@ -40,6 +40,10 @@ class DecisionsService:
         self.app, self.config = app, config
         self.enabled = True
         self._unrecorded: set[int] = set()  # undone in game, his overrule not yet in the ledger
+        self.rules = {rules.kind: rules for rules in apply.builtin_rules()}  # this app's own kinds
+
+    def rules_for(self, kind: str):
+        return apply.rules_for(kind, self.rules)
 
     def _present(self, guids, now: float) -> dict[int, str]:
         try:
@@ -67,7 +71,7 @@ class DecisionsService:
         """Each registered kind's own minute work (proposing, posting, taking effect, ending): a
         kind that fails is logged and the others still run."""
         for kind in ledger.KINDS:
-            hook = getattr(apply.rules_for(kind), 'tick', None)
+            hook = getattr(self.rules_for(kind), 'tick', None)
             if hook is None:
                 continue
             try:
@@ -80,13 +84,13 @@ class DecisionsService:
     async def on_hello(self, ev) -> None:
         """A worldserver (re)connected: kinds holding state in game send it again."""
         for kind in ledger.KINDS:
-            hook = getattr(apply.rules_for(kind), 'on_hello', None)
+            hook = getattr(self.rules_for(kind), 'on_hello', None)
             if hook is not None:
                 hook(ev)
 
     async def on_connection(self, connected: bool) -> None:
         for kind in ledger.KINDS:
-            hook = getattr(apply.rules_for(kind), 'on_connection', None)
+            hook = getattr(self.rules_for(kind), 'on_connection', None)
             if hook is not None:
                 hook(connected)
 
@@ -97,7 +101,7 @@ class DecisionsService:
         MAX_HOOK_TRIES times; a poll whose kind has no hook (yet) waits for one."""
         store = self.app.store
         for row in polls.unhandled(store.conn):
-            hook = getattr(apply.rules_for(row['kind']), 'closed', None)
+            hook = getattr(self.rules_for(row['kind']), 'closed', None)
             if hook is None:
                 continue
             try:
@@ -161,9 +165,10 @@ class DecisionsService:
             ledger.overrule(store, row['id'], now=now)
             return {'ok': True, 'outcome': 'overruled', 'undone': False,
                     'message': 'Overruled before it took effect; the rule in force stays.'}
-        if apply.reversible(row):
+        rules = self.rules_for(row['kind'])
+        if apply.reversible(row, rules):
             try:
-                await apply.rules_for(row['kind']).undo(self.app, row)
+                await rules.undo(self.app, row)
             except Exception as error:
                 log.warning('decision_undo_failed id=%d kind=%s error=%s', row['id'], row['kind'],
                             type(error).__name__)

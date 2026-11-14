@@ -40,6 +40,7 @@ RECEIPT_RAIDS = 4         # the role_first proposal reads the last raids' receip
 CONTESTED_SLOTS = 2       # role priorities for at most this many slots
 RAID_KEY = "decisions:loot_rule:raid:{raid_id}"
 PROPOSAL_KEY = "decisions:loot_poll:{poll}"
+ANNOUNCE_KEY = "decisions:loot_rule:announce:{poll}"   # a poll's result post, waiting out the quiet window
 MODE_WORDS = {"dkp": "DKP", "loot_council": "a loot council", "gear_priority": "gear priority"}
 SLOT_WORDS = {"weapon_2h": "two-handers", "weapon_1h": "one-handers", "trinket": "trinkets",
               "token": "tier tokens", "other": "other gear"}
@@ -330,7 +331,10 @@ class LootRules:
         days = getattr(config, "loot_poll_days", 14)
         self._close_when_all_voted(app, now)
         from .lineup import server_quiet
-        if not server_quiet(app) and poll_due(app.store.conn, now=now, poll_days=days, human=app.human_guid):
+        quiet = server_quiet(app)
+        if not quiet:
+            self._announce(app, now)
+        if not quiet and poll_due(app.store.conn, now=now, poll_days=days, human=app.human_guid):
             self._open(app, now)
         self._take_effect(app, now)
 
@@ -373,8 +377,9 @@ class LootRules:
                 polls.close_early(app.store, row["id"], now=now)
 
     async def closed(self, app, poll, winner) -> None:
-        """The poll's result: a tie or no votes keeps the rule in force; a winner is announced in
-        #loot-and-dkp and waits, settled, for the next raid."""
+        """The poll's result, at once: a tie or no votes keeps the rule in force; the rule in force
+        voted again is no new decision (it "stays"); another winner is settled by the poll and waits
+        for the next raid. Its post in #loot-and-dkp waits for the server to be awake (_announce)."""
         store, now = app.store, app.clock.now()
         if winner not in MODES:
             log.info("loot_rule_poll_no_result poll=%d", poll["id"])
@@ -390,21 +395,52 @@ class LootRules:
             if checked:
                 value["role_first"] = {s: list(r) for s, r in checked.items()}
         author = saved.get("by") if isinstance(saved, dict) and type(saved.get("by")) is int else None
-        officers = self._officers(app)
-        if author not in officers:
-            author = min(officers, key=lambda g: (not is_loot_officer(officers[g]), g)) if officers else None
-        from leeroy_mind.discord import store as dstore
+        held = current_rule(store.conn)
+        chosen = rule_from_value(value)
+        stays = held.mode == chosen.mode and dict(held.role_first) == dict(chosen.role_first)
         with store.transaction():
-            message = None
-            if author is not None:
-                message = dstore.post(store, channel=RULE_CHANNEL, author=author, origin="mind", now=now,
-                                      text=f"Loot rules from the next raid: {rule_words(value)}. "
-                                           "Settled by the officers' poll.")
-            ident = ledger.propose(store, kind="loot_rule", subject=SUBJECT, value=value,
-                                   positions=polls.positions_of(poll), now=now, poll=poll["id"])
-            ledger.settle(store, ident, settled_by=0, poll=poll["id"], message=message, now=now)
+            ident = None
+            if not stays:
+                ident = ledger.propose(store, kind="loot_rule", subject=SUBJECT, value=value,
+                                       positions=polls.positions_of(poll), now=now, poll=poll["id"])
+                ledger.settle(store, ident, settled_by=0, poll=poll["id"], now=now)
+            text = (f"Loot rules stay: {rule_words(value)}." if stays else
+                    f"Loot rules from the next raid: {rule_words(value)}. Settled by the officers' poll.")
+            store.set_meta(ANNOUNCE_KEY.format(poll=poll["id"]),
+                           json.dumps({"text": text, "by": author, "decision": ident}, sort_keys=True))
             polls.mark_handled(store, poll["id"], now=now)
-        log.info("loot_rule_settled id=%d poll=%d mode=%s", ident, poll["id"], winner)
+        if stays:
+            log.info("loot_rule_stays poll=%d mode=%s", poll["id"], winner)
+        else:
+            log.info("loot_rule_settled id=%d poll=%d mode=%s", ident, poll["id"], winner)
+
+    def _announce(self, app, now):
+        """Post each poll's waiting result in #loot-and-dkp (outside the quiet window), in the name
+        of the officer who opened the poll, else the loot officer; the decision names the post."""
+        store = app.store
+        rows = store.conn.execute("SELECT key,value FROM meta WHERE key GLOB ? ORDER BY key",
+                                  (ANNOUNCE_KEY.format(poll="*"),)).fetchall()
+        if not rows:
+            return
+        officers = self._officers(app)
+        from leeroy_mind.discord import store as dstore
+        for key, raw in rows:
+            try:
+                saved = json.loads(raw)
+                text, author, decision = saved["text"], saved.get("by"), saved.get("decision")
+            except (TypeError, ValueError, KeyError):
+                with store.transaction():
+                    store.conn.execute("DELETE FROM meta WHERE key=?", (key,))
+                continue
+            if author not in officers:
+                author = min(officers, key=lambda g: (not is_loot_officer(officers[g]), g)) if officers else None
+            with store.transaction():
+                if author is not None:
+                    message = dstore.post(store, channel=RULE_CHANNEL, author=author, origin="mind", text=text,
+                                          now=now)
+                    if type(decision) is int:
+                        ledger.announce(store, decision, message)
+                store.conn.execute("DELETE FROM meta WHERE key=?", (key,))
 
     def _take_effect(self, app, now):
         row = ledger.pending(app.store.conn, "loot_rule", SUBJECT)

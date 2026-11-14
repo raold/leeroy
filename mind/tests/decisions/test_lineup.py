@@ -213,3 +213,106 @@ def test_never_posted_in_the_servers_quiet_window(store, clock, cast):
     app.server = None
     run(LineupRules(), app)
     assert ledger.get(store.conn, ident)['status'] == 'settled'
+
+
+def test_a_failing_step_never_blocks_the_others(store, clock, cast, monkeypatch, caplog):
+    import logging
+    from leeroy_mind.decisions import lineup as module
+    members, personas = cast
+    now = clock.now()
+    # Tonight's posted lineup, and tomorrow's night due for a proposal whose build fails
+    event(store, now + 2 * HOUR, 7)
+    event(store, now + 22 * HOUR, 8)
+    ident = ledger.propose(store, kind='lineup', subject=subject_of(7), value={'members': [201], 'bench': []},
+                           positions=[], now=now)
+    ledger.settle(store, ident, settled_by=201, now=now)
+    monkeypatch.setattr(module, 'build_lineup', lambda *a, **k: 1 / 0)
+    ports = Ports()
+    rules, app = LineupRules(), app_for(store, clock, personas, ports)
+    rules.on_hello(None)
+    with caplog.at_level(logging.WARNING):
+        run(rules, app)
+    assert 'lineup_step_failed step=propose error=ZeroDivisionError' in caplog.text
+    assert ports.sent[-1].members == (201,)  # tonight's roster still reaches native
+    move(clock, now + 2 * HOUR + NIGHT_S)
+    run(rules, app)
+    assert ledger.get(store.conn, ident)['status'] == 'talk_only' and ports.sent[-1].members == ()
+
+
+def test_unbuildable_nights_and_a_failed_armory_read_back_off(store, clock, cast):
+    members, personas = cast
+    reads = []
+
+    def equipped(guids):
+        reads.append(len(guids))
+        raise OSError('armory down')
+    app = app_for(store, clock, personas)
+    app.guild.armory = SimpleNamespace(available=True, equipped=equipped)
+    # No tank can lead: the night is tried again hourly, not every minute
+    tankless = {g: body(g, 8, 1) if g in (201, 202) else m for g, m in members.items()}
+    store.upsert_cast(list(tankless.values()), 2000.0)
+    now = clock.now()
+    event(store, now + 20 * HOUR)
+    rules = LineupRules()
+    for minute in range(5):
+        move(clock, now + 60 * minute)
+        run(rules, app)
+    assert ledger.history(store.conn) == [] and len(reads) == 1  # one armory read, then backed off
+    store.upsert_cast(list(members.values()), 3000.0)
+    move(clock, now + 30 * 60)
+    run(rules, app)
+    assert ledger.history(store.conn) == []  # the night waits out its hour
+    move(clock, now + HOUR)
+    run(rules, app)
+    [row] = ledger.history(store.conn)
+    assert row['status'] == 'proposed' and len(reads) == 2  # the armory read again after its back-off
+    assert json.loads(row['value'])['tanks'] == [201, 202]
+
+
+def test_the_roster_steers_only_until_his_raid_begins(store, clock, cast):
+    members, personas = cast
+    now = clock.now()
+    event(store, now + 3 * HOUR)
+    ident = ledger.propose(store, kind='lineup', subject=subject_of(7), value={'members': [201, 211], 'bench': [229]},
+                           positions=[], now=now)
+    ledger.settle(store, ident, settled_by=201, now=now)
+    ports = Ports()
+    rules, app = LineupRules(), app_for(store, clock, personas, ports)
+    rules.on_hello(None)
+    run(rules, app)
+    assert ports.sent[-1].members == (201, 211)
+    with store.transaction():  # his raid of the night began
+        store.conn.execute("INSERT INTO guild_raid(raid_id,started,raid_key,size,heroic,offline,lead_guid,tank_guid,"
+                           "loot_guid) VALUES (5,?,'icc',10,0,0,1,201,211)", (now + 60,))
+    move(clock, now + 120)
+    run(rules, app)
+    assert ports.sent[-1].members == () and ports.sent[-1].bench == ()
+    # An offline raid of the members is not his raid: the next night's roster holds through one
+    event(store, now + 27 * HOUR, 8)
+    nxt = ledger.propose(store, kind='lineup', subject=subject_of(8), value={'members': [202], 'bench': []},
+                         positions=[], now=now + 120)
+    ledger.settle(store, nxt, settled_by=202, now=now + 120)
+    with store.transaction():
+        store.conn.execute("INSERT INTO guild_raid(raid_id,started,raid_key,size,heroic,offline,lead_guid,tank_guid,"
+                           "loot_guid) VALUES (6,?,'naxx',10,0,1,201,201,211)", (now + 22 * HOUR,))
+    move(clock, now + 23 * HOUR)
+    run(rules, app)
+    assert ports.sent[-1].members == (202,)
+
+
+def test_a_lineup_settled_after_his_raid_began_steers_the_next_night_only(store, clock, cast):
+    members, personas = cast
+    now = clock.now()
+    event(store, now + 3 * HOUR)
+    with store.transaction():
+        store.conn.execute("INSERT INTO guild_raid(raid_id,started,raid_key,size,heroic,offline,lead_guid,tank_guid,"
+                           "loot_guid) VALUES (5,?,'icc',10,0,0,1,201,211)", (now - 60,))
+    ident = ledger.propose(store, kind='lineup', subject=subject_of(7), value={'members': [201], 'bench': []},
+                           positions=[], now=now)
+    ledger.settle(store, ident, settled_by=201, now=now)
+    assert tonight(store.conn, now) is None  # no formation tonight uses it
+    ports = Ports()
+    rules, app = LineupRules(), app_for(store, clock, personas, ports)
+    rules.on_hello(None)
+    run(rules, app)
+    assert ports.sent[-1].members == ()  # and the picker never holds it

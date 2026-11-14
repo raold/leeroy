@@ -425,6 +425,6 @@ json MakeGuildGroupEvent(GuildGroupEvent const& e)
         added.push_back({{"guid", guid}, {"role", role}});
     return {{"type", "guild_group"}, {"reason", e.reason}, {"size", e.size}, {"leader_guid", e.leaderGuid},
         {"raid", e.raid}, {"map", e.map}, {"instance_id", e.instanceId}, {"difficulty", e.difficulty},
-        {"added", added}, {"members", e.members}};
+        {"added", added}, {"members", e.members}, {"roster_followed", e.rosterFollowed}};
 }
 }

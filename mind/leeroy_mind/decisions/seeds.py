@@ -83,12 +83,15 @@ HIS_LOOT_S = 7 * 86400.0
 
 
 def his_loot_seeds(conn, *, now, names, human, cast) -> list[Seed]:
-    """His claims of the last week over a member who wanted the item (a charged receipt with his
-    claim and its unique debit to him): the guild grumbles about it in #loot-and-dkp. Built from
-    the receipt; the member who lost it is its stakeholder."""
-    out = []
-    for lid, note, item_id in conn.execute(
-            "SELECT id,note,item_id FROM dkp_ledger WHERE reason='item' AND guid=? AND ts BETWEEN ? AND ? "
+    """His claims of the last week over a member who could use the item (a charged receipt with his
+    claim and its debit to him): the guild grumbles about it in #loot-and-dkp. Built from the
+    receipt: she "wanted it" only when she bid wanting it, else she "could use it". about is (her,
+    him): she is its stakeholder, and he is the one it is about, so who talks passes culture's
+    teasing gates (server.rhythm, the engine). At most one a member a local day: her newest."""
+    from leeroy_mind.clock import local_at
+    out, seen = [], set()
+    for lid, note, item_id, ts in conn.execute(
+            "SELECT id,note,item_id,ts FROM dkp_ledger WHERE reason='item' AND guid=? AND ts BETWEEN ? AND ? "
             "AND (note GLOB 'guild:loot:*' OR note GLOB 'council:guild:loot:*') ORDER BY ts DESC,id DESC LIMIT 32",
             (human, now - HIS_LOOT_S, now)).fetchall():
         row = conn.execute('SELECT value FROM meta WHERE key=?', (note.removeprefix('council:'),)).fetchone()
@@ -101,10 +104,16 @@ def his_loot_seeds(conn, *, now, names, human, cast) -> list[Seed]:
                 continue
         except (TypeError, ValueError, KeyError, AttributeError):
             continue
+        day = (runner, local_at(ts).date())
+        if day in seen:
+            continue
+        seen.add(day)
+        bids = record.get('bidders') if isinstance(record.get('bidders'), list) else []
+        wanted = any(isinstance(b, dict) and b.get('guid') == runner and b.get('wanted') is True for b in bids)
         item = _item_name(conn, item_id)
         bid = award.get('runner_up_bid')
         fact = (f"{names.get(human, 'The guild master')} claimed [{item}] in the raid over "
-                f"{names.get(runner, 'a guild member')}, who wanted it"
+                f"{names.get(runner, 'a guild member')}, who {'wanted' if wanted else 'could use'} it"
                 + (f' and bid {bid:g} DKP' if type(bid) in (int, float) and bid > 0 else ''))
-        out.append(Seed(f'his_loot:{lid}', 'his_loot', ('loot-and-dkp',), fact, (runner,)))
+        out.append(Seed(f'his_loot:{lid}', 'his_loot', ('loot-and-dkp',), fact, (runner, human)))
     return out

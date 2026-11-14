@@ -282,12 +282,13 @@ class LivePorts:
         from leeroy_mind.decisions.lineup import tonight
         return tonight(self.conn, self.clock.now())
 
-    def lineup_formed(self, lineup, raid_id):
-        """The formation formed from that lineup: it is in effect, with the raid."""
+    def lineup_formed(self, lineup, raid_id, *, via=None):
+        """A raid was formed from that lineup (via "add": his add followed its roster): it is in
+        effect, with the raid."""
         if getattr(self.app, "decisions", None) is None:
             return False
         from leeroy_mind.decisions.lineup import formed
-        return formed(self.app.store, lineup.decision, raid_id, now=self.clock.now())
+        return formed(self.app.store, lineup.decision, raid_id, now=self.clock.now(), via=via)
 
     def loot_rule(self, raid_id):
         """The loot rule this raid runs under (decisions.loot_rules), fixed when it opened; None

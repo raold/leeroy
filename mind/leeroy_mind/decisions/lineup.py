@@ -15,6 +15,7 @@ from datetime import datetime
 import hashlib
 import json
 import logging
+import math
 from uuid import uuid4
 
 from leeroy_mind.guild.comp import (TARGETS, NoTankError, candidates_from, choose_leads, coverage,
@@ -30,6 +31,8 @@ SETTLE_AFTER_S = 2 * 3600                # the lead posts it this long after pro
 NIGHT_S = 6 * 3600                       # a raid night ends this long after its posted time
 ROSTER_AHEAD_S = 6 * 3600                # the picker holds the roster from here to the night's end
 BENCH_MAX = 10                           # the bench a lineup posts: the next members by priority
+UNBUILT_RETRY_S = 3600.0                 # a night no lineup could be built for is tried again hourly
+ARMORY_RETRY_S = 900.0                   # after a failed armory read, lineups go without gear this long
 CHANNEL = 'raid-planning'
 DAY_S = 86400.0
 ROLE_WORDS = (('tank', 'Tanks'), ('healer', 'Healers'), ('damage', 'Damage'))
@@ -128,9 +131,16 @@ class FormLineup:
     healers: frozenset[int]
 
 
+def his_raid_began(conn, event, *, before: float = math.inf) -> bool:
+    """Whether a raid of his (not an offline raid) began in this raid night's window, before `before`."""
+    return conn.execute('SELECT 1 FROM guild_raid WHERE offline=0 AND started>=? AND started<? AND started<? LIMIT 1',
+                        (event['at'] - ROSTER_AHEAD_S, event['at'] + NIGHT_S, before)).fetchone() is not None
+
+
 def tonight(conn, now: float) -> FormLineup | None:
     """The settled or in-effect lineup of the raid night whose window holds now (from ROSTER_AHEAD_S
-    before its posted time to its end): a formation now forms from it."""
+    before its posted time to its end): a formation now forms from it. One settled only after a
+    raid of his began that night steers the next night only."""
     for event in raid_events(conn, since=now - NIGHT_S, until=now + ROSTER_AHEAD_S):
         if not event['at'] - ROSTER_AHEAD_S <= now < event['at'] + NIGHT_S:
             continue
@@ -138,7 +148,7 @@ def tonight(conn, now: float) -> FormLineup | None:
         row = ledger.pending(conn, 'lineup', subject)
         if row is None or row['status'] != 'settled':
             row = ledger.current(conn, 'lineup', subject)
-        if row is None:
+        if row is None or row['status'] == 'settled' and his_raid_began(conn, event, before=row['settled']):
             continue
         try:
             value = json.loads(row['value'])
@@ -151,13 +161,14 @@ def tonight(conn, now: float) -> FormLineup | None:
     return None
 
 
-def formed(store, decision: int, raid_id: int, *, now) -> bool:
-    """The guild's formation formed from this lineup: it is in effect, with the raid it formed.
-    False when it is no longer settled (in effect already, overruled, ended)."""
+def formed(store, decision: int, raid_id: int, *, now, via: str | None = None) -> bool:
+    """A raid was formed from this lineup (the guild's formation, or via "add": his add followed its
+    roster): it is in effect, with the raid. False when it is no longer settled (in effect
+    already, overruled, ended)."""
     row = ledger.get(store.conn, decision)
     if row is None or row['status'] != 'settled':
         return False
-    ledger.take_effect(store, decision, effect_ref={'raid': raid_id}, now=now)
+    ledger.take_effect(store, decision, effect_ref={'raid': raid_id, **({'via': via} if via else {})}, now=now)
     return True
 
 
@@ -170,7 +181,8 @@ class LineupRules:
     def __init__(self):
         self._sent = None          # the roster native holds as far as the mind knows; None: unknown
         self._connected = False    # a hello since the bridge last connected
-        self._unbuilt = set()      # raid nights no lineup could be built for (logged once each)
+        self._unbuilt = {}         # raid night -> when to try building its lineup again
+        self._armory_after = 0.0   # no armory read before this (a failed read backs off)
 
     def reversible(self, row) -> bool:
         return False
@@ -186,22 +198,34 @@ class LineupRules:
             self._connected, self._sent = False, None
 
     async def tick(self, app, now: float) -> None:
-        store = app.store
-        await self._propose(app, now)
-        self._settle(app, now)
-        self._end(store, now)
-        await self._roster(app, now)
+        """Each step on its own: one that fails is logged and the others still run."""
+        steps = (('propose', self._propose), ('settle', self._settle),
+                 ('end', lambda app, now: self._end(app.store, now)), ('roster', self._roster))
+        for name, step in steps:
+            try:
+                result = step(app, now)
+                if asyncio.iscoroutine(result):
+                    await result
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                log.warning('lineup_step_failed step=%s error=%s', name, type(error).__name__)
 
     async def _propose(self, app, now):
         lo, hi = LINEUP_AHEAD_S
         due = [e for e in raid_events(app.store.conn, since=now + lo, until=now + hi)
-               if app.store.conn.execute('SELECT 1 FROM guild_decision WHERE kind=? AND subject=?',
-                                         ('lineup', subject_of(e['id']))).fetchone() is None]
+               if now >= self._unbuilt.get(e['id'], 0.0)
+               and app.store.conn.execute('SELECT 1 FROM guild_decision WHERE kind=? AND subject=?',
+                                          ('lineup', subject_of(e['id']))).fetchone() is None]
         if not due:
             return
         members = dict(app.store.cast())
         personas = {g: p for g in members if (p := app.personas.get(g)) is not None}
-        gear = await _gear(app, sorted(g for g in personas if g != app.human_guid))
+        gear = {}
+        if now >= self._armory_after:
+            gear, read = await _gear(app, sorted(g for g in personas if g != app.human_guid))
+            if not read:
+                self._armory_after = now + ARMORY_RETRY_S
         from leeroy_mind.nightly.store import active_away
         try:
             away = frozenset(active_away(app.store))
@@ -212,8 +236,8 @@ class LineupRules:
                                  human_guid=app.human_guid, away=away)
             if value is None:
                 if event['id'] not in self._unbuilt:
-                    self._unbuilt.add(event['id'])
                     log.info('lineup_unbuilt event=%d reason=no_tank', event['id'])
+                self._unbuilt[event['id']] = now + UNBUILT_RETRY_S
                 continue
             # Who objects first: the discussion seed shows the first few positions
             positions = sorted(lineup_positions(app.store.conn, value, personas, now=now),
@@ -259,15 +283,18 @@ class LineupRules:
                 ledger.retire(store, row['id'], now=now)
 
     def desired(self, conn, now) -> tuple[tuple[int, ...], tuple[int, ...], int]:
-        """The roster the picker should hold now: tonight's lineup members and bench, until the
-        night's end; empty without one."""
+        """The roster the picker should hold now: tonight's posted lineup's members and bench, until
+        the night's end, while no raid of his has begun that night; empty otherwise (a lineup
+        settled after his raid began steers the next night only)."""
         found = tonight(conn, now)
         if found is None:
             return (), (), 0
         row = ledger.get(conn, found.decision)
         event = _event(conn, row['subject'])
-        until = int((event['at'] + NIGHT_S) * 1000) if event is not None else 0
-        return found.members, tuple(sorted(found.bench - set(found.members))), until
+        if row['status'] != 'settled' or event is None or his_raid_began(conn, event):
+            return (), (), 0
+        return (found.members, tuple(sorted(found.bench - set(found.members))),
+                int((event['at'] + NIGHT_S) * 1000))
 
     async def _roster(self, app, now):
         guild = getattr(app, 'guild', None)
@@ -311,19 +338,20 @@ def _event(conn, subject):
                         (event,)).fetchone()
 
 
-async def _gear(app, guids) -> dict[int, int]:
-    """Each member's average item level from the armory, off the event loop; {} when unread."""
+async def _gear(app, guids) -> tuple[dict[int, int], bool]:
+    """Each member's average item level from the armory, off the event loop, and whether it was
+    read ({} without an armory)."""
     guild = getattr(app, 'guild', None)
     armory = getattr(guild, 'armory', None)
     if armory is None or not guids or not getattr(armory, 'available', True):
-        return {}
+        return {}, True
     from leeroy_mind.guild.armory import average_item_level
     try:
         equipped = await asyncio.to_thread(armory.equipped, guids)
     except Exception as error:
         log.warning('lineup_gear_unread error=%s', type(error).__name__)
-        return {}
-    return {g: round(average_item_level(slots)) for g, slots in equipped.items() if isinstance(slots, dict)}
+        return {}, False
+    return {g: round(average_item_level(slots)) for g, slots in equipped.items() if isinstance(slots, dict)}, True
 
 
 def lineup_rules() -> LineupRules:

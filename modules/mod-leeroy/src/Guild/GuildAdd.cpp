@@ -38,6 +38,8 @@ namespace
 // instance, the mind is told, so a raid built this way can count like a called one.
 ObjectGuid builtGroup;
 uint32 builtSize = 0;
+// Whether a fill of that group followed the posted roster: its guild_group events say so, built and entered.
+bool builtFollowed = false;
 // World thread. The posted raid lineup (guild_add_roster), in memory only: a worldserver start clears it and the mind
 // sends it again on hello. Followed only while Leeroy.GuildAdd.FollowRoster is on.
 GuildAddRoster postedRoster;
@@ -224,6 +226,7 @@ void PublishGuildGroup(std::string reason, Player* human, Group* group,
     event.instanceId = human->GetInstanceId();
     event.difficulty = static_cast<std::uint8_t>(human->GetMap()->GetDifficulty());
     event.added = std::move(added);
+    event.rosterFollowed = builtFollowed;
     for (auto const& slot : group->GetMemberSlots())
         if (uint32 const guid = slot.guid.GetCounter(); guid != event.leaderGuid && IsCast(guid))
             event.members.push_back(guid);
@@ -324,6 +327,11 @@ std::vector<std::string> Fill(Player* human, uint32 size)
 
     if (!joined.empty())
     {
+        std::vector<std::uint32_t> guids;
+        for (auto const& [guid, role] : joined)
+            guids.push_back(guid);
+        // A top-up of the same group keeps what an earlier fill of it followed.
+        builtFollowed = (builtGroup == group->GetGUID() && builtFollowed) || GuildAddRosterFollowed(roster, guids);
         builtGroup = group->GetGUID();
         builtSize = size;
         PublishGuildGroup("built", human, group, joined);

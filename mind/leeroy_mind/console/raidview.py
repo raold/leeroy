@@ -132,7 +132,8 @@ def _dkp(conn, raid_id: int) -> dict:
                          "FROM dkp_ledger WHERE raid_id=? AND reason NOT IN "
                          "('kill', 'attendance', 'standby') ORDER BY ts DESC LIMIT ?",
                    (raid_id, raid_id, DKP_EVENTS)):
-        item = _meta(conn, r["note"]) if (r["note"] or "").startswith("guild:loot:") else None
+        note = (r["note"] or "").removeprefix("council:")  # a loot council's row names its receipt too
+        item = _meta(conn, note) if note.startswith("guild:loot:") else None
         events.append({"ts": r["ts"], "reason": r["reason"], "n": r["n"],
                        "total": round(r["total"] or 0, 1), "each": round(r["each"] or 0, 1),
                        "guid": r["guid"], "item_id": r["item_id"],
@@ -304,7 +305,8 @@ def guild_view(conn) -> dict:
                          "LEFT JOIN guild_raid g ON g.raid_id = l.raid_id "
                          "WHERE l.reason = 'item' ORDER BY l.ts DESC, l.id DESC LIMIT ?",
                    (LOOT_HISTORY,)):
-        item = _meta(conn, r["note"]) if (r["note"] or "").startswith("guild:loot:") else None
+        note = (r["note"] or "").removeprefix("council:")  # a loot council's row names its receipt too
+        item = _meta(conn, note) if note.startswith("guild:loot:") else None
         loot.append({"ts": r["ts"], "guid": r["guid"], "paid": round(-(r["delta"] or 0), 1),
                      "item_id": r["item_id"], "raid_id": r["raid_id"], "raid": r["raid_key"],
                      "size": r["size"], "heroic": bool(r["heroic"]),

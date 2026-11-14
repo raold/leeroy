@@ -143,3 +143,71 @@ async def test_lineup_after_form_waits_for_the_next_night(setup, posting):
     await form10(setup)
     assert set(formed_members(ports)) == set(LINEUP)
     assert ledger.get(ports.conn, nxt)['status'] == 'in_effect'
+
+
+# -- his own add-built group (P2-1): the lineup takes effect through his add when the picker followed it
+
+from dataclasses import replace as _replace  # noqa: E402
+
+from leeroy_mind.protocol import Login, Zone  # noqa: E402
+
+from .test_guild_group import GROUP, group_event  # noqa: E402
+
+
+async def adopt(setup, followed):
+    ports, _, night = setup
+    await night.on_login(Login(0, 1, True))
+    await night.tick()
+    await night.on_zone(Zone(0, 1, 4812, "Icecrown Citadel"))
+    await night.on_guild_group(_replace(group_event(ports), roster_followed=followed))
+    await night.tick()
+    await night.tick()
+
+
+@_run_async
+async def test_his_add_that_followed_the_roster_puts_the_lineup_in_effect(setup, posting):
+    ports, _, night = setup
+    store, post = posting
+    decision = post(7, ports.clock.now() + HOUR, members=GROUP, bench=(125, 126))
+    ports.lineup_formed = lambda lineup, raid_id, **kw: formed(store, lineup.decision, raid_id,
+                                                               now=ports.clock.now(), **kw)
+    await adopt(setup, True)
+    assert night.state is State.RUNNING
+    row = ledger.get(ports.conn, decision)
+    assert row['status'] == 'in_effect'
+    assert json.loads(row['effect_ref']) == {'raid': night.session.raid_id, 'via': 'add'}
+    # Its bench stands by, with standby DKP, as a formed raid's bench does; he is never on it
+    raid_id = night.session.raid_id
+    assert night.run.plan.bench == [125, 126]
+    statuses = dict(ports.conn.execute('SELECT guid,status FROM guild_attendance WHERE raid_id=?', (raid_id,)))
+    assert (statuses[125], statuses[126], statuses[1]) == ('benched', 'benched', 'raided')
+    standby = {g for (g,) in ports.conn.execute("SELECT guid FROM dkp_ledger WHERE raid_id=? AND reason='standby'",
+                                               (raid_id,))}
+    assert standby == {125, 126}
+
+
+@_run_async
+async def test_his_add_that_did_not_follow_it_leaves_the_lineup_talk(setup, posting):
+    ports, _, night = setup
+    store, post = posting
+    decision = post(7, ports.clock.now() + HOUR, members=GROUP, bench=(125,))
+    await adopt(setup, False)
+    assert night.state is State.RUNNING and night.run.plan.bench == []
+    assert ledger.get(ports.conn, decision)['status'] == 'settled'
+    await ports.clock.advance(HOUR + NIGHT_S, step=HOUR + NIGHT_S)
+    LineupRules()._end(store, ports.clock.now())
+    assert ledger.get(ports.conn, decision)['status'] == 'talk_only'
+
+
+@_run_async
+async def test_a_second_formation_the_same_night_ignores_a_lineup_posted_after_the_first(setup, posting):
+    ports, _, night = setup
+    store, post = posting
+    await form10(setup)
+    await ports.clock.advance(60, step=60)
+    late = post(7, ports.clock.now() + HOUR)
+    night._end('called')
+    await night.tick()
+    await form10(setup)
+    assert set(formed_members(ports)) != set(LINEUP)
+    assert ledger.get(ports.conn, late)['status'] == 'settled'

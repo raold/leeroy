@@ -914,3 +914,16 @@ LEEROY_TEST(Guild_AddRosterParsesAndRefuses)
     held.untilMs = 10;
     CHECK(GuildAddRosterRefusal(held, 1000).empty());  // already over: held, never followed
 }
+
+LEEROY_TEST(Guild_AddRosterFollowedOnlyWhenARosterMemberJoined)
+{
+    auto const roster = Roster({102, 205}, {103});
+    // One of the roster's members (or its bench) among those who joined: the lineup took effect through his add.
+    CHECK(GuildAddRosterFollowed(roster, {300, 205}));
+    CHECK(GuildAddRosterFollowed(roster, {103}));
+    // Nobody of the roster joined, or nothing joined, or no roster in force: it did not.
+    CHECK(!GuildAddRosterFollowed(roster, {300, 301}));
+    CHECK(!GuildAddRosterFollowed(roster, {}));
+    CHECK(!GuildAddRosterFollowed(GuildAddRosterInForce(false, roster, 0), {102, 205}));
+    CHECK(!GuildAddRosterFollowed(GuildAddRoster{}, {102}));
+}

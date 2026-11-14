@@ -196,7 +196,9 @@ class GuildGroup:
     """His own `.playerbots bot addN` filled his group from free guild members (mod-leeroy, not a
     raid call). reason "built": this run added `added`; "entered": he then reached an instance map
     leading that same group. map/instance_id/difficulty are where he is (instance_id 0 outside an
-    instance); members are the guild's cast in his group, him excluded."""
+    instance); members are the guild's cast in his group, him excluded. roster_followed: the
+    picker used the guild's posted lineup (guild_add_roster) for at least one member it added to
+    this group (absent from older worldservers: False)."""
     ts: int
     reason: str
     size: int
@@ -207,6 +209,7 @@ class GuildGroup:
     difficulty: int
     added: tuple[GuildGroupAdd, ...]
     members: tuple[int, ...]
+    roster_followed: bool = False
 
 
 COMMANDS: dict[str, type] = {
