@@ -173,7 +173,7 @@ for commit in "${commits[@]}"; do
     while IFS= read -r -d '' path; do
         case "$path" in
             voice/*) voice_changes=1 ;;
-            mind/*|selfie/*|CLAUDE.md|README.md|references.bib) ;;
+            mind/*|selfie/*|CLAUDE.md|README.md|references.bib|.gitattributes) ;;
             modules/*|config/*|patches/*) if ((!native)); then bad "disallowed path: $path (requires --native)"; paths_ok=0; fi ;;
             *) bad "disallowed path: $path"; paths_ok=0 ;;
         esac
