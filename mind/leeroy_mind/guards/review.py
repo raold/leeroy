@@ -2,6 +2,7 @@
 from collections import Counter, defaultdict
 from dataclasses import replace
 from datetime import date, timedelta
+from difflib import SequenceMatcher
 import hashlib
 import json
 import math
@@ -31,13 +32,53 @@ REACTIONS = ('👍', '😄')
 _CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm', 'group', 'voice'})
 _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
-                        'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener'})
+                        'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener',
+                        'echo_parent'})
+ECHO_RUN, ECHO_SHARE, ECHO_MIN_WORDS = 8, .8, 6
+HINTS = {
+    'echo_parent': 'it repeats the message you are answering back instead of answering it',
+    'nothing_new': 'it only repeats what was already said',
+    'own_repeat_same_channel': 'it repeats one of your own recent lines',
+    'own_repeat_cross_channel': 'it repeats one of your own recent lines',
+    'own_repeat_discord': 'it repeats one of your own recent messages',
+    'channel_repeat': 'it repeats what someone here already said today',
+    'repeated_topic': 'it goes back over a topic you already covered',
+    'gag_ration': 'it reuses a running joke you have used enough lately',
+    'stock_phrase_ration': 'it leans on a stock phrase you have used enough lately',
+    'guild_evening_phrase': 'it reuses a phrase the guild has heard enough tonight',
+    'low_parent_and_thread_relevance': 'it does not answer what was said',
+    'off_anchor': 'it wanders off the subject',
+    'claim_conflict': 'it contradicts something already known',
+}
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
           'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
           'grats': ({'gz','grats','gratz','congrats','nice','gg'}, '🎉'),
           'thanks': ({'ty','thx','thanks','tyty'}, '❤️'),
           'sympathy': ({'rip','oof','f','ouch'}, '🫡')}
 _EMOTICONS = re.compile(r':[pd](?!\w)|:[()]|<3(?!\w)|(?<!\w)xd(?!\w)', re.IGNORECASE)
+
+
+def echoes(text: str, parent: str) -> bool:
+    """True when `text` says `parent` back: a copied run of ECHO_RUN words, or copied runs of two
+    or more words covering ECHO_SHARE of a parent of at least ECHO_MIN_WORDS words. Apostrophes
+    are dropped first, so "you're" and "youre" match; a short line said back ("i love you") is
+    not an echo."""
+    def bare(value):
+        return words(re.sub(r"['’]", "", value or ""))
+    mine, his = bare(text), bare(parent)
+    if not mine or not his:
+        return False
+    runs = [b.size for b in SequenceMatcher(None, his, mine, autojunk=False).get_matching_blocks()]
+    return max(runs) >= ECHO_RUN or (len(his) >= ECHO_MIN_WORDS
+                                     and sum(n for n in runs if n >= 2) >= ECHO_SHARE * len(his))
+
+
+def rewrite_hint(codes) -> str:
+    """The screened retry's instruction in words; a code without words is named as it is."""
+    reasons = list(dict.fromkeys(HINTS.get(code, code) for code in codes))
+    if not reasons:
+        return 'Rewrite your reply once.'
+    return 'Rewrite your reply once in your own words. Your draft has a problem: ' + '; '.join(reasons)
 
 
 def _action(codes):
@@ -446,6 +487,8 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         scores.extend((Score('parent_relevance', round(parent_score,6)), Score('thread_relevance', round(thread_score,6))))
         if parent_score < cfg.parent_cosine and thread_score < cfg.thread_cosine:
             rewrite.append('low_parent_and_thread_relevance')
+    if parent and parent.guid != draft.guid and echoes(draft.text, parent.text):
+        drop.append('echo_parent')
     if not filler and _pairs(draft.text, draft.embedding, [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
     filler_code = 'server_filler' if draft.server else 'filler_after_question'

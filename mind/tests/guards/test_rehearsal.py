@@ -31,7 +31,7 @@ async def run_mode(root, enabled):
     store = Store(open_db(root / "mind.db"), clock=clock)
     current = [TRANSCRIPT[0]]
     def script(model, messages):
-        return current[0][3] if "guard codes:" in messages[-1]["content"] else current[0][2]
+        return current[0][3] if messages[-1]["content"].startswith("Rewrite your reply once") else current[0][2]
     vector = pack_vec(unit(0))
     async def embed(texts, priority):
         return [vector] * len(texts)
