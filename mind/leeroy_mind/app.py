@@ -489,6 +489,8 @@ class MindApp:
         self.photos = attach_photos(self)
         from .outreach.attach import attach as attach_outreach
         self.outreach = attach_outreach(self)
+        from .decisions.attach import attach_decisions
+        self.decisions = attach_decisions(self)  # after the server: decisions need it
         from .godmode.attach import attach as attach_godmode
         self.godmode = attach_godmode(self)  # [godmode]: off adds nothing
         from .raidlead.service import attach as attach_raidlead

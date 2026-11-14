@@ -1293,3 +1293,96 @@ def test_the_discord_op_runs_one_action_at_a_time(tmp_path, caplog):
 
     asyncio.run(go())
     assert "control_request: op=discord action=post outcome=ok" in caplog.text
+
+
+# -- his decisions: the decision op ---------------------------------------------------------------
+
+class Undoable:
+    kind = "loot_rule"
+
+    def __init__(self):
+        self.undone = []
+
+    def reversible(self, row):
+        return True
+
+    async def undo(self, app, row):
+        self.undone.append(row["id"])
+
+
+def decisions_service(store, clock):
+    from leeroy_mind.decisions.config import DecisionsConfig
+    from leeroy_mind.decisions.service import DecisionsService
+    store.set_meta("human_guid", "1")
+    return DecisionsService(SimpleNamespace(store=store, clock=clock, human_guid=1), DecisionsConfig(enabled=True))
+
+
+def test_the_decision_op_in_its_one_strict_form():
+    assert "decision" in endpoint.OPS
+    assert parse_request(line(v=1, key=KEY, op="decision", args={"action": "overrule", "id": 3}), KEY) == (
+        "decision", {"action": "overrule", "id": 3})
+    for bad in ({"action": "vote", "poll": 1}, {"action": "vote", "poll": 0, "option": "dkp"},
+                {"action": "vote", "poll": 1, "option": "DKP!"}, {"action": "overrule", "id": True},
+                {"action": "undo", "id": 1}, {"action": "overrule", "id": 1, "why": "x"}):
+        with pytest.raises(BadRequest):
+            parse_request(line(v=1, key=KEY, op="decision", args=bad), KEY)
+
+
+def test_undo_only_where_reversible(store, clock, tmp_path, caplog):
+    from leeroy_mind.decisions import apply, ledger
+    caplog.set_level(logging.INFO)
+    now = clock.now()
+    made = {}
+    for kind, subject in (("loot_rule", "loot"), ("strategy", "strategy:631:9:0"), ("rank", "rank:105")):
+        made[kind] = ledger.propose(store, kind=kind, subject=subject, value={}, positions=[], now=now)
+        if kind != "rank":
+            ledger.settle(store, made[kind], settled_by=102, now=now)
+            ledger.take_effect(store, made[kind], effect_ref={"refs": [f"decision:{made[kind]}"]}, now=now)
+    rules = Undoable()
+    apply.register(rules)
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.decisions = decisions_service(store, clock)
+            undone = await ask(ep, "decision", {"action": "overrule", "id": made["loot_rule"]})
+            future = await ask(ep, "decision", {"action": "overrule", "id": made["strategy"]})
+            early = await ask(ep, "decision", {"action": "overrule", "id": made["rank"]})
+            again = await ask(ep, "decision", {"action": "overrule", "id": made["strategy"]})
+            app.decisions = None
+            off = await ask(ep, "decision", {"action": "overrule", "id": 1})
+            return undone, future, early, again, off
+    try:
+        undone, future, early, again, off = asyncio.run(go())
+    finally:
+        apply.unregister("loot_rule")
+    assert undone["ok"] and undone["undone"] is True and rules.undone == [made["loot_rule"]]
+    assert future["ok"] and future["undone"] is False and "can't be undone in game" in future["message"]
+    assert early["ok"] and early["message"] == "Overruled before it took effect; the rule in force stays."
+    assert again == {"ok": False, "error": "That decision is no longer live."}
+    assert off == {"ok": False, "error": "Decisions are off in this mind."}
+    rows = {r["id"]: r for r in store.conn.execute("SELECT * FROM guild_decision")}
+    assert all(r["status"] == "overruled" and r["overruled_by_owner"] == 1 for r in rows.values())
+    assert f"decision_op action=overrule id={made['loot_rule']} outcome=undone" in caplog.text
+    assert f"decision_op action=overrule id={made['strategy']} outcome=overruled" in caplog.text
+
+
+def test_his_vote_counts_once(store, clock, tmp_path):
+    from leeroy_mind.decisions import polls
+    now = clock.now()
+    store.set_meta("human_guid", "1")
+    poll = polls.open_poll(store, channel="officer-chat", question="Loot rules?", options=("dkp", "loot_council"),
+                           voters=(102, 104), closes=now + 3600, now=now, kind="loot_rule", subject="loot")
+
+    async def go():
+        async with served(tmp_path) as (app, ep):
+            app.decisions = decisions_service(store, clock)
+            first = await ask(ep, "decision", {"action": "vote", "poll": poll, "option": "dkp"})
+            second = await ask(ep, "decision", {"action": "vote", "poll": poll, "option": "loot_council"})
+            wrong = await ask(ep, "decision", {"action": "vote", "poll": poll + 1, "option": "dkp"})
+            return first, second, wrong
+    first, second, wrong = asyncio.run(go())
+    assert first == {"ok": True, "outcome": "voted", "message": "Your vote is in."}
+    assert second == {"ok": False, "error": "You already voted in this poll; a vote never changes."}
+    assert wrong == {"ok": False, "error": "There is no such poll."}
+    assert polls.tally(store.conn, poll) == {"dkp": 1, "loot_council": 0}
+    assert polls.voters_of(polls.get_poll(store.conn, poll)) == {1, 102, 104}

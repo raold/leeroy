@@ -63,7 +63,7 @@ EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "tra
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
                                 "banter", "photos", "voice_notes", "groups", "culture", "outreach",
-                                "godmode", "raidlead"})
+                                "godmode", "decisions", "raidlead"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
