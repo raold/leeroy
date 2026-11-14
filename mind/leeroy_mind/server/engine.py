@@ -138,8 +138,13 @@ class ServerEngine:
             from dataclasses import replace
             available = [replace(seed, channels=tuple(c for c in seed.channels if c not in busy and
                          now >= self._human_until.get(c,0))) for seed in available]
+            from leeroy_mind.tuning.effective import edits_of
+            # every free member counts (an unedited one weighs 1), so one member's 0 never
+            # takes a channel from the others
+            hangouts = {g: edits_of(observed.personas[g]) for g in free if g in observed.personas}
             chosen = rhythm.choose_seed_and_channel(available, local=observed.local,
-                officers_free=len(free & observed.officers), rng=self.rng)
+                officers_free=len(free & observed.officers), rng=self.rng,
+                hangouts=hangouts if any(e.channels for e in hangouts.values()) else None)
             if chosen is None:
                 return
             seed, channel = chosen
@@ -226,6 +231,12 @@ class ServerEngine:
 
     def _valid(self, conversation, speaker, parent=None):
         if conversation.reason or self._blocked(self.app.clock.now()) or not self._joke_valid(conversation, speaker):
+            return False
+        godmode = getattr(self.app, 'godmode', None)
+        # An intent opens the conversation only while it waits; once posted, the talk goes on.
+        if (conversation.seed.kind == 'intent' and not conversation.messages
+                and (godmode is None or not godmode.seed_valid(conversation.seed))):
+            conversation.reason = conversation.reason or 'intent_settled'
             return False
         if parent is not None:
             row = self.app.store.conn.execute('SELECT channel,deleted FROM discord_message WHERE id=?',
@@ -358,7 +369,13 @@ class ServerEngine:
                     from leeroy_mind.groups.conversations import definition as group_definition
                     definition = group_definition(conversation.channel)
                 purpose = definition.topic
-                if conversation.seed.kind == 'purpose':
+                if conversation.seed.kind == 'intent':
+                    from leeroy_mind.godmode.service import intent_kind
+                    opener = {'thread': "You'd meant to start a thread here about this; open it now, as your own idea, in your own words: ",
+                              'bring_up': "You'd meant to bring this up; do it now, as your own idea, in your own words: "
+                              }.get(intent_kind(conversation.seed),
+                                    "You'd meant to post here about this; do it now, as your own idea, in your own words: ")
+                elif conversation.seed.kind == 'purpose':
                     opener = 'Talk about this topic in your own way: '
                 elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day',
                                                 'wow_event','loot_close'}:
@@ -392,6 +409,11 @@ class ServerEngine:
                     meta.on_discord_record = lambda line,message,now:self._record_joke(conversation,line,message,now)
                 elif conversation.seed.kind == 'loot_close' and len(conversation.seed.about) > 1:
                     meta.on_discord_record = lambda line,message,now:self._record_close(conversation,line,message,now)
+                if conversation.seed.kind == 'intent' and parent is None:
+                    from leeroy_mind.godmode.service import intent_of
+                    meta.godmode_intent = intent_of(conversation.seed)
+                    meta.on_discord_record = (lambda line,message,now,i=meta.godmode_intent:
+                                              self.app.godmode.taken(i, message, now))
                 opening_photo = meta.photo_seed is not None and dry == 0
                 if parent is None and dry == 0 and not opening_photo and conversation.seed.kind != 'joke':
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
@@ -412,6 +434,10 @@ class ServerEngine:
                     # Spent once its photo was offered; one never offered (another photo in
                     # flight) stays for a later conversation.
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
+                if parent is None and dry == 0 and conversation.seed.kind == 'intent':
+                    godmode = getattr(app, 'godmode', None)
+                    if godmode is not None:
+                        godmode.opened(conversation.seed, bool(added))
                 if parent is None and not added and conversation.seed.openers is not None:
                     conversation.reason = 'opener_dropped'
                     break
