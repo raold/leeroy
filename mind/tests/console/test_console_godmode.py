@@ -13,9 +13,6 @@ from leeroy_mind.console.tuneview import tuning_view
 from leeroy_mind.godmode import intents as I
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.personas.io import load_persona
-from leeroy_mind.storage.db import open_db
-from leeroy_mind.storage.store import Store
-from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.tuning import changes as C
 from leeroy_mind.tuning import edits as E
 

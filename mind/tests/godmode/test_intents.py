@@ -1,7 +1,6 @@
 """D6 Part A task 3: intents, strings that are nudges, carried out in her own way or reported
 back with a reason."""
 import asyncio
-import json
 import logging
 import random
 from dataclasses import replace
@@ -9,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import HUMAN as HUMAN_GUID, run, seed_test_cast
+from conftest import run, seed_test_cast
 from selfies.fakes import mind_app
 from leeroy_mind.awareness.card import CardContext, card
 from leeroy_mind.discord import store as dstore
