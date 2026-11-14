@@ -414,6 +414,7 @@ SWITCHES = (
     ('callbacks','enabled','Memory callbacks',''), ('learn','enabled','Rewards',''),
     ('learn','bandit','Bandit credit','learn.enabled'), ('learn','coach','Talk coach','learn.enabled'),
     ('learn','capture_preferences','Preference capture','learn.enabled'), ('banter','enabled','Banter',''),
+    ('learn','cycle','Weekly learning cycle','learn.enabled'),
     ('server','enabled','24/7 server','nights only inside its quiet window'),
     ('romance','activities','Romance activities','realm.enabled; native rebuild'),
     ('photos','enabled','Discord photos','restart the console too'), ('selfies','enabled','Selfies',''),

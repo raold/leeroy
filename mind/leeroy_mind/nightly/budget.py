@@ -64,6 +64,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "talk_coach": {"json": 1},                # one bounded coaching call per member
     "rewards": {},                           # own measured wall cost; no generation calls
     "bandit": {},
+    "learn_cycle": {},                       # the weekly cycle: model-free
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)

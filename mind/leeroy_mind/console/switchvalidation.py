@@ -31,7 +31,7 @@ def valid_table(name, table, raw):
         return parse_config({**table,'enabled':True}).enabled
     if name == 'learn':
         from leeroy_mind.learn.arms import FAMILIES
-        flags = {'enabled','coach','auto_lessons','bandit','freeze','capture_preferences'}
+        flags = {'enabled','coach','auto_lessons','bandit','freeze','capture_preferences','apply','cycle'}
         return (not set(table)-flags-{'frozen_families','frozen_members'}
                 and all(type(table.get(k,False)) is bool for k in flags)
                 and type(table.get('frozen_families',[])) is list

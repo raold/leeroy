@@ -536,3 +536,9 @@ def test_schedule_only_asks_for_status_never_actions_or_arguments(tmp_path, monk
     assert "Get-ScheduledTaskInfo" in calls[0]
     assert "Actions" not in calls[0] and "Register-" not in calls[0] and "Start-" not in calls[0]
     assert SECRET not in json.dumps(got)
+
+
+def test_the_live_learn_keys_are_valid_and_the_cycle_has_a_row(tmp_path):
+    (tmp_path/'mind.toml').write_text('[learn]\nenabled=true\nbandit=true\napply=true\ncycle=true\n')
+    states = {(r['table'],r['key']):r['state'] for r in ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']}
+    assert states['learn','enabled'] == states['learn','cycle'] == 'on'
