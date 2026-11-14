@@ -3,7 +3,9 @@ import re
 
 _PHOTO = r'(?:selfies?|pics?|pictures?|photos?|snaps?)'
 _YOU = r'(?:you|u|ya)'
-_SOFT = r'(?:(?:please|pls|plz|just|also|so|and|now|then|ok|okay|hey|yo|lol|haha|omg|oh|well)\s+)*'
+_SOFT = (r'(?:(?:please|pls|plz|just|also|so|and|now|then|ok|okay|hey|yo|lol|haha|omg|oh|well|'
+         r'babe|baby|bae|hun|hon|honey|love|lover|sweetie|sweetheart|darling|dear|sexy|beautiful|'
+         r'gorgeous|cutie|girl)\s+)*')
 # Addressed to her at a clause's start: an imperative, "can/could/would/will you ...", or his
 # "can I see/get" and "let me see". Never his own "I'll send", "let me take" or "send you".
 _FRAME = re.compile(r'^' + _SOFT + r'(?:(?:(?:can|could|would|will)\s+' + _YOU + r'\s+(?:please\s+|pls\s+|just\s+)?)?'
@@ -12,6 +14,7 @@ _FRAME = re.compile(r'^' + _SOFT + r'(?:(?:(?:can|could|would|will)\s+' + _YOU +
 _GOT = re.compile(r'^' + _SOFT + r'(?:(?:have\s+)?' + _YOU + r'\s+)?got\s+(?=(?:a|an|any|another|some)\b)', re.I)
 _OBJECT = re.compile(r'\s*(?:[\w\'’-]+\s+){0,4}?(' + _PHOTO + r')\b(?:\s+(of|from)\s+(\S.*))?', re.I)
 _CLAUSE = re.compile(r'([^.!?;,\n]+)([.!?;,\n]*)')
+_JOIN = re.compile(r'\s+(?:and|then|n)\s+', re.I)
 _BARE = re.compile(r'^(?:please\s+)?(?:selfie|pic)\s*\?(?:\s*please)?[!?\s]*$', re.I)
 _PAST = re.compile(r'\b(?:that|this|the\s+(?:last|earlier|previous|same))\s+' + _PHOTO + r'\b|'
                    r'\b(?:you\s+(?:sent|posted|shared|took)|already\s+(?:sent|posted|shared)|'
@@ -35,8 +38,12 @@ def asks_for_selfie(text: str, names=()) -> bool:
         return True
     own = '|'.join(re.escape(n) for n in names if n)
     her = re.compile(r'(?:' + _YOU + r'|yourself|urself|(?:your|ur)\s+face' + ('|' + own if own else '') + r')\b', re.I)
-    for clause, end in _CLAUSE.findall(text):
+    clauses = [(part, end) for whole, end in _CLAUSE.findall(text)
+               for part in _JOIN.split(whole)]  # "... when you're free and send me a selfie"
+    for clause, end in clauses:
         clause = clause.strip()
+        if own:  # her name before the ask: "Ana send me a pic"
+            clause = re.sub(r'^(?:' + own + r')\b\s*', '', clause, flags=re.I)
         frame = _FRAME.match(clause) or (end.startswith('?') and _GOT.match(clause))
         found = _OBJECT.match(clause, frame.end()) if frame else None
         if found is None:

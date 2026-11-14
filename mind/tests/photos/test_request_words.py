@@ -18,6 +18,10 @@ NAMES = ('Arkon',)
     'send me a pic of Arkon', 'send me a pic of @Arkon', 'will you snap a selfie for me later?',
     "Send me a selfie. I'll send one back", 'hey, can you send a pic of ur face?',
     'Can I get a selfie of you at the inn?',
+    # A pet name or her own name before the ask (the owner's DMs, 2026-11-14).
+    'babe can you send me a pic?', 'baby send me a selfie', 'Arkon send me a pic',
+    'hey gorgeous, show me a pic of you', 'lover can i get a selfie?',
+    "sneak away when you're free and send me a selfie", 'go change then send me a pic',
 ])
 def test_explicit_selfie_requests(text):
     assert asks_for_selfie(text, names=NAMES)
@@ -43,6 +47,8 @@ def test_explicit_selfie_requests(text):
     'do you want me to send a pic?',
     # The ask and the noun are in different clauses.
     'send me the loot list, nice pic btw',
+    'babe I took a selfie', 'baby got it, nice pic', 'Arkon let me take a pic',
+    "i'll take a pic and send it to you", 'i want to take a pic and send you one',
 ])
 def test_non_requests_and_previous_photo_questions(text):
     assert not asks_for_selfie(text, names=NAMES)
