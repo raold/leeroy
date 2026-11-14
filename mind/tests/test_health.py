@@ -254,7 +254,7 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
         "unvoiced": OK,
         "offline-raid": OK, "guild-raids": OK, "night-failures": NOTE,
         "evidence-cycles": OK, "selfie-queue": OK, "realm-screen": OK, "weekly-eval": OK,
-        "secret-gate": OK, "offline-days": OK, "training-lab": OK, "gpu-pause": OK}
+        "secret-gate": OK, "offline-days": OK, "training-lab": OK, "gpu-pause": OK, "regear": OK}
     assert checks["server-log"].text == "Server.log: cast 111 members, pinned 111 (floor 100)"
     assert checks["mind"].text.startswith(f"mind: pid {MIND_PID} running (control.json names it)")
     assert "bridge_hello" in checks["mind-log"].text
@@ -272,11 +272,11 @@ def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, ca
     argv = ["--root", str(rig.root), "--data-dir", str(rig.data)]
     assert health.main(argv, probes=rig.probes()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 27 and lines[0].startswith("ok   authserver.exe running")
+    assert len(lines) == 28 and lines[0].startswith("ok   authserver.exe running")
     assert all(line[:5] in ("ok   ", "note ") for line in lines)
     assert health.main(argv + ["--json"], probes=rig.probes()) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and len(out["checks"]) == 27
+    assert out["ok"] is True and len(out["checks"]) == 28
     assert out["checks"][0] == {"name": "authserver", "status": "ok",
                                 "text": out["checks"][0]["text"]}
     rig.servers = [s for s in rig.servers if s.image != "authserver.exe"]

@@ -149,6 +149,39 @@ fighting nearby restarts that clock. Inside an instance it waits for a rez, as b
 Reloadable with `.reload config`. Logs carry guids, spell ids and result codes only.
 **Native rebuild required.**
 
+# The one-time regear (the cast down to an item level)
+
+Gear-up (`gear_up`, `GearUpJob`) runs playerbots' `autogear bis <ilvl>` on each bot, else
+`PlayerbotFactory::AutoGear(bot, EPIC, ilvl, false)`. Neither keeps gear above a lower cap as a
+rule: `autogear bis` destroys everything equipped and every weapon and armour piece in the bags,
+gears the empty bot at the cap, then puts on the nearest BiS tier at or below it (a tier's list
+holds items above it: 27 of the 204 entries of the 245 list are 264-284); the plain autogear swaps each slot for its
+best capped pick and stores the old item in the bags, but keeps the old item when the bags are full
+or nothing capped fits the slot. So `gear_up` with `"regear": true` (hello lists `regear`; ilvl
+200-300) adds a pass after it: weapons and armour above the cap left in the bags are destroyed
+(bots never trade them, and an upgrade pass could equip them again; never the bank, the mail or
+the guild bank), anything still equipped above the cap is stripped, emptied slots are refilled from
+the capped search (`AutoGear`, incremental), and a slot nothing capped can fill gets its old item
+back, never left empty, counted as `kept` in the progress event. Shirt and tabard are never
+touched. Only the cast's bots (pure policy `RegearRefusal`): the owner (`owner:<guid>`), anyone
+outside the cast (`not_cast:<guid>`) or on a player's account (`not_bot:<guid>`) refuses the whole
+command before anything moves; a regear while he is online is refused `owner_online`, and his login
+mid-job ends it `owner_online`. Each member is skipped for the gear-up body checks and for every
+Realm/training fence (`RealmModule::MutationReason`). Log `regear_member guid= ilvl= avg= stripped=
+restored= empty= kept= destroyed=`. **Native rebuild required.**
+
+The mind sends it once per value of `[guild] regear_to` (0 = never), meta `guild:regear:<ilvl>`:
+the cast's members at 80 and above at its start, theorycrafters at `theorycrafter_ilvl` when that is
+higher, 40 a batch two minutes apart, only in gear-up's windows (he has been offline 10 minutes, no
+raid night or offline raid). A member lands when its average item level is within 20 under and 6
+over its target; its `geared`/`tc_geared` flags are replaced. Skipped members wait 30 minutes; three
+landings out of bounds (or failures) give a member up; members who leave the cast are dropped.
+Gear-up and the theorycrafter pass wait until the regear is done. A hello from a restarted
+worldserver releases any gear-up batch the old process held. Health's `regear` line shows members
+done of the total. Logs: `regear_started`, `regear_batch`, `regear_member`, `regear_out_of_bounds`,
+`regear_dropped`, `regear_gave_up`, `regear_batch_done`, `regear_done ilvl= guids= avg= gave_up=
+dropped= kept=`.
+
 # The raid lead (his orders to his own group)
 
 `Leeroy.RaidLead.Enable` (default 0, reloadable with `.reload config`) is the native half of the

@@ -76,6 +76,7 @@ struct GearUpCmd
 {
     std::vector<std::uint32_t> guids;
     std::uint32_t ilvl = 264, levelTo = 80;
+    bool regear = false; // take the cast's bots down to ilvl (LeeroyGearUpPolicy.h); needs hello's "regear"
 };
 struct RaidControlCmd
 {
@@ -137,6 +138,7 @@ struct JobEvent
     std::optional<std::int64_t> lastProgressTs;
     std::optional<bool> bossEngaged;
     std::optional<std::string> dcState; // Offline Running heartbeats: DcPhaseCode.
+    std::optional<std::uint32_t> kept;  // Regear progress: slots that kept an item above the cap.
 };
 nlohmann::json MakeJobEvent(JobEvent const&);
 

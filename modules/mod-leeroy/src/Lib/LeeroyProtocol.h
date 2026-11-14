@@ -20,7 +20,8 @@ inline constexpr std::size_t kInboxCapacity = 1000;
 inline constexpr std::string_view kModuleVersion = "0.1.0";
 // What this build understands beyond the base protocol, listed in hello's "features": item_links, the {{item:<id>}}
 // placeholders in say and realm_say text (LeeroyItemLinks.h). A mind sends a placeholder only to a hello that lists it.
-inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead"};
+// regear: gear_up's "regear" mode (GearUpJob.cpp); a mind sends it only to a hello that lists it.
+inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "regear"};
 
 std::int64_t NowUnixMs();
 

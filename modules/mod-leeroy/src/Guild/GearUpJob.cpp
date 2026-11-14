@@ -3,7 +3,10 @@
 #include "GearUpJob.h"
 #include "GuildPorts.h"
 #include "LeeroyGearUpPolicy.h"
+#include "Realm/RealmModule.h"
+#include "Realm/RealmPorts.h"
 
+#include "Bag.h"
 #include "Event.h"
 #include "Guild.h"
 #include "GuildMgr.h"
@@ -13,6 +16,7 @@
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -68,6 +72,106 @@ GearUpState StateFor(uint32 guid, GearJob const& job, Player* bot)
     return state;
 }
 
+std::string SkipFor(uint32 guid, GearJob const& job, Player* bot)
+{
+    if (Realm::RealmOwns(guid))
+        return "busy:realm_owner";
+    if (!job.command.regear)
+        return std::string(GearUpSkipReason(StateFor(guid, job, bot)));
+    RegearTarget target;
+    target.human = guid == job.human || guid == HumanGuid();
+    target.cast = IsCast(guid);
+    target.randomAccount = Realm::IsOnRandomBotAccount(guid);
+    std::string const fence = bot ? Realm::RealmModule::Instance().MutationReason(guid) : std::string{};
+    return std::string(RegearSkipReason(target, FindOnline(job.human) != nullptr, StateFor(guid, job, bot), fence));
+}
+
+std::array<RegearSlotItem, kRegearSlots> Equipped(Player* bot)
+{
+    static_assert(EQUIPMENT_SLOT_END == kRegearSlots && EQUIPMENT_SLOT_BODY == kRegearSlotBody
+        && EQUIPMENT_SLOT_TABARD == kRegearSlotTabard);
+    std::array<RegearSlotItem, kRegearSlots> slots{};
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            if (ItemTemplate const* proto = item->GetTemplate())
+                slots[slot] = {item->GetEntry(), proto->ItemLevel};
+    return slots;
+}
+
+// The backpack and the four bags; never the bank.
+uint32 DestroyBagItemsAbove(Player* bot, uint32 cap)
+{
+    uint32 destroyed = 0;
+    auto const check = [&](uint8 bag, uint8 slot)
+    {
+        Item* item = bot->GetItemByPos(bag, slot);
+        ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+        if (proto && RegearDestroysBagItem(proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR,
+                proto->ItemLevel, cap))
+        {
+            bot->DestroyItem(bag, slot, true);
+            ++destroyed;
+        }
+    };
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        check(INVENTORY_SLOT_BAG_0, slot);
+    for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+        if (Bag* container = bot->GetBagByPos(bag))
+            for (uint32 slot = 0; slot < container->GetBagSize(); ++slot)
+                check(bag, static_cast<uint8>(slot));
+    return destroyed;
+}
+
+struct RegearOutcome
+{
+    uint32 stripped = 0, restored = 0, empty = 0, destroyed = 0, kept = 0;
+};
+
+// After the capped gear pass (autogear bis <cap>, else AutoGear at the cap): that pass puts replaced items in the bags,
+// keeps an item when the bags are full or the capped search has nothing for its slot, and a BiS list may hold items
+// above its tier. Strip what is still above the cap, refill from the capped search, give back what cannot be filled.
+RegearOutcome RegearToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegearSlots> const& before)
+{
+    RegearOutcome out;
+    out.destroyed = DestroyBagItemsAbove(bot, cap);
+    auto const now = Equipped(bot);
+    std::array<uint32, kRegearSlots> old{};
+    bool refill = false;
+    for (uint8 slot = 0; slot < kRegearSlots; ++slot)
+    {
+        RegearStep const step = RegearSlotStep(slot, before[slot], now[slot], cap);
+        if (step == RegearStep::Leave)
+            continue;
+        old[slot] = RegearOldEntry(step, before[slot], now[slot]);
+        if (step == RegearStep::Strip)
+        {
+            bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+            ++out.stripped;
+        }
+        refill = true;
+    }
+    if (refill)
+        PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, cap, /*incremental*/ true);
+    auto const after = Equipped(bot);
+    for (uint8 slot = 0; slot < kRegearSlots; ++slot)
+    {
+        uint32 const entry = RegearRestoreEntry(after[slot], old[slot]);
+        if (!entry)
+            continue;
+        uint16 dest = 0;
+        InventoryResult const result = bot->CanEquipNewItem(slot, dest, entry, false);
+        if (result == EQUIP_ERR_OK && bot->EquipNewItem(dest, entry, true))
+        {
+            ++out.restored;
+            bot->AutoUnequipOffhandIfNeed();
+        }
+        else if (slot != EQUIPMENT_SLOT_OFFHAND || result != EQUIP_ERR_CANT_EQUIP_WITH_TWOHANDED)
+            ++out.empty; // An off hand beside a two-hander is meant to be empty.
+    }
+    out.kept = RegearKept(Equipped(bot), cap);
+    return out;
+}
+
 void Finish(std::string const& failure = {})
 {
     GearJob& job = *active;
@@ -98,10 +202,21 @@ LeeroyCommandResult HandleGearUp(nlohmann::json const& message)
     GearJob job;
     job.guild = LeeroyModule::Instance().GuildId();
     job.human = HumanGuid();
-    // IsCast is level-80-only. Gear-up must also accept under-level members of this same owned guild.
-    // Validate the entire request before queuing it; a non-bot guild member never reaches a factory.
+    if (command->regear && FindOnline(job.human))
+        return {false, "owner_online"};
+    // IsCast is level-80-only. Gear-up must also accept under-level members of this same owned guild; a regear takes
+    // only the cast's bots. Validate the entire request before queuing it; a non-bot never reaches a factory.
     for (uint32 guid : command->guids)
     {
+        if (command->regear)
+        {
+            RegearTarget target;
+            target.human = guid == job.human;
+            target.cast = IsCast(guid);
+            target.randomAccount = Realm::IsOnRandomBotAccount(guid);
+            if (auto const refusal = RegearRefusal(target); !refusal.empty())
+                return {false, std::string(refusal) + ":" + std::to_string(guid)};
+        }
         if (Realm::RealmOwns(guid)) return {false, "busy:realm_owner"};
         if (!InOwnedGuild(guid, job.guild, job.human))
             return {false, "not_cast:" + std::to_string(guid)};
@@ -136,11 +251,15 @@ void TickGearUp()
         Finish("timeout");
         return;
     }
+    if (job.command.regear && FindOnline(job.human))
+    {
+        Finish("owner_online"); // his login ends a regear; the mind sends the rest in a later window
+        return;
+    }
 
     uint32 const guid = job.command.guids[job.next++];
     Player* bot = FindOnline(guid);
-    std::string_view const skip = Realm::RealmOwns(guid) ? "busy:realm_owner"
-        : GearUpSkipReason(StateFor(guid, job, bot));
+    std::string const skip = SkipFor(guid, job, bot);
     if (!skip.empty())
         job.result.skipped.emplace_back(guid, skip);
     else
@@ -154,13 +273,14 @@ void TickGearUp()
             // Randomize can initialize guild/talent state. Recheck the actual player and ownership after it
             // before running the separate gear mutation; never reuse an AI pointer across that call.
             bot = FindOnline(guid);
-            std::string_view const afterLevel = Realm::RealmOwns(guid) ? "busy:realm_owner"
-                : GearUpSkipReason(StateFor(guid, job, bot));
+            std::string const afterLevel = SkipFor(guid, job, bot);
             if (!afterLevel.empty())
                 job.result.skipped.emplace_back(guid, afterLevel);
             else
             {
-                auto const gearFailure = [&]() -> std::string_view
+                auto const before = Equipped(bot);
+                RegearOutcome regear;
+                auto const gearFailure = [&]() -> std::string
                 {
                     PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
                     // silent suppresses wrapper feedback. The installed BiS action may still TellMaster internally;
@@ -168,15 +288,18 @@ void TickGearUp()
                     bool const applied = ai->DoSpecificAction("autogear bis",
                         Event("autogear bis", std::to_string(job.command.ilvl)), true);
                     bot = FindOnline(guid);
-                    if (Realm::RealmOwns(guid)) return "busy:realm_owner";
-                    if (auto const failure = GearUpSkipReason(StateFor(guid, job, bot)); !failure.empty())
+                    if (auto failure = SkipFor(guid, job, bot); !failure.empty())
                         return failure;
                     if (!applied)
                     {
                         PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, job.command.ilvl, false);
                         bot = FindOnline(guid);
                     }
-                    return Realm::RealmOwns(guid) ? "busy:realm_owner" : GearUpSkipReason(StateFor(guid, job, bot));
+                    if (auto failure = SkipFor(guid, job, bot); !failure.empty() || !job.command.regear)
+                        return failure;
+                    regear = RegearToCap(bot, job.command.ilvl, before);
+                    bot = FindOnline(guid);
+                    return bot ? std::string{} : std::string("offline");
                 }();
                 if (!gearFailure.empty())
                     job.result.skipped.emplace_back(guid, gearFailure);
@@ -195,6 +318,13 @@ void TickGearUp()
                     progress.level = bot->GetLevel();
                     float const average = bot->GetAverageItemLevel();
                     progress.avgIlvl = std::isfinite(average) && average > 0 ? static_cast<uint32>(average) : 0;
+                    if (job.command.regear)
+                    {
+                        progress.kept = regear.kept;
+                        LOG_INFO("module.leeroy", "mod-leeroy: regear_member guid={} ilvl={} avg={} stripped={} "
+                            "restored={} empty={} kept={} destroyed={}", guid, job.command.ilvl, progress.avgIlvl,
+                            regear.stripped, regear.restored, regear.empty, regear.kept, regear.destroyed);
+                    }
                     PublishJob(progress);
                 }
             }

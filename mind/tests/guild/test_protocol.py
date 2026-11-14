@@ -55,7 +55,8 @@ def test_all_job_fixtures_round_trip_typed_nested_fields():
         assert type(ev) is Job
         assert type(ev.guids) is tuple and type(ev.skipped) is tuple
         assert all(type(skip) is JobSkip for skip in ev.skipped)
-        expected = dict(members_in_instance=None, last_progress_ts=None, boss_engaged=None, dc_state=None)
+        expected = dict(members_in_instance=None, last_progress_ts=None, boss_engaged=None, dc_state=None,
+                        kept=None)
         expected.update({key: value for key, value in msg.items() if key not in ("v", "type")})
         assert json.loads(json.dumps(dataclasses.asdict(ev))) == expected
 
@@ -108,7 +109,7 @@ def test_register_is_idempotent_and_preserves_existing_types():
                       loot_master_guid=1102), {"heroic": False, "assistants": [],
                       "max_wipes": 6, "max_wipes_per_boss": 3, "timeout_min": 180,
                       "min_members": 2}),
-    (GearUp(id="t", guids=(1101,)), {"ilvl": 264, "level_to": 80}),
+    (GearUp(id="t", guids=(1101,)), {"ilvl": 264, "level_to": 80, "regear": False}),
     (RaidControl(id="t", member_guid=1, action="disband"), {"leader_guid": 0, "param": ""}),
     (SetSpec(id="t", guid=1101, spec_no=2), {"glyphs": True}),
     (BotDo(id="t", guids=(1101,), action="cast", param="rebirth"), {"target_guid": 0}),

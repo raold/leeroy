@@ -241,6 +241,8 @@ std::optional<GearUpCmd> ParseGearUp(json const& j, std::string& error)
     f.List("guids", out.guids, 1, 40);
     f.Number("ilvl", out.ilvl, 1, 400, true);
     f.Number("level_to", out.levelTo, 1, 80, true);
+    f.Boolean("regear", out.regear);
+    f.Require(!out.regear || (out.ilvl >= 200 && out.ilvl <= 300), "ilvl");
     return f.Result(std::move(out));
 }
 
@@ -415,6 +417,7 @@ json MakeJobEvent(JobEvent const& e)
     if (e.lastProgressTs) out["last_progress_ts"] = *e.lastProgressTs;
     if (e.bossEngaged) out["boss_engaged"] = *e.bossEngaged;
     if (e.dcState) out["dc_state"] = *e.dcState;
+    if (e.kept) out["kept"] = *e.kept;
     return out;
 }
 

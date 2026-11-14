@@ -202,11 +202,11 @@ async def test_gear_up_once_flags_only_matching_qualifying_progress(roster_data)
     fake, roster = await offline(roster_data)
     await roster.maybe_gear_up()
     command = fake.sent[-1]
-    assert command.guids == (101,) and command.ilvl == 264 and command.level_to == 80
+    assert command.guids == (101,) and command.ilvl == 245 and command.level_to == 80 and not command.regear
     await roster.maybe_gear_up()
     assert len(fake.sent) == 1 and not flags(fake.conn, "geared")
     for event in (replace(progress(command), id="foreign"), replace(progress(command), kind="offline_raid"),
-                  progress(command, guid=102), progress(command, level=79), progress(command, avg_ilvl=244)):
+                  progress(command, guid=102), progress(command, level=79), progress(command, avg_ilvl=231)):
         await roster.on_job(event)
     assert not flags(fake.conn, "geared")
     await roster.on_job(progress(command))
@@ -470,10 +470,10 @@ async def test_theorycrafters_geared_once_and_disabled_means_no_send(roster_data
     fake.personas[102].game.thinks_as = "theorycrafter"
     await roster.maybe_gear_theorycrafters()
     command = fake.sent[-1]
-    assert command.guids == (102,) and command.ilvl == 277
-    await roster.on_job(progress(command, guid=102, avg_ilvl=270))
+    assert command.guids == (102,) and command.ilvl == 251
+    await roster.on_job(progress(command, guid=102, avg_ilvl=244))
     assert not flags(fake.conn, "tc_geared")
-    await roster.on_job(progress(command, guid=102, avg_ilvl=271))
+    await roster.on_job(progress(command, guid=102, avg_ilvl=245))
     assert flags(fake.conn, "tc_geared") == {102}
     await roster.on_job(job("gear_up", "done", id=command.id, guids=(102,)))
     await advance(fake, 3600)
