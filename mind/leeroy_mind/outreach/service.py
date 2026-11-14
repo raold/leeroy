@@ -7,7 +7,7 @@ import random
 import re
 
 from leeroy_mind.discord import layout
-from leeroy_mind.discord.channels import is_discord
+from leeroy_mind.discord.channels import is_discord, is_group
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.logs import log
 from leeroy_mind.storage.rows import cosine, unpack_vec
@@ -247,13 +247,14 @@ class Outreach:
             return {row.to_guid} if row.from_guid == human else set()
         if (peer := layout.dm_peer(row.channel)) is not None:
             return {peer}
-        readers = set(row.audience or ())
+        readers = set(row.audience or ()) - {human}
+        if is_group(row.channel):
+            return readers  # his group DM is to everyone in it
         if row.to_guid and row.to_guid != human:
             return {row.to_guid} & readers
         from leeroy_mind.talk.select import mentioned
         names = {g: m.name for g, m in self.app.world.discord_members().items() if g in readers}
-        named = set(mentioned(row.text, names))
-        return named or (readers - {human})
+        return set(mentioned(row.text, names))  # a line to nobody in particular raises nothing
 
     def _line_alive(self, row):
         rows = self.app.store.chat_lines([row.id])
