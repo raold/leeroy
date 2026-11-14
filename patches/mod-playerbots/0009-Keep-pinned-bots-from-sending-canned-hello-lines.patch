@@ -1,7 +1,7 @@
 From a8f5d37874ad9972af1e854f06b314708a59c6bf Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 31 Oct 2026 13:29:03 -0400
-Subject: [PATCH 09/10] Keep pinned bots from sending canned hello lines
+Subject: [PATCH 09/11] Keep pinned bots from sending canned hello lines
 
 The previous commit silenced the group-leader change lines. Pinned
 bots still said "Hello" after accepting a party invite, when the owner

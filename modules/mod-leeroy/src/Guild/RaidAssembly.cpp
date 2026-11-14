@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "RaidAssembly.h"
+#include "HazardJob.h"
 #include "PlayStyle.h"
 #include "GuildPorts.h"
 #include "OfflineRaidJob.h"
@@ -133,6 +134,7 @@ void RaidHabits(Player* bot, Player* leader)
         }
         Training::JournalReset(bot->GetGUID().GetCounter(), {"formation", "wait for attack time"});
         PlayStyle::Forget(bot->GetGUID().GetCounter()); // RaidHabits is now the authoritative baseline.
+        ApplyHazards(bot); // the reset dropped its non-combat avoid aoe
     }
 }
 
