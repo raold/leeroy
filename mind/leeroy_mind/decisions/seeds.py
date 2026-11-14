@@ -8,7 +8,7 @@ import json
 
 from leeroy_mind.discord import layout
 from leeroy_mind.server.seeds import FRESH_DEFAULT_S, Seed
-from .apply import LABELS, OFFICER_KINDS, channels_of, officers_only, private_channel, stakeholders, summary
+from .apply import LABELS, OFFICER_KINDS, channels_of, officers_only, positions_private, stakeholders, summary
 from .positions import facts_text, member_facts
 from .polls import options_of, positions_of
 
@@ -49,8 +49,10 @@ def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
         proposed = row['status'] == 'proposed'
         if not proposed and (row['settled'] is None or now - row['settled'] > FRESH_DEFAULT_S):
             continue
-        # A proposal's fact carries its positions: the officers' own when voted in their channel
-        private = officers_only(row, message_channel) or proposed and private_channel(poll_channel)
+        # A proposal's fact carries its positions: the officers' own when their poll settles it,
+        # and never public before that poll (and so its audience) is known
+        private = (positions_private(row, message_channel, poll_channel) if proposed
+                   else officers_only(row, message_channel))
         channels = ('officer-chat',) if private and row['kind'] not in OFFICER_KINDS else CHANNELS[row['kind']]
         about = tuple(sorted(g for g in stakeholders(row) if g in personas and (not private or g in officers)))
         label = LABELS[row['kind']]

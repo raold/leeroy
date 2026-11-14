@@ -34,10 +34,12 @@ def _action(row) -> dict | None:
     if row["status"] not in LIVE:
         return None
     if row["status"] != "in_effect":
-        return {"kind": "overrule", "label": "Overrule", "words": "Not in effect yet: overruling stops it."}
+        return {"kind": "overrule", "label": "Overrule", "permanent": False,
+                "words": "Not in effect yet: overruling stops it, and the rule in force stays."}
     if apply.reversible(row):
-        return {"kind": "undo", "label": "Undo", "words": "Undo restores what it changed in game."}
-    return {"kind": "overrule", "label": "Overrule future effect", "words": CANT_UNDO}
+        return {"kind": "undo", "label": "Undo", "permanent": False,
+                "words": "Undo restores what it changed in game."}
+    return {"kind": "overrule", "label": "Overrule future effect", "permanent": True, "words": CANT_UNDO}
 
 
 def poll_cards(conn, message_ids, human: int) -> dict[int, dict]:

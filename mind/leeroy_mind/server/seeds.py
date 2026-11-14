@@ -15,7 +15,8 @@ from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
               'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke', 'decision')
-FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0}
+# A decision's stage is argued once (its keys name the stage): never fresh again once used
+FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'decision': math.inf}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
 log = logging.getLogger(__name__)

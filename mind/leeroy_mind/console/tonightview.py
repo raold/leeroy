@@ -13,6 +13,7 @@ from .opsview import OpsView, Missing, Budget, database, require
 from leeroy_mind.realm.bank import BankLedger, STOCK
 from leeroy_mind.discord.channels import group_sql
 from leeroy_mind.groups.config import load_groups_config
+from leeroy_mind.decisions.config import load_decisions_config
 
 SECTIONS = ('raid','waiting','loot','bank','kit','week','guild')
 
@@ -105,9 +106,13 @@ def _waiting(conn,data_dir,now):
     queue = selfieview.queue_view(conn,data_dir,now=now)
     if not queue['available']:
         raise Missing('photo_tables')
-    # Open polls still waiting for his vote (he is a voter in every poll; a vote is final)
-    polls = conn.execute("SELECT count(*) FROM guild_poll p WHERE status='open' AND closes>? AND NOT EXISTS "
-        "(SELECT 1 FROM guild_poll_vote v WHERE v.poll=p.id AND v.member=?)", (now, human)).fetchone()[0]         if {'guild_poll', 'guild_poll_vote'} <= views.tables(conn) else None
+    # Open polls still waiting for his vote (he is a voter in every poll; a vote is final);
+    # "not set up yet" (None) while [decisions] is off, as before its tables existed
+    polls = None
+    if (load_decisions_config(data_dir/'mind.toml').enabled
+            and {'guild_poll', 'guild_poll_vote'} <= views.tables(conn)):
+        polls = conn.execute("SELECT count(*) FROM guild_poll p WHERE status='open' AND closes>? AND NOT EXISTS "
+            "(SELECT 1 FROM guild_poll_vote v WHERE v.poll=p.id AND v.member=?)", (now, human)).fetchone()[0]
     return result(dms=dms,letters=letters,selfies=len(queue['queue']),polls=polls)
 
 

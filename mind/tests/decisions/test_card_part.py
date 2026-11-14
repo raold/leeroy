@@ -63,7 +63,7 @@ def test_game_card_shows_her_vote(card_ctx, clock):
     ('officer', None, True), ('voice:officers', None, True), ('discord:officer-chat', None, True),
     ('discord:bank-requests', None, True), ('guild', None, False), ('whisper', None, False),
     ('discord:general', None, False), ('dm:102', None, False),
-    ('gdm:3', (1, 102, 104), True), ('gdm:3', (1, 102, 103), False), ('gdm:3', (102, 104, 105), False)])
+    ('gdm:3', (1, 102, 104), False), ('gdm:3', (1, 102, 103), False), ('gdm:3', (102, 104, 105), False)])
 def test_officer_decisions_stay_with_officers(card_ctx, clock, channel, readers, shown):
     readers = readers or (1, 101, 102, 103, 104)
     context = (discord(clock, channel, readers=readers, to_guid=1 if channel.startswith('dm:') else 0)
@@ -97,3 +97,22 @@ def test_the_part_is_bounded_and_fits_the_budget(card_ctx, clock, guild):
     assert len(lines) <= DECISION_LINES and any(line.startswith('Open poll') for line in lines)
     for budget in (150, 400, 600):
         assert estimate_tokens(result.render(budget)) <= budget
+
+
+def test_a_polled_proposal_keeps_its_positions_with_the_officers_until_its_poll_is_known(card_ctx, clock):
+    now = clock.now()
+    ledger.propose(card_ctx, kind='loot_rule', subject='loot:next', value={'mode': 'gear_priority'}, now=now,
+                   positions=[{'guid': 102, 'side': 'gear_priority', 'why': 'theorycrafter'}])
+    assert 'your position: gear_priority' not in part(card(card_ctx, 102, context=ctx(clock, 'guild')))
+    assert 'your position: gear_priority' in part(card(card_ctx, 102, context=ctx(clock, 'officer')))
+
+
+def test_a_long_summary_is_cut_not_dropped(card_ctx, clock):
+    now = clock.now()
+    first = {f'slot{n}': ['tank', 'healer', 'melee', 'ranged'] for n in range(12)}
+    rule = ledger.propose(card_ctx, kind='loot_rule', subject='loot', value={'mode': 'dkp', 'role_first': first},
+                          positions=[], poll=None, now=now)
+    ledger.settle(card_ctx, rule, settled_by=0, now=now)
+    line = next(line for line in part(card(card_ctx, 101, context=ctx(clock, 'guild'))).splitlines()
+                if line.startswith('Loot rule'))
+    assert line.startswith('Loot rule settled: mode dkp; slot0: tank>healer') and line.endswith('…')

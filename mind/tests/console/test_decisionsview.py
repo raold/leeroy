@@ -51,8 +51,7 @@ def console(store, clock, data):
     poll = polls.open_poll(store, channel='officer-chat', question='Loot rules for next week?',
                            options=('dkp', 'loot_council'), voters=(102, 104), closes=now + 86400, now=now - 9,
                            kind='loot_rule', subject='loot')
-    with store.transaction():
-        store.conn.execute('UPDATE guild_poll SET message=? WHERE id=?', (message, poll))
+    polls.attach_message(store, poll, message)
     polls.vote(store, poll, 102, 'dkp', why='high_dkp', now=now - 5)
     polls.vote(store, poll, 1, 'dkp', now=now - 4)
     store.conn.commit()
@@ -69,9 +68,11 @@ def test_decisions_view_renders_effects(console, data):
     assert (loot['settler'], loot['state'], loot['summary']) == ('a poll', 'in effect', 'mode loot_council')
     assert loot['positions'] == [{'guid': 102, 'name': 'Belra', 'side': 'loot_council', 'why': 'low_attendance'}]
     assert loot['action']['kind'] == 'overrule' and "can't be undone in game" in loot['action']['words'].lower()
+    assert loot['action']['permanent'] is True and lineup['action'] is None
     assert lineup['changed'] == ['talk only: no_raid'] and lineup['action'] is None
     assert bank['officers_only'] is True and bank['action']['kind'] == 'overrule'
     assert bank['action']['words'].startswith('Not in effect yet')
+    assert bank['action']['permanent'] is False
     [poll] = view['polls']
     assert poll['options'] == [{'code': 'dkp', 'count': 2}, {'code': 'loot_council', 'count': 0}]
     assert (poll['his_vote'], poll['votes'], poll['voters'], poll['open']) == ('dkp', 2, 3, True)

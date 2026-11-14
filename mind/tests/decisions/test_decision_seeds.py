@@ -54,3 +54,31 @@ def test_gather_adds_decisions_only_when_on(store, clock, guild):
     seeds = [s for s in gather(store.conn, decisions_enabled=True, **args) if s.kind == 'decision']
     assert [(s.key, s.channels, s.officers_only) for s in seeds] == [
         ('decision:1:proposed', ('applications', 'officer-chat'), True)]
+
+
+def test_each_stage_is_argued_once(store, clock, guild):
+    from leeroy_mind.server.seeds import fresh, mark_used
+    now = clock.now()
+    ledger.propose(store, kind='lineup', subject='raid:9', value={'members': [101], 'bench': [103]},
+                   positions=[{'guid': 103, 'side': 'object', 'why': 'benched_twice'}], now=now)
+    [seed] = decision_seeds(store.conn, now=now, personas=guild, officers=OFFICERS)
+    assert fresh(store.conn, [seed], now=now) == [seed]
+    mark_used(store, seed, now=now)
+    later = now + 30 * 86400  # still proposed a month on: not argued again
+    assert fresh(store.conn, decision_seeds(store.conn, now=later, personas=guild, officers=OFFICERS), now=later) == []
+
+
+def test_a_polled_proposal_never_seeds_publicly_before_its_poll(store, clock, guild):
+    now = clock.now()
+    positions = [{'guid': 101, 'side': 'gear_priority', 'why': 'theorycrafter'}]
+    ledger.propose(store, kind='loot_rule', subject='loot', value={'mode': 'gear_priority'},
+                   positions=positions, now=now)
+    [seed] = decision_seeds(store.conn, now=now, personas=guild, officers=OFFICERS)
+    assert seed.officers_only and seed.channels == ('officer-chat',) and 101 not in seed.about
+    public = polls.open_poll(store, channel='loot-and-dkp', question='Loot rules?', options=('dkp', 'gear_priority'),
+                             voters=(101, 102), closes=now + 3600, now=now, kind='loot_rule', subject='loot:open')
+    ledger.propose(store, kind='loot_rule', subject='loot:open', value={'mode': 'gear_priority'},
+                   positions=positions, now=now, poll=public)
+    seeds = {s.key: s for s in decision_seeds(store.conn, now=now, personas=guild, officers=OFFICERS)}
+    assert not seeds['decision:2:proposed'].officers_only
+    assert seeds['decision:2:proposed'].channels == ('loot-and-dkp',)

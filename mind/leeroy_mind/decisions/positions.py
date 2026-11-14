@@ -209,20 +209,27 @@ def vote_at(poll: int, member: int, opened: float, closes: float) -> float:
     return lo + (hi - lo) * int.from_bytes(digest[:8], 'big') / 2 ** 64
 
 
-def cast_votes(store, *, now, present: Callable[[int], bool]) -> int:
-    """Each member with a position on an open poll votes its side once its time has come and while
-    present(guid) (online or idle). The number of votes cast."""
-    cast = 0
-    for row in open_polls(store.conn):
+def _due(conn, now):
+    """(poll, position) for each member whose vote on an open poll is due and not cast yet."""
+    for row in open_polls(conn):
         if now >= row['closes']:
             continue
-        voted = {r[0] for r in store.conn.execute('SELECT member FROM guild_poll_vote WHERE poll=?', (row['id'],))}
+        voted = {r[0] for r in conn.execute('SELECT member FROM guild_poll_vote WHERE poll=?', (row['id'],))}
         voters, options = voters_of(row), options_of(row)
         for p in positions_of(row):
             g = p['guid']
-            if (g in voted or g not in voters or p['side'] not in options
-                    or now < vote_at(row['id'], g, row['opened'], row['closes']) or not present(g)):
-                continue
-            cast += vote(store, row['id'], g, p['side'], why=p['why'], now=now)
-    return cast
+            if (g not in voted and g in voters and p['side'] in options
+                    and now >= vote_at(row['id'], g, row['opened'], row['closes'])):
+                yield row['id'], p
 
+
+def due_voters(conn, *, now) -> set[int]:
+    """Members whose vote is due now: only their presence needs reading this tick."""
+    return {p['guid'] for _, p in _due(conn, now)}
+
+
+def cast_votes(store, *, now, present: Callable[[int], bool]) -> int:
+    """Each member with a position on an open poll votes its side once its time has come and while
+    present(guid) (online or idle). The number of votes cast."""
+    return sum(vote(store, poll, p['guid'], p['side'], why=p['why'], now=now)
+               for poll, p in list(_due(store.conn, now)) if present(p['guid']))

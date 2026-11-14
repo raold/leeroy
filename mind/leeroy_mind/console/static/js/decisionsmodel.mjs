@@ -29,8 +29,22 @@ export function decisionRow(d) {
     }).join(", "),
     officers: d.officers_only === true,
     action: kind ? { kind: kind, label: str(action.label) || (kind === "undo" ? "Undo" : "Overrule"),
-                     words: str(action.words) } : null
+                     words: str(action.words), permanent: kind === "overrule" && action.permanent !== false } : null
   };
+}
+
+// The confirmation an overrule asks for first; one the game cannot undo also asks him to tick
+// that he understands. Absent or unknown permanence counts as permanent.
+export function confirmStep(action) {
+  action = obj(action);
+  if (action.kind === "undo") {
+    return { prompt: "Undo it in game and overrule it?", label: "Confirm undo", ack: "" };
+  }
+  if (action.permanent) {
+    return { prompt: "This can't be undone in game: overruling only stops its future effect.",
+             label: "Overrule for good", ack: "I understand it can't be undone in game." };
+  }
+  return { prompt: "Overrule it before it takes effect?", label: "Confirm overrule", ack: "" };
 }
 
 // A poll as a card: each option with its count and share, his vote, and whether he can vote now

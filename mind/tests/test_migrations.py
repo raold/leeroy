@@ -450,9 +450,15 @@ def test_migration_from_an_older_db(tmp_path, monkeypatch):
         for bad in ("kind='gold'", "status='maybe'", "value='not json'", "overruled_by_owner=2"):
             with pytest.raises(sqlite3.IntegrityError):
                 conn.execute(f"UPDATE guild_decision SET {bad}")
-        with pytest.raises(sqlite3.IntegrityError):  # one live decision per kind and subject
-            conn.execute("INSERT INTO guild_decision(kind,subject,value,status,proposed) "
-                         "VALUES ('rank','rank:101','{}','in_effect',2)")
+        with pytest.raises(sqlite3.IntegrityError):  # one pending decision per kind and subject
+            conn.execute("INSERT INTO guild_decision(kind,subject,value,status,proposed,settled) "
+                         "VALUES ('rank','rank:101','{}','settled',2,2)")
+        # beside it, one in effect: a successor waits while the rule in force stands
+        conn.execute("INSERT INTO guild_decision(kind,subject,value,status,proposed,settled,effect) "
+                     "VALUES ('rank','rank:101','{}','in_effect',2,2,2)")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO guild_decision(kind,subject,value,status,proposed,settled,effect) "
+                         "VALUES ('rank','rank:101','{}','in_effect',3,3,3)")
         with pytest.raises(sqlite3.IntegrityError):  # 2-6 options
             conn.execute("INSERT INTO guild_poll(channel,question,options,voters,opened,closes,status) "
                          "VALUES ('officer-chat','q','[\"a\"]','[]',1,2,'open')")

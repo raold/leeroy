@@ -157,7 +157,10 @@ def test_waiting_never_carries_message_text(store,tmp_path,clock):
                            "VALUES ('officer-chat','PRIVATE POLL','[\"a\",\"b\"]','[1,102]',?,?,?)", (now-1, now+60, status))
     store.conn.execute("INSERT INTO guild_poll_vote(poll,member,option,ts) VALUES (2,1,'a',?)", (now,))
     view = tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
-    assert view['sections']['waiting']['letters']==2 and view['sections']['waiting']['polls']==1
+    assert view['sections']['waiting']['letters']==2 and view['sections']['waiting']['polls'] is None  # [decisions] off
+    (tmp_path/'mind.toml').write_text('[server]\nenabled = true\n[decisions]\nenabled = true\n',encoding='utf-8')
+    view = tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
+    assert view['sections']['waiting']['polls']==1  # open, not past closing, not voted by him
     assert 'PRIVATE' not in json.dumps(view)
 
 

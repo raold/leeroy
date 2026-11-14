@@ -760,7 +760,8 @@ def decision_args(args) -> dict:
     """His decision action: {"action": "vote", "poll", "option"} (a poll id and one of its option
     codes) or {"action": "overrule", "id"} (a decision id)."""
     from leeroy_mind.decisions.ledger import CODE
-    if not isinstance(args, dict) or args.get("action") not in DECISION_SHAPES             or set(args) != DECISION_SHAPES[args["action"]]:
+    if (not isinstance(args, dict) or args.get("action") not in DECISION_SHAPES
+            or set(args) != DECISION_SHAPES[args["action"]]):
         raise BadRequest("A decision action is vote {poll, option} or overrule {id}.")
     for key in ("poll", "id"):
         if key in args and (type(args[key]) is not int or not 1 <= args[key] < 2**63):

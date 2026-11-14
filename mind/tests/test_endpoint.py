@@ -1357,7 +1357,7 @@ def test_undo_only_where_reversible(store, clock, tmp_path, caplog):
         apply.unregister("loot_rule")
     assert undone["ok"] and undone["undone"] is True and rules.undone == [made["loot_rule"]]
     assert future["ok"] and future["undone"] is False and "can't be undone in game" in future["message"]
-    assert early["ok"] and early["message"] == "Overruled before it took effect."
+    assert early["ok"] and early["message"] == "Overruled before it took effect; the rule in force stays."
     assert again == {"ok": False, "error": "That decision is no longer live."}
     assert off == {"ok": False, "error": "Decisions are off in this mind."}
     rows = {r["id"]: r for r in store.conn.execute("SELECT * FROM guild_decision")}

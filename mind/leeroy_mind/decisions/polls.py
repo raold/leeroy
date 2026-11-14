@@ -153,3 +153,35 @@ def close_due(store, *, now) -> list[tuple[int, str | None]]:
 def open_polls(conn) -> list:
     return conn.execute("SELECT * FROM guild_poll WHERE status='open' ORDER BY id").fetchall()
 
+
+
+def attach_message(store, poll: int, message: int) -> bool:
+    """The Discord post that carries the poll (its card in Comms); set once."""
+    if type(poll) is not int or type(message) is not int or message < 1:
+        raise DecisionError('poll_message_invalid')
+    with store.transaction():
+        return store.conn.execute('UPDATE guild_poll SET message=? WHERE id=? AND message IS NULL',
+                                  (message, poll)).rowcount == 1
+
+
+def unhandled(conn) -> list:
+    """Closed polls of a kind whose result that kind has not taken yet."""
+    return conn.execute("SELECT * FROM guild_poll WHERE status='closed' AND handled IS NULL AND kind IS NOT NULL "
+                        'ORDER BY id').fetchall()
+
+
+def mark_handled(store, poll: int, *, now) -> bool:
+    """The receipt that a closed poll's result reached its kind, once. A kind may write it in the
+    transaction that records its decision; the service writes it after a hook returns."""
+    ts = _time(now)
+    with store.transaction():
+        return store.conn.execute("UPDATE guild_poll SET handled=? WHERE id=? AND status<>'open' AND handled IS NULL",
+                                  (ts, poll)).rowcount == 1
+
+
+def hook_failed(store, poll: int) -> int:
+    """One more failed attempt to hand this poll's result to its kind; the attempts so far."""
+    with store.transaction():
+        store.conn.execute('UPDATE guild_poll SET hook_tries=hook_tries+1 WHERE id=?', (poll,))
+        row = store.conn.execute('SELECT hook_tries FROM guild_poll WHERE id=?', (poll,)).fetchone()
+    return row[0] if row else 0

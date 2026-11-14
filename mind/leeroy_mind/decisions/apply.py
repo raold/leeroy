@@ -15,6 +15,9 @@ from .ledger import KINDS
 BUILTIN: tuple[str, ...] = ()
 # Bank requests and ranks are the officers' business; their posts live in officers' channels
 OFFICER_KINDS = frozenset({'bank', 'rank'})
+# Kinds an officers' poll settles: who argued what stays with the officers until the poll is linked
+POLLED_KINDS = frozenset({'loot_rule', 'rank'})
+SUMMARY_CHARS = 160
 LABELS = {'lineup': 'Raid lineup', 'loot_rule': 'Loot rule', 'bank': 'Bank request',
           'strategy': 'Boss strategy', 'rank': 'Rank change'}
 STATES = {'proposed': 'proposed', 'settled': 'settled', 'in_effect': 'in effect', 'talk_only': 'talk only',
@@ -96,6 +99,14 @@ def officers_only(row, message_channel: str | None = None) -> bool:
     return row['kind'] in OFFICER_KINDS or private_channel(message_channel)
 
 
+def positions_private(row, message_channel: str | None, poll_channel: str | None) -> bool:
+    """Whether who argued what on this decision is the officers' alone: its business is theirs, its
+    poll is held in their channel, or it is a kind their poll settles and no poll is linked yet
+    (its audience is not known, so it fails closed)."""
+    return (officers_only(row, message_channel) or private_channel(poll_channel)
+            or row['kind'] in POLLED_KINDS and not poll_channel)
+
+
 def channels_of(conn, row) -> tuple[str | None, str | None]:
     """(the announcing message's channel, the poll's channel), either None."""
     message = conn.execute('SELECT channel FROM discord_message WHERE id=?', (row['message'],)).fetchone() \
@@ -139,7 +150,13 @@ def _word(value) -> str:
 
 
 def summary(row, name=lambda g: f'#{g}', guid: int = 0) -> str:
-    """What was decided, from the stored value: codes, counts and names, never free text."""
+    """What was decided, from the stored value: codes, counts and names, never free text; at most
+    SUMMARY_CHARS, cut with an ellipsis."""
+    text = _summary(row, name, guid)
+    return text if len(text) <= SUMMARY_CHARS else text[:SUMMARY_CHARS - 1].rstrip() + '…'
+
+
+def _summary(row, name, guid):
     value, kind = value_of(row), row['kind']
     if kind == 'lineup':
         members, bench = _guids(value, 'members'), _guids(value, 'bench')

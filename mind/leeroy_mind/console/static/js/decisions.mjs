@@ -1,6 +1,6 @@
 import { $, api, arr, clear, el, emit, on, post, refused, setText, str } from "./core.mjs";
 import { S } from "./state.mjs";
-import { controlReason, decisionRow, pollModel, sectionHidden } from "./decisionsmodel.mjs";
+import { confirmStep, controlReason, decisionRow, pollModel, sectionHidden } from "./decisionsmodel.mjs";
 
 // -- the guild's decisions: the Guild tab's ledger and the poll cards in Comms ------------------
 
@@ -39,7 +39,7 @@ export function pollCard(poll, reason, busy) {
   return box;
 }
 
-var busy = false, failure = "", last = null;
+var busy = false, failure = "", last = null, armed = 0, acked = false;
 
 function renderDecisions(view) {
   last = view;
@@ -54,7 +54,19 @@ function renderDecisions(view) {
       .forEach(function (t) { tr.appendChild(el("td", "", t)); });
     var td = el("td");
     if (d.positions) { td.title = d.positions; }
-    if (d.action) {
+    if (d.action && armed === d.id) {
+      var step = confirmStep(d.action);
+      td.appendChild(el("p", d.action.permanent ? "warn" : "", step.prompt));
+      if (step.ack) {
+        var label = el("label"), box = el("input");
+        box.type = "checkbox"; box.checked = acked; box.dataset.ack = String(d.id);
+        label.appendChild(box); label.appendChild(document.createTextNode(" " + step.ack)); td.appendChild(label);
+      }
+      var yes = button(step.label, d.action.permanent ? "danger" : "primary");
+      yes.dataset.confirm = String(d.id); yes.disabled = busy || !!reason || (!!step.ack && !acked);
+      var no = button("Cancel"); no.dataset.cancel = String(d.id);
+      td.appendChild(yes); td.appendChild(no);
+    } else if (d.action) {
       var b = button(d.action.label);
       b.dataset.decision = String(d.id); b.title = d.action.words; b.disabled = busy || !!reason;
       b.setAttribute("aria-label", d.action.label + ": " + d.label + ", " + d.summary);
@@ -89,9 +101,17 @@ function act(promise) {
     .finally(function () { busy = false; pollDecisions(); });
 }
 
+// An overrule is armed by its first click and sent only by the confirmation
 $("g-decisions").addEventListener("click", function (ev) {
-  var b = ev.target.closest("[data-decision]");
-  if (b && !b.disabled) { act(overruleDecision(Number(b.dataset.decision))); }
+  var confirm = ev.target.closest("[data-confirm]"), cancel = ev.target.closest("[data-cancel]");
+  var arm = ev.target.closest("[data-decision]");
+  if (confirm && !confirm.disabled) { var id = Number(confirm.dataset.confirm); armed = 0; acked = false; act(overruleDecision(id)); }
+  else if (cancel) { armed = 0; acked = false; if (last) { renderDecisions(last); } }
+  else if (arm && !arm.disabled) { armed = Number(arm.dataset.decision); acked = false; if (last) { renderDecisions(last); } }
+});
+$("g-decisions").addEventListener("change", function (ev) {
+  var box = ev.target.closest("[data-ack]");
+  if (box) { acked = box.checked; if (last) { renderDecisions(last); } }
 });
 $("g-polls").addEventListener("click", function (ev) {
   var b = ev.target.closest('[data-action="poll-vote"]');

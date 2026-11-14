@@ -464,21 +464,14 @@ def _directed_emotes(reader, guid, human, ctx, now):
     return lines
 
 
-def _officers_room(reader, officer, ctx, human):
+def _officers_room(officer, ctx):
     """Whether the officers' business may reach this turn: an officers' channel in either medium
-    for an officer, or a group DM whose every reader but him is an officer (#265's audiences)."""
-    if is_officer_channel(ctx.channel):
-        return officer
-    if not (officer and is_group(ctx.channel) and ctx.readers):
-        return False
-    others = set(_ids(ctx.readers)) - {human}
-    roles = reader.rows(("persona_core",), "SELECT guid FROM persona_core WHERE json_valid(json) "
-        "AND json_extract(json,'$.play.guild_role')='officer' AND guid IN (SELECT value FROM json_each(?))",
-        (json.dumps(sorted(others)),))
-    return bool(others) and others <= {r["guid"] for r in roles}
+    (game officer chat, their voice room, an officers' Discord channel), for an officer, as #265's
+    officers' audience reaches. Never a group DM, a whisper, a DM or a public room."""
+    return officer and is_officer_channel(ctx.channel)
 
 
-def _decisions(reader, guid, officer, ctx, now, human):
+def _decisions(reader, guid, officer, ctx, now):
     """Decisions that touch her (in effect, settled, or proposed with her position), her vote or
     position on each, and the open polls she votes in. Officers' business only in officers' rooms."""
     from leeroy_mind.decisions import apply
@@ -486,12 +479,12 @@ def _decisions(reader, guid, officer, ctx, now, human):
     if not set(tables) <= reader.tables:
         reader.missing.update(set(tables) - reader.tables)
         return []
-    room = _officers_room(reader, officer, ctx, human)
+    room = _officers_room(officer, ctx)
     name = lambda g: _person(ctx, g)  # noqa: E731
     votes = {r["poll"]: r for r in reader.rows(("guild_poll_vote",),
              "SELECT poll,option,why FROM guild_poll_vote WHERE member=? AND ts<=?", (guid, now))}
-    def stand(poll, poll_channel, positions):
-        if apply.private_channel(poll_channel) and not room:
+    def stand(poll, private, positions):
+        if private and not room:
             return ""
         if poll in votes:
             return f"; you voted {_text(votes[poll]['option'], 40)} ({_text(votes[poll]['why'], 40) or 'no reason given'})"
@@ -505,11 +498,12 @@ def _decisions(reader, guid, officer, ctx, now, human):
             "AND d.proposed<=? ORDER BY coalesce(d.effect,d.settled,d.proposed) DESC,d.id DESC LIMIT 64", (now,)):
         message = reader.rows(("discord_message",), "SELECT channel FROM discord_message WHERE id=?",
                               (row["message"],)) if row["message"] else []
-        if apply.officers_only(row, message[0]["channel"] if message else None) and not room:
+        message = message[0]["channel"] if message else None
+        if apply.officers_only(row, message) and not room:
             continue
         positions = _json(row["positions"], [])
         positions = positions if isinstance(positions, list) else []
-        mine = stand(row["poll"], row["poll_channel"], positions)
+        mine = stand(row["poll"], apply.positions_private(row, message, row["poll_channel"]), positions)
         if not apply.touches(row, guid) or row["status"] == "proposed" and not mine:
             continue
         lines.append(f"{apply.LABELS[row['kind']]} {apply.STATES[row['status']]}: "
@@ -525,7 +519,7 @@ def _decisions(reader, guid, officer, ctx, now, human):
         options = _json(row["options"], [])
         options = [o for o in options if isinstance(o, str)] if isinstance(options, list) else []
         positions = _json(row["positions"], [])
-        mine = stand(row["id"], row["channel"], positions if isinstance(positions, list) else [])
+        mine = stand(row["id"], apply.private_channel(row["channel"]), positions if isinstance(positions, list) else [])
         polls.append(f"Open poll in #{_text(row['channel'], 40)}: {_text(row['question'], 200)} "
                      f"(options: {', '.join(_text(o, 40) for o in options)})" + (mine or "; you have not voted"))
         if len(polls) == POLL_LINES:
@@ -565,7 +559,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         parts = (("context","Conversation",conversation),
                  ("here","Here",here),
                  ("claims","Your claims",_claims(reader,guid,officer,context,now)),
-                 ("decisions","Guild decisions",_decisions(reader,guid,officer,context,now,human)
+                 ("decisions","Guild decisions",_decisions(reader,guid,officer,context,now)
                   if context.decisions else []),
                  ("drama","Your recent guild drama",_drama(reader,guid,officer,context,now)))
         return Card(guid,tuple(Part(k,title,tuple(lines)) for k,title,lines in parts if lines),tuple(sorted(reader.missing)))
@@ -619,7 +613,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     standing.extend(f"Attendance: {r['n']} {r['status']}" for r in attendance)
     add("standing", "Your standing", standing)
     if context.decisions:
-        add("decisions", "Guild decisions", _decisions(reader, guid, officer, context, now, human))
+        add("decisions", "Guild decisions", _decisions(reader, guid, officer, context, now))
     bank = []
     snapshot = source.bank_snapshot
     if isinstance(snapshot, dict) and type(snapshot.get("money")) is int and snapshot["money"] >= 0 \

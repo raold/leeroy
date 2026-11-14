@@ -67,3 +67,25 @@ def test_a_poll_is_checked_when_it_opens(store, clock):
     poll = open_loot_poll(store, now, positions=[Position(102, 'dkp', 'high_dkp')])
     assert polls.voters_of(polls.get_poll(store.conn, poll)) == {1, 102, 104}
     assert polls.positions_of(polls.get_poll(store.conn, poll)) == [{'guid': 102, 'side': 'dkp', 'why': 'high_dkp'}]
+
+
+def test_the_database_keeps_a_vote_final(store, clock):
+    import sqlite3
+    now = clock.now()
+    poll = open_loot_poll(store, now)
+    assert polls.vote(store, poll, 102, 'dkp', why='high_dkp', now=now)
+    for sql in ("UPDATE guild_poll_vote SET option='loot_council'", 'DELETE FROM guild_poll_vote'):
+        with pytest.raises(sqlite3.IntegrityError, match='a vote is final'):
+            store.conn.execute(sql)
+    store.conn.rollback()
+    assert polls.tally(store.conn, poll)['dkp'] == 1
+
+
+def test_a_poll_names_its_post_once(store, clock):
+    now = clock.now()
+    poll = open_loot_poll(store, now)
+    with store.transaction():
+        posts = [store.conn.execute("INSERT INTO discord_message(channel,author,origin,text,ts) "
+                                    "VALUES ('officer-chat',102,'mind','vote',?)", (now,)).lastrowid for _ in range(2)]
+    assert polls.attach_message(store, poll, posts[0]) and not polls.attach_message(store, poll, posts[1])
+    assert polls.get_poll(store.conn, poll)['message'] == posts[0]

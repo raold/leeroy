@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { controlReason, decisionRow, pollModel, sectionHidden } from '../../../leeroy_mind/console/static/js/decisionsmodel.mjs';
+import { confirmStep, controlReason, decisionRow, pollModel, sectionHidden } from '../../../leeroy_mind/console/static/js/decisionsmodel.mjs';
 import { validView } from '../../../leeroy_mind/console/static/js/resilience.mjs';
 
 const running = {control: {enabled: true}, mind: {state: 'running'}};
@@ -19,7 +19,7 @@ test('a ledger row shows what changed and offers only the action the mind offere
     action: {kind: 'overrule', label: 'Overrule future effect', words: "Can't be undone in game: overruling stops its future effect only."}});
   assert.equal(row.changed, 'DKP ledger rows: 12, 13; receipts: guild:loot:1');
   assert.equal(row.positions, 'Belra: loot council (low attendance)');
-  assert.deepEqual(row.action, {kind: 'overrule', label: 'Overrule future effect',
+  assert.deepEqual(row.action, {kind: 'overrule', label: 'Overrule future effect', permanent: true,
     words: "Can't be undone in game: overruling stops its future effect only."});
   assert.equal(decisionRow({id: 5, kind: 'rank', status: 'expired', action: null}).action, null);
   assert.equal(decisionRow({id: 6, kind: 'rank', action: {kind: 'delete everything'}}).action, null);
@@ -53,4 +53,16 @@ test('a malformed decisions answer does not replace a good view', () => {
   assert.equal(validView('/api/decisions', {decisions: [], polls: [], missing: []}), true);
   assert.equal(validView('/api/decisions', {decisions: [], polls: 'x', missing: []}), false);
   assert.equal(validView('/api/decisions', {decisions: [1], polls: [], missing: []}), false);
+});
+
+test('an overrule asks first, and one the game cannot undo also asks him to say he understands', () => {
+  const permanent = confirmStep(decisionRow({action: {kind: 'overrule', permanent: true, words: 'x'}}).action);
+  assert.match(permanent.prompt, /can't be undone in game/);
+  assert.ok(permanent.ack);
+  assert.equal(permanent.label, 'Overrule for good');
+  const pending = confirmStep(decisionRow({action: {kind: 'overrule', permanent: false}}).action);
+  assert.equal(pending.ack, '');
+  assert.equal(confirmStep(decisionRow({action: {kind: 'undo'}}).action).label, 'Confirm undo');
+  // Unknown permanence fails toward the stronger confirmation
+  assert.ok(confirmStep(decisionRow({action: {kind: 'overrule'}}).action).ack);
 });
