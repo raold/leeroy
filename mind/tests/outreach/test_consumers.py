@@ -375,6 +375,24 @@ def test_public_item_stays_typed_while_she_sits_in_his_voice_room(rig,tmp_path,m
     assert not app.outreach._held and app.outreach.select(101,'whisper') is None
 
 
+def test_whisper_item_spoken_in_his_voice_room_is_told_as_a_whisper(rig,tmp_path,monkeypatch):
+    from voice.conftest import VRig
+    app=app_for(rig,tmp_path)
+    voice=VRig(rig)
+    voice.him('guild_hall')
+    voice.seat(101,'guild_hall')
+    item=birthday(rig)
+    queued=[]
+    monkeypatch.setattr(rig.engine,'_queue',queued.extend)
+    rig.script('another birthday means another excuse for cake')
+    rig.engine._queue_whisper(101,'start',rig.clock.now())
+    assert speak(rig,*queued[0])
+    told=records.get(rig.store,item.id)
+    assert told.state=='told' and told.told_via=='whisper'
+    assert rig.store.chat_lines([told.line_id])[0].channel=='whisper'
+    assert len(voice.speaks())==1 and not rig.sent.says() and not app.outreach._held
+
+
 def him_photo(rig,tmp_path):
     """A ready `him` snap of 101's, offered as PhotoSender offers one: to a DM opener or an
     answer to his DM, while it is still unsent."""
