@@ -49,7 +49,8 @@ def test_attachment_registers_without_starting_and_reuses_app_dependencies(h):
         assert app._bg_tasks == [] and app.nightly.running is None
         ctx = context(app)
         assert ctx.writer is app.writer and ctx.embedder is app.embedder
-        assert ctx.personas is app.personas and ctx.arbiter is app.arbiter
+        # the night's view of the app's cache: the same personas, without godmode's talk lens
+        assert ctx.personas._cache is app.personas and ctx.arbiter is app.arbiter
         assert ctx.ident.guid == 1 and callable(ctx.asker)
     finally:
         run(app.stop())

@@ -243,8 +243,57 @@ def test_the_night_reads_her_persona_without_trait_edits(h):
                                                    "value": "absurd"}},
                human=OWNER, source="cli", now=h.clock.now(), pic=pic)
     ctx = h.ctx()
-    assert ctx.persona(101).humour == load_persona(h.store, 101).humour
-    assert ctx.personas.get(101).humour == "absurd"  # the talk side's lens
+    stored = load_persona(h.store, 101).humour
+    assert ctx.persona(101).humour == stored
+    assert ctx.personas.get(101).humour == stored  # a stage reading ctx.personas directly
+    assert {g: p.humour for g, p in ctx.personas.all().items()}[101] == stored
+    assert ctx.personas.base(101).humour == stored
+    from leeroy_mind.personas.io import PersonaCache
+    assert PersonaCache(h.store).get(101).humour == "absurd"  # the talk side's lens
+
+
+def test_the_night_view_keeps_dials_and_drops_only_the_edits(h):
+    from leeroy_mind.personas.io import PersonaCache
+    from leeroy_mind.tuning.effective import dials_of, edits_of
+    pic = _pic(h.store)
+    C.apply_sets(h.store, [C.Set("member", "101", "talkative", 9)], pic, source="cli",
+                 now=h.clock.now())
+    E.set_edit(h.store, {"kind": "trait", "args": {"member": 101, "path": "humour",
+                                                   "value": "absurd"}},
+               human=OWNER, source="cli", now=h.clock.now(), pic=pic)
+    talk = PersonaCache(h.store).get(101)
+    night = h.ctx().personas.get(101)
+    assert dials_of(night).values == dials_of(talk).values  # the night keeps the dials
+    assert edits_of(night).empty and not edits_of(talk).empty
+
+
+def test_her_arc_view_reads_the_lens(h):
+    from leeroy_mind.arc.live import arc_view
+    from nightly.test_night_romance import arc_woman
+    arc_woman(h, 101, "drawn", stage="notices")
+    lens_on(h, women=(101,), stage="whispers")
+    view = arc_view(h.store, load_persona(h.store, 101), 1, now=h.clock.now(), channel="guild",
+                    to_guid=0, forms=("he", "him", "his"), names={})
+    assert view.stage == "whispers"
+    assert h.store.get_relationship(101, 1).romance_stage == "notices"
+
+
+def test_the_two_mood_folds_agree(h):
+    from leeroy_mind.culture.tease import tease_ok
+    from leeroy_mind.personas.io import PersonaCache
+    h.store.put_relationship(Relationship(a=101, b=103, affinity=50))
+    with h.store.transaction():
+        h.store.put_state(replace(h.store.get_state(103), mood=0.8))
+    pic = _pic(h.store)
+    for offset in (-0.8, -0.8):  # summed past the range: clamped once, after folding
+        E.set_edit(h.store, {"kind": "mood", "args": {"member": 103, "offset": offset,
+                                                      "seconds": 3600}},
+                   human=OWNER, source="cli", now=h.clock.now(), pic=pic)
+    h.store.reload_edits()
+    assert h.store.get_state(103, lens=True).mood == pytest.approx(-0.8)
+    # tease folds the same way: -0.8 is a hurt mood (a clamped sum first would read -0.2)
+    assert tease_ok(h.store.conn, 101, 103, personas=PersonaCache(h.store), human=1,
+                    now=h.clock.now())[1] == "hurt_mood"
 
 
 def test_lens_readers_skip_a_malformed_edit(h, caplog):
