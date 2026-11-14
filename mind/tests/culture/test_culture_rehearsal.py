@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from conftest import TEST_CAST, run
 from nightly.conftest import FakeAdmin, generic, scripted
 from nightly.test_night_lexicon import term
+from culture.test_memes import recorded
 from selfies.fakes import CLOCK, fake_command, mind_app
 from leeroy_mind.culture import memes
 from leeroy_mind.culture.bots import BOTS, SINCE_KEY
@@ -143,7 +144,9 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch):
                 "JOIN discord_attachment a ON a.message=m.id JOIN discord_meme d ON d.posted_message=m.id").fetchone()
             assert row is not None, json.loads(app.store.get_meta("server:recent") or "[]")
             assert (row["channel"], row["kind"], row["status"]) == ("memes", "meme", "posted")
-            assert row["author"] in TEST_CAST and row["author"] != 102 and row["text"].startswith(LINE[:20])
+            assert row["author"] in TEST_CAST and row["author"] != 102
+            # her line as delivered (her typing style may add a typo), recorded as her chat line
+            assert row["text"] and row["text"] == recorded(app, row["id"])
             # spent once, on delivery: its joke's use and the butt's teasing allowance
             assert app.store.conn.execute("SELECT uses_total FROM lexicon WHERE id=?", (ident,)).fetchone()[0] == 1
             assert app.store.get_meta(f"server:seed:{out['seed'].key}") is not None

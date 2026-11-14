@@ -262,6 +262,12 @@ def test_no_meme_left_takes_no_gpu(h):
     assert render(h, worker) is False and worker.renders == [] and worker.stopped == 0
 
 
+def recorded(app, message):
+    """The chat line the pipeline recorded for a Discord message (its discord:line receipt)."""
+    line = app.store.get_meta(f"discord:line:{message}")
+    return app.store.conn.execute("SELECT text FROM chat_line WHERE id=?", (int(line),)).fetchone()[0]
+
+
 def test_meme_image_posts_as_an_attachment(tmp_path):
     """The opener's MemeOffer through the real talk pipeline: one message carrying a `meme`
     attachment, the meme posted in the message's own transaction, and its caption a note for the
@@ -292,13 +298,16 @@ def test_meme_image_posts_as_an_attachment(tmp_path):
             meta = TurnMeta('', why='server:meme_image', single_line=True, keep_channel=True)
             meta.photo, meta.photo_asked = memes.offer(app, mid), True
             lines = await finish(app, asyncio.create_task(app.engine.speak_meta(turn, meta)))
-            assert len(lines) == 1 and lines[0].startswith('made this one at lunch')
+            assert len(lines) == 1
             row = app.store.conn.execute(
-                "SELECT m.id,m.channel,m.author,a.kind,a.path,a.snap,a.width,d.status,d.posted_message "
+                "SELECT m.id,m.channel,m.author,m.text,a.kind,a.path,a.snap,a.width,d.status,d.posted_message "
                 "FROM discord_message m JOIN discord_attachment a ON a.message=m.id "
                 "JOIN discord_meme d ON d.posted_message=m.id").fetchone()
             assert (row["channel"], row["author"], row["kind"], row["path"], row["snap"], row["width"],
                     row["status"]) == ("memes", 101, "meme", "discord/memes/1.jpg", None, 1024, "posted")
+            # her line as the pipeline delivered it (her typing style may add a typo), posted with the
+            # meme and recorded as her chat line
+            assert row["text"] == lines[0] == recorded(app, row["id"])
             assert 'strikes again' in str(app.llm.calls)  # the caption was in her instruction
             assert by_messages(app.store.conn, [row["id"]], memes=True) == {
                 row["id"]: "[meme picture captioned: when the floor inspector / strikes again]"}
