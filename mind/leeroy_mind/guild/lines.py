@@ -50,6 +50,40 @@ def template(key, **facts) -> str:
     return TEMPLATES[key].format(**facts)
 
 
+# A raid's outcome code in the words its wrap-up line gets: native offline stops, the mind's own and
+# a called raid night's ends. A code not listed reads neutrally; no code reaches the prompt raw.
+OUTCOME_WORDS = {
+    "cleared": "cleared it",
+    "cleared_reachable": "cleared every boss we could reach",
+    "timeout": "ran out of time",
+    "too_few": "too many people dropped out",
+    "leader_lost": "lost our raid leader",
+    "wipe_cap": "too many wipes",
+    "boss_wipe_cap": "kept wiping on one boss",
+    "dc_stalled": "kept getting stuck",
+    "dc_door_blocked": "got stuck at a door we couldn't open",
+    "dc_paused": "got stuck and couldn't go on",
+    "stalled": "got stuck before the next boss",
+    "stopped": "called it early",
+    "operator_stopped": "called it early",
+    "human_login": "called it early",
+    "logout": "the raid leader logged off",
+    "called": "called it for the night",
+    "lapsed": "the call lapsed",
+    "declined": "called it off",
+    "cancelled": "called it off",
+    "hangout": "turned it into a hangout",
+    "disbanded": "the group broke up",
+    "failed": "couldn't fill the raid",
+    "assemble_timeout": "never got everyone together",
+}
+OUTCOME_NEUTRAL = "the raid is over"
+
+
+def outcome_words(outcome) -> str:
+    return OUTCOME_WORDS.get(str(outcome), OUTCOME_NEUTRAL)
+
+
 def public_text(ports, text) -> str:
     """Clean game labels and configured identity before public callouts."""
     text = " ".join(strip_wow_markup(str(text)).split())

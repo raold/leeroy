@@ -16,6 +16,11 @@ class Armory(Protocol):
     def human_tier(self, guid) -> int: ...
     def name(self, guid) -> str | None: ...
     def bound_with(self, owner, map_id, guids) -> set[int]: ...
+    def saved_sizes(self, owner, map_id) -> set[int]: ...
+
+
+# A raid map's difficulty and its size: 10 and 25 normal, then 10 and 25 heroic.
+RAID_SIZES = {0: 10, 1: 25, 2: 10, 3: 25}
 
 
 def _id(value) -> int:
@@ -165,6 +170,22 @@ class MysqlArmory:
         if len(rows) != 1 or len(rows[0]) != 1:
             raise RosterError("character name result: invalid columns")
         return rows[0][0]
+
+    def saved_sizes(self, owner, map_id) -> set[int]:
+        """The raid sizes (10, 25) owner holds a permanent save for on map_id this lockout week: the
+        saves his add command reads. The weekly reset deletes expired rows; an extended save stays."""
+        owner, map_id = _id(owner), _id(map_id)
+        sql = ("SELECT DISTINCT i.difficulty FROM character_instance ci JOIN instance i ON i.id = ci.instance "
+               f"WHERE ci.guid = {owner} AND ci.permanent = 1 AND i.map = {map_id}")
+        sizes = set()
+        for number, row in enumerate(run_mysql(self.chars, sql, self.mysql_exe), 1):
+            try:
+                if len(row) != 1:
+                    raise ValueError("invalid save row")
+                sizes.add(RAID_SIZES[_numeric(row[0])])
+            except (TypeError, ValueError, KeyError):
+                raise RosterError(f"save row {number}: invalid columns") from None
+        return sizes
 
     def bound_with(self, owner, map_id, guids) -> set[int]:
         """The guids saved, at any difficulty, to a copy of map_id that owner is saved to."""

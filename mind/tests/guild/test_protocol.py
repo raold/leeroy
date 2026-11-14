@@ -55,7 +55,7 @@ def test_all_job_fixtures_round_trip_typed_nested_fields():
         assert type(ev) is Job
         assert type(ev.guids) is tuple and type(ev.skipped) is tuple
         assert all(type(skip) is JobSkip for skip in ev.skipped)
-        expected = dict(members_in_instance=None, last_progress_ts=None, boss_engaged=None)
+        expected = dict(members_in_instance=None, last_progress_ts=None, boss_engaged=None, dc_state=None)
         expected.update({key: value for key, value in msg.items() if key not in ("v", "type")})
         assert json.loads(json.dumps(dataclasses.asdict(ev))) == expected
 
@@ -174,14 +174,14 @@ def test_job_progress_optional_fields_round_trip_and_old_native_defaults():
     register()
     msg = lines(kind="event")[0]["msg"]
     old = bridge.parse_event(json.dumps(msg))
-    assert old.members_in_instance is old.last_progress_ts is old.boss_engaged is None
+    assert old.members_in_instance is old.last_progress_ts is old.boss_engaged is old.dc_state is None
     msg.update(members_in_instance=0, last_progress_ts=123, boss_engaged=False)
     ev = bridge.parse_event(json.dumps(msg))
     assert (ev.members_in_instance, ev.last_progress_ts, ev.boss_engaged) == (0, 123, False)
 
 
 @pytest.mark.parametrize(('field', 'value'), [('members_in_instance', True),
-    ('last_progress_ts', 1.5), ('boss_engaged', 0)])
+    ('last_progress_ts', 1.5), ('boss_engaged', 0), ('dc_state', 1)])
 def test_job_progress_fields_are_strictly_typed(field, value):
     register()
     msg = lines(kind="event")[0]["msg"]
@@ -207,3 +207,4 @@ def test_offline_raid_heartbeat_fixture_parses_with_progress_fields():
     ev = bridge.parse_event(json.dumps(row["msg"]))
     assert (ev.kind, ev.state, ev.stage, ev.kills, ev.instance_id) == ("offline_raid", "progress", "running", 1, 77)
     assert (ev.members_in_instance, ev.last_progress_ts, ev.boss_engaged) == (2, 1700000000000, False)
+    assert ev.dc_state == "door"

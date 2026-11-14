@@ -227,3 +227,28 @@ def test_bound_with_reads_only_the_owners_copies_of_that_map(monkeypatch):
     for args in (("1", 631, [1101]), (1, 0, [1101]), (1, 631, [True])):
         with pytest.raises(ValueError, match="uint32"):
             armory.bound_with(*args)
+
+
+def test_saved_sizes_reads_only_the_owners_permanent_saves_of_that_map(monkeypatch):
+    chars, world = databases()
+    seen = []
+
+    def query(db, sql, exe):
+        seen.append((db, sql))
+        return [["1"], ["2"], ["3"]]
+
+    monkeypatch.setattr(module, "run_mysql", query)
+    armory = MysqlArmory(chars, world, Path("mysql.exe"))
+    assert armory.saved_sizes(1, 533) == {10, 25}
+    [(db, sql)] = seen
+    assert db is chars and sql.startswith("SELECT DISTINCT i.difficulty FROM character_instance ci ")
+    assert sql.endswith("WHERE ci.guid = 1 AND ci.permanent = 1 AND i.map = 533")
+    monkeypatch.setattr(module, "run_mysql", lambda *a: [])
+    assert armory.saved_sizes(1, 533) == set()
+    for rows in ([["7"]], [["x"]], [["1", "2"]]):
+        monkeypatch.setattr(module, "run_mysql", lambda *a, rows=rows: rows)
+        with pytest.raises(RosterError, match="save row 1"):
+            armory.saved_sizes(1, 533)
+    for args in (("1", 533), (1, 0), (True, 533)):
+        with pytest.raises(ValueError, match="uint32"):
+            armory.saved_sizes(*args)
