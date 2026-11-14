@@ -2,8 +2,8 @@
 #include "LeeroyHazardPolicy.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
+#include <tuple>
 #include <utility>
 
 namespace Leeroy::Guild
@@ -20,13 +20,16 @@ struct LargeHazard
 // Citadel, Obsidian Sanctum, Eye of Eternity, Vault of Archavon): the ground hazards between 15 and 35 yards
 // that a player walks out of. The others in that band are boss-centred, a vehicle phase, a jet line or a
 // sweeping orb (see the README).
-constexpr std::array<LargeHazard, 5> kLargeHazards{{
+constexpr std::array<LargeHazard, 6> kLargeHazards{{
     {28241, LargeHazardRadius::CasterReach}, // Poison, Grobbulus's cloud: hits within the cloud's growing reach
+    {54363, LargeHazardRadius::CasterReach}, // its 25-man version (aura 54362, the difficulty twin of 28158)
     {69789, LargeHazardRadius::Spell},       // Ooze Flood, Rotface's flooded corner (25 yards)
     {71215, LargeHazardRadius::Spell},       // its 25-man and heroic versions
     {71587, LargeHazardRadius::Spell},
     {71588, LargeHazardRadius::Spell},
 }};
+
+float constexpr kPi = 3.14159265358979f;
 
 float Distance2d(HazardPoint a, float x, float y)
 {
@@ -37,56 +40,27 @@ bool SameFloor(HazardPoint p, HazardZone const& zone)
 {
     return std::fabs(p.z - zone.z) <= kHazardHeightYards;
 }
+
+// Where along a -> b the zone's centre projects (0..1), and how far the segment passes from it.
+std::pair<float, float> Closest(HazardPoint a, HazardPoint b, HazardZone const& zone)
+{
+    float const dx = b.x - a.x;
+    float const dy = b.y - a.y;
+    float const length2 = dx * dx + dy * dy;
+    float t = length2 > 0.0001f ? ((zone.x - a.x) * dx + (zone.y - a.y) * dy) / length2 : 0.0f;
+    t = std::clamp(t, 0.0f, 1.0f);
+    return {t, std::hypot(a.x + t * dx - zone.x, a.y + t * dy - zone.y)};
 }
 
-std::optional<LargeHazardRadius> LargeHazardRule(std::uint32_t spellId)
+bool Crosses(HazardPoint a, HazardPoint b, HazardZone const& zone, float reach)
 {
-    for (auto const& hazard : kLargeHazards)
-        if (hazard.spell == spellId)
-            return hazard.radius;
-    return std::nullopt;
+    return (SameFloor(a, zone) || SameFloor(b, zone)) && Closest(a, b, zone).second <= zone.radius + reach;
 }
 
-float HazardAvoidRadius(std::uint32_t spellId, float spellRadius, float casterReach, float stockCap,
-    bool whitelisted)
+// Every clear spot near p with its shift, nearest first, then nearest `toward`.
+std::vector<std::pair<float, HazardPoint>> ClearCandidates(HazardPoint p, HazardPoint toward,
+    std::vector<HazardZone> const& zones, float reach)
 {
-    if (whitelisted)
-        return 0.0f;
-    if (auto const rule = LargeHazardRule(spellId))
-    {
-        float const radius = *rule == LargeHazardRadius::CasterReach ? casterReach : spellRadius;
-        return radius > 0.0f && radius <= kHazardLargeCapYards ? radius : 0.0f;
-    }
-    return spellRadius > 0.0f && spellRadius <= stockCap ? spellRadius : 0.0f;
-}
-
-bool InHazard(HazardPoint p, HazardZone const& zone, float reach)
-{
-    return SameFloor(p, zone) && Distance2d(p, zone.x, zone.y) <= zone.radius + reach;
-}
-
-std::optional<std::size_t> HazardAt(HazardPoint p, std::vector<HazardZone> const& zones, float reach)
-{
-    for (std::size_t i = 0; i < zones.size(); ++i)
-        if (InHazard(p, zones[i], reach))
-            return i;
-    return std::nullopt;
-}
-
-bool HazardClear(HazardPoint p, std::vector<HazardZone> const& zones, float reach)
-{
-    for (auto const& zone : zones)
-        if (SameFloor(p, zone) && Distance2d(p, zone.x, zone.y) < zone.radius + reach + kHazardMarginYards)
-            return false;
-    return true;
-}
-
-std::vector<HazardPoint> HazardSafeSpots(HazardPoint p, HazardPoint toward, std::vector<HazardZone> const& zones,
-    float reach, std::size_t limit)
-{
-    if (limit == 0 || HazardClear(p, zones, reach))
-        return {};
-
     std::vector<HazardPoint> candidates;
     // Straight out of each zone p is in, the shortest way: usually the answer.
     for (auto const& zone : zones)
@@ -113,31 +87,206 @@ std::vector<HazardPoint> HazardSafeSpots(HazardPoint p, HazardPoint toward, std:
         candidates.push_back({zone.x + dx / length * out, zone.y + dy / length * out, p.z});
     }
     // Overlapping zones: rings around p.
-    float constexpr pi = 3.14159265358979f;
     for (float ring = kHazardRingStepYards; ring <= kHazardMaxShiftYards + 0.001f; ring += kHazardRingStepYards)
         for (int k = 0; k < kHazardRingDirections; ++k)
         {
-            float const angle = 2.0f * pi * static_cast<float>(k) / static_cast<float>(kHazardRingDirections);
+            float const angle = 2.0f * kPi * static_cast<float>(k) / static_cast<float>(kHazardRingDirections);
             candidates.push_back({p.x + ring * std::cos(angle), p.y + ring * std::sin(angle), p.z});
         }
 
-    std::vector<std::pair<std::pair<float, float>, HazardPoint>> clear;
+    std::vector<std::tuple<float, float, HazardPoint>> clear;
     for (auto const& c : candidates)
     {
         float const shift = Distance2d(p, c.x, c.y);
         if (shift <= kHazardMaxShiftYards + 0.001f && HazardClear(c, zones, reach))
-            clear.push_back({{shift, Distance2d(toward, c.x, c.y)}, c});
+            clear.emplace_back(shift, Distance2d(toward, c.x, c.y), c);
     }
-    std::stable_sort(clear.begin(), clear.end(),
-        [](auto const& a, auto const& b) { return a.first < b.first; });
-    std::vector<HazardPoint> spots;
+    std::stable_sort(clear.begin(), clear.end(), [](auto const& a, auto const& b)
+        { return std::tie(std::get<0>(a), std::get<1>(a)) < std::tie(std::get<0>(b), std::get<1>(b)); });
+    std::vector<std::pair<float, HazardPoint>> sorted;
+    sorted.reserve(clear.size());
     for (auto const& entry : clear)
+        sorted.emplace_back(std::get<0>(entry), std::get<2>(entry));
+    return sorted;
+}
+}
+
+std::optional<LargeHazardRadius> LargeHazardRule(std::uint32_t spellId)
+{
+    for (auto const& hazard : kLargeHazards)
+        if (spellId && hazard.spell == spellId)
+            return hazard.radius;
+    return std::nullopt;
+}
+
+std::optional<LargeHazardRadius> LargeHazardRule(HazardSpellIds const& ids)
+{
+    for (std::uint32_t id : ids)
+        if (auto const rule = LargeHazardRule(id))
+            return rule;
+    return std::nullopt;
+}
+
+float HazardAvoidRadius(HazardSpellIds const& ids, float spellRadius, float casterReach, float stockCap,
+    bool whitelisted)
+{
+    if (whitelisted)
+        return 0.0f;
+    if (auto const rule = LargeHazardRule(ids))
+    {
+        float const radius = *rule == LargeHazardRadius::CasterReach ? casterReach : spellRadius;
+        return radius > 0.0f && radius <= kHazardLargeCapYards ? radius : 0.0f;
+    }
+    return spellRadius > 0.0f && spellRadius <= stockCap ? spellRadius : 0.0f;
+}
+
+float HazardTriggerZoneRadius(HazardSpellIds const& ids, float spellRadius, float unitReach, float stockCap,
+    bool whitelisted)
+{
+    float const radius = HazardAvoidRadius(ids, spellRadius, unitReach, stockCap, whitelisted);
+    if (radius <= 0.0f || LargeHazardRule(ids) == LargeHazardRadius::CasterReach)
+        return radius;
+    return radius + unitReach;
+}
+
+bool InHazard(HazardPoint p, HazardZone const& zone, float reach)
+{
+    return SameFloor(p, zone) && Distance2d(p, zone.x, zone.y) <= zone.radius + reach;
+}
+
+std::optional<std::size_t> HazardAt(HazardPoint p, std::vector<HazardZone> const& zones, float reach)
+{
+    for (std::size_t i = 0; i < zones.size(); ++i)
+        if (InHazard(p, zones[i], reach))
+            return i;
+    return std::nullopt;
+}
+
+bool HazardClear(HazardPoint p, std::vector<HazardZone> const& zones, float reach)
+{
+    for (auto const& zone : zones)
+        if (SameFloor(p, zone) && Distance2d(p, zone.x, zone.y) < zone.radius + reach + kHazardMarginYards)
+            return false;
+    return true;
+}
+
+bool HazardSegmentClear(HazardPoint a, HazardPoint b, std::vector<HazardZone> const& zones, float reach)
+{
+    for (auto const& zone : zones)
+        if (Crosses(a, b, zone, reach))
+            return false;
+    return true;
+}
+
+std::vector<HazardPoint> HazardSafeSpots(HazardPoint p, HazardPoint toward, std::vector<HazardZone> const& zones,
+    float reach, std::size_t limit)
+{
+    if (limit == 0 || HazardClear(p, zones, reach))
+        return {};
+    std::vector<HazardPoint> spots;
+    for (auto const& entry : ClearCandidates(p, toward, zones, reach))
     {
         if (spots.size() == limit)
             break;
         spots.push_back(entry.second);
     }
     return spots;
+}
+
+std::vector<HazardPoint> HazardExitSpots(HazardPoint at, std::optional<HazardPoint> goal, HazardPoint toward,
+    std::vector<HazardZone> const& zones, float reach, std::size_t limit)
+{
+    if (limit == 0 || HazardClear(at, zones, reach))
+        return {};
+    std::vector<std::tuple<float, float, HazardPoint>> ranked;
+    for (auto const& [shift, spot] : ClearCandidates(at, toward, zones, reach))
+    {
+        bool const hisSide = !goal || HazardSegmentClear(spot, *goal, zones, reach);
+        ranked.emplace_back(shift + (hisSide ? 0.0f : kHazardSideSlackYards), Distance2d(toward, spot.x, spot.y),
+            spot);
+    }
+    std::stable_sort(ranked.begin(), ranked.end(), [](auto const& a, auto const& b)
+        { return std::tie(std::get<0>(a), std::get<1>(a)) < std::tie(std::get<0>(b), std::get<1>(b)); });
+    std::vector<HazardPoint> spots;
+    for (auto const& entry : ranked)
+    {
+        if (spots.size() == limit)
+            break;
+        spots.push_back(std::get<2>(entry));
+    }
+    return spots;
+}
+
+std::vector<HazardPoint> HazardDetour(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones,
+    float reach)
+{
+    if (HazardAt(from, zones, reach) || HazardSegmentClear(from, goal, zones, reach))
+        return {};
+    HazardZone const* first = nullptr;
+    float firstT = 2.0f;
+    for (auto const& zone : zones)
+    {
+        if (!Crosses(from, goal, zone, reach))
+            continue;
+        float const t = Closest(from, goal, zone).first;
+        if (t < firstT)
+        {
+            firstT = t;
+            first = &zone;
+        }
+    }
+    if (!first)
+        return {};
+
+    HazardZone const& zone = *first;
+    float const ring = zone.radius + reach + kHazardMarginYards + kHazardDetourOutsetYards;
+    float const fromAngle = std::atan2(from.y - zone.y, from.x - zone.x);
+    float delta = std::atan2(goal.y - zone.y, goal.x - zone.x) - fromAngle;
+    while (delta > kPi)
+        delta -= 2.0f * kPi;
+    while (delta <= -kPi)
+        delta += 2.0f * kPi;
+    float const maxStep = kHazardDetourMaxDegrees * kPi / 180.0f;
+    float const stepSize = kHazardDetourStepDegrees * kPi / 180.0f;
+
+    std::vector<HazardPoint> waypoints;
+    int const shorter = delta >= 0.0f ? 1 : -1;
+    for (int direction : {shorter, -shorter})
+    {
+        float const remaining = direction == shorter ? std::fabs(delta) : 2.0f * kPi - std::fabs(delta);
+        // The farthest round that a clear straight line still reaches.
+        for (float step = std::min(remaining, maxStep); step > 0.0f; step -= stepSize)
+        {
+            float const angle = fromAngle + static_cast<float>(direction) * step;
+            HazardPoint const waypoint{zone.x + ring * std::cos(angle), zone.y + ring * std::sin(angle), from.z};
+            if (HazardClear(waypoint, zones, reach) && HazardSegmentClear(from, waypoint, zones, reach))
+            {
+                waypoints.push_back(waypoint);
+                break;
+            }
+        }
+    }
+    return waypoints;
+}
+
+bool HazardExitYielded(HazardExitGuard const& guard, std::uint64_t zone, std::uint64_t now)
+{
+    return guard.zone == zone && now < guard.yieldUntil;
+}
+
+bool NoteHazardExit(HazardExitGuard& guard, std::uint64_t zone, std::uint64_t now)
+{
+    if (guard.zone != zone || now - guard.since > kHazardExitWindowMs)
+    {
+        guard = {zone, 1, now, 0};
+        return false;
+    }
+    if (++guard.exits < kHazardExitsPerWindow)
+        return false;
+    guard.exits = 0;
+    guard.since = now;
+    guard.yieldUntil = now + kHazardYieldMs;
+    return true;
 }
 
 bool HazardEligible(HazardMemberFacts const& facts)

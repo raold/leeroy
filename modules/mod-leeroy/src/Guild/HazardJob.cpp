@@ -6,6 +6,7 @@
 #include "CellImpl.h"
 #include "Config.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "DynamicObject.h"
 #include "GameObject.h"
 #include "GridNotifiers.h"
@@ -23,10 +24,12 @@
 #include "WorldSession.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <unordered_map>
 #include <utility>
@@ -89,8 +92,11 @@ struct Memo
 std::mutex memoLock;
 std::unordered_map<std::uint32_t, Memo> spotMemo;
 std::unordered_map<std::uint32_t, Memo> exitMemo;
+std::unordered_map<std::uint32_t, Memo> detourMemo; // asked: the follow goal; answer: the waypoint
+std::unordered_map<std::uint32_t, HazardExitGuard> exitGuards;
 std::set<std::uint32_t> spotMembers; // members whose follow spot moved, for the minute's summary
 std::set<std::uint32_t> exitMembers;
+std::set<std::uint32_t> detourMembers;
 
 MapKey KeyOf(Player* player) { return {player->GetMapId(), player->GetInstanceId()}; }
 
@@ -204,6 +210,22 @@ bool PeriodicDamageTrap(SpellInfo const* info)
     return false;
 }
 
+// The first (10-man or normal) difficulty version of a spell; 0 when it has no difficulty versions.
+std::uint32_t FirstVersion(std::uint32_t spellId)
+{
+    if (std::uint32_t const row = sSpellMgr->GetSpellDifficultyId(spellId))
+        if (SpellDifficultyEntry const* entry = sSpellDifficultyStore.LookupEntry(row))
+            for (int32 spell : entry->SpellID)
+                if (spell > 0)
+                    return static_cast<std::uint32_t>(spell);
+    return 0;
+}
+
+HazardSpellIds Ids(std::uint32_t spellId)
+{
+    return {spellId, FirstVersion(spellId), 0};
+}
+
 // The three kinds stock avoid aoe knows, measured as it measures them, around one scan centre.
 struct HazardScanner
 {
@@ -223,7 +245,8 @@ struct HazardScanner
     void Note(WorldObject const* object, float radius)
     {
         if (radius > 0.0f && seen.insert(object->GetGUID()).second)
-            zones.push_back({object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), radius});
+            zones.push_back({object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), radius,
+                object->GetGUID().GetRawValue()});
     }
 
     void Visit(DynamicObjectMapType& m)
@@ -237,7 +260,8 @@ struct HazardScanner
             Unit* caster = area->GetCaster();
             if (!info || info->IsPositive() || !caster || caster->IsFriendlyTo(reference) || !DamagingArea(info))
                 continue;
-            Note(area, HazardAvoidRadius(info->Id, area->GetRadius(), 0.0f, stockCap, whitelist.contains(info->Id)));
+            Note(area, HazardAvoidRadius(Ids(info->Id), area->GetRadius(), 0.0f, stockCap,
+                whitelist.contains(info->Id)));
         }
     }
 
@@ -258,7 +282,7 @@ struct HazardScanner
             if (!spell || spell->IsPositive() || !PeriodicDamageTrap(spell))
                 continue;
             float const radius = static_cast<float>(info->trap.diameter) / 2.0f + trap->GetCombatReach();
-            Note(trap, HazardAvoidRadius(spell->Id, radius, 0.0f, stockCap, whitelist.contains(spell->Id)));
+            Note(trap, HazardAvoidRadius(Ids(spell->Id), radius, 0.0f, stockCap, whitelist.contains(spell->Id)));
         }
     }
 
@@ -279,10 +303,14 @@ struct HazardScanner
                         aura ? sSpellMgr->GetSpellInfo(aura->Effects[effect->GetEffIndex()].TriggerSpell) : nullptr;
                     if (!trigger)
                         continue;
+                    // A 25-man aura (54362) triggers its own spell (54363): its 10-man twin's trigger names it too.
+                    SpellInfo const* firstAura = sSpellMgr->GetSpellInfo(FirstVersion(aura->Id));
+                    HazardSpellIds ids = Ids(trigger->Id);
+                    ids[2] = firstAura ? firstAura->Effects[effect->GetEffIndex()].TriggerSpell : 0;
                     for (std::uint8_t j = 0; j < MAX_SPELL_EFFECTS; ++j)
                         if (trigger->Effects[j].Effect == SPELL_EFFECT_SCHOOL_DAMAGE)
                         {
-                            radius = std::max(radius, HazardAvoidRadius(trigger->Id, trigger->Effects[j].CalcRadius(),
+                            radius = std::max(radius, HazardTriggerZoneRadius(ids, trigger->Effects[j].CalcRadius(),
                                 unit->GetCombatReach(), stockCap, whitelist.contains(trigger->Id)));
                             break;
                         }
@@ -301,7 +329,6 @@ struct HazardScanner
 void Publish(Player* owner, std::vector<Player*> const& aware, bool on)
 {
     auto next = std::make_shared<Snapshot>();
-    next->version = ++version;
     if (on && !aware.empty())
     {
         float const stockCap = sPlayerbotAIConfig.MaxAoeAvoidRadius;
@@ -341,10 +368,15 @@ void Publish(Player* owner, std::vector<Player*> const& aware, bool on)
     }
     {
         std::lock_guard<std::mutex> lock(memoLock);
-        std::erase_if(spotMemo, [&](auto const& item) { return !next->aware.contains(item.first); });
-        std::erase_if(exitMemo, [&](auto const& item) { return !next->aware.contains(item.first); });
+        auto const gone = [&](auto const& item) { return !next->aware.contains(item.first); };
+        std::erase_if(spotMemo, gone);
+        std::erase_if(exitMemo, gone);
+        std::erase_if(detourMemo, gone);
+        std::erase_if(exitGuards, gone);
     }
     std::lock_guard<std::mutex> lock(snapshotLock);
+    // A new version only when the zones changed, so the answers memoised against them hold between passes.
+    next->version = snapshot && snapshot->zones == next->zones ? snapshot->version : ++version;
     snapshot = std::move(next);
 }
 
@@ -352,22 +384,25 @@ void Summarise()
 {
     std::size_t spots = 0;
     std::size_t exits = 0;
+    std::size_t detours = 0;
     {
         std::lock_guard<std::mutex> lock(memoLock);
         spots = spotMembers.size();
         exits = exitMembers.size();
+        detours = detourMembers.size();
         spotMembers.clear();
         exitMembers.clear();
+        detourMembers.clear();
     }
     std::shared_ptr<Snapshot const> current;
     {
         std::lock_guard<std::mutex> lock(snapshotLock);
         current = snapshot;
     }
-    if (spots || exits)
-        LOG_INFO("module.leeroy", "hazards_minute aware={} zones={} spot_members={} exit_members={}",
+    if (spots || exits || detours)
+        LOG_INFO("module.leeroy", "hazards_minute aware={} zones={} spot_members={} detour_members={} exit_members={}",
             current ? current->aware.size() : std::size_t(0), current ? current->zoneCount : std::size_t(0), spots,
-            exits);
+            detours, exits);
 }
 
 #if LEEROY_HAS_HAZARD_FILTER
@@ -377,6 +412,12 @@ constexpr float kMemoYards = 0.5f;
 bool Close(HazardPoint a, HazardPoint b)
 {
     return std::hypot(a.x - b.x, a.y - b.y) < kMemoYards && std::fabs(a.z - b.z) < 2.0f;
+}
+
+std::uint64_t NowMs()
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
 // Map thread. The zones on the bot's map when the last pass found it aware, else null; `hold` keeps them alive.
@@ -401,9 +442,9 @@ std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shar
     return zones == hold->zones.end() || zones->second.empty() ? nullptr : &zones->second;
 }
 
-// The first candidate the navmesh reaches from `from` and that is still clear where it lands.
+// The first candidate the navmesh reaches from `from` along a straight line that stays out of every zone.
 bool FirstReachable(Player* bot, HazardPoint from, std::vector<HazardPoint> const& candidates,
-    std::vector<HazardZone> const& zones, float reach, HazardPoint& out)
+    std::vector<HazardZone> const& zones, float reach, bool lineMustBeClear, HazardPoint& out)
 {
     for (HazardPoint const& candidate : candidates)
     {
@@ -414,7 +455,8 @@ bool FirstReachable(Player* bot, HazardPoint from, std::vector<HazardPoint> cons
             continue;
         HazardPoint const landed{x, y, z};
         if (!HazardClear(landed, zones, reach)
-            || std::hypot(landed.x - from.x, landed.y - from.y) > kHazardMaxShiftYards)
+            || std::hypot(landed.x - from.x, landed.y - from.y) > kHazardMaxShiftYards
+            || (lineMustBeClear && !HazardSegmentClear(from, landed, zones, reach)))
             continue;
         out = landed;
         return true;
@@ -425,6 +467,8 @@ bool FirstReachable(Player* bot, HazardPoint from, std::vector<HazardPoint> cons
 class GroupHazardFilter final : public PlayerbotHazardFilter
 {
 public:
+    // The formation spot moved off a hazard (the goal), then, while the straight walk to it would cross one, a
+    // waypoint round it: follow never walks the bot through a hazard to reach him.
     bool SafeFollowSpot(Player* bot, float& x, float& y, float& z) override
     {
         PlayerbotAI* ai = nullptr;
@@ -433,33 +477,44 @@ public:
         if (!zones)
             return false;
         std::uint32_t const guid = bot->GetGUID().GetCounter();
+        float const reach = bot->GetCombatReach();
         HazardPoint const spot{x, y, z};
-        Memo memo{hold->version, spot, false, spot};
+        HazardPoint const at = PointOf(bot);
+
+        Memo goal{hold->version, spot, false, spot};
         bool known = false;
         {
             std::lock_guard<std::mutex> lock(memoLock);
             auto const found = spotMemo.find(guid);
             if (found != spotMemo.end() && found->second.version == hold->version && Close(found->second.asked, spot))
             {
-                memo = found->second;
+                goal = found->second;
                 known = true;
             }
         }
         if (!known)
         {
-            float const reach = bot->GetCombatReach();
-            auto const candidates = HazardSafeSpots(spot, PointOf(bot), *zones, reach, kCandidates);
-            memo.moved = !candidates.empty() && FirstReachable(bot, spot, candidates, *zones, reach, memo.answer);
+            auto const candidates = HazardSafeSpots(spot, at, *zones, reach, kCandidates);
+            goal.moved =
+                !candidates.empty() && FirstReachable(bot, spot, candidates, *zones, reach, false, goal.answer);
             std::lock_guard<std::mutex> lock(memoLock);
-            spotMemo[guid] = memo;
-            if (memo.moved)
+            spotMemo[guid] = goal;
+            if (goal.moved)
                 spotMembers.insert(guid);
         }
-        if (!memo.moved)
+
+        HazardPoint target = goal.answer;
+        bool changed = goal.moved;
+        if (auto const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, hold->version))
+        {
+            target = *waypoint;
+            changed = true;
+        }
+        if (!changed)
             return false;
-        x = memo.answer.x;
-        y = memo.answer.y;
-        z = memo.answer.z;
+        x = target.x;
+        y = target.y;
+        z = target.z;
         return true;
     }
 
@@ -473,38 +528,56 @@ public:
         std::uint32_t const guid = bot->GetGUID().GetCounter();
         float const reach = bot->GetCombatReach();
         HazardPoint const at = PointOf(bot);
-        if (!HazardAt(at, *zones, reach))
+        auto const inside = HazardAt(at, *zones, reach);
+        if (!inside)
         {
             std::lock_guard<std::mutex> lock(memoLock);
             exitMemo.erase(guid);
             return false;
         }
+        std::uint64_t const zone = (*zones)[*inside].id;
+        std::uint64_t const now = NowMs();
+
         Memo memo{hold->version, at, false, at};
+        std::optional<HazardPoint> goal;
         bool known = false;
+        bool yielded = false;
         {
             std::lock_guard<std::mutex> lock(memoLock);
+            HazardExitGuard& guard = exitGuards[guid];
             auto const found = exitMemo.find(guid);
-            if (found != exitMemo.end())
+            if (HazardExitYielded(guard, zone, now))
+                yielded = true;
+            else if (found != exitMemo.end() && found->second.moved && HazardClear(found->second.answer, *zones, reach)
+                && std::hypot(found->second.answer.x - at.x, found->second.answer.y - at.y) <= kHazardMaxShiftYards)
             {
-                Memo const& last = found->second;
-                // Keep walking to the exit already chosen while it stays clear: no new path every tick.
-                if (last.moved && HazardClear(last.answer, *zones, reach)
-                    && std::hypot(last.answer.x - at.x, last.answer.y - at.y) <= kHazardMaxShiftYards)
-                {
-                    memo = last;
-                    known = true;
-                }
-                else if (!last.moved && last.version == hold->version && Close(last.asked, at))
-                    known = true; // nothing reachable a moment ago
+                memo = found->second; // keep walking to the exit already chosen: no new path every tick
+                known = true;
             }
+            else if (found != exitMemo.end() && !found->second.moved && found->second.version == hold->version
+                && Close(found->second.asked, at))
+                known = true; // nothing reachable a moment ago
+            else if (NoteHazardExit(guard, zone, now))
+            {
+                yielded = true;
+                LOG_INFO("module.leeroy", "hazard_exit_yield guid={} entries={}", guid, kHazardExitsPerWindow);
+            }
+            if (yielded)
+                exitMemo.erase(guid);
+            // Out of combat: his side is the side of the follow goal the last follow tick chose.
+            if (auto const spot = spotMemo.find(guid); !known && !yielded && spot != spotMemo.end()
+                && ai->GetState() == BOT_STATE_NON_COMBAT)
+                goal = spot->second.answer;
         }
+        if (yielded)
+            return false;
         if (!known)
         {
-            HazardPoint toward = at;
-            if (Player* master = ai->GetMaster(); master && master->IsInMap(bot))
+            HazardPoint toward = goal.value_or(at);
+            if (Player* master = ai->GetMaster(); !goal && master && master->IsInMap(bot))
                 toward = PointOf(master);
-            auto const candidates = HazardSafeSpots(at, toward, *zones, reach, kCandidates);
-            memo.moved = !candidates.empty() && FirstReachable(bot, at, candidates, *zones, reach, memo.answer);
+            auto const candidates = HazardExitSpots(at, goal, toward, *zones, reach, kCandidates);
+            memo.moved = !candidates.empty() && FirstReachable(bot, at, candidates, *zones, reach, false, memo.answer);
             std::lock_guard<std::mutex> lock(memoLock);
             exitMemo[guid] = memo;
             if (memo.moved)
@@ -516,6 +589,35 @@ public:
         y = memo.answer.y;
         z = memo.answer.z;
         return true;
+    }
+
+private:
+    // A waypoint round the hazard in the way, kept until the bot is near it; nullopt when the way is clear.
+    static std::optional<HazardPoint> Detour(Player* bot, std::uint32_t guid, HazardPoint at, HazardPoint goal,
+        std::vector<HazardZone> const& zones, float reach, std::uint64_t zonesVersion)
+    {
+        float const reached = std::max(2.5f, sPlayerbotAIConfig.FollowDistance + 1.0f);
+        {
+            std::lock_guard<std::mutex> lock(memoLock);
+            auto const found = detourMemo.find(guid);
+            if (found != detourMemo.end())
+            {
+                Memo const& last = found->second;
+                if (last.version == zonesVersion && Close(last.asked, goal)
+                    && std::hypot(last.answer.x - at.x, last.answer.y - at.y) > reached
+                    && HazardSegmentClear(at, last.answer, zones, reach))
+                    return last.answer;
+                detourMemo.erase(found);
+            }
+        }
+        auto const waypoints = HazardDetour(at, goal, zones, reach);
+        HazardPoint waypoint;
+        if (waypoints.empty() || !FirstReachable(bot, at, waypoints, zones, reach, true, waypoint))
+            return std::nullopt; // clear, standing in one (the exit's job), or no way round: straight as stock
+        std::lock_guard<std::mutex> lock(memoLock);
+        detourMemo[guid] = Memo{zonesVersion, goal, true, waypoint};
+        detourMembers.insert(guid);
+        return waypoint;
     }
 };
 #endif
