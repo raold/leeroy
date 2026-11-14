@@ -39,6 +39,8 @@ def boss_lines(boss: Boss, difficulty: str | None) -> list[str]:
     lines = [head + (f" enrage {enrage:g}s" if enrage else "")]
     if boss.call:
         lines.append(f"  call: {boss.call}")
+    if boss.heroic_call:
+        lines.append(f"  heroic call: {boss.heroic_call}")
     lines.append("  phases: " + ", ".join(p.id for p in boss.phases))
     for m in boss.mechanics:
         if difficulty and not m.applies(difficulty):
@@ -68,7 +70,10 @@ def boss_only(boss: Boss) -> tuple[str, ...]:
 def boss_json(boss: Boss, difficulty: str | None) -> dict:
     return {"map": boss.map_id, "index": boss.index, "name": boss.name, "slug": boss.slug,
             "creatures": list(boss.creatures), "enrage": dict(boss.enrage), "call": boss.call,
-            "melee_behind": boss.melee_behind, "phases": [p.__dict__ for p in boss.phases],
+            "heroic_call": boss.heroic_call,
+            "melee_behind": boss.melee_behind,
+            "phases": [{"id": p.id, "name": p.name, "hp_below": p.hp_below, "after": dict(p.after)}
+                       for p in boss.phases],
             "mechanics": [{"id": m.id, "name": m.name, "kind": m.kind, "phase": list(m.phase),
                            "roles": list(m.roles), "only": list(m.only), "handled_by": m.handled_by,
                            "playerbots": list(m.playerbots), "handled_note": m.handled_note,

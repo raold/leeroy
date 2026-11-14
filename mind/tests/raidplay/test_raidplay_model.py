@@ -68,6 +68,8 @@ def test_playbook_for_resolves_a_training_context():
     assert raidplay.playbook_for(631, 99, 0) is None
     assert raidplay.mechanic("nope") is None
     assert raidplay.load().check("icc.marrowgar.check_avoid_coldflame").tag == "coldflame"
+    air = raidplay.load().boss(631, 8).phases[1]
+    assert air.id == "air" and dict(air.after) == {"10": 124, "25": 127, "10h": 124, "25h": 127}
 
 
 def test_lookup_by_spell_covers_every_difficulty():

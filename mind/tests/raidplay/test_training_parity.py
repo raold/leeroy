@@ -4,7 +4,8 @@ compared with literal copies taken before the playbooks replaced them."""
 
 from dataclasses import replace
 
-from leeroy_mind.guild.boss_calls import BOSS_CALLS, BossCall, call_for
+from leeroy_mind import raidplay
+from leeroy_mind.guild.boss_calls import BOSS_CALLS, HEROIC_CALLS, BossCall, call_for
 from leeroy_mind.training import protocol as p
 from leeroy_mind.training.checks import CHECKS_VERSION, PLAYBOOK_CHECKS_VERSION, run_checks
 from leeroy_mind.training.config import TrainingConfig
@@ -111,10 +112,28 @@ def test_playbooks_add_rows_after_the_originals():
     assert watch_names(True) == ("Inoculated",)
 
 
-def test_the_stock_calls_are_unchanged():
-    assert BOSS_CALLS == OLD_BOSS_CALLS
+# The one intended change (ruling, 2026-11-14): on normal the volcano and portal cannot be targeted.
+JARAXXUS_NORMAL = BossCall("jaraxxus: interrupt, dodge eruptions, kill the mistress")
+
+
+def test_the_stock_calls_are_unchanged_but_jaraxxus():
     assert list(BOSS_CALLS) == list(OLD_BOSS_CALLS)
+    assert {k: v for k, v in BOSS_CALLS.items() if k != (649, 1)} == {
+        k: v for k, v in OLD_BOSS_CALLS.items() if k != (649, 1)}
+    assert BOSS_CALLS[649, 1] == JARAXXUS_NORMAL
+    assert dict(HEROIC_CALLS) == {(649, 1): OLD_BOSS_CALLS[649, 1]}
     assert call_for(533, "Patchwerk")[1].pre == "Patchwerk next. drink up, then on the tank"
+
+
+def test_the_jaraxxus_call_follows_the_difficulty():
+    calls = {d: call_for(649, "Lord Jaraxxus", d)[1].pre for d in (None, 0, 1, 2, 3)}
+    assert calls[None] == calls[0] == calls[1] == "jaraxxus: interrupt, dodge eruptions, kill the mistress"
+    assert calls[2] == calls[3] == "jaraxxus: interrupt, kill portals and volcanoes"
+    for key, old in OLD_BOSS_CALLS.items():
+        if key != (649, 1):
+            name = raidplay.load().boss(*key).name
+            assert {call_for(key[0], name, d)[1] for d in (None, 0, 1, 2, 3)} == {old}
+    assert raidplay.load().boss(649, 1).call_at("25h") == "jaraxxus: interrupt, kill portals and volcanoes"
 
 
 class Book:
@@ -173,13 +192,15 @@ def test_the_switch_is_off_by_default():
 def test_calls_fall_back_to_the_old_values_when_the_data_cannot_load(monkeypatch, caplog):
     from leeroy_mind import raidplay
     from leeroy_mind.guild import boss_calls
-    assert boss_calls._FALLBACK == dict(BOSS_CALLS) == OLD_BOSS_CALLS
+    assert boss_calls._FALLBACK == dict(BOSS_CALLS) == OLD_BOSS_CALLS | {(649, 1): JARAXXUS_NORMAL}
+    assert boss_calls._FALLBACK_HEROIC == dict(boss_calls.HEROIC_CALLS)
 
     def broken():
         raise raidplay.PlaybookError("invented failure")
     monkeypatch.setattr(raidplay, "load", broken)
-    calls = boss_calls._Calls()
+    calls, heroic = boss_calls._Calls(), boss_calls._Calls(heroic=True)
     with caplog.at_level("WARNING"):
-        assert dict(calls) == OLD_BOSS_CALLS and len(calls) == 18
+        assert dict(calls) == boss_calls._FALLBACK and len(calls) == 18
         assert calls[631, 0].pre.startswith("marrowgar")
-    assert [r.getMessage() for r in caplog.records] == ["boss_calls_fallback error=PlaybookError"]
+        assert dict(heroic) == boss_calls._FALLBACK_HEROIC
+    assert [r.getMessage() for r in caplog.records] == ["boss_calls_fallback error=PlaybookError"] * 2

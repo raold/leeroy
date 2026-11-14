@@ -167,7 +167,7 @@ spells = [71289]
 only = ["25", "10h", "25h"]
 handled_by = "partial"
 playerbots = ["icc adds lady deathwhisper"]
-handled_note = "a druid bot cyclones the dominated player; without a druid nothing does"
+handled_note = "the stock action puts Cyclone on a dominated player or bot (no class needed); not verified that a charmed bot's own AI still runs it"
 explain = "She mind controls a player; crowd control or break it rather than killing them."
 check = "icc.deathwhisper.check_dominate_mind"
 first = 30
@@ -901,7 +901,7 @@ enrage = 330
 call = "blood queen: spread, bite on time, take swarm out"
 phase = [
   { id = "ground", name = "Ground phase" },
-  { id = "air", name = "Air phase: Bloodbolt Whirl (127 s on 25-man)", after = 124 },
+  { id = "air", name = "Air phase: Bloodbolt Whirl", after = { "10" = 124, "25" = 127 } },
 ]
 
 [[boss.mechanic]]

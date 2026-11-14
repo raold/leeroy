@@ -437,7 +437,7 @@ roles = ["tank", "melee", "ranged"]
 spells = []
 handled_by = "none"
 adds = [16573, 29256]
-explain = "A crypt guard joins three seconds after each Locust Swarm (and one early on 10-man); an off-tank takes it and the raid kills it away from the swarm path."
+explain = "On 25-man two crypt guards are there at the pull (10-man gets one after 18 s), and another joins 3 s after each Locust Swarm; an off-tank holds them off the swarm path."
 check = "naxx.anubrekhan.check_adds"
 
 [[boss.check]]

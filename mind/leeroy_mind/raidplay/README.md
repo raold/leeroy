@@ -35,7 +35,9 @@ are written in our own words. Per-difficulty spell ids follow the core's spell d
 licence does not fit); see the DBM facts below.
 
 Per boss: `index`, `name` (must equal `wow.BOSS_NAMES`), `slug`, `creatures`, `script`,
-`enrage` (seconds), `phase` list, optional `call` and `lust` (the stock pre-pull call), and
+`enrage` (seconds), `phase` list (each with an optional `hp_below` and an `after` in seconds, a value
+or a per-difficulty table), optional `call` and `lust` (the stock pre-pull call) and `heroic_call`
+(the call on heroic when it must differ), and
 `melee_behind = false` with `no_behind_since` for bosses whose melee are not scored for standing
 behind the boss.
 
@@ -124,7 +126,12 @@ the mechanics' `hits` carry the ids that land.
 ## Raid lead calls
 
 `guild/boss_calls.py`'s `BOSS_CALLS` is read from each boss's `call` and `lust` on first use;
-`call_for` is unchanged. The 18 ICC and Trial of the Crusader calls moved here verbatim;
+`call_for(map, name, difficulty=None)` picks a boss's `heroic_call` (kept in `HEROIC_CALLS`)
+when a caller names a heroic difficulty (2 or 3). The 18 ICC and Trial of the Crusader calls moved
+here verbatim, except Lord Jaraxxus (ruling, 2026-11-14): his volcano and portal cannot be targeted
+on normal, so his call is now "jaraxxus: interrupt, dodge eruptions, kill the mistress" and
+the old "kill portals and volcanoes" is his heroic call. Callers that pass no difficulty (today's
+raid lead and stock cards) get the normal call, which is safe on heroic too;
 Naxxramas bosses have no call yet, so they keep the generic one. If the playbook data cannot be
 read, `BOSS_CALLS` falls back to those 18 calls as they were (log `boss_calls_fallback`, once)
 so guild life never fails with it; a test keeps the two equal.

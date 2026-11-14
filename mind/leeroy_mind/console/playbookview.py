@@ -14,6 +14,7 @@ def playbook_view() -> dict:
         for boss in raid.bosses:
             bosses.append({
                 "index": boss.index, "name": boss.name, "slug": boss.slug, "call": boss.call,
+                "heroic_call": boss.heroic_call,
                 "enrage": sorted(set(boss.enrage.values())),
                 "phases": [p.name for p in boss.phases],
                 "mechanics": [{"id": m.id, "name": m.name, "kind": m.kind, "roles": list(m.roles),

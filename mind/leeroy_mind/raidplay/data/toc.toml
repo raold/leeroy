@@ -189,7 +189,8 @@ slug = "jaraxxus"
 creatures = [34780]
 script = "boss_lord_jaraxxus.cpp"
 enrage = 600
-call = "jaraxxus: interrupt, kill portals and volcanoes"
+call = "jaraxxus: interrupt, dodge eruptions, kill the mistress"
+heroic_call = "jaraxxus: interrupt, kill portals and volcanoes"
 phase = [{ id = "main", name = "Main fight" }]
 
 [[boss.mechanic]]

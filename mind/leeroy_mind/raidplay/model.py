@@ -77,7 +77,7 @@ class Phase:
     id: str
     name: str
     hp_below: int | None = None
-    after: float | None = None
+    after: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))  # by difficulty
 
 
 @dataclass(frozen=True)
@@ -156,6 +156,7 @@ class Boss:
     melee_behind: bool
     no_behind_since: int | None
     call: str | None
+    heroic_call: str | None
     lust: bool
     phases: tuple[Phase, ...]
     mechanics: tuple[Mechanic, ...]
@@ -164,6 +165,10 @@ class Boss:
     @property
     def key(self) -> tuple[int, int]:
         return self.map_id, self.index
+
+    def call_at(self, difficulty: str) -> str | None:
+        """The stock pre-pull call for a difficulty: the heroic call on heroic when there is one."""
+        return self.heroic_call if difficulty.endswith("h") and self.heroic_call else self.call
 
 
 @dataclass(frozen=True)
@@ -409,7 +414,7 @@ def _boss(raw, where: str, raid_key: str, map_id: int, diffs: tuple[str, ...]) -
     if not isinstance(raw, dict):
         _fail(where, "expected a table")
     _known(raw, {"index", "name", "slug", "creatures", "script", "enrage", "melee_behind",
-                 "no_behind_since", "call", "lust", "phase", "mechanic", "check"}, where)
+                 "no_behind_since", "call", "heroic_call", "lust", "phase", "mechanic", "check"}, where)
     index = _int(raw.get("index"), f"{where}.index", 0, 255)
     name = _text(raw.get("name"), f"{where}.name", limit=80)
     known = BOSS_NAMES.get((map_id, index))
@@ -429,6 +434,11 @@ def _boss(raw, where: str, raid_key: str, map_id: int, diffs: tuple[str, ...]) -
     call = raw.get("call")
     if call is not None:
         _text(call, f"{where}.call", limit=60)
+    heroic_call = raw.get("heroic_call")
+    if heroic_call is not None:
+        _text(heroic_call, f"{where}.heroic_call", limit=60)
+        if call is None or not any(d.endswith("h") for d in diffs):
+            _fail(where, "heroic_call needs a call and a raid with heroic difficulties")
     lust = raw.get("lust", True)
     if type(lust) is not bool:
         _fail(where, "lust must be a boolean")
@@ -445,7 +455,8 @@ def _boss(raw, where: str, raid_key: str, map_id: int, diffs: tuple[str, ...]) -
         after = p.get("after")
         phases.append(Phase(pid, _text(p.get("name"), f"{pw}.name", limit=80),
                             None if hp is None else _int(hp, f"{pw}.hp_below", 1, 100),
-                            None if after is None else _number(after, f"{pw}.after")))
+                            MappingProxyType({} if after is None else
+                                             _per_difficulty(after, f"{pw}.after", diffs, _number))))
     phase_ids = {p.id for p in phases}
     if len(phase_ids) != len(phases):
         _fail(where, "phase ids must be unique")
@@ -464,7 +475,7 @@ def _boss(raw, where: str, raid_key: str, map_id: int, diffs: tuple[str, ...]) -
     enrage = _per_difficulty(raw["enrage"], f"{where}.enrage", diffs, _number) if "enrage" in raw else {}
     return Boss(map_id, index, name, slug, _ints(raw.get("creatures", []), f"{where}.creatures"),
                 _text(raw.get("script"), f"{where}.script", limit=120), MappingProxyType(enrage),
-                behind, since, call, lust, tuple(phases), mechanics, checks)
+                behind, since, call, heroic_call, lust, tuple(phases), mechanics, checks)
 
 
 def parse_raid(data: dict, source: str) -> Raid:
