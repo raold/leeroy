@@ -27,6 +27,7 @@ TEMPLATES = {
     "loot_call": "{item}: bids to me",
     "loot_award": "{item} -> {winner}, {paid:g} dkp",
     "loot_award_close": "{item} -> {winner}, {paid:g} dkp. close one, {runner_up} bid {runner_bid:g}",
+    "loot_award_council": "{item} -> {winner}, loot council",
     "loot_unclaimed": "{item}: no takers",
     "loot_give_failed": "{item}: couldn't hand that out ({error})",
     "dkp_standings": "dkp top 5: {top}",

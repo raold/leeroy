@@ -424,3 +424,20 @@ and Server.log names it once per member and rule: `world roster skipped guid <n>
 Before this, one such row answered every roster request `world_roster_invalid`. Existing Realm
 actors and their `realm_say` path retain their behavior. The mind also requires
 its separate `[world]` opt-ins; world photos need `[selfies] enabled = true`.
+
+# The posted lineup in the owner's add picker
+
+`guild_add_roster` is a bridge command (`members`, `bench`: positive guids, none twice, at most 200
+each, none in both; `until_ms`: Unix ms, at most 12 hours ahead, else `bad field: until_ms`). The
+mind sends it while a raid lineup the guild posted (its `[decisions]`) is at hand, and an empty one
+when that night ends. Native holds it in memory only: a worldserver start clears it and the mind
+sends it again on hello. With `Leeroy.GuildAdd.FollowRoster = 1` (default 0, `.reload config`) and
+the roster unexpired, the owner's `.playerbots bot addN` takes, within each role, the roster's
+members first and its bench only when no other free member fits; every existing fence, the size
+template and the buff and gear rules still order the members within each tier (pure policy:
+`PlanGuildAdd`'s roster, `GuildAddRosterInForce`). At 0, or with the roster expired or empty, it
+picks exactly as before. The `guild_group` events of a group he built carry `roster_followed`:
+true once a fill of that group added at least one of the roster's members or bench
+(`GuildAddRosterFollowed`), so the mind can record the lineup in effect through his add. Server.log:
+`guild_add_roster held (N members, M bench)` and `add<N> from the guild follows the posted roster
+(...)`, counts only. **Native rebuild required.**

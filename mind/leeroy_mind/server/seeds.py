@@ -15,11 +15,11 @@ from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
               'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke',
-              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision')
+              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision', 'his_loot')
 # An intent (godmode.intents) is tried again half an hour after an opener that was dropped.
 # A decision's stage is argued once (its keys name the stage): never fresh again once used
 FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loot_close': 7 * 86400.0,
-           'intent': 1800.0, 'decision': math.inf}
+           'intent': 1800.0, 'decision': math.inf, 'his_loot': 7 * 86400.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
 log = logging.getLogger(__name__)
@@ -111,8 +111,8 @@ def _item_name(conn, item):
 
 
 def _loot(conn, c):
-    for lid, guid, delta, item, class_id in conn.execute(
-            "SELECT d.id,d.guid,d.delta,d.item_id,m.class FROM dkp_ledger d "
+    for lid, guid, delta, item, class_id, note in conn.execute(
+            "SELECT d.id,d.guid,d.delta,d.item_id,m.class,d.note FROM dkp_ledger d "
             'LEFT JOIN cast_member m ON m.guid=d.guid '
             "WHERE d.reason='item' AND d.item_id IS NOT NULL AND d.ts BETWEEN ? AND ? "
             'ORDER BY d.ts DESC,d.id DESC LIMIT 64', (c.now-FRESH_DEFAULT_S, c.now)):
@@ -121,8 +121,10 @@ def _loot(conn, c):
         channels = ('loot-and-dkp',)
         if class_id in layout.CLASS_CHANNEL:
             channels += (layout.CLASS_CHANNEL[class_id],)
+        # A loot council's award (decisions.loot_rules) is charged nothing and says so
+        price = 'by loot council' if note.startswith('council:') else f'for {abs(delta):g} DKP'
         yield Seed(f'loot:{lid}', 'loot', channels,
-                   f'{c.name(guid)} won [{_item_name(conn, item)}] for {abs(delta):g} DKP', (guid,))
+                   f'{c.name(guid)} won [{_item_name(conn, item)}] {price}', (guid,))
 
 
 def _life(conn, c):
@@ -304,8 +306,12 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
     if intents_enabled:
         result += _read('intent', lambda: _intent(conn, c))
     if decisions_enabled:
-        from leeroy_mind.decisions.seeds import decision_seeds
+        from leeroy_mind.decisions.seeds import decision_seeds, his_loot_seeds
         result += _read('decision', lambda: decision_seeds(conn, now=now, personas=cast, officers=officers))
+        his = _read('his_loot', lambda: his_loot_seeds(conn, now=now, names=names, human=human, cast=cast))
+        # His claim is that drop's subject; it is never raised twice as plain loot too.
+        raised = {'loot:' + seed.key.split(':', 1)[1] for seed in his}
+        result = [seed for seed in result if seed.key not in raised] + his
     return result
 
 
