@@ -237,6 +237,45 @@ def test_semantic_match_reuses_existing_claim_vector_and_threshold(app, channel,
     asyncio.run(go())
 
 
+def his_line(app, text, *, channel='guild', to=0, readers=(1, 101, 102, 103)):
+    ev = Chat(ts=int(app.clock.now()*1000), channel=channel, from_guid=1, from_name='Owner',
+              to_guid=to, text=text, map=0, zone=0)
+    line = app.store.insert_chat_line(ev, session_id=None, origin='human', audience=readers)
+    if channel.startswith(('discord:', 'gdm:')):
+        message = discord.post(app.store, channel=channel.removeprefix('discord:'), author=1,
+                               origin='human', text=text, now=app.clock.now())
+        app.store.set_meta(f'discord:line:{message}', str(line))
+    return line
+
+
+@pytest.mark.parametrize('channel', ['guild', 'party', 'discord:general'])
+@pytest.mark.parametrize('text,to,closed', [
+    ('How is the outing going, everyone?', 0, set()),
+    ('Arkon, how is your outing going?', 0, {101}),
+    ('How is your outing going?', 101, {101})])
+def test_his_public_line_closes_only_the_item_of_the_member_it_is_to(app, channel, text, to, closed):
+    async def go():
+        items = {g: plan(app, guid=g) for g in (101, 102)}
+        app.embedder.query = vector(.9)
+        app.outreach.on_his_line(his_line(app, text, channel=channel, to=to))
+        assert {g for g in items if not app.outreach.eligible(g)} == closed
+        await settle(app)
+        assert {g for g, i in items.items() if records.get(app.store, i.id).ended == 'he_raised'} == closed
+        assert app.embedder.calls == ([[text]] if closed else [])
+    asyncio.run(go())
+
+
+def test_his_group_dm_line_is_to_everyone_in_it(app):
+    async def go():
+        items = {g: plan(app, guid=g) for g in (101, 102, 103)}
+        app.embedder.query = vector(.9)
+        app.outreach.on_his_line(his_line(app, 'How is the outing going?', channel='gdm:1',
+                                          readers=(1, 101, 102)))
+        await settle(app)
+        assert {g for g, i in items.items() if records.get(app.store, i.id).ended == 'he_raised'} == {101, 102}
+    asyncio.run(go())
+
+
 @pytest.mark.parametrize('change', ['deleted', 'edited', 'not_owner'])
 def test_stale_or_nonowner_named_line_cannot_close_intention(app, change):
     async def go():
