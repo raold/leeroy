@@ -76,9 +76,15 @@ def last_run(conn) -> dict[str, float]:
                 "GROUP BY raid_key,size,heroic")}
 
 
+# A raid of his own group whose lead was a member he named (raidlead): no raid night the mind led.
+NAMED_LEAD_KEY = "guild:raid:{raid_id}:named-lead"
+_NOT_NAMED = ("NOT EXISTS (SELECT 1 FROM meta WHERE meta.key = "
+              "'guild:raid:' || guild_raid.raid_id || ':named-lead')")
+
+
 def last_led(conn) -> dict[int, float]:
     return dict(conn.execute("SELECT lead_guid,MAX(started) FROM guild_raid "
-                             "WHERE offline=0 GROUP BY lead_guid"))
+                             f"WHERE offline=0 AND {_NOT_NAMED} GROUP BY lead_guid"))
 
 
 def offline_raid_between(conn, start, end) -> bool:

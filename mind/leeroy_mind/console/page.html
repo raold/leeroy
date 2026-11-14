@@ -76,7 +76,7 @@
         </form>
         <details class="lab-detail"><summary>Version history</summary><div id="lab-weight-history"></div></details>
       </section>
-      <section class="panel"><h3>Weekly report</h3><pre id="lab-report">Not set up yet.</pre></section>
+      <section class="panel"><h3>Weekly report</h3><div id="lab-report"><p class="note">Not set up yet.</p></div></section>
     </div>
   </section>
   <dialog id="lab-confirm" aria-labelledby="lab-confirm-title" aria-describedby="lab-confirm-words">
@@ -222,6 +222,11 @@
           <label>Lead <select id="r-lead"></select></label>
           <button id="r-go" type="submit">Form the raid</button>
         </form>
+        <form id="r-leadform" class="formrow" aria-label="Raid lead" hidden>
+          <label>Raid lead <select id="r-raidlead"></select></label>
+          <button id="r-leadgo" type="submit">Set the lead</button>
+          <span id="r-leadnow" class="muted"></span>
+        </form>
         <p id="r-why" class="why" role="status"></p>
       </article>
       <article class="panel span">
@@ -289,6 +294,15 @@
       <article class="panel">
         <header><h3>Chronicle</h3></header>
         <div id="g-chronicle" class="scroll"></div>
+      </article>
+      <article id="g-decisions-panel" class="panel span" hidden>
+        <header><h3>Decisions</h3></header>
+        <p id="g-decisions-why" class="why"></p>
+        <div class="scroll"><table><thead><tr><th>decision</th><th>what</th><th>status</th><th>settled by</th>
+          <th>settled</th><th>in effect</th><th>what changed</th><th></th></tr></thead>
+          <tbody id="g-decisions"></tbody></table></div>
+        <h4>Polls</h4>
+        <div id="g-polls" class="dc-polls"></div>
       </article>
     </div>
   </section>

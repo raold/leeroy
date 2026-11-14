@@ -389,7 +389,7 @@ class ServerEngine:
                 elif conversation.seed.kind == 'meme_image':
                     opener = 'You made a meme picture about this running joke and are posting it now: '
                 elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day',
-                                                'wow_event','loot_close'}:
+                                                'decision','wow_event','loot_close'}:
                     opener = 'Start a conversation about this real event in your own way: '
                 else:
                     opener = 'Start a conversation using only what is known: '

@@ -96,7 +96,7 @@ def arc_view(store: Store, p: Persona, human: int, *, now: float, channel: str, 
     in (ARC_CAP_TOKENS); without it they go in order: the plan's second line, home, the rival,
     cooling. An ex, and every turn but a whisper or DM to him, gets her stage and plan state
     alone."""
-    stage = store.get_relationship(p.guid, human).romance_stage
+    stage = store.get_relationship(p.guid, human, lens=True).romance_stage  # talk: the lens
     arc = get_arc(store, p.guid, human)
     if not (is_private(channel) and to_guid == human) or stage == "ex":
         return ArcView(stage, arc.plan_state)

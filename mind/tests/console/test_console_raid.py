@@ -522,3 +522,27 @@ def test_a_busy_endpoint_is_asked_again_before_the_stop_is_forced(mind_rows):
     out = _handle(mind_rows, processes, link).act("stop")
     assert out.message.startswith("mind stopped by force (the control endpoint did not answer")
     assert len(link.calls) == 5 and processes.killed == [(101, 1120), (100, 1110)]
+
+
+def test_the_raid_lead_picker_goes_to_the_minds_raidlead_op(guild, data):
+    lead = {"lead": 101, "source": "default", "his": False, "assistant": True, "raid": True,
+            "blocked": None, "candidates": [{"guid": 101, "name": "Arkon", "officer": True, "online": True}]}
+    link = FakeLink(lambda op, args: {**STATUS, "raid_lead": lead} if op == "status"
+                    else {"ok": True, "message": "Arkon leads your group's raid now."})
+
+    async def go():
+        async with served(make_app(data, mind=running(data), link=link)) as app:
+            assert (await http(app, "GET", "/api/raid")).json()["mind"]["raid_lead"] == lead
+            body = {"action": "set", "guid": 101}
+            assert (await http(app, "POST", "/api/raidlead", body=body)).status == 403  # no Origin
+            r = await http(app, "POST", "/api/raidlead", body={"action": "set", "guid": "101"}, origin=True)
+            assert r.status == 400
+            r = await http(app, "POST", "/api/raidlead", body=body, origin=True)
+            assert r.status == 200 and r.json()["message"] == "Arkon leads your group's raid now."
+            assert link.calls[-1] == ((101, 100), "raidlead", body)
+        off = Controls(enabled=False, reason="process control is off (--no-control)", mind=running(data))
+        async with served(make_app(data, mind=running(data), controls=off, link=link)) as app:
+            r = await http(app, "POST", "/api/raidlead", body={"action": "clear"}, origin=True)
+            assert r.status == 403
+    asyncio.run(go())
+    assert [c[1] for c in link.calls].count("raidlead") == 1

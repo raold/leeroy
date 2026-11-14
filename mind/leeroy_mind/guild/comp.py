@@ -149,8 +149,12 @@ def select_comp(size: int, cands: Iterable[Candidate], *, must_include: Iterable
 
 def choose_leads(cands: Iterable[Candidate], *, requested: int | None, rotate: bool = False,
                  human_leads: bool, human_guid: int,
-                 last_led: dict[int, float] | None = None) -> Leads:
-    """Resolve leadership separately from the actual tank and loot responsibilities."""
+                 last_led: dict[int, float] | None = None, speaker: int | None = None) -> Leads:
+    """Resolve leadership separately from the actual tank and loot responsibilities.
+
+    speaker: the member he named to lead his own group (raidlead). When he leads, an available
+    speaker becomes the raid's lead (lead_guid: who calls it) while he stays the game's leader;
+    otherwise, as without one, lead_guid is his."""
     if type(human_guid) is not int or human_guid <= 0:
         raise ValueError("human GUID must be a positive integer")
     available = [c for c in _unique(cands).values() if c.available is True and c.guid != human_guid]
@@ -174,7 +178,8 @@ def choose_leads(cands: Iterable[Candidate], *, requested: int | None, rotate: b
     request = next((c for c in ranked if type(requested) is int and c.guid == requested
                     and c.guild_role == "officer"), None)
     if human_leads:
-        lead_guid = human_guid
+        named = next((c for c in available if type(speaker) is int and c.guid == speaker), None)
+        lead_guid = named.guid if named is not None else human_guid
     else:
         lead = request or (rotated if rotate else None) or standing or rotated or tank
         lead_guid = lead.guid

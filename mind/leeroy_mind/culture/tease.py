@@ -13,7 +13,7 @@ def tease_ok(conn, teaser: int, target: int, *, personas, human: int, now: float
 
 def _tease_ok(conn, teaser, target, *, personas, human, now, allowance=False):
     """Only a thread which delivered its own mark may reuse its allowance."""
-    from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay, mood_overlay
+    from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay, fold_mood, mood_overlay
     rel = conn.execute('SELECT affinity FROM relationship WHERE a=? AND b=?', (teaser,target)).fetchone()
     offsets = feeling_overlay(conn).get((teaser, target))
     if offsets:  # godmode feelings and moods count as the night's own do
@@ -26,7 +26,7 @@ def _tease_ok(conn, teaser, target, *, personas, human, now, allowance=False):
     mood = conn.execute('SELECT mood FROM persona_state WHERE guid=?', (target,)).fetchone()
     edited = mood_overlay(conn, target, now)
     if edited:
-        mood = (max(-1.0, min(1.0, (mood[0] if mood else 0.0) + edited)),)
+        mood = (fold_mood(mood[0] if mood else 0.0, edited),)
     if mood and mood[0] < -.3:
         return False, 'hurt_mood'
     local = local_at(now)

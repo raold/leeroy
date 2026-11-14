@@ -10,7 +10,7 @@ def valid_table(name, table, raw):
         return False
     simple = {'claims':{'enabled'},'signals':{'enabled'},'fingerprint':{'enabled'},
               'callbacks':{'enabled'},'looks':{'diversity'},'personas':{'auto_newcomers'},
-              'playstyle':{'enabled'},'photos':{'enabled','send'}}
+              'playstyle':{'enabled'},'photos':{'enabled','send'},'raidlead':{'enabled'}}
     if name in simple:
         return not set(table)-simple[name] and all(type(v) is bool for v in table.values())
     if name in ('talk','romance','selfies','control'):
@@ -31,7 +31,7 @@ def valid_table(name, table, raw):
         return parse_config({**table,'enabled':True}).enabled
     if name == 'learn':
         from leeroy_mind.learn.arms import FAMILIES
-        flags = {'enabled','coach','auto_lessons','bandit','freeze','capture_preferences'}
+        flags = {'enabled','coach','auto_lessons','bandit','freeze','capture_preferences','apply','cycle'}
         return (not set(table)-flags-{'frozen_families','frozen_members'}
                 and all(type(table.get(k,False)) is bool for k in flags)
                 and type(table.get('frozen_families',[])) is list
