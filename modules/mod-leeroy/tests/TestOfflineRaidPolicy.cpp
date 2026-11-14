@@ -485,3 +485,31 @@ LEEROY_TEST(OfflineRaid_HoldClockRestartsInAFightUnreadableEncounterOrAnyOtherPh
         CHECK_EQ(hold.Observe(DcPhase::Door, false, 1), "dc_door_blocked");
     }
 }
+
+LEEROY_TEST(OfflineRaid_NaxxSapphironAndKelThuzadAreOutOfDungeonClearsReach)
+{
+    CHECK(DcUnreachableBosses(533) == std::vector<std::uint32_t>({13, 14}));
+    CHECK(DcUnreachableBosses(631).empty());
+    CHECK(DcUnreachableBosses(603).empty());
+}
+
+LEEROY_TEST(OfflineRaid_EveryReachableBossDoneEndsTheRunAsClearedReachable)
+{
+    // NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3, TO_BE_DECIDED 5. Naxxramas has 15 bosses.
+    std::vector<std::uint8_t> naxx(15, 3);
+    naxx[13] = 0; naxx[14] = 5;
+    CHECK(ClearedReachable(naxx, {13, 14}));
+    naxx[13] = 3;
+    CHECK(ClearedReachable(naxx, {13, 14}));    // Sapphiron somehow down, Kel'Thuzad still out of reach.
+    naxx[14] = 3;
+    CHECK(!ClearedReachable(naxx, {13, 14}));   // All fifteen: Decide's own "cleared".
+    naxx[14] = 0; naxx[12] = 1;
+    CHECK(!ClearedReachable(naxx, {13, 14}));   // The Four Horsemen are still being fought.
+    naxx[12] = 2;
+    CHECK(!ClearedReachable(naxx, {13, 14}));
+    naxx[12] = 3;
+    CHECK(ClearedReachable(naxx, {13, 14}));
+    CHECK(!ClearedReachable(naxx, {}));          // A map with no table never claims it.
+    CHECK(!ClearedReachable({}, {13, 14}));
+    CHECK(!ClearedReachable(std::vector<std::uint8_t>(13, 3), {13, 14})); // Index outside the roster.
+}

@@ -52,6 +52,28 @@ std::string DcHold::Observe(DcPhase phase, std::optional<bool> bossEngaged, std:
     return phase == DcPhase::Door ? "dc_door_blocked" : "dc_paused";
 }
 
+std::vector<std::uint32_t> DcUnreachableBosses(std::uint32_t mapId)
+{
+    if (mapId == 533) return {13, 14};
+    return {};
+}
+
+bool ClearedReachable(std::vector<std::uint8_t> const& bossStates, std::vector<std::uint32_t> const& unreachable)
+{
+    if (bossStates.empty() || unreachable.empty()) return false;
+    bool outOfReachLeft = false;
+    for (std::uint32_t boss : unreachable)
+    {
+        if (boss >= bossStates.size()) return false;
+        outOfReachLeft = outOfReachLeft || bossStates[boss] != 3;
+    }
+    for (std::size_t index = 0; index < bossStates.size(); ++index)
+        if (bossStates[index] != 3
+            && std::find(unreachable.begin(), unreachable.end(), static_cast<std::uint32_t>(index)) == unreachable.end())
+            return false;
+    return outOfReachLeft;
+}
+
 bool BossProgress(std::uint8_t before, std::uint8_t after)
 {
     return before != after && (after == 1 || after == 3 || IsWipe(before, after));

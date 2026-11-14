@@ -319,6 +319,13 @@ void Enter(Job& job, Stage stage)
     job.stage = stage;
     job.stageElapsed = 0;
     job.announced = false;
+    if (stage == Stage::Running)
+    {
+        // The end-of-tick heartbeat publishes before the first Running tick reads dungeon-clear:
+        // a restart must not report its pre-restart phase (usually off) or carry its hold.
+        job.dcPhase = DcPhase::Unknown;
+        job.dcHold = {};
+    }
 }
 
 void Stop(Job& job, std::string reason, bool failed = false)
@@ -1022,6 +1029,17 @@ void Running(Job& job, uint32 diff)
         for (Member& member : job.members)
             member.restartIssued = member.restartDropped = false;
         Enter(job, Stage::Restarting);
+    }
+    else if (auto const unreachable = Benchmark(job) ? std::vector<uint32>{} : DcUnreachableBosses(job.command.mapId);
+        ClearedReachable(job.previousBossStates, unreachable))
+    {
+        std::string left;
+        for (uint32 boss : unreachable)
+            if (job.previousBossStates[boss] != DONE)
+                left += (left.empty() ? "" : ",") + std::to_string(boss);
+        LOG_INFO("module.leeroy", "leeroy: raid {} cleared_reachable kills={} out_of_reach={}",
+            job.event.id, job.event.kills, left);
+        Stop(job, OfflineClearedReachable);
     }
     else if (!held.empty())
         Stop(job, held); // Only after every existing stop/restart rule chose to go on.

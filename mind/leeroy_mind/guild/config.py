@@ -41,8 +41,9 @@ class GuildConfig:
     offline_raids_per_day: int = 1
     offline_window: tuple[str, str] = ("13:00", "18:00")
     offline_min_away_min: int = 60
-    # Never toc or ulduar: the offline runner cannot run them (offline.UNSUPPORTED).
-    offline_rotation: tuple[str, ...] = ("icc25", "icc10", "naxx25", "naxx10")
+    # Never toc or ulduar: the offline runner cannot run them (offline.UNSUPPORTED). No naxx25: he
+    # raids Naxxramas 25 himself, and a 25-man offline save would lock his raiders out of his copy.
+    offline_rotation: tuple[str, ...] = ("icc25", "icc10", "naxx10")
     offline_max_wipes: int = 6
     offline_max_wipes_per_boss: int = 3
     offline_timeout_min: int = 180

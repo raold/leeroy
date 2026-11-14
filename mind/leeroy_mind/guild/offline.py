@@ -35,6 +35,9 @@ NO_FRESH_RAID = "setup:starting:no_fresh_encounters"
 # Setup proved, before anyone fought, that this raid has nothing the runner can kill today: its copy
 # has no fresh boss, or dungeon-clear finds no boss on the map. The raid is passed over for the day.
 NOTHING_TO_KILL = frozenset({NO_FRESH_RAID, "setup:starting:dc_no_bosses"})
+# Native stopped a run that reached Running at a door dungeon-clear cannot open. With no kill and no
+# wipe nobody fought a boss: the run is voided like NOTHING_TO_KILL (its attendance taken back).
+DOOR_BLOCKED = "dc_door_blocked"
 # Raids the offline runner (dungeon-clear driving the tank bot) cannot run, with the code naming why.
 # toc: the herald's event summons every boss, none has a static spawn, so dungeon-clear's roster is
 # empty and `dc on` is refused (2026-11-11: setup:starting:timeout). ulduar: its first boss, Flame
@@ -649,14 +652,29 @@ class OfflineRaids:
             self._hold_today(blocked=True)
             return
         cast = tuple(g for g in self.ports.cast() if g != self.ports.human_guid)
+
+        def binds():
+            human = self.ports.human_guid
+            return (self.armory.saved_sizes(human, raid.map_id),
+                    self.armory.bound_with(human, raid.map_id, cast))
+
         try:
-            saved = await asyncio.to_thread(self.armory.bound_with, self.ports.human_guid, raid.map_id, cast)
+            his, saved = await asyncio.to_thread(binds)
         except Exception as e:
             # Unproved binds could cost him a lockout: no raid until they can be read.
             log.warning("offline_raid_binds_unreadable error=%s", type(e).__name__)
             attempts = self._day_state()["attempts"] + 1
             self._hold_today(attempts=attempts, next_try=self.ports.clock.now() + BUSY_RETRY_S,
                              blocked=attempts >= MAX_ATTEMPTS)
+            return
+        if split_key(key)[1] in his:
+            # He holds a save of this raid at this size this lockout week. An offline run would save
+            # its members to another copy, and his add command leaves such members out (locked)
+            # until the reset: never his own raiders' week.
+            log.info("offline_raid_skipped raid=%s reason=owner_saved", key)
+            skipped = self._day_state().get("skipped", [])
+            self._hold_today(skipped=skipped if key in skipped else [*skipped, key],
+                             next_try=self.ports.clock.now() + RETRY_S)
             return
         excluded, inside = self._busy()
         busy = (excluded | inside) - set(saved)
@@ -867,6 +885,11 @@ class OfflineRaids:
                 and not self._owned.get("started") and not self._owned.get("running_seen")
                 and not terminal.get("kills") and not terminal.get("wipes"))
 
+    def _door_void(self, terminal):
+        """Native stopped the run at a door before any boss was fought: nothing it can kill there."""
+        return (terminal["state"] == "done" and terminal["reason"] == DOOR_BLOCKED
+                and not terminal.get("kills") and not terminal.get("wipes"))
+
     async def _attend(self):
         await self.session.attend()
         self._owned["attended"] = True
@@ -933,10 +956,11 @@ class OfflineRaids:
                     # receipt and body identity for a later cleanup attempt.
                     await self._release()
                     return
-        no_fresh = self._no_fresh_raid(terminal)
-        # Only a run that reached running, or fought, was raided.
-        raided = bool(self._owned.get("running_seen") or self._owned.get("started")
-                      or terminal.get("kills") or terminal.get("wipes"))
+        door_void = self._door_void(terminal)
+        no_fresh = self._no_fresh_raid(terminal) or door_void
+        # Only a run that reached running, or fought, was raided; a door-voided one fought nobody.
+        raided = not door_void and bool(self._owned.get("running_seen") or self._owned.get("started")
+                                        or terminal.get("kills") or terminal.get("wipes"))
         busy = (None if raided or no_fresh or terminal["state"] != "failed"
                 else setup_retry_after(str(terminal.get("reason") or "")))
         try:
@@ -949,6 +973,10 @@ class OfflineRaids:
                 session.wipes = max(session.wipes, terminal["wipes"])
                 if raided and not self._owned.get("attended"):
                     await self._attend()
+                elif door_void and self._owned.get("attended"):
+                    session.retract_attendance()
+                    self._owned["attended"] = False
+                    self._save()
                 vote = await session.close(public_text(self.ports, outcome)[:160],
                                            raided=raided)
                 if vote is not None and vote not in self._votes:

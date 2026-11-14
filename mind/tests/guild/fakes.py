@@ -145,6 +145,7 @@ class FakeArmory:
         self.tier = tier
         self.names = {1: "Testmage"}
         self.binds = {}  # guid -> {(map id, instance id)}
+        self.saves = {}  # guid -> {(map id, size)}: permanent saves this lockout week
         self.calls = []
 
     def items(self, ids):
@@ -164,6 +165,10 @@ class FakeArmory:
     def name(self, guid):
         self.calls.append(("name", guid))
         return self.names.get(guid)
+
+    def saved_sizes(self, owner, map_id):
+        self.calls.append(("saved_sizes", owner, map_id))
+        return {size for bound_map, size in self.saves.get(owner, ()) if bound_map == map_id}
 
     def bound_with(self, owner, map_id, guids):
         guids = tuple(guids)

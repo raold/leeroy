@@ -43,9 +43,11 @@ bool FreshEncounters(std::vector<std::uint8_t> const& bossStates, std::uint32_t 
 inline constexpr char const* OfflineNoDcBosses = "dc_no_bosses";
 std::string DcRosterRefusal(std::size_t bosses);
 
-// Dungeon-clear's leader run as the offline job reads it on a Running tick. In an offline raid only a
-// path dungeon-clear cannot pass pauses it (the job turns WaitAtBoss off and nobody types `dc pause`):
-// Door is its auto-pause in front of a door it cannot open, Paused any other hold.
+// Dungeon-clear's leader run as the offline job reads it on a Running tick. Door is its auto-pause in
+// front of a door it cannot open. Paused is any other hold: dungeon-clear's null-door fallback (a
+// blocked path with no door object) or, once the Training Ground acts (`[training] act` and 28 days
+// of pulls), its boss hold: the training listener sets WaitAtBoss on every offline run's tank and
+// releases each hold, native resuming it after 20 s. Nobody types `dc pause` in an offline raid.
 enum class DcPhase { Unknown, Off, On, Paused, Door };
 DcPhase ReadDcPhase(bool leaderPresent, bool enabled, bool paused, bool pausedAtDoor);
 char const* DcPhaseCode(DcPhase phase); // The heartbeat's dc_state: unknown, off, on, paused, door.
@@ -53,13 +55,24 @@ char const* DcPhaseCode(DcPhase phase); // The heartbeat's dc_state: unknown, of
 // A hold out of every boss fight ends the run after this long, naming it (dc_door_blocked or
 // dc_paused). Nothing in an offline raid opens such a door: on 2026-11-13 Ulduar's Flame Leviathan
 // gate, which only the siege-vehicle event opens, held a 25-man run until the mind's 30-minute
-// watchdog stopped it. An engaged or unreadable encounter, or any other phase, resets the clock.
+// watchdog stopped it. A training boss hold resumes within 20 s, so only a stuck one stops as
+// dc_paused. An engaged or unreadable encounter, or any other phase, resets the clock.
 inline constexpr std::uint32_t OfflineDcHoldStopMs = 300000;
 struct DcHold
 {
     std::uint32_t heldMs = 0;
     std::string Observe(DcPhase phase, std::optional<bool> bossEngaged, std::uint32_t diffMs);
 };
+
+// Instance-script boss indices dungeon-clear cannot reach on a map. Naxxramas (533): Sapphiron (13)
+// and Kel'Thuzad (14) are reached only by the hub's teleporter after the four wings, and dungeon-clear
+// does not use teleporters (its route stalls there with the run still enabled).
+std::vector<std::uint32_t> DcUnreachableBosses(std::uint32_t mapId);
+// Every boss dungeon-clear can reach is done and some boss it cannot reach is not: the run ends as
+// cleared_reachable instead of idling until the stall watchdog or the timeout. Empty states, an
+// empty table or an out-of-range index never claim it.
+bool ClearedReachable(std::vector<std::uint8_t> const& bossStates, std::vector<std::uint32_t> const& unreachable);
+inline constexpr char const* OfflineClearedReachable = "cleared_reachable";
 
 // Empty error admits. Repeated stops during our teardown are no-ops; a finished or foreign job is refused.
 std::string OfflineStopError(bool connected, bool owned, bool finished, bool tearingDown,
