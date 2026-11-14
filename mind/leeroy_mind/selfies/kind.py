@@ -132,6 +132,42 @@ PAIRINGS = ("photo.outfit: swimwear away from the water",
             "photo.setting: only swimwear in the hot tub",
             "photo.framing: swimwear only framed upper body",
             "photo.kind: no swimwear in a headshot")
+
+# Varied sets (owner, 2026-11-14; varied.py): the four candidates of one set each get their own
+# look, composed by code from these lists, one of each category, never four dresses. The lists
+# reuse the vetted lust values and add a few gym and casual ones vetted the same way (clothed,
+# nothing see-through, no underwear or sleepwear, nothing young-looking). They are not in
+# LUST_OUTFITS: the night's photo-kind pass and LUST_SCHEMA are unchanged.
+_GYM_MORE = ("{colour} racerback sports top and leggings",
+             "cropped {colour} sports top and high-waisted leggings",
+             "fitted {colour} tank top and bike shorts")
+_CASUAL_MORE = ("fitted {colour} t-shirt and high-waisted jeans", "flowy {colour} sundress")
+# No string bikini in a varied set: its swimwear is shot full-length, and from behind
+VARIED_OUTFITS: dict[str, str] = {
+    **{k: v for k, v in LUST_OUTFITS.items() if k != "string bikini"},
+    **{_choice(t): t for t in _GYM_MORE + _CASUAL_MORE}}
+VARIED_GYM_OUTFITS = GYM_OUTFITS | frozenset(_choice(t) for t in _GYM_MORE)
+VARIED_LOOKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {  # category: outfits, settings
+    "swim": (tuple(_choice(t) for t in _SWIM if _choice(t) in VARIED_OUTFITS),
+             tuple(s for s in WATER_SETTINGS if s not in SWIM_ONLY_SETTINGS)),
+    "gym": (tuple(_choice(t) for t in _GYM + _GYM_MORE), GYM_SETTINGS),
+    "casual": (("off-the-shoulder top and jeans", "crop top and high-waisted shorts",
+                "tank top and denim shorts", "sweetheart-neckline sundress",
+                *(_choice(t) for t in _CASUAL_MORE)),
+               ("a cafe terrace", "a park in summer", "a garden party", "a city street at night")),
+    "going_out": (("halter top and a miniskirt", "one-shoulder top and leather trousers",
+                   "silk blouse and a leather miniskirt", "square-neck top and a pencil skirt",
+                   "leather jacket over a crop top", "bodycon mini dress", "cut-out dress"),
+                  ("a rooftop bar at night", "a nightclub", "a wine bar", "a dance floor",
+                   "a hotel balcony at dusk")),
+}
+CATEGORIES = tuple(VARIED_LOOKS)
+# The pose each candidate is photographed in, and how much of her is in frame: her figure shows
+VARIED_VIEWS = ("behind", "rear_three_quarter", "side", "front")
+BACK_VIEWS = ("behind", "rear_three_quarter")
+VARIED_FRAMINGS = ("full_body", "three_quarter")
+VIEW_OUTSIDE = "photo.view: a pose only in a varied set"
+SWIM_BACK = "photo.framing: swimwear from behind only full-length"
 # a composed part that holds her character or real name (a colour or a season can be one): the
 # prompt's name filter would drop the whole joined phrase, so the pick is asked once more
 NAME_CLASHES = tuple(f"photo.{f}: shares her name" for f in ("setting", "outfit", "expression"))
@@ -290,40 +326,63 @@ def _photo_problems(p: Persona, data: dict) -> list[str]:
         return [f"photo: {type(e).__name__}"]
 
 
+def outfit_phrase(choice: str, colour: str, outfits: dict[str, str] = LUST_OUTFITS) -> str:
+    """The outfit `choice` with its colour put in and an article in front."""
+    phrase = outfits[choice].format(colour=colour)
+    article = "an" if phrase[0].lower() in "aeiou" else "a"
+    return f"{article} {phrase}"
+
+
 def compose_lust(data: dict) -> ProfilePhoto:
     """The kind a lust reply (LUST_SCHEMA's shape) stands for: its picks as they are, and the
     outfit with its colour put in and an article in front."""
-    phrase = LUST_OUTFITS[data["outfit"]].format(colour=data["colour"])
-    article = "an" if phrase[0].lower() in "aeiou" else "a"
     return ProfilePhoto(kind=data["kind"], framing=data["framing"], setting=data["setting"],
-                        outfit=f"{article} {phrase}", expression=data["expression"])
+                        outfit=outfit_phrase(data["outfit"], data["colour"]),
+                        expression=data["expression"])
 
 
-def screen_lust(p: Persona, data: dict) -> list[str]:
+def screen_lust(p: Persona, data: dict, *, varied: bool = False) -> list[str]:
     """The problems with a lust reply, as `photo.<field>: <kind>` (every value is from the
     lists, so nothing to quote): a value off its list (the schema refuses that first), then the
     PAIRINGS: swimwear away from WATER_SETTINGS, gym wear away from GYM_SETTINGS, anything but
     swimwear in SWIM_ONLY_SETTINGS, swimwear framed other than upper body or in a headshot;
     then, on the kind it composes, her name in a part (NAME_CLASHES), the age guard and
-    validate_persona."""
-    problems = [f"photo.{field}: not on its list" for field, values in (
-        ("setting", LUST_SETTINGS), ("outfit", LUST_OUTFITS), ("colour", LUST_COLOURS),
-        ("expression", LUST_EXPRESSIONS)) if data.get(field) not in values]
+    validate_persona.
+
+    `varied`: one candidate's look in a varied set (varied.py), with a `view` and its own
+    framings (VARIED_VIEWS, VARIED_FRAMINGS) and outfits (VARIED_OUTFITS). Only there may
+    swimwear be framed full-length or three-quarter and photographed from behind; it stays at
+    the water, gym wear at the gym, the hot tub swimwear only, and a pose (`view`) anywhere
+    else is refused (VIEW_OUTSIDE). The age guard and the name screens also read the pose and
+    framing phrases the prompt adds."""
+    lists = (("setting", LUST_SETTINGS), ("outfit", VARIED_OUTFITS if varied else LUST_OUTFITS),
+             ("colour", LUST_COLOURS), ("expression", LUST_EXPRESSIONS))
+    if varied:
+        lists += (("framing", VARIED_FRAMINGS), ("view", VARIED_VIEWS))
+    problems = [f"photo.{field}: not on its list" for field, values in lists
+                if data.get(field) not in values]
+    if not varied and data.get("view") is not None:
+        problems.append(VIEW_OUTSIDE)
     if problems:
         return problems
     swim = data["outfit"] in SWIM_OUTFITS
     if swim and data["setting"] not in WATER_SETTINGS:
         problems.append(PAIRINGS[0])
-    if data["outfit"] in GYM_OUTFITS and data["setting"] not in GYM_SETTINGS:
+    if (data["outfit"] in (VARIED_GYM_OUTFITS if varied else GYM_OUTFITS)
+            and data["setting"] not in GYM_SETTINGS):
         problems.append(PAIRINGS[1])
     if data["setting"] in SWIM_ONLY_SETTINGS and not swim:
         problems.append(PAIRINGS[2])
-    if swim and data.get("framing") != "upper_body":
+    if swim and not varied and data.get("framing") != "upper_body":
         problems.append(PAIRINGS[3])
+    if swim and varied and data["view"] in BACK_VIEWS and data["framing"] != "full_body":
+        problems.append(SWIM_BACK)
     if swim and data.get("kind") == "headshot":
         problems.append(PAIRINGS[4])
     if problems:
         return problems
+    if varied:
+        return _screen_varied(p, data)
     photo = compose_lust(data)
     named = names_re(p)
     problems = [f"photo.{f}: shares her name" for f in ("setting", "outfit", "expression")
@@ -332,6 +391,22 @@ def screen_lust(p: Persona, data: dict) -> list[str]:
         problems.append(NAME_CLASHES[1])  # the joined phrase itself, "wearing" and all
     problems += [f"photo.{f}: age" for f in _FIELDS if AGE_RE.search(getattr(photo, f))]
     return problems + _photo_problems(p, {f: getattr(photo, f) for f in _FIELDS})
+
+
+def _screen_varied(p: Persona, data: dict) -> list[str]:
+    """A varied look's composed phrases (prompt.varied_parts): her name in any, the age guard on
+    each, then validate_persona on the outfit, setting and expression as a photo kind (its
+    framing as the nearest kind's: full_body is the varied set's own)."""
+    from .prompt import varied_parts
+    parts = varied_parts(data, outfit_phrase(data["outfit"], data["colour"], VARIED_OUTFITS))
+    named = names_re(p)
+    problems = [f"photo.{f}: shares her name" for f, text in parts.items()
+                if named is not None and named.search(text)]
+    problems += [f"photo.{f}: age" for f, text in parts.items() if AGE_RE.search(text)]
+    return problems + _photo_problems(p, {
+        "kind": data["kind"], "framing": "three_quarter", "setting": data["setting"],
+        "outfit": outfit_phrase(data["outfit"], data["colour"], VARIED_OUTFITS),
+        "expression": data["expression"]})
 
 
 def _refused(ctx: "NightContext", guid: int, problems: list[str]) -> tuple[None, list[str]]:

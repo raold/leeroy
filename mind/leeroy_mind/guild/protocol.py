@@ -143,6 +143,18 @@ class StockItems:
 
 
 @dataclass(frozen=True, slots=True)
+class GuildAddRoster:
+    """The posted raid lineup (decisions.lineup) the owner's add-from-guild picker follows while
+    Leeroy.GuildAdd.FollowRoster is on: members first within each role, the bench only when nobody
+    else fits, until until_ms (Unix ms, at most 12 h ahead). Empty members and bench clear it.
+    Held in memory: a worldserver start clears it and the mind sends it again on hello."""
+    id: str
+    members: tuple[int, ...]
+    bench: tuple[int, ...]
+    until_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class JobSkip:
     guid: int
     reason: str
@@ -184,7 +196,9 @@ class GuildGroup:
     """His own `.playerbots bot addN` filled his group from free guild members (mod-leeroy, not a
     raid call). reason "built": this run added `added`; "entered": he then reached an instance map
     leading that same group. map/instance_id/difficulty are where he is (instance_id 0 outside an
-    instance); members are the guild's cast in his group, him excluded."""
+    instance); members are the guild's cast in his group, him excluded. roster_followed: the
+    picker used the guild's posted lineup (guild_add_roster) for at least one member it added to
+    this group (absent from older worldservers: False)."""
     ts: int
     reason: str
     size: int
@@ -195,6 +209,7 @@ class GuildGroup:
     difficulty: int
     added: tuple[GuildGroupAdd, ...]
     members: tuple[int, ...]
+    roster_followed: bool = False
 
 
 COMMANDS: dict[str, type] = {
@@ -211,6 +226,7 @@ COMMANDS: dict[str, type] = {
     "set_spec": SetSpec,
     "bot_do": BotDo,
     "stock_items": StockItems,
+    "guild_add_roster": GuildAddRoster,
 }
 
 

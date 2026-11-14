@@ -44,7 +44,7 @@ from .scenes import GUILD_MIN
 from .slot import SetRefused, render_slot
 from .snaps import SnapRow, expire, looks_hash, mark_rendered, planned
 from .stage import CONTENDED, RoomFailed, _unleased, seed_for, start_worker
-from .store import current
+from .store import current, face_pick
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError, to_the_end
 
 if TYPE_CHECKING:
@@ -137,6 +137,25 @@ def _reference(ctx: "NightContext", guid: int, pick: int) -> Path:
     return files.history(ctx.settings.data_dir, guid, pick).absolute()
 
 
+def _face(ctx: "NightContext", p: Persona, guid: int, pick: int) -> tuple[Path, str] | None:
+    """The identity reference while her cover is change `pick`, and its framing: the newest
+    photo up to it that shows her face (store.face_pick: an ordinary candidate, cut by her kind's
+    framing, or a varied front or side view, cut by its own), never one from behind; None when
+    there is none (no_face_ref). The snap row keeps the cover's pick, so photo_changed is
+    unchanged."""
+    with ctx.store.transaction():
+        got = face_pick(ctx.store.conn, guid, pick)
+    if got is None:
+        return None
+    face, framing = got
+    return _reference(ctx, guid, face), framing or p.photo.framing
+
+
+def _faceless(ctx: "NightContext", row: SnapRow) -> bool:
+    p = _stored(ctx, row.guid)
+    return p is not None and p.photo is not None and _face(ctx, p, row.guid, row.pick) is None
+
+
 def _moved(store, row: SnapRow, p: Persona | None) -> str | None:
     """Why a situation no longer stands for the member as they are: photo_changed or
     looks_changed, the sweep's order."""
@@ -152,6 +171,11 @@ def _ended(ctx: "NightContext", row: SnapRow) -> str | None:
     why = _moved(ctx.store, row, _stored(ctx, row.guid))
     if why is None and not _reference(ctx, row.guid, row.pick).is_file():
         why = "missing"
+    if why is None:
+        p = _stored(ctx, row.guid)
+        face = None if p is None or p.photo is None else _face(ctx, p, row.guid, row.pick)
+        if face is not None and not face[0].is_file():
+            why = "missing"
     return why
 
 
@@ -173,6 +197,9 @@ def _members(ctx: "NightContext", row: SnapRow) -> list[tuple[int, int, int, Per
         p = _stored(ctx, guid)
         if (p is not None and renderable(p) is None and _pick_of(ctx.store, guid) == pick
                 and _reference(ctx, guid, pick).is_file()):
+            face = _face(ctx, p, guid, pick)
+            if face is None or not face[0].is_file():  # no_face_ref: left out of the tiles
+                continue
             out.append((i, guid, pick, p))
     return out
 
@@ -187,7 +214,8 @@ def _renders(ctx: "NightContext", row: SnapRow) -> bool:
         return False
     if row.kind == "guild":
         return len(_members(ctx, row)) >= GUILD_MIN
-    return _ended(ctx, row) is None and _held(ctx.base(row.guid), row) is None
+    return (_ended(ctx, row) is None and _held(ctx.base(row.guid), row) is None
+            and not _faceless(ctx, row))
 
 
 def wants_gpu(ctx: "NightContext") -> bool:
@@ -282,10 +310,11 @@ async def _situation(ctx: "NightContext", r: SnapRenderer, row: SnapRow, began: 
     out = files.snap(data, row.guid, row.id).absolute()
     thumb = files.snap(data, row.guid, row.id, thumb=True).absolute()
     out.parent.mkdir(parents=True, exist_ok=True)
+    ref, framing = _face(ctx, p, row.guid, row.pick)  # the loop held a faceless one
     try:
         got, seed, tries = await r.image(
             snap_id=row.id, guid=row.guid, idx=0, spec=build_scene_prompt(p, scene_from(row.scene)),
-            ref=_reference(ctx, row.guid, row.pick), framing=p.photo.framing, out=out,
+            ref=ref, framing=framing, out=out,
             thumb=thumb, thumb_size=SNAP_THUMB_PX, shape="portrait", rid=f"s{row.id}")
     except SetRefused:
         return "expired" if _expiry(ctx, row, "flagged") else "failed"
@@ -324,10 +353,14 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
         if _pick_of(ctx.store, guid) != pick:  # moved since the stage began: left out
             continue
         tile = part / f"t{i}.jpg"
+        face = _face(ctx, p, guid, pick)
+        if face is None:  # a pick since _members: left out, as a moved photo is
+            continue
+        ref, framing = face
         try:
             got, _, tries = await r.image(
                 snap_id=row.id, guid=guid, idx=i, spec=build_tile_prompt(p),
-                ref=_reference(ctx, guid, pick), framing=p.photo.framing, out=tile,
+                ref=ref, framing=framing, out=tile,
                 thumb=part / f"t{i}.thumb.jpg", thumb_size=_TILE_THUMB_PX, shape="square",
                 rid=f"g{row.id}:{i}")
         except SetRefused:
@@ -402,6 +435,8 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
                     tally["expired" if _expiry(ctx, row, why) else "failed"] += 1
                     continue
                 held = _held(ctx.base(row.guid), row)
+                if held is None and _faceless(ctx, row):
+                    held = "no_face_ref"  # her only covers are from behind: stays planned
                 if held is not None:
                     log("selfies_snap_held", night=ctx.night, snap=row.id, reason=held)
                     tally["held" if ctx.skip(STAGE, unit) else "failed"] += 1
