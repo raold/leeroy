@@ -139,11 +139,12 @@ class ServerEngine:
             available = [replace(seed, channels=tuple(c for c in seed.channels if c not in busy and
                          now >= self._human_until.get(c,0))) for seed in available]
             from leeroy_mind.tuning.effective import edits_of
-            hangouts = {g: e for g in free if g in observed.personas
-                        and (e := edits_of(observed.personas[g])).channels}
+            # every free member counts (an unedited one weighs 1), so one member's 0 never
+            # takes a channel from the others
+            hangouts = {g: edits_of(observed.personas[g]) for g in free if g in observed.personas}
             chosen = rhythm.choose_seed_and_channel(available, local=observed.local,
                 officers_free=len(free & observed.officers), rng=self.rng,
-                hangouts=hangouts or None)
+                hangouts=hangouts if any(e.channels for e in hangouts.values()) else None)
             if chosen is None:
                 return
             seed, channel = chosen
@@ -414,6 +415,10 @@ class ServerEngine:
                     # Spent once its photo was offered; one never offered (another photo in
                     # flight) stays for a later conversation.
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
+                if parent is None and dry == 0 and conversation.seed.kind == 'intent':
+                    godmode = getattr(app, 'godmode', None)
+                    if godmode is not None:
+                        godmode.opened(conversation.seed, bool(added))
                 if parent is None and not added and conversation.seed.openers is not None:
                     conversation.reason = 'opener_dropped'
                     break

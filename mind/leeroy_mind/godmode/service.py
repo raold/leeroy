@@ -21,6 +21,7 @@ class Godmode:
         self._busy: set[int] = set()  # intents handed to a reaction or an opener right now
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
+        self._missed: set[int] = set()  # bring_up openers posted without naming the topic
 
     # -- the console's op --------------------------------------------------------------------
 
@@ -68,6 +69,12 @@ class Godmode:
         row = I.get(store.conn, ident)
         if row is None or row["status"] != "pending":
             return
+        if row["kind"] == "bring_up":
+            text = store.conn.execute("SELECT text FROM discord_message WHERE id=?",
+                                      (message,)).fetchone()
+            if text is None or not I.mentions(row["args"]["topic"], text[0]):
+                self._missed.add(ident)  # posted, but not about it: the seed tries again later
+                return
         if row["kind"] == "thread":
             from leeroy_mind.discord import store as dstore
             try:
@@ -77,6 +84,19 @@ class Godmode:
         store.conn.execute("UPDATE godmode_intent SET status='taken',reason='sent',settled=? "
                            "WHERE id=? AND status='pending'", (now, ident))
         log_event("godmode_intent_settled", id=ident, status="taken", reason="sent")
+
+    def opened(self, seed, posted: bool) -> None:
+        """The engine's word after an intent seed's opener: one that never posted (dropped), or
+        a bring_up that posted without naming its topic, backs the intent off (I.tried)."""
+        ident = intent_of(seed)
+        if ident is None or not I.waiting(self.app.store.conn, ident):
+            self._missed.discard(ident)
+            return
+        missed = ident in self._missed
+        self._missed.discard(ident)
+        if not posted or missed:
+            I.tried(self.app.store, ident, now=self.app.clock.now(),
+                    reason="not_mentioned" if missed else "dropped")
 
     def on_line(self, line_id, chat) -> None:
         """Every line the mind said: a Discord line of hers that mentions a pending bring_up's
@@ -93,14 +113,9 @@ class Godmode:
         except Exception:
             return
         for i in rows:
-            kind, a = i["kind"], i["args"]
-            words = a.get("topic") or a.get("about") or ""
-            place = ((kind == "bring_up" and (a.get("channel") == cid
-                                             or "channel" not in a and not cid.startswith("dm:")))
-                     or (kind == "post" and a["channel"] == cid)
-                     or (kind == "dm_him" and cid == f"dm:{chat.from_guid}"
-                         and chat.to_guid in (0, self.app.human_guid)))
-            if place and I.mentions(words, chat.text):
+            words = i["args"].get("topic") or i["args"].get("about") or ""
+            if (I.in_place(i, cid, to_guid=chat.to_guid, human=self.app.human_guid)
+                    and I.mentions(words, chat.text)):
                 I.settle(self.app.store, i["id"], status="taken", reason="mentioned",
                          now=self.app.clock.now())
 
@@ -136,8 +151,21 @@ class Godmode:
                     I.settle(store, i["id"], status="not_taken", reason="reactions_off", now=now)
                 elif i["kind"] == "react" and server.reactions is not None:
                     self._hand(i, server.reactions.intent_react(i, settle=self.react_settle))
-                elif i["kind"] == "dm_him" and server.dms is not None:
-                    self._hand(i, server.dms.intent_opener(i, settled=self.taken))
+                elif i["kind"] == "dm_him" and getattr(server.config, "dms_per_day", 1) <= 0:
+                    I.settle(store, i["id"], status="not_taken", reason="dms_off", now=now)
+                elif i["kind"] == "dm_him" and self.app.engine.cfg.talk.chattiness <= 0:
+                    I.settle(store, i["id"], status="not_taken", reason="chattiness_off", now=now)
+                elif (i["kind"] == "dm_him" and server.dms is not None
+                      and I.may_try(store.conn, i["id"], now)):
+                    opener = server.dms.intent_opener(i, settled=self.taken)
+                    if opener is not None:
+                        self._hand(i, self._dm(i, opener))
+
+    async def _dm(self, intent, opener):
+        """A dm_him opener; one that ran and sent nothing backs the intent off."""
+        ran = await opener
+        if ran and I.waiting(self.app.store.conn, intent["id"]):
+            I.tried(self.app.store, intent["id"], now=self.app.clock.now())
 
     def _hand(self, intent, coro):
         if coro is None:

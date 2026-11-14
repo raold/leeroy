@@ -26,8 +26,10 @@ def social_view(conn, *, now: float) -> dict:
     def q(sql, p=()):
         return views.rows(conn, sql, p)
 
-    toward = ({r["a"]: r for r in q("SELECT * FROM relationship WHERE b = ?", (human,))}
-              if human else {})
+    from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay
+    lens = feeling_overlay(conn)  # what members act on: the owner's godmode feelings folded in
+    toward = ({r["a"]: apply_feelings(dict(r), lens.get((r["a"], human)))
+               for r in q("SELECT * FROM relationship WHERE b = ?", (human,))} if human else {})
     states = {r["guid"]: r for r in q("SELECT * FROM attraction_state")}
     felt = {g for g, r in toward.items() if r["romance_stage"] != "none"}
     you = []
@@ -53,7 +55,7 @@ def social_view(conn, *, now: float) -> dict:
                            "WHERE level > 0 ORDER BY level DESC, holder, target LIMIT ?",
                            (JEALOUSY_MAX,))]
 
-    stage = {(r["a"], r["b"]): r["romance_stage"]
+    stage = {(r["a"], r["b"]): lens.get((r["a"], r["b"]), {}).get("romance_stage", r["romance_stage"])
              for r in q("SELECT a, b, romance_stage FROM relationship")}
     pairs = {tuple(sorted(k)) for k in stage if human not in k and k[0] != k[1]}
     romances = []

@@ -721,11 +721,11 @@ class Pipeline:
                 g for g, at in self._answered_at.items() if ctx.now - at < OPEN_THREAD_S))
         for g in guids:
             p = self.personas.get(g)
-            rel = self.store.get_relationship(g, last) if last else None
+            rel = self.store.get_relationship(g, last, lens=True) if last else None
             rel_h = None
             if reply and hg:
-                rel_h = rel if last == hg else self.store.get_relationship(g, hg)
-            weights[g] = speaker_weight(p, self.store.get_state(g), rel, ctx,
+                rel_h = rel if last == hg else self.store.get_relationship(g, hg, lens=True)
+            weights[g] = speaker_weight(p, self.store.get_state(g, lens=True), rel, ctx,
                                         None if g in fresh else self.world.last_spoke.get(g),
                                         self._effects(g).talk_mult)
             if has_reason(p, rel, ctx, rel_to_human=rel_h, reply=reply):
@@ -1138,7 +1138,7 @@ class Pipeline:
         now = self.clock.now()
         human, hg = self.human, self.human.guid
         names = self._names(turn.channel)
-        rel_h = self.store.get_relationship(turn.speaker, hg) if hg else None
+        rel_h = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
         close = knows_real_name(rel_h)  # his inner circle: his real name is theirs to use
         recent = list(window) if preview else self.world.recent_visible(
             turn.speaker, 8,
@@ -1179,7 +1179,7 @@ class Pipeline:
                 people.append(g)
         attitude = p.romance.stance if p.identity.player_gender == "female" else ""
         cards = [relationship_card(names.get(g, "someone"),
-                                   self.store.get_relationship(turn.speaker, g),
+                                   self.store.get_relationship(turn.speaker, g, lens=True),
                                    is_human=g == hg,
                                    is_guild_master=g == hg and human.is_guild_master,
                                    forms=human.forms if g == hg else THEY_FORMS,
@@ -1215,7 +1215,7 @@ class Pipeline:
                 turn.speaker, turn.channel, turn.to_guid, **bond_options)
             memories = [*pinned, *memories][:5]
 
-        state = self.store.get_state(turn.speaker)
+        state = self.store.get_state(turn.speaker, lens=True)
         altered = self._altered_of(turn.speaker)
         local = self.clock.local()
         phase = day_phase(local)
@@ -1607,7 +1607,7 @@ class Pipeline:
                 voiced = self._route(turn, meta)
         else:
             hg = self.human.guid
-            close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg))
+            close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg, lens=True))
         if meta.photo is not None and not caption_ok(text):
             if self._photo_owed(turn, meta):
                 return await self._answer_without_photo(turn, meta, 'photo_words')

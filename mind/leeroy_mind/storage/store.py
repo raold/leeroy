@@ -656,11 +656,12 @@ class Store:
         self._edits = None
 
     def _overlays(self) -> tuple[dict, dict]:
-        """(feelings, moods) from tuning.edits, cached; empty when none (or no meta yet)."""
+        """(feelings, mood parts) from tuning.edits, cached; empty when none (or no meta yet).
+        Mood parts keep each edit's own end, so an expired one never hides a later one."""
         if self._edits is None:
-            from leeroy_mind.tuning.edits import feeling_overlay, moods
+            from leeroy_mind.tuning.edits import feeling_overlay, mood_parts
             try:
-                self._edits = (feeling_overlay(self.conn), moods(self.conn, None))
+                self._edits = (feeling_overlay(self.conn), mood_parts(self.conn))
             except sqlite3.Error:
                 self._edits = ({}, {})
             if self._depth == 0:
@@ -669,46 +670,38 @@ class Store:
 
     # -- relationships -----------------------------------------------------------------
 
-    def _base_relationship(self, a: int, b: int) -> Relationship:
-        r = self._one("SELECT * FROM relationship WHERE a = ? AND b = ?", (a, b))
-        if r is None:
-            return Relationship(a=a, b=b)
-        return Relationship(
-            a=a, b=b, affinity=r["affinity"], trust=r["trust"], respect=r["respect"],
-            attraction=r["attraction"], familiarity=r["familiarity"], label=r["label"],
-            romance_stage=r["romance_stage"], notes=r["notes"],
-            pinned=tuple(json.loads(r["pinned"])), last_seen=r["last_seen"],
-            interactions=r["interactions"])
-
-    def get_relationship(self, a: int, b: int) -> Relationship:
-        """a's view of b, with the owner's godmode feelings folded in when an edit reaches the
-        pair (an EffectiveRelationship); the stored row otherwise."""
-        r = self._base_relationship(a, b)
+    def get_relationship(self, a: int, b: int, *, lens: bool = False) -> Relationship:
+        """a's view of b as stored: the night's truth, which every writer and the night read.
+        `lens=True` (talk, cards, guards, the server's choices, the console) folds the owner's
+        godmode feelings in (tuning.edits) as an EffectiveRelationship, which is never written
+        (put_relationship refuses one); without an edit reaching the pair it is the stored row.
+        """
+        row = self._one("SELECT * FROM relationship WHERE a = ? AND b = ?", (a, b))
+        r = Relationship(a=a, b=b) if row is None else Relationship(
+            a=a, b=b, affinity=row["affinity"], trust=row["trust"], respect=row["respect"],
+            attraction=row["attraction"], familiarity=row["familiarity"], label=row["label"],
+            romance_stage=row["romance_stage"], notes=row["notes"],
+            pinned=tuple(json.loads(row["pinned"])), last_seen=row["last_seen"],
+            interactions=row["interactions"])
+        if not lens:
+            return r
         offsets = self._overlays()[0].get((a, b))
         if not offsets:
             return r
         from leeroy_mind.tuning.edits import FEELING_DIMS, feeling
-        moved = {d: feeling(offsets, getattr(r, d), d) for d in FEELING_DIMS if d in offsets}
-        stage = offsets.get("romance_stage", "")
         values = {f.name: getattr(r, f.name) for f in fields(Relationship)}
-        values.update(moved)
-        if stage:
-            values["romance_stage"] = stage
-        return EffectiveRelationship(**values, read=tuple(sorted(moved.items())), stage_read=stage)
+        values.update({d: feeling(offsets, getattr(r, d), d) for d in FEELING_DIMS if d in offsets})
+        if offsets.get("romance_stage"):
+            values["romance_stage"] = offsets["romance_stage"]
+        return EffectiveRelationship(**values)
 
     def put_relationship(self, r: Relationship) -> None:
-        """Scores are clamped to REL_RANGES and never rounded. A relationship read with a
-        godmode overlay is written in the stored row's terms: a moved score by how much the
-        writer moved it, an untouched one (and the overlay's romance stage) as stored."""
+        """Scores are clamped to REL_RANGES and never rounded. A godmode lens
+        (EffectiveRelationship) is never written: an edit is a view, the stored row the night's
+        truth."""
+        if isinstance(r, EffectiveRelationship):
+            raise TypeError("a godmode lens is never written: read the stored relationship")
         with self.transaction():
-            if isinstance(r, EffectiveRelationship):
-                stored = self._base_relationship(r.a, r.b)
-                moved = {d: getattr(stored, d) + (getattr(r, d) - seen) for d, seen in r.read}
-                stage = (stored.romance_stage if r.stage_read and r.romance_stage == r.stage_read
-                         else r.romance_stage)
-                values = {f.name: getattr(r, f.name) for f in fields(Relationship)}
-                values.update(moved, romance_stage=stage)
-                r = Relationship(**values)
             scores = {d: min(max(float(getattr(r, d)), REL_RANGES[d][0]), REL_RANGES[d][1])
                       for d in REL_DIMS}
             self.conn.execute(
@@ -777,36 +770,30 @@ class Store:
         return {r["guid"]: r["version"]
                 for r in self._all("SELECT guid, version FROM persona_core" + where)}
 
-    def _base_state(self, guid: int) -> PersonaStateRow:
+    def get_state(self, guid: int, *, lens: bool = False) -> PersonaStateRow:
+        """The member's state as stored, which every writer and the night read. `lens=True`
+        (her prompt's mood line, speaker weights, bits, banter) folds in the godmode mood edits
+        in force now (an EffectiveState, never written)."""
         r = self._one("SELECT * FROM persona_state WHERE guid = ?", (guid,))
-        if r is None:
-            return PersonaStateRow(guid=guid)
-        return PersonaStateRow(
+        s = PersonaStateRow(guid=guid) if r is None else PersonaStateRow(
             guid=guid, mood=r["mood"], mood_baseline=r["mood_baseline"],
             goals=tuple(json.loads(r["goals"])), self_notes=tuple(json.loads(r["self_notes"])),
             altered_state=r["altered_state"], state_since=r["state_since"],
             state_session=r["state_session"], life_thread=r["life_thread"], updated=r["updated"])
-
-    def get_state(self, guid: int) -> PersonaStateRow:
-        """The member's state, with a godmode mood edit in force folded in (an EffectiveState);
-        the stored row otherwise."""
-        s = self._base_state(guid)
-        mood = self._overlays()[1].get(guid)
-        if mood is None or not self.clock.now() < mood[1]:
+        if not lens:
             return s
-        felt = max(-1.0, min(1.0, s.mood + mood[0]))
+        now = self.clock.now()
+        offset = sum(off for off, ends in self._overlays()[1].get(guid, ()) if now < ends)
+        if not offset:
+            return s
         values = {f.name: getattr(s, f.name) for f in fields(PersonaStateRow)}
-        values["mood"] = felt
-        return EffectiveState(**values, mood_read=felt)
+        values["mood"] = max(-1.0, min(1.0, s.mood + offset))
+        return EffectiveState(**values)
 
     def put_state(self, s: PersonaStateRow) -> None:
-        """A state read with a mood edit keeps the stored mood when the writer passed the mood
-        on unchanged, and takes the writer's own when it set one (the night's mood stage)."""
+        """A godmode lens (EffectiveState) is never written."""
         if isinstance(s, EffectiveState):
-            mood = self._base_state(s.guid).mood if s.mood == s.mood_read else s.mood
-            values = {f.name: getattr(s, f.name) for f in fields(PersonaStateRow)}
-            values["mood"] = mood
-            s = PersonaStateRow(**values)
+            raise TypeError("a godmode lens is never written: read the stored state")
         with self.transaction():
             self.conn.execute(
                 "INSERT OR REPLACE INTO persona_state(guid, mood, mood_baseline, goals, "

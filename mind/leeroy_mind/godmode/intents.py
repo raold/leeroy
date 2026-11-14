@@ -33,6 +33,12 @@ ABOUT_MAX = 200
 TOPIC_MAX = 120
 SEED_WEIGHT = 4.0
 BRING_UP_CHANNELS = ("general", "irl")
+# A carried-out attempt that came to nothing (a dropped draft, an opener that never named the
+# topic) waits BACKOFF_S, doubling, and after MAX_TRIES the intent is reported not taken.
+BACKOFF_S = 300.0
+MAX_TRIES = 4
+TRIES_KEY = "godmode:intent:tries:{id}"
+DM_FLOOR_S = 600.0  # never right after an opener of her own
 LOVE = frozenset({"❤️", "😍", "😊", "🫂", "💕", "😘", "🥰"})
 _ARGS = {"post": ({"channel", "about"}, set()), "thread": ({"channel", "name", "about"}, set()),
          "react": ({"message", "emoji"}, set()), "dm_him": ({"about"}, set()),
@@ -165,8 +171,9 @@ def create(store, *, member, kind, args, human, now, pic=None, server=True) -> i
             a["name"] = text(clean_name(args["name"]), MAX_THREAD_NAME)
     elif kind == "bring_up":
         a["topic"] = text(args["topic"], TOPIC_MAX)
-        if args.get("channel"):
-            a["channel"] = _channel(pic, member, args["channel"])
+        # one place to bring it up: his channel, or one of the everyday ones by her guid
+        a["channel"] = _channel(pic, member, args.get("channel")
+                                or BRING_UP_CHANNELS[member % len(BRING_UP_CHANNELS)])
     elif kind == "dm_him":
         a["about"] = text(args["about"], ABOUT_MAX)
     elif kind == "react":
@@ -315,10 +322,21 @@ def instruction(intent) -> str:
     return ""
 
 
+def in_place(intent, cid, *, to_guid=0, human=0) -> bool:
+    """Whether channel id `cid` is where she carries this intent out: a post and a bring_up in
+    their channel (a bring_up in her DM with him too), a dm_him in her DM with him."""
+    kind, a, guid = intent["kind"], intent["args"], intent["member"]
+    dm = cid == f"dm:{guid}" and to_guid in (0, human)
+    if kind == "post":
+        return a["channel"] == cid
+    if kind == "bring_up":
+        return a.get("channel") == cid or dm
+    return kind == "dm_him" and dm
+
+
 def card_lines(conn, guid, channel, *, to_guid=0, human=0) -> list[str]:
     """Her pending intents as her own plans ("You meant to ..."), only where she would carry
-    them out: post and bring_up in their channel (bring_up without one, any server channel),
-    dm_him in her DM with him. Never in a group DM, never a thread or a reaction."""
+    them out (in_place). Never in a group DM, never a thread or a reaction."""
     from leeroy_mind.discord.channels import channel_id, is_discord, is_group
     if not is_discord(channel) or is_group(channel):
         return []
@@ -326,18 +344,46 @@ def card_lines(conn, guid, channel, *, to_guid=0, human=0) -> list[str]:
     out = []
     for i in pending(conn, guid):
         kind, a = i["kind"], i["args"]
-        if kind == "post" and a["channel"] == cid:
+        if not in_place(i, cid, to_guid=to_guid, human=human):
+            continue
+        if kind == "post":
             out.append(f"You meant to post here about {a['about']}.")
-        elif kind == "bring_up" and (a.get("channel") == cid or "channel" not in a
-                                     and not cid.startswith("dm:")):
+        elif kind == "bring_up":
             out.append(f"You meant to bring up {a['topic']}.")
-        elif kind == "dm_him" and cid == f"dm:{guid}" and to_guid in (0, human):
+        elif kind == "dm_him":
             out.append(f"You meant to message him about {a['about']}.")
     return out[:2]
+
+
+def tries(conn, ident) -> tuple[int, float]:
+    """(attempts that came to nothing, the earliest time to try again)."""
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (TRIES_KEY.format(id=ident),)).fetchone()
+    try:
+        v = json.loads(row[0]) if row else {}
+        return int(v.get("n", 0)), float(v.get("next", 0.0))
+    except (TypeError, ValueError, AttributeError):
+        return 0, 0.0
+
+
+def may_try(conn, ident, now) -> bool:
+    return now >= tries(conn, ident)[1]
+
+
+def tried(store, ident, *, now, reason="dropped") -> bool:
+    """One attempt came to nothing: back off (BACKOFF_S, doubling), and after MAX_TRIES settle
+    it not taken with `reason`. True when it was settled now."""
+    with store.transaction():
+        n = tries(store.conn, ident)[0] + 1
+        store.set_meta(TRIES_KEY.format(id=ident),
+                       json.dumps({"n": n, "next": now + BACKOFF_S * 2 ** (n - 1)}))
+    if n >= MAX_TRIES:
+        return settle(store, ident, status="not_taken", reason=reason, now=now)
+    return False
 
 
 def seed_rows(conn, *, now):
     """(id, member, kind, args) of the pending intents the server engine opens (post, thread,
     bring_up), oldest first."""
     return [(i["id"], i["member"], i["kind"], i["args"]) for i in pending(conn)
-            if i["kind"] in ("post", "thread", "bring_up") and i["due"] > now]
+            if i["kind"] in ("post", "thread", "bring_up") and i["due"] > now
+            and may_try(conn, i["id"], now)]

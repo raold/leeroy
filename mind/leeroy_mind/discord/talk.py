@@ -505,7 +505,7 @@ class DiscordTalk:
             p = app.personas.get(g)
             if p is None or self._presence(g, p, local).state not in ANSWERING:
                 continue
-            w = warmth(p, app.store.get_relationship(g, hg)) * self._fit(ch, g, p)
+            w = warmth(p, app.store.get_relationship(g, hg, lens=True)) * self._fit(ch, g, p)
             if w > 0:
                 weights[g] = w
         n = 2 if len(weights) > 1 and self.rng.random() < SECOND_P else 1

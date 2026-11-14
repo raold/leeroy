@@ -20,7 +20,9 @@ With it off:
 - the tune op's `edit` verbs `set` and `preview` and the `string` op answer "Godmode is off";
 - nothing attaches: no tick, no intent seeds, no card lines, no openers or reactions;
 - `edit list`, `edit retire`, `tuning undo N` and `tuning revert N` still work, so edits made
-  while it was on can be taken back.
+  while it was on can be taken back. A revert or a retire leaves a table edit the night has
+  moved since (a feud it reopened, a memory it changed) as the night left it and says so; a
+  single undo of one refuses in words.
 
 Edits already made stay in force when it is turned off, as dials and nudges do: retire them, undo
 them, or revert to the change before the first one. Strings still waiting simply wait; they
@@ -38,22 +40,28 @@ history and in `python -m leeroy_mind tuning --data-dir D edits|history`. `tunin
 | `trait` | her persona as read, at one whitelisted path (Big Five scores and behaviour, attachment, humour, likes, dislikes, values, opinions, speech habits, game wants, motivation, thinks-as, favourite spot) | the overlay is dropped |
 | `feeling` | offsets on affinity, trust and attraction toward you or a member; a romance stage on the ladder (none to planning) toward you | the overlay is dropped |
 | `mood` | a mood offset (-1 to 1) for 1 hour to 14 days | the overlay is dropped |
-| `life_event` | a new life thread with a screened title, the thread it replaces resolved | the thread is removed (resolved, its beats' memories archived, once the night wrote beats) and the old one is active again |
-| `memory_implant` | a memory she simply has (`source owner`, key `owner:godmode:<id>`, dated `days_ago` back) | the memory is rejected |
+| `life_event` | a new life thread with a screened title, the thread it replaces resolved | the thread is removed (resolved, its beats' memories archived, once the night wrote beats) and the old one is active again; a later life event that replaced it is undone first |
+| `memory_implant` | a memory she simply has (`source owner`, key `owner:godmode:<id>`, dated `days_ago` back) | the memory is rejected and the memories built on it archived |
 | `memory_erase` | one active memory archived | its old status comes back |
 | `feud_start` / `feud_end` | a feud between two members opened (cause `owner`) or ended, with its story arc | the feud is removed (ended, once the night cited it) or reopened |
 | `hangouts` | weights 0 (avoids) to 3 on Discord channels and voice rooms | the overlay is dropped |
 | `skill` | star, middle or fire: play style's potions and wait, outdoors | the overlay is dropped |
 | `activities` | day-plan activities and partners, for Part C's planner | the overlay is dropped |
 
-Where they are read: traits, hangouts, skill and activities ride on the effective persona
-(`tuning.effective.edits_of`); feelings and moods are folded in by `Store.get_relationship` and
-`Store.get_state`, and by the raw readers (`server.state.tie_kind`, the server snapshot's ties,
-`culture.tease`, the night's encounter partners) through `tuning.edits.feeling_overlay` and
-`mood_overlay`. A write through an overlay goes back into the stored row's own terms: a moved
-score by the writer's own amount, an untouched one as stored, so dropping the overlay leaves no
-offset behind. What the night did meanwhile (a memory, a stance band, a mood it computed) is
-the guild's history, as with dials.
+**An overlay edit is a lens, never a write.** The stored rows stay the night's truth:
+`Store.get_relationship(a, b)` and `Store.get_state(guid)` return the stored row, and every
+writer and the night read that (the romance ladder, attraction and its stance bands, regression,
+gains, breakups, weekends, the mood stage, notes, re-seeds). Only the readers that shape what a
+member says or who speaks see the lens: `get_relationship(..., lens=True)` and
+`get_state(..., lens=True)` in talk (speaker weights, relationship cards, the mood line, bits,
+reactions, banter, photo and voice-room choices), `server.state.tie_kind`, the server snapshot,
+`culture.tease`, `arc.live`'s rival line and the console's Personas and Social views. A lens row
+(`EffectiveRelationship`, `EffectiveState`) is never written: `put_relationship` and `put_state`
+refuse one. Traits, hangouts, skill and activities ride on the effective persona for talk
+(`tuning.effective.edits_of`); the night reads her persona as stored and dialled
+(`NightContext.persona`, `load_effective`). So undoing an overlay edit leaves exactly what the
+night would have produced without it (`tests/nightly/test_night_godmode_lens.py`, one test per
+writer). Feelings sum over the edits in force; each mood edit counts until its own end.
 
 Content rules: age, looks, names, identity and the romance stance are never edited (codes
 `age`, `looks`, `name`, `identity`, `romance`); trait values must still make a valid persona
@@ -77,14 +85,19 @@ turn that carries an outreach item or a string's own turn shows no further strin
 | --- | --- | --- |
 | `post` {channel, about} | an `intent` seed in the server engine, her as the opener | her opener is posted, or a line of hers there names it |
 | `thread` {channel, name, about} | the same, and a thread named as he asked on her opener | her opener is posted |
-| `bring_up` {topic[, channel]} | the same seed (general or irl without a channel) | a Discord line of hers in its scope names one of the topic's words (`moves.topics`) |
-| `react` {message, emoji} | the server's Reactor, after her presence's delay | the reaction is written |
-| `dm_him` {about} | a DM opener on D2's DM path, no outreach item | it is sent, or her DM to you names it |
+| `bring_up` {topic[, channel]} | the same seed in its one channel (his, else general or irl by her guid) | a Discord line of hers there, or in her DM with you, names one of the topic's words (`moves.topics`); an opener that does not name it is not taken |
+| `react` {message, emoji} | the server's Reactor, after her presence's delay; her presence and the string's fit are checked again before it is written | the reaction is written |
+| `dm_him` {about} | a DM opener on D2's DM path, no outreach item, never within 10 minutes of an opener of her own | it is sent, or her DM to you names it |
+
+An attempt that comes to nothing (a dropped draft, an opener that never named the topic) backs
+the string off: 5 minutes, doubling, and after 4 it is `not_taken` (`dropped`,
+`not_mentioned`).
 
 Each tick (30 s) settles a string `expired` after a day, or `not_taken` with a reason when it
 no longer fits: `away`, `gone`, `feud` (a feud with whom it touches), `stance` (warm words or a
 loving reaction toward a rival, a DM when she dislikes you), `claims` (it reverses a claim of
-hers), `deleted` (the message is gone), or the store's own refusal code. He can cancel a
+hers), `deleted` (the message is gone), `reactions_off`, `dms_off` (`[server] dms_per_day = 0`),
+`chattiness_off`, or the store's own refusal code. He can cancel a
 waiting one. Group DMs and game lines never carry out or show a Discord string. The game kinds
 (`come_to_me`, `join_group`, `follow`, `duel_me`, `emote`, `sit`) are Part B's native strings
 and are refused `not_yet` here. Discord strings need the guild Discord's engine

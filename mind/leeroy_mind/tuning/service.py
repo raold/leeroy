@@ -129,7 +129,9 @@ class TuningService:
                   edit=r["id"])
         return {"ok": True, "change": r["change"], "id": r["id"], "rows": r["rows"],
                 "version": app.personas.tuning.version,
-                "message": f"Saved as change #{r['change']}." if r["change"] else "Already retired."}
+                "message": (f"Saved as change #{r['change']}." + (
+                    " The night had moved what it changed, so that stays as the night left it."
+                    if r.get("moved") else "")) if r["change"] else "Already retired."}
 
     def status(self) -> dict:
         t = self.app.personas.tuning
@@ -150,10 +152,10 @@ class TuningService:
             reach = self.reach(s.scope, s.target, s.dial, pic)
         elif action == "undo":
             r = C.undo(app.store, args["change"], pic, source="console", now=now,
-                       dial=self._dial())
+                       life_dial=self._dial())
         elif action == "revert":
             r = C.revert_to(app.store, args["to"], pic, source="console", now=now,
-                            dial=self._dial())
+                            life_dial=self._dial())
         elif action == "group":
             r = C.save_group(app.store, args["id"], args["name"], args["where"],
                              source="console", now=now)
@@ -167,7 +169,9 @@ class TuningService:
             reach = self.reach("group", str(self._group_id(r.change)), "talkative")
         log_event("tune_written", action=action, change=r.change or 0, rows=r.rows)
         message = ("Nothing to change: it already stands that way." if r.change is None
-                   else f"Saved as change #{r.change}.")
+                   else f"Saved as change #{r.change}." + (
+                       f" {r.moved} edit{'' if r.moved == 1 else 's'} the night had moved since "
+                       "stayed as the night left them." if r.moved else ""))
         return {"ok": True, "change": r.change, "rows": r.rows, "reach": reach,
                 "version": t.version, "message": message}
 

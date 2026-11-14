@@ -147,10 +147,10 @@ def _write(root: Path, args) -> int:
                 dial = 5
             try:
                 if args.action == "undo":
-                    r = C.undo(store, args.change, pic, source="cli", now=now, dial=dial)
+                    r = C.undo(store, args.change, pic, source="cli", now=now, life_dial=dial)
                     what = f"undo #{args.change}"
                 else:
-                    r = C.revert_to(store, args.to, pic, source="cli", now=now, dial=dial)
+                    r = C.revert_to(store, args.to, pic, source="cli", now=now, life_dial=dial)
                     what = f"revert to #{args.to}"
             except (C.TuneError, ValueError) as e:  # an edit's refusal (tuning.edits) too
                 print(f"{'undo' if args.action == 'undo' else 'revert'}: {e}", file=sys.stderr)

@@ -63,9 +63,11 @@ def test_intent_reaches_her_card(cast):
     assert I.card_lines(cast.conn, 103, "dm:103", to_guid=1, human=1) == [
         "You meant to message him about the raid schedule."]
     assert I.card_lines(cast.conn, 103, "discord:general", human=1) == []
-    bring = make(cast, 104, "bring_up", topic="the Saurfang wipe")
-    assert I.card_lines(cast.conn, 104, "discord:strategy", human=1) == ["You meant to bring up the Saurfang wipe."]
-    assert I.card_lines(cast.conn, 104, "dm:104", to_guid=1, human=1) == []
+    bring = make(cast, 104, "bring_up", topic="the Saurfang wipe")  # one channel: general
+    assert I.get(cast.conn, bring)["args"]["channel"] == "general"
+    assert I.card_lines(cast.conn, 104, "discord:general", human=1) == ["You meant to bring up the Saurfang wipe."]
+    assert I.card_lines(cast.conn, 104, "discord:strategy", human=1) == []  # never every channel
+    assert I.card_lines(cast.conn, 104, "dm:104", to_guid=1, human=1) == ["You meant to bring up the Saurfang wipe."]
     assert I.card_lines(cast.conn, 104, "gdm:1", human=1) == []  # never in a group DM
     assert {i, dm, bring} == {r["id"] for r in I.pending(cast.conn)}
 
@@ -277,6 +279,9 @@ def test_bring_up_expires_when_never_mentioned(app):
     assert I.get(app.store.conn, other)["status"] == "pending"  # group DMs and game lines never count
     app.godmode.on_line(4, Chat(ts=0, channel="discord:strategy", from_guid=105, from_name="",
                                 to_guid=0, text="still thinking about that saurfang mess", map=0, zone=0))
+    assert I.get(app.store.conn, other)["status"] == "pending"  # not her intent's channel
+    app.godmode.on_line(5, Chat(ts=0, channel="discord:irl", from_guid=105, from_name="",
+                                to_guid=0, text="still thinking about that saurfang mess", map=0, zone=0))
     assert I.get(app.store.conn, other)["status"] == "taken"
     run(app.godmode.tick(app.clock.now() + I.DUE_S + 1))
     row = I.get(app.store.conn, ident)
@@ -360,3 +365,130 @@ def test_reactions_off_reports_a_react_not_taken(app):
     run(app.godmode.tick(app.clock.now()))
     row = I.get(app.store.conn, ident)
     assert (row["status"], row["reason"]) == ("not_taken", "reactions_off")
+
+
+def _tick(app, now):
+    """One tick and whatever it handed out, in one event loop."""
+    async def go():
+        await app.godmode.tick(now)
+        for _ in range(200):
+            if not app.godmode._tasks:
+                return
+            await asyncio.sleep(0)
+    run(go())
+
+
+def test_a_dropped_dm_him_backs_off_and_then_reports_why(app, monkeypatch):
+    ident = _string(app, 103, "dm_him", about="the raid schedule")
+    monkeypatch.setattr("leeroy_mind.server.dms.presence_of",
+                        lambda *a, **k: SimpleNamespace(state="online"))
+    app.engine.cfg = replace(app.engine.cfg, talk=replace(app.engine.cfg.talk, chattiness=4))
+    calls = []
+
+    async def dropped(turn, meta):  # the guards drop her draft: nothing is recorded
+        calls.append(app.clock.now())
+        return []
+    monkeypatch.setattr(app.engine, "speak_meta", dropped)
+    start = app.clock.now()
+    for step in range(10):  # ten ticks, 30 s apart: five minutes
+        monkeypatch.setattr(app.clock, "now", lambda t=start + 30 * step: t)
+        _tick(app, app.clock.now())
+    assert len(calls) == 1 and I.get(app.store.conn, ident)["status"] == "pending"
+    t = start
+    for _ in range(I.MAX_TRIES - 1):
+        t += I.BACKOFF_S * 2 ** I.MAX_TRIES
+        monkeypatch.setattr(app.clock, "now", lambda t=t: t)
+        _tick(app, t)
+    assert len(calls) == I.MAX_TRIES
+    row = I.get(app.store.conn, ident)
+    assert (row["status"], row["reason"]) == ("not_taken", "dropped")
+
+
+@pytest.mark.parametrize("setting,reason", [("dms", "dms_off"), ("chattiness", "chattiness_off")])
+def test_dm_him_says_why_when_her_openers_are_off(app, setting, reason):
+    ident = _string(app, 103, "dm_him", about="the raid schedule")
+    if setting == "dms":
+        app.server.config = replace(app.server.config, dms_per_day=0)
+    else:
+        app.engine.cfg = replace(app.engine.cfg, talk=replace(app.engine.cfg.talk, chattiness=0))
+    run(app.godmode.tick(app.clock.now()))
+    row = I.get(app.store.conn, ident)
+    assert (row["status"], row["reason"]) == ("not_taken", reason)
+
+
+def test_dm_him_waits_after_an_opener_of_her_own(app, monkeypatch):
+    from leeroy_mind.server.dms import OPEN_KEY
+    _string(app, 103, "dm_him", about="the raid schedule")
+    monkeypatch.setattr("leeroy_mind.server.dms.presence_of",
+                        lambda *a, **k: SimpleNamespace(state="online"))
+    app.engine.cfg = replace(app.engine.cfg, talk=replace(app.engine.cfg.talk, chattiness=4))
+    app.store.set_meta(OPEN_KEY.format(guid=103), str(app.clock.now() - 30))
+    _tick(app, app.clock.now())
+    assert not app.turns
+    app.store.set_meta(OPEN_KEY.format(guid=103), str(app.clock.now() - I.DM_FLOOR_S - 1))
+    _tick(app, app.clock.now())
+    assert app.turns and app.turns[-1][0].channel == "dm:103"
+
+
+def test_bring_up_is_taken_only_when_the_opener_names_it(app, monkeypatch):
+    _only_intents(app, monkeypatch)
+    ident = _string(app, 104, "bring_up", topic="the Saurfang wipe")
+
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await _finished(app.server.engine)
+    run(go())
+    assert app.turns and app.turns[0][0].speaker == 104
+    assert I.get(app.store.conn, ident)["status"] == "pending"  # "An invented thought"
+    assert I.tries(app.store.conn, ident)[0] == 1
+    assert not I.may_try(app.store.conn, ident, app.clock.now())  # backs off before trying again
+    real = app.engine.speak_meta
+
+    async def names_it(turn, meta):
+        out = await real(turn, meta)
+        with app.store.transaction():
+            app.store.conn.execute("UPDATE discord_message SET text='that saurfang wipe though' "
+                                   "WHERE turn=?", (meta.turn_id,))
+        return out
+    monkeypatch.setattr(app.engine, "speak_meta", names_it)
+    row = app.store.conn.execute("SELECT id FROM discord_message ORDER BY id DESC").fetchone()
+    with app.store.transaction():
+        app.store.conn.execute("UPDATE discord_message SET text='that saurfang wipe though' "
+                               "WHERE id=?", (row[0],))
+    app.godmode.taken(ident, row[0], app.clock.now())
+    assert I.get(app.store.conn, ident)["status"] == "taken"
+
+
+def test_a_reaction_rechecks_her_and_the_intent_after_its_delay(app, monkeypatch):
+    message = dstore.post(app.store, channel="general", author=103, origin="mind",
+                          text="Raid tonight?", now=app.clock.now())
+    ident = _string(app, 102, "react", message=message, emoji="🎉")
+    states = iter(["online", "online"])
+    monkeypatch.setattr("leeroy_mind.server.reacting.presence_of",
+                        lambda *a, **k: SimpleNamespace(state=next(states, "online")))
+
+    async def sleep(s):  # a feud begins while she waits to react
+        app.store.conn.execute("INSERT INTO feud(a,b,started,cause) VALUES (102,103,?,'x')",
+                               (app.clock.now(),))
+        app.store.conn.commit()
+    monkeypatch.setattr(app.clock, "sleep", sleep)
+    _tick(app, app.clock.now())
+    row = I.get(app.store.conn, ident)
+    assert (row["status"], row["reason"]) == ("not_taken", "feud")
+    assert not app.store.conn.execute("SELECT 1 FROM discord_reaction").fetchone()
+
+
+def test_a_reaction_waits_when_she_went_offline_during_its_delay(app, monkeypatch):
+    message = dstore.post(app.store, channel="general", author=103, origin="mind",
+                          text="Raid tonight?", now=app.clock.now())
+    ident = _string(app, 102, "react", message=message, emoji="🎉")
+    states = iter(["online", "offline"])
+    monkeypatch.setattr("leeroy_mind.server.reacting.presence_of",
+                        lambda *a, **k: SimpleNamespace(state=next(states, "offline")))
+
+    async def sleep(s):
+        return None
+    monkeypatch.setattr(app.clock, "sleep", sleep)
+    _tick(app, app.clock.now())
+    assert I.get(app.store.conn, ident)["status"] == "pending"
+    assert not app.store.conn.execute("SELECT 1 FROM discord_reaction").fetchone()

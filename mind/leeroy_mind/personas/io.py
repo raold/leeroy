@@ -78,9 +78,9 @@ def load_effective(store: Store, guid: int, *, tuning: Tuning | None = None) -> 
     if p is None:
         return None
     t = load_tuning(store) if tuning is None else tuning
-    if not (t.pins or t.offsets or t.edits):
+    if not (t.pins or t.offsets):
         return p
-    return t.apply(p, store.cast().get(guid) if t.needs_cast else None)
+    return t.apply(p, store.cast().get(guid) if t.needs_cast else None, edits=False)
 
 
 def export_personas(store: Store, out_dir: Path, guids=None) -> list[Path]:

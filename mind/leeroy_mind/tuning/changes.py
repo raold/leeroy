@@ -54,6 +54,7 @@ class Picture:
 class Result:
     change: int | None  # None: nothing changed, nothing written
     rows: int = 0
+    moved: int = 0  # table edits the night had moved since, left as they are (a revert)
 
 
 def picture(store, personas) -> Picture:
@@ -256,7 +257,8 @@ def _now_def(conn, target: str):
     return None if d is None else json.dumps(d, sort_keys=True, separators=(",", ":"))
 
 
-def undo(store, change: int, pic: Picture, *, source: str, now: float, dial: int = 5) -> Result:
+def undo(store, change: int, pic: Picture, *, source: str, now: float,
+         life_dial: int = 5) -> Result:
     from . import edits, nudges
     with store.transaction():
         conn = store.conn
@@ -292,7 +294,7 @@ def undo(store, change: int, pic: Picture, *, source: str, now: float, dial: int
                     check_set(Set(scope, target, dial, r[3]), pic, live_groups(conn))
                 _write_value(conn, new, scope, target, dial, r[4], r[3], r[7])
         nudges.write_moves(conn, new, nudge_moves)
-        edits.write_moves(edits.Ctx(store, now, pic.human, dial), new, edit_moves)
+        edits.write_moves(edits.Ctx(store, now, pic.human, life_dial), new, edit_moves)
         _stamp(conn, new)
         return Result(new, len(rows) + len(nudge_moves) + len(edit_moves))
 
@@ -310,7 +312,7 @@ def state_after(conn, change: int) -> tuple[dict, dict]:
 
 
 def revert_to(store, change: int, pic: Picture, *, source: str, now: float,
-              dial: int = 5) -> Result:
+              life_dial: int = 5) -> Result:
     """Every value and group back to how they stood right after `change` (0: before any), as
     one change; nothing when they already are."""
     from . import edits, nudges
@@ -341,9 +343,11 @@ def revert_to(store, change: int, pic: Picture, *, source: str, now: float,
             version = pic.versions.get(int(target)) if scope == "member" else None
             _write_value(conn, new, scope, target, dial, before, after, version)
         nudges.write_moves(conn, new, nudge_moves)
-        edits.write_moves(edits.Ctx(store, now, pic.human, dial), new, edit_moves)
+        ctx = edits.Ctx(store, now, pic.human, life_dial, lenient=True)
+        edits.write_moves(ctx, new, edit_moves)
         _stamp(conn, new)
-        return Result(new, len(moves) + len(def_moves) + len(nudge_moves) + len(edit_moves))
+        return Result(new, len(moves) + len(def_moves) + len(nudge_moves) + len(edit_moves),
+                      moved=len(ctx.moved))
 
 
 # -- reading the log ----------------------------------------------------------------------------

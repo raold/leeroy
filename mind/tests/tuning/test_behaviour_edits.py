@@ -69,6 +69,22 @@ def test_hangout_weights_move_her_opening_channel():
                for _ in range(200))
 
 
+def test_one_members_avoidance_never_removes_a_channel_for_everyone():
+    anyone = Seed("purpose:general", "purpose", ("general",), "topic")
+    local = datetime(2026, 11, 12, 14)
+    p = {g: make_persona(g, f"Test{g}") for g in (101, 102, 103)}
+    avoids = overlay(p[103], channels={"general": 0})
+    free = {101: edits_of(p[101]), 102: edits_of(p[102]), 103: edits_of(avoids)}
+    assert choose_seed_and_channel([anyone], local=local, officers_free=0, rng=random.Random(1),
+                                   hangouts=free) == (anyone, "general")
+    shared = Seed("life:1", "life", ("general",), "fact", (101,))
+    assert choose_seed_and_channel([shared], local=local, officers_free=0, rng=random.Random(1),
+                                   hangouts=free) == (shared, "general")
+    own = Seed("life:2", "life", ("general",), "fact", (103,))
+    assert choose_seed_and_channel([own], local=local, officers_free=0, rng=random.Random(1),
+                                   hangouts=free) is None  # her own opener: she avoids it
+
+
 def test_no_hangouts_leave_every_draw_as_it_was():
     seed = Seed("life:1", "life", ("irl", "general"), "fact", (103,))
     local = datetime(2026, 11, 12, 14)

@@ -47,7 +47,8 @@ def length(rng: random.Random) -> int:
 
 def _hangout(hangouts, seed: Seed, channel: str) -> float:
     """The mean of the owner's godmode hangout weights (tuning.edits) for this channel over
-    the seed's openers, or over every free member when anyone may open it; 1.0 without any."""
+    the seed's free openers, or over every free member when anyone may open it (an unedited
+    member weighs 1); 1.0 without any."""
     if not hangouts:
         return 1.0
     who = [g for g in (seed.openers if seed.openers is not None else hangouts) if g in hangouts]
@@ -58,8 +59,8 @@ def _hangout(hangouts, seed: Seed, channel: str) -> float:
 
 def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_free: int,
                             rng: random.Random, hangouts=None) -> tuple[Seed, str] | None:
-    """`hangouts`: free member -> their godmode overlays (MemberEdits), only when any has
-    hangout weights; None leaves every weight as it was."""
+    """`hangouts`: every free member -> their godmode overlays (MemberEdits), given only when
+    any has hangout weights; None leaves every weight as it was."""
     options, weights = [], []
     phase = day_phase(local)
     for seed in seeds:

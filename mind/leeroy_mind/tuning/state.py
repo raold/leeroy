@@ -123,12 +123,14 @@ class Tuning:
             return NEUTRAL
         return MemberTuning(_frozen(values), frozenset(d for d in pins if d in values))
 
-    def apply(self, p, member=None):
-        """The effective persona (the stored object itself when nothing reaches it)."""
+    def apply(self, p, member=None, *, edits: bool = True):
+        """The effective persona (the stored object itself when nothing reaches it). `edits`
+        False leaves the owner's godmode edits out: the night reads her as stored and dialled,
+        the edits being a lens for talk only."""
         from .effective import with_edits, with_nudges
         q = with_nudges(effective(p, self.member(p, member)),
                         N.for_member(self.nudges, p, member, self.groups, self.human))
-        if not self.edits or p is None or p.guid == self.human:
+        if not edits or not self.edits or p is None or p.guid == self.human:
             return q
         return with_edits(q, E.member_edits(self.edits, p.guid))
 

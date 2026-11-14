@@ -70,12 +70,8 @@ class Relationship:
 
 @dataclass(frozen=True, slots=True)
 class EffectiveRelationship(Relationship):
-    """A relationship read with the owner's godmode feelings folded in (tuning.edits). `read`
-    holds (dimension, value read) for each dimension an overlay moved, and `stage_read` the
-    romance stage the overlay set (""): Store.put_relationship turns a write of one back into
-    the stored row's own terms, so an overlay is never written into the table."""
-    read: tuple = ()
-    stage_read: str = ""
+    """A relationship read through the owner's godmode lens (Store.get_relationship(lens=True),
+    tuning.edits): never written (Store.put_relationship refuses one)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,9 +92,8 @@ class PersonaStateRow:
 
 @dataclass(frozen=True, slots=True)
 class EffectiveState(PersonaStateRow):
-    """A persona state read with a godmode mood edit folded in: `mood_read` is the mood that
-    was read. Store.put_state keeps the stored mood when a writer passes it on unchanged."""
-    mood_read: float = 0.0
+    """A persona state read through the owner's godmode lens (Store.get_state(lens=True)):
+    never written (Store.put_state refuses one)."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -97,7 +97,7 @@ def _share(app, pic, persona_of, guid: int) -> float:
     if guid not in online:
         online.append(guid)
     ctx = SpeakerContext(now=app.clock.now(), topic=set(), opener=True, phase=DayPhase.EVENING)
-    weights = {g: speaker_weight(persona_of(g), app.store.get_state(g), None, ctx, None, 1.0)
+    weights = {g: speaker_weight(persona_of(g), app.store.get_state(g, lens=True), None, ctx, None, 1.0)
                for g in online}
     total = sum(weights.values())
     return weights[guid] / total if total else 0.0

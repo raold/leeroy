@@ -49,10 +49,6 @@ def layers(ctx, guid) -> dict[int, float]:
     with ctx.store.transaction():
         known = {r["b"]: r["score"] for r in ctx.store.conn.execute(
             "SELECT b,affinity+familiarity AS score FROM relationship WHERE a=?", (guid,))}
-        from leeroy_mind.tuning.edits import feeling_overlay
-        for (a, b), offsets in feeling_overlay(ctx.store.conn).items():
-            if a == guid and "affinity" in offsets:  # the owner's godmode feelings
-                known[b] = known.get(b, 0) + offsets["affinity"]
         scores = {g: known.get(g, 0) for g in ctx.members() if g != guid}
     ranked = sorted(scores, key=lambda g: (-scores[g], g))
     return {g: 3.0 if i < 5 else 1.0 if i < 20 else 0.3 for i, g in enumerate(ranked)}

@@ -54,13 +54,14 @@ def snapshot(store):
     store.reload_edits()
     cache = PersonaCache(store)
     conn = store.conn
-    rels = {(a, b): store.get_relationship(a, b) for a in (101, 102, 103) for b in (1, 101, 102, 103)}
+    rels = {(a, b): store.get_relationship(a, b, lens=True)
+            for a in (101, 102, 103) for b in (1, 101, 102, 103)}
     return {
         "personas": {g: persona_to_dict(cache.get(g)) for g in (101, 102, 103)},
         "relationships": {k: (r.affinity, r.trust, r.attraction, r.romance_stage)
                           for k, r in rels.items()},
         "ties": {(a, b): tie_kind(conn, a, b) for a in (101, 102, 103) for b in (1, 101, 102, 103)},
-        "moods": {g: store.get_state(g).mood for g in (101, 102, 103)},
+        "moods": {g: store.get_state(g, lens=True).mood for g in (101, 102, 103)},
         "memories": [tuple(r) for r in conn.execute(
             "SELECT id,owner,status,text FROM memory WHERE status='active' ORDER BY id")],
         "feuds": [tuple(r) for r in conn.execute(
@@ -215,8 +216,9 @@ def test_feelings_overlay_reaches_every_reader(tuned):
     assert tie_kind(tuned.conn, 101, 103) == "neutral"
     r = edit(tuned, "feeling", member=101, other=103, affinity=60)
     tuned.reload_edits()
-    rel = tuned.get_relationship(101, 103)
+    rel = tuned.get_relationship(101, 103, lens=True)
     assert isinstance(rel, EffectiveRelationship) and rel.affinity == 70
+    assert type(tuned.get_relationship(101, 103)) is Relationship  # the stored truth
     assert tie_kind(tuned.conn, 101, 103) == "friend"
     card = relationship_card("Coros", rel, is_human=False, is_guild_master=False)
     assert card == relationship_card("Coros", replace(Relationship(a=101, b=103), affinity=70),
@@ -224,14 +226,16 @@ def test_feelings_overlay_reaches_every_reader(tuned):
     from leeroy_mind.culture.tease import tease_ok
     personas = PersonaCache(tuned)
     assert tease_ok(tuned.conn, 101, 103, personas=personas, human=1, now=NOW)[1] != "dislikes"
-    # a night write through the overlay moves the stored row by its own amount only
-    tuned.put_relationship(replace(rel, affinity=rel.affinity + 5, trust=rel.trust))
-    stored = tuned.conn.execute("SELECT affinity FROM relationship WHERE a=101 AND b=103").fetchone()
-    assert stored[0] == 15
+    # a lens is never written; the night moves the stored row underneath it
+    with pytest.raises(TypeError):
+        tuned.put_relationship(replace(rel, affinity=rel.affinity + 5))
+    stored = tuned.get_relationship(101, 103)
+    tuned.put_relationship(replace(stored, affinity=stored.affinity + 5))
+    assert tuned.get_relationship(101, 103, lens=True).affinity == 75
     undo(tuned, r["change"])
     tuned.reload_edits()
-    assert tuned.get_relationship(101, 103).affinity == 15
-    assert type(tuned.get_relationship(101, 103)) is Relationship
+    assert tuned.get_relationship(101, 103, lens=True).affinity == 15
+    assert type(tuned.get_relationship(101, 103, lens=True)) is Relationship
     assert tie_kind(tuned.conn, 101, 103) == "neutral"
 
 
@@ -244,8 +248,9 @@ def test_mood_overlay_reaches_tease_and_ends_on_time(tuned):
     edit(tuned, "mood", member=103, offset=-0.9, seconds=3600)
     tuned.reload_edits()
     assert tease_ok(tuned.conn, 101, 103, personas=personas, human=1, now=NOW)[1] == "hurt_mood"
-    assert tuned.get_state(103).mood == pytest.approx(-0.9)
-    tuned.put_state(replace(tuned.get_state(103), goals=("rest",)))  # mood passed on unchanged
+    assert tuned.get_state(103, lens=True).mood == pytest.approx(-0.9)
+    assert tuned.get_state(103).mood == 0  # stored
+    tuned.put_state(replace(tuned.get_state(103), goals=("rest",)))  # a writer reads the stored row
     assert tuned.conn.execute("SELECT mood FROM persona_state WHERE guid=103").fetchone()[0] == 0
     assert tease_ok(tuned.conn, 101, 103, personas=personas, human=1, now=NOW + 3601)[0]
 
@@ -274,8 +279,8 @@ def test_the_endpoint_shape_and_the_service_switch(tuned):
 def test_no_edits_means_stored_objects_and_rows(tuned):
     cache = PersonaCache(tuned)
     assert cache.get(101) is cache.base(101)
-    assert type(tuned.get_relationship(101, 102)) is Relationship
-    assert type(tuned.get_state(101)).__name__ == "PersonaStateRow"
+    assert type(tuned.get_relationship(101, 102, lens=True)) is Relationship
+    assert type(tuned.get_state(101, lens=True)).__name__ == "PersonaStateRow"
 
 
 def test_logs_never_carry_edit_text(tuned, caplog):
@@ -330,3 +335,93 @@ def test_cli_reads_edits_and_undoes_them_with_the_mind_stopped(tmp_path, capsys)
         assert conn.execute("SELECT count(*) FROM feud WHERE ended IS NULL").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_a_mood_edit_after_an_expired_one_applies(tuned, monkeypatch):
+    edit(tuned, "mood", member=103, offset=-0.5, seconds=3600)
+    later = NOW + 7200
+    monkeypatch.setattr(tuned.clock, "now", lambda: later)
+    edit(tuned, "mood", member=103, offset=0.8, seconds=86400, now=later)
+    tuned.reload_edits()
+    assert E.mood_overlay(tuned.conn, 103, later) == pytest.approx(0.8)
+    assert tuned.get_state(103, lens=True).mood == pytest.approx(0.8)
+    edit(tuned, "mood", member=103, offset=-0.3, seconds=7200, now=later)
+    tuned.reload_edits()
+    assert tuned.get_state(103, lens=True).mood == pytest.approx(0.5)  # overlapping: both count
+
+
+def test_life_events_undone_in_any_order_restore_her_thread(tuned):
+    ensure_thread(tuned, 103, "learning to cook", 1000.0, random.Random(1))
+    tuned.conn.commit()
+    original = snapshot(tuned)["threads"]
+    a = edit(tuned, "life_event", member=103, title="started a new job at the bakery")
+    b = edit(tuned, "life_event", member=103, title="moved to a new flat", now=NOW + 1)
+    with pytest.raises(C.TuneError, match="later life event"):
+        undo(tuned, a["change"])
+    undo(tuned, b["change"], now=NOW + 20)
+    undo(tuned, a["change"], now=NOW + 30)
+    assert snapshot(tuned)["threads"] == original
+    a = edit(tuned, "life_event", member=103, title="started a new job at the bakery", now=NOW + 40)
+    edit(tuned, "life_event", member=103, title="moved to a new flat", now=NOW + 41)
+    C.revert_to(tuned, a["change"] - 1, pic(tuned), source="console", now=NOW + 50)
+    assert snapshot(tuned)["threads"] == original
+
+
+def test_undo_and_revert_pass_the_life_dial_not_a_dial_name(tuned, monkeypatch):
+    seen = []
+    real = E._apply
+
+    def spy(ctx, proj):
+        seen.append(ctx.dial)
+        return real(ctx, proj)
+    monkeypatch.setattr(E, "_apply", spy)
+    r = edit(tuned, "feud_start", member=102, other=103)
+    E.retire(tuned, r["id"], source="console", now=NOW + 5, human=1)
+    C.apply_sets(tuned, [C.Set("member", "101", "talkative", 8)], pic(tuned), source="console",
+                 now=NOW + 6)
+    C.revert_to(tuned, r["change"], pic(tuned), source="console", now=NOW + 9, life_dial=0)
+    assert seen[-1] == 0
+
+
+def test_a_feud_the_night_reopened_never_blocks_revert_or_retire(tuned):
+    _setup(tuned)  # 101 and 103 are feuding
+    r = edit(tuned, "feud_end", member=101, other=103)
+    tuned.conn.execute("INSERT INTO feud(a,b,started,cause) VALUES (101,103,?,'again')", (NOW + 1,))
+    tuned.conn.commit()
+    with pytest.raises(C.TuneError):
+        undo(tuned, r["change"])  # a single undo still says why
+    C.apply_sets(tuned, [C.Set("member", "101", "talkative", 8)], pic(tuned), source="console",
+                 now=NOW + 2)
+    out = C.revert_to(tuned, 0, pic(tuned), source="console", now=NOW + 3)
+    assert out.change is not None and out.moved == 1
+    assert not tuned.conn.execute("SELECT 1 FROM tuning_value").fetchone()
+    assert [tuple(f) for f in tuned.conn.execute(
+        "SELECT a,b,cause FROM feud WHERE ended IS NULL")] == [(101, 103, "again")]
+    r = edit(tuned, "feud_end", member=101, other=103, now=NOW + 4)
+    tuned.conn.execute("INSERT INTO feud(a,b,started,cause) VALUES (101,103,?,'third')", (NOW + 5,))
+    tuned.conn.commit()
+    assert E.retire(tuned, r["id"], source="console", now=NOW + 6, human=1)["moved"]
+
+
+def test_an_implant_undo_archives_what_was_built_on_it(tuned):
+    from conftest import make_mem
+    r = edit(tuned, "memory_implant", member=101, text="Won a fishing contest in Dalaran.")
+    implant = r["effects"]["memory"]
+    first = tuned.insert_memory(make_mem(owner=101, kind="reflection", source="reflection",
+                                         text="I am good at fishing.",
+                                         evidence=(f"memory:{implant}",)))
+    second = tuned.insert_memory(make_mem(owner=101, kind="reflection", source="reflection",
+                                          text="Fishing is my thing.",
+                                          evidence=(f"memory:{first}",)))
+    other = tuned.insert_memory(make_mem(owner=101, text="Coros pulled early again."))
+    tuned.conn.commit()
+    undo(tuned, r["change"])
+    status = dict(tuned.conn.execute("SELECT id,status FROM memory"))
+    assert status[implant] == "rejected"
+    assert status[first] == status[second] == "archived" and status[other] == "active"
+
+
+def test_trait_values_are_stored_cleaned(tuned):
+    r = edit(tuned, "trait", member=101, path="likes", value=["  quiet  | runs \x01 "])
+    assert E.values(tuned.conn)[r["id"]]["args"]["value"] == ["quiet runs"]
+    assert PersonaCache(tuned).get(101).likes == ("quiet runs",)

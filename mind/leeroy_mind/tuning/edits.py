@@ -9,11 +9,12 @@ receipts in, so ``tuning undo N`` and ``revert N`` cover every kind.
 
 Two families:
 
-- overlays (trait, feeling, mood, hangouts, skill, activities) change no stored row. Traits,
-  hangouts, skill and activities fold into the effective persona (tuning.effective); feelings
-  and moods are read where relationships and moods are read (Store.get_relationship and
-  Store.get_state, and the raw readers through feeling_overlay and mood_overlay). Dropping
-  the overlay is the whole undo.
+- overlays (trait, feeling, mood, hangouts, skill, activities) are a lens, never a write: the
+  stored rows stay the night's truth, read by every writer and the night. Talk-facing readers
+  alone see it: traits, hangouts, skill and activities on the effective persona for talk
+  (tuning.effective), feelings and moods through Store.get_relationship/get_state(lens=True)
+  and the raw readers (feeling_overlay, mood_overlay). Dropping the overlay is the whole undo,
+  and leaves what the night would have produced without it.
 - table edits (life_event, memory_implant, memory_erase, feud_start, feud_end) write through the
   tables the night owns, and their projection keeps what undo needs to put them back:
   an implanted memory is rejected, an erased one gets its old status back, a feud start is
@@ -25,12 +26,14 @@ Content rules hold: the age, looks and name paths are never edited, text passes 
 cleaning, the real-name screen, the explicit screens and the romance-between-members screen,
 and a trait value must still make a valid persona. Nothing here logs text or calls a model."""
 import json
+import logging
 import random
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from leeroy_mind.storage.rows import REL_RANGES
 
+log = logging.getLogger(__name__)
 CURRENT = "tuning:edit:value:"
 RECEIPT = "tuning:edit:change:"
 EDIT_KINDS = ("trait", "feeling", "mood", "life_event", "memory_implant", "memory_erase",
@@ -245,6 +248,7 @@ def _trait_value(pic, human, member, path, value):
                                         "edited.")
         raise EditRefused("path", "That part of a persona is not editable here.")
     p = _cast_member(pic, member)
+    value = _cleaned(value, lambda s: screen_text(s, cap=300, pic=pic, human=human))
     data = persona_to_dict(p)
     node = data
     keys = path.split(".")
@@ -257,20 +261,18 @@ def _trait_value(pic, human, member, path, value):
         raise EditRefused("invalid", "That value does not fit this part of a persona.") from None
     if validate_persona(q):
         raise EditRefused("invalid", "That value is out of range for this part of a persona.")
-    for s in _strings(value):
-        screen_text(s, cap=300, pic=pic, human=human)
     return _get(persona_to_dict(q), keys)
 
 
-def _strings(v):
+def _cleaned(v, clean):
+    """`v` with every string screened and replaced by its cleaned form (Board cleaning)."""
     if isinstance(v, str):
-        yield v
-    elif isinstance(v, dict):
-        for x in v.values():
-            yield from _strings(x)
-    elif isinstance(v, list):
-        for x in v:
-            yield from _strings(x)
+        return clean(v)
+    if isinstance(v, dict):
+        return {k: _cleaned(x, clean) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_cleaned(x, clean) for x in v]
+    return v
 
 
 def _get(d, keys):
@@ -403,11 +405,22 @@ def in_force(proj, now) -> bool:
 
 @dataclass
 class Ctx:
+    """What table effects need. `lenient` (a revert or a retire): a table edit the night moved
+    since is left as the night left it and counted in `moved`, instead of refusing everything.
+    `going`: the edits this write turns off, so a later one going too never blocks."""
     store: object
     now: float
     human: int
     dial: int = 5
     ident: object = None
+    lenient: bool = False
+    moved: list = field(default_factory=list)
+    going: set = field(default_factory=set)
+
+    def changed(self, proj, words):
+        if not self.lenient:
+            raise _tune_error("changed", words)
+        self.moved.append(proj["id"])
 
 
 def _apply(ctx, proj) -> dict:
@@ -435,11 +448,12 @@ def _reverse(ctx, proj) -> None:
     kind, a, fx, conn = proj["kind"], proj["args"], proj.get("effects") or {}, ctx.store.conn
     if kind == "memory_implant" and fx.get("memory"):
         conn.execute("UPDATE memory SET status='rejected' WHERE id=?", (fx["memory"],))
+        _archive_derived(conn, fx["memory"])
     elif kind == "memory_erase":
         row = conn.execute("SELECT status FROM memory WHERE id=?", (a["memory"],)).fetchone()
         if row is not None and row[0] != "archived":
-            raise _tune_error("changed", "That memory changed since it was erased: undo the later "
-                                         "change first, or revert.")
+            return ctx.changed(proj, "That memory changed since it was erased: undo the later "
+                                     "change first, or revert.")
         if row is not None:
             conn.execute("UPDATE memory SET status=? WHERE id=?", (fx.get("status_before", "active"),
                                                                    a["memory"]))
@@ -456,8 +470,8 @@ def _reverse(ctx, proj) -> None:
         other = conn.execute("SELECT 1 FROM feud WHERE a=? AND b=? AND ended IS NULL",
                              (a["member"], a["other"])).fetchone()
         if row is None or row[0] != fx.get("ended") or other is not None:
-            raise _tune_error("changed", "That pair's feud changed since: undo the later change "
-                                         "first, or revert.")
+            return ctx.changed(proj, "That pair's feud changed since: undo the later change "
+                                     "first, or revert.")
         conn.execute("UPDATE feud SET ended=NULL WHERE id=?", (fx["feud"],))
         _restore_arc(conn, a, fx.get("arc"), mine=fx.get("arc_left"))
     elif kind == "life_event" and fx.get("thread"):
@@ -480,6 +494,26 @@ def _implant(ctx, proj) -> int:
                     importance=a["importance"], valence=a["valence"], source="owner",
                     evidence=evidence, key=key, scope=scope, scope_with=scope_with)
     return store.upsert_keyed_memory(row)
+
+
+DERIVED_MAX = 500
+
+
+def _archive_derived(conn, memory):
+    """Archive the active memories built on `memory` (citing memory:<id>, at any depth up to
+    DERIVED_MAX), so nothing she recalls still rests on an implant taken back."""
+    frontier, seen = [memory], {memory}
+    while frontier and len(seen) < DERIVED_MAX:
+        refs = json.dumps([f"memory:{m}" for m in frontier])
+        found = [r[0] for r in conn.execute(
+            "SELECT DISTINCT m.id FROM memory m, json_each(m.evidence) e "
+            "WHERE e.value IN (SELECT value FROM json_each(?))", (refs,))]
+        frontier = [m for m in found if m not in seen][:DERIVED_MAX - len(seen)]
+        seen.update(frontier)
+    derived = sorted(seen - {memory})
+    if derived:
+        conn.execute("UPDATE memory SET status='archived' WHERE status='active' AND id IN "
+                     "(SELECT value FROM json_each(?))", (json.dumps(derived),))
 
 
 def _feud_cited(conn, feud) -> bool:
@@ -560,6 +594,12 @@ def _undo_life(ctx, proj) -> None:
     from leeroy_mind.nightly.wowlife import refresh_on_mind
     a, fx, store = proj["args"], proj["effects"], ctx.store
     conn, guid, tid = store.conn, a["member"], fx["thread"]
+    for later, v in values(conn).items():
+        if (later != proj["id"] and later not in ctx.going and live(v)
+                and v.get("kind") == "life_event" and v["member"] == guid
+                and any(p[0] == tid for p in (v.get("effects") or {}).get("prior", ()))):
+            raise _tune_error("changed", f"A later life event (edit #{later}) replaced this one's "
+                                         "thread: undo that first, or revert.")
     beats = [r[0] for r in conn.execute("SELECT id FROM life_beat WHERE thread_id=?", (tid,))]
     if beats:
         conn.execute("UPDATE life_thread SET status='resolved',resolved=coalesce(resolved,?) "
@@ -595,6 +635,7 @@ def write_moves(ctx, change, moves) -> list:
     conn = ctx.store.conn
     off = sorted((m for m in moves if live(m["before"]) and not live(m["after"])),
                  key=lambda m: -m["id"])
+    ctx.going = {m["id"] for m in off}
     on = sorted((m for m in moves if not live(m["before"]) and live(m["after"])),
                 key=lambda m: m["id"])
     rest = [m for m in moves if m not in off and m not in on]
@@ -686,10 +727,11 @@ def retire(store, id, *, source, now, human=0, dial=5) -> dict:
         if before["retired"] is not None:
             return {"change": None, "id": id, "kind": before["kind"], "rows": 0}
         change = C._new_change(conn, now, source, f"edit {before['kind']} retired")
-        write_moves(_ctx(store, now, human, dial, None), change,
-                    [{"id": id, "before": before, "after": {**before, "retired": now}}])
+        ctx = Ctx(store, now, human, dial, None, lenient=True)
+        write_moves(ctx, change, [{"id": id, "before": before, "after": {**before, "retired": now}}])
         C._stamp(conn, change)
-        return {"change": change, "id": id, "kind": before["kind"], "rows": 1}
+        return {"change": change, "id": id, "kind": before["kind"], "rows": 1,
+                "moved": bool(ctx.moved)}
 
 
 def preview(store, args, *, human, now, pic=None) -> dict:
@@ -745,12 +787,8 @@ NO_EDITS = MemberEdits()
 
 def load(conn, now=None) -> tuple:
     """The persona-overlay edits in force (trait, hangouts, skill, activities), oldest first."""
-    try:
-        current = values(conn)
-    except Exception:
-        return ()
-    return tuple(v for _, v in sorted(current.items())
-                 if v.get("kind") in PERSONA_KINDS and in_force(v, now))
+    found = [kv for kind in sorted(PERSONA_KINDS) for kv in _live_of(conn, kind)]
+    return tuple(v for _, v in sorted(found, key=lambda kv: kv[0]) if in_force(v, now))
 
 
 def member_edits(edits, guid) -> MemberEdits:
@@ -779,45 +817,70 @@ def trait_overlay(conn, guid, now=None) -> dict:
     return dict(member_edits(load(conn, now), guid).traits)
 
 
+_MALFORMED: set[str] = set()
+
+
+def _live_of(conn, kind):
+    """The unretired projections of one kind, oldest first. SQLite filters by kind and
+    retirement, so a lens reader parses only what can be in force; a malformed projection is
+    skipped and logged once (by id), never failing the read."""
+    try:
+        rows = conn.execute(
+            "SELECT key,value FROM meta WHERE key GLOB ? AND json_valid(value) "
+            "AND json_extract(value,'$.kind')=? AND json_extract(value,'$.retired') IS NULL",
+            (CURRENT + "[0-9]*", kind)).fetchall()
+    except Exception:
+        return []
+    out = []
+    for key, value in rows:
+        try:
+            v = json.loads(value)
+            int(v["member"]), v["args"]["member"]
+            out.append((int(key[len(CURRENT):]), v))
+        except (ValueError, KeyError, TypeError):
+            if key not in _MALFORMED:
+                _MALFORMED.add(key)
+                log.warning("godmode_edit_malformed key=%s", key[len(CURRENT):][:12])
+    return sorted(out, key=lambda kv: kv[0])
+
+
 def feeling_overlay(conn, now=None) -> dict:
     """(a, b) -> offsets on affinity, trust and attraction (summed over the edits in force), and
-    "romance_stage" from the newest edit that sets one."""
+    "romance_stage" from the newest edit that sets one. A lens: only talk-facing readers fold it
+    in (Store.get_relationship(lens=True), tie_kind, tease, the server snapshot, the console)."""
     out = {}
-    try:
-        current = values(conn)
-    except Exception:
-        return out
-    for _, v in sorted(current.items()):
-        if v.get("kind") != "feeling" or not in_force(v, now):
+    for _, v in _live_of(conn, "feeling"):
+        try:
+            a = v["args"]
+            row = out.setdefault((int(a["member"]), int(a["other"])), {})
+            for d in FEELING_DIMS:
+                if d in a:
+                    row[d] = row.get(d, 0.0) + float(a[d])
+            if "romance_stage" in a:
+                row["romance_stage"] = str(a["romance_stage"])
+        except (KeyError, TypeError, ValueError):
             continue
-        a = v["args"]
-        row = out.setdefault((a["member"], a["other"]), {})
-        for d in FEELING_DIMS:
-            if d in a:
-                row[d] = row.get(d, 0.0) + a[d]
-        if "romance_stage" in a:
-            row["romance_stage"] = a["romance_stage"]
     return out
+
+
+def mood_parts(conn) -> dict:
+    """guid -> ((offset, ends), ...) for every unretired mood edit; each counts only before its
+    own end."""
+    out = {}
+    for _, v in _live_of(conn, "mood"):
+        try:
+            out.setdefault(int(v["member"]), []).append((float(v["args"]["offset"]),
+                                                          float(v["ends"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {g: tuple(parts) for g, parts in out.items()}
 
 
 def mood_overlay(conn, guid, now) -> float:
-    """The member's mood offset in force now (summed, within [-1, 1]); 0.0 when none."""
-    return moods(conn, now).get(guid, (0.0, None))[0]
-
-
-def moods(conn, now) -> dict:
-    """guid -> (offset, the soonest end) for the mood edits in force at `now`."""
-    out = {}
-    try:
-        current = values(conn)
-    except Exception:
-        return out
-    for _, v in sorted(current.items()):
-        if v.get("kind") == "mood" and in_force(v, now):
-            off, ends = out.get(v["member"], (0.0, None))
-            out[v["member"]] = (max(-1.0, min(1.0, off + v["args"]["offset"])),
-                                v["ends"] if ends is None else min(ends, v["ends"]))
-    return out
+    """The member's mood offset in force now (summed over edits not yet ended, within
+    [-1, 1]); 0.0 when none."""
+    total = sum(off for off, ends in mood_parts(conn).get(guid, ()) if now < ends)
+    return max(-1.0, min(1.0, total))
 
 
 def feeling(offsets, base: float, dim: str) -> float:

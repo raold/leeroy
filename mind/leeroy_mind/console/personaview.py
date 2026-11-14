@@ -103,6 +103,8 @@ def _tie(r) -> dict:
 def _ties(conn, human: int, top: int, guid: int | None = None) -> tuple[dict, dict]:
     """(guid -> {"top": its strongest `top` ties, "total": how many}, guid -> its row toward
     the owner)."""
+    from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay
+    lens = feeling_overlay(conn)  # what members act on: the owner's godmode feelings folded in
     one = "" if guid is None else "AND a = :guid "
     ties: dict[int, dict] = {}
     for r in conn.execute(
@@ -112,12 +114,14 @@ def _ties(conn, human: int, top: int, guid: int | None = None) -> tuple[dict, di
             f"AND ({_SCORED})) WHERE n <= :top ORDER BY a, n",
             {"human": human, "top": top, "guid": guid}):
         entry = ties.setdefault(r["a"], {"top": [], "total": r["total"]})
-        entry["top"].append(dict(_tie(r), notes=r["notes"]) if guid is not None else _tie(r))
+        tie = apply_feelings(_tie(r), lens.get((r["a"], r["b"])))
+        entry["top"].append(dict(tie, notes=r["notes"]) if guid is not None else tie)
     you = {}
     if human:
         for r in conn.execute(f"SELECT {_TIE} FROM relationship WHERE b = :human {one}",
                               {"human": human, "guid": guid}):
-            you[r["a"]] = {k: v for k, v in _tie(r).items() if k != "guid"}
+            tie = apply_feelings(_tie(r), lens.get((r["a"], human)))
+            you[r["a"]] = {k: v for k, v in tie.items() if k != "guid"}
     return ties, you
 
 

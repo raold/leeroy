@@ -230,6 +230,10 @@ class DmOpeners:
         guid, now = turn.speaker, app.clock.now()
         if turn.to_guid != app.human_guid or turn.addressee != app.human_guid:
             return False
+        from leeroy_mind.godmode.intents import DM_FLOOR_S
+        opened = _number(app.store.get_meta(OPEN_KEY.format(guid=guid)))
+        if opened is not None and now - opened < DM_FLOOR_S:
+            return False  # never right on top of an opener of her own
         if now < self._human_until.get(guid, 0):
             return False
         if any(queued.speaker == guid for queued in app.engine.planned_turns()):
@@ -280,10 +284,11 @@ class DmOpeners:
                                     and waiting(self.app.store.conn, intent['id']))
         return self._speak_intent(guid, turn, meta)
 
-    async def _speak_intent(self, guid, turn, meta):
+    async def _speak_intent(self, guid, turn, meta) -> bool:
+        """True when the opener was composed (sent or dropped), False when it never ran."""
         async with self._lock:
             if self._pending is not None or not meta.still_valid():
-                return
+                return False
             self._pending_guid = guid
             self._pending = asyncio.create_task(self.app.engine.speak_meta(turn, meta))
             try:
@@ -291,9 +296,11 @@ class DmOpeners:
             except asyncio.CancelledError:
                 if asyncio.current_task().cancelling():
                     raise
+                return False
             finally:
                 self._pending = None
                 self._pending_guid = None
+            return True
 
     async def close(self) -> None:
         self._closed = True

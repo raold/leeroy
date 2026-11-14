@@ -168,6 +168,20 @@ class Reactor:
         if not self._ready():
             return
         now = self.app.clock.now()
+        p = self.app.personas.get(guid)
+        member = self.app.world.discord_members().get(guid)
+        if p is None or member is None or presence_of(
+                p, local=local_time(self.app.clock.local(), p.identity.region),
+                body_online=guid in self.app.world.online, body_zone=member.zone,
+                rng_seed=RNG_SEED).state not in {'online', 'idle'}:
+            return  # gone offline meanwhile: the intent waits for a later tick
+        from leeroy_mind.godmode.intents import fit, get as get_intent, settle as settle_intent
+        current = get_intent(self.app.store.conn, intent['id'])
+        if current is not None and current['status'] == 'pending':
+            ok, why = fit(self.app.store.conn, current, self.app.personas, now=now)
+            if not ok:
+                settle_intent(self.app.store, intent['id'], status='not_taken', reason=why, now=now)
+                return
         row = self.app.store.conn.execute('SELECT author,channel,deleted FROM discord_message '
                                           'WHERE id=?', (mid,)).fetchone()
         from leeroy_mind.godmode.intents import waiting
