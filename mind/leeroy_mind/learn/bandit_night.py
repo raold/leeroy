@@ -48,7 +48,7 @@ async def stage_bandit(ctx):
     await ctx.map_units("bandit",[f"{r[0]}:{r[1]}:{freeze_key}" for r in rows],one)
     if not ctx.done('bandit','retire:'+freeze_key):
         candidates=await read_work(ctx,lambda snapshot:bandit.retirement_candidates(snapshot.store.conn,settings=cfg))
-        ctx.commit('bandit','retire:'+freeze_key,lambda store:bandit.retire(store.conn,candidates))
+        ctx.commit('bandit','retire:'+freeze_key,lambda store:bandit.retire(store.conn,candidates,now=ctx.clock.now()))
     log('bandit_credited',count=credited)
 
 

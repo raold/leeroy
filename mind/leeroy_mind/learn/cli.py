@@ -51,6 +51,14 @@ def learn_main(argv=None):
     lesson_command.add_argument("--guid", type=int)
     arm_command = sub.add_parser("arms")
     arm_command.add_argument("--data-dir", default=argparse.SUPPRESS)
+    version_command = sub.add_parser("versions", help="list saved learning-state versions (read-only)")
+    version_command.add_argument("--data-dir", default=argparse.SUPPRESS)
+    rollback_command = sub.add_parser("rollback", help="restore a learning-state version, with the mind stopped")
+    rollback_command.add_argument("--data-dir", default=argparse.SUPPRESS)
+    rollback_command.add_argument("--to", type=int, metavar="VERSION",
+                                  help="the version to restore (default: the newest weekly one)")
+    rollback_command.add_argument("--with-weights", action="store_true",
+                                  help="also restore that version's reward weights (default: keep the current ones)")
     from .preference_cli import add_parsers, run
     add_parsers(sub)
     args = parser.parse_args(argv)
@@ -58,8 +66,12 @@ def learn_main(argv=None):
         parser.error("--days must be between 1 and 3650")
     if args.action == 'lessons' and args.guid is not None and args.guid <= 0:
         parser.error('--guid must be positive')
+    if args.action == 'rollback' and args.to is not None and args.to <= 0:
+        parser.error('--to must be positive')
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
-    if args.action not in ('report', 'lessons', 'arms'):
+    if args.action == 'rollback':
+        return rollback_main(root, args.to, with_weights=args.with_weights)
+    if args.action not in ('report', 'lessons', 'arms', 'versions'):
         return run(args,root)
     try:
         with closing(sqlite3.connect(f"{(root / 'mind.db').resolve().as_uri()}?mode=ro", uri=True)) as conn:
@@ -68,6 +80,9 @@ def learn_main(argv=None):
                 result = {'available':have_lessons(conn), 'lessons':read_lessons(conn,guid=args.guid,now=time.time())}
             elif args.action == "arms":
                 result = arms_report(conn)
+            elif args.action == "versions":
+                from .cycle import versions
+                result = {"versions": versions(conn, limit=52)}
             else:
                 result = report(conn, days=args.days)
             print(json.dumps(result, sort_keys=True, allow_nan=False))
@@ -95,3 +110,32 @@ def arms_report(conn, *, now=None):
                 "turns":shares.get(arm.id,0),"share":shares.get(arm.id,0)/total if total else 0.})
     from dataclasses import asdict
     return {"available":True,"arms":[asdict(a) for a in registry],"contexts":contexts}
+
+
+def rollback_main(root, version=None, *, with_weights=False):
+    """With the mind stopped: hold mind.lock throughout, never create or migrate mind.db."""
+    from leeroy_mind.app import AlreadyRunning, acquire_instance_lock
+    from leeroy_mind.logs import log
+    from .cycle import rollback
+    try:
+        (root / "mind.db").open("rb").close()  # never a lock file in a data dir without a mind
+        with acquire_instance_lock(root), closing(sqlite3.connect(
+                (root / "mind.db").resolve().as_uri() + "?mode=rw", uri=True, timeout=5.0)) as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='learn_version'").fetchone() is None:
+                print("learn rollback: no learning-state versions in this database; it was not migrated")
+                return 1
+            try:
+                with conn:
+                    result = rollback(conn, version, now=time.time(), with_weights=with_weights)
+            except ValueError as error:  # fixed words only; nothing typed is echoed
+                print(f"learn rollback refused: {error}")
+                return 1
+        log("learn_rollback", restored=result["restored"], saved=result["saved"], kept=result["kept"],
+            weights=int(result["weights"]), source="cli")
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    except AlreadyRunning:
+        print("learn rollback: mind.lock is held; stop the mind before restoring a learning state")
+    except (OSError, sqlite3.Error):
+        print("learn rollback: command unavailable; nothing changed")
+    return 1

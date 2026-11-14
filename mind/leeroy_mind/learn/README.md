@@ -370,3 +370,107 @@ provenance passes the same audience checks, with a persona prior below 50 eligib
 lines. No lexical phrase is injected. This deliberately avoids applying a global
 profile learned from private or officer samples to public chat. Reads run on an
 owned SQLite snapshot; there is no extra model or embedding call.
+
+## The weekly cycle
+
+```toml
+[learn]
+enabled = true
+bandit = true
+coach = true
+cycle = false
+```
+
+`cycle = true` (default false; an invalid table disables learning; restart the mind)
+adds the model-free `learn_cycle` night stage after `bandit` (else after `talk_coach`
+or `rewards`). It runs once per ISO week, on the Monday night after the Sunday
+weekly evaluation; a later night of that week retries a failed or frozen run. Its
+receipt is the `learn_cycle` night step named after the evaluated week. With it off
+there is no stage, lesson application is unchanged, the coach's payload is unchanged
+and the golden prompts are byte-identical. On or off, the bandit samples exactly as
+described above: promotion never changes Thompson sampling or its exploration cap.
+
+Each run, in one transaction:
+
+1. **Version.** The learning state is saved in `learn_version` (migration
+   `learn_cycle`): every arm's registry row, the live lessons' ids, status,
+   reinforcement count and expiry (never their text), the promotions, the reward
+   weights in force, the last owner/guard decision id, and the bandit's decayed
+   posteriors per context and arm (for inspection). The newest 52 versions are kept.
+2. **Held-out evaluation.** Task 12's detectors run lexical and model-free over the
+   evaluated week's mind lines and the week before: repetition (across-day repeats
+   and shared evening phrases) and stock openings/closings are measured; non
+   sequiturs are partial (filler after a question only: relevance needs embeddings);
+   unawareness is partial (plain claims against verified kills, raids and places);
+   contradiction needs a model and is not measured. Guard trips are the live verdicts
+   recorded on each generation's recipe. Every medium counts, whispers, officer chat,
+   voice, Discord channels, DMs and group DMs included; only counts and rates leave
+   the evaluation, overall and per medium (game, Discord rooms with group DMs, DMs).
+3. **Promotion** is a status. An active arm is promoted per bandit context on each
+   line's whole reward (never the bandit's credit, which divides a line among its
+   seven families), frozen members' lines left out: 30 or more rewarded uses there,
+   a posterior probability above 0.9 of beating its family control's lines
+   (deterministic quadrature over decayed Beta posteriors), lines in the evaluated
+   week with no detector rate above control's in that context, no guard regression
+   (its weekly trip rate and its trip rate over all screened attempts, rejected
+   drafts included, are not above control's), no owner veto, no unmet hold and the
+   diversity floor held. An active lesson is promoted on the same gates against the
+   same member's generated lines without it, in the same rooms, its own guard trips
+   included. A promoted arm is reported, listed in the Lab and never retired for its
+   share; a promoted lesson leads the style block (with the cycle on), so trimming
+   drops trial lessons first.
+4. **Retirement.** An active arm with 30 or more rewarded uses, a probability under
+   0.5 of beating control on whole rewards, and under 5% of its family's generations
+   in both weeks (counted in the bandit contexts where it has been used) is retired;
+   never a promoted arm. The Lab can accept a retired arm again. A lesson not
+   reinforced in 14 days has already lapsed (lessons expire after 14 days without
+   reinforcement); the cycle lists those that lapsed in the evaluated week and ends
+   their promotions.
+5. **Diversity floor.** A rate rose only when, in one medium, repetition or stock
+   phrases have at least 10 more flagged lines than the week before, at least half a
+   percentage point more, and a one-sided two-proportion test under p = 0.05. Then
+   nothing is promoted, and the most recent promotions whose own lines in that medium
+   (at least 10) ran higher on what rose than their comparison lines are rolled back.
+   Such a rollback holds the item for two weeks and 30 new rewarded uses; after that
+   the gates decide again.
+6. **Report.** `meta['learn:weekly-report']` (version 1): the weeks, the state
+   version saved before the run, rates for both weeks overall and per medium, what
+   was measured, the diversity floor, what was promoted, retired, rolled back or held
+   (with reason codes), per-arm and per-lesson rates for both weeks and shares.
+   Numbers, ids and codes only, kept under 60,000 bytes for the Lab.
+
+Freezes: a global freeze (mind.toml or the Lab) skips the run without a receipt
+(`learn_cycle_frozen`). A frozen family or member is never promoted, retired or
+rolled back; frozen members' lines and rewards are left out of every gate (the
+bandit's own posteriors, kept only for inspection, still hold credit from before a
+freeze). The cycle never changes reward weights or guardrails. Logs: `learn_cycle_done
+week= version= promoted= retired= rolled_back= held= diversity_ok=`; a failure is one
+`nightly_unit_failed` with the exception type only.
+
+The coach (with `cycle = true`) adds `weekly_cycle` to each member's payload: last
+week's promoted, retired and rolled-back arm families with their closed parameters,
+that member's promoted, retired and rolled-back lesson ids and the guild's rates for
+both weeks. No text, and only when a report exists.
+
+### Rollback
+
+`python -m leeroy_mind learn rollback --data-dir <data> [--to VERSION] [--with-weights]`
+runs with the mind stopped: it holds `mind.lock` throughout, never creates or migrates
+`mind.db`, and restores the given version, by default the newest weekly one (the state
+before the latest cycle). `learn versions` lists the saved versions read-only. The Lab
+offers the same restore through the `learn` op (`{action: "rollback", version,
+weights}`), behind the key, Origin and `--no-control` gates; it works while learning
+is frozen, as other explicit owner edits do.
+
+A rollback first saves the current state as a new `rollback` version, so it can be
+undone. It restores arm statuses (an active arm the version lacks becomes a proposal
+again), the lessons' status, reinforcement count and expiry (a lesson the version
+lacks is expired) and the promotions. Then every guard or owner decision made after
+the version is applied again, in order: the night's guard retirements, his accepts,
+rejects and retires of arms, his lesson approvals, vetoes and expiries
+(`learn_decision`). His vetoes win. What the rollback reverted (a promotion, or a
+retirement it brought back) waits for 30 new rewarded uses before the cycle decides
+it again (`learn_hold`). Reward weights stay as they are unless `--with-weights` (the
+Lab's checkbox) asks for that version's weights, written as a new weights version.
+It never touches freezes, personas, talk history or the bandit's evidence (credits,
+shares and rejections are measured history).
