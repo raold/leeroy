@@ -2917,6 +2917,8 @@ class Pipeline:
             self._record(turn, meta, p, text, memory_ids)
         except Exception:  # the app's dispatcher must never see it
             log.exception("say_record_failed: guid=%d channel=%s", ev.from_guid, ev.channel)
+            if meta.outreach_item is not None:
+                self.outreach.release(meta)
         else:
             log.info("say_confirmed_by_echo: guid=%d channel=%s", ev.from_guid, ev.channel)
         self.timing.echo_settled(meta.timing_trace, confirmed=True)

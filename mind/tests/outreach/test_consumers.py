@@ -164,6 +164,26 @@ def test_lost_native_ack_reserves_until_echo_or_settlement(rig,tmp_path,confirme
     assert not app.outreach._held and not rig.engine._unacked
 
 
+def test_failed_late_echo_record_releases_its_reservation(rig,tmp_path,monkeypatch):
+    app = app_for(rig,tmp_path)
+    item = plan(rig)
+    turn,meta = bind(app,item,'whisper')
+    def timeout(command):
+        raise AckTimeout('synthetic lost acknowledgement')
+    rig.sent.ack=timeout
+    assert speak(rig,turn,meta)==[]
+    assert item.id in app.outreach._held
+    def fault(*args,**kwargs):
+        raise RuntimeError('synthetic record fault')
+    monkeypatch.setattr(rig.engine,'_record',fault)
+    echo=Chat(ts=0,channel='whisper',from_guid=101,from_name='Arkon',to_guid=HUMAN,
+              text=rig.sent.says()[0].text,map=0,zone=10,via_bridge=True)
+    assert rig.engine.is_echo(echo,rig.clock.now())
+    assert not app.outreach._held and not rig.engine._unacked
+    assert records.get(rig.store,item.id).state=='open'
+    assert app.outreach.select(101,'dm').id==item.id
+
+
 @pytest.mark.parametrize('via',['whisper','dm'])
 def test_receipt_fault_rolls_back_line_and_post_together(rig,tmp_path,monkeypatch,via):
     app = app_for(rig,tmp_path)
