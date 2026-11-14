@@ -15,7 +15,7 @@ from leeroy_mind.discord import store as discord
 from leeroy_mind.outreach.fill import fill_member
 from leeroy_mind.outreach.night import stage_outreach
 from leeroy_mind.outreach import store as items
-from leeroy_mind.outreach.sources import source_alive, source_embedding, DAY, MISS_YOU_ABOUT
+from leeroy_mind.outreach.sources import source_alive, source_embedding, his_day, DAY, MISS_YOU_ABOUT
 from leeroy_mind.nightly.life import ensure_thread
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.storage.rows import pack_vec
@@ -232,6 +232,58 @@ def test_native_loot_without_proven_prior_group_witnesses_does_not_fill(h, scena
             h.store.conn.execute("UPDATE game_event SET session_id=? WHERE type='group'", (other_session,))
     fill(h)
     assert items.open_items(h.store, 101) == []
+
+
+def group_lookups(h, guid, eid):
+    statements = []
+    h.store.conn.set_trace_callback(statements.append)
+    try:
+        his_day(h.store, eid, guid, 1)
+    finally:
+        h.store.conn.set_trace_callback(None)
+    return [s for s in statements if "type='group'" in s]
+
+
+def test_others_loot_is_refused_before_any_witness_lookup(h):
+    sid = h.store.start_session(h.T - 100)
+    group = h.group(h.T - 20, [1, 101, 102])
+    eid = h.loot(h.T - 10, 102, "Invented Lantern", item_id=12345)
+    with h.store.transaction():
+        h.store.conn.execute("UPDATE game_event SET session_id=? WHERE id IN (?,?)", (sid, group, eid))
+    assert group_lookups(h, 101, eid) == []
+    fill(h)
+    assert items.open_items(h.store, 101) == []
+
+
+@pytest.mark.parametrize("age,filled", [(DAY - 60, True), (DAY + 60, False)])
+def test_his_loot_witnesses_come_from_a_bounded_index_range(h, age, filled):
+    sid = h.store.start_session(h.T - 2 * DAY)
+    group = h.group(h.T - 10 - age, [1, 101])
+    eid = h.loot(h.T - 10, 1, "Invented Lantern", item_id=12345)
+    with h.store.transaction():
+        h.store.conn.execute("UPDATE game_event SET session_id=? WHERE id IN (?,?)", (sid, group, eid))
+    query, = group_lookups(h, 101, eid)
+    plan = " ".join(row[3] for row in h.store.conn.execute("EXPLAIN QUERY PLAN " + query))
+    assert "game_event_ts (ts>? AND ts<?)" in plan and "TEMP B-TREE" not in plan and "MULTI-INDEX" not in plan
+    fill(h)
+    assert [i.ref for i in items.open_items(h.store, 101)] == ([f"his_day:{eid}"] if filled else [])
+
+
+def test_birthday_tomorrow_in_her_region_waits_for_her_midnight(h):
+    night = datetime(2026, 10, 29, 4, 30, tzinfo=ZoneInfo("America/New_York"))
+    p = h.persona(101, region="UK", birthday="10-30")
+    fill(h, p=p, local=night, now=night.timestamp())
+    item, = items.open_items(h.store, 101)
+    london = ZoneInfo("Europe/London")
+    assert (item.ref, item.audience, item.weight) == ("birthday:2026-10-30", "guild", 5)
+    assert (item.not_before, item.expires) == (datetime(2026, 10, 30, tzinfo=london).timestamp(),
+                                               datetime(2026, 10, 31, tzinfo=london).timestamp())
+    evening = datetime(2026, 10, 29, 21, tzinfo=ZoneInfo("America/New_York"))
+    assert item.not_before <= evening.timestamp() < item.expires
+    assert source_alive(h.store, item, now=evening.timestamp(), human=1, local=evening)
+    later = datetime(2026, 10, 30, 4, 30, tzinfo=ZoneInfo("America/New_York"))
+    assert fill(h, p=p, local=later, now=later.timestamp()) == 0
+    assert items.open_items(h.store, 101) == [item]
 
 
 def test_birthday_uses_her_regional_day_and_expires_at_her_midnight(h):

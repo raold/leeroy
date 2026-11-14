@@ -1,5 +1,5 @@
 """Current, bounded evidence for intentions. Reading a row never widens its audience."""
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import re
 
@@ -124,17 +124,19 @@ def follow_memory(store, guid, ref):
 
 def his_day(store, eid, guid, human, *, now=None, library=None, ident=None):
     row = store.conn.execute("SELECT * FROM game_event WHERE id=?", (eid,)).fetchone()
-    if row is None or now is not None and row["ts"] > now:
+    if (row is None or now is not None and row["ts"] > now
+            or row["type"] == "loot_won" and row["guid"] != human):
         return None
     try:
         data = json.loads(row["payload"])
         members = data.get("members")
         if row["type"] == "loot_won" and "members" not in data and row["session_id"] is not None:
             # Native LootWon has no audience. Its prior captured group in this
-            # session supplies witnesses; a later/current roster never does.
-            group = store.conn.execute("SELECT payload FROM game_event WHERE type='group' AND session_id=? "
-                "AND (ts<? OR (ts=? AND id<?)) ORDER BY ts DESC,id DESC LIMIT 1",
-                (row["session_id"], row["ts"], row["ts"], row["id"])).fetchone()
+            # session, at most a day before it, supplies witnesses; a later/current
+            # roster never does. The ts range walks game_event_ts back from the loot.
+            group = store.conn.execute("SELECT payload FROM game_event WHERE ts<=? AND ts>=? "
+                "AND type='group' AND session_id=? AND (ts<? OR id<?) ORDER BY ts DESC,id DESC LIMIT 1",
+                (row["ts"], row["ts"] - DAY, row["session_id"], row["ts"], row["id"])).fetchone()
             members = json.loads(group[0]).get("members") if group else None
         if (not isinstance(members, list) or any(type(g) is not int or g <= 0 for g in members)
                 or guid not in members or human not in members):
@@ -210,9 +212,10 @@ def source_alive(store, item, *, now, human, local=None, persona=None, delivered
             return his_day(store, _id(item.ref, "his_day"), guid, human, now=now,
                            library=library, ident=ident) == item.about
         if item.kind == "birthday":
-            at = member_local(local or store.clock.local(), p)
-            return (item.ref == f"birthday:{at.date()}" and p.real_life.birthday == at.strftime("%m-%d")
-                    and item.about == BIRTHDAY_ABOUT)
+            today = member_local(local or store.clock.local(), p).date()
+            day = datetime.strptime(item.ref.removeprefix("birthday:"), "%Y-%m-%d").date()
+            return (item.ref == f"birthday:{day}" and day in (today, today + timedelta(days=1))
+                    and p.real_life.birthday == day.strftime("%m-%d") and item.about == BIRTHDAY_ABOUT)
         if item.kind == "miss_you":
             datetime.strptime(item.ref.removeprefix("miss_you:"), "%Y-%m-%d")
             return (item.ref.startswith("miss_you:") and item.about == MISS_YOU_ABOUT

@@ -381,7 +381,8 @@ class TurnMeta:
     single_line_before_photo: bool = False  # restored when an owed answer goes on without it
     discord_named: bool = False  # he addressed this member in a channel: re-ask one silence
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
-    # its words and its thread's last lines (discord.talk, ruling R13); "" for every other turn
+    # its words and its thread's last lines (discord.talk, ruling R13); for a turn carrying an
+    # outreach item, its words (outreach.service); "" for every other turn
     recall_query: str = ""
     guard_verdict: str = "not_run"
     guard_rewritten: bool = False
@@ -1528,13 +1529,15 @@ class Pipeline:
             return self._drop(turn, meta, "no_persona")
         offer = getattr(self, '_photo_offer', None)
         if (discord and turn.template is None and meta.before_transport is None
-                and not meta.photo_asked and offer is not None and meta.outreach_item is None):
+                and not meta.photo_asked and offer is not None):
             meta.photo_asked = True
             try:
                 meta.photo = offer(turn, meta, now)
             except Exception:
                 log.warning('photo_offer_failed')
             if meta.photo is not None:
+                if meta.outreach_item is not None:
+                    self.outreach.unbind(meta)  # her photo is this turn's news; the item waits
                 turn.max_lines = 1
                 meta.single_line_before_photo = meta.single_line
                 meta.single_line = True
@@ -2914,6 +2917,8 @@ class Pipeline:
             self._record(turn, meta, p, text, memory_ids)
         except Exception:  # the app's dispatcher must never see it
             log.exception("say_record_failed: guid=%d channel=%s", ev.from_guid, ev.channel)
+            if meta.outreach_item is not None:
+                self.outreach.release(meta)
         else:
             log.info("say_confirmed_by_echo: guid=%d channel=%s", ev.from_guid, ev.channel)
         self.timing.echo_settled(meta.timing_trace, confirmed=True)

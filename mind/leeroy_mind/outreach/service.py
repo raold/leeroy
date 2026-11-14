@@ -7,7 +7,7 @@ import random
 import re
 
 from leeroy_mind.discord import layout
-from leeroy_mind.discord.channels import is_discord
+from leeroy_mind.discord.channels import channel_id, is_discord, is_group
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.logs import log
 from leeroy_mind.storage.rows import cosine, unpack_vec
@@ -15,6 +15,7 @@ from . import store as records
 from .sources import source_alive, source_embedding
 
 NUDGE = "You sent him a DM he hasn't answered. Ask whether he saw it, without repeating the message."
+TOPIC = "bring up the one thing you mean to tell {them}"
 
 
 def _named_item(about, text):
@@ -26,6 +27,7 @@ class Outreach:
     def __init__(self, app):
         self.app = app
         self._held = {}
+        self._bound = {}
         self._tasks = set()
         self._checking = {}
         self._vectors = {}
@@ -123,18 +125,33 @@ class Outreach:
         return via
 
     def bind(self, turn, meta, item):
-        self._via(turn, item)  # fail closed before any private text joins instructions
+        via = self._via(turn, item)  # fail closed before any private text joins instructions
         if item.id in self._held:
             return False
         self._held[item.id] = meta.turn_id
+        previous = meta.still_valid
+        self._bound[meta.turn_id] = (meta.topic, meta.recall_query, meta.server_anchor,
+                                     meta.single_line, previous)
         meta.outreach_item = item.id
         meta.single_line = True
-        meta.topic = item.about
+        # The instruction hook alone puts the item's words in the prompt; recall still looks for them.
+        meta.topic = TOPIC.format(them=self.app.engine.human.forms[1])
+        meta.recall_query = item.about
+        if via in {'guild', 'party'}:
+            meta.keep_channel = True  # typed where its receipt can name it, never moved into a voice room
         if is_discord(turn.channel):
             meta.server_anchor = item.about
-        previous = meta.still_valid
         meta.still_valid = lambda: (self.valid(turn, meta) and (previous is None or previous()))
         return True
+
+    def unbind(self, meta):
+        """A photo goes out on this turn instead: the item stays open for a later one."""
+        saved = self._bound.get(meta.turn_id)
+        if meta.outreach_item is None or saved is None:
+            return
+        self.release(meta)
+        meta.outreach_item = None
+        meta.topic, meta.recall_query, meta.server_anchor, meta.single_line, meta.still_valid = saved
 
     def valid(self, turn, meta):
         item = records.get(self.app.store, meta.outreach_item)
@@ -188,6 +205,7 @@ class Outreach:
             return
         if pending and any(parts[2] is meta for parts in self.app.engine._unacked.values()):
             return  # native may still confirm this exact delivery by echo
+        self._bound.pop(meta.turn_id, None)
         if self._held.get(meta.outreach_item) == meta.turn_id:
             self._held.pop(meta.outreach_item, None)
 
@@ -229,21 +247,23 @@ class Outreach:
             return {row.to_guid} if row.from_guid == human else set()
         if (peer := layout.dm_peer(row.channel)) is not None:
             return {peer}
-        readers = set(row.audience or ())
+        readers = set(row.audience or ()) - {human}
+        if is_group(row.channel):
+            return readers  # his group DM is to everyone in it
         if row.to_guid and row.to_guid != human:
             return {row.to_guid} & readers
         from leeroy_mind.talk.select import mentioned
         names = {g: m.name for g, m in self.app.world.discord_members().items() if g in readers}
-        named = set(mentioned(row.text, names))
-        return named or (readers - {human})
+        return set(mentioned(row.text, names))  # a line to nobody in particular raises nothing
 
     def _line_alive(self, row):
         rows = self.app.store.chat_lines([row.id])
         if not rows or rows[0].text != row.text or rows[0].from_guid != self.app.human_guid:
             return False
         if is_discord(row.channel):
-            current = self.app.store.conn.execute('SELECT m.deleted,m.text FROM discord_message m '
-                "JOIN meta x ON x.key='discord:line:'||m.id WHERE x.value=?", (str(row.id),)).fetchone()
+            current = self.app.store.conn.execute('SELECT m.deleted,m.text FROM meta x JOIN discord_message m '
+                "ON m.id=CAST(substr(x.key,14) AS INTEGER) WHERE x.key GLOB 'discord:line:*' AND x.value=? "
+                'AND m.channel=?', (str(row.id), channel_id(row.channel))).fetchone()
             return bool(current and current['deleted'] is None and current['text'] == row.text)
         return True
 
@@ -281,24 +301,28 @@ class Outreach:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    async def _vector(self, text):
+        """A vector the live review or this service already holds for these words, else a new one."""
+        key = hashlib.sha256(text.encode()).digest()
+        review = getattr(getattr(self.app.engine, 'live_review', None), 'vectors', None) or {}
+        vector = review.get(key) or self._vectors.get(key)
+        if vector is None:
+            vector = (await self.app.embedder.embed([text], Priority.EXTRACTION))[0]
+            self._vectors[key] = vector
+            while len(self._vectors) > 256:
+                self._vectors.pop(next(iter(self._vectors)))
+        return vector
+
     async def _raised(self, row, items, guids):
         try:
-            query = (await self.app.embedder.embed([row.text], Priority.EXTRACTION))[0]
+            query = await self._vector(row.text)
             for item in items:
                 if not self._line_alive(row):
                     return
                 current = records.get(self.app.store, item.id)
                 if current is None or current.state != 'open' or not self._alive(current):
                     continue
-                vector = source_embedding(self.app.store, current)
-                key = hashlib.sha256(current.about.encode()).digest()
-                if vector is None:
-                    vector = self._vectors.get(key)
-                if vector is None:
-                    vector = (await self.app.embedder.embed([current.about], Priority.EXTRACTION))[0]
-                    self._vectors[key] = vector
-                    while len(self._vectors) > 256:
-                        self._vectors.pop(next(iter(self._vectors)))
+                vector = source_embedding(self.app.store, current) or await self._vector(current.about)
                 score = cosine(unpack_vec(query), unpack_vec(vector))
                 if math.isfinite(score) and score >= .6 and self._line_alive(row) and self._alive(current):
                     records.drop(self.app.store, item.id, 'he_raised')
