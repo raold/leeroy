@@ -31,6 +31,7 @@ from typing import Callable
 
 from leeroy_mind.discord.store import AttachmentIn
 from leeroy_mind.logs import log as log_event
+from leeroy_mind.nightly.budget import register_counter
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,11 @@ READY_S = 7 * 86400.0  # a ready meme is offered for a week after it was planned
 JOKE_GAP_S = 30 * 86400.0  # a joke gets at most one meme in this long
 OWN_PHOTO = "own_photo"
 MAX_CAPTION = 60
+# What a caption may hold: the characters the bundled caption font (selfie/leeroy_selfie/fonts,
+# Anton) draws, so a caption never shows a missing-glyph box. Mirrored in the worker's protocol
+# (selfie/leeroy_selfie/protocol.py CAPTION_CHARS); a test fails on drift, and the selfie suite
+# checks every one against the font's own character map.
+CAPTION_CHARS = (frozenset(map(chr, (*range(0x20, 0x7F), *range(0xA1, 0x180)))) | frozenset("‘’“”–—…•€™")) - {"µ"}  # the micro sign capitalises to a Greek letter the font lacks
 CONTENDED = 2  # worker failures in a row that end the stage for the night
 
 # Places and objects with no people in them: the only words an image prompt can hold.
@@ -102,7 +108,7 @@ def caption_codes(text, *, ident, names: dict[int, str], actors: frozenset[int])
     if (not isinstance(text, str) or len(text) > MAX_CAPTION or text != text.strip()
             or any(not c.isprintable() for c in text)):
         return ["shape"]
-    codes = []
+    codes = [] if all(c in CAPTION_CHARS for c in text) else ["glyph"]  # an emoji, CJK, ...
     if has_meta(text) or "|" in text:
         codes.append("meta")
     for code, pattern in (("explicit", EXPLICIT_RE), ("wear", WEAR_RE), ("age", AGE_RE)):
@@ -132,25 +138,48 @@ def plan_due(conn, now: float, per_week: int) -> str | None:
     return None
 
 
-def own_snap(conn, data_dir: Path, guid: int, *, nsfw_max: float, personas) -> int | None:
-    """The butt's own situational photo already posted in a public channel (a plain one, scored
-    under the NSFW limit, its file still there, its member 25 or older), newest first."""
+def snap_eligible(conn, data_dir: Path, guid: int, sid: int, *, nsfw_max: float, personas) -> bool:
+    """Whether `sid` may be the base of a public meme about `guid`: her own plain situational
+    photo, scored under the NSFW limit, its file still there, she 25 or older, and posted by her
+    where the whole guild saw it. "Posted publicly" is decided by its actual posting, never by
+    the photo's flags: every message carrying it is hers, not deleted, in a layout channel that
+    is not officers-only (a DM or group DM is no layout channel), and there is at least one.
+    A request photo posted only in #officer-chat, #applications or #bank-requests never qualifies."""
     import json
+    from leeroy_mind.discord import layout
     from leeroy_mind.selfies import files
     from leeroy_mind.selfies.ration import SEND_MIN_AGE
     p = personas.get(guid)
     if p is None or p.identity.age < SEND_MIN_AGE:
-        return None
-    for sid, scene, nsfw in conn.execute(
-            "SELECT id,scene,nsfw FROM selfie_snap WHERE kind='situation' AND guid=? AND audience='anyone' "
+        return False
+    row = conn.execute("SELECT scene,nsfw FROM selfie_snap WHERE id=? AND kind='situation' AND guid=? "
+                       "AND audience='anyone' AND status='sent' AND channel='discord'", (sid, guid)).fetchone()
+    if row is None:
+        return False
+    try:
+        data = json.loads(row[0])
+    except (TypeError, ValueError):
+        return False
+    nsfw = row[1]
+    if not (isinstance(data, dict) and data.get("audience") == "anyone" and data.get("style", "plain") == "plain"
+            and type(nsfw) in (int, float) and math.isfinite(nsfw) and nsfw < nsfw_max
+            and files.snap(data_dir, guid, sid).is_file()):
+        return False
+    postings = conn.execute("SELECT m.channel,m.author,m.origin,m.deleted FROM discord_attachment a "
+                            "JOIN discord_message m ON m.id=a.message WHERE a.snap=? AND a.kind='snap'",
+                            (sid,)).fetchall()
+    return bool(postings) and all(
+        author == guid and origin == "mind" and deleted is None
+        and (ch := layout.channel(channel)) is not None and not ch.officers_only
+        for channel, author, origin, deleted in postings)
+
+
+def own_snap(conn, data_dir: Path, guid: int, *, nsfw_max: float, personas) -> int | None:
+    """The butt's own situational photo already posted publicly (snap_eligible), newest first."""
+    for (sid,) in conn.execute(
+            "SELECT id FROM selfie_snap WHERE kind='situation' AND guid=? AND audience='anyone' "
             "AND status='sent' AND channel='discord' ORDER BY sent DESC,id DESC LIMIT 8", (guid,)):
-        try:
-            data = json.loads(scene)
-        except (TypeError, ValueError):
-            continue
-        if (isinstance(data, dict) and data.get("audience") == "anyone" and data.get("style", "plain") == "plain"
-                and type(nsfw) in (int, float) and math.isfinite(nsfw) and nsfw < nsfw_max
-                and files.snap(data_dir, guid, sid).is_file()):
+        if snap_eligible(conn, data_dir, guid, sid, nsfw_max=nsfw_max, personas=personas):
             return sid
     return None
 
@@ -174,6 +203,11 @@ def make_plan_stage(app, selfies_cfg) -> Callable:
     """The "meme_plan" stage: one caption a night at most, written by the reflection model."""
     from leeroy_mind.nightly.llm import ReflectionError, schema
     from leeroy_mind.personas.screens import redact_real_name
+
+    def count(ctx) -> int:
+        return int(not ctx.done(PLAN_STAGE, "plan")
+                   and plan_due(ctx.store.conn, ctx.clock.now(), app.culture_config.memes_per_week) is None)
+    register_counter(PLAN_STAGE, count)
 
     async def stage_meme_plan(ctx) -> None:
         unit = "plan"
@@ -273,8 +307,9 @@ def _recheck(ctx, row, *, library, nsfw_max) -> str | None:
         if caption_codes(text, ident=ctx.ident, names=names, actors=frozenset({butt, originator} - {0})):
             return "caption"
     if row["base"] == "snap":
-        if row["snap"] is None or own_snap(ctx.store.conn, ctx.settings.data_dir, butt, nsfw_max=nsfw_max,
-                                            personas=personas) != row["snap"]:
+        # still eligible (a newer public photo of hers does not refuse this one)
+        if row["snap"] is None or not snap_eligible(ctx.store.conn, ctx.settings.data_dir, butt, row["snap"],
+                                                    nsfw_max=nsfw_max, personas=personas):
             return "snap"
     elif row["scene"] not in MEME_SCENES:
         return "scene"
@@ -357,6 +392,7 @@ def make_render_stage(app, cfg, *, worker=None) -> Callable:
 
     def make():
         return worker() if worker is not None else SelfieWorker(worker_command(cfg), env=worker_env(cfg))
+    register_counter(RENDER_STAGE, lambda ctx: len(_todo(ctx)))
 
     async def start(ctx, w) -> bool:
         from leeroy_mind.selfies.render import _unleased

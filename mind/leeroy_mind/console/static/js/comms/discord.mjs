@@ -14,7 +14,8 @@ export function mergeReadMarks(saved, discord) {
 export function groupMessages(messages) {
   var previous = null;
   return arr(messages).map(function (m) {
-    var grouped = !!previous && m.author === previous.author && m.thread === previous.thread
+    // every bot post has author 0: a bot groups only with its own posts (each keeps its name)
+    var grouped = !!previous && m.author === previous.author && m.bot === previous.bot && m.thread === previous.thread
       && m.ts >= previous.ts && m.ts - previous.ts < 7 * 60
       && new Date(m.ts * 1000).toDateString() === new Date(previous.ts * 1000).toDateString()
       && !m.reply_to && m.deleted === null && previous.deleted === null;

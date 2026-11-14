@@ -68,7 +68,9 @@ each tile resized to `tile`, set on a dark `#0e141a` ground with `gutter` pixels
 between, 2 x 2 up to 4 x 4; a tile that is missing or not a JPEG answers `missing_tile` and
 writes nothing. Either worker also answers a `caption` request (the mind's culture memes):
 `base_path` (an existing JPEG), `top` and `bottom` (at most 60 printable characters each, one
-may be empty), `out_path` and `nsfw_max`. It draws the classic outlined capitals at the top and
+may be empty, and only characters the font draws: `protocol.CAPTION_CHARS`, printable ASCII,
+Latin-1, Latin Extended-A and common typographic marks; an emoji is a bad request), `out_path`
+and `nsfw_max`. It draws the classic outlined capitals at the top and
 bottom with Pillow in the bundled Anton font (SIL Open Font License 1.1, `leeroy_selfie/fonts/`
 with its `OFL.txt`), each block sized to the width; the text is never part of a diffusion
 prompt. The captioned image goes through the NSFW classifier like every render and is written

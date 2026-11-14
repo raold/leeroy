@@ -47,3 +47,13 @@ test("a bot's post says which bot wrote it", () => {
   assert.equal(botName("__proto__"), "Server bot");
   assert.equal(botName(undefined), "Server bot");
 });
+
+import { groupMessages } from "../../../leeroy_mind/console/static/js/comms/discord.mjs";
+
+test("bot posts group only with their own bot's, so each keeps its name and BOT tag", () => {
+  const post = (id, bot, ts) => ({ id, author: 0, bot, thread: null, ts, reply_to: null, deleted: null });
+  assert.deepEqual(groupMessages([post(1, "birthday", 100), post(2, "reminders", 110), post(3, "reminders", 120)])
+    .map(g => g.grouped), [false, false, true]);
+  const member = (id, ts) => ({ id, author: 101, thread: null, ts, reply_to: null, deleted: null });
+  assert.deepEqual(groupMessages([member(4, 100), member(5, 110)]).map(g => g.grouped), [false, true]);
+});

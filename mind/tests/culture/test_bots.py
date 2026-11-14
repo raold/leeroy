@@ -264,9 +264,55 @@ def test_signups_use_the_guilds_own_role_emoji_when_they_are_on(h, tmp_path):
         (103, ":dps:"), (104, ":dps:")]
 
 
-def test_a_real_name_never_goes_out(h, tmp_path):
+def test_a_real_name_never_goes_out_and_a_refusal_is_settled_once(h, tmp_path, caplog, monkeypatch):
+    import logging
+    from leeroy_mind.discord import store as dstore
     since(h)
-    loot(h, name="Quillon's Blade")  # the fixture real name inside an item name
+    loot(h, name="Quillon's Blade")  # the fixture real name in an item name: never a post at all
+    named = calendar(h, at=h.clock.now() + 1800, title="Quillon night", event=778)  # caught by the final screen
+    app, bots = make_app(h, tmp_path)
+    with caplog.at_level(logging.INFO):
+        for _ in range(3):
+            run(bots.tick(h.clock.now()))
+            h.clock.advance(60)
+    assert posts(h) == [] and h.store.get_meta(RECEIPT.format(bot="reminders", ref=named)) == "refused:real_name"
+    assert h.store.get_meta(RECEIPT.format(bot="signups", ref=named)) == "refused:real_name"
+    assert caplog.text.count("culture_bot_refused") == 2 and "Quillon" not in caplog.text  # once each
+    # a post the store refuses is settled too, and its signup reactions are never looked for
+    calendar(h, at=h.clock.now() + 86400, title="Raid night")
+    monkeypatch.setattr(dstore, "post_bot", lambda *a, **k: (_ for _ in ()).throw(dstore.DiscordRefused("bad_channel")))
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        for _ in range(2):
+            run(bots.tick(h.clock.now()))
+            h.clock.advance(60)
+    assert h.store.get_meta(RECEIPT.format(bot="signups", ref=_ref(h, "signups"))) == "refused:bad_channel"
+    assert caplog.text.count("culture_bot_refused") == 1
+
+
+def test_posted_awards_never_crowd_a_new_one_out_of_the_query(h, tmp_path):
+    since(h)
+    now = h.clock.now()
+    for n in range(300):  # more than the query's limit, every one already posted
+        lid = loot(h, n=n, ts=now - 3000 + n, item=3000 + n, name=f"Invented Trinket {n}")
+        h.store.set_meta(RECEIPT.format(bot="loot", ref=lid), str(10_000 + n))
+    loot(h, n=999, ts=now - 10, name="Invented Crown", item=4000)
+    app, bots = make_app(h, tmp_path)
+    run(bots.tick(now))
+    assert [m["text"] for m in posts(h)] == ["[Invented Crown] -> Arkon, 47 dkp"]
+
+
+def test_switching_the_bots_off_forgets_their_start(h, tmp_path):
+    from leeroy_mind.culture.attach import forget_bots_since
+    since(h)
+    on = SimpleNamespace(store=h.store, culture_config=CultureConfig(enabled=True, bots=True))
+    forget_bots_since(on)
+    assert h.store.get_meta(SINCE_KEY) is not None  # on: kept
+    off = SimpleNamespace(store=h.store, culture_config=CultureConfig(enabled=True, bots=False))
+    forget_bots_since(off)
+    assert h.store.get_meta(SINCE_KEY) is None
+    # switched on again: what happened while they were off is never posted
+    loot(h, ts=h.clock.now() - 600)
     app, bots = make_app(h, tmp_path)
     run(bots.tick(h.clock.now()))
     assert posts(h) == []

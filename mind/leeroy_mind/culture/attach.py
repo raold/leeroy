@@ -16,6 +16,19 @@ class CultureExtras:
     meme_images: bool = False
 
 
+def forget_bots_since(app) -> None:
+    """At each start with the bots off (whatever turned them off): forget when they last started,
+    so switching them on again never posts a backlog of what happened meanwhile."""
+    if app_bots(app):
+        return
+    from .bots import SINCE_KEY, forget_since
+    try:
+        if app.store.get_meta(SINCE_KEY) is not None:
+            forget_since(app.store)
+    except Exception as error:  # a start never fails over this
+        log.warning("culture_bots_since_failed code=%s", type(error).__name__)
+
+
 def attach_part_c(app, server_config) -> CultureExtras | None:
     bots_on, memes_on = app_bots(app), app_memes(app)
     if not (bots_on or memes_on or app_emoji(app)):

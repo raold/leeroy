@@ -120,3 +120,59 @@ def test_the_worker_answers_a_caption_and_goes_on_after_a_failure(tmp_path):
     answers = [json.loads(x) for x in out.getvalue().splitlines()][1:]
     assert answers[0] == {"id": "a", "ok": False, "error": "missing_base"}
     assert answers[1]["ok"] is True and answers[1]["flagged"] is False and fake.seen == ["a", "b"]
+
+
+def font_characters(path):
+    """The code points a TrueType font maps to a glyph (its cmap's format 4 and 12 subtables),
+    read with the standard library: what the caption can draw without a missing-glyph box."""
+    import struct
+    data = path.read_bytes()
+    tables = {}
+    for i in range(struct.unpack(">H", data[4:6])[0]):
+        tag, _, offset, _ = struct.unpack(">4sIII", data[12 + 16 * i:28 + 16 * i])
+        tables[tag] = offset
+    base, out = tables[b"cmap"], set()
+    for i in range(struct.unpack(">H", data[base + 2:base + 4])[0]):
+        _, _, sub = struct.unpack(">HHI", data[base + 4 + 8 * i:base + 12 + 8 * i])
+        at = base + sub
+        fmt = struct.unpack(">H", data[at:at + 2])[0]
+        if fmt == 4:
+            seg2 = struct.unpack(">H", data[at + 6:at + 8])[0]
+            n = seg2 // 2
+            ends = struct.unpack(f">{n}H", data[at + 14:at + 14 + seg2])
+            starts = struct.unpack(f">{n}H", data[at + 16 + seg2:at + 16 + 2 * seg2])
+            deltas = struct.unpack(f">{n}h", data[at + 16 + 2 * seg2:at + 16 + 3 * seg2])
+            ro = at + 16 + 3 * seg2
+            ranges = struct.unpack(f">{n}H", data[ro:ro + seg2])
+            for k in range(n):
+                for c in range(starts[k], ends[k] + 1):
+                    if c == 0xFFFF:
+                        continue
+                    if ranges[k] == 0:
+                        glyph = (c + deltas[k]) & 0xFFFF
+                    else:
+                        g = ro + 2 * k + ranges[k] + 2 * (c - starts[k])
+                        glyph = struct.unpack(">H", data[g:g + 2])[0]
+                        glyph = (glyph + deltas[k]) & 0xFFFF if glyph else 0
+                    if glyph:
+                        out.add(c)
+        elif fmt == 12:
+            for j in range(struct.unpack(">I", data[at + 12:at + 16])[0]):
+                s, e, _ = struct.unpack(">III", data[at + 16 + 12 * j:at + 28 + 12 * j])
+                out.update(range(s, e + 1))
+    return out
+
+
+def test_every_caption_character_has_a_glyph_in_the_bundled_font():
+    from leeroy_selfie.protocol import CAPTION_CHARS
+    have = font_characters(caption.FONT)
+    drawn = {ch for c in CAPTION_CHARS for ch in c.upper()}  # the caption draws capitals
+    assert {ord(c) for c in CAPTION_CHARS | drawn} <= have
+    assert 0x1F602 not in have and 0x43F not in have  # an emoji and Cyrillic would be boxes
+
+
+@pytest.mark.parametrize("text", ["LOL \U0001F602", "пол", "猫", "tank​"])
+def test_a_caption_the_font_cannot_draw_is_a_bad_request(tmp_path, text):
+    with pytest.raises(ValueError):
+        parse(line(tmp_path, top=text))
+    assert parse(line(tmp_path, top="CAFÉ ’NUFF — ¡OLÉ!")).top.startswith("CAF")

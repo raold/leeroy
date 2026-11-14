@@ -19,6 +19,8 @@ class ServerExt:
 
 
 def attach_server(app) -> ServerExt | None:
+    from leeroy_mind.culture.attach import forget_bots_since
+    forget_bots_since(app)  # bots off at this start (the server too): their next start is fresh
     config = load_server_config(app.data_dir / 'mind.toml')
     if not config.enabled:
         return None

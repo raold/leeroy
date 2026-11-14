@@ -96,11 +96,10 @@ def _signups(conn, c: _Context):
 def _loot(conn, c: _Context):
     from leeroy_mind.culture.origins import _item_name, loot_record
     from leeroy_mind.guild.lines import template
-    for lid, note in conn.execute(
-            "SELECT id,note FROM dkp_ledger WHERE reason='item' AND ts>=? AND ts<=? "
-            "AND note GLOB 'guild:loot:*' ORDER BY ts,id LIMIT 256", (max(c.since, c.now - LOOKBACK_S), c.now)):
-        if _done(conn, "loot", str(lid)):
-            continue
+    for lid, note in conn.execute(  # posted awards are left out before the limit, never counted in it
+            "SELECT d.id,d.note FROM dkp_ledger d WHERE d.reason='item' AND d.ts>=? AND d.ts<=? "
+            "AND d.note GLOB 'guild:loot:*' AND NOT EXISTS (SELECT 1 FROM meta WHERE key='culture:bot:loot:'||d.id) "
+            "ORDER BY d.ts,d.id LIMIT 256", (max(c.since, c.now - LOOKBACK_S), c.now)):
         found = loot_record(conn, "loot:close_loot:" + note)  # the receipt and its unique debit
         if found is None:
             continue
@@ -206,6 +205,24 @@ def due_posts(conn, c: _Context) -> list[Post]:
     return sorted(out, key=lambda p: (p.due, BOTS.index(p.bot), p.ref))
 
 
+def settle_refused(store, post: Post, code: str) -> bool:
+    """A due post that will never go out (the real-name screen or the store refused it) keeps a
+    receipt saying so, `refused:<code>`, so it is neither retried nor logged every minute."""
+    key = RECEIPT.format(bot=post.bot, ref=post.ref)
+    with store.transaction():
+        if store.get_meta(key) is not None:
+            return False
+        store.set_meta(key, f"refused:{code}")
+        return True
+
+
+def forget_since(store) -> None:
+    """The bots are off at this start: their next start begins afresh, so switching them on again
+    never posts what happened while they were off."""
+    with store.transaction():
+        store.conn.execute("DELETE FROM meta WHERE key=?", (SINCE_KEY,))
+
+
 def post_once(store, post: Post, *, now: float) -> int | None:
     """The post and its receipt in one transaction; None when the receipt was already there."""
     key = RECEIPT.format(bot=post.bot, ref=post.ref)
@@ -267,12 +284,14 @@ class ServerBots:
             if posted >= PER_TICK or self._closed:
                 break
             if _screened_out(post.text, c.ident):
-                log.info("culture_bot_skipped bot=%s code=real_name", post.bot)
+                if settle_refused(app.store, post, "real_name"):
+                    log.info("culture_bot_refused bot=%s code=real_name", post.bot)
                 continue
             try:
                 mid = post_once(app.store, post, now=app.clock.now())
             except dstore.DiscordRefused as error:
-                log.info("culture_bot_refused bot=%s code=%s", post.bot, error.code)
+                if settle_refused(app.store, post, error.code):
+                    log.info("culture_bot_refused bot=%s code=%s", post.bot, error.code)
                 continue
             if mid is None:
                 continue
@@ -299,7 +318,8 @@ class ServerBots:
         store, added = self.app.store, 0
         rows = store.conn.execute(
             "SELECT c.event_id, CAST(m.value AS INTEGER) FROM realm_calendar c JOIN meta m "
-            "ON m.key='culture:bot:signups:'||c.id WHERE c.kind='raid' AND c.event_id IS NOT NULL "
+            "ON m.key='culture:bot:signups:'||c.id WHERE m.value NOT GLOB '*[^0-9]*' "
+            "AND c.kind='raid' AND c.event_id IS NOT NULL "
             "AND c.at>? ORDER BY c.at", (c.now - 86400,)).fetchall()
         for event, mid in rows:
             for guid, status in store.conn.execute(

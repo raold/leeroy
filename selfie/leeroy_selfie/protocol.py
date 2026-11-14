@@ -16,6 +16,11 @@ IDENTITY_KEYS = frozenset({"ref", "crop", "scale"})
 GRID_KEYS = frozenset({"id", "op", "tiles", "tile", "gutter", "out", "thumb", "thumb_size"})
 CAPTION_KEYS = frozenset({"id", "op", "base_path", "top", "bottom", "out_path", "nsfw_max"})
 MAX_CAPTION = 60  # characters a caption line may hold
+# The characters the bundled caption font (fonts/Anton-Regular.ttf) draws: printable ASCII,
+# Latin-1 and Latin Extended-A, and the common typographic marks. Anything else (an emoji, CJK,
+# Cyrillic) would draw as a missing-glyph box, so a caption holding it is a bad request. The mind
+# keeps the same set (culture/memes.py CAPTION_CHARS); tests check the font and the drift.
+CAPTION_CHARS = (frozenset(map(chr, (*range(0x20, 0x7F), *range(0xA1, 0x180)))) | frozenset("‘’“”–—…•€™")) - {"µ"}  # the micro sign capitalises to a Greek letter the font lacks
 MAX_TILES = 16
 SQUARE_TOLERANCE = 0.001
 PORTRAIT_SIZE = (832, 1216)  # width, height of shape "portrait" (needs size 1024)
@@ -170,8 +175,8 @@ def _grid(d: dict, rid: str) -> Grid:
 def _caption_line(d: dict, key: str) -> str:
     v = d[key]
     if (type(v) is not str or len(v) > MAX_CAPTION or v != v.strip()
-            or any(not c.isprintable() for c in v)):
-        raise ValueError(f"{key} is not a caption line of at most {MAX_CAPTION} characters")
+            or any(not c.isprintable() or c not in CAPTION_CHARS for c in v)):
+        raise ValueError(f"{key} is not a caption line of at most {MAX_CAPTION} characters the font draws")
     return v
 
 

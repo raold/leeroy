@@ -5,6 +5,7 @@ here is invented ("Quillon" is the fixture real name)."""
 import asyncio
 import logging
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -117,6 +118,8 @@ def test_memes_per_week_caps_planning(h, caplog):
     ({**CAPTION, "bottom": "in her lingerie"}, "explicit"),
     ({**CAPTION, "bottom": "a teenager again"}, "age"),
     ({**CAPTION, "top": "", "bottom": ""}, "empty"),
+    ({**CAPTION, "bottom": "the floor again \U0001F602"}, "glyph"),   # the font has no emoji
+    ({**CAPTION, "bottom": "\u043f\u043e\u043b"}, "glyph"),          # nor Cyrillic
 ])
 def test_a_screened_caption_stores_nothing(h, caplog, reply, code):
     joke(h)
@@ -171,24 +174,86 @@ def test_flagged_or_screened_meme_is_never_ready(h, tmp_path, case):
     assert memes.offer(SimpleNamespace(store=h.store, data_dir=tmp_path, clock=h.clock), mid) is None
 
 
-def test_her_own_posted_photo_is_captioned_without_a_render(h, tmp_path):
+def posted_snap(h, tmp_path, channel, *, guid=102, line=4321, sent=3.0):
+    """Her situational photo as the photo paths post it: a `snap` attachment on her own message in
+    `channel`, the snap marked sent on 'discord' (what photos/requests.py does for any layout
+    channel an ask came from, officers-only ones included)."""
     from selfies.fakes import ready_snap
-    from leeroy_mind.personas.io import load_persona
+    from leeroy_mind.discord import store as dstore
     from leeroy_mind.selfies.snaps import mark_sent
-    ident = joke(h)
-    sid = ready_snap(h.store, tmp_path, 102, audience="anyone",
+    sid = ready_snap(h.store, tmp_path, guid, audience="anyone",
                      scene={"shows": "an invented kitchen", "audience": "anyone"})
-    assert mark_sent(h.store, sid, sender=102, channel="discord", line_id=4321, now=3.0)
-    persona = {102: load_persona(h.store, 102)}
-    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=persona) == sid
+    with h.store.transaction():
+        mid = dstore.post(h.store, channel=channel, author=guid, origin="mind", text="here you go", now=sent,
+                          attachment=dstore.AttachmentIn("snap", f"selfies/{guid}/snaps/{sid}.jpg", 832, 1216, 100, sid))
+    assert mark_sent(h.store, sid, sender=guid, channel="discord", line_id=line, now=sent)
+    return sid, mid
+
+
+def personas_of(h):
+    from leeroy_mind.personas.io import load_persona
+    return {102: load_persona(h.store, 102)}
+
+
+def test_her_own_posted_photo_is_captioned_without_a_render(h, tmp_path):
+    ident = joke(h)
+    sid, _ = posted_snap(h, tmp_path, "pics")
+    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) == sid
     mid = planned(h, ident, base="snap", snap=sid, scene=None)
+    newer, _ = posted_snap(h, tmp_path, "food", line=4322, sent=4.0)  # a newer public photo of hers
     worker = Worker()
-    render(h, worker)
+    render(h, worker)  # still eligible: the newer one does not refuse it
     assert worker.renders == [] and len(worker.captions) == 1
     assert h.store.conn.execute("SELECT status FROM discord_meme WHERE id=?", (mid,)).fetchone()[0] == "ready"
+    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) == newer
     # a photo sent only to him never becomes a public meme
-    h.store.conn.execute("UPDATE selfie_snap SET audience='him',channel='dm' WHERE id=?", (sid,))
-    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=persona) is None
+    h.store.conn.execute("UPDATE selfie_snap SET audience='him',channel='dm' WHERE id IN (?,?)", (sid, newer))
+    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) is None
+
+
+@pytest.mark.parametrize("where", ["officer-chat", "applications", "bank-requests", "dm:102", "deleted", "unposted"])
+def test_an_officers_only_or_private_photo_never_bases_a_public_meme(h, tmp_path, where):
+    """Review P1-1: a request photo posted only in an officers' channel carries the same flags as a
+    #pics photo (audience anyone, sent on discord); only its actual posting tells them apart."""
+    ident = joke(h)
+    sid, message = posted_snap(h, tmp_path, "pics" if where in ("deleted", "unposted") else where)
+    if where == "deleted":
+        h.store.conn.execute("UPDATE discord_message SET deleted=5.0 WHERE id=?", (message,))
+    if where == "unposted":
+        h.store.conn.execute("DELETE FROM discord_attachment WHERE message=?", (message,))
+    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) is None
+    assert not memes.snap_eligible(h.store.conn, tmp_path, 102, sid, nsfw_max=0.2, personas=personas_of(h))
+    mid = planned(h, ident, base="snap", snap=sid, scene=None)  # one planned before is refused at render
+    worker = Worker()
+    render(h, worker)
+    assert worker.captions == []
+    assert h.store.conn.execute("SELECT status FROM discord_meme WHERE id=?", (mid,)).fetchone()[0] == "refused"
+
+
+def test_the_caption_characters_are_the_workers(h):
+    """The mind's caption alphabet is the worker's (selfie/leeroy_selfie/protocol.py, read by path:
+    the mind never imports that package)."""
+    import importlib.util
+    path = Path(memes.__file__).parents[3] / "selfie" / "leeroy_selfie" / "protocol.py"
+    spec = importlib.util.spec_from_file_location("selfie_protocol_for_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.CAPTION_CHARS == memes.CAPTION_CHARS and module.MAX_CAPTION == memes.MAX_CAPTION
+
+
+def test_the_meme_stages_are_in_the_night_budget(h):
+    from leeroy_mind.nightly import budget
+    ident = joke(h)
+    memes.make_plan_stage(app_for(per_week=1), SELFIES)
+    memes.make_render_stage(app_for(), SELFIES, worker=lambda: Worker())
+    assert {"meme_plan", "meme_render"} <= budget.EXTENSION_STAGES
+    ctx = h.ctx()
+    assert budget._counts(ctx, set(), frozenset()).keys().isdisjoint({"meme_plan", "meme_render"})  # off: none
+    counts = budget._counts(ctx, set(), frozenset({"meme_plan", "meme_render"}))
+    assert (counts["meme_plan"], counts["meme_render"]) == (1, 0)
+    planned(h, ident)
+    counts = budget._counts(ctx, set(), frozenset({"meme_plan", "meme_render"}))
+    assert (counts["meme_plan"], counts["meme_render"]) == (0, 1)  # capped at one a week; one to render
 
 
 def test_no_meme_left_takes_no_gpu(h):

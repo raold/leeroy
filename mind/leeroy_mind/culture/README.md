@@ -183,8 +183,10 @@ Each post's receipt (meta `culture:bot:<bot>:<ref>`) is written in the post's ow
 so a restart can neither post twice nor lose a receipt. Inside the server's quiet window nothing
 is posted; what fell due waits and goes out at the window's end, oldest first, at most 10 a
 minute; a post whose subject passed meanwhile (a reminder after its raid night, a birthday after
-its day) is never sent late. Events from before the bots were first switched on (meta
-`culture:bots:since`) are never posted. A text the real-name screen catches is skipped. Members
+its day) is never sent late. Events from before the bots were switched on (meta
+`culture:bots:since`, forgotten at every start with the bots off, so switching them on again never
+posts a backlog) are never posted. A post the real-name screen catches, or the store refuses,
+keeps a `refused:<code>` receipt and is logged once, never retried. Members
 react to bot posts as to any post (the server's reactions), except a signup post: its reactions
 are the members' real calendar signups (`realm_rsvp`), their role for signed up, a shrug for
 tentative, nothing for a decline or for him. Item names in bot posts are bracketed, so Part B's
@@ -212,9 +214,15 @@ images are left for later.
   joke with no meme in 30 days. The model writes only the caption (top and bottom, 60 characters
   each) and picks the picture: one of 20 fixed scenes of places and objects with no people, or the
   butt's own situational photo already posted in a public channel (plain style, under the NSFW
-  limit, she 25 or older). A caption is refused by the photo screens (`EXPLICIT_RE`, `WEAR_RE`,
-  `AGE_RE`), the real-name screen, or a member named who is not the joke's butt or originator;
-  a refused caption stores nothing. Stage `meme_render` (an image stage after the photo stages,
+  limit, she 25 or older). "Posted publicly" is read from the photo's actual posting, never its
+  flags: every message carrying it is hers, not deleted, in a layout channel that is not
+  officers-only; a selfie-request photo posted only in #officer-chat, #applications or
+  #bank-requests (or in a DM) never becomes a meme, and a planned meme whose photo stops
+  qualifying is refused at render. A caption is refused by the photo screens (`EXPLICIT_RE`,
+  `WEAR_RE`, `AGE_RE`), the real-name screen, a member named who is not the joke's butt or
+  originator, or a character the bundled font cannot draw (`glyph`: printable ASCII, Latin-1,
+  Latin Extended-A and common typographic marks only, so no emoji or other scripts draw as
+  boxes; the worker refuses the same); a refused caption stores nothing. Stage `meme_render` (an image stage after the photo stages,
   taking no GPU when nothing is planned) rechecks the joke, the caption and the photo, renders a
   scene with a plain worker (no identity) from the scene's fixed words only, so no name ever
   reaches an image prompt, under the NSFW gate and the selfie GPU rules (never under a live lease;
@@ -229,6 +237,9 @@ images are left for later.
   note ("[meme picture captioned: ...]"). Memes never reach DMs, group DMs or officer channels.
   Logs: `culture_meme_plan`, `culture_meme_refused codes=`, `culture_meme_ready`,
   `culture_meme_posted`; never a caption.
+
+Both meme stages are extension stages in the night's budget (one call for the plan; about 40 s
+of image work for each meme to render), counted only on a runner that has them.
 
 No migration (the `discord_meme` table is 0043's) and no native change. Release: mind, console and
 selfie worker (`bash scripts/ac-release.sh <commit>`); the selfie worker gains the bundled font and
