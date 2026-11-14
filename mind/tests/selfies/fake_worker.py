@@ -18,11 +18,15 @@ FAKE_SELFIE_LOG          a file it appends "<id> <seed>" (plus " identity <ref>"
                          render request and "<id> grid <tile count>" for each grid
 FAKE_SELFIE_TOO_LONG    a comma list of request id prefixes that answer prompt_too_long
 FAKE_SELFIE_BAD_SIMILARITY  grids answer a malformed similarity diagnostic
+FAKE_SELFIE_FLAG_CAPTION  captions come back flagged (nothing written)
 FAKE_SELFIE_IDENTITY     ready says identity true, and a render without an identity answers
                          bad_request (a plain worker answers identity_unavailable to one with)
 
 A grid writes JPEG to `out` and `thumb` and answers the canvas size from the real worker's layout
 (selfie/leeroy_selfie/grid.py); a tile that is not a file answers missing_tile.
+
+A caption (the culture memes) writes JPEG to `out_path` when `base_path` is a file (else
+missing_base) and answers a 1024 x 1024 image; FAKE_SELFIE_LOG gets "<id> caption".
 
 A render it answers writes JPEG to `out` and `thumb`. Like the real worker, the end of stdin
 ends it at once, mid-render too, and quit ends it with 0."""
@@ -76,6 +80,21 @@ def _grid(req: dict) -> None:
     extra = {"similarity": {"code": "ok", "pairs": 99}}         if os.environ.get("FAKE_SELFIE_BAD_SIMILARITY") else {}
     _send({"id": req["id"], "ok": True, "error": "", "width": width, "height": height,
            "seconds": 0.01, **extra})
+
+
+def _caption(req: dict) -> None:
+    if os.environ.get("FAKE_SELFIE_LOG"):
+        with open(os.environ["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
+            f.write(f"{req['id']} caption\n")
+    if not os.path.isfile(req["base_path"]):
+        _send({"id": req["id"], "ok": False, "error": "missing_base"})
+        return
+    flagged = bool(os.environ.get("FAKE_SELFIE_FLAG_CAPTION"))
+    if not flagged:
+        _write(req["out_path"], JPEG)
+    _send({"id": req["id"], "ok": True, "error": "", "flagged": flagged,
+           "nsfw": 0.95 if flagged else 0.01, "width": 1024, "height": 1024, "lines": 2,
+           "seconds": 0.01})
 
 
 def _send(obj: dict) -> None:
@@ -140,6 +159,9 @@ def main() -> None:
             os._exit(0)
         if req.get("op") == "grid":
             _grid(req)
+            continue
+        if req.get("op") == "caption":
+            _caption(req)
             continue
         if req.get("op") == "embed":
             if env.get("FAKE_SELFIE_HANG"):

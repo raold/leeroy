@@ -192,3 +192,55 @@ def loot_wish_seeds(conn, *, now, cast, names, human, ident=None) -> list[Seed]:
     # Together the wishes weigh about three ordinary subjects, however many raiders there are.
     weight = min(1.0, 3 / len(out)) if out else 1.0
     return [replace(s, weight=weight) for s in out]
+
+
+# -- Part C: memes. Text memes ride the jokes' own provenance; image memes are rendered at night. --
+
+MEME_RAID_S = 3 * 86400.0
+
+
+def meme_seeds(store, *, now, local, personas, human, library=None, ident=None) -> list[Seed]:
+    """Text memes and copypastas for #memes: one subject an active, public running joke (the
+    same rebuilt fact and butt as its joke seed, culture_seeds), and the guild's last raid with
+    wipes. Together they weigh about one ordinary subject."""
+    from leeroy_mind.guild.raids import CATALOG
+    out = [Seed(f"meme:joke:{s.key[5:]}", "meme", ("memes",), s.fact, s.about)
+           for s in _culture_seeds(store, now=now, personas=personas, human=human, library=library, ident=ident)]
+    row = store.conn.execute("SELECT raid_id,raid_key,size,kills,wipes FROM guild_raid WHERE ended BETWEEN ? AND ? "
+                             "AND wipes>0 ORDER BY ended DESC,raid_id DESC LIMIT 1", (now - MEME_RAID_S, now)).fetchone()
+    if row is not None and row[1] in CATALOG:
+        rid, key, size, kills, wipes = row
+        out.append(Seed(f"meme:raid:{rid}", "meme", ("memes",),
+                        f"Last raid: {CATALOG[key].name} {size}, {wipes} wipes and {kills} kills"))
+    weight = min(1.0, 1 / len(out)) if out else 1.0
+    return [replace(s, weight=weight) for s in out]
+
+
+def meme_image_seeds(store, *, now, local, personas, human, library=None, ident=None) -> list[Seed]:
+    """A ready image meme (culture.memes) for #memes, while its joke still rebuilds as public:
+    the joke's own fact and butt, so the kindness gate casts it as it casts the joke."""
+    from leeroy_mind.culture.memes import ready_memes
+    out = []
+    for meme in ready_memes(store.conn, now):
+        jokes = [s for s in _culture_seeds(store, now=now, personas=personas, human=human, include_recent=True,
+                                           only=meme["joke"], library=library, ident=ident)
+                 if s.key == f"joke:{meme['joke']}"]
+        if jokes:
+            out.append(Seed(f"meme_image:{meme['id']}:{meme['joke']}", "meme_image", ("memes",),
+                            jokes[0].fact, jokes[0].about))
+    return out
+
+
+def joke_of(seed) -> int | None:
+    """The running joke a joke or meme seed rests on (None: a raid-wipe meme, any other kind)."""
+    parts = seed.key.split(":")
+    try:
+        if seed.kind == "joke":
+            return int(parts[1])
+        if seed.kind == "meme" and parts[1] == "joke":
+            return int(parts[2])
+        if seed.kind == "meme_image":
+            return int(parts[2])
+    except (IndexError, ValueError):
+        return None
+    return None

@@ -44,6 +44,8 @@ def cmd_doctor(args) -> int:
         lines += models.check(root, name, quick=args.quick)
     for name in models.IDENTITY_PINS:  # only an --identity worker needs these: not fetched is a note
         lines += models.check(root, name, quick=args.quick)
+    from .caption import FONT  # the memes' caption font and its licence, bundled with the package
+    lines.append((FONT.is_file() and FONT.with_name("OFL.txt").is_file(), "caption font " + FONT.name))
     if not args.quick:
         lines += _gpu_lines()
     for ok, text in lines:

@@ -7,9 +7,9 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from . import grid, jpeg, models, similarity
+from . import caption, grid, jpeg, models, similarity
 from .fit import fit
-from .protocol import PORTRAIT_SIZE, Grid, Identity, Render, RenderFailed
+from .protocol import PORTRAIT_SIZE, Caption, Grid, Identity, Render, RenderFailed
 
 
 RETRY_WAIT_S = 10.0  # a retry's wait for the VRAM an unload is still freeing
@@ -136,6 +136,24 @@ class Renderer:
         while len(self._refs) > REF_CACHE:
             self._refs.popitem(last=False)
         return embeds
+
+    def caption(self, req: Caption) -> dict:
+        """A meme: the caption drawn over the base JPEG (caption.draw), scored by the NSFW
+        classifier like every render, and written to out_path (quality 92) only when it scores
+        under nsfw_max. RenderFailed("missing_base") when the base is gone or not a JPEG."""
+        started = time.perf_counter()
+        try:
+            img = jpeg.open_rgb(req.base_path)
+        except Exception as e:  # Pillow's errors share no narrower base: the base is there or not
+            raise RenderFailed("missing_base") from e
+        img, boxes = caption.draw(img, req.top, req.bottom)
+        nsfw = self.score(img)
+        flagged = nsfw >= req.nsfw_max
+        if not flagged:
+            jpeg.write(img, req.out_path, 92)
+        width, height = img.size
+        return {"flagged": flagged, "nsfw": round(nsfw, 4), "width": width, "height": height,
+                "lines": len(boxes), "seconds": round(time.perf_counter() - started, 2)}
 
     def grid(self, req: Grid) -> dict:
         """The guild photo composited from its tiles (grid.compose): {"ok": True, width,

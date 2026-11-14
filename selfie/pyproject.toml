@@ -23,10 +23,14 @@ gpu = [
   "pillow==13.0.0",
   "numpy==2.5.4",
 ]
-test = ["pytest>=9.1,<10"]
+# Pillow too: the caption test draws a real image with the bundled font
+test = ["pytest>=9.1,<10", "pillow==13.0.0"]
 
 [tool.setuptools.packages.find]
 include = ["leeroy_selfie*"]
+
+[tool.setuptools.package-data]
+leeroy_selfie = ["fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

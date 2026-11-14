@@ -242,7 +242,7 @@ class LiveReview:
                 rows = [r for r in rows if visible(message_readers(conn,r[0]),turn.channel,
                     speaker=turn.speaker,to_guid=turn.to_guid,readers=readers)]
             photos = by_messages(conn, [r[0] for r in rows], uploads=getattr(e,'photos_enabled',False),
-                                 members=getattr(e,'photos_send',False))
+                                 members=getattr(e,'photos_send',False), memes=getattr(e,'culture_memes',False))
             history = tuple(HistoryLine(r[0], r[1], r[2], r[3] + (
                 ' ' + photos[r[0]] if r[0] in photos else ''), draft.channel,
                 (observed.human if r[2] == turn.speaker else turn.speaker) if draft.channel == "dm" else 0,

@@ -14,6 +14,8 @@ RENDER_KEYS = frozenset({"id", "op", "phrases", "negative", "seed", "steps", "cf
                          "out", "thumb", "thumb_size", "nsfw_max"})
 IDENTITY_KEYS = frozenset({"ref", "crop", "scale"})
 GRID_KEYS = frozenset({"id", "op", "tiles", "tile", "gutter", "out", "thumb", "thumb_size"})
+CAPTION_KEYS = frozenset({"id", "op", "base_path", "top", "bottom", "out_path", "nsfw_max"})
+MAX_CAPTION = 60  # characters a caption line may hold
 MAX_TILES = 16
 SQUARE_TOLERANCE = 0.001
 PORTRAIT_SIZE = (832, 1216)  # width, height of shape "portrait" (needs size 1024)
@@ -57,6 +59,19 @@ class Grid:
     out: str
     thumb: str
     thumb_size: int
+
+
+@dataclass(frozen=True)
+class Caption:
+    """A meme's classic caption over an existing JPEG (caption.py): `top` and `bottom`, either
+    may be empty but not both, drawn by Pillow and written to `out_path` unless the captioned
+    image scores nsfw_max or more. The text is drawn, never part of a diffusion prompt."""
+    id: str
+    base_path: str
+    top: str
+    bottom: str
+    out_path: str
+    nsfw_max: float
 
 
 @dataclass(frozen=True)
@@ -152,9 +167,29 @@ def _grid(d: dict, rid: str) -> Grid:
                 _jpg(d, "out"), _jpg(d, "thumb"), _int(d, "thumb_size", 128, 1024))
 
 
-def parse(line: bytes) -> Render | Grid | Embed | Quit | Retry:
-    """A request line as a Render, a Grid, a Quit or a Retry; ValueError for anything else (a
-    line too long, not JSON, an unknown or missing key, a wrong type or range)."""
+def _caption_line(d: dict, key: str) -> str:
+    v = d[key]
+    if (type(v) is not str or len(v) > MAX_CAPTION or v != v.strip()
+            or any(not c.isprintable() for c in v)):
+        raise ValueError(f"{key} is not a caption line of at most {MAX_CAPTION} characters")
+    return v
+
+
+def _caption(d: dict, rid: str) -> Caption:
+    if set(d) != CAPTION_KEYS:
+        raise ValueError("caption keys are not exactly " + ", ".join(sorted(CAPTION_KEYS)))
+    top, bottom = _caption_line(d, "top"), _caption_line(d, "bottom")
+    if not top and not bottom:
+        raise ValueError("a caption needs a top or a bottom line")
+    base, out = _jpg(d, "base_path"), _jpg(d, "out_path")
+    if PurePath(base) == PurePath(out):
+        raise ValueError("a caption never writes over its base")
+    return Caption(rid, base, top, bottom, out, _num(d, "nsfw_max", 0.01, 0.9))
+
+
+def parse(line: bytes) -> Render | Grid | Caption | Embed | Quit | Retry:
+    """A request line as a Render, a Grid, a Caption, a Quit or a Retry; ValueError for anything
+    else (a line too long, not JSON, an unknown or missing key, a wrong type or range)."""
     if len(line) > MAX_LINE:
         raise ValueError("line too long")
     try:
@@ -173,6 +208,8 @@ def parse(line: bytes) -> Render | Grid | Embed | Quit | Retry:
         return Quit(rid) if d["op"] == "quit" else Retry(rid)
     if d.get("op") == "grid":
         return _grid(d, rid)
+    if d.get("op") == "caption":
+        return _caption(d, rid)
     if d.get("op") == "embed":
         if set(d) != {"id", "op", "ref"}:
             raise ValueError("embed keys are id, op, ref")
