@@ -237,7 +237,9 @@ def test_a_riff_takes_its_mediums_length(rig,monkeypatch,channel):
     if channel=="guild":
         assert all("One short line." in a and "This is Discord" not in a for a in asked)
     else:
-        assert all("short line" not in a and "write in Discord chat" in a for a in asked)
+        # whichever length band each riff line drew (talk/discord_length.band)
+        assert all("short line" not in a and "Discord chat" in a and "not the game" in a
+                   for a in asked)
 
 
 @pytest.mark.parametrize("interrupt",["owner","fight"])

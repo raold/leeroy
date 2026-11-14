@@ -62,6 +62,22 @@ opens a DM, riffs on General or answers late on her own time. It is read with th
 `[talk]`, at mind start and at each login; an invalid value is the default, logged once
 (`talk_discord_words_invalid`). No migration or native rebuild. Code: `discord_length.py`.
 
+Since the second round (owner, 2026-11-13: channels a mix, "DMs max expressive"):
+
+- **His DMs** take `[talk] dm_words` (0-200, default **200**; invalid is the default, logged once,
+  `talk_dm_words_invalid`) and their own wording (`prompt.DISCORD_DM`): write as fully as you
+  feel, say everything you want to say in your own voice, a whole paragraph when there is
+  something to say. A config without `dm_words` falls back to `discord_words`.
+- **Channels and group DMs** (`gdm:<id>`, a chat, not a pair) draw a length band once per turn
+  (`Turn.discord_draw`, from the pipeline's own `_length_rng`, so compose never draws from
+  `self.rng`): 55% a quick message of a few words or one sentence (at most 20 words,
+  `prompt.DISCORD_QUICK`), 30% a couple of sentences (45, `DISCORD_FEW`), 15% the paragraph of
+  `discord_words` (`DISCORD_LENGTH`), never over the setting (`discord_length.band`). The band
+  sets the wording, the room, the typing, the "long" tell and the trim alike, and a silent answer
+  is asked again for "a sentence", "a couple of sentences" or "a few sentences" by its band.
+  Measured on the live install the first afternoon: channel messages ran a median 40 words
+  (9% at 15 or fewer), against 9 before #271.
+
 - The instruction (`prompt.DISCORD_LENGTH`) takes the place of the template's "one short line"
   (or "in a few words", or an explicit whisper's "a line or two"): write it the way you would
   in a Discord DM thread (Discord chat, in a channel), usually a few sentences, a short
