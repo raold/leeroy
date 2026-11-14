@@ -49,6 +49,8 @@ run nothing else.
                        "raid", "size", "heroic", "lead"}: checked as the endpoint checks it,
                        then on to the mind's control endpoint (mindlink); refused with
                        --no-control, while a start or stop runs, or while the mind is not up
+    POST /api/raidlead {"action": "set", "guid"} or {"action": "clear"}: who calls his group's raid
+                       (the mind's raidlead op, the raid actions' gates); 409 while it is off
     GET  /api/face     ?guid=<guid>&size=sm|md|lg: the member's chosen photo (mind-data/selfies/
                        <guid>/chosen.jpg) as it is, or 404; the browser scales it
     GET  /api/tuning   the Personas tab's dials: world, groups and each member's values, and
@@ -78,6 +80,7 @@ run nothing else.
                        op `library`, a read: it works with --no-control); the query is never logged
     GET  /api/training the Training tab: what `training status`, `gate`, `trials` and `cards`
                        print, from mind.db (`setup` false when it has no training tables)
+    GET  /api/training/playbooks  the raid playbooks per boss (leeroy_mind.raidplay), read-only
     GET  /api/ops/badge  the Ops tab badge's two counts (health FAILs, held members), polled while any tab is open
     GET  /api/ops      eight independently budgeted read-only operations panels (opsview)
     GET  /api/dojo     the Dojo tab: the dojo's own files (its layout's data and runtime roots,
@@ -107,6 +110,17 @@ run nothing else.
                        way, no link), then on to the mind's board op, which stores it for the
                        Realm night; a saved or withdrawn reply is announced as a `board` event
                        {"action", "id"}
+    GET  /api/decisions the Guild tab's Decisions: the decision ledger newest first with what each
+                       changed and whether the game can undo it, and the polls with counts and his
+                       vote (decisionsview.decisions_view; `enabled` from mind.toml's [decisions])
+    POST /api/decision {"action": "vote", "poll", "option"} or {"action": "overrule", "id"}: checked as
+                       the endpoint checks it (400 with its words), refused 403 with --no-control and
+                       409 while nothing can be saved, then on to the mind's decision op; a done one
+                       is announced as a `decision` event {"action", "id"}
+    POST /api/string   {"action": "create", "member", "kind", "args"} | {"action": "cancel",
+                       "id"} | {"action": "list"}: his strings (godmode intents), gated as Board
+                       replies are, then on to the mind's string op ([godmode] enabled); a change
+                       is announced as a `string` event {"action", "id"}, never its text
     GET  /api/discord  the Discord tab: ?channel=<id>&after=<id>&thread=<id>, all optional. The
                        server (categories with their channels and last ids, DMs, members with
                        class, role and presence as the mind computes it, his guid and name) and,
@@ -147,9 +161,11 @@ from .. import clock as mind_clock, endpoint
 from ..discord import layout as discord_layout, store as discord_store
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
 from . import opsview
+from . import playbookview
 from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview, views, insightview)
+from . import decisionsview
 from .control import Controls, Refused
 from .httpd import Request, Response, Stream, digits, encode_json, json_response, text
 from .mindlink import BANK_S, BOARD_S, DISCORD_S, LIBRARY_S, RAID_S, SAY_S, LinkError
@@ -335,6 +351,13 @@ class ConsoleApp:
         self.groups = load_groups_config(settings.data_dir / 'mind.toml')
         from ..outreach.config import load_outreach_config
         self.outreach_enabled = load_outreach_config(settings.data_dir / 'mind.toml').enabled
+        from ..decisions.config import load_decisions_config
+        self.decisions_enabled = load_decisions_config(settings.data_dir / 'mind.toml').enabled
+        from ..godmode.config import load_godmode_config
+        self.godmode_enabled = load_godmode_config(settings.data_dir / 'mind.toml').enabled
+        from ..culture.config import load_culture_config
+        culture = load_culture_config(settings.data_dir / 'mind.toml')
+        self.item_tooltips = culture.enabled and culture.loot
         self._voice_uploads = []
         self._voice_day = None
         self._voice_day_total = 0
@@ -893,6 +916,7 @@ class ConsoleApp:
                   ("POST", "/api/learn"): self._api_learning_action,
                   ("POST", "/api/feedback"): self._api_learning_action,
                   ("GET", "/api/training"): self._api_training,
+                  ("GET", "/api/training/playbooks"): self._api_playbooks,
                   ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/ops/badge"): self._api_ops_badge,
                   ("GET", "/api/ops/action"): self._api_ops_action_status,
@@ -915,8 +939,12 @@ class ConsoleApp:
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action,
+                  ("POST", "/api/raidlead"): self._api_raidlead_action,
                   ("POST", "/api/say"): self._api_say,
-                  ("POST", "/api/board"): self._api_board_reply}
+                  ("POST", "/api/board"): self._api_board_reply,
+                  ("GET", "/api/decisions"): self._api_decisions,
+                  ("POST", "/api/decision"): self._api_decision,
+                  ("POST", "/api/string"): self._api_string}
         route = routes.get((req.method, req.path))
         if route is None:
             known = {path for _, path in routes}
@@ -1004,9 +1032,12 @@ class ConsoleApp:
             return {"ok": False, "error": str(reply.get("error") or "refused")[:200]}
         raid = reply.get("raid")
         world = reply.get("world")
-        return {"ok": True, "stopping": reply.get("stopping") is True,
-                "raid": raid if isinstance(raid, dict) else None,
-                "world": world if isinstance(world, dict) else None}
+        status = {"ok": True, "stopping": reply.get("stopping") is True,
+                  "raid": raid if isinstance(raid, dict) else None,
+                  "world": world if isinstance(world, dict) else None}
+        if isinstance(reply.get("raid_lead"), dict):  # only while the mind's raid lead is on
+            status["raid_lead"] = reply["raid_lead"]
+        return status
 
     # -- the raid and guild tabs ---------------------------------------------------------------
 
@@ -1286,6 +1317,14 @@ class ConsoleApp:
     async def _api_ops_badge(self, req: Request):
         return json_response(200, await self._ops.badge({"mind": self.view.state}))
 
+    async def _api_playbooks(self, req: Request):
+        try:
+            view = await asyncio.to_thread(playbookview.playbook_view)
+        except Exception as e:
+            log.warning("console_playbooks_unread: error=%s", type(e).__name__)
+            return json_response(503, {"ok": False, "error": f"the playbooks could not be read ({type(e).__name__})"})
+        return json_response(200, view)
+
     async def _api_dojo(self, req: Request):
         view = await asyncio.to_thread(dojoview.dojo_view, self.s.dojo_layout, conns=self._conns)
         return json_response(200, view)
@@ -1327,7 +1366,8 @@ class ConsoleApp:
         try:
             view = await asyncio.to_thread(feed.read, self.s.data_dir / "mind.db",
                                            personaview.member_view, guid, now=self._clock(),
-                                           outreach_enabled=self.outreach_enabled)
+                                           outreach_enabled=self.outreach_enabled,
+                                           godmode_enabled=self.godmode_enabled)
         except Exception as e:
             log.warning("console_persona_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
@@ -1420,7 +1460,8 @@ class ConsoleApp:
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
         return json_response(200, {"view": view, "mind": await self._tune_status(),
-                                   "control": self.controls.describe()})
+                                   "control": self.controls.describe(),
+                                   "godmode": self.godmode_enabled})
 
     async def _api_tune(self, req: Request):
         try:
@@ -1605,6 +1646,28 @@ class ConsoleApp:
         self.broadcast("raid", {"action": args["action"], "message": message})
         return json_response(200, {"ok": True, "message": message})
 
+    async def _api_raidlead_action(self, req: Request):
+        """Who calls his group's raid ({"action": "set", "guid"} or {"action": "clear"}), through
+        the mind's raidlead op behind the raid actions' gates."""
+        try:
+            args = endpoint.raidlead_args(req.json())
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._raid_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "raidlead", args,
+                                            timeout=RAID_S)
+        except LinkError as e:
+            return json_response(409, {"ok": False, "error": str(e)})
+        if reply.get("ok") is not True:
+            return json_response(409, {"ok": False,
+                                       "error": str(reply.get("error") or "refused")[:300]})
+        message = str(reply.get("message") or "done")[:300]
+        self.broadcast("raid", {"action": "lead", "message": message})
+        return json_response(200, {"ok": True, "message": message})
+
     # -- the reply box -------------------------------------------------------------------------
 
     def _say_problem(self) -> tuple[int, str] | None:
@@ -1707,6 +1770,69 @@ class ConsoleApp:
         return json_response(200, {"ok": True, "message": str(reply.get("message") or "Saved.")[:300],
                                    "id": reply_id})
 
+    async def _api_decisions(self, req: Request):
+        return await self._db_view("decisions", decisionsview.decisions_view, now=self._clock(),
+                                   enabled=self.decisions_enabled)
+
+    async def _api_decision(self, req: Request):
+        try:
+            args = endpoint.decision_args(req.json())  # checked exactly as the mind will
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._board_problem()
+        if problem is not None:
+            words = problem[1] if problem[0] != 403 else "Decisions are read-only: this console runs with --no-control."
+            return json_response(problem[0], {"ok": False, "error": words})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "decision", args, timeout=BOARD_S)
+        except LinkError as e:
+            words = str(e)
+            if e.unanswered:  # it may have reached the mind and been saved
+                return json_response(409, {"ok": False, "error": words[:1].upper() + words[1:]
+                                           + ". Look at the decisions before trying again."})
+            return json_response(409, {"ok": False, "error": f"Nothing was saved: {words}."})
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            if error.startswith(OLD_OPS):
+                error = "The running mind predates decisions: restart it after the update."
+            return json_response(409, {"ok": False, "error": error[:300] or "The mind refused it."})
+        ident = args["poll"] if args["action"] == "vote" else args["id"]
+        self.broadcast("decision", {"action": args["action"], "id": ident})
+        return json_response(200, {"ok": True, "message": str(reply.get("message") or "Saved.")[:300],
+                                   "undone": reply.get("undone") is True})
+
+    # -- his strings (godmode intents) ---------------------------------------------------------
+
+    async def _api_string(self, req: Request):
+        """POST /api/string: create {member, kind, args}, cancel {id} or list, relayed to the
+        mind's string op after the same shape check; the mind screens and stores it. Never logs
+        or broadcasts its text."""
+        try:
+            args = endpoint.string_args(req.json())
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._board_problem()
+        if problem is not None:
+            return json_response(problem[0], {"ok": False, "error": problem[1]})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "string", args,
+                                            timeout=BOARD_S)
+        except LinkError as e:
+            words = str(e)
+            if e.unanswered:
+                return json_response(409, {"ok": False, "error": words[:1].upper() + words[1:]
+                                           + ". Look at her strings before sending it again."})
+            return json_response(409, {"ok": False, "error": f"Nothing was saved: {words}."})
+        if reply.get("ok") is not True:
+            error = str(reply.get("error") or "")
+            return json_response(409, {"ok": False, "error": error[:300] or "The mind refused it.",
+                                       **({"code": str(reply["code"])[:40]}
+                                          if isinstance(reply.get("code"), str) else {})})
+        if args["action"] != "list":
+            self.broadcast("string", {"action": args["action"],
+                                      "id": reply.get("id") if type(reply.get("id")) is int else None})
+        return json_response(200, reply)
+
     # -- the guild's Discord --------------------------------------------------------------------
 
     def _trial_rank(self) -> int:
@@ -1722,7 +1848,8 @@ class ConsoleApp:
         view = discordview.discord_view(
             conn, owner_now=mind_clock.local_at(self._clock()),
             trial_rank=self._trial_rank(), channel=channel, after=after, thread=thread,
-            read_marks=read_marks, server=self.server_enabled, groups=self.groups.enabled)
+            read_marks=read_marks, server=self.server_enabled, groups=self.groups.enabled,
+            items=self.s.data_dir / 'library.db' if self.item_tooltips else None)
         view['photos'] = self.photos.enabled and self.controls.enabled
         view['voice_notes'] = self.voice_notes.enabled and self.controls.enabled
         fp = None

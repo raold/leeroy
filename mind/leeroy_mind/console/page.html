@@ -222,6 +222,11 @@
           <label>Lead <select id="r-lead"></select></label>
           <button id="r-go" type="submit">Form the raid</button>
         </form>
+        <form id="r-leadform" class="formrow" aria-label="Raid lead" hidden>
+          <label>Raid lead <select id="r-raidlead"></select></label>
+          <button id="r-leadgo" type="submit">Set the lead</button>
+          <span id="r-leadnow" class="muted"></span>
+        </form>
         <p id="r-why" class="why" role="status"></p>
       </article>
       <article class="panel span">
@@ -289,6 +294,15 @@
       <article class="panel">
         <header><h3>Chronicle</h3></header>
         <div id="g-chronicle" class="scroll"></div>
+      </article>
+      <article id="g-decisions-panel" class="panel span" hidden>
+        <header><h3>Decisions</h3></header>
+        <p id="g-decisions-why" class="why"></p>
+        <div class="scroll"><table><thead><tr><th>decision</th><th>what</th><th>status</th><th>settled by</th>
+          <th>settled</th><th>in effect</th><th>what changed</th><th></th></tr></thead>
+          <tbody id="g-decisions"></tbody></table></div>
+        <h4>Polls</h4>
+        <div id="g-polls" class="dc-polls"></div>
       </article>
     </div>
   </section>
@@ -425,6 +439,11 @@
           <tbody id="p-outreach-kinds"></tbody></table></div>
         <p id="p-outreach-why" class="why"></p>
       </article>
+      <article id="p-strings" class="panel" hidden>
+        <header><h3>Strings</h3><span id="p-strings-n" class="muted"></span></header>
+        <p class="why">Things you asked her to do. She does them in her own words when they fit, or they come back as not taken with a reason.</p>
+        <div id="p-strings-box"></div>
+      </article>
       <article class="panel span">
         <header><h3>Relationships</h3><span id="p-tien" class="muted"></span></header>
         <div class="scroll"><table><thead><tr><th>with</th><th>label</th><th class="num">affinity</th><th class="num">trust</th>
@@ -499,10 +518,12 @@
     <div id="training-kpis" class="kpis" aria-label="The training ground"></div>
     <div class="cards wide">
       <article class="panel span"><header><h3>This week</h3></header><div id="training-week"></div></article>
+      <article class="panel span"><header><h3>What hurt them</h3></header><div id="training-hurt"></div></article>
       <article class="panel"><header><h3>Trials</h3></header><div id="training-trials"></div></article>
       <article class="panel"><header><h3>What would count as done</h3></header><div id="training-done"></div></article>
       <article class="panel span"><header><h3>Tactic cards</h3></header><div id="training-cards"></div></article>
       <article class="panel span"><header><h3>What the numbers do not prove</h3></header><div id="training-evidence"></div></article>
+      <article class="panel span"><header><h3>Raid playbooks</h3></header><div id="training-playbooks"></div></article>
     </div>
   </section>
   <section id="tab-dojo" class="tab mindtab" role="tabpanel" aria-labelledby="t-dojo" hidden>

@@ -1,4 +1,4 @@
-import { num, obj, plural, str } from "./core.mjs";
+import { arr, num, obj, plural, str } from "./core.mjs";
 
 // How the Training tab words what /api/training holds. No DOM here: node imports this file.
 
@@ -71,4 +71,111 @@ export function scopeText(x) {
 export function trialText(t) {
   t = obj(t);
   return plural(num(t.arms), "arm") + ", " + plural(num(t.observations), "observation");
+}
+
+// -- what hurt them (the `hurt` report): each boss's numbers as short lines ------------------------
+
+// A spell by its stored name, else its id
+export function spellText(s) {
+  s = obj(s);
+  return str(s.name) || "spell " + num(s.spell);
+}
+
+function who(m) {
+  m = obj(m);
+  return str(m.name) || "#" + num(m.guid);
+}
+
+// The boss's heading line: pulls, kills, wipes, kinds and deaths a pull
+export function hurtHead(c) {
+  c = obj(c);
+  var kinds = Object.keys(obj(c.by_kind)).sort().map(function (k) { return k + " " + num(c.by_kind[k]); });
+  var parts = [plural(num(c.pulls), "pull") + " (" + plural(num(c.kills), "kill") + ", " + plural(num(c.wipes), "wipe") + ")"];
+  if (kinds.length) { parts.push(kinds.join(", ")); }
+  var deaths = obj(c.deaths);
+  parts.push((typeof deaths.per_pull === "number" ? deaths.per_pull.toFixed(2) : "-") + " deaths a pull");
+  if (num(c.incomplete_pulls)) { parts.push(plural(num(c.incomplete_pulls), "incomplete pull") + " not read"); }
+  return parts.join(" · ");
+}
+
+// Deaths by killing spell: "Vile Gas ×9 (6 members)"; "" when nobody died
+export function deathsBy(c, n) {
+  return arr(obj(obj(c).deaths).by_spell).slice(0, n || 3).map(function (d) {
+    return spellText(d) + " ×" + num(d.deaths) + " (" + plural(num(d.members), "member") + ")";
+  }).join(", ");
+}
+
+// The spells that hit the cast hardest, as shares of recorded (requested) damage
+export function hitHardest(c, n) {
+  return arr(obj(obj(c).damage_taken).top).slice(0, n || 3).map(function (t) {
+    var share = typeof t.share === "number" ? " " + Math.round(t.share * 100) + "%" : "";
+    return spellText(t) + share;
+  }).join(", ");
+}
+
+// Failed mechanics the checks proved, with the member who failed each most
+export function mechanicsText(c, n) {
+  return arr(obj(c).mechanics).slice(0, n || 3).map(function (m) {
+    var worst = arr(m.worst)[0];
+    return str(m.key) + " (" + str(m.kind) + ") ×" + num(m.count) + (worst ? ", most " + who(worst) + " ×" + num(worst.count) : "");
+  }).join("; ");
+}
+
+// Avoidable effects: who the records show hit, and how often past the allowance
+export function avoidText(c, n) {
+  return arr(obj(c).avoidable).filter(function (a) { return num(a.hits) > 0 || !a.resolved; }).map(function (a) {
+    var label = arr(a.names).join(" / ");
+    if (!a.resolved) { return label + ": spell not named yet"; }
+    return label + ": " + arr(a.members).slice(0, n || 3).map(function (m) {
+      return who(m) + " " + plural(num(m.hits), "hit") + (num(m.over_allowance) ? " (" + num(m.over_allowance) + " over)" : "");
+    }).join(", ");
+  });
+}
+
+var KIND_WORDS = {
+  avoid_ground: "avoid the ground", move_out_cone: "out of the cone", spread: "spread", stack: "stack",
+  soak: "soak", run_out_debuff: "run out", interrupt: "interrupt", dispel: "dispel",
+  tank_swap_at_stacks: "tank swap", switch_adds: "switch to adds", kill_order: "kill order",
+  los: "line of sight", face_away: "face away", positional: "position", kite: "kite",
+  raid_cooldowns: "cooldowns", use_object: "use it", heal_target: "heal it", enrage_timer: "enrage",
+  stop_casting: "stop casting"
+};
+
+// The raid playbooks (/api/training/playbooks) as words: one group per raid, one line per boss
+export function playbookGroups(v) {
+  return arr(obj(v).raids).map(function (r) {
+    r = obj(r);
+    return {
+      title: str(r.name) + " (" + arr(r.difficulties).join(", ") + ")",
+      bosses: arr(r.bosses).map(function (b) {
+        b = obj(b);
+        var mechs = arr(b.mechanics), stock = mechs.filter(function (m) { return obj(m).handled_by === "playerbots"; }).length;
+        var partial = mechs.filter(function (m) { return obj(m).handled_by === "partial"; }).length;
+        return {
+          title: str(b.name),
+          detail: plural(mechs.length, "mechanic") + ", " + stock + " handled by playerbots" + (partial ? ", " + partial + " partly" : ""),
+          call: str(b.call),
+          mechanics: mechs.map(function (m) {
+            m = obj(m);
+            var only = arr(m.only).length ? " · only " + arr(m.only).join(", ") : "";
+            return {
+              title: str(m.name),
+              tag: KIND_WORDS[m.kind] || str(m.kind),
+              who: arr(m.roles).join(", ") + only,
+              stock: m.handled_by === "playerbots" ? "playerbots" : m.handled_by === "partial" ? "partly playerbots" : "",
+              note: str(m.handled_note),
+              text: str(m.explain)
+            };
+          })
+        };
+      })
+    };
+  });
+}
+
+export function playbookTotals(v) {
+  var t = obj(obj(v).totals);
+  return plural(num(t.raids), "raid") + " · " + plural(num(t.bosses), "boss", "bosses") + " · "
+    + plural(num(t.mechanics), "mechanic") + " · " + num(t.playerbots) + " handled by playerbots, " + num(t.partial) + " partly · "
+    + plural(num(t.scored), "check row") + " can fail by default (" + num(t.scored_playbooks) + " with playbook checks on)";
 }

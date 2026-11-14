@@ -1,7 +1,7 @@
 From 3826b2f4db0c1086c51c97443749e0975b7fd788 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 7 Nov 2026 07:57:49 -0500
-Subject: [PATCH 10/10] Keep pinned bots out of random bot arena teams
+Subject: [PATCH 10/11] Keep pinned bots out of random bot arena teams
 
 ---
  src/Bot/Factory/RandomPlayerbotFactory.cpp | 4 ++++

@@ -169,3 +169,25 @@ def test_nothing_from_training_reaches_the_log(db, data, caplog):
             await app.close()
     asyncio.run(go())
     assert SECRET not in caplog.text
+
+
+def test_what_hurt_them_names_spells_the_mind_stored_and_members(db):
+    from training.test_tg_hurt import NAMES, VILE_GAS, save
+    from leeroy_mind.training.hurt import NAMES_KEY
+    v = trainview.training_view(db, now=NOW)
+    assert v["hurt"]["spell_names"] == "unavailable"
+    db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+               (NAMES_KEY, json.dumps({str(k): n for k, n in NAMES.items()})))
+    db.execute("INSERT INTO cast_member(guid,name,race,class,gender,level,rank,online,updated) "
+               "VALUES(101,'Testa',1,8,1,80,1,1,0)")
+    save(_Fake(db), "9000000-77-4", start=int(NOW * 1000) - 60_000, outcome="wiped",
+         members=((101, "ranged", ((VILE_GAS, 3000, 3),)),), deaths=((101, VILE_GAS),))
+    v = trainview.training_view(db, now=NOW)
+    hurt = v["hurt"]
+    assert hurt["spell_names"] == "stored_names" and hurt["last"] == trainview.HURT_LAST
+    fester = hurt["contexts"][0]
+    assert (fester["boss"], fester["mode"], fester["pulls"], fester["wipes"]) == ("Festergut", "10-man", 1, 1)
+    assert fester["deaths"]["by_spell"] == [dict(spell=VILE_GAS, name="Vile Gas", deaths=1, members=1, pulls=1)]
+    assert fester["avoidable"][0]["members"][0] == dict(guid=101, name="Testa", hits=3, over_allowance=2,
+                                                         pulls=1, amount=3000)
+    assert len(fester["damage_taken"]["top"]) <= trainview.HURT_TOP

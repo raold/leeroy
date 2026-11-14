@@ -16,13 +16,19 @@ from leeroy_mind.wow import is_raid_fight
 
 from . import protocol as p, store
 from .ledger import PullRecord
-from .mechanics import BOSS_MECHANICS, NO_BEHIND
+from .mechanics import boss_mechanics, no_behind
 
 if TYPE_CHECKING:
     from .spells import SpellBook
 
 
 CHECKS_VERSION = 1
+# The raid playbooks' further checks ([training] playbooks) are a newer contract.
+PLAYBOOK_CHECKS_VERSION = 2
+
+
+def checks_version(playbooks: bool = False) -> int:
+    return PLAYBOOK_CHECKS_VERSION if playbooks else CHECKS_VERSION
 
 
 @dataclass(frozen=True)
@@ -45,23 +51,27 @@ class CheckResult:
     version: int = CHECKS_VERSION
 
 
-def run_checks(record: PullRecord, roles: dict[int, str], book: SpellBook) -> CheckResult:
+def run_checks(record: PullRecord, roles: dict[int, str], book: SpellBook, *,
+               playbooks: bool = False) -> CheckResult:
     """Return proven violations and explicit reasons checks remain incomplete.
 
     ``failed_mechanics`` is the observed lower bound. Only ``complete`` permits
     interpreting it as the checked total; an empty failure list is not a pass.
     ``coverage`` contains stable, sorted reason strings, not coverage estimates.
+    ``playbooks`` adds the raid playbooks' version 2 checks for every covered raid.
     """
     h = record.header
+    version = checks_version(playbooks)
+    table, exempt_behind = boss_mechanics(playbooks), no_behind(playbooks)
     causes = ("unknown",) * len(record.deaths)
     if not record.complete or h.outcome not in {"killed", "wiped"} or not is_raid_fight(h.map, h.boss_id):
-        return CheckResult((), causes, 0, ("pull:ineligible",))
+        return CheckResult((), causes, 0, ("pull:ineligible",), version=version)
     duration = (h.end_ms - h.start_ms) / 1000
     if duration <= 0 or not record.members or len(record.members) != h.members:
-        return CheckResult((), causes, 0, ("pull:empty",))
+        return CheckResult((), causes, 0, ("pull:empty",), version=version)
 
     failures, missing = {}, set()
-    if (h.map, h.boss_id) not in BOSS_MECHANICS:
+    if (h.map, h.boss_id) not in table:
         missing.add("mechanics:generic_only")
     members = {m.guid: m for m in record.members}
     known_roles = {g: roles[g] for g in members if roles.get(g) in {"tank", "healer", "melee", "ranged"}}
@@ -76,7 +86,7 @@ def run_checks(record: PullRecord, roles: dict[int, str], book: SpellBook) -> Ch
         if count > 0:
             failures[guid, kind, key] = Failure(kind, key, guid, count, 0, 0.0)
 
-    for mechanic in BOSS_MECHANICS.get((h.map, h.boss_id), ()):
+    for mechanic in table.get((h.map, h.boss_id), ()):
         selected = [m for m in record.members if not mechanic.roles or known_roles.get(m.guid) in mechanic.roles]
         if mechanic.kind in {"avoid", "adds"}:
             # Neither current nor arbitrary future labels are proof of stronger
@@ -142,7 +152,7 @@ def run_checks(record: PullRecord, roles: dict[int, str], book: SpellBook) -> Ch
     for guid, role in known_roles.items():
         own = samples[guid]
         living = {t: point for t, point in own.items() if point["hp"] > 0}
-        if role == "melee" and (h.map, h.boss_id) not in NO_BEHIND:
+        if role == "melee" and (h.map, h.boss_id) not in exempt_behind:
             if len(own) < expected or len(boss) < expected:
                 missing.add(f"behind:tracks:{guid}")
             bad = []
@@ -193,7 +203,7 @@ def run_checks(record: PullRecord, roles: dict[int, str], book: SpellBook) -> Ch
         missing.add("deaths:causal_attribution")
     ordered = tuple(failures[key] for key in sorted(failures))
     failed = sum(f.kind in {"avoid", "debuff", "buff", "spread", "behind", "adds"} for f in ordered)
-    return CheckResult(ordered, causes, failed, tuple(sorted(missing)), not missing)
+    return CheckResult(ordered, causes, failed, tuple(sorted(missing)), not missing, version)
 
 
 def _samples(data, fields, duration):
@@ -263,18 +273,18 @@ def _restore(conn, row):
     return PullRecord(header, tuple(members), deaths, tracks, tuple(casts), bool(row["complete"])), roles
 
 
-async def rescore(ports, book: SpellBook, *, since_ms=None) -> int:
+async def rescore(ports, book: SpellBook, *, since_ms=None, playbooks: bool = False) -> int:
     """Recheck eligible stored pulls; pruned tracks stay explicitly unavailable."""
     updated = 0
     for row in store.pull_rows(ports.conn, since_ms=since_ms, scoreable=True):
-        if row["checks_version"] >= CHECKS_VERSION:
+        if row["checks_version"] >= checks_version(playbooks):
             continue
         record, roles = _restore(ports.conn, row)
         if not record.complete or record.header.outcome == "aborted" or not is_raid_fight(record.header.map, record.header.boss_id):
             continue
-        result = run_checks(record, roles, book)
+        result = run_checks(record, roles, book, playbooks=playbooks)
         store.set_checks(ports.conn, row["id"], result.failures, result.causes,
-                         deaths=len(record.deaths), failed=result.failed_mechanics, version=CHECKS_VERSION,
+                         deaths=len(record.deaths), failed=result.failed_mechanics, version=result.version,
                          complete=result.complete, coverage=result.coverage)
         updated += 1
     return updated

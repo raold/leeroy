@@ -353,11 +353,18 @@ class LiveReview:
                 here = tuple(names[g] for g in readers if g in names and g != turn.speaker)
             self_line = (f"You're {state.presence.state}" + (f' ({state.status})' if state.status else '')
                          + (', playing WoW' if state.presence.playing else ', not playing WoW'))
+        intents = ()
+        godmode = getattr(e, 'godmode', None)
+        # One thing to carry out a turn: an outreach item or an intent's own turn says it already.
+        if (godmode is not None and getattr(meta, 'outreach_item', None) is None
+                and getattr(meta, 'godmode_intent', None) is None):
+            intents = tuple(godmode.card_lines(turn.speaker, raw, to_guid=to, conn=conn))
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
             discord_events=tuple(events[-4:]), now=now,names=names,
             romance_activities=bond[0] and not is_group(raw), jealousy=0 if is_group(raw) else bond[1], server=observed.server,
-            here=here, self_line=self_line)
+            here=here, self_line=self_line, holidays=getattr(e, 'culture_calendar', False),
+            intents=intents, decisions=bool(getattr(e, 'decisions_enabled', False)))
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):
             if not close:

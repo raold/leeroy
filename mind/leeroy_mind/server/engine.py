@@ -138,8 +138,13 @@ class ServerEngine:
             from dataclasses import replace
             available = [replace(seed, channels=tuple(c for c in seed.channels if c not in busy and
                          now >= self._human_until.get(c,0))) for seed in available]
+            from leeroy_mind.tuning.effective import edits_of
+            # every free member counts (an unedited one weighs 1), so one member's 0 never
+            # takes a channel from the others
+            hangouts = {g: edits_of(observed.personas[g]) for g in free if g in observed.personas}
             chosen = rhythm.choose_seed_and_channel(available, local=observed.local,
-                officers_free=len(free & observed.officers), rng=self.rng)
+                officers_free=len(free & observed.officers), rng=self.rng,
+                hangouts=hangouts if any(e.channels for e in hangouts.values()) else None)
             if chosen is None:
                 return
             seed, channel = chosen
@@ -196,6 +201,8 @@ class ServerEngine:
                          human=self.app.human_guid, now=self.app.clock.now(), allowance=allowance)[0]
 
     def _joke_valid(self, conversation, speaker):
+        if conversation.seed.kind == 'loot_close' and len(conversation.seed.about) > 1:
+            return self._gate(conversation, speaker, conversation.seed.about[1])
         if conversation.seed.kind != "joke":
             return True
         from leeroy_mind.culture.config import app_enabled
@@ -211,7 +218,10 @@ class ServerEngine:
         if not any(s.key == conversation.seed.key and s.fact == conversation.seed.fact
                    and s.about == conversation.seed.about for s in current):
             return False
-        target = conversation.seed.about[0]
+        return self._gate(conversation, speaker, conversation.seed.about[0])
+
+    def _gate(self, conversation, speaker, target):
+        """The kindness gate for the opener and each speaker; the target may answer."""
         teaser = conversation.teaser if conversation.teaser is not None else speaker
         if not target:
             return True
@@ -221,6 +231,12 @@ class ServerEngine:
 
     def _valid(self, conversation, speaker, parent=None):
         if conversation.reason or self._blocked(self.app.clock.now()) or not self._joke_valid(conversation, speaker):
+            return False
+        godmode = getattr(self.app, 'godmode', None)
+        # An intent opens the conversation only while it waits; once posted, the talk goes on.
+        if (conversation.seed.kind == 'intent' and not conversation.messages
+                and (godmode is None or not godmode.seed_valid(conversation.seed))):
+            conversation.reason = conversation.reason or 'intent_settled'
             return False
         if parent is not None:
             row = self.app.store.conn.execute('SELECT channel,deleted FROM discord_message WHERE id=?',
@@ -284,9 +300,20 @@ class ServerEngine:
                         app.store.set_meta(OWNER_KEY, night_of(local_at(now)))
                 app.store.set_meta(receipt, str(message))
 
+    def _record_close(self, conversation, line, message, now):
+        """A delivered close-loot thread spends its runner-up's teasing allowance for the day,
+        once, inside the pipeline's post/chat transaction, as a joke's does."""
+        from leeroy_mind.culture.tease import mark_teased
+        receipt = f'culture:server-close:{conversation.id}'
+        with self.app.store.transaction():
+            if self.app.store.get_meta(receipt) is None:
+                mark_teased(self.app.store, conversation.seed.about[1], now=now)
+                self.app.store.set_meta(receipt, str(message))
+
     def _settle_joke(self, conversation, meta):
         """Read the committed receipt after success or shielded cancellation."""
-        conversation.teased = self.app.store.get_meta(f'culture:server-joke:{conversation.id}') is not None
+        kind = 'close' if conversation.seed.kind == 'loot_close' else 'joke'
+        conversation.teased = self.app.store.get_meta(f'culture:server-{kind}:{conversation.id}') is not None
 
     async def _conversation(self, conversation):
         app, last, dry = self.app, None, 0
@@ -342,9 +369,16 @@ class ServerEngine:
                     from leeroy_mind.groups.conversations import definition as group_definition
                     definition = group_definition(conversation.channel)
                 purpose = definition.topic
-                if conversation.seed.kind == 'purpose':
+                if conversation.seed.kind == 'intent':
+                    from leeroy_mind.godmode.service import intent_kind
+                    opener = {'thread': "You'd meant to start a thread here about this; open it now, as your own idea, in your own words: ",
+                              'bring_up': "You'd meant to bring this up; do it now, as your own idea, in your own words: "
+                              }.get(intent_kind(conversation.seed),
+                                    "You'd meant to post here about this; do it now, as your own idea, in your own words: ")
+                elif conversation.seed.kind == 'purpose':
                     opener = 'Talk about this topic in your own way: '
-                elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day'}:
+                elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day',
+                                                'decision','wow_event','loot_close'}:
                     opener = 'Start a conversation about this real event in your own way: '
                 else:
                     opener = 'Start a conversation using only what is known: '
@@ -357,7 +391,7 @@ class ServerEngine:
                     person = observed.personas.get(target)
                     name = app.engine.human.called if target == app.human_guid else person.character_name
                     instruction += f" Tease {name} about it the way friends do; keep it kind."
-                if conversation.seed.kind == 'joke' and conversation.teaser is None:
+                if conversation.seed.kind in ('joke', 'loot_close') and conversation.teaser is None:
                     conversation.teaser = speaker
                 turn = Turn(TurnKind.OPEN if parent is None else TurnKind.CONTINUE, speaker,
                     conversation.channel if is_group(conversation.channel) else 'discord:'+conversation.channel,
@@ -373,6 +407,13 @@ class ServerEngine:
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
                 if conversation.seed.kind == 'joke':
                     meta.on_discord_record = lambda line,message,now:self._record_joke(conversation,line,message,now)
+                elif conversation.seed.kind == 'loot_close' and len(conversation.seed.about) > 1:
+                    meta.on_discord_record = lambda line,message,now:self._record_close(conversation,line,message,now)
+                if conversation.seed.kind == 'intent' and parent is None:
+                    from leeroy_mind.godmode.service import intent_of
+                    meta.godmode_intent = intent_of(conversation.seed)
+                    meta.on_discord_record = (lambda line,message,now,i=meta.godmode_intent:
+                                              self.app.godmode.taken(i, message, now))
                 opening_photo = meta.photo_seed is not None and dry == 0
                 if parent is None and dry == 0 and not opening_photo and conversation.seed.kind != 'joke':
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
@@ -381,7 +422,7 @@ class ServerEngine:
                     await app.engine.speak_meta(turn, meta)
                 finally:
                     conversation.in_flight = conversation.in_flight_turn = None
-                    if conversation.seed.kind == "joke":
+                    if conversation.seed.kind in ("joke", "loot_close"):
                         self._settle_joke(conversation, meta)
                 added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
                     'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
@@ -393,6 +434,10 @@ class ServerEngine:
                     # Spent once its photo was offered; one never offered (another photo in
                     # flight) stays for a later conversation.
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
+                if parent is None and dry == 0 and conversation.seed.kind == 'intent':
+                    godmode = getattr(app, 'godmode', None)
+                    if godmode is not None:
+                        godmode.opened(conversation.seed, bool(added))
                 if parent is None and not added and conversation.seed.openers is not None:
                     conversation.reason = 'opener_dropped'
                     break

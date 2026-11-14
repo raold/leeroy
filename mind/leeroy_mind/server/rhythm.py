@@ -9,7 +9,7 @@ from leeroy_mind.discord.channels import is_group
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.talk.budget import DayPhase, day_phase
 from leeroy_mind.talk.select import pick_speakers
-from leeroy_mind.tuning.effective import dials_of
+from leeroy_mind.tuning.effective import dials_of, edits_of
 from .seeds import Seed
 from .state import DiscordState
 
@@ -45,8 +45,22 @@ def length(rng: random.Random) -> int:
     return n
 
 
+def _hangout(hangouts, seed: Seed, channel: str) -> float:
+    """The mean of the owner's godmode hangout weights (tuning.edits) for this channel over
+    the seed's free openers, or over every free member when anyone may open it (an unedited
+    member weighs 1); 1.0 without any."""
+    if not hangouts:
+        return 1.0
+    who = [g for g in (seed.openers if seed.openers is not None else hangouts) if g in hangouts]
+    if not who:
+        return 1.0
+    return sum(hangouts[g].channel_weight(channel) for g in who) / len(who)
+
+
 def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_free: int,
-                            rng: random.Random) -> tuple[Seed, str] | None:
+                            rng: random.Random, hangouts=None) -> tuple[Seed, str] | None:
+    """`hangouts`: every free member -> their godmode overlays (MemberEdits), given only when
+    any has hangout weights; None leaves every weight as it was."""
     options, weights = [], []
     phase = day_phase(local)
     for seed in seeds:
@@ -68,6 +82,8 @@ def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_
                 weight *= 3
             if name in {'loot-and-dkp', 'logs'} and seed.kind == 'raid_after':
                 weight *= 3
+            if hangouts:
+                weight *= _hangout(hangouts, seed, name)
             if weight > 0:
                 options.append((seed, name))
                 weights.append(weight)
@@ -105,11 +121,14 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
             weight *= dials.mult('drama')
         if classes is not None and layout.CLASS_CHANNEL.get(classes.get(guid)) == channel:
             weight *= 4
+        weight *= edits_of(p).channel_weight(channel)  # godmode hangouts; 0: she avoids it
         weights[guid] = weight
     if sum(w > 0 for w in weights.values()) < 2:
         return []
     openers = {g:w for g,w in weights.items() if seed.openers is None or g in seed.openers}
-    butt = seed.about[0] if seed.kind == 'joke' and seed.about else 0
+    # A close loot award stings its runner-up: who talks about it passes the same kindness gate.
+    butt = (seed.about[0] if seed.kind == 'joke' and seed.about else
+            seed.about[1] if seed.kind == 'loot_close' and len(seed.about) > 1 else 0)
     if butt:
         openers = {g:w for g,w in openers.items() if g != butt and tease is not None and tease(g, butt)}
         weights = {g:w for g,w in weights.items() if g == butt or tease is not None and tease(g, butt)}

@@ -17,7 +17,7 @@ from leeroy_mind.wow import BOSS_NAMES, is_raid_fight
 from .config import load_training_config
 from .experiments import Experimenter
 from .inspect import cards_view, checklist, gate_state, trials_view
-from .mechanics import BOSS_MECHANICS
+from .mechanics import boss_mechanics
 from .report import training_section
 from .service import load_book, rescore_stored
 from . import store
@@ -84,9 +84,30 @@ def _lab_owned(conn):
         "native_start": meta(NATIVE_START_KEY)}
 
 
+def _spell_book(root):
+    """The client's spell names for `hurt`, read from local DBC files only (no database
+    login); None when the folder cannot be found. A missing Spell.dbc loads an empty book."""
+    from leeroy_mind.guild.config import load_guild_config
+    from leeroy_mind.library.world import dbc_dir_of
+    from .spells import load_spellbook
+    try:
+        folder = dbc_dir_of(load_guild_config(root / "mind.toml").worldserver_conf)
+    except (OSError, ConfigError, ValueError):
+        return None
+    return load_spellbook(folder) if folder is not None else None
+
+
+def _last(value):
+    number = int(value)
+    if not 1 <= number <= 1000:
+        raise argparse.ArgumentTypeError("--last takes 1 to 1000 pulls")
+    return number
+
+
 async def _rescore(conn, root):
+    playbooks = load_training_config(root / "mind.toml").playbooks
     book = await asyncio.to_thread(load_book, root)
-    return await rescore_stored(SimpleNamespace(conn=conn), book)
+    return await rescore_stored(SimpleNamespace(conn=conn), book, playbooks=playbooks)
 
 
 def training_main(argv=None):
@@ -96,7 +117,7 @@ def training_main(argv=None):
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "voicecheck",
-                 "trials", "rollback", "stock", "lab", "lab-clear"):
+                 "trials", "rollback", "stock", "lab", "lab-clear", "hurt"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -110,6 +131,10 @@ def training_main(argv=None):
             sub.add_argument("--night", required=True)
         elif name in {"cards", "lessons", "trials", "rollback", "stock"}:
             sub.add_argument("--context", required=name in {"lessons", "rollback", "stock"})
+        elif name == "hurt":
+            sub.add_argument("--context")
+            sub.add_argument("--last", type=_last)
+            sub.add_argument("--kind", action="append", choices=("his", "offline", "benchmark"))
     args = parser.parse_args(argv)
     root = _root(args)
     write = args.command in {"rescore", "rollback", "stock", "lab-clear"} or args.command == "gate" and args.reset
@@ -160,6 +185,13 @@ def training_main(argv=None):
                     result = {"context": context, "changed": changed,
                               "applied_commands_unchanged": True,
                               "pending_cleanup": conn.execute("SELECT count(*) FROM tg_applied WHERE undone IS NULL").fetchone()[0]}
+                elif args.command == "hurt":
+                    from leeroy_mind.console.views import names
+                    from .hurt import KINDS, SpellNames, hurt_report, stored_names
+                    context = _context(args.context) if args.context else None
+                    book = _spell_book(root)
+                    result = hurt_report(conn, context=context, last=args.last, kinds=args.kind or KINDS,
+                                         spells=SpellNames(book, stored_names(conn)), names=names(conn))
                 elif args.command == "cards":
                     result = cards_view(conn, args.context)
                 elif args.command == "lessons":
@@ -170,7 +202,8 @@ def training_main(argv=None):
                     async def read():
                         return await asyncio.to_thread(load_book, root)
                     book = asyncio.run(read())
-                    names = sorted({name for rows in BOSS_MECHANICS.values() for row in rows
+                    table = boss_mechanics(load_training_config(root / "mind.toml").playbooks)
+                    names = sorted({name for rows in table.values() for row in rows
                                     for name in (*row.names, *row.exempt)})
                     result = {"loaded": sorted(book.loaded), "spells": {name: sorted(book.ids(name)) for name in names}}
                 else:

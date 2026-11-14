@@ -293,7 +293,8 @@ class BetweenPulls:
                     pending, self._drink_pending = self._drink_pending, None
                     if pending["revision"] != self._revision or not self._fresh(pending["ts"]):
                         return
-                    speaker = self._run.plan.lead_guid
+                    speaking = getattr(self.ports, "speaking_lead", None)
+                    speaker = (speaking(self._run) if speaking is not None else None) or self._run.plan.lead_guid
                     if speaker == self._human:
                         speaker = self._run.plan.tank_guid
                     now = self.ports.clock.now()

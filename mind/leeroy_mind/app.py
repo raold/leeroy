@@ -489,6 +489,12 @@ class MindApp:
         self.photos = attach_photos(self)
         from .outreach.attach import attach as attach_outreach
         self.outreach = attach_outreach(self)
+        from .decisions.attach import attach_decisions
+        self.decisions = attach_decisions(self)  # after the server: decisions need it
+        from .godmode.attach import attach as attach_godmode
+        self.godmode = attach_godmode(self)  # [godmode]: off adds nothing
+        from .raidlead.service import attach as attach_raidlead
+        self.raidlead = attach_raidlead(self)  # None while [raidlead] is off
 
     # -- extension points --------------------------------------------------------------------
 
@@ -763,6 +769,8 @@ class MindApp:
         if not is_discord(chat.channel):
             self._spoke_at[chat.from_guid] = self.clock.now()
         self._queue_closed(self.threads.on_line_sent(line_id, chat))
+        if (godmode := getattr(self, "godmode", None)) is not None:
+            godmode.on_line(line_id, chat)  # a line that carries out one of his intents
 
     def on_his_discord_line(self, line_id: int, chat: Chat, ts: float) -> None:
         """The desk's hook for his Discord post's chat line (discord.desk): it joins its thread
@@ -1007,12 +1015,29 @@ class MindApp:
         if origin != "human":
             return True  # game lines are kept in the log only
         self._note_human_name(ev.from_name)
-        command = self.voice.echoes_command(ev) or his_command(ev.channel, ev.text)
-        if not backlog and self.signals is not None:
+        command = self.voice.echoes_command(ev)
+        held = False
+        raidlead = getattr(self, "raidlead", None)
+        if not command and not backlog and raidlead is not None:
+            # An order to his group is the raid lead's before playerbots' command words; a line it
+            # holds for the model goes to talk later, after any line it held before (raidlead).
+            try:
+                await raidlead.before_his_line()
+            except Exception:  # never in the way of his line: it fails open to talk
+                log.warning("raidlead_before_line_failed")
+            claim = raidlead.claims(ev, line_id)
+            command, held = claim == "order", claim == "held"
+        if not command and not held:
+            command = his_command(ev.channel, ev.text)
+        if not backlog and self.signals is not None and not held:
             self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
-        if command:
+        if command or held:
             self.world.apply(ev, now)  # he is active, but a bot command is not talk
             return True
+        await self._his_talk(ev, line_id, now, at, backlog)
+        return True
+
+    async def _his_talk(self, ev: Chat, line_id: int, now: float, at, backlog: bool) -> None:
         row = self.store.chat_lines([line_id])[0]
         self.world.add_line(row, now)
         # A replayed line is threaded at the time he typed it (the server's clock, the same
@@ -1022,7 +1047,18 @@ class MindApp:
             if self.outreach is not None:
                 self.outreach.on_his_line(line_id)
             await self.engine.on_human_chat(row)
-        return True
+
+    async def release_to_talk(self, ev: Chat, line_id: int) -> None:
+        """A line of his the raid lead held as a possible order and found to be none: it goes on
+        as the talk he meant, as if never held (raidlead.service), and the signals see talk."""
+        if not self._stopping:
+            self.signal_his_line(ev, line_id, command=False)
+            await self._his_talk(ev, line_id, self.clock.now(), None, False)
+
+    def signal_his_line(self, ev: Chat, line_id: int, *, command: bool) -> None:
+        """The signals' record of a line the raid lead held, once it is known to be an order or talk."""
+        if self.signals is not None:
+            self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
 
     def _record_only(self, ev: Event, name: str) -> None:
         """While stopping: keep what still arrives in the log and start nothing."""

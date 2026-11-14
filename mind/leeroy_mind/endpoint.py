@@ -29,7 +29,9 @@ connection closes.
                     revert {to} | group {id, name, where} | retire {id} |
                     preview {scope, target, dial, value}: the owner's persona dials
                     (leeroy_mind.tuning), written by this mind only, one change at a time,
-                    and in force from the next read; a preview's text goes only to the caller
+                    and in force from the next read; a preview's text goes only to the caller;
+                    edit {verb: set|preview {kind, args} | retire {id} | list}: godmode edits
+                    (leeroy_mind.tuning.edits), set and preview only with [godmode] enabled
     selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid}: profile
                     photos (leeroy_mind.selfies), written by this mind only, one change at a
                     time until its files are written; status at any time
@@ -62,6 +64,9 @@ connection closes.
                     loaded or the library has no vectors, or another library call is running;
                     answers up to k (1-12) hits in the console's hit shape. The query is never
                     logged
+    string {action} create {member, kind, args} | cancel {id} | list [{member}]: his strings,
+                    intents a member carries out in her own way (leeroy_mind.godmode), only with
+                    [godmode] enabled; one change at a time
     ops {action}    opt-in operator actions: inspect, status, offline_stop {id}, render,
                     snapshot {label}. Realm release is inspected here but is executed only
                     through the console's clean stop/CLI/restart procedure. New work needs
@@ -104,9 +109,9 @@ MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library",
-       "ops", "claim_check", "feedback", "kit", "learn", "gpu")
+       "ops", "claim_check", "feedback", "kit", "learn", "gpu", "decision", "string", "raidlead")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
-TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge")
+TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge", "edit")
 TUNE_SHAPES = {
     "status": {"action"},
     "set": {"action", "scope", "target", "dial", "value", "previewed"},
@@ -508,6 +513,12 @@ def tune_args(args) -> dict:
             return parse_args(args)
         except ValueError as exc:
             raise BadRequest(str(exc)) from None
+    if action == "edit":
+        from leeroy_mind.tuning.edits import parse_args as edit_args
+        try:
+            return edit_args(args)
+        except ValueError as exc:
+            raise BadRequest(str(exc)) from None
     shape = TUNE_SHAPES[action]
     if set(args) != shape:
         if action == "status":
@@ -745,12 +756,55 @@ def gpu_args(args):
         raise BadRequest(str(exc)) from None
 
 
+def string_args(args):
+    """A string action's arguments (godmode.intents.parse): create {member, kind, args},
+    cancel {id} or list [{member}], in the console's words."""
+    from leeroy_mind.godmode.intents import parse
+    try:
+        return parse(args)
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from None
+
+
+def raidlead_args(args) -> dict:
+    """The raid lead's arguments, exactly: {"action": "set", "guid": a member's guid} names who
+    calls his group's raid (his own guid: he does); {"action": "clear"} hands it back to the
+    guild's pick. BadRequest otherwise."""
+    if not isinstance(args, dict) or args.get("action") not in ("set", "clear"):
+        raise BadRequest("raidlead: an action, set or clear")
+    if args["action"] == "clear":
+        if set(args) != {"action"}:
+            raise BadRequest("raidlead clear: takes no arguments")
+        return {"action": "clear"}
+    if set(args) != {"action", "guid"} or type(args["guid"]) is not int or not 0 < args["guid"] < 1 << 32:
+        raise BadRequest("raidlead set: exactly a guid")
+    return {"action": "set", "guid": args["guid"]}
+
+
 def learn_args(args):
     from leeroy_mind.learn.control import arguments
     try:
         return arguments(args)
     except ValueError as exc:
         raise BadRequest(str(exc)) from None
+
+
+DECISION_SHAPES = {"vote": {"action", "poll", "option"}, "overrule": {"action", "id"}}
+
+
+def decision_args(args) -> dict:
+    """His decision action: {"action": "vote", "poll", "option"} (a poll id and one of its option
+    codes) or {"action": "overrule", "id"} (a decision id)."""
+    from leeroy_mind.decisions.ledger import CODE
+    if (not isinstance(args, dict) or args.get("action") not in DECISION_SHAPES
+            or set(args) != DECISION_SHAPES[args["action"]]):
+        raise BadRequest("A decision action is vote {poll, option} or overrule {id}.")
+    for key in ("poll", "id"):
+        if key in args and (type(args[key]) is not int or not 1 <= args[key] < 2**63):
+            raise BadRequest(f"{key} is a positive whole number.")
+    if "option" in args and (not isinstance(args["option"], str) or not CODE.fullmatch(args["option"])):
+        raise BadRequest("option is one of the poll's option codes.")
+    return dict(args)
 
 
 def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
@@ -764,7 +818,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     if not isinstance(value, dict) or not {"v", "key", "op"} <= set(value) <= {
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
-                         "say, board, discord, library, ops, claim_check, feedback, learn or gpu action)")
+                         "say, board, discord, library, ops, claim_check, feedback, learn, gpu, "
+                         "decision, string or raidlead action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -778,7 +833,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     parse_args = {"ops": ops_args, "raid": raid_args, "tune": tune_args, "selfie": selfie_args,
                   "say": say_args, "board": board_args, "discord": discord_args,
                   "library": library_args, "claim_check": claim_check_args,
-                  "feedback": feedback_args, "learn": learn_args, "gpu": gpu_args}.get(op)
+                  "feedback": feedback_args, "learn": learn_args, "gpu": gpu_args,
+                  "decision": decision_args, "string": string_args, "raidlead": raidlead_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -858,8 +914,10 @@ class ControlEndpoint:
         self._say = asyncio.Lock()  # one line of his in flight
         self._board = asyncio.Lock()  # one Board reply or withdrawal at a time
         self._discord = asyncio.Lock()  # one Discord action of his at a time
+        self._decision = asyncio.Lock()  # one vote or overrule of his at a time
         self._library = asyncio.Lock()  # one library search in flight
         self._claim_check = asyncio.Lock()  # one ephemeral read in flight
+        self._string = asyncio.Lock()  # one string (godmode intent) change at a time
         self.bank_s, self._clock = bank_s, clock
         self.library_s = library_s
         from .opscontrol import OpsControl
@@ -986,7 +1044,8 @@ class ControlEndpoint:
                       outcome="ok" if reply["ok"] else "refused")
             return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
-                       "board": self.board, "discord": self.discord}[op](args)
+                       "board": self.board, "discord": self.discord, "decision": self.decision,
+                       "string": self.string, "raidlead": self.raidlead}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -1016,7 +1075,35 @@ class ControlEndpoint:
             world = None
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
                 "raid": raid, **self._health(), "world": world, "typing": self._typing(),
+                **({"raid_lead": self._raid_lead()} if getattr(self.app, "raidlead", None) is not None else {}),
                 "gpu": self.app.gpu.snapshot() if getattr(self.app, "gpu", None) is not None else None}
+
+    def _raid_lead(self) -> dict | None:
+        """The raid lead's state for the console's picker (raidlead.service.console_status), or
+        None while it is off."""
+        raidlead = getattr(self.app, "raidlead", None)
+        if raidlead is None or self.app.stopping:
+            return None
+        try:
+            return raidlead.console_status()
+        except Exception as e:
+            log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+            return None
+
+    async def raidlead(self, args: dict) -> dict:
+        raidlead = getattr(self.app, "raidlead", None)
+        if not self.cfg.enabled or self.app.stopping:
+            return {"ok": False, "error": "Control is off or the mind is stopping."}
+        if raidlead is None:
+            return {"ok": False, "error": "The raid lead is off ([raidlead] enabled in mind.toml)."}
+        if self._raid.locked():
+            return {"ok": False, "error": "another raid action is still running"}
+        async with self._raid:
+            try:
+                return await asyncio.wait_for(raidlead.console_action(args), self.raid_s)
+            except TimeoutError:
+                return {"ok": False, "error": "the raid lead is still waiting on the game; check "
+                                              "the raid tab before trying again"}
 
     def _typing(self) -> list:
         """Who is typing, for Comms' dots: the talk engine's turns being composed or typed
@@ -1107,8 +1194,10 @@ class ControlEndpoint:
         if service is None:
             return {"ok": False, "error": "tuning is not running in this mind"}
         action = args["action"]
-        if action == "status" or (action == "nudge" and args["verb"] == "list"):
+        if action == "status" or (action in ("nudge", "edit") and args["verb"] == "list"):
             return await service.handle(args)
+        if action == "edit" and args["verb"] == "preview":
+            return await service.handle(args)  # a dry run: the checks only, no model
         if action == "preview" or (action == "nudge" and args["verb"] == "preview"):
             if self._preview.locked():
                 return {"ok": False, "error": "another preview is still running"}
@@ -1314,6 +1403,26 @@ class ControlEndpoint:
             log_event("control_say_failed", level=logging.WARNING, error=type(e).__name__)
             return {"ok": False, "error": f"The line could not be sent ({type(e).__name__})."}
 
+    async def string(self, args: dict) -> dict:
+        """His strings (godmode.service): list at any time, a create or cancel one at a time;
+        refused in words with [godmode] off. Logs carry the action and outcome, never text."""
+        service = getattr(self.app, "godmode", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "The mind is stopping."}
+        if service is None:
+            return {"ok": False, "code": "off", "error": "Godmode is off: set [godmode] enabled = "
+                    "true in mind.toml and restart the mind."}
+        if args["action"] == "list":
+            return await service.handle(args)
+        if self._string.locked():
+            return {"ok": False, "error": "Another string is still being saved."}
+        async with self._string:
+            try:
+                return await service.handle(args)
+            except Exception as e:  # its text can carry his words
+                log_event("control_string_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False, "error": f"The string could not be saved ({type(e).__name__})."}
+
     async def board(self, args: dict) -> dict:
         """His Board reply or withdrawal (leeroy_mind.board.BoardDesk), one at a time: a second
         while one is being saved is refused, never queued."""
@@ -1347,6 +1456,23 @@ class ControlEndpoint:
                 return await desk.handle(args)
             except Exception as e:  # its text can carry a message or a name
                 log_event("control_discord_failed", level=logging.WARNING, error=type(e).__name__)
+                return {"ok": False, "error": f"That could not be saved ({type(e).__name__})."}
+
+    async def decision(self, args: dict) -> dict:
+        """His vote in a poll or his overrule of a decision (leeroy_mind.decisions.service), one at
+        a time: a second while one is being saved is refused, never queued."""
+        service = getattr(self.app, "decisions", None)
+        if self.app.stopping:
+            return {"ok": False, "error": "The mind is stopping."}
+        if service is None:
+            return {"ok": False, "error": "Decisions are off in this mind."}
+        if self._decision.locked():
+            return {"ok": False, "error": "Another decision action is still being saved."}
+        async with self._decision:
+            try:
+                return await service.handle(args)
+            except Exception as e:
+                log_event("control_decision_failed", level=logging.WARNING, error=type(e).__name__)
                 return {"ok": False, "error": f"That could not be saved ({type(e).__name__})."}
 
 

@@ -1294,6 +1294,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "health":
         from .health import main as health_main
         return health_main(argv[1:])
+    if argv and argv[0] == "raidplay":
+        from .raidplay.cli import raidplay_main
+        return raidplay_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
@@ -1316,6 +1319,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("health", help="a read-only check of the live install: the servers, the "
                                   "mind, its endpoint, the console, voice and Ollama; one ok, "
                                   "note or FAIL line each")
+    sub.add_parser("raidplay", help="raid playbooks per boss: show, check against the spell "
+                                    "book, and extract local DBM facts")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

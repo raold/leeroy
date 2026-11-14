@@ -16,7 +16,7 @@ from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.text import strip_wow_markup
 
 from .dkp import apply_due_decay, attendance_entries, kill_entries
-from .lines import instruction, member_name, public_text, template
+from .lines import instruction, member_name, outcome_words, public_text, template
 from .loot import LootMaster, _digest, _get, _once, _put
 from .raids import CATALOG, validate
 from .store import _insert_ledger, balances, bench_streaks
@@ -142,6 +142,14 @@ class RaidSession:
             await self._say_decay()
         await self._bench_memories(now)
 
+    def retract_attendance(self):
+        """Take back attend(): this raid's attendance rows and their DKP, for a run voided before
+        any boss was fought. Memories already written stay."""
+        with self.ports.conn:
+            self.ports.conn.execute("DELETE FROM guild_attendance WHERE raid_id=?", (self.raid_id,))
+            self.ports.conn.execute("DELETE FROM dkp_ledger WHERE raid_id=? AND reason IN ('attendance','standby')",
+                                    (self.raid_id,))
+
     async def _bench_memories(self, now):
         ports, plan, raid_id, bench = self.ports, self.plan, self.raid_id, self.plan.bench
         streaks = bench_streaks(ports.conn, bench)
@@ -257,7 +265,7 @@ class RaidSession:
                     await self.ports.say(self.plan.loot_guid, "guild", template("dkp_standings", top=top))
                 if _once(self.ports.conn, self._prefix + "wrapup"):
                     self.ports.propose(self._speaker, "guild", instruction("raid_wrapup", raid=CATALOG[self.plan.raid_key].name,
-                                       kills=self.kills, wipes=self.wipes, outcome=public_text(self.ports, outcome)), kind=TurnKind.ASIDE)
+                                       kills=self.kills, wipes=self.wipes, outcome=outcome_words(outcome)), kind=TurnKind.ASIDE)
                 if self.kills:
                     self._vote = MvpVote(self.ports, random.Random(self.raid_id), lead=self._speaker,
                                          members=self.plan.members,

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adaptText, gateText, changeText, deathsText, coverageText, evidenceNotes, trialText, scopeText }
+import { adaptText, gateText, changeText, deathsText, coverageText, evidenceNotes, trialText, scopeText,
+  spellText, hurtHead, deathsBy, hitHardest, mechanicsText, avoidText, playbookGroups, playbookTotals }
   from "../../../leeroy_mind/console/static/js/trainmodel.mjs";
 
 test("days until tactics may adapt", () => {
@@ -46,4 +47,42 @@ test("a trial's or a card group's scope reads as its boss and mode", () => {
   assert.equal(scopeText({ scope: "631:0:1", boss: "Lord Marrowgar", mode: "25-man" }), "Lord Marrowgar · 25-man");
   assert.equal(scopeText({ scope: "odd", boss: "odd", mode: "" }), "odd");
   assert.equal(scopeText({ scope: "631:0:1" }), "631:0:1");
+});
+test("the raid playbooks read as raids, bosses and mechanics", () => {
+  const v = { totals: { raids: 1, bosses: 1, mechanics: 2, playerbots: 1, partial: 0, scored: 1, scored_playbooks: 3 },
+    raids: [{ name: "Naxxramas", difficulties: ["10", "25"], bosses: [{ name: "Gluth", call: null, mechanics: [
+      { name: "Mortal Wound", kind: "tank_swap_at_stacks", roles: ["tank"], only: [], handled_by: "playerbots", explain: "Swap." },
+      { name: "Enrage", kind: "dispel", roles: ["ranged"], only: ["25"], handled_by: "partial", handled_note: "with a hunter", explain: "Soothe." }] }] }] };
+  const g = playbookGroups(v);
+  assert.equal(g[0].title, "Naxxramas (10, 25)");
+  assert.equal(g[0].bosses[0].detail, "2 mechanics, 1 handled by playerbots, 1 partly");
+  assert.deepEqual(g[0].bosses[0].mechanics.map(m => [m.tag, m.who, m.stock, m.note]),
+    [["tank swap", "tank", "playerbots", ""], ["dispel", "ranged · only 25", "partly playerbots", "with a hunter"]]);
+  assert.equal(playbookTotals(v), "1 raid · 1 boss · 2 mechanics · 1 handled by playerbots, 0 partly · 1 check row can fail by default (3 with playbook checks on)");
+  assert.deepEqual(playbookGroups(null), []);
+});
+
+test("what hurt them reads as short lines of numbers and spell names", () => {
+  const c = {
+    pulls: 7, kills: 2, wipes: 5, by_kind: { offline: 1, his: 6 }, incomplete_pulls: 1,
+    deaths: { per_pull: 3.2857, by_spell: [{ spell: 900, name: "Vile Gas", deaths: 9, members: 6 },
+                                           { spell: 0, name: "melee or untagged", deaths: 1, members: 1 },
+                                           { spell: 77, name: null, deaths: 1, members: 1 }] },
+    damage_taken: { top: [{ spell: 901, name: "Gas Spore", share: 0.3125 }, { spell: 5, share: null }] },
+    mechanics: [{ kind: "debuff", key: "Gas Spore", count: 12, worst: [{ guid: 101, name: "Testa", count: 4 }] },
+                { kind: "spread", key: "spread", count: 2, worst: [] }],
+    avoidable: [{ names: ["Vile Gas"], resolved: true, hits: 5, members: [{ guid: 101, name: "Testa", hits: 4, over_allowance: 2 },
+                                                                         { guid: 102, hits: 1, over_allowance: 0 }] },
+                { names: ["Malleable Goo", "Slime Puddle"], resolved: false, hits: 0, members: [] },
+                { names: ["Coldflame"], resolved: true, hits: 0, members: [] }],
+  };
+  assert.equal(hurtHead(c), "7 pulls (2 kills, 5 wipes) · his 6, offline 1 · 3.29 deaths a pull · 1 incomplete pull not read");
+  assert.equal(deathsBy(c), "Vile Gas ×9 (6 members), melee or untagged ×1 (1 member), spell 77 ×1 (1 member)");
+  assert.equal(hitHardest(c), "Gas Spore 31%, spell 5");
+  assert.equal(mechanicsText(c), "Gas Spore (debuff) ×12, most Testa ×4; spread (spread) ×2");
+  assert.deepEqual(avoidText(c), ["Vile Gas: Testa 4 hits (2 over), #102 1 hit", "Malleable Goo / Slime Puddle: spell not named yet"]);
+  assert.equal(spellText({ spell: 3 }), "spell 3");
+  assert.equal(hurtHead({}), "0 pulls (0 kills, 0 wipes) · - deaths a pull");
+  assert.equal(deathsBy({}), "");
+  assert.deepEqual(avoidText({}), []);
 });

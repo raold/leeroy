@@ -10,6 +10,8 @@ import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderP
 import { voiceBox, retainVoicePlayers } from "./voiceplayer.mjs";
 import { voiceDraft, voicePreparing, clearVoice, prepareVoice, renderVoiceDraft, setupVoiceComposer } from "./voicerecorder.mjs";
 import { groupList, groupPanel, groupReason, currentGroup } from "./groups.mjs";
+import { castVote, pollCard } from "../decisions.mjs";
+import { itemSegments, itemTip, qualityClass } from "./items.mjs";
 
 var shown = "", thread = 0, panel = "", reply = null, entryMark = 0, drawing = "";
 var drafts = new Map(), replyDrafts = new Map(), folded = new Set(), dialog = null, returnTo = null, failure = "";
@@ -115,6 +117,20 @@ function renderMembers() {
   });
   restore(members, key);
 }
+// The text as text; a [Name] the console resolved becomes an item name with its popover.
+function messageBody(m) {
+  var body = el("div", "body");
+  itemSegments(str(m.text), m.items).forEach(function (seg, i) {
+    if (!seg.item) { body.appendChild(document.createTextNode(seg.text)); return; }
+    var wrap = el("span", "dc-item-wrap"), id = "dc-item-" + m.id + "-" + i;
+    var name = el("button", "dc-item " + qualityClass(seg.item.quality), seg.text); name.type = "button";
+    name.setAttribute("aria-describedby", id);
+    var tip = el("span", "dc-item-tip"); tip.id = id; tip.setAttribute("role", "tooltip");
+    itemTip(seg.item).forEach(function (line, n) { tip.appendChild(el("span", n ? "" : "dc-item-name " + qualityClass(seg.item.quality), line)); });
+    wrap.appendChild(name); wrap.appendChild(tip); body.appendChild(wrap);
+  });
+  return body;
+}
 function messageRow(item, data) {
   var m = item.message, mine = m.author === DISCORD.human.guid, deleted = m.deleted !== null;
   var row = el("article", "msg dc-message" + (item.grouped ? " dc-grouped" : "") + (mine ? " mine" : "")
@@ -134,8 +150,9 @@ function messageRow(item, data) {
   var quote = quoteOf(m, (data.quotes || []).concat(data.messages), name);
   if (quote) { var q = el("blockquote", "dc-quote"); q.appendChild(el("b", "", quote.name)); q.appendChild(el("span", "", quote.text)); content.appendChild(q); }
   if (!deleted && m.voice_note && privateDm()) { content.appendChild(voiceBox(m, mine ? 'you' : name(m.author), mine)); }
-  else { content.appendChild(el("div", "body", deleted ? "Message deleted" : str(m.text))); }
+  else { content.appendChild(deleted ? el("div", "body", "Message deleted") : messageBody(m)); }
   if (!deleted && m.image) { content.appendChild(photoBox(m, name(m.author))); }
+  if (!deleted && m.poll) { content.appendChild(pollCard(m.poll, discordReason(), discordBusy)); }
   if (!deleted && !mine && m.origin==='mind') {
     var feedback = feedbackButtons(m,name(m.author));
     content.appendChild(feedback || el('small','hint','Feedback unavailable: this older message has no unique stored chat line.'));
@@ -312,6 +329,9 @@ function action(ev) {
   var target = ev.target.closest("[data-action], [data-thread], [data-dm]"); if (!target) { return; }
   if (target.dataset.dm) { openView("dm:" + target.dataset.dm); input.focus(); return; }
   if (target.dataset.thread) { chooseThread(Number(target.dataset.thread)); return; }
+  if (target.dataset.action === "poll-vote") {
+    castVote(Number(target.dataset.poll), target.dataset.option).then(refreshDiscord).catch(fail); return;
+  }
   var m = message(Number(target.dataset.message)), act = target.dataset.action; if (!m) { return; }
   if (act === "reply") { reply = m; renderComposer(); input.focus(); }
   else if (act === "thread") {

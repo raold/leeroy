@@ -424,7 +424,9 @@ SWITCHES = (
     ('playstyle','enabled','Play styles','Leeroy.PlayStyle.Enable = 1'),
     ('realm','enabled','The Realm','Leeroy.Realm.Enable = 1; realm/blocklist.txt'),
     ('training','enabled','Training',''), ('decisions','enabled','Decisions','server.enabled'),
-    ('control','ops_actions','Ops actions','restart the console too'))
+    ('training','playbooks','Raid playbook checks','training.enabled'),
+    ('control','ops_actions','Ops actions','restart the console too'),
+    ('raidlead','enabled','Raid lead','Leeroy.RaidLead.Enable = 1; native rebuild'))
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:
@@ -642,7 +644,7 @@ def health_view(root, data, run_checks=health.run_checks):
         name, state = code(c.name), c.status if c.status in {"ok", "fail", "note"} else "note"
         text = c.text
         if (name in private or (name in {"endpoint", "mind"} and state == "fail")
-                or name == "telemetry" and "not checked" in text):
+                or name in {"telemetry", "training-gate"} and "not checked" in text):
             text = f"{name}: {health.MARK[state].strip()} (details available in the local health CLI)."
         for path, word in ((data, "<mind-data>"), (root, "<install>")):
             text = text.replace(str(path), word).replace(path.as_posix(), word)

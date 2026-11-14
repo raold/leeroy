@@ -116,7 +116,9 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
               if 'discord_attachment' in views.tables(conn) else {})
     from leeroy_mind.voice_notes.service import rows as voice_rows
     notes=voice_rows(conn,[m['id'] for m in rows])
-    return [{**m, "reactions": react.get(m["id"], []),
+    from .decisionsview import poll_cards
+    polls = poll_cards(conn, [m['id'] for m in rows], human_guid(conn))
+    return [{**m, **({'poll': polls[m['id']]} if m['id'] in polls else {}), "reactions": react.get(m["id"], []),
              'voice_note': ({'url':f"/api/discord/voice?id={m['id']}",
                  'ms':notes[m['id']]['ms'],'bytes':notes[m['id']]['bytes'],
                  'transcript_ok':bool(notes[m['id']]['transcript_ok']),'origin':notes[m['id']]['origin']}
@@ -124,6 +126,22 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
              'feedback_id': lines.get(m['id']), 'feedback': votes.get(lines.get(m['id'])),
              'image': ({'w': photos[m['id']]['width'], 'h': photos[m['id']]['height'],
                         'kind': photos[m['id']]['kind']} if m['id'] in photos else None)} for m in rows]
+
+
+def with_items(rows: list[dict], library, *, conn=None, now: float | None = None) -> list[dict]:
+    """Culture's item tooltips ([culture] loot): each message's bracketed names the library's item
+    table holds exactly, read-only, at most MESSAGE_ITEMS a message; a deleted message has none.
+    A name several items share resolves to the guild's own item or its raid's copy (items.tooltips)."""
+    from . import items as library_items
+    spans = {m["id"]: ([] if m.get("deleted") is not None else library_items.bracketed(m.get("text")))
+             for m in rows}
+    names = {n for found in spans.values() for n in found}
+    prefer, raid = (library_items.guild_items(conn, now) if names and conn is not None and now is not None
+                    else (set(), None))
+    known = library_items.tooltips(library, names, prefer_ids=prefer, raid=raid)
+    for m in rows:
+        m["items"] = [{"text": n, **known[n]} for n in spans[m["id"]] if n in known]
+    return rows
 
 
 def window(conn, channel: str, thread: int | None = None) -> list[dict]:
@@ -150,7 +168,7 @@ def last_by_channel(conn) -> dict[str, int]:
 
 def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | None = None,
                  after: int = 0, thread: int | None = None, read_marks: dict | None = None,
-                 server: bool = False, groups: bool = False) -> dict:
+                 server: bool = False, groups: bool = False, items=None) -> dict:
     have = views.tables(conn)
     missing = [t for t in DISCORD_TABLES if t not in have]
     last = last_by_channel(conn) if "discord_message" in have else {}
@@ -205,6 +223,8 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
         out["channel"] = channel
         out["messages"] = with_reactions(conn, store.messages(
             conn, channel, after=after, limit=LIMIT, thread=thread)) if ok else []
+        if items is not None:
+            with_items(out["messages"], items, conn=conn, now=owner_now.timestamp())
         out["threads"] = store.threads(conn, channel, limit=LIMIT + 1) if ok else []
         out["pins"] = store.pins(conn, channel, limit=LIMIT + 1) if ok else []
         parents = sorted({m["reply_to"] for m in out["messages"] if m["reply_to"]})

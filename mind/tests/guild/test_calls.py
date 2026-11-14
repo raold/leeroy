@@ -122,10 +122,23 @@ async def test_marks_and_soulstone_require_jobs_and_address_main_tank(setup):
     assert len(ports.sent) == 3
 
 
-@_run_async
-async def test_owner_led_run_suppresses_every_hook(setup):
-    ports, run, calls = setup
-    run = replace(run, lead_is_human=True)
+def owner_led(ports, lead):
+    """A raid he drives (lead_is_human): lead 1 is his own lead, any other the member he named."""
+    plan = RaidPlan("icc", 10, False, False, lead, 107, 120,
+                    [101, 102, 104, 107, 108, 109, 110, 111, 120], [], True)
+    ports.conn.execute("UPDATE guild_raid SET ended=0 WHERE ended IS NULL")
+    session = asyncio.run(RaidSession.open(ports, GuildConfig(), FakeArmory({}, {}), plan))
+    session.bind_instance(77)
+    return RaidRun(session.plan, session, True, True)
+
+
+def test_owner_led_run_suppresses_every_hook(setup):
+    ports, _, calls = setup
+    run = owner_led(ports, 1)
+    asyncio.run(_owner_led_silent(ports, run, calls))
+
+
+async def _owner_led_silent(ports, run, calls):
     await calls.on_start(run)
     await calls.on_ready(run)
     await calls.on_dc_status(dc(ports))
@@ -134,6 +147,25 @@ async def test_owner_led_run_suppresses_every_hook(setup):
     await advance(ports, 5)
     await calls.tick()
     assert ports.sent == ports.said == []
+
+
+def test_a_raid_he_drives_is_called_by_the_member_he_named(setup):
+    """raidlead: his own group's raid keeps him driving it (no countdown, no dungeon-clear), and
+    the member he named calls the marks, the soulstone, the lust and the battle rez."""
+    ports, _, calls = setup
+    run = owner_led(ports, 101)
+    asyncio.run(_named_lead_calls(ports, run, calls))
+
+
+async def _named_lead_calls(ports, run, calls):
+    await calls.on_start(run)
+    assert [(c.action, c.param) for c in ports.sent] == [("co", "+mark rti"), ("rti", "skull"), ("nc", "+ss tank")]
+    assert {s[0] for s in ports.said} == {101}
+    ports.sent.clear()
+    ports.said.clear()
+    await calls.on_boss(boss(ports, run))
+    assert [(c.action, c.param) for c in ports.sent] == [("cast", "bloodlust")]
+    assert ports.said[-1][:3] == (101, "raid", "lust now")
 
 
 @_run_async
@@ -469,3 +501,29 @@ async def test_training_pre_call_resolves_encounter_index_from_validated_boss_na
     await calls.on_dc_status(ev)
     assert seen == [(631, 0)]
     assert ports.said[-1][2] == "use the tested formation"
+
+
+@_run_async
+async def test_pre_calls_ask_the_raid_playbook_hook_first(setup, monkeypatch):
+    """raidlead.callouts.boss_brief: None keeps the standing call; a playbook's brief replaces it."""
+    from leeroy_mind.raidlead import callouts
+    ports, run, calls = await start(setup)
+    await calls.on_dc_status(dc(ports))
+    assert ports.said[-1][2] == "festergut: ranged spread, stack on gas spores"
+    seen = []
+    monkeypatch.setattr(callouts, "boss_brief", lambda context: seen.append(context) or "spores: stack")
+    await calls.on_dc_status(dc(ports, "Rotface", 36627))
+    assert ports.said[-1][2] == "spores: stack"
+    assert (seen[0].map_id, seen[0].boss_id, seen[0].size, seen[0].heroic) == (631, 5, 10, False)
+
+
+@_run_async
+async def test_a_heroic_run_gets_the_heroic_pre_pull_call(setup, monkeypatch):
+    """call_for with the run's difficulty: a heroic plan's pre-pull call is the heroic one."""
+    from leeroy_mind.guild import calls as calls_module
+    ports, run, calls = await start(setup)
+    seen = []
+    real = calls_module.call_for
+    monkeypatch.setattr(calls_module, "call_for", lambda *a: seen.append(a) or real(*a))
+    await calls.on_dc_status(dc(ports))
+    assert seen and seen[0][2] == 0  # this 10-player normal run

@@ -582,6 +582,13 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .dc-message { padding-block: 10px; }
 .dc-content { min-width: 0; }
 .dc-message .body { white-space: pre-wrap; }
+.dc-item-wrap { position: relative; }
+.dc-item { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--c, var(--ink)); cursor: help; }
+.dc-item.q2, .dc-item-name.q2 { --c: var(--ok); } .dc-item.q3, .dc-item-name.q3 { --c: var(--blue); }
+.dc-item.q4, .dc-item-name.q4 { --c: var(--violet); } .dc-item.q5, .dc-item-name.q5 { --c: var(--warn); }
+.dc-item-tip { display: none; position: absolute; left: 0; top: 100%; z-index: 5; min-width: 12em; max-width: 20em; padding: 6px 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); font-size: 12px; white-space: normal; }
+.dc-item-tip span { display: block; } .dc-item-name { color: var(--c, var(--ink)); font-weight: 600; }
+.dc-item-wrap:hover .dc-item-tip, .dc-item-wrap:focus-within .dc-item-tip { display: block; }
 .dc-grouped { padding-top: 3px; }
 .dc-time-small { font-size: 10px; color: var(--ink-3); padding-top: 4px; }
 .dc-quote { border-left: 3px solid var(--accent); padding: 5px 10px; margin: 3px 0 8px; font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
@@ -595,6 +602,10 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .dc-message-actions { opacity: 0; }
 .dc-message:hover .dc-message-actions, .dc-message:focus-within .dc-message-actions { opacity: 1; }
 .dc-pin { display: inline-block; margin-left: 8px; color: var(--accent); }
+.dc-poll { display: grid; gap: 6px; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; max-width: 32rem; }
+.dc-poll-option { text-align: left; min-height: 32px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 18%, var(--surface)) var(--share, 0%), var(--surface) var(--share, 0%)); }
+.dc-poll-option.on { border-color: var(--accent); }
+.dc-polls { display: grid; gap: 8px; }
 .dc-new { border-top: 1px solid var(--accent); color: var(--accent); text-align: center; font-size: 12px; font-weight: 700; margin: 12px 0; }
 #dc-composer { padding: 12px 14px; border-top: 1px solid var(--line); }
 #dc-composer label { display: block; font-size: 12px; margin-bottom: 5px; }

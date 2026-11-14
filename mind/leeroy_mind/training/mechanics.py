@@ -1,11 +1,15 @@
-"""Encounter facts, independently transcribed as data rather than script logic.
+"""Encounter checks for training/checks.py, read from the raid playbooks (leeroy_mind.raidplay).
 
-Creature difficulty variants are the first four columns of the core's base
-creature_template.sql. Zero difficulty entries are intentionally omitted.
+The playbooks hold every check as data. Version 1 is the original transcription for ICC and
+Trial of the Crusader and is what the training ground scores by default; version 2 adds the
+playbooks' further checks for every covered raid and is scored only with [training] playbooks.
 """
 
+import functools
 from dataclasses import dataclass
 from typing import Literal
+
+from leeroy_mind import raidplay
 
 
 @dataclass(frozen=True)
@@ -26,61 +30,35 @@ class Mechanic:
     tag: str = ""
 
 
-BOSS_MECHANICS: dict[tuple[int, int], tuple[Mechanic, ...]] = {
-    (631, 0): (
-        Mechanic("avoid", ("Coldflame",), tag="coldflame"),
-        Mechanic("avoid", ("Bone Storm",), roles=("ranged", "healer"), max_hits=6, tag="spread"),
-        Mechanic("debuff", ("Impaled",), max_count=2)),
-    (631, 1): (
-        Mechanic("avoid", ("Death and Decay",), max_hits=1),
-        Mechanic("adds", entries=(37890, 38393, 38628, 38629, 37949, 38394, 38625, 38626, 38222), max_share=.25),
-        Mechanic("debuff", ("Dominate Mind",), max_count=1)),
-    (631, 3): (
-        Mechanic("debuff", ("Mark of the Fallen Champion",), max_count=3, scope="raid"),
-        Mechanic("adds", entries=(38508, 38596, 38597, 38598), max_share=.15),
-        Mechanic("spread", roles=("ranged",))),
-    (631, 4): (
-        Mechanic("buff", ("Inoculated",), min_stack=3, min_pull_s=150),
-        Mechanic("avoid", ("Vile Gas",), roles=("ranged",), max_hits=1),
-        Mechanic("spread", roles=("ranged",), exempt=("Gas Spore",), exempt_s=12)),
-    (631, 5): (
-        Mechanic("avoid", ("Slime Spray", "Unstable Ooze Explosion", "Sticky Ooze"), max_hits=1),),
-    (631, 6): (
-        Mechanic("avoid", ("Malleable Goo", "Slime Puddle", "Choking Gas Bomb"), max_hits=1),
-        Mechanic("adds", entries=(37562, 38602, 38760, 38761, 37697, 38604, 38758, 38759), max_share=.2)),
-    (631, 7): (
-        Mechanic("avoid", ("Shock Vortex", "Empowered Shock Vortex"), max_hits=1),
-        Mechanic("adds", entries=(38454, 38775, 38776, 38777), max_share=.1),
-        Mechanic("spread", roles=("ranged",))),
-    (631, 8): (
-        Mechanic("avoid", ("Swarming Shadows",), max_hits=1),
-        Mechanic("avoid", ("Bloodbolt Whirl",), max_hits=2),
-        Mechanic("spread", roles=("ranged",), exempt=("Pact of the Darkfallen",), exempt_s=15)),
-    (631, 11): (
-        Mechanic("debuff", ("Instability",), max_stack=5),
-        Mechanic("debuff", ("Unchained Magic",), max_count=1),
-        Mechanic("avoid", ("Frost Bomb", "Blistering Cold")),
-        Mechanic("spread", roles=("ranged",))),
-    (631, 12): (
-        Mechanic("avoid", ("Defile", "Shadow Trap")),
-        Mechanic("debuff", ("Necrotic Plague",), max_count=1),
-        Mechanic("adds", entries=(36609, 39120, 39121, 39122, 36701, 39302, 39303, 39304,
-                                  37799, 39284, 39285, 39286), max_share=.2)),
-    (649, 0): (
-        Mechanic("avoid", ("Slime Pool", "Fire Bomb", "Trample"), max_hits=1),
-        Mechanic("debuff", ("Paralytic Toxin", "Burning Bile"), max_count=1)),
-    (649, 1): (
-        Mechanic("avoid", ("Legion Flame", "Infernal Eruption"), max_hits=1),
-        Mechanic("adds", entries=(34815, 35262, 35263, 35264, 34826, 35270, 35271, 35272), max_share=.2)),
-    (649, 3): (Mechanic("avoid", ("Unleashed Light", "Unleashed Dark"), max_hits=2),),
-    (649, 4): (
-        Mechanic("debuff", ("Penetrating Cold",), max_count=1),
-        Mechanic("avoid", ("Impale",))),
-}
-
-NO_BEHIND = frozenset({(631, 2), (631, 10), (649, 2)})
+def _version(playbooks: bool) -> int:
+    return 2 if playbooks else 1
 
 
-def watch_names() -> tuple[str, ...]:
-    return tuple(sorted({name for rows in BOSS_MECHANICS.values() for row in rows
+@functools.cache
+def boss_mechanics(playbooks: bool = False) -> dict[tuple[int, int], tuple[Mechanic, ...]]:
+    """Each covered boss's checks in playbook order; bosses with none are left out."""
+    out = {}
+    for boss in raidplay.load().bosses():
+        rows = tuple(Mechanic(c.kind, c.names, c.entries, c.roles, c.max_hits, c.max_count,
+                              c.max_stack, c.min_stack, c.min_pull_s, c.max_share, c.scope,
+                              c.exempt, c.exempt_s, c.tag)
+                     for c in boss.checks if c.since <= _version(playbooks))
+        if rows:
+            out[boss.key] = rows
+    return out
+
+
+@functools.cache
+def no_behind(playbooks: bool = False) -> frozenset[tuple[int, int]]:
+    """Bosses whose melee are not scored for standing behind the boss."""
+    return frozenset(b.key for b in raidplay.load().bosses()
+                     if b.no_behind_since is not None and b.no_behind_since <= _version(playbooks))
+
+
+def watch_names(playbooks: bool = False) -> tuple[str, ...]:
+    return tuple(sorted({name for rows in boss_mechanics(playbooks).values() for row in rows
                          if row.kind == "buff" for name in row.names}))
+
+
+BOSS_MECHANICS = boss_mechanics()
+NO_BEHIND = no_behind()

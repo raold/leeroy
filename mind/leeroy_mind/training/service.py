@@ -12,12 +12,13 @@ from leeroy_mind.guild.loot import _get, _once
 
 from . import protocol, store
 from .applier import Applier, ApplierState
-from .checks import CHECKS_VERSION, _restore, run_checks
+from .checks import _restore, checks_version, run_checks
 from .config import load_training_config
 from .experiment_lifecycle import ExperimentLifecycle
 from .experiments import Experimenter
 from .facts import TalkHook
 from .gate import Gate
+from .hurt import avoidable_spells, name_new_pulls, referenced_spells, remember_names
 from .ledger import Ledger
 from .ledger import combat_role
 from .jobs import TrainingJobs
@@ -58,14 +59,20 @@ def load_book(data_dir):
     return load_spellbook(folder, world=world)
 
 
-async def rescore_stored(ports, book):
+def playbooks_on(ports) -> bool:
+    """[training] playbooks: score the raid playbooks' version 2 checks too."""
+    return getattr(getattr(ports, "cfg", None), "playbooks", False) is True
+
+
+async def rescore_stored(ports, book, *, playbooks=None):
     """Checks invalidate scores; always restore the matching score in this pass."""
+    playbooks = playbooks_on(ports) if playbooks is None else playbooks
     count = 0
     for row in store.pull_rows(ports.conn, scoreable=True):
-        if row["checks_version"] >= CHECKS_VERSION and row["score"] is not None:
+        if row["checks_version"] >= checks_version(playbooks) and row["score"] is not None:
             continue
         record, roles = _restore(ports.conn, row)
-        result = run_checks(record, roles, book)
+        result = run_checks(record, roles, book, playbooks=playbooks)
         if await score_pull(ports, record, None, result) is not None:
             count += 1
         await asyncio.sleep(0)
@@ -95,6 +102,7 @@ class TrainingGround:
         self.native = NativeCleanup(ports, self)
         self.listener.prepare_run = self.prepare_run
         self.ledger.after_store.insert(0, self._score)
+        self.ledger.after_store.append(self._stored)
         self.experimenter = Experimenter(ports, ports.cfg, score_basis=self.listener.farm_basis)
         self.experiments = ExperimentLifecycle(self, self.experimenter)
         self.ledger.after_store.append(self.experiments.after_store)
@@ -116,7 +124,8 @@ class TrainingGround:
         return self._book
 
     def watch_ids(self):
-        return tuple(sorted({id for name in watch_names() for id in self._book.ids(name)})) if self._book else ()
+        return (tuple(sorted({id for name in watch_names(playbooks_on(self.ports)) for id in self._book.ids(name)}))
+                if self._book else ())
 
     def training_members(self):
         return self.jobs.members()
@@ -231,9 +240,34 @@ class TrainingGround:
         if self._book is None:
             return
         roles = {row["guid"]: row["role"] for row in store.member_rows(self.ports.conn, rec.header.id)}
-        result = run_checks(rec, roles, self._book)
+        result = run_checks(rec, roles, self._book, playbooks=playbooks_on(self.ports))
         await score_pull(self.ports, rec, ctx, result)
+        self._name_spells((rec.header.id,))
         await self.listener.after_pull(rec, ctx, result)
+
+    async def _stored(self, rec, ctx):
+        # Inline after pull storage: only marks the gate's held disarm as free to go.
+        self.gate.pull_stored(rec.header)
+
+    async def _name_stored(self):
+        """Once the book loads: every avoidable effect's spell names, then the spells of the
+        pulls stored since the last pass, 20 at a time so the loop stays responsive."""
+        if "Spell.dbc" not in getattr(self._book, "loaded", ()):
+            return  # an empty book names nothing; the mark waits for a book that can
+        try:
+            remember_names(self.ports.conn, self._book, avoidable_spells(self._book))
+            while name_new_pulls(self.ports.conn, self._book):
+                await asyncio.sleep(0)
+        except Exception as error:
+            log.warning("training_spell_names_failed error=%s", type(error).__name__)
+
+    def _name_spells(self, pulls):
+        """Keep the names of the spells stored pulls name (meta tg:spell_names) for readers
+        without the spell book; best effort, never a reason a pull is not scored."""
+        try:
+            remember_names(self.ports.conn, self._book, referenced_spells(self.ports.conn, pulls))
+        except Exception as error:
+            log.warning("training_spell_names_failed error=%s", type(error).__name__)
 
     def submit(self, name, args=(), kwargs=None, run=None):
         if self._stopping or not self._connected:
@@ -423,6 +457,7 @@ class TrainingGround:
             # shielded worker until it actually ends, even after repeated cancel.
             raise
         await rescore_stored(self.ports, self._book)
+        await self._name_stored()
         self.experiments.replay_again()
 
     def _guild_busy(self):
@@ -507,6 +542,7 @@ def attach_training(app):
             ground.listener.lust_provider = calls.lust
     hook = TalkHook(ground.ports)
     hook.change_for = ground.listener.change_for
+    hook.live = lambda: ground.gate.phase == "passed"
     app.engine.add_instruction_hook(hook)
     facts = getattr(app.engine, "facts", None)
     if facts is not None:

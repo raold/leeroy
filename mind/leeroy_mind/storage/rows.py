@@ -69,6 +69,12 @@ class Relationship:
 
 
 @dataclass(frozen=True, slots=True)
+class EffectiveRelationship(Relationship):
+    """A relationship read through the owner's godmode lens (Store.get_relationship(lens=True),
+    tuning.edits): never written (Store.put_relationship refuses one)."""
+
+
+@dataclass(frozen=True, slots=True)
 class PersonaStateRow:
     """Self-notes are {"text": str, "evidence": [str], "added": float (unix seconds)}.
     state_since and updated are mind-clock unix seconds."""
@@ -82,6 +88,12 @@ class PersonaStateRow:
     state_session: int = 0
     life_thread: str = ""
     updated: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveState(PersonaStateRow):
+    """A persona state read through the owner's godmode lens (Store.get_state(lens=True)):
+    never written (Store.put_state refuses one)."""
 
 
 @dataclass(frozen=True, slots=True)

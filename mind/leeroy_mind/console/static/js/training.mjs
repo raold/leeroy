@@ -1,6 +1,7 @@
-import { $, arr, clear, el, num, obj, plural, str } from "./core.mjs";
+import { $, api, arr, clear, el, num, obj, plural, refused, str } from "./core.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
-import { adaptText, changeText, coverageText, deathsText, evidenceNotes, gateText, scopeText, trialText } from "./trainmodel.mjs";
+import { adaptText, avoidText, changeText, coverageText, deathsBy, deathsText, evidenceNotes, gateText, hitHardest, hurtHead,
+  mechanicsText, playbookGroups, playbookTotals, scopeText, trialText } from "./trainmodel.mjs";
 import { when } from "./words.mjs";
 
 // -- the training tab: mind.db only, read-only -----------------------------------------------------
@@ -15,7 +16,7 @@ function kinds(o) {
 }
 
 function renderTraining(v) {
-  var ids = ["training-week", "training-trials", "training-cards", "training-done", "training-evidence"];
+  var ids = ["training-week", "training-hurt", "training-trials", "training-cards", "training-done", "training-evidence"];
   if (!v.setup) {
     renderKpis($("training-kpis"), []);
     ids.forEach(function (id) { notSetUp($(id), str(v.why)); });
@@ -41,6 +42,8 @@ function renderTraining(v) {
     week.appendChild(r);
   });
   empty(week, "No scored fights this week.");
+
+  renderHurt($("training-hurt"), obj(v.hurt));
 
   var trials = $("training-trials");
   clear(trials);
@@ -87,4 +90,66 @@ function renderTraining(v) {
   empty(ev, "The report states no limits.");
 }
 
-pollTab("training", { path: "/api/training", ms: TRAINING_MS, render: renderTraining });
+// What hurt them: per boss, deaths by killing spell, the spells that hit hardest, failed mechanics
+// and avoidable hits, from the stored pulls. Numbers and spell names only.
+function renderHurt(box, h) {
+  clear(box);
+  arr(h.contexts).forEach(function (c) {
+    box.appendChild(el("h4", "", scopeText(c)));
+    box.appendChild(el("p", "note", hurtHead(c)));
+    [["Deaths by", deathsBy(c)], ["Hit hardest by", hitHardest(c)], ["Failed mechanics", mechanicsText(c)]]
+      .concat(avoidText(c).map(function (t) { return ["Avoidable", t]; }))
+      .forEach(function (pair) {
+        if (!pair[1]) { return; }
+        var r = row();
+        r.appendChild(el("span", "chip", pair[0]));
+        r.appendChild(el("span", "", pair[1]));
+        box.appendChild(r);
+      });
+  });
+  empty(box, "No boss pull has been stored yet.");
+  if (arr(h.contexts).length) {
+    var ev = obj(h.evidence);
+    ["damage_taken", "avoidable"].forEach(function (k) { if (str(ev[k])) { box.appendChild(el("p", "muted", str(ev[k]))); } });
+  }
+}
+
+// The raid playbooks are the repo's data: read once a page, kept while it stays open
+var playbooks = null;
+
+function renderPlaybooks(v) {
+  var box = $("training-playbooks");
+  clear(box);
+  box.appendChild(el("p", "note", playbookTotals(v)));
+  playbookGroups(v).forEach(function (raid) {
+    box.appendChild(el("h4", "", raid.title));
+    raid.bosses.forEach(function (b) {
+      var d = el("details", ""), s = el("summary", "");
+      s.appendChild(el("strong", "", b.title));
+      s.appendChild(el("span", "muted", " " + b.detail));
+      d.appendChild(s);
+      if (b.call) { d.appendChild(el("p", "note", "Call: " + b.call)); }
+      b.mechanics.forEach(function (m) {
+        var r = row();
+        r.appendChild(el("strong", "", m.title));
+        r.appendChild(el("span", "chip", m.tag));
+        r.appendChild(el("span", "muted", m.who));
+        if (m.stock) { r.appendChild(el("span", "chip", m.stock)); }
+        if (m.note) { r.appendChild(el("span", "muted", m.note)); }
+        r.appendChild(el("span", "", m.text));
+        d.appendChild(r);
+      });
+      box.appendChild(d);
+    });
+  });
+}
+
+function loadPlaybooks() {
+  if (playbooks) { return; }
+  playbooks = api("/api/training/playbooks", { poll: true }).then(function (r) {
+    if (refused(r) || r.status !== 200) { playbooks = null; return null; }
+    return r.json().then(renderPlaybooks);
+  }).catch(function () { playbooks = null; });
+}
+
+pollTab("training", { path: "/api/training", ms: TRAINING_MS, render: function (v) { renderTraining(v); loadPlaybooks(); } });

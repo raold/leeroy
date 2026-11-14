@@ -7,6 +7,24 @@ samples observed during matched encounters; it cannot establish causal overhead.
 The adapter calls ``sample`` from its independent ticker, supplies ``watch_names``
 as ``watch``, and fences disconnects with ``on_connection``. No task is spawned
 here. Only completed, uninterrupted fights with at least two samples qualify.
+
+Both offline raids and his raids (raid nights, and the add-command groups the
+raid night adopts) are measured while the gate is in ``ab``. Each kind keeps its
+own per-family parity counter and its own perf rows, and the verdict pairs an
+armed with an unarmed fight only within one kind and one boss context, so his
+presence can neither stand in for overhead nor hide it. A raid led by a bot has
+dungeon-clear's muster naming the next boss and alternates by boss index. A raid
+he leads has no such muster: the gate musters itself at the start and after
+every finished pull. Its parity slot is the kills so far plus the wipes since
+the last kill, so each boss's first pull keeps its kill position (a repeated
+route puts every boss on the other side next visit, whatever the wipes) and a
+wipe's retry falls on the other side. After ``passed`` every pull is armed;
+after ``failed`` none is.
+
+A disarm never follows an armed pull's terminal at once: native drops a pull
+whose epoch moves before it is confirmed and encoded. ``record=false`` waits
+until that pull's header is stored (``pull_stored``) or ``HOLD_S`` pass, and the
+sampler's ticker sends it. Arming is never held back.
 """
 
 import asyncio
@@ -30,6 +48,8 @@ from .store import perf_rows, put_perf
 INTERVAL = 30.0
 MAX_SAMPLES = 256
 BASIS = "rolling_world_500_updates_v1"
+HOLD_S = 10.0  # a disarm waits this long after an armed pull's terminal, at most
+KINDS = ("offline", "his")
 
 
 def _number(value):
@@ -52,6 +72,7 @@ class _Fight:
     due: float
     samples: list = field(default_factory=list)
     pending: bool = False
+    kind: str = "offline"
 
 
 class Gate:
@@ -59,6 +80,7 @@ class Gate:
         self.ports, self.watch = ports, watch
         self.store = Store(ports.conn, clock=ports.clock)
         self._phase, self._raids, self._verdict_ms = "ab", 0, None
+        self._passed_at = None
         saved = self._read("tg_gate")
         if saved is not None:
             if (isinstance(saved, dict) and type(saved.get("phase")) is str
@@ -68,9 +90,19 @@ class Gate:
                     and (saved["phase"] != "passed" or _number(saved.get("verdict_ms")))):
                 self._phase, self._raids, self._verdict_ms = (
                     saved["phase"], saved["raids"], saved.get("verdict_ms"))
+                # When it passed: before then his and offline pulls are a sample (store.full_since_ms).
+                if _number(saved.get("passed_at")):
+                    self._passed_at = saved["passed_at"]
             else:
                 self._phase = "failed"  # Corrupt state cannot silently re-arm a final gate.
         self._run = self._raid_index = self._boss_index = None
+        # The parity slot of the current muster: the named boss, or for a raid he
+        # leads the pull's ordinal. None before the run's first muster.
+        self._slot = None
+        self._kills = self._wipes = 0
+        self._pulling = None
+        self._hold = None       # (until, pull key, engage ms) after an armed pull's terminal
+        self._deferred = False  # a record=false held back by _hold, for the sampler's ticker
         self._muster_ms = 0
         self._connection_ms = -1
         self._record, self._watch, self._acked = False, (), False
@@ -91,8 +123,10 @@ class Gate:
             return False
 
     def _save(self):
-        self.store.set_meta("tg_gate", json.dumps(dict(
-            phase=self._phase, raids=self._raids, verdict_ms=self._verdict_ms), allow_nan=False))
+        saved = dict(phase=self._phase, raids=self._raids, verdict_ms=self._verdict_ms)
+        if self._passed_at is not None:
+            saved["passed_at"] = self._passed_at
+        self.store.set_meta("tg_gate", json.dumps(saved, allow_nan=False))
 
     @property
     def phase(self) -> Literal["ab", "passed", "failed"]:
@@ -109,52 +143,83 @@ class Gate:
             return
         self._fence()
         self._run, self._raid_index, self._boss_index = run, None, None
+        self._slot, self._kills, self._wipes, self._pulling = None, 0, 0, None
         self._record, self._last_boss_ms = False, -1
-        if self.phase == "ab" and self._offline(run):
-            # Offline raids rotate between raids, so parity is counted within
-            # one map and difficulty: its next visit starts on the other side.
-            family = self._family(run)
-            key, count_key = f"tg_gate:raid:{run.session.raid_id}", f"tg_gate:family:{family}"
-            saved, count = self._read(key), self._read(count_key)
-            count = 0 if count is None else count
-            if type(count) is not int or count < 0:
-                return
-            if saved is None:
-                saved = dict(family=family, index=count)
-                with self.store.transaction():
-                    self.store.set_meta(key, json.dumps(saved))
-                    self.store.set_meta(count_key, json.dumps(count + 1))
-                    self._raids += 1
-                    self._save()
-                count += 1
-            if (isinstance(saved, dict) and saved.get("family") == family
-                    and type(saved.get("index")) is int and 0 <= saved["index"] < count):
-                self._raid_index = saved["index"]
+        if self.phase == "ab" and self._kind(run) is not None:
+            self._count(run)
+        if self._self_musters(run):
+            await self._muster_next(run)
+
+    def _count(self, run):
+        # Raids rotate, so parity is counted within one kind, map and
+        # difficulty: the family's next visit starts on the other side.
+        family = self._family(run)
+        key, count_key = f"tg_gate:raid:{run.session.raid_id}", f"tg_gate:family:{family}"
+        saved, count = self._read(key), self._read(count_key)
+        count = 0 if count is None else count
+        if type(count) is not int or count < 0:
+            return
+        if saved is None:
+            saved = dict(family=family, index=count)
+            with self.store.transaction():
+                self.store.set_meta(key, json.dumps(saved))
+                self.store.set_meta(count_key, json.dumps(count + 1))
+                self._raids += 1
+                self._save()
+            count += 1
+        if (isinstance(saved, dict) and saved.get("family") == family
+                and type(saved.get("index")) is int and 0 <= saved["index"] < count):
+            self._raid_index = saved["index"]
 
     @staticmethod
     def _offline(run):
         return run.plan.offline and not run.human_in_raid and not run.plan.human_in_raid
 
-    @staticmethod
-    def _family(run):
-        return f"{run.session.ctx.map_id}:{int(run.plan.size == 25) + 2 * int(run.plan.heroic)}"
+    @classmethod
+    def _kind(cls, run):
+        """The measured kind: an offline raid, his raid, or None (never measured)."""
+        if cls._offline(run):
+            return "offline"
+        if run.human_in_raid is True and not run.plan.offline and run.plan.human_in_raid:
+            return "his"
+        return None
+
+    @classmethod
+    def _family(cls, run):
+        family = f"{run.session.ctx.map_id}:{int(run.plan.size == 25) + 2 * int(run.plan.heroic)}"
+        # Offline families keep their original keys; his raids count apart.
+        return family if cls._offline(run) else f"his:{family}"
+
+    @classmethod
+    def _self_musters(cls, run):
+        """His own lead sends no dungeon-clear muster, so the gate musters each pull itself."""
+        return run is not None and cls._kind(run) == "his" and getattr(run, "lead_is_human", False) is True
 
     def record_flag(self, run, boss_index: int) -> bool:
+        """The flag for a pull. ``boss_index`` is the parity slot: the boss a muster
+        names, or for a raid he leads its kills so far plus wipes since the last kill."""
         if self.phase == "failed" or not self.ports.cfg.telemetry:
             return False
         if self.phase == "passed":
             return True
-        return bool(run is self._run and self._offline(run) and self._raid_index is not None
+        return bool(run is self._run and self._kind(run) is not None and self._raid_index is not None
                     and type(boss_index) is int and boss_index >= 0
                     and (self._raid_index + boss_index) % 2 == 0)
 
     def recording(self) -> bool:
-        return bool(self._run is not None and self._boss_index is not None
+        return bool(self._run is not None and self._slot is not None
                     and not getattr(self._run.session, "_closing", False)
                     and self._record and self._acked and self.ports.cfg.telemetry
                     and self.phase != "failed")
 
+    def _held(self):
+        return self._hold is not None and self.ports.clock.now() < self._hold[0]
+
     async def _send(self):
+        if not self._record and self._held():
+            self._deferred = True  # the armed pull just ended: native may still be encoding it
+            return
+        self._deferred = False
         revision, run = self._revision, self._run
         async with self._send_lock:
             if revision != self._revision or run is not self._run:
@@ -175,7 +240,23 @@ class Gate:
         # A retry of this same boss is a new pull boundary too. The previous
         # command ACK can be reused, but its unfinished fight cannot.
         self._fight = None
-        self._boss_index = boss_index
+        self._boss_index = self._slot = boss_index
+        self._muster_ms = int(self.ports.clock.now() * 1000)
+        if changed or not self._acked:
+            self._fence()
+            self._record, self._watch = record, watch
+            await self._send()
+
+    async def _muster_next(self, run):
+        """His lead's next pull, whatever boss it is: the slot is the kills so far plus the
+        wipes since the last kill."""
+        if run is not self._run or getattr(run.session, "_closing", False):
+            return
+        slot = self._kills + self._wipes
+        record, watch = self.record_flag(run, slot), tuple(self.watch())
+        changed = (record, watch) != (self._record, self._watch)
+        self._fight = self._pulling = None
+        self._boss_index, self._slot = None, slot
         self._muster_ms = int(self.ports.clock.now() * 1000)
         if changed or not self._acked:
             self._fence()
@@ -185,7 +266,7 @@ class Gate:
     def invalidate(self, run):
         if run is self._run:
             self._fence()
-            self._run = self._boss_index = self._raid_index = None
+            self._run = self._boss_index = self._raid_index = self._slot = self._pulling = None
             self._record = False
 
     async def on_end(self, outcome, *, run=None):
@@ -204,7 +285,7 @@ class Gate:
         self._connection_ms = max(self._connection_ms, int(self.ports.clock.now() * 1000))
         self._watch = tuple(self.watch())
         if self._run is not None:
-            self._record = self.record_flag(self._run, self._boss_index)
+            self._record = self.record_flag(self._run, self._slot)
         await self._send()
 
     def _matches(self, ev):
@@ -219,8 +300,14 @@ class Gate:
                 and ev.ts <= self.ports.clock.now() * 1000 + 5000
                 and type(ctx.instance_id) is int and ctx.instance_id > 0
                 and ev.map == ctx.map_id and ev.instance_id == ctx.instance_id
-                and ev.boss_id == self._boss_index and is_raid_fight(ev.map, ev.boss_id)
+                and self._slot is not None
+                and (ev.boss_id == self._boss_index or self._any_boss())
+                and is_raid_fight(ev.map, ev.boss_id)
                 and bool(set(run.plan.members).intersection(ev.members)))
+
+    def _any_boss(self):
+        """A self-muster names no boss: the next raid fight engaged is its pull."""
+        return self._boss_index is None and self._slot is not None and self._self_musters(self._run)
 
     async def on_boss(self, ev):
         if not self._matches(ev) or ev.state not in {"engaged", "killed", "wiped"}:
@@ -231,39 +318,69 @@ class Gate:
                 return
             self._last_boss_ms = ev.ts
             self._fight = None
-            if self.phase != "ab" or not self._offline(self._run) or not self._acked:
+            self._pulling = (key, ev.ts)
+            kind = self._kind(self._run)
+            if self.phase != "ab" or kind is None or not self._acked:
                 return
             plan = self._run.plan
             difficulty = int(plan.size == 25) + 2 * int(plan.heroic)
             now = self.ports.clock.now()
             self._fight = _Fight(f"gate:{self._generation}:{uuid4().hex}", self._generation, key,
                 f"{ev.map}:{ev.boss_id}:{difficulty}", self._run.session.raid_id,
-                self._record, ev.ts, now, now + INTERVAL)
+                self._record, ev.ts, now, now + INTERVAL, kind=kind)
             return
-        fight = self._fight
-        if fight is None or fight.key != key or ev.ts < fight.start_ms:
+        fight, pulling = self._fight, self._pulling
+        ours = fight is not None and fight.key == key and ev.ts >= fight.start_ms
+        ended = pulling is not None and pulling[0] == key and ev.ts >= pulling[1]
+        if ended and self._record:
+            # Native may still be confirming and encoding this armed pull: hold any disarm.
+            self._hold = (self.ports.clock.now() + HOLD_S, key, pulling[1])
+        # His lead's next pull is mustered once this one ends, armed or not.
+        advance = self._self_musters(self._run) and ended
+        if not ours and not advance:
             return
         self._last_boss_ms = max(self._last_boss_ms, ev.ts)
-        self._fight = None  # An in-flight response can never finish this fight afterward.
-        if len(fight.samples) >= 2 and fight.generation == self._generation:
+        self._pulling = None
+        changed = False
+        if ours:
+            self._fight = None  # An in-flight response can never finish this fight afterward.
+        if ours and len(fight.samples) >= 2 and fight.generation == self._generation:
             mean = fmean(s[2] for s in fight.samples)
             receipt = dict(basis=BASIS, fight=fight.id, generation=fight.generation,
-                raid=fight.raid, context=fight.context, armed=fight.armed,
+                raid=fight.raid, context=fight.context, armed=fight.armed, kind=fight.kind,
                 instance_id=fight.key[1], started=fight.started,
                 start_ms=fight.start_ms, end_ms=ev.ts, outcome=ev.state,
                 count=len(fight.samples), samples=fight.samples, mean_ms=mean)
             # put_perf owns a transaction and deduplicates by fight. Write the
             # receipt second: a crash leaves an ineligible orphan, never proof.
             put_perf(self.ports.conn, self.ports.clock.now(), fight.id, fight.context,
-                     "offline", fight.armed, mean)
+                     fight.kind, fight.armed, mean)
             self.store.set_meta(f"tg_gate:perf:{fight.id}", json.dumps(receipt, allow_nan=False))
             prior = self.phase
             self.verdict()
-            if self.phase != prior:
-                await self._send()
+            changed = self.phase != prior
+        if advance and self._run is not None:
+            if ev.state == "killed":
+                self._kills, self._wipes = self._kills + 1, 0
+            else:
+                self._wipes += 1
+            await self._muster_next(self._run)
+        elif changed:
+            await self._send()
+
+    def pull_stored(self, header):
+        """The held pull's header is stored, so native has finished with it: the disarm may go.
+        Called inline from pull storage, so it never awaits; the sampler's ticker sends it."""
+        hold = self._hold
+        if (hold is not None and (header.map, header.instance_id, header.boss_id) == hold[1]
+                and abs(header.start_ms - hold[2]) <= 1000):
+            self._hold = None
 
     async def sample(self):
         """One throttled ticker step; no catch-up bursts and no concurrent polls."""
+        if self._deferred and not self._held():
+            self._hold = None
+            await self._send()
         fight, run, revision = self._fight, self._run, self._revision
         now = self.ports.clock.now()
         if (fight is None or fight.pending or now < fight.due or not self._acked
@@ -304,13 +421,16 @@ class Gate:
         fight.due = self.ports.clock.now() + INTERVAL
 
     def _current_fight(self, fight, run):
+        boss = fight.key[2] if self._any_boss() else self._boss_index
         return (run is not None and not getattr(run.session, "_closing", False)
-                and (run.session.ctx.map_id, run.session.ctx.instance_id, self._boss_index) == fight.key
-                and self.record_flag(run, self._boss_index) == fight.armed == self._record)
+                and (run.session.ctx.map_id, run.session.ctx.instance_id, boss) == fight.key
+                and self.record_flag(run, self._slot) == fight.armed == self._record)
 
     def _eligible(self, row):
         r = self._read(f"tg_gate:perf:{row['fight']}")
-        if (not isinstance(r, dict) or r.get("basis") != BASIS
+        # A receipt written before his raids were measured names no kind: offline.
+        if (not isinstance(r, dict) or r.get("kind", "offline") != row["kind"]
+                or r.get("basis") != BASIS
                 or r.get("fight") != row["fight"] or r.get("context") != row["context"]
                 or type(r.get("armed")) is not bool or int(r["armed"]) != row["armed"]
                 or type(r.get("generation")) is not str or not r["generation"]
@@ -349,19 +469,23 @@ class Gate:
     def verdict(self) -> tuple[str, float | None]:
         if self.phase != "ab":
             return self.phase, self._verdict_ms
+        # Pairs stay within one kind: his raids and offline raids never meet.
         contexts = defaultdict(lambda: defaultdict(list))
         seen = set()
-        for row in perf_rows(self.ports.conn):
-            if row["fight"] not in seen and self._eligible(row):
-                contexts[row["context"]][row["armed"]].append(row["mean_ms"])
-                seen.add(row["fight"])
+        for kind in KINDS:
+            for row in perf_rows(self.ports.conn, kind=kind):
+                if row["fight"] not in seen and self._eligible(row):
+                    contexts[kind, row["context"]][row["armed"]].append(row["mean_ms"])
+                    seen.add(row["fight"])
         differences = [fmean(sides[1]) - fmean(sides[0]) for sides in contexts.values()
                        if sides[0] and sides[1]]
         if len(differences) >= self.ports.cfg.gate_pulls:
             self._verdict_ms = fmean(differences)
             self._phase = "passed" if self._verdict_ms <= self.ports.cfg.gate_max_ms else "failed"
+            if self._phase == "passed":
+                self._passed_at = self.ports.clock.now()
             self._fence()
             self._record = bool(self.phase == "passed" and self.ports.cfg.telemetry
-                                and self._run is not None and self._boss_index is not None)
+                                and self._run is not None and self._slot is not None)
             self._save()
         return self.phase, self._verdict_ms

@@ -140,6 +140,12 @@ def tie_kind(conn, a: int, b: int) -> str:
                     '((a=? AND b=?) OR (a=? AND b=?)) LIMIT 1', (a,b,b,a)).fetchone():
         return 'feud'
     row = conn.execute('SELECT affinity,romance_stage FROM relationship WHERE a=? AND b=?', (a,b)).fetchone()
+    from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay
+    offsets = feeling_overlay(conn).get((a, b))
+    if offsets:  # the owner's godmode feelings, as Store.get_relationship reads them
+        felt = apply_feelings({'affinity': row[0] if row else 0.0,
+                               'romance_stage': row[1] if row else 'none'}, offsets)
+        row = (felt['affinity'], felt['romance_stage'])
     if row is None:
         return 'neutral'
     if row[1] not in ('none', 'ex'):

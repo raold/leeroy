@@ -30,6 +30,7 @@ class TrainingConfig:
     lead_voice: bool = True
     gate_pulls: int = 12
     gate_max_ms: float = 1.0
+    playbooks: bool = False
     core_dir: Path = Path(r"F:\azerothcore\azerothcore-wotlk")
 
 
@@ -56,7 +57,7 @@ def load_training_config(path: Path) -> TrainingConfig:
             _bad(key, "a known setting")
     values = {key: section.get(key, getattr(defaults, key)) for key in known}
     for key in ("enabled", "telemetry", "act", "experiments", "lab", "spread",
-                "benchmark", "lead_voice"):
+                "benchmark", "lead_voice", "playbooks"):
         if type(values[key]) is not bool:
             _bad(key, "a boolean")
     for key, lo, hi in (("observe_days", 0, 365), ("lab_bots", 1, 10),
