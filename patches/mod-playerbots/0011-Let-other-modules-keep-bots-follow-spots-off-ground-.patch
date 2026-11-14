@@ -1,19 +1,20 @@
-From 6fe587dd148be43b98e558ba6e89a3422c54c9db Mon Sep 17 00:00:00 2001
+From f80bc23632060b667beee66db895d2857bfa5610 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
-Date: Sat, 14 Nov 2026 06:23:38 -0500
+Date: Sat, 14 Nov 2026 07:15:24 -0500
 Subject: [PATCH 11/11] Let other modules keep bots' follow spots off ground
  hazards
 
 A module may install a PlayerbotHazardFilter. FollowAction then lets it
-move a formation spot that lies in a hazard to a safe spot nearby, and
-avoid aoe asks it, after the stock cases, where to step out of a hazard
-the bot stands in. Nothing changes until a filter is installed.
+move a formation spot that lies in a hazard to a safe spot nearby, or to
+a waypoint round a hazard the straight walk to it would cross, and avoid
+aoe asks it, after the stock cases, where to step out of a hazard the
+bot stands in. Nothing changes until a filter is installed.
 ---
  src/Ai/Base/Actions/FollowActions.cpp       | 16 +++++++++
  src/Ai/Base/Actions/MovementActions.cpp     | 27 +++++++++++++-
  src/Ai/Base/Actions/MovementActions.h       |  1 +
- src/Ai/Base/Actions/PlayerbotHazardFilter.h | 39 +++++++++++++++++++++
- 4 files changed, 82 insertions(+), 1 deletion(-)
+ src/Ai/Base/Actions/PlayerbotHazardFilter.h | 40 +++++++++++++++++++++
+ 4 files changed, 83 insertions(+), 1 deletion(-)
  create mode 100644 src/Ai/Base/Actions/PlayerbotHazardFilter.h
 
 diff --git a/src/Ai/Base/Actions/FollowActions.cpp b/src/Ai/Base/Actions/FollowActions.cpp
@@ -133,10 +134,10 @@ index 0eec0c88..ffaf6aae 100644
      int moveInterval;
 diff --git a/src/Ai/Base/Actions/PlayerbotHazardFilter.h b/src/Ai/Base/Actions/PlayerbotHazardFilter.h
 new file mode 100644
-index 00000000..490fb154
+index 00000000..97b3c728
 --- /dev/null
 +++ b/src/Ai/Base/Actions/PlayerbotHazardFilter.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,40 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -158,7 +159,8 @@ index 00000000..490fb154
 +public:
 +    virtual ~PlayerbotHazardFilter() = default;
 +
-+    // A follow spot inside a hazard: moves it to a safe spot nearby and returns true.
++    // Where to walk for a follow spot: a safe spot nearby when it lies in a hazard, or a waypoint round a hazard
++    // the straight walk to it would cross. Returns true when it changed the spot.
 +    virtual bool SafeFollowSpot(Player* bot, float& x, float& y, float& z) = 0;
 +
 +    // The bot stands in a hazard: where to step out to. Consulted after the stock avoid aoe cases.
