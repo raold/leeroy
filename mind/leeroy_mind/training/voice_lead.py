@@ -127,6 +127,12 @@ class VoiceLead:
     def _fresh(self, ts, *, age=3.0):
         return type(ts) is int and 0 <= self.ports.clock.now() - ts/1000 <= age
 
+    def _recorded(self):
+        """A recorded pull of a gate that has passed: while the gate still measures
+        (``ab``), his armed pulls are evidence only and add no callouts."""
+        gate = self.ground.gate
+        return gate.phase == "passed" and gate.recording()
+
     def _wipe_silence(self):
         raid = getattr(getattr(self.ground, "app", None), "raid", None)
         if raid is None:
@@ -257,8 +263,8 @@ class VoiceLead:
     async def on_cast(self, ev):
         fight = self._fight
         if (fight is None or not self._valid(fight[0]) or not self._fresh(ev.ts)
-                or self._wipe_silence()
-                or not self.ground.gate.recording() or ev.map != fight[0][3]
+                or self._wipe_silence() or not self._recorded()
+                or ev.map != fight[0][3]
                 or ev.instance_id != fight[0][4] or ev.ts < fight[2]):
             return
         # Ordered server hooks use separate timestamps; the recorder starts at
@@ -304,8 +310,7 @@ class VoiceLead:
             return
         fight, ts, text = self._queue.popleft()
         if (self._fight is not fight or not self._valid(fight[0]) or not self._fresh(ts)
-                or self._wipe_silence()
-                or not self.ground.gate.recording()):
+                or self._wipe_silence() or not self._recorded()):
             return
         self._speech = asyncio.create_task(self.ports.say(fight[0][0].plan.lead_guid,
                                                        "raid", text, kind=TurnKind.URGENT))

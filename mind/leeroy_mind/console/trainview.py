@@ -1,16 +1,21 @@
-"""The Training tab's read-only question to mind.db: what `training status`, `gate`, `trials` and
-`cards` print, shared with the CLI through training/inspect.py. Nothing here writes or migrates."""
+"""The Training tab's read-only question to mind.db: what `training status`, `gate`, `trials`,
+`cards` and `hurt` print, shared with the CLI through training/inspect.py and training/hurt.py.
+Nothing here writes or migrates."""
 import math
 from datetime import datetime, timezone
 
 from leeroy_mind.realm.race import mode_label
 from leeroy_mind.training import inspect
+from leeroy_mind.training.hurt import SpellNames, hurt_report, stored_names
 from leeroy_mind.training.report import BASELINE_SECONDS, training_section
 from leeroy_mind.wow import boss_name
 
 from . import views
 
 TRIALS = 20
+HURT_CONTEXTS = 12  # the bosses fought most recently
+HURT_LAST = 20      # each boss's newest pulls
+HURT_TOP = 5
 NO_TABLES = "this mind.db has no training ground tables."
 OLD_TABLES = "this mind.db's training ground tables are not the current version."
 DAY = 86400
@@ -69,6 +74,13 @@ def training_view(conn, *, now: float) -> dict:
         group["cards"].append({k: c[k] for k in ("id", "version", "status", "origin", "call",
                                                   "reason", "created", "changed")})
 
+    # What hurt them: spell names only from those the mind stored (the console never reads the
+    # client's files or worldserver.conf), members' names from the cast.
+    hurt = hurt_report(conn, last=HURT_LAST, spells=SpellNames(None, stored_names(conn)),
+                       names=views.names(conn), top=HURT_TOP, max_contexts=HURT_CONTEXTS)
+    for c in hurt["contexts"]:
+        c["mode"] = _scope(c["context"])["mode"]
+
     return {"setup": True, "why": "", "week": week, "since": since, "days_observed": observed,
             "days_left": left, "four_weeks": section["done_when"].get("four_weeks") is True,
             "gate": {"phase": gate.get("phase"), "raids": gate.get("raids"),
@@ -76,4 +88,5 @@ def training_view(conn, *, now: float) -> dict:
             "pulls": {"total": sum(by_kind.values()), "by_kind": by_kind, "week_by_kind": week_kind},
             "contexts": section["contexts"], "trials": trials,
             "trials_open": sum(t["status"] == "open" for t in all_trials), "cards": cards,
-            "checklist": inspect.checklist(section["done_when"]), "evidence": section["evidence"]}
+            "checklist": inspect.checklist(section["done_when"]), "evidence": section["evidence"],
+            "hurt": hurt}
