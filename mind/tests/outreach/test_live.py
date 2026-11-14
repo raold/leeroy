@@ -276,6 +276,19 @@ def test_his_group_dm_line_is_to_everyone_in_it(app):
     asyncio.run(go())
 
 
+def test_his_discord_line_is_checked_through_its_receipt_index(app):
+    line = his_line(app, 'How is the outing going?', channel='discord:general')
+    statements = []
+    app.store.conn.set_trace_callback(statements.append)
+    try:
+        assert app.outreach._line_alive(app.store.chat_lines([line])[0])
+    finally:
+        app.store.conn.set_trace_callback(None)
+    query = next(s for s in statements if 'discord_message' in s)
+    plan = ' '.join(row[3] for row in app.store.conn.execute('EXPLAIN QUERY PLAN ' + query))
+    assert 'meta_discord_line_value' in plan and 'SCAN' not in plan
+
+
 @pytest.mark.parametrize('change', ['deleted', 'edited', 'not_owner'])
 def test_stale_or_nonowner_named_line_cannot_close_intention(app, change):
     async def go():

@@ -7,7 +7,7 @@ import random
 import re
 
 from leeroy_mind.discord import layout
-from leeroy_mind.discord.channels import is_discord, is_group
+from leeroy_mind.discord.channels import channel_id, is_discord, is_group
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.logs import log
 from leeroy_mind.storage.rows import cosine, unpack_vec
@@ -261,8 +261,9 @@ class Outreach:
         if not rows or rows[0].text != row.text or rows[0].from_guid != self.app.human_guid:
             return False
         if is_discord(row.channel):
-            current = self.app.store.conn.execute('SELECT m.deleted,m.text FROM discord_message m '
-                "JOIN meta x ON x.key='discord:line:'||m.id WHERE x.value=?", (str(row.id),)).fetchone()
+            current = self.app.store.conn.execute('SELECT m.deleted,m.text FROM meta x JOIN discord_message m '
+                "ON m.id=CAST(substr(x.key,14) AS INTEGER) WHERE x.key GLOB 'discord:line:*' AND x.value=? "
+                'AND m.channel=?', (str(row.id), channel_id(row.channel))).fetchone()
             return bool(current and current['deleted'] is None and current['text'] == row.text)
         return True
 
