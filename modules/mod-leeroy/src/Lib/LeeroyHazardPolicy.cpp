@@ -271,6 +271,11 @@ std::vector<HazardPoint> HazardDetour(HazardPoint from, HazardPoint goal, std::v
     return waypoints;
 }
 
+float HazardDetourStep(float followDistance, float reach)
+{
+    return std::max(kHazardDetourMinStepYards, followDistance + reach + 0.5f);
+}
+
 bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint goal)
 {
     float const left = Distance2d(at, goal.x, goal.y);

@@ -458,7 +458,8 @@ enum class Walk { Reached, Stalled, Wandered };
 
 // Follow as the filter drives it: a waypoint is kept until the bot is within `step` of it, a new one comes from
 // HazardDetour, and with none the bot walks straight at its goal; 0.7 yards a tick. Stalled means follow would
-// stand still (target within its 1.5-yard follow distance) short of the goal.
+// stand still short of the goal: playerbots walks only while the distance from the bot's edge (centre distance
+// less its reach) exceeds the 1.5-yard follow distance.
 Walk FollowWalk(HazardPoint bot, HazardPoint goal, std::vector<HazardZone> const& zones, float reach, float step,
     int& noProgress)
 {
@@ -466,7 +467,7 @@ Walk FollowWalk(HazardPoint bot, HazardPoint goal, std::vector<HazardZone> const
     HazardDetourTrack track;
     for (int tick = 0; tick < 4000; ++tick)
     {
-        if (Dist(bot, goal) <= 1.5f)
+        if (Dist(bot, goal) - reach <= 1.5f)
             return Walk::Reached;
         if (kept && (Dist(bot, *kept) <= step || !HazardSegmentClear(bot, *kept, zones, reach)))
             kept.reset();
@@ -483,7 +484,7 @@ Walk FollowWalk(HazardPoint bot, HazardPoint goal, std::vector<HazardZone> const
         }
         HazardPoint const target = kept.value_or(goal);
         float const left = Dist(bot, target);
-        if (left <= 1.5f)
+        if (left - reach <= 1.5f)
             return Walk::Stalled;
         float const move = std::min(0.7f, left);
         bot.x += (target.x - bot.x) / left * move;
@@ -520,7 +521,7 @@ LEEROY_TEST(Hazard_RandomFieldsNeverStallAFollower)
         if (!start || !goal || Dist(*start, *goal) < 10.0f)
             continue;
         ++runs;
-        switch (FollowWalk(*start, *goal, zones, reach, kHazardDetourMinStepYards, noProgress))
+        switch (FollowWalk(*start, *goal, zones, reach, HazardDetourStep(1.5f, reach), noProgress))
         {
             case Walk::Reached: ++reached; break;
             case Walk::Stalled: ++stalled; break;
@@ -554,7 +555,31 @@ LEEROY_TEST(Hazard_APocketBetweenHazardsEndsInAStraightWalk)
     std::vector<HazardZone> zones{{6.8f, -20.5f, 0, 6.1f, 1}, {-4.4f, 11.7f, 0, 7.1f, 2}, {5.4f, -7.1f, 0, 10.3f, 3},
         {-12.3f, -15.7f, 0, 7.4f, 4}};
     int noProgress = 0;
-    CHECK(FollowWalk({-23.7f, 31.1f, 0}, {41.0f, -41.7f, 0}, zones, 1.33f, kHazardDetourMinStepYards, noProgress)
-        == Walk::Reached);
+    CHECK(FollowWalk({-23.7f, 31.1f, 0}, {41.0f, -41.7f, 0}, zones, 1.33f, HazardDetourStep(1.5f, 1.33f),
+        noProgress) == Walk::Reached);
+    CHECK_EQ(noProgress, 0);
+}
+
+LEEROY_TEST(Hazard_DetourStepsClearFollowsOwnStopDistance)
+{
+    CHECK_EQ(HazardDetourStep(1.5f, 1.5f), 3.5f); // a player: 1.5 follow distance from his 1.5-yard edge
+    CHECK_EQ(HazardDetourStep(0.5f, 0.4f), kHazardDetourMinStepYards);
+    CHECK_EQ(HazardDetourStep(3.0f, 1.0f), 4.5f);
+}
+
+// Re-review 2 of #296: a first waypoint 2.7 yards off cleared the old 2.5-yard step but not follow's stop
+// distance (1.5 beyond the bot's 1.5-yard reach), so follow never walked to it.
+LEEROY_TEST(Hazard_AWaypointInsideFollowsStopDistanceIsNeverTaken)
+{
+    std::vector<HazardZone> zones{{3.8f, -13.3f, 0, 10.3f, 1}, {-28.5f, 18.3f, 0, 11.5f, 2},
+        {-10.4f, 15.1f, 0, 11.3f, 3}, {-9.6f, 4.4f, 0, 6.2f, 4}};
+    HazardPoint const from{-14.5f, 29.1f, 0};
+    HazardPoint const goal{2.6f, -20.1f, 0};
+    float const reach = 1.5f;
+    float const step = HazardDetourStep(1.5f, reach);
+    for (auto const& w : HazardDetour(from, goal, zones, reach, step))
+        CHECK(Dist(from, w) - reach > 1.5f);
+    int noProgress = 0;
+    CHECK(FollowWalk(from, goal, zones, reach, step, noProgress) == Walk::Reached);
     CHECK_EQ(noProgress, 0);
 }

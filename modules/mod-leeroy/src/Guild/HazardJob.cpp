@@ -605,7 +605,7 @@ private:
     {
         // A waypoint is kept until the bot is this near, and a new one must lie at least this far away, beyond
         // the distance at which follow stops walking.
-        float const reached = std::max(kHazardDetourMinStepYards, sPlayerbotAIConfig.FollowDistance + 1.0f);
+        float const reached = HazardDetourStep(sPlayerbotAIConfig.FollowDistance, reach);
         {
             std::lock_guard<std::mutex> lock(memoLock);
             auto const found = detourMemo.find(guid);

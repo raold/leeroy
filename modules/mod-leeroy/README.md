@@ -118,7 +118,7 @@ training state or pending bot command leaves the body to its owner (nothing adde
   rings of 2 yards up to 40 yards, ties toward the bot), checked against the navmesh. While the straight walk
   from the bot to that spot (moved or not) would cross a zone, follow walks to a waypoint round it instead: on a
   ring 1 yard beyond the clearance, the shorter way round first, as far round as a clear straight line reaches
-  (at most 90 degrees a step), at least 2.5 yards (and beyond the follow distance) from the bot, navmesh-checked
+  (at most 90 degrees a step), beyond the distance at which follow stops (its follow distance past the bot's reach, plus half a yard; at least 2.5), navmesh-checked
   and kept until the bot is near it. A bot behind a hazard he walked through goes round it. With no way round
   that makes progress (a second hazard shutting both ways), or once six waypoints in a row gain less than a
   yard on the goal (a pocket between hazards, where greedy steps would circle), it walks straight as stock until

@@ -34,6 +34,9 @@ inline constexpr float kHazardDetourMaxDegrees = 90.0f;
 inline constexpr float kHazardDetourStepDegrees = 5.0f;
 // A waypoint nearer the bot than this is no progress (follow would not even start): skip it.
 inline constexpr float kHazardDetourMinStepYards = 2.5f;
+// How far a detour waypoint must lie, and how near the bot gets before the next: beyond the distance at which
+// follow stops walking, which playerbots measures from the bot's edge (its reach) past FollowDistance.
+float HazardDetourStep(float followDistance, float reach);
 // Stepped out of the same hazard this many times within the window: another mover wants the bot through it.
 inline constexpr std::uint32_t kHazardExitsPerWindow = 3;
 inline constexpr std::uint64_t kHazardExitWindowMs = 20000;
