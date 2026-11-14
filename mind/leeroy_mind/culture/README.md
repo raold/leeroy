@@ -61,3 +61,68 @@ cooldown, lifetime use and target allowance. Dropped lines spend nothing.
 Discord records these receipts in the same transaction as the delivered message
 and chat mirror. Banter and the server share joke cooldowns and pending banter
 reservations, so two clocks cannot reuse a freshly delivered joke.
+
+## Part B: the server's calendar and loot talk
+
+Two more switches inside enabled culture, both false by default and read once at mind start
+(restart the mind, and the console for tooltips, after changing them):
+
+```toml
+[culture]
+enabled = true
+calendar = false   # the server's own events in Discord talk and the awareness card
+loot = false       # close awards, raiders' wishes, and item tooltips in the console
+```
+
+A wrong type disables the whole culture table, Part A included. Older code reading a
+mind.toml that sets either key treats it as an unknown key and turns culture off: remove
+the keys before rolling back. With both false nothing below runs: no handler, no task, no
+MySQL read, no seed, no card line and no tooltip.
+
+**Calendar.** Once a day after 08:05 local (and at once with nothing cached) the mind reads
+`game_event` from the world database through `library/mysql.query`: a read-only session,
+one SELECT, a 5-second server limit, credentials from `WorldDatabaseInfo` in
+worldserver.conf, never logged. It keeps holidays and the Darkmoon Faire and fishing
+contests (`culture:wowcal`). A failed read logs only its exception class and retries an
+hour later. The core gives holiday stages (`holidayStage > 0`) their dates from the
+client's Holidays.dbc and its own date rules; their world rows carry no start time, so the
+mind never dates them ahead. Rows the core schedules from the table (stage 0 with a real
+start, such as the weekly fishing contests) get their occurrences by the core's own rule.
+The bridge's `game_event` start/stop (native publishes it while `Leeroy.Realm.Enable = 1`;
+no native change) goes into `culture:wowcal:active` and `culture:wowcal:stopped` for the
+cached entries only, and wins over the table: a start means on now (a holiday's end is then
+unknown and never stated), a stop after an occurrence began ends it. A start with no stop
+ages out after the event's length plus six hours. Discord gets `wow_event` seeds in
+#achievements-and-mounts and #general (fishing also in #professions-and-gold, Call to Arms
+in #pvp-arena): "<name> is on until <day>", "<name> is on now" or "<name> starts <day>"
+within three days, plus the library event page's first sentence when it has one of at most
+140 characters. The awareness card's Upcoming calendar lists up to four server events within
+a week. Synthetic apps (an injected model client) never read the game database.
+
+**Loot.** `loot_close` seeds come from charged guild loot receipts with their unique matching
+DKP debit (the rule Part A's origins use) whose award was close, within seven days: "<winner>
+beat <runner-up> to [<item>] by <n> DKP" (n is the winning bid over the runner-up's) in
+#loot-and-dkp. That drop's plain `loot` seed is then dropped, and a drop already talked about
+as plain loot is not raised again; a close award is held for its whole week. `loot_wish`
+seeds need a raid night the calendar desk posted within three days. Raid nights name no
+instance, so the target raid is the guild's newest raid within 14 days; the raiders are the
+members who raided in its last four ended raids. Off the event loop and only while he is out
+of game, the mind reads that raid's bosses' drops of its size and difficulty from library.db,
+then the items and the raiders' equipment through the guild armory, and keeps for each raider
+the largest `upgrade_gain` (the loot system's own rule; ties to the lower item id) in
+`culture:loot:wish`, recomputed every 12 hours or when the raid night changes. A raider
+whose equipment cannot be read wishes for nothing. Each wish seeds "<name> needs [<item>]
+from <boss>" in #loot-and-dkp and the member's class channel, opened by that member; all
+wishes together weigh about three ordinary subjects. Legendary progress and BiS lists are not
+reachable: no data for either exists. Loot from native `loot_won` events is still not used
+(they name no members). None of these seeds reach group DMs (they are not public kinds there),
+DMs or officer channels.
+
+**Tooltips.** With `loot` on, the console's Discord view gives each message the bracketed
+names that the library's item table holds exactly (any case, at most eight a message; junk,
+test items and boss, raid, dungeon, class and race names never), read-only; the page shows
+them quality-coloured with a popover of name, quality, item level and slot. A miss stays
+plain text. A name several items share shows the highest item level.
+
+No migration, no native change and no model call. Release is mind and console only
+(`bash scripts/ac-release.sh <commit>`).
