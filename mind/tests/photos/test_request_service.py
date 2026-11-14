@@ -155,6 +155,12 @@ def test_online_request_answers_with_gallery_copy_and_keeps_fresh_plan(tmp_path,
             await drive(app,lambda: app.store.conn.execute('SELECT 1 FROM discord_message WHERE reply_to=? AND origin=\'mind\'',(again['id'],)).fetchone())
             assert records.get(app.store,again['id']) is None
             assert app.store.conn.execute('SELECT count(*) FROM discord_attachment').fetchone()[0]==1
+            # Just past the member's two-minute window, a new ask is a request again.
+            await app.clock.advance(request.created+records.MEMBER_GAP+1-app.clock.now(),1)
+            app.llm._script = lambda *args: 'fine, the window light was decent anyway'
+            third=await app.discord.handle({'action':'post','channel':channel,'text':f'@{name} pic?'})
+            await drive(app,lambda: bool((r:=records.get(app.store,third['id'])) and r.initial_message))
+            assert records.get(app.store,third['id']).guid==101
         finally:
             await app.stop()
     run(scenario())

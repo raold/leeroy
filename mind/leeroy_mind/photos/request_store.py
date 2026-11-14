@@ -9,7 +9,7 @@ import re
 
 from leeroy_mind.selfies import snaps
 
-MEMBER_GAP = 600.0
+MEMBER_GAP = 120.0
 LIFETIME = 86400.0
 HOUR = 3600.0
 HOUR_BORROWS = 6

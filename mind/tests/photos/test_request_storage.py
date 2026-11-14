@@ -94,9 +94,10 @@ def test_claim_is_durable_idempotent_and_member_cap_does_not_reset(store, app):
     assert outcome == 'accepted'
     assert requests.claim(store, message=req.message, guid=101, asked_channel='dm:101',
         thread=None, photo_channel='dm:101', audience='him', now=req.created + 1) == (req, 'existing')
-    assert claim(app, now=req.created + 599)[1] == 'cooldown'
-    assert claim(app, 102, now=req.created + 599)[1] == 'accepted'
-    assert claim(app, now=req.created + 600)[1] == 'accepted'
+    assert requests.MEMBER_GAP == 120
+    assert claim(app, now=req.created + 119)[1] == 'cooldown'
+    assert claim(app, 102, now=req.created + 119)[1] == 'accepted'
+    assert claim(app, now=req.created + 120)[1] == 'accepted'
     reopened = Store(db.open_db(app.data_dir / 'mind.db'), clock=app.clock)
     try:
         assert requests.get(reopened, req.message) == req

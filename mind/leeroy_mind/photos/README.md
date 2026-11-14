@@ -46,7 +46,7 @@ that retained photo, not the new scene being planned. The new photo waits for te
 minutes of confirmed offline presence and no running night. Unrendered requests expire
 after 24 hours; a rendered photo survives restart until its delivery receipt commits.
 
-Requested photos have separate limits: one request per member per ten minutes, six admitted
+Requested photos have separate limits: one request per member per two minutes, six admitted
 borrows per hour and thirty per local date across the guild. They skip and do not spend the
 spontaneous photo draw, two-day gap or weekly/daily ration. The selfies dial at zero still
 means no photo. A retained image is not repeated to the same audience within thirty days,

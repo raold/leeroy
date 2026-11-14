@@ -440,7 +440,7 @@ def test_borrow_caps_take_fallback_without_spending_spontaneous_ration(tmp_path,
             assert (snaps.sent_count(app.store, 0), snaps.last_sent(app.store, 101),
                     channel_count(app.store.conn, date)) == budget
             # Keep the ordinary ten-second channel interval, while remaining well inside
-            # this request's independent ten-minute member cap.
+            # this request's independent two-minute member cap.
             await app.clock.advance(15, 15)
             again = await app.discord.handle({'action': 'post', 'channel': channel,
                                               'text': f'@{name} selfie?'})
