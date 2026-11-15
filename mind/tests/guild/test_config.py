@@ -15,7 +15,10 @@ def config(tmp_path, text):
 def test_guild_config_defaults_and_absent_sections(tmp_path):
     assert load_guild_config(tmp_path / "missing.toml") == GuildConfig()
     assert config(tmp_path, '[human]\nnickname="Synthetic"\n') == GuildConfig()
-    assert (GuildConfig().theorycrafter_ilvl, GuildConfig().late_summon_s) == (277, (60, 180))
+    assert (GuildConfig().theorycrafter_ilvl, GuildConfig().late_summon_s) == (251, (60, 180))
+    # The owner's 2026-11-14 decision: gear-up keeps the cast at 245 so ICC drops are upgrades; no regear unless set.
+    assert (GuildConfig().gear_up_ilvl, GuildConfig().gear_up_below_avg_ilvl) == (245, 232)
+    assert GuildConfig().regear_to == 0
     assert GuildConfig().offline_rotation == ("icc25", "icc10", "naxx10")
     assert GuildConfig().ranks == {"officer": 1, "raider": 2, "social": 3}
     assert DkpConfig().prices == {"weapon_2h": 80, "weapon_1h": 50, "trinket": 50,
@@ -30,6 +33,7 @@ friends_cap = 50
 friends_add = 1.0
 friends_remove = 0.0
 theorycrafter_ilvl = 0
+regear_to = 245
 late_summon_s = [0, 600]
 ranks = {raider = 4}
 worldserver_conf = "synthetic/server.conf"
@@ -44,6 +48,7 @@ prices = {other = 20}
     assert cfg.dkp.prices["other"] == 20 and cfg.dkp.prices["weapon_2h"] == 80
     assert cfg.worldserver_conf.name == "server.conf" and cfg.mysql_exe.name == "mysql.exe"
     assert cfg.dkp.attendance == 5. and cfg.dkp.kill == 12
+    assert cfg.regear_to == 245 and cfg.gear_up_ilvl == 245
 
 
 @pytest.mark.parametrize(("setting", "value"), [
@@ -53,6 +58,8 @@ prices = {other = 20}
     ("late_summon_s", "[0,601]"), ("late_summon_s", "[true,60]"),
     ("late_summon_s", "[0,1,2]"), ("theorycrafter_ilvl", "199"),
     ("theorycrafter_ilvl", "301"), ("theorycrafter_ilvl", "false"),
+    ("regear_to", "199"), ("regear_to", "301"), ("regear_to", "true"), ("regear_to", "245.0"),
+    ("regear_to", '"245"'),
     ("offline_window", '["24:00","18:00"]'), ("offline_window", '["9:00","18:00"]'),
     ("offline_window", '["09:60","18:00"]'), ("offline_window", '["09:00"]'),
     ("offline_rotation", '["voa25"]'), ("offline_rotation", '["ulduar10h"]'),

@@ -149,6 +149,68 @@ fighting nearby restarts that clock. Inside an instance it waits for a rez, as b
 Reloadable with `.reload config`. Logs carry guids, spell ids and result codes only.
 **Native rebuild required.**
 
+# Gear-up and the one-time regear
+
+Playerbots' `autogear bis <ilvl>` destroys everything equipped and every weapon and armour
+piece in the bags. It gears the empty bot at the cap, then puts on the BiS list of the nearest
+tier at or below it. A tier's list holds items above it: 27 of the 204 entries of the 245 list
+are 264-284. `PlayerbotFactory::AutoGear(bot, EPIC, ilvl, incremental)` picks the best item under
+the cap for each slot and stores the replaced item in the bags. It keeps the old item when the
+bags are full or nothing capped fits the slot. Incremental mode replaces an item only for a pick
+scoring 1.2 times as much.
+
+**Ordinary gear-up** (role change, under level, below average, theorycrafter; native whose hello
+lists `regear`, `GearUpToCap`) never uses `autogear bis` and never destroys a bag item. It runs
+one capped incremental `AutoGear`, which fills empty slots and upgrades slots under the cap.
+- An item the bot had at or above the cap that the pass replaced (DKP loot) goes back into its
+  slot from the bags, enchants and gems intact. The capped item the pass made for that slot is
+  destroyed.
+- Anything this gear-up put on above the cap is stripped, and the slot is refilled from the capped
+  search (pure policy `GearUpSlotStep`).
+- Nothing it equips is above its cap, and nothing the bot already holds at or above it is removed.
+- Log `gear_up_member guid= ilvl= avg= stripped= returned= empty= kept=`.
+
+**The regear** (`"regear": true`, ilvl 200-300) is the only gear-up that removes or destroys gear
+above its cap (`RegearToCap`). It runs `autogear bis <cap>`, else the plain `AutoGear`, then:
+- destroys weapons and armour above the cap in the backpack and four bags (never the bank, the
+  mail or the guild bank);
+- strips anything still equipped above the cap;
+- refills emptied slots from the capped search;
+- gives a slot that nothing capped can fill its old item back, never left empty, counted as `kept`.
+
+Shirt and tabard are never touched. Only the cast's bots (pure policy `RegearRefusal`): the owner
+(`owner:<guid>`), anyone outside the cast (`not_cast:<guid>`) or a character on a player's account
+(`not_bot:<guid>`) refuses the whole command before anything moves. A regear while he is online is
+refused `owner_online`, and his login mid-job ends it `owner_online`. Members log `regear_member`.
+
+Fences, in every mode (`SkipFor`): each member is checked just before it is touched. It is skipped
+for the body checks (grouped, battleground or queue, instance, teleport, dead, combat, flight,
+trade), then for every Realm/training fence (`RealmModule::MutationReason`: a Realm lease, an
+offline raid or dummy trial owning it, training cleanup, training journals, pending bot jobs, his
+group). A held member is a skip in the job's terminal, never a refusal of the batch. **Native
+rebuild required.**
+
+The mind sends the regear once per value of `[guild] regear_to` (0 = never), meta
+`guild:regear:<ilvl>`, only in gear-up's windows (he has been offline 10 minutes, no raid night or
+offline raid).
+- **Who and when.** The cast's members at 80 and above at its start (145 live). Theorycrafters go to
+  `theorycrafter_ilvl` when that is higher. Batches of 40, two minutes apart.
+- **Landing.** A member lands when its average is within 20 under and 6 over its target; its
+  `geared`/`tc_geared` flags are replaced.
+- **Retries.** Skipped members wait 30 minutes. Three landings out of bounds (or failures) give a
+  member up and clear its `geared` flag, so gear-up revisits it by its average. Members still
+  pending three days after the start are given up and reported. Members who leave the cast are
+  dropped. With nobody eligible the regear is done at once.
+- **Gear-up meanwhile.** It goes on for everyone the regear is not still holding.
+- **Receipts.** Ordinary gear-ups take a floor of ilvl - 20 and no ceiling, since kept loot can lift
+  the average. An older native keeps the old floors.
+- **Restarts.** A hello from a restarted worldserver releases any gear-up batch the old process held.
+- **Health.** The `regear` line shows members done of the total (a note), and FAILs a regear
+  running over two days.
+- **Logs.** `regear_started`, `regear_batch`, `regear_member`, `regear_out_of_bounds`,
+  `regear_dropped`, `regear_gave_up reason=tries|deadline`, `regear_batch_done`,
+  `regear_done ilvl= guids= avg= gave_up= dropped= kept=`.
+
 # The raid lead (his orders to his own group)
 
 `Leeroy.RaidLead.Enable` (default 0, reloadable with `.reload config`) is the native half of the
