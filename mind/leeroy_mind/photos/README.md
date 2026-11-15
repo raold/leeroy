@@ -48,6 +48,10 @@ borrowing unavailable; it never fails the request. A scene the paused model cann
 the screened everyday choice, picked without a model.
 Gallery photos come only from her cover's set and sets rendered from a persona at least as
 new, so a set from before a looks change is not sent once her cover shows the new looks.
+The console applies the same rule (`selfies.store.looks_floor`) to what it shows him: the
+gallery, its photo URLs and the "Choose selfies" queue leave out older sets, and the gallery
+leaves out situations planned from looks she no longer has. Her cover is always shown; with
+no cover nothing is hidden. Rows and files are kept, and picks and undos accept any ready set.
 The retained image is copied; its original is never moved or consumed. Its caption describes
 that retained photo, not the new scene being planned. The new photo waits for ten continuous
 minutes of confirmed offline presence and no running night. Unrendered requests expire

@@ -1,20 +1,23 @@
 """Retained photos are read-only; only the existing selfie op changes a cover."""
 import asyncio
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from conftest import seed_test_cast
+from conftest import TEST_CAST, seed_test_cast
 from console.rig import http, make_app, running
 from console.test_console_selfies import served, _tree
 from console.test_console_tuning import FakeLink
 from leeroy_mind.console import feed, galleryview
 from leeroy_mind.console.control import Controls
+from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.selfies import files
-from leeroy_mind.selfies.snaps import expire
-from leeroy_mind.selfies.store import pick
-from selfies.fakes import ready, ready_snap, planned_snap
+from leeroy_mind.selfies.snaps import expire, looks_hash
+from leeroy_mind.selfies.store import pick, undo
+from leeroy_mind.wow import CLASSES, RACES
+from selfies.fakes import APPEARANCE, ready, ready_snap, planned_snap, renderable_cast
 
 
 @pytest.fixture
@@ -25,10 +28,11 @@ def data(store):
 
 
 def test_gallery_orders_every_rendered_photo_and_marks_the_cover(store, data):
+    renderable_cast(store, 101)
     ready(store, data, 101, 1, now=1)
     ready(store, data, 101, 2, now=3)
     ready(store, data, 102, 1, now=4)
-    snap = ready_snap(store, data, 101)
+    snap = ready_snap(store, data, 101, looks=looks_hash(APPEARANCE))
     with store.transaction():
         store.conn.execute("UPDATE selfie_snap SET rendered=2 WHERE id=?", (snap,))
     expire(store, snap, "passed", now=5)
@@ -176,3 +180,116 @@ def test_gallery_hides_a_lust_set_of_a_member_who_left_the_style_unless_it_is_th
     seen = galleryview.gallery(store.conn, data, 101)["photos"]
     assert [p["id"] for p in seen if p["cover"]] == ["candidate:2:1"]
     assert galleryview.photo(store.conn, data, 101, "candidate", 2, 1) is not None
+
+
+def _new_looks(store, guid, **looks) -> str:
+    """Her looks changed (a new persona version, as the night's looks pass or an owner edit
+    leaves it); the looks hash a situation planned from them carries."""
+    _, race, cls = TEST_CAST[guid]
+    p = load_persona(store, guid)
+    appearance = replace(p.appearance, **looks)
+    save_persona(store, replace(p, appearance=appearance), source="owner", ts=2000.0,
+                 race=RACES[race], class_name=CLASSES[cls])
+    return looks_hash(appearance)
+
+
+def _rows(store):
+    return [tuple(store.conn.execute(f"SELECT * FROM {t} ORDER BY rowid").fetchall())
+            for t in ("selfie_set", "selfie_candidate", "selfie_snap")]
+
+
+def _shown(store, data, guid=101):
+    return galleryview.gallery(store.conn, data, guid)["photos"]
+
+
+def test_gallery_hides_photos_from_before_her_looks_changed_and_keeps_them(store, data):
+    renderable_cast(store, 101)  # persona version 2
+    ready(store, data, 101, 1, now=1)  # rendered from version 2: a slim woman in a sweater
+    old_snap = ready_snap(store, data, 101, looks=looks_hash(APPEARANCE))
+    pick(store, 101, 1, 0, source="console", now=2)
+    new = _new_looks(store, 101, build="voluptuous", weight_kg=80)  # version 3
+    ready(store, data, 101, 2, now=3)
+    new_snap = ready_snap(store, data, 101, looks=new)
+    # her cover is still from set 1 (version 2): set 2 is newer and shows; the old situation not
+    seen = _shown(store, data)
+    assert {p["set"] for p in seen if p["kind"] == "candidate"} == {1, 2}
+    assert [p["id"] for p in seen if p["kind"] == "snap"] == [f"snap:{new_snap}"]
+    assert galleryview.photo(store.conn, data, 101, "snap", old_snap, None) is None
+    assert galleryview.photo(store.conn, data, 101, "snap", new_snap, None) is not None
+
+    change = pick(store, 101, 2, 1, source="console", now=4)  # her cover now has the new looks
+    before, rows = _tree(data), _rows(store)
+    seen = _shown(store, data)
+    assert {p["set"] for p in seen if p["kind"] == "candidate"} == {2}
+    assert [p["id"] for p in seen if p["cover"]] == ["candidate:2:1"]
+    for idx in range(4):
+        assert galleryview.photo(store.conn, data, 101, "candidate", 1, idx) is None
+        assert galleryview.photo(store.conn, data, 101, "candidate", 1, idx, thumb=True) is None
+        assert galleryview.photo(store.conn, data, 101, "candidate", 2, idx) is not None
+    assert _tree(data) == before and _rows(store) == rows  # nothing deleted, moved or written
+    assert len(rows[0]) == 2 and len(rows[1]) == 8 and len(rows[2]) == 2
+
+    undo(store, change, source="console", now=5)  # undo still works: set 1 is her cover again
+    seen = _shown(store, data)
+    assert [p["id"] for p in seen if p["cover"]] == ["candidate:1:0"]
+    assert {p["set"] for p in seen if p["kind"] == "candidate"} == {1, 2}
+    assert galleryview.photo(store.conn, data, 101, "candidate", 1, 3) is not None
+
+
+def test_a_hidden_set_can_still_be_picked_and_then_shows_as_her_cover(store, data):
+    renderable_cast(store, 101)
+    ready(store, data, 101, 1, now=1)
+    _new_looks(store, 101, hair_colour="copper red")
+    ready(store, data, 101, 2, now=2)
+    pick(store, 101, 2, 0, source="console", now=3)
+    assert {p["set"] for p in _shown(store, data)} == {2}
+    assert pick(store, 101, 1, 2, source="console", now=4) is not None  # the mind still takes it
+    seen = _shown(store, data)
+    assert [p["id"] for p in seen if p["cover"]] == ["candidate:1:2"]
+    assert {p["set"] for p in seen} == {1, 2}  # set 2 is newer than her cover's set
+
+
+def test_with_no_cover_every_photo_shows_as_before(store, data):
+    renderable_cast(store, 101)
+    ready(store, data, 101, 1, now=1)
+    old_snap = ready_snap(store, data, 101, looks=looks_hash(APPEARANCE))
+    _new_looks(store, 101, build="curvy")
+    ready(store, data, 101, 2, now=2)
+    seen = _shown(store, data)
+    assert {p["set"] for p in seen if p["kind"] == "candidate"} == {1, 2}
+    assert [p["id"] for p in seen if p["kind"] == "snap"] == [f"snap:{old_snap}"]
+    assert galleryview.photo(store.conn, data, 101, "candidate", 1, 0) is not None
+    assert galleryview.photo(store.conn, data, 101, "snap", old_snap, None) is not None
+
+
+def test_a_cover_set_without_a_recorded_persona_version_hides_nothing(store, data):
+    renderable_cast(store, 101)
+    ready(store, data, 101, 1, now=1)
+    _new_looks(store, 101, build="curvy")
+    ready(store, data, 101, 2, now=2)
+    pick(store, 101, 2, 0, source="console", now=3)
+    with store.transaction():
+        store.conn.execute("UPDATE selfie_set SET persona_version=NULL WHERE guid=101 AND set_no=2")
+    assert {p["set"] for p in _shown(store, data)} == {1, 2}
+    pick(store, 101, 1, 0, source="console", now=4)  # her cover's set has a version: 2 has none
+    assert {p["set"] for p in _shown(store, data)} == {1}
+    assert galleryview.photo(store.conn, data, 101, "candidate", 2, 0) is None
+
+
+def test_the_gallery_endpoint_hides_and_refuses_photos_of_her_old_looks(store, data):
+    renderable_cast(store, 101)
+    ready(store, data, 101, 1, now=1)
+    _new_looks(store, 101, build="voluptuous")
+    ready(store, data, 101, 2, now=2)
+    pick(store, 101, 2, 3, source="console", now=3)
+
+    async def go():
+        async with served(make_app(data)) as app:
+            response = await http(app, "GET", "/api/selfies/gallery?guid=101")
+            assert response.status == 200
+            assert {p["set"] for p in response.json()["view"]["photos"]} == {2}
+            old = "/api/selfies/photo?guid=101&kind=candidate&set=1&index=0"
+            assert (await http(app, "GET", old)).status == 404
+            assert (await http(app, "GET", old + "&thumb=1")).status == 404
+            assert (await http(app, "GET", old.replace("set=1", "set=2"))).status == 200
+    asyncio.run(go())
