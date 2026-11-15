@@ -193,8 +193,7 @@ ENCOUNTER_SCHEMA = schema("encounter", {
         "teller": {"type": "string", "enum": ["a", "b"]},
         "about": {"type": "string"}, "source": {"type": "integer"},
         "text": {"type": "string", "maxLength": 200},
-        "claim": {"type": "string", "maxLength": 200}},
-        required=["teller", "about", "source", "text"]) | {"type": ["object", "null"]},
+        "claim": {"type": "string", "maxLength": 200}}) | {"type": ["object", "null"]},
 })
 
 

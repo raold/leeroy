@@ -103,15 +103,15 @@ def test_romances_go_furthest_stage_first(db):
 
 
 def test_breakups_say_who_left_whom_for_him_newest_first(db):
-    db.execute("INSERT INTO breakup(woman,partner,for_guid,stage,night,ts,feud) "
-               "VALUES(1102,1101,?,'late_nights','2026-10-27',10,NULL)", (HUMAN,))
-    db.execute("INSERT INTO breakup(woman,partner,for_guid,stage,night,ts,feud) "
-               "VALUES(1104,1103,?,'confession','2026-10-28',20,3)", (HUMAN,))
+    db.execute("INSERT INTO breakup(woman,partner,for_guid,stage,night,ts,feud,public) "
+               "VALUES(1102,1101,?,'late_nights','2026-10-27',10,NULL,0)", (HUMAN,))
+    db.execute("INSERT INTO breakup(woman,partner,for_guid,stage,night,ts,feud,public) "
+               "VALUES(1104,1103,?,'confession','2026-10-28',20,3,1)", (HUMAN,))
     _rel(db, 1103, 1104, "ex")
     _rel(db, 1104, 1103, "ex")
     v = socialview.social_view(db, now=NOW)
-    assert [(b["woman"], b["partner"], b["for"], b["feud"]) for b in v["breakups"]] == [
-        (1104, 1103, HUMAN, True), (1102, 1101, HUMAN, False)]
+    assert [(b["woman"], b["partner"], b["for"], b["feud"], b["public"]) for b in v["breakups"]] == [
+        (1104, 1103, HUMAN, True, True), (1102, 1101, HUMAN, False, False)]
     assert v["romances"][-1] == {"a": 1103, "b": 1104, "ab": "ex", "ba": "ex", "stage": "ex"}
 
 

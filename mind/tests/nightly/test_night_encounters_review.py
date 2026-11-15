@@ -11,7 +11,7 @@ def test_budget_covers_actual_scene_and_judge_calls_even_with_bystanders(h):
     assert encounter(h)["status"] == "done"
     assert len(h.rows(103)) == 1
     calls = [c["format"]["title"] for c in ctx.reasoner.llm.calls if c.get("format")]
-    assert calls == ["encounter", "judge"]
+    assert calls == ["encounter", "judge_scene"]
     assert budget.unit_calls("encounters") == len(calls)
     assert budget.estimate({"encounters": 1}, measured={}) == {
         "encounters": len(calls) * budget.PLAN_S["json"]}

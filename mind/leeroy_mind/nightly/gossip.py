@@ -1,8 +1,11 @@
 """Bounded retellings and imperfect corrections, inside an accepted scene's transaction.
 
 A rumour's canonical text is a third-person claim about its subject (the scene's `claim`, else
-the retelling when that is one), never a member's raw first-person memory; a telling with
-neither still reaches its hearer, without a rumour row (member drama, 2026-11-15)."""
+a plain "level" retelling when that is one), never a member's raw first-person memory; a
+telling with neither still reaches its hearer, without a rumour row (member drama, 2026-11-15).
+It is what the Social tab shows. A correction still tells the source memory's own words, never
+the model's claim, except a breakup's rumour, whose canonical is the night's own code-built
+line. Breakup rumours (drama.couples) never count toward the live_rumors cap."""
 import random
 import re
 
@@ -29,6 +32,7 @@ CORRECTION_RESIDUE = 0.5
 FADE_DAYS = 14
 HOPS_MAX = 3
 DISCRETION_BASE = 0.8
+BREAKUP_ROOT = "rule:breakup:"  # drama.couples.BREAKUP_ROOT
 _FIRST_PERSON = re.compile(
     r"(?<![\w'’])(?:i(?:['’](?:m|ve|ll|d))?|me|my|mine|myself|we(?:['’](?:re|ve|ll|d))?|us|our"
     r"|ours|ourselves)(?![\w'’])", re.IGNORECASE)
@@ -315,11 +319,15 @@ def after_gossip(store, ctx, enc, gossip, shown, *, now):
     if scope == ("open", 0):
         rumor = existing
         if rumor is None:
-            if len(live_rumors(store)) >= ctx.settings.live_rumors:
+            if len(organic_rumors(store)) >= ctx.settings.live_rumors:
                 return None
             name = ctx.name(about)
             claim = " ".join(strip_wow_markup(gossip.get("claim") or "").split())
-            canonical = next((clean_memory_text(t, ctx.ident) for t in (claim, text)
+            # The retelling is the canonical only when it was told plainly, never sharpened or
+            # bent toward the hearer (the operation the scene prompt asked for).
+            told = choose_op(_traits(ctx, teller), store.get_relationship(hearer, about).affinity)
+            canonical = next((clean_memory_text(t, ctx.ident)
+                              for t in (claim, text if told == "level" else "")
                               if third_person(t, name)), None)
             if canonical is not None and _check(ctx, teller, canonical, source, about, now=now):
                 ident = store.conn.execute("INSERT INTO rumor(root,about,canonical,source,created,last_told) "
@@ -389,7 +397,10 @@ def after_correction(store, ctx, enc, rumor, hearer, *, now):
         return None
     rumor, state = offer["rumor"], offer["state"]
     source = next(m for m in offer["sources"] if m.id == rumor["source"])
-    canonical = clean_memory_text(rumor["canonical"], ctx.ident)
+    # The truth is the source memory's own words, never a model's claim; a breakup's rumour
+    # has a code-built canonical (drama.couples), which is the truth.
+    canonical = clean_memory_text(rumor["canonical"] if rumor["root"].startswith(BREAKUP_ROOT)
+                                  else source.text, ctx.ident)
     # The correction is about the canonical actor, including when she corrects her own
     # story; the regular gossip rule excludes owner==about, so validate as the hearer.
     if not _check(ctx, hearer, canonical, source, rumor["about"], now=now):
@@ -431,3 +442,9 @@ def fade(store, *, now):
 def live_rumors(store):
     with store.transaction():
         return store.conn.execute("SELECT * FROM rumor WHERE status='live' ORDER BY id").fetchall()
+
+
+def organic_rumors(store):
+    """The live rumours the live_rumors cap counts: a breakup's (drama.couples) is one event and
+    never takes a slot."""
+    return [r for r in live_rumors(store) if not str(r["root"]).startswith(BREAKUP_ROOT)]

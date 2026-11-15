@@ -1,4 +1,6 @@
-"""`[drama]` in mind.toml, read once at startup; an invalid table turns it all off."""
+"""`[drama]` in mind.toml, read once at mind start and pinned until a restart (nightly.wiring
+pins it into every night's settings, as `learn_enabled` is, and here for live talk's cards);
+an invalid table turns it all off."""
 import logging
 import tomllib
 from dataclasses import dataclass, fields
@@ -6,6 +8,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 _warned: set[tuple[Path, str]] = set()
+_PINNED = False  # the startup value (pin), for readers without a night context
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,17 @@ def load_drama_config(path: Path) -> DramaConfig:
     return DramaConfig(**table)
 
 
+def pin(on: bool) -> None:
+    """The mind's startup choice (nightly.wiring.attach); off until set."""
+    global _PINNED
+    _PINNED = bool(on)
+
+
+def pinned() -> bool:
+    """The switch as the mind started with it: live talk's cards read this."""
+    return _PINNED
+
+
 def member_romance(ctx) -> bool:
-    """The night's switch (NightlySettings.member_romance, read at mind start)."""
+    """The night's switch (NightlySettings.member_romance, pinned at mind start)."""
     return bool(getattr(ctx.settings, "member_romance", False))

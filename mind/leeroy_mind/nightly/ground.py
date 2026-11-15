@@ -25,8 +25,9 @@ The rules, in order; the first that fails is the reason:
     ("tom not supported").
 
 A scene is fiction by design (member drama, 2026-11-15): its judge asks only whether the
-evidence contradicts it (FICTION_ASK), so invented detail the evidence merely does not mention
-passes, and a contradiction or a broken rule still rejects. Every other kind keeps JUDGE_ASK."""
+evidence contradicts it (FICTION_ASK, its own system line and schema), so invented detail the
+evidence merely does not mention passes, and a contradiction or a broken rule still rejects.
+Every other kind keeps JUDGE_ASK."""
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -71,15 +72,26 @@ JUDGE_ASK = (
     "For each ITEM, say how far its EVIDENCE supports it: \"yes\" when the evidence supports all "
     "of it, \"partly\" when it supports some of it, \"no\" when it does not. Set invariants_ok to "
     "false when the item breaks any of the rules. Give why in a few words.")
-# Kinds judged for contradiction only: an invented scene and the memories it leaves.
+# Kinds judged for contradiction only: an invented scene and the memories it leaves. Their
+# batches have a system line, a question and a schema of their own, so the natural answer to
+# the question is the verdict (contradicted: true rejects).
 CONTRADICT_ONLY = frozenset({"scene"})
+FICTION_SYSTEM = ("You check parts of small invented scenes between guildmates: whether the "
+                  "evidence contradicts each part, and whether each part keeps the rules below.")
 FICTION_ASK = (
     "Each ITEM is part of a small invented scene between guildmates, or a memory of it, so "
-    "invented detail is expected. For each ITEM, say whether its EVIDENCE contradicts it: \"no\" "
-    "when the evidence shows something in the item is false (a different outcome, someone who "
-    "was not there, a fact it gets wrong), \"yes\" when nothing in the evidence contradicts it, "
-    "even if the evidence does not mention it. Set invariants_ok to false when the item breaks "
-    "any of the rules. Give why in a few words.")
+    "invented detail is expected. For each ITEM: is it contradicted by its EVIDENCE? Set "
+    "contradicted to true only if the evidence shows something in the item is false (a "
+    "different outcome, someone who was not there, a fact it gets wrong). Detail the evidence "
+    "does not mention is not a contradiction: set contradicted to false. Set invariants_ok to "
+    "false when the item breaks any of the rules. Give why in a few words.")
+FICTION_SCHEMA = schema("judge_scene", {"verdicts": {"type": "array", "items": {
+    "type": "object",
+    "properties": {"i": {"type": "integer", "minimum": 0},
+                   "contradicted": {"type": "boolean"},
+                   "invariants_ok": {"type": "boolean"},
+                   "why": {"type": "string", "maxLength": 120}},
+    "required": ["i", "contradicted", "invariants_ok", "why"], "additionalProperties": False}}})
 JUDGE_SCHEMA = schema("judge", {"verdicts": {"type": "array", "items": {
     "type": "object",
     "properties": {"i": {"type": "integer", "minimum": 0},
@@ -209,18 +221,22 @@ def _reason(head: str, why: str) -> str:
 
 def _policy(claim: Claim, v: dict | None) -> Verdict:
     """The judge's verdict on one claim. A missing verdict, or one that breaks the invariants,
-    rejects; a CONTRADICT_ONLY kind is rejected only when the judge says its evidence
-    contradicts it (FICTION_ASK's "no"); an INVARIANT_ONLY kind needs nothing more; otherwise
-    yes accepts, partly only for PARTLY_OK kinds, and no rejects."""
+    rejects; a CONTRADICT_ONLY kind (FICTION_SCHEMA's verdict, labelled "contradicted" or
+    "consistent") is rejected only when the judge says its evidence contradicts it; an
+    INVARIANT_ONLY kind needs nothing more; otherwise yes accepts, partly only for PARTLY_OK
+    kinds, and no rejects."""
     if v is None:
         return Verdict(False, "judge", "no verdict")
+    if claim.kind in CONTRADICT_ONLY:
+        label = "contradicted" if v["contradicted"] else "consistent"
+        if not v["invariants_ok"]:
+            return Verdict(False, "judge", _reason("invariants", v["why"]), label)
+        if v["contradicted"]:
+            return Verdict(False, "judge", _reason("contradicted", v["why"]), label)
+        return Verdict(True, "judge", v["why"], label)
     support, why = v["support"], v["why"]
     if not v["invariants_ok"]:
         return Verdict(False, "judge", _reason("invariants", why), support)
-    if claim.kind in CONTRADICT_ONLY:
-        if support == "no":
-            return Verdict(False, "judge", _reason("contradicted", why), support)
-        return Verdict(True, "judge", why, support)
     if claim.kind in INVARIANT_ONLY or support == "yes" or (
             support == "partly" and claim.kind in PARTLY_OK):
         return Verdict(True, "judge", why, support)
@@ -232,13 +248,16 @@ async def judge(ctx: "NightContext", claims: list[Claim], ev: Evidence,
                 facts: Facts, *, couple: tuple[str, str] | None = None) -> list[Verdict]:
     """The judge's verdict on each claim, in order, asked in batches of JUDGE_BATCH numbered
     from 0. Each claim is shown as "ITEM {i}: [{kind}] {text}", then EVIDENCE: and its cited
-    lines. CONTRADICT_ONLY kinds are asked FICTION_ASK in batches of their own, the rest
-    JUDGE_ASK. `couple` (two character names) is the member romance a scene may show
-    (system_prompt). A failed request is the unit's failure (a ReflectionError)."""
-    system = system_prompt("judge", JUDGE_SYSTEM, ctx.settings.data_dir, human=ctx.ident,
-                           couple=couple)
+    lines. CONTRADICT_ONLY kinds are asked in batches of their own (FICTION_SYSTEM,
+    FICTION_ASK, FICTION_SCHEMA; overlay prompts/nightly_judge_scene.txt), the rest JUDGE_ASK.
+    `couple` (two character names) is the member romance a scene may show (system_prompt). A
+    failed request is the unit's failure (a ReflectionError)."""
+    plain = (system_prompt("judge", JUDGE_SYSTEM, ctx.settings.data_dir, human=ctx.ident,
+                           couple=couple), JUDGE_ASK, JUDGE_SCHEMA)
+    fiction_ = (system_prompt("judge_scene", FICTION_SYSTEM, ctx.settings.data_dir,
+                              human=ctx.ident, couple=couple), FICTION_ASK, FICTION_SCHEMA)
     out: dict[int, Verdict] = {}
-    for ask, fiction in ((JUDGE_ASK, False), (FICTION_ASK, True)):
+    for (system, ask, shape), fiction in ((plain, False), (fiction_, True)):
         group = [(n, c) for n, c in enumerate(claims) if (c.kind in CONTRADICT_ONLY) is fiction]
         for start in range(0, len(group), JUDGE_BATCH):
             batch = group[start:start + JUDGE_BATCH]
@@ -246,7 +265,7 @@ async def judge(ctx: "NightContext", claims: list[Claim], ev: Evidence,
                 f"\n\nITEM {i}: [{c.kind}] {c.text}\nEVIDENCE:\n"
                 + "\n".join(ev.line(ref, ctx.tz) for ref in dict.fromkeys(c.evidence))
                 for i, (_, c) in enumerate(batch))
-            reply = await ctx.reasoner.json(system, user, JUDGE_SCHEMA)
+            reply = await ctx.reasoner.json(system, user, shape)
             by_i: dict[int, dict] = {}
             for v in reply["verdicts"]:
                 by_i.setdefault(v["i"], v)  # the first verdict for an item counts

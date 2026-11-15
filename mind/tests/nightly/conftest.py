@@ -124,6 +124,8 @@ def generic(prompt: str) -> dict:
         return {"verdicts": [{"i": int(i), "support": "yes", "invariants_ok": True,
                                "why": "Supported by the supplied evidence."}
                               for i in dict.fromkeys(_ITEM.findall(prompt.split("matching this schema:")[0]))]}
+    if title == "judge_scene":
+        return consistent(prompt.split("matching this schema:")[0])
     if title == "reflection":
         return {"outputs": [], "emotions": [], "diary": {"text": "Taking a quiet moment.", "evidence": [1]}}
     if title == "encounter":
@@ -164,6 +166,13 @@ def yes(prompt: str) -> dict:
     """The judge's reply (Task 6's JUDGE_SCHEMA) that supports every ITEM n in the prompt and
     finds each one within the rules."""
     return {"verdicts": [{"i": int(n), "support": "yes", "invariants_ok": True, "why": ""}
+                         for n in dict.fromkeys(_ITEM.findall(prompt))]}
+
+
+def consistent(prompt: str) -> dict:
+    """The scene judge's reply (ground.FICTION_SCHEMA): nothing in any ITEM n is contradicted
+    and each one keeps the rules."""
+    return {"verdicts": [{"i": int(n), "contradicted": False, "invariants_ok": True, "why": ""}
                          for n in dict.fromkeys(_ITEM.findall(prompt))]}
 
 

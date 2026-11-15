@@ -78,8 +78,8 @@ def social_view(conn, *, now: float) -> dict:
     romances.sort(key=lambda r: (-max(_stage(r["ab"]), _stage(r["ba"])), r["a"], r["b"]))
     breakups = [{"id": r["id"], "woman": r["woman"], "partner": r["partner"],
                  "for": r["for_guid"], "stage": r["stage"], "ts": r["ts"],
-                 "feud": bool(r["feud"])}
-                for r in (q("SELECT id, woman, partner, for_guid, stage, ts, feud FROM breakup "
+                 "feud": bool(r["feud"]), "public": bool(r["public"])}
+                for r in (q("SELECT id, woman, partner, for_guid, stage, ts, feud, public FROM breakup "
                             "ORDER BY ts DESC, id DESC LIMIT ?", (BREAKUPS_MAX,))
                           if "breakup" in have else [])]
 

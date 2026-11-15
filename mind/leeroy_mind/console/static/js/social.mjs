@@ -101,6 +101,7 @@ function renderSocial(v) {
       r.appendChild(el("span", "muted", "for"));
       r.appendChild(person(v, b.for));
       r.appendChild(el("span", "muted", when(b.ts)));
+      if (!b.public) { r.appendChild(el("span", "chip", "kept quiet")); }
       if (b.feud) { r.appendChild(el("span", "chip warn", "feud")); }
       r.title = breakupText(b, v.names);
       box.appendChild(r);

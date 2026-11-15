@@ -7,28 +7,34 @@ of the stored romance ladder through their nightly scenes, and the owner can dra
   may be taken at home (her household names a spouse or partner, `taken`), already in a member
   romance, or a woman whose own romance with him has begun (banter or later): his romances are
   never broken by members. A woman drawn to or lusting after him (her stance) starts one at
-  DRAWN_FACTOR of the usual chance.
+  DRAWN_FACTOR of the usual chance. Exes rest EX_COOLDOWN_DAYS and a feuding pair never sparks.
 - **The ladder.** LADDER, on both of their relationship rows: notices (a spark), banter
   (flirting), whispers (a crush), late_nights (dating), confession (together); ex after a
   breakup. A spark needs SPARK_AFFINITY both ways and seeds SPARK_ATTRACTION. Each warm scene of
   theirs adds FLIRT_GAIN attraction both ways and may take one step, once both rows meet that
   step's gate (GATES) and enough nights passed since the last one: his arc's pacing without his
   play days. A cold scene takes COOL_LOSS; short of dating, a romance below FIZZLE ends quietly.
-- **Drawn away.** On a night he pursued her (an attraction act in the last PURSUIT_DAYS), her
-  pull toward her partner erodes by EROSION; once her attraction to him clearly outweighs it
-  (MARGIN over her partner's pull plus HOLD), she leaves. From a crush on (BREAKS) that is a
-  breakup: the partner is hurt (memory, distress, capped affinity and trust loss), envies him
-  (his envy row spikes to ENVY_SPIKE), may open a feud with her (by his traits), and the guild
-  hears it as a rumour about her. Earlier stages just end. A woman whose stance toward him is
-  none is never drawn away: his acts do not move her.
+- **Drawn away.** His pursuit is his deliberate attention at her (_pursuit, owner ruling
+  2026-11-15): his flirts and compliments aimed at her and his whisper or DM lines to her,
+  never raid or party time together nor his guild-chat replies. While he pursued her within
+  PURSUIT_DAYS, her warm scenes with her partner add nothing on her side, and each night her
+  pull toward her partner erodes by EROSION; once her pull to him outweighs it (MARGIN over her
+  partner's pull plus HOLD), she leaves, so steady pursuit wins. From a crush on (BREAKS) that
+  is a breakup: the split is public, the partner is hurt (memory, distress, capped affinity and
+  trust loss), may open a feud with her (by his traits), and the guild hears it as a rumour
+  about her. That she left for him is told (the partner's memory and envy, the feud cause, the
+  rumour) only when some of his pursuit was public; otherwise only her own memory knows, private
+  with him. Earlier stages just end. A woman whose stance toward him is none is never drawn
+  away: his acts do not move her.
 
-The nightly unit and the scene hook only write inside the caller's transaction. Logs carry ids,
-counts and codes, never text.
+The nightly unit and the scene hook only write inside the caller's transaction, and only with
+the night's switch on (pinned at mind start). Logs carry ids, counts and codes, never text.
 """
 import json
 import re
 from dataclasses import replace
 
+from leeroy_mind.discord.channels import is_public, private_sql
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly import knowledge
@@ -65,16 +71,21 @@ FLIRT_GAIN = 8.0
 COOL_LOSS = 6.0
 FIZZLE = 15.0
 PURSUIT_DAYS = 3.0
-PURSUIT_ACTS = ("flirt", "public_compliment", "remembered", "answered", "quest_together")
-MARGIN = 15.0
+# His deliberate attention at her (owner ruling 2026-11-15): his flirts at her (lines and romantic
+# emotes) and compliments aimed at her, plus every whisper or DM line of his to her (_pursuit).
+# Never raid or party time together (quest_together) nor his replies in guild chat (answered).
+PURSUIT_ACTS = ("flirt", "public_compliment")
+MARGIN = 10.0
 HOLD = {"whispers": 0.0, "late_nights": 10.0, "confession": 20.0}
-EROSION = 6.0
+EROSION = 10.0  # her pull toward her partner, a night he pursues her: more than a scene adds
+EX_COOLDOWN_DAYS = 30.0  # nights before two exes may spark again
 BREAKUP_LOSS = -10.0  # the jilted partner's affinity and trust toward her, under the night cap
 ENVY_SPIKE = 85.0
 DAY_S = 86400.0
 # Her stages toward him from which she is his, never a member's (romance._RIVAL_STAGES' range).
 WITH_HIM = frozenset(ROMANCE_STAGES[ROMANCE_STAGES.index("banter"):ROMANCE_STAGES.index("ex")])
 DRAWN = frozenset({"drawn", "lust"})
+BREAKUP_ROOT = "rule:breakup:"  # a breakup's open root (the split itself is public)
 
 _UNTAKEN = re.compile(
     r"\b(?:no|not|never|without)\s+(?:a\s+)?(?:married|spouse|partner|husband|wife|boyfriend|girlfriend)\b"
@@ -228,8 +239,15 @@ def after_scene(store, ctx, enc, *, total: float, valence: float) -> str | None:
         return None
     now, ref = ctx.clock.now(), [f"encounter:{enc['id']}"]
     if total >= 0 and valence >= 0:
+        # While he pursues her, her warm scenes with her partner add nothing on her side and
+        # take no step: his romance wins if he keeps at it.
+        woman = next((g for g in (a, b) if _gender(ctx, g) == "female"), None)
+        drawn = woman is not None and bool(_pursuit(store, woman, ctx.human, now))
         for x, y in ((a, b), (b, a)):
-            _attraction(store, x, y, FLIRT_GAIN, "member:scene", ref, now)
+            if not (drawn and x == woman):
+                _attraction(store, x, y, FLIRT_GAIN, "member:scene", ref, now)
+        if drawn:
+            return "distracted"
         new = can_step(store, a, b, stage, now)
         if new is None:
             return "warmer"
@@ -250,12 +268,34 @@ def after_scene(store, ctx, enc, *, total: float, valence: float) -> str | None:
 
 # -- the night's unit ------------------------------------------------------------------------
 
-def _pursued(store, woman, now) -> list[str]:
-    """His acts toward her in the last PURSUIT_DAYS (attraction_act refs)."""
-    return [r["ref"] for r in store.conn.execute(
-        f"SELECT ref FROM attraction_act WHERE guid=? AND gain>0 AND ts>? AND ts<=? "
-        f"AND act IN ({','.join('?' * len(PURSUIT_ACTS))}) ORDER BY ts, id",
-        (woman, now - PURSUIT_DAYS * DAY_S, now, *PURSUIT_ACTS))]
+def _public_ref(store, ref: str) -> bool:
+    """Whether an act of his was public: a line on a channel the whole guild may read (guild,
+    party, raid, say, yell, a public Discord channel) or a text emote in the game. Anything
+    else (a whisper, a DM, an officers' or unknown line) is not."""
+    if ref.startswith("event:"):
+        row = store.conn.execute("SELECT type FROM game_event WHERE id=?",
+                                 (int(ref[6:]) if ref[6:].isdecimal() else -1,)).fetchone()
+        return row is not None and row["type"] == "text_emote"
+    if ref.startswith("chat:") and ref[5:].isdecimal():
+        row = store.conn.execute("SELECT channel FROM chat_line WHERE id=?", (int(ref[5:]),)).fetchone()
+        return row is not None and is_public(row["channel"])
+    return False
+
+
+def _pursuit(store, woman, human, now) -> list[tuple[str, bool]]:
+    """His pursuit of her in the last PURSUIT_DAYS, oldest first: (ref, public). His flirt and
+    compliment acts at her (attraction_act), and his whisper or DM lines to her."""
+    since, out = now - PURSUIT_DAYS * DAY_S, {}
+    for r in store.conn.execute(
+            f"SELECT ref FROM attraction_act WHERE guid=? AND ts>? AND ts<=? "
+            f"AND act IN ({','.join('?' * len(PURSUIT_ACTS))}) ORDER BY ts, id",
+            (woman, since, now, *PURSUIT_ACTS)):
+        out.setdefault(r["ref"], _public_ref(store, r["ref"]))
+    for r in store.conn.execute(
+            f"SELECT id FROM chat_line WHERE from_guid=? AND to_guid=? AND origin='human' "
+            f"AND {private_sql()} AND ts>? AND ts<=? ORDER BY ts, id", (human, woman, since, now)):
+        out.setdefault(f"chat:{r['id']}", False)
+    return list(out.items())
 
 
 def _feud_chance(ctx, guid) -> float:
@@ -275,14 +315,13 @@ def _envy(store, holder, human, evidence, now):
         (holder, human, level, now, json.dumps(list(evidence)[:3])))
 
 
-def _rumour(store, ctx, ident, woman, jilted, source, now) -> int | None:
+def _rumour(store, ctx, ident, woman, jilted, source, canonical, now) -> int | None:
     """The guild hears it: a live rumour about her whose first spreader is the jilted partner.
-    A breakup is one event, so it does not wait for a free live-rumour slot."""
-    root = f"rule:breakup:{ident}"
+    A breakup is one event: it neither waits for a live-rumour slot nor fills one
+    (gossip.organic_rumors)."""
+    root = f"{BREAKUP_ROOT}{ident}"
     if store.conn.execute("SELECT 1 FROM rumor WHERE root=?", (root,)).fetchone():
         return None
-    canonical = clean_memory_text(
-        f"{ctx.name(woman)} left {ctx.name(jilted)} for {ctx.ident.called}.", ctx.ident)
     rumor = store.conn.execute(
         "INSERT INTO rumor(root,about,canonical,source,created,last_told) VALUES (?,?,?,?,?,?)",
         (root, woman, canonical, source, now, now)).lastrowid
@@ -294,44 +333,60 @@ def _rumour(store, ctx, ident, woman, jilted, source, now) -> int | None:
     return rumor
 
 
-def breakup(store, ctx, woman: int, jilted: int, stage: str, now: float) -> int:
-    """She leaves `jilted` for him, inside the night unit's transaction. Returns the breakup id."""
+def breakup(store, ctx, woman: int, jilted: int, stage: str, now: float, *,
+            pursuit=()) -> int:
+    """She leaves `jilted` for him, inside the night unit's transaction. Returns the breakup id.
+
+    The split is public. Why she left (him) is public only when some of his `pursuit` (ref,
+    public) was (owner ruling 2026-11-15): then the partner's hurt memory, his feelings, the
+    feud cause and the rumour name him, and the partner envies him. When all of it was in
+    whispers or DMs, they say only that she left, and her own memory of leaving him for the
+    owner is private with the owner, citing those lines."""
     from leeroy_mind.nightly import feuds
     human = ctx.human
+    public = any(open_ for _, open_ in pursuit)
     ident = store.conn.execute(
-        "INSERT INTO breakup(woman,partner,for_guid,stage,night,ts) VALUES (?,?,?,?,?,?)",
-        (woman, jilted, human, stage, ctx.night, now)).lastrowid
-    root = f"rule:breakup:{ident}"
+        "INSERT INTO breakup(woman,partner,for_guid,stage,night,ts,public) VALUES (?,?,?,?,?,?,?)",
+        (woman, jilted, human, stage, ctx.night, now, int(public))).lastrowid
+    root = f"{BREAKUP_ROOT}{ident}"
     _set_stage(store, woman, jilted, stage, "ex", [root], now)
     for g, how in ((woman, "witnessed"), (jilted, "witnessed")):
         knowledge.learn(store, root, g, how, ts=now)
+    her, his, him = ctx.name(woman), ctx.name(jilted), ctx.ident.called
+    if public:
+        hurt_text, hurt_actors = f"{her} left me for {him}.", [woman, human]
+        canonical, cause = f"{her} left {his} for {him}.", f"{her} left {his} for {him}"
+    else:
+        hurt_text, hurt_actors = f"{her} has been distant. I think there's someone else.", [woman]
+        canonical, cause = f"{her} and {his} split up.", f"{her} and {his} split up"
     hurt = ctx.writer.put(reflection_row(
-        jilted, clean_memory_text(f"{ctx.name(woman)} left me for {ctx.ident.called}.", ctx.ident),
-        now=now, actors=[woman, human], evidence=[root], key=f"breakup:{ident}",
-        importance=8, valence=-0.8))
-    ctx.writer.put(reflection_row(
-        woman, clean_memory_text(f"Left {ctx.name(jilted)} for {ctx.ident.called}.", ctx.ident),
-        now=now, actors=[jilted, human], evidence=[root], key=f"breakup:{ident}",
-        importance=7, valence=0.3))
+        jilted, clean_memory_text(hurt_text, ctx.ident), now=now, actors=hurt_actors,
+        evidence=[root], key=f"breakup:{ident}", importance=8, valence=-0.8))
+    left = reflection_row(
+        woman, clean_memory_text(f"Left {his} for {him}.", ctx.ident), now=now,
+        actors=[jilted, human], evidence=[root] if public else [root, *(r for r, _ in pursuit)],
+        key=f"breakup:{ident}", importance=7, valence=0.3)
+    ctx.writer.put(left if public else replace(left, scope="private", scope_with=human))
     for dim in ("affinity", "trust"):
         apply_capped(store, night=ctx.night, a=jilted, b=woman, dim=dim, delta=BREAKUP_LOSS,
                      speed=ctx.settings.relationship_speed, reason="breakup", evidence=(root,),
                      ts=now, human=human)
-    for target, kind, intensity in ((woman, "distress", 3), (human, "resentment", 2)):
+    felt = ((woman, "distress", 3), (human, "resentment", 2)) if public else ((woman, "distress", 3),)
+    for target, kind, intensity in felt:
         store.conn.execute(
             "INSERT INTO emotion(guid,night,type,target,intensity,why,source,evidence,ts) "
             "VALUES (?,?,?,?,?,?,'breakup',?,?)",
             (jilted, ctx.night, kind, target, intensity, "breakup", json.dumps([f"memory:{hurt}"]), now))
-    _envy(store, jilted, human, [f"memory:{hurt}"], now)
-    rumor = _rumour(store, ctx, ident, woman, jilted, hurt, now)
+    if public:
+        _envy(store, jilted, human, [f"memory:{hurt}"], now)
+    rumor = _rumour(store, ctx, ident, woman, jilted, hurt,
+                    clean_memory_text(canonical, ctx.ident), now)
     feud = None
     if ctx.rng(STAGE, "feud", ident).random() < _feud_chance(ctx, jilted):
-        feud = feuds.open_drama(store, ctx, jilted, woman, root=root,
-                                cause=f"{ctx.name(woman)} left {ctx.name(jilted)} for "
-                                      f"{ctx.ident.called}")
+        feud = feuds.open_drama(store, ctx, jilted, woman, root=root, cause=cause)
     store.conn.execute("UPDATE breakup SET feud=?, rumor=? WHERE id=?", (feud, rumor, ident))
     log("member_breakup", id=ident, woman=woman, partner=jilted, stage=stage,
-        feud=feud or 0, rumor=rumor or 0)
+        public=int(public), feud=feud or 0, rumor=rumor or 0)
     return ident
 
 
@@ -343,16 +398,18 @@ def _draw_away(store, ctx, members, now) -> tuple[int, int]:
         if woman is None:
             continue
         other = b if woman == a else a
-        acts = _pursued(store, woman, now)
+        acts = _pursuit(store, woman, ctx.human, now)
         if not acts:
             continue
-        _attraction(store, woman, other, -EROSION, "member:drawn_away", acts[:3], now)
+        _attraction(store, woman, other, -EROSION, "member:drawn_away",
+                    [r for r, _ in acts][:3], now)
+        # Her pull to him against her pull to her partner (and how far the two have come).
         pull = _rel(store, woman, ctx.human).attraction
         held = _rel(store, woman, other).attraction + HOLD.get(stage, 0.0)
         if pull < held + MARGIN:
             continue
         if stage in BREAKS:
-            breakup(store, ctx, woman, other, stage, now)
+            breakup(store, ctx, woman, other, stage, now, pursuit=acts)
             breakups += 1
         else:
             _set_stage(store, woman, other, stage, "none", [f"rule:drawn:{woman}"], now)
@@ -365,13 +422,21 @@ def _sparks(store, ctx, members) -> int:
     eligible = sorted(g for g in members if free(ctx, g))
     women = [g for g in eligible if _gender(ctx, g) == "female"]
     men = [g for g in eligible if _gender(ctx, g) == "male"]
+    now = ctx.clock.now()
+    # Exes rest EX_COOLDOWN_DAYS; a feuding pair never sparks.
+    barred = {frozenset((r["woman"], r["partner"])) for r in store.conn.execute(
+        "SELECT woman,partner FROM breakup WHERE ts>?", (now - EX_COOLDOWN_DAYS * DAY_S,))}
+    barred |= {frozenset((r["a"], r["b"])) for r in store.conn.execute(
+        "SELECT a,b FROM feud WHERE ended IS NULL")}
     pairs = []
     for w in women:
         for m in men:
+            if frozenset((w, m)) in barred:
+                continue
             low = min(_rel(store, w, m).affinity, _rel(store, m, w).affinity)
             if low >= SPARK_AFFINITY:
                 pairs.append((-low, w, m))
-    used, sparks, now = set(), 0, ctx.clock.now()
+    used, sparks = set(), 0
     for _, w, m in sorted(pairs):
         if sparks >= SPARKS_PER_NIGHT:
             break
@@ -385,15 +450,18 @@ def _sparks(store, ctx, members) -> int:
             if rel.attraction < SPARK_ATTRACTION:
                 _attraction(store, x, y, SPARK_ATTRACTION - rel.attraction, "member:spark",
                             [f"rule:spark:{min(w, m)}:{max(w, m)}"], now)
-        _set_stage(store, w, m, "none", "notices", [f"rule:spark:{min(w, m)}:{max(w, m)}"], now)
+        _set_stage(store, w, m, _rel(store, w, m).romance_stage, "notices",
+                   [f"rule:spark:{min(w, m)}:{max(w, m)}"], now)
         used.update((w, m))
         sparks += 1
     return sparks
 
 
 async def stage_couples(ctx) -> None:
-    """The night's deterministic unit: his pull against each partner first, then new sparks."""
-    if ctx.done(STAGE, "all"):
+    """The night's deterministic unit: his pull against each partner first, then new sparks.
+    Nothing at all while the night's switch is off."""
+    from leeroy_mind.drama.config import member_romance
+    if not member_romance(ctx) or ctx.done(STAGE, "all"):
         return
 
     def write(store):

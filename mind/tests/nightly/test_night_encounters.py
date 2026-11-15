@@ -12,7 +12,7 @@ from leeroy_mind.nightly.relations import Copresence
 from leeroy_mind.nightly.storyteller import Volition, arc_key
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.protocol import Member
-from nightly.conftest import no_real_name, yes
+from nightly.conftest import consistent, no_real_name, yes
 
 
 def reply(**changes):
@@ -24,8 +24,8 @@ def reply(**changes):
 
 
 def seeded(h, data=None, *, setting="the Orgrimmar bank steps", volition=None, private=0,
-           judge=yes, idx=0):
-    ctx = h.ctx({"encounter": [reply() if data is None else data], "judge": [judge]})
+           judge=consistent, idx=0):
+    ctx = h.ctx({"encounter": [reply() if data is None else data], "judge_scene": [judge]})
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO encounter(night,idx,a,b,setting,status,volition,private) "
                             "VALUES (?,?,101,102,?,'planned',?,?)",
@@ -235,7 +235,7 @@ def test_normalized_real_names_reject_entire_scene(h, field):
 
 def test_rejected_judge_writes_no_effects(h):
     def reject(text):
-        result = yes(text)
+        result = consistent(text)
         result["verdicts"][1]["invariants_ok"] = False
         return result
     ctx = seeded(h, judge=reject)
@@ -325,7 +325,7 @@ def test_failed_commit_rolls_back_every_effect_and_can_retry(h, monkeypatch):
     run(enc.stage_encounters(ctx))
     assert encounter(h)["status"] == "planned" and not ctx.done("encounters", "enc:0")
     assert all(h.count(t) == 0 for t in ("memory", "rel_delta", "knows", "emotion", "grounding_log"))
-    retry = h.ctx({"encounter": [reply()], "judge": [yes]})
+    retry = h.ctx({"encounter": [reply()], "judge_scene": [consistent]})
     run(enc.stage_encounters(retry))
     assert encounter(h)["status"] == "done" and h.count("memory") == 2
 

@@ -203,7 +203,7 @@ def test_correction_supersedes_matching_hearsay_leaves_half_shift_and_is_idempot
     with h.store.transaction():
         corrected = gossip.after_correction(h.store, ctx, enc, 1, 102, now=h.T)
     row = h.store.get_memories([corrected])[0]
-    assert row.text == "Turns out Coros took the bracers."
+    assert row.text == "Turns out Coros took my bracers."
     assert row.key == "correct:1" and row.confidence == 0.9 and row.importance == 4
     old = h.store.get_memories([previous])[0]
     assert old.status == "superseded" and old.superseded_by == corrected
