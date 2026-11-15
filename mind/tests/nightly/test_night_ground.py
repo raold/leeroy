@@ -241,8 +241,10 @@ def test_invariant_only_kinds_need_only_the_invariants(h, facts, ev):
                              for n in dict.fromkeys(re.findall(r"\bITEM (\d+)\b", prompt))]}
     ctx = h.ctx(default=unsupported)
     claims = [Claim(k, 101, "My sister visits soon.", ["memory:10"]) for k in ("life", "break", "wowlife", "belief", "scene")]
+    # A scene is judged for contradiction only (FICTION_ASK): its "no" means contradicted.
     assert [(v.ok, v.label, v.reason) for _, v in run(ground(ctx, claims, ev, facts))] == [
-        (True, "no", "made up")] * 3 + [(False, "no", "unsupported: made up")] * 2
+        (True, "no", "made up")] * 3 + [(False, "no", "unsupported: made up"),
+                                        (False, "no", "contradicted: made up")]
 
 
 def test_the_owner_and_the_evidence_edges(facts, ev):

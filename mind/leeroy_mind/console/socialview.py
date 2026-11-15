@@ -1,6 +1,8 @@
 """The Social tab's read-only question to mind.db: the guild's drama as the night's stages
-wrote it (feuds, jealousy, romances, how members feel about the owner, live rumours, the guild
-mood). A table an older mind.db lacks is named in `missing` and reads as empty."""
+wrote it (feuds, jealousy, romances, breakups, how members feel about the owner, live rumours,
+the guild mood). A table an older mind.db lacks is named in `missing` and reads as empty.
+A member romance (drama.couples) is a pair with a `stage` on the member ladder; a breakup says
+who left whom for him."""
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.storage.rows import ROMANCE_STAGES
 
@@ -8,14 +10,24 @@ from . import views
 from .feed import guild_mood, human_guid
 
 SOCIAL_TABLES = ("relationship", "attraction_state", "feud", "jealousy", "rumor", "rumor_state",
-                 "knows", "guild_mood", "pad_mood")
+                 "knows", "guild_mood", "pad_mood", "breakup")
 ROMANCE_ORDER = ROMANCE_STAGES  # the stored ladder, furthest last
 JEALOUSY_MAX = 30
 RUMOURS_MAX = 20
+BREAKUPS_MAX = 20
 
 
 def _stage(s) -> int:
-    return ROMANCE_ORDER.index(s) if s in ROMANCE_ORDER else 0
+    """How far along a pair is, for ordering: an ex sits below every romance under way."""
+    return -1 if s == "ex" else ROMANCE_ORDER.index(s) if s in ROMANCE_ORDER else 0
+
+
+def _pair_stage(ab: str, ba: str) -> str:
+    """The pair's one stage: ex when either row says so, else the further of the two (a
+    member romance keeps both rows on one stage)."""
+    if "ex" in (ab, ba):
+        return "ex"
+    return max((ab, ba), key=_stage)
 
 
 def social_view(conn, *, now: float) -> dict:
@@ -62,8 +74,14 @@ def social_view(conn, *, now: float) -> dict:
     for a, b in pairs:
         ab, ba = stage.get((a, b), "none"), stage.get((b, a), "none")
         if ab != "none" or ba != "none":
-            romances.append({"a": a, "b": b, "ab": ab, "ba": ba})
+            romances.append({"a": a, "b": b, "ab": ab, "ba": ba, "stage": _pair_stage(ab, ba)})
     romances.sort(key=lambda r: (-max(_stage(r["ab"]), _stage(r["ba"])), r["a"], r["b"]))
+    breakups = [{"id": r["id"], "woman": r["woman"], "partner": r["partner"],
+                 "for": r["for_guid"], "stage": r["stage"], "ts": r["ts"],
+                 "feud": bool(r["feud"])}
+                for r in (q("SELECT id, woman, partner, for_guid, stage, ts, feud FROM breakup "
+                            "ORDER BY ts DESC, id DESC LIMIT ?", (BREAKUPS_MAX,))
+                          if "breakup" in have else [])]
 
     rumours = []
     for r in q("SELECT id, root, about, canonical, created, last_told FROM rumor "
@@ -84,4 +102,5 @@ def social_view(conn, *, now: float) -> dict:
 
     return {"human": human, "names": {str(g): n for g, n in views.names(conn).items()},
             "missing": missing, "mood": guild_mood(conn), "octants": octants, "you": you,
-            "feuds": feuds, "jealousy": jealousy, "romances": romances, "rumours": rumours}
+            "feuds": feuds, "jealousy": jealousy, "romances": romances, "breakups": breakups,
+            "rumours": rumours}

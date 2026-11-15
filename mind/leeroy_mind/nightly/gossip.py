@@ -1,5 +1,10 @@
-"""Bounded retellings and imperfect corrections, inside an accepted scene's transaction."""
+"""Bounded retellings and imperfect corrections, inside an accepted scene's transaction.
+
+A rumour's canonical text is a third-person claim about its subject (the scene's `claim`, else
+the retelling when that is one), never a member's raw first-person memory; a telling with
+neither still reaches its hearer, without a rumour row (member drama, 2026-11-15)."""
 import random
+import re
 
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly import knowledge
@@ -7,6 +12,7 @@ from leeroy_mind.nightly.evidence import Evidence, load_facts, load_items
 from leeroy_mind.nightly.ground import Claim, check, log_verdicts
 from leeroy_mind.nightly.motives import trait_today
 from leeroy_mind.nightly.relations import apply_capped
+from leeroy_mind.personas.screens import has_word
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.text import strip_wow_markup, truncate_words
 from leeroy_mind.tuning.effective import dials_of
@@ -23,6 +29,16 @@ CORRECTION_RESIDUE = 0.5
 FADE_DAYS = 14
 HOPS_MAX = 3
 DISCRETION_BASE = 0.8
+_FIRST_PERSON = re.compile(
+    r"(?<![\w'’])(?:i(?:['’](?:m|ve|ll|d))?|me|my|mine|myself|we(?:['’](?:re|ve|ll|d))?|us|our"
+    r"|ours|ourselves)(?![\w'’])", re.IGNORECASE)
+_QUOTES = re.compile(r"[\"“”«»]")
+
+
+def third_person(text: str, name: str) -> bool:
+    """A rumour's canonical form: it names its subject, quotes nobody and says no I or we."""
+    return (bool(text) and has_word(text, name) and not _FIRST_PERSON.search(text)
+            and not _QUOTES.search(text))
 
 
 def choose_op(teller_traits, hearer_affinity_to_about) -> str:
@@ -234,13 +250,24 @@ def _memory(owner, text, *, actors, evidence, now, importance, confidence, valen
         scope=scope[0], scope_with=scope[1], key=key)
 
 
+def _couple(ctx, about):
+    """A rumour may be romantic about a member romance (drama.couples, switch on): `about` and
+    the member they are with, or were with until a breakup."""
+    from leeroy_mind.drama.config import member_romance
+    if not member_romance(ctx) or about == ctx.human:
+        return frozenset()
+    from leeroy_mind.drama.couples import romance_of
+    other = romance_of(ctx.store, about, ctx.human)
+    return frozenset() if other is None else frozenset({about, other})
+
+
 def _check(ctx, teller, text, source, about, *, now):
     ref = f"memory:{source.id}"
     ev = Evidence()
     for item in load_items(ctx.store, [ref], ident=ctx.ident):
         ev.add(item)
     claim = Claim("gossip", teller, text, [ref], about=about)
-    verdict = check(claim, ev, load_facts(ctx))
+    verdict = check(claim, ev, load_facts(ctx), couple=_couple(ctx, about))
     log_verdicts(ctx.store, ctx.night, "encounters", [(claim, verdict)], now, ctx.ident)
     return verdict.ok
 
@@ -290,12 +317,14 @@ def after_gossip(store, ctx, enc, gossip, shown, *, now):
         if rumor is None:
             if len(live_rumors(store)) >= ctx.settings.live_rumors:
                 return None
-            canonical = clean_memory_text(source.text, ctx.ident)
-            if not _check(ctx, teller, canonical, source, about, now=now):
-                return None
-            ident = store.conn.execute("INSERT INTO rumor(root,about,canonical,source,created,last_told) "
-                "VALUES (?,?,?,?,?,?)", (root, about, canonical, source.id, now, now)).lastrowid
-            rumor = store.conn.execute("SELECT * FROM rumor WHERE id=?", (ident,)).fetchone()
+            name = ctx.name(about)
+            claim = " ".join(strip_wow_markup(gossip.get("claim") or "").split())
+            canonical = next((clean_memory_text(t, ctx.ident) for t in (claim, text)
+                              if third_person(t, name)), None)
+            if canonical is not None and _check(ctx, teller, canonical, source, about, now=now):
+                ident = store.conn.execute("INSERT INTO rumor(root,about,canonical,source,created,last_told) "
+                    "VALUES (?,?,?,?,?,?)", (root, about, canonical, source.id, now, now)).lastrowid
+                rumor = store.conn.execute("SELECT * FROM rumor WHERE id=?", (ident,)).fetchone()
         elif rumor["status"] != "live" or rumor["about"] != about:
             return None
         if corrected:

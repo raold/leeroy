@@ -144,19 +144,25 @@ def _after_opening(store, feud, enc):
     return True
 
 
-def maybe_open(store, ctx, enc, deltas, shown):
+def maybe_open(store, ctx, enc, deltas, shown, *, drama: bool = False):
     """Open a feud and its sides after the scene's capped relationship updates.
 
     `deltas` are the scene's normalized delta dictionaries (each bounded to +/-3);
     their sign is the scene's mood, while stored affinities decide eligibility.
     `shown` contains every shown memory ref. No models or independent unit commits.
+    `drama`: a jealous member's confrontation ([drama] member_romance) that blew up (its total
+    at BLOWUP_DELTA or below) opens a feud once the confronting member's own affinity is at
+    FEUD_AFFINITY or below; the other side's need not be: a blow-up makes it mutual. Short of
+    a blow-up it takes both sides, as any scene does.
     """
+    from leeroy_mind.nightly.storyteller import BLOWUP_DELTA
     enc = dict(enc)
     if enc.get("private"):
         return None
     total = _total(deltas)
     if total is None or total >= 0:
         return None
+    blew_up = drama and total <= BLOWUP_DELTA
     shown = tuple(dict.fromkeys(shown))
     with store.transaction():
         pair = _accepted(store, ctx, enc)
@@ -170,12 +176,39 @@ def maybe_open(store, ctx, enc, deltas, shown):
         if store.conn.execute("SELECT 1 FROM feud f,json_each(f.evidence) e WHERE e.value=?",
                               (root,)).fetchone():
             return None
-        if (store.get_relationship(a, b).affinity > FEUD_AFFINITY
-                or store.get_relationship(b, a).affinity > FEUD_AFFINITY
+        sides = ((enc["a"], enc["b"]),) if blew_up else ((a, b), (b, a))
+        if (any(store.get_relationship(x, y).affinity > FEUD_AFFINITY for x, y in sides)
                 or _opened_tonight(store, ctx) >= ctx.settings.feuds_per_night):
             return None
         now = ctx.clock.now()
         cause = clean_memory_text(enc["scene"], ctx.ident)[:120] if _shown_open(store, ctx, a, shown) else ""
+        return _open(store, ctx, a, b, root, cause, now)
+
+
+def open_drama(store, ctx, a, b, *, root, cause):
+    """A feud a drama event opens by itself, with no scene and no affinity bar (a breakup:
+    drama.couples): the same row, arc, fact and sides as a scene's. `root` is the event's
+    open root; `cause` its screened words. None when the pair already feuds, the root already
+    opened one, either is not a member, or tonight's feuds_per_night is spent."""
+    a, b = sorted((a, b))
+    with store.transaction():
+        if a == b or ctx.human in (a, b) or not {a, b} <= set(ctx.members()):
+            return None
+        if store.conn.execute("SELECT 1 FROM feud WHERE a=? AND b=? AND ended IS NULL", (a, b)).fetchone():
+            return None
+        if store.conn.execute("SELECT 1 FROM feud f,json_each(f.evidence) e WHERE e.value=?",
+                              (root,)).fetchone():
+            return None
+        if _opened_tonight(store, ctx) >= ctx.settings.feuds_per_night:
+            return None
+        return _open(store, ctx, a, b, root, clean_memory_text(cause, ctx.ident)[:120],
+                     ctx.clock.now())
+
+
+def _open(store, ctx, a, b, root, cause, now):
+    """The feud row, its story arc, its cause fact and the sides, inside the caller's
+    transaction (a < b)."""
+    with store.transaction():
         ident = store.conn.execute("INSERT INTO feud(a,b,started,cause,evidence) VALUES (?,?,?,?,?)",
                                    (a, b, now, cause, json.dumps([root]))).lastrowid
         store.conn.execute("INSERT INTO story_arc(kind,key,tension,opened,last_beat,status) "

@@ -14,8 +14,9 @@ def source(h, owner=101, *, text="Coros took my bracers.", actors=(103,), **kw):
                  evidence=(f"rule:gossip:{owner}",), **kw)
 
 
-def telling(*, alias=2, teller="a", about="Coros", text="Coros took my bracers."):
-    return {"teller": teller, "about": about, "source": alias, "text": text}
+def telling(*, alias=2, teller="a", about="Coros", text="Coros took my bracers.", claim=None):
+    return {"teller": teller, "about": about, "source": alias, "text": text,
+            "claim": f"{about} took the bracers." if claim is None else claim}
 
 
 def hearsay(h, owner=102):

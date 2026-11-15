@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from .runner import NightContext
 
 VOLITIONS = ("confront", "make_up", "confide", "gossip", "correct", "recruit", "needle",
-             "bond", "mentor", "tease")
+             "bond", "mentor", "tease", "flirt")
 LAYER_TRUST = {"surface": 20.0, "middle": 45.0, "deep": 65.0}
 NIGHT_OWL_DROP = 10.0
 CONFIDE_EXTRAVERSION = 4  # who confides: the quieter ones, at most this extraverted tonight
@@ -62,7 +62,12 @@ INTENT = {
     "bond": "{a} just wants to hang out with {b}.",
     "mentor": "{a} is showing {b} the ropes.",
     "tease": "{a} wants to bring up the running joke with {b}.",
+    "flirt": "{a} and {b} flirt a little.",  # a member romance's scene (drama.couples)
 }
+# A jealous member's confrontation of her rival ([drama] member_romance): its volition ref.
+JEALOUSY_REF = "rule:jealousy:"
+JEALOUSY_INTENT = ("{a} is jealous of how {b} keeps after {human}'s attention, and means to have "
+                   "it out with {b}.")
 
 
 @dataclass(frozen=True)
@@ -202,6 +207,19 @@ def volitions(ctx: "NightContext") -> dict[int, list[Volition]]:
                 "SELECT mentor,mentee FROM mentor WHERE ended IS NULL AND started<=? AND ends>?",
                 (now, now)):
             add(row["mentor"], "mentor", row["mentee"], 0.8)
+
+        from leeroy_mind.drama.config import member_romance
+        if member_romance(ctx):
+            from leeroy_mind.drama.couples import FLIRT_WEIGHT, active
+            from leeroy_mind.nightly.romance import JEALOUSY_CONFRONT
+            for a, b, _ in active(ctx.store, eligible, ctx.human):
+                add(a, "flirt", b, FLIRT_WEIGHT)
+                add(b, "flirt", a, FLIRT_WEIGHT)
+            for row in conn.execute("SELECT holder,target,level FROM jealousy WHERE kind='rivalry' "
+                                    "AND level>=? ORDER BY holder,target", (JEALOUSY_CONFRONT,)):
+                weight = 0.6 + 0.3 * min(1.0, (row["level"] - JEALOUSY_CONFRONT) / 30)
+                add(row["holder"], "confront", row["target"], weight,
+                    f"{JEALOUSY_REF}{row['target']}")
         for row in conn.execute(
                 "SELECT a.guid,l.originator FROM lexicon_adopter a JOIN lexicon l ON l.id=a.term "
                 "WHERE a.active=1 AND l.kind='joke' AND l.status='active'"):
