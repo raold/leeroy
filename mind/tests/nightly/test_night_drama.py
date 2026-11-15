@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from leeroy_mind.arc.after import HOUSEHOLD_SEPARATED, HOUSEHOLD_SEPARATED_KIDS
 from leeroy_mind.drama import config as drama_config
 from leeroy_mind.drama import couples
 from leeroy_mind.nightly import encounters as enc
@@ -219,7 +220,27 @@ def test_taken_reads_the_household(household, taken):
     ("Two-bed flat above a chippy, cat Gloom, two kids with dad", None),
     ("Lives in a single-wide trailer with two dogs", None),
     ("Keeps her mind engaged in crosswords", None),
-    ("", None)])
+    ("", None),
+    # what is someone else's (review-317): a relative's status or partner, a friend
+    ("Lives with her married sister in a two-bed above a laundromat", None),
+    ("Shares a flat with her sister and her sister's husband", None),
+    ("Lives near her parents, who are married 40 years; one cat", None),
+    ("Rents the attic; her mother's partner owns the house", None),
+    ("Lives alone near her widowed mother", "single"),
+    ("Lives with widowed mother (68) and a fat orange tabby", None),
+    ("Visits her divorced dad on Sundays, lives alone with a cat", "single"),
+    ("Shares a one-bed with a girlfriend from uni", None),
+    ("Two-bed flat with two girlfriends from work", None),
+    ("Business partner owns half the shop; lives alone above it", "single"),
+    ("A single cat and too many plants in a one-bed", None),
+    # hers: a parent of her own status, separated, a spouse who died
+    ("Widowed mother of three, kids still at home", "widowed"),
+    ("Single mum of two in a terraced house", "single"),
+    ("Separated from her husband, two kids", "separated"),
+    ("Estranged husband in Ohio, lives alone with a beagle", "separated"),
+    (HOUSEHOLD_SEPARATED, "separated"), (HOUSEHOLD_SEPARATED_KIDS, "separated"),
+    ("Husband died in 2019, lives alone with a cat", "widowed"),
+    ("Lost her husband three years ago; daughter visits", "widowed")])
 def test_the_household_says_her_status_and_taken_agrees(household, status):
     assert couples.household_status(household) == status
     member = SimpleNamespace(real_life=SimpleNamespace(household=household))

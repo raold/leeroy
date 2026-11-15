@@ -197,7 +197,8 @@ def test_cli_go_saves_after_a_snapshot_and_clear_takes_them_off(tmp_path, capsys
     assert "did take the home state off 2 members" in capsys.readouterr().out
     assert _homes(d) == {201: None, 202: None, 203: None}
     conn = sqlite3.connect(d / "mind.db")
-    try:
+    try:  # each back to the source it had before (generated), as `personas undo` would
+        assert set(r[0] for r in conn.execute("SELECT source FROM persona_core")) == {"generated"}
         assert [r[0] for r in conn.execute("SELECT kind FROM persona_ledger ORDER BY id")] == [
             "home"] * 4
     finally:
@@ -211,3 +212,54 @@ def test_cli_refuses_to_write_while_the_mind_runs(tmp_path, capsys):
         assert main(["personas", "--data-dir", str(d), "homes", "--go"]) == 1
         assert "mind service is running" in capsys.readouterr().out
     assert _homes(d) == {201: None, 202: None, 203: None}
+
+
+# -- no prompt carries her state (review-317 P2-1) ---------------------------------------------------
+
+def test_no_prompt_text_carries_her_state(store):
+    from leeroy_mind.nightly.enrich import _facts
+    from leeroy_mind.nightly.growth import core_text
+    from leeroy_mind.personas.card import render_core_card
+    from leeroy_mind.personas.generate import cast_summary
+    from leeroy_mind.personas.promotion import promotion_seed
+    p = replace(us(household="Lives alone with a cat"),
+                identity=replace(us().identity, home="Wyoming"))
+    texts = {"core judge": core_text(p), "core card": render_core_card(p, race="Human",
+                                                                       class_name="Priest"),
+             "looks pass": _facts(p), "cast summary": cast_summary([p])}
+    save_persona(store, replace(p, guid=301), source="generated", ts=1000.0, race="Human",
+                 class_name="Priest", include_world=True)
+    with store.transaction():
+        store.conn.execute("INSERT OR REPLACE INTO persona_tier VALUES (301, 'world')")
+    texts["world seed"] = promotion_seed(store, 301, "the cast")[1]
+    assert "Arkon" in texts["world seed"] and '"region":"US"' in texts["world seed"]
+    for name, text in texts.items():
+        assert "Wyoming" not in text and '"home"' not in text, name
+    assert json.loads(texts["core judge"])["identity"]["region"] == "US"
+
+
+# -- --clear gives the persona its source back (review-317) -----------------------------------------
+
+def _source(store, guid=201):
+    return store.conn.execute("SELECT source FROM persona_core WHERE guid=?", (guid,)).fetchone()[0]
+
+
+def test_taking_a_home_off_gives_back_the_source_before_it(store):
+    _store(store)
+    homes.set_home(store, 201, "Texas", now=2000.0)
+    homes.set_home(store, 201, "Ohio", now=2100.0)
+    assert _source(store) == "owner"
+    clear = homes.set_home(store, 201, None, now=2200.0)
+    assert load_persona(store, 201).identity.home is None and _source(store) == "seed"
+    assert json.loads(store.get_meta(homes.RECEIPT.format(ledger=clear)))["before"] == "Ohio"
+    assert undo(store, clear, now=2300.0)  # the clear itself can be undone
+    assert load_persona(store, 201).identity.home == "Ohio"
+
+
+def test_a_home_no_receipt_explains_is_cleared_as_the_owners(store):
+    _store(store)
+    p = load_persona(store, 201)  # as an import would store it
+    save_persona(store, replace(p, identity=replace(p.identity, home="Utah")), source="seed",
+                 ts=1500.0, race="Human", class_name="Warrior")
+    homes.set_home(store, 201, None, now=2000.0)
+    assert load_persona(store, 201).identity.home is None and _source(store) == "owner"

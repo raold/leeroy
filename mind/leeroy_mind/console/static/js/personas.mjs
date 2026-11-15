@@ -13,8 +13,8 @@ import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
-import { CLASSES, bioText, moodText, moodTitle, photoKindText, signed, tileState, when, whoText, youText,
-         youTitle } from "./words.mjs";
+import { CLASSES, bioText, leadText, moodText, moodTitle, photoKindText, romanceText, signed, tileState, when,
+         whoText, youText, youTitle } from "./words.mjs";
 
 // -- the personas tab: mind.db only, and read-only: nothing here writes a persona itself --------
 // (its dials are the tuning's overlay, below; its profile photos are selfies.mjs's; a weight and
@@ -248,9 +248,7 @@ function renderMember(j) {
   setText("p-sub", [m["class"] ? (CLASSES[m["class"]] || "-") + (m.spec ? " " + m.spec : "") : "", str(m.role),
                     m.level ? "level " + m.level : "", typeof m.rank === "number" ? "rank " + m.rank : "",
                     m.in_cast ? (m.online ? "online" : "offline") : "not in the cast"].filter(Boolean).join(" · "));
-  setText("p-lead", "Mood: " + (missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood))
-          + (m.mood ? " (" + moodTitle(m.mood) + ")" : "") + " · stance: " + (m.stance || "-")
-          + " · toward you: " + (missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you)));
+  setText("p-lead", leadText(m, missing));
   setText("p-why", p ? "Persona v" + p.version + ", last changed " + when(p.updated) + " by " + (BY[p.by] || str(p.by))
           + (p.readable ? "." : "; this console cannot read it (a newer persona schema?).")
           : "No persona is stored for this member yet, so the mind does not voice them.");
@@ -274,7 +272,7 @@ function renderMember(j) {
     var id = obj(c.identity), ro = obj(c.romance), ty = obj(c.typing), ga = obj(c.game), pl = obj(c.play);
     kv($("p-who"), [["player", whoText(id, ro.stance, c.status, id.player_gender)],
                     ["attachment", c.attachment], ["humour", c.humour],
-                    ["romance", ro.stance + (ro.style ? ", " + ro.style : "") + (ro.jealousy_mode ? ", " + ro.jealousy_mode.replace(/_/g, " ") : "")],
+                    ["romance style", romanceText(ro)],
                     ["drift flags", typeof drift.flags === "number" ? (drift.flags ? plural(drift.flags, "open flag") + " in " + days + " days" : "none open") : "unavailable"],
                     ["the night's traits", traits.night ? "sampled for " + traits.night : missing.indexOf("trait_state") >= 0 ? "unavailable" : "not sampled yet"]]);
     kv($("p-typing"), [["case", ty["case"]], ["end punctuation", ty.end_punct],

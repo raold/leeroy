@@ -35,6 +35,7 @@ from leeroy_mind.nightly.ground import Claim
 from leeroy_mind.nightly.knowledge import is_secret, roots
 from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.nightly.store import enqueue_review, ledger_add
+from leeroy_mind.personas.homes import without_home
 from leeroy_mind.personas.schema import Persona, persona_to_dict
 from leeroy_mind.storage.rows import PersonaStateRow
 from leeroy_mind.storage.store import Store
@@ -74,10 +75,11 @@ _MEMORY = re.compile(r"memory:([0-9]+)")
 # -- the core and who may grow -------------------------------------------------------------------
 
 def core_text(p: Persona) -> str:
-    """The persona as JSON, less NOT_CORE and her tastes: who the member is, fixed. A member
-    the owner has tuned is who he set them to be: the effective scores, and his tuning lines
-    under "tuning" (tuning.lines), so a note that fits the tuned member is no contradiction."""
-    d = persona_to_dict(p)
+    """The persona as JSON, less NOT_CORE, her tastes and her home state (the console's alone):
+    who the member is, fixed. A member the owner has tuned is who he set them to be: the
+    effective scores, and his tuning lines under "tuning" (tuning.lines), so a note that fits
+    the tuned member is no contradiction."""
+    d = without_home(persona_to_dict(p))
     for key in NOT_CORE:
         d.pop(key, None)
     if isinstance(d.get("romance"), dict):

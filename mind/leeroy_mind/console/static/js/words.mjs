@@ -99,6 +99,21 @@ export function whoText(identity, stance, status, gender) {
     .map(function (x) { return x.trim(); }).filter(Boolean).join(" · ");
 }
 
+// The Personas detail's lead line: the night's mood and her row toward him. Her stance is on the
+// player line (whoText) and nowhere else there.
+export function leadText(m, missing) {
+  m = obj(m); missing = arr(missing);
+  return "Mood: " + (missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood))
+    + (m.mood ? " (" + moodTitle(m.mood) + ")" : "")
+    + " · toward you: " + (missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you));
+}
+
+// The Personas detail's romance row: her style and how she takes jealousy (the stance is the player line's)
+export function romanceText(romance) {
+  var ro = obj(romance);
+  return [str(ro.style), str(ro.jealousy_mode).replace(/_/g, " ")].filter(Boolean).join(", ") || "-";
+}
+
 // The member card in Comms from /api/persona's member view: the name, a note (whoText: age, place,
 // stance and relationship status), three facts and the bio (bioText). view null: mind.db does not know them (a 404),
 // so only the name the page knows (known) is shown.

@@ -50,8 +50,9 @@ PARTNER = frozenset({"late_nights", "confession"})  # dating and together
 BREAKS = frozenset({"whispers", "late_nights", "confession"})  # leaving one is a breakup
 WORDS = {"notices": "noticing each other", "banter": "flirting", "whispers": "crushing on each other",
          "late_nights": "dating", "confession": "together", "ex": "broken up"}
-# a couple as a relationship status on the console's cards: "dating <Name>", "with <Name>"
-STATUS_WORDS = {"whispers": "dating", "late_nights": "dating", "confession": "with"}
+# a couple as a relationship status on the console's cards, by WORDS' stages: "crush on <Name>",
+# "dating <Name>", "with <Name>" (together)
+STATUS_WORDS = {"whispers": "crush on", "late_nights": "dating", "confession": "with"}
 INTENT = {
     "notices": "{a} and {b} have started to notice each other; there's a small spark.",
     "banter": "{a} and {b} flirt a little.",
@@ -97,16 +98,54 @@ _UNTAKEN = re.compile(
 _TAKEN = re.compile(r"\b(?:married|husband|wife|spouse|partner|boyfriend|girlfriend|fianc[eé]e?)\b",
                     re.IGNORECASE)
 # What else a household sentence says of her (the console's relationship status, owner
-# 2026-11-15), read after _UNTAKEN has taken out "no partner", the exes and the late spouses.
+# 2026-11-15). First what is someone else's (_NOT_HERS), then what is over (_GONE, _UNTAKEN:
+# "no partner", the exes, the late, separated and dead spouses), then the words.
+_STATUSES = r"(?:married|widowed|divorced|separated|engaged|single)"
+_MODS = r"(?:(?:older|younger|big|little|elder|twin|step-?|new|late|ex-?|former|second)\s+)?"
+_PARENTS = (r"(?:mothers?|mums?|moms?|mommy|mummy|dads?|daddy|fathers?|parents?|grandmas?|"
+            r"grandmothers?|grand-?dads?|grandfathers?|grandparents?|nans?|nanas?|grans?|granny)")
+_KIN = (r"(?:sisters?|brothers?|siblings?|sons?|daughters?|kids?|child(?:ren)?|aunts?|uncles?|"
+        r"cousins?|nieces?|nephews?|friends?|flatmates?|roommates?|housemates?|neighbou?rs?|"
+        r"bosse?s?|" + _PARENTS[3:-1] + ")")
+_SPOUSES = r"(?:husband|wife|spouse|partner|boyfriend|girlfriend|fianc\w*)"
+_NOT_HERS = re.compile(
+    # a relative's status: "her married sister", "his divorced brother"; a parent's only after
+    # her, his, my, their or with ("lives with her widowed mother"), as "single mum of two" and
+    # "widowed mother of three" are hers
+    rf"\b{_STATUSES}\s+{_MODS}(?!{_PARENTS}\b){_KIN}\b"
+    rf"|\b(?:her|his|my|their|with)\s+{_MODS}{_STATUSES}\s+{_MODS}{_PARENTS}\b"
+    # a relative's partner: "her sister's husband", "mum's new boyfriend"
+    rf"|\b{_KIN}(?:['’]s|s['’])\s+{_MODS}{_SPOUSES}\b"
+    # a relative who is: "parents, who are married 40 years", "sister is engaged"
+    rf"|\b{_KIN}(?:,?\s+(?:who\s+)?(?:is|are|was|were|got|have\s+been|has\s+been)\s+|\s+)"
+    rf"(?:(?:still|happily|just|recently|newly)\s+)?{_STATUSES}\b"
+    # a friend, not a partner: "a girlfriend from uni", her girlfriends; a business partner
+    r"|\b(?:a|an|one|two|some|old|couple\s+of)\s+(?:girl|boy)friends?\s+from\b"
+    r"|\b(?:girl|boy)friends\b"
+    r"|\b(?:business|sparring|raid|gym|lab|tennis|squash|dance|climbing|training|workout|"
+    r"writing|duo|study)\s+partners?\b", re.IGNORECASE)
+# a partner who is gone: "separated from her husband", "husband died", "lost her husband"
+_GONE = re.compile(
+    rf"\bseparated\s+from\s+(?:her|his|their)?\s*{_SPOUSES}\b"
+    rf"|\b{_SPOUSES}\s+(?:died|passed(?:\s+(?:away|on))?|was\s+killed)\b"
+    rf"|\b(?:lost|losing)\s+(?:her|his)\s+{_SPOUSES}\b", re.IGNORECASE)
 _MARRIED = re.compile(r"\b(?:married|husband|wife|spouse)\b", re.IGNORECASE)
 _ENGAGED = re.compile(r"\bfianc[eé]e?\b|\bengaged\b(?!\s+(?:in|with)\b)", re.IGNORECASE)
 _NOT_ENGAGED = re.compile(r"\b(?:no|not|never|without)\s+(?:a\s+)?(?:engaged|fianc\w*)\b",
                           re.IGNORECASE)
-_WIDOWED = re.compile(r"\bwidow(?:ed|er)?\b|\blate\s+(?:husband|wife|partner|spouse)\b",
-                      re.IGNORECASE)
+_WIDOWED = re.compile(
+    rf"\bwidow(?:ed|er)?\b|\blate\s+(?:husband|wife|partner|spouse)\b"
+    rf"|\b{_SPOUSES}\s+(?:died|passed(?:\s+(?:away|on))?|was\s+killed)\b"
+    rf"|\b(?:lost|losing)\s+(?:her|his)\s+{_SPOUSES}\b", re.IGNORECASE)
+_SEPARATED = re.compile(
+    r"\bseparat(?:ed|ion|ing)\b(?!\s+by\b)|\bestranged\s+(?:husband|wife|spouse|partner)\b"
+    r"|\bsplit\s+(?:up\s+)?(?:from|with)\s+(?:her|his)\s+(?:husband|wife|spouse|partner)\b",
+    re.IGNORECASE)
 _DIVORCED = re.compile(r"\bdivorc\w*|\bex-?\s?(?:husband|wife|spouse)\b", re.IGNORECASE)
 _SINGLE = re.compile(
-    r"\bsingle\b(?!-|\s+(?:bed|room|storey|story|wide|family|level|car|garage)\b)"
+    # "single" of her, never of a thing ("a single cat", "single-wide")
+    r"\bsingle\b(?!-|\s+(?!(?:mum|mom|mother|parent|dad|father|woman|lady|girl|guy|man|and|"
+    r"again|now|since|for|but|or|after|still|ever|life)\b)[a-z])"
     r"|\balone\b|\bsolo\b|\bun-?married\b"
     r"|\b(?:no|not|never|without)\s+(?:a\s+)?(?:married|spouse|partner|husband|wife|boyfriend|"
     r"girlfriend)\b", re.IGNORECASE)
@@ -114,26 +153,27 @@ TAKEN_STATUSES = frozenset({"married", "engaged", "partnered"})
 
 
 def household_status(household: str | None) -> str | None:
-    """What her household sentence says of her: "married", "engaged", "partnered" (a partner,
-    boyfriend or girlfriend), "widowed", "divorced" or "single" (alone, single, no partner), in
-    that order, so a remarried divorcee is married; None when it does not say."""
-    text = household or ""
-    rest = _UNTAKEN.sub(" ", _NOT_ENGAGED.sub(" ", text))
+    """What her household sentence says of her (never of a relative or a friend): "married",
+    "engaged", "partnered" (a partner, boyfriend or girlfriend), "widowed", "separated",
+    "divorced" or "single" (alone, single, no partner), in that order, so a remarried divorcee
+    is married; None when it does not say."""
+    own = _NOT_HERS.sub(" ", household or "")
+    rest = _UNTAKEN.sub(" ", _GONE.sub(" ", _NOT_ENGAGED.sub(" ", own)))
     if _TAKEN.search(rest) or _ENGAGED.search(rest):
         if _MARRIED.search(rest):
             return "married"
         return "engaged" if _ENGAGED.search(rest) else "partnered"
-    if _WIDOWED.search(text):
-        return "widowed"
-    if _DIVORCED.search(text):
-        return "divorced"
-    return "single" if _SINGLE.search(text) else None
+    for status, words in (("widowed", _WIDOWED), ("separated", _SEPARATED),
+                          ("divorced", _DIVORCED), ("single", _SINGLE)):
+        if words.search(own):
+            return status
+    return None
 
 
 def taken(p) -> bool:
-    """Her household names a spouse, a fiancé or a partner (as with the women married to
-    outsiders): such a member never starts a member romance. "No partner", an ex and a late
-    spouse do not count."""
+    """Her household names a spouse, a fiancé or a partner of her own (as with the women married
+    to outsiders): such a member never starts a member romance. "No partner", an ex, a
+    separated or late spouse and a relative's do not count."""
     return household_status(p.real_life.household) in TAKEN_STATUSES
 
 

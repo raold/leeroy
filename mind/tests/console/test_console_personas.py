@@ -466,12 +466,14 @@ def test_the_card_carries_her_home_state_and_a_status_built_by_code(cast, data):
         cast.put_relationship(replace(cast.get_relationship(301, 302), romance_stage=ab))
         cast.put_relationship(replace(cast.get_relationship(302, 301), romance_stage=ba))
 
-    for stage, words in (("whispers", "dating"), ("late_nights", "dating"),
+    for stage, words in (("whispers", "crush on"), ("late_nights", "dating"),
                          ("confession", "with")):
         couple(stage, stage)  # a member couple wins over the household, by the stored names
         assert (card(302)["status"], card(301)["status"]) == (f"{words} Arkon", f"{words} Belra")
     couple("confession", "late_nights")  # the lower of the two rows
     assert card(302)["status"] == "dating Arkon"
+    couple("late_nights", "whispers")
+    assert card(302)["status"] == "crush on Arkon"
     for ab, ba in (("banter", "banter"), ("notices", "confession"), ("confession", "ex")):
         couple(ab, ba)
         assert (card(302)["status"], card(301)["status"]) == ("married", None)

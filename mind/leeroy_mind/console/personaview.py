@@ -266,9 +266,9 @@ BIO_LIFE = ("job", "household", "rhythm", "birthday", "night_owl", "life_thread"
 
 
 def _status(conn, have, guid: int, p, names: dict, human: int) -> str | None:
-    """Her relationship status in code-built words (owner, 2026-11-15): "dating <Name>" (a crush
-    or dating) or "with <Name>" (together) while she is in a member couple (drama.couples' pair
-    stage of both rows, by their stored names), else what her household says
+    """Her relationship status in code-built words (owner, 2026-11-15): "crush on <Name>",
+    "dating <Name>" or "with <Name>" (together) while she is in a member couple (drama.couples'
+    pair stage of both rows, by their stored names), else what her household says
     (couples.household_status), else None. His own romance with her is not a status."""
     if "relationship" in have:
         stages = tuple(STATUS_WORDS)

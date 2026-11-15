@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bioText, birthdayText, cardText, moodText, whoText, youText } from "../../../leeroy_mind/console/static/js/words.mjs";
+import { bioText, birthdayText, cardText, leadText, moodText, romanceText, whoText, youText }
+  from "../../../leeroy_mind/console/static/js/words.mjs";
 
 // The member card's words from /api/persona's member view. Invented members only.
 
@@ -49,6 +50,19 @@ test("each part is left out when empty, without a stray separator", () => {
                "52 · UK · married");  // a stance of none is no attitude
   assert.equal(cardText(view({ stance: null }, { identity: {}, status: "with Teodor" })).note, "with Teodor");
   assert.equal(cardText(view({ stance: null }, { identity: {} })).note, "");
+});
+
+test("the Personas detail shows the stance once, on the player line", () => {
+  var m = view({ stance: "lust" }).member, ro = { stance: "lust", style: "bold", jealousy_mode: "play_by_play" };
+  var lines = [whoText({ age: 38, region: "US", home: "Ohio" }, ro.stance, "married", "female"),
+               leadText(m, []), romanceText(ro)];
+  assert.equal(lines.join(" | ").split("lust").length - 1, 1);
+  assert.ok(leadText(m, []).startsWith("Mood: relaxed (pleasure +0.20"));
+  assert.ok(leadText(m, []).endsWith(") · toward you: affinity +12, attraction 40"));
+  assert.ok(leadText(m, []).indexOf("stance") < 0);
+  assert.equal(romanceText(ro), "bold, play by play");
+  assert.equal(romanceText({ stance: "none", style: null, jealousy_mode: null }), "-");
+  assert.equal(leadText({}, ["pad_mood", "relationship"]), "Mood: unavailable · toward you: unavailable");
 });
 
 test("the Personas player line puts the gender after the age", () => {

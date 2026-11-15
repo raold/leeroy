@@ -11,11 +11,13 @@ the console's member card and Personas line. A UK member has none and reads "UK"
 - set_home: one transaction. Her stored persona read again, saved with the home as a new persona
   version, source "owner", with a persona ledger row of kind "home" and a private receipt (meta
   RECEIPT: the home before and after, and the source before), as personas.looks_edit does.
+  Taking a home off (`--clear`) saves the source she had before her home was set instead.
 - restore: nightly.growth.undo's "home" branch (`personas undo <id>`): the home as it was, with
   the source before, while it is still what the edit left.
 
-`personas homes` plans, and with --go saves, only US members of the cast without a home; nothing
-in talk reads it, and presence keeps US Eastern time for every US member."""
+`personas homes` plans, and with --go saves, only US members of the cast without a home. No
+prompt carries it (without_home: the night's core judge and a world seed's dump leave it out),
+and presence keeps US Eastern time for every US member."""
 import json
 import random
 import re
@@ -65,6 +67,14 @@ _STATE = re.compile(r"\b(" + _alt(US_STATES) + r")\b", re.IGNORECASE)
 # someone else's place: a relative named earlier in the same clause
 _RELATIVE = re.compile(r"\b(?:kids?|sons?|daughters?|child(?:ren)?|grandkids?|mom|mum|mother|"
                        r"dad|father|parents?|sisters?|brothers?)\b", re.IGNORECASE)
+
+
+def without_home(d: dict) -> dict:
+    """A persona dict (schema.persona_to_dict) as a prompt may carry it: her home state is for
+    the console's cards only, never for a model (for most it is a draw no line of hers knows)."""
+    if isinstance(d.get("identity"), dict):
+        d["identity"].pop("home", None)
+    return d
 
 
 @dataclass(frozen=True)
@@ -154,10 +164,29 @@ def _race_class(store, guid: int) -> tuple[str, str]:
     return race_class(store, guid)
 
 
+def _source_before(store, guid: int, home: str) -> str | None:
+    """The persona's source before the home steps that gave her `home`: her home rows not
+    undone, newest first, followed by their receipts back to the one that gave her a first
+    home. None when no receipt leads there (a home from an import)."""
+    source, want = None, home
+    for r in store.conn.execute(
+            "SELECT id FROM persona_ledger l WHERE guid=? AND kind=? AND NOT EXISTS (SELECT 1 "
+            "FROM persona_ledger u WHERE u.kind='undo' AND u.ref=l.id) ORDER BY id DESC",
+            (guid, KIND)).fetchall():
+        raw = store.get_meta(RECEIPT.format(ledger=r["id"]))
+        receipt = json.loads(raw) if raw else {}
+        if want is None or receipt.get("after") != want:
+            continue
+        source, want = receipt.get("source"), receipt.get("before")
+    return source if want is None and source in SOURCES else None
+
+
 def set_home(store, guid: int, home: str | None, *, now: float) -> int | None:
     """Her home as given, saved as an owner persona version with its ledger row and receipt;
-    the ledger row's id, or None when it already is (nothing written). The schema refuses a
-    home that is not a US state, or one for a UK member (PersonaError)."""
+    the ledger row's id, or None when it already is (nothing written). Taking a home off
+    (`--clear`) gives the persona back the source it had before her home was set, as the
+    persona ledger's undo does (else "owner"). The schema refuses a home that is not a US state,
+    or one for a UK member (PersonaError)."""
     from leeroy_mind.nightly.store import ledger_add
     with store.transaction():
         stored = load_persona(store, guid)
@@ -168,9 +197,10 @@ def set_home(store, guid: int, home: str | None, *, now: float) -> int | None:
             return None
         source = store.conn.execute("SELECT source FROM persona_core WHERE guid=?",
                                     (guid,)).fetchone()[0]
+        new_source = (_source_before(store, guid, before) or "owner") if home is None else "owner"
         race, class_name = _race_class(store, guid)
         version = save_persona(store, replace(stored, identity=replace(stored.identity, home=home)),
-                               source="owner", ts=now, race=race, class_name=class_name)
+                               source=new_source, ts=now, race=race, class_name=class_name)
         ledger = ledger_add(store, guid=guid, kind=KIND, text=describe(before, home), evidence=[],
                             now=now)
         store.set_meta(RECEIPT.format(ledger=ledger), json.dumps(
