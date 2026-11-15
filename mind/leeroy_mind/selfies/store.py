@@ -293,6 +293,26 @@ def lust_set(conn, guid: int, set_no: int) -> bool:
         return False
 
 
+# -- the looks a set shows ----------------------------------------------------------------------
+
+def looks_floor(conn, guid: int) -> int | None:
+    """The persona version a ready set must have been rendered from to be listed to him: her
+    cover's set's (0 when it has none recorded), so that set always passes; None with no cover,
+    and nothing is hidden. The photo request path's rule (photos.request_stock): a set rendered
+    from an older persona may show looks she no longer has. A read-side rule only: picks and
+    undos take any ready set. Reads any connection, the console's too."""
+    row = conn.execute(
+        "SELECT COALESCE((SELECT persona_version FROM selfie_set s WHERE s.guid=c.guid AND "
+        "s.set_no=c.set_no),0) FROM selfie_current c WHERE c.guid=?", (guid,)).fetchone()
+    return None if row is None else row[0]
+
+
+def current_looks(persona_version: int | None, floor: int | None) -> bool:
+    """A set rendered from `persona_version` (None: none recorded) is listed under `floor`
+    (looks_floor)."""
+    return floor is None or (persona_version or 0) >= floor
+
+
 # -- picks and undos ----------------------------------------------------------------------------
 
 def pick(store, guid: int, set_no: int, idx: int, *, source: str, now: float,

@@ -89,9 +89,12 @@ run nothing else.
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
     GET  /api/selfies/gallery ?guid=: retained candidates and rendered situations, newest first,
-                       with cover flags and keyed thumbnail/full-image URLs
+                       with cover flags and keyed thumbnail/full-image URLs; only photos of her
+                       current looks (galleryview: her cover's set, sets from a persona at
+                       least as new, situations of her looks now)
     GET  /api/selfies/photo ?guid=&kind=candidate&set=&index= (or kind=snap&id=), optional
-                       thumb=1: one rendered photo belonging to the member, JPEG or 404
+                       thumb=1: one rendered photo belonging to the member and listed by the
+                       gallery's rule, JPEG or 404
     POST /api/selfie   a selfie action ({"action": "status"|"pick"|"more"|"undo", ...}),
                        checked as the endpoint checks it, then on to the mind's selfie op,
                        refused as raid actions are; a pick, undo or "4 more" is announced as a

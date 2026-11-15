@@ -189,6 +189,42 @@ def test_an_older_mind_db_says_photos_are_unavailable(store, data, monkeypatch):
     run(go())
 
 
+def test_a_set_waiting_from_before_her_looks_changed_is_neither_listed_nor_counted(cast, data):
+    from dataclasses import replace
+    from conftest import TEST_CAST
+    from leeroy_mind.personas.io import load_persona, save_persona
+    from leeroy_mind.selfies.store import queue_restyled
+    from leeroy_mind.wow import CLASSES, RACES
+    ready(cast, data, 101, 1, now=1.0)  # waiting for his choice, rendered from version 2
+    p = load_persona(cast, 101)
+    _, race, cls = TEST_CAST[101]
+    save_persona(cast, replace(p, appearance=replace(p.appearance, build="voluptuous")),
+                 source="owner", ts=2000.0, race=RACES[race], class_name=CLASSES[cls])
+    queue_restyled(cast, 101, now=2.0)  # set 1 stays waiting beside the new set
+    ready(cast, data, 101, 2, now=3.0)
+    ready(cast, data, 102, 1, now=4.0)
+
+    async def go():
+        async with served(make_app(data)) as app:
+            v = (await http(app, "GET", "/api/selfies")).json()["view"]
+            assert [(q["guid"], q["set"]) for q in v["queue"]] == [(101, 1), (101, 2), (102, 1)]
+            assert v["counts"]["waiting"] == 2  # no cover yet: nothing hidden
+            pick(cast, 101, 2, 0, source="console", now=5.0)
+            queue_more(cast, 102, now=6.0)
+            v = (await http(app, "GET", "/api/selfies")).json()["view"]
+            assert v["queue"] == [] and v["counts"]["waiting"] == 0 and v["counts"]["queued"] == 1
+            assert (await http(app, "GET", "/api/selfies/images?guid=101&set=1")).status == 404
+            assert (await http(app, "GET", "/api/selfies/images?guid=101&set=2")).status == 200
+            m = (await http(app, "GET", "/api/selfies/member?guid=101")).json()
+            assert [(s["set"], s["decided"]) for s in m["sets"]] == [(2, "picked")]
+            assert [s["status"] for s in (await http(app, "GET", "/api/selfies/member?guid=102")
+                                          ).json()["sets"]] == ["ready", "queued"]
+    run(go())
+    rows = cast.conn.execute("SELECT set_no, decided FROM selfie_set WHERE guid=101 "
+                             "ORDER BY set_no").fetchall()
+    assert [tuple(r) for r in rows] == [(1, None), (2, "picked")]  # set 1 is kept, still waiting
+
+
 PICK = {"action": "pick", "guid": 101, "set": 1, "index": 2}
 
 
