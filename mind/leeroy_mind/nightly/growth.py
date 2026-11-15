@@ -35,6 +35,7 @@ from leeroy_mind.nightly.ground import Claim
 from leeroy_mind.nightly.knowledge import is_secret, roots
 from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.nightly.store import enqueue_review, ledger_add
+from leeroy_mind.personas.homes import without_home
 from leeroy_mind.personas.schema import Persona, persona_to_dict
 from leeroy_mind.storage.rows import PersonaStateRow
 from leeroy_mind.storage.store import Store
@@ -74,10 +75,11 @@ _MEMORY = re.compile(r"memory:([0-9]+)")
 # -- the core and who may grow -------------------------------------------------------------------
 
 def core_text(p: Persona) -> str:
-    """The persona as JSON, less NOT_CORE and her tastes: who the member is, fixed. A member
-    the owner has tuned is who he set them to be: the effective scores, and his tuning lines
-    under "tuning" (tuning.lines), so a note that fits the tuned member is no contradiction."""
-    d = persona_to_dict(p)
+    """The persona as JSON, less NOT_CORE, her tastes and her home state (the console's alone):
+    who the member is, fixed. A member the owner has tuned is who he set them to be: the
+    effective scores, and his tuning lines under "tuning" (tuning.lines), so a note that fits
+    the tuned member is no contradiction."""
+    d = without_home(persona_to_dict(p))
     for key in NOT_CORE:
         d.pop(key, None)
     if isinstance(d.get("romance"), dict):
@@ -247,6 +249,8 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
       restore the photo and its receipt unless a later hand-set photo wins;
     - looks (his weight and bust edit, personas.looks_edit): both values and the source as they
       were, while they are still what the edit left;
+    - home (personas.homes, `personas homes --go`): her home state and the source as they were,
+      while it is still what the step left;
     - household (Task S6): her card's household, her arc's partner and her plan's cover story
       as they were before the affair ended her marriage, and the separation's private memory and
       arc event taken back (arc.after.restore_household). An undo row is never undone.
@@ -278,11 +282,15 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
         elif kind == "looks":
             from leeroy_mind.personas.looks_edit import restore
             done = restore(store, row, now=now)
+        elif kind == "home":
+            from leeroy_mind.personas.homes import restore
+            done = restore(store, row, now=now)
         else:
             done = False
         if done:
             ledger_add(store, guid=row["guid"], kind="undo", text=f"undid {kind}: {row['text']}",
                        evidence=json.loads(row["evidence"]), ref=ledger_id, now=now)
-    if done and kind in ("stance_band", "household", "variety", "looks") and personas is not None:
+    if (done and kind in ("stance_band", "household", "variety", "looks", "home")
+            and personas is not None):
         personas.invalidate(row["guid"])
     return done

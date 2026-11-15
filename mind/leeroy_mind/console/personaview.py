@@ -14,24 +14,27 @@ connection that is closed again). The mind writes these rows; the console only r
   1, named by their octant; guild_mood: the guild's mood per night and its reasons;
 - relationship: how a member sees another (Store.put_relationship, note_interaction). A
   member's ties are its rows that hold a score or a label, the strongest feeling (|affinity|)
-  first, then the best known (familiarity); its row toward the owner is shown apart;
+  first, then the best known (familiarity); its row toward the owner is shown apart. A member
+  couple's two rows (drama.couples) are her relationship status in a member's detail;
 - memory: active memories per owner and kind, all and those stored in the last RECENT_DAYS
   days (counts only, never their text);
 - persona_ledger (nightly.store.ledger_add): the night's growth (note_added, note_dropped,
   note_rolled_back), its critic's drift_flag rows, stance moves (stance_band), his weight and
-  bust edits (looks, personas.looks_edit) and undo rows.
+  bust edits (looks, personas.looks_edit), home states (home, personas.homes) and undo rows.
   An open drift flag is one from the last RECENT_DAYS days that is neither undone nor resolved
   in review_queue, as the critic counts them;
 - trait_state (nightly.motives): the Big Five the night sampled for each member around their
   persona's own scores. The night's stages read it; the live talk does not.
 
 Persona content is read through the persona loader (schema.persona_from_dict); of a persona
-only its card summary and bio are shown (the bio: job, household, rhythm, birthday, life thread,
+only its card summary and bio are shown (the summary with a US member's home state and a
+relationship status built by code; the bio: job, household, rhythm, birthday, life thread,
 likes, dislikes, values and when they drink or smoke), never its secret, disclosures, opinions,
 sample lines, bits, interview, money, sleep or real name. A part whose table this mind.db lacks (an older schema) is None and the
 table is listed in `missing`; a part with no rows yet is empty or None, never zeros."""
 import json
 
+from leeroy_mind.drama.couples import LADDER, STATUS_WORDS, household_status, pair_stage
 from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's stage
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
@@ -262,13 +265,36 @@ def roster_page(view: dict, offset: int, *, limit: int = 50) -> dict:
 BIO_LIFE = ("job", "household", "rhythm", "birthday", "night_owl", "life_thread")
 
 
-def _card(p) -> dict:
-    """The persona card summary: who they are, how they type, how they play, their looks and the
-    bio the member card shows (owner, 2026-11-14): job, household, rhythm, birthday, night owl, life
+def _status(conn, have, guid: int, p, names: dict, human: int) -> str | None:
+    """Her relationship status in code-built words (owner, 2026-11-15): "crush on <Name>",
+    "dating <Name>" or "with <Name>" (together) while she is in a member couple (drama.couples'
+    pair stage of both rows, by their stored names), else what her household says
+    (couples.household_status), else None. His own romance with her is not a status."""
+    if "relationship" in have:
+        stages = tuple(STATUS_WORDS)
+        rows = conn.execute(
+            "SELECT x.b AS other, x.romance_stage AS ab, y.romance_stage AS ba FROM relationship x "
+            "JOIN relationship y ON y.a = x.b AND y.b = x.a WHERE x.a = ? AND x.b NOT IN (?, ?) "
+            f"AND x.romance_stage IN ({','.join('?' * len(stages))}) ORDER BY x.b",
+            (guid, guid, human or 0, *stages)).fetchall()
+        couples = [(LADDER.index(s), r["other"], s) for r in rows
+                   if (s := pair_stage(r["ab"], r["ba"])) in STATUS_WORDS]
+        if couples:
+            _, other, stage = max(couples, key=lambda c: (c[0], -c[1]))
+            return f"{STATUS_WORDS[stage]} {names.get(str(other)) or f'#{other}'}"
+    return household_status(p.real_life.household) if p is not None else None
+
+
+def _card(p, status: str | None = None) -> dict:
+    """The persona card summary: who they are (with a US member's home state, and the
+    relationship status _status words), how they type, how they play, their looks and the bio
+    the member card shows (owner, 2026-11-14): job, household, rhythm, birthday, night owl, life
     thread, likes, dislikes, values and habits (substance and when only). Never the secret, the
     disclosures, opinions, sample lines, bits, interview, real name, money or sleep."""
     d = persona_to_dict(p)
-    return {"identity": {k: d["identity"][k] for k in ("age", "player_gender", "region")},
+    return {"identity": {**{k: d["identity"][k] for k in ("age", "player_gender", "region")},
+                         "home": p.identity.home},
+            "status": status,
             "big_five": d["big_five"], "attachment": d["attachment"], "humour": d["humour"],
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},
@@ -305,7 +331,8 @@ def member_view(conn, guid: int, *, now: float, outreach_enabled=False,
                                         (guid, LEDGER))]
     result = {"human": v["human"], "names": v["names"], "missing": v["missing"],
             "recent_days": RECENT_DAYS, "member": member,
-            "card": _card(p) if p is not None else None, "memories": kinds, "ledger": ledger,
+            "card": (_card(p, _status(conn, have, guid, p, v["names"], v["human"]))
+                     if p is not None else None), "memories": kinds, "ledger": ledger,
             "looks_limits": LOOKS_LIMITS}
     if outreach_enabled:
         from .outreachview import member_view as outreach_view

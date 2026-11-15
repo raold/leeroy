@@ -335,3 +335,39 @@ def test_only_the_enrichment_schema_carries_the_photo_kind():
     assert "photo" not in persona_json_schema()["properties"]
     inner = persona_json_schema(enrichment=True)["properties"]["photo"]["anyOf"][0]
     assert inner["required"] == ["kind", "framing", "setting", "outfit", "expression"]
+
+
+# -- a US member's home state (owner, 2026-11-15) ------------------------------------------------
+
+def _home(region, home):
+    p = make_persona(101, "Testa", region=region, accent="en-us" if region == "US" else "en-gb")
+    return replace(p, identity=replace(p.identity, home=home))
+
+
+def test_a_persona_without_a_home_dumps_and_renders_as_the_previous_release_wrote_it():
+    p = make_persona(101, "Testa", region="US", accent="en-us")
+    assert p.identity.home is None and "home" not in persona_to_dict(p)["identity"]
+    card = lambda q: render_core_card(q, race="Human", class_name="Priest")  # noqa: E731
+    assert card(_home("US", "Texas")) == card(p)  # no prompt reads it
+
+
+def test_a_home_state_round_trips():
+    p = _home("US", "New Mexico")
+    d = persona_to_dict(p)
+    assert d["identity"]["home"] == "New Mexico" and persona_from_dict(d) == p
+    assert validate_persona(p) == []
+
+
+@pytest.mark.parametrize("region,home,problem", [
+    ("US", "Texsa", "identity.home: must be a US state's full name, such as Texas"),
+    ("US", "TX", "identity.home: must be a US state's full name, such as Texas"),
+    ("US", "District of Columbia", "identity.home: must be a US state's full name, such as Texas"),
+    ("UK", "Texas", "identity.home: a US member's state only; leave it empty for the UK"),
+    ("UK", "Yorkshire", "identity.home: a US member's state only; leave it empty for the UK"),
+])
+def test_only_a_real_state_for_a_us_member(region, home, problem):
+    assert problem in validate_persona(_home(region, home))
+
+
+def test_the_generator_is_never_asked_for_a_home():
+    assert "home" not in persona_json_schema()["properties"]["identity"]["properties"]
