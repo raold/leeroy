@@ -160,6 +160,122 @@ test("a failed load is remembered as no photo", async () => {
   assert.equal(await p, null);
 });
 
+test("with retryMs a first load with no answer is asked again while its askers wait", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var loads = 0;
+  var cache = new FaceCache({ retryMs: [1000, 2000, 5000],
+    load: function () { loads++; if (loads < 5) { throw new Error("no answer"); } return "blob:" + loads; } });
+  var answer = "waiting";
+  cache.get("k").then(function (v) { answer = v; });
+  await tick();
+  assert.equal(loads, 1);
+  assert.equal(answer, "waiting");             // not a miss: still waiting
+  assert.equal(cache.peek("k"), undefined);
+  t.mock.timers.tick(999); await tick();
+  assert.equal(loads, 1);
+  t.mock.timers.tick(1); await tick();
+  assert.equal(loads, 2);
+  t.mock.timers.tick(2000); await tick();
+  assert.equal(loads, 3);
+  t.mock.timers.tick(4999); await tick();
+  assert.equal(loads, 3);
+  t.mock.timers.tick(1); await tick();
+  assert.equal(loads, 4);
+  t.mock.timers.tick(5000); await tick();     // the last delay is repeated
+  assert.equal(loads, 5);
+  await tick();
+  assert.equal(answer, "blob:5");
+  assert.equal(cache.active, 0);
+});
+
+test("a retried load ends as a miss only on a 404, and forgetting the key stops its retries", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var n = 0, cache = new FaceCache({ retryMs: [1000],
+    load: function (key) { n++; if (key === "gone" && n > 1) { return null; } throw new Error("no answer"); } });
+  var gone = cache.get("gone");
+  await tick(); t.mock.timers.tick(1000); await tick(); await tick();
+  assert.equal(await gone, null);
+  assert.equal(cache.peek("gone"), null);
+  n = 0;
+  var later = cache.get("later");
+  await tick();
+  assert.equal(n, 1);
+  cache.forgetKey("later");
+  assert.equal(await later, null);
+  t.mock.timers.tick(60000); await tick();
+  assert.equal(n, 1);                          // no try after the key was forgotten
+  assert.equal(cache.active, 0);
+});
+
+test("a retry waits without holding one of the active loads", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var asked = [], cache = new FaceCache({ retryMs: [1000], maxActive: 1,
+    load: function (key) { asked.push(key); if (key === "bad") { throw new Error("x"); } return "blob:" + key; } });
+  var bad = cache.get("bad"), good = cache.get("good");
+  await tick(); await tick();
+  assert.equal(await good, "blob:good");
+  assert.deepEqual(asked, ["bad", "good"]);
+  cache.forgetKey("bad"); await bad;
+});
+
+test("a reload answering the photo it had keeps it: nothing is let go or replaced", async () => {
+  var replaced = [], seen = [];
+  var t = rig(function (key, n) { return n === 1 ? { url: "blob:1" } : "same"; });
+  var load = t.cache.load;
+  t.cache.load = function (key, previous) {
+    seen.push(previous);
+    return load(key).then(function (v) { return v === "same" ? previous : v; });
+  };
+  t.cache.replaced = function (key, v) { replaced.push([key, v]); };
+  var p = t.cache.get("k"); await t.settle();
+  var first = await p;
+  t.now = 61000;
+  var q = t.cache.get("k"); await t.settle();
+  assert.equal(await q, first);
+  assert.equal(seen[0], null);                 // the first load had nothing before it
+  assert.equal(seen[1], first);
+  assert.deepEqual(t.dropped, []);
+  assert.deepEqual(replaced, []);
+  assert.equal(t.cache.peek("k"), first);
+});
+
+test("a reload with another answer calls replaced with it in place before the old photo is let go", async () => {
+  var order = [];
+  var t = rig(function (key, n) { return n === 1 ? "blob:1" : n === 2 ? "blob:2" : null; });
+  t.cache.drop = function (v) { order.push("drop " + v + ", peek " + t.cache.peek("k")); };
+  t.cache.replaced = function (key, v) { order.push("replaced " + key + " " + v + ", peek " + t.cache.peek("k")); };
+  var p = t.cache.get("k"); await t.settle(); await p;
+  assert.deepEqual(order, []);                 // a first answer is no replacement
+  t.now = 61000;
+  var q = t.cache.get("k"); await t.settle(); await q;
+  assert.deepEqual(order, ["replaced k blob:2, peek blob:2", "drop blob:1, peek blob:2"]);
+  t.now = 122000;
+  var r = t.cache.get("k"); await t.settle(); await r;   // the photo is gone: its faces are told too
+  assert.deepEqual(order.slice(2), ["replaced k null, peek null", "drop blob:2, peek null"]);
+});
+
+test("a miss that turns into a photo calls replaced, so the initials drawn for it change", async () => {
+  var replaced = [];
+  var t = rig(function (key, n) { return n === 1 ? null : "blob:2"; });
+  t.cache.replaced = function (key, v) { replaced.push(v); };
+  var p = t.cache.get("k"); await t.settle(); await p;
+  t.now = 300000;
+  var q = t.cache.get("k"); await t.settle(); await q;
+  assert.deepEqual(replaced, ["blob:2"]);
+});
+
+test("a photo still shown is not evicted beyond maxEntries; one no longer shown is", async () => {
+  var shown = new Set(["a"]), dropped = [];
+  var cache = new FaceCache({ maxEntries: 2, load: function (key) { return "blob:" + key; },
+    drop: function (v) { dropped.push(v); }, inUse: function (key, v) { return shown.has(key) && v === "blob:" + key; } });
+  await cache.get("a"); await cache.get("b"); await cache.get("c");
+  assert.deepEqual(dropped, ["blob:b"]);       // "a" is older but still on screen
+  assert.equal(cache.peek("a"), "blob:a");
+  shown.clear();
+  await cache.get("d");
+  assert.deepEqual(dropped, ["blob:b", "blob:a"]);
+});
+
 test("initials and palette", () => {
   assert.equal(initials("arkon"), "AR");
   assert.equal(initials(""), "?");
@@ -174,10 +290,20 @@ test("initials and palette", () => {
 class FakeEl {
   constructor(tag) {
     this.tagName = tag.toUpperCase(); this.className = ""; this.textContent = ""; this.alt = "";
-    this.src = ""; this.children = []; this.parentNode = null; this.dataset = {};
+    this.listeners = {}; this.src = ""; this.children = []; this.parentNode = null; this.dataset = {};
     this.style = { props: {}, setProperty: function (k, v) { this.props[k] = v; } };
     this.attrs = {};
   }
+  // An image loads a moment after its src is set; bytes that are no image, or a revoked URL, fail
+  get src() { return this._src; }
+  set src(v) {
+    this._src = v;
+    var self = this;
+    if (this.tagName === "IMG" && v) {
+      setImmediate(function () { self.fire(v.indexOf("blob:broken") === 0 || page.revoked.indexOf(v) >= 0 ? "error" : "load"); });
+    }
+  }
+  fire(type) { (this.listeners[type] || []).slice().forEach((fn) => { fn({ type: type, target: this }); }); }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
   appendChild(c) { c.parentNode = this; this.children.push(c); return c; }
@@ -185,52 +311,79 @@ class FakeEl {
     this.children[this.children.indexOf(o)] = n;
     n.parentNode = this; o.parentNode = null;
   }
-  addEventListener() {}
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
   cloneNode() {
     var c = new FakeEl(this.tagName);
     c.src = this.src; c.alt = this.alt; c.className = this.className;
     return c;
   }
-  decode() { return this.src.indexOf("blob:broken") === 0 ? Promise.reject(new Error("bad")) : Promise.resolve(); }
+  decode() { return Promise.resolve(); }
 }
 
-var page = { asked: [], made: 0, reloads: 0, roots: [] };
+function blob(tag, bytes) {
+  return { tag: tag, size: bytes.length, arrayBuffer: function () { return Promise.resolve(Uint8Array.from(bytes).buffer); } };
+}
+function ok(tag, bytes) {
+  return Promise.resolve({ status: 200, blob: function () { return Promise.resolve(blob(tag, bytes || [1, 2, 3])); } });
+}
+
+var page = { asked: [], made: 0, calls: {}, roots: [], revoked: [], revokedWhileShown: [] };
+// The faces under the page's roots: one member's, or all of them (guid null)
+function onPage(guid) {
+  var found = [];
+  function walk(node) {
+    if (guid === null ? node.dataset.faceGuid : node.dataset.faceGuid === guid) { found.push(node); }
+    node.children.forEach(walk);
+  }
+  page.roots.forEach(walk);
+  return found;
+}
 async function stage() {
   if (page.face) { return page.face; }
   globalThis.document = {
     createElement: function (t) { return new FakeEl(t); },
     querySelectorAll: function (selector) {
-      var guid = /data-face-guid="(\d+)"/.exec(selector)[1], found = [];
-      function walk(node) {
-        if (node.dataset.faceGuid === guid) { found.push(node); }
-        node.children.forEach(walk);
-      }
-      page.roots.forEach(walk);
-      return found;
+      var one = /data-face-guid="(\d+)"/.exec(selector);
+      return onPage(one ? one[1] : null);
     }
   };
   globalThis.fetch = function (path) {
     page.asked.push(path);
-    var guid = /guid=(\d+)/.exec(path)[1];
-    if (guid === "2201" || guid === "101") { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "ok" }); } }); }
-    if (guid === "2203") { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "broken" }); } }); }
+    var guid = /guid=(\d+)/.exec(path)[1], n = page.calls[guid] = (page.calls[guid] || 0) + 1;
+    if (guid === "2201" || guid === "101" || guid === "2206" || guid === "2208") { return ok("ok"); }
+    if (guid === "2203") { return ok("broken"); }
     if (guid === "2204") {  // a photo, then a server error, then no answer at all, then gone
-      var n = ++page.reloads;
-      if (n === 1) { return Promise.resolve({ status: 200, blob: function () { return Promise.resolve({ tag: "ok" }); } }); }
+      if (n === 1) { return ok("ok"); }
       if (n === 2) { return Promise.resolve({ status: 503 }); }
       if (n === 3) { return Promise.reject(new TypeError("Failed to fetch")); }
       return Promise.resolve({ status: 404 });
     }
+    if (guid === "2205") {  // no answer, then a server error, then the photo
+      if (n === 1) { return Promise.reject(new TypeError("Failed to fetch")); }
+      if (n === 2) { return Promise.resolve({ status: 502 }); }
+      return ok("ok");
+    }
+    if (guid === "2207") { return ok("ok", [n, 7]); }  // another photo at every load
+    if (guid === "2209") { return n === 1 ? Promise.resolve({ status: 403 }) : ok("ok"); }  // the key refused once
     return Promise.resolve({ status: 404 });
   };
   URL.createObjectURL = function (b) { return "blob:" + b.tag + "/" + (++page.made); };
-  URL.revokeObjectURL = function () {};
+  URL.revokeObjectURL = function (url) {
+    page.revoked.push(url);
+    onPage(null).forEach(function (node) { if (node.src === url) { page.revokedWhileShown.push(url); } });
+  };
   page.mod = await import("../../../leeroy_mind/console/static/js/faces.mjs");
   page.face = page.mod.face;
   return page.face;
 }
 async function settled() { for (var i = 0; i < 10; i++) { await tick(); } }
 function askedFor(guid) { return page.asked.filter(function (p) { return p.indexOf("guid=" + guid + "&") >= 0; }).length; }
+// fn run as if ms had passed since now
+async function later(ms, fn) {
+  var real = Date.now, t0 = real();
+  Date.now = function () { return t0 + ms; };
+  try { return await fn(); } finally { Date.now = real; }
+}
 
 test("a face drawn again reuses the photo already decoded", async () => {
   var face = await stage();
@@ -249,6 +402,18 @@ test("a face drawn again reuses the photo already decoded", async () => {
   assert.equal(askedFor(2201), 1);
 });
 
+test("one photo serves a member's faces of every size", async () => {
+  var face = await stage();
+  var before = askedFor(2201);
+  ["list", "feed", "room", "card", "wall"].forEach(function (kind) {
+    assert.equal(face(2201, "Arkon", kind).tagName, "IMG", kind);
+  });
+  assert.equal(face(2201, "Arkon", "wall").className, "av wall");
+  assert.equal(face(2201, "Arkon", "card").className, "av xl");
+  assert.equal(askedFor(2201), before);
+  assert.match(page.asked.filter(function (p) { return p.indexOf("guid=2201&") >= 0; })[0], /&size=lg$/);
+});
+
 test("a member without a photo is asked for once, not at every render", async () => {
   var face = await stage();
   var a = face(2202, "Bexley", "feed");
@@ -261,7 +426,7 @@ test("a member without a photo is asked for once, not at every render", async ()
   assert.equal(askedFor(2202), 1);
 });
 
-test("a photo that does not decode keeps the initials and is not asked for again", async () => {
+test("a photo that is no image keeps the initials and is not asked for again", async () => {
   var face = await stage();
   var row = document.createElement("div");
   row.appendChild(face(2203, "Corwyn", "feed"));
@@ -272,32 +437,112 @@ test("a photo that does not decode keeps the initials and is not asked for again
   assert.equal(askedFor(2203), 1);
 });
 
+test("a first load with no answer is asked again in seconds and the initials on the page turn into the photo", async (t) => {
+  var face = await stage();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var row = document.createElement("div");
+  page.roots = [row];
+  row.appendChild(face(2205, "Eira", "wall"));
+  await settled();
+  assert.equal(row.children[0].tagName, "SPAN");   // no answer yet: still waiting, not a miss
+  assert.equal(askedFor(2205), 1);
+  t.mock.timers.tick(1000); await settled();       // a 502
+  assert.equal(askedFor(2205), 2);
+  assert.equal(row.children[0].tagName, "SPAN");
+  t.mock.timers.tick(2000); await settled();       // the photo, with no redraw of the tab
+  assert.equal(askedFor(2205), 3);
+  assert.equal(row.children[0].tagName, "IMG");
+  assert.equal(row.children[0].className, "av wall");
+  page.roots = [];
+});
+
 test("a known photo whose reload fails with a 5xx or no answer is kept; a 404 ends it", async () => {
   var face = await stage();
   var row = document.createElement("div");
+  page.roots = [row];
   row.appendChild(face(2204, "Dagny", "feed"));
   await settled();
   assert.equal(row.children[0].tagName, "IMG");
-  var src = row.children[0].src, real = Date.now, t0 = real();
-  try {
-    Date.now = function () { return t0 + 61000; };
-    assert.equal(face(2204, "Dagny", "feed").tagName, "IMG");  // the old photo while it reloads
+  var src = row.children[0].src;
+  await later(599000, async function () {
+    face(2204, "Dagny", "feed"); await settled();
+    assert.equal(askedFor(2204), 1);                             // checked again only after 10 minutes
+  });
+  await later(601000, async function () {
+    assert.equal(face(2204, "Dagny", "feed").tagName, "IMG");    // the old photo while it reloads
     await settled();
     var a = face(2204, "Dagny", "feed");                         // the 503: still the photo
     assert.equal(a.tagName, "IMG");
     assert.equal(a.src, src);
-    Date.now = function () { return t0 + 122000; };
+  });
+  await later(1202000, async function () {
     face(2204, "Dagny", "feed");
     await settled();
     assert.equal(face(2204, "Dagny", "feed").src, src);          // no answer: still the photo
-    Date.now = function () { return t0 + 183000; };
+    assert.equal(row.children[0].src, src);
+  });
+  await later(1803000, async function () {
     face(2204, "Dagny", "feed");
     await settled();
     var gone = face(2204, "Dagny", "feed");                      // the 404 ends it
     assert.equal(gone.tagName, "SPAN");
     assert.equal(gone.textContent, "DA");
-  } finally { Date.now = real; }
+    assert.equal(row.children[0].tagName, "SPAN");               // on the page too, at once
+  });
   assert.equal(askedFor(2204), 4);
+  assert.deepEqual(page.revokedWhileShown, []);
+  page.roots = [];
+});
+
+test("a reload that brings the same photo keeps the image shown and lets nothing go", async () => {
+  var face = await stage();
+  var row = document.createElement("div");
+  page.roots = [row];
+  row.appendChild(face(2206, "Fenna", "wall"));
+  await settled();
+  var src = row.children[0].src, revoked = page.revoked.length;
+  await later(601000, async function () { face(2206, "Fenna", "list"); await settled(); });
+  assert.equal(askedFor(2206), 2);
+  assert.equal(row.children[0].src, src);
+  assert.equal(face(2206, "Fenna", "wall").src, src);
+  assert.equal(page.revoked.length, revoked);
+  page.roots = [];
+});
+
+test("a reload that brings another photo draws the faces on the page with it before the old URL goes", async () => {
+  var face = await stage();
+  var row = document.createElement("div"), detail = document.createElement("div");
+  page.roots = [row, detail];
+  row.appendChild(face(2207, "Gwyn", "wall"));
+  detail.appendChild(face(2207, "Gwyn", "card"));
+  await settled();
+  var old = row.children[0].src;
+  assert.equal(detail.children[0].src, old);
+  await later(601000, async function () { face(2207, "Gwyn", "list"); await settled(); });
+  assert.notEqual(row.children[0].src, old);
+  assert.equal(row.children[0].className, "av wall");
+  assert.equal(detail.children[0].src, row.children[0].src);
+  assert.equal(detail.children[0].className, "av xl");
+  assert.ok(page.revoked.indexOf(old) >= 0);
+  assert.deepEqual(page.revokedWhileShown, []);
+  page.roots = [];
+});
+
+test("an image that fails on the page is drawn again and its member asked for again", async () => {
+  var face = await stage();
+  var row = document.createElement("div");
+  page.roots = [row];
+  row.appendChild(face(2208, "Hale", "wall"));
+  await settled();
+  var shown = row.children[0], before = askedFor(2208);
+  assert.equal(shown.tagName, "IMG");
+  shown.fire("error");
+  assert.equal(row.children[0].tagName, "SPAN");   // the initials while it is asked for again
+  await settled();
+  assert.equal(askedFor(2208), before + 1);
+  assert.equal(row.children[0].tagName, "IMG");
+  assert.notEqual(row.children[0].src, shown.src);
+  page.roots = [];
 });
 
 test("a member's face is a button that names them for the card; his own is no button", async () => {
@@ -349,10 +594,10 @@ test("a photo picked or undone is asked for again at once; four more leaves the 
   core.emit("selfie", { action: "pick", guid: 2201 });
   var again = face(2201, "Arkon", "list");
   assert.equal(again.tagName, "SPAN");                       // the old photo is not shown again
+  assert.equal(face(2201, "Arkon", "card").tagName, "SPAN");  // in any size
   await settled();
-  assert.equal(askedFor(2201), before + 1);
-  assert.equal(face(2201, "Arkon", "card").tagName, "SPAN");  // every size of that member
-  await settled();
+  assert.equal(askedFor(2201), before + 1);                  // one photo asked for, for every size
+  assert.equal(face(2201, "Arkon", "card").tagName, "IMG");
   core.emit("selfie", { action: "undo", guid: 2201 });
   assert.equal(face(2201, "Arkon", "list").tagName, "SPAN");
   core.emit("selfie", { action: "pick", guid: "2201" });     // never a guid that is not a number
@@ -369,10 +614,11 @@ test("a cover change refreshes faces already on the page without waiting for its
   var src = row.children[0].src, before = askedFor(101);
   core.emit("selfie", { action: "pick", guid: 101 });
   await settled();
-  assert.equal(askedFor(101), before + 2);
+  assert.equal(askedFor(101), before + 1);
   assert.equal(row.children[0].tagName, "IMG");
   assert.notEqual(row.children[0].src, src);
   assert.equal(row.children[1].className, "av xl");
+  assert.equal(row.children[1].src, row.children[0].src);
   page.roots = [];
 });
 
@@ -383,4 +629,21 @@ test("nameCell puts opts.build's node where the face goes, whatever the cell's s
   assert.equal(td.children[0].children[0].dataset.opener, "2201Arkon");
   var plain = page.mod.nameCell(tr, 2201, "Arkon", {});
   assert.notEqual(plain.children[0].children[0].tagName, "BUTTON");
+});
+
+test("a refused key is not asked again on its own; the next key (forgetFaces) asks again and draws the page", async (t) => {
+  var face = await stage();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var row = document.createElement("div");
+  page.roots = [row];
+  row.appendChild(face(2209, "Iona", "wall"));
+  await settled();
+  assert.equal(row.children[0].tagName, "SPAN");
+  t.mock.timers.tick(120000); await settled();
+  assert.equal(askedFor(2209), 1);                 // asking again with the same key cannot help
+  page.mod.forgetFaces();
+  await settled();
+  assert.equal(askedFor(2209), 2);
+  assert.equal(row.children[0].tagName, "IMG");    // drawn again without a poll of its tab
+  page.roots = [];
 });
