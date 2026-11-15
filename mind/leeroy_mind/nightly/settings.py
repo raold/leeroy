@@ -37,6 +37,7 @@ class NightlySettings:
     culture_enabled: bool = False
     looks_diversity: bool = False
     romance_activities: bool = False
+    member_romance: bool = False  # [drama] member_romance (drama.config)
     grace_minutes: int = 10
     retry_minutes: int = 60
     max_attempts: int = 3
@@ -120,6 +121,7 @@ def load_settings(cfg: MindConfig, data_dir: Path, *, culture=None) -> NightlySe
     from leeroy_mind.learn.config import load_learn_config
     from leeroy_mind.personas.looks_diversity import enabled
     from leeroy_mind.culture.config import load_culture_config
+    from leeroy_mind.drama.config import load_drama_config
     data_dir = Path(data_dir)
     server = load_server_config(data_dir / "mind.toml")
     from leeroy_mind.world.config import load as load_world
@@ -137,7 +139,8 @@ def load_settings(cfg: MindConfig, data_dir: Path, *, culture=None) -> NightlySe
         world_per_night=world.world_per_night,
         world_selfies_per_night=world.world_selfies_per_night,
         looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None,
-        romance_activities=cfg.romance.activities)
+        romance_activities=cfg.romance.activities,
+        member_romance=load_drama_config(data_dir / "mind.toml").member_romance)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

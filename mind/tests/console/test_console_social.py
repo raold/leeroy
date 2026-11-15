@@ -72,7 +72,9 @@ def test_social_reads_the_drama(db):
     assert v["feuds"] == [{"id": 1, "a": 1101, "b": 1102, "started": 100, "cause": f"{SECRET} loot"}]
     assert v["jealousy"] == [{"holder": 1105, "target": 1101, "kind": "envy", "level": 0.6,
                               "updated": 10}]
-    assert v["romances"] == [{"a": 1101, "b": 1102, "ab": "whispers", "ba": "banter"}]
+    assert v["romances"] == [{"a": 1101, "b": 1102, "ab": "whispers", "ba": "banter",
+                              "stage": "whispers"}]
+    assert v["breakups"] == []
     assert [r["id"] for r in v["rumours"]] == [1]
     r = v["rumours"][0]
     assert (r["about"], r["spreaders"], r["stiflers"], r["knowers"]) == (1103, [1101, 1102], [1104], 3)
@@ -98,6 +100,19 @@ def test_romances_go_furthest_stage_first(db):
     _rel(db, 1105, 1106, "late_nights")  # the arc's ladder, between whispers and planning
     ab = [(r["a"], r["b"]) for r in socialview.social_view(db, now=NOW)["romances"]]
     assert ab == [(1103, 1104), (1105, 1106), (1101, 1102), (1106, 1107)]
+
+
+def test_breakups_say_who_left_whom_for_him_newest_first(db):
+    db.execute("INSERT INTO breakup(woman,partner,for_guid,stage,night,ts,feud,public) "
+               "VALUES(1102,1101,?,'late_nights','2026-10-27',10,NULL,0)", (HUMAN,))
+    db.execute("INSERT INTO breakup(woman,partner,for_guid,stage,night,ts,feud,public) "
+               "VALUES(1104,1103,?,'confession','2026-10-28',20,3,1)", (HUMAN,))
+    _rel(db, 1103, 1104, "ex")
+    _rel(db, 1104, 1103, "ex")
+    v = socialview.social_view(db, now=NOW)
+    assert [(b["woman"], b["partner"], b["for"], b["feud"], b["public"]) for b in v["breakups"]] == [
+        (1104, 1103, HUMAN, True, True), (1102, 1101, HUMAN, False, False)]
+    assert v["romances"][-1] == {"a": 1103, "b": 1104, "ab": "ex", "ba": "ex", "stage": "ex"}
 
 
 def test_jealousy_is_highest_first_and_capped(db):

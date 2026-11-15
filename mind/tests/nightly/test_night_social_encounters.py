@@ -54,7 +54,8 @@ def test_hooks_receive_final_scene_clamped_deltas_and_all_shown_refs(h, monkeypa
                 evidence=("rule:copper-compass",))
     retrieved(monkeypatch, h, mid)
     calls = []
-    def opening(store, ctx, row, deltas, shown):
+    def opening(store, ctx, row, deltas, shown, *, drama=False):
+        assert drama is False  # no [drama] switch: an ordinary scene
         current = store.conn.execute("SELECT * FROM encounter WHERE id=?", (row["id"],)).fetchone()
         assert current["status"] == row["status"] == "done"
         assert current["scene"] == row["scene"] and current["private"] == row["private"] == 0

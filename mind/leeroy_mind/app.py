@@ -497,6 +497,8 @@ class MindApp:
         self.raidlead = attach_raidlead(self)  # None while [raidlead] is off
         from .raidplay.respond import attach as attach_mechanics
         self.mechanics = attach_mechanics(self)  # [raidplay] respond: off adds nothing
+        from .drama.couples import attach as attach_drama
+        self.drama = attach_drama(self)  # [drama] member_romance: off adds no stage
 
     # -- extension points --------------------------------------------------------------------
 

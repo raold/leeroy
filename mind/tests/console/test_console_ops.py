@@ -44,6 +44,14 @@ def test_invalid_table_reads_as_invalid_off(tmp_path,text):
     assert 'PRIVATE_SENTINEL' not in json.dumps(rows)
 
 
+@pytest.mark.parametrize('text,state', [('', 'off'), ('[drama]\nmember_romance=true', 'on'),
+                                        ('[drama]\nmember_romance=1', 'invalid')])
+def test_member_romance_switch_is_listed(tmp_path, text, state):
+    (tmp_path/'mind.toml').write_text(text)
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert next(r for r in rows if r['table']=='drama')['state'] == state
+
+
 def test_unmet_mind_needs_are_listed(tmp_path):
     (tmp_path/'mind.toml').write_text('[learn]\nbandit=true\n')
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']

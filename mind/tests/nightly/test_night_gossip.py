@@ -25,11 +25,13 @@ def source(h, owner=101, text="Coros took my bracers.", **values):
     return h.store.get_memories([ident])[0]
 
 
-def tell(h, memory, *, ctx=None, enc=None, shown=None, about="Coros", text=None, who="a"):
+def tell(h, memory, *, ctx=None, enc=None, shown=None, about="Coros", text=None, who="a",
+         claim=None):
     ctx = ctx or h.ctx()
     enc = enc or scene(h, a=memory.owner)
     data = {"teller": who, "about": about, "source": memory.id,
-            "text": memory.text if text is None else text}
+            "text": memory.text if text is None else text,
+            "claim": f"{about} took the bracers." if claim is None else claim}
     with h.store.transaction():
         return gossip.after_gossip(h.store, ctx, enc, data, shown or [memory], now=h.T)
 

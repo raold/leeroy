@@ -70,7 +70,7 @@ def flatten(result):
 
 def test_constants_and_intents_are_the_contract():
     assert VOLITIONS == ("confront", "make_up", "confide", "gossip", "correct", "recruit",
-                         "needle", "bond", "mentor", "tease")
+                         "needle", "bond", "mentor", "tease", "flirt")
     assert LAYER_TRUST == {"surface": 20.0, "middle": 45.0, "deep": 65.0}
     assert (NIGHT_OWL_DROP, RESOLVE_DAYS, BLOWUP_DAYS, BLOWUP_DELTA) == (10.0, 10, 7, -4)
     assert INTENT == {
@@ -84,6 +84,7 @@ def test_constants_and_intents_are_the_contract():
         "bond": "{a} just wants to hang out with {b}.",
         "mentor": "{a} is showing {b} the ropes.",
         "tease": "{a} wants to bring up the running joke with {b}.",
+        "flirt": "{a} and {b} flirt a little.",
     }
 
 

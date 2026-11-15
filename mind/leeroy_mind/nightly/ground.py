@@ -13,7 +13,8 @@ The rules, in order; the first that fails is the reason:
     ("name not in evidence: <name>");
  6. `about` is someone the cited items involve, and not the owner ("about not in evidence");
  7. no romance aimed at a member, by P1b's screen with the cast's names in any case (PR6;
-    rivalry over him is allowed) ("romance between members");
+    rivalry over him is allowed; a couple's own scene may name the two of them, drama.couples)
+    ("romance between members");
  8. nobody leaves the guild: talk of quitting the game is fine ("leaves the guild");
  9. outside FICTION, every number occurs in a cited item; a rumour's may move within
     NUMBER_BAND of one ("number not in evidence", "number outside the band");
@@ -21,7 +22,12 @@ The rules, in order; the first that fails is the reason:
 11. a rel_delta moves a REL_DELTA_DIMS dimension by at most 10, and never attraction, which only
     the owner's curve moves (Task 12) ("bad delta", "attraction moves only by acts");
 12. a tom claim is about someone who really does not know something it cites
-    ("tom not supported")."""
+    ("tom not supported").
+
+A scene is fiction by design (member drama, 2026-11-15): its judge asks only whether the
+evidence contradicts it (FICTION_ASK, its own system line and schema), so invented detail the
+evidence merely does not mention passes, and a contradiction or a broken rule still rejects.
+Every other kind keeps JUDGE_ASK."""
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -66,6 +72,26 @@ JUDGE_ASK = (
     "For each ITEM, say how far its EVIDENCE supports it: \"yes\" when the evidence supports all "
     "of it, \"partly\" when it supports some of it, \"no\" when it does not. Set invariants_ok to "
     "false when the item breaks any of the rules. Give why in a few words.")
+# Kinds judged for contradiction only: an invented scene and the memories it leaves. Their
+# batches have a system line, a question and a schema of their own, so the natural answer to
+# the question is the verdict (contradicted: true rejects).
+CONTRADICT_ONLY = frozenset({"scene"})
+FICTION_SYSTEM = ("You check parts of small invented scenes between guildmates: whether the "
+                  "evidence contradicts each part, and whether each part keeps the rules below.")
+FICTION_ASK = (
+    "Each ITEM is part of a small invented scene between guildmates, or a memory of it, so "
+    "invented detail is expected. For each ITEM: is it contradicted by its EVIDENCE? Set "
+    "contradicted to true only if the evidence shows something in the item is false (a "
+    "different outcome, someone who was not there, a fact it gets wrong). Detail the evidence "
+    "does not mention is not a contradiction: set contradicted to false. Set invariants_ok to "
+    "false when the item breaks any of the rules. Give why in a few words.")
+FICTION_SCHEMA = schema("judge_scene", {"verdicts": {"type": "array", "items": {
+    "type": "object",
+    "properties": {"i": {"type": "integer", "minimum": 0},
+                   "contradicted": {"type": "boolean"},
+                   "invariants_ok": {"type": "boolean"},
+                   "why": {"type": "string", "maxLength": 120}},
+    "required": ["i", "contradicted", "invariants_ok", "why"], "additionalProperties": False}}})
 JUDGE_SCHEMA = schema("judge", {"verdicts": {"type": "array", "items": {
     "type": "object",
     "properties": {"i": {"type": "integer", "minimum": 0},
@@ -134,8 +160,11 @@ def _terms_re(terms: frozenset[str]) -> re.Pattern | None:
                       re.I) if forms else None
 
 
-def check(claim: Claim, ev: Evidence, facts: Facts) -> Verdict:
-    """The deterministic rules (the module docstring), check "deterministic"."""
+def check(claim: Claim, ev: Evidence, facts: Facts, *, couple: frozenset[int] = frozenset()
+          ) -> Verdict:
+    """The deterministic rules (the module docstring), check "deterministic". `couple`: the two
+    members of a member romance whose own scene this is (drama.couples); rule 7 lets the text
+    be romantic about the two of them, and about nobody else in the guild."""
     def no(reason: str) -> Verdict:
         return Verdict(False, "deterministic", reason)
     text, kind = claim.text, claim.kind
@@ -154,8 +183,10 @@ def check(claim: Claim, ev: Evidence, facts: Facts) -> Verdict:
             return no(f"name not in evidence: {name}")
     if claim.about is not None and (claim.about not in actors or claim.about == claim.owner):
         return no("about not in evidence")
+    characters = (facts.member_names if not couple else
+                  tuple(n for n in facts.member_names if facts.names.get(n.lower()) not in couple))
     try:
-        check_romance({"sample_lines": [text]}, facts.ident, (), characters=facts.member_names)
+        check_romance({"sample_lines": [text]}, facts.ident, (), characters=characters)
     except ValueError:
         return no("romance between members")
     if LEAVES_RE.search(text):
@@ -190,10 +221,19 @@ def _reason(head: str, why: str) -> str:
 
 def _policy(claim: Claim, v: dict | None) -> Verdict:
     """The judge's verdict on one claim. A missing verdict, or one that breaks the invariants,
-    rejects; an INVARIANT_ONLY kind needs nothing more; otherwise yes accepts, partly only for
-    PARTLY_OK kinds, and no rejects."""
+    rejects; a CONTRADICT_ONLY kind (FICTION_SCHEMA's verdict, labelled "contradicted" or
+    "consistent") is rejected only when the judge says its evidence contradicts it; an
+    INVARIANT_ONLY kind needs nothing more; otherwise yes accepts, partly only for PARTLY_OK
+    kinds, and no rejects."""
     if v is None:
         return Verdict(False, "judge", "no verdict")
+    if claim.kind in CONTRADICT_ONLY:
+        label = "contradicted" if v["contradicted"] else "consistent"
+        if not v["invariants_ok"]:
+            return Verdict(False, "judge", _reason("invariants", v["why"]), label)
+        if v["contradicted"]:
+            return Verdict(False, "judge", _reason("contradicted", v["why"]), label)
+        return Verdict(True, "judge", v["why"], label)
     support, why = v["support"], v["why"]
     if not v["invariants_ok"]:
         return Verdict(False, "judge", _reason("invariants", why), support)
@@ -205,35 +245,49 @@ def _policy(claim: Claim, v: dict | None) -> Verdict:
 
 
 async def judge(ctx: "NightContext", claims: list[Claim], ev: Evidence,
-                facts: Facts) -> list[Verdict]:
+                facts: Facts, *, couple: tuple[str, str] | None = None) -> list[Verdict]:
     """The judge's verdict on each claim, in order, asked in batches of JUDGE_BATCH numbered
     from 0. Each claim is shown as "ITEM {i}: [{kind}] {text}", then EVIDENCE: and its cited
-    lines. A failed request is the unit's failure (a ReflectionError)."""
-    system = system_prompt("judge", JUDGE_SYSTEM, ctx.settings.data_dir, human=ctx.ident)
-    out: list[Verdict] = []
-    for start in range(0, len(claims), JUDGE_BATCH):
-        batch = claims[start:start + JUDGE_BATCH]
-        user = JUDGE_ASK + "".join(
-            f"\n\nITEM {i}: [{c.kind}] {c.text}\nEVIDENCE:\n"
-            + "\n".join(ev.line(ref, ctx.tz) for ref in dict.fromkeys(c.evidence))
-            for i, c in enumerate(batch))
-        reply = await ctx.reasoner.json(system, user, JUDGE_SCHEMA)
-        by_i: dict[int, dict] = {}
-        for v in reply["verdicts"]:
-            by_i.setdefault(v["i"], v)  # the first verdict for an item counts
-        out += [_policy(c, by_i.get(i)) for i, c in enumerate(batch)]
-    return out
+    lines. CONTRADICT_ONLY kinds are asked in batches of their own (FICTION_SYSTEM,
+    FICTION_ASK, FICTION_SCHEMA; overlay prompts/nightly_judge_scene.txt), the rest JUDGE_ASK.
+    `couple` (two character names) is the member romance a scene may show (system_prompt). A
+    failed request is the unit's failure (a ReflectionError)."""
+    plain = (system_prompt("judge", JUDGE_SYSTEM, ctx.settings.data_dir, human=ctx.ident,
+                           couple=couple), JUDGE_ASK, JUDGE_SCHEMA)
+    fiction_ = (system_prompt("judge_scene", FICTION_SYSTEM, ctx.settings.data_dir,
+                              human=ctx.ident, couple=couple), FICTION_ASK, FICTION_SCHEMA)
+    out: dict[int, Verdict] = {}
+    for (system, ask, shape), fiction in ((plain, False), (fiction_, True)):
+        group = [(n, c) for n, c in enumerate(claims) if (c.kind in CONTRADICT_ONLY) is fiction]
+        for start in range(0, len(group), JUDGE_BATCH):
+            batch = group[start:start + JUDGE_BATCH]
+            user = ask + "".join(
+                f"\n\nITEM {i}: [{c.kind}] {c.text}\nEVIDENCE:\n"
+                + "\n".join(ev.line(ref, ctx.tz) for ref in dict.fromkeys(c.evidence))
+                for i, (_, c) in enumerate(batch))
+            reply = await ctx.reasoner.json(system, user, shape)
+            by_i: dict[int, dict] = {}
+            for v in reply["verdicts"]:
+                by_i.setdefault(v["i"], v)  # the first verdict for an item counts
+            out.update((n, _policy(c, by_i.get(i))) for i, (n, c) in enumerate(batch))
+    return [out[n] for n in range(len(claims))]
 
 
 async def ground(ctx: "NightContext", claims: list[Claim], ev: Evidence,
-                 facts: Facts) -> list[tuple[Claim, Verdict]]:
+                 facts: Facts, *, couple: dict[int, str] | None = None
+                 ) -> list[tuple[Claim, Verdict]]:
     """Each claim with its verdict, in the original order: `check` first, then the judge for
-    the survivors whose kind is not CHECK_ONLY. Writes nothing."""
-    verdicts = [check(c, ev, facts) for c in claims]
+    the survivors whose kind is not CHECK_ONLY. `couple` maps the two members of a member
+    romance to their names when the claims are their own scene (drama.couples). Writes
+    nothing."""
+    pair = frozenset(couple or ())
+    verdicts = [check(c, ev, facts, couple=pair) for c in claims]
     judged = [i for i, (c, v) in enumerate(zip(claims, verdicts))
               if v.ok and c.kind not in CHECK_ONLY]
     if judged:
-        for i, v in zip(judged, await judge(ctx, [claims[i] for i in judged], ev, facts)):
+        names = tuple(couple[g] for g in sorted(couple)) if couple else None
+        for i, v in zip(judged, await judge(ctx, [claims[i] for i in judged], ev, facts,
+                                            couple=names)):
             verdicts[i] = v
     return list(zip(claims, verdicts))
 

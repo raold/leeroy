@@ -33,6 +33,13 @@ INVARIANTS = (
     "no current events or present-day technology. "
     "Never mention AI, language models, prompts, or anyone being a bot or glitching."
 )
+# A member romance's own prompts (drama.couples, `[drama] member_romance`): the romance rule
+# names the two of them, and nobody else in the guild. Every other invariant is unchanged.
+ROMANCE_RULE = ("Romance, flirting and desire are only ever aimed at {human}; "
+                "guild members never flirt with, date or desire each other. ")
+COUPLE_RULE = ("Romance, flirting and desire are aimed at {human}, or between {a} and {b}, two "
+               "adult guildmates who are into each other, kept warm and never explicit; no "
+               "other guild members flirt with, date or desire each other. ")
 
 # The reasoning pass: P1b's REASON preset, plus the 27B model's own sampling and a length cap.
 # The model's thinking counts against num_predict. At a flat 2,048 tokens a third of the
@@ -165,10 +172,12 @@ def night_prompt_names() -> frozenset[str]:
 
 
 def system_prompt(name: str, default: str, data_dir: Path, /, *, human: HumanIdentity,
-                  **fields) -> str:
+                  couple: tuple[str, str] | None = None, **fields) -> str:
     """A generating prompt: the owner's overlay prompts/nightly_{name}.txt when there is one,
     else `default`, filled from `fields`; then who the owner is in this guild (never by his
-    real name); then INVARIANTS. The last two follow whichever template was used.
+    real name); then INVARIANTS. The last two follow whichever template was used. `couple`
+    (two character names) swaps INVARIANTS' romance rule for COUPLE_RULE, for a member
+    romance's own scene; `couple` is reserved like `human`.
 
     The first three parameters are positional-only, so a template may have a field called
     `name`, `default` or `data_dir`; `human` is reserved. A template that cannot be filled (a
@@ -186,8 +195,12 @@ def system_prompt(name: str, default: str, data_dir: Path, /, *, human: HumanIde
             f"prompt nightly_{name} cannot be filled ({where}): {bad}. "
             f"Fields given: {', '.join(sorted(fields)) or 'none'}. "
             "A literal brace is written twice, as {{ or }}.") from e
+    rules = INVARIANTS.format(human=human.called)
+    if couple:
+        rules = rules.replace(ROMANCE_RULE.format(human=human.called),
+                              COUPLE_RULE.format(human=human.called, a=couple[0], b=couple[1]), 1)
     return (body + "\n\nIn this guild: " + human.describe(include_real_name=False) + ".\n"
-            + INVARIANTS.format(human=human.called))
+            + rules)
 
 
 class ReflectionError(Exception):
