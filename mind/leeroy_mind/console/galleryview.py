@@ -2,13 +2,18 @@
 
 Expired situations remain in the owner's gallery; this does not make them sendable again.
 Guild composites are not a member's portrait. Missing tables and files read as empty.
+
+Only photos of her current looks are listed or served, by the photo request path's rule: her
+cover's set and sets rendered from a persona at least as new (store.looks_floor), and situations
+planned from the looks she has now. With no cover nothing is hidden. Rows and files are kept.
 """
 import json
 from pathlib import Path
 
 from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.selfies import files
-from leeroy_mind.selfies.store import cover_look, lust_set, varied_look
+from leeroy_mind.selfies.snaps import looks_hash
+from leeroy_mind.selfies.store import cover_look, current_looks, looks_floor, lust_set, varied_look
 from leeroy_mind.selfies.style import suggestive
 
 from .faces import MAX_FACE_BYTES, image_info, read_image
@@ -24,16 +29,41 @@ def _present(path: Path, root: Path) -> bool:
     return image_info(path, root) is not None
 
 
-def _lust_held(conn, have, guid) -> bool:
-    """She no longer has the lust style (or her stored persona cannot be read): photos of sets
-    rendered under it are neither listed nor served, unless one is already her photo."""
+def _persona(conn, have, guid):
+    """Her stored persona, or None (no table, no row, or one that cannot be read)."""
     if "persona_core" not in have:
-        return True
+        return None
     row = conn.execute("SELECT json FROM persona_core WHERE guid=?", (guid,)).fetchone()
     try:
-        return not suggestive(persona_from_dict(json.loads(row[0]))) if row else True
+        return persona_from_dict(json.loads(row[0])) if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _lust_held(p) -> bool:
+    """She no longer has the lust style (or her stored persona cannot be read): photos of sets
+    rendered under it are neither listed nor served, unless one is already her photo."""
+    try:
+        return p is None or not suggestive(p)
     except (TypeError, ValueError):
         return True
+
+
+def _looks(p) -> str | None:
+    """The hash a situation planned from her current looks carries (snaps.looks_hash), or None."""
+    try:
+        return None if p is None or p.appearance is None else looks_hash(p.appearance)
+    except (TypeError, ValueError):
+        return None
+
+
+def _floor(conn, have, guid) -> int | None:
+    return looks_floor(conn, guid) if {"selfie_set", "selfie_current"} <= have else None
+
+
+def _snap_shown(floor, looks, stored) -> bool:
+    """A situation is listed with no cover, or when it was planned from the looks she has now."""
+    return floor is None or (looks is not None and stored == looks)
 
 
 def _entry(data_dir, guid, kind, number, index, rendered, cover):
@@ -86,15 +116,18 @@ def gallery(conn, data_dir, guid: int) -> dict:
         row = conn.execute("SELECT set_no, idx FROM selfie_current WHERE guid=?", (guid,)).fetchone()
         current = tuple(row) if row else None
     photos = out["photos"]
-    held = _lust_held(conn, have, guid)
+    p = _persona(conn, have, guid)
+    held, floor = _lust_held(p), _floor(conn, have, guid)
     if {"selfie_set", "selfie_candidate"} <= have:
         for row in conn.execute(
-                "SELECT s.set_no, c.idx, s.rendered FROM selfie_set s JOIN selfie_candidate c "
-                "ON c.guid=s.guid AND c.set_no=s.set_no WHERE s.guid=? AND s.status='ready'",
-                (guid,)):
+                "SELECT s.set_no, c.idx, s.rendered, s.persona_version FROM selfie_set s "
+                "JOIN selfie_candidate c ON c.guid=s.guid AND c.set_no=s.set_no "
+                "WHERE s.guid=? AND s.status='ready'", (guid,)):
             is_cover = current == (row[0], row[1])
             if _world_set(conn, have, guid, row[0]):
                 continue
+            if not current_looks(row[3], floor):
+                continue  # rendered from an older persona than her cover's set: not listed
             if held and not is_cover and lust_set(conn, guid, row[0]):
                 continue  # a lust-style set of a member who left that style: not listed
             entry = _entry(data_dir, guid, "candidate", row[0], row[1], row[2], is_cover)
@@ -105,8 +138,11 @@ def gallery(conn, data_dir, guid: int) -> dict:
                     entry["look"] = look
                 photos.append(entry)
     if "selfie_snap" in have:
-        for row in conn.execute("SELECT id, rendered FROM selfie_snap WHERE guid=? "
+        looks = _looks(p)
+        for row in conn.execute("SELECT id, rendered, looks FROM selfie_snap WHERE guid=? "
                                 "AND kind='situation' AND rendered IS NOT NULL", (guid,)):
+            if not _snap_shown(floor, looks, row[2]):
+                continue  # planned from looks she no longer has: not listed
             entry = _entry(data_dir, guid, "snap", row[0], None, row[1], False)
             if entry:
                 photos.append(entry)
@@ -145,17 +181,24 @@ def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | 
     try:
         if kind == "candidate" and {"selfie_set", "selfie_candidate"} <= have:
             found = conn.execute(
-                "SELECT 1 FROM selfie_candidate c JOIN selfie_set s ON s.guid=c.guid AND "
-                "s.set_no=c.set_no WHERE c.guid=? AND c.set_no=? AND c.idx=? AND s.status='ready'",
-                (guid, number, index)).fetchone()
+                "SELECT s.persona_version FROM selfie_candidate c JOIN selfie_set s ON "
+                "s.guid=c.guid AND s.set_no=c.set_no WHERE c.guid=? AND c.set_no=? AND c.idx=? "
+                "AND s.status='ready'", (guid, number, index)).fetchone()
+            if found and not current_looks(found[0], _floor(conn, have, guid)):
+                return None
             path = files.candidate(data_dir, guid, number, index, thumb=thumb)
         elif kind == "snap" and "selfie_snap" in have:
-            found = conn.execute("SELECT 1 FROM selfie_snap WHERE guid=? AND id=? AND "
+            found = conn.execute("SELECT looks FROM selfie_snap WHERE guid=? AND id=? AND "
                                  "kind='situation' AND rendered IS NOT NULL", (guid, number)).fetchone()
+            if found and not _snap_shown(_floor(conn, have, guid),
+                                         _looks(_persona(conn, have, guid)), found[0]):
+                return None
             path = files.snap(data_dir, guid, number, thumb=thumb)
         else:
             return None
-        if found and kind == "candidate" and lust_set(conn, guid, number)                 and _lust_held(conn, have, guid) and not _is_cover(conn, have, guid, number, index):
+        if (found and kind == "candidate" and lust_set(conn, guid, number)
+                and _lust_held(_persona(conn, have, guid))
+                and not _is_cover(conn, have, guid, number, index)):
             return None
         if kind == "candidate" and _world_set(conn, have, guid, number):
             return None
