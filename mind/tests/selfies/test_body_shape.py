@@ -19,7 +19,8 @@ from leeroy_mind.selfies.kind import EXPLICIT_RE, WEAR_RE
 from leeroy_mind.selfies.prompt import (BUILD_WORDS, GLUTES_VIEWS, GLUTES_WORDS, HIPS_WORDS,
                                         LUST_NEGATIVE, NEGATIVE, VARIED_NEGATIVE, WAIST_WORDS,
                                         body_words, build_prompt, build_varied_prompt, build_words,
-                                        glutes_words, hair_skin, hair_skin_short, over_fit)
+                                        glutes_words, hair_skin, hair_skin_short, over_fit,
+                                        POSE_SHORT, varied_parts)
 from leeroy_mind.selfies.snaps import looks_hash
 from leeroy_mind.selfies.style import AGE_RE, LUST, suggestive
 from leeroy_mind.selfies.tokens import PIECES, WORD_TOKENS, estimate, joined
@@ -111,8 +112,10 @@ def test_every_shape_word_is_clothed_adult_and_on_the_token_table():
 def test_waist_and_hips_take_the_builds_own_words_place_or_follow_it():
     assert build_words(woman(build="curvy", waist="very_narrow", hips="very_wide")) == (
         "curvy hourglass figure, full bust, very wide hips, very narrow waist")
-    assert build_words(woman(build="curvy", **LARGEST)) == (
-        "curvy hourglass figure, very large full bust, very wide hips, thick waist")
+    assert build_words(woman(build="curvy", **LARGEST)) == (  # a wide waist is no hourglass
+        "curvy figure, very large full bust, very wide hips, thick waist")
+    assert build_words(woman(build="curvy", waist="average")) == (
+        "curvy hourglass figure, full bust, wide hips, average waist")
     assert build_words(woman(build="voluptuous", waist="narrow", hips="wide")) == (
         "voluptuous full-figured body, large full bust, wide hips, soft curves, narrow waist")
     assert build_words(woman(build="slim", bust="small", waist="narrow", hips="narrow")) == (
@@ -146,26 +149,35 @@ def _looks(views=None):
                                               kind.LUST_COLOURS[0], "an over-the-shoulder glance")
 
 
-def test_glutes_are_required_from_behind_and_the_side_and_optional_from_the_front():
+def test_glutes_are_required_from_behind_and_the_side_and_last_from_the_front():
+    """Required right after her build from behind and the side; in a front view the last
+    phrase of priority 2, after her eye colour and the details that tell her apart (review of
+    #318: optional glutes had taken their room)."""
     assert set(GLUTES_VIEWS) == set(kind.BACK_VIEWS) | {"side"}
-    p = woman(build="curvy", glutes="large")
+    p = woman(build="curvy", glutes="large", face=("thin glasses", "a tired half-smile"))
     for look in _looks():
         spec = build_varied_prompt(p, look)
-        want = 0 if look.view in GLUTES_VIEWS else 1
-        assert ("large round glutes", want) in spec.phrases, look
         texts = _texts(spec)
-        assert texts.index("large round glutes") == texts.index(build_words(p)) + 1
+        if look.view in GLUTES_VIEWS:
+            assert ("large round glutes", 0) in spec.phrases, look
+            assert texts.index("large round glutes") == texts.index(build_words(p)) + 1
+        else:
+            assert spec.phrases[-1] == ("large round glutes", 2), look
+            for detail in ("hazel eyes", "thin glasses"):
+                assert texts.index(detail) < texts.index("large round glutes")
 
 
 def test_a_profile_says_glutes_only_where_the_framing_shows_her_figure():
     p = woman(build="curvy", glutes="medium")
-    for framing, said in (("three_quarter", 1), ("upper_body", None), ("face", None),
+    for framing, said in (("three_quarter", 2), ("upper_body", None), ("face", None),
                           ("head_and_shoulders", None)):
         spec = build_prompt(replace(p, photo=replace(PHOTO, framing=framing)))
         if said is None:
             assert "rounded glutes" not in _texts(spec)
         else:
             assert ("rounded glutes", said) in spec.phrases
+            texts = _texts(spec)
+            assert texts.index("hazel eyes") < texts.index("rounded glutes")  # after her eyes
 
 
 def test_a_situational_photo_says_glutes_where_its_framing_shows_her_figure():
@@ -173,7 +185,8 @@ def test_a_situational_photo_says_glutes_where_its_framing_shows_her_figure():
     from selfies.test_selfie_scene import SCENE
     p = woman(build="curvy", glutes="large", hips="very_wide")
     wide = build_scene_prompt(p, Scene(**{**SCENE, "framing": "three_quarter"}))
-    assert ("large round glutes", 1) in wide.phrases
+    assert ("large round glutes", 2) in wide.phrases
+    assert _texts(wide).index("hazel eyes") < _texts(wide).index("large round glutes")
     assert (build_words(p), 0) in wide.phrases and "very wide hips" in build_words(p)
     close = build_scene_prompt(p, Scene(**{**SCENE, "framing": "upper_body"}))
     assert "large round glutes" not in _texts(close)
@@ -194,26 +207,51 @@ def _never_cut(spec, p):
 @pytest.mark.parametrize("build", ["curvy", "voluptuous", "average"])
 @pytest.mark.parametrize("kg", [64, 88, 180])
 @pytest.mark.parametrize("looks", [{}, LONG_LOOKS])
-def test_every_varied_look_fits_with_her_largest_shapes(build, kg, looks):
-    """Her body, hair and skin are never cut and glutes stay required from behind and the side.
-    The one case that cannot fit, pinned here: the longest looks for a voluptuous woman of BMI
-    32 or more with every shape at its largest and long hair and skin words, 5 of 458 looks at
-    76 tokens. The worker refuses those (prompt_too_long) and the slot renders her ordinary
-    photo instead (render.render_candidates' fallback). None of the live cast reaches it."""
+def test_every_varied_look_keeps_its_pose_with_her_largest_shapes(build, kg, looks):
+    """Controller ruling, 2026-11-15, after the GPU: a back view without its pose phrase renders
+    from the front, so the pose is never yielded. Her body, hair and skin are never cut; glutes
+    are required from behind and the side while they fit, and yield (after the framing) before
+    the pose; last of all "from behind, looking over her shoulder" says "from behind". What
+    cannot fit even so, pinned here: a voluptuous woman of BMI 32 or more with every shape at
+    its largest and long hair and skin words, 2 of 458 looks at 76 tokens. The worker refuses
+    those (prompt_too_long) and the slot renders her ordinary photo instead
+    (render.render_candidates' fallback). None of the live cast reaches it."""
     p = woman(build=build, weight_kg=kg, **LARGEST, **looks)
     assert suggestive(p)
     over = []
     for look in _looks():
         spec = build_varied_prompt(p, look)
+        parts = varied_parts(look, look.phrase)
+        required = _texts(spec, 0)
+        pose = POSE_SHORT.get(parts["view"], parts["view"])
+        assert parts["view"] in required or pose in required, look  # never yielded
+        if pose in required and pose != parts["view"]:
+            assert "very large round glutes" not in required  # glutes went first
         if over_fit(spec):
-            over.append(joined(_texts(spec, 0)))
+            over.append(joined(required))
         _never_cut(spec, p)
-        if look.view in GLUTES_VIEWS:
-            assert "very large round glutes" in _texts(spec, 0)
+        if look.view in GLUTES_VIEWS and "very large round glutes" not in required:
+            assert ("very large round glutes", 1) in spec.phrases  # yielded, still offered
+            assert parts["framing"] not in required  # the framing gave way first
     if build == "voluptuous" and kg >= 88 and looks:
-        assert len(over) <= 5 and max(over) <= 76
+        assert len(over) <= 2 and max(over) <= 76
     else:
         assert over == []
+
+
+def test_a_back_view_keeps_its_pose_with_every_shape_largest_and_25_kg_more():
+    """The GPU case: her "behind" look, edited, lost "from behind, looking over her shoulder" to
+    priority 1. With every shape at its largest, 25 kg more and long hair and skin words, every
+    back and side look keeps its pose required, whole or (last of all) as "from behind"."""
+    p = woman(build="voluptuous", weight_kg=APPEARANCE.weight_kg + 25, **LARGEST, **LONG_LOOKS)
+    seen = 0
+    for look in _looks(views=GLUTES_VIEWS):
+        spec = build_varied_prompt(p, look)
+        view = varied_parts(look, look.phrase)["view"]
+        assert (view, 0) in spec.phrases or (POSE_SHORT.get(view), 0) in spec.phrases, look
+        seen += 1
+    assert seen > 100
+    assert POSE_SHORT == {"from behind, looking over her shoulder": "from behind"}
 
 
 @pytest.mark.parametrize("build", ["curvy", "voluptuous"])

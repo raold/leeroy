@@ -466,8 +466,6 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     add(*subject_phrase(p))
     body, plain_build = body_phrases(p)  # her body right after who she is, required
     out += body
-    if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # where the framing shows her figure
-        out.append((glutes_words(p), 1))
     add(s.activity, 1, True)
     if lust:  # one phrase: the fit keeps both or neither; scene_renderable checked the names
         add(lust_phrase(s), 0, True)
@@ -481,6 +479,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
         add(s.outfit, 2, True)
     if _LIGHT[s.when]:
         add(_LIGHT[s.when], 2)
+    if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # optional, after who she is
+        out.append((glutes_words(p), 2))
     add(s.expression, 3, True)
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)

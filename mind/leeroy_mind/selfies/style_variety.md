@@ -204,21 +204,40 @@ same Undo (a receipt from before them still undoes weight and bust) and the same
 | hips | narrow "narrow hips", average "average hips", wide "wide hips", very_wide "very wide hips" |
 
 Waist and hips are said in place of the build's own words (curvy's "wide hips, narrow waist",
-voluptuous's "wide hips") or after the build, like the bust; from BMI 28 a slim, athletic or
-average build's own words give way to the size and they stay as phrases of their own. Glutes are a
-phrase of their own right after the build: required in a varied candidate seen from behind or from
-the side (`prompt.GLUTES_VIEWS`), optional (priority 1) in a front view and where a profile or
-situational photo's framing shows her figure (three-quarter, full length), not said in a closer
-photo. None of these words is in a negative, `EXPLICIT_RE`, `WEAR_RE` or the age guard.
+voluptuous's "wide hips") or after the build, like the bust; a curvy build with a wide waist drops
+"hourglass" ("curvy figure, ..., thick waist"). From BMI 28 a slim, athletic or average build's own
+words give way to the size and they stay as phrases of their own. Glutes are a phrase of their own:
+required right after the build in a varied candidate seen from behind or from the side
+(`prompt.GLUTES_VIEWS`); elsewhere, where the framing shows her figure (a front view, a
+three-quarter or full-length profile or situation), the last phrase of priority 2, after her eye
+colour and the details that tell her apart (review of #318: there it had taken their room); not
+said in a closer photo. None of these words is in a negative, `EXPLICIT_RE`, `WEAR_RE` or the age
+guard.
 
-Measured on a copy of the 09:50 snapshot with the worker's `fit.py` and the real tokenizers: with
-no edit, and with all four at their largest on the 91 lust women (bust and glutes very large, waist
-wide, hips very wide), alone or with 25 kg more, no hair or skin is lost, no full build is
-shortened and no prompt goes over 75. Glutes stay in all 1092 back and side candidates; where
-optional they are kept in 298 of 364 front candidates and 24 of 62 three-quarter profiles. The one
-case that cannot fit is synthetic: a voluptuous woman of BMI 32 or more with every shape at its
-largest and long hair and skin words counts 76 in 5 of 458 varied looks; the worker refuses those
-and the slot renders her ordinary photo instead.
+The pose of a varied candidate ("from behind, looking over her shoulder", "side profile") is never
+yielded (controller ruling, 2026-11-15, after the GPU: a back view without it renders from the
+front). When a back or side look cannot fit after the other steps, the framing yields, then her
+glutes, and last of all "from behind, looking over her shoulder" says "from behind"
+(`prompt.POSE_SHORT`), still a view from behind. A look still over the limit is left for the
+worker to refuse, and that slot renders her ordinary photo instead; that happens only in a
+synthetic test case (a voluptuous woman of BMI 32 or more with every shape at its largest and long
+hair and skin words, 2 of 458 looks at 76 tokens), never on the live cast.
+
+Measured on a copy of the 09:50 snapshot with the worker's `fit.py` and the real tokenizers (145
+cast profiles; 16 varied candidates for each of the 91 lust women, 1456):
+
+| | pose lost | hair or skin lost | full build shortened | glutes required kept (back and side) | too long (real) |
+|---|---|---|---|---|---|
+| no edit | 0 | 0 | 0 | | 0 |
+| all four largest on the 91 | 0 | 0 | 0 | 1064 of 1092 | 0 |
+| all four largest and 25 kg more on the 91 | 0 | 0 | 0 | 878 of 1092 | 0 |
+
+"From behind" stands in for the whole pose in 1 and 17 of those candidates. Optional glutes (front
+views, three-quarter profiles) never cost her eye colour or an identity detail; in this data they
+are never kept either, so in practice glutes are said from behind and the side. Where glutes are
+required, they take room from priority-2 details: compared with the same candidate without glutes,
+an eye colour or identity detail is lost in 108 behind, 149 rear three-quarter and 155 side looks
+of 364 each with all four largest, and in 174, 138 and 173 with glutes alone.
 
 **The words.** Every profile, varied and situational prompt has the same required (priority-0)
 set after its kind and framing: who she is ("36-year-old American woman"), her body
