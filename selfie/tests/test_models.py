@@ -43,9 +43,12 @@ def test_the_ipadapter_pin_names_its_commit_licence_and_three_files():
 
 
 def test_the_pins_name_the_files_the_loaders_read():
-    assert set(MODEL_PINS) == {"realvisxl", "nsfw", "ipadapter"}
+    assert set(MODEL_PINS) == {"realvisxl", "nsfw", "ipadapter", "yunet"}
     assert models.BASE_PINS == ("realvisxl", "nsfw")
     assert models.IDENTITY_PINS == ("ipadapter",)
+    assert models.FACE_PINS == ("yunet",)
+    assert MODEL_PINS["yunet"].files == ("face_detection_yunet_2023mar.onnx",)
+    assert MODEL_PINS["yunet"].licence == "MIT"
     assert MODEL_PINS["nsfw"].files == ("config.json", "model.safetensors",
                                         "preprocessor_config.json")
     assert len(MODEL_PINS["realvisxl"].files) == 19
@@ -110,7 +113,7 @@ def test_fetch_with_no_names_fetches_every_pin_the_adapter_too(tmp_path, monkeyp
         put(tmp_path, by_repo[repo])
     monkeypatch.setattr(models, "_snapshot_download", fake)
     fetch_models(tmp_path, None, say=lambda text: None)
-    assert fetched == ["realvisxl", "nsfw", "ipadapter"]
+    assert fetched == ["realvisxl", "nsfw", "ipadapter", "yunet"]
 
 
 def test_the_cli_fetch_without_only_asks_for_every_pin(monkeypatch):

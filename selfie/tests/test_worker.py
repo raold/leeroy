@@ -110,11 +110,10 @@ def test_a_plain_worker_refuses_an_identity_reference(tmp_path):
     assert lines[2]["ok"] is True
 
 
-def test_an_identity_worker_refuses_a_render_without_one(tmp_path):
+def test_an_identity_worker_renders_with_and_without_one(tmp_path):
     fake = Fake(identity=True)
     _, lines = run_identity(lambda: fake, req(tmp_path, "a") + with_identity(tmp_path, "b"))
-    assert lines[1] == {"id": "a", "ok": False, "error": "bad_request"}
-    assert lines[2]["ok"] is True and fake.seen == ["b"]
+    assert lines[1]["ok"] is True and lines[2]["ok"] is True and fake.seen == ["a", "b"]
 
 
 def test_ready_says_identity_only_for_a_renderer_that_loaded_the_adapter(tmp_path):

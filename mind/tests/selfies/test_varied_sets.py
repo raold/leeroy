@@ -28,6 +28,11 @@ from nightly.test_night_enrich import APPEARANCE
 from selfies import clip_bpe
 from selfies.fakes import fake_worker, ready
 
+
+def make_stage_for(cfg, tmp_path, **env):
+    from leeroy_mind.selfies.stage import make_stage
+    return make_stage(cfg, worker=fake_worker(tmp_path, **env))
+
 DAY = "2026-10-29"
 KIND = ProfilePhoto("mirror_selfie", "upper_body", "the mirror in her hallway",
                     "a black fitted little dress", "a playful smile")
@@ -754,3 +759,79 @@ def test_try_varied_renders_one_set_into_scratch_and_writes_nothing_live(tmp_pat
                             make_llm=lambda cfg: llm(root)) == 1
     assert "not of the lust style" in capsys.readouterr().err
     assert cli.selfies_main(["--data-dir", str(root), "try", "--varied", "--snaps"]) == 2
+
+
+# -- the face of her chosen photo in every new set (identity_sets, owner 2026-11-14) -------------
+
+IDENT = SelfieCfg(enabled=True, varied_sets=True, identity_sets=True)
+
+
+def _logged(path):
+    return [line.split() for line in path.read_text(encoding="utf-8").splitlines()
+            if line.split()[0].count(":") == 3]  # "<guid>:<set>:<idx>:<attempt> <seed> ..."
+
+
+def _cover(h, guid=101):
+    ready(h.store, h.settings.data_dir, guid, 1)  # an ordinary set, picked: her face
+    change = pick(h.store, guid, 1, 0, source="console", now=h.T)
+    ref = files.history(h.settings.data_dir, guid, change)
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_bytes(b"jpeg")
+    return change
+
+
+def test_a_new_set_carries_her_chosen_photos_face_and_back_views_take_it_lightly(h, tmp_path):
+    p = lust(h, 101)
+    change = _cover(h)
+    varied.queue(h.store, human=1, now=h.T, day=DAY, go=True)
+    looks = varied.plan_of(h.store.conn, 101, 2)
+    log = tmp_path / "requests.log"
+    run(make_stage_for(IDENT, tmp_path, FAKE_SELFIE_IDENTITY="1", FAKE_SELFIE_LOG=str(log))(h.ctx()))
+    rows = [r for r in _logged(log) if r[0].startswith("101:2:")]
+    assert len(rows) == 4
+    ref = str(files.history(h.settings.data_dir, 101, change).absolute())
+    for row, look in zip(rows, looks):
+        assert row[2] == "identity" and row[3] == ref
+        assert float(row[4]) == (0.3 if look.view in kind.BACK_VIEWS else 0.6)
+    assert _prompts(h, 101, 2) and p.photo is not None
+
+
+def test_a_first_set_has_no_face_to_carry_and_renders_plain_on_the_identity_worker(h, tmp_path):
+    lust(h, 101)
+    varied.queue(h.store, human=1, now=h.T, day=DAY, go=True)
+    log = tmp_path / "requests.log"
+    run(make_stage_for(IDENT, tmp_path, FAKE_SELFIE_IDENTITY="1", FAKE_SELFIE_LOG=str(log))(h.ctx()))
+    rows = [r for r in _logged(log) if r[0].startswith("101:1:")]
+    assert len(rows) == 4 and all(len(r) == 2 for r in rows)  # no identity
+    assert len(_prompts(h, 101, 1)) == 4
+
+
+def test_with_identity_sets_off_no_set_carries_a_face(h, tmp_path):
+    lust(h, 101)
+    _cover(h)
+    varied.queue(h.store, human=1, now=h.T, day=DAY, go=True)
+    log = tmp_path / "requests.log"
+    run(make_stage_for(ON, tmp_path, FAKE_SELFIE_LOG=str(log))(h.ctx()))
+    rows = [r for r in _logged(log) if r[0].startswith("101:2:")]
+    assert len(rows) == 4 and all(len(r) == 2 for r in rows)
+
+
+def test_the_booth_starts_the_identity_worker_only_with_the_switch(monkeypatch):
+    from types import SimpleNamespace
+    from leeroy_mind.selfies import booth
+    asked = []
+    monkeypatch.setattr(booth, "worker_command",
+                        lambda cfg, identity=False, embedding=False: asked.append(identity) or ["x"])
+    monkeypatch.setattr(booth, "SelfieWorker", lambda command, env=None: command)
+    app = SimpleNamespace(night_scheduler=SimpleNamespace(run_night=None),
+                          arbiter=SimpleNamespace(set_preempt=lambda f: None))
+    for cfg in (IDENT, ON):
+        booth.PhotoBooth(app, cfg).worker()
+    assert asked == [True, False]
+
+
+def test_the_identity_sets_switch_is_off_by_default_and_read_from_the_toml(tmp_path):
+    path = tmp_path / "mind.toml"
+    path.write_text("[selfies]\nenabled = true\nidentity_sets = true\n", encoding="utf-8")
+    assert load_selfie_config(path).identity_sets is True
+    assert SelfieCfg().identity_sets is False

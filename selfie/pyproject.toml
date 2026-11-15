@@ -22,6 +22,7 @@ gpu = [
   "huggingface_hub==2.4.0",
   "pillow==13.0.0",
   "numpy==2.5.4",
+  "opencv-python-headless==5.0.0.93",
 ]
 # Pillow too: the caption test draws a real image with the bundled font
 test = ["pytest>=9.1,<10", "pillow==13.0.0"]

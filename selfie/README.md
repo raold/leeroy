@@ -50,10 +50,18 @@ true` and keeps the pipeline loaded on the CPU: the mind makes room and sends `{
 "op": "retry"}`, and the worker checks the free VRAM again (waiting up to 10 s for an unload to
 free it) without loading anything twice. The end of stdin ends it at once, mid-render too.
 `worker --identity` also loads the adapter (a missing adapter file refuses ready with `model`)
-and says `identity: true` in its ready line; it then renders only requests that carry an
-`identity` reference (a square crop of a JPEG and a scale; the embeds of the last 8 references,
-each a file version and crop, are kept), and a worker without it answers `identity_unavailable`
-to one.
+and says `identity: true` in its ready line; it renders requests that carry an `identity`
+reference (a square crop of a JPEG and a scale; the embeds of the last 8 references, each a file
+version and crop, are kept) and, since 2026-11-14, requests without one too (a blank reference at
+scale 0, which adds nothing), so one worker serves a night's profile sets with and without a
+face; a worker without the adapter answers `identity_unavailable` to a reference.
+The reference face (`face.py`): with the `yunet` pin fetched (`fetch-models --only yunet`, YuNet
+from OpenCV Zoo, MIT, about 230 KB; needs `opencv-python-headless` from the `gpu` extra) the
+worker finds the face in the reference and cuts a square of 1.8 times its longer side around it,
+preferring a face inside the mind's square, then evens out the crop's colour cast (gray world),
+so a nightclub's purple light does not tint every new scene. Not fetched, no OpenCV, no face
+found or any detector error: the mind's square is cut as it is. `doctor` notes `yunet` as not
+fetched without failing.
 `worker --embed-only` loads only the already fetched IP-Adapter image encoder,
 with local files only. It uses the CPU if the VRAM floor is unavailable, and
 falls back to the CPU after a GPU allocation failure. An `embed` request has

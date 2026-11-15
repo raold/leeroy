@@ -34,7 +34,8 @@ class PhotoBooth:
     def __init__(self, app, cfg, *, worker=None):
         self.app, self.cfg = app, cfg
         self.scheduler, self.arbiter = app.night_scheduler, app.arbiter
-        self.worker = worker or (lambda: SelfieWorker(worker_command(cfg), env=worker_env(cfg)))
+        self.worker = worker or (lambda: SelfieWorker(
+            worker_command(cfg, identity=cfg.identity_sets), env=worker_env(cfg)))
         self._night = self.scheduler.run_night
         self._exclusive = asyncio.Lock()
         self._task = None

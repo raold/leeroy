@@ -96,8 +96,8 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
     """0 after a quit or the end of stdin, 1 when the renderer could not be loaded. `identity`
     says the start asked for the adapter (worker --identity); a renderer that did not load it
     then answers ready ok false, model. Ready says identity only for a renderer that has the
-    adapter, and such a worker refuses a render without an identity reference (bad_request);
-    one without it refuses a render with one (identity_unavailable). Either composites a grid
+    adapter; such a worker renders with or without an identity reference (without: the adapter
+    at scale 0), and one without it refuses a render with one (identity_unavailable). Either composites a grid
     and draws a caption.
     The reader runs from the start, so the end of stdin calls on_eof (the worker's: os._exit)
     at once, during the load, a wait for a retry or a render too."""
@@ -146,9 +146,8 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
         if isinstance(req, Caption):
             _send(out, _caption_answer(renderer, req))
             continue
-        if (req.identity is not None) != has_adapter:
-            error = "bad_request" if has_adapter else "identity_unavailable"
-            _send(out, {"id": req.id, "ok": False, "error": error})
+        if req.identity is not None and not has_adapter:
+            _send(out, {"id": req.id, "ok": False, "error": "identity_unavailable"})
             continue
         _send(out, _answer(renderer, req))
 

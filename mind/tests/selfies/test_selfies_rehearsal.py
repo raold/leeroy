@@ -76,7 +76,7 @@ def test_profile_photos_end_to_end(tmp_path, monkeypatch):
     data = tmp_path / "mind-data"
     data.mkdir()
     env: dict[str, str] = {}  # the fake worker's behaviour for the night under way
-    monkeypatch.setattr(stage, "worker_command", lambda cfg: fake_command(tmp_path)[0])
+    monkeypatch.setattr(stage, "worker_command", lambda cfg, **kw: fake_command(tmp_path)[0])
     monkeypatch.setattr(stage, "worker_env", lambda cfg: {**fake_command(tmp_path)[1], **env})
     pids, log = tmp_path / "pids.json", tmp_path / "requests.log"
     hello = {"type": "hello", "server": "mod-leeroy", "version": "0.1.0", "guild_id": GUILD_ID,

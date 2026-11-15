@@ -24,7 +24,15 @@ from .style import LUST, PLAIN
 from .slot import SetRefused, TRIES, render_slot
 from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, build_varied_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
-from .worker import RenderRequest, SelfieWorker, WorkerError
+from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
+
+# [selfies] identity_sets (owner, 2026-11-14): a profile set of a member with a chosen photo
+# carries that photo's face (store.face_pick: never a back view), cut by its framing (the worker
+# cuts it tight around the face it finds), at identity_scale; a varied slot seen from behind
+# takes it at REAR_SCALE of that, or the adapter turns her to the camera. A member with no
+# chosen photo yet (her first set) renders without one.
+REAR_SCALE = 0.5
+MIN_SCALE = 0.3  # the worker's floor
 
 if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
@@ -72,7 +80,8 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
                             set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
                             leases: Callable[[], frozenset[str]] | None = None,
                             fallback: PromptSpec | None = None,
-                            dropped: set[int] | None = None) -> list[Candidate]:
+                            dropped: set[int] | None = None,
+                            identity: tuple[Identity | None, ...] | None = None) -> list[Candidate]:
     """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each: every slot
     from `spec`, or slot i from spec[i] when it is a tuple of four (a varied set). A slot whose
     prompt the worker finds too long ("prompt_too_long") renders from `fallback` instead when
@@ -81,16 +90,20 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
     and nothing is sent. Raises SetRefused when a slot is flagged TRIES times, RoomFailed when
     make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot, an
     image answered as written whose two files are not both there ("unwritten") or any other
-    worker failure, and LiveLeaseHeld."""
+    worker failure, and LiveLeaseHeld. `identity` gives slot i its face reference (None: none)."""
     out_dir = Path(out_dir).absolute()
     specs = (spec,) * SET_SIZE if isinstance(spec, PromptSpec) else tuple(spec)
     if len(specs) != SET_SIZE:
         raise ValueError("a set renders four candidates")
+    faces = tuple(identity) if identity is not None else (None,) * SET_SIZE
+    if len(faces) != SET_SIZE:
+        raise ValueError("a set has four face references")
     made = []
     for idx in range(SET_SIZE):
         try:
             made.append(await _slot(worker, specs[idx], out_dir, idx, night=night, guid=guid,
-                                    set_no=set_no, cfg=cfg, make_room=make_room, leases=leases))
+                                    set_no=set_no, cfg=cfg, make_room=make_room, leases=leases,
+                                    identity=faces[idx]))
         except WorkerError as e:
             if e.reason != "prompt_too_long" or fallback is None or specs[idx] is fallback:
                 raise
@@ -98,9 +111,10 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
                 dropped.add(idx)
             log("selfies_varied_slot_dropped", night=night, guid=guid, set=set_no, slot=idx,
                 reason="too_long")
+            front = next((f for f in faces if f is not None and f.scale >= cfg.identity_scale), None)
             made.append(await _slot(worker, fallback, out_dir, idx, night=night, guid=guid,
                                     set_no=set_no, cfg=cfg, make_room=make_room, leases=leases,
-                                    tag="o"))
+                                    tag="o", identity=front or faces[idx]))
     return made
 
 
@@ -124,14 +138,15 @@ async def _room(make_room: Callable[[], Awaitable[None]], *, night: str, guid: i
 
 async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str, guid: int,
                 set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
-                leases: Callable[[], frozenset[str]] | None, tag: str = "") -> Candidate:
+                leases: Callable[[], frozenset[str]] | None, tag: str = "",
+                identity: Identity | None = None) -> Candidate:
     out, thumb = out_dir / f"c{idx}.jpg", out_dir / f"c{idx}.thumb.jpg"
 
     def request(attempt: int) -> RenderRequest:
         _unleased(leases)
         return RenderRequest(spec.phrases, spec.negative,
                              seed_for(night, guid, set_no, idx, attempt), cfg.steps, cfg.guidance,
-                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max)
+                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max, identity=identity)
 
     async def room() -> None:
         await _room(make_room, night=night, guid=guid, set_no=set_no, idx=idx)
@@ -290,6 +305,35 @@ def _varied_specs(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int,
     return None
 
 
+def _set_faces(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int, set_no: int,
+               varied: bool) -> tuple[Identity | None, ...] | None:
+    """The set's face references by slot, or None (the switch off, or no chosen photo with a
+    face yet): her cover's face (store.face_pick) cut by its framing at identity_scale, a slot
+    seen from behind at REAR_SCALE of it."""
+    if not getattr(cfg, "identity_sets", False) or p.photo is None:
+        return None
+    from .kind import BACK_VIEWS
+    from .scene import ref_crop
+    from .store import current, face_pick
+    with ctx.store.transaction():
+        cur = current(ctx.store, guid)
+        got = None if cur is None else face_pick(ctx.store.conn, guid, cur.pick)
+        plan = None
+        if varied:
+            from . import varied as varied_mod
+            plan = varied_mod.plan_of(ctx.store.conn, guid, set_no)
+    if got is None:
+        return None
+    ref = files.history(ctx.settings.data_dir, guid, got[0]).absolute()
+    if not ref.is_file():
+        return None
+    crop = ref_crop(got[1] or p.photo.framing)
+    full = Identity(ref, crop, cfg.identity_scale)
+    rear = Identity(ref, crop, max(MIN_SCALE, round(cfg.identity_scale * REAR_SCALE, 2)))
+    views = tuple(None if x is None else x.view for x in plan) if plan else (None,) * SET_SIZE
+    return tuple(rear if v in BACK_VIEWS else full for v in views)
+
+
 async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, p: Persona,
                       guid: int, set_no: int, varied: tuple[PromptSpec | None, ...] | None,
                       dropped: set[int]) -> list[Candidate]:
@@ -306,10 +350,15 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     else:
         dropped.update(i for i, x in enumerate(varied) if x is None)
         spec = tuple(ordinary if x is None else x for x in varied)
+    faces = _set_faces(ctx, cfg, p, guid, set_no, varied is not None)
+    if faces is not None:
+        log("selfies_set_face", night=ctx.night, guid=guid, set=set_no,
+            scales=",".join(str(f.scale) for f in faces))
     made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders,
-                                   fallback=None if varied is None else ordinary, dropped=dropped)
+                                   fallback=None if varied is None else ordinary, dropped=dropped,
+                                   identity=faces)
     files.publish_set(data, guid, set_no)
     return made
 
