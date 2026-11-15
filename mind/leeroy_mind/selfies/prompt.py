@@ -17,8 +17,9 @@ worker's NSFW gate is the same for both.
 The subject (subject_phrase) and the face (looks_phrases: hair_skin, then eyes_face) are shared
 with the situational photos' prompts (scene.py), as are the body: the build said as a figure with
 her bust when the owner set one (build_words) and her weight said as a body size by its BMI
-(size_words: nothing in the ordinary band, so a persona without a weight or bust edit renders as
-before unless her weight sits outside it). Both are clothed words; the negatives are unchanged."""
+(size_words: nothing in the ordinary band, nor below it for a full build, so a persona without a
+weight or bust edit renders as before unless her weight sits outside it). Both are clothed words;
+the negatives are unchanged."""
 import re
 from dataclasses import dataclass
 
@@ -124,7 +125,9 @@ _BUILD_BUST = {"curvy": "full bust", "voluptuous": "large full bust"}
 # The weight said as a body size (owner 2026-11-15: curvy and voluptuous members rendered slim),
 # by the body-mass index of weight_kg and height_cm: (below this BMI, a woman's words, a man's).
 # The ordinary band says nothing, so the build alone stands there, as before. Short on purpose:
-# at most 5 tokens, so it fits beside the longest required set.
+# at most 5 tokens, so it fits beside the longest required set. Size words never pull against
+# the build (controller ruling, 2026-11-15): for a FULL_BUILDS build the bands below 25 say
+# nothing either, so a curvy woman of BMI 20 is still said as curvy, never slender.
 SIZE_WORDS = ((18.5, "very thin", "very thin"),
               (22.0, "slender", "lean"),
               (25.0, "", ""),
@@ -132,6 +135,7 @@ SIZE_WORDS = ((18.5, "very thin", "very thin"),
               (32.0, "chubby", "chubby"),
               (36.0, "plus-size", "overweight"),
               (float("inf"), "plus-size, overweight", "very overweight"))
+FULL_BUILDS = ("curvy", "voluptuous", "stocky", "heavy")  # only the bands above 25 add words
 
 
 def bmi(a) -> float:
@@ -140,8 +144,11 @@ def bmi(a) -> float:
 
 
 def size_words(p: Persona) -> str:
-    """The body size her weight and height say (SIZE_WORDS), or "" in the ordinary band."""
+    """The body size her weight and height say (SIZE_WORDS), or "" in the ordinary band, and
+    below it for a full build (FULL_BUILDS): a thin word never contradicts a curvy figure."""
     value = bmi(p.appearance)
+    if value < 25.0 and p.appearance.build in FULL_BUILDS:
+        return ""
     woman = p.identity.player_gender == "female"
     return next(w if woman else m for below, w, m in SIZE_WORDS if value < below)
 

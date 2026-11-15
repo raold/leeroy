@@ -98,7 +98,34 @@ def test_the_looks_pass_is_never_asked_for_a_bust_and_never_takes_one():
     (80, "chubby", "chubby"), (88, "plus-size", "overweight"),
     (100, "plus-size, overweight", "very overweight"), (180, "plus-size, overweight", "very overweight")])
 def test_the_weight_is_said_as_a_body_size_by_its_bmi(kg, her, his):
-    assert size_words(woman(weight_kg=kg)) == her and size_words(man(weight_kg=kg)) == his
+    for build in ("slim", "athletic", "average"):  # every band, as the BMI says
+        assert size_words(woman(weight_kg=kg, build=build)) == her
+        assert size_words(man(weight_kg=kg, build=build)) == his
+
+
+@pytest.mark.parametrize("build", ["curvy", "voluptuous", "stocky", "heavy"])
+@pytest.mark.parametrize("kg,her,his", [
+    (45, "", ""), (49, "", ""), (55, "", ""), (60, "", ""), (64, "", ""),
+    (70, "slightly chubby", "slightly chubby"), (80, "chubby", "chubby"),
+    (88, "plus-size", "overweight"), (100, "plus-size, overweight", "very overweight")])
+def test_a_full_build_is_never_said_thin_only_heavier(build, kg, her, his):
+    """Size words never pull against the build (controller ruling, 2026-11-15): a curvy,
+    voluptuous, stocky or heavy build below BMI 25 has no size word, its build words alone."""
+    assert size_words(woman(weight_kg=kg, build=build)) == her
+    assert size_words(man(weight_kg=kg, build=build)) == his
+
+
+def test_a_curvy_woman_of_bmi_20_renders_curvy_with_no_size_word():
+    p = replace(woman(build="curvy"), appearance=replace(APPEARANCE, build="curvy",
+                                                         height_cm=165, weight_kg=55))
+    assert round(55 / 1.65 ** 2, 1) == 20.2 and size_words(p) == ""
+    texts = _texts(build_prompt(p))
+    assert (BUILD_WORDS["curvy"], 0) in build_prompt(p).phrases
+    assert not any(t in texts for _, w, m in SIZE_WORDS for t in (w, m) if t)
+    vol = replace(p, appearance=replace(p.appearance, build="voluptuous", bust="large"))
+    assert size_words(vol) == "" and (build_words(vol), 0) in build_prompt(vol).phrases
+    slim = replace(p, appearance=replace(p.appearance, build="slim"))
+    assert size_words(slim) == "slender"  # a slim build keeps its band
 
 
 def test_a_bust_set_is_said_in_place_of_the_builds_own_and_never_for_a_man():
@@ -222,7 +249,8 @@ def test_an_ordinary_plain_prompt_always_requires_the_size():
             p = woman(build=build, weight_kg=kg, bust="very_large")
             for framing in ("face", "three_quarter"):
                 spec = build_prompt(replace(p, photo=replace(PHOTO, framing=framing)))
-                assert (size_words(p), 0) in spec.phrases
+                if size_words(p):  # a full build below BMI 25 has none
+                    assert (size_words(p), 0) in spec.phrases
                 assert joined(_texts(spec, 0)) <= REQUIRED_MAX
 
 

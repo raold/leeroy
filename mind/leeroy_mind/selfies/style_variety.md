@@ -186,12 +186,17 @@ Every profile, varied and situational prompt now says the weight as a body size 
 (`prompt.size_words`: very thin below 18.5, slender below 22, nothing from 22 to 25, slightly
 chubby, chubby from 28, plus-size from 32, plus-size and overweight from 36; a man's words differ
 above 32) and the bust inside the build's figure words (`prompt.build_words`; never for a man).
+Size words never pull against the build: a curvy, voluptuous, stocky or heavy build below BMI 25
+has no size word (its build words alone); only slim, athletic and average builds get the thin
+bands.
 In a profile prompt the size is required while the required set with it counts at most 70 by the
 mind's estimate, else it is the first optional phrase; in a varied set it comes before her hair
 and skin in the same chain; in a situational photo it sits beside the build at priority 1. The
 looks pass is never asked for a bust. Negatives, the NSFW gate, the age guard and the name
 screens are unchanged.
 
-Note for the first night after release: members whose stored weight falls outside 22-25 BMI
-(the 91 lust women were set to their build's median: about 29.5 curvy, 32.5 voluptuous) now
-render visibly heavier; adjust their weight in the Looks panel where that is not wanted.
+Note for the first night after release: a member with a full build above BMI 25, or a slim,
+athletic or average build outside 22-25, gets a size word. Of the 91 lust women (measured
+2026-11-15: curvy median BMI 21.3, range 19.6-24.8; voluptuous median 23.9, range 20.5-28.7), 81
+get none, so their prompts are unchanged until a weight or bust is set; 9 voluptuous members get
+"slightly chubby" and one "chubby". Raise a weight in the Looks panel to make a body read heavier.
