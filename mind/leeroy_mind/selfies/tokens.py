@@ -66,7 +66,8 @@ WORD_TOKENS = {
     "white": 1, "wide": 1, "windswept": 2, "wine": 1, "wink": 1, "with": 1, "woman": 1,
     "wooden": 1, "wrap": 1, "year": 1,
     # body size and bust (prompt.SIZE_WORDS, BUST_WORDS), measured 2026-11-15
-    "chubby": 1, "lean": 1, "overweight": 1, "slender": 1, "slightly": 1, "small": 1,
+    "arms": 1, "chubby": 1, "heavyset": 2, "lean": 1, "overweight": 1, "round": 1, "slender": 1,
+    "slightly": 1, "small": 1,
     # the photo kinds and framings (prompt._KINDS, _FRAMINGS), measured 2026-11-15
     "by": 1, "candid": 1, "close": 1, "friend": 1, "headshot": 1, "mid": 1, "phone": 1,
     "professional": 1, "selfie": 1, "string": 1, "taken": 1, "thigh": 1, "upper": 1,

@@ -18,7 +18,7 @@ from leeroy_mind.endpoint import BadRequest, ControlCfg, ControlEndpoint, looks_
 from leeroy_mind.nightly.growth import undo
 from leeroy_mind.personas.io import PersonaCache, load_persona, save_persona
 from leeroy_mind.personas.looks_edit import RECEIPT, LooksError, LooksService, set_looks
-from leeroy_mind.selfies import kind, varied
+from leeroy_mind.selfies import files, kind, varied
 from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.prompt import build_prompt
 from leeroy_mind.selfies.service import SelfieService
@@ -31,6 +31,7 @@ from .fakes import OWNER, PHOTO, mind_app, ready, renderable_cast
 from .test_selfie_prompt import LUST_PHOTO
 
 KEY = "K" * 43
+KEEP = "with her new figure; pick one as her photo to keep it."
 ON = "[selfies]\nenabled = true\n"
 
 
@@ -68,6 +69,13 @@ def _ledger(store, guid):
     with store.transaction():
         return [dict(r) for r in store.conn.execute(
             "SELECT id, kind, text, ref FROM persona_ledger WHERE guid=? ORDER BY id", (guid,))]
+
+
+def _protected(store, guid):
+    with store.transaction():
+        row = store.conn.execute("SELECT reason, version FROM persona_looks_protection "
+                                 "WHERE guid=?", (guid,)).fetchone()
+    return None if row is None else tuple(row)
 
 
 def _source(store, guid):
@@ -128,7 +136,7 @@ def test_a_change_is_an_owner_version_with_a_ledger_row_and_a_receipt(store, clo
                                     "text": "weight 64 -> 88 kg, bust the build's own -> large"}]
     assert json.loads(store.get_meta(RECEIPT.format(ledger=made.ledger))) == {
         "before": {"weight_kg": 64, "bust": None}, "after": {"weight_kg": 88, "bust": "large"},
-        "source": "seed"}
+        "source": "seed", "version": made.version, "protection": None}
     with store.transaction():  # the variety pass now leaves her looks alone
         assert store.conn.execute("SELECT reason FROM persona_looks_protection WHERE guid=102"
                                   ).fetchone()[0] == "owner"
@@ -165,6 +173,7 @@ def test_undo_restores_both_values_and_the_source_and_is_recorded(store, clock, 
     assert rows[-1]["kind"] == "undo" and rows[-1]["ref"] == made.ledger
     assert rows[-1]["text"].startswith("undid looks: weight 64 -> 88 kg")
     assert undo(store, made.ledger, now=6001.0) is False  # once
+    assert _protected(store, 102) is None  # the variety pass may re-roll her again, as before
     with store.transaction():
         view = member_view(store.conn, 102, now=7000.0)
     assert [r["undone"] for r in view["ledger"] if r["kind"] == "looks"] == [True]
@@ -195,23 +204,23 @@ def test_a_change_queues_a_fresh_set_and_its_render_says_the_new_looks(store, cl
     reply = run(LooksService(app).handle(looks(weight_kg=88)))
     n = reply["ledger"]
     assert reply == {"ok": True, "guid": 102, "ledger": n, "set": 2,
-                     "message": f"Saved (ledger #{n}). A new set renders tonight. The set waiting "
-                                "for your choice stays in her gallery."}
+                     "message": f"Saved (ledger #{n}). A new set renders tonight {KEEP} The set "
+                                "waiting for your choice stays in her gallery."}
     assert [(s.guid, s.set_no, s.reason) for s in queued_sets(store)] == [(102, 2, "more")]
     assert ready_set(store, 102, 1).decided == "passed"  # as "4 more" passes it: still pickable
     spec = build_prompt(app.personas.base(102))  # what tonight's render reads: the new looks
     assert ("curvy hourglass figure, large full bust, wide hips, narrow waist", 0) in spec.phrases
-    assert ("chubby", 0) in spec.phrases  # 88 kg at 168 cm
+    assert ("chubby, thick arms", 0) in spec.phrases  # 88 kg at 168 cm
     again = run(LooksService(app).handle(looks(weight_kg=90, bust="medium")))
     assert again["set"] == 2 and again["message"].endswith(
-        "A set is already queued; it renders tonight with the new looks.")
+        f"A set is already queued: it renders tonight {KEEP}")
     assert len(queued_sets(store)) == 1
     same = run(LooksService(app).handle(looks(weight_kg=90, bust="medium")))
     assert same == {"ok": True, "guid": 102, "ledger": None, "set": None,
                     "message": "Nothing changed: those are already their looks."}
 
 
-def test_the_words_name_the_booth_and_her_covers_face_when_they_apply(store, clock, tmp_path):
+def test_the_words_name_the_booth_when_it_applies(store, clock, tmp_path):
     from leeroy_mind.selfies.store import pick
     app = app_for(store, clock, tmp_path, SelfieCfg(enabled=True, booth=True, identity_sets=True))
     save_woman(store, 102)
@@ -219,7 +228,7 @@ def test_the_words_name_the_booth_and_her_covers_face_when_they_apply(store, clo
     pick(store, 102, 1, 0, source="console", now=2.0)
     reply = run(LooksService(app).handle(looks()))
     assert reply["message"].endswith("A new set renders tonight or at the photo booth's next "
-                                     "pass, with her cover's face.")
+                                     f"pass {KEEP}")
 
 
 def test_a_lust_style_woman_gets_a_varied_set_even_after_one_today(store, clock, tmp_path):
@@ -229,7 +238,7 @@ def test_a_lust_style_woman_gets_a_varied_set_even_after_one_today(store, clock,
     store.set_meta(varied.DAY_KEY.format(guid=102), day)  # "selfies vary" ran for her today
     reply = run(LooksService(app).handle(looks(weight_kg=100, bust="very_large")))
     assert reply["ok"] and reply["set"] == 1
-    assert reply["message"].endswith("A new varied set renders tonight.")
+    assert reply["message"].endswith(f"A new varied set renders tonight {KEEP}")
     plan = json.loads(store.get_meta(VARIED_SET_KEY.format(guid=102, set_no=1)))
     assert len(plan["looks"]) == 4
 
@@ -238,7 +247,7 @@ def test_with_varied_sets_off_a_lust_woman_gets_an_ordinary_set(store, clock, tm
     app = app_for(store, clock, tmp_path)
     save_woman(store, 102, lust=True)
     reply = run(LooksService(app).handle(looks()))
-    assert reply["set"] == 1 and reply["message"].endswith("A new set renders tonight.")
+    assert reply["set"] == 1 and reply["message"].endswith(f"A new set renders tonight {KEEP}")
     assert store.get_meta(VARIED_SET_KEY.format(guid=102, set_no=1)) is None
 
 
@@ -270,7 +279,7 @@ def test_undo_through_the_service_queues_a_set_and_refuses_other_ledger_rows(sto
     back = run(LooksService(app).handle({"action": "undo", "ledger": made["ledger"]}))
     assert back["ok"] and back["ledger"] == made["ledger"] and back["message"].startswith("Undone.")
     assert app.personas.base(102).appearance.bust is None
-    assert back["message"].endswith("A set is already queued; it renders tonight with the new looks.")
+    assert back["message"].endswith(f"A set is already queued: it renders tonight {KEEP}")
     assert run(LooksService(app).handle({"action": "undo", "ledger": made["ledger"]}))["ok"] is False
     note = ledger_add(store, guid=102, kind="note_added", text="likes boats", evidence=[], now=1.0)
     assert run(LooksService(app).handle({"action": "undo", "ledger": note})) == {
@@ -326,3 +335,153 @@ def test_a_change_through_the_endpoint_answers_and_logs_content_free(tmp_path, c
     for name in names:
         assert name not in text
     assert "weight" not in text and "bust" not in text  # ids and outcomes only
+
+
+# -- the set it queues shows her new figure under a light face ---------------------------------
+
+def _service_on(h, cfg):
+    app = SimpleNamespace(store=h.store, clock=h.clock, data_dir=h.settings.data_dir,
+                          personas=PersonaCache(h.store), human_guid=1)
+    app.selfies = SelfieService(app, cfg)
+    return app
+
+
+def _face_file(h, guid, change):
+    ref = files.history(h.settings.data_dir, guid, change)
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_bytes(b"jpeg")
+    return str(ref.absolute())
+
+
+def test_a_looks_edit_set_holds_her_cover_face_lightly_until_he_picks_from_it(h, tmp_path):
+    """Controller, measured on the GPU 2026-11-15: at identity_scale the face reference carries
+    her slim cover's body into the set. The set a weight or bust edit queues takes it at the
+    worker's floor in every slot, front views included; once he picks a new cover from it, the
+    next set holds that fuller cover at full strength again."""
+    from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY, pick, queue_more
+    from selfies.test_varied_sets import IDENT, _cover, _logged, lust, make_stage_for
+    lust(h, 101, appearance=replace(APPEARANCE, build="voluptuous"))
+    old_cover = _cover(h)
+    app = _service_on(h, IDENT)
+    reply = run(LooksService(app).handle(looks(guid=101, weight_kg=96, bust="very_large")))
+    assert reply["set"] == 2 and reply["message"].endswith(
+        "A new varied set renders tonight with her new figure; pick one as her photo to keep it.")
+    assert h.store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=101, set_no=2)) == "1"
+    plan = varied.plan_of(h.store.conn, 101, 2)
+    assert {x.view for x in plan} & set(kind.BACK_VIEWS) and {x.view for x in plan} - set(kind.BACK_VIEWS)
+    log = tmp_path / "requests.log"
+    stage = make_stage_for(IDENT, tmp_path, FAKE_SELFIE_IDENTITY="1", FAKE_SELFIE_LOG=str(log))
+    run(stage(h.ctx()))
+    rows = [r for r in _logged(log) if r[0].startswith("101:2:")]
+    ref = str(files.history(h.settings.data_dir, 101, old_cover).absolute())
+    assert len(rows) == 4
+    for row in rows:  # her old cover's face, at the floor in every slot, front views included
+        assert row[2] == "scale" and float(row[3]) == 0.3 and row[4] == "identity"
+        assert row[5] == ref
+    front = next(i for i, x in enumerate(plan) if x.view in ("front", "side"))
+    new_cover = pick(h.store, 101, 2, front, source="console", now=h.T + 10)
+    new_ref = _face_file(h, 101, new_cover)
+    queue_more(h.store, 101, now=h.T + 20)  # "4 more" later: no looks edit, no marker
+    assert h.store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=101, set_no=3)) is None
+    log.unlink()
+    run(stage(h.ctx()))
+    rows = [r for r in _logged(log) if r[0].startswith("101:3:")]
+    assert len(rows) == 4
+    assert all(float(r[3]) == 0.6 and r[5] == new_ref for r in rows)  # the fuller cover, full
+
+
+def test_a_set_already_queued_is_marked_too(store, clock, tmp_path):
+    from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY, queue_more
+    app = app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    ready(store, tmp_path, 102, 1)
+    queue_more(store, 102, now=5.0)  # his "4 more", before the edit
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=2)) is None
+    reply = run(LooksService(app).handle(looks()))
+    assert reply["set"] == 2 and reply["message"].endswith(
+        "A set is already queued: it renders tonight with her new figure; pick one as her "
+        "photo to keep it.")
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=2)) == "1"
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) is None
+
+
+def test_an_ordinary_set_of_a_member_without_an_edit_keeps_the_full_face(h, tmp_path):
+    from leeroy_mind.selfies.store import queue_more
+    from selfies.test_varied_sets import _cover, _logged, lust, make_stage_for
+    lust(h, 101)
+    _cover(h)
+    queue_more(h.store, 101, now=h.T)
+    cfg = SelfieCfg(enabled=True, identity_sets=True)
+    log = tmp_path / "requests.log"
+    run(make_stage_for(cfg, tmp_path, FAKE_SELFIE_IDENTITY="1", FAKE_SELFIE_LOG=str(log))(h.ctx()))
+    rows = [r for r in _logged(log) if r[0].startswith("101:2:")]
+    assert len(rows) == 4 and all(float(r[3]) == 0.6 for r in rows)
+
+
+def test_undo_puts_back_a_protection_that_was_there_and_keeps_a_later_ones(store, clock, tmp_path):
+    from leeroy_mind.personas.io import import_personas  # noqa: F401  (an owner save, as an import)
+    app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    with store.transaction():  # an earlier owner change of her looks protected them
+        store.conn.execute("INSERT INTO persona_looks_protection VALUES (102, 'owner', 1)")
+    made = set_looks(store, 102, weight_kg=88, bust=None, now=5000.0)
+    assert _protected(store, 102) == ("owner", made.version)
+    assert undo(store, made.ledger, now=6000.0) is True
+    assert _protected(store, 102) == ("owner", 1)  # as it was before the edit
+    second = set_looks(store, 102, weight_kg=90, bust=None, now=7000.0)
+    p = load_persona(store, 102)  # a later owner change of her hair holds the protection
+    name, race, cls = TEST_CAST[102]
+    later = save_persona(store, replace(p, appearance=replace(p.appearance, hair_colour="auburn")),
+                         source="owner", ts=7100.0, race=RACES[race], class_name=CLASSES[cls])
+    assert _protected(store, 102) == ("owner", later)
+    assert undo(store, second.ledger, now=7200.0) is True
+    assert _protected(store, 102)[1] != 1  # not taken back: a later owner change holds it
+
+
+def test_an_edit_while_her_set_renders_says_so_and_a_set_with_her_new_figure_follows(store, clock,
+                                                                                       tmp_path):
+    from leeroy_mind.selfies.store import queue_more
+    app = app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    ready(store, tmp_path, 102, 1)
+    queue_more(store, 102, now=5.0)
+    files.staging_dir(tmp_path, 102, 2).mkdir(parents=True)  # the night is rendering set 2
+    reply = run(LooksService(app).handle(looks()))
+    assert reply["set"] == 2 and reply["message"].endswith(
+        "Her set is rendering now from her previous looks; a set with her new figure follows "
+        "it. Pick one as her photo to keep it.")
+
+
+def test_a_set_whose_render_an_edit_overtook_is_stamped_old_and_a_fresh_one_queued(h, tmp_path,
+                                                                                   monkeypatch):
+    """Review of #316: a set stamped with the version in force at publish read as current when
+    an edit landed mid-render. It is stamped with the version its prompts were built from, and a
+    fresh looks-edit set is queued that renders from the persona after the edit."""
+    from leeroy_mind.selfies import render
+    from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY, queue_more, queued_sets
+    from selfies.test_varied_sets import _cover, lust, make_stage_for
+    lust(h, 101, appearance=replace(APPEARANCE, build="voluptuous"))
+    _cover(h)
+    queue_more(h.store, 101, now=h.T)  # set 2, his "4 more"
+    built = h.store.persona_versions()[101]
+    real = render.render_candidates
+    edits = []
+
+    async def edit_midway(*a, **kw):  # the owner saves her looks while set 2 renders
+        if not edits:
+            edits.append(set_looks(h.store, 101, weight_kg=96, bust="very_large", now=h.T + 5))
+        return await real(*a, **kw)
+    monkeypatch.setattr(render, "render_candidates", edit_midway)
+    cfg = SelfieCfg(enabled=True, identity_sets=True)
+    run(make_stage_for(cfg, tmp_path, FAKE_SELFIE_IDENTITY="1")(h.ctx()))
+    assert edits and edits[0].version == built + 1
+    stamped = h.store.conn.execute("SELECT persona_version FROM selfie_set WHERE guid=101 AND "
+                                   "set_no=2").fetchone()[0]
+    assert stamped == built  # what its prompts were built from, not the version at publish
+    fresh = h.store.conn.execute("SELECT set_no, status, persona_version FROM selfie_set WHERE "
+                                 "guid=101 AND set_no=3").fetchone()
+    assert fresh is not None and h.store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=101, set_no=3))
+    if fresh[1] == "ready":  # the same stage rendered it, from the persona after the edit
+        assert fresh[2] == built + 1
+    else:
+        assert [s.set_no for s in queued_sets(h.store)] == [3]

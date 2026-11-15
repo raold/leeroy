@@ -23,6 +23,7 @@ from leeroy_mind.selfies.scene import (ABOUT, BIRTHDAY_S, EVERYDAY_DAYS, GUILD_D
                                        scene_from, scene_json, scene_renderable, scene_schema,
                                        scene_system, screen_scene, window)
 from leeroy_mind.selfies.style import LUST, PLAIN, style_of
+from leeroy_mind.selfies.tokens import estimate
 from nightly.conftest import IDENT
 from nightly.test_night_enrich import APPEARANCE
 from nightly.test_night_photo_lust import OLD_REFUSED
@@ -86,7 +87,8 @@ def test_the_scene_prompt_runs_in_the_briefs_order():
     assert spec.phrases == (
         ("mirror selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0),
         (SCENE["activity"], 1), (SCENE["setting"], 1),
-        ("shoulder-length dark brown hair, tucked behind one ear", 1), ("light olive skin", 1),
+        # hair and skin required, never traded for body words (controller ruling, 2026-11-15)
+        ("shoulder-length dark brown hair, tucked behind one ear", 0), ("light olive skin", 0),
         ("looking at the camera", 3), ("hazel eyes", 2), ("freckles", 2), ("thin glasses", 2),
         (SCENE["outfit"], 2), ("soft morning light", 2), (SCENE["expression"], 3),
         ("average build", 1),
@@ -213,33 +215,37 @@ def test_a_scene_round_trips_through_its_json():
 
 
 def test_build_prompt_is_unchanged():
-    # the profile photo's prompt, pinned before subject_phrase and looks_phrases were factored out
-    hair = ("shoulder-length dark brown hair, tucked behind one ear", 1)
-    looks = (hair, ("light olive skin", 1), ("hazel eyes", 2), ("freckles", 2),
-             ("thin glasses", 2), ("average build", 1))
+    # the profile photo's prompt, pinned before subject_phrase and looks_phrases were factored out;
+    # since 2026-11-15 her hair and skin are required and come right after who she is (controller
+    # ruling: never traded for body words), and "looking at the camera" follows them
+    hair = ("shoulder-length dark brown hair, tucked behind one ear", 0)
+    face = (hair, ("light olive skin", 0))
+    rest = (("hazel eyes", 2), ("freckles", 2), ("thin glasses", 2), ("average build", 1))
     kind_ = (("orange rain bib over a grey hoodie", 2), ("on the deck of a small boat", 2),
              ("squinting into the wind", 3))
     phone = ("recent smartphone photo, natural light, natural skin texture, unretouched", 1)
     subject = ("34-year-old British woman", 0)
+    look = ("looking at the camera", 2)
     assert build_prompt(woman()).phrases == (
-        ("candid photo taken by a friend", 0), ("waist-up shot, upper body", 0), subject, *looks, *kind_, phone)
+        ("candid photo taken by a friend", 0), ("waist-up shot, upper body", 0), subject, *face,
+        *rest, *kind_, phone)
     assert build_prompt(woman(age=22, photo={**PHOTO, "kind": "selfie",
                                              "framing": "head_and_shoulders"})).phrases == (
         ("phone selfie", 0), ("head and shoulders", 0), ("22-year-old adult British woman", 0),
-        ("looking at the camera", 2), *looks, *kind_, phone)
+        *face, look, *rest, *kind_, phone)
     shaved = man(appearance=replace(APPEARANCE, hair_length="shaved", skin_tone=""),
                  photo={**PHOTO, "kind": "mirror_selfie"})
     assert build_prompt(shaved).phrases == (
         ("mirror selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British man", 0),
-        ("looking at the camera", 2), ("shaved head", 1), *looks[2:], *kind_, phone)
+        ("shaved head", 0), look, *rest, *kind_, phone)
     assert build_prompt(woman(photo={**PHOTO, "kind": "headshot", "framing": "face"})).phrases == (
-        ("professional headshot", 0), ("close-up of the face", 0), subject,
-        ("looking at the camera", 2), *looks, *kind_,
-        ("recent photo, natural skin texture, unretouched", 1))
+        ("professional headshot", 0), ("close-up of the face", 0), subject, *face, look, *rest,
+        *kind_, ("recent photo, natural skin texture, unretouched", 1))
     assert build_prompt(lusty(photo=LUST_PHOTO), kind_style=LUST).phrases == (
-        ("candid photo taken by a friend", 0), ("waist-up shot, upper body", 0), subject, *looks,
-        ("wearing a red string bikini, the beach at sunset", 0), ("a teasing grin", 3), phone)
-    assert subject_phrase(woman()) == subject and looks_phrases(woman(), None) == list(looks[:5])
+        ("candid photo taken by a friend", 0), ("waist-up shot, upper body", 0), subject, *face,
+        *rest, ("wearing a red string bikini, the beach at sunset", 0), ("a teasing grin", 3), phone)
+    assert subject_phrase(woman()) == subject and looks_phrases(woman(), None) == [
+        (hair[0], 1), ("light olive skin", 1), *rest[:3]]
 
 
 # -- the lust scene (ruling R2) --------------------------------------------------------------
@@ -409,7 +415,9 @@ def test_the_lust_prompts_joined_phrase_keeps_both_parts_within_the_token_fit():
         s = replace(scene_from(LUST_SCENE), kind=kind_, framing=framing, setting=setting,
                     outfit=outfit, activity="a" * 80, expression="an over-the-shoulder glance")
         spec = build_scene_prompt(lusty(age=25, region="US", appearance=big), s)
-        kept, dropped = fit(spec.phrases, _tokens, 75)
+        # the mind's own count (tokens.estimate, never below CLIP's): with her hair and skin now
+        # required (2026-11-15) the coarser _tokens over-count no longer fits this extreme look
+        kept, dropped = fit(spec.phrases, estimate, 75)
         assert f"wearing {outfit}, {setting}" in kept
         assert outfit not in " ".join(dropped) and setting not in " ".join(dropped)
         assert any("f" * 40 == d for d in dropped)          # the long looks went, not the pick

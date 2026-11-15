@@ -17,7 +17,7 @@ from leeroy_mind.text import has_meta
 from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
-from .prompt import (_FRAMINGS, build_words, size_words, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
+from .prompt import (_FRAMINGS, body_phrases, fit_required, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
                      LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
@@ -442,14 +442,15 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
 
 
 def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
-    """The prompt for scene s with p's face, in this order: kind, framing, subject (0), the
-    activity (1), the setting (1), hair and skin (1), looking at the camera (3, not a snapshot),
-    eyes and face details (2), the outfit (2), the light of its time of day (2), the expression
-    (3), the build as a figure with her bust when set (1, prompt.build_words), her weight as a
-    body size (1, prompt.size_words) and the phone look (1, without natural light late at night). A lust
+    """The prompt for scene s with p's face, in this order: kind, framing, subject (0), her body
+    (0: her size, then the build with her bust, prompt.body_phrases), the activity (1), the
+    setting (1), hair and skin (0), looking at the camera (3, not a snapshot), eyes and face
+    details (2), the outfit (2), the light of its time of day (2), the expression (3), a plain
+    average build (1) and the phone look (1, without natural light late at night). A lust
     scene's outfit and setting go in as one priority-0 phrase where the setting stands, with
-    SNAP_NEGATIVE_LUST. Free text holding the persona's names is dropped. ValueError when
-    scene_renderable says why not."""
+    SNAP_NEGATIVE_LUST. If the required set would not fit, her body words shorten, then the
+    kind and the framing yield (prompt.fit_required). Free text holding the persona's names is
+    dropped. ValueError when scene_renderable says why not."""
     missing = scene_renderable(p, s)
     if missing:
         raise ValueError(missing)
@@ -460,12 +461,14 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     add(_KINDS[s.kind], 0)
     add(_FRAMINGS[s.framing], 0)
     add(*subject_phrase(p))
+    body, plain_build = body_phrases(p)  # her body right after who she is, required
+    out += body
     add(s.activity, 1, True)
     if lust:  # one phrase: the fit keeps both or neither; scene_renderable checked the names
         add(lust_phrase(s), 0, True)
     else:
         add(s.setting, 1, True)
-    out += hair_skin(p, name_re)
+    out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
     if s.kind != "snapshot":
         add("looking at the camera", 3)
     out += eyes_face(p, name_re)
@@ -474,9 +477,10 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     if _LIGHT[s.when]:
         add(_LIGHT[s.when], 2)
     add(s.expression, 3, True)
-    add(build_words(p), 1)
-    add(size_words(p), 1)  # her weight as a body size; nothing in the ordinary band
+    if plain_build:  # a plain average build stays where the build always was
+        out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)
+    out = fit_required(out, p, [_KINDS[s.kind], _FRAMINGS[s.framing]], name_re)
     return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if lust else SNAP_NEGATIVE)
 
 

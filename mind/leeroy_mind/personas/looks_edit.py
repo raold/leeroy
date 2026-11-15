@@ -10,7 +10,8 @@ through the running mind's `looks` control op (endpoint.looks_args, ControlEndpo
   nothing. A night writer that saves her persona later reads it again first, so it keeps them.
 - restore, nightly.growth.undo's "looks" branch, so `personas undo <id>` and the console's Undo
   both take one back: both values as they were, with the source before, while they are still
-  what the edit left (a later edit wins: undo that first).
+  what the edit left (a later edit wins: undo that first), and the persona_looks_protection row
+  the edit added removed (or the one it replaced put back), unless a later owner change holds it.
 - LooksService: the op's two actions, set and undo, for cast members only. After either, the
   mind's persona cache drops the member and the selfie service queues a fresh profile set
   (SelfieService.queue_for_looks: a varied one for the lust style while varied_sets is on).
@@ -102,6 +103,7 @@ def set_looks(store, guid: int, *, weight_kg: int, bust: str | None,
             raise LooksError("This persona does not save: " + "; ".join(errs)[:200])
         source = store.conn.execute("SELECT source FROM persona_core WHERE guid=?",
                                     (guid,)).fetchone()[0]
+        protection = _protection(store, guid)
         race, class_name = _race_class(store, guid)
         version = save_persona(store, changed, source="owner", ts=now, race=race,
                                class_name=class_name)
@@ -109,7 +111,8 @@ def set_looks(store, guid: int, *, weight_kg: int, bust: str | None,
         ledger = ledger_add(store, guid=guid, kind=KIND, text=describe(before, after),
                             evidence=[], now=now)
         store.set_meta(RECEIPT.format(ledger=ledger), json.dumps(
-            {"before": before, "after": after, "source": source}, sort_keys=True))
+            {"before": before, "after": after, "source": source, "version": version,
+             "protection": protection}, sort_keys=True))
     return LooksChange(ledger, version, before, after)
 
 
@@ -128,8 +131,26 @@ def restore(store, row, *, now: float) -> bool:
     restored = replace(p, appearance=replace(p.appearance, **receipt["before"]))
     source = receipt.get("source") if receipt.get("source") in SOURCES else "owner"
     race, class_name = _race_class(store, p.guid)
-    save_persona(store, restored, source=source, ts=now, race=race, class_name=class_name)
+    version = save_persona(store, restored, source=source, ts=now, race=race,
+                           class_name=class_name)
+    if "version" in receipt:  # the protection the edit added goes, unless a later one replaced it
+        held = _protection(store, p.guid)
+        if held is not None and held[1] in (receipt["version"], version):
+            prior = receipt.get("protection")
+            if prior is None:
+                store.conn.execute("DELETE FROM persona_looks_protection WHERE guid=?", (p.guid,))
+            else:
+                store.conn.execute("INSERT OR REPLACE INTO persona_looks_protection "
+                                   "VALUES (?, ?, ?)", (p.guid, prior[0], prior[1]))
     return True
+
+
+def _protection(store, guid: int) -> list | None:
+    """Her persona_looks_protection row as [reason, version] (the variety pass leaves protected
+    looks alone; the owner-save trigger of migration 0028 adds it), or None."""
+    row = store.conn.execute("SELECT reason, version FROM persona_looks_protection WHERE guid=?",
+                             (guid,)).fetchone()
+    return None if row is None else [row[0], row[1]]
 
 
 class LooksService:

@@ -253,17 +253,24 @@ def _required(spec):
 
 
 @pytest.mark.parametrize("build", ["curvy", "voluptuous", "average", "heavy"])
-def test_every_composable_required_set_fits_with_five_tokens_to_spare(h, build):
+def test_every_composable_required_set_fits_the_workers_limit(h, build):
     """By the mind's own count (tokens.estimate, never below the real one), every look the lists
-    allow keeps its required phrases at REQUIRED_MAX (70) or under, with her looks short or long."""
+    allow keeps its required phrases, her hair and skin among them (controller ruling,
+    2026-11-15), at the worker's 75 or under, with her looks short or long."""
     from leeroy_mind.selfies.tokens import joined
     for looks in (APPEARANCE, LONG_LOOKS):
         p = lust(h, age=99, appearance=replace(looks, build=build))
         for look in _looks():
-            assert joined(_required(build_varied_prompt(p, look))) <= 70, look
+            spec = build_varied_prompt(p, look)
+            assert joined(_required(spec)) <= 75, look
+            assert all(pr == 0 for t, pr in spec.phrases if " hair" in t or t.endswith(" skin"))
 
 
-def test_hair_and_skin_are_required_while_they_fit(h):
+def test_hair_and_skin_are_required_and_yield_only_free_text_too_long_to_fit(h):
+    """Her hair and skin are required (controller ruling, 2026-11-15). Only free text too long
+    to fit at all yields them, after her body words shortened and the framing and the pose
+    yielded; then her skin goes first, and what yielded before it drops to priority 2 so the
+    worker's fit offers her own looks room first."""
     from leeroy_mind.selfies.tokens import joined
     short = lust(h, appearance=replace(APPEARANCE, build="voluptuous"))
     look = varied.Look("gym", "front", "full_body", "the gym", "sports top and leggings", "red",
@@ -276,8 +283,10 @@ def test_hair_and_skin_are_required_while_they_fit(h):
                                                 hair_style="h" * 40, skin_tone="s" * 30))
     longest = max(_looks(), key=lambda x: joined([f"wearing {x.phrase}, {x.setting}"]))
     spec = build_varied_prompt(huge, longest)
-    assert all(pr == 1 for t, pr in spec.phrases if "h" * 40 in t or "s" * 30 in t)
-    assert joined(_required(spec)) <= 70
+    assert joined(_required(spec)) <= 75
+    assert [pr for t, pr in spec.phrases if "s" * 30 in t] == [1]
+    assert spec.phrases[0][1] == spec.phrases[1][1] == 2  # the pose and framing yielded first
+    assert ("voluptuous figure, large full bust", 0) in spec.phrases  # the build's short form
 
 
 def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
@@ -291,9 +300,13 @@ def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
     spec = build_varied_prompt(p, look)
     kept, dropped = fit(spec.phrases, estimate, 75)
     for text in (VARIED_VIEW_WORDS[look.view], VARIED_FRAMING_WORDS[look.framing],
-                 BUILD_WORDS["voluptuous"], f"wearing {look.phrase}, {look.setting}",
-                 subject_phrase(p)[0]):
+                 f"wearing {look.phrase}, {look.setting}", subject_phrase(p)[0]):
         assert text in kept and text not in dropped
+    # her build, in its short form when her long looks need the room (2026-11-15), and her
+    # hair and skin, which are never traded for it
+    assert BUILD_WORDS["voluptuous"] in kept or "voluptuous figure, large full bust" in kept
+    for text in ("honey blonde with highlights", "warm golden olive skin"):
+        assert text in kept
     assert "f" * 40 in dropped
 
 
@@ -312,8 +325,8 @@ def test_the_word_table_is_what_the_real_tokenizers_count():
 @pytest.mark.parametrize("build", ["curvy", "voluptuous"])
 def test_no_composable_varied_prompt_needs_more_than_75_real_tokens(h, build):
     """With the real tokenizers (when their files are on the machine): every look the lists
-    allow, for short and long invented looks, counts at most 70 required tokens (75 is the
-    worker's limit), and the mind's estimate is never below the real count."""
+    allow, for short and long invented looks, counts at most the worker's 75 required tokens,
+    her hair and skin among them, and the mind's estimate is never below the real count."""
     from leeroy_mind.selfies.tokens import estimate, joined
     for looks in (APPEARANCE, LONG_LOOKS):
         p = lust(h, age=99, appearance=replace(looks, build=build))
@@ -321,7 +334,7 @@ def test_no_composable_varied_prompt_needs_more_than_75_real_tokens(h, build):
         for look in _looks():
             required = _required(build_varied_prompt(p, look))
             real = sum(seen.setdefault(t, clip_bpe.count(t)) for t in required) + len(required) - 1
-            assert real <= 70 and joined(required) >= real, look
+            assert real <= 75 and joined(required) >= real, look
         for text in seen:
             assert estimate(text) >= seen[text], text
 

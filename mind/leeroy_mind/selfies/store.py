@@ -222,6 +222,11 @@ def counts(conn) -> dict[str, int]:
 # -- the style a set was rendered under ---------------------------------------------------------
 
 LUST_SET_KEY = "selfies:set-lust:{guid}:{set_no}"
+# A set queued (or already queued) by his weight or bust edit (personas.looks_edit,
+# SelfieService.queue_for_looks): render.py gives every slot her cover's face at the worker's
+# floor scale, so her new figure shows instead of the cover's (controller, measured on the GPU
+# 2026-11-15). Once he picks a cover from it, later sets hold that fuller cover at full strength.
+LOOKS_EDIT_SET_KEY = "selfies:set-looks-edit:{guid}:{set_no}"
 # A varied set's plan (varied.py): its four candidates' looks, by slot, as JSON {"v", "day",
 # "looks"}; written when it is queued, dropped when it rendered as an ordinary set instead. A
 # pick of one of its candidates records that candidate's look under the change's id.
@@ -277,6 +282,15 @@ def cover_look(conn, guid: int) -> dict | None:
     except Exception:
         return None
     return look if isinstance(look, dict) else None
+
+
+def looks_edit_set(conn, guid: int, set_no: int) -> bool:
+    """The set was queued for a weight or bust edit (LOOKS_EDIT_SET_KEY). Reads any connection."""
+    try:
+        return conn.execute("SELECT 1 FROM meta WHERE key=?", (LOOKS_EDIT_SET_KEY.format(
+            guid=guid, set_no=set_no),)).fetchone() is not None
+    except Exception:  # a database without the meta table
+        return False
 
 
 LUST_COVER_REFUSED = ("this set was rendered in the lust style and she no longer has it (or her "
