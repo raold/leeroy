@@ -5,7 +5,7 @@ import pytest
 
 from conftest import run
 from leeroy_mind.nightly import encounters as enc, gossip, knowledge
-from nightly.conftest import yes
+from nightly.conftest import consistent
 from nightly.test_night_encounters import encounter, prompt, reply, retrieved, seeded
 
 
@@ -14,8 +14,9 @@ def source(h, owner=101, *, text="Coros took my bracers.", actors=(103,), **kw):
                  evidence=(f"rule:gossip:{owner}",), **kw)
 
 
-def telling(*, alias=2, teller="a", about="Coros", text="Coros took my bracers."):
-    return {"teller": teller, "about": about, "source": alias, "text": text}
+def telling(*, alias=2, teller="a", about="Coros", text="Coros took my bracers.", claim=None):
+    return {"teller": teller, "about": about, "source": alias, "text": text,
+            "claim": f"{about} took the bracers." if claim is None else claim}
 
 
 def hearsay(h, owner=102):
@@ -195,7 +196,7 @@ def test_private_copy_never_enters_a_second_hop(h, monkeypatch):
         memories=[{"who": "a", "text": "Coros was at the bank.", "importance": 3, "valence": 0},
                   {"who": "b", "text": "Belra was at the bank.", "importance": 3, "valence": 0}],
         gossip=telling(about="Testy", text="Testy got the bakery manager job."))
-    second = h.ctx({"encounter": [second_reply], "judge": [yes]}, night="2026-10-30")
+    second = h.ctx({"encounter": [second_reply], "judge_scene": [consistent]}, night="2026-10-30")
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO encounter(night,idx,a,b,setting,status) "
                             "VALUES (?,0,102,103,'the Orgrimmar bank steps','planned')", (second.night,))
@@ -294,7 +295,7 @@ def test_gossip_failure_rolls_back_scene_and_can_retry(h, monkeypatch):
                ("rumor", "rumor_version", "rumor_state", "rel_delta", "knows", "emotion"))
     assert not ctx.done("encounters", "enc:0")
     monkeypatch.setattr(gossip, "after_gossip", original)
-    retry = h.ctx({"encounter": [data], "judge": [yes]})
+    retry = h.ctx({"encounter": [data], "judge_scene": [consistent]})
     run(enc.stage_encounters(retry))
     assert encounter(h)["status"] == "done" and len(hearsay(h)) == 1
 

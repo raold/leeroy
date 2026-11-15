@@ -19,6 +19,22 @@ export function feelings(y, now) {
   return out;
 }
 
+// A member romance's one stage (drama.couples), in the guild's words.
+var MEMBER_STAGE = { notices: "a spark", banter: "flirting", whispers: "a crush", late_nights: "dating",
+  confession: "together", ex: "broke up" };
+export function memberStageText(s) { return MEMBER_STAGE[str(s)] || stageText(s); }
+
+// Jealousy is stored 0-100; a meter wants 0-1.
+export function jealousyShare(level) { return Math.max(0, Math.min(1, num(level) / 100)); }
+
+// Who left whom, and for whom.
+export function breakupText(b, names) {
+  b = obj(b);
+  var n = obj(names);
+  function name(g) { return str(n[String(g)]) || "#" + g; }
+  return name(b.woman) + " left " + name(b.partner) + " for " + name(b.for);
+}
+
 export function feudText(f, names) {
   f = obj(f);
   var n = obj(names);

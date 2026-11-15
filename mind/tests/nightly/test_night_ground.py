@@ -239,10 +239,15 @@ def test_invariant_only_kinds_need_only_the_invariants(h, facts, ev):
     def unsupported(prompt: str) -> dict:
         return {"verdicts": [{"i": int(n), "support": "no", "invariants_ok": True, "why": "made up"}
                              for n in dict.fromkeys(re.findall(r"\bITEM (\d+)\b", prompt))]}
-    ctx = h.ctx(default=unsupported)
+    def contradicted(prompt: str) -> dict:
+        return {"verdicts": [{"i": int(n), "contradicted": True, "invariants_ok": True, "why": "made up"}
+                             for n in dict.fromkeys(re.findall(r"\bITEM (\d+)\b", prompt))]}
+    ctx = h.ctx({"judge_scene": [contradicted]}, default=unsupported)
     claims = [Claim(k, 101, "My sister visits soon.", ["memory:10"]) for k in ("life", "break", "wowlife", "belief", "scene")]
+    # A scene is judged for contradiction only (its own batch, ground.FICTION_SCHEMA).
     assert [(v.ok, v.label, v.reason) for _, v in run(ground(ctx, claims, ev, facts))] == [
-        (True, "no", "made up")] * 3 + [(False, "no", "unsupported: made up")] * 2
+        (True, "no", "made up")] * 3 + [(False, "no", "unsupported: made up"),
+                                        (False, "contradicted", "contradicted: made up")]
 
 
 def test_the_owner_and_the_evidence_edges(facts, ev):

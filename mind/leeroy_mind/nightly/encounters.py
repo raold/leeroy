@@ -21,6 +21,11 @@ from leeroy_mind.talk.prompt import relationship_card
 from leeroy_mind.text import strip_wow_markup, truncate_words
 
 STAGE = "encounters"
+SCENE_PROMPT = ("Write a small off-screen scene between two guildmates; no romance or flirting "
+                "between them.\n{cards}")
+COUPLE_PROMPT = ("Write a small off-screen scene between two guildmates who are {words}; a little "
+                 "flirting between the two of them is fine, kept warm and never explicit.\n{cards}")
+DRAMA_SOUR = -8  # a drama confrontation gone bad: the confronter's affinity, under the night cap
 PAIR_SETTINGS = (
     "officer chat, arguing about the raid",
     "the healers' channel after the raid",
@@ -187,7 +192,8 @@ ENCOUNTER_SCHEMA = schema("encounter", {
     "gossip": schema("gossip", {
         "teller": {"type": "string", "enum": ["a", "b"]},
         "about": {"type": "string"}, "source": {"type": "integer"},
-        "text": {"type": "string", "maxLength": 200}}) | {"type": ["object", "null"]},
+        "text": {"type": "string", "maxLength": 200},
+        "claim": {"type": "string", "maxLength": 200}}) | {"type": ["object", "null"]},
 })
 
 
@@ -399,7 +405,9 @@ def _gossip_prompt(ctx, row, ev, teller, options, offer):
     lines.append(f"Only {ctx.name(teller)} (teller {key}) may pass on one of these memories. "
                  "If one of them passes on something from their memories, retell it in one "
                  "sentence by the operation below. Use the source's bracketed evidence alias, "
-                 "the named person as about, and return gossip null if nothing is passed on.")
+                 "the named person as about, and return gossip null if nothing is passed on. "
+                 "In claim, say what the story is as one plain sentence in the third person "
+                 "that names the person it is about, never a quote and never I or we.")
     for _, m, abouts, traits in options:
         for about in abouts:
             if offer is not None and about != offer["about"]:
@@ -433,7 +441,10 @@ async def run_encounter(ctx, row):
     a, b = row["a"], row["b"]
     if a == b or a not in ctx.members() or b not in ctx.members():
         return
-    from leeroy_mind.nightly.storyteller import BLOWUP_DELTA, INTENT, arc_key
+    from leeroy_mind.drama import couples
+    from leeroy_mind.drama.config import member_romance
+    from leeroy_mind.nightly.storyteller import (BLOWUP_DELTA, INTENT, JEALOUSY_INTENT,
+                                                 JEALOUSY_REF, arc_key)
 
     found = await asyncio.gather(retrieve(ctx, a, ctx.name(b), 3),
                                  retrieve(ctx, b, ctx.name(a), 3))
@@ -493,14 +504,30 @@ async def run_encounter(ctx, row):
         relationships = "\n".join(f"{ctx.name(g)} toward " + relationship_card(ctx.name(other),
             ctx.store.get_relationship(g, other), is_human=False) for g, other in ((a, b), (b, a)))
         titles = f"{ctx.name(a)}: {_title(ctx, a)}\n{ctx.name(b)}: {_title(ctx, b)}"
+        drama = member_romance(ctx)
+        couple = couples.couple_names(ctx, a, b) if drama else None
+        stage = couples.stage_of(ctx.store, a, b) if drama else "none"
         gossip_prompt = (confession_prompt + "\nThis is a confidence; return gossip null.\n"
                          if confession else _gossip_prompt(ctx, row, ev, teller, options, offer))
-    system = system_prompt("encounter", "Write a small off-screen scene between two guildmates; "
-        "no romance or flirting between them.\n{cards}", ctx.settings.data_dir, human=ctx.ident,
-        cards=f"{ctx.card(a)}\n{ctx.card(b)}")
+    cards = f"{ctx.card(a)}\n{ctx.card(b)}"
+    if couple:
+        system = system_prompt("encounter", COUPLE_PROMPT, ctx.settings.data_dir, human=ctx.ident,
+                               couple=(couple[a], couple[b]), cards=cards,
+                               words=couples.WORDS[stage])
+    else:
+        system = system_prompt("encounter", SCENE_PROMPT, ctx.settings.data_dir, human=ctx.ident,
+                               cards=cards)
     user = (f"a: {ctx.name(a)}; b: {ctx.name(b)}\nSetting: {row['setting']}\n{relationships}\n"
             f"Life threads:\n{titles}\nEvidence:\n{ev.render(ctx.tz)}\n")
-    if not confession and row["volition"] in INTENT and (row["volition"] not in {"gossip", "correct"} or offer):
+    jealous = drama and row["volition"] == "confront" and row["ref"].startswith(JEALOUSY_REF)
+    if couple:
+        user += couples.INTENT[stage].format(a=ctx.name(a), b=ctx.name(b)) + "\n"
+    elif drama and stage == "ex":
+        user += f"{ctx.name(a)} and {ctx.name(b)} broke up.\n"
+    if jealous and not confession:
+        user += JEALOUSY_INTENT.format(a=ctx.name(a), b=ctx.name(b), human=ctx.ident.called) + "\n"
+    elif (not confession and row["volition"] in INTENT and not (couple and row["volition"] == "flirt")
+          and (row["volition"] not in {"gossip", "correct"} or offer)):
         user += INTENT[row["volition"]].format(a=ctx.name(a), b=ctx.name(b)) + "\n"
     user += gossip_prompt
     if candidates:
@@ -511,16 +538,24 @@ async def run_encounter(ctx, row):
              "of the people around who noticed, and what they noticed. Give exactly one memory "
              "for a and one for b.")
     reply = await ctx.reasoner.json(system, user, ENCOUNTER_SCHEMA, temperature=0.8)
+    # Grounding only: the people who might be around are really around, so the scene may name
+    # them (rule 5). The memories keep citing `refs` alone.
+    checked = refs
+    if candidates:
+        ev.add(Item(f"around:{row['id']}", "People around: "
+                    + ", ".join(ctx.name(g) for g in candidates) + ".",
+                    frozenset(candidates), ctx.clock.now()))
+        checked = [*refs, f"around:{row['id']}"]
     memories = {m["who"]: m for m in reply["memories"]}
-    scene = Claim("scene", a, _text(reply["scene"]), refs)
+    scene = Claim("scene", a, _text(reply["scene"]), checked)
     if set(memories) != {"a", "b"}:
         pairs = [(scene, Verdict(False, "deterministic", "one memory per participant required"))]
         claims = []
     else:
-        claims = [Claim("scene", g, _text(memories[key]["text"]), refs,
+        claims = [Claim("scene", g, _text(memories[key]["text"]), checked,
                         valence=max(-1, min(1, memories[key]["valence"])))
                   for key, g in (("a", a), ("b", b))]
-        pairs = await ground(ctx, [scene, *claims], ev, facts)
+        pairs = await ground(ctx, [scene, *claims], ev, facts, couple=couple)
     accepted = bool(claims) and all(verdict.ok for _, verdict in pairs)
     telling = None
     if reply.get("gossip") is not None and row["volition"] != "correct" and not confession:
@@ -534,7 +569,8 @@ async def run_encounter(ctx, row):
         else:
             telling = {**payload, "source": source_id,
                        "about": _gossip_text(ctx, payload["about"]),
-                       "text": _gossip_text(ctx, payload["text"])}
+                       "text": _gossip_text(ctx, payload["text"]),
+                       "claim": _gossip_text(ctx, payload.get("claim") or "")}
     around, seen = [], set()
     names = {ctx.name(g).casefold(): g for g in candidates}
     if accepted:
@@ -627,6 +663,13 @@ async def run_encounter(ctx, row):
                          ts=now, human=ctx.human)
         store.conn.execute("UPDATE encounter SET status='done',scene=?,blowup=? WHERE id=?",
             (scene.text, int(row["volition"] == "confront" and total <= BLOWUP_DELTA), row["id"]))
+        if jealous and total < 0 and not scene_row["private"]:
+            # A jealous confrontation gone bad sours the confronter, and the confronted half as
+            # much, under the night cap like every other change.
+            for g, other, amount in ((a, b, DRAMA_SOUR), (b, a, DRAMA_SOUR / 2)):
+                apply_capped(store, night=ctx.night, a=g, b=other, dim="affinity", delta=amount,
+                             speed=ctx.settings.relationship_speed, reason="confrontation",
+                             evidence=refs, ts=now, human=ctx.human)
         if confession:
             _confess(store, ctx, confession, root, refs, now)
         elif not row["private"]:
@@ -648,8 +691,11 @@ async def run_encounter(ctx, row):
         gossip_enc = dict(scene_row) | {"status": "done", "scene": scene.text,
             "_gossip_teller": teller, "_gossip_sources": tuple(sorted(offered)),
             "_shown_refs": tuple(shown_refs), "_shown": tuple(shown)}
-        feuds.maybe_open(store, ctx, gossip_enc, deltas, tuple(shown_refs))
+        feuds.maybe_open(store, ctx, gossip_enc, deltas, tuple(shown_refs), drama=jealous)
         feuds.maybe_end(store, ctx, gossip_enc, deltas)
+        if couple:
+            couples.after_scene(store, ctx, gossip_enc, total=total,
+                                valence=sum(c.valence for c in claims) / len(claims))
         if not confession and row["volition"] == "correct" and offer is not None:
             gossip.after_correction(store, ctx, gossip_enc, offer["rumor"]["id"], b, now=now)
         elif telling is not None:

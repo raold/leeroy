@@ -6,7 +6,7 @@ from leeroy_mind.nightly import encounters as enc, feuds, gossip, knowledge
 from leeroy_mind.nightly.ground import Claim
 from leeroy_mind.nightly.evidence import Evidence, load_items
 from leeroy_mind.nightly.growth import eligible
-from nightly.conftest import no_real_name, yes
+from nightly.conftest import consistent, no_real_name, yes
 from nightly.test_night_encounters import encounter, probe, prompt, retrieved, secret_memory
 
 
@@ -37,8 +37,8 @@ def answer(h, other=102, **changes):
 
 
 def scene(h, data=None, *, other=102, night="2026-10-29", idx=0,
-          setting="voice chat late at night", volition=None, judge=yes):
-    ctx = h.ctx({"encounter": [answer(h, other) if data is None else data], "judge": [judge]}, night=night)
+          setting="voice chat late at night", volition=None, judge=consistent):
+    ctx = h.ctx({"encounter": [answer(h, other) if data is None else data], "judge_scene": [judge]}, night=night)
     with h.store.transaction():
         h.store.conn.execute("INSERT INTO encounter(night,idx,a,b,setting,status,volition) "
                             "VALUES (?,?,101,?,?,'planned',?)", (night, idx, other, setting, volition))
@@ -268,7 +268,7 @@ def test_legacy_open_secret_root_with_third_party_is_not_confession_context(h, m
 def test_confession_rejects_before_any_disclosure_effect(h):
     prepare(h)
     def reject(text):
-        verdicts = yes(text)
+        verdicts = consistent(text)
         verdicts["verdicts"][0]["invariants_ok"] = False
         return verdicts
     ctx = scene(h, judge=reject)
@@ -328,7 +328,7 @@ def test_late_hook_failure_rolls_back_confession_and_retry_is_once(h, monkeypatc
     assert all(h.count(t) == 0 for t in ("memory", "disclosure", "layer_open", "knows", "fact", "emotion"))
     assert h.store.get_relationship(101, 102).trust == 70
     monkeypatch.setattr(feuds, "maybe_open", original)
-    retry = h.ctx({"encounter": [answer(h)], "judge": [yes]})
+    retry = h.ctx({"encounter": [answer(h)], "judge_scene": [consistent]})
     run(enc.stage_encounters(retry))
     run(enc.stage_encounters(retry))
     assert h.count("disclosure") == h.count("layer_open") == 1

@@ -1,7 +1,7 @@
 import { $, arr, clear, el, num, obj, plural, str } from "./core.mjs";
 import { face } from "./faces.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
-import { feelings, feudText, romanceText, stageText } from "./socialmodel.mjs";
+import { breakupText, feelings, feudText, jealousyShare, memberStageText, romanceText, stageText } from "./socialmodel.mjs";
 import { signed, when } from "./words.mjs";
 
 // -- the social tab: mind.db only -----------------------------------------------------------------
@@ -36,7 +36,8 @@ function renderSocial(v) {
   renderKpis($("social-kpis"), [
     { k: "Guild mood", v: mood ? signed(num(mood.value), 2) : "-", d: mood ? str(reasons[0]) || "no reason given" : "not recorded yet" },
     { k: "Open feuds", v: String(arr(v.feuds).length), d: "" },
-    { k: "Romances", v: String(arr(v.romances).length), d: "between members" },
+    { k: "Romances", v: String(arr(v.romances).filter(function (p) { return p.stage !== "ex"; }).length), d: "between members" },
+    { k: "Breakups", v: String(arr(v.breakups).length), d: "left a member for you" },
     { k: "Live rumours", v: String(arr(v.rumours).length), d: "" }]);
   var now = Date.now() / 1000;
   section("social-you", ["relationship", "attraction_state"], v, function (box) {
@@ -73,7 +74,8 @@ function renderSocial(v) {
       r.appendChild(el("span", "muted", "→"));
       r.appendChild(person(v, j.target));
       r.appendChild(el("span", "chip", str(j.kind)));
-      r.appendChild(meter(j.level));
+      r.appendChild(meter(jealousyShare(j.level)));
+      r.appendChild(el("span", "muted", String(Math.round(num(j.level)))));
       box.appendChild(r);
     });
     empty(box, "Nobody is jealous.");
@@ -84,10 +86,27 @@ function renderSocial(v) {
       r.appendChild(person(v, p.a));
       r.appendChild(el("span", "muted", "&"));
       r.appendChild(person(v, p.b));
-      r.appendChild(el("span", "muted", romanceText(p, nameOf(v, p.a), nameOf(v, p.b))));
+      r.appendChild(el("span", "chip" + (p.stage === "ex" ? " warn" : ""), memberStageText(p.stage || p.ab)));
+      r.title = romanceText(p, nameOf(v, p.a), nameOf(v, p.b));
       box.appendChild(r);
     });
     empty(box, "No romance between members.");
+  });
+  section("social-breakups", ["breakup"], v, function (box) {
+    arr(v.breakups).forEach(function (b) {
+      var r = row();
+      r.appendChild(person(v, b.woman));
+      r.appendChild(el("span", "muted", "left"));
+      r.appendChild(person(v, b.partner));
+      r.appendChild(el("span", "muted", "for"));
+      r.appendChild(person(v, b.for));
+      r.appendChild(el("span", "muted", when(b.ts)));
+      if (!b.public) { r.appendChild(el("span", "chip", "kept quiet")); }
+      if (b.feud) { r.appendChild(el("span", "chip warn", "feud")); }
+      r.title = breakupText(b, v.names);
+      box.appendChild(r);
+    });
+    empty(box, "Nobody has left a partner for you.");
   });
   section("social-rumours", ["rumor", "rumor_state", "knows"], v, function (box) {
     arr(v.rumours).forEach(function (m) {

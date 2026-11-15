@@ -429,7 +429,8 @@ SWITCHES = (
     ('control','ops_actions','Ops actions','restart the console too'),
     ('raidlead','enabled','Raid lead','Leeroy.RaidLead.Enable = 1; native rebuild'),
     ('raidlead','briefs','Boss briefs','raidlead.enabled'),
-    ('raidplay','respond','Mechanic responder','training.playbooks; Leeroy.Mechanics.Enable = 1'))
+    ('raidplay','respond','Mechanic responder','training.playbooks; Leeroy.Mechanics.Enable = 1'),
+    ('drama','member_romance','Member romances',''))
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:

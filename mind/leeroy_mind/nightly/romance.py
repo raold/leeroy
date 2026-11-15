@@ -19,6 +19,7 @@ from leeroy_mind.nightly.attraction import RUSH_S, aimed_at, reflection_row
 from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.confide import depth_with
 from leeroy_mind.nightly.knowledge import could_have_seen, roots
+from leeroy_mind.nightly.relations import apply_capped
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.storage.rows import ROMANCE_STAGES
 from leeroy_mind.talk.budget import DayPhase, day_phase
@@ -30,6 +31,10 @@ DAY_S = 86400.0
 MODE_MULT = {"good_sport": .5, "sulker": 1.2, "grumbler": 1., "teaser": .8,
              "play_by_play": 1.}
 DECAY = .85
+# [drama] member_romance: from this level jealousy wants it out (storyteller's confront
+# volition, an envious man's words to him), and a rival's resentment drifts by RESENTMENT.
+JEALOUSY_CONFRONT = 70.0
+RESENTMENT = -2.0
 # A woman from banter to after is in the running for him, a rival to every other one.
 _RIVAL_STAGES = ROMANCE_STAGES[ROMANCE_STAGES.index("banter"):ROMANCE_STAGES.index("after") + 1]
 _PRIVATE_VOICE = tuple(f"voice:{room}" for room in PRIVATE)
@@ -261,8 +266,13 @@ def jealousy_rows(store, min_level=0.0) -> list[tuple[int, int, str, float]]:
 
 
 def _observations(store, holder, window):
+    """What the holder saw in the window. Jealousy's own memories (keys `jealousy:` and
+    `envy:`) are its outputs, not observations: counted, they fed a level night after night
+    (live mind.db 2026-11-15: every jealousy row's evidence was its holder's own memory), so a
+    saturated level never came down when nothing new happened."""
     ids = [r[0] for r in store.conn.execute(
         "SELECT id FROM memory WHERE owner=? AND status='active' AND t_event>=? AND t_event<? "
+        "AND (key IS NULL OR (key NOT LIKE 'jealousy:%' AND key NOT LIKE 'envy:%')) "
         "ORDER BY t_event,id", (holder, *window))]
     return store.get_memories(ids)
 
@@ -298,6 +308,9 @@ async def stage_jealousy(ctx) -> None:
     if ctx.done("jealousy", "all"):
         return
     now = ctx.clock.now()
+
+    from leeroy_mind.drama.config import member_romance
+    drama = member_romance(ctx)
 
     def write(store):
         attitudes = ctx.attitudes(fresh=True)
@@ -338,14 +351,31 @@ async def stage_jealousy(ctx) -> None:
                 "ON CONFLICT(holder,target) DO UPDATE SET kind=excluded.kind,level=excluded.level, "
                 "updated=excluded.updated,evidence=excluded.evidence",
                 (holder, target, kind, level, now, json.dumps(evidence)))
+            year, week, _ = date.fromisoformat(ctx.night).isocalendar()
             if before < 40 <= level:
-                year, week, _ = date.fromisoformat(ctx.night).isocalendar()
                 text = (f"{ctx.name(target)} keeps going after {ctx.ident.called}'s attention."
                         if kind == "rivalry" else f"The women here only have eyes for {ctx.ident.called}.")
                 ctx.writer.put(reflection_row(holder, text, now=now,
                     actors=[target, ctx.human] if kind == "rivalry" else [target],
                     evidence=evidence, key=f"jealousy:{target}:{year}-W{week:02}",
                     importance=5, valence=-.3), shown=shown)
+            if drama and level >= JEALOUSY_CONFRONT:
+                if kind == "rivalry":
+                    # Resentment while it boils: the jealous member's view of her rival sours a
+                    # little each night, under the night cap (her confrontation can then open a
+                    # feud, feuds.maybe_open's drama rule).
+                    apply_capped(store, night=ctx.night, a=holder, b=target, dim="affinity",
+                                 delta=RESENTMENT, speed=ctx.settings.relationship_speed,
+                                 reason="jealousy", evidence=evidence or (f"rule:jealousy:{target}",),
+                                 ts=now, human=ctx.human)
+                elif evidence:
+                    # Envy has him as its target, who never enters a scene: the man means to
+                    # tell him so in words, a memory live talk can bring up (once a week).
+                    ctx.writer.put(reflection_row(holder,
+                        f"Sick of every woman here falling for {ctx.ident.called}. "
+                        f"Next time it comes up I'm telling {ctx.ident.forms[1]} so.",
+                        now=now, actors=[ctx.human], evidence=evidence,
+                        key=f"envy:{year}-W{week:02}", importance=6, valence=-.5), shown=shown)
 
         for holder in sorted(progressed):
             for target in sorted(progressed - {holder}):

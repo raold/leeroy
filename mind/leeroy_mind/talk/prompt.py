@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from leeroy_mind.discord.channels import is_discord, is_private
+from leeroy_mind.drama.config import pinned as member_romance_pinned
 from leeroy_mind.human import THEY_FORMS, HumanIdentity
 from leeroy_mind.personas.schema import Persona, Typing
 from leeroy_mind.personas.screens import redact_real_name
@@ -379,6 +380,12 @@ def select_samples(p: Persona, n: int = 5) -> list[str]:
 
 # How a label reads on a card (prompts lens, minor 13: the schema word reached the model).
 LABEL_TEXT = {"friend": "you're friends", "friction": "you two clash", "rival": "you're rivals"}
+# A member romance on a card between two members ([drama] member_romance writes these stages on
+# member pairs; nothing else does), only while the mind started with that switch on. Group
+# turns never show it (friendship_only).
+MEMBER_ROMANCE_TEXT = {"notices": "there's a spark between you", "banter": "you flirt",
+                       "whispers": "you've got a crush on each other", "late_nights": "you're dating",
+                       "confession": "you're together", "ex": "you broke up"}
 # A woman's pull toward him on his card (prompts I4), by attraction band.
 ATTRACTION_TEXT = {"lust": "you want {them}", "drawn": "you're into {them}",
                    "fond": "you're fond of {them}"}
@@ -438,6 +445,9 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     bits = []
     if not friendship_only and not is_human and r.label.strip() in LABEL_TEXT:
         bits.append(LABEL_TEXT[r.label.strip()])
+    if (not friendship_only and not is_human and r.romance_stage in MEMBER_ROMANCE_TEXT
+            and member_romance_pinned()):
+        bits.append(MEMBER_ROMANCE_TEXT[r.romance_stage])  # a member romance (drama.couples)
     band = attraction_band(r, attitude) if is_human and not friendship_only else ""
     if band:
         bits.append(ATTRACTION_TEXT[band].format(them=them))

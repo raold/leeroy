@@ -24,6 +24,8 @@ def attach(app):
     from leeroy_mind.culture.config import load_culture_config
     app.culture_config = load_culture_config(app.data_dir / "mind.toml")
     settings = load_settings(cfg, app.data_dir, culture=app.culture_config)
+    from leeroy_mind.drama.config import pin as pin_drama
+    pin_drama(settings.member_romance)  # [drama] member_romance: a startup choice, as learn is
     admin = HttpOllamaAdmin(startup.ollama.url) if isinstance(app.llm, OllamaClient) else NullAdmin()
     arbiter = GpuArbiter(admin, settings)
     restart_warned = None
@@ -47,7 +49,8 @@ def attach(app):
                 ollama=replace(candidate.ollama, url=startup.ollama.url),
                 models=replace(candidate.models, embedding=startup.models.embedding))
             updated = replace(load_settings(candidate, app.data_dir, culture=app.culture_config),
-                              learn_enabled=settings.learn_enabled, quiet=settings.quiet)
+                              learn_enabled=settings.learn_enabled, quiet=settings.quiet,
+                              member_romance=settings.member_romance)
             # The server lease's clock is a startup choice. Keep both owners on
             # that clock until restart, even when runtime dials are reloaded.
         except ConfigError:
