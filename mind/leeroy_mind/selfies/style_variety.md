@@ -172,7 +172,7 @@ The owner sets a member's weight (kg, the schema's 40-180) and, for a woman, her
 under Looks. Saving goes through the running mind's `looks` control op (`POST /api/looks`,
 behind the key, Origin and `--no-control` gates, under the photo changes' lock) to
 `personas/looks_edit.py`: an owner persona version (source `owner`, so the variety pass leaves
-her looks alone), a persona ledger row of kind `looks` (migration `0049_looks_ledger.sql`) and a
+her looks alone), a persona ledger row of kind `looks` (migration `0050_looks_ledger.sql`) and a
 private receipt (meta `personas:looks-undo:<ledger>`). The ledger's Undo button, or
 `personas undo <id>` with the mind stopped, puts both values and the prior source back while
 they are still what the edit left. Each save or console undo queues a fresh profile set as
