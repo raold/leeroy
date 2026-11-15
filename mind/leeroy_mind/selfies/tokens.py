@@ -68,6 +68,8 @@ WORD_TOKENS = {
     # body size and bust (prompt.SIZE_WORDS, BUST_WORDS), measured 2026-11-15
     "arms": 1, "chubby": 1, "frame": 1, "heavyset": 2, "lean": 1, "overweight": 1, "round": 1,
     "slender": 1, "slightly": 1, "small": 1,
+    # glutes, waist and hips (prompt.GLUTES_WORDS, WAIST_WORDS, HIPS_WORDS), measured 2026-11-15
+    "backside": 2, "glutes": 2, "rounded": 1,
     # the photo kinds and framings (prompt._KINDS, _FRAMINGS), measured 2026-11-15
     "by": 1, "candid": 1, "close": 1, "friend": 1, "headshot": 1, "mid": 1, "phone": 1,
     "professional": 1, "selfie": 1, "string": 1, "taken": 1, "thigh": 1, "upper": 1,

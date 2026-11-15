@@ -134,8 +134,10 @@ def test_a_change_is_an_owner_version_with_a_ledger_row_and_a_receipt(store, clo
     assert now["source"] == "owner" and now["version"] == was["version"] + 1 == made.version
     assert _ledger(store, 102) == [{"id": made.ledger, "kind": "looks", "ref": None,
                                     "text": "weight 64 -> 88 kg, bust the build's own -> large"}]
+    shapes = {"glutes": None, "waist": None, "hips": None}
     assert json.loads(store.get_meta(RECEIPT.format(ledger=made.ledger))) == {
-        "before": {"weight_kg": 64, "bust": None}, "after": {"weight_kg": 88, "bust": "large"},
+        "before": {"weight_kg": 64, "bust": None, **shapes},
+        "after": {"weight_kg": 88, "bust": "large", **shapes},
         "source": "seed", "version": made.version, "protection": None}
     with store.transaction():  # the variety pass now leaves her looks alone
         assert store.conn.execute("SELECT reason FROM persona_looks_protection WHERE guid=102"
@@ -178,7 +180,10 @@ def test_undo_restores_both_values_and_the_source_and_is_recorded(store, clock, 
         view = member_view(store.conn, 102, now=7000.0)
     assert [r["undone"] for r in view["ledger"] if r["kind"] == "looks"] == [True]
     assert view["looks_limits"] == {"weight_kg": [40, 180],
-                                    "busts": ["small", "medium", "large", "very_large"]}
+                                    "busts": ["small", "medium", "large", "very_large"],
+                                    "glutes": ["small", "medium", "large", "very_large"],
+                                    "waists": ["very_narrow", "narrow", "average", "wide"],
+                                    "hips": ["narrow", "average", "wide", "very_wide"]}
     assert "bust" not in view["card"]["appearance"]  # stored as before the field existed
 
 
@@ -283,7 +288,7 @@ def test_undo_through_the_service_queues_a_set_and_refuses_other_ledger_rows(sto
     assert run(LooksService(app).handle({"action": "undo", "ledger": made["ledger"]}))["ok"] is False
     note = ledger_add(store, guid=102, kind="note_added", text="likes boats", evidence=[], now=1.0)
     assert run(LooksService(app).handle({"action": "undo", "ledger": note})) == {
-        "ok": False, "error": f"Ledger #{note} is not a weight or bust change."}
+        "ok": False, "error": f"Ledger #{note} is not a weight or figure change."}
 
 
 # -- the endpoint -------------------------------------------------------------------------------
@@ -558,3 +563,87 @@ def test_a_failed_stale_check_is_logged_and_the_stage_goes_on(h, tmp_path, monke
     assert [(r.leeroy_fields["guid"], r.leeroy_fields["set"], r.leeroy_fields["error"])
             for r in failed] == [(101, 2, "RuntimeError"), (102, 2, "RuntimeError")]
     assert "a stale check that fails" not in caplog.text
+
+
+
+# -- glutes, waist and hips (owner, 2026-11-15) --------------------------------------------------
+
+def test_glutes_waist_and_hips_save_with_the_bust_in_one_edit_and_undo(store, clock, tmp_path):
+    app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    made = set_looks(store, 102, weight_kg=64, bust="large", glutes="very_large", waist="narrow",
+                     hips="very_wide", now=5000.0)
+    a = load_persona(store, 102).appearance
+    assert (a.bust, a.glutes, a.waist, a.hips) == ("large", "very_large", "narrow", "very_wide")
+    assert _ledger(store, 102)[-1]["text"] == (
+        "bust the build's own -> large, glutes not said -> very large, "
+        "waist the build's own -> narrow, hips the build's own -> very wide")
+    kept = set_looks(store, 102, weight_kg=70, bust="large", now=5100.0)  # shapes not given: kept
+    a = load_persona(store, 102).appearance
+    assert (a.weight_kg, a.glutes, a.waist, a.hips) == (70, "very_large", "narrow", "very_wide")
+    assert undo(store, kept.ledger, now=5200.0) and undo(store, made.ledger, now=5300.0)
+    a = load_persona(store, 102).appearance
+    assert (a.weight_kg, a.bust, a.glutes, a.waist, a.hips) == (64, None, None, None, None)
+    from leeroy_mind.personas.schema import persona_to_dict
+    assert not {"bust", "glutes", "waist", "hips"} & set(persona_to_dict(
+        load_persona(store, 102))["appearance"])  # stored as before the fields existed
+
+
+def test_a_receipt_from_before_the_shapes_still_undoes(store, clock, tmp_path):
+    """A #316 receipt holds weight and bust only: its undo compares and restores those."""
+    app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    made = set_looks(store, 102, weight_kg=88, bust="large", now=5000.0)
+    key = RECEIPT.format(ledger=made.ledger)
+    receipt = json.loads(store.get_meta(key))
+    for side in ("before", "after"):
+        receipt[side] = {k: receipt[side][k] for k in ("weight_kg", "bust")}
+    store.set_meta(key, json.dumps(receipt))
+    assert undo(store, made.ledger, now=6000.0) is True
+    a = load_persona(store, 102).appearance
+    assert (a.weight_kg, a.bust) == (64, None)
+
+
+@pytest.mark.parametrize("over,words", [
+    ({"glutes": "huge"}, "Glutes are one of small, medium, large, very large"),
+    ({"waist": "tiny"}, "Waist is one of very narrow, narrow, average, wide"),
+    ({"hips": 3}, "Hips are one of narrow, average, wide, very wide")])
+def test_a_shape_off_its_list_is_refused(store, clock, tmp_path, over, words):
+    app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    with pytest.raises(LooksError, match=words):
+        set_looks(store, 102, weight_kg=64, bust=None, now=1.0, **over)
+    with pytest.raises(BadRequest, match=words):
+        looks_args({**looks(), **over})
+
+
+@pytest.mark.parametrize("name,words", [("glutes", "Glutes are"), ("waist", "Waist is"),
+                                        ("hips", "Hips are")])
+def test_a_man_has_no_glutes_waist_or_hips(store, clock, tmp_path, name, words):
+    app = app_for(store, clock, tmp_path)
+    value = {"glutes": "large", "waist": "narrow", "hips": "wide"}[name]
+    reply = run(LooksService(app).handle({**looks(guid=101, bust=None), name: value}))
+    assert reply == {"ok": False, "error": f"{words} for women only."}
+
+
+def test_looks_args_take_the_shapes_optionally_and_nothing_else():
+    full = {**looks(), "glutes": "large", "waist": None, "hips": "very_wide"}
+    assert looks_args(full) == full
+    assert looks_args({**looks(), "hips": "wide"}) == {**looks(), "hips": "wide"}
+    with pytest.raises(BadRequest, match="and any of glutes, waist, hips"):
+        looks_args({**looks(), "thighs": "large"})
+    with pytest.raises(BadRequest, match="exactly ledger"):
+        looks_args({"action": "undo", "ledger": 3, "hips": "wide"})
+
+
+def test_a_shape_edit_queues_a_light_face_set_through_the_service(store, clock, tmp_path):
+    from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY
+    app = app_for(store, clock, tmp_path)
+    save_woman(store, 102, build="curvy")
+    reply = run(LooksService(app).handle({**looks(weight_kg=64, bust=None), "glutes": "large",
+                                          "waist": "very_narrow", "hips": "very_wide"}))
+    assert reply["ok"] and reply["set"] == 1
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) == "1"
+    spec = build_prompt(app.personas.base(102))
+    assert ("curvy hourglass figure, full bust, very wide hips, very narrow waist", 0) \
+        in spec.phrases

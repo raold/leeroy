@@ -17,7 +17,8 @@ from leeroy_mind.text import has_meta
 from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
-from .prompt import (_FRAMINGS, body_phrases, fit_required, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
+from .prompt import (_FRAMINGS, GLUTES_FRAMINGS, body_phrases, fit_required, glutes_words,
+                     _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
                      LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
@@ -465,6 +466,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     add(*subject_phrase(p))
     body, plain_build = body_phrases(p)  # her body right after who she is, required
     out += body
+    if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # where the framing shows her figure
+        out.append((glutes_words(p), 1))
     add(s.activity, 1, True)
     if lust:  # one phrase: the fit keeps both or neither; scene_renderable checked the names
         add(lust_phrase(s), 0, True)

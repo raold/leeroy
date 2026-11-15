@@ -36,7 +36,8 @@ from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's 
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
 from leeroy_mind.personas.looks_edit import WEIGHT_MAX, WEIGHT_MIN
-from leeroy_mind.personas.schema import BUSTS, persona_from_dict, persona_to_dict
+from leeroy_mind.personas.schema import (BUSTS, GLUTES, HIPS, WAISTS, persona_from_dict,
+                                         persona_to_dict)
 from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
 
 from .feed import guild_mood, human_guid
@@ -48,7 +49,8 @@ DETAIL_TIES = 40    # ties in a member's detail
 LEDGER = 25         # ledger rows in a member's detail
 LOOKS_S = 60.0      # a looks pass saves its persona this soon after its unit's time, at most
 # what his weight and bust edit accepts (personas.looks_edit, the looks op): the Looks panel's form
-LOOKS_LIMITS = {"weight_kg": [WEIGHT_MIN, WEIGHT_MAX], "busts": list(BUSTS)}
+LOOKS_LIMITS = {"weight_kg": [WEIGHT_MIN, WEIGHT_MAX], "busts": list(BUSTS),
+                "glutes": list(GLUTES), "waists": list(WAISTS), "hips": list(HIPS)}
 TABLES = ("cast_member", "persona_core", "pad_mood", "guild_mood", "relationship", "memory",
           "persona_ledger", "trait_state")
 _SCORED = ("affinity != 0 OR trust != 0 OR respect != 0 OR attraction != 0 "

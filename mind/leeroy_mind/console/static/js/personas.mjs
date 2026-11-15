@@ -8,7 +8,7 @@ import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { godmodePanel, renderStrings } from "./godmode.mjs";
 import { looksEditor, looksUndoButton } from "./looks.mjs";
-import { bustText, canUndoLooks } from "./looksmodel.mjs";
+import { SHAPES, bustText, canUndoLooks, shapeText } from "./looksmodel.mjs";
 import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
@@ -25,7 +25,7 @@ var BY = { seed: "the seeding", owner: "you (an import, a personas command or th
            night: "the night's looks pass", photo: "the night's photo-kind pass", stance: "a stance move",
            undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
-                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "weight and bust",
+                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "weight and figure",
                      undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
 function worldMode() { return $("p-world-filter").checked; }
@@ -297,7 +297,8 @@ function renderMember(j) {
                               .map(function (f) { return [f.k.toLowerCase(), f.v]; }) : []);
   var a = c && c.appearance ? obj(c.appearance) : null;
   kv($("p-looks"), a ? [["height", a.height_cm + " cm"], ["build", a.build], ["weight", a.weight_kg + " kg"],
-                        ...(c.identity && c.identity.player_gender === "female" ? [["bust", bustText(a.bust)]] : []),
+                        ...(c.identity && c.identity.player_gender === "female"
+                          ? [["bust", bustText(a.bust)], ...SHAPES.map(function (sh) { return [sh.name, shapeText(sh.name, a[sh.name])]; })] : []),
                         ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],
                         ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc],
                         ["photo kind", c.photo ? photoKindText(c.photo) : "none yet: the night's photo-kind pass gives one"]]

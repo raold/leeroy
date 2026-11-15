@@ -73,6 +73,7 @@ def test_a_looks_change_needs_the_key_the_origin_and_json_and_goes_to_the_mind(c
 
 @pytest.mark.parametrize("body", [
     {"action": "write"}, {**SET, "weight_kg": 39}, {**SET, "weight_kg": 181},
+    {**SET, "glutes": "huge"}, {**SET, "waist": 2}, {**SET, "thighs": "large"},
     {**SET, "weight_kg": "88"}, {**SET, "bust": "huge"}, {**SET, "extra": 1},
     {"action": "set", "guid": 101, "weight_kg": 88}, {**SET, "guid": "101"},
     {"action": "undo", "ledger": 0}, {"action": "undo", "ledger": True}, ["set"], {}])
@@ -145,7 +146,10 @@ def test_the_member_detail_carries_the_forms_limits(cast, data):
         async with served(make_app(data)) as app:
             j = (await http(app, "GET", "/api/persona?guid=101")).json()
             assert j["looks_limits"] == {"weight_kg": [40, 180],
-                                         "busts": ["small", "medium", "large", "very_large"]}
+                                         "busts": ["small", "medium", "large", "very_large"],
+                                         "glutes": ["small", "medium", "large", "very_large"],
+                                         "waists": ["very_narrow", "narrow", "average", "wide"],
+                                         "hips": ["narrow", "average", "wide", "very_wide"]}
             assert j["card"]["appearance"]["weight_kg"] == 64
     run(go())
 

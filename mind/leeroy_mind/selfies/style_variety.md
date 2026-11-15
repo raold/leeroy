@@ -190,6 +190,36 @@ recognisably her, clearly fuller. The console says "A new set renders tonight wi
 figure; pick one as her photo to keep it": once he picks a cover from that set, later sets hold
 that fuller cover at `identity_scale` as before.
 
+**Glutes, waist and hips** (owner, 2026-11-15: "the same adjustment for glutes, waist and
+hips"). Three more selects beside the bust in the Looks panel, women only, owner-set only (the
+looks pass is never asked; `schema.OWNER_LOOKS`), unset by default; an unset one leaves the stored
+JSON and `looks_hash` as they were. They ride the same `looks` op (`glutes`, `waist`, `hips`, each
+optional: one left out stays as stored), the same ledger kind and receipt (no migration), the
+same Undo (a receipt from before them still undoes weight and bust) and the same light-face set.
+
+| part | values and words |
+|---|---|
+| glutes | small "slim backside", medium "rounded glutes", large "large round glutes", very_large "very large round glutes" |
+| waist | very_narrow "very narrow waist", narrow "narrow waist", average "average waist", wide "thick waist" |
+| hips | narrow "narrow hips", average "average hips", wide "wide hips", very_wide "very wide hips" |
+
+Waist and hips are said in place of the build's own words (curvy's "wide hips, narrow waist",
+voluptuous's "wide hips") or after the build, like the bust; from BMI 28 a slim, athletic or
+average build's own words give way to the size and they stay as phrases of their own. Glutes are a
+phrase of their own right after the build: required in a varied candidate seen from behind or from
+the side (`prompt.GLUTES_VIEWS`), optional (priority 1) in a front view and where a profile or
+situational photo's framing shows her figure (three-quarter, full length), not said in a closer
+photo. None of these words is in a negative, `EXPLICIT_RE`, `WEAR_RE` or the age guard.
+
+Measured on a copy of the 09:50 snapshot with the worker's `fit.py` and the real tokenizers: with
+no edit, and with all four at their largest on the 91 lust women (bust and glutes very large, waist
+wide, hips very wide), alone or with 25 kg more, no hair or skin is lost, no full build is
+shortened and no prompt goes over 75. Glutes stay in all 1092 back and side candidates; where
+optional they are kept in 298 of 364 front candidates and 24 of 62 three-quarter profiles. The one
+case that cannot fit is synthetic: a voluptuous woman of BMI 32 or more with every shape at its
+largest and long hair and skin words counts 76 in 5 of 458 varied looks; the worker refuses those
+and the slot renders her ordinary photo instead.
+
 **The words.** Every profile, varied and situational prompt has the same required (priority-0)
 set after its kind and framing: who she is ("36-year-old American woman"), her body
 (`prompt.body_phrases`: her size by BMI, `prompt.size_words`, then the build's figure words with
