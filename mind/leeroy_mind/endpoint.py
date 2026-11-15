@@ -112,7 +112,8 @@ MAX_CONNECTIONS = 8
 REFUSAL_LOG_S = 30.0
 REPLACE_TRIES = 40  # 2 s of 50 ms tries to move control.json over a file being read
 OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "discord", "library",
-       "ops", "claim_check", "feedback", "kit", "learn", "gpu", "decision", "string", "raidlead")
+       "ops", "claim_check", "feedback", "kit", "learn", "gpu", "decision", "string", "raidlead",
+       "looks")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
 TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge", "edit")
 TUNE_SHAPES = {
@@ -795,6 +796,35 @@ def raidlead_args(args) -> dict:
     return {"action": "set", "guid": args["guid"]}
 
 
+LOOKS_SHAPES = {"set": {"action", "guid", "weight_kg", "bust"}, "undo": {"action", "ledger"}}
+
+
+def looks_args(args) -> dict:
+    """His weight and bust edit (personas.looks_edit), exactly: {"action": "set", "guid", a
+    member's guid, "weight_kg", a whole number of kg in the schema's range, "bust", one of
+    schema.BUSTS or null} or {"action": "undo", "ledger": a persona ledger row's id}; whether
+    they name a cast member with looks is the mind's to say. BadRequest otherwise."""
+    from leeroy_mind.personas.looks_edit import LooksError, check
+    if not isinstance(args, dict) or args.get("action") not in LOOKS_SHAPES:
+        raise BadRequest("looks: an action, set or undo")
+    action = args["action"]
+    shape = LOOKS_SHAPES[action]
+    if set(args) != shape:
+        raise BadRequest(f"looks {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    if action == "undo":
+        if not (type(args["ledger"]) is int and 1 <= args["ledger"] < 1 << 63):
+            raise BadRequest("looks undo: ledger is a ledger row's number")
+        return {"action": "undo", "ledger": args["ledger"]}
+    if not _count(args["guid"], 1):
+        raise BadRequest("looks set: guid is a member's guid")
+    try:
+        check(args["weight_kg"], args["bust"])
+    except LooksError as e:
+        raise BadRequest(str(e)) from None
+    return {"action": "set", "guid": args["guid"], "weight_kg": args["weight_kg"],
+            "bust": args["bust"]}
+
+
 def learn_args(args):
     from leeroy_mind.learn.control import arguments
     try:
@@ -833,7 +863,7 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
             "v", "key", "op", "args"}:
         raise BadRequest("bad request: exactly v, key, op (and args for a raid, tune, selfie, "
                          "say, board, discord, library, ops, claim_check, feedback, learn, gpu, "
-                         "decision, string or raidlead action)")
+                         "decision, string, raidlead or looks action)")
     given = value["key"]
     if not isinstance(given, str) or not secrets.compare_digest(
             given.encode("utf-8", "surrogatepass"), key.encode("ascii")):
@@ -848,7 +878,8 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
                   "say": say_args, "board": board_args, "discord": discord_args,
                   "library": library_args, "claim_check": claim_check_args,
                   "feedback": feedback_args, "learn": learn_args, "gpu": gpu_args,
-                  "decision": decision_args, "string": string_args, "raidlead": raidlead_args}.get(op)
+                  "decision": decision_args, "string": string_args, "raidlead": raidlead_args,
+                  "looks": looks_args}.get(op)
     if parse_args is None:
         if "args" in value:
             raise BadRequest(f"bad request: {op} takes no args")
@@ -1059,7 +1090,8 @@ class ControlEndpoint:
             return reply, None
         reply = await {"raid": self.raid, "tune": self.tune, "selfie": self.selfie,
                        "board": self.board, "discord": self.discord, "decision": self.decision,
-                       "string": self.string, "raidlead": self.raidlead}[op](args)
+                       "string": self.string, "raidlead": self.raidlead,
+                       "looks": self.looks}[op](args)
         log_event("control_request", op=op, action=args["action"],
                   outcome="ok" if reply["ok"] else "refused")
         return reply, None
@@ -1242,6 +1274,25 @@ class ControlEndpoint:
             return {"ok": False, "error": "another photo change is still being written"}
         async with self._selfie:
             return await service.handle(args)
+
+    async def looks(self, args: dict) -> dict:
+        """His weight and bust edits (personas.looks_edit.LooksService): a set or undo one at a
+        time, under the photo changes' lock (each queues a fresh profile set). Logs carry the
+        action, ids and outcome."""
+        if self.app.stopping:
+            return {"ok": False, "error": "the mind is stopping"}
+        if getattr(self.app, "selfies", None) is None:
+            return {"ok": False, "error": "photos are not running in this mind"}
+        if self._selfie.locked():
+            return {"ok": False, "error": "another photo change is still being written"}
+        async with self._selfie:
+            from leeroy_mind.personas.looks_edit import LooksService
+            try:
+                return await LooksService(self.app).handle(args)
+            except Exception as e:
+                log_event("control_looks_failed", level=logging.WARNING, action=args["action"],
+                          error=type(e).__name__)
+                return {"ok": False, "error": f"The looks could not be saved ({type(e).__name__})."}
 
     async def bank(self) -> dict:
         """The guild bank, read through guild life's armory in a worker thread. Askers share

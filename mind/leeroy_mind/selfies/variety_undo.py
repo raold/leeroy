@@ -5,7 +5,7 @@ import json
 from leeroy_mind.nightly.enrich import _race_class
 from leeroy_mind.nightly.store import ledger_add
 from leeroy_mind.personas.io import load_persona, save_persona
-from leeroy_mind.personas.schema import persona_from_dict, persona_to_dict
+from leeroy_mind.personas.schema import appearance_dict, persona_from_dict, persona_to_dict
 from . import kind
 
 PRIOR = "selfies:variety-prior:"
@@ -14,8 +14,8 @@ UNDO = "selfies:variety-undo:"
 
 def record(store, before, after, *, now, released):
     source = store.conn.execute("SELECT source FROM persona_core WHERE guid=?",(before.guid,)).fetchone()[0]
-    receipt = dict(appearance=asdict(before.appearance) if before.appearance else None,
-        photo=asdict(before.photo) if before.photo else None, after=asdict(after.appearance),
+    receipt = dict(appearance=appearance_dict(before.appearance) if before.appearance else None,
+        photo=asdict(before.photo) if before.photo else None, after=appearance_dict(after.appearance),
         source=source, photo_record=store.get_meta(kind.STYLE_KEY.format(guid=before.guid)),
         pending_pick=store.get_meta(f"selfies:variety-pick:{before.guid}"), released=released)
     ledger = ledger_add(store,guid=before.guid,kind="variety",text="re-rolled appearance",
@@ -32,7 +32,7 @@ def restore(store, row, *, now):
         return False
     receipt = json.loads(raw)
     p = load_persona(store,row["guid"])
-    if p is None or p.appearance is None or json.loads(json.dumps(asdict(p.appearance))) != receipt["after"]:
+    if p is None or p.appearance is None or json.loads(json.dumps(appearance_dict(p.appearance))) != receipt["after"]:
         return False  # a later appearance choice wins
     data = persona_to_dict(p)
     data["appearance"] = receipt["appearance"]

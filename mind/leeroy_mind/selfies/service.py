@@ -128,6 +128,52 @@ class SelfieService:
                 "photo style." if why in HELD else "Four more will be rendered tonight.")
         return {"ok": True, "set": queued.set_no, "guid": guid, "message": said}
 
+    def queue_for_looks(self, guid: int) -> tuple[int | None, str]:
+        """A fresh profile set after his weight or bust edit (personas.looks_edit), queued as
+        his "4 more" queues one (store.queue_more: the sets waiting for his choice passed, kept
+        in her gallery): a varied set for a woman of the lust style while `varied_sets` is on
+        (varied.queue, without its once-a-day rule), else an ordinary one. A set already queued
+        renders from the persona as it is then, so it is left as it is. (the set's number or
+        None, the words for the console)."""
+        app = self.app
+        if not self.cfg.enabled:
+            return None, "Rendering is off in mind.toml ([selfies] enabled = false), so no new set."
+        p = app.personas.base(guid)
+        style = chosen_style(app.store, p) if p is not None else "plain"
+        why = renderable(p, style)
+        if why is not None and why not in HELD:
+            return None, f"No new set yet ({why}): the night renders one once the looks and photo kind are in."
+        with app.store.transaction():
+            row = app.store.conn.execute("SELECT set_no FROM selfie_set WHERE guid=? AND "
+                                         "status='queued'", (guid,)).fetchone()
+            waiting = app.store.conn.execute(
+                "SELECT count(*) FROM selfie_set WHERE guid=? AND status='ready' AND "
+                "decided IS NULL", (guid,)).fetchone()[0]
+        if row is not None:
+            return row[0], "A set is already queued; it renders tonight with the new looks."
+        set_no, kind_words = None, "A new set"
+        if why is None and self.cfg.varied_sets and suggestive(p):
+            from . import varied
+            report = varied.queue(app.store, human=app.human_guid, now=app.clock.now(),
+                                  day=app.clock.local().date().isoformat(), go=True,
+                                  guids=[guid], daily=False)
+            if report["queued"]:
+                set_no, kind_words = report["queued"][0]["set"], "A new varied set"
+        if set_no is None:
+            set_no = queue_more(app.store, guid, now=app.clock.now()).set_no
+        their = "her" if p.identity.player_gender == "female" else "his"
+        if why in HELD:
+            said = (f"{kind_words} is queued; it waits until {their} photo kind is chosen again "
+                    f"for {their} photo style.")
+        else:
+            when = "tonight" + (" or at the photo booth's next pass" if self.cfg.booth else "")
+            face = (f", with {their} cover's face" if self.cfg.identity_sets
+                    and current(app.store, guid) is not None else "")
+            said = f"{kind_words} renders {when}{face}."
+        if waiting:
+            said += f" The set waiting for your choice stays in {their} gallery."
+        return set_no, said
+
     def _vary(self, go: bool, guids=None) -> dict:
         from . import varied
         if go and not self.cfg.enabled:

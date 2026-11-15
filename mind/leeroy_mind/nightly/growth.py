@@ -245,6 +245,8 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
       are not reversed;
     - variety: restore the recorded appearance and source if the re-roll is still current;
       restore the photo and its receipt unless a later hand-set photo wins;
+    - looks (his weight and bust edit, personas.looks_edit): both values and the source as they
+      were, while they are still what the edit left;
     - household (Task S6): her card's household, her arc's partner and her plan's cover story
       as they were before the affair ended her marriage, and the separation's private memory and
       arc event taken back (arc.after.restore_household). An undo row is never undone.
@@ -273,11 +275,14 @@ def undo(store: Store, ledger_id: int, *, now: float, personas=None) -> bool:
         elif kind == "variety":
             from leeroy_mind.selfies.variety_undo import restore
             done = restore(store,row,now=now)
+        elif kind == "looks":
+            from leeroy_mind.personas.looks_edit import restore
+            done = restore(store, row, now=now)
         else:
             done = False
         if done:
             ledger_add(store, guid=row["guid"], kind="undo", text=f"undid {kind}: {row['text']}",
                        evidence=json.loads(row["evidence"]), ref=ledger_id, now=now)
-    if done and kind in ("stance_band", "household", "variety") and personas is not None:
+    if done and kind in ("stance_band", "household", "variety", "looks") and personas is not None:
         personas.invalidate(row["guid"])
     return done

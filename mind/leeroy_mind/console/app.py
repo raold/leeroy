@@ -96,6 +96,10 @@ run nothing else.
                        checked as the endpoint checks it, then on to the mind's selfie op,
                        refused as raid actions are; a pick, undo or "4 more" is announced as a
                        `selfie` event {"action", "guid"}
+    POST /api/looks    {"action": "set", "guid", "weight_kg", "bust"} or {"action": "undo",
+                       "ledger"}: his weight and bust edit (personas.looks_edit), checked as the
+                       endpoint checks it, then on to the mind's looks op, refused as selfie
+                       actions are; a done one is announced as a `looks` event {"action", "guid"}
     POST /api/say      {"channel": "guild"|"officer"|"group"|"whisper", "text"[, "to"]}: his
                        line, said in game as his: checked and cleaned as the mind checks it (400
                        with its words; a slash command too, which WoW would post as words),
@@ -261,6 +265,9 @@ STATIC_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; char
 SELFIE_DOWN = "The mind isn't running, so it can't set photos. Start it from the Mind tab."
 SELFIE_OLD_MIND = ("The running mind is older than this console and cannot set photos: restart "
                    "it from the Mind tab.")
+LOOKS_DOWN = "The mind isn't running, so it can't change looks. Start it from the Mind tab."
+LOOKS_OLD_MIND = ("The running mind is older than this console and cannot change looks: restart "
+                  "it from the Mind tab.")
 SELFIE_WORDS = {
     "photos are not running in this mind": "Photos are off in this mind.",
     "another photo change is still being written":
@@ -937,6 +944,7 @@ class ConsoleApp:
                   ("GET", "/api/selfies/gallery"): self._api_selfie_gallery,
                   ("GET", "/api/selfies/photo"): self._api_selfie_photo,
                   ("POST", "/api/selfie"): self._api_selfie,
+                  ("POST", "/api/looks"): self._api_looks,
                   ("POST", "/api/voice"): self._api_voice,
                   ("POST", "/api/control"): self._api_control,
                   ("POST", "/api/raid"): self._api_raid_action,
@@ -1616,6 +1624,32 @@ class ConsoleApp:
             return json_response(409, {"ok": False, "error": self._selfie_words(reply)})
         if args["action"] != "status":
             self.broadcast("selfie", {"action": args["action"], "guid": reply.get("guid")})
+        return json_response(200, reply)
+
+    async def _api_looks(self, req: Request):
+        """POST /api/looks: his weight and bust edit or its undo, gated as a photo change and
+        relayed to the mind's looks op; a done one is announced as a `looks` event."""
+        try:
+            args = endpoint.looks_args(req.json())  # exactly as the mind will check it
+        except endpoint.BadRequest as e:
+            return json_response(400, {"ok": False, "error": str(e)})
+        problem = self._raid_problem()
+        if problem is not None:
+            status_code, words = problem
+            if self.view.state != "running" and status_code == 409 and self.controls.busy is None:
+                words = LOOKS_DOWN
+            return json_response(status_code, {"ok": False, "error": words})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), "looks", args,
+                                            timeout=SELFIE_S + SELFIE_MARGIN_S)
+        except LinkError as e:
+            return json_response(409, {"ok": False, "error": str(e)})
+        if reply.get("ok") is not True:
+            said = str(reply.get("error") or "refused")[:300]
+            said = LOOKS_OLD_MIND if said.startswith(OLD_OPS) else SELFIE_WORDS.get(said, said)
+            return json_response(409, {"ok": False, "error": said})
+        if reply.get("ledger") is not None:
+            self.broadcast("looks", {"action": args["action"], "guid": reply.get("guid")})
         return json_response(200, reply)
 
     def _raid_problem(self) -> tuple[int, str] | None:

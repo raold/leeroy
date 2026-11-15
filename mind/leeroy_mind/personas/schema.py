@@ -191,6 +191,11 @@ class Appearance:
     eye_colour: str = _f(max_len=20)
     face: tuple[str, ...] = _f(max_items=4, max_len=40)      # freckles, glasses, piercings, tattoos, a beard
     at_the_pc: str = _f(max_len=120)                         # what they wear at the keyboard
+    # A clothed body descriptor the photo prompt says (owner, 2026-11-15), set by hand in the
+    # console's Looks panel; None leaves it to the build. Women only; the looks pass never
+    # writes it (enrich.ENRICH_SCHEMA leaves it out), and a persona stored without it loads.
+    bust: Literal["small", "medium", "large", "very_large"] | None = _f(default=None,
+                                                                        enrichment=True)
 
 
 @dataclass(frozen=True)
@@ -209,6 +214,17 @@ class ProfilePhoto:
 
 
 DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
+BUSTS = get_args(get_args(get_type_hints(Appearance)["bust"])[0])  # smallest first
+OWNER_LOOKS = ("bust",)  # looks only the owner sets: no model is asked for them
+
+
+def appearance_dict(a: Appearance) -> dict:
+    """The looks as a plain dict, a bust that is not set left out, so looks stored before it
+    existed keep their dict (and every hash and receipt made from it)."""
+    d = _dump(a)
+    if a.bust is None:
+        del d["bust"]
+    return d
 
 
 @dataclass(frozen=True)
@@ -442,6 +458,8 @@ def persona_to_dict(p: Persona) -> dict:
     d = {"schema": SCHEMA_VERSION, **_dump(p)}
     if p.photo is None:
         del d["photo"]  # a persona without one stays as the previous release wrote it
+    if p.appearance is not None:
+        d["appearance"] = appearance_dict(p.appearance)  # likewise looks without a bust
     return d
 
 
@@ -534,6 +552,8 @@ def _enrichment_errors(p: Persona) -> list[str]:
     if p.identity.player_gender == "male":
         errs += [f"romance.{name}: men stay friends; leave it empty"
                  for name in ("drawn_to", "turned_off_by") if getattr(p.romance, name)]
+        if p.appearance is not None and p.appearance.bust is not None:
+            errs.append("appearance.bust: women only; leave it empty")
     ranks = [DEPTHS.index(d.depth) for d in p.disclosures if d.depth in DEPTHS]
     if ranks != sorted(ranks):
         errs.append("disclosures: depths must run surface, then middle, then deep")

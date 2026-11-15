@@ -164,3 +164,34 @@ snap row keeps the cover's pick, so `photo_changed` expiry is unchanged; with no
 situation stays planned (`no_face_ref`), a guild tile leaves her out and a request falls back.
 A varied candidate offered as a photo-request fallback records its own look. Images stay square
 (`size`); full-length poses are not portrait-shaped.
+
+## Weight and bust (owner edits)
+
+The owner sets a member's weight (kg, the schema's 40-180) and, for a woman, her bust
+(`small`, `medium`, `large`, `very_large`, or not set) in the console's Personas member detail,
+under Looks. Saving goes through the running mind's `looks` control op (`POST /api/looks`,
+behind the key, Origin and `--no-control` gates, under the photo changes' lock) to
+`personas/looks_edit.py`: an owner persona version (source `owner`, so the variety pass leaves
+her looks alone), a persona ledger row of kind `looks` (migration `0049_looks_ledger.sql`) and a
+private receipt (meta `personas:looks-undo:<ledger>`). The ledger's Undo button, or
+`personas undo <id>` with the mind stopped, puts both values and the prior source back while
+they are still what the edit left. Each save or console undo queues a fresh profile set as
+"4 more" does (sets waiting for his choice are passed and stay in her gallery): a varied set for
+a woman of the lust style while `varied_sets` is on (the once-a-day rule does not apply), else an
+ordinary one. A set already queued is left as it is: it renders from the persona as it is at
+render time. With `identity_sets` it carries her cover's face. With `[selfies] enabled = false`
+the looks save and no set is queued.
+
+Every profile, varied and situational prompt now says the weight as a body size by its BMI
+(`prompt.size_words`: very thin below 18.5, slender below 22, nothing from 22 to 25, slightly
+chubby, chubby from 28, plus-size from 32, plus-size and overweight from 36; a man's words differ
+above 32) and the bust inside the build's figure words (`prompt.build_words`; never for a man).
+In a profile prompt the size is required while the required set with it counts at most 70 by the
+mind's estimate, else it is the first optional phrase; in a varied set it comes before her hair
+and skin in the same chain; in a situational photo it sits beside the build at priority 1. The
+looks pass is never asked for a bust. Negatives, the NSFW gate, the age guard and the name
+screens are unchanged.
+
+Note for the first night after release: members whose stored weight falls outside 22-25 BMI
+(the 91 lust women were set to their build's median: about 29.5 curvy, 32.5 voluptuous) now
+render visibly heavier; adjust their weight in the Looks panel where that is not wanted.

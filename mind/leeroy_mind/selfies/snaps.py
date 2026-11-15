@@ -10,10 +10,10 @@ Each writer runs in `store.transaction()`. A refusal is SnapError. The mind writ
 reads (`counts` takes a plain connection for that)."""
 import hashlib
 import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from typing import Callable
 
-from ..personas.schema import Appearance
+from ..personas.schema import Appearance, appearance_dict
 
 WEEK_S = 7 * 86400.0
 _COLS = ("id, kind, guid, source, ref, night, status, ended, scene, audience, phases, members, "
@@ -77,7 +77,9 @@ def _one(store, sql: str, params=()):
 
 
 def looks_hash(a: Appearance) -> str:
-    return hashlib.sha256(json.dumps(asdict(a), sort_keys=True).encode("utf-8")).hexdigest()
+    """The looks' hash; a bust that is not set is left out, so a hash made before it existed
+    still matches."""
+    return hashlib.sha256(json.dumps(appearance_dict(a), sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def _tiles(members) -> str:
