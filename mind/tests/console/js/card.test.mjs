@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cardText, moodText, youText } from "../../../leeroy_mind/console/static/js/words.mjs";
+import { bioText, birthdayText, cardText, moodText, youText } from "../../../leeroy_mind/console/static/js/words.mjs";
 
 // The member card's words from /api/persona's member view. Invented members only.
 
@@ -50,7 +50,59 @@ test("a table an older mind.db lacks reads unavailable", () => {
 });
 
 test("a member mind.db does not know keeps the name the page knows", () => {
-  assert.deepEqual(cardText(null, "Bexley"), { name: "Bexley", note: "Not in mind.db.", facts: [] });
+  assert.deepEqual(cardText(null, "Bexley"), { name: "Bexley", note: "Not in mind.db.", facts: [],
+                                                bio: { about: "", rows: [] } });
   assert.equal(cardText(view({ name: "" }), "Bexley").name, "Bexley");
   assert.equal(cardText(view({ name: "" })).name, "#1101");
+});
+
+// The bio (owner, 2026-11-14): the persona card's life, likes, dislikes, values, habits and game, in words
+function bioCard(over) {
+  return Object.assign({
+    identity: { age: 38, player_gender: "female", region: "US" },
+    life: { job: "drainage inspector", household: "lives with her husband and two kids", rhythm: "6-to-2 shift.",
+            birthday: "01-10", night_owl: true, life_thread: "treats the game like a novel" },
+    likes: ["lore threads", "cheap IPA"], dislikes: ["lag"], values: ["directness", "reliability"],
+    habits: [{ substance: "alcohol", when: "raid_nights" }, { substance: "tobacco", when: "after_midnight" }],
+    game: { wants: ["finish the fanfic", "win the healing argument"], years_played: 8,
+            outside_raids: ["auction_house", "collecting"], favourite_spot: "the Apothecarium" },
+    play: { main_spec: "Shadow", off_spec: "Holy" } }, over || {});
+}
+
+test("the bio is the life thread, then job, home, days, birthday, habits, likes, dislikes, values and game", () => {
+  var b = bioText(bioCard());
+  assert.equal(b.about, "treats the game like a novel");
+  assert.deepEqual(b.rows, [
+    { k: "Job", v: "drainage inspector" },
+    { k: "Home", v: "lives with her husband and two kids" },
+    { k: "Days", v: "6-to-2 shift · night owl" },
+    { k: "Birthday", v: "January 10" },
+    { k: "Habits", v: "drinks on raid nights, smokes after midnight" },
+    { k: "Likes", v: "lore threads, cheap IPA" },
+    { k: "Dislikes", v: "lag" },
+    { k: "Values", v: "directness, reliability" },
+    { k: "Wants", v: "finish the fanfic; win the healing argument" },
+    { k: "Plays", v: "8 years, Shadow (off: Holy)" },
+    { k: "Off raids", v: "auction house, collecting" },
+    { k: "Hangs out", v: "the Apothecarium" }]);
+  assert.deepEqual(cardText(view({}, bioCard())).bio, b);
+});
+
+test("empty parts of the bio are left out, and no card means no bio", () => {
+  var b = bioText(bioCard({ life: { job: "", household: "", rhythm: "", birthday: "", night_owl: false, life_thread: " " },
+                           likes: [], dislikes: [], values: [], habits: [], game: {}, play: {} }));
+  assert.deepEqual(b, { about: "", rows: [] });
+  assert.deepEqual(bioText(null), { about: "", rows: [] });
+  assert.deepEqual(bioText(bioCard({ habits: [{ substance: "glue", when: "daily" }] })).rows.find(function (r) {
+    return r.k === "Habits"; }), undefined);
+  assert.equal(bioText(bioCard({ life: { night_owl: true } })).rows[0].v, "night owl");
+  assert.equal(bioText(bioCard({ play: { main_spec: "", off_spec: "Holy" } })).rows.find(function (r) {
+    return r.k === "Plays"; }).v, "8 years");
+});
+
+test("a birthday reads as a month and day; anything else is kept as it is", () => {
+  assert.equal(birthdayText("12-03"), "December 3");
+  assert.equal(birthdayText("13-01"), "13-01");
+  assert.equal(birthdayText(""), "");
+  assert.equal(birthdayText(null), "");
 });

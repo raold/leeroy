@@ -170,8 +170,10 @@
         </div>
         <section id="mcard" class="mcard" aria-labelledby="mcard-name" hidden>
           <div id="mcard-face" class="cardface"></div>
-          <div><h4 id="mcard-name"></h4><p id="mcard-note" class="note"></p></div>
+          <div><h4 id="mcard-name"></h4><p id="mcard-note" class="note"></p>
+            <p id="mcard-about" class="about" hidden></p></div>
           <div id="mcard-facts" class="facts"></div>
+          <div id="mcard-bio" class="facts bio" role="group" aria-label="Bio" hidden></div>
           <div class="vol">
             <div class="lbl"><label for="mcard-vol">Volume</label><output id="mcard-db" class="mono" for="mcard-vol">0.0 dB</output></div>
             <div class="volrow"><input id="mcard-vol" type="range" min="-12" max="12" step="0.5" value="0">
@@ -408,6 +410,7 @@
         <div class="table-scroll" tabindex="0" role="region" aria-label="Persona traits"><table><thead><tr><th>trait</th><th class="num">persona</th><th class="num" id="p-nighthead">the night</th>
           <th class="num">shift</th><th>how it shows</th></tr></thead><tbody id="p-five"></tbody></table></div>
         <dl id="p-who" class="kv"></dl>
+        <h4>Life</h4><p id="p-about" class="about" hidden></p><dl id="p-life" class="kv"></dl>
       </article>
       <article class="panel">
         <header><h3>How they type and play</h3></header>

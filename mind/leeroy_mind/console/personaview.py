@@ -24,8 +24,9 @@ connection that is closed again). The mind writes these rows; the console only r
   persona's own scores. The night's stages read it; the live talk does not.
 
 Persona content is read through the persona loader (schema.persona_from_dict); of a persona
-only its card summary is shown, never its secret, sample lines, bits, interview, habits, real
-life or real name. A part whose table this mind.db lacks (an older schema) is None and the
+only its card summary and bio are shown (the bio: job, household, rhythm, birthday, life thread,
+likes, dislikes, values and when they drink or smoke), never its secret, disclosures, opinions,
+sample lines, bits, interview, money, sleep or real name. A part whose table this mind.db lacks (an older schema) is None and the
 table is listed in `missing`; a part with no rows yet is empty or None, never zeros."""
 import json
 
@@ -253,14 +254,23 @@ def roster_page(view: dict, offset: int, *, limit: int = 50) -> dict:
     return out
 
 
+BIO_LIFE = ("job", "household", "rhythm", "birthday", "night_owl", "life_thread")
+
+
 def _card(p) -> dict:
-    """The persona card summary: who they are, how they type, how they play and their looks."""
+    """The persona card summary: who they are, how they type, how they play, their looks and the
+    bio the member card shows (owner, 2026-11-14): job, household, rhythm, birthday, night owl, life
+    thread, likes, dislikes, values and habits (substance and when only). Never the secret, the
+    disclosures, opinions, sample lines, bits, interview, real name, money or sleep."""
     d = persona_to_dict(p)
     return {"identity": {k: d["identity"][k] for k in ("age", "player_gender", "region")},
             "big_five": d["big_five"], "attachment": d["attachment"], "humour": d["humour"],
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},
-            "appearance": d["appearance"], "photo": d.get("photo")}
+            "appearance": d["appearance"], "photo": d.get("photo"),
+            "life": {k: d["real_life"][k] for k in BIO_LIFE},
+            "likes": list(d["likes"]), "dislikes": list(d["dislikes"]), "values": list(d["values"]),
+            "habits": [{"substance": h["substance"], "when": h["when"]} for h in d["habits"]]}
 
 
 def member_view(conn, guid: int, *, now: float, outreach_enabled=False,

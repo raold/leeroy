@@ -228,9 +228,17 @@ def test_a_member_in_detail_shows_the_card_summary_and_nothing_private(cast, dat
     assert kinds[:2] == [("undo", "undid drift_flag: DRIFTLINE undone", False),
                          ("drift_flag", "DRIFTLINE resolved", False)]
     assert ("drift_flag", "DRIFTLINE undone", True) in kinds and len(kinds) == 6
+    # the bio the member card shows (owner, 2026-11-14)
+    assert card["life"] == {"job": "warehouse supervisor", "household": "lives with a flatmate",
+                            "rhythm": "early shifts, free evenings", "birthday": "03-14",
+                            "night_owl": False, "life_thread": "learning to cook"}
+    assert (card["likes"], card["dislikes"], card["values"]) == (["quiet runs"], ["late starts"],
+                                                                 ["reliability"])
+    assert card["habits"] == []
     text = json.dumps(view)
     for private in (SECRET, "INTERVIEWTEXT", "MEMTEXT", "BITINSTR", "mention the weather",
-                    "real_name", "Sam Carter", "warehouse", "tea beats coffee"):
+                    "real_name", "Sam Carter", "tea beats coffee", "in bed by midnight",
+                    "comfortable", "says mate a lot", "mocks new players", "disclosures"):
         assert private not in text
     assert feed.read(data / "mind.db", personaview.member_view, 305,
                      now=NOW)["card"]["appearance"]["build"] == "athletic"
@@ -422,3 +430,18 @@ def test_the_cast_opens_as_a_wall():
     assert "localStorage" not in js
     faces = (Path(__file__).resolve().parents[2] / "leeroy_mind/console/static/js/faces.mjs").read_text("utf-8")
     assert "wall: " in faces
+
+
+def test_the_bio_carries_when_they_drink_and_never_the_odds_or_the_disclosures():
+    from conftest import _base_persona_dict
+    from leeroy_mind.personas.schema import persona_from_dict
+    d = _base_persona_dict(301, "Arkon")
+    d["habits"] = [{"substance": "alcohol", "when": "raid_nights", "odds": 0.9, "max_state": "tipsy"}]
+    d["disclosures"] = [{"depth": "surface", "text": "SURFACETEXT"}, {"depth": "middle", "text": "MIDDLETEXT"},
+                        {"depth": "deep", "text": "DEEPTEXT"}]
+    card = personaview._card(persona_from_dict(d))
+    assert card["habits"] == [{"substance": "alcohol", "when": "raid_nights"}]
+    text = json.dumps(card)
+    for private in ("SURFACETEXT", "MIDDLETEXT", "DEEPTEXT", "0.9", "tipsy", "once lost a bet",
+                    "comfortable", "in bed by midnight", "tea beats coffee"):
+        assert private not in text
