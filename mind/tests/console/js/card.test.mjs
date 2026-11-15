@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bioText, birthdayText, cardText, moodText, youText } from "../../../leeroy_mind/console/static/js/words.mjs";
+import { bioText, birthdayText, cardText, leadText, moodText, romanceText, whoText, youText }
+  from "../../../leeroy_mind/console/static/js/words.mjs";
 
 // The member card's words from /api/persona's member view. Invented members only.
 
@@ -10,13 +11,14 @@ function view(member, card, missing) {
                                    mood: { octant: "relaxed", p: 0.2, a: -0.1, d: 0.1, updated: 0 },
                                    you: { affinity: 12, attraction: 40, romance_stage: "none", trust: 50,
                                           respect: 40, familiarity: 30 } }, member || {}),
-           card: card === undefined ? { identity: { age: 28, player_gender: "f", region: "Leeds" } } : card };
+           card: card === undefined ? { identity: { age: 28, player_gender: "female", region: "UK", home: null },
+                                        status: "single" } : card };
 }
 
-test("the note is age and region, then the stance; the facts are role, mood and toward you", () => {
+test("the note is age, place, stance and status; the facts are role, mood and toward you", () => {
   var v = view(), c = cardText(v);
   assert.equal(c.name, "Arkon");
-  assert.equal(c.note, "28, Leeds · teasing");
+  assert.equal(c.note, "28 · UK · teasing · single");
   assert.deepEqual(c.facts, [{ k: "Role", v: "Priest · healer" },
                              { k: "Mood", v: moodText(v.member.mood) },
                              { k: "Toward you", v: youText(v.member.you) }]);
@@ -31,10 +33,43 @@ test("with no persona card the note says so", () => {
                              { k: "Toward you", v: "no row yet" }]);
 });
 
-test("a stance alone, or age and region alone, without a stray separator", () => {
+test("a US member reads her state, or US before she has one; a couple names the partner", () => {
+  var us = { identity: { age: 38, player_gender: "female", region: "US", home: "Texas" }, status: "married" };
+  assert.equal(cardText(view({ stance: "lust" }, us)).note, "38 · Texas · lust · married");
+  us = { identity: { age: 41, player_gender: "female", region: "US", home: null }, status: "divorced" };
+  assert.equal(cardText(view({ stance: "fond" }, us)).note, "41 · US · fond · divorced");
+  var uk = { identity: { age: 29, player_gender: "female", region: "UK" }, status: "dating Teodor" };
+  assert.equal(cardText(view({ stance: "drawn" }, uk)).note, "29 · UK · drawn · dating Teodor");
+});
+
+test("each part is left out when empty, without a stray separator", () => {
   assert.equal(cardText(view({}, { identity: { age: null, region: "" } })).note, "teasing");
   assert.equal(cardText(view({ stance: null }, { identity: { age: 31, region: "" } })).note, "31");
-  assert.equal(cardText(view({ stance: "" })).note, "28, Leeds");
+  assert.equal(cardText(view({ stance: "" })).note, "28 · UK · single");
+  assert.equal(cardText(view({ stance: "none" }, { identity: { age: 52, region: "UK" }, status: "married" })).note,
+               "52 · UK · married");  // a stance of none is no attitude
+  assert.equal(cardText(view({ stance: null }, { identity: {}, status: "with Teodor" })).note, "with Teodor");
+  assert.equal(cardText(view({ stance: null }, { identity: {} })).note, "");
+});
+
+test("the Personas detail shows the stance once, on the player line", () => {
+  var m = view({ stance: "lust" }).member, ro = { stance: "lust", style: "bold", jealousy_mode: "play_by_play" };
+  var lines = [whoText({ age: 38, region: "US", home: "Ohio" }, ro.stance, "married", "female"),
+               leadText(m, []), romanceText(ro)];
+  assert.equal(lines.join(" | ").split("lust").length - 1, 1);
+  assert.ok(leadText(m, []).startsWith("Mood: relaxed (pleasure +0.20"));
+  assert.ok(leadText(m, []).endsWith(") · toward you: affinity +12, attraction 40"));
+  assert.ok(leadText(m, []).indexOf("stance") < 0);
+  assert.equal(romanceText(ro), "bold, play by play");
+  assert.equal(romanceText({ stance: "none", style: null, jealousy_mode: null }), "-");
+  assert.equal(leadText({}, ["pad_mood", "relationship"]), "Mood: unavailable · toward you: unavailable");
+});
+
+test("the Personas player line puts the gender after the age", () => {
+  assert.equal(whoText({ age: 38, region: "US", home: "Ohio" }, "lust", "married", "female"),
+               "38 · female · Ohio · lust · married");
+  assert.equal(whoText({ age: 47, region: "UK" }, "none", null, "male"), "47 · male · UK");
+  assert.equal(whoText(null, "", "", ""), "");
 });
 
 test("a class without a role, a role without a class and neither", () => {

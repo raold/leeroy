@@ -1203,6 +1203,63 @@ def cmd_fix_typing(args) -> int:
         _close_fix_store(store, lock)
 
 
+def cmd_homes(args) -> int:
+    """`personas homes`: a home state for each US member of the cast without one, from where her
+    own words put her, else a population-weighted draw by guid (personas/homes.py); `--clear`
+    takes every home off again. A read-only plan unless --go, which saves each as an owner
+    persona version with a "home" ledger row (`personas undo <id>` takes one back)."""
+    from collections import Counter
+    from .personas.homes import plan_homes, set_home
+    from .personas.io import load_persona
+    root = _root(args)
+    args.dry_run = not args.go
+    opened = _fix_store(args, root, "pre-homes")
+    if isinstance(opened, int):
+        return opened
+    store, lock = opened
+    try:
+        personas, bad = [], []
+        for g in sorted(store.persona_versions()):  # the cast's, never a world persona
+            try:
+                if (p := load_persona(store, g)) is not None:
+                    personas.append(p)
+            except ValueError as e:  # PersonaError and JSON errors alike
+                bad.append(f"cannot read persona {g}: {_ascii(str(e))[:200]}")
+        for line in bad:
+            print(line)
+        plan = plan_homes(personas, clear=args.clear)
+        failed = []
+        for h in plan:
+            why = (f"{h.field}: {h.phrase}" if h.how == "text" else
+                   "drawn by population" if h.how == "draw" else f"was {h.before}")
+            print(f"{h.guid:>7}  {_ascii(h.name):<12}  {h.home or 'not set':<15}  {_ascii(why)}")
+            if args.go:
+                try:
+                    set_home(store, h.guid, h.home, now=store.clock.now())
+                except ValueError as e:
+                    failed.append(h.guid)
+                    print(f"         cannot save: {_ascii(str(e))[:200]}")
+        verb = "would" if args.dry_run else "did"
+        if args.clear:
+            print(f"{verb} take the home state off {len(plan) - len(failed)} members")
+        else:
+            us = [p for p in personas if p.identity.region == "US"]
+            states = Counter(h.home for h in plan if h.guid not in failed)
+            fields = Counter(h.field for h in plan if h.how == "text")
+            where = ", ".join(f"{f} {n}" for f, n in fields.most_common())
+            print(f"{verb} give {len(plan) - len(failed)} of {len(us)} US members a home state: "
+                  f"{sum(fields.values())} from their own words" + (f" ({where})" if where else "")
+                  + f", {sum(h.how == 'draw' for h in plan)} drawn; {len(us) - len(plan)} had one "
+                  f"already; {len(personas) - len(us)} UK members keep UK")
+            print(", ".join(f"{s} {n}" for s, n in
+                            sorted(states.items(), key=lambda x: (-x[1], x[0]))))
+        if args.dry_run:
+            print("nothing was written")
+        return 1 if bad or failed else 0
+    finally:
+        _close_fix_store(store, lock)
+
+
 def cmd_generate(args, root, store) -> int:
     import asyncio
     import random
@@ -1423,6 +1480,19 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_fix.add_argument("--data-dir", default=argparse.SUPPRESS,
                        help="the mind's data folder (as personas --data-dir)")
     p_fix.set_defaults(func=cmd_fix_typing)
+    p_home = psub.add_parser("homes",
+                             help="give each US member of the cast without one a home state for "
+                                  "the console's cards: where her own words put her, else a "
+                                  "population-weighted draw by guid; a read-only plan unless --go")
+    p_home.add_argument("--go", action="store_true",
+                        help="save them as owner persona versions with ledger rows (the mind "
+                             "stopped; mind.db is snapshot first)")
+    p_home.add_argument("--clear", action="store_true",
+                        help="take every home state off again (before rolling back to code "
+                             "without them)")
+    p_home.add_argument("--data-dir", default=argparse.SUPPRESS,
+                        help="the mind's data folder (as personas --data-dir)")
+    p_home.set_defaults(func=cmd_homes)
     p_pers.set_defaults(func=cmd_personas)
     from .world.cli import run as world_status
     p_world = psub.add_parser("world", help="read-only world target counts and generation plan")

@@ -1,5 +1,9 @@
 """Shared world-to-cast seed and atomic write, after normal cast generation/screens."""
-from .io import canonical_json, load_persona
+import json
+
+from .homes import without_home
+from .io import load_persona
+from .schema import persona_to_dict
 from .tiers import is_cast
 
 
@@ -11,7 +15,10 @@ def promotion_seed(store, guid, summary):
         except ValueError:
             seed = None  # an unreadable old seed must not strand a cast member
         if seed is not None:
-            summary += "\nPrevious world persona for this newcomer (seed data; adapt to the cast):\n" + canonical_json(seed)
+            # its home state stays out, as in every prompt (homes.without_home)
+            summary += ("\nPrevious world persona for this newcomer (seed data; adapt to the cast):\n"
+                        + json.dumps(without_home(persona_to_dict(seed)), sort_keys=True,
+                                     ensure_ascii=False, separators=(",", ":")))
     return version, summary
 
 

@@ -13,6 +13,7 @@ from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from typing import Literal, get_args, get_origin, get_type_hints
 
 from ..text import has_meta
+from .states import US_STATES
 
 SCHEMA_VERSION = 1
 MIN_AGE = 18
@@ -52,6 +53,10 @@ class Identity:
     region: Literal["UK", "US"]
     accent: Literal["en-gb", "en-us"]
     voice: Voice
+    # A US member's state by its full name ("Texas"), given once by `personas homes` (owner,
+    # 2026-11-15) for the console's cards; None for a UK member and a US member without one yet.
+    # No model writes it (left out of the generator's schema) and no prompt reads it.
+    home: str | None = _f(max_len=20, default=None, enrichment=True)
 
 
 @dataclass(frozen=True)
@@ -474,6 +479,8 @@ def persona_to_dict(p: Persona) -> dict:
         del d["photo"]  # a persona without one stays as the previous release wrote it
     if p.appearance is not None:
         d["appearance"] = appearance_dict(p.appearance)  # likewise looks without shape words
+    if p.identity.home is None:
+        del d["identity"]["home"]  # and an identity without a home state
     return d
 
 
@@ -556,7 +563,19 @@ def validate_persona(p: Persona) -> list[str]:
             errs.append(f"relationships[{i}].other: must be someone else or @human")
     errs += _typing_errors(p.typing)
     errs += _enrichment_errors(p)
+    errs += _home_errors(p.identity)
     return errs
+
+
+def _home_errors(i: Identity) -> list[str]:
+    """A home is a US state by its full name, for a US member only."""
+    if i.home is None:
+        return []
+    if i.region != "US":
+        return ["identity.home: a US member's state only; leave it empty for the UK"]
+    if i.home not in US_STATES:
+        return ["identity.home: must be a US state's full name, such as Texas"]
+    return []
 
 
 def _enrichment_errors(p: Persona) -> list[str]:
