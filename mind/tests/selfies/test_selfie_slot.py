@@ -79,7 +79,7 @@ def test_an_identity_request_carries_its_reference_and_shape(tmp_path):
     ready, got = run(go())
     assert ready.identity is True
     assert (got.width, got.height) == (832, 1216)
-    assert log.read_text().splitlines()[0] == f"i1 1234 identity {ref} 0.6"
+    assert log.read_text().splitlines()[0] == f"i1 1234 scale 0.6 identity {ref}"
     assert log.read_text().splitlines()[1] == "i2 1234"
 
 

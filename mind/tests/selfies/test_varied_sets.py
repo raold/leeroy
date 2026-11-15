@@ -791,8 +791,8 @@ def test_a_new_set_carries_her_chosen_photos_face_and_back_views_take_it_lightly
     assert len(rows) == 4
     ref = str(files.history(h.settings.data_dir, 101, change).absolute())
     for row, look in zip(rows, looks):
-        assert row[2] == "identity" and row[3] == ref
-        assert float(row[4]) == (0.3 if look.view in kind.BACK_VIEWS else 0.6)
+        assert row[2] == "scale" and row[4] == "identity" and row[5] == ref
+        assert float(row[3]) == (0.3 if look.view in kind.BACK_VIEWS else 0.6)
     assert _prompts(h, 101, 2) and p.photo is not None
 
 
