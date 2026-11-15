@@ -55,9 +55,14 @@ MODEL_PINS: dict[str, ModelPin] = {
         "h94/IP-Adapter", "018e402774aeeddd60609b4ecdb7e298259dc729",
         ("models/image_encoder/config.json", "models/image_encoder/model.safetensors",
          "sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors")),
+    "yunet": ModelPin(
+        "yunet", "YuNet face detector (OpenCV Zoo, 2023mar)", "MIT",
+        "opencv/face_detection_yunet", "3cc26e7f1014a5ee5d74a42acee58bafc9d0a310",
+        ("face_detection_yunet_2023mar.onnx",)),
 }
 BASE_PINS = ("realvisxl", "nsfw")  # what every worker needs
 IDENTITY_PINS = ("ipadapter",)  # what only an --identity worker needs
+FACE_PINS = ("yunet",)  # an --identity worker's face crop: not fetched, the mind's square is used
 
 
 def model_dir(data_dir: Path, name: str) -> Path:

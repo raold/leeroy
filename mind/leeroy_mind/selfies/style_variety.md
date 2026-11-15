@@ -78,6 +78,18 @@ and queued work, while disabling new automatic assignments and history writes.
 
 ## Varied sets
 
+**Her face in every new set** (`[selfies] identity_sets = true`, owner 2026-11-14; default false,
+read at the mind's start; needs the selfie worker's `ipadapter` pin, and `yunet` for the tight
+face crop). Profile sets used to render from text alone, so every candidate and every new set
+was a different woman who fit the description. With the switch on, the night's `selfies` stage
+and the photo booth start the identity worker, and a set for a member with a chosen photo carries
+that photo's face (`store.face_pick`: her cover's newest front or side face, never a back view)
+cut by its framing at `identity_scale` (0.6); a varied slot seen from behind (`BACK_VIEWS`) takes
+it at half that (0.3, the worker's floor), or the adapter turns her to the camera. A member with
+no chosen photo yet (her first set) renders plainly on the same worker. Log `selfies_set_face
+guid= set= scales=`. Measured 2026-11-14 on Aima and Maristine's varied plans: the same woman as
+her cover in every look, from-behind shots kept, her cover's lighting no longer tints the scene.
+
 `[selfies] varied_sets = true` (default false; read at the mind's start; an invalid or
 unknown-key table keeps it off) allows a varied set for each woman of the lust style: one set
 whose four candidates each have their own look and pose, composed by code (`varied.py`) from

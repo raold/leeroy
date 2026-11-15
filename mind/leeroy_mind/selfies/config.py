@@ -31,6 +31,7 @@ class SelfieCfg:
     identity_min_free_gib: float = 13.5  # the identity worker loads the adapter too
     variety: bool = False  # balanced lust choices and recent plain-photo observations
     varied_sets: bool = False  # varied.py: four looks and poses in one set for the lust style
+    identity_sets: bool = False  # profile sets carry her chosen photo's face (the identity worker)
 
 
 def _bool(v) -> bool:
@@ -68,6 +69,7 @@ _RULES = {
     "identity_min_free_gib": (_num(4, 23), "a number 4-23"),
     "variety": (_bool, "true or false"),
     "varied_sets": (_bool, "true or false"),
+    "identity_sets": (_bool, "true or false"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib"}
 _PATHS = {"python", "data"}

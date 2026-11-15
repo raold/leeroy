@@ -24,7 +24,8 @@ def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = No
         queue(ctx)
         if not todo(ctx):
             return
-        w = worker() if worker is not None else SelfieWorker(worker_command(cfg), env=worker_env(cfg))
+        w = worker() if worker is not None else SelfieWorker(
+            worker_command(cfg, identity=cfg.identity_sets), env=worker_env(cfg))
         try:
             await render(ctx, cfg, w)
         finally:

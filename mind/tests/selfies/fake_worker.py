@@ -14,13 +14,13 @@ FAKE_SELFIE_HANG_AFTER   renders after the first n never answer
 FAKE_SELFIE_DIE          the worker exits (3) when a render arrives, without an answer
 FAKE_SELFIE_CHILD        start a sleeping child process before ready
 FAKE_SELFIE_PIDS         a file it writes {"pid", "child"} to before ready
-FAKE_SELFIE_LOG          a file it appends "<id> <seed>" (plus " identity <ref>" for an identity render) to for each
+FAKE_SELFIE_LOG          a file it appends "<id> <seed>" (plus " scale <s> identity <ref>" for an identity render) to for each
                          render request and "<id> grid <tile count>" for each grid
 FAKE_SELFIE_TOO_LONG    a comma list of request id prefixes that answer prompt_too_long
 FAKE_SELFIE_BAD_SIMILARITY  grids answer a malformed similarity diagnostic
 FAKE_SELFIE_FLAG_CAPTION  captions come back flagged (nothing written)
-FAKE_SELFIE_IDENTITY     ready says identity true, and a render without an identity answers
-                         bad_request (a plain worker answers identity_unavailable to one with)
+FAKE_SELFIE_IDENTITY     ready says identity true; it renders with or without an identity (a
+                         plain worker answers identity_unavailable to one with)
 
 A grid writes JPEG to `out` and `thumb` and answers the canvas size from the real worker's layout
 (selfie/leeroy_selfie/grid.py); a tile that is not a file answers missing_tile.
@@ -175,7 +175,8 @@ def main() -> None:
         if env.get("FAKE_SELFIE_LOG"):
             ref = (req.get("identity") or {}).get("ref")
             with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
-                f.write(f"{req['id']} {req['seed']}" + (f" identity {ref}" if ref else "") + "\n")
+                scale = (req.get("identity") or {}).get("scale")
+                f.write(f"{req['id']} {req['seed']}" + (f" scale {scale} identity {ref}" if ref else "") + "\n")
         renders += 1
         if any(req["id"].startswith(x) for x in env.get("FAKE_SELFIE_TOO_LONG", "").split(",") if x):
             _send({"id": req["id"], "ok": False, "error": "prompt_too_long"})
@@ -184,9 +185,8 @@ def main() -> None:
             threading.Event().wait()
         if env.get("FAKE_SELFIE_DIE"):
             os._exit(3)
-        if (req.get("identity") is not None) != identity:
-            _send({"id": req["id"], "ok": False,
-                   "error": "bad_request" if identity else "identity_unavailable"})
+        if req.get("identity") is not None and not identity:
+            _send({"id": req["id"], "ok": False, "error": "identity_unavailable"})
             continue
         if oom > 0:
             oom -= 1

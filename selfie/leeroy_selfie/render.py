@@ -1,5 +1,6 @@
 """The renderer: RealVisXL on the GPU, the NSFW classifier on the CPU, and for an identity worker
-the IP-Adapter Plus Face with its image encoder. torch, diffusers, transformers and Pillow are
+the IP-Adapter Plus Face with its image encoder (and, when fetched, the YuNet face detector that
+cuts the reference tight around her face: face.py). torch, diffusers, transformers and Pillow are
 imported inside the functions that need them, so the CLI and the default test suite never load
 them."""
 import os
@@ -7,7 +8,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from . import caption, grid, jpeg, models, similarity
+from . import caption, face, grid, jpeg, models, similarity
 from .fit import fit
 from .protocol import PORTRAIT_SIZE, Caption, Grid, Identity, Render, RenderFailed
 
@@ -44,11 +45,13 @@ def ref_box(width: int, height: int, crop: tuple[float, float, float, float]
 
 
 class Renderer:
-    """`identity` says the pipeline has the adapter: then every render needs a reference, and
-    without it none may carry one."""
+    """`identity` says the pipeline has the adapter: a render with a reference is conditioned on
+    it, one without renders with the adapter at scale 0 (2026-11-14: one identity worker serves
+    a night's sets with and without a reference); without the adapter none may carry one.
+    `face_ref` (face.FaceRef, or None) cuts the reference tight around her face."""
 
     def __init__(self, pipe, processor, classifier, nsfw_index: int, torch, info: dict,
-                 identity: bool = False):
+                 identity: bool = False, face_ref=None):
         self.pipe = pipe
         self.processor = processor
         self.classifier = classifier
@@ -56,7 +59,9 @@ class Renderer:
         self.torch = torch
         self.info = info
         self.identity = identity
+        self.face_ref = face_ref
         self._refs: OrderedDict = OrderedDict()  # (ref, st_mtime_ns, crop, cfg) -> embeds
+        self._blanks: dict = {}  # cfg -> the embeds a render without a reference carries
 
     def _count(self, text: str) -> int:
         return max(len(tok(text, add_special_tokens=False).input_ids)
@@ -72,12 +77,12 @@ class Renderer:
         """One image, a square of the requested `size` (768, 896 or 1024) or PORTRAIT for shape
         "portrait", saved as is to `out`, and a thumbnail with its long side `thumb_size` to
         `thumb`; neither when the NSFW score reaches nsfw_max. A render with an identity is
-        conditioned on the face in its reference crop, at its scale. RenderFailed: oom,
-        missing_ref (the reference is gone or not a JPEG), identity_unavailable (a reference
-        without the adapter), bad_request (the adapter without a reference)."""
-        if (req.identity is not None) != self.identity:
-            raise RenderFailed("identity_unavailable" if req.identity is not None
-                               else "bad_request")
+        conditioned on the face in its reference crop, at its scale; one without, on an
+        identity pipeline, carries a blank reference at scale 0, which adds nothing. RenderFailed:
+        oom, missing_ref (the reference is gone or not a JPEG), identity_unavailable (a reference
+        without the adapter)."""
+        if req.identity is not None and not self.identity:
+            raise RenderFailed("identity_unavailable")
         torch = self.torch
         started = time.perf_counter()
         limit = self.pipe.tokenizer.model_max_length - 2
@@ -90,6 +95,9 @@ class Renderer:
             if req.identity is not None:  # diffusers turns CFG off at cfg 1.0 (guidance > 1)
                 adapter_kw["ip_adapter_image_embeds"] = self._embeds(req.identity, req.cfg > 1)
                 self.pipe.set_ip_adapter_scale(req.identity.scale)
+            elif self.identity:  # the adapter's addition is scale * its attention: 0 adds nothing
+                adapter_kw["ip_adapter_image_embeds"] = self._blank(req.cfg > 1)
+                self.pipe.set_ip_adapter_scale(0.0)
             generator = torch.Generator("cuda").manual_seed(req.seed)
             image = self.pipe(prompt=prompt, negative_prompt=negative,
                               num_inference_steps=req.steps, guidance_scale=req.cfg,
@@ -127,7 +135,8 @@ class Renderer:
             img = jpeg.open_rgb(identity.ref)
         except Exception as e:  # Pillow's errors share no narrower base
             raise RenderFailed("missing_ref") from e
-        crop = img.crop(ref_box(*img.size, identity.crop))
+        box = ref_box(*img.size, identity.crop)
+        crop = self.face_ref(img, box)[0] if self.face_ref is not None else img.crop(box)
         with self.torch.no_grad():
             embeds = self.pipe.prepare_ip_adapter_image_embeds(
                 ip_adapter_image=crop, ip_adapter_image_embeds=None, device="cuda",
@@ -136,6 +145,18 @@ class Renderer:
         while len(self._refs) > REF_CACHE:
             self._refs.popitem(last=False)
         return embeds
+
+    def _blank(self, cfg: bool):
+        """The embeds of a plain grey image, once per `cfg`: what a render without a reference
+        carries through the adapter, at scale 0."""
+        if cfg not in self._blanks:
+            from PIL import Image
+            with self.torch.no_grad():
+                self._blanks[cfg] = self.pipe.prepare_ip_adapter_image_embeds(
+                    ip_adapter_image=Image.new("RGB", (224, 224), (128, 128, 128)),
+                    ip_adapter_image_embeds=None, device="cuda", num_images_per_prompt=1,
+                    do_classifier_free_guidance=cfg)
+        return self._blanks[cfg]
 
     def caption(self, req: Caption) -> dict:
         """A meme: the caption drawn over the base JPEG (caption.draw), scored by the NSFW
@@ -231,7 +252,8 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
     if "nsfw" not in labels:
         raise ReadyError("model", fields=timings)
     loaded = _OnCpu(pipe, processor, classifier, labels["nsfw"], torch,
-                    {"torch": torch.__version__, "diffusers": diffusers.__version__}, identity)
+                    {"torch": torch.__version__, "diffusers": diffusers.__version__}, identity,
+                    _face_ref(data) if identity else None)
     return _to_gpu(loaded, min_free_gib, timings, wait_s=0.0)
 
 
@@ -239,10 +261,21 @@ class _OnCpu:
     """What a start loaded before its VRAM check, kept for a retry after a vram refusal."""
 
     def __init__(self, pipe, processor, classifier, nsfw_index: int, torch, versions: dict,
-                 identity: bool):
+                 identity: bool, face_ref=None):
         self.pipe, self.processor, self.classifier = pipe, processor, classifier
         self.nsfw_index, self.torch, self.versions = nsfw_index, torch, versions
-        self.identity = identity
+        self.identity, self.face_ref = identity, face_ref
+
+
+def _face_ref(data: Path):
+    """face.FaceRef on the fetched YuNet model, or None (not fetched, changed, or no OpenCV):
+    the mind's square is then cut as it is."""
+    try:
+        if any(ok is not True for ok, _ in models.check(data, "yunet", quick=True)):
+            return None
+        return face.FaceRef(models.model_dir(data, "yunet") / face.MODEL_FILE)
+    except Exception:
+        return None
 
 
 def _free_gib(torch, min_free_gib: float, wait_s: float) -> float:
@@ -282,4 +315,5 @@ def _to_gpu(c: _OnCpu, min_free_gib: float, timings: dict, *, wait_s: float) -> 
         raise ReadyError("model", fields=fields) from e
     info = {"device": "cuda", "free_gib": round(free_gib, 1), "versions": dict(c.versions),
             **timings}
-    return Renderer(pipe, c.processor, c.classifier, c.nsfw_index, torch, info, c.identity)
+    return Renderer(pipe, c.processor, c.classifier, c.nsfw_index, torch, info, c.identity,
+                    c.face_ref)

@@ -494,16 +494,35 @@ def test_a_flagged_identity_render_writes_nothing(tmp_path, monkeypatch, ref):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["ref.jpg"]
 
 
-def test_a_render_never_ignores_an_identity_and_an_identity_renderer_needs_one(
+def test_a_render_never_ignores_an_identity_and_an_identity_renderer_renders_without_one(
         tmp_path, monkeypatch, ref):
     stub_pil(monkeypatch)
     plain, ident = make_renderer(), make_renderer(identity=True)
     with pytest.raises(RenderFailed, match="identity_unavailable"):
         plain.render(portrait(ref, out=tmp_path / "a.jpg"))
-    with pytest.raises(RenderFailed, match="bad_request"):
-        ident.render(request(tmp_path))
-    assert plain.pipe.calls == [] == ident.pipe.calls
-    assert plain.pipe.scales == [] and plain.pipe.embed_calls == 0
+    assert plain.pipe.calls == [] and plain.pipe.scales == [] and plain.pipe.embed_calls == 0
+    # without a reference, an identity pipeline carries a blank one at scale 0, encoded once per cfg
+    ident.render(request(tmp_path))
+    ident.render(request(tmp_path, id="r2"))
+    assert ident.pipe.scales == [0.0, 0.0] and ident.pipe.embed_calls == 1
+    assert ident.pipe.calls[0]["ip_adapter_image_embeds"] == ["embeds-1"]
+    assert ident.pipe.embedded[0]["do_classifier_free_guidance"] is True  # cfg 6.0
+    # a plain pipeline never passes adapter embeds
+    plain.render(request(tmp_path, id="r3"))
+    assert "ip_adapter_image_embeds" not in plain.pipe.calls[0]
+
+
+def test_the_face_ref_cuts_the_crop_it_encodes(tmp_path, monkeypatch, ref):
+    stub_pil(monkeypatch)
+    seen = []
+
+    def face_ref(img, box):
+        seen.append(box)
+        return "tight-crop", True
+    r = make_renderer(identity=True)
+    r.face_ref = face_ref
+    r.render(portrait(ref, out=tmp_path / "a.jpg", crop=(0.25, 0.0, 0.75, 0.5)))
+    assert len(seen) == 1 and r.pipe.embedded[0]["ip_adapter_image"] == "tight-crop"
 
 
 # -- the grid ------------------------------------------------------------------------------------

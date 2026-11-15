@@ -72,15 +72,15 @@ def test_an_identity_request_carries_its_reference_and_shape(tmp_path):
         ready = await w.start()
         try:
             got = await w.render(request(tmp_path, identity=ident, shape="portrait"), rid="i1")
-            with pytest.raises(WorkerError, match="^bad_request$"):
-                await w.render(request(tmp_path), rid="i2")
+            await w.render(request(tmp_path), rid="i2")  # an identity worker renders plain too
             return ready, got
         finally:
             await w.stop()
     ready, got = run(go())
     assert ready.identity is True
     assert (got.width, got.height) == (832, 1216)
-    assert log.read_text().splitlines()[0] == f"i1 1234 identity {ref}"
+    assert log.read_text().splitlines()[0] == f"i1 1234 scale 0.6 identity {ref}"
+    assert log.read_text().splitlines()[1] == "i2 1234"
 
 
 def test_a_grid_answers_its_size_and_a_missing_tile_keeps_the_worker(tmp_path):
