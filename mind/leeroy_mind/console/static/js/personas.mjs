@@ -11,7 +11,7 @@ import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
-import { CLASSES, moodText, moodTitle, photoKindText, signed, tileState, when, youText, youTitle } from "./words.mjs";
+import { CLASSES, bioText, moodText, moodTitle, photoKindText, signed, tileState, when, youText, youTitle } from "./words.mjs";
 
 // -- the personas tab: mind.db only, and read-only: nothing here can change a persona -----------
 // (its dials are the tuning's overlay, below; its profile photos are selfies.mjs's)
@@ -285,6 +285,12 @@ function renderMember(j) {
                      ["raid role", pl.raid_role], ["skill", pl.skill],
                      ["guild role", str(pl.guild_role) + (pl.officer_title ? " (" + pl.officer_title + ")" : "")]]);
   }
+  var bio = bioText(c);
+  setText("p-about", bio.about);
+  $("p-about").hidden = !bio.about;
+  var inGame = ["Wants", "Plays", "Off raids", "Hangs out"];  // "In game" below already lists these
+  kv($("p-life"), c ? bio.rows.filter(function (f) { return inGame.indexOf(f.k) < 0; })
+                              .map(function (f) { return [f.k.toLowerCase(), f.v]; }) : []);
   var a = c && c.appearance ? obj(c.appearance) : null;
   kv($("p-looks"), a ? [["height", a.height_cm + " cm"], ["build", a.build], ["weight", a.weight_kg + " kg"],
                         ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],

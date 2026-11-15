@@ -189,6 +189,7 @@ def test_the_member_card_is_in_the_right_column():
     page = _page()
     right = page[page.index('id="comms-right"'):page.index("</aside>", page.index('id="comms-right"'))]
     for i in ("here-title", "here-faces", "mcard", "mcard-face", "mcard-name", "mcard-note", "mcard-facts",
+              "mcard-about", "mcard-bio",
               "mcard-vol", "mcard-db", "mcard-reset", "mcard-whisper", "mcard-mute", "mcard-profile"):
         assert f'id="{i}"' in right, i
     assert re.search(r'<input id="mcard-vol" type="range" min="-12" max="12" step="0.5" value="0"', right)

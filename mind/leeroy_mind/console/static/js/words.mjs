@@ -48,11 +48,52 @@ export function photoKindText(p) {
     .filter(Boolean).join(", ");
 }
 
+var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+              "October", "November", "December"];
+var SUBSTANCE = { alcohol: "drinks", weed: "smokes weed", caffeine: "runs on caffeine", tobacco: "smokes" };
+var WHEN = { raid_nights: "on raid nights", weekends: "at weekends", days_off: "on days off",
+             after_midnight: "after midnight", daily: "every day" };
+
+// A persona birthday ("MM-DD") in words ("January 10"); anything else as it is
+export function birthdayText(mmdd) {
+  var m = /^(\d\d)-(\d\d)$/.exec(str(mmdd));
+  if (!m || +m[1] < 1 || +m[1] > 12) { return str(mmdd); }
+  return MONTHS[+m[1] - 1] + " " + (+m[2]);
+}
+
+// The member's bio from the persona card: a short line about them (their life thread) and its rows,
+// each left out when empty. card null: no bio.
+export function bioText(card) {
+  if (!card) { return { about: "", rows: [] }; }
+  var c = obj(card), life = obj(c.life), game = obj(c.game), play = obj(c.play), rows = [];
+  function add(k, v) { v = str(v).trim(); if (v) { rows.push({ k: k, v: v }); } }
+  function list(v, sep) { return arr(v).map(str).filter(Boolean).join(sep || ", "); }
+  add("Job", life.job);
+  add("Home", life.household);
+  add("Days", [str(life.rhythm).trim().replace(/\.$/, ""), life.night_owl === true ? "night owl" : ""]
+    .filter(Boolean).join(" · "));
+  add("Birthday", birthdayText(life.birthday));
+  add("Habits", arr(c.habits).map(function (h) {
+    h = obj(h);
+    return SUBSTANCE[h.substance] ? SUBSTANCE[h.substance] + (WHEN[h.when] ? " " + WHEN[h.when] : "") : "";
+  }).filter(Boolean).join(", "));
+  add("Likes", list(c.likes));
+  add("Dislikes", list(c.dislikes));
+  add("Values", list(c.values));
+  add("Wants", list(game.wants, "; "));
+  add("Plays", [typeof game.years_played === "number" ? game.years_played + " years" : "",
+                str(play.main_spec) + (play.main_spec && play.off_spec ? " (off: " + play.off_spec + ")" : "")]
+    .filter(Boolean).join(", "));
+  add("Off raids", list(game.outside_raids).replace(/_/g, " "));
+  add("Hangs out", game.favourite_spot);
+  return { about: str(life.life_thread).trim(), rows: rows };
+}
+
 // The member card in Comms from /api/persona's member view: the name, a note (age and region, then
-// the stance) and three facts. view null: mind.db does not know them (a 404), so only the name the
+// the stance), three facts and the bio (bioText). view null: mind.db does not know them (a 404), so only the name the
 // page knows (known) is shown.
 export function cardText(view, known) {
-  if (!view) { return { name: str(known), note: "Not in mind.db.", facts: [] }; }
+  if (!view) { return { name: str(known), note: "Not in mind.db.", facts: [], bio: bioText(null) }; }
   var m = obj(obj(view).member), c = view.card ? obj(view.card) : null, missing = arr(view.missing);
   var name = str(m.name) || str(known) || "#" + num(m.guid), note = "No persona yet.";
   if (c) {
@@ -61,7 +102,7 @@ export function cardText(view, known) {
     if (stance) { note = note ? note + " · " + stance : stance; }
   }
   var role = [m["class"] ? CLASSES[m["class"]] || "-" : "", str(m.role)].filter(Boolean).join(" · ") || "-";
-  return { name: name, note: note,
+  return { name: name, note: note, bio: bioText(c),
            facts: [{ k: "Role", v: role },
                    { k: "Mood", v: missing.indexOf("pad_mood") >= 0 ? "unavailable" : moodText(m.mood) },
                    { k: "Toward you", v: missing.indexOf("relationship") >= 0 ? "unavailable" : youText(m.you) }] };

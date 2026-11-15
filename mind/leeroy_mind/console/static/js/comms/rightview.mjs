@@ -78,6 +78,17 @@ function drawCard(t, known) {
     facts.appendChild(d);
   });
   facts.hidden = !t.facts.length;
+  var bio = t.bio || { about: "", rows: [] }, rows = $("mcard-bio");
+  $("mcard-about").textContent = bio.about;
+  $("mcard-about").hidden = !bio.about;
+  clear(rows);
+  bio.rows.forEach(function (f) {
+    var d = el("div", "fact");
+    d.appendChild(el("span", "k", f.k));
+    d.appendChild(el("span", "v", f.v));
+    rows.appendChild(d);
+  });
+  rows.hidden = !bio.rows.length;
   $("mcard-profile").disabled = !known;
   $("mcard-dm").disabled = !DISCORD.dms.some(function (d) { return d.guid === CARD.guid; });
   $("mcard-profile").title = known ? "" : "Not in mind.db.";
