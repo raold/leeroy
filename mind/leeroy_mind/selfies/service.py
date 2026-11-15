@@ -55,21 +55,28 @@ _NOT_REMOVED = (", but the old photo file could not be removed yet; the mind rem
 
 
 def queue_looks_set(store, cfg: SelfieCfg, p, guid: int, *, human: int, now: float,
-                    day: str) -> tuple[int, bool, bool]:
-    """The set that renders her new figure after a weight or bust edit, (its number, varied,
-    already queued). A set already queued is kept (it renders from the persona as it is then);
-    else one is queued as his "4 more" queues one (store.queue_more: the sets waiting for his
-    choice passed, kept in her gallery), a varied set for a woman of the lust style while
-    `varied_sets` is on (varied.queue, without its once-a-day rule). Either way it is marked
-    (store.LOOKS_EDIT_SET_KEY) to hold her cover's face lightly, so her new figure shows; once he
-    picks one as her photo, later sets carry that fuller cover as usual. Also used by the render
-    when an edit landed while her set was rendering (render._stale)."""
+                    day: str, data_dir) -> tuple[int, bool, str]:
+    """The set that renders her new figure after a weight or bust edit: (its number, varied,
+    state), state "new" (queued now), "queued" (one was queued already: it renders from the
+    persona as it is then) or "rendering" (the queued one has started: its <set>.part staging
+    folder exists, so it renders her previous looks; render._stale queues a fresh set once it
+    is ready). A new set is queued as his "4 more" queues one (store.queue_more: the sets
+    waiting for his choice passed, kept in her gallery), a varied set for a woman of the lust
+    style while `varied_sets` is on (varied.queue, without its once-a-day rule). A set still
+    queued, and only such a set, is marked (store.LOOKS_EDIT_SET_KEY) to hold her cover's face
+    lightly, so her new figure shows; once he picks one as her photo, later sets carry that
+    fuller cover as usual."""
     from .store import LOOKS_EDIT_SET_KEY
     with store.transaction():
         row = store.conn.execute("SELECT set_no FROM selfie_set WHERE guid=? AND "
                                  "status='queued'", (guid,)).fetchone()
-    set_no, varied_set, already = (row[0] if row else None), False, row is not None
-    if (set_no is None and getattr(cfg, "varied_sets", False) and suggestive(p)
+    if row is not None:
+        if files.staging_dir(data_dir, guid, row[0]).exists():
+            return row[0], False, "rendering"  # started: a mark now would change nothing
+        store.set_meta(LOOKS_EDIT_SET_KEY.format(guid=guid, set_no=row[0]), "1")
+        return row[0], False, "queued"
+    set_no, varied_set = None, False
+    if (getattr(cfg, "varied_sets", False) and suggestive(p)
             and renderable(p, chosen_style(store, p) or "plain") is None):
         from . import varied
         report = varied.queue(store, human=human, now=now, day=day, go=True, guids=[guid],
@@ -79,7 +86,7 @@ def queue_looks_set(store, cfg: SelfieCfg, p, guid: int, *, human: int, now: flo
     if set_no is None:
         set_no = queue_more(store, guid, now=now).set_no
     store.set_meta(LOOKS_EDIT_SET_KEY.format(guid=guid, set_no=set_no), "1")
-    return set_no, varied_set, already
+    return set_no, varied_set, "new"
 
 
 class SelfieService:
@@ -171,16 +178,16 @@ class SelfieService:
             waiting = app.store.conn.execute(
                 "SELECT count(*) FROM selfie_set WHERE guid=? AND status='ready' AND "
                 "decided IS NULL", (guid,)).fetchone()[0]
-        set_no, varied, already = queue_looks_set(
+        set_no, varied, state = queue_looks_set(
             app.store, self.cfg, p, guid, human=app.human_guid, now=app.clock.now(),
-            day=app.clock.local().date().isoformat())
+            day=app.clock.local().date().isoformat(), data_dir=app.data_dir)
         their = "her" if p.identity.player_gender == "female" else "his"
         keep = f"with {their} new figure; pick one as {their} photo to keep it."
-        if already and files.staging_dir(app.data_dir, guid, set_no).exists():
+        if state == "rendering":
             return set_no, (f"{their.capitalize()} set is rendering now from {their} previous "
                             f"looks; a set with {their} new figure follows it. Pick one as "
                             f"{their} photo to keep it.")
-        if already:
+        if state == "queued":
             return set_no, f"A set is already queued: it renders tonight {keep}"
         kind_words = "A new varied set" if varied else "A new set"
         if why in HELD:

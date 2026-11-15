@@ -302,7 +302,8 @@ def _stale(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int, set_no: i
     if why is not None and why not in HELD:
         return None
     made, _, _ = queue_looks_set(ctx.store, cfg, now, guid, human=ctx.human,
-                                 now=ctx.clock.now(), day=ctx.clock.local().date().isoformat())
+                                 now=ctx.clock.now(), day=ctx.clock.local().date().isoformat(),
+                                 data_dir=ctx.settings.data_dir)
     log("selfies_set_stale", night=ctx.night, guid=guid, set=set_no, requeued=made)
     return made
 
@@ -528,7 +529,11 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
             log("selfies_set_ready", night=ctx.night, guid=guid, set=set_no,
                 seconds=round(time.monotonic() - began, 1), tries=sum(c.tries for c in made),
                 **({"varied": True} if varied else {}))
-            _stale(ctx, cfg, p, guid, set_no, built_from)
+            try:  # the set is saved ready: a failed check never ends the stage
+                _stale(ctx, cfg, p, guid, set_no, built_from)
+            except Exception as e:
+                log("selfies_stale_check_failed", level=logging.WARNING, night=ctx.night,
+                    guid=guid, set=set_no, error=type(e).__name__)
         else:
             tally["failed"] += 1
     return True

@@ -448,8 +448,9 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     details (2), the outfit (2), the light of its time of day (2), the expression (3), a plain
     average build (1) and the phone look (1, without natural light late at night). A lust
     scene's outfit and setting go in as one priority-0 phrase where the setting stands, with
-    SNAP_NEGATIVE_LUST. If the required set would not fit, her body words shorten, then the
-    kind and the framing yield (prompt.fit_required). Free text holding the persona's names is
+    SNAP_NEGATIVE_LUST. If the required set would not fit, the kind, framing, hair style, skin
+    modifiers and size's last terms shorten, then the kind and the framing yield
+    (prompt.fit_required); her build and bust stay whole. Free text holding the persona's names is
     dropped. ValueError when scene_renderable says why not."""
     missing = scene_renderable(p, s)
     if missing:

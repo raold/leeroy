@@ -266,11 +266,11 @@ def test_every_composable_required_set_fits_the_workers_limit(h, build):
             assert all(pr == 0 for t, pr in spec.phrases if " hair" in t or t.endswith(" skin"))
 
 
-def test_hair_and_skin_are_required_and_yield_only_free_text_too_long_to_fit(h):
-    """Her hair and skin are required (controller ruling, 2026-11-15). Only free text too long
-    to fit at all yields them, after her body words shortened and the framing and the pose
-    yielded; then her skin goes first, and what yielded before it drops to priority 2 so the
-    worker's fit offers her own looks room first."""
+def test_hair_and_skin_are_required_and_only_their_details_shorten(h):
+    """Her hair and skin are required (controller rulings, 2026-11-15). When the room runs out,
+    her hair keeps its length and colour and drops its style, her skin keeps its tone word; her
+    build stays whole; then the framing and the pose yield."""
+    from leeroy_mind.selfies.prompt import over_fit
     from leeroy_mind.selfies.tokens import joined
     short = lust(h, appearance=replace(APPEARANCE, build="voluptuous"))
     look = varied.Look("gym", "front", "full_body", "the gym", "sports top and leggings", "red",
@@ -283,10 +283,10 @@ def test_hair_and_skin_are_required_and_yield_only_free_text_too_long_to_fit(h):
                                                 hair_style="h" * 40, skin_tone="s" * 30))
     longest = max(_looks(), key=lambda x: joined([f"wearing {x.phrase}, {x.setting}"]))
     spec = build_varied_prompt(huge, longest)
-    assert joined(_required(spec)) <= 75
-    assert [pr for t, pr in spec.phrases if "s" * 30 in t] == [1]
-    assert spec.phrases[0][1] == spec.phrases[1][1] == 2  # the pose and framing yielded first
-    assert ("voluptuous figure, large full bust", 0) in spec.phrases  # the build's short form
+    assert not over_fit(spec) and joined(_required(spec)) <= 75
+    assert ("shoulder-length dark brown hair", 0) in spec.phrases  # its style dropped
+    assert ("s" * 30 + " skin", 0) in spec.phrases  # one word: its tone, kept
+    assert (BUILD_WORDS["voluptuous"], 0) in spec.phrases  # never shortened
 
 
 def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
@@ -302,9 +302,8 @@ def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
     for text in (VARIED_VIEW_WORDS[look.view], VARIED_FRAMING_WORDS[look.framing],
                  f"wearing {look.phrase}, {look.setting}", subject_phrase(p)[0]):
         assert text in kept and text not in dropped
-    # her build, in its short form when her long looks need the room (2026-11-15), and her
-    # hair and skin, which are never traded for it
-    assert BUILD_WORDS["voluptuous"] in kept or "voluptuous figure, large full bust" in kept
+    # her build, whole, and her hair and skin, which are never traded for it (2026-11-15)
+    assert BUILD_WORDS["voluptuous"] in kept  # never shortened (controller, 2026-11-15)
     for text in ("honey blonde with highlights", "warm golden olive skin"):
         assert text in kept
     assert "f" * 40 in dropped

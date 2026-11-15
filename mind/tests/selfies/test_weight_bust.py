@@ -16,9 +16,9 @@ from leeroy_mind.personas.schema import (BUSTS, PersonaError, ProfilePhoto, appe
                                          persona_from_dict, persona_to_dict, validate_persona)
 from leeroy_mind.selfies import kind, varied
 from leeroy_mind.selfies.kind import EXPLICIT_RE, WEAR_RE
-from leeroy_mind.selfies.prompt import (_FRAMINGS, _KINDS, BUILD_SHORT, BUILD_WORDS, BUST_WORDS,
-                                        FIT_MAX, LUST_NEGATIVE, NEGATIVE, PLAIN, SHORT,
-                                        SIZE_WORDS,
+from leeroy_mind.selfies.prompt import (_FRAMINGS, _KINDS, BUILD_WORDS, BUST_WORDS, FIT_MAX,
+                                        FULL_BUILDS, LUST_NEGATIVE, NEGATIVE, PLAIN, SHORT,
+                                        SIZE_WORDS, hair_skin_short, over_fit,
                                         body_phrases, body_words, build_prompt,
                                         build_varied_prompt, build_words, hair_skin,
                                         size_words, varied_parts)
@@ -180,24 +180,37 @@ def test_a_bust_set_is_said_in_place_of_the_builds_own_and_never_for_a_man():
     assert build_words(man(build="stocky", bust="large")) == BUILD_WORDS["stocky"]
 
 
-def test_the_short_forms_keep_the_first_size_term_the_figure_and_the_bust():
+def test_the_size_keeps_two_terms_and_the_build_and_bust_never_shorten():
+    """Controller ruling, 2026-11-15, measured on the GPU: "plus-size" alone and a short
+    "voluptuous figure" both rendered her slim. The fit's short body is the size's first two
+    terms; the build and a set bust stay whole."""
     p = woman(build="voluptuous", weight_kg=100, bust="very_large")
     assert body_words(p) == [FULL_W, build_words(p)]
-    assert body_words(p, short=True) == ["plus-size", "voluptuous figure, very large full bust"]
+    assert body_words(p, short=True) == ["plus-size, heavyset", build_words(p)]
     assert body_words(woman(build="curvy", weight_kg=80), short=True) == [
-        "chubby", "curvy hourglass figure, full bust"]
+        CHUBBY, BUILD_WORDS["curvy"]]  # two terms already: nothing to shorten
     assert body_words(woman(build="slim", weight_kg=100, bust="small"), short=True) == [
-        "plus-size", "small bust"]
+        "plus-size, heavyset", "small bust"]
     assert body_words(man(build="stocky", weight_kg=100), short=True) == [
-        "very overweight", "stocky build"]
-    for p in (woman(build="voluptuous", weight_kg=100), woman(build="average", bust="large")):
-        assert len(body_words(p)) == len(body_words(p, short=True))
+        "very overweight, heavyset", BUILD_WORDS["stocky"]]
+    assert size_words(woman(build="curvy", weight_kg=70), short=True) == "slightly chubby"
+
+
+def test_hair_keeps_its_length_and_colour_and_skin_its_tone_word():
+    p = woman(**LONG_LOOKS)
+    assert hair_skin_short(p, None) == [
+        ("shoulder-length honey blonde with highlights hair, loose beach waves over one shoulder",
+         "shoulder-length honey blonde with highlights hair"),
+        ("warm golden olive skin", "olive skin")]
+    plain = woman(hair_style="", skin_tone="fair")
+    assert hair_skin_short(plain, None) == []  # nothing shorter to say
+    assert hair_skin_short(woman(hair_length="shaved"), None) == [("light olive skin", "olive skin")]
 
 
 def test_every_word_is_clothed_adult_and_on_the_token_table():
     from leeroy_mind.selfies.tokens import PIECES, WORD_TOKENS
     sizes = [w for _, a, b in SIZE_WORDS for w in (a, b)]
-    for text in sizes + list(BUST_WORDS.values()) + list(BUILD_SHORT.values()):
+    for text in sizes + list(BUST_WORDS.values()) + list(SHORT.values()):
         assert not EXPLICIT_RE.search(text) and not WEAR_RE.search(text), text
         assert not AGE_RE.search(text) and "cleavage" not in text and "petite" not in text
         for piece in PIECES.findall(text.lower()):
@@ -244,23 +257,19 @@ def test_an_ordinary_weight_and_no_bust_say_only_the_build():
 @pytest.mark.parametrize("kind_", ["selfie", "mirror_selfie", "headshot", "snapshot"])
 def test_her_size_build_hair_and_skin_follow_who_she_is_all_required(kind_):
     """Controller rulings, 2026-11-15: the required set is who she is, her body (size, then build
-    with her bust), her hair and her skin, in that order, for plain and lust kinds alike."""
+    with her bust), her hair and her skin, in that order, for plain and lust kinds alike; her
+    build and bust stay whole, her size keeps at least two terms."""
     p = woman(build="voluptuous", weight_kg=88, bust="very_large")
     p = replace(p, identity=replace(p.identity, age=36, region="US"))
-    long, short = body_words(p), body_words(p, short=True)
-    assert long == [PLUS_W, build_words(p)]
     for photo, style in ((replace(PHOTO, kind=kind_), PLAIN),
                          (replace(_lust_kind(), kind=kind_), LUST)):
         spec = build_prompt(replace(p, photo=photo), kind_style=style)
         texts = _texts(spec)
         at = texts.index("36-year-old American woman")
-        body = texts[at + 1:at + 3]
-        assert all(body[i] in (long[i], short[i]) for i in range(2))  # short when room is tight
-        assert texts[at + 3:at + 5] == [HAIR, SKIN]
-        for text in (*body, HAIR, SKIN):
+        assert texts[at + 1] in (PLUS_W, "plus-size, heavyset")
+        assert texts[at + 2:at + 5] == [build_words(p), HAIR, SKIN]
+        for text in texts[at + 1:at + 5]:
             assert (text, 0) in spec.phrases
-    plain = build_prompt(replace(p, photo=replace(PHOTO, kind=kind_, framing="face")))
-    assert (PLUS_W, 0) in plain.phrases and (build_words(p), 0) in plain.phrases  # room: long
 
 
 def test_a_bust_or_a_size_on_an_average_build_makes_the_build_required():
@@ -304,15 +313,31 @@ LONG_LOOKS = dict(hair_colour="honey blonde with highlights",
                   hair_style="loose beach waves over one shoulder", skin_tone="warm golden olive")
 
 
+def _never_cut(spec, p):
+    """What round 3's ruling never drops from the required set: her build and a set bust whole,
+    at least two terms of her size, her hair's length and colour, her skin tone and who she is."""
+    required = _texts(spec, 0)
+    long, short = body_words(p), body_words(p, short=True)
+    if body_phrases(p)[0]:
+        for i, text in enumerate(long):
+            assert text in required or short[i] in required, text
+        if p.appearance.build in FULL_BUILDS:
+            assert build_words(p) in required
+    pairs = dict(hair_skin_short(p, None))
+    for text, _ in hair_skin(p, None):
+        assert text in required or pairs.get(text) in required, text
+    assert any("-year-old" in t for t in required)
+
+
 @pytest.mark.parametrize("build", ["curvy", "voluptuous", "average", "heavy"])
 @pytest.mark.parametrize("bust", [None, "very_large"])
 @pytest.mark.parametrize("looks", [{}, LONG_LOOKS])
-def test_the_longest_lust_prompt_fits_and_keeps_her_hair_and_skin(build, bust, looks):
-    """The required set counts at most 75 by the mind's own count, never below the real one, so
-    the worker never refuses it. Who she is, her hair and skin and the outfit with its setting
-    are always required; her body words are too, in their short forms when the room needs it;
-    then the kind and the framing take their short forms, and only then yield, keeping their
-    places for the worker's fit."""
+def test_the_longest_lust_prompt_fits_and_never_cuts_her_body_hair_or_skin(build, bust, looks):
+    """Round 3 (controller, 2026-11-15): the required set fits the worker's 75 by the mind's own
+    count, never below the real one, so the worker never refuses it, while her body, her hair's
+    length and colour and her skin tone stay: the kind and framing shorten first, then her
+    hair's style and her skin's modifiers, then her size to two terms, then the kind and the
+    framing yield, keeping their places."""
     fit = _worker_fit()
     longest = _longest_lust_phrase()
     for framing in ("face", "head_and_shoulders", "upper_body", "three_quarter"):
@@ -321,37 +346,84 @@ def test_the_longest_lust_prompt_fits_and_keeps_her_hair_and_skin(build, bust, l
             for kg in (49, 64, 80, 88, 100, 180):
                 p = woman(build=build, bust=bust, weight_kg=kg, **looks)
                 spec = build_prompt(replace(p, photo=ph), kind_style=LUST)
-                required = _texts(spec, 0)
-                assert joined(required) <= FIT_MAX, (framing, kind_, kg)
-                for text, _ in hair_skin(p, None):
-                    assert text in required
-                long, short = body_words(p), body_words(p, short=True)
-                if not body_phrases(p)[0]:  # a plain average build: optional, as before
-                    long = short = []
-                for i, text in enumerate(long):
-                    assert text in required or short[i] in required
-                assert f"wearing {ph.outfit}, {ph.setting}" in required
-                assert any("-year-old" in t for t in required)
+                assert not over_fit(spec), (framing, kind_, kg)
+                _never_cut(spec, p)
+                assert f"wearing {ph.outfit}, {ph.setting}" in _texts(spec, 0)
                 for text in (_KINDS[kind_], _FRAMINGS[framing]):
                     forms = {text, SHORT.get(text, text)}
-                    assert forms & set(required) or forms & set(_texts(spec, 1))
+                    assert forms & set(_texts(spec, 0)) or forms & set(_texts(spec, 1))
                 kept, dropped = fit(spec.phrases, estimate, 75)
-                assert not set(required) & set(dropped)
+                assert not set(_texts(spec, 0)) & set(dropped)
 
 
-def test_the_body_shortens_then_the_kind_and_framing_and_only_then_they_yield():
-    p = woman(build="voluptuous", bust="very_large", weight_kg=100, **LONG_LOOKS)
-    ph = replace(_longest_lust_phrase(), kind="snapshot", framing="three_quarter")
-    spec = build_prompt(replace(p, photo=ph), kind_style=LUST)
-    assert ("plus-size", 0) in spec.phrases
-    assert ("voluptuous figure, very large full bust", 0) in spec.phrases
-    assert _texts(spec)[:2] == ["candid photo", "three-quarter shot, waist and hips in frame"]
+def test_the_steps_run_in_the_rulings_order():
+    """The kind and framing shorten first, then her hair's style, then her skin's modifiers,
+    then her size's last terms, and only then do the kind and framing yield: a later step is
+    taken only once every earlier one has been."""
+    ph0 = replace(_longest_lust_phrase(), kind="snapshot", framing="three_quarter")
+    seen = set()
+    for kg in (64, 80, 88, 100, 180):
+        for bust in (None, "very_large"):
+            for looks in ({}, LONG_LOOKS):
+                p = woman(build="voluptuous", weight_kg=kg, bust=bust, **looks)
+                required = _texts(build_prompt(replace(p, photo=ph0), kind_style=LUST), 0)
+                pairs = hair_skin_short(p, None)
+                size, two = size_words(p), size_words(p, short=True)
+                steps = [_KINDS["snapshot"] not in required,  # (taken) per step that applies
+                         _FRAMINGS["three_quarter"] not in required,
+                         pairs[0][0] not in required, pairs[1][0] not in required]
+                steps += [size not in required] if size != two else []
+                steps += ["candid photo" not in required]
+                taken = [i for i, x in enumerate(steps) if x]
+                assert taken == list(range(len(taken))), (kg, bust, bool(looks), steps)
+                seen.add(len(taken) == len(steps) or len(taken))
+    assert True in seen and len(seen) >= 3  # from a few steps to the kind yielding
+    heavy = woman(build="voluptuous", weight_kg=100, bust="very_large", **LONG_LOOKS)
+    texts = _texts(build_prompt(replace(heavy, photo=ph0), kind_style=LUST), 0)
+    assert "shoulder-length honey blonde with highlights hair" in texts and "olive skin" in texts
+    assert build_words(heavy) in texts and "plus-size, heavyset" in texts
     assert SHORT == {"candid photo taken by a friend": "candid photo",
                      "professional headshot": "headshot",
                      "waist-up shot, upper body": "waist-up shot",
                      _FRAMINGS["three_quarter"]: "three-quarter shot, waist and hips in frame"}
-    medium = build_prompt(replace(woman(build="voluptuous", weight_kg=80), photo=PHOTO))
-    assert (CHUBBY, 0) in medium.phrases  # a plain kind has room for the long forms
+
+
+# Two prompts measured on the GPU (controller, 2026-11-15), as invented members of the same shape:
+# a voluptuous woman with no edit whose short "voluptuous figure" rendered slim, and one 28 kg
+# heavier with a very large bust whose "plus-size" alone rendered slim.
+PINNED = {"no_edit": (dict(build="voluptuous", height_cm=165, weight_kg=62, hair_colour="ash blonde",
+                            hair_style="swept into a loose bun",
+                            skin_tone="fair with rosy cool undertones"),
+                       29, "UK", ("snapshot", "three_quarter", "fitted little dress", "black",
+                                  "a lakeside dock")),
+          "heavier": (dict(build="voluptuous", height_cm=168, weight_kg=96, bust="very_large",
+                           hair_colour="dark auburn", hair_style="soft side part",
+                           skin_tone="freckled"),
+                      36, "US", ("selfie", "upper_body", "fitted little dress", "cobalt blue",
+                                 "the deck of a sailing boat"))}
+
+
+@pytest.mark.parametrize("case", sorted(PINNED))
+def test_the_two_gpu_measured_prompts_keep_her_whole_figure_and_her_hair(case):
+    looks, age, region, (kind_, framing, outfit, colour, setting) = PINNED[case]
+    p = woman(**{k: v for k, v in looks.items() if k != "height_cm"})
+    p = replace(p, appearance=replace(p.appearance, height_cm=looks["height_cm"]),
+                identity=replace(p.identity, age=age, region=region))
+    ph = kind.compose_lust({"kind": kind_, "framing": framing, "outfit": outfit, "colour": colour,
+                            "setting": setting, "expression": "a wink"})
+    spec = build_prompt(replace(p, photo=ph), kind_style=LUST)
+    required = _texts(spec, 0)
+    assert build_words(p) in required  # the full figure words, never "voluptuous figure"
+    if case == "no_edit":
+        assert build_words(p) == BUILD_WORDS["voluptuous"] and not size_words(p)
+    else:
+        assert PLUS_W in required  # her whole size, not "plus-size" alone
+        assert "very large full bust" in build_words(p)
+    hair = next(t for t in required if t.endswith(" hair") or " hair, " in t)
+    assert hair.startswith(f"shoulder-length {looks['hair_colour']} hair")
+    tone = looks["skin_tone"].split()[-1]
+    assert any(t.endswith(f"{tone} skin") for t in required)
+    assert not over_fit(spec)
 
 
 def test_an_ordinary_plain_prompt_always_requires_the_size_and_keeps_its_kind():
@@ -360,11 +432,13 @@ def test_an_ordinary_plain_prompt_always_requires_the_size_and_keeps_its_kind():
             p = woman(build=build, weight_kg=kg, bust="very_large")
             for framing in ("face", "three_quarter"):
                 spec = build_prompt(replace(p, photo=replace(PHOTO, framing=framing)))
-                if size_words(p):  # a full build below BMI 25 has none; short when room is tight
+                if size_words(p):  # a full build below BMI 25 has none; two terms at least
                     said = {(size_words(p), 0), (size_words(p, short=True), 0)}
                     assert said & set(spec.phrases)
+                _never_cut(spec, p)
                 assert joined(_texts(spec, 0)) <= FIT_MAX
-                assert (_KINDS["snapshot"], 0) in spec.phrases  # a plain kind has room
+                kind_said = {(_KINDS["snapshot"], 0), ("candid photo", 0)}
+                assert kind_said & set(spec.phrases)  # a plain kind has room for its kind
 
 
 # -- the varied set -----------------------------------------------------------------------------
@@ -390,17 +464,14 @@ def test_a_varied_set_requires_her_body_hair_and_skin_right_after_who_she_is(bui
     long, short = body_words(p), body_words(p, short=True)
     for look in _looks():
         spec = build_varied_prompt(p, look)
-        required = _texts(spec, 0)
-        assert joined(required) <= FIT_MAX, look
+        assert not over_fit(spec), look
+        _never_cut(spec, p)
         after = _after_subject(spec)
-        assert all(after[i] in (long[i], short[i]) for i in range(len(long)))
-        assert after[len(long):len(long) + 2] == [t for t, _ in hair_skin(p, None)]
-        for text in after[:len(long) + 2]:
-            assert text in required
+        assert after[0] in (long[0], short[0]) and after[1] == build_words(p)
         parts = varied_parts(look, look.phrase)
-        assert parts["wearing"] in required
-        if parts["view"] not in required:  # the framing yields before the pose
-            assert parts["framing"] not in required
+        assert parts["wearing"] in _texts(spec, 0)
+        if parts["view"] not in _texts(spec, 0):  # the framing yields before the pose
+            assert parts["framing"] not in _texts(spec, 0)
 
 
 def test_a_varied_set_says_hair_and_skin_right_after_her_body():
@@ -425,7 +496,7 @@ _TOKENIZERS = pytest.mark.skipif(clip_bpe.tokenizers() is None,
 def test_the_new_words_count_what_the_real_tokenizers_count():
     from leeroy_mind.selfies.tokens import PIECES, WORD_TOKENS
     texts = [w for _, a, b in SIZE_WORDS for w in (a, b) if w] + list(BUST_WORDS.values())
-    for text in texts + list(BUILD_SHORT.values()):
+    for text in texts + list(SHORT.values()):
         assert estimate(text) >= clip_bpe.count(text), text
         for piece in PIECES.findall(text.lower()):
             if piece.isalpha() and piece in WORD_TOKENS:
@@ -471,5 +542,5 @@ def test_a_situational_photo_says_her_body_hair_and_skin_right_after_who_she_is(
     assert (BUILD_WORDS["average"], 1) in avg.phrases  # a plain average build stays optional
     heavy = woman(build="voluptuous", weight_kg=180, bust="very_large", **LONG_LOOKS)
     hot = build_scene_prompt(heavy, scene_from(LUST_SCENE))
-    assert joined(_texts(hot, 0)) <= FIT_MAX
-    assert all(t in _texts(hot, 0) for t, _ in hair_skin(heavy, None))
+    assert not over_fit(hot)
+    _never_cut(hot, heavy)

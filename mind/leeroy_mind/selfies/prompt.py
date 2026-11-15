@@ -19,9 +19,10 @@ with the situational photos' prompts (scene.py), as is the body (body_phrases): 
 (size_words), then her build as a figure with her bust when the owner set one (build_words), said
 right after who she is. In every profile, varied and situational prompt the required set is who
 she is, her body, her hair and her skin; fit_required keeps it inside the worker's 75 tokens by
-shortening the body words first, then letting the kind or pose and the framing yield, never her
-hair or skin for body words (controller ruling, 2026-11-15; only free text too long to fit at all
-yields them). The body words are clothed; the negatives are unchanged."""
+shortening the kind and framing, then her hair's style and her skin's modifiers, then her size to
+two terms, then letting the kind or pose and the framing yield. Her body is never shortened
+further and her hair's length and colour and her skin tone are never dropped (controller rulings,
+2026-11-15, measured on the GPU). The body words are clothed; the negatives are unchanged."""
 import re
 from dataclasses import dataclass
 
@@ -53,7 +54,7 @@ _FRAMINGS = {"face": "close-up of the face", "head_and_shoulders": "head and sho
              # face, bust, waist and hips in frame (owner, 2026-11-08)
              "three_quarter": "three-quarter shot from mid-thigh up, waist and hips in frame",  # the waist in frame, so the figure shows
              "full_body": "full-body shot"}  # a varied set's candidate only (no photo kind has it)
-# Their short forms, which fit_required falls back to before either yields (2026-11-15)
+# Their short forms, fit_required's first step (2026-11-15)
 SHORT = {"candid photo taken by a friend": "candid photo", "professional headshot": "headshot",
          "waist-up shot, upper body": "waist-up shot",
          "three-quarter shot from mid-thigh up, waist and hips in frame":
@@ -123,10 +124,6 @@ BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "aver
                "curvy": "curvy hourglass figure, full bust, wide hips, narrow waist",
                "voluptuous": "voluptuous full-figured body, large full bust, wide hips, soft curves",
                "stocky": "stocky sturdy build", "heavy": "plus-size full figure"}
-# The short forms the fit falls back to before anything of who she is yields (fit_required).
-BUILD_SHORT = {"slim": "slim figure", "athletic": "athletic figure", "average": "average build",
-               "curvy": "curvy hourglass figure", "voluptuous": "voluptuous figure",
-               "stocky": "stocky build", "heavy": "plus-size figure"}
 # Her bust as set in the Looks panel (owner, 2026-11-15): a clothed fashion word, said in place of
 # the build's own (_BUILD_BUST) or after the build, women only. Never cleavage or a word of the
 # negatives.
@@ -164,25 +161,23 @@ def bmi(a) -> float:
 def size_words(p: Persona, short: bool = False) -> str:
     """The body size her weight and height say (SIZE_WORDS), or "": in the ordinary band, below
     it for a full build (FULL_BUILDS: a thin word never contradicts a curvy figure) and from 25
-    to 28 for an athletic one (muscle). `short`: its first term only ("plus-size")."""
+    to 28 for an athletic one (muscle). `short`: its first two terms ("plus-size, heavyset"), the
+    least the fit ever keeps (controller ruling, 2026-11-15, measured on the GPU: "plus-size"
+    alone rendered her slim)."""
     value, build = bmi(p.appearance), p.appearance.build
     if (value < 25.0 and build in FULL_BUILDS) or (25.0 <= value < 28.0 and build == "athletic"):
         return ""
     woman = p.identity.player_gender == "female"
     words = next(w if woman else m for below, w, m in SIZE_WORDS if value < below)
-    return words.split(", ")[0] if short else words
+    return ", ".join(words.split(", ")[:2]) if short else words
 
 
-def build_words(p: Persona, short: bool = False) -> str:
-    """The build as a figure (BUILD_WORDS; `short`: BUILD_SHORT with the bust kept), with her
-    bust (BUST_WORDS) said in place of the build's own when one is set; a man's bust is never
-    said."""
+def build_words(p: Persona) -> str:
+    """The build as a figure (BUILD_WORDS), with her bust (BUST_WORDS) said in place of the
+    build's own when one is set; a man's bust is never said. Never shortened (controller ruling,
+    2026-11-15: a short "voluptuous figure" rendered her slim)."""
     a = p.appearance
     bust = BUST_WORDS[a.bust] if bust_said(p) else None
-    if short:
-        words = BUILD_SHORT.get(a.build, f"{a.build} build")
-        own = bust or _BUILD_BUST.get(a.build)
-        return f"{words}, {own}" if own else words
     words = BUILD_WORDS.get(a.build, f"{a.build} build")
     if bust is None:
         return words
@@ -198,12 +193,12 @@ def bust_said(p: Persona) -> bool:
 def body_words(p: Persona, short: bool = False) -> list[str]:
     """Her body, in order: her size (size_words), then her build with her bust (build_words).
     From BMI 28 a slim, athletic or average build's words are left out (the size says what she
-    is; her bust, when set, stays as a phrase of its own). `short`: each in its short form, one
-    to one with the long."""
+    is; her bust, when set, stays as a phrase of its own). `short`: the size in its two-term
+    form, one to one with the long; the build and the bust never shorten."""
     size = size_words(p, short)
     if size and bmi(p.appearance) >= REPLACES_AT and p.appearance.build in THIN_BUILDS:
         return [size] + ([BUST_WORDS[p.appearance.bust]] if bust_said(p) else [])
-    return ([size] if size else []) + [build_words(p, short)]
+    return ([size] if size else []) + [build_words(p)]
 
 
 def body_phrases(p: Persona) -> tuple[list[tuple[str, int]], tuple[str, int] | None]:
@@ -221,23 +216,22 @@ FIT_MAX = 75  # the worker's limit on the required phrases (selfie/leeroy_selfie
 
 def fit_required(out: list[tuple[str, int]], p: Persona, yields: list[str],
                  name_re: re.Pattern | None = None) -> list[tuple[str, int]]:
-    """`out` made to fit the worker: while the required (priority-0) set counts more than
-    FIT_MAX by the mind's own count (tokens.estimate, never below the real one), one step at a
-    time (controller rulings, 2026-11-15): her body words take their short forms (body_words
-    short: the size's first term, then the build's short form); the phrases of `yields` (the
-    kind or pose, then the framing) take theirs (SHORT); then they move to priority 1; only
-    then, as a last resort for free text too long to fit by the mind's count, her skin and then
-    her hair move to priority 1, and what yielded before them to 2, so the worker's fit offers
-    her hair and skin room first. Who she is and an outfit with its setting never yield; a
-    yielded phrase keeps its place."""
+    """`out` made to fit the worker (controller ruling, 2026-11-15, measured on the GPU): while
+    the required (priority-0) set counts more than FIT_MAX by the mind's own count
+    (tokens.estimate, never below the real one), one step at a time: the phrases of `yields`
+    (the kind, then the framing) take their short forms (SHORT); her hair keeps its length and
+    colour and drops its style (hair_skin_short); her skin keeps its tone word; her size keeps
+    its first two terms; then the phrases of `yields` (a varied set's framing, then its pose; a
+    profile's kind, then its framing) move to priority 1, keeping their places. Her body (the
+    build and a set bust whole, at least two terms of the size), who she is, her hair's length
+    and colour, her skin tone and an outfit with its setting never go: a prompt still too long
+    after all that is left as it is (over_fit names it) for the worker to refuse."""
     from .tokens import joined
     out = list(out)
-    steps = list(zip(body_words(p), body_words(p, short=True)))
-    steps += [(t, SHORT[t]) for t in yields if t in SHORT]
+    steps = [(t, SHORT[t]) for t in yields if t in SHORT]
+    steps += hair_skin_short(p, name_re)
+    steps += [x for x in zip(body_words(p), body_words(p, short=True)) if x[0] != x[1]]
     steps += [(SHORT.get(t, t), None) for t in yields] + [(t, None) for t in yields]
-    face = [t for t, _ in reversed(hair_skin(p, name_re))]
-    steps += [(t, None) for t in face]
-    gave = set(yields) | {SHORT[t] for t in yields if t in SHORT}
     for old, new in steps:
         if joined(t for t, pr in out if pr == 0) <= FIT_MAX:
             break
@@ -245,9 +239,13 @@ def fit_required(out: list[tuple[str, int]], p: Persona, yields: list[str],
             continue
         at = out.index((old, 0))
         out[at] = (new, 0) if new is not None else (old, 1)
-        if old in face:  # her own looks go before the composition phrases that yielded
-            out = [(t, 2) if pr == 1 and t in gave else (t, pr) for t, pr in out]
     return out
+
+
+def over_fit(spec: "PromptSpec") -> bool:
+    """The required set still counts more than the worker's limit by the mind's count."""
+    from .tokens import joined
+    return joined(t for t, pr in spec.phrases if pr == 0) > FIT_MAX
 
 
 def phrase_adder(out: list[tuple[str, int]], name_re: re.Pattern | None):
@@ -285,6 +283,23 @@ def hair_skin(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
     return out
 
 
+def hair_skin_short(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, str]]:
+    """(long, short) for her hair and her skin as hair_skin says them, for fit_required: the
+    hair's length and colour without its style, the skin's tone word (its last) without its
+    modifiers. A phrase with no shorter form, or one the name filter left out, has no pair."""
+    a, pairs = p.appearance, []
+    kept = {t for t, _ in hair_skin(p, name_re)}
+    if a.hair_length != "shaved":
+        hair = f"{_LENGTHS[a.hair_length]} {_clean(a.hair_colour)} hair"
+        style = _clean(a.hair_style)
+        if style and f"{hair}, {style}" in kept:
+            pairs.append((f"{hair}, {style}", hair))
+    tone = _clean(a.skin_tone)
+    if " " in tone and f"{tone} skin" in kept:
+        pairs.append((f"{tone} skin", f"{tone.split(' ')[-1]} skin"))
+    return pairs
+
+
 def eyes_face(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
     """Eyes and face details from the looks, at priority 2."""
     a, out = p.appearance, []
@@ -307,8 +322,9 @@ def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int
 # is, her body (body_phrases: her size, then her build with her bust), her hair, her skin and the
 # outfit with its setting (controller ruling, 2026-11-15: her hair and skin are never traded for
 # body words). When it would count more than the worker's 75 (a curvy or voluptuous build with
-# long looks can, measured on the real tokenizers), fit_required shortens her body words, then
-# yields the framing and then the pose. The thong and g-string negatives join the lust ones.
+# long looks can, measured on the real tokenizers), fit_required shortens her hair's style, her
+# skin's modifiers and her size to two terms, then yields the framing and then the pose; her build
+# and bust stay whole. The thong and g-string negatives join the lust ones.
 VARIED_VIEW_WORDS = {"behind": "from behind, looking over her shoulder",
                      "rear_three_quarter": "three-quarter rear view",
                      "side": "side profile",
@@ -401,6 +417,7 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
     add(tail, 1)
     if light:
         add(light, 9, True)  # first to go; never displaces identity, outfit or setting
-    # her body words shorten first, then the kind and the framing yield (fit_required)
+    # the kind and framing, her hair's style, her skin's modifiers and her size's third and
+    # fourth terms shorten first; then the kind and the framing yield (fit_required)
     out = fit_required(out, p, [_KINDS[ph.kind], _FRAMINGS[ph.framing]], name_re)
     return PromptSpec(tuple(out), LUST_NEGATIVE if lust else NEGATIVE)

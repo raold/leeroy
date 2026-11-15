@@ -450,6 +450,9 @@ def test_an_edit_while_her_set_renders_says_so_and_a_set_with_her_new_figure_fol
     assert reply["set"] == 2 and reply["message"].endswith(
         "Her set is rendering now from her previous looks; a set with her new figure follows "
         "it. Pick one as her photo to keep it.")
+    # review of #316: a set that has started is never marked (its faces are already chosen)
+    from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=2)) is None
 
 
 def test_a_set_whose_render_an_edit_overtook_is_stamped_old_and_a_fresh_one_queued(h, tmp_path,
@@ -485,3 +488,47 @@ def test_a_set_whose_render_an_edit_overtook_is_stamped_old_and_a_fresh_one_queu
         assert fresh[2] == built + 1
     else:
         assert [s.set_no for s in queued_sets(h.store)] == [3]
+
+
+def test_queue_looks_set_marks_only_a_set_still_queued(store, clock, tmp_path):
+    from leeroy_mind.selfies.service import queue_looks_set
+    from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY, queue_more
+    app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    p = load_persona(store, 102)
+    args = dict(human=OWNER, now=6.0, day="2026-10-29", data_dir=tmp_path)
+    queue_more(store, 102, now=5.0)
+    staging = files.staging_dir(tmp_path, 102, 1)
+    staging.mkdir(parents=True)
+    assert queue_looks_set(store, SelfieCfg(enabled=True), p, 102, **args) == (1, False,
+                                                                               "rendering")
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) is None
+    staging.rmdir()  # a set not started yet takes the mark
+    assert queue_looks_set(store, SelfieCfg(enabled=True), p, 102, **args) == (1, False, "queued")
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) == "1"
+
+
+def test_a_failed_stale_check_is_logged_and_the_stage_goes_on(h, tmp_path, monkeypatch, caplog):
+    """Review of #316: render._stale runs after the set is saved ready; an error there is logged
+    and the stage renders the next set."""
+    from leeroy_mind.selfies import render
+    from leeroy_mind.selfies.store import queue_more, ready_set
+    from selfies.test_varied_sets import _cover, lust, make_stage_for
+    lust(h, 101)
+    lust(h, 102)
+    _cover(h, 101)
+    _cover(h, 102)
+    queue_more(h.store, 101, now=h.T)
+    queue_more(h.store, 102, now=h.T)
+
+    def broken(*a, **kw):
+        raise RuntimeError("a stale check that fails")
+    monkeypatch.setattr(render, "_stale", broken)
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(make_stage_for(SelfieCfg(enabled=True), tmp_path)(h.ctx()))
+    assert ready_set(h.store, 101, 2) is not None and ready_set(h.store, 102, 2) is not None
+    failed = [r for r in caplog.records
+              if getattr(r, "leeroy_event", None) == "selfies_stale_check_failed"]
+    assert [(r.leeroy_fields["guid"], r.leeroy_fields["set"], r.leeroy_fields["error"])
+            for r in failed] == [(101, 2, "RuntimeError"), (102, 2, "RuntimeError")]
+    assert "a stale check that fails" not in caplog.text
