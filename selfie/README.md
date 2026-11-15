@@ -66,10 +66,19 @@ see `../mind/leeroy_mind/personas/looks_diversity.md`.
 answers a `grid` request (1-16 JPEG tiles) by compositing the guild photo with Pillow, no GPU:
 each tile resized to `tile`, set on a dark `#0e141a` ground with `gutter` pixels around and
 between, 2 x 2 up to 4 x 4; a tile that is missing or not a JPEG answers `missing_tile` and
-writes nothing. The mind's `[selfies]` table in `mind.toml` turns
+writes nothing. Either worker also answers a `caption` request (the mind's culture memes):
+`base_path` (an existing JPEG), `top` and `bottom` (at most 60 printable characters each, one
+may be empty, and only characters the font draws: `protocol.CAPTION_CHARS`, printable ASCII,
+Latin-1, Latin Extended-A and common typographic marks; an emoji is a bad request), `out_path`
+and `nsfw_max`. It draws the classic outlined capitals at the top and
+bottom with Pillow in the bundled Anton font (SIL Open Font License 1.1, `leeroy_selfie/fonts/`
+with its `OFL.txt`), each block sized to the width; the text is never part of a diffusion
+prompt. The captioned image goes through the NSFW classifier like every render and is written
+only when it scores under `nsfw_max` (`flagged: true` writes nothing); a base that is missing
+or not a JPEG answers `missing_base`. The mind's `[selfies]` table in `mind.toml` turns
 rendering on (off by default) and sets the classifier limit, steps, guidance, size and the
 VRAM floor.
 
 Licences: this package is GPL-3.0-or-later (see `LICENSE`); RealVisXL is openrail++, the
 classifier Apache-2.0, diffusers Apache-2.0, IP-Adapter Apache-2.0 (its image encoder, OpenCLIP
-ViT-H/14, MIT). Pins and sources are in `../references.bib`.
+ViT-H/14, MIT), the Anton caption font SIL OFL 1.1 (`leeroy_selfie/fonts/OFL.txt`). Pins and sources are in `../references.bib`.

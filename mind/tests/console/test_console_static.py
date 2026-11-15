@@ -100,7 +100,22 @@ def test_the_static_table_holds_only_the_kinds_it_may_serve():
     assert all(kind == "text/javascript; charset=utf-8"
                for name, (_, kind) in files.items() if name.endswith(".mjs"))
     assert not [name for name in files if not name.endswith((".css", ".js", ".mjs", ".woff2",
-                                                              ".txt"))]
+                                                              ".txt", ".svg"))]
+    # SVG only for the guild's own emoji ([culture] emoji), served as a picture, never a page
+    assert {name for name in files if name.endswith(".svg")} == {
+        f"emoji/{n}.svg" for n in ("tank", "healer", "dps", "warrior", "paladin", "hunter", "rogue",
+                                   "priest", "deathknight", "shaman", "mage", "warlock", "druid")}
+    assert all(b"<script" not in body and b"href" not in body and b"on" + b"load" not in body
+               for name, (body, _) in files.items() if name.endswith(".svg"))
+
+
+def test_an_emoji_svg_is_served_as_a_picture_that_runs_nothing(data):
+    async def go():
+        async with served(make_app(data)) as app:
+            r = await http(app, "GET", "/static/emoji/tank.svg", key=False)
+            assert r.status == 200 and r.header("content-type") == "image/svg+xml"
+            assert (r.header("content-security-policy") or "").startswith("default-src 'none'")
+    run(go())
 
 
 def test_the_page_runs_only_its_own_files(data):

@@ -45,7 +45,7 @@ inline constexpr std::string_view MemberSkipReasons[] = {
     // Tick's pre-step fence and admission (MutationReason without the job's own, Identity, admit).
     "busy:body_identity_changed", "busy:body_scope_changed", "body_identity_changed", "busy:body_identity",
     "busy:training_owner", "busy:training_state", "not_bot", "busy:body_unavailable", "busy:raid_owner",
-    "not_actor", "not_cast",
+    "not_actor", "not_cast", "busy:string",
     // Eligible: BusyReason's "busy:<reason>", then its own.
     "busy:offline", "busy:dead", "busy:combat", "busy:flight", "busy:raid_group", "busy:human_group",
     "busy:instance", "busy:battleground", "busy:arena", "busy:lfg", "busy:teleport", "busy:duel",

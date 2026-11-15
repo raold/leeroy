@@ -61,6 +61,31 @@ struct CalendarAuthorityFacts
 // Personal events have native guildId zero, but still require a current cast
 // creator whose exact native identity and roster belong to the configured guild.
 std::string CalendarAuthorityReason(CalendarAuthorityFacts const&);
+
+// A character writing the guild calendar (a post's creator, an event's creator, a signer).
+// A calendar post, update or signup changes CalendarMgr rows and sends calendar packets; it
+// never touches a body (strategies, group, master, position, DC settings). So only identity
+// can refuse one: the Realm on, a cast member on a random-bot account who is not the owner,
+// whose character cache row, live body (when connected) and roster entry all name the
+// configured guild and one account. No body fence ever does: not a training cleanup, not a
+// training, offline-raid, Realm or raid owner, not a pending bot command, not the queue fence.
+// bodyFence is what the body-move admission says about this character; it never refuses a
+// calendar write and is carried only so the write that goes past it can be logged.
+struct CalendarMemberFacts
+{
+    bool realmOn = false;
+    std::uint32_t guid = 0, human = 0, guild = 0;
+    bool cast = false, randomBotAccount = false;
+    bool character = false, body = false, rosterMember = false;
+    std::uint32_t characterGuild = 0, characterAccount = 0, bodyGuild = 0, bodyAccount = 0, rosterAccount = 0;
+    std::string bodyFence{};
+};
+struct CalendarMemberVerdict
+{
+    std::string reason;    // Empty: the write may go on.
+    std::string pastFence; // The body fence an admitted write goes past, for the log only.
+};
+CalendarMemberVerdict CalendarMemberAdmission(CalendarMemberFacts const&);
 std::string CalendarCapacityReason(std::size_t creatorEvents, std::size_t guildEvents);
 std::string CalendarSignupReason(std::size_t invites, std::size_t matchingInvites);
 std::string CalendarTimeReason(std::uint64_t at, std::uint64_t now, bool allowKeep = false);

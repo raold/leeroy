@@ -53,6 +53,9 @@ def boss_lines(boss: Boss, difficulty: str | None) -> list[str]:
                      f"handled by {m.handled_by}{stock}; check {m.check}")
         if m.handled_note:
             lines.append(f"      stock: {m.handled_note}")
+        if roles := m.responder_roles():
+            own = f"; casts {', '.join(map(str, m.responder_spells(difficulty or m.only[0])))}"                 if m.respond_spells is not None else ""
+            lines.append(f"      responder: {m.area}, moves {'/'.join(roles)}{own}")
         adds = f"; adds {', '.join(map(str, m.adds))}" if m.adds else ""
         lines.append(f"      spells {', '.join(map(str, ids)) or '-'}{adds}" + (f"; {numbers}" if numbers else "")
                      + ("" if m.only == boss_only(boss) else f"; only {', '.join(m.only)}"))

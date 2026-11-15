@@ -21,6 +21,8 @@ bool DummyTrialOwns(std::uint32_t guid);
 // members while DC override/hold cleanup or an exact job receipt is retained.
 // Unknown legacy membership is conservatively busy; the DC0 variant returns false.
 bool TrainingDcOwns(std::uint32_t guid);
+// The leaders whose training DC run or job holds this body (TrainingDcOwns, by owner).
+std::vector<std::uint32_t> TrainingDcOwners(std::uint32_t guid);
 void TickVocab();
 void TickDcHolds(std::uint32_t diff);
 bool IsPrimed(std::string const& qualifier);

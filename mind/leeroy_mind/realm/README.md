@@ -148,3 +148,43 @@ off, and the other 107 get a new, smaller leave (never the original replayed), t
 defaults once it succeeds. Native pure tests
 separately exercise every check code, wait expiration, partial current-step failures, scoped and
 continuation protection, and mutation-free forget refusals.
+
+# The calendar desk and body fences
+
+A calendar post, update or signup moves no body, so native refuses one only for identity (the
+character is a cast member on a random-bot account, not the owner, and its cache row, body and
+roster entry agree on the guild and account) and for its own operation (the event, its time, caps,
+the invite lock). `calendar_signup` is a direct command like a post: no queue lease, no pin. See
+`modules/mod-leeroy/README.md`, "Calendar writes take no body fence".
+
+The desk (`calendar.py`) no longer spends a try on a fence, which an older worldserver still gives:
+
+- A `busy_*` refusal (native's `busy:<owner>` as the ledger stores it) never counts toward
+  `MAX_TRIES` (3). The ref waits `RETRY_S` (600 s), doubling with each busy refusal in a row up to
+  `BUSY_MAX_S` (1 h), and is tried again until its event is within `POST_AHEAD_S` (an offline
+  raid's post, while the raid runs), at most `ROWS_MAX` (24) attempts in all. Any other refusal
+  still counts and still waits `RETRY_S`.
+- Posts read each failed attempt's reason from its `realm_direct` row (joined on `command_id`).
+  The ledger's prune keeps a `calendar_post` refusal 30 days (`RETAIN_POST_REFUSALS_S`) whatever the
+  refusal count, so the desk can still read it; other refusals keep the newest-512 rule.
+- Signups and updates keep their tries in memory: a try whose outcome was a busy refusal is handed
+  back once it is read. Their busy refusals (count, run, last send) are also kept in meta
+  (`realm:calendar:busy:<ref>`), so a restart neither resets `ROWS_MAX` nor cuts a pause short; the
+  key goes when the signup is taken, or 30 days after its last send. Other tries restart at zero
+  with the process, as before.
+- A post's creator is passed over next time after a refusal, except `busy_training_cleanup`, which
+  held every creator at once.
+- An offline raid's post leaves the raid's roster out of its creators (its plans' members and
+  leads, the members native accepted and the job's `guids`): the raid-lead rotation first, else
+  the social chain (events, social, historian), else no post (`realm_calendar_no_creator`).
+
+Exactly-once is unchanged: an unknown or acked ref is never sent again, busy refusals or not. A
+write native entered and cannot prove (`calendar_write_unknown`, by ack or by job) settles
+**unknown** in the direct ledger (`NATIVE_UNKNOWN`), never refused: a post reads `posted` with no
+event id and a signup counts as taken, so neither is sent again. Before, such a refusal freed the
+ref, and a post could have been made twice.
+No migration. After release, a ref an older worldserver gave up for busy refusals alone is tried
+again while its event is still ahead and its refusals' ledger rows survive (until now the prune
+kept only the newest 512 refusals): as of 2026-11-14, the raid nights of 11-15 and 11-16 (refused
+`busy_training_cleanup` on 11-10) and a birthday on 11-20 (`busy_realm_owner`). An offline raid's
+post is tried again only while that raid runs.

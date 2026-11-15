@@ -340,6 +340,142 @@ multipliers that silence `avoid aoe` during a mechanic silence the exit too, and
 target stands in a hazard can step back in to reach it (after two exits the yield lets it stay). Logs carry
 guids, counts and reason codes only. **Native rebuild required, with the playerbots patch applied first.**
 
+# Boss mechanics at cast start (the mechanic responder)
+
+Stock playerbots meets most boss mechanics only after standing in them: `avoid aoe` steps out once an effect has
+landed (and only with a real-player master), and nothing at all handles the mechanics the raid playbooks mark
+`handled_by = "none"`. `Leeroy.Mechanics.Enable` (default 0, `.reload config`) moves the cast bots of the owner's
+group and of a running offline raid when the boss **starts casting**, from the playbooks
+(`mind/leeroy_mind/raidplay/README.md`, the mind's `[raidplay] respond`). The world side is `Guild/MechanicJob.*`,
+pure policy and geometry `Lib/LeeroyMechanicPolicy.*` (unit tests `TestMechanicPolicy.cpp`); the bodies move
+through the local playerbots patch `0012` (`PlayerbotMechanicGuard`; without it the start log says the guard is
+unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
+
+- **`raid_mechanics {map, difficulty, mechanics: [{id, kind, area, roles, spells, radius, range, angle,
+  duration, landing}]}`**: one instance's whole table (difficulty 0 10, 1 25, 2 10 heroic, 3 25 heroic),
+  replacing the last one for that map and difficulty; at most 64 rules of at most 16 spell ids each, 16 tables,
+  yards up to 100, `duration` up to 120 seconds. Kinds and their areas: `avoid_ground` (`dest`: a circle round the
+  cast's destination, else its target; `caster`: round the caster, following it, ending with it; `line`: a band
+  `radius` either side and `range` long from the caster toward its target, else its destination, else its facing;
+  `ring`: a ring `range` from the destination, `radius` either side, as Infernal Eruption's blasts land 15 yards
+  from the volcano), `move_out_cone` (`cone`: `angle` degrees wide and `range`, else `radius`, long, aimed the same
+  way), `spread` (`group`), `stack` (`dest`: gather within `radius` of the cast's target, following it, else its
+  destination), `run_out_debuff` (`target`: the member the cast or its aura lands on keeps `radius`, else
+  `range`, from every other member) and `los` (`caster`: out of its sight). `landing: true` means the place is
+  known only when the cast completes (Shock Vortex lands 13 yards from its target in a random direction): such a
+  rule binds nobody until then. A malformed field is refused `bad field: <key>`. The table is accepted with the
+  switch off too (the switch gates only the responses), and it belongs to the mind connection that sent it: a new
+  connection, or none, drops it (`mechanic_tables_dropped tables=`), and the new mind sends its own at hello, or
+  nothing when its switch is off. Each accepted table logs `mechanic_table map= difficulty= rules=`.
+- **Who moves.** Every 250 ms the world tick takes the members of his group (no battleground or battlefield
+  group) and of a running offline raid (its members in its group inside its instance; never a benchmark) on a
+  raid map whose map and difficulty have a table. A member responds while it is a cast bot (not a self-bot, never
+  him), alive, in the world, not teleporting, on no vehicle or transport (the gunship's deck), and not fenced:
+  for his group a Realm lease or `NativeOwnershipReason` (training, an offline raid, a pending bot job); for an
+  offline raid a Realm lease, a dummy trial, the global training cleanup fence, a pending bot job, or a training
+  DC run or job of any leader but the raid's own (`TrainingDcOwners`: every offline raid registers one over its
+  whole group, and its training run's journals are its own). A bot with `stay` or `passive` in its combat
+  strategies is held (his own stay, the raid lead's `stay` or `hold`, a dungeon-clear camp hold) and is left where
+  it is. Its role is playerbots' reading of its spec (tank, healer, ranged, melee). Random bots and anyone outside
+  his group or the offline raid are never in the snapshot, and a bot not in it is answered at once.
+- **Cast start, completion and cancel.** On every spell's `OnSpellPrepare` (map thread; an atomic check first) a
+  creature casting in a raid instance with responders looks the spell up in the table; each rule it starts becomes
+  a mechanic in force for the cast time plus its hazard's linger: the rule's `duration`, else the spell's own up
+  to 120 seconds, else 3 seconds, never under 1.5 (at most 64 at once). `OnSpellCast` reads the cast's destination
+  and target again once its targets are chosen, so a destination offset from the target is where it really lands,
+  and a `landing` rule binds from then on. `OnSpellCastCancel` (the boss stopped the cast, or broke off a channel
+  such as Hellfire) ends what that cast started at once (`cancelled=1`; a debuff already on a member stays). A
+  `run_out_debuff` needs a player target; when the debuff (a rule spell) lands on a player as an aura, that starts
+  or extends it too. An instant cast has hit before any hook runs, so the playbooks leave instant cones out.
+- **Moving.** Playerbots' `mechanic move` trigger (in every class combat strategy) asks the guard whether a
+  mechanic in force binds the bot (its role; for a run out only the debuffed member; a stack only within 20 yards
+  of its point, so a horseman's tank in another corner is left alone); the `mechanic move` action
+  (`ACTION_RAID + 9`: above stock's raid positioning while it lasts, below every emergency and stock's own
+  `ACTION_EMERGENCY` mechanic moves) then makes a forced move to the nearest spot that keeps every duty with 1.5
+  yards to spare: out of each area (beyond the bot's reach), within the stack radius less 2 yards, beyond the
+  spacing from every other member of the group or raid within 60 yards (a chain such as Holy Wrath or Fel
+  Lightning jumps between both bodies' edges, so its 10 yards are 10 plus twice the reach, 13 for players; a burst
+  such as Mana Detonation reaches the other's edge, 10 plus one reach), out of the caster's sight; straight out
+  first, then rings of 2 yards up to 40 yards (spreading: away from the others' middle between equals), clear of
+  the ground hazards `HazardJob` measures (scanned round the responders while a mechanic is in force, whatever
+  `Leeroy.Hazards.Enable` says), and checked against the navmesh. A bound bot standing in one of those hazards is
+  not "kept" and moves out with the rest. The chosen spot is kept while it still holds; a search that found
+  nothing is tried again after a second. When the mechanic ends nothing is restored: no strategy, value or master
+  was changed, and the bot plays on as stock.
+- **Refusals.** Meanwhile `MoveTo` refuses an ordinary (not forced) move whose destination lies in an area a
+  mechanic in force makes the bot leave, and nothing else: never while the bot stands in a known ground hazard
+  (stock `avoid aoe`'s one way out comes first), never for spacing or a gather (the mechanic move serves those),
+  and never a forced move.
+- **Never fight stock.** A bot whose last move is a forced move the guard did not issue, made since a mechanic
+  began (a stock raid strategy's own positioning), is yielded from that mechanic for the rest of it: the guard
+  stamps its own forced moves through `MechanicMoved`. The raid lead's `spread`, `run_out` and `back_off` orders
+  (#299) yield their bots for 10 seconds first (`MechanicYield`), so neither refuses nor undoes the other, and
+  neither reports the other as a failure.
+- Logs: `mechanic_response id=<playbook mechanic> spell= kind= members=<moved> map= instance= cancelled=` when
+  each ends, `members` counting the bots whose forced move was issued (the training ground's per-mechanic checks
+  measure the effect), and once a minute while there are responders,
+  `mechanics_minute responders= instances= held= fenced= dropped=`. Ids, counts and codes only.
+
+Limits: a spell whose place is chosen after cast start without a landing to read (Putricide's bombs, the Beasts'
+slime pools, Icehowl's charge, the twins' orbs), an instant cone (Grobbulus's Slime Spray, Arctic Breath, the
+25-man Impale), and the mechanics where stock moves the same bodies with forced moves (Rotface's Sticky Ooze, the
+heroic Lich King's Shadow Trap) are left out by the playbooks; `soak` (the off-tanks' Hateful Strike and the like)
+and the non-movement kinds (`interrupt`, `dispel`, `tank_swap_at_stacks`, `switch_adds`, `kill_order`) are later
+work. A hazard that outlives its response (a Fire Bomb's 60-second patch) is left to the hazard scan and stock
+`avoid aoe` in his group; in an all-bot offline raid nothing walks a bot out of it after that. Spreading bots plan
+against current positions, so neighbours may step twice; a bot with no clear reachable spot within 40 yards
+stays. Encounter multipliers that zero movement actions zero this one too.
+**Native rebuild required, with the playerbots patch applied first.**
+
+# The owner's strings in game
+
+His strings (D6 godmode, `mind/leeroy_mind/godmode/README.md`): from a member's detail in the guild console the
+mind sends one `string_do {guid, kind, target_guid, emote}` (`Guild/Strings.cpp`, pure policy
+`Lib/LeeroyStrings.h`). Native carries it out at once on the world thread and acks it, publishing first a done
+`job` (kind `string_do`) whose `reason` says what she did (`came`, `joined`, `joined_far`, `following`,
+`stopped`, `challenged`, `emoted`, `sat`); or it refuses with one code in the ack and changes nothing.
+
+`Leeroy.Strings.Enable` (default 0, `.reload config`; `off` while 0). Every kind needs him online and alive, the
+member a pinned cast member of his guild on a random-bot account run by playerbots, and her body free of every
+ownership fence: a Realm lease, training, an offline raid, a pending bot command (`MutationReason`; a member of
+his own group under every fence but the one that holds his group for him, as his add command treats her). Never
+in a fight (`combat`: hers, his or his group's on his map), in or onto an instance (`in_instance`, hers or his), in a battleground or
+arena (`in_bg`), a queue (`queued`) or while either travels (`travelling`). Then per kind:
+
+- `come_to_me`: only while he stands in a city or rest area (a capital and its parts, a town with an inn, a
+  faction rest zone, or wherever the core has him resting; else `bad_area`), never out of someone else's group
+  (`grouped`). She is put beside him (the add command's teleport); one outside his group then keeps
+  playerbots' `stay` for 10 minutes once she has landed, so her routine does not walk her off. For that window
+  she is fenced: `NativeOwnershipReason` answers `busy:string` (`StringStayHeld`), so Realm moves (the bond's
+  inn visits included), queues, offline raids and dummy trials (`busy:string:<guid>`, which the mind's planner
+  retries in 15 minutes instead of leaving her out of the day) refuse her, while his own asks (his strings, his
+  add command) pass it (`StringWaiver`). The fence ends with the stay: its 10 minutes, the key at 0, his
+  logout, or her joining a group. If he is hovering on a flying mount she lands beside him in the air and falls,
+  as the add command's teleport does.
+- `join_group`: into the party he leads (made now when he has none), never a raid or a Dungeon Finder group,
+  at most five (`in_group`, `lfg_group`, `not_leader`, `in_raid`, `group_full`), under the add command's own
+  member fences for a party of his (`grouped`, `locked`, ...). She joins with the raid night's habits
+  (`RaidHabits`: him as master, hazards) and comes to him.
+- `follow`: in his party only (`not_in_group`; his raid `busy:raid_owner`). Him as her master with playerbots'
+  `follow`; the same string again stops it and she waits where she is (playerbots' `stay`). Both last while that
+  group does; a stop in a party that becomes a raid is lifted by the tick and her follow given back, since the
+  string can no longer undo it there.
+- `duel_me`: neither in a group with the other (`in_group`), nobody duelling (`busy:duel`), the same zone within
+  30 yards (`too_far`), both where the core allows a duel and outside a sanctuary (`bad_area`). The core's duel
+  spell is cast at him; accepting is his.
+- `emote`: one of 16 friendly emotes (`bad_emote`), within 25 yards (`too_far`), aimed at him as bridge speech.
+- `sit`: within 20 yards (`too_far`); #244's social seat keeps her sitting up to 5 minutes while he stays near
+  and nobody in his group fights. A later come_to_me, join_group, follow or duel_me stands her up first.
+
+None of these takes a Realm body-ledger rank (they are his own asks; come_to_me's window is a native fence
+instead), and the Realm keeps refusing a body in his group as before. What a string changed is journalled per
+body, AI and session (pure decisions `StringHoldFences`, `DecideStringHold`): the world tick (once a second) lifts
+only the `stay` it added (after come_to_me's 10 minutes or his logout, when the follow's group ends or turns into a
+raid, or when the key goes to 0) and stands a seated member up when her seat ends; a body another owner holds, or
+in combat, is never touched and waits; a relog, an AI replacement or (come_to_me) a group join drops the hold
+untouched. Logs: `string_done guid= kind=
+outcome=`, `string_refused guid= kind= code=`, `string_stay_lifted guid=`. **Native rebuild required.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a
@@ -473,6 +609,39 @@ this change is different: the new mind stores `changed` (and `skipped`, `skipped
 key is stripped from those rows). Take a snapshot before deploying and roll back with it. Both a
 native rebuild and an updated mind are needed for the new proof to take effect.
 
+# Calendar writes take no body fence
+
+A calendar post, update or signup changes CalendarMgr rows and sends calendar packets. It never
+touches a body (strategies, group, master, position, DC settings), so native refuses one only for
+identity (`CalendarMemberAdmission`, `LeeroyRealmCalendar.h`): `realm_off`; `no_event` unless the
+character is a cast member, not the owner, and its character cache row, live body (a bot between
+maps counts) and roster entry all name the configured guild and one account; `not_bot` off a
+random-bot account. The event's creator is checked the same way (`CalendarAuthorityReason` first),
+the event must exist, and each write's own checks stay (packet hooks, time, caps, invite lock,
+`calendar_authority_changed` when an identity fence moved mid-write). No body fence refuses one:
+not the training cleanup (`TrainingCleanupPending()`, `OfflineTrainingCleanupPending()`), not a
+training, offline-raid, Realm or raid owner, not pending bot commands, not the queue fence.
+
+Before this, `MemberReason` reused the body-move admission (`MutationReason`). On 2026-11-10 a
+twelve-hour training cleanup refused all nine raid-night posts (three nights, three creators each)
+and 361 signups `busy:training_cleanup`; the mind gave each post up after three tries, so none of
+that week's raid nights reached the calendar. No offline-raid post ever succeeded either: its
+creators were inside the running raid (`busy:training_owner`).
+
+`calendar_signup` is now a direct command like a post: one synchronous write on the world thread
+that reserves, pins and queues nothing (`IsQueued` no longer lists it). The signer and the event's
+creator are each held to their identity fence (`CreatorFence`/`ExactCreator`) across the write.
+It acks as before and still publishes `realm_job` `calendar_signup` (the member as `guid`, value 0)
+once the write was attempted; a refusal is the ack's alone, as for a post. A write that threw or
+failed its readback after native entered it answers `calendar_write_unknown` (ack and job); the
+mind settles that as unknown and never sends it again. The first write of each
+kind past each body fence code is logged once per process:
+`realm calendar_signup by guid=<n> went past body fence busy:training_cleanup (...)`.
+
+Body moves, `NativeOwnershipReason` and `OfflineTrainingCleanupPending()` (still unbounded) are
+unchanged. Ship with a native rebuild (`ac-release.sh --native`); the mind needs no change for it,
+and its desk separately never spends a try on an older worldserver's `busy:` refusal.
+
 # World persona roster and speech
 
 A native rebuild adds `get_world_roster` (complete, bounded roster pages carrying
@@ -486,3 +655,20 @@ and Server.log names it once per member and rule: `world roster skipped guid <n>
 Before this, one such row answered every roster request `world_roster_invalid`. Existing Realm
 actors and their `realm_say` path retain their behavior. The mind also requires
 its separate `[world]` opt-ins; world photos need `[selfies] enabled = true`.
+
+# The posted lineup in the owner's add picker
+
+`guild_add_roster` is a bridge command (`members`, `bench`: positive guids, none twice, at most 200
+each, none in both; `until_ms`: Unix ms, at most 12 hours ahead, else `bad field: until_ms`). The
+mind sends it while a raid lineup the guild posted (its `[decisions]`) is at hand, and an empty one
+when that night ends. Native holds it in memory only: a worldserver start clears it and the mind
+sends it again on hello. With `Leeroy.GuildAdd.FollowRoster = 1` (default 0, `.reload config`) and
+the roster unexpired, the owner's `.playerbots bot addN` takes, within each role, the roster's
+members first and its bench only when no other free member fits; every existing fence, the size
+template and the buff and gear rules still order the members within each tier (pure policy:
+`PlanGuildAdd`'s roster, `GuildAddRosterInForce`). At 0, or with the roster expired or empty, it
+picks exactly as before. The `guild_group` events of a group he built carry `roster_followed`:
+true once a fill of that group added at least one of the roster's members or bench
+(`GuildAddRosterFollowed`), so the mind can record the lineup in effect through his add. Server.log:
+`guild_add_roster held (N members, M bench)` and `add<N> from the guild follows the posted roster
+(...)`, counts only. **Native rebuild required.**

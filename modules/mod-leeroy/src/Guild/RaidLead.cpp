@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "RaidLead.h"
+#include "MechanicJob.h"
 #include "GuildPorts.h"
 #include "PlayStyle.h"
 #include "LeeroyRaidLeadPolicy.h"
@@ -248,6 +249,8 @@ std::string ApplyRaidOrder(Player* bot, BotDoCmd const& command)
             return {};
         return "failed";
     }
+    if (plan.moveAway > 0 || plan.toHisSide)
+        MechanicYield(guid); // his order moves it: the mechanic responder neither refuses nor undoes it
     if (plan.moveAway > 0)
         return MoveAway(bot, ai, group, plan.moveAway);
     if (plan.toHisSide)

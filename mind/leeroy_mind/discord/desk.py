@@ -192,7 +192,8 @@ class DiscordDesk:
             self._his_action()
             return {"ok": True, "id": thread}
         if action == "react":
-            dstore.react(store, message, member=me, emoji=args["emoji"], now=now)
+            from leeroy_mind.culture.config import app_emoji
+            dstore.react(store, message, member=me, emoji=args["emoji"], now=now, custom=app_emoji(app))
         elif action == "unreact":
             dstore.unreact(store, message, member=me, emoji=args["emoji"], now=now)
         elif action == "edit":

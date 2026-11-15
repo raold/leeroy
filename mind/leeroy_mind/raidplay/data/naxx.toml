@@ -95,6 +95,9 @@ explain = "His spray covers the area in front of him and spawns slimes from thos
 check = "naxx.grobbulus.check_avoid"
 first = 10
 every = 20
+# Instant: it has hit before any cast hook runs, and the next comes 20 s later on a kited boss
+# (its spell_cone is 42 degrees).
+area = "none"
 
 [[boss.mechanic]]
 id = "naxx.grobbulus.fallout_slime"
@@ -364,6 +367,9 @@ explain = "A spore spawns every thirty-five seconds; a group stands in its burst
 check = "none"
 first = 15
 every = 35
+# Bursting a spore on a group is a rotation; moving every melee and ranged onto each spore would
+# pull them all off the boss.
+respond_roles = []
 
 [[boss.mechanic]]
 id = "naxx.loatheb.inevitable_doom"
@@ -428,6 +434,10 @@ explain = "Impale strikes in a line toward a player; do not stand between him an
 check = "naxx.anubrekhan.check_avoid"
 first = 15
 every = 20
+angle = 29
+# spell_cone gives Impale 29 degrees. The 10-man cast takes a second; the 25-man one is instant and
+# has hit before any hook runs, so the responder answers the 10-man cast only.
+respond_spells = { "10" = [28783] }
 
 [[boss.mechanic]]
 id = "naxx.anubrekhan.crypt_guards"
@@ -1078,7 +1088,7 @@ id = "naxx.kelthuzad.detonate_mana"
 name = "Detonate Mana"
 kind = "run_out_debuff"
 phase = "kelthuzad"
-roles = ["healer", "ranged"]
+roles = ["healer", "melee", "ranged"]
 spells = [27819]
 hits = [27820]
 handled_by = "none"
@@ -1087,6 +1097,8 @@ explain = "A caster with Detonate Mana steps away from others so the burst hits 
 check = "none"
 first = 30
 every = 30
+# Any mana user can carry it, melee (retribution, enhancement) included; the burst reaches 10 yards
+# past each other member's edge.
 
 [[boss.mechanic]]
 id = "naxx.kelthuzad.frost_blast"

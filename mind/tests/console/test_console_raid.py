@@ -546,3 +546,18 @@ def test_the_raid_lead_picker_goes_to_the_minds_raidlead_op(guild, data):
             assert r.status == 403
     asyncio.run(go())
     assert [c[1] for c in link.calls].count("raidlead") == 1
+
+
+def test_a_loot_council_award_keeps_its_item_name(guild, data):
+    """A council charges nothing; its row's note names the receipt behind `council:` (decisions)."""
+    store, _, now_id = guild
+    conn = store.conn
+    add_ledger(conn, [LedgerEntry(NOW - 30, 202, 0.0, "item", now_id, 50003, f"council:guild:loot:{now_id}:cc")])
+    with conn:
+        _put(conn, f"guild:loot:{now_id}:cc", {"state": "charged", "name": "Synthetic Ring", "item_id": 50003,
+                                                "mode": "loot_council", "award": {"guid": 202, "paid": 0.0}})
+    view = feed.read(data / "mind.db", raidview.raid_view, now=NOW)
+    [item] = [e for e in view["open"]["dkp"]["events"] if e["reason"] == "item"]
+    assert (item["guid"], item["total"], item["item"]) == (202, 0.0, "Synthetic Ring")
+    loot = feed.read(data / "mind.db", raidview.guild_view)["loot"][0]
+    assert (loot["guid"], loot["paid"], loot["item"]) == (202, 0.0, "Synthetic Ring")

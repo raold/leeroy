@@ -67,7 +67,9 @@ connection closes.
                     logged
     string {action} create {member, kind, args} | cancel {id} | list [{member}]: his strings,
                     intents a member carries out in her own way (leeroy_mind.godmode), only with
-                    [godmode] enabled; one change at a time
+                    [godmode] enabled; one change at a time. A game kind (come_to_me,
+                    join_group, follow, duel_me, emote, sit) goes to native at once and answers
+                    {state: taken|not_taken, reason} with its words
     ops {action}    opt-in operator actions: inspect, status, offline_stop {id}, render,
                     snapshot {label}. Realm release is inspected here but is executed only
                     through the console's clean stop/CLI/restart procedure. New work needs
@@ -715,7 +717,9 @@ def discord_args(args) -> dict:
                 raise BadRequest(WORDS[e.code]) from None
     if "emoji" in shape:
         emoji = args["emoji"]
-        if not isinstance(emoji, str) or not is_one_emoji(emoji) or len(emoji) > 16:
+        # A registered custom shortcode passes the shape; whether the guild's own emoji are on
+        # ([culture] emoji) is the console's and the mind's own check.
+        if not isinstance(emoji, str) or not is_one_emoji(emoji, custom=True) or len(emoji) > 16:
             raise BadRequest(WORDS["not_emoji"])
         out["emoji"] = emoji
     if "name" in shape:

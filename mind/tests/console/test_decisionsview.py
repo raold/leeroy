@@ -38,6 +38,10 @@ def console(store, clock, data):
                           positions=[{'guid': 102, 'side': 'loot_council', 'why': 'low_attendance'}], now=now - 50)
     ledger.settle(store, loot, settled_by=0, now=now - 40)
     ledger.take_effect(store, loot, effect_ref={'ledger': [12, 13], 'receipts': ['guild:loot:7:ab']}, now=now - 30)
+    strategy = ledger.propose(store, kind='strategy', subject='strategy:631:1:0', value={'change': 'slower_pulls'},
+                              positions=[], now=now - 48)
+    ledger.settle(store, strategy, settled_by=101, now=now - 38)
+    ledger.take_effect(store, strategy, effect_ref={'layer': 'guild'}, now=now - 29)
     lineup = ledger.propose(store, kind='lineup', subject='raid:9', value={'members': [101], 'bench': [103]},
                             positions=[], now=now - 20)
     ledger.talk_only(store, lineup, reason='no_raid', now=now - 10)
@@ -55,20 +59,24 @@ def console(store, clock, data):
     polls.vote(store, poll, 102, 'dkp', why='high_dkp', now=now - 5)
     polls.vote(store, poll, 1, 'dkp', now=now - 4)
     store.conn.commit()
-    yield dict(loot=loot, lineup=lineup, bank=bank, poll=poll, message=message, now=now)
+    yield dict(loot=loot, strategy=strategy, lineup=lineup, bank=bank, poll=poll, message=message, now=now)
     apply.unregister('loot_rule')
 
 
 def test_decisions_view_renders_effects(console, data):
     view = feed.read(data / 'mind.db', decisionsview.decisions_view, now=console['now'], enabled=True)
     assert view['enabled'] is True and view['missing'] == [] and view['human'] == 1
-    assert [d['id'] for d in view['decisions']] == [console['bank'], console['lineup'], console['loot']]
-    bank, lineup, loot = view['decisions']
+    assert [d['id'] for d in view['decisions']] == [console['bank'], console['lineup'], console['strategy'],
+                                                    console['loot']]
+    bank, lineup, strategy, loot = view['decisions']
     assert loot['changed'] == ['DKP ledger rows: 12, 13', 'receipts: guild:loot:7:ab']
     assert (loot['settler'], loot['state'], loot['summary']) == ('a poll', 'in effect', 'mode loot_council')
     assert loot['positions'] == [{'guid': 102, 'name': 'Belra', 'side': 'loot_council', 'why': 'low_attendance'}]
-    assert loot['action']['kind'] == 'overrule' and "can't be undone in game" in loot['action']['words'].lower()
-    assert loot['action']['permanent'] is True and lineup['action'] is None
+    # The loot rule (Part B) is undone by putting the rule it replaced back; a kind with no rules yet
+    # (the strategy, Part C) can't be undone in game
+    assert loot['action']['kind'] == 'undo' and loot['action']['permanent'] is False
+    assert strategy['action']['kind'] == 'overrule' and "can't be undone in game" in strategy['action']['words'].lower()
+    assert strategy['action']['permanent'] is True and lineup['action'] is None
     assert lineup['changed'] == ['talk only: no_raid'] and lineup['action'] is None
     assert bank['officers_only'] is True and bank['action']['kind'] == 'overrule'
     assert bank['action']['words'].startswith('Not in effect yet')

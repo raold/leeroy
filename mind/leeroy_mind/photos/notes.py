@@ -44,13 +44,28 @@ def _snaps(conn, column, ids):
     return out
 
 
-def by_messages(conn, ids, *, uploads=False, members=False):
+def _memes(conn, ids):
+    """A posted culture meme's caption (culture.memes), joined through its own posted message:
+    the picture's words are what the guild saw in #memes."""
+    ids = tuple(dict.fromkeys(ids))
+    if not ids:
+        return {}
+    rows = conn.execute("SELECT m.id,d.top,d.bottom FROM discord_meme d JOIN discord_message m ON m.id=d.posted_message "
+                        "JOIN discord_attachment a ON a.message=m.id WHERE m.id IN (SELECT value FROM json_each(?)) "
+                        "AND a.kind='meme' AND d.status='posted' AND m.deleted IS NULL", (json.dumps(ids),))
+    return {mid: '[meme picture captioned: ' + ' / '.join(t for t in (top, bottom) if t) + ']'
+            for mid, top, bottom in rows}
+
+
+def by_messages(conn, ids, *, uploads=False, members=False, memes=False):
     ids = tuple(ids)
     out = {mid: note for mid, (note, _) in _snaps(conn,'m.id',ids).items()} if members else {}
     if uploads and ids:
         from leeroy_mind.discord.store import attachments
         out.update({mid:photo_note(row['look']) for mid,row in attachments(conn,ids).items()
                     if row['kind'] == 'upload'})
+    if memes and ids:  # [culture] memes
+        out.update(_memes(conn, ids))
     return out
 
 

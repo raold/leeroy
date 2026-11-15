@@ -495,6 +495,8 @@ class MindApp:
         self.godmode = attach_godmode(self)  # [godmode]: off adds nothing
         from .raidlead.service import attach as attach_raidlead
         self.raidlead = attach_raidlead(self)  # None while [raidlead] is off
+        from .raidplay.respond import attach as attach_mechanics
+        self.mechanics = attach_mechanics(self)  # [raidplay] respond: off adds nothing
 
     # -- extension points --------------------------------------------------------------------
 

@@ -22,7 +22,7 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // placeholders in say and realm_say text (LeeroyItemLinks.h). A mind sends a placeholder only to a hello that lists it.
 // regear: gear_up's "regear" mode, and every other gear_up a capped incremental pass that keeps the loot a bot holds
 // (GearUpJob.cpp); a mind sends a regear, and expects those averages, only to a hello that lists it.
-inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "regear"};
+inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear"};
 
 std::int64_t NowUnixMs();
 

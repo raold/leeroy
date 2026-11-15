@@ -84,6 +84,10 @@ exit "${FAIL_HEALTH:-0}"
         cls.git_at(cls.template, "add", ".")
         cls.git_at(cls.template, "commit", "-qm", "Single")
         cls.single = cls.git_at(cls.template, "rev-parse", "HEAD")
+        cls.write(cls.template / ".gitattributes", "*.ttf binary\n")
+        cls.git_at(cls.template, "add", ".")
+        cls.git_at(cls.template, "commit", "-qm", "Attributes")
+        cls.attributes = cls.git_at(cls.template, "rev-parse", "HEAD")
         cls.write(cls.template / "modules/native.cpp", "native\n")
         cls.git_at(cls.template, "add", ".")
         cls.git_at(cls.template, "commit", "-qm", "Native")
@@ -264,6 +268,9 @@ exit "${FAIL_CONSOLE:-0}"
         self.assertIn("requires --native", self.run_release(self.native, rc=1))
         self.run_release("--native", "--dry-run", self.native)
         self.original()
+
+    def test_gitattributes_is_an_allowed_path(self):
+        self.assertIn("allowed paths", self.run_release("--dry-run", self.attributes))
 
     def test_merge_and_single_success(self):
         output = self.run_release(self.merge, self.single)

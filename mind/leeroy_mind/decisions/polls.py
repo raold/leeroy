@@ -150,6 +150,21 @@ def close_due(store, *, now) -> list[tuple[int, str | None]]:
     return out
 
 
+def close_early(store, poll: int, *, now) -> tuple[int, str | None] | None:
+    """Close one open poll before its closing time (every voter a kind waits for has voted): (poll,
+    the winning option or None), or None when it was not open."""
+    ts = _time(now)
+    with store.transaction():
+        row = get_poll(store.conn, poll)
+        if row is None or row['status'] != 'open':
+            return None
+        result = winner(tally(store.conn, poll))
+        store.conn.execute("UPDATE guild_poll SET status='closed', result=? WHERE id=? AND status='open'",
+                           (result, poll))
+    log.info('poll_closed id=%d result=%s votes=%d early=1', poll, result or '-', sum(tally(store.conn, poll).values()))
+    return poll, result
+
+
 def open_polls(conn) -> list:
     return conn.execute("SELECT * FROM guild_poll WHERE status='open' ORDER BY id").fetchall()
 

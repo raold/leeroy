@@ -19,9 +19,11 @@ def clock():
 
 
 def app(tmp_path, *, server=True):
-    registered = []
+    registered, handlers, hooks = [], [], []
     return SimpleNamespace(data_dir=tmp_path, server=object() if server else None,
-                           engine=SimpleNamespace(), register_background=registered.append, registered=registered)
+                           engine=SimpleNamespace(), register_background=registered.append, registered=registered,
+                           register_event_handler=lambda name, handler: handlers.append((name, handler)),
+                           handlers=handlers, register_connection_hook=hooks.append, hooks=hooks)
 
 
 @pytest.mark.parametrize('config', ['[decisions]\nenabled = false\n', '[decisions]\nenabled = true\n',
@@ -30,7 +32,8 @@ def test_off_preserves_golden_prompts_and_golden_file(store, clock, tmp_path, co
     (tmp_path / 'mind.toml').write_text(config, encoding='utf-8')
     off = app(tmp_path)
     assert attach_decisions(off) is None
-    assert off.registered == [] and not hasattr(off.engine, 'decisions_enabled')
+    assert off.registered == [] and off.handlers == [] and off.hooks == []
+    assert not hasattr(off.engine, 'decisions_enabled')
     # Stored decisions and an open poll change nothing while the switch is off
     now = clock.now()
     ledger.propose(store, kind='loot_rule', subject='loot', value={'mode': 'dkp'},
@@ -49,3 +52,5 @@ def test_on_needs_the_server_running_and_then_attaches_one_task(tmp_path):
     service = attach_decisions(on)
     assert isinstance(service, DecisionsService) and on.engine.decisions_enabled is True
     assert on.registered == [service.run]
+    # Part B's kinds hold state in game (the picker's roster): sent again on hello, dropped on disconnect
+    assert on.handlers == [('hello', service.on_hello)] and on.hooks == [service.on_connection]

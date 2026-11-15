@@ -5,6 +5,9 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
 
 using namespace Leeroy::Realm;
 namespace
@@ -14,6 +17,22 @@ CalendarAuthorityFacts Authority()
     return {41, 9, 301, 41, 41, true, true, true, false};
 }
 CalendarPollBoundary Boundary() { return {5, 2, 7, 41, 9, 100, 200}; }
+CalendarMemberFacts Member(std::string fence = {})
+{
+    CalendarMemberFacts facts;
+    facts.realmOn = true;
+    facts.guid = 301; facts.human = 9; facts.guild = 41;
+    facts.cast = facts.randomBotAccount = true;
+    facts.character = facts.body = facts.rosterMember = true;
+    facts.characterGuild = facts.bodyGuild = 41;
+    facts.characterAccount = facts.bodyAccount = facts.rosterAccount = 7001;
+    facts.bodyFence = std::move(fence);
+    return facts;
+}
+// Every reason the body-move admission (MutationReason) gives: none of them is a calendar fence.
+constexpr std::array<std::string_view, 7> kBodyFences = {"busy:training_cleanup", "busy:training_owner",
+    "busy:training_state", "busy:realm_owner", "busy:raid_owner", "busy:body_unavailable", "not_bot"};
+
 CalendarRsvpFact Invite(std::uint64_t id = 1, std::uint8_t status = 0)
 { return {id, 1000 + id, 301, status}; }
 struct AllocationCounts { unsigned created = 0, destroyed = 0, returnedIds = 0; };
@@ -53,6 +72,56 @@ LEEROY_TEST(RealmCalendar_OnlyCurrentCastInConfiguredGuildHasEventAuthority)
     auto personal = Authority(); personal.guildEvent = false; personal.eventGuild = 0;
     CHECK(CalendarAuthorityReason(personal).empty());
     personal.creatorGuild = 0; CHECK_EQ(CalendarAuthorityReason(personal), "no_event");
+}
+
+LEEROY_TEST(RealmCalendar_MemberWritesAreRefusedByIdentityOnly)
+{
+    auto const clean = CalendarMemberAdmission(Member());
+    CHECK(clean.reason.empty()); CHECK(clean.pastFence.empty());
+    auto off = Member(); off.realmOn = false;
+    CHECK_EQ(CalendarMemberAdmission(off).reason, "realm_off");
+    for (unsigned change = 0; change < 15; ++change)
+    {
+        auto facts = Member("busy:training_cleanup");
+        if (change == 0) facts.guid = 0;
+        if (change == 1) facts.guild = 0;
+        if (change == 2) facts.guid = facts.human;
+        if (change == 3) facts.cast = false;
+        if (change == 4) facts.character = false;
+        if (change == 5) facts.body = false;
+        if (change == 6) facts.rosterMember = false;
+        if (change == 7) facts.characterGuild = 42;
+        if (change == 8) facts.bodyGuild = 42;
+        if (change == 9) facts.characterAccount = 7002;
+        if (change == 10) facts.rosterAccount = 7002;
+        if (change == 11) facts.bodyAccount = 7002;
+        if (change == 12) facts.characterGuild = facts.bodyGuild = 0;
+        if (change == 13) { facts.characterGuild = facts.bodyGuild = 0; facts.guild = 0; }
+        if (change == 14) facts.rosterAccount = facts.characterAccount = 7002;
+        auto const verdict = CalendarMemberAdmission(facts);
+        CHECK_EQ(verdict.reason, "no_event");
+        CHECK(verdict.pastFence.empty()); // A refused write goes past nothing.
+    }
+    auto human = Member(); human.human = 0; // No owner configured: nobody is "the owner".
+    CHECK(CalendarMemberAdmission(human).reason.empty());
+    auto player = Member("not_bot"); player.randomBotAccount = false;
+    CHECK_EQ(CalendarMemberAdmission(player).reason, "not_bot");
+}
+
+LEEROY_TEST(RealmCalendar_NoBodyFenceRefusesACalendarWrite)
+{
+    // 2026-11-10: a twelve-hour training cleanup refused every raid-night post and signup
+    // (busy:training_cleanup); offline-raid posts were refused for creators inside the raid
+    // (busy:training_owner). A calendar write touches no body, so each fence is only reported.
+    for (auto fence : kBodyFences)
+    {
+        auto const verdict = CalendarMemberAdmission(Member(std::string(fence)));
+        CHECK(verdict.reason.empty());
+        CHECK_EQ(verdict.pastFence, fence);
+    }
+    auto offWithFence = Member("busy:training_cleanup"); offWithFence.realmOn = false;
+    auto const off = CalendarMemberAdmission(offWithFence);
+    CHECK_EQ(off.reason, "realm_off"); CHECK(off.pastFence.empty());
 }
 
 LEEROY_TEST(RealmCalendar_CreationAndSignupCapsRefuseAtBoundary)

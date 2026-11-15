@@ -2611,7 +2611,8 @@ class Pipeline:
             else:
                 if photo is not None:
                     meta.photo_finished = True
-                    log.info('photo_sent snap=%d line=%d', photo.snap.id, line)
+                    if photo.snap is not None:  # a culture meme (MemeOffer) logs its own posting
+                        log.info('photo_sent snap=%d line=%d', photo.snap.id, line)
                 for effect in after_commit:
                     effect()
         except DiscordRefused as e:

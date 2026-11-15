@@ -91,6 +91,10 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "scenes": {"json": 1},                     # one scene call a situational photo: 20 s
     # one image of about 6 s holds both slots: 12 s, in 20 s JSON equivalents
     "snaps": {"json": 0.6},
+    # culture memes: one caption call; a plain worker's cold start (10-50 s), a scene's seeds and
+    # the caption, about 40 s held over both slots, in 20 s JSON equivalents
+    "meme_plan": {"json": 1},
+    "meme_render": {"json": 4},
     # Sundays: 36 probes, about 25 quiz questions and 80 interview asks, then the quiz judge,
     # consistency and distinctiveness: about 2,400 s
     "eval": {"live": 141, "json": 77},
@@ -106,7 +110,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies", "talk_coach", "bandit"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies", "talk_coach", "bandit", "meme_plan", "meme_render"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:

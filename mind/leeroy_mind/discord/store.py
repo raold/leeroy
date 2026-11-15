@@ -91,6 +91,44 @@ def post(store, *, channel: str, author: int, origin: str, text: str, reply_to: 
         return mid
 
 
+BOT_NAME_MAX = 20  # discord_message.bot's limit (migrations/*_discord_photos.sql)
+
+
+def post_bot(store, *, channel: str, bot: str, text: str, reply_to: int | None = None,
+             now: float) -> int:
+    """A server bot's post (culture.bots): origin 'bot', author 0 and the bot's id in `bot`, the
+    shape the photos migration reserved. Never a member's line: no chat_line mirror and no turn.
+    A channel the layout lacks or a DM is refused (bad_channel): bots post only in the server's
+    own channels."""
+    from . import layout
+    text = _text(text)
+    if not isinstance(bot, str) or not 1 <= len(bot) <= BOT_NAME_MAX:
+        raise DiscordRefused("bad_bot")
+    if layout.channel(channel) is None:
+        raise DiscordRefused("bad_channel")
+    with store.transaction():
+        if reply_to is not None:
+            p = store.conn.execute(
+                "SELECT channel, deleted FROM discord_message WHERE id = ?", (reply_to,)).fetchone()
+            if p is None or p[0] != channel:
+                raise DiscordRefused("no_parent")
+            if p[1] is not None:
+                raise DiscordRefused("deleted_parent")
+        return store.conn.execute(
+            "INSERT INTO discord_message(channel, author, origin, text, reply_to, ts, bot) "
+            "VALUES (?, 0, 'bot', ?, ?, ?, ?)", (channel, text, reply_to, now, bot)).lastrowid
+
+
+def bots(conn, ids: Iterable[int]) -> dict[int, str]:
+    """The bot id of each bot post among `ids` (read by the console)."""
+    ids = list(ids)
+    if not ids:
+        return {}
+    return {r[0]: r[1] for r in conn.execute(
+        "SELECT id, bot FROM discord_message WHERE origin = 'bot' AND id IN "
+        f"({','.join('?' * len(ids))})", ids)}
+
+
 def attachments(conn, ids: Iterable[int]) -> dict[int, dict]:
     ids = list(ids)
     if not ids:
@@ -131,8 +169,9 @@ def delete(store, message: int, *, author: int, now: float) -> None:
         store.conn.execute("DELETE FROM discord_reaction WHERE message = ?", (message,))
 
 
-def react(store, message: int, *, member: int, emoji: str, now: float) -> bool:
-    if not is_one_emoji(emoji) or len(emoji) > 16:
+def react(store, message: int, *, member: int, emoji: str, now: float, custom: bool = False) -> bool:
+    """`custom`: the guild's own shortcodes count as emoji ([culture] emoji on)."""
+    if not is_one_emoji(emoji, custom=custom) or len(emoji) > 16:
         raise DiscordRefused("not_emoji")
     with store.transaction():
         _live(store, message)

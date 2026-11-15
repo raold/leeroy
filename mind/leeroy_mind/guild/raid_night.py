@@ -5,7 +5,7 @@ to deliver jobs/logout while the independent ticker awaits bridge commands.
 """
 
 import asyncio
-from collections import deque
+from collections import Counter, deque
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 import logging
@@ -173,6 +173,74 @@ class RaidNight:
         """The member he named to lead his own group (raidlead), when the raid lead is on; else None."""
         designated = getattr(self.ports, "designated_lead", None)
         return designated() if designated is not None else None
+
+    def _lineup(self):
+        """Tonight's posted raid lineup (the guild's decisions), or None: decisions off, or none."""
+        lineup = getattr(self.ports, "lineup", None)
+        if lineup is None:
+            return None
+        try:
+            return lineup()
+        except Exception:
+            log.warning("lineup_unread")
+            return None
+
+    def _from_lineup(self, lineup, size, candidates, required, seed):
+        """The roster from a posted lineup: its available members go in first (within capacity and
+        each role's seats), its bench only when nobody else can fill a role, and select_comp fills
+        what its unavailable members leave, as without one."""
+        by = {c.guid: c for c in candidates}
+        targets = dict(zip(("tank", "healer", "damage"), TARGETS[size]))
+        targets["damage"] -= 1  # his seat
+        must = sorted(required)
+        counts = Counter(by[g].role for g in must if g in by)
+        missing = 0
+        for guid in lineup.members:
+            candidate = by.get(guid)
+            if guid in must:
+                continue
+            if candidate is None or candidate.available is not True:
+                missing += 1
+                continue
+            if len(must) < size - 1 and counts[candidate.role] < targets[candidate.role]:
+                must.append(guid)
+                counts[candidate.role] += 1
+        def benched(short):
+            return [replace(c, available=False) if c.guid in lineup.bench and c.guid not in must
+                    and c.role not in short else c for c in candidates]
+        try:
+            comp = select_comp(size, benched(()), must_include=must, human_in_raid=True, seed=seed)
+        except NoTankError:
+            comp = None
+        if comp is None or comp.shortfall:
+            # The bench is the last resort: only for a role nobody else can fill
+            short = set(comp.shortfall) if comp is not None else {"tank"}
+            comp = select_comp(size, benched(short), must_include=must, human_in_raid=True, seed=seed)
+        members = list(comp.members)
+        bench = list(comp.bench) + [g for g in sorted(lineup.bench) if g in by and by[g].available is True
+                                    and g not in members and g not in comp.bench
+                                    and by[g].guild_role in ("officer", "raider")]
+        if missing:
+            log.info("lineup_partial id=%d missing=%d", lineup.decision, missing)
+        return members, bench
+
+    def _lineup_bench(self, lineup, raid):
+        """A lineup's bench as a raid's bench: its available raiders and officers outside the raid."""
+        everyone = {c.guid: c for c in self._candidates()}
+        return [g for g in sorted(lineup.bench) if g in everyone and everyone[g].available is True
+                and g not in raid and everyone[g].guild_role in ("officer", "raider")]
+
+    def _lineup_formed(self, lineup, via=None):
+        formed = getattr(self.ports, "lineup_formed", None)
+        if formed is None or self.session is None:
+            return
+        try:
+            if via is None:
+                formed(lineup, self.session.raid_id)
+            else:
+                formed(lineup, self.session.raid_id, via=via)
+        except Exception:
+            log.warning("lineup_effect_unrecorded id=%d", lineup.decision)
 
     def _speaker(self):
         if self.run:
@@ -363,7 +431,8 @@ class RaidNight:
                                       if type(g) is int and g > 0 and g != self.ports.human_guid))
         self._epoch += 1
         self._pick_return_state = self.state
-        self._adoption = (raid.key, *mode, ev.instance_id, members, frozenset(self._added_tanks))
+        self._adoption = (raid.key, *mode, ev.instance_id, members, frozenset(self._added_tanks),
+                          getattr(ev, "roster_followed", False) is True)
         self.state = State.FORMING
 
     def _instance_recorded(self, raid_key, instance_id):
@@ -534,9 +603,14 @@ class RaidNight:
             candidates = self._candidates()
             leaders = self._leaders(candidates, pick.lead)
             required = {leaders.tank_guid, leaders.lead_guid, leaders.loot_guid} - {self.ports.human_guid}
-            comp = select_comp(pick.size, candidates, must_include=sorted(required), human_in_raid=True,
-                               seed=self.rng.getrandbits(64))
-            members, bench = list(comp.members), list(comp.bench)
+            lineup = self._lineup()
+            if lineup is None:
+                comp = select_comp(pick.size, candidates, must_include=sorted(required), human_in_raid=True,
+                                   seed=self.rng.getrandbits(64))
+                members, bench = list(comp.members), list(comp.bench)
+            else:
+                members, bench = self._from_lineup(lineup, pick.size, candidates, required,
+                                                   self.rng.getrandbits(64))
             by_guid = {c.guid: c for c in candidates}
             clear = ClearLockout(uuid4().hex, raid.map_id, tuple([*members, self.ports.human_guid]))
             ack = await self._ack(clear, epoch)
@@ -604,6 +678,8 @@ class RaidNight:
             plan = RaidPlan(raid.key, pick.size, pick.heroic, False, leaders.lead_guid, leaders.tank_guid,
                             leaders.loot_guid, members, bench, True)
             await self._begin(plan, epoch, on_time, late)
+            if lineup is not None:
+                self._lineup_formed(lineup)
         except (NoTankError, ValueError, _Failed) as error:
             self._check(epoch)
             reason = str(error) if isinstance(error, _Failed) else "the available roster cannot fill this raid"
@@ -643,7 +719,7 @@ class RaidNight:
         his copy as the called raid proves it, then the loot master, the record with its attendance
         for those who arrived, and assembly, with him leading. Nothing is formed or disbanded: the
         group stays as he built it."""
-        raid_key, size, heroic, instance_id, members, tanks = self._adoption
+        raid_key, size, heroic, instance_id, members, tanks, followed = self._adoption
         self._adoption = None
         try:
             if self._instance_recorded(raid_key, instance_id):
@@ -664,10 +740,16 @@ class RaidNight:
                 raise _Failed("nobody arrived in his instance")
             # A member he named to lead his group calls the raid (raidlead); he still drives it.
             leaders = self._leaders(candidates, Lead(True), speaker=self._designated())
+            # His add followed tonight's posted lineup: the lineup is in effect through it, and its
+            # bench stands by (standby DKP) as a formed raid's bench does
+            lineup = self._lineup() if followed else None
+            bench = self._lineup_bench(lineup, {c.guid for c in candidates}) if lineup is not None else []
             plan = RaidPlan(raid_key, size, heroic, False, leaders.lead_guid, leaders.tank_guid,
-                            leaders.loot_guid, [c.guid for c in candidates], [], True)
+                            leaders.loot_guid, [c.guid for c in candidates], bench, True)
             await self._send(SetLootMaster(uuid4().hex, self.ports.human_guid, leaders.loot_guid), epoch)
             await self._begin(plan, epoch, plan.members, [], instance_id=instance_id, lead_is_human=True)
+            if lineup is not None:
+                self._lineup_formed(lineup, via="add")
             if plan.lead_guid != self.ports.human_guid:
                 # Her raid because he named her: it counts as no raid night the mind led (last_led).
                 with self.ports.conn:
