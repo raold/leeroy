@@ -285,8 +285,9 @@ def hair_skin(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
 
 def hair_skin_short(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, str]]:
     """(long, short) for her hair and her skin as hair_skin says them, for fit_required: the
-    hair's length and colour without its style, the skin's tone word (its last) without its
-    modifiers. A phrase with no shorter form, or one the name filter left out, has no pair."""
+    hair's length and colour without its style, the skin's tone without its modifiers
+    (skin_tone_word). A phrase with no shorter form, or one the name filter left out, has no
+    pair."""
     a, pairs = p.appearance, []
     kept = {t for t, _ in hair_skin(p, name_re)}
     if a.hair_length != "shaved":
@@ -295,9 +296,24 @@ def hair_skin_short(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, s
         if style and f"{hair}, {style}" in kept:
             pairs.append((f"{hair}, {style}", hair))
     tone = _clean(a.skin_tone)
-    if " " in tone and f"{tone} skin" in kept:
-        pairs.append((f"{tone} skin", f"{tone.split(' ')[-1]} skin"))
+    short = skin_tone_word(tone)
+    if short != tone and f"{tone} skin" in kept:
+        pairs.append((f"{tone} skin", f"{short} skin"))
     return pairs
+
+
+_CLAUSE = re.compile(r",|\s+with\s+", re.IGNORECASE)
+
+
+def skin_tone_word(tone: str) -> str:
+    """Her skin's tone without its modifiers: the first clause, before the first "," or " with "
+    ("fair with faint freckles" -> "fair", "pale, with rosy cheeks" -> "pale", "light olive with
+    a few freckles" -> "light olive"), where the tone comes in the looks; with no such separator
+    its last word ("warm brown" -> "brown")."""
+    first = _CLAUSE.split(tone, maxsplit=1)[0].strip()
+    if first and first != tone:
+        return first
+    return tone.split(" ")[-1] if tone else tone
 
 
 def eyes_face(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
@@ -309,6 +325,23 @@ def eyes_face(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
     for detail in a.face:
         add(detail, 2, True)
     return out
+
+
+# Face details that tell her apart, which the fit offers room first among her details, after her
+# eye colour: glasses, facial hair, scars, tattoos and piercings (review of #316, round 3: with her
+# hair, skin and body required, glasses and stubble lost their place to expressions and posture).
+IDENTITY_DETAIL = re.compile(r"\b(glasses|spectacles|stubble|beard|moustache|mustache|goatee|"
+                             r"sideburns|scars?|tattoos?|piercings?)\b", re.IGNORECASE)
+
+
+def identity_first(p: Persona, details: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """`details` (eyes_face) in the order the fit should offer them room: her eye colour, then the
+    details that tell her apart (IDENTITY_DETAIL), then the rest, each group in its own order."""
+    eye = f"{_clean(p.appearance.eye_colour)} eyes"
+    first = [d for d in details if d[0] == eye]
+    rest = [d for d in details if d[0] != eye]
+    return (first + [d for d in rest if IDENTITY_DETAIL.search(d[0])]
+            + [d for d in rest if not IDENTITY_DETAIL.search(d[0])])
 
 
 def looks_phrases(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
@@ -367,7 +400,7 @@ def build_varied_prompt(p: Persona, look) -> PromptSpec:
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # her hair and skin, required
     add(parts["wearing"], 0, True)
     add(parts["expression"], 1, True)
-    out += eyes_face(p, name_re)
+    out += identity_first(p, eyes_face(p, name_re))
     add(_PHONE_TAIL, 2)
     out = fit_required(out, p, [parts["framing"], parts["view"]], name_re)
     return PromptSpec(tuple(out), VARIED_NEGATIVE)
@@ -400,9 +433,9 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
     body, plain_build = body_phrases(p)
     out += body
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
+    out += identity_first(p, eyes_face(p, name_re))  # before the camera line (review of #316)
     if ph.kind != "snapshot":
         add("looking at the camera", 2)
-    out += eyes_face(p, name_re)
     if plain_build:
         out.append(plain_build)
     if lust:  # one phrase: the fit keeps both or neither, and priority 0 keeps both

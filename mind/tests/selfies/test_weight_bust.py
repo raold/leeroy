@@ -207,6 +207,22 @@ def test_hair_keeps_its_length_and_colour_and_skin_its_tone_word():
     assert hair_skin_short(woman(hair_length="shaved"), None) == [("light olive skin", "olive skin")]
 
 
+@pytest.mark.parametrize("tone,said", [
+    ("fair with faint freckles", "fair"), ("pale, with rosy cheeks", "pale"),
+    ("light olive with a few freckles", "light olive"), ("warm brown", "brown"),
+    ("Pale with flush cheeks", "Pale"), ("fair, tired eyes", "fair"),
+    ("Pale, with a faint dusting of", "Pale"), ("Fair With Sun Damage", "Fair"),
+    ("sun-warmed tan", "tan")])
+def test_the_skin_keeps_its_tone_not_its_last_word(tone, said):
+    """Review of #316, round 3: in the looks the tone comes first ("fair with freckles"), so the
+    short form is the first clause, before "," or " with "; only with no separator the last
+    word. The last word gave "freckles skin", "eyes skin" and "of skin"."""
+    from leeroy_mind.selfies.prompt import skin_tone_word
+    assert skin_tone_word(tone) == said
+    assert hair_skin_short(woman(hair_style="", skin_tone=tone), None) == [
+        (f"{tone} skin", f"{said} skin")]
+
+
 def test_every_word_is_clothed_adult_and_on_the_token_table():
     from leeroy_mind.selfies.tokens import PIECES, WORD_TOKENS
     sizes = [w for _, a, b in SIZE_WORDS for w in (a, b)]
@@ -544,3 +560,22 @@ def test_a_situational_photo_says_her_body_hair_and_skin_right_after_who_she_is(
     hot = build_scene_prompt(heavy, scene_from(LUST_SCENE))
     assert not over_fit(hot)
     _never_cut(hot, heavy)
+
+
+def test_her_eye_colour_and_what_tells_her_apart_come_first_among_her_details():
+    """Review of #316, round 3: with her hair, skin and body required, glasses and stubble lost
+    their place in the fit to expressions and posture. Her details now go eye colour, then
+    glasses, facial hair, scars, tattoos and piercings, then the rest, before the camera line."""
+    from leeroy_mind.selfies.prompt import identity_first
+    p = woman(face=("a tired half-smile", "slightly hunched", "day's stubble",
+                    "thin black-framed glasses"))
+    details = identity_first(p, [("hazel eyes", 2), ("a tired half-smile", 2),
+                                 ("slightly hunched", 2), ("day's stubble", 2),
+                                 ("thin black-framed glasses", 2)])
+    assert [t for t, _ in details] == ["hazel eyes", "day's stubble", "thin black-framed glasses",
+                                       "a tired half-smile", "slightly hunched"]
+    spec = build_prompt(replace(p, photo=replace(PHOTO, kind="selfie")))
+    texts = _texts(spec)
+    at = texts.index("hazel eyes")
+    assert texts[at:at + 5] == [t for t, _ in details]
+    assert texts[at + 5] == "looking at the camera"

@@ -89,7 +89,8 @@ def test_the_scene_prompt_runs_in_the_briefs_order():
         (SCENE["activity"], 1), (SCENE["setting"], 1),
         # hair and skin required, never traded for body words (controller ruling, 2026-11-15)
         ("shoulder-length dark brown hair, tucked behind one ear", 0), ("light olive skin", 0),
-        ("looking at the camera", 3), ("hazel eyes", 2), ("freckles", 2), ("thin glasses", 2),
+        # her eye colour, then what tells her apart (glasses), then the rest (2026-11-15)
+        ("looking at the camera", 3), ("hazel eyes", 2), ("thin glasses", 2), ("freckles", 2),
         (SCENE["outfit"], 2), ("soft morning light", 2), (SCENE["expression"], 3),
         ("average build", 1),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
@@ -217,10 +218,12 @@ def test_a_scene_round_trips_through_its_json():
 def test_build_prompt_is_unchanged():
     # the profile photo's prompt, pinned before subject_phrase and looks_phrases were factored out;
     # since 2026-11-15 her hair and skin are required and come right after who she is (controller
-    # ruling: never traded for body words), and "looking at the camera" follows them
+    # ruling: never traded for body words), and "looking at the camera" follows her eyes and face
+    # details, so glasses and stubble keep their place in the fit
     hair = ("shoulder-length dark brown hair, tucked behind one ear", 0)
     face = (hair, ("light olive skin", 0))
-    rest = (("hazel eyes", 2), ("freckles", 2), ("thin glasses", 2), ("average build", 1))
+    details = (("hazel eyes", 2), ("thin glasses", 2), ("freckles", 2))  # what tells her apart
+    rest = (*details, ("average build", 1))
     kind_ = (("orange rain bib over a grey hoodie", 2), ("on the deck of a small boat", 2),
              ("squinting into the wind", 3))
     phone = ("recent smartphone photo, natural light, natural skin texture, unretouched", 1)
@@ -232,20 +235,21 @@ def test_build_prompt_is_unchanged():
     assert build_prompt(woman(age=22, photo={**PHOTO, "kind": "selfie",
                                              "framing": "head_and_shoulders"})).phrases == (
         ("phone selfie", 0), ("head and shoulders", 0), ("22-year-old adult British woman", 0),
-        *face, look, *rest, *kind_, phone)
+        *face, *details, look, ("average build", 1), *kind_, phone)
     shaved = man(appearance=replace(APPEARANCE, hair_length="shaved", skin_tone=""),
                  photo={**PHOTO, "kind": "mirror_selfie"})
     assert build_prompt(shaved).phrases == (
         ("mirror selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British man", 0),
-        ("shaved head", 0), look, *rest, *kind_, phone)
+        ("shaved head", 0), *details, look, ("average build", 1), *kind_, phone)
     assert build_prompt(woman(photo={**PHOTO, "kind": "headshot", "framing": "face"})).phrases == (
-        ("professional headshot", 0), ("close-up of the face", 0), subject, *face, look, *rest,
-        *kind_, ("recent photo, natural skin texture, unretouched", 1))
+        ("professional headshot", 0), ("close-up of the face", 0), subject, *face, *details, look,
+        ("average build", 1), *kind_, ("recent photo, natural skin texture, unretouched", 1))
     assert build_prompt(lusty(photo=LUST_PHOTO), kind_style=LUST).phrases == (
         ("candid photo taken by a friend", 0), ("waist-up shot, upper body", 0), subject, *face,
         *rest, ("wearing a red string bikini, the beach at sunset", 0), ("a teasing grin", 3), phone)
     assert subject_phrase(woman()) == subject and looks_phrases(woman(), None) == [
-        (hair[0], 1), ("light olive skin", 1), *rest[:3]]
+        (hair[0], 1), ("light olive skin", 1), ("hazel eyes", 2), ("freckles", 2),
+        ("thin glasses", 2)]  # the looks' own order; the prompts put what tells her apart first
 
 
 # -- the lust scene (ruling R2) --------------------------------------------------------------

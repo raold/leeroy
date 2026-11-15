@@ -450,9 +450,10 @@ def test_an_edit_while_her_set_renders_says_so_and_a_set_with_her_new_figure_fol
     assert reply["set"] == 2 and reply["message"].endswith(
         "Her set is rendering now from her previous looks; a set with her new figure follows "
         "it. Pick one as her photo to keep it.")
-    # review of #316: a set that has started is never marked (its faces are already chosen)
+    # marked even while it renders (controller, round 4): if that render fails or is cancelled,
+    # the set renders again from the new looks and must take the light face then
     from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY
-    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=2)) is None
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=2)) == "1"
 
 
 def test_a_set_whose_render_an_edit_overtook_is_stamped_old_and_a_fresh_one_queued(h, tmp_path,
@@ -490,7 +491,7 @@ def test_a_set_whose_render_an_edit_overtook_is_stamped_old_and_a_fresh_one_queu
         assert [s.set_no for s in queued_sets(h.store)] == [3]
 
 
-def test_queue_looks_set_marks_only_a_set_still_queued(store, clock, tmp_path):
+def test_queue_looks_set_marks_a_queued_set_whether_or_not_it_renders(store, clock, tmp_path):
     from leeroy_mind.selfies.service import queue_looks_set
     from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY, queue_more
     app_for(store, clock, tmp_path)
@@ -502,10 +503,35 @@ def test_queue_looks_set_marks_only_a_set_still_queued(store, clock, tmp_path):
     staging.mkdir(parents=True)
     assert queue_looks_set(store, SelfieCfg(enabled=True), p, 102, **args) == (1, False,
                                                                                "rendering")
-    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) is None
-    staging.rmdir()  # a set not started yet takes the mark
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) == "1"
+    store.conn.execute("DELETE FROM meta WHERE key=?", (LOOKS_EDIT_SET_KEY.format(guid=102,
+                                                                                  set_no=1),))
+    staging.rmdir()  # a set not started yet takes the mark the same way
     assert queue_looks_set(store, SelfieCfg(enabled=True), p, 102, **args) == (1, False, "queued")
     assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) == "1"
+
+
+def test_a_marked_set_whose_render_was_cancelled_renders_again_under_the_light_face(h, tmp_path):
+    """Controller, round 4: an edit while her set renders marks it; the render is cut short
+    (his login cancels the booth: only its <set>.part is left), and when the set renders again
+    from her new looks every slot takes her cover's face at MIN_SCALE."""
+    from leeroy_mind.selfies.service import queue_looks_set
+    from leeroy_mind.selfies.store import queue_more
+    from selfies.test_varied_sets import _cover, _logged, lust, make_stage_for
+    lust(h, 101)
+    _cover(h)
+    queue_more(h.store, 101, now=h.T)  # set 2
+    files.staging_dir(h.settings.data_dir, 101, 2).mkdir(parents=True)  # rendering when he edits
+    set_looks(h.store, 101, weight_kg=96, bust="very_large", now=h.T + 1)
+    state = queue_looks_set(h.store, SelfieCfg(enabled=True), load_persona(h.store, 101), 101,
+                            human=1, now=h.T + 1, day="2026-10-29",
+                            data_dir=h.settings.data_dir)
+    assert state == (2, False, "rendering")
+    log = tmp_path / "requests.log"
+    cfg = SelfieCfg(enabled=True, identity_sets=True)
+    run(make_stage_for(cfg, tmp_path, FAKE_SELFIE_IDENTITY="1", FAKE_SELFIE_LOG=str(log))(h.ctx()))
+    rows = [r for r in _logged(log) if r[0].startswith("101:2:")]
+    assert len(rows) == 4 and all(float(r[3]) == 0.3 for r in rows)
 
 
 def test_a_failed_stale_check_is_logged_and_the_stage_goes_on(h, tmp_path, monkeypatch, caplog):

@@ -62,19 +62,21 @@ def queue_looks_set(store, cfg: SelfieCfg, p, guid: int, *, human: int, now: flo
     folder exists, so it renders her previous looks; render._stale queues a fresh set once it
     is ready). A new set is queued as his "4 more" queues one (store.queue_more: the sets
     waiting for his choice passed, kept in her gallery), a varied set for a woman of the lust
-    style while `varied_sets` is on (varied.queue, without its once-a-day rule). A set still
-    queued, and only such a set, is marked (store.LOOKS_EDIT_SET_KEY) to hold her cover's face
-    lightly, so her new figure shows; once he picks one as her photo, later sets carry that
-    fuller cover as usual."""
+    style while `varied_sets` is on (varied.queue, without its once-a-day rule). The set is
+    marked (store.LOOKS_EDIT_SET_KEY) to hold her cover's face lightly, so her new figure shows,
+    in every state: a rendering set that fails or is cancelled renders again with the mark;
+    once he picks one as her photo, later sets carry that fuller cover as usual."""
     from .store import LOOKS_EDIT_SET_KEY
     with store.transaction():
         row = store.conn.execute("SELECT set_no FROM selfie_set WHERE guid=? AND "
                                  "status='queued'", (guid,)).fetchone()
     if row is not None:
-        if files.staging_dir(data_dir, guid, row[0]).exists():
-            return row[0], False, "rendering"  # started: a mark now would change nothing
+        # marked even while it renders: a render that started chose its faces already, but one
+        # that fails or is cancelled (his login cancels the booth) renders again from the new
+        # looks and must take the light face then (controller ruling, 2026-11-15)
         store.set_meta(LOOKS_EDIT_SET_KEY.format(guid=guid, set_no=row[0]), "1")
-        return row[0], False, "queued"
+        rendering = files.staging_dir(data_dir, guid, row[0]).exists()
+        return row[0], False, "rendering" if rendering else "queued"
     set_no, varied_set = None, False
     if (getattr(cfg, "varied_sets", False) and suggestive(p)
             and renderable(p, chosen_style(store, p) or "plain") is None):

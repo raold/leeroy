@@ -18,7 +18,8 @@ from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSI
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
 from .prompt import (_FRAMINGS, body_phrases, fit_required, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
-                     LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin, looks_phrases,
+                     LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
+                     identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
 from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGATIVE,
@@ -472,7 +473,7 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
     if s.kind != "snapshot":
         add("looking at the camera", 3)
-    out += eyes_face(p, name_re)
+    out += identity_first(p, eyes_face(p, name_re))  # eye colour, glasses, stubble first
     if not lust:
         add(s.outfit, 2, True)
     if _LIGHT[s.when]:

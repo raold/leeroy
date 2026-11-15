@@ -222,7 +222,9 @@ slim):
 1. the kind and the framing take their short forms (`prompt.SHORT`: "candid photo", "headshot",
    "waist-up shot", "three-quarter shot, waist and hips in frame");
 2. her hair keeps its length and colour and drops its style;
-3. her skin keeps its tone word and drops its modifiers;
+3. her skin keeps its tone, the first clause before a "," or " with " ("fair with faint
+   freckles" says "fair skin"), or with no such separator its last word ("warm brown" says
+   "brown skin");
 4. her size keeps its first two terms ("plus-size, heavyset", "chubby, thick arms");
 5. the kind, then the framing (a varied set: the framing, then the pose) yield to priority 1,
    keeping their places.
@@ -231,7 +233,7 @@ Her build (curvy, voluptuous, stocky, heavy and every other) and a set bust are 
 her hair's length and colour and her skin tone are never dropped. A prompt still too long after
 all five steps is left as it is (`prompt.over_fit` names it); none was found.
 
-Measured with the worker's `fit.py` and the real tokenizers on a copy of a mind snapshot (145 cast
+Measured with the worker's `fit.py` and the real tokenizers on a copy of the 08:14 mind snapshot (145 cast
 profiles; 16 varied candidates for each of the 91 lust women, 1456):
 
 | | hair or skin lost | full build shortened | size words full / two terms | too long |
@@ -240,23 +242,29 @@ profiles; 16 varied candidates for each of the 91 lust women, 1456):
 | main, varied | 52 skin | | | 0 |
 | no edit, profiles | 0 | 0 | 50 / 0 | 0 |
 | no edit, varied | 0 | 0 | 160 / 0 | 0 |
-| +25 kg and very large on the 91, profiles | 0 | 0 | 53 / 38 | 0 |
-| +25 kg and very large on the 91, varied | 0 | 0 | 855 / 601 | 0 |
-| BMI 38 and very large on the 91, profiles | 0 | 0 | 19 / 72 | 0 |
-| BMI 38 and very large on the 91, varied | 0 | 0 | 449 / 1007 | 0 |
+| +25 kg and very large on the 91, profiles | 0 | 0 | 57 / 34 | 0 |
+| +25 kg and very large on the 91, varied | 0 | 0 | 987 / 469 | 0 |
+| BMI 38 and very large on the 91, profiles | 0 | 0 | 23 / 68 | 0 |
+| BMI 38 and very large on the 91, varied | 0 | 0 | 679 / 777 | 0 |
 
 What gives way instead: with no edit, 42 of 145 profiles and 485 of 1456 varied candidates drop
-their hair style, 3 and 33 their skin modifiers. With +25 kg and a very large bust, 4 profile
-prompts lose their kind or framing phrase to the fit (25 of the varied candidates' framings or
-poses). The looks pass is never asked for a bust. Negatives, the NSFW gate, the age guard and the
-name screens are unchanged.
+their hair style, 3 and 33 their skin modifiers (on the live cast every one of the 74 multi-word
+skins keeps its tone: "fair", "pale", "tan", "light"). With +25 kg and a very large bust, 2 profile
+prompts lose their kind or framing phrase to the fit (17 of the varied candidates' framings or
+poses). Her face details come in the order the fit should keep them: her eye colour, then what
+tells her apart (glasses, facial hair, scars, tattoos, piercings), then the rest, before
+"looking at the camera" (`prompt.identity_first`); with no edit no profile loses glasses or
+facial hair that main keeps (29 members lose another detail, mostly an expression or posture).
+The looks pass is never asked for a bust. Negatives, the NSFW gate, the age guard and the name
+screens are unchanged.
 
 **An edit while her set renders.** A set is stamped with the persona version its prompts were
 built from, not the one in force when it is published. If her looks changed while it rendered
 (`render._stale`), a fresh looks-edit set is queued at once and renders from the persona after the
 edit; the console says her set is rendering from her previous looks and a set with her new figure
-follows it. A set that has started rendering (its `<set>.part` folder exists) is never marked for
-the light face: its faces were chosen when it started. A failed check is logged
+follows it. That rendering set is marked for the light face too: a render that started chose its
+faces already, but one that fails or is cancelled (his login cancels the booth) renders again
+from her new looks under the light face. A failed check is logged
 (`selfies_stale_check_failed guid= set= error=`) and the stage goes on.
 
 **Undo** puts back both values and the persona's source, and removes the `persona_looks_protection`
