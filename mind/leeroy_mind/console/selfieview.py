@@ -9,7 +9,9 @@ through feed.read). The running mind writes the rows and files through its contr
 - member_photos: one member's photo in force, sets and change history.
 
 Images are read only from `files` paths, which are built from integers, and a file over
-MAX_IMAGE_BYTES is left out. A mind.db without the selfie tables says so in `missing`."""
+MAX_IMAGE_BYTES is left out. A ready set rendered from an older persona than her cover's set
+(store.looks_floor) is left out of all three, as the gallery leaves it out; rows, files, picks
+and undos are untouched. A mind.db without the selfie tables says so in `missing`."""
 import base64
 import json
 from pathlib import Path
@@ -83,11 +85,15 @@ def queue_view(conn, data_dir: Path, *, now: float) -> dict:
     names = _names(conn)
     out["counts"].update(store.counts(conn))
     out["counts"].update(_kinds(conn, human_guid(conn)))
+    waiting = [r for r in conn.execute(
+        "SELECT guid, set_no, reason, rendered, persona_version FROM selfie_set WHERE "
+        "status = 'ready' AND decided IS NULL ORDER BY rendered, guid, set_no") if is_cast(conn,r[0])]
+    floors = {g: store.looks_floor(conn, g) for g in {r[0] for r in waiting}}
+    shown = [r for r in waiting if store.current_looks(r[4], floors[r[0]])]
+    # a set older than her cover's (store.looks_floor) is not listed, nor counted as waiting
+    out["counts"]["waiting"] -= len({r[0] for r in waiting} - {r[0] for r in shown})
     out["queue"] = [{"guid": r[0], "name": names.get(r[0], f"#{r[0]}"), "set": r[1],
-                     "reason": r[2], "rendered": r[3]}
-                    for r in conn.execute(
-                        "SELECT guid, set_no, reason, rendered FROM selfie_set WHERE "
-                        "status = 'ready' AND decided IS NULL ORDER BY rendered, guid, set_no") if is_cast(conn,r[0])]
+                     "reason": r[2], "rendered": r[3]} for r in shown]
     out["recent"] = [{**p, "name": names.get(p["guid"], f"#{p['guid']}")}
                      for p in store.picks(conn, None, RECENT)]
     return out
@@ -110,8 +116,9 @@ def set_images(conn, data_dir: Path, guid: int, set_no: int) -> dict | None:
         files.set_dir(data_dir, guid, set_no)  # integers in range, else not a set of theirs
     except (TypeError, ValueError):
         return None
-    if conn.execute("SELECT 1 FROM selfie_set WHERE guid = ? AND set_no = ? AND "
-                    "status = 'ready'", (guid, set_no)).fetchone() is None:
+    row = conn.execute("SELECT persona_version FROM selfie_set WHERE guid = ? AND set_no = ? AND "
+                       "status = 'ready'", (guid, set_no)).fetchone()
+    if row is None or not store.current_looks(row[0], store.looks_floor(conn, guid)):
         return None
     cur = conn.execute("SELECT set_no, idx FROM selfie_current WHERE guid = ?",
                        (guid,)).fetchone()
@@ -134,9 +141,10 @@ def member_photos(conn, data_dir: Path, guid: int) -> dict | None:
         return None
     cur = conn.execute("SELECT set_no, idx, pick FROM selfie_current WHERE guid = ?",
                        (guid,)).fetchone()
+    floor = store.looks_floor(conn, guid)
     return {"guid": guid,
             "current": None if cur is None else {"set": cur[0], "index": cur[1], "pick": cur[2]},
             "sets": [{"set": r[0], "status": r[1], "decided": r[2]} for r in conn.execute(
-                "SELECT set_no, status, decided FROM selfie_set WHERE guid = ? "
-                "ORDER BY set_no", (guid,))],
+                "SELECT set_no, status, decided, persona_version FROM selfie_set WHERE guid = ? "
+                "ORDER BY set_no", (guid,)) if r[1] != "ready" or store.current_looks(r[3], floor)],
             "history": store.picks(conn, guid)}
