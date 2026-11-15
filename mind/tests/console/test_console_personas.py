@@ -218,7 +218,8 @@ def test_a_member_in_detail_shows_the_card_summary_and_nothing_private(cast, dat
     assert card["typing"]["case"] == "lower" and card["game"]["motivation"] == "achiever"
     assert card["play"]["raid_role"] == "tank" and card["appearance"] is None
     assert card["photo"] is None
-    assert card["identity"] == {"age": 34, "player_gender": "male", "region": "UK"}
+    assert card["identity"] == {"age": 34, "player_gender": "male", "region": "UK", "home": None}
+    assert card["status"] is None  # "lives with a flatmate" says nothing of it
     assert card["romance"] == {"stance": "none", "style": None, "jealousy_mode": None}
     ties = view["member"]["ties"]["top"]
     assert len(ties) == 4 and ties[0]["notes"] == "notes on 302"
@@ -445,3 +446,32 @@ def test_the_bio_carries_when_they_drink_and_never_the_odds_or_the_disclosures()
     for private in ("SURFACETEXT", "MIDDLETEXT", "DEEPTEXT", "0.9", "tipsy", "once lost a bet",
                     "comfortable", "in bed by midnight", "tea beats coffee"):
         assert private not in text
+
+
+def test_the_card_carries_her_home_state_and_a_status_built_by_code(cast, data):
+    belra = load_persona(cast, 302)
+    _save(cast, replace(belra, identity=replace(belra.identity, region="US", accent="en-us",
+                                                home="Ohio"),
+                        real_life=replace(belra.real_life, household="Lives with her husband")),
+          "owner", NOW)
+
+    def card(guid):
+        return feed.read(data / "mind.db", personaview.member_view, guid, now=NOW)["card"]
+
+    assert card(302)["identity"] == {"age": 34, "player_gender": "female", "region": "US",
+                                     "home": "Ohio"}
+    assert card(302)["status"] == "married"  # her row toward him (banter) is no status
+
+    def couple(ab, ba):
+        cast.put_relationship(replace(cast.get_relationship(301, 302), romance_stage=ab))
+        cast.put_relationship(replace(cast.get_relationship(302, 301), romance_stage=ba))
+
+    for stage, words in (("whispers", "dating"), ("late_nights", "dating"),
+                         ("confession", "with")):
+        couple(stage, stage)  # a member couple wins over the household, by the stored names
+        assert (card(302)["status"], card(301)["status"]) == (f"{words} Arkon", f"{words} Belra")
+    couple("confession", "late_nights")  # the lower of the two rows
+    assert card(302)["status"] == "dating Arkon"
+    for ab, ba in (("banter", "banter"), ("notices", "confession"), ("confession", "ex")):
+        couple(ab, ba)
+        assert (card(302)["status"], card(301)["status"]) == ("married", None)

@@ -89,18 +89,24 @@ export function bioText(card) {
   return { about: str(life.life_thread).trim(), rows: rows };
 }
 
-// The member card in Comms from /api/persona's member view: the name, a note (age and region, then
-// the stance), three facts and the bio (bioText). view null: mind.db does not know them (a 404), so only the name the
-// page knows (known) is shown.
+// Who a member is in one line (owner, 2026-11-15): her age, where she lives (her US state, else her
+// region: "UK", or "US" before she has a state), her stance toward him and her relationship status,
+// as "38 · Texas · lust · married", each part left out when empty (a stance of none too, so it never
+// reads "none · married"). gender: put after the age (the Personas tab's player line).
+export function whoText(identity, stance, status, gender) {
+  var id = obj(identity), age = typeof id.age === "number" ? String(id.age) : str(id.age);
+  return [age, str(gender), str(id.home) || str(id.region), stance === "none" ? "" : str(stance), str(status)]
+    .map(function (x) { return x.trim(); }).filter(Boolean).join(" · ");
+}
+
+// The member card in Comms from /api/persona's member view: the name, a note (whoText: age, place,
+// stance and relationship status), three facts and the bio (bioText). view null: mind.db does not know them (a 404),
+// so only the name the page knows (known) is shown.
 export function cardText(view, known) {
   if (!view) { return { name: str(known), note: "Not in mind.db.", facts: [], bio: bioText(null) }; }
   var m = obj(obj(view).member), c = view.card ? obj(view.card) : null, missing = arr(view.missing);
   var name = str(m.name) || str(known) || "#" + num(m.guid), note = "No persona yet.";
-  if (c) {
-    var id = obj(c.identity), stance = str(m.stance);
-    note = [id.age, id.region].filter(function (x) { return x !== null && x !== undefined && x !== ""; }).join(", ");
-    if (stance) { note = note ? note + " · " + stance : stance; }
-  }
+  if (c) { note = whoText(c.identity, m.stance, c.status); }
   var role = [m["class"] ? CLASSES[m["class"]] || "-" : "", str(m.role)].filter(Boolean).join(" · ") || "-";
   return { name: name, note: note, bio: bioText(c),
            facts: [{ k: "Role", v: role },

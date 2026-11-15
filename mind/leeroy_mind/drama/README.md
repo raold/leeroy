@@ -53,9 +53,11 @@ Four changes ship without the switch:
 
 - **Romances.** A man and a woman of the cast who like each other (affinity 10 both ways) may
   spark (`couples` night stage, after `romance`): 15% a night, at most 2 a night, 0.15 of that for
-  a woman drawn to or lusting after him. Never for someone whose household names a spouse or
-  partner, someone already in a member romance, a woman whose romance with him has begun
-  (banter or later), a pair with an open feud, or two exes within 30 nights of their breakup.
+  a woman drawn to or lusting after him. Never for someone whose household names a spouse, a
+  fiancé or a partner (`household_status` married, engaged or partnered: the reading the
+  console's relationship status shows), someone already in a member romance, a woman whose
+  romance with him has begun (banter or later), a pair with an open feud, or two exes within 30
+  nights of their breakup.
   Their relationship rows climb notices, banter, whispers (a crush), late_nights (dating),
   confession (together) through their scenes: each warm scene adds 8 attraction both ways and may
   take one step once both rows meet the step's gate and its nights have passed; a cold scene

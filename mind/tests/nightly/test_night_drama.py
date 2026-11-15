@@ -192,6 +192,47 @@ def test_taken_reads_the_household(household, taken):
     assert couples.taken(SimpleNamespace(real_life=SimpleNamespace(household=household))) is taken
 
 
+# Shaped like the stored cast's households (2026-11-15); the console's relationship status.
+@pytest.mark.parametrize("household,status", [
+    ("Lives with her husband in a one-bedroom above a laundromat", "married"),
+    ("Married, kids 9 and 13, three-bed semi", "married"),
+    ("Husband and newborn baby in a small apartment.", "married"),
+    ("Lives in a semi with wife and a fat labrador", "married"),
+    ("Engaged, saving for the wedding; fiance works nights", "engaged"),
+    ("Two-bed with her fiancée and a cat", "engaged"),
+    ("Lives with girlfriend and a corgi", "partnered"),
+    ("Two-bed with civil partner and a rescue collie", "partnered"),
+    ("Alone in a 2BR above a closed feed store, girlfriend calls daily", "partnered"),
+    ("Divorced, shares 2-bed with 16yo son", "divorced"),
+    ("Lives alone; ex-husband's name still on the deed", "divorced"),
+    ("Terraced house off the bypass, alone since the divorce '06", "divorced"),
+    ("Divorced, now lives with her boyfriend and two cats", "partnered"),
+    ("Widowed; her late husband's records on the shelf", "widowed"),
+    ("Lives alone with one cat", "single"),
+    ("One-bed flat above chippy, cat Sergeant, no partner", "single"),
+    ("Single mum, lives with 6-year-old daughter.", "single"),
+    ("Solo, 2-bed flat above a chippy", "single"),
+    ("Never married, one cat", "single"),
+    ("Lives with her mum", None),
+    ("Shares a two-bed flat with a flatmate", None),
+    ("Two-bed terraced, cat called Pickle, kitchen messy since split", None),
+    ("Two-bed flat above a chippy, cat Gloom, two kids with dad", None),
+    ("Lives in a single-wide trailer with two dogs", None),
+    ("Keeps her mind engaged in crosswords", None),
+    ("", None)])
+def test_the_household_says_her_status_and_taken_agrees(household, status):
+    assert couples.household_status(household) == status
+    member = SimpleNamespace(real_life=SimpleNamespace(household=household))
+    assert couples.taken(member) is (status in couples.TAKEN_STATUSES)
+
+
+@pytest.mark.parametrize("ab,ba,stage", [
+    ("late_nights", "late_nights", "late_nights"), ("confession", "whispers", "whispers"),
+    ("confession", "ex", "ex"), ("banter", "none", "none"), ("weekend", "banter", "none")])
+def test_a_pairs_stage_is_the_lower_of_its_rows(ab, ba, stage):
+    assert couples.pair_stage(ab, ba) == stage
+
+
 def _spark_ready(h, w=102, m=101, affinity=15.0):
     for x, y in ((w, m), (m, w)):
         h.rel(x, y, affinity=affinity)

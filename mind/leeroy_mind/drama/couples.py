@@ -50,6 +50,8 @@ PARTNER = frozenset({"late_nights", "confession"})  # dating and together
 BREAKS = frozenset({"whispers", "late_nights", "confession"})  # leaving one is a breakup
 WORDS = {"notices": "noticing each other", "banter": "flirting", "whispers": "crushing on each other",
          "late_nights": "dating", "confession": "together", "ex": "broken up"}
+# a couple as a relationship status on the console's cards: "dating <Name>", "with <Name>"
+STATUS_WORDS = {"whispers": "dating", "late_nights": "dating", "confession": "with"}
 INTENT = {
     "notices": "{a} and {b} have started to notice each other; there's a small spark.",
     "banter": "{a} and {b} flirt a little.",
@@ -94,28 +96,64 @@ _UNTAKEN = re.compile(
     re.IGNORECASE)
 _TAKEN = re.compile(r"\b(?:married|husband|wife|spouse|partner|boyfriend|girlfriend|fianc[eé]e?)\b",
                     re.IGNORECASE)
+# What else a household sentence says of her (the console's relationship status, owner
+# 2026-11-15), read after _UNTAKEN has taken out "no partner", the exes and the late spouses.
+_MARRIED = re.compile(r"\b(?:married|husband|wife|spouse)\b", re.IGNORECASE)
+_ENGAGED = re.compile(r"\bfianc[eé]e?\b|\bengaged\b(?!\s+(?:in|with)\b)", re.IGNORECASE)
+_NOT_ENGAGED = re.compile(r"\b(?:no|not|never|without)\s+(?:a\s+)?(?:engaged|fianc\w*)\b",
+                          re.IGNORECASE)
+_WIDOWED = re.compile(r"\bwidow(?:ed|er)?\b|\blate\s+(?:husband|wife|partner|spouse)\b",
+                      re.IGNORECASE)
+_DIVORCED = re.compile(r"\bdivorc\w*|\bex-?\s?(?:husband|wife|spouse)\b", re.IGNORECASE)
+_SINGLE = re.compile(
+    r"\bsingle\b(?!-|\s+(?:bed|room|storey|story|wide|family|level|car|garage)\b)"
+    r"|\balone\b|\bsolo\b|\bun-?married\b"
+    r"|\b(?:no|not|never|without)\s+(?:a\s+)?(?:married|spouse|partner|husband|wife|boyfriend|"
+    r"girlfriend)\b", re.IGNORECASE)
+TAKEN_STATUSES = frozenset({"married", "engaged", "partnered"})
+
+
+def household_status(household: str | None) -> str | None:
+    """What her household sentence says of her: "married", "engaged", "partnered" (a partner,
+    boyfriend or girlfriend), "widowed", "divorced" or "single" (alone, single, no partner), in
+    that order, so a remarried divorcee is married; None when it does not say."""
+    text = household or ""
+    rest = _UNTAKEN.sub(" ", _NOT_ENGAGED.sub(" ", text))
+    if _TAKEN.search(rest) or _ENGAGED.search(rest):
+        if _MARRIED.search(rest):
+            return "married"
+        return "engaged" if _ENGAGED.search(rest) else "partnered"
+    if _WIDOWED.search(text):
+        return "widowed"
+    if _DIVORCED.search(text):
+        return "divorced"
+    return "single" if _SINGLE.search(text) else None
 
 
 def taken(p) -> bool:
-    """Her household names a spouse or a partner (as with the women married to outsiders):
-    such a member never starts a member romance. "No partner", an ex and a late spouse do not
-    count."""
-    return bool(_TAKEN.search(_UNTAKEN.sub(" ", p.real_life.household or "")))
+    """Her household names a spouse, a fiancé or a partner (as with the women married to
+    outsiders): such a member never starts a member romance. "No partner", an ex and a late
+    spouse do not count."""
+    return household_status(p.real_life.household) in TAKEN_STATUSES
 
 
 def _rel(store, a, b):
     return store.get_relationship(a, b)
 
 
-def stage_of(store, a: int, b: int) -> str:
-    """The pair's member stage: the lower of their two rows on LADDER, "ex" when either says ex,
-    else "none"."""
-    ab, ba = _rel(store, a, b).romance_stage, _rel(store, b, a).romance_stage
+def pair_stage(ab: str, ba: str) -> str:
+    """A pair's member stage from their two rows' stages: the lower on LADDER, "ex" when either
+    says ex, else "none"."""
     if "ex" in (ab, ba):
         return "ex"
     if ab in LADDER and ba in LADDER:
         return LADDER[min(LADDER.index(ab), LADDER.index(ba))]
     return "none"
+
+
+def stage_of(store, a: int, b: int) -> str:
+    """The pair's member stage (pair_stage of their two rows)."""
+    return pair_stage(_rel(store, a, b).romance_stage, _rel(store, b, a).romance_stage)
 
 
 def active(store, members, human: int) -> list[tuple[int, int, str]]:
