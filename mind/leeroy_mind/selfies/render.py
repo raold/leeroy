@@ -278,6 +278,36 @@ async def _start(ctx: "NightContext", worker: SelfieWorker, policy: RenderPolicy
     return True
 
 
+def _version(ctx: "NightContext", guid: int) -> int | None:
+    with ctx.store.transaction():
+        return ctx.store.persona_versions(tier=None).get(guid)
+
+
+def _stale(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int, set_no: int,
+           built_from: int | None) -> int | None:
+    """A weight or bust edit that landed while set `set_no` rendered from `p` (her stored looks
+    now differ from p's): a fresh looks-edit set is queued (service.queue_looks_set) so one
+    renders from the persona after the edit; its number, or None."""
+    from leeroy_mind.personas.io import load_persona
+    from leeroy_mind.personas.schema import appearance_dict
+    from .service import queue_looks_set
+    try:
+        now = load_persona(ctx.store, guid)
+    except ValueError:
+        return None
+    if (now is None or now.appearance is None
+            or appearance_dict(now.appearance) == appearance_dict(p.appearance)):
+        return None
+    why = renderable(now, chosen_style(ctx.store, now) or PLAIN)
+    if why is not None and why not in HELD:
+        return None
+    made, _, _ = queue_looks_set(ctx.store, cfg, now, guid, human=ctx.human,
+                                 now=ctx.clock.now(), day=ctx.clock.local().date().isoformat(),
+                                 data_dir=ctx.settings.data_dir)
+    log("selfies_set_stale", night=ctx.night, guid=guid, set=set_no, requeued=made)
+    return made
+
+
 def _discard(ctx: "NightContext", guid: int, set_no: int) -> None:
     """What a failed render left (not on the cancel path: clear_stale clears that later)."""
     with suppress(OSError):
@@ -309,15 +339,18 @@ def _set_faces(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int, set_n
                varied: bool) -> tuple[Identity | None, ...] | None:
     """The set's face references by slot, or None (the switch off, or no chosen photo with a
     face yet): her cover's face (store.face_pick) cut by its framing at identity_scale, a slot
-    seen from behind at REAR_SCALE of it."""
+    seen from behind at REAR_SCALE of it. A set his weight or bust edit queued
+    (store.looks_edit_set) holds it at MIN_SCALE in every slot: at identity_scale the reference
+    carries her cover's slimmer body into the set (measured on the GPU, 2026-11-15)."""
     if not getattr(cfg, "identity_sets", False) or p.photo is None:
         return None
     from .kind import BACK_VIEWS
     from .scene import ref_crop
-    from .store import current, face_pick
+    from .store import current, face_pick, looks_edit_set
     with ctx.store.transaction():
         cur = current(ctx.store, guid)
         got = None if cur is None else face_pick(ctx.store.conn, guid, cur.pick)
+        light = looks_edit_set(ctx.store.conn, guid, set_no)
         plan = None
         if varied:
             from . import varied as varied_mod
@@ -328,8 +361,10 @@ def _set_faces(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int, set_n
     if not ref.is_file():
         return None
     crop = ref_crop(got[1] or p.photo.framing)
-    full = Identity(ref, crop, cfg.identity_scale)
     rear = Identity(ref, crop, max(MIN_SCALE, round(cfg.identity_scale * REAR_SCALE, 2)))
+    if light:
+        return (Identity(ref, crop, MIN_SCALE),) * SET_SIZE
+    full = Identity(ref, crop, cfg.identity_scale)
     views = tuple(None if x is None else x.view for x in plan) if plan else (None,) * SET_SIZE
     return tuple(rear if v in BACK_VIEWS else full for v in views)
 
@@ -364,15 +399,20 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
 
 
 def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate],
-           lust: bool = False, varied: bool = False, dropped: frozenset[int] = frozenset()):
-    """Mark the set ready. A set that did not render as a varied one loses its plan, and one
-    whose slots rendered her ordinary photo loses those slots' looks, so a ready set's plan is
-    always what its candidates show."""
+           lust: bool = False, varied: bool = False, dropped: frozenset[int] = frozenset(),
+           built_from: int | None = None):
+    """Mark the set ready, stamped with the persona version its prompts were built from
+    (`built_from`; a weight or bust edit may have landed while it rendered), never the one in
+    force at publish. A set that did not render as a varied one loses its plan, and one whose
+    slots rendered her ordinary photo loses those slots' looks, so a ready set's plan is always
+    what its candidates show."""
     from . import varied as plans
 
     def write(store) -> None:
+        version = (built_from if built_from is not None
+                   else store.persona_versions(tier=None)[guid])
         mark_ready(store, guid, set_no, made, now=ctx.clock.now(), night=ctx.night,
-                   persona_version=store.persona_versions(tier=None)[guid], lust=lust)
+                   persona_version=version, lust=lust)
         looks = plans.plan_of(store.conn, guid, set_no) if varied else None
         if looks is None or all(i in dropped or x is None for i, x in enumerate(looks)):
             plans.drop_plan(store, guid, set_no)
@@ -422,6 +462,7 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         if not allows(ctx,guid):
             continue
         p = _stored(ctx, guid)
+        built_from = _version(ctx, guid)  # read with p (no await between): what p is
         why = _held(ctx, p)
         if why is not None:
             if why in HELD:  # her kind's text is never rendered plainly, nor without its phrase
@@ -483,11 +524,16 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
             _discard(ctx,guid,set_no)
             continue
         if ctx.commit(policy.stage, unit, _ready(ctx, guid, set_no, made, lust, varied,
-                                                 frozenset(dropped))):
+                                                 frozenset(dropped), built_from)):
             tally["ready"] += 1
             log("selfies_set_ready", night=ctx.night, guid=guid, set=set_no,
                 seconds=round(time.monotonic() - began, 1), tries=sum(c.tries for c in made),
                 **({"varied": True} if varied else {}))
+            try:  # the set is saved ready: a failed check never ends the stage
+                _stale(ctx, cfg, p, guid, set_no, built_from)
+            except Exception as e:
+                log("selfies_stale_check_failed", level=logging.WARNING, night=ctx.night,
+                    guid=guid, set=set_no, error=type(e).__name__)
         else:
             tally["failed"] += 1
     return True

@@ -3,7 +3,8 @@ connection that is closed again). The mind writes these rows; the console only r
 
 - cast_member (the roster) and persona_core: each stored persona (personas.io.save_persona),
   its version (1, then one more per write that changed it), when it was saved and its source:
-  seed (`personas seed`), owner (`personas import`, `rebalance-stances`, `fix-typing`) or
+  seed (`personas seed`), owner (`personas import`, `rebalance-stances`, `fix-typing`, his
+  weight and bust edit in the Looks panel) or
   variety (`selfies variety`), or generated, which three writers share: `personas generate`; the night's looks pass, which
   commits the persona together with its own night_step unit (LOOKS_STAGE, <guid>); and a
   stance move (nightly.attraction, live or at night), saved at the instant of its stance_band
@@ -17,7 +18,8 @@ connection that is closed again). The mind writes these rows; the console only r
 - memory: active memories per owner and kind, all and those stored in the last RECENT_DAYS
   days (counts only, never their text);
 - persona_ledger (nightly.store.ledger_add): the night's growth (note_added, note_dropped,
-  note_rolled_back), its critic's drift_flag rows, stance moves (stance_band) and undo rows.
+  note_rolled_back), its critic's drift_flag rows, stance moves (stance_band), his weight and
+  bust edits (looks, personas.looks_edit) and undo rows.
   An open drift flag is one from the last RECENT_DAYS days that is neither undone nor resolved
   in review_queue, as the critic counts them;
 - trait_state (nightly.motives): the Big Five the night sampled for each member around their
@@ -33,7 +35,8 @@ import json
 from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's stage
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
-from leeroy_mind.personas.schema import persona_from_dict, persona_to_dict
+from leeroy_mind.personas.looks_edit import WEIGHT_MAX, WEIGHT_MIN
+from leeroy_mind.personas.schema import BUSTS, persona_from_dict, persona_to_dict
 from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
 
 from .feed import guild_mood, human_guid
@@ -44,6 +47,8 @@ TIES = 3            # ties in the roster
 DETAIL_TIES = 40    # ties in a member's detail
 LEDGER = 25         # ledger rows in a member's detail
 LOOKS_S = 60.0      # a looks pass saves its persona this soon after its unit's time, at most
+# what his weight and bust edit accepts (personas.looks_edit, the looks op): the Looks panel's form
+LOOKS_LIMITS = {"weight_kg": [WEIGHT_MIN, WEIGHT_MAX], "busts": list(BUSTS)}
 TABLES = ("cast_member", "persona_core", "pad_mood", "guild_mood", "relationship", "memory",
           "persona_ledger", "trait_state")
 _SCORED = ("affinity != 0 OR trust != 0 OR respect != 0 OR attraction != 0 "
@@ -300,7 +305,8 @@ def member_view(conn, guid: int, *, now: float, outreach_enabled=False,
                                         (guid, LEDGER))]
     result = {"human": v["human"], "names": v["names"], "missing": v["missing"],
             "recent_days": RECENT_DAYS, "member": member,
-            "card": _card(p) if p is not None else None, "memories": kinds, "ledger": ledger}
+            "card": _card(p) if p is not None else None, "memories": kinds, "ledger": ledger,
+            "looks_limits": LOOKS_LIMITS}
     if outreach_enabled:
         from .outreachview import member_view as outreach_view
         result['outreach'] = outreach_view(conn, guid)

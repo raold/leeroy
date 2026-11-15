@@ -164,3 +164,123 @@ snap row keeps the cover's pick, so `photo_changed` expiry is unchanged; with no
 situation stays planned (`no_face_ref`), a guild tile leaves her out and a request falls back.
 A varied candidate offered as a photo-request fallback records its own look. Images stay square
 (`size`); full-length poses are not portrait-shaped.
+
+## Weight and bust (owner edits)
+
+The owner sets a member's weight (kg, the schema's 40-180) and, for a woman, her bust
+(`small`, `medium`, `large`, `very_large`, or not set) in the console's Personas member detail,
+under Looks. Saving goes through the running mind's `looks` control op (`POST /api/looks`,
+behind the key, Origin and `--no-control` gates, under the photo changes' lock) to
+`personas/looks_edit.py`: an owner persona version (source `owner`, so the variety pass leaves
+her looks alone), a persona ledger row of kind `looks` (migration `0050_looks_ledger.sql`) and a
+private receipt (meta `personas:looks-undo:<ledger>`). The ledger's Undo button, or
+`personas undo <id>` with the mind stopped, puts both values and the prior source back while
+they are still what the edit left. Each save or console undo queues a fresh profile set as
+"4 more" does (sets waiting for his choice are passed and stay in her gallery): a varied set for
+a woman of the lust style while `varied_sets` is on (the once-a-day rule does not apply), else an
+ordinary one. A set already queued is not doubled: it renders from the persona as it is at render
+time. With `[selfies] enabled = false` the looks save and no set is queued.
+
+**Her new figure under a light face.** Measured on the GPU (2026-11-15), her cover's face
+reference at `identity_scale` (0.6) carried her slim cover body into every set: 68 kg to 96 kg,
+medium to very large, showed no change. So the set an edit queues, or the set already queued,
+is marked (meta `selfies:set-looks-edit:<guid>:<set_no>`) and `render._set_faces` gives every
+slot of it, front views included, her cover's face at the worker's floor `MIN_SCALE` (0.3): still
+recognisably her, clearly fuller. The console says "A new set renders tonight with her new
+figure; pick one as her photo to keep it": once he picks a cover from that set, later sets hold
+that fuller cover at `identity_scale` as before.
+
+**The words.** Every profile, varied and situational prompt has the same required (priority-0)
+set after its kind and framing: who she is ("36-year-old American woman"), her body
+(`prompt.body_phrases`: her size by BMI, `prompt.size_words`, then the build's figure words with
+her bust in them, `prompt.build_words`; never a man's bust), her hair, her skin (controller
+ruling, 2026-11-15: hair and skin are never traded for body words), then her outfit and setting
+where the kind has them.
+
+| BMI | a woman | a man |
+|---|---|---|
+| below 18.5 | slender | very thin |
+| 18.5-22 | slender | lean |
+| 22-25 | (nothing) | (nothing) |
+| 25-28 | slightly chubby | slightly chubby |
+| 28-32 | chubby, thick arms | chubby, thick arms |
+| 32-36 | plus-size, heavyset, thick arms, full round face | overweight, heavyset, thick arms, full round face |
+| 36 and up | plus-size, heavyset, very full figure, full round face | very overweight, heavyset, full round face |
+
+Size words never pull against the build: a curvy, voluptuous, stocky or heavy build below BMI 25
+has no size word, an athletic one from 25 to 28 none either (muscle), and from BMI 28 a slim,
+athletic or average build's own words give way to the size (her bust, when set, stays as its own
+phrase). A woman is never said "very thin". A plain average build with no bust and no size word
+stays optional after her looks, as before. The words count at most 14 tokens (measured on the real
+tokenizers).
+
+When the required set would count more than the worker's 75 (`prompt.fit_required`, by the mind's
+own count, never below the real one), it shortens in this order (controller ruling, 2026-11-15,
+after the GPU showed that a short "voluptuous figure" and a bare "plus-size" both rendered her
+slim):
+
+1. the kind and the framing take their short forms (`prompt.SHORT`: "candid photo", "headshot",
+   "waist-up shot", "three-quarter shot, waist and hips in frame");
+2. her hair keeps its length and colour and drops its style;
+3. her skin keeps its tone, the first clause before a "," or " with " ("fair with faint
+   freckles" says "fair skin"), or with no such separator its last word ("warm brown" says
+   "brown skin");
+4. her size keeps its first two terms ("plus-size, heavyset", "chubby, thick arms");
+5. the kind, then the framing (a varied set: the framing, then the pose) yield to priority 1,
+   keeping their places.
+
+Her build (curvy, voluptuous, stocky, heavy and every other) and a set bust are never shortened;
+her hair's length and colour and her skin tone are never dropped. A prompt still too long after
+all five steps is left as it is (`prompt.over_fit` names it); none was found.
+
+Measured with the worker's `fit.py` and the real tokenizers on a copy of the 08:14 mind snapshot (145 cast
+profiles; 16 varied candidates for each of the 91 lust women, 1456):
+
+| | hair or skin lost | full build shortened | size words full / two terms | too long |
+|---|---|---|---|---|
+| main, profiles | 27 hair, 32 skin | (no size words) | | 0 |
+| main, varied | 52 skin | | | 0 |
+| no edit, profiles | 0 | 0 | 50 / 0 | 0 |
+| no edit, varied | 0 | 0 | 160 / 0 | 0 |
+| +25 kg and very large on the 91, profiles | 0 | 0 | 57 / 34 | 0 |
+| +25 kg and very large on the 91, varied | 0 | 0 | 987 / 469 | 0 |
+| BMI 38 and very large on the 91, profiles | 0 | 0 | 23 / 68 | 0 |
+| BMI 38 and very large on the 91, varied | 0 | 0 | 679 / 777 | 0 |
+
+What gives way instead: with no edit, 42 of 145 profiles and 485 of 1456 varied candidates drop
+their hair style, 3 and 33 their skin modifiers (on the live cast every one of the 74 multi-word
+skins keeps its tone: "fair", "pale", "tan", "light"). With +25 kg and a very large bust, 2 profile
+prompts lose their kind or framing phrase to the fit (17 of the varied candidates' framings or
+poses). Her face details come in the order the fit should keep them: her eye colour, then what
+tells her apart (glasses, facial hair, scars, tattoos, piercings), then the rest, before
+"looking at the camera" (`prompt.identity_first`); with no edit no profile loses glasses or
+facial hair that main keeps (29 members lose another detail, mostly an expression or posture).
+The looks pass is never asked for a bust. Negatives, the NSFW gate, the age guard and the name
+screens are unchanged.
+
+**An edit while her set renders.** A set is stamped with the persona version its prompts were
+built from, not the one in force when it is published. If her looks changed while it rendered
+(`render._stale`), a fresh looks-edit set is queued at once and renders from the persona after the
+edit; the console says her set is rendering from her previous looks and a set with her new figure
+follows it. That rendering set is marked for the light face too: a render that started chose its
+faces already, but one that fails or is cancelled (his login cancels the booth) renders again
+from her new looks under the light face. A failed check is logged
+(`selfies_stale_check_failed guid= set= error=`) and the stage goes on.
+
+**Undo** puts back both values and the persona's source, and removes the `persona_looks_protection`
+row the edit added (or puts back the one it replaced), unless a later owner change of her looks
+holds it.
+
+**What else an edit touches.** Her looks hash changes, so her stocked situational photos (made at
+night on the GPU) expire `looks_changed` and the gallery hides them; an undo restores the hash but
+not the expired photos (nothing is deleted). A very large bust with the lust swimwear outfits,
+whose negatives let cleavage through, makes the NSFW gate refuse more candidates; a refused
+candidate retries its seeds (`slot.TRIES`), so such a set costs more GPU time and can be refused.
+
+Note for the first night after release: every non-average build moves to right after who she is,
+and hair and skin become required in every profile and situational prompt (situational body words
+move from priority 1 to 0). A member with a full build above BMI 25, or a slim or average build
+outside 22-25 (athletic outside 22-28), gets a size word. Of the 91 lust women (measured
+2026-11-15: curvy median BMI 21.3, range 19.6-24.8; voluptuous median 23.9, range 20.5-28.7), 81
+get no size word; 9 voluptuous members get "slightly chubby" and one "chubby, thick arms". Raise a
+weight in the Looks panel to make a body read heavier; that set renders under the light face.

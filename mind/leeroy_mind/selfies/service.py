@@ -54,6 +54,43 @@ _NOT_REMOVED = (", but the old photo file could not be removed yet; the mind rem
                 "next start.")
 
 
+def queue_looks_set(store, cfg: SelfieCfg, p, guid: int, *, human: int, now: float,
+                    day: str, data_dir) -> tuple[int, bool, str]:
+    """The set that renders her new figure after a weight or bust edit: (its number, varied,
+    state), state "new" (queued now), "queued" (one was queued already: it renders from the
+    persona as it is then) or "rendering" (the queued one has started: its <set>.part staging
+    folder exists, so it renders her previous looks; render._stale queues a fresh set once it
+    is ready). A new set is queued as his "4 more" queues one (store.queue_more: the sets
+    waiting for his choice passed, kept in her gallery), a varied set for a woman of the lust
+    style while `varied_sets` is on (varied.queue, without its once-a-day rule). The set is
+    marked (store.LOOKS_EDIT_SET_KEY) to hold her cover's face lightly, so her new figure shows,
+    in every state: a rendering set that fails or is cancelled renders again with the mark;
+    once he picks one as her photo, later sets carry that fuller cover as usual."""
+    from .store import LOOKS_EDIT_SET_KEY
+    with store.transaction():
+        row = store.conn.execute("SELECT set_no FROM selfie_set WHERE guid=? AND "
+                                 "status='queued'", (guid,)).fetchone()
+    if row is not None:
+        # marked even while it renders: a render that started chose its faces already, but one
+        # that fails or is cancelled (his login cancels the booth) renders again from the new
+        # looks and must take the light face then (controller ruling, 2026-11-15)
+        store.set_meta(LOOKS_EDIT_SET_KEY.format(guid=guid, set_no=row[0]), "1")
+        rendering = files.staging_dir(data_dir, guid, row[0]).exists()
+        return row[0], False, "rendering" if rendering else "queued"
+    set_no, varied_set = None, False
+    if (getattr(cfg, "varied_sets", False) and suggestive(p)
+            and renderable(p, chosen_style(store, p) or "plain") is None):
+        from . import varied
+        report = varied.queue(store, human=human, now=now, day=day, go=True, guids=[guid],
+                              daily=False)
+        if report["queued"]:
+            set_no, varied_set = report["queued"][0]["set"], True
+    if set_no is None:
+        set_no = queue_more(store, guid, now=now).set_no
+    store.set_meta(LOOKS_EDIT_SET_KEY.format(guid=guid, set_no=set_no), "1")
+    return set_no, varied_set, "new"
+
+
 class SelfieService:
     def __init__(self, app, cfg: SelfieCfg):
         self.app = app
@@ -127,6 +164,43 @@ class SelfieService:
         said = ("Four more are queued; they wait until her photo kind is chosen again for her "
                 "photo style." if why in HELD else "Four more will be rendered tonight.")
         return {"ok": True, "set": queued.set_no, "guid": guid, "message": said}
+
+    def queue_for_looks(self, guid: int) -> tuple[int | None, str]:
+        """A fresh profile set after his weight or bust edit (personas.looks_edit): queue_looks_set
+        below. (the set's number or None, the words for the console)."""
+        app = self.app
+        if not self.cfg.enabled:
+            return None, "Rendering is off in mind.toml ([selfies] enabled = false), so no new set."
+        p = app.personas.base(guid)
+        style = chosen_style(app.store, p) if p is not None else "plain"
+        why = renderable(p, style)
+        if why is not None and why not in HELD:
+            return None, f"No new set yet ({why}): the night renders one once the looks and photo kind are in."
+        with app.store.transaction():
+            waiting = app.store.conn.execute(
+                "SELECT count(*) FROM selfie_set WHERE guid=? AND status='ready' AND "
+                "decided IS NULL", (guid,)).fetchone()[0]
+        set_no, varied, state = queue_looks_set(
+            app.store, self.cfg, p, guid, human=app.human_guid, now=app.clock.now(),
+            day=app.clock.local().date().isoformat(), data_dir=app.data_dir)
+        their = "her" if p.identity.player_gender == "female" else "his"
+        keep = f"with {their} new figure; pick one as {their} photo to keep it."
+        if state == "rendering":
+            return set_no, (f"{their.capitalize()} set is rendering now from {their} previous "
+                            f"looks; a set with {their} new figure follows it. Pick one as "
+                            f"{their} photo to keep it.")
+        if state == "queued":
+            return set_no, f"A set is already queued: it renders tonight {keep}"
+        kind_words = "A new varied set" if varied else "A new set"
+        if why in HELD:
+            said = (f"{kind_words} is queued; it waits until {their} photo kind is chosen again "
+                    f"for {their} photo style.")
+        else:
+            when = "tonight" + (" or at the photo booth's next pass" if self.cfg.booth else "")
+            said = f"{kind_words} renders {when} {keep}"
+        if waiting:
+            said += f" The set waiting for your choice stays in {their} gallery."
+        return set_no, said
 
     def _vary(self, go: bool, guids=None) -> dict:
         from . import varied

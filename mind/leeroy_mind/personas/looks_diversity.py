@@ -4,14 +4,14 @@ Ancestry is an authored fictional descriptor in face[0], not inferred from a rea
 person. Hair texture is carried in hair_style. Existing appearance schema suffices.
 See looks_diversity.md for the coarse regional priors and their limits.
 """
-from dataclasses import asdict, replace
+from dataclasses import replace
 import math
 import random
 import sqlite3
 import tomllib
 from pathlib import Path
 
-from leeroy_mind.personas.schema import Appearance
+from leeroy_mind.personas.schema import Appearance, appearance_dict
 from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.personas.stances import is_woman
 from leeroy_mind.selfies.style import AGE_RE
@@ -110,14 +110,13 @@ def safe(p, appearance, *, ident, names=()):
     from leeroy_mind.selfies.kind import ERA_RE, EXPLICIT_RE, WEAR_RE
     if p.identity.age < MIN_LOOK_AGE:
         return False
-    text = " ".join(str(v) if not isinstance(v, tuple) else " ".join(v)
-                    for v in asdict(appearance).values())
+    text = " ".join(str(v) if not isinstance(v, list) else " ".join(v)
+                    for v in appearance_dict(appearance).values())
     if any(rx.search(text) for rx in (AGE_RE, LIKENESS_RE, ERA_RE, EXPLICIT_RE, WEAR_RE)):
         return False
     if names_real_name(text, ident) or any(has_word(text, n) for n in names if n):
         return False
-    data = dict(appearance=asdict(appearance), disclosures=[], drawn_to=[], turned_off_by=[])
-    data["appearance"]["face"] = list(appearance.face)
+    data = dict(appearance=appearance_dict(appearance), disclosures=[], drawn_to=[], turned_off_by=[])
     return not screen_enrichment(p, data, ident=ident, member_names=names)
 
 

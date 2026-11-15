@@ -14,6 +14,7 @@ from leeroy_mind.personas.schema import Appearance, ProfilePhoto
 from leeroy_mind.selfies.prompt import (LUST_HELD, LUST_NEGATIVE, NEGATIVE, PromptSpec,
                                         BUILD_WORDS, build_prompt, renderable)
 from leeroy_mind.selfies.style import LUST, PLAIN, suggestive
+from leeroy_mind.selfies.tokens import estimate
 from nightly.test_night_enrich import APPEARANCE
 
 PHOTO = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
@@ -62,8 +63,9 @@ def test_a_headshot_has_no_phone_look_and_a_snapshot_does_not_look_at_the_camera
 
 def test_hair_skin_eyes_and_face_details_come_from_the_looks():
     ph = build_prompt(woman()).phrases
-    assert ("shoulder-length dark brown hair, tucked behind one ear", 1) in ph
-    assert ("light olive skin", 1) in ph
+    # hair and skin are required, never traded for body words (controller ruling, 2026-11-15)
+    assert ("shoulder-length dark brown hair, tucked behind one ear", 0) in ph
+    assert ("light olive skin", 0) in ph
     assert ("hazel eyes", 2) in ph
     assert ("freckles", 2) in ph and ("thin glasses", 2) in ph
     assert ("average build", 1) in ph
@@ -71,12 +73,12 @@ def test_hair_skin_eyes_and_face_details_come_from_the_looks():
     assert ("on the deck of a small boat", 2) in ph
     assert ("squinting into the wind", 3) in ph
     shaved = build_prompt(man(appearance=replace(APPEARANCE, hair_length="shaved"))).phrases
-    assert ("shaved head", 1) in shaved
+    assert ("shaved head", 0) in shaved
     assert not any("shaved head," in t for t, _ in shaved)
     for length, word in [("short", "short"), ("chin", "chin-length"), ("long", "long"),
                          ("very_long", "very long")]:
         ph = build_prompt(woman(appearance=replace(APPEARANCE, hair_length=length))).phrases
-        assert (f"{word} dark brown hair, tucked behind one ear", 1) in ph
+        assert (f"{word} dark brown hair, tucked behind one ear", 0) in ph
 
 
 def test_no_name_reaches_a_prompt():
@@ -192,7 +194,9 @@ def test_the_longest_lust_kind_keeps_outfit_and_setting_through_the_workers_fit(
         photo = ProfilePhoto(kind_, framing, setting, outfit, "an over-the-shoulder glance")
         spec = build_prompt(woman(stance="lust", age=25, appearance=big, photo=photo),
                             kind_style=LUST)
-        kept, dropped = fit(spec.phrases, _tokens, 75)
+        # the mind's own count (tokens.estimate, never below CLIP's): with her hair and skin now
+        # required (2026-11-15) the coarser _tokens over-count no longer fits this extreme look
+        kept, dropped = fit(spec.phrases, estimate, 75)
         assert f"wearing {outfit}, {setting}" in kept and outfit not in " ".join(dropped)
         assert setting not in " ".join(dropped)
         assert any("f" * 40 == d for d in dropped)        # the long looks went, not the kind
@@ -235,7 +239,7 @@ def test_empty_free_text_leaves_no_blank_phrase():
     spec = build_prompt(woman(appearance=replace(APPEARANCE, hair_style="", face=()),
                               photo={**PHOTO, "setting": "", "outfit": " ", "expression": ""}))
     assert all(t.strip() for t, _ in spec.phrases)
-    assert ("shoulder-length dark brown hair", 1) in spec.phrases
+    assert ("shoulder-length dark brown hair", 0) in spec.phrases
 
 
 def test_a_lone_surrogate_never_reaches_the_prompt():

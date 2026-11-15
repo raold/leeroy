@@ -7,22 +7,26 @@ import { memberOutreachModel } from "./outreachmodel.mjs";
 import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { godmodePanel, renderStrings } from "./godmode.mjs";
+import { looksEditor, looksUndoButton } from "./looks.mjs";
+import { bustText, canUndoLooks } from "./looksmodel.mjs";
 import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
 import { registerTab, showTab } from "./tabs.mjs";
 import { CLASSES, bioText, moodText, moodTitle, photoKindText, signed, tileState, when, youText, youTitle } from "./words.mjs";
 
-// -- the personas tab: mind.db only, and read-only: nothing here can change a persona -----------
-// (its dials are the tuning's overlay, below; its profile photos are selfies.mjs's)
+// -- the personas tab: mind.db only, and read-only: nothing here writes a persona itself --------
+// (its dials are the tuning's overlay, below; its profile photos are selfies.mjs's; a weight and
+// bust edit is looks.mjs's, written by the running mind's looks op)
 
 var PERSONAS_MS = 30000;  // as the Guild tab: the live mind writes this database meanwhile
 var TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"];
-var BY = { seed: "the seeding", owner: "you (an import or a personas command)", generator: "the generator", variety: "variety pass",
+var BY = { seed: "the seeding", owner: "you (an import, a personas command or the Looks panel)", generator: "the generator", variety: "variety pass",
            night: "the night's looks pass", photo: "the night's photo-kind pass", stance: "a stance move",
            undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
-                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", undo: "undo" };
+                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "weight and bust",
+                     undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
 function worldMode() { return $("p-world-filter").checked; }
 $("p-world-filter").addEventListener("change", function () {
@@ -293,10 +297,12 @@ function renderMember(j) {
                               .map(function (f) { return [f.k.toLowerCase(), f.v]; }) : []);
   var a = c && c.appearance ? obj(c.appearance) : null;
   kv($("p-looks"), a ? [["height", a.height_cm + " cm"], ["build", a.build], ["weight", a.weight_kg + " kg"],
+                        ...(c.identity && c.identity.player_gender === "female" ? [["bust", bustText(a.bust)]] : []),
                         ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],
                         ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc],
                         ["photo kind", c.photo ? photoKindText(c.photo) : "none yet: the night's photo-kind pass gives one"]]
                      : [["looks", c ? "none yet: the night's looks pass gives them" : "-"]]);
+  looksEditor($("p-looks-edit"), j, m.guid, tuneLive(), tuneWhy(), pollMember);
   var kinds = $("p-kinds"), mem = j.memories;
   setText("p-kindhead", "in " + days + " d");
   clear(kinds);
@@ -347,7 +353,9 @@ function renderMember(j) {
   var box = $("p-ledger");
   clear(box);
   arr(j.ledger).forEach(function (r) {
-    box.appendChild(el("div", "r", when(r.ts) + "  " + (LEDGER_KINDS[r.kind] || str(r.kind)) + ": " + str(r.text) + (r.undone ? "  (undone)" : "")));
+    var row = el("div", "r", when(r.ts) + "  " + (LEDGER_KINDS[r.kind] || str(r.kind)) + ": " + str(r.text) + (r.undone ? "  (undone)" : ""));
+    if (canUndoLooks(r)) { row.appendChild(looksUndoButton(r, m.guid, tuneLive(), tuneWhy(), pollMember)); }
+    box.appendChild(row);
   });
   if (!arr(j.ledger).length) { box.appendChild(el("div", "muted", j.ledger ? "No ledger rows yet." : "Unavailable in this mind.db.")); }
   renderStrings(j, m.guid, tuneLive(), tuneWhy());
@@ -657,6 +665,7 @@ function pollTuning() {
 whereText();
 
 on("string", function () { if (S.tab === "personas") { pollMember(); } });
+on("looks", function (d) { if (S.tab === "personas" && obj(d).guid === pick) { pollMember(); } });
 on("tuning", function (d) {
   emit("note", "dials: change #" + num(d.change) + " saved");
   if (S.tab === "personas") { pollTuning(); }

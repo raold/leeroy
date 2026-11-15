@@ -8,7 +8,7 @@ import pytest
 from conftest import run
 from leeroy_mind.nightly.enrich import _bare
 from leeroy_mind.personas.io import load_persona, save_persona
-from leeroy_mind.personas.schema import ProfilePhoto
+from leeroy_mind.personas.schema import ProfilePhoto, appearance_dict
 from leeroy_mind.selfies import cli, files, kind, scenes, variety
 from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.store import current, pick, queued_sets
@@ -57,9 +57,9 @@ def test_go_snapshots_before_writing_and_records_prior_fields(source,capsys):
     snaps = list((root/"snapshots").glob("mind-pre-variety-*.db"))
     assert len(snaps) == 1
     with sqlite3.connect(snaps[0]) as conn:
-        assert json.loads(conn.execute("SELECT json FROM persona_core WHERE guid=102").fetchone()[0])["appearance"] == json.loads(json.dumps(asdict(p.appearance)))
+        assert json.loads(conn.execute("SELECT json FROM persona_core WHERE guid=102").fetchone()[0])["appearance"] == json.loads(json.dumps(appearance_dict(p.appearance)))
     receipt = json.loads(store.get_meta("selfies:variety-prior:102"))
-    assert receipt["appearance"] == json.loads(json.dumps(asdict(p.appearance)))
+    assert receipt["appearance"] == json.loads(json.dumps(appearance_dict(p.appearance)))
     assert receipt["photo"] == asdict(p.photo)
 
 

@@ -290,12 +290,12 @@ def _members(store, human: int) -> tuple[dict[int, Persona], list[int]]:
     return personas, unreadable
 
 
-def _skip(conn, store, p: Persona, day: str) -> str | None:
+def _skip(conn, store, p: Persona, day: str, daily: bool = True) -> str | None:
     if p.appearance is None:
         return "no_looks"
     if renderable(p, kind.chosen_style(store, p) or PLAIN) is not None:
         return "not_renderable"
-    if store.get_meta(DAY_KEY.format(guid=p.guid)) == day:
+    if daily and store.get_meta(DAY_KEY.format(guid=p.guid)) == day:
         return "already_today"
     if conn.execute("SELECT 1 FROM selfie_set WHERE guid=? AND status='queued'",
                     (p.guid,)).fetchone() is not None:
@@ -315,13 +315,14 @@ def _waiting(conn, guid: int) -> int:
 
 
 def queue(store, *, human: int, now: float, day: str, go: bool, stance: str = "lust",
-          guids=None) -> dict:
+          guids=None, daily: bool = True) -> dict:
     """Plan (go False, read-only) or queue (go True, one transaction) a varied set for every
     cast member of `stance`'s style (only "lust": style.suggestive), or only those of `guids`,
-    who has none queued, none queued today (`day`, the local date) and a photo kind the night can
-    render. The report: per member the set, its looks as codes and how many sets waiting for his
-    choice it passes; the skipped by code (a named guid not in the cast: not_cast); how many
-    were not of the stance."""
+    who has none queued, none queued today (`day`, the local date; not asked with `daily` False:
+    his weight or bust edit, personas.looks_edit) and a photo kind the night can render. The
+    report: per member the set, its looks as codes and how many sets waiting for his choice it
+    passes; the skipped by code (a named guid not in the cast: not_cast); how many were not of
+    the stance."""
     if stance not in STANCES:
         raise ValueError("stance_unsupported")
     wanted = None if guids is None else set(guids)
@@ -343,7 +344,7 @@ def queue(store, *, human: int, now: float, day: str, go: bool, stance: str = "l
                 report["not_stance"] += 1
                 continue
             report["members"] += 1
-            why = _skip(conn, store, p, day)
+            why = _skip(conn, store, p, day, daily)
             set_no = _next_set(conn, guid)
             looks = None if why else compose(p, f"{guid}:{set_no}:{versions.get(guid)}")
             if why is None and looks is None:

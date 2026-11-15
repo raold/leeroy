@@ -27,8 +27,8 @@ from leeroy_mind.nightly.ground import screen_text
 from leeroy_mind.nightly.llm import ReflectionError, schema, system_prompt
 from leeroy_mind.personas.card import card_race_class
 from leeroy_mind.personas.io import load_persona, save_persona
-from leeroy_mind.personas.schema import (Appearance, Disclosure, Persona, persona_json_schema,
-                                         persona_to_dict, validate_persona)
+from leeroy_mind.personas.schema import (OWNER_LOOKS, Appearance, Disclosure, Persona,
+                                         persona_json_schema, persona_to_dict, validate_persona)
 from leeroy_mind.personas.screens import check_romance, has_word, names_real_name
 from leeroy_mind.personas.stances import is_woman
 from leeroy_mind.storage.store import Store
@@ -63,10 +63,13 @@ LIKENESS_RE = re.compile(
     r"\b(looks? like|resembl\w*|look-?alike|doppelg[aä]nger|spitting image|celebrity|famous)\b",
     re.I)
 
-# The reply: the persona schema's own bounds for the four fields, and three or four layers.
+# The reply: the persona schema's own bounds for the four fields, and three or four layers. The
+# looks only the owner sets (OWNER_LOOKS: the bust) are not asked for.
 _FIELDS = persona_json_schema(enrichment=True)["properties"]
+_LOOKS = _FIELDS["appearance"]["anyOf"][0]
 ENRICH_SCHEMA = schema("enrich", {
-    "appearance": _FIELDS["appearance"]["anyOf"][0],
+    "appearance": {**_LOOKS, "properties": {k: v for k, v in _LOOKS["properties"].items()
+                                            if k not in OWNER_LOOKS}},
     "drawn_to": _FIELDS["romance"]["properties"]["drawn_to"],
     "turned_off_by": _FIELDS["romance"]["properties"]["turned_off_by"],
     "disclosures": {**_FIELDS["disclosures"], "minItems": 3},
@@ -107,8 +110,8 @@ def _with(p: Persona, appearance: Appearance | None, disclosures: tuple[Disclosu
 
 def merge(p: Persona, data: dict) -> Persona:
     """`p` with a reply's appearance, layers and tastes; a man's tastes are (), whatever the
-    model wrote."""
-    looks = data["appearance"]
+    model wrote. Looks only the owner sets (OWNER_LOOKS) are never taken from a reply."""
+    looks = {k: v for k, v in data["appearance"].items() if k not in OWNER_LOOKS}
     return _with(p, Appearance(**{**looks, "face": tuple(looks["face"])}),
                  tuple(Disclosure(d["depth"], d["text"]) for d in data["disclosures"]),
                  tuple(data["drawn_to"]), tuple(data["turned_off_by"]))
