@@ -92,7 +92,7 @@ from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
                                      ordered, topic_for)
 from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
-from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, strip as strip_phrases
+from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hint, strip as strip_phrases
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -268,6 +268,9 @@ REAL_NAME_GAP_S = 600.0  # guild-wide: one inner-circle member is offered his re
 MAX_EMOTES = 2  # the emote commands a line may carry out
 SHORT_ANSWER_WORDS = 3  # an owed answer cut short of the sentences that slipped, at least
 ANSWERED_LINES = 256  # his lines whose answers are kept
+# A common stock phrase an answer owed to him leaned on is no rewrite then: it is named on her
+# next turn instead (guards/phrases.py Found.pending), within this long
+PHRASE_PENDING_S = 12 * 3600.0
 TURNS_KEPT = 256  # the turns whose lines said are kept, for a turn that follows one (I7)
 WORDS_KEPT = 4096  # said lines whose words before styling are kept for extraction
 # Lines the typing never adds a mark to: a wipe's (rehearsal 2's "coros first to go again.
@@ -487,6 +490,10 @@ class TurnMeta:
     # there (_spend), so the conversation's next beats follow the bring-in rules
     beat_conversation: str = ""
     beat_use: str | None = None
+    # the common stock phrases the reviewed draft leaned on while owed to him (no rewrite: her
+    # next turn is told), and those this turn's prompt was told about (phrase_hint_pending)
+    phrase_pending: tuple[str, ...] = field(default=(), repr=False)
+    phrase_hint: tuple[str, ...] = field(default=(), repr=False)
     # [bakeoff] capture: the model calls this turn made since its last recorded line (the sent
     # words pick theirs), and the row the generation's first line wrote (bakeoff/capture.py);
     # empty and None while capture is off
@@ -612,6 +619,12 @@ class Composed:
     # the turn answers his line and it asks her something (asking.asks): the beat's answering
     # wants lead (beat.wants_for's `asking`)
     asking: bool = False
+
+
+def _pending_of(verdicts) -> tuple[str, ...]:
+    """The common stock phrases the reviewed lines leaned on while owed to him (Verdict.pending),
+    once each."""
+    return tuple(dict.fromkeys(x for v in verdicts for x in getattr(v, "pending", ())))
 
 
 def _hinted(composed: "Composed", hint: str) -> "Composed":
@@ -740,6 +753,9 @@ class Pipeline:
         self._greet_lines: set[int] = set()  # the chat lines greetings of his login said
         # his line -> the lines said as answers to it (_earlier_answers), the latest lines only
         self._answer_lines: dict[int, set[int]] = {}
+        # a member's common stock phrases her last owed answer leaned on, for her next turn's
+        # prompt (phrase_hint_pending): (when, the stock list's own words)
+        self._phrase_pending: dict[int, tuple[float, tuple[str, ...]]] = {}
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
@@ -1755,6 +1771,25 @@ class Pipeline:
             entries = []
         return beats.offerable(list(zip(keys, c.beat_items)), entries)
 
+    def _pending_phrases(self, guid: int, now: float) -> tuple[str, ...]:
+        """Her common stock phrases waiting to be named on her next turn, within
+        PHRASE_PENDING_S."""
+        at, named = self._phrase_pending.get(guid, (0.0, ()))
+        if named and now - at > PHRASE_PENDING_S:
+            self._phrase_pending.pop(guid, None)
+            return ()
+        return named
+
+    def _settle_phrase_hint(self, turn: Turn, meta: TurnMeta, now: float) -> None:
+        """Her turn is said: the phrases its prompt named are done with; those her owed answer
+        leaned on (a common stock entry, no rewrite) wait for her next turn
+        (`phrase_hint_pending`, a count only)."""
+        if meta.phrase_hint and self._phrase_pending.get(turn.speaker, (0.0, ()))[1] == meta.phrase_hint:
+            self._phrase_pending.pop(turn.speaker, None)
+        if meta.phrase_pending:
+            self._phrase_pending[turn.speaker] = (now, meta.phrase_pending)
+            log.info("phrase_hint_pending guid=%d n=%d", turn.speaker, len(meta.phrase_pending))
+
     def _beat_rng(self, turn: Turn, meta: TurnMeta, now: float) -> random.Random:
         """The turn's own seeded draw for the order of the beat's items (life.seed.seeded): the
         night, the member, the minute and the turn."""
@@ -2012,6 +2047,11 @@ class Pipeline:
         his = his if to_human else ""
         if his and is_question(his) and not before and not meta.pushback_line:
             after = question_first(after, human.forms[2])
+        if live and not preview:  # her last owed answer's common stock phrases, named now
+            named = self._pending_phrases(turn.speaker, now)
+            if named:
+                meta.phrase_hint = named
+                after = " ".join(x for x in (after, phrase_hint(named)) if x)
         # [talk] situation (core plan Task 8): the hard rules, Right now by the instruction, and
         # every situation template's length from here (situation_length)
         situation = getattr(self.cfg.talk, "situation", False) is True
@@ -2657,6 +2697,7 @@ class Pipeline:
                 if self.scheduler.expired(self._deadline(turn, meta)):
                     return self._drop(turn, meta, "expired")
             keep(lines,verdicts)
+            meta.phrase_pending = _pending_of(verdicts)
             for verdict in verdicts:
                 meta.guard_codes = verdict.codes
                 if verdict.action == "send":
@@ -2760,7 +2801,7 @@ class Pipeline:
         lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
         if not lines:
             return None
-        codes = []
+        codes, verdicts = [], []
         for line in lines:
             verdict = await self.live_review.check(turn, meta, line.plain)
             if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
@@ -2768,7 +2809,9 @@ class Pipeline:
             if set(verdict.codes) & HARD_CODES:
                 return None
             codes.extend(verdict.codes)
+            verdicts.append(verdict)
         meta.guard_codes = tuple(dict.fromkeys(codes))
+        meta.phrase_pending = _pending_of(verdicts)
         return lines
 
     async def _without_phrases(self, turn, meta, p, lines, verdicts, owed, *, close, spoken):
@@ -2793,6 +2836,7 @@ class Pipeline:
                 if not owed and self.scheduler.expired(self._deadline(turn, meta)):
                     return self._drop(turn, meta, "expired")
             if kept and all(v.action == "send" for v in checked):
+                meta.phrase_pending = _pending_of(checked)
                 return kept
         meta.guard_codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
         if owed:
@@ -4054,6 +4098,7 @@ class Pipeline:
         if meta.memory_ids:
             self.store.touch_memories(meta.memory_ids, now)
         self._record_beat(turn, meta, now)
+        self._settle_phrase_hint(turn, meta, now)
 
     def _drop(self, turn: Turn, meta: TurnMeta, reason: str, memory_ids=(), *, text: str = "",
               at: float | None = None) -> list[str]:

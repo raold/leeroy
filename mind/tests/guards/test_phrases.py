@@ -452,3 +452,58 @@ def test_the_subject_folds_simple_inflections():
     assert not phrases._same_word('run', 'running')  # under four letters: only itself
     assert phrases._topic(('in', 'norwegian', 'waffles'), frozenset({'norway', 'waffle'}))
     assert not phrases._topic(('norwegian', 'salmon'), frozenset({'norway'}))
+
+
+# -- slop and common stock entries (controller ruling, 2026-11-16) -------------------------------
+# A "!" line is slop: over its ration it is a rewrite on every turn. Any other line is common: a
+# rewrite only on a turn not owed to him; on an owed answer it is no code, only `pending`, named
+# on her next turn. Each on a guild line, his whisper and his DM, owed and not.
+
+def test_the_list_marks_its_slop():
+    names = phrases.slop()
+    assert {'menace', 'you absolute tease', 'proper mental', 'chaos gremlin', 'the audacity',
+            'i cant even', 'living for this', 'shivers down'} <= names
+    assert not {'sitting here', 'every single', 'at least', 'staring at', 'i swear'} & names
+    assert dict(phrases.stock())['proper mental'] == ((True, ('proper', 'mental')),)
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+@pytest.mark.parametrize('owed', [False, True])
+def test_a_common_entry_waits_for_her_next_turn_only_when_owed(store, channel, her_to, his_to,
+                                                               mine, owed):
+    _hers(store, 'just sitting here with tea', 'party', 0, NOW - 7200)  # hers, in 72 h
+    result = found(store, draft('sitting here waiting for the raid', real_answer_due=owed, **mine))
+    if owed:
+        assert result.codes == () and result.pending == ('sitting here',)
+    else:
+        assert 'stock_member' in result.codes and result.pending == ()
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+@pytest.mark.parametrize('owed', [False, True])
+def test_slop_is_a_rewrite_owed_or_not(store, channel, her_to, his_to, mine, owed):
+    _hers(store, 'that boss is a menace', 'party', 0, NOW - 7200)
+    result = found(store, draft('you menace, eight it is', real_answer_due=owed, **mine))
+    assert 'stock_member' in result.codes and result.pending == ()
+
+
+@pytest.mark.parametrize('owed', [False, True])
+def test_the_casts_common_phrase_waits_too_on_his_answer(store, owed):
+    for guid in (102, 103, 104):
+        put(store, 'im sitting here bored', guid=guid, ts=NOW - 3600, channel='party')
+    result = found(store, draft('im sitting here with soup', channel='whisper', to_guid=1,
+                                real_answer_due=owed))
+    if owed:
+        assert result.codes == () and result.pending == ('sitting here',)
+    else:
+        assert {'phrase_cast', 'stock_cast'} <= set(result.codes)
+
+
+def test_a_draft_with_both_waits_on_the_common_and_rewrites_the_slop(store):
+    _hers(store, 'just sitting here', 'party', 0, NOW - 7200)
+    _hers(store, 'what a menace', 'party', 0, NOW - 7000)
+    result = found(store, draft('sitting here, you menace', channel='whisper', to_guid=1,
+                                real_answer_due=True))
+    assert result.codes == ('stock_member',) and result.pending == ('sitting here',)
+    assert 'menace' in ' '.join(result.phrases)
+

@@ -608,4 +608,5 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         scores.append(Score('missing_sources', len(reader.missing)))
     reaction = '👍' if parent and parent.text.rstrip().endswith('?') else '😄' if set(words(draft.text)) & {'lol','haha','hehe'} else '👍'
     return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)),
-                   (server_reaction or reaction) if action == 'react' else None, cooled.phrases)
+                   (server_reaction or reaction) if action == 'react' else None, cooled.phrases,
+                   cooled.pending)

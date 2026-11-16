@@ -321,3 +321,22 @@ def test_deleted_discord_parent_during_embedding_cannot_send(rig, monkeypatch):
     sent, _ = speak(rig, turn("discord:general"), TurnMeta("deleted", discord=DiscordTarget(parent, None)))
     assert sent == [] and not rig.sent.log
     assert not rig.store.conn.execute("SELECT 1 FROM discord_message WHERE origin='mind'").fetchone()
+
+
+def test_an_owed_answers_common_phrase_is_named_on_her_next_turn(rig, monkeypatch, caplog):
+    """Controller ruling 2026-11-16: a common stock phrase on an answer owed to him costs no
+    rewrite (no extra model call); her next turn's prompt names it once, then it is done."""
+    pending = iter([("sitting here",), (), ()])
+    def review(stores, draft):
+        return Verdict("send", pending=next(pending))
+    monkeypatch.setattr(live, "review", review)
+    rig.script("on my way now", "see you there", "sounds good")
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        sent, _ = speak(rig, turn("whisper"), TurnMeta("owed", why="reply:named", answers_human=True))
+    assert sent and len(rig.chat_calls()) == 1  # no rewrite
+    assert "phrase_hint_pending guid=101 n=1" in caplog.text and "sitting here" not in caplog.text
+    speak(rig, turn("guild"), TurnMeta("next", why="reply:named", answers_human=True))
+    assert "Don't say 'sitting here' again; say it your own way or not at all." in rig.last_user()
+    speak(rig, turn("guild"), TurnMeta("after", why="reply:named", answers_human=True))
+    assert "sitting here" not in rig.last_user()
+

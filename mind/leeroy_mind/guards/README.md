@@ -220,6 +220,20 @@ back), since the cast saying it is what the stock ration is for.
 `stock_phrases.txt` holds the curated stock roleplay and AI phrases; its header says how to
 extend it ("^" anchors one to a clause opening: `^at least` is the consolation frame).
 
+Its lines come in two classes (controller ruling, 2026-11-16). A leading `!` marks **slop**
+(the roleplay epithets and tics: "you absolute ...", "menace", "the audacity", "lose my mind"):
+over its ration it is a rewrite on every turn. Every other line is **common** ("sitting here",
+"every single", "at least", "i swear"): over its ration it is a rewrite only on a turn not owed
+to him. On an answer owed to him (`Draft.real_answer_due`) a common entry, alone or inside a
+phrase the three phrase rules flag, gives no code: `Found.pending` / `Verdict.pending` carry
+the list's own words for it, the line goes out with no extra model call, and her next turn's
+instruction ends "Don't say '<entry>' again; say it your own way or not at all." (the
+pipeline's `_phrase_pending`, kept 12 hours, cleared once that turn is said; mind.log
+`phrase_hint_pending guid= n=`, a count only). `stock_cast`'s guild-wide ration is unchanged
+on turns not owed to him. Replay of his DM drafts (owed): the sandbox session's 6 first drafts
+went from 6 rewritten to 1 (a non-stock phrase), 3 leaving a hint; the 7 live drafts of
+2026-11-16 from 5 to 2 (both slop), 4 leaving a hint.
+
 Two bounded reads per draft: the names (persona, `meta human_name`, active nicknames) and
 the last 72 hours of member and owner lines (`chat_line_ts`, at most 4,000 rows). A line
 already dropped as a whole-line repeat or echo stays dropped; phrases only add a rewrite.
@@ -261,9 +275,9 @@ nouns only she repeated in one conversation: "grain density", "chicken wrap"). M
 4.7 ms. A false positive costs the one retry; if the retry keeps the phrase (a topic noun
 often is the subject), a non-owed line is then clause-cut or dropped, an owed one goes as
 written. Replay measures flag rate on what was said, not behaviour after rewrites. These
-numbers predate the subject rules of 2026-11-16, which only ever flag less; on the sandbox DM
-session the drafts the guard reviewed went from 6 of 6 rewritten to 2 of 6 (both for stock
-phrases the cast keeps using).
+numbers predate the subject rules and the slop/common classes of 2026-11-16, which only ever
+flag less; on the sandbox DM session the drafts the guard reviewed went from 6 of 6 rewritten
+to 0 of 6 (2 leaving a hint for her next turn).
 
 To replay (for example after extending the list), open `mind.db` with `?mode=ro` and, for
 each member line of `chat_line` (`origin='mind'`, oldest first), call

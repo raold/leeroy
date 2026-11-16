@@ -41,5 +41,6 @@ async def judge_relevance(reasoner, stores, draft) -> Verdict:
     codes = tuple(c for c in verdict.codes if c != code)
     # Confirmed relevance only clears its own finding, never another guard's block.
     if not codes:
-        return Verdict('send', (), verdict.scores, verdict.related)
-    return Verdict(_action(codes), codes, verdict.scores, verdict.related, verdict.reaction)
+        return Verdict('send', (), verdict.scores, verdict.related, pending=verdict.pending)
+    return Verdict(_action(codes), codes, verdict.scores, verdict.related, verdict.reaction,
+                   verdict.phrases, verdict.pending)

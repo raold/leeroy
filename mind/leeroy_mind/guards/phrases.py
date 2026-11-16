@@ -16,7 +16,10 @@ every content word is in the subject is its topic, for every rule here; a stock 
 its content words are his ("thinking about you" said back to his: other members saying it is the
 cast's sameness the stock ration is for). A two-word phrase is no candidate when either word is
 in the subject. The curated list in `stock_phrases.txt` is rationed on top: once per member in
-72 h (`stock_member`) and 3 times a day across the cast (`stock_cast`).
+72 h (`stock_member`) and 3 times a day across the cast (`stock_cast`). Its "!" lines are slop,
+a rewrite on every turn; its other lines are common phrases, a rewrite only on a turn not owed
+to him: on an owed answer (`Draft.real_answer_due`) one gives no code but `Found.pending`, the
+list's own words, named on her next turn (talk/pipeline.py `_phrase_pending`).
 
 Reads are bounded and read-only; nothing here writes, logs or calls a model. Evidence is her own
 lines in any channel and other members' lines, counted and never quoted: the rewrite hint names
@@ -116,6 +119,9 @@ class Token:
 class Found:
     codes: tuple[str, ...] = ()
     phrases: tuple[str, ...] = field(default=(), repr=False)
+    # common stock entries an answer owed to him leaned on: no rewrite now, a hint on her next
+    # turn (the entries' own words from the list, never the draft's)
+    pending: tuple[str, ...] = field(default=(), repr=False)
 
 
 def _fold(raw):
@@ -179,19 +185,33 @@ def _content(word):
 
 
 @lru_cache(maxsize=1)
-def stock() -> tuple[tuple[str, tuple[tuple[bool, tuple[str, ...]], ...]], ...]:
-    """The curated list: (name, ((anchored, words), ...)) for each line of stock_phrases.txt."""
+def _stock_table():
+    """(name, alts, slop) for each line of stock_phrases.txt; a leading "!" marks slop."""
     raw = (resources.files('leeroy_mind.guards') / 'stock_phrases.txt').read_text(encoding='utf-8')
     entries = []
     for line in raw.splitlines():
         line = line.strip()
         if not line or line.startswith('#'):
             continue
+        is_slop = line.startswith('!')
         alts = tuple((alt.strip().startswith('^'), _words(alt.strip().lstrip('^')))
-                     for alt in line.split('|') if _words(alt.strip().lstrip('^')))
+                     for alt in line.lstrip('!').split('|') if _words(alt.strip().lstrip('^')))
         if alts:
-            entries.append((' '.join(alts[0][1]), alts))
+            entries.append((' '.join(alts[0][1]), alts, is_slop))
     return tuple(entries)
+
+
+@lru_cache(maxsize=1)
+def stock() -> tuple[tuple[str, tuple[tuple[bool, tuple[str, ...]], ...]], ...]:
+    """The curated list: (name, ((anchored, words), ...)) for each line of stock_phrases.txt."""
+    return tuple((name, alts) for name, alts, _ in _stock_table())
+
+
+@lru_cache(maxsize=1)
+def slop() -> frozenset:
+    """The names of the slop entries ("!" lines): the roleplay epithets and tics, a rewrite on
+    every turn. The others are common phrases: on an answer owed to him only a later hint."""
+    return frozenset(name for name, _, is_slop in _stock_table() if is_slop)
 
 
 def _at(words, phrase, anchored):
@@ -263,7 +283,8 @@ def _stock_spans(toks):
         for clause in _clauses(toks):
             words = [t.norm for t in clause]
             for anchored, alt in alts:
-                out.extend((alts, (clause[i].i, clause[i].i + len(alt) - 1)) for i in _at(words, alt, anchored))
+                out.extend((name, alts, (clause[i].i, clause[i].i + len(alt) - 1))
+                           for i in _at(words, alt, anchored))
     return out
 
 
@@ -342,11 +363,12 @@ def _topic(words, subject):
 
 
 @lru_cache(maxsize=4096)
-def _stock_words(words):
-    """The phrase holds a line of the stock list (any spelling of it)."""
-    return any(len(alt) <= len(words) and any(words[i:i + len(alt)] == alt
-                                              for i in range(len(words) - len(alt) + 1))
-               for _, alts in stock() for _, alt in alts)
+def _stock_in(words):
+    """The names of the stock entries the phrase holds (any spelling of each)."""
+    return tuple(name for name, alts in stock()
+                 if any(len(alt) <= len(words) and any(words[i:i + len(alt)] == alt
+                                                       for i in range(len(words) - len(alt) + 1))
+                        for _, alt in alts))
 
 
 def _surface(text, toks, spans):
@@ -387,6 +409,9 @@ def check(reader, draft, now: float) -> Found:
     own = [r for r in rows if r['from_guid'] == draft.guid and r['origin'] == 'mind'][:OWN_LIMIT]
     cast = [r for r in rows if r['from_guid'] != draft.guid and r['origin'] == 'mind']
     hits = {code: [] for code in CODES}
+    # an answer owed to him: a common stock entry is no rewrite, only a hint on her next turn
+    # (controller ruling, 2026-11-16); slop stays a rewrite everywhere
+    owed, sloppy, pending = bool(draft.real_answer_due), slop(), set()
     key = _key(raw_channel(draft), draft.guid, draft.to_guid)
     # The conversation's subject is everyone's (owner's live DM test, 2026-11-16: the place he
     # was writing about, said back, was flagged as her tic): a phrase whose every content word
@@ -408,28 +433,38 @@ def check(reader, draft, now: float) -> Found:
                 continue
             if len(words) == 2 and any(_in_subject(w, subject) for w in words):
                 continue  # a two-word phrase only of words nobody else here used
+            held = _stock_in(words)
             uses = sum(words in grams for grams in seen_talk)
-            if uses >= CONVERSATION_USES or (uses and _stock_words(words)):
-                hits['phrase_conversation'] += spans
-            if sum(words in grams for grams in day) >= DAY_USES:
-                hits['phrase_day'] += spans
-            if len(others.get(words, ())) >= CAST_MEMBERS:
-                hits['phrase_cast'] += spans
+            flagged = [code for code, met in (
+                ('phrase_conversation', uses >= CONVERSATION_USES or bool(uses and held)),
+                ('phrase_day', sum(words in grams for grams in day) >= DAY_USES),
+                ('phrase_cast', len(others.get(words, ())) >= CAST_MEMBERS)) if met]
+            if flagged and owed and held and not set(held) & sloppy:
+                pending.update(held)  # a common phrase on his answer: a hint next turn
+                continue
+            for code in flagged:
+                hits[code] += spans
     if stocked:
         mine = [_seen(r['text'])[0] for r in own if now - r['ts'] <= STOCK_MEMBER_SECONDS]
         recent = [_seen(r['text'])[0] for r in (*own, *cast) if now - r['ts'] <= STOCK_CAST_SECONDS]
-        for alts, span in stocked:
+        for name, alts, span in stocked:
             if _topic(tuple(t.norm for t in toks[span[0]:span[1] + 1]), his):
                 continue  # his own words said back ("thinking about you" to his)
-            if any(_has(clauses, alts) for clauses in mine):
-                hits['stock_member'].append(span)
-            if sum(_has(clauses, alts) for clauses in recent) >= STOCK_CAST_USES:
-                hits['stock_cast'].append(span)
+            flagged = [code for code, met in (
+                ('stock_member', any(_has(clauses, alts) for clauses in mine)),
+                ('stock_cast', sum(_has(clauses, alts) for clauses in recent) >= STOCK_CAST_USES))
+                if met]
+            if flagged and owed and name not in sloppy:
+                pending.add(name)  # a common phrase on his answer: a hint next turn
+                continue
+            for code in flagged:
+                hits[code].append(span)
     codes = tuple(code for code in CODES if hits[code])
+    later = tuple(sorted(pending))[:MAX_NAMED]
     if not codes:
-        return Found()
+        return Found(pending=later)
     named = _surface(text, toks, [span for code in codes for span in hits[code]])
-    return Found(codes, tuple(named[:MAX_NAMED]))
+    return Found(codes, tuple(named[:MAX_NAMED]), later)
 
 
 def hint(phrases) -> str:

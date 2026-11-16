@@ -4,14 +4,23 @@
 # 3 times a day. A draft over either ration gets one screened rewrite whose hint names the
 # phrase; see guards/README.md "Phrase cooldown".
 #
+# Two classes (controller ruling, 2026-11-16):
+# - A leading "!" marks slop: the roleplay epithets and tics. Over its ration it is a rewrite
+#   on every turn, an answer owed to him included.
+# - Every other line is a common phrase people also type ("sitting here", "every single",
+#   "at least"). Over its ration it is a rewrite only on a turn not owed to him; on an answer
+#   owed to him it costs no rewrite and becomes a hint on her next turn instead
+#   (`phrase_hint_pending`).
+#
 # How to extend:
 # - One phrase per line, as words. Case, apostrophes ("you're" = "youre") and the cast's
 #   abbreviations ("u", "ur", "gonna", "rn", ...) are folded before matching, so write the
 #   plain spelling once.
 # - Spellings that count as the same phrase go on one line, separated by " | ". They share
 #   one ration; the first one names the line in tests and reports.
-# - A leading "^" matches only at the start of a sentence or a comma clause: "^at least" is
-#   the consolation opener ("at least you get paid for it"), never "at least ten".
+# - A leading "^" (after the "!", when there is one) matches only at the start of a sentence
+#   or a comma clause: "^at least" is the consolation opener ("at least you get paid for it"),
+#   never "at least ten".
 # - Matching is on whole words, so "menace" does not match "menaced".
 # - Only add phrases that are stock whoever says them. An ordinary phrase a member overuses
 #   is already caught by the plain cooldown, which needs no entry here.
@@ -20,47 +29,51 @@
 #   an edit.
 
 # The exasperated-affection frame (audit 2026-11-15, 1a and 1d).
-menace
-incorrigible
-insatiable
-death of me
-lose my mind | losing my mind | lost my mind | lose my damn mind
-what you do to me | what youre doing to me | the things you do to me
-killing me | trying to kill me
-god youre
-drives me crazy | driving me crazy | drive me crazy
-you have no idea
-playing with fire
-bad influence
-youre trouble | youre impossible
-im not even mad | and im not even
+!menace
+!incorrigible
+!insatiable
+!death of me
+!lose my mind | losing my mind | lost my mind | lose my damn mind
+!what you do to me | what youre doing to me | the things you do to me
+!killing me | trying to kill me
+!god youre
+!drives me crazy | driving me crazy | drive me crazy
+!you have no idea
+!playing with fire
+!bad influence
+!youre trouble | youre impossible
+!im not even mad | and im not even
 
-# Stock epithets (owner's live DM test, 2026-11-16). "you absolute ..." and "you're actually
-# mental" are never anything else, so they count anywhere in a clause ("omg you absolute
-# legend"); "proper mental" and "you're proper" only where a clause opens with them ("a proper
-# mental health day" is no epithet).
-you absolute tease | you absolute weapon | you absolute maniac | you absolute madman | you absolute madlad | you absolute lunatic | you absolute menace | you absolute legend | you absolute disaster | you absolute nightmare | you absolute animal | you absolute savage
-youre actually mental
-^proper mental
-^youre proper
+# Stock epithets and tics (owner's live DM test, 2026-11-16). "you absolute ..." and "you're
+# actually mental" are never anything else, so they count anywhere in a clause ("omg you
+# absolute legend"); "proper mental" and "you're proper" only where a clause opens with them
+# ("a proper mental health day" is no epithet).
+!you absolute tease | you absolute weapon | you absolute maniac | you absolute madman | you absolute madlad | you absolute lunatic | you absolute menace | you absolute legend | you absolute disaster | you absolute nightmare | you absolute animal | you absolute savage
+!youre actually mental
+!^proper mental
+!^youre proper
+!chaos gremlin
+!the audacity
+!i cant even
+!living for this
 
 # The DM and life-update scaffolds.
 sitting here
 staring at
 thinking about you
 every single
-your hands on me | hands on me
-want you so bad
-cry for help
+!your hands on me | hands on me
+!want you so bad
+!cry for help
 at this point
 id rather
 i swear
 
 # Greeting frames.
 there he is | there she is
-took you long enough
-man of the hour | woman of the hour
-welcome back to the living
+!took you long enough
+!man of the hour | woman of the hour
+!welcome back to the living
 
 # Status-report openers.
 ^just finished
@@ -72,17 +85,17 @@ how was your day
 what are you up to
 
 # Known roleplay-model slop (not yet seen here, cheap to keep out).
-shivers down | shiver down | sends shivers | send shivers
-barely above a whisper
-weak in the knees
-butterflies in my stomach
-mischievous
-you know exactly what
-two can play at that game
-the night is young
-keep me on my toes | keeps me on my toes
-in more ways than one
-cant help but
-i must say
-a testament to
-tapestry
+!shivers down | shiver down | sends shivers | send shivers
+!barely above a whisper
+!weak in the knees
+!butterflies in my stomach
+!mischievous
+!you know exactly what
+!two can play at that game
+!the night is young
+!keep me on my toes | keeps me on my toes
+!in more ways than one
+!cant help but
+!i must say
+!a testament to
+!tapestry
