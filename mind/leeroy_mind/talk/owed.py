@@ -66,8 +66,13 @@ MAX_AGE_S = {"game": 900.0, "discord": 1800.0}  # a boss fight can hold an answe
 # Lines he sends this close together, before anyone answers, are one message to answer
 BURST_S = 90.0
 # An owed answer's deadline (after its delay): long enough for a cold model load or a night's
-# hand-over, never the 20-30 s a social line gets
+# hand-over, never the 20-30 s a social line gets. With several answers to him in flight it
+# scales with their number (owner, 2026-11-16: "allow longer periods of gpu usage if chatting
+# with multiple bots at the same time"), each waiting its fair share of the model's slots
+# without being timed out by the others, up to a hard ceiling that keeps a stuck Ollama from
+# wedging the mind (owed_deadline).
 OWED_DEADLINE_S = {"game": 90.0, "discord": 300.0}
+OWED_DEADLINE_CEILING_S = {"game": 600.0, "discord": 900.0}
 # The drop reasons an owed answer is rescued from inside its turn: the model request failed or
 # ran late, so Pipeline._generate never reached its own owed_fallback
 RESCUABLE = frozenset({"llm_error", "expired"})
@@ -83,9 +88,46 @@ def owes_him(pipe, turn, meta) -> bool:
     return bool(pipe.live_review.owed(turn, meta))
 
 
-def owed_deadline(channel: str) -> float:
+def owed_deadline(channel: str, in_flight: int = 1) -> float:
+    """Seconds an owed answer on `channel` may take, `in_flight` answers to him (this one
+    included) sharing the model: the base times their number, at most the ceiling."""
     from leeroy_mind.discord.transport import is_discord
-    return OWED_DEADLINE_S["discord" if is_discord(channel) else "game"]
+    kind = "discord" if is_discord(channel) else "game"
+    return min(OWED_DEADLINE_CEILING_S[kind], OWED_DEADLINE_S[kind] * max(1, in_flight))
+
+
+def answers_in_flight(pipe, discord: bool | None = None) -> int:
+    """How many answers to him the engine's jobs hold now (the turn each is on and those
+    queued behind it): REPLY_KINDS turns addressed to him, or whispered to him. `discord`
+    keeps only Discord turns (True) or game turns (False)."""
+    from leeroy_mind.discord.transport import is_discord
+    from leeroy_mind.talk.pipeline import REPLY_KINDS
+    hg = pipe.human.guid
+    if not hg:
+        return 0
+    n = 0
+    for t in pipe.planned_turns():
+        if t.kind not in REPLY_KINDS:
+            continue
+        if not (t.addressee == hg or (t.channel == "whisper" and t.to_guid == hg)):
+            continue
+        if discord is not None and is_discord(t.channel) != discord:
+            continue
+        n += 1
+    return n
+
+
+def extend_owed_deadline(pipe, turn, meta, now: float) -> None:
+    """Give an owed turn its deadline by the answers to him in flight (owed_deadline), never
+    shorter than the one it has; logs `owed_deadline_extended` with the count when more than
+    one answer shares the model."""
+    n = answers_in_flight(pipe)
+    seconds = owed_deadline(turn.channel, n)
+    if now + seconds > turn.deadline:
+        turn.deadline = now + seconds
+        if n > 1:
+            log.info("owed_deadline_extended: guid=%d channel=%s in_flight=%d seconds=%d",
+                     turn.speaker, turn.channel, n, int(seconds))
 
 
 # -- the fallback line -------------------------------------------------------------------------
@@ -205,7 +247,7 @@ async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
         return rejected, why
     from leeroy_mind.talk.pipeline import _scope_valid
     meta.owed_rescued = why
-    turn.deadline = max(turn.deadline, pipe.clock.now() + owed_deadline(turn.channel))
+    extend_owed_deadline(pipe, turn, meta, pipe.clock.now())
     if meta.borrow_credit is not None:
         pipe._mark_borrow(meta, reset=True)
     text = await pipe.owed_fallback(turn, meta, composed, spoken=spoken)

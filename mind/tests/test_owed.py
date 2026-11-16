@@ -471,3 +471,36 @@ def test_the_model_away_holds_the_rescue_until_it_is_back(store, clock, tmp_path
         await _tick(r, w, 40)
         assert [s.channel for s in r.sent.says()] == ["guild"]
     run(main())
+
+
+# -- several answers to him at once (owner, 2026-11-16) -----------------------------------------
+
+def test_the_owed_deadline_scales_with_the_answers_in_flight_up_to_a_ceiling():
+    assert owed.owed_deadline("whisper") == 90.0
+    assert owed.owed_deadline("guild", 3) == 270.0
+    assert owed.owed_deadline("guild", 20) == 600.0  # the hard ceiling
+    assert owed.owed_deadline("dm:102", 2) == 600.0
+    assert owed.owed_deadline("discord:general", 9) == 900.0
+
+
+def test_four_whispers_at_once_are_all_answered_on_a_slow_model(store, clock, tmp_path, caplog):
+    """Three model slots, four of his whispers, 50 s a request: the fourth waits 100 s, past the
+    90 s an owed answer gets alone. With four in flight its deadline scales (360 s), so it is
+    answered, never expired."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("yep {n}, right here"))
+        chat = r.llm.chat
+
+        async def slow(*args, **kwargs):
+            await r.clock.sleep(50)
+            return await chat(*args, **kwargs)
+        r.llm.chat = slow
+        for g in (101, 102, 103, 104):
+            await r.human("you there?", channel="whisper", to_guid=g)
+        await r.advance(400, 2)
+        assert {s.guid for s in r.sent.says() if s.channel == "whisper"} == {101, 102, 103, 104}
+        assert not [u for u in r.utterances() if u["dropped"]]
+        assert any("owed_deadline_extended" in m and "in_flight=4" in m for m in caplog.messages)
+    run(main())

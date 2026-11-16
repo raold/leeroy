@@ -88,8 +88,8 @@ from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
 from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
-from leeroy_mind.talk.owed import (RESCUABLE as OWED_RESCUABLE, fallback_lines,
-                                   owed_deadline, owes_him, rescue_text)
+from leeroy_mind.talk.owed import (RESCUABLE as OWED_RESCUABLE, extend_owed_deadline,
+                                   fallback_lines, owes_him, rescue_text)
 from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_line_text,
                                      comms_rules, facts_head, knows_real_name, mood_line,
                                      quest_help, real_name_line, redact_for, relationship_card,
@@ -1674,8 +1674,8 @@ class Pipeline:
         if turn.deadline <= 0:
             turn.deadline = now + (DISCORD_DEADLINE_S if is_discord(turn.channel)
                                    else DEADLINE_S.get(turn.priority, OTHER_DEADLINE_S))
-            if owes_him(self, turn, meta):
-                turn.deadline = max(turn.deadline, now + owed_deadline(turn.channel))
+            if owes_him(self, turn, meta):  # by the answers to him in flight (talk/owed.py)
+                extend_owed_deadline(self, turn, meta, now)
             self._mark_borrow(meta, reset=True)
         if not turn.channel:
             turn.channel = choose_channel(turn.kind, speaker=turn.speaker, world=self.world,

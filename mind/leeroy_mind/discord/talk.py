@@ -60,6 +60,9 @@ log = logging.getLogger("leeroy_mind.discord")
 
 LEASE = "discord"  # his Discord's lease on the GPU arbiter
 LEASE_IDLE_S = 600.0
+# the lease is kept while answers to him on Discord are still in flight (owner, 2026-11-16:
+# longer GPU use when several members answer him at once), checked this often past its idle end
+LEASE_HOLD_S = 30.0
 WHY = "discord:reply"
 GONE = "discord_deleted_parent"  # the drop reason of an answer whose post was deleted
 MAX_NAMED = 3
@@ -803,9 +806,23 @@ class DiscordTalk:
 
     async def _expire(self) -> None:
         clock = self.app.clock
-        while (left := self._until - clock.now()) > 0:
-            await clock.sleep(left)
+        while True:
+            while (left := self._until - clock.now()) > 0:
+                await clock.sleep(left)
+            if not self._answers_in_flight():
+                break
+            log.info("discord_lease_kept: reason=answers_in_flight")
+            self._until = clock.now() + LEASE_HOLD_S  # the live model stays for them
         await self._release()
+
+    def _answers_in_flight(self) -> bool:
+        """Answers to him on Discord the engine still holds (talk/owed.py)."""
+        from leeroy_mind.talk.owed import answers_in_flight
+        engine = getattr(self.app, "engine", None)
+        try:
+            return engine is not None and answers_in_flight(engine, discord=True) > 0
+        except Exception:
+            return False
 
     async def _release(self) -> None:
         arbiter, self._arbiter, self._held = self._arbiter, None, False

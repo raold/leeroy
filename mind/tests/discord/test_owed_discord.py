@@ -110,3 +110,29 @@ def test_a_silent_model_still_answers_his_dm(store, clock, tmp_path):
     said = answers(rig, "dm:105", mid)
     assert len(said) == 1 and said[0]["text"].strip() and "?" in said[0]["text"]
     rig.close()
+
+
+def test_the_discord_lease_is_kept_while_answers_to_him_are_in_flight(store, clock, tmp_path,
+                                                                     caplog):
+    """Owner, 2026-11-16: the live model stays pinned while several members answer him."""
+    from discord.test_discord_talk import FakeArbiter
+    from leeroy_mind.discord.talk import LEASE, LEASE_IDLE_S
+    from leeroy_mind.talk.turns import Turn, TurnKind
+    caplog.set_level(logging.INFO)
+    rig = rig_for(store, clock, tmp_path, script=numbered("hey {n}"))
+    arbiter = FakeArbiter()
+    talk = talk_for(rig, arbiter=arbiter)
+    in_flight = [Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="dm:102", to_guid=1,
+                      addressee=1)]
+    rig.engine.planned_turns = lambda: list(in_flight)
+
+    async def go():
+        talk._take_lease()
+        await rig.advance(LEASE_IDLE_S + 60, 10)
+        assert LEASE in arbiter.holders
+        assert any("discord_lease_kept" in m for m in caplog.messages)
+        in_flight.clear()
+        await rig.advance(120, 10)
+        assert LEASE not in arbiter.holders
+    rig.sync(go())
+    rig.close()

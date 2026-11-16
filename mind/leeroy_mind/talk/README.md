@@ -311,5 +311,17 @@ full rule); no switch, no migration, no native rebuild.
 - **His talk first.** With every line of his answered, a whisper or opener that starts a
   conversation with him waits while an answer to him is still on its way, and is dropped
   (`his_talk`) when he spoke or was answered after it was planned (ruling 2, `AFTER_BURST_S`).
+- **Several answers to him at once** (owner, 2026-11-16: "allow longer periods of gpu usage if
+  chatting with multiple bots at the same time"). An owed answer's deadline is its base (90 s
+  game, 300 s Discord) times the answers to him in flight (`owed.answers_in_flight`: the turn
+  each job is on and those queued behind it, `REPLY_KINDS` addressed or whispered to him), up to
+  a hard ceiling of 600 s (game) / 900 s (Discord) so a stuck Ollama never wedges the mind; log
+  `owed_deadline_extended in_flight= seconds=` from two in flight. The deadline bounds the model
+  queue wait, the generation and the first line's typing alike (`_first_typing`), so none of
+  those cuts an owed answer short; the per-request client timeout (60 s) stays. The `[ollama]
+  max_inflight` slots (3) are unchanged: the extra answers wait their turn with the longer
+  deadline. The Discord lease is kept while answers to him on Discord are in flight
+  (`discord_lease_kept`, checked every 30 s past its 10-min idle end), so the live model stays
+  pinned; his login lease pins it already. The night and the offline raid leases are untouched.
 - **Health:** `owner-replies` counts his messages of the last 24 h with no member answer within
   5 minutes, by medium (a note from one, a FAIL from 10); counts only, never text.
