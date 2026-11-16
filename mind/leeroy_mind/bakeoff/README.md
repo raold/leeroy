@@ -172,7 +172,7 @@ local only, never posted, uploaded or committed; delete it after.**
 [[candidate]]
 name = "orion"                 # 1-40 letters, digits, . _ -; not sent, first or live
 model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
-think = false                  # true, false, or left out (see below)
+# think = false                # the default; true, or "default" (see below)
 # think_budget = 1400          # a thinking candidate's extra num_predict (default 1400)
 # num_ctx = 6144               # default: as captured, or for a thinking one captured + budget, rounded up to 1024
 # prompt_variant = "as_is"     # or "situation"
@@ -192,11 +192,11 @@ many turns used one and the wants. It combines with `prompt_variant` (bake-off 1
 Orion + beat + situation on public channels). The beat is asked on every captured turn, game
 channels too, which the live pipeline does not do.
 
-**`think` has three settings.** `true` and `false` are sent as the request's flag; **left out,
-no flag is sent and the model does what it does by default**. So a plain candidate must say
-`think = false`, as the live pipeline does: Orion thinks only when the flag is left out (it
-answers `think: true` with HTTP 400), Qwen3 thinks by default too. A candidate whose `think` is
-not `false` is a thinking one: the captured `stop` is dropped (the live blank-line stop would
+**`think` has three settings.** `false` (the default when the key is left out, as the live
+pipeline sends it) and `true` are sent as the request's flag; **`think = "default"` sends no flag,
+so the model does what it does by default**: Orion thinks only then (it answers `think: true` with
+HTTP 400), Qwen3 thinks by default too. A candidate whose `think` is not `false` is a thinking
+one: the captured `stop` is dropped (the live blank-line stop would
 fire inside the thinking; the content is cut at its first blank line afterwards), `num_predict`
 is raised by `think_budget` and `num_ctx` raised to fit (4096 + 1400 becomes 6144).
 **Bake-off 1 (2026-11-16) found native thinking worse on Orion** (5-7 s, 400-550 words of prompt
@@ -221,48 +221,41 @@ A first bake-off 2 (design addendum, section 8; native thinking left out after b
 [[candidate]]
 name = "orion"
 model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
-think = false
 
 [[candidate]]
 name = "orion-situation"
 model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
-think = false
 prompt_variant = "situation"
 
 [[candidate]]
 name = "orion-beat"
 model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
-think = false
 beat = true
 
 [[candidate]]
 name = "orion-beat-situation"
 model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
-think = false
 beat = true
 prompt_variant = "situation"
 
 [[candidate]]
 name = "cydonia"
 model = "hf.co/bartowski/TheDrummer_Cydonia-24B-v4.3-GGUF:IQ4_XS"   # on disk (the fallback)
-think = false
 
 # Pull first (each ~15-20 GB on F:), then uncomment; a missing one is only listed as missing.
 # [[candidate]]
 # name = "gemma3-27b"
 # model = "gemma3:27b"
-# think = false
 # [[candidate]]
 # name = "mistral-small-3.2"
 # model = "mistral-small3.2:24b"
-# think = false
 # [[candidate]]
 # name = "qwen3-32b"
 # model = "qwen3:32b"
-# think = false
 # [[candidate]]
-# name = "qwen3-32b-thinking"     # thinking on another model: the flag left out
+# name = "qwen3-32b-thinking"     # thinking on another model: no flag, its own default
 # model = "qwen3:32b"
+# think = "default"
 # think_budget = 1400
 # timeout = 300
 ```

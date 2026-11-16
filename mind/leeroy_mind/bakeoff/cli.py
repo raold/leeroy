@@ -223,7 +223,7 @@ def _who(ctx, personas):
 def _think_mode(c) -> str:
     if c.think is False:
         return "think false" + (f", num_ctx {c.num_ctx}" if c.num_ctx else "")
-    mode = "think true" if c.think else "think left out (the model's default)"
+    mode = "think true" if c.think else 'think "default" (no flag: the model\'s own default)'
     return (f"{mode}: no stop, num_predict + {c.think_budget}, num_ctx "
             f"{c.num_ctx or c.context(4096)} for a 4096 request")
 

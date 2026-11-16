@@ -48,6 +48,7 @@ think_budget = 100
 [[candidate]]
 name = "deep"
 model = "deep:1"
+think = "default"
 
 [[candidate]]
 name = "absent"

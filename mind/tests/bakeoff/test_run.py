@@ -12,7 +12,7 @@ from bakeoff.rig import CONFIG, HINT, RETRY_EVERY, SYSTEM, digest, ollama, seed,
 from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.bakeoff import variants
 from leeroy_mind.bakeoff.cli import bakeoff_main
-from leeroy_mind.bakeoff.config import CandidateError, load_candidates
+from leeroy_mind.bakeoff.config import Candidate, CandidateError, load_candidates
 
 NAMES = ["sent", "first", "live", "polite", "terse", "terse-think", "deep"]
 
@@ -215,7 +215,8 @@ def test_a_dry_run_shows_the_plan_and_the_missing_models_without_the_lock(data, 
     assert "captured: 40 turns (whisper 40)" in out and "plan: 20 turns (private 20)" in out
     assert "missing (not pulled): missing:1" in out and "reflection model (the judge): pulled" in out
     assert "candidate polite: think false" in out
-    assert "candidate deep: think left out (the model's default): no stop, num_predict + 1400" in out
+    assert ("candidate deep: think \"default\" (no flag: the model's own default): no stop, "
+            "num_predict + 1400") in out
     assert [c for c in llm.calls if "messages" in c] == []
     assert not (data / "scratch").exists() or not list((data / "scratch").glob("bakeoff-*"))
 
@@ -312,18 +313,35 @@ def test_a_bad_candidate_file_is_refused_by_key(tmp_path, text, why):
         load_candidates(path)
 
 
-def test_candidate_think_is_three_way(tmp_path):
+def test_candidate_think_is_three_way_and_false_when_left_out(tmp_path):
     path = tmp_path / "c.toml"
-    path.write_text('[[candidate]]\nname = "plain"\nmodel = "m"\nthink = false\n'
+    path.write_text('[[candidate]]\nname = "plain"\nmodel = "m"\n'
+                    '[[candidate]]\nname = "off"\nmodel = "m"\nthink = false\n'
                     '[[candidate]]\nname = "on"\nmodel = "m"\nthink = true\n'
-                    '[[candidate]]\nname = "default"\nmodel = "m"\n'
-                    '[[candidate]]\nname = "big"\nmodel = "m"\nthink_budget = 2000\nnum_ctx = 8192\n')
-    plain, on, default, big = load_candidates(path)
+                    '[[candidate]]\nname = "own"\nmodel = "m"\nthink = "default"\n'
+                    '[[candidate]]\nname = "big"\nmodel = "m"\nthink = "default"\n'
+                    'think_budget = 2000\nnum_ctx = 8192\n')
+    plain, off, on, own, big = load_candidates(path)
     assert (plain.think, plain.thinks, plain.think_budget, plain.context(4096)) == (False, False, 0, 4096)
+    assert off == Candidate("off", "m")  # left out is false, as the live pipeline sends it
     assert (on.think, on.thinks, on.think_budget, on.context(4096)) == (True, True, 1400, 6144)
-    assert (default.think, default.thinks, default.context(4096)) == (None, True, 6144)
+    assert (own.think, own.thinks, own.context(4096)) == (None, True, 6144)
     assert (big.think_budget, big.context(4096)) == (2000, 8192)
     assert (plain.prompt_variant, plain.timeout) == ("as_is", 120)
+    for bad in ('"yes"', '"Default"', "1"):
+        path.write_text(f'[[candidate]]\nname = "x"\nmodel = "m"\nthink = {bad}\n')
+        with pytest.raises(CandidateError, match='think must be true, false .* or "default"'):
+            load_candidates(path)
+
+
+def test_a_candidate_left_without_think_sends_false(data, tmp_path, clock):
+    llm, admin, _ = ollama(data)
+    cfg = '[[candidate]]\nname = "plain"\nmodel = "polite:1"\n'
+    assert run(data, tmp_path, "--turns", "10", "--windows", "0", "--out", str(tmp_path / "o"),
+               llm=llm, admin=admin, clock=clock, cfg_text=cfg) == 0
+    calls = [c for c in llm.calls if c.get("model") == "polite:1"]
+    assert len(calls) == 10 and all(c["think"] is False and c["options"]["stop"] == ["\n\n"]
+                                    and c["options"]["num_predict"] == 80 for c in calls)
 
 
 def test_situation_keeps_the_hard_rules_bake_off_1_s_two_and_an_unknown_bullet():

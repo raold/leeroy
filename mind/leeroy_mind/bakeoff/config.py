@@ -35,14 +35,15 @@ def load(path: Path) -> BakeoffCfg:
 
 @dataclass(frozen=True)
 class Candidate:
-    """`think`: True or False is sent as the request's flag; None (the key left out) sends no
-    flag, so the model does what it does by default (Orion thinks only then, and answers HTTP 400
-    to think: true). A candidate whose think is not False is a thinking one: no captured stop
-    (it would fire inside the thinking; the content is cut at its first stop afterwards),
-    num_predict raised by think_budget and num_ctx raised to fit (or `num_ctx`)."""
+    """`think`: True or False is sent as the request's flag (False when the key is left out, as
+    the live pipeline sends it); None (`think = "default"`) sends no flag, so the model does what
+    it does by default (Orion thinks only then, and answers HTTP 400 to think: true). A candidate
+    whose think is not False is a thinking one: no captured stop (it would fire inside the
+    thinking; the content is cut at its first stop afterwards), num_predict raised by
+    think_budget and num_ctx raised to fit (or `num_ctx`)."""
     name: str
     model: str
-    think: bool | None = None
+    think: bool | None = False
     think_budget: int = 0
     prompt_variant: str = "as_is"
     timeout: int = DEFAULT_TIMEOUT
@@ -88,9 +89,12 @@ def _candidate(i: int, raw) -> Candidate:
                              f"and not {', '.join(sorted(RESERVED))}")
     if not isinstance(model, str) or not model.strip() or len(model) > 200:
         raise CandidateError(f"{where}: model must be a model name")
-    think = raw.get("think")
-    if think is not None and type(think) is not bool:
-        raise CandidateError(f"{where}: think must be true or false (or left out: the model's default)")
+    think = raw.get("think", False)
+    if think == "default":
+        think = None  # send no flag: the model's own default
+    elif type(think) is not bool:
+        raise CandidateError(f'{where}: think must be true, false (the default) or "default" '
+                             "(no flag: the model's own default)")
     thinks = think is not False
     budget = raw.get("think_budget", DEFAULT_THINK_BUDGET if thinks else 0)
     if type(budget) is not int or not 0 <= budget <= THINK_BUDGET_MAX:
