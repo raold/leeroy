@@ -174,7 +174,7 @@ MOVE_HINT = "You just {move}: say something new instead."
 SUMMONS_HINT = ("You two only talk through the game: don't ask {them} over or say you're "
                 "waiting; answer what {they} said.")
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
-                     "history", "copy", "slang", "summons"})
+                     "history", "copy", "slang", "summons", "phrase: resting"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons.
 DROP_ON_RETRY = frozenset({"history", "summons"})
@@ -347,9 +347,10 @@ class TurnMeta:
     fight_end_ms: int = 0
     # An optional owner fence; omitted by ordinary engine callers.
     still_valid: Callable[[], bool] | None = None
-    # Whether a model line says a phrase that rests (a greeting the guild used lately,
-    # talk/greetings.py): a fatal tell, asked again once, then dropped. None: nothing rests.
-    phrase_rests: Callable[[str], bool] | None = None
+    # The retry hint naming the phrases a model line says that rest (a greeting the guild used
+    # lately, talk/greetings.py), "" when none does: a fatal tell, asked again once with that
+    # hint, then dropped. None: nothing rests.
+    phrase_rests: Callable[[str], str] | None = None
     # Optional DB-only receipt writer. Runs with the Discord post and chat mirror in
     # one transaction; it must not mutate memory-only delivery state before commit.
     on_discord_record: Callable[[int, int, float], None] | None = None
@@ -2221,6 +2222,7 @@ class Pipeline:
             if expired:
                 return raw, "expired"
             silent, tells = quiet(raw), []
+            rest_hint = ""
             if not silent:
                 text = raw if c.close else redact_real_name(raw, self.human, self.human.called)
                 text = strip_copied(text, (name, *own), him=his)
@@ -2238,7 +2240,7 @@ class Pipeline:
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
                     tells.append(Tell("member flirt", True))
-                if meta.phrase_rests is not None and meta.phrase_rests(text):
+                if meta.phrase_rests is not None and (rest_hint := meta.phrase_rests(text)):
                     tells.append(Tell("phrase: resting", True))
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
                            for t in tells):
@@ -2261,7 +2263,8 @@ class Pipeline:
                 return raw, "silent"
             log.info("say_tells: guid=%d kind=%s attempt=%d tells=%s", turn.speaker, turn.kind,
                      attempt, ",".join(t.reason for t in tells))
-            messages = asking(self._retry_hint(tells, p, turn))
+            messages = asking(" ".join(x for x in (self._retry_hint(tells, p, turn), rest_hint)
+                                       if x))
         return text, "tells"
 
     def _answers_his_whisper(self, turn: Turn) -> bool:

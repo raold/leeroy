@@ -11,7 +11,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.talk.budget import DayPhase, day_phase
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.tuning.effective import dials_of, edits_of
-from .seeds import Seed, subject_of
+from .seeds import Seed, seed_subject
 from .state import DiscordState
 
 PHASE_RATE = {DayPhase.MORNING: 0.6, DayPhase.DAY: 0.8, DayPhase.EVENING: 1.5,
@@ -67,7 +67,7 @@ def _hangout(hangouts, seed: Seed, channel: str) -> float:
 
 def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_free: int,
                             rng: random.Random, hangouts=None) -> tuple[Seed, str] | None:
-    """The kind of subject first (seeds.subject_of, by SUBJECT_WEIGHT), then a seed and a
+    """The kind of subject first (seeds.seed_subject, by SUBJECT_WEIGHT), then a seed and a
     channel within it by their own weights, so a kind with many seeds (a life beat per member)
     never crowds out a singular one (last night's raid). `hangouts`: every free member -> their
     godmode overlays (MemberEdits), given only when any has hangout weights; None leaves every
@@ -78,12 +78,12 @@ def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_
         return None
     total, raw = defaultdict(float), defaultdict(float)
     for (seed, _), weight, unhangout in zip(options, weights, plain):
-        total[subject_of(seed.kind)] += weight
-        raw[subject_of(seed.kind)] += unhangout
+        total[seed_subject(seed)] += weight
+        raw[seed_subject(seed)] += unhangout
     subjects = sorted(total)
     subject = rng.choices(subjects, weights=[
         SUBJECT_WEIGHT.get(s, SUBJECT_DEFAULT) * total[s] / raw[s] for s in subjects], k=1)[0]
-    within = [(o, w) for o, w in zip(options, weights) if subject_of(o[0].kind) == subject]
+    within = [(o, w) for o, w in zip(options, weights) if seed_subject(o[0]) == subject]
     return rng.choices([o for o, _ in within], weights=[w for _, w in within], k=1)[0]
 
 

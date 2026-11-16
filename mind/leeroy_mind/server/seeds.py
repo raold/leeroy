@@ -34,12 +34,17 @@ SUBJECTS = {'raid': ('raid_before', 'raid_after', 'reset', 'his_day'),
             'calendar': ('calendar', 'birthday', 'wow_event'),
             'chat': ('plan', 'purpose')}
 _SUBJECT_OF = {kind: subject for subject, kinds in SUBJECTS.items() for kind in kinds}
-# The weekly attendance thread: regulars who missed this many of the last ATTENDANCE_WINDOW
-# raids after attending ATTENDANCE_REGULAR of the ATTENDANCE_BEFORE before them; its fact names
-# at most ATTENDANCE_NAMES of them.
+# A public decision (a lineup, a loot rule, a boss strategy) is the guild's raid or loot
+# business, by the channel it is argued in; an officers' one stays officer business.
+DECISION_SUBJECTS = {'raid-planning': 'raid', 'strategy': 'raid', 'loot-and-dkp': 'loot'}
+# The weekly attendance thread (dropping_off): regulars who missed this many of the last
+# ATTENDANCE_WINDOW raids they could have joined after attending ATTENDANCE_REGULAR of the
+# ATTENDANCE_BEFORE before them; its fact names at most ATTENDANCE_NAMES of them, and there is
+# none when more than ATTENDANCE_MAX_SHARE of the cast would be named (no exodus is invented).
 ATTENDANCE_WINDOW, ATTENDANCE_MISSED = 4, 3
 ATTENDANCE_BEFORE, ATTENDANCE_REGULAR = 8, 2
 ATTENDANCE_NAMES = 6
+ATTENDANCE_MAX_SHARE = 0.10
 # Seeds the game's openers to the guild may bring up (talk.engine): public, never officers'.
 GAME_KINDS = ('raid_before', 'raid_after', 'reset', 'loot', 'life', 'calendar', 'birthday',
               'weekend', 'rival')
@@ -50,6 +55,14 @@ _unavailable = set()
 def subject_of(kind: str) -> str:
     """The subject a seed kind belongs to (SUBJECTS); an unlisted kind is its own."""
     return _SUBJECT_OF.get(kind, kind)
+
+
+def seed_subject(seed) -> str:
+    """A seed's subject: its kind's (subject_of), except a public decision, which is raid or loot
+    business by its channel (DECISION_SUBJECTS)."""
+    if seed.kind == 'decision' and not seed.officers_only and seed.channels:
+        return DECISION_SUBJECTS.get(seed.channels[0], subject_of(seed.kind))
+    return subject_of(seed.kind)
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,22 +268,36 @@ def _his_day(conn, c):
 
 def dropping_off(conn, now: float, cast) -> tuple[list[int], int]:
     """The members of `cast` who missed at least ATTENDANCE_MISSED of the last
-    ATTENDANCE_WINDOW finished raids after attending at least ATTENDANCE_REGULAR of the
-    ATTENDANCE_BEFORE raids before them (regulars dropping off, not members who never raid), in
-    guid order, and how many of the last raids there were. Nobody until a full window exists."""
-    raids = [r[0] for r in conn.execute(
-        'SELECT raid_id FROM guild_raid WHERE ended IS NOT NULL AND ended<=? '
-        'ORDER BY ended DESC,raid_id DESC LIMIT ?', (now, ATTENDANCE_WINDOW + ATTENDANCE_BEFORE))]
-    recent, before = raids[:ATTENDANCE_WINDOW], set(raids[ATTENDANCE_WINDOW:])
-    if len(recent) < ATTENDANCE_WINDOW:
-        return [], len(recent)
-    attended = {}
-    for rid, guid in conn.execute("SELECT raid_id,guid FROM guild_attendance WHERE status IN ('raided','benched') "
-                                 'AND raid_id IN (SELECT value FROM json_each(?))', (json.dumps(raids),)):
-        attended.setdefault(guid, set()).add(rid)
-    out = [guid for guid in sorted(cast)
-           if len(set(recent) - attended.get(guid, set())) >= ATTENDANCE_MISSED
-           and len(before & attended.get(guid, set())) >= ATTENDANCE_REGULAR]
+    ATTENDANCE_WINDOW finished raids they could have joined, after attending at least
+    ATTENDANCE_REGULAR of the ATTENDANCE_BEFORE before those (regulars dropping off, not members
+    who never raid), in guid order, and how many raids the window holds. A raid with no
+    attendance rows (an offline start that failed) counts for nobody; one he called (not
+    offline) counts only for its roster and bench, since it records only his group; an offline
+    raid counts for everyone. A member on leave (an open away row) is never named. Nobody until
+    the window is full, so at least ATTENDANCE_WINDOW + ATTENDANCE_REGULAR raids with attendance
+    must have finished before anyone can be named."""
+    raids = [(r[0], bool(r[1])) for r in conn.execute(
+        'SELECT r.raid_id,r.offline FROM guild_raid r WHERE r.ended IS NOT NULL AND r.ended<=? '
+        'AND EXISTS (SELECT 1 FROM guild_attendance a WHERE a.raid_id=r.raid_id) '
+        'ORDER BY r.ended DESC,r.raid_id DESC LIMIT ?', (now, ATTENDANCE_WINDOW + ATTENDANCE_BEFORE))]
+    if len(raids) < ATTENDANCE_WINDOW:
+        return [], len(raids)
+    rows = {}
+    for rid, guid, status in conn.execute(
+            "SELECT raid_id,guid,status FROM guild_attendance WHERE raid_id IN "
+            '(SELECT value FROM json_each(?))', (json.dumps([rid for rid, _ in raids]),)):
+        rows.setdefault(guid, {})[rid] = status
+    away = {r[0] for r in conn.execute('SELECT guid FROM away WHERE returned_at IS NULL '
+                                       'AND (returns_at IS NULL OR returns_at>?)', (now,))}
+    recent, before = raids[:ATTENDANCE_WINDOW], raids[ATTENDANCE_WINDOW:]
+    out = []
+    for guid in sorted(cast):
+        mine = rows.get(guid, {})
+        attended = {rid for rid, status in mine.items() if status in ('raided', 'benched')}
+        could = [rid for rid, offline in recent if offline or rid in mine]
+        if (guid not in away and len([rid for rid in could if rid not in attended]) >= ATTENDANCE_MISSED
+                and len({rid for rid, _ in before} & attended) >= ATTENDANCE_REGULAR):
+            out.append(guid)
     return out, len(recent)
 
 
@@ -278,7 +305,7 @@ def _officer(conn, c):
     # One attendance thread a week for the officers, never one per member (2026-11-15: 49 of
     # 57 #officer-chat openers were "X missed N of the last 4 raids", one seed per member).
     late, window = dropping_off(conn, c.now, c.cast)
-    if late:
+    if late and len(late) <= ATTENDANCE_MAX_SHARE * len(c.cast):
         names = [c.name(g) for g in late[:ATTENDANCE_NAMES]]
         more = len(late) - len(names)
         listed = ', '.join(names) + (f' and {more} more' if more else '')

@@ -771,8 +771,10 @@ class TalkEngine(EmoteReactions):
     async def _open_to_guild(self) -> float | None:
         """A conversation among the members, begun by an opener about the guild's own business
         (talk/guild_topics.py: a subject first, then a topic and who raises it; a topic once a
-        night), in guild chat, answered as a social burst is (_burst). Nobody may speak in his
-        raid's fight, its wipe or its debrief. The talkative dials' pull, or None with nobody."""
+        night), in guild chat, answered as a social burst is (_burst). It holds the social
+        bursts' clock while it runs and rests it a gap after (BurstBudget.begin), and gives way
+        to a social burst already running. Nobody may speak in his raid's fight, its wipe or its
+        debrief. The talkative dials' pull, or None with nobody."""
         now, hg = self.clock.now(), self.human.guid
         if not hg or not self.world.human_online:
             return None
@@ -795,12 +797,19 @@ class TalkEngine(EmoteReactions):
         if picked is None:
             log.info("open_to_guild_skipped: reason=nobody_free candidates=%d", len(every))
             return mult
+        if self.budget.bursting:  # a social burst began meanwhile: never two at once
+            log.info("open_to_guild_skipped: reason=burst_running")
+            return mult
         speaker, topic = picked
         used.add(topic.key)
         log.info("open_to_guild: guid=%d subject=%s", speaker, topic.subject)
         plan = BurstPlan(self.rng.randint(*GUILD_OPEN_SIZE),
                          PHASE_MODS[day_phase(local)].max_speakers, "guild")
-        await self._burst(plan, first=(speaker, topic.topic, f"burst:guild:{topic.subject}"))
+        self.budget.begin(now)  # the social bursts wait for it, then rest a gap
+        try:
+            await self._burst(plan, first=(speaker, topic.topic, f"burst:guild:{topic.subject}"))
+        finally:
+            self.budget.burst_done(self.clock.now())
         return mult
 
     def _item_name(self, item: int) -> str | None:

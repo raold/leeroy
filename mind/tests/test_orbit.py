@@ -24,6 +24,8 @@ from leeroy_mind.human import HumanIdentity
 from leeroy_mind.protocol import Login, Logout, Zone
 from leeroy_mind.server.seeds import Seed
 from leeroy_mind.talk import greetings, guild_topics
+from leeroy_mind.talk.budget import BurstBudget, DayPhase
+from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.engine import TO_HIM_TOPICS
 from leeroy_mind.talk.prompt import FLIRT_RULE, FLIRT_RULE_AWAY, comms_rules
 from leeroy_mind.talk.reactions import LOGIN_QUIET_S
@@ -134,7 +136,8 @@ def test_a_guild_opener_starts_a_conversation_among_the_members(store, clock, tm
         guild_business(store, clock.now())
         r.engine.bits.p_fire = 0.0
         r.engine.whispers.set_rate(0.0)
-        r.engine.budget.set_to_him_rate(12.0)
+        # only the openers' clock: the social bursts' own clock never comes due
+        r.engine.budget = BurstBudget(4, r.engine.rng, gap_s=(1e9, 1e9), to_him_per_hour=12.0)
         share(r, 0.0)
         await r.session()
         await r.event(Login(ts=0, guid=HUMAN, human=True))
@@ -321,3 +324,108 @@ def test_a_turn_among_the_members_never_reads_the_flirt_permission(store, clock,
     flirt = r.chat_calls()[-1]["messages"][0]["content"]
     assert "You flirt only with Zan" in flirt
     r.close()
+
+
+# -- review of #319 ------------------------------------------------------------------------------
+
+def test_no_topic_and_no_error_when_everyone_just_spoke():
+    """Every candidate weighs 0 (all spoke within the minute): no opener, not a ValueError."""
+    personas = {g: make_persona(g, f"T{g}") for g in (101, 102)}
+    topics = [guild_topics.GuildTopic("raid", "raid_after:1", "how the last raid went"),
+              guild_topics.GuildTopic("calendar", "calendar:1", "the calendar")]
+    for seed in range(50):
+        assert guild_topics.choose(topics, {101: 0.0, 102: 0.0}, personas,
+                                   random.Random(seed)) is None
+
+
+def test_a_topic_about_a_member_is_never_hers_to_raise(store):
+    personas = {g: make_persona(g, n) for g, n in ((101, "Ana"), (102, "Bea"), (103, "Cy"))}
+    seeds = [Seed("loot:1", "loot", ("loot-and-dkp",), "Ana won [Helm] for 40 DKP", (101,)),
+             Seed("birthday:1", "birthday", ("general",), "Ana's birthday on Friday")]
+    import leeroy_mind.talk.guild_topics as gt
+    original = gt.public_seeds
+    try:
+        gt.public_seeds = lambda conn, **kw: seeds
+        topics = gt.gather(store.conn, now=0, local=datetime(2026, 11, 12, 19), cast=personas,
+                           human=HUMAN)
+    finally:
+        gt.public_seeds = original
+    assert [t.about for t in topics] == [(101,), (101,)]
+    rng = random.Random(2)
+    for _ in range(300):
+        picked = guild_topics.choose(topics, {101: 5.0, 102: 1.0, 103: 1.0}, personas, rng)
+        assert picked is not None
+        speaker, topic = picked
+        assert speaker != 101 or topic.subject == "game"
+    # she alone online: neither is hers, so only her own game remains
+    assert all(guild_topics.choose(topics, {101: 1.0}, personas, random.Random(s))[1].subject
+               == "game" for s in range(30))
+
+
+def test_public_decisions_are_raid_or_loot_business_officers_ones_stay_officer():
+    from leeroy_mind.server.seeds import seed_subject
+    assert seed_subject(Seed("decision:1:proposed", "decision", ("raid-planning",), "f")) == "raid"
+    assert seed_subject(Seed("decision:2:proposed", "decision", ("strategy",), "f")) == "raid"
+    assert seed_subject(Seed("decision:3:settled", "decision", ("loot-and-dkp",), "f")) == "loot"
+    assert seed_subject(Seed("decision:p1:poll", "decision", ("officer-chat",), "f",
+                             officers_only=True)) == "officer"
+    assert seed_subject(Seed("officer:attendance:2026-W46", "officer", ("officer-chat",), "f",
+                             officers_only=True)) == "officer"
+
+
+def test_a_guild_opener_holds_the_social_bursts_while_it_runs_and_rests_them_after(
+        store, clock, tmp_path):
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        guild_business(store, clock.now())
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await r.advance(LOGIN_QUIET_S + 5)
+        seen = {}
+
+        async def burst(plan, first=None):
+            now = clock.now()
+            seen["during"] = r.engine.budget.tick(now + 120, phase=DayPhase.EVENING,
+                                                  human_idle=False, raid=RaidPhase.NONE)
+            seen["first"] = first
+        r.engine._burst = burst
+        share(r, 0.0)
+        start = clock.now()
+        await r.engine._open()
+        assert seen["first"] is not None and seen["during"] is None  # held while it ran
+        assert not r.engine.budget.bursting
+        social = r.engine.budget.tick(clock.now() + 1, phase=DayPhase.EVENING,
+                                      human_idle=False, raid=RaidPhase.NONE)
+        assert social is None  # and rests a gap after
+        r.engine.budget.begin(start)  # a social burst already running: the opener gives way
+        seen.clear()
+        await r.engine._open_to_guild()
+        assert "first" not in seen
+    run(main())
+
+
+def test_each_greeter_is_told_what_this_login_said_and_the_retry_names_it(store, clock,
+                                                                          tmp_path):
+    """The first greeter of this login says "there he is": the second greeter's instruction is
+    built as it is composed, so it names that phrase, and her retry's hint names exactly the
+    phrase her line repeated."""
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=lambda m, msgs: "there he is, zan!")
+        r.engine.greeter_draw = lambda rng: 2
+        r.engine.plain_hello_p = 0.0
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await r.advance(90)
+        said = greeted(r)
+        assert len(said) == 1  # the second greeter's line said it again: dropped
+        asked = [c["messages"] for c in r.chat_calls()
+                 if "just logged on" in c["messages"][-1]["content"]]
+        first, second, retry = asked[0], asked[1], asked[2]
+        assert 'Don\'t say "there he is"' not in first[-1]["content"]  # nothing rested yet
+        assert 'Don\'t say "there he is"' in second[-1]["content"]  # this login's first one
+        hint = 'Don\'t say "there he is": the guild has greeted him that way lately.'
+        assert retry[-1]["content"].count(hint) == 2  # her instruction and the retry's hint
+        drops = r.store.conn.execute("SELECT dropped FROM utterance WHERE kind='greet' "
+                                     "AND dropped IS NOT NULL").fetchall()
+        assert [d[0] for d in drops] == ["tells"]
+    run(main())

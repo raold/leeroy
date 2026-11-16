@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from leeroy_mind.personas.schema import Persona
-from leeroy_mind.server.seeds import public_seeds, subject_of
+from leeroy_mind.server.seeds import public_seeds, seed_subject
 from leeroy_mind.talk.select import pick_speakers
 
 SUBJECT_WEIGHT = {"raid": 3.0, "game": 2.5, "loot": 2.0, "life": 1.5, "calendar": 1.0,
@@ -49,6 +49,7 @@ class GuildTopic:
     key: str
     topic: str
     owner: int = 0  # only this member brings it up (their life beat); 0: anyone
+    about: tuple[int, ...] = ()  # never raised by these members (their own loot or birthday)
 
 
 _UNNAMED = re.compile(r"\[Item (\d+)\]")
@@ -59,7 +60,8 @@ def gather(conn: sqlite3.Connection, *, now: float, local: datetime,
            item_name: Callable[[int], str | None] = lambda item: None) -> list[GuildTopic]:
     """The guild's subjects right now; [] when the store cannot be read. An item the store's
     connection could not name (server.seeds names it from an attached library) is named by
-    `item_name`; loot of his, and loot still unnamed, are left out."""
+    `item_name`; loot of his, and loot still unnamed, are left out. A loot topic is never its
+    winner's to raise, nor a birthday topic one of the members it names."""
     try:
         seeds = public_seeds(conn, now=now, local=local, cast=cast, human=human)
     except sqlite3.Error:
@@ -76,8 +78,17 @@ def gather(conn: sqlite3.Connection, *, now: float, local: datetime,
                 continue
             s = replace(s, fact=fact)
         owner = s.about[0] if s.kind == "life" and s.about else 0
-        out.append(GuildTopic(subject_of(s.kind), s.key, text.format(fact=s.fact), owner))
+        about = (tuple(s.about) if s.kind == "loot" else
+                 _named(s.fact, cast) if s.kind == "birthday" else ())
+        out.append(GuildTopic(seed_subject(s), s.key, text.format(fact=s.fact), owner, about))
     return out
+
+
+def _named(text: str, cast: Mapping[int, Persona]) -> tuple[int, ...]:
+    """The members whose character name the text says (a birthday event's title)."""
+    folded = text.casefold()
+    return tuple(sorted(g for g, p in cast.items() if p.character_name and re.search(
+        rf"(?<!\w){re.escape(p.character_name.casefold())}(?!\w)", folded)))
 
 
 def game_topics(p: Persona) -> list[GuildTopic]:
@@ -96,14 +107,17 @@ def choose(topics: list[GuildTopic], weights: Mapping[int, float],
     """(speaker, topic): a subject by SUBJECT_WEIGHT among those with a topic not in `used`
     that someone in `weights` may raise, then a topic of it (one of a member's own weighs what
     its member does) and its member, or a speaker by weight; for "game" a speaker first, then
-    one of their own game topics. None with nobody."""
+    one of their own game topics. A topic about a member (GuildTopic.about) is never theirs to
+    raise. None with nobody, and when nobody has any weight (all just spoke)."""
+    if not any(w > 0 for w in weights.values()):
+        return None
     free = [t for t in topics if t.key not in used]
     by_subject: dict[str, list[GuildTopic]] = {}
     for t in free:
-        if not t.owner or weights.get(t.owner, 0) > 0:
+        if (weights.get(t.owner, 0) > 0 if t.owner else
+                any(w > 0 and g not in t.about for g, w in weights.items())):
             by_subject.setdefault(t.subject, []).append(t)
-    if any(w > 0 for w in weights.values()):
-        by_subject.setdefault("game", [])  # every member has their own game
+    by_subject.setdefault("game", [])  # every member has their own game
     subjects = sorted(s for s in by_subject if s in SUBJECT_WEIGHT)
     if not subjects:
         return None
@@ -121,5 +135,5 @@ def choose(topics: list[GuildTopic], weights: Mapping[int, float],
                                           for t in options], k=1)[0]
     if topic.owner:
         return topic.owner, topic
-    picked = pick_speakers(dict(weights), 1, rng)
+    picked = pick_speakers({g: w for g, w in weights.items() if g not in topic.about}, 1, rng)
     return (picked[0], topic) if picked else None

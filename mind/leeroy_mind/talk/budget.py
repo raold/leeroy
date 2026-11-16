@@ -168,6 +168,17 @@ class BurstBudget:
         self._burst_since = now
         return BurstPlan(self._rng.randint(*self._size), PHASE_MODS[phase].max_speakers)
 
+    @property
+    def bursting(self) -> bool:
+        """A social burst, or a conversation begun with begin, is under way."""
+        return self._burst_since is not None
+
+    def begin(self, now: float) -> None:
+        """A conversation the openers' clock started among the members (engine._open_to_guild)
+        is under way: no social burst starts until its burst_done, which then rests the clock
+        a social gap, as after one of its own."""
+        self._burst_since = now
+
     def burst_done(self, now: float) -> None:
         self._burst_since = None
         self._burst_end = now

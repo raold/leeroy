@@ -121,6 +121,7 @@ class Reactions(Pipeline):
         # (talk/greetings.py; the tuning scenario pins both to keep its recorded draws)
         self.greeter_draw: Callable[[random.Random], int] = greetings.greeter_count
         self.plain_hello_p = greetings.TEMPLATE_P
+        self.add_instruction_hook(self._greeting_instruction)
         self._hellos = 0  # hellos planned since it (greetings, answers to his hello)
         self._fight_deaths: list[int] = []  # the group's deaths in the current pull, in order
         self._lately: dict[int, dict[str, tuple[float, str]]] = {}  # guid -> what -> (at, text)
@@ -277,7 +278,6 @@ class Reactions(Pipeline):
         best = max(picked, key=lambda g: known[g])
         him = self._his_names()
         cooled = greetings.Cooled(greetings.recent(self.store.conn, now), now, him, login_at=now)
-        avoid = cooled.avoid_line(self.human.called, self.human.forms[1])
         items = []
         for g in [best] + [g for g in picked if g != best]:
             channel = choose_channel(TurnKind.GREET, speaker=g, world=self.world, raid=self.raid,
@@ -298,19 +298,32 @@ class Reactions(Pipeline):
                 meta.why = picked_why("greet_plain", g, pool)
             else:
                 turn = Turn(kind=TurnKind.GREET, speaker=g, channel=channel, addressee=hg,
-                            instruction=avoid, delay=delay)
+                            delay=delay)
             items.append((turn, meta))
         self._greeters = {t.speaker for t, _ in items}
         self._hellos = len(items)
         self._queue(items)
 
-    def _greeting_rests(self, text: str, login_at: float, him: list[str]) -> bool:
-        """A model greeting of the login at `login_at` says a phrase that rests now
-        (greetings.Cooled, read again as it is screened, so an earlier greeting of this login
-        counts)."""
+    def _greeting_rests(self, text: str, login_at: float, him: list[str]) -> str:
+        """The retry hint naming the phrases a model greeting of the login at `login_at` says
+        that rest now (greetings.Cooled, read again as it is screened, so an earlier greeting of
+        this login counts); "" when it says none."""
         now = self.clock.now()
         return greetings.Cooled(greetings.recent(self.store.conn, now), now, him,
-                                login_at=login_at).repeats(text)
+                                login_at=login_at).hint(text, self.human.called,
+                                                        self.human.forms[1])
+
+    def _greeting_instruction(self, turn: Turn, meta: TurnMeta, previous: str) -> str:
+        """A model greeting's instruction as it is composed (an instruction hook): the phrases
+        that rest right now, this login's earlier greetings included (greetings.avoid_line), so
+        each greeter is told what the ones before it said."""
+        if turn.kind is not TurnKind.GREET or meta.phrase_rests is None:
+            return previous
+        now = self.clock.now()
+        avoid = greetings.Cooled(greetings.recent(self.store.conn, now), now, self._his_names(),
+                                 login_at=self._login_at).avoid_line(self.human.called,
+                                                                     self.human.forms[1])
+        return " ".join(x for x in (previous, avoid) if x)
 
     def _plain_greeter(self, guid: int) -> bool:
         """A greeter who may type a plain hello: a man, or a woman with no romance toward him

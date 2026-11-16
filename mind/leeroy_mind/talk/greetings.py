@@ -6,9 +6,10 @@
   template (TEMPLATES) said through their typing style, never one the guild said lately.
 - A phrase rests: a stock greeting (STOCK) anyone used in a greeting within STOCK_COOL_S, this
   login's included, and the opening words (OPENING_WORDS, his names folded together) of a
-  greeting of an earlier login within OPENING_COOL_S, are named in the model's instruction
-  (avoid_line) and its line is screened for them (repeats), so a greeting that still uses one is
-  asked again, then dropped.
+  greeting of an earlier login within OPENING_COOL_S. Each greeter's instruction names them as
+  it is composed (avoid_line), so a later greeter knows what an earlier one said, and its line
+  is screened for them (resting): one that still says one is asked again with a hint naming
+  exactly those phrases (hint), then dropped.
 Reads utterance rows only; writes nothing."""
 import random
 import sqlite3
@@ -73,6 +74,14 @@ def recent(conn: sqlite3.Connection, now: float) -> list[tuple[float, str]]:
         return []
 
 
+def _avoid(phrases: list[str], them: str) -> str:
+    if not phrases:
+        return ""
+    quoted = [f'"{s}"' for s in phrases]
+    listed = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " or " + quoted[-1]
+    return AVOID.format(phrases=listed, them=them)
+
+
 class Cooled:
     """What rests at `now` for a greeting of the login at `login_at`: the stock phrases of the
     greetings in `said`, and the openings of those said before that login."""
@@ -92,19 +101,27 @@ class Cooled:
                     and key not in self.openings):
                 self.openings.append(key)
 
+    def resting(self, text: str) -> list[str]:
+        """The resting phrases the line says: its stock phrases, then its opening (HIM for his
+        names) when a recent greeting opened so."""
+        out = sorted(stock_in(text) & set(self.stock))
+        key = opening(text, self.him)
+        return out + [key] if key in self.openings else out
+
     def repeats(self, text: str) -> bool:
         """The line says a resting stock phrase or opens as a recent greeting did."""
-        return bool(stock_in(text) & set(self.stock)) or opening(text, self.him) in self.openings
+        return bool(self.resting(text))
+
+    def hint(self, text: str, called: str, them: str) -> str:
+        """AVOID naming exactly the resting phrases the line says (a retry's hint), "" when it
+        says none."""
+        return _avoid([p.replace(HIM, called) for p in self.resting(text)], them)
 
     def avoid_line(self, called: str, them: str) -> str:
-        """AVOID naming the resting phrases (stock first), "" when nothing rests."""
-        shown = [*self.stock, *(o.replace(HIM, called) for o in self.openings
-                                if o.split()[0] != HIM)][:AVOID_MAX]
-        if not shown:
-            return ""
-        quoted = [f'"{s}"' for s in shown]
-        phrases = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " or " + quoted[-1]
-        return AVOID.format(phrases=phrases, them=them)
+        """AVOID naming the resting phrases (stock first, at most AVOID_MAX), "" when nothing
+        rests."""
+        return _avoid([*self.stock, *(o.replace(HIM, called) for o in self.openings
+                                      if o.split()[0] != HIM)][:AVOID_MAX], them)
 
     def template(self, rng: random.Random, called: str) -> str | None:
         """A plain hello whose opening does not rest, or None when every one does."""
