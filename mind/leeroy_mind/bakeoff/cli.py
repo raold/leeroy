@@ -29,7 +29,7 @@ from . import plan as planning
 from . import results, score, sheet
 from .capture import RETENTION_S
 from .config import CandidateError, load_candidates
-from .generate import trimmed
+from .generate import BEAT_PREDICT, trimmed
 
 SOURCES = ("first", "sent")
 WINDOWS_MAX = 60
@@ -208,15 +208,17 @@ async def _dry(root, cfg, candidates, args, make_llm, clock) -> int:
     return 0
 
 
-def _who(ctx, personas):
-    """For a beat candidate: his name and possessive, whether she may flirt with him, her name."""
+def _who(ctx, personas, think_budget: int):
+    """For a beat candidate: his name and possessive, whether she may flirt with him, her name,
+    and the beat's num_predict (the data dir's [talk] think_budget, as live)."""
     from leeroy_mind.talk.romance import flirt_chance
 
     def who(turn) -> dict:
         p = personas.get(turn.captured.guid)
         return {"human": ctx.ident.called, "their": ctx.ident.forms[2],
                 "can_flirt": p is not None and flirt_chance(p, 1.0) > 0,
-                "speaker": p.character_name if p is not None else ""}
+                "speaker": p.character_name if p is not None else "",
+                "think_budget": think_budget}
     return who
 
 
@@ -466,7 +468,8 @@ async def _go(root, store, cfg, candidates, args, out, make_llm, make_admin, clo
                 print("missing (not pulled, skipped): " + ", ".join(missing))
             await _make_room(admin, cfg.models.embedding)
             await _generate(llm, admin, res, built, ready, typist, ctx, built.seed, args.source, used,
-                            who=_who(ctx, personas))
+                            who=_who(ctx, personas, getattr(cfg.talk, "think_budget", None)
+                                     or BEAT_PREDICT))
             names = [*score.BASELINES, *(c.name for c in ready)]
             judge_ran, judge_note = False, ""
             if not built.windows:

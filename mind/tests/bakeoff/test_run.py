@@ -400,3 +400,38 @@ def test_beat_items_are_read_back_from_the_request():
             "[just now] Zan (whisper to Belra): the line she answers\n\nAnswer Zan.")
     assert beat.items([{"role": "system", "content": "card"}, {"role": "user", "content": user}],
                       "Belra") == ["we cleared ICC together", "his earlier line"]
+
+
+def test_a_candidate_beat_is_seeded_per_turn_and_candidate_with_the_live_budget(data, tmp_path, clock):
+    """review-328-r2 P3-B: the beat call carries a seed per turn and candidate, and the data
+    dir's [talk] think_budget as its num_predict."""
+    (data / "mind.toml").write_text("[talk]\nthink_budget = 300\n")
+    llm, admin, _ = ollama(data)
+    cfg = "".join(f'[[candidate]]\nname = "{n}"\nmodel = "polite:1"\nbeat = true\n' for n in ("b1", "b2"))
+    assert run(data, tmp_path, "--turns", "10", "--windows", "0", "--out", str(tmp_path / "o"),
+               llm=llm, admin=admin, clock=clock, cfg_text=cfg) == 0
+    beats_ = [c for c in llm.calls if c.get("model") == "polite:1" and c["format"] is not None]
+    assert len(beats_) == 20 and all(c["options"]["num_predict"] == 300 for c in beats_)
+    first, second = beats_[:10], beats_[10:]
+    assert len({c["options"]["seed"] for c in first}) == 10
+    assert not {c["options"]["seed"] for c in first} & {c["options"]["seed"] for c in second}
+
+
+def test_the_report_splits_beat_turns_and_says_what_to_compare_them_with(data, store, tmp_path, clock):
+    """review-328-r2 P3-A: turns that had a beat live are reported apart, and the report says to
+    compare `first` there with a `beat = true` candidate."""
+    store.conn.execute("UPDATE bakeoff_turn SET beat=1, want='vent' WHERE id % 2 = 0")
+    store.conn.commit()
+    store.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    llm, admin, _ = ollama(data)
+    out = tmp_path / "o"
+    assert run(data, tmp_path, "--turns", "40", "--windows", "0", "--out", str(out), llm=llm,
+               admin=admin, clock=clock) == 0
+    report = json.loads((out / "report.json").read_text())
+    assert report["beat_turns"] == 20
+    first = next(c for c in report["candidates"] if c["name"] == "first")
+    assert first["subsets"]["beat"]["lines"]["turns"] == 20
+    assert first["subsets"]["no_beat"]["lines"]["turns"] == 20
+    md = (out / "report.md").read_text()
+    assert "## Turns that had a beat live" in md and "## Turns without a live beat" in md
+    assert "compare `first` and `live` with a `beat = true` candidate, not a plain one" in md

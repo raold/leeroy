@@ -124,7 +124,10 @@ Per candidate, plus three baselines:
 
 So `first` against a candidate asked the first request is the model and sampling; `first`
 against `live` is what the pipeline's retries and guards changed; `live` against `sent` is what
-came after generation (typing, corrections). Per family (game, private, discord):
+came after generation (typing, corrections). **On turns that had a beat live** (`[talk]
+think_private`, nearly every answer to his whispers and DMs), `first` and `live` were drafted with
+Orion's beat in the prompt, but the stored request has it taken out: there, compare `first` with a
+`beat = true` candidate, not a plain one, or the difference is the beat, not the model. Per family (game, private, discord):
 
 - **(a) Stylometric AUC against his lines** (`turing/stylo`): the candidate's lines stand in the
   corpus in place of the members' lines of those turns; only they are sampled on the members'
@@ -140,8 +143,9 @@ came after generation (typing, corrections). Per family (game, private, discord)
   his line.
 - **(d)** how often the answer is distinct from what was sent, the median words, silences,
   errors (with their codes), median seconds and thinking tokens.
-- **Retried turns apart**: the line stats, the text AUC and two detectors again for the turns
-  the live pipeline asked more than once and for those it answered on its first try.
+- **Retried and beat turns apart**: the line stats, the text AUC and two detectors again for the
+  turns the live pipeline asked more than once and for those it answered on its first try, and for
+  the turns that had a beat live and those that did not.
 - The top tells per candidate: the style features in words and the judge's caught tells (its
   phrases only from public channels, as the night keeps them).
 
@@ -183,7 +187,8 @@ model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
 **`beat = true`** (bakeoff/beat.py): the candidate first asks a beat on the turn's request through
 talk/beat.py, as the live pipeline does for his whispers and DMs (the beat's instruction after the
 request, `format` = the beat's schema, `think` false, the BEAT preset's sampling and num_predict
-240), then asks its line with the beat's lines after the instruction. A beat that fails the
+the data dir's `[talk] think_budget`, 240 if unset, a seed per turn and candidate), then asks its
+line with the beat's lines after the instruction. A beat that fails the
 schema, does not fit or errs is skipped and the line goes without it. What it may bring in is
 read back from the request (the memories under "You remember:", the earlier chat lines that are
 not hers, never the line she answers), since the composed prompt's own list is not stored. The

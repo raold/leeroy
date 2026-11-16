@@ -1,7 +1,8 @@
 """The `beat` candidate setting (`beat = true`): the candidate asks its own beat first, through
 talk/beat.py as the live pipeline does ([talk] think_private): one call on the turn's own request
 with the beat's instruction after it, constrained to beat.schema with think false (BEAT's
-sampling and num_ctx, num_predict 240), then the line is asked with the beat's lines after the
+sampling and num_ctx, num_predict the data dir's [talk] think_budget, a seed per turn and
+candidate), then the line is asked with the beat's lines after the
 instruction. A beat that fails the schema, does not fit or errs is skipped and the line goes
 without it, as live.
 
@@ -50,10 +51,12 @@ def items(messages: list[dict], speaker: str) -> list[str]:
 
 
 async def ask(llm, model: str, messages: list[dict], *, human: str, their: str, can_flirt: bool,
-              speaker: str, timeout: float, keep_alive: str) -> tuple[str | None, str]:
-    """(the beat's lines, its want code) or (None, why it was skipped)."""
+              speaker: str, timeout: float, keep_alive: str, seed: int,
+              predict: int = BEAT.options["num_predict"]) -> tuple[str | None, str]:
+    """(the beat's lines, its want code) or (None, why it was skipped). `seed`: per turn and
+    candidate, so a re-run draws the same beat; `predict`: the live [talk] think_budget."""
     wants = beats.wants_for(can_flirt)
-    options = dict(BEAT.options)
+    options = dict(BEAT.options) | {"num_predict": int(predict), "seed": int(seed)}
     offered = beats.fitting(sum(estimate_tokens(m.get("content") or "") for m in messages), human,
                             wants, items(messages, speaker), predict=options["num_predict"],
                             num_ctx=options["num_ctx"], their=their)

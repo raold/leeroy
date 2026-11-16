@@ -35,6 +35,7 @@ from leeroy_mind.text import estimate_tokens
 from . import variants
 
 KEEP_ALIVE = "5m"   # loaded while its candidate runs; unloaded when the next model begins
+BEAT_PREDICT = 240  # a beat's num_predict when the data dir's [talk] think_budget is unknown
 
 
 def _kind(value: str) -> TurnKind | None:
@@ -160,7 +161,9 @@ async def ask(llm, candidate, turn, seed: str, source: str = "first", who=None) 
         lines, beat_code = await beat.ask(
             llm, candidate.model, messages, human=info.get("human", ""),
             their=info.get("their", "their"), can_flirt=bool(info.get("can_flirt")),
-            speaker=info.get("speaker", ""), timeout=candidate.timeout, keep_alive=KEEP_ALIVE)
+            speaker=info.get("speaker", ""), timeout=candidate.timeout, keep_alive=KEEP_ALIVE,
+            seed=turn_seed(f"{seed}|beat|{candidate.name}", turn.id),
+            predict=info.get("think_budget", BEAT_PREDICT))
         if lines is None:
             beat_code = f"skipped:{beat_code}"
         else:

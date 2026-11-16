@@ -8,8 +8,11 @@
 
 So `first` against a candidate asked the same first request is sampling and model; `first`
 against `live` is what the pipeline's retries and guards changed; `live` against `sent` is what
-happened after generation (typing, corrections). Every score is also split by turns the live
-pipeline asked more than once (`retried`) and turns it answered on the first try.
+happened after generation (typing, corrections). On a turn that had a beat live
+([talk] think_private), `first` and `live` were drafted with Orion's beat, which is never stored:
+there compare them with a `beat = true` candidate, not a plain one. Every score is also split by
+turns the live pipeline asked more than once (`retried`) and turns it answered on the first try,
+and by turns that had a beat live (`beat`) and those that did not (`no_beat`).
 
 (a) The stylometric AUC against his real lines (turing.stylo.analyse: the same features and
 sampling caps), where a candidate's lines stand in the corpus in place of the members' lines of
@@ -31,7 +34,7 @@ from leeroy_mind.turing.judge import TELLS
 from leeroy_mind.turing.report import judge_rates
 
 BASELINES = ("sent", "first", "live")
-SUBSETS = ("retried", "first_try")
+SUBSETS = ("retried", "first_try", "beat", "no_beat")
 RECENT_OWN = 20       # her earlier lines a reply is checked against for repeats
 BURST_STEP_S = 2.0    # a candidate's extra line comes this long after the one before
 TOP_STYLE = 3
@@ -70,7 +73,10 @@ def _put(turn, lines: list[str], added: set[str]) -> list[Line]:
 
 
 def subset(plan, name: str) -> set[int]:
-    """The planned turns the live pipeline asked more than once (`retried`), or the others."""
+    """The planned turns the live pipeline asked more than once (`retried`) or answered on the
+    first try (`first_try`); that had a beat live (`beat`) or not (`no_beat`)."""
+    if name in ("beat", "no_beat"):
+        return {tid for tid, t in plan.turns.items() if t.captured.beat == (name == "beat")}
     want = name == "retried"
     return {tid for tid, t in plan.turns.items() if t.captured.retried == want}
 
@@ -305,7 +311,8 @@ def render(report: dict) -> str:
         "`sent` is what the guild sent; `first` is the live model's first draft and `live` the reply "
         "whose words were sent, both typed as every candidate's is: `first` against a candidate is "
         "the model, `first` against `live` the pipeline's retries and guards, `live` against `sent` "
-        "what came after generation.",
+        "what came after generation. On turns that had a beat live, compare `first` and `live` "
+        "with a `beat = true` candidate, not a plain one (the tables of beat turns below).",
         "",
         "AUC 0.50 means the lines read like his; 1.00 means always told apart. The first table's "
         "AUC reads the words alone (what a model changes); the last one adds when and after what "
@@ -314,8 +321,10 @@ def render(report: dict) -> str:
         "is within noise (turing/README.md, Limits); with a few dozen lines a family it is wider.",
     ]
     if report.get("beat_turns"):
-        out += ["", f"{report['beat_turns']} of the turns had a beat live (talk/beat.py). Its lines are "
-                "never stored, so every request here is the line's request without them."]
+        out += ["", f"{report['beat_turns']} of the turns had a beat live (talk/beat.py): their first "
+                "draft and sent reply were written with it, but its lines are never stored, so every "
+                "request here is the line's request without them. On those turns compare `first` and "
+                "`live` with a `beat = true` candidate, not a plain one."]
     if report["missing"]:
         out += ["", "Not pulled, so not run: " + ", ".join(f"`{m}`" for m in report["missing"]) + "."]
     if not report["judge_ran"]:
@@ -366,7 +375,10 @@ def render(report: dict) -> str:
             out.append("- errors: " + ", ".join(f"{k} {n}" for k, n in sorted(c["lines"]["codes"].items())))
         out.append("")
     for name, title in (("retried", "Turns the live pipeline asked more than once"),
-                        ("first_try", "Turns it answered on the first try")):
+                        ("first_try", "Turns it answered on the first try"),
+                        ("beat", "Turns that had a beat live (compare `first` with a `beat = true` "
+                                 "candidate)"),
+                        ("no_beat", "Turns without a live beat")):
         out += [f"## {title}", "",
                 "| candidate | ok | silent | errors | distinct from sent | median words | " + " | ".join(
                     f"AUC {FAMILY_LABELS[f]}" for f in FAMILIES) + " | repeats own | filler after ? |",
