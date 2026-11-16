@@ -29,7 +29,9 @@ What it looks at:
   cast members without a persona. A table an older mind.db lacks is unavailable, a note;
 - the Realm on in mind.toml with a screen that cannot be ready (no realm/blocklist.txt entry, or
   no cached guild name: a FAIL), the newest weekly evaluation incomplete, no secret probe ever
-  recorded while secrets exist, and offline raids blocked on each of the last 3 days (notes).
+  recorded while secrets exist, and offline raids blocked on each of the last 3 days (notes);
+- his messages of the last 24 h that no member answered within 5 minutes (talk/owed.py's
+  count: a note from one, a FAIL from OWNER_UNANSWERED_FAIL), by medium, counts only.
 
 [health] in mind.toml: min_cast (default 100), the floor for both counts in the cast line and
 for the endpoint's cast; grace_minutes (default 6), how long after a server or mind start a
@@ -82,6 +84,9 @@ HOLD_S = 3600  # a realm body hold or unknown root older than this is stuck
 OFFLINE_OVERDUE_S = 30 * 60
 RAID_OPEN_S = 6 * 3600
 SELFIE_QUEUED_S = 30 * 3600
+OWNER_WINDOW_S = 24 * 3600  # his messages of the last day, each answered within OWNER_ANSWER_S
+OWNER_ANSWER_S = 300.0
+OWNER_UNANSWERED_FAIL = 10
 CYCLE_ROWS = 100000
 CYCLE_SECONDS = 0.8
 NIGHT_LOG_BYTES = 4 * 1024 * 1024
@@ -1243,9 +1248,35 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("offline-days", _offline_days, conn, now),
                 _guarded("training-lab", _training_lab, conn, now),
                 _guarded("gpu-pause", _gpu_pause, conn, now),
+                _guarded("owner-replies", _owner_replies, conn, now),
                 _guarded("regear", _regear, conn, now)]
     finally:
         conn.close()
+
+
+def _owner_replies(conn, now: float) -> Check:
+    """His messages of the last OWNER_WINDOW_S that no member answered within OWNER_ANSWER_S
+    (talk.owed.count_unanswered): ok at none, a note from one, a FAIL from
+    OWNER_UNANSWERED_FAIL. Counts by medium only, never a text."""
+    from .talk.owed import count_unanswered
+    name = "owner-replies"
+
+    def check():
+        row = conn.execute("SELECT value FROM meta WHERE key = 'human_guid'").fetchone()
+        human = row[0] if row is not None else None
+        if not (isinstance(human, str) and human.isdecimal() and int(human) > 0):
+            return Check(name, OK, "his messages: none yet (no human guid stored)")
+        got = count_unanswered(conn, int(human), now - OWNER_WINDOW_S, now, window=OWNER_ANSWER_S)
+        if not got.total:
+            return Check(name, OK, "his messages, last 24 h: none yet")
+        if not got.missed:
+            return Check(name, OK, f"his messages, last 24 h: all {got.total} answered")
+        by = ", ".join(f"{k} {n}" for k, n in sorted(got.unanswered.items()))
+        status = FAIL if got.missed >= OWNER_UNANSWERED_FAIL else NOTE
+        return Check(name, status, f"his messages, last 24 h: {got.missed} of {got.total} "
+                     f"unanswered within {int(OWNER_ANSWER_S // 60)} min ({by}); "
+                     "mind.log owed_rescue / owed_held / owed_given_up say why")
+    return _table_check(name, check)
 
 
 def _gpu_pause(conn, now):

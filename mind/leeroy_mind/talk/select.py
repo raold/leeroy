@@ -36,10 +36,13 @@ REASON_HUMAN_FAMILIARITY = 60
 OPEN_THREAD_S = 300.0  # answering him keeps a thread with him open this long
 # How much a woman's attitude weights the draw for an answer to him (lust > drawn > fond).
 ATTITUDE_WEIGHT = {"lust": 1.25, "drawn": 1.15, "fond": 1.08}
-WHISPER_REPLY_P = 0.9
+# Every whisper of his is answered by the one he whispered (owner, 2026-11-15: "a whisper or DM
+# always gets its member's reply"; it was 0.9 for anyone without an attitude toward him).
+WHISPER_REPLY_P = 1.0
 # A woman with an attitude toward him answers every whisper of his (rehearsal 3, check 4).
 WHISPER_REPLY_P_ATTITUDE = 1.0
-REPLY_COUNT_REMARK = ((0.18, 0), (0.70, 1), (1.0, 2))  # cumulative
+# A bare remark of his gets one answer or two, never none (owner, 2026-11-15; it was 18% none).
+REPLY_COUNT_REMARK = ((0.70, 1), (1.0, 2))  # cumulative
 _WORD = re.compile(r"[a-z0-9']+")
 _BRACKETS = re.compile(r"\[[^\]]*\]")
 _STOP = frozenset("""about after again also always another around been before being both
@@ -518,7 +521,10 @@ def plan_replies(text: str, *, channel: str, to_guid: int, weights: dict[int, fl
     reasons to speak; a zero weight never answers (the addressee excepted). `reasons` are the
     members with a real reason (see has_reason) and are drawn first; `allowed` is the raid
     gate, e.g. lambda g: raid.allows(g, TurnKind.REPLY_HUMAN, now). A whisper is answered by
-    the one he whispered, `whisper_p` of the time (whisper_reply_p). A line that names one
+    the one he whispered, `whisper_p` of the time (whisper_reply_p). Any other line gets at
+    least one answer while anyone can give it (the engine weighs again with recent speech
+    ignored when every weight is zero, so a member dialled to talkative 0 still never answers
+    unnamed). A line that names one
     member and speaks to no one else is answered by that member alone (aimed_at_one); the
     members it names answer first in any other.
     `target`: the member his pushback is aimed at (Pushback.target, fix wave G6). They answer

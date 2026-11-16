@@ -877,10 +877,11 @@ def test_a_reply_that_parrots_his_line_is_asked_again_then_never_said(store, clo
                                                                "the inn"]
         assert len(r.chat_calls()) == 2 and "own words" in r.prompts()[1]
         r = make_rig(store, clock, tmp_path, script=script_from([parrot, HIS_WHISPER,
-                                                                  HIS_WHISPER]))
+                                                                  HIS_WHISPER, HIS_WHISPER]))
         await r.advance(15)
         assert await spoken(r, whisper_back(102, line.id)) == []
-        assert len(r.chat_calls()) == 3  # the fallback parrots him too: never said
+        # the fallback parrots him too, and again when told so (P3-C): never said
+        assert len(r.chat_calls()) == 4
         assert r.utterances()[-1]["dropped"] == "tells" and r.sent.says() == []
     run(main())
 
@@ -1247,16 +1248,23 @@ def test_the_chain_counts_answers_and_reactions_but_never_stops_them(store, cloc
 
 
 def test_guild_wide_six_per_minute(store, clock, tmp_path):
-    """The limit counts turns (ruling 4); every reply here is one line, so Says are turns."""
+    """The limit counts turns (ruling 4); every reply here is one line, so Says are turns. Since
+    2026-11-15 the one answer he is owed for each line of his is never held back (talk/owed.py):
+    the limit holds the extra answers, so in any minute at most 6 more go out than he sent
+    lines."""
     async def main():
         r = make_rig(store, clock, tmp_path)
+        his = []
         for i in range(60):
+            his.append(r.clock.now())
             await r.human(f"anyone up for heroics {i}?")
             await r.advance(2)
         await r.advance(40)
         times = [t for t, _ in r.sent.timed_says()]
-        assert len(times) >= 12
-        assert all(sum(1 for u in times if t <= u < t + 60) <= 6 for t in times)
+        assert len(times) >= 60
+        assert all(sum(1 for u in times if t <= u < t + 60)
+                   <= 6 + sum(1 for h in his if t - 60 <= h < t + 60) for t in times)
+        assert [u for u in r.utterances() if u["dropped"] == "guards"]  # the extras are held
     run(main())
 
 
@@ -2624,11 +2632,12 @@ def test_her_answer_to_his_whisper_goes_out_right_after_a_guild_line_of_hers(sto
         assert task.done()
         assert [s.channel for s in r.sent.says() if s.guid == 102][:2] == ["guild", "whisper"]
         assert not [u for u in r.utterances() if u["dropped"] == "guards"]
-        # in guild chat the guard keeps its job: her answer to his guild line waits 10 s
+        # in guild chat the guard held back her answer to his guild line for 10 s, and that was
+        # his only answer; since 2026-11-15 the one answer he is owed goes out (talk/owed.py)
         r.engine.guards.record("t-guild", 102, r.clock.now(), TurnKind.OPEN)
         await r.human("belra you there?")
         await r.advance(30)
-        assert [u["dropped"] for u in r.utterances() if u["guid"] == 102][-1] == "guards"
+        assert [u["dropped"] for u in r.utterances() if u["guid"] == 102][-1] is None
     run(main())
 
 
@@ -2636,7 +2645,7 @@ def test_a_woman_with_an_attitude_toward_him_answers_every_whisper_of_his(store,
                                                                           tmp_path):
     """Rehearsal 3, check 4: his third whisper to a drawn woman drew no reply, the one in ten
     WHISPER_REPLY_P leaves out. A woman fond of him, drawn to him or wanting him answers every
-    whisper; a man keeps the 0.9."""
+    whisper; since 2026-11-15 a man does too (the owner: every whisper gets its reply)."""
     async def main():
         _women(store)
         r = make_rig(store, clock, tmp_path, script=numbered())
@@ -2644,7 +2653,7 @@ def test_a_woman_with_an_attitude_toward_him_answers_every_whisper_of_his(store,
         for g in (101, 102, 103, 104):
             await r.human("you around?", channel="whisper", to_guid=g)
         await r.advance(40)
-        assert {s.guid for s in r.sent.says() if s.channel == "whisper"} == {102, 103, 104}
+        assert {s.guid for s in r.sent.says() if s.channel == "whisper"} == {101, 102, 103, 104}
     run(main())
 
 
@@ -2664,12 +2673,13 @@ def test_a_silent_answer_to_his_whisper_is_asked_once_more(store, clock, tmp_pat
         line = his_line(r, store, "you around?", channel="whisper", to_guid=102).id
         assert await spoken(r, whisper_back(102, line)) == ["right here then"]
         assert len(r.chat_calls()) == 2 and two in r.prompts()[1] and two not in r.prompts()[0]
-        # a second silence gets the owed fallback (owner, 2026-11-15); a silent one stands
+        # a second silence gets the owed fallback (owner, 2026-11-15), asked once more when it is
+        # silent too (P3-C); only then does the silence stand (talk/owed.py's watchdog answers)
         r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "/w Zan",
-                                                                  "(nothing)"]))
+                                                                  "(nothing)", "(nothing)"]))
         line = his_line(r, store, "still there?", channel="whisper", to_guid=103).id
         assert await spoken(r, whisper_back(103, line)) == []
-        assert r.utterances()[-1]["dropped"] == "silent" and len(r.chat_calls()) == 3
+        assert r.utterances()[-1]["dropped"] == "silent" and len(r.chat_calls()) == 4
         assert hint in r.prompts()[1]  # the drawn woman is not at the explicit band
         r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "hey"]))
         g = his_line(r, store, "anyone around?").id

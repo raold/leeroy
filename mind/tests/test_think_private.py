@@ -480,6 +480,66 @@ def test_the_owed_fallback_carries_the_beat(rig):
     assert [s.text for s in rig.sent.says()] == ["oh. wow. i don't know what to say"]
 
 
+def test_an_in_turn_rescue_reuses_the_beat(rig, caplog):
+    """talk/owed.py rescue_text: his whisper's line request fails (llm_error), so the turn's own
+    owed fallback answers him on the same composed prompt, the beat's lines included; no second
+    beat is asked."""
+    class LineFailsOnce(OrionLLM):
+        failed = False
+
+        async def chat(self, model_name, messages, *, options, think=None, format=None, **kw):
+            if format is None and not self.failed:
+                self.failed = True
+                self.calls.append({"model": model_name, "messages": messages, "format": None})
+                raise LLMError("/api/chat: HTTP 500")
+            return await super().chat(model_name, messages, options=options, think=think,
+                                      format=format, **kw)
+    rig.engine.scheduler._llm = rig.llm = LineFailsOnce(model(VENT, "ugh, sorry. tell me"))
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        rig.whisper_from_him(102, "long shift, dead on my feet")
+        rig.run()
+    assert "owed_rescue_line: guid=102" in caplog.text
+    assert len(beat_calls(rig)) == 1
+    fallback = line_calls(rig)[-1]
+    assert LINES_VENT in last_user(fallback)
+    assert last_user(fallback).endswith(OWED_FALLBACK_HINT.format(human="Zan"))
+    assert [s.text for s in rig.sent.says()] == ["ugh, sorry. tell me"]
+
+
+def test_the_watchdogs_rescue_of_his_whisper_gets_a_beat(rig, caplog):
+    """talk/owed.py OwedWatch: a whisper of his nobody answered is rescued by a new turn, which
+    is an answer to him: it asks its own beat, and its line carries the beat's lines."""
+    from types import SimpleNamespace
+    from leeroy_mind.protocol import Chat
+    from leeroy_mind.talk import owed
+    rig.llm.set_script(model(VENT, "sorry, just saw this. rough one?"))
+    app = SimpleNamespace(store=rig.store, clock=rig.clock, engine=rig.engine, world=rig.world,
+                          scheduler=rig.engine.scheduler, discord_talk=None)
+    watch = owed.OwedWatch(app)
+    rig.engine.owed = watch
+
+    async def tick(seconds):
+        for _ in range(int(seconds)):
+            await rig.advance(1)
+            watch.tick(rig.clock.now())
+
+    async def main():
+        await tick(owed.START_GRACE_S)
+        ev = Chat(ts=0, channel="whisper", from_guid=HUMAN, from_name="Testmage", to_guid=102,
+                  text="long shift, dead on my feet", map=0, zone=10)
+        row = rig.store.chat_lines([rig.store.insert_chat_line(ev, session_id=None,
+                                                               origin="human")])[0]
+        rig.world.add_line(row, rig.clock.now())
+        watch.note_line(row, "whisper")  # his line, never planned: only the watchdog answers
+        await tick(400)
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        rig.sync(main())
+    assert "owed_rescue: medium=whisper" in caplog.text
+    assert len(beat_calls(rig)) == 1
+    assert LINES_VENT in last_user(line_calls(rig)[-1])
+    assert [s.text for s in rig.sent.says()] == ["sorry, just saw this. rough one?"]
+
+
 def test_a_line_after_a_beat_is_recorded_as_one(rig):
     rig.engine.learn_enabled = True
     rig.llm.set_script(model(VENT, "aw hey you", "gear first, then gems"))

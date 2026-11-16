@@ -282,13 +282,14 @@ def test_retry_preserves_two_client_calls_and_old_llm_seconds(store, tmp_path):
         assert await rig.engine._generate(t, meta, composed) == ("(nothing)", "silent")
         rig.engine.timing.pipeline_done(meta.timing_trace)
         event = terminals(events)[0]
-        # his whisper is owed: the two timed attempts, then the owed fallback (2026-11-15), which
-        # the trace's two attempt slots leave out but the turn's model seconds count
-        assert len(calls) == 3 and event["model_attempts"] == 2
+        # his whisper is owed: the two timed attempts, then the owed fallback (2026-11-15) and its
+        # second ask (review-325-r2 P3-C), which the trace's two attempt slots leave out but the
+        # turn's model seconds count
+        assert len(calls) == 4 and event["model_attempts"] == 2
         assert event["llm_client_call_ms"] == 4000
         assert event["readiness_admission_ms"] is None
         assert event["model_attempt1_outcome"] == event["model_attempt2_outcome"] == "completed"
-        assert meta.llm_s == 3.0
+        assert meta.llm_s == 4.0
         await rig.engine.scheduler.close()
     run(go())
 

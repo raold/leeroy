@@ -12,7 +12,9 @@ Who answers (plan):
   whose Discord presence is online or idle (not away, with a persona; her body in the
   game need not be online, ruling R14), weighted by warmth toward him (romance.WHISPER_WEIGHT
   and FOND_SHARE for a woman's stance, affinity, the talkative dial) times fit: CLASS_FIT for a
-  class channel's own class, ROLE_FIT for raiders and officers in RAID_CHANNELS.
+  class channel's own class, ROLE_FIT for raiders and officers in RAID_CHANNELS. With nobody
+  online or idle, one of the rest who isn't away answers (his post is always answered,
+  talk/owed.py), and the first answer of every post carries TurnMeta.owed_answer.
 Each answer is a REPLY_HUMAN turn on `discord:<id>` (or the DM, to him), its meta why WHY with
 DiscordTarget(reply_to=his post, thread=its thread), after a delay of 2-25 s by her presence
 (answer_delay). A post's answers are one job, so each comes after the one before it.
@@ -58,6 +60,10 @@ log = logging.getLogger("leeroy_mind.discord")
 
 LEASE = "discord"  # his Discord's lease on the GPU arbiter
 LEASE_IDLE_S = 600.0
+# the lease is kept while answers to him on Discord are still in flight (owner, 2026-11-16:
+# longer GPU use when several members answer him at once), checked this often past its idle end
+LEASE_HOLD_S = 30.0
+LEASE_KEEP_MAX_S = 900.0  # past its idle end the lease is kept this long at most
 WHY = "discord:reply"
 GONE = "discord_deleted_parent"  # the drop reason of an answer whose post was deleted
 MAX_NAMED = 3
@@ -482,6 +488,7 @@ class DiscordTalk:
                             discord_named=g in group_named if is_group(channel) else how == "named",
                             first_question_answer=not items and classify_human_line(text) == "question_all",
                             recall_query=self.recall_query(message_id) or "")
+            meta.owed_answer = not items  # the answer he is owed (talk/owed.py)
             requests = getattr(getattr(app, 'photos', None), 'requests', None)
             if requests is not None:
                 requests.decorate(turn, meta, message_id)
@@ -503,20 +510,34 @@ class DiscordTalk:
                 and personas.get(g) is not None][:MAX_NAMED]
 
     def _draw(self, ch: layout.Channel, audience) -> list[int]:
+        """One member (two with SECOND_P) of the audience online or idle, by warmth and fit;
+        with none of them online or idle, one of the rest who isn't away, so his post is
+        always answered (talk/owed.py; it went unanswered at night before)."""
         app = self.app
         world, hg = app.world, app.human_guid
         away = away_now(app.store, app.clock.now())
         local = app.clock.local()
         weights: dict[int, float] = {}
+        others = []
         for g in sorted(audience):
             if g == hg or g in away:
                 continue
             p = app.personas.get(g)
-            if p is None or self._presence(g, p, local).state not in ANSWERING:
+            if p is None:
+                continue
+            if self._presence(g, p, local).state not in ANSWERING:
+                others.append((g, p))
                 continue
             w = warmth(p, app.store.get_relationship(g, hg, lens=True)) * self._fit(ch, g, p)
             if w > 0:
                 weights[g] = w
+        if not weights:
+            rest = {g: w for g, p in others
+                    if (w := warmth(p, app.store.get_relationship(g, hg, lens=True))
+                        * self._fit(ch, g, p)) > 0}
+            if rest:
+                log.info("discord_draw_widened: channel=%s pool=%d", ch.id, len(rest))
+            return pick_speakers(rest, 1, self.rng)
         n = 2 if len(weights) > 1 and self.rng.random() < SECOND_P else 1
         return pick_speakers(weights, n, self.rng)
 
@@ -786,9 +807,26 @@ class DiscordTalk:
 
     async def _expire(self) -> None:
         clock = self.app.clock
-        while (left := self._until - clock.now()) > 0:
-            await clock.sleep(left)
+        cap = None  # the idle end's absolute keep cap (review-327 P3-10)
+        while True:
+            while (left := self._until - clock.now()) > 0:
+                await clock.sleep(left)
+            if cap is None:
+                cap = clock.now() + LEASE_KEEP_MAX_S
+            if not self._answers_in_flight() or clock.now() >= cap:
+                break
+            log.info("discord_lease_kept: reason=answers_in_flight")
+            self._until = min(cap, clock.now() + LEASE_HOLD_S)  # the live model stays for them
         await self._release()
+
+    def _answers_in_flight(self) -> bool:
+        """Answers to him on Discord the engine still holds (talk/owed.py)."""
+        from leeroy_mind.talk.owed import answers_in_flight
+        engine = getattr(self.app, "engine", None)
+        try:
+            return engine is not None and answers_in_flight(engine, discord=True) > 0
+        except Exception:
+            return False
 
     async def _release(self) -> None:
         arbiter, self._arbiter, self._held = self._arbiter, None, False

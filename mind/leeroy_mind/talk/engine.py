@@ -312,6 +312,8 @@ class TalkEngine(EmoteReactions):
         self._chain_line(chain_base(row.channel, row.from_guid, row.to_guid, row.zone), now,
                          from_human=True)
         self._touch_talk(now)
+        if (owed := getattr(self, "owed", None)) is not None:
+            owed.note_line(row, reply_to)  # owed an answer until a member gives one (talk/owed.py)
         whisper = reply_to == "whisper"
         audience, cands = self._reply_candidates(row, reply_to, now)
         if not cands:  # liveops M5: a line nobody answers says why in the log
@@ -320,6 +322,11 @@ class TalkEngine(EmoteReactions):
             return
         ctx = self._context(now, topic_words([row.text]), quest=is_quest_talk(row.text))
         weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True)
+        if cands and not any(weights.values()):
+            # everyone who could answer spoke in the last minute: weighed again with that
+            # ignored, so his line still gets its answer and the dials still apply (talk/owed.py)
+            weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True,
+                                        fresh=frozenset(cands))
         names = {g: self.world.members[g].name for g in cands if g in self.world.members}
         push = self._pushback(row, reply_to, cands)
         planned = plan_reply_turns(row.text, channel=reply_to, to_guid=row.to_guid,
@@ -356,7 +363,8 @@ class TalkEngine(EmoteReactions):
             planned, lore, kept = self._plan_lore(row, planned, weights, reply_to)
         if (not whisper and self._login_quiet(now)
                 and classify_human_line(row.text) == "greeting"):
-            planned = self._cap_hellos(planned, held)  # the login's 2-3 hellos in all
+            # the login's 2-3 hellos in all, and one answer to his own hello whatever they were
+            planned = self._cap_hellos(planned, held) or planned[:1]
         log.info("reply_planned: line=%d channel=%s pool=%d replies=%d game=%s", row.id,
                  reply_to, len(pool), len(planned), question.topic if question else "-")
         if question is not None and planned:
@@ -412,6 +420,8 @@ class TalkEngine(EmoteReactions):
                                    why="reply:raid_lead")))
         for _, meta in items:
             meta.timing_origin = timing_origin
+        if items:
+            items[0][1].owed_answer = True  # the answer he is owed (talk/owed.py)
         self._queue(items)
 
     def _reply_candidates(self, row: ChatLineRow, reply_to: str, now: float
