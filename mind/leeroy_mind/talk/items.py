@@ -203,6 +203,12 @@ class ItemLinker:
     def ready(self) -> bool:
         return bool(self._index())
 
+    def places(self) -> frozenset[str]:
+        """The library's places and NPCs as bare keys, read with the item names (the check that
+        a battleground is put in no zone: talk/gamenames.py)."""
+        self._index()
+        return self._places
+
     def free_names(self) -> list[str]:
         """Every item name that links unbracketed, as the item table spells it, sorted: what
         the owner can skim (the one-off dump)."""

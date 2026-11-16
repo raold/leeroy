@@ -648,12 +648,13 @@ def test_his_pushback_that_asks_the_past_is_still_its_targets_first(store, clock
     run(main())
 
 
-def test_his_nothing_stands(store, clock, tmp_path):
-    """Silence from the one he pushes back on is accepted: no retry."""
+def test_his_nothing_is_asked_again_then_the_fallback(store, clock, tmp_path):
+    """His pushback is owed an answer (LiveReview.owed; owner, 2026-11-15: every message of his
+    gets a reply): silence is asked again, then the short fallback; only its silence stands."""
     async def main():
         r = korvin_rig(store, clock, tmp_path, script=lambda m, msgs: "(nothing)")
         await r.human("you are fixing to get the boot from this guild korvin")
         await r.advance(45, step=2)
-        assert len(korvins(r)) == 1 and r.sent.says() == []
+        assert len(korvins(r)) == 3 and r.sent.says() == []
         assert [u["dropped"] for u in r.utterances()] == ["silent"]
     run(main())
