@@ -36,8 +36,10 @@ from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.gpu import LiveLeaseHeld
 from leeroy_mind.personas.schema import Persona
 
-from . import files
+from . import bestof, critic, files
 from .config import SelfieCfg, worker_command, worker_env
+from .judge import VisionJudge
+from .params import choose
 from .prompt import LUST_HELD, LUST_NAMED, renderable
 from .render import scene_scale
 from .scene import build_scene_prompt, build_tile_prompt, ref_crop, scene_from, scene_renderable
@@ -279,18 +281,19 @@ class SnapRenderer:
 
     async def image(self, *, snap_id: int, guid: int, idx: int, spec, ref: Path, framing: str,
                     out: Path, thumb: Path, thumb_size: int, shape: str, rid: str,
-                    scale: float | None = None):
+                    scale: float | None = None, steps: int | None = None):
         """(the answer, its seed, the attempts used). SetRefused after TRIES flagged seeds;
         WorkerError("unwritten") for an answer whose two files are not both there. `framing` is
         the reference's (its crop); `scale` the face's (render.scene_scale for a situation),
-        identity_scale when None (a guild tile)."""
+        identity_scale when None (a guild tile); `steps` cfg.steps when None."""
         ctx, cfg = self.ctx, self.cfg
         identity = Identity(ref, ref_crop(framing), cfg.identity_scale if scale is None else scale)
+        steps = cfg.steps if steps is None else steps
 
         def request(attempt: int) -> RenderRequest:
             self._leases()
             return RenderRequest(spec.phrases, spec.negative,
-                                 seed_for(ctx.night, guid, snap_id, idx, attempt), cfg.steps,
+                                 seed_for(ctx.night, guid, snap_id, idx, attempt), steps,
                                  cfg.guidance, SIZE, out, thumb, thumb_size, cfg.nsfw_max,
                                  identity=identity, shape=shape)
         got, attempts = await render_slot(self.worker, request,
@@ -345,6 +348,114 @@ async def _situation(ctx: "NightContext", r: SnapRenderer, row: SnapRow, began: 
     log("selfies_snap_ready", night=ctx.night, snap=row.id,
         seconds=round(time.monotonic() - began, 1), tries=tries)
     return "ready"
+
+
+async def _situation_critic(ctx: "NightContext", r: SnapRenderer, row: SnapRow,
+                            began: float) -> "bestof.Pending | str":
+    """[selfies] critic: best_of seeds of the situation (seed k is _situation's seed with idx k,
+    so k 0 is the seed it would render), each into snaps/critic/ and measured by the worker's
+    detectors (a pending selfie_critic row), with the parameter bandit's scale and steps when it
+    is on. The judge and the choice wait for the worker to exit (_publish). Every seed flagged
+    by the NSFW gate ends it flagged, as _situation does."""
+    data = ctx.settings.data_dir
+    cfg = r.cfg
+    p = ctx.base(row.guid)
+    ref, framing = _face(ctx, p, row.guid, row.pick)  # the loop held a faceless one
+    scene = scene_from(row.scene)
+    control = (scene_scale(cfg.identity_scale, scene.framing), cfg.steps)
+    spec = build_scene_prompt(p, scene)
+    codes = critic.scene_codes(scene)
+    crop = ref_crop(framing)
+    shots = []
+    for k in range(cfg.best_of):
+        params = choose(ctx.store, cfg, data, shape="portrait", framing=scene.framing,
+                        control=control)
+        key = seed_for(ctx.night, row.guid, row.id, k, 0)
+        out = files.snap_candidate(data, row.guid, row.id, key).absolute()
+        thumb = files.snap_candidate(data, row.guid, row.id, key, thumb=True).absolute()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        log("selfies_snap_face", night=ctx.night, snap=row.id, guid=row.guid,
+            scale=params.scale)
+        try:
+            got, seed, tries = await r.image(
+                snap_id=row.id, guid=row.guid, idx=k, spec=spec, ref=ref, framing=framing,
+                out=out, thumb=thumb, thumb_size=SNAP_THUMB_PX, shape="portrait",
+                rid=f"s{row.id}:{k}", scale=params.scale, steps=params.steps)
+        except SetRefused:
+            continue
+        measured = await bestof.measure(r.worker, out, Identity(ref, crop, params.scale))
+        shots.append(bestof.Shot(critic.insert(
+            ctx.store, run=ctx.night, purpose="snap", guid=row.guid, snap_id=row.id, seed=seed,
+            file=critic.rel(data, out), ref=critic.rel(data, ref), crop=crop, critique=measured,
+            framing=codes[0], outfit=codes[1], prop=codes[2], scale=params.scale,
+            steps=params.steps, arm=params.arm, now=ctx.clock.now()),
+            out, thumb, got, seed, tries))
+    if not shots:
+        return "expired" if _expiry(ctx, row, "flagged") else "failed"
+    return bestof.Pending(row, began, tuple(shots))
+
+
+def _send_best(ctx: "NightContext", item: "bestof.Pending", verdicts) -> str:
+    """The clean seed with the best score becomes the situation's photo (copied from
+    snaps/critic/, which keeps every seed); with none clean it stays planned for a later night
+    (new seeds), held `critic`."""
+    row = item.row
+    chosen = critic.best(verdicts)
+    flagged = sum(1 for v in verdicts.values() if not v.clean)
+    if chosen is None:
+        log("selfies_snap_held", night=ctx.night, snap=row.id, reason="critic", seeds=len(item.shots),
+            flagged=flagged)
+        return "held" if ctx.skip(STAGE, _unit(row)) else "failed"
+    shot = next(s for s in item.shots if s.row_id == chosen)
+    data = ctx.settings.data_dir
+    files.replace_atomic(shot.out, files.snap(data, row.guid, row.id).absolute())
+    files.replace_atomic(shot.thumb, files.snap(data, row.guid, row.id, thumb=True).absolute())
+    moved = None
+
+    def write(store) -> None:
+        nonlocal moved
+        moved = _moved(store, row, ctx.base(row.guid))  # his choice may have moved meanwhile
+        if moved is not None:
+            expire(store, row.id, moved, now=ctx.clock.now())
+            return
+        mark_rendered(store, row.id, width=shot.got.width, height=shot.got.height,
+                      seed=shot.seed, tries=shot.tries, nsfw=shot.got.nsfw,
+                      prompt=shot.got.prompt, now=ctx.clock.now())
+        critic.mark_chosen(store.conn, chosen)
+    if not ctx.commit(STAGE, _unit(row), write):
+        return "failed"
+    if moved is not None:
+        log("selfies_snap_expired", night=ctx.night, snap=row.id, reason=moved)
+        return "expired"
+    log("selfies_snap_ready", night=ctx.night, snap=row.id,
+        seconds=round(time.monotonic() - item.began, 1), tries=shot.tries,
+        seeds=len(item.shots), flagged=flagged)
+    return "ready"
+
+
+async def _publish(ctx: "NightContext", cfg: SelfieCfg, pending: list) -> Counter:
+    """After the worker has exited: the judge's pass over each situation's seeds (bestof.settle),
+    then _send_best. The judge's model leaves the GPU once the pass is done."""
+    tally = Counter()
+    if not pending:
+        return tally
+    judge = VisionJudge(ctx.reasoner.llm, cfg.critic_model)
+    for item in pending:
+        try:
+            verdicts = await bestof.settle(ctx.store, cfg, ctx.settings.data_dir, judge,
+                                           [s.row_id for s in item.shots], shape="portrait",
+                                           now=ctx.clock.now())
+            tally[_send_best(ctx, item, verdicts)] += 1
+        except LiveLeaseHeld:
+            raise
+        except Exception as e:  # a file that could not be copied: that unit's failure only
+            ctx.fail(STAGE, _unit(item.row), e)
+            tally["failed"] += 1
+    if judge.used:
+        await critic.unload(ctx.arbiter.admin, judge.model)
+    log("selfies_snaps_published", night=ctx.night,
+        **{k: tally[k] for k in ("ready", "expired", "held", "failed")})
+    return tally
 
 
 def _clear(path: Path) -> None:
@@ -420,11 +531,15 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
 
 
 async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
-                  todo: list[SnapRow]) -> None:
+                  todo: list[SnapRow]) -> list:
+    """Renders the todo list with the worker; with [selfies] critic the situations' seeds are
+    measured and returned (bestof.Pending) for _publish once the worker is gone, else []."""
     r = SnapRenderer(ctx, cfg, worker)
     tally = Counter()
     started = restarted = False
     contended = 0
+    pending = []
+    measuring = getattr(cfg, "critic", False)
     for n, row in enumerate(todo):
         unit = _unit(row)
         try:
@@ -462,6 +577,13 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
         try:
             if row.kind == "guild":
                 tally[await _guild(ctx, r, row, members, began)] += 1
+            elif measuring:
+                got = await _situation_critic(ctx, r, row, began)
+                if isinstance(got, str):
+                    tally[got] += 1
+                else:
+                    pending.append(got)
+                    tally["measured"] += 1
             else:
                 tally[await _situation(ctx, r, row, began)] += 1
         except LiveLeaseHeld:
@@ -485,7 +607,9 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
             continue
         contended = 0
     log("selfies_snaps_done", night=ctx.night,
-        **{k: tally[k] for k in ("ready", "expired", "held", "failed")})
+        **{k: tally[k] for k in ("ready", "expired", "held", "failed")},
+        **({"measured": tally["measured"]} if measuring else {}))
+    return pending
 
 
 def make_snaps_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = None
@@ -502,12 +626,15 @@ def make_snaps_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | Non
         if not todo:
             return
         w = make()
+        pending = []
         try:
-            await _render(ctx, cfg, w, todo)
+            pending = await _render(ctx, cfg, w, todo)
         finally:
             # his login's cancel too, landing here or before: the stop runs to its end, so the
             # tree is gone before the hand-over's preempt returns and the live model loads
             await to_the_end(w.stop())
+        if pending:  # [selfies] critic: the judge and best-of-N, the worker's VRAM free now
+            await _publish(ctx, cfg, pending)
     return stage_snaps
 
 

@@ -21,6 +21,15 @@ FAKE_SELFIE_BAD_SIMILARITY  grids answer a malformed similarity diagnostic
 FAKE_SELFIE_FLAG_CAPTION  captions come back flagged (nothing written)
 FAKE_SELFIE_IDENTITY     ready says identity true; it renders with or without an identity (a
                          plain worker answers identity_unavailable to one with)
+FAKE_SELFIE_CRITIC_BAD   a comma list of seeds whose renders the critic op measures with two
+                         faces (the mind's extra_face)
+FAKE_SELFIE_CRITIC_ID    a JSON object seed -> the identity cosine the critic answers (default
+                         0.8 for a render with a reference)
+FAKE_SELFIE_LOG_STEPS    the log line of a render ends " steps <n>"
+
+A critic answers the measurements of a file this worker rendered (by its seed), or a clean one
+for any other JPEG; a path that is not a file answers missing_image; FAKE_SELFIE_LOG gets
+"<id> critic <seed>".
 
 A grid writes JPEG to `out` and `thumb` and answers the canvas size from the real worker's layout
 (selfie/leeroy_selfie/grid.py); a tile that is not a file answers missing_tile.
@@ -97,6 +106,26 @@ def _caption(req: dict) -> None:
            "seconds": 0.01})
 
 
+def _critic(req: dict, seeds: dict) -> None:
+    env = os.environ
+    seed = seeds.get(req["path"])
+    if env.get("FAKE_SELFIE_LOG"):
+        with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
+            f.write(f"{req['id']} critic {seed}\n")
+    if not os.path.isfile(req["path"]):
+        _send({"id": req["id"], "ok": False, "error": "missing_image"})
+        return
+    bad = {int(s) for s in env.get("FAKE_SELFIE_CRITIC_BAD", "").split(",") if s.strip()}
+    cosines = json.loads(env.get("FAKE_SELFIE_CRITIC_ID") or "{}")
+    identity = cosines.get(str(seed), 0.8) if req.get("ref") else None
+    _send({"id": req["id"], "ok": True, "error": "", "faces": 2 if seed in bad else 1,
+           "face_score": 0.95, "hands": 2,
+           "hand": [{"conf": 0.97, "fingers": 5, "plausible": True, "spread": 2.0}] * 2,
+           "eyes": {"tilt": 0.5, "level": 0.01, "gaze_gap": 0.3, "iod": 80.0},
+           "identity": identity, "identity_code": "ok" if req.get("ref") else "no_ref",
+           "detectors": {"faces": "ok", "hands": "ok"}, "seconds": 0.01})
+
+
 def _send(obj: dict) -> None:
     sys.stdout.buffer.write(json.dumps(obj).encode("utf-8") + b"\n")
     sys.stdout.buffer.flush()
@@ -153,6 +182,7 @@ def main() -> None:
     oom = int(env.get("FAKE_SELFIE_OOM") or 0)
     hang_after = int(env["FAKE_SELFIE_HANG_AFTER"]) if env.get("FAKE_SELFIE_HANG_AFTER") else None
     renders = 0
+    seeds: dict = {}  # out path -> the seed it was rendered from
     while True:
         req = json.loads(lines.get())
         if req.get("op") == "quit":
@@ -162,6 +192,9 @@ def main() -> None:
             continue
         if req.get("op") == "caption":
             _caption(req)
+            continue
+        if req.get("op") == "critic":
+            _critic(req, seeds)
             continue
         if req.get("op") == "embed":
             if env.get("FAKE_SELFIE_HANG"):
@@ -176,7 +209,8 @@ def main() -> None:
             ref = (req.get("identity") or {}).get("ref")
             with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
                 scale = (req.get("identity") or {}).get("scale")
-                f.write(f"{req['id']} {req['seed']}" + (f" scale {scale} identity {ref}" if ref else "") + "\n")
+                f.write(f"{req['id']} {req['seed']}" + (f" scale {scale} identity {ref}" if ref else "")
+                        + (f" steps {req['steps']}" if env.get("FAKE_SELFIE_LOG_STEPS") else "") + "\n")
         renders += 1
         if any(req["id"].startswith(x) for x in env.get("FAKE_SELFIE_TOO_LONG", "").split(",") if x):
             _send({"id": req["id"], "ok": False, "error": "prompt_too_long"})
@@ -197,6 +231,7 @@ def main() -> None:
         if not bad:
             _write(req["out"], JPEG)
             _write(req["thumb"], JPEG)
+            seeds[req["out"]] = req["seed"]
         width, height = (832, 1216) if req.get("shape") == "portrait" else (req["size"],) * 2
         _send({"id": req["id"], "ok": True, "error": "", "flagged": bad,
                "width": width, "height": height,

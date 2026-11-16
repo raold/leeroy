@@ -245,6 +245,9 @@ class RequestPhotos:
                 result = await render_request(app, photo, room, worker_factory=self.worker_factory)
                 outcome = result.outcome
                 if outcome != 'ready':
+                    if result.code == 'critic' and self._critic_fallback(request):
+                        outcome = 'critic_fallback'
+                        return False
                     records.fail(app.store, request.message, result.code or 'render_failed', now=app.clock.now())
                 return outcome == 'ready'
         except (LiveLeaseHeld, GpuPaused):
@@ -276,6 +279,19 @@ class RequestPhotos:
                 render_ms=round(getattr(result, 'render_ms', timings.get('render_ms', 0))),
                 unload_ms=round(timings.get('unload_ms', 0)), stop_ms=round(timings.get('stop_ms', 0)),
                 reload_ms=round(timings.get('reload_ms', 0)), outcome=outcome)
+
+    def _critic_fallback(self, request) -> bool:
+        """[selfies] critic refused every seed of the fresh render: a ready-made photo of hers
+        (request_stock.reserve_fallback) takes the fresh photo's place (request_store.promote_
+        fallback), so she sends that instead. False when there is none: the request fails."""
+        from .request_stock import reserve_fallback
+        app = self.app
+        try:
+            reserve_fallback(app, request, now=app.clock.now())
+            return records.promote_fallback(app.store, request.message, now=app.clock.now())
+        except Exception as error:
+            log('selfie_request_fallback_failed', code=type(error).__name__)
+            return False
 
     def decorate(self, turn, meta, message):
         if request_target(self.app, message) != turn.speaker:

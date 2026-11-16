@@ -114,6 +114,9 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
     face = _face(app, p, snap.guid, snap.pick)
     if face is None or not face[0].is_file():
         return RenderOutcome("failed", "no_face_ref" if face is None else "missing")
+    if getattr(cfg, "critic", False):
+        return await _render_best(app, snap, room, p, scene, spec, face, out, thumb,
+                                  worker_factory=worker_factory)
     identity = Identity(face[0], ref_crop(face[1]), scene_scale(cfg.identity_scale, scene.framing))
     log("selfies_snap_face", snap=snap.id, guid=snap.guid, request=snap.request,
         scale=identity.scale)
@@ -180,3 +183,180 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         return RenderOutcome("failed", code, start_ms, render_ms, tries)
     except OSError:
         return RenderOutcome("failed", "files", start_ms, render_ms, tries)
+
+
+# -- [selfies] critic: best-of-N for a requested photo -----------------------------------------
+
+RETRY_SCALE = 0.45  # a request with no clean seed renders once more with her face this light
+JUDGE_ALLOWANCE_S = 30.0  # what a second round leaves the judge, inside the borrow's budget
+BORROW_S = 180.0  # the arbiter's borrow_timeout, when the room does not say
+
+
+def judge_llm(app):
+    """The judge's client for a request: one that does not wait on the live-chat admission the
+    borrow has closed (the app's own would wait for the borrow to end), but honours the GPU
+    pause. Tests set app.critic_llm."""
+    llm = getattr(app, "critic_llm", None)
+    if llm is not None:
+        return llm
+    from leeroy_mind.llm.client import OllamaClient
+    llm = OllamaClient(app.cfg.ollama.url)
+    gate = getattr(getattr(app, "gpu", None), "gate", None)
+    if gate is not None:
+        llm.gpu_gate = gate
+    return llm
+
+
+async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
+                       worker_factory=None) -> RenderOutcome:
+    """best_of seeds (seed k's attempts are render's attempts k*TRIES.., so k 0 is the seed it
+    would render), each into snaps/critic/ and measured by the worker; when no seed is clean on
+    the detectors, best_of more at RETRY_SCALE with the same worker. The worker then exits and
+    the judge settles every seed; the best clean one is linked into place. With none clean and
+    no second round yet, a second round runs (the worker started again) while the borrow's
+    budget allows, else the request fails `critic` and the caller sends a ready-made photo."""
+    from . import bestof, critic
+    from .judge import VisionJudge
+    from .params import Params, choose
+    from .worker import to_the_end
+    cfg = app.selfies.cfg
+    data = app.data_dir
+    crop = ref_crop(face[1])
+    control = (scene_scale(cfg.identity_scale, scene.framing), cfg.steps)
+    codes = critic.scene_codes(scene)
+    run = f"request:{snap.request}"
+    worker = (worker_factory() if worker_factory is not None else
+              SelfieWorker(worker_command(cfg, identity=True), env=worker_env(cfg)))
+    room.own_worker(worker)  # startup itself can leave a process that needs teardown
+    state = {"k": 0, "start_ms": 0.0, "render_ms": 0.0, "tries": 0, "slowest": 0.0}
+    shots: list = []
+    clean_on_detectors: set = set()
+
+    async def start() -> None:
+        began = time.perf_counter()
+        try:
+            await start_worker(worker, room.make_room)
+        finally:
+            ms = (time.perf_counter() - began) * 1000
+            state["start_ms"] += ms
+            room.timings["start_ms"] = state["start_ms"]
+            state["last_start_ms"] = ms
+        room.check()
+
+    async def round_(retry: bool) -> None:
+        for _ in range(cfg.best_of):
+            k = state["k"]
+            state["k"] += 1
+            params = (Params(RETRY_SCALE, cfg.steps) if retry else
+                      choose(app.store, cfg, data, shape="portrait", framing=scene.framing,
+                             control=control))
+            identity = Identity(face[0], crop, params.scale)
+            key = seed_for(snap.request, snap.guid, k * TRIES)
+            cand = files.snap_candidate(data, snap.guid, snap.id, key).absolute()
+            small = files.snap_candidate(data, snap.guid, snap.id, key, thumb=True).absolute()
+            cand.parent.mkdir(parents=True, exist_ok=True)
+            log("selfies_snap_face", snap=snap.id, guid=snap.guid, request=snap.request,
+                scale=params.scale)
+
+            def request(attempt, k=k, params=params, identity=identity, cand=cand, small=small):
+                room.check()
+                return RenderRequest(spec.phrases, spec.negative,
+                                     seed_for(snap.request, snap.guid, k * TRIES + attempt),
+                                     params.steps, cfg.guidance, SIZE, cand, small, THUMB_PX,
+                                     cfg.nsfw_max, identity=identity, shape="portrait")
+            began = time.perf_counter()
+            try:
+                got, tries = await render_slot(
+                    worker, request, rid=lambda attempt, k=k: f"request:{snap.request}:{k}:{attempt}",
+                    make_room=room.make_room)
+            except SetRefused:
+                state["tries"] += TRIES
+                continue
+            finally:
+                spent = time.perf_counter() - began
+                state["render_ms"] += spent * 1000
+                state["slowest"] = max(state["slowest"], spent)
+                room.timings["render_ms"] = state["render_ms"]
+            state["tries"] += tries
+            room.check()
+            if not cand.is_file() or not small.is_file():
+                raise WorkerError("unwritten")
+            measured = await bestof.measure(worker, cand, identity)
+            seed = seed_for(snap.request, snap.guid, k * TRIES + tries - 1)
+            row_id = critic.insert(
+                app.store, run=run, purpose="request", guid=snap.guid, snap_id=snap.id, seed=seed,
+                file=critic.rel(data, cand), ref=critic.rel(data, face[0]), crop=crop,
+                critique=measured, framing=codes[0], outfit=codes[1], prop=codes[2],
+                scale=params.scale, steps=params.steps, arm=params.arm, now=app.clock.now())
+            shots.append(bestof.Shot(row_id, cand, small, got, seed, tries))
+            if critic.verdict(measured, None).clean:
+                clean_on_detectors.add(row_id)
+
+    def outcome(kind, code=None):
+        return RenderOutcome(kind, code, state["start_ms"], state["render_ms"], state["tries"])
+
+    judge = VisionJudge(judge_llm(app), cfg.critic_model)
+    verdicts: dict = {}
+    retried = False
+    try:
+        await start()
+        await round_(False)
+        if not clean_on_detectors:
+            retried = True
+            await round_(True)
+        await to_the_end(worker.stop())
+        room.check()
+        verdicts.update(await bestof.settle(app.store, cfg, data, judge,
+                                            [s.row_id for s in shots], shape="portrait",
+                                            now=app.clock.now()))
+        room.check()
+        chosen = critic.best(verdicts)
+        arbiter = getattr(room, "arbiter", None)
+        budget = getattr(arbiter, "borrow_timeout", BORROW_S)
+        left = budget - (time.monotonic() - getattr(room, "started", time.monotonic()))
+        need = (state.get("last_start_ms", 0.0) / 1000 + cfg.best_of * state["slowest"]
+                + JUDGE_ALLOWANCE_S)
+        if chosen is None and not retried and left > need:
+            retried = True
+            before = len(shots)
+            await start()
+            await round_(True)
+            await to_the_end(worker.stop())
+            room.check()
+            verdicts.update(await bestof.settle(app.store, cfg, data, judge,
+                                                [s.row_id for s in shots[before:]],
+                                                shape="portrait", now=app.clock.now()))
+            room.check()
+            chosen = critic.best(verdicts)
+        if judge.used:
+            await critic.unload(getattr(arbiter, "admin", None), judge.model)
+        flagged = sum(1 for v in verdicts.values() if not v.clean)
+        log("selfie_request_critic", request=snap.request, seeds=len(shots), flagged=flagged,
+            retried=retried, chosen=chosen is not None)
+        if not shots:
+            return outcome("failed", "flagged")
+        if chosen is None:
+            return outcome("failed", "critic")
+        shot = next(s for s in shots if s.row_id == chosen)
+        with app.store.transaction():
+            _, code = _fresh(app, snap)
+            if code:
+                return outcome("failed", code)
+            # Exclusive links cannot replace a retained file, even if a crash/race left one.
+            os.link(shot.out, out)
+            os.link(shot.thumb, thumb)
+            image = read_image(out, app.data_dir)
+            if image is None:
+                raise WorkerError('unwritten')
+            request_store.remember_image(app.store, snap.id, identity=f'snap:{snap.id}',
+                                         digest=hashlib.sha256(image).hexdigest())
+            mark_rendered(app.store, snap.id, width=shot.got.width, height=shot.got.height,
+                          seed=shot.seed, tries=shot.tries, nsfw=shot.got.nsfw,
+                          prompt=shot.got.prompt, now=app.clock.now())
+            critic.mark_chosen(app.store.conn, chosen)
+        return outcome("ready")
+    except WorkerError as error:
+        code = error.reason if error.reason in ("oom", "vram", "unwritten", "stopped", "timeout") else "worker"
+        return outcome("failed", code)
+    except OSError:
+        return outcome("failed", "files")

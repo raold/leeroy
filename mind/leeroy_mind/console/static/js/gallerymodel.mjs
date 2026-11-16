@@ -18,6 +18,13 @@ export function coverWhy(photo, state, saving) {
   if (photo.cover) { return "This is the current cover."; }
   return whyOff(state);
 }
+// The photo critic's defect codes for a flagged candidate ("limbs,hands"), or "" for a clean one.
+// Codes only: letters and underscores, at most ten of them.
+export function flagCodes(photo) {
+  var flag = photo && photo.flag;
+  if (typeof flag !== "string") { return ""; }
+  return flag.split(",").filter(function (c) { return /^[a-z_]{1,20}$/.test(c); }).slice(0, 10).join(", ");
+}
 // A varied set's candidate says its look (what she wears, how she was photographed); others nothing
 export function lookWords(photo) {
   var look = photo && photo.look;
