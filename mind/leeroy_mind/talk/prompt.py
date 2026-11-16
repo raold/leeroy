@@ -397,27 +397,29 @@ DISCORD_LENGTH = ("This is Discord, not the game, so more than your usual one li
                   "sentence when that's all it needs. One paragraph, no line breaks.")
 DISCORD_WHERE = {"dm": "a Discord DM thread", "channel": "Discord chat"}
 # A channel message drawn short (discord_length.band) reads as a quick line or a couple of
-# sentences; a DM with him is as full as she likes (owner, 2026-11-13: "DMs max expressive").
+# sentences; a DM with him is as full as she likes (owner, 2026-11-13: "DMs max expressive"),
+# as long as the moment needs and no longer (owner's live DM test, 2026-11-16: "write as fully
+# as you feel" made every answer a paragraph, his quick questions included).
 DISCORD_QUICK = ("This is Discord chat, not the game: a quick message the way people type in a "
                  "busy channel, a few words or one sentence (at most about {words} words). "
                  "No line breaks.")
 DISCORD_FEW = ("This is Discord chat, not the game, so more than your usual one line: a couple "
                "of sentences (at most about {words} words). One paragraph, no line breaks.")
-DISCORD_DM = ("This is your private Discord DM, not the game, so write as fully as you feel: "
-              "say everything you want to say, in your own voice, a whole paragraph when you "
-              "have something to say (at most about {words} words). One paragraph, no line "
-              "breaks.")
+DISCORD_DM = ("This is your private Discord DM, not the game. Write as much or as little as the "
+              "moment needs: a quick line when {they} asked something quick, more when you have "
+              "something to say (at most about {words} words). One paragraph, no line breaks.")
 DISCORD_DROPS = ((", in one short line", ""), (" in one short line", ""), (", one short line", ""),
                  ("One short line, the way", "Say it the way"), (", in a few words", ""))
 
 
-def discord_length(channel: str, words: int) -> str:
+def discord_length(channel: str, words: int, they: str = "they") -> str:
     """DISCORD_LENGTH for a turn on `channel` holding about `words`: a DM's or a channel's; ""
-    for a game channel or with no words (the one short line, as before)."""
+    for a game channel or with no words (the one short line, as before). `they`: the
+    addressee's subject pronoun (a DM's is his: HumanIdentity.forms)."""
     template = discord_template(channel, words)
     if not template:
         return ""
-    return template.format(where=DISCORD_WHERE["channel"], words=words)
+    return template.format(where=DISCORD_WHERE["channel"], words=words, they=they)
 
 
 def discord_template(channel: str, words: int) -> str:
@@ -464,7 +466,7 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     else:
         tmpl = OPEN_TO_HIM if to_him and kind is TurnKind.OPEN else INSTRUCTIONS[kind]
     shaped = length_text.strip()
-    on_discord = "" if shaped else discord_length(channel, discord_words)
+    on_discord = "" if shaped else discord_length(channel, discord_words, forms[0])
     length = shaped or on_discord
     if own and not length:  # her usual line, in the words comms_rules has for it
         length = length_rule(typing) if typing is not None else SHORT_LINE

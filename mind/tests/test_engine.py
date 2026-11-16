@@ -215,7 +215,9 @@ def test_her_reply_to_his_quest_line_ends_on_an_offer_to_come_along(store, clock
                                                   addressee=HUMAN, trigger_line=line))
             return msgs[0]["content"], msgs[1]["content"].rsplit("\n\n", 1)[1]
         system, end = await last(104, quest)
-        assert end.endswith("You only know which quests Zan has done if he told you.")
+        # his question is answered first, then the offer (owner's live DM test, 2026-11-16)
+        assert end.endswith("You only know which quests Zan has done if he told you. Answer his "
+                            "question first, plainly, then whatever else.")
         assert "end your line with an offer to help him with it or to come along" in end
         assert "quest" not in system
         for guid, line, kind in ((101, quest, TurnKind.REPLY_HUMAN),

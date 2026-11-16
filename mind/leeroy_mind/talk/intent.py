@@ -31,6 +31,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 from leeroy_mind.life.day import Block, DayEvent
+from leeroy_mind.talk.asking import asks
 from leeroy_mind.talk.filters import flirty
 from leeroy_mind.talk.questions import is_plan
 from leeroy_mind.talk.select import classify_human_line
@@ -141,6 +142,18 @@ STANCE_FLIRT = {"fond": 0.3, "drawn": 0.7, "lust": 1.0}
 # Off under his explicit whisper overlay: it says not to put him off or make him wait.
 TAIL_OFF = frozenset({Intent.VENT, Intent.GOSSIP, Intent.DEFLECT, Intent.BOUNDARY,
                       Intent.LOGISTICS, Intent.SMALL_TALK})
+# The wants offered first when his line asks her something (asking.asks; owner's live DM test,
+# 2026-11-16: the beat chose flirt on 6 of 7 of his DMs, questions included): the ones that
+# answer him, each only where the turn allows it; the rest follow in enum order.
+ASKING_FIRST = (Intent.REACT, Intent.LOGISTICS, Intent.BOUNDARY, Intent.TEASE, Intent.SHARE)
+
+
+def ordered(wants, asking: bool) -> tuple[Intent, ...]:
+    """`wants` (Intents or their codes) in the order they are offered: enum order, or with
+    ASKING_FIRST leading when his line asks her something. Only reorders: nothing is added."""
+    given = {Intent(w) for w in wants}
+    lead = [i for i in ASKING_FIRST if i in given] if asking else []
+    return (*lead, *(i for i in Intent if i in given and i not in lead))
 # A time of day in his line: a real hour ("8pm", "8:30 p.m.", "20:30") or "server time";
 # never "lvl 80 pm me"
 _TIME = re.compile(r"\b(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*(?:[ap]m\b|[ap]\.m\.)"
@@ -243,10 +256,11 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
 
 
 def allowed(ctx: IntentContext) -> tuple[Intent, ...]:
-    """The wants this turn may have (weight above 0), in enum order: beat.wants_for generalised
-    to every rule above."""
+    """The wants this turn may have (weight above 0): beat.wants_for generalised to every rule
+    above. In enum order, or with ASKING_FIRST leading on a turn to him whose line asks her
+    something (asking.asks), on every channel."""
     w = weights(ctx)
-    return tuple(i for i in Intent if w[i] > 0)
+    return ordered((i for i in Intent if w[i] > 0), ctx.to_him and asks(ctx.his_line))
 
 
 def draw_intent(ctx: IntentContext, rng: random.Random) -> Intent | None:
@@ -293,5 +307,6 @@ def topic_for(intent: Intent, ctx: IntentContext) -> str:
     return ""
 
 
-__all__ = ["INTENT_KINDS", "Intent", "IntentContext", "ROWS", "TAIL_OFF", "WANT_WORDS", "allowed",
-           "draw_intent", "topic_for", "want_words", "weights"]
+__all__ = ["ASKING_FIRST", "INTENT_KINDS", "Intent", "IntentContext", "ROWS", "TAIL_OFF",
+           "WANT_WORDS", "allowed", "draw_intent", "ordered", "topic_for", "want_words",
+           "weights"]

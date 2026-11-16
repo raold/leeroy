@@ -40,6 +40,7 @@ import random
 import re
 import secrets
 import sqlite3
+import zlib
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, field, replace
@@ -89,7 +90,8 @@ from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
-from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
+from leeroy_mind.talk.asking import asks, is_question
+from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line, question_first
 from leeroy_mind.talk.owed import (HIS_TALK_WAIT_S, KEEP_WHISPERS, RESCUABLE as OWED_RESCUABLE,
                                    answers_in_flight, extend_owed_deadline, his_talk_after,
                                    owes_him, rescue_text)
@@ -469,6 +471,11 @@ class TurnMeta:
     # the beat's lines for this answer (talk/beat.py): None not asked yet, "" skipped; never
     # logged or stored
     beat: str | None = field(default=None, repr=False)
+    # the beat's conversation ledger key (beat.ledger_key; "" before a beat was asked) and the
+    # key of what it brought in ("m<id>"/"c<id>", None for nothing): her said turn is recorded
+    # there (_spend), so the conversation's next beats follow the bring-in rules
+    beat_conversation: str = ""
+    beat_use: str | None = None
     # [bakeoff] capture: the model calls this turn made since its last recorded line (the sent
     # words pick theirs), and the row the generation's first line wrote (bakeoff/capture.py);
     # empty and None while capture is off
@@ -572,11 +579,16 @@ class Composed:
     # her last moves with this turn's counterpart, as its Lately line read them: the repeat
     # check uses the same rows
     moves: list[MoveRow] = field(default_factory=list)
-    # the memories and chat lines it showed, as the beat may offer them (beat.items_of)
+    # the memories and chat lines it showed, as the beat may offer them (beat.keyed_items), and
+    # beside each its key ("m<id>" a memory, "c<id>" a chat line; "" none)
     beat_items: list[str] = field(default_factory=list)
     # his explicit whisper overlay is after its instruction (romance.whisper_tail): the beat
     # then offers none of the wants it rules out (beat.wants_for's `tail`)
     tail: bool = False
+    beat_keys: list[str] = field(default_factory=list)
+    # the turn answers his line and it asks her something (asking.asks): the beat's answering
+    # wants lead (beat.wants_for's `asking`)
+    asking: bool = False
 
 
 def _hinted(composed: "Composed", hint: str) -> "Composed":
@@ -1352,20 +1364,26 @@ class Pipeline:
         goes as it would without it. Its preparation runs inside the same guard, and after a wait
         for admission the scope and the deadline are checked again, as _ask does. Its time counts
         in the turn's llm_s. Logs carry the want code and times, never its words."""
-        started, reason, wants, items = self.clock.now(), "", (), []
+        started, reason, wants, items, order = self.clock.now(), "", (), [], []
         try:
             human, their = self.human.called, self.human.forms[2]
-            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0, tail=c.tail)
+            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0, tail=c.tail,
+                                    asking=c.asking)
             options = dict(BEAT.options)
             options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
+            offered = self._beat_offer(turn, meta, c, started)
             items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
-                                  wants, c.beat_items, predict=options["num_predict"],
-                                  num_ctx=options["num_ctx"], their=their)
+                                  wants, [x for _, x in offered], predict=options["num_predict"],
+                                  num_ctx=options["num_ctx"], their=their, asking=c.asking)
             if items is None:
                 reason = "room"
             else:
-                messages = _with_hint(c.messages, beats.instruction(human, wants, items, their))
-                fmt = beats.schema(wants, human, their)
+                # what fits, in the turn's own order (beat.shuffled): position carries no bias
+                order = beats.shuffled(offered[:len(items)], self._beat_rng(turn, meta, started))
+                items = [x for _, x in order]
+                messages = _with_hint(c.messages, beats.instruction(human, wants, items, their,
+                                                                    asking=c.asking))
+                fmt = beats.schema(wants, human, their, offered=bool(items), asking=c.asking)
 
                 async def job(llm):
                     if not _scope_valid(meta):
@@ -1405,9 +1423,54 @@ class Pipeline:
             log.info("think_beat_skipped: guid=%d reason=%s ms=%d", turn.speaker, reason,
                      round(elapsed * 1000))
             return ""
+        meta.beat_use = next((k for k, x in order if x == found.use), None) if found.use else None
         log.info("think_beat: guid=%d want=%s use=%d ms=%d", turn.speaker, found.want,
                  found.use is not None, round(elapsed * 1000))
         return beats.lines(found, human)
+
+    def _beat_offer(self, turn: Turn, meta: TurnMeta, c: "Composed",
+                    now: float) -> list[tuple[str, str]]:
+        """What the beat may bring in this turn (beat.offerable): the composed prompt's items
+        without what this conversation's ledger says she already brought in, none while she
+        brought something in within her last turns there. The turn's ledger key goes on `meta`,
+        so her said turn is recorded (_spend). A ledger that cannot be read offers as an empty
+        one would."""
+        meta.beat_conversation = beats.ledger_key(turn.speaker, turn.channel, turn.to_guid)
+        meta.beat_use = None
+        keys = list(c.beat_keys) + [""] * (len(c.beat_items) - len(c.beat_keys))
+        try:
+            entries = beats.ledger(self.store.get_meta(meta.beat_conversation), now)
+        except sqlite3.Error:
+            entries = []
+        return beats.offerable(list(zip(keys, c.beat_items)), entries)
+
+    def _beat_rng(self, turn: Turn, meta: TurnMeta, now: float) -> random.Random:
+        """The turn's own seeded draw for the order of the beat's items (life.seed.seeded): the
+        night, the member, the minute and the turn."""
+        from leeroy_mind.life.seed import seeded
+        return seeded("beat_items", night_of(self.clock.local()), turn.speaker, int(now // 60),
+                      zlib.crc32(str(meta.turn_id).encode()))
+
+    def _record_beat(self, turn: Turn, meta: TurnMeta, now: float) -> None:
+        """Her turn in a conversation whose beat was asked is said: the ledger gains it (what it
+        brought in, or nothing), ids and times only; her ledgers there older than LEDGER_TTL go.
+        Never costs the line: a failing write is logged by its class."""
+        key = meta.beat_conversation
+        if not key:
+            return
+        try:
+            entries = beats.ledger(self.store.get_meta(key), now)
+            self.store.set_meta(key, beats.recorded(entries, now, meta.beat_use))
+            prefix = beats.LEDGER_KEY.format(guid=turn.speaker, conversation="")
+            with self.store.transaction():
+                stale = [k for k, v in self.store.conn.execute(
+                    "SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?",
+                    (len(prefix), prefix)) if k != key and not beats.ledger(v, now)]
+                self.store.conn.executemany("DELETE FROM meta WHERE key = ?",
+                                            [(k,) for k in stale])
+        except sqlite3.Error as e:
+            log.warning("think_beat_ledger_failed: guid=%d error=%s", turn.speaker,
+                        type(e).__name__)
 
     async def _compose_prompt(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
@@ -1511,12 +1574,13 @@ class Pipeline:
                                    pronoun=pronouns.get(("card", g), ""))
                  for g in people]
 
-        trigger = ""
+        trigger = his = ""  # his: the line of his the turn answers, on any channel ("" none)
         if trigger_text is not None:
-            query = trigger = trigger_text
+            query = trigger = his = trigger_text  # a preview's line is his
         elif turn.trigger_line:
             rows = self.store.chat_lines([turn.trigger_line])
             query = trigger = rows[0].text if rows and self._may_carry(turn, rows[0]) else ""
+            his = trigger if trigger and hg and rows[0].from_guid == hg else ""
         elif meta.recall_query:  # his Discord post and its thread, no trigger line (discord.talk)
             query = meta.recall_query
         elif turn.kind is TurnKind.OPEN and meta.topic:
@@ -1543,6 +1607,8 @@ class Pipeline:
         local = self.clock.local()
         phase = day_phase(local)
         to_human = bool(hg) and turn.addressee == hg
+        if to_human and not his and not preview:
+            his = self._his_post(meta)  # his Discord post or DM the turn answers
         them = human.forms[1] if to_human else "them"
         greet = turn.kind is TurnKind.GREET
         # the greetings of his login a later greeter sees, as who said hi and never the words
@@ -1609,6 +1675,13 @@ class Pipeline:
         after = moves_line(recent_moves,
                            night_start=night_bounds(night_of(local), local.tzinfo)[0],
                            forms=self._forms_of(self._counterpart(turn)))
+        # an answer to his question, on any channel: answer it first (asking.QUESTION_FIRST,
+        # in place of the hint's "do something else"), unless another member already answered
+        # it (`seen` then says to add what they didn't); a question or a request leads the
+        # beat's answering wants (Composed.asking)
+        his = his if to_human else ""
+        if his and is_question(his) and not before:
+            after = question_first(after, human.forms[2])
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
@@ -1695,6 +1768,12 @@ class Pipeline:
             text = strip_wow_markup(text)
             return text if real or not human.real_name else redact_real_name(text, human,
                                                                             human.called)
+        shown = memories[:len(trimmed.memories)]
+        beat_offer = beats.keyed_items(
+            [(f"m{m.id}" if m.id else "", beats.unframed(x))
+             for m, x in zip(shown, trimmed.memories)],
+            [(f"c{r.id}" if r.id else "", plain(r.text)) for r in recent[:-1]
+             if r.from_guid != turn.speaker and r.id != turn.trigger_line])
         return Composed(messages,
                         list(dict.fromkeys([m.id for m in memories[:len(trimmed.memories)]] +
                              ([callback.memory_id] if callback else []))), p, close,
@@ -1706,11 +1785,25 @@ class Pipeline:
                         [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves,
                         # as plain text (no age, speaker or bullet): the shown memories, then the
                         # others' earlier lines, never hers nor the line she answers
-                        beat_items=beats.items_of(
-                            [beats.unframed(x) for x in trimmed.memories],
-                            [plain(r.text) for r in recent[:-1]
-                             if r.from_guid != turn.speaker and r.id != turn.trigger_line]),
-                        tail=bool(tail))
+                        beat_items=[x for _, x in beat_offer],
+                        tail=bool(tail), beat_keys=[k for k, _ in beat_offer],
+                        asking=bool(his) and asks(his))
+
+    def _his_post(self, meta: TurnMeta) -> str:
+        """The text of his Discord post the turn answers (meta.discord's reply_to, his own
+        message, not deleted), or ""."""
+        target = meta.discord
+        hg = self.human.guid
+        if target is None or not target.reply_to or not hg:
+            return ""
+        try:
+            with self.store.transaction():
+                row = self.store.conn.execute(
+                    "SELECT text FROM discord_message WHERE id = ? AND author = ? "
+                    "AND origin = 'human' AND deleted IS NULL", (target.reply_to, hg)).fetchone()
+        except sqlite3.Error:
+            return ""
+        return row[0] if row else ""
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:
@@ -3595,6 +3688,7 @@ class Pipeline:
             self._romance_at[turn.speaker] = now
         if meta.memory_ids:
             self.store.touch_memories(meta.memory_ids, now)
+        self._record_beat(turn, meta, now)
 
     def _drop(self, turn: Turn, meta: TurnMeta, reason: str, memory_ids=(), *, text: str = "",
               at: float | None = None) -> list[str]:

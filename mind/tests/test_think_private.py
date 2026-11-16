@@ -277,7 +277,8 @@ def test_his_whisper_gets_a_beat_then_the_line(rig):
     rig.whisper_from_him(102, "long shift, dead on my feet")
     rig.run()
     first, second = rig.chat_calls()
-    assert first["format"] == beats.schema(beats.wants_for(True), "Zan", "his")  # he/him
+    # he/him; nothing to bring in yet, so `use` can only be null
+    assert first["format"] == beats.schema(beats.wants_for(True), "Zan", "his", offered=False)
     assert first["think"] is False  # never left out for Orion: it would think
     assert first["options"] == {"temperature": 0.9, "min_p": 0.05, "top_p": 1.0,
                                 "num_predict": 240, "num_ctx": NUM_CTX}
@@ -348,7 +349,7 @@ def test_bring_in_names_what_she_was_offered(rig):
     assert last_user(first_beat).endswith(beats.USE_NONE)  # nothing before his line
     offered = last_user(second_beat).rsplit("\n", 1)[-1]
     assert offered == "1. hey you"  # his earlier line as plain text: no age, no speaker
-    listed = last_user(second_beat).split("worth bringing in, or null:", 1)[1]
+    listed = last_user(second_beat).split("last line, else null:", 1)[1]
     assert "mm hi stranger" not in listed and "my boss again" not in listed  # hers, his newest
     assert last_user(line_calls(rig)[-1]).endswith("\nBring in: " + offered[3:])
 

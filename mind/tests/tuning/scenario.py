@@ -20,7 +20,11 @@ The beat before an answer to his whisper or DM ([talk] think_private, talk/beat.
 off in this scenario, so its whisper answer is the one recorded before; the beat has its own
 golden, golden_beat.json (record_beat): two answers to his whispers with the beat on, every
 request as sent (the beat's prompt, format and options, and each line's prompt with the beat's
-lines after its instruction)."""
+lines after its instruction).
+
+Re-recorded on 2026-11-16 for DM quality (test_tuning_invariant.py says what moved): the hint's
+topics are content words only and his unanswered questions are answered first; the beat's `use`
+bears directly on his last line or is null. The draws and the lines sent are unchanged."""
 import asyncio
 import json
 import random
