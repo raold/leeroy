@@ -201,6 +201,14 @@ class Appearance:
     # writes it (enrich.ENRICH_SCHEMA leaves it out), and a persona stored without it loads.
     bust: Literal["small", "medium", "large", "very_large"] | None = _f(default=None,
                                                                         enrichment=True)
+    # Her figure's other clothed shape words, set the same way (owner, 2026-11-15: "the same
+    # adjustment for glutes, waist and hips"): women only, owner-set, never the looks pass's.
+    glutes: Literal["small", "medium", "large", "very_large"] | None = _f(default=None,
+                                                                          enrichment=True)
+    waist: Literal["very_narrow", "narrow", "average", "wide"] | None = _f(default=None,
+                                                                           enrichment=True)
+    hips: Literal["narrow", "average", "wide", "very_wide"] | None = _f(default=None,
+                                                                        enrichment=True)
 
 
 @dataclass(frozen=True)
@@ -220,15 +228,21 @@ class ProfilePhoto:
 
 DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
 BUSTS = get_args(get_args(get_type_hints(Appearance)["bust"])[0])  # smallest first
-OWNER_LOOKS = ("bust",)  # looks only the owner sets: no model is asked for them
+GLUTES = get_args(get_args(get_type_hints(Appearance)["glutes"])[0])
+WAISTS = get_args(get_args(get_type_hints(Appearance)["waist"])[0])
+HIPS = get_args(get_args(get_type_hints(Appearance)["hips"])[0])
+OWNER_LOOKS = ("bust", "glutes", "waist", "hips")  # looks only the owner sets, women only: no
+# model is asked for them
 
 
 def appearance_dict(a: Appearance) -> dict:
-    """The looks as a plain dict, a bust that is not set left out, so looks stored before it
-    existed keep their dict (and every hash and receipt made from it)."""
+    """The looks as a plain dict, the owner's shape words (OWNER_LOOKS) that are not set left
+    out, so looks stored before they existed keep their dict (and every hash and receipt made
+    from it)."""
     d = _dump(a)
-    if a.bust is None:
-        del d["bust"]
+    for name in OWNER_LOOKS:
+        if getattr(a, name) is None:
+            del d[name]
     return d
 
 
@@ -464,7 +478,7 @@ def persona_to_dict(p: Persona) -> dict:
     if p.photo is None:
         del d["photo"]  # a persona without one stays as the previous release wrote it
     if p.appearance is not None:
-        d["appearance"] = appearance_dict(p.appearance)  # likewise looks without a bust
+        d["appearance"] = appearance_dict(p.appearance)  # likewise looks without shape words
     if p.identity.home is None:
         del d["identity"]["home"]  # and an identity without a home state
     return d
@@ -571,8 +585,9 @@ def _enrichment_errors(p: Persona) -> list[str]:
     if p.identity.player_gender == "male":
         errs += [f"romance.{name}: men stay friends; leave it empty"
                  for name in ("drawn_to", "turned_off_by") if getattr(p.romance, name)]
-        if p.appearance is not None and p.appearance.bust is not None:
-            errs.append("appearance.bust: women only; leave it empty")
+        if p.appearance is not None:
+            errs += [f"appearance.{name}: women only; leave it empty" for name in OWNER_LOOKS
+                     if getattr(p.appearance, name) is not None]
     ranks = [DEPTHS.index(d.depth) for d in p.disclosures if d.depth in DEPTHS]
     if ranks != sorted(ranks):
         errs.append("disclosures: depths must run surface, then middle, then deep")

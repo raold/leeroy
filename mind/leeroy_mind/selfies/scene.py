@@ -17,7 +17,8 @@ from leeroy_mind.text import has_meta
 from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
-from .prompt import (_FRAMINGS, body_phrases, fit_required, _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
+from .prompt import (_FRAMINGS, GLUTES_FRAMINGS, body_phrases, fit_required, glutes_words,
+                     _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
                      LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
@@ -478,6 +479,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
         add(s.outfit, 2, True)
     if _LIGHT[s.when]:
         add(_LIGHT[s.when], 2)
+    if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # optional, after who she is
+        out.append((glutes_words(p), 2))
     add(s.expression, 3, True)
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)

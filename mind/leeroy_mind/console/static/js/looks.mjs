@@ -1,8 +1,8 @@
-// His weight and bust edit in a member's Looks panel: a number and a select, saved through the
+// His weight and figure edit in a member's Looks panel: a number and selects, saved through the
 // mind's looks op (/api/looks). Each save is a new persona version with a ledger row (its Undo is
 // in the ledger below) and queues a fresh set of profile photos. Drafts stay in this page's memory.
 import { clear, el, emit, obj, post, str } from "./core.mjs";
-import { BUST_UNSET, BUST_WORDS, looksArgs, looksForm, looksReply, looksUndoArgs } from "./looksmodel.mjs";
+import { BUST_UNSET, BUST_WORDS, SHAPES, looksArgs, looksForm, looksReply, looksUndoArgs } from "./looksmodel.mjs";
 
 const drafts = new Map();
 const said = new Map();  // the last answer per member, shown again after a redraw
@@ -47,6 +47,21 @@ export function looksEditor(box, j, guid, live, why, done) {
     bl.appendChild(bust);
     box.appendChild(bl);
   }
+  const shapes = {};  // glutes, waist and hips beside her bust, women only
+  if (form.bustable) {
+    SHAPES.forEach(sh => {
+      const sel = el("select");
+      const unset = el("option", "", sh.unset); unset.value = ""; sel.appendChild(unset);
+      form.shapes[sh.name].options.forEach(v => { const o = el("option", "", v.replace(/_/g, " ")); o.value = v; sel.appendChild(o); });
+      const key = "shape:" + sh.name;
+      sel.value = draft[key] !== undefined ? draft[key] : form.shapes[sh.name].value;
+      sel.addEventListener("change", () => { draft[key] = sel.value; });
+      const lab = el("label", "godmode-field", sh.label);
+      lab.appendChild(sel);
+      box.appendChild(lab);
+      shapes[sh.name] = sel;
+    });
+  }
   const status = el("p", "why"); status.setAttribute("role", "status");
   const last = said.get(guid);
   status.textContent = last ? last.words
@@ -55,10 +70,11 @@ export function looksEditor(box, j, guid, live, why, done) {
   const acts = el("div", "acts");
   const save = el("button", "", "Save looks");
   save.type = "button";
-  [weight, bust, save].forEach(x => { if (x) { x.disabled = !live; if (!live) x.title = why; } });
+  [weight, bust, ...Object.values(shapes), save].forEach(x => { if (x) { x.disabled = !live; if (!live) x.title = why; } });
   save.addEventListener("click", () => {
     let args;
-    try { args = looksArgs(guid, form, weight.value, bust ? bust.value : ""); }
+    const picked = Object.fromEntries(Object.entries(shapes).map(([k, sel]) => [k, sel.value]));
+    try { args = looksArgs(guid, form, weight.value, bust ? bust.value : "", picked); }
     catch (e) { status.textContent = e.message; status.classList.add("bad"); return; }
     status.classList.remove("bad");
     status.textContent = "Saving…";

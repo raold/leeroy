@@ -486,8 +486,7 @@ def test_a_varied_set_requires_her_body_hair_and_skin_right_after_who_she_is(bui
         assert after[0] in (long[0], short[0]) and after[1] == build_words(p)
         parts = varied_parts(look, look.phrase)
         assert parts["wearing"] in _texts(spec, 0)
-        if parts["view"] not in _texts(spec, 0):  # the framing yields before the pose
-            assert parts["framing"] not in _texts(spec, 0)
+        assert parts["view"] in _texts(spec, 0)  # the pose never yields (2026-11-15)
 
 
 def test_a_varied_set_says_hair_and_skin_right_after_her_body():

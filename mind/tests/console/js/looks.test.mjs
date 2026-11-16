@@ -1,17 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BUST_UNSET, bustText, canUndoLooks, looksArgs, looksForm, looksReply,
-         looksUndoArgs } from "../../../leeroy_mind/console/static/js/looksmodel.mjs";
+import { BUST_UNSET, SHAPES, bustText, canUndoLooks, looksArgs, looksForm, looksReply,
+         looksUndoArgs, shapeText } from "../../../leeroy_mind/console/static/js/looksmodel.mjs";
 
-const LIMITS = { weight_kg: [40, 180], busts: ["small", "medium", "large", "very_large"] };
-const her = { identity: { player_gender: "female" }, appearance: { weight_kg: 88, bust: "large" } };
+const LIMITS = { weight_kg: [40, 180], busts: ["small", "medium", "large", "very_large"],
+                 glutes: ["small", "medium", "large", "very_large"],
+                 waists: ["very_narrow", "narrow", "average", "wide"],
+                 hips: ["narrow", "average", "wide", "very_wide"] };
+const her = { identity: { player_gender: "female" },
+              appearance: { weight_kg: 88, bust: "large", glutes: "large", hips: "very_wide" } };
 const him = { identity: { player_gender: "male" }, appearance: { weight_kg: 95 } };
+const shapesOf = (g, w, h) => ({ glutes: { value: g, options: LIMITS.glutes },
+                                waist: { value: w, options: LIMITS.waists },
+                                hips: { value: h, options: LIMITS.hips } });
 
 test("the form takes her values and the view's limits; no looks, no form", () => {
   assert.deepEqual(looksForm(her, LIMITS),
-    { weight: 88, bust: "large", min: 40, max: 180, busts: LIMITS.busts, bustable: true });
+    { weight: 88, bust: "large", min: 40, max: 180, busts: LIMITS.busts, bustable: true,
+      shapes: shapesOf("large", "", "very_wide") });
   assert.deepEqual(looksForm(him, LIMITS),
-    { weight: 95, bust: "", min: 40, max: 180, busts: LIMITS.busts, bustable: false });
+    { weight: 95, bust: "", min: 40, max: 180, busts: LIMITS.busts, bustable: false,
+      shapes: shapesOf("", "", "") });
   assert.equal(looksForm({ identity: {}, appearance: null }, LIMITS), null);
   assert.equal(looksForm(null, LIMITS), null);
   assert.equal(looksForm(her, {}).max, 180);  // an older console view without limits
@@ -48,4 +57,20 @@ test("the answer's words are the mind's own, and the bust is said in words", () 
   assert.equal(bustText("very_large"), "very large");
   assert.equal(bustText(undefined), BUST_UNSET);
   assert.equal(bustText("huge"), BUST_UNSET);
+});
+
+test("glutes, waist and hips go with her bust, as values or null, never for a man", () => {
+  const f = looksForm(her, LIMITS);
+  assert.deepEqual(SHAPES.map(sh => sh.name), ["glutes", "waist", "hips"]);
+  assert.deepEqual(looksArgs(102, f, "88", "very_large", { glutes: "very_large", waist: "", hips: "wide" }),
+    { action: "set", guid: 102, weight_kg: 88, bust: "very_large", glutes: "very_large", waist: null,
+      hips: "wide" });
+  assert.deepEqual(looksArgs(102, f, "88", "large"),  // an older page: the shapes stay as stored
+    { action: "set", guid: 102, weight_kg: 88, bust: "large" });
+  assert.throws(() => looksArgs(102, f, "88", "", { waist: "tiny" }), /waist value from the list/);
+  assert.deepEqual(looksArgs(101, looksForm(him, LIMITS), "95", "", { glutes: "large", hips: "wide" }),
+    { action: "set", guid: 101, weight_kg: 95, bust: null });
+  assert.equal(shapeText("glutes", undefined), "not said");
+  assert.equal(shapeText("waist", ""), "the build's own");
+  assert.equal(shapeText("hips", "very_wide"), "very wide");
 });

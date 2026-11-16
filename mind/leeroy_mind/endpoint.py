@@ -797,20 +797,25 @@ def raidlead_args(args) -> dict:
 
 
 LOOKS_SHAPES = {"set": {"action", "guid", "weight_kg", "bust"}, "undo": {"action", "ledger"}}
+LOOKS_OPTIONAL = ("glutes", "waist", "hips")  # set's own extras: one left out stays as stored
 
 
 def looks_args(args) -> dict:
-    """His weight and bust edit (personas.looks_edit), exactly: {"action": "set", "guid", a
+    """His weight and figure edit (personas.looks_edit), exactly: {"action": "set", "guid", a
     member's guid, "weight_kg", a whole number of kg in the schema's range, "bust", one of
-    schema.BUSTS or null} or {"action": "undo", "ledger": a persona ledger row's id}; whether
-    they name a cast member with looks is the mind's to say. BadRequest otherwise."""
+    schema.BUSTS or null, and any of "glutes", "waist", "hips", each one of its schema values or
+    null} or {"action": "undo", "ledger": a persona ledger row's id}; whether they name a cast
+    member with looks is the mind's to say. BadRequest otherwise."""
     from leeroy_mind.personas.looks_edit import LooksError, check
     if not isinstance(args, dict) or args.get("action") not in LOOKS_SHAPES:
         raise BadRequest("looks: an action, set or undo")
     action = args["action"]
     shape = LOOKS_SHAPES[action]
-    if set(args) != shape:
-        raise BadRequest(f"looks {action}: exactly " + ", ".join(sorted(shape - {"action"})))
+    extras = set(args) - shape
+    if not shape <= set(args) or (action == "undo" and extras) \
+            or not extras <= set(LOOKS_OPTIONAL):
+        raise BadRequest(f"looks {action}: exactly " + ", ".join(sorted(shape - {"action"}))
+                         + (" (and any of glutes, waist, hips)" if action == "set" else ""))
     if action == "undo":
         if not (type(args["ledger"]) is int and 1 <= args["ledger"] < 1 << 63):
             raise BadRequest("looks undo: ledger is a ledger row's number")
@@ -818,11 +823,11 @@ def looks_args(args) -> dict:
     if not _count(args["guid"], 1):
         raise BadRequest("looks set: guid is a member's guid")
     try:
-        check(args["weight_kg"], args["bust"])
+        check(args["weight_kg"], args["bust"], **{k: args[k] for k in extras})
     except LooksError as e:
         raise BadRequest(str(e)) from None
     return {"action": "set", "guid": args["guid"], "weight_kg": args["weight_kg"],
-            "bust": args["bust"]}
+            "bust": args["bust"], **{k: args[k] for k in LOOKS_OPTIONAL if k in extras}}
 
 
 def learn_args(args):

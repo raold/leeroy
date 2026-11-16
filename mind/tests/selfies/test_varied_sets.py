@@ -283,10 +283,15 @@ def test_hair_and_skin_are_required_and_only_their_details_shorten(h):
                                                 hair_style="h" * 40, skin_tone="s" * 30))
     longest = max(_looks(), key=lambda x: joined([f"wearing {x.phrase}, {x.setting}"]))
     spec = build_varied_prompt(huge, longest)
-    assert not over_fit(spec) and joined(_required(spec)) <= 75
     assert ("shoulder-length dark brown hair", 0) in spec.phrases  # its style dropped
     assert ("s" * 30 + " skin", 0) in spec.phrases  # one word: its tone, kept
     assert (BUILD_WORDS["voluptuous"], 0) in spec.phrases  # never shortened
+    from leeroy_mind.selfies.prompt import POSE_SHORT
+    view = VARIED_VIEW_WORDS[longest.view]
+    assert {(view, 0), (POSE_SHORT.get(view), 0)} & set(spec.phrases)  # the pose never yields
+    # free text this long cannot fit beside a pose that never yields: the worker refuses the
+    # slot and it renders her ordinary photo (render.render_candidates' fallback)
+    assert over_fit(spec) == (joined(_required(spec)) > 75)
 
 
 def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
