@@ -29,6 +29,28 @@ HIS = "how many kids do you have? what about their dad?"
     ("i love you", "i love you", False),
     ("how are you doing tonight?", "how are you doing tonight?", False),
     ("how are you doing tonight babe?", "how are you doing tonight babe?", True),
+    # Identity audit, 2026-11-15: his opening carried past his first sentence, and runs that
+    # cross his sentences (a question among them), are his words said back as hers.
+    ("are you sure? its kinda late. you know im a night owl, not a morning person",
+     "are you sure? it's kinda late. you know i'm up with you anyway", True),
+    ("are you sure? its kinda wild. you know", "are you sure? its kinda wild", True),
+    ("are we still on for tonight? the raid starts at eight sharp",
+     "ok. still on for tonight? the raid starts at eight. bring flasks", True),
+    # ...but his whole short first sentence said back, and a run inside one question, are not.
+    ("you drive me wild", "you drive me wild too. trust me.", False),
+    ("i love you so much. see you tonight", "i love you so much too", False),
+    ("do you want to come to the raid tonight with me?",
+     "i do want to come to the raid tonight with you", False),
+    ("are you sure? its kinda wild", "are you sure? yes", False),
+    # Review 323 P3-3: a short first sentence of his opens no echo, and words he asked for are
+    # the answer.
+    ("haha. you drive me wild", "haha you drive me wild too", False),
+    ("lol. you are so cute", "lol you are so cute too", False),
+    ("ok. lets do this then. ready?", "ok lets do this then", False),
+    ("repeat after me. i am yours. only yours. forever and always.",
+     "i am yours. only yours. forever and always.", False),
+    ("now say it: i belong to the guild and its raid nights", "i belong to the guild and its raid nights", False),
+    ("id say that is a lot of flasks for one raid night", "id say that is a lot of flasks for one raid night", True),
 ])
 def test_echo_is_a_copied_run_of_his_words(parent, reply, expected):
     assert echoes(reply, parent) is expected
@@ -58,17 +80,31 @@ def test_rewrite_hint_says_what_is_wrong_in_words():
 
 @pytest.mark.parametrize("channel", ["whisper", "dm:101"])
 def test_an_owed_answer_never_sends_an_echo(rig, monkeypatch, channel):
-    """Both drafts said his message back: neither goes out. It was dropped; since 2026-11-15 his
-    owed answer is the fallback line instead, built from his message and never his words
-    (talk/owed.py)."""
+    """Owner, 2026-11-15: every message from him gets a reply. Both drafts said his message back,
+    so one fresh draft is tried (never going on from the echo, which is never an assistant turn;
+    what was wrong is said at the end of the instruction); when that one echoes too, his owed
+    answer is the fallback line, built from his message and never his words (talk/owed.py)."""
     monkeypatch.setattr(live, "review", lambda *args: Verdict("drop", ("echo_parent",)))
     rig.script(HIS, HIS)
     sent, meta = speak(rig, turn(channel), TurnMeta("owed", why="reply:named", answers_human=True,
                                                     whisper_reply=channel == "whisper"))
     assert len(sent) == 1 and meta.guard_rewritten and meta.owed_rescued == "guard_echo"
     assert not echoes(sent[0], HIS) and HIS.casefold() not in sent[0].casefold()
-    [first, retry] = rig.chat_calls()
-    assert "own words" in retry["messages"][-1]["content"]
+    [first, retry, fresh] = rig.chat_calls()
+    for call in (retry, fresh):
+        assert [m["role"] for m in call["messages"]] == ["system", "user"]
+        assert "own words" in call["messages"][-1]["content"]
+        assert call["messages"][-1]["content"].startswith(first["messages"][-1]["content"])
+
+
+def test_an_owed_answer_sends_a_fresh_draft_when_both_echo(rig, monkeypatch):
+    def verdict(stores, draft):
+        return Verdict("send") if "girls" in draft.text else Verdict("drop", ("echo_parent",))
+    monkeypatch.setattr(live, "review", verdict)
+    rig.script(HIS, HIS, "two girls, five and eight")
+    sent, meta = speak(rig, turn("dm:101"), TurnMeta("owed", why="reply:named", answers_human=True))
+    assert len(sent) == 1 and sent[0].startswith("two girls, five and eight")
+    assert len(rig.chat_calls()) == 3
 
 
 def test_an_owed_answer_keeps_a_rewrite_that_stopped_echoing(rig, monkeypatch):

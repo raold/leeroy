@@ -14,6 +14,7 @@ from leeroy_mind.learn.config import load_learn_config
 from leeroy_mind.signals.store import REASONS
 from leeroy_mind.discord.channels import is_discord, channel_id
 from leeroy_mind.discord import layout
+from leeroy_mind.turing.report import panel as turing_panel
 
 DAYS, LIMIT = 14, 300
 
@@ -146,6 +147,15 @@ def _numeric(value, depth=0):
     return None
 
 
+def _turing(conn, now):
+    """The Turing judge's stored nights (turing.report): numbers, fixed labels and the judge's
+    short phrases from public windows only."""
+    try:
+        return turing_panel(conn, now=now)
+    except (sqlite3.Error, ValueError, TypeError):
+        return {'available': False, 'days': 14, 'families': []}
+
+
 def lab_view(conn, *, now, config=None, member=None, offset=0):
     tables = views.tables(conn)
     cfg = control.effective(conn, config) if config is not None else control.effective(conn)
@@ -189,7 +199,8 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
             'rewards': _rewards(conn, now), 'arms': _arms(conn, now),
             'lessons': {'available': lessons.available(conn), 'items': notes, 'members':people,
                         'member':member, 'offset':offset, 'total':total, 'more':offset+len(notes)<total},
-            'weights': {'available': available, 'current': asdict(current), 'history': history}, 'report': report}
+            'weights': {'available': available, 'current': asdict(current), 'history': history}, 'report': report,
+            'turing': _turing(conn, now)}
 
 
 def line_view(conn, ident, *, now):

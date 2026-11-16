@@ -18,8 +18,12 @@ from leeroy_mind.discord.text import is_emoji_message
 from leeroy_mind.eval.talk import contradiction, nonsequitur, repetition, unawareness
 from leeroy_mind.eval.talk.common import Line, day, evening, similarity, words
 from leeroy_mind.memory.recall import whisper_ok
+from leeroy_mind.personas.facts import (Facts, conflicts as persona_conflicts, facts_of_json,
+                                        owner_texts)
+from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.moves import topics
 
+from .identity import CODES as SLIP_CODES, code_for as slip_code, slips
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
 
 OWN_LINES = 128
@@ -34,7 +38,17 @@ _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
                         'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener',
                         'echo_parent'})
+# Never sent, and never an owed answer's fallback: his words said back as hers, and her speaking
+# with the other sex's body or role (identity.py). A slip is a rewrite, so it gets one retry.
+HARD_CODES = frozenset({'echo_parent', *SLIP_CODES.values()})
 ECHO_RUN, ECHO_RATIO, ECHO_MIN_WORDS = 8, .9, 6
+ECHO_OPENING = 5  # his first words said back as hers, carried past his first sentence
+ECHO_OPENING_FIRST = 3  # ...when that first sentence has this many words
+# He asked for the words, so saying them is the answer ("repeat after me", "now say it"); never
+# "i'd say that's fair".
+_ASKED = re.compile(r"(?:^|[.!?,:;]\s*|\b(?:now|just|please|pls|plz|go on|go ahead|can you|"
+                    r"could you|will you|wanna)\s+)(?:repeat|say)\b(?:\s+(?:after me|it|that|"
+                    r"this|back|the words)\b|\s*[:\"“])", re.IGNORECASE)
 _ASKING = re.compile(r'^(?:can|could|would|will|do|does|did|are|is|am|was|were|have|has|had|'
                      r'should|what|how|when|where|why|who|which|whats|hows|wanna)\b')
 HINTS = {
@@ -51,6 +65,12 @@ HINTS = {
     'low_parent_and_thread_relevance': 'it does not answer what was said',
     'off_anchor': 'it wanders off the subject',
     'claim_conflict': 'it contradicts something already known',
+    'self_male_slip': ("it speaks as if you were a man, with a man's body or a man's role; you "
+                       'are a woman, so say it as yourself, about your own body'),
+    'self_female_slip': ("it speaks as if you were a woman, with a woman's body or a woman's "
+                         'role; you are a man, so say it as yourself, about your own body'),
+    'persona_conflict': ('it gets your own life wrong: keep to who you live with, your kids, your '
+                         'pets, your job and where you live as your card says'),
 }
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
           'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
@@ -58,33 +78,53 @@ FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts
           'thanks': ({'ty','thx','thanks','tyty'}, '❤️'),
           'sympathy': ({'rip','oof','f','ouch'}, '🫡')}
 _EMOTICONS = re.compile(r':[pd](?!\w)|:[()]|<3(?!\w)|(?<!\w)xd(?!\w)', re.IGNORECASE)
+# A server reply that is only filler ("lol", "same", "rip") becomes a reaction this share of the
+# time; the rest are posted as the short messages a guild Discord is full of (2026-11-15).
+FILLER_REACT_SHARE = .4
 
 
 def echoes(text: str, parent: str) -> bool:
     """True when `text` says `parent` back instead of answering it: the whole of a parent of at
     least ECHO_MIN_WORDS words in the same mood (a question as a question, a statement as a
-    statement; their letters ECHO_RATIO alike), or a run of ECHO_RUN words copied from one of his
-    statements. Turning his question into its answer ("Are the flasks ready?" / "The flasks are
-    ready.") is an answer, and a short line said back ("i love you") is not an echo. Apostrophes
-    are dropped first, so "you're" and "youre" match."""
+    statement; their letters ECHO_RATIO alike), a run of ECHO_RUN words copied from one of his
+    statements, a run of ECHO_RUN words copied across his sentences (a question among them
+    too), or her line opening with his first ECHO_OPENING words or more, carried past the end
+    of his first sentence ("are you sure? its kinda..." said back as hers). Turning his question
+    into its answer ("Are the flasks ready?" / "The flasks are ready.") is an answer, and a
+    short line said back ("i love you") is not an echo, nor is one that opens with his whole
+    first sentence and stops there ("you drive me wild" / "you drive me wild too").
+    Apostrophes are dropped first, so "you're" and "youre" match."""
     def bare(value):
         return words(re.sub(r"['\u2019]", "", value or ""))
 
     def asking(sentence):
         return sentence.rstrip().endswith('?') or bool(_ASKING.match(' '.join(bare(sentence))))
     mine, his = bare(text), bare(parent)
-    if not mine or not his:
-        return False
+    if not mine or not his or _ASKED.search(parent or ''):
+        return False  # nothing to compare, or he asked her to say it
     if (len(his) >= ECHO_MIN_WORDS and asking(text) == asking(parent)
             and SequenceMatcher(None, ' '.join(his), ' '.join(mine), autojunk=False).ratio() >= ECHO_RATIO):
         return True
+    sentences = [bare(s) for s in re.split(r'(?<=[.!?])\s+|\n+', parent or '')]
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', parent or ''):
         said = bare(sentence)
         if len(said) >= ECHO_RUN and not asking(sentence):
             blocks = SequenceMatcher(None, said, mine, autojunk=False).get_matching_blocks()
             if max(block.size for block in blocks) >= ECHO_RUN:
                 return True
-    return False
+    # Which of his sentences each of his words is in, so a copy can be seen to cross one.
+    where = [i for i, said in enumerate(s for s in sentences if s) for _ in said]
+    if len(where) != len(his):  # markup split by a sentence break: read it as one sentence
+        where = [0] * len(his)
+    for block in SequenceMatcher(None, his, mine, autojunk=False).get_matching_blocks():
+        if block.size >= ECHO_RUN and where[block.a] != where[block.a + block.size - 1]:
+            return True
+    # His opening needs a first sentence of ECHO_OPENING_FIRST words or more: "haha. you drive
+    # me wild" / "haha you drive me wild too" is an answer.
+    first = next((len(s) for s in sentences if s), 0)
+    opening = next((i for i, (a, b) in enumerate(zip(his, mine)) if a != b), min(len(his), len(mine)))
+    return (first >= ECHO_OPENING_FIRST and opening >= ECHO_OPENING
+            and where[opening - 1] != where[0])
 
 
 def rewrite_hint(codes) -> str:
@@ -93,6 +133,14 @@ def rewrite_hint(codes) -> str:
     if not reasons:
         return 'Rewrite your reply once.'
     return 'Rewrite your reply once in your own words. Your draft has a problem: ' + '; '.join(reasons)
+
+
+def fresh_hint(codes) -> str:
+    """rewrite_hint for a new draft that never sees the failed one (a hard problem: his words
+    said back, her as a man, must not be the text the model goes on from)."""
+    reasons = list(dict.fromkeys(HINTS.get(code, code) for code in codes))
+    return ('Write your reply in your own words, as yourself. A draft of it had a problem to '
+            'avoid: ' + '; '.join(reasons)) if reasons else 'Write your reply in your own words.'
 
 
 def _action(codes):
@@ -108,6 +156,15 @@ def _server_filler(text):
     if 0 < len(tokens) <= 4:
         return next((emoji for tokenset,emoji in FILLER.values() if set(tokens) <= tokenset), None)
     return None
+
+
+def _filler_posts(draft) -> bool:
+    """A server reply of only filler is posted as its short message, not turned into a reaction,
+    for 1 - FILLER_REACT_SHARE of drafts. The draw is fixed by the speaker, the message answered
+    and the words, never the clock, so the recheck before sending gives the same answer."""
+    key = f'{draft.guid}:{draft.parent_id}:{" ".join(draft.text.casefold().split())}'
+    draw = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') / 2**64
+    return draw >= FILLER_REACT_SHARE
 
 
 def _old_schema(exc):
@@ -292,10 +349,12 @@ def _gags(reader, draft):
     tokens = words(draft.text)
     keys = {f'{kind}:{hashlib.sha256(" ".join(key).encode()).hexdigest()}'
             for kind, key in repetition.stock_keys(tokens)}
-    for row in reader.rows('gags_unavailable', 'SELECT l.id,l.term FROM lexicon l '
+    for row in reader.rows('gags_unavailable', 'SELECT l.id,l.term,l.kind FROM lexicon l '
             'JOIN lexicon_adopter a ON a.term=l.id WHERE a.guid=? AND a.active=1 '
             "AND l.status='active' AND l.kind IN ('joke','slang') ORDER BY l.id LIMIT 100", (draft.guid,)):
         phrase = words(row['term'])
+        if row['kind'] == 'slang' and len(phrase) == 1 and everyday_reason(phrase[0]):
+            continue  # an everyday word is never slang, even when one is still stored
         if phrase and phrase in [tokens[i:i+len(phrase)] for i in range(len(tokens)-len(phrase)+1)]:
             keys.add(f'gag:{row["id"]}')
     return keys
@@ -406,13 +465,22 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     cfg, reader = stores.config, Reader(stores.conn)
     if draft.server:
         cfg = replace(cfg, semantic_enabled=True)
-    role = reader.rows('role_unavailable', "SELECT json_extract(json,'$.play.guild_role') AS role "
-                       'FROM persona_core WHERE guid=? AND json_valid(json)', (draft.guid,))
+    role = reader.rows('role_unavailable', "SELECT json_extract(json,'$.play.guild_role') AS role,"
+                       'json FROM persona_core WHERE guid=? AND json_valid(json)', (draft.guid,))
     officer = bool(role and role[0]['role'] == 'officer')
+    stored = _json(role[0]['json'], None) if role else None
+    facts = facts_of_json(stored) if isinstance(stored, dict) else Facts()  # none: settles nothing
     history = _history(reader, stores, draft, now, officer)
     parent, thread = _context(history, draft, now)
     scores, refs, rewrite, drop = [], [], [], []
     server_reaction = _server_filler(draft.text) if draft.server else None
+    # A reply of only filler is posted as it is for a share of drafts (_filler_posts): a "lol"
+    # or "same" is no repeat, nothing new or off its parent, as its reaction would not be.
+    # An opener of filler still drops (filler_opener).
+    filler_post = bool(server_reaction and draft.parent_id is not None and _filler_posts(draft))
+    if filler_post:
+        server_reaction = None
+        scores.append(Score('filler_post', 1.0))
     if draft.server:
         # The all-channel shelf is only for her own repeats. It never enters
         # context, cross-member comparisons, relevance or a rewrite hint.
@@ -421,7 +489,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
             and (draft.line_id is None or h.id < draft.line_id)]
         day = [h for h in history if _same_room(h,draft) and h.origin == 'mind' and 0 <= now-h.ts <= 86400]
         for code, shelf in (('own_repeat_discord',own_discord), ('channel_repeat',day)):
-            matches = [] if server_reaction else _pairs(draft.text,draft.embedding,shelf,cfg,minimum=1)
+            matches = [] if server_reaction or filler_post else _pairs(draft.text,draft.embedding,shelf,cfg,minimum=1)
             if matches:
                 drop.append(code)
                 scores.append(Score(code,round(matches[0][1],6)))
@@ -433,7 +501,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
                 rewrite.append('off_anchor')
     own = [line for line in history if line.guid == draft.guid and line.origin == 'mind'
            and now-line.ts <= cfg.repeat_seconds][-OWN_LINES:]
-    repeats = _pairs(draft.text, draft.embedding, own, cfg)
+    repeats = [] if filler_post else _pairs(draft.text, draft.embedding, own, cfg)
     if repeats:
         previous, score = repeats[0]
         drop.append('own_repeat_same_channel' if _same_room(previous, draft) else 'own_repeat_cross_channel')
@@ -478,7 +546,22 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
                 refs.append(Reference('gag', ident))
         elif counts[key] >= cfg.stock_daily_cap:
             rewrite.append('stock_phrase_ration')
-    conflicts = _claim_hits(reader, stores, draft, now, officer)
+    # Her own persona (personas.facts), read with her role above.
+    if slips(draft.text, facts.gender):
+        rewrite.append(slip_code(facts.gender))
+    hits = _claim_hits(reader, stores, draft, now, officer)
+    wrong = persona_conflicts(draft.text, facts)
+    if wrong or any(persona_conflicts(hit.claim_text, facts, claim=True) for hit in hits):
+        # His own edits of her life (godmode implants and life events) win: read them only
+        # when the persona is about to hold something against her.
+        facts = facts_of_json(stored, owner=owner_texts(stores.conn, draft.guid))
+        wrong = persona_conflicts(draft.text, facts)
+    if wrong:
+        rewrite.append('persona_conflict')
+        refs.append(Reference('persona', draft.guid))
+    # The persona outranks what she said in chat: a stored claim that contradicts it (an echo
+    # of his words, an invented family) never holds a draft back.
+    conflicts = [hit for hit in hits if not persona_conflicts(hit.claim_text, facts, claim=True)]
     if conflicts:
         rewrite.append('claim_conflict')
         refs.extend(Reference('claim', hit.claim_id) for hit in conflicts)
@@ -494,7 +577,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         filler = server_reaction is not None
         if filler and draft.parent_id is None:
             drop.append('filler_opener')
-    if parent and cfg.semantic_enabled and len(words(draft.text)) >= nonsequitur.MIN_REPLY_WORDS \
+    if parent and not filler_post and cfg.semantic_enabled and len(words(draft.text)) >= nonsequitur.MIN_REPLY_WORDS \
             and draft.embedding is not None and parent.embedding is not None:
         parent_score, thread_score = nonsequitur.relevance_scores(draft.embedding,
             checked_vector(parent.embedding), [checked_vector(line.embedding) for line in thread if line.embedding is not None])
@@ -503,7 +586,8 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
             rewrite.append('low_parent_and_thread_relevance')
     if parent and parent.guid != draft.guid and echoes(draft.text, parent.text):
         drop.append('echo_parent')
-    if not filler and _pairs(draft.text, draft.embedding, [line for line in thread if line.guid != draft.guid], cfg):
+    if not filler and not filler_post and _pairs(draft.text, draft.embedding,
+                                                 [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
     filler_code = 'server_filler' if draft.server else 'filler_after_question'
     codes = tuple(dict.fromkeys([*rewrite, *drop, *([filler_code] if filler else [])]))

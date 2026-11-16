@@ -26,8 +26,9 @@ class DiscordTarget:
 
 
 def store_line(store, turn, meta, text: str, now: float, *, audience) -> int:
-    """Store a member's line as her message (discord.store.post, origin "mind", in reply to and
-    in the thread of meta.discord, with the turn's id) and return its id. `audience` is who
+    """Store a member's line as her message (discord.store.post, origin "mind", in the thread of
+    meta.discord and, the turn's first message only, in reply to it, with the turn's id) and
+    return its id. `audience` is who
     may read the channel (WorldView.audience), and a speaker outside it is refused (ruling R8):
     in a DM anyone but its own member (not_peer), in an officers' channel a non-officer
     (officers_only), elsewhere anyone it lacks (not_in_audience). A channel the layout does not
@@ -58,8 +59,10 @@ def store_line(store, turn, meta, text: str, now: float, *, audience) -> int:
     target = meta.discord
     photo = getattr(meta, 'photo', None)
     attachment = photo.attachment if photo is not None and not meta.said else None
+    # Only a turn's first message is a reply: the rest of a burst, or a "*word" correction,
+    # follow it as plain messages, the way people type on.
     return dstore.post(store, channel=cid, author=turn.speaker, origin="mind", text=text,
-                       reply_to=target.reply_to if target is not None else None,
+                       reply_to=target.reply_to if target is not None and not meta.said else None,
                        thread=target.thread if target is not None else None,
                        turn=("realism_correction:" if getattr(meta,"realism_correction",False) else "")+meta.turn_id, now=now,
                        attachment=attachment)

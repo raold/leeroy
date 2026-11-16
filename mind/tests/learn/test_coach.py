@@ -87,6 +87,27 @@ def test_lesson_screens(context,item):
     asyncio.run(go())
 
 
+def test_the_coach_knows_the_members_pronoun_and_a_misgendered_lesson_is_refused(context,store,tmp_path):
+    """Identity audit, 2026-11-15: two of five active lessons called a man She."""
+    enabled(tmp_path)
+    async def go():
+        async with context(lambda *_:json.dumps(answer([note('She keeps replies short.'),note()])),
+                           learn_enabled=True,learn_coach=True) as (ctx,llm):
+            exchanges(ctx)  # 101 is a man
+            await coach.stage(ctx)
+            assert '"member_pronoun": "He"' in llm.calls[0]['messages'][-1]['content']
+            assert 'member_pronoun' in llm.calls[0]['messages'][0]['content']
+            saved=lessons.read(store.conn,guid=101,now=ctx.clock.now())
+            assert [l['text'] for l in saved]==[note()['text']]
+            p=ctx.persona(101)
+            assert lessons.misgendered('She keeps replies short.','male')
+            assert not lessons.misgendered('She keeps replies short.','female')
+            assert not lessons.misgendered('This member keeps replies short.','male')
+            assert lessons.screen(note('She keeps replies short.'),scope='guild',persona=p,
+                                  ident=ctx.ident) is None
+    asyncio.run(go())
+
+
 def test_schema_rejects_injected_keys_attestation_and_excess_output():
     shape=coach.response_schema(False)
     check_schema(shape,answer())

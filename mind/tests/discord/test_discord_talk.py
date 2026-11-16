@@ -352,7 +352,8 @@ def test_the_prompt_has_the_channel_purpose_and_recent_messages_but_no_officer_l
     assert ("You are in #general on the guild's Discord: Anything and everything, for the "
             "whole guild.") in prompt
     assert "Recent messages:" in prompt
-    assert "Coros: quixfen raid tonight / bring flasks" in prompt
+    # each other member once with their pronoun (identity audit, 2026-11-15)
+    assert "Coros (he): quixfen raid tonight / bring flasks" in prompt
     assert "Answer his message: @Arkon you coming to quixfen?" in prompt
     assert prompt.count("@Arkon you coming to quixfen?") == 1
     assert "Answer his message: @Arkon you coming to quixfen?" in prompt
@@ -382,7 +383,7 @@ def test_the_second_answer_sees_the_first(store, clock, tmp_path):
     answer(rig, talk, mid)
     first, second = answers(rig, "general", mid)
     assert (first["author"], second["author"]) == (101, 103)
-    assert f"Arkon: {first['text']}" in rig.prompts()[-1]
+    assert f"Arkon (he): {first['text']}" in rig.prompts()[-1]
     rig.close()
 
 

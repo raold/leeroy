@@ -426,3 +426,14 @@ def test_no_card_content_is_logged_and_reads_are_bounded(populated,clock,caplog)
     assert caplog.text==""
     assert len(statements)<=16
     assert all(sql.lstrip().startswith(("SELECT","WITH")) for sql in statements)
+
+
+def test_a_claim_that_contradicts_her_persona_is_never_shown_as_hers(populated,clock):
+    """Identity audit, 2026-11-15: a stored echo ("is single with no children") was shown to a
+    married member as her own claim. The persona outranks it."""
+    from engine_rig import save_member
+    save_member(populated, 101, player_gender="female", household="Lives with her husband")
+    line=say(populated,101,"single, no kids lol")
+    claim(populated,"is single with no children",source_line=line)
+    shown=section(card(populated,101,context=context(clock,channel="guild")),"claims")
+    assert "I like the invented boss" in shown and "single" not in shown
