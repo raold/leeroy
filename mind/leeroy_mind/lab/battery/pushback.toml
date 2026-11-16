@@ -1,0 +1,28 @@
+# Pushback: he disagrees or is annoyed, and she takes it seriously.
+
+[[script]]
+id = "pushback-1"
+kind = "pushback"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "how was your day" },
+  { text = "thats not what i asked though" },
+]
+
+[[script]]
+id = "pushback-2"
+kind = "pushback"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "i dont think standing in fire was the healers fault tbh" },
+  { text = "nah youre wrong on this one" },
+]
+
+[[script]]
+id = "pushback-3"
+kind = "pushback"
+channels = ["dm"]
+lines = [
+  { text = "you keep bringing up the same thing every time we talk" },
+  { text = "can we talk about something else" },
+]

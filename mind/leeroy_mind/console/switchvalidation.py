@@ -31,7 +31,8 @@ def valid_table(name, table, raw):
             return False
         return parse_config({**table,'enabled':True}).enabled
     if name == 'learn':
-        from leeroy_mind.learn.arms import FAMILIES
+        from leeroy_mind.learn.arms import all_families
+        FAMILIES = all_families()
         flags = {'enabled','coach','auto_lessons','bandit','freeze','capture_preferences','apply','cycle'}
         return (not set(table)-flags-{'frozen_families','frozen_members'}
                 and all(type(table.get(k,False)) is bool for k in flags)
@@ -39,6 +40,9 @@ def valid_table(name, table, raw):
                 and all(type(f) is str and f in FAMILIES for f in table.get('frozen_families',[]))
                 and type(table.get('frozen_members',[])) is list
                 and all(type(g) is int and g>0 for g in table.get('frozen_members',[])))
+    if name == 'lab':
+        from leeroy_mind.lab.config import KEYS, parse
+        return not set(table)-KEYS and (table == {} or parse(table) != parse({}) or all(v == getattr(parse({}), k) for k, v in table.items()))
     if name == 'banter':
         return (not set(table)-{'enabled','per_hour'} and type(table.get('enabled',False)) is bool
                 and type(table.get('per_hour',2)) is int and 0 <= table.get('per_hour',2) <= 12)

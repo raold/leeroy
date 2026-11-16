@@ -1,0 +1,28 @@
+# A direct question: the answer belongs in her first sentence.
+
+[[script]]
+id = "question-1"
+kind = "question"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "what did you have for dinner tonight", ask = "noun", nouns = ["dinner", "ate", "eat", "eating", "had", "pizza", "pasta", "chicken", "salad", "food", "cooked", "takeout", "leftovers", "soup", "burger", "tacos", "nothing", "skipped"] },
+  { text = "nice. do you cook a lot?", ask = "yesno" },
+]
+
+[[script]]
+id = "question-2"
+kind = "question"
+channels = ["dm", "whisper", "guild"]
+lines = [
+  { text = "{name} how long have you been playing wow", ask = "number" },
+  { text = "what got you into it in the first place" },
+]
+
+[[script]]
+id = "question-3"
+kind = "question"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "do you have any pets", ask = "yesno" },
+  { text = "whats their name", ask = "name", nouns = ["none", "no", "nope"] },
+]

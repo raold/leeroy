@@ -359,6 +359,7 @@ class TurnMeta:
     recipe_snapshot: object | None = None  # optional numeric/identifier attribution at composition
     recipe_line_id: int | None = None  # first acknowledged fragment of this generation
     learning: object | None = field(default=None, repr=False)  # scoped style for this generation
+    lab: object | None = field(default=None, repr=False)  # lab/live.py: the turn's piece draw
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
@@ -1313,6 +1314,21 @@ class Pipeline:
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
                        trigger_text: str | None = None, dial: int | None = None) -> Composed:
+        """A live turn composes inside lab/live.composing: the conversation lab's prompt pieces
+        in force for it (a sandbox's lab overlays, a lab arm the learn bandit drew), or nothing
+        at all without them."""
+        if live and (getattr(self, "lab_overlays", None) is not None
+                     or getattr(self, "learn_enabled", False)):
+            from leeroy_mind.lab.live import composing
+            with composing(self, turn, meta):
+                return await self._compose_turn(turn, meta, live=live, persona=persona,
+                                                window=window, trigger_text=trigger_text, dial=dial)
+        return await self._compose_turn(turn, meta, live=live, persona=persona, window=window,
+                                        trigger_text=trigger_text, dial=dial)
+
+    async def _compose_turn(self, turn: Turn, meta: TurnMeta, *, live: bool,
+                            persona: Persona | None = None, window: list | None = None,
+                            trigger_text: str | None = None, dial: int | None = None) -> Composed:
         kwargs = dict(live=live,persona=persona,window=window,trigger_text=trigger_text,dial=dial)
         if live and getattr(self,"learn_enabled",False):
             from leeroy_mind.prompts import trace_templates

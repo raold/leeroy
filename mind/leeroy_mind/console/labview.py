@@ -118,7 +118,7 @@ def _arms(conn, now):
             continue
         stats = bandit.posterior(conn, None, key, now=now)
         shares = dict(conn.execute('SELECT arm_id,turns FROM bandit_share WHERE context=?', (key,)))
-        totals = {f: sum(shares.get(a.id, 0) for a in registry if a.family == f) for f in arms.FAMILIES}
+        totals = {f: sum(shares.get(a.id, 0) for a in registry if a.family == f) for f in arms.all_families()}
         for arm in registry:
             p = stats.get(arm.id, {'alpha': 1., 'beta': 1., 'uses': 0, 'bad': 0, 'attempts': 0})
             contexts.append({'context': json.loads(key), 'arm_id': arm.id, **p,
@@ -154,6 +154,16 @@ def _turing(conn, now):
         return turing_panel(conn, now=now)
     except (sqlite3.Error, ValueError, TypeError):
         return {'available': False, 'days': 14, 'families': []}
+
+
+def _conversation(conn):
+    """The conversation lab's nights (lab/report.panel): numbers, codes and the variants' word
+    diffs (prompt wording, never a member's line)."""
+    try:
+        from leeroy_mind.lab.report import panel
+        return panel(conn)
+    except (sqlite3.Error, ValueError, TypeError, KeyError):
+        return {'available': False, 'runs': []}
 
 
 def lab_view(conn, *, now, config=None, member=None, offset=0):
@@ -192,7 +202,11 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
             except (ValueError, RecursionError):
                 pass
     base = config if config is not None else control.LearnCfg()
-    return {'at': now, 'freeze': cfg.freeze, 'families': list(arms.FAMILIES), 'cycle': bool(base.cycle),
+    # a lab piece's family (learn.arms prompt.<piece>) is listed once it has an arm or a freeze
+    present = {a.family for a in arms.read(conn)} if arms.available(conn) else set()
+    families = list(arms.FAMILIES) + [f for f in arms.prompt_families()
+                                      if f in present or f in cfg.frozen_families]
+    return {'at': now, 'freeze': cfg.freeze, 'families': families, 'cycle': bool(base.cycle),
             'versions': cycle.versions(conn),
             'frozen_families': list(cfg.frozen_families), 'enabled': cfg.enabled,
             'config_freeze': bool(base.freeze), 'config_frozen_families': sorted(base.frozen_families),
@@ -200,7 +214,7 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
             'lessons': {'available': lessons.available(conn), 'items': notes, 'members':people,
                         'member':member, 'offset':offset, 'total':total, 'more':offset+len(notes)<total},
             'weights': {'available': available, 'current': asdict(current), 'history': history}, 'report': report,
-            'turing': _turing(conn, now)}
+            'turing': _turing(conn, now), 'conversation': _conversation(conn)}
 
 
 def line_view(conn, ident, *, now):

@@ -1,0 +1,27 @@
+# A question that names, or asks her to name, a raid or a boss.
+
+[[script]]
+id = "raid-1"
+kind = "raid"
+channels = ["guild", "party"]
+lines = [
+  { text = "{name} which raid are we doing thursday", ask = "name", nouns = ["naxx", "naxxramas", "icc", "icecrown", "ulduar", "uld", "toc", "trial", "ony", "onyxia", "vault", "voa", "eoe", "os", "sarth", "obsidian", "ruby"] },
+  { text = "10 or 25?", ask = "number", nouns = ["ten", "twenty"] },
+]
+
+[[script]]
+id = "raid-2"
+kind = "raid"
+channels = ["guild", "dm"]
+lines = [
+  { text = "{name} whats your favorite raid in wrath", ask = "name", nouns = ["naxx", "naxxramas", "icc", "icecrown", "ulduar", "uld", "toc", "trial", "ony", "onyxia", "vault", "voa", "eoe", "os", "sarth", "obsidian", "ruby"] },
+  { text = "why that one" },
+]
+
+[[script]]
+id = "raid-3"
+kind = "raid"
+channels = ["party", "whisper"]
+lines = [
+  { text = "{name} which boss gave you the most trouble last week", ask = "name", nouns = ["lich", "arthas", "sindragosa", "putricide", "festergut", "rotface", "marrowgar", "deathwhisper", "saurfang", "thaddius", "loatheb", "heigan", "sapphiron", "kelthuzad", "patchwerk", "grobbulus", "gluth", "yogg", "mimiron", "hodir", "thorim", "freya", "razorscale", "ignis", "kologarn", "anubarak", "jaraxxus", "twins", "gunship", "valithria", "lanathel", "council", "none", "nobody"] },
+]
