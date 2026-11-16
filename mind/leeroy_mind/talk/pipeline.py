@@ -678,10 +678,12 @@ class Pipeline:
         # a model turn composing or typing, and since when (turn_phases); cleared at its end
         self._phases: dict[asyncio.Task, tuple[Turn, str, float]] = {}
         self._delivering: set[asyncio.Task] = set()
-        # each queued job's turns with their metas (_queue), and the turn each job is waiting
-        # out the delay of with a wake (_delay): waiting_turns, hurry and withdraw read them
+        # each queued job's turns with their metas (_queue), the turn each job is waiting out
+        # the delay of with a wake (_delay) and the jobs whose line is at the bridge
+        # (_send_line): waiting_turns, hurry and withdraw read them
         self._job_items: dict[asyncio.Task, list[tuple[Turn, TurnMeta]]] = {}
         self._delaying: dict[asyncio.Task, Turn] = {}
+        self._sending: set[asyncio.Task] = set()
         self._send_lock = asyncio.Lock()
         self._unacked: dict[tuple[int, str, str], tuple] = {}  # ack timed out, echo awaited
         # what has been said; own lines are (channel, to_guid, the words before styling)
@@ -851,12 +853,13 @@ class Pipeline:
         return out
 
     def _weigh(self, guids, *, last: int | None, ctx: SpeakerContext, reply: bool,
-               fresh=frozenset()) -> tuple[dict[int, float], set[int]]:
+               fresh=frozenset(), with_him=frozenset()) -> tuple[dict[int, float], set[int]]:
         """Speaker weights, and the members with a real reason to speak (select.has_reason):
         `last` is whoever spoke last (the human, for a reply). When it is the human, his row
         counts only as lived and the members with an open thread with him are known
         (SpeakerContext.to_human, .thread). Members in `fresh` are weighed as if they had not
-        spoken lately."""
+        spoken lately; members in `with_him` (the voice room he speaks in) give him full attention
+        ([life] availability)."""
         weights, reasons = {}, set()
         hg = self.human.guid
         if hg and last == hg:
@@ -875,7 +878,8 @@ class Pipeline:
                 reasons.add(g)
         life = getattr(self, "life", None)
         if life is not None and life.availability > 0:  # her attention in game (life/service.py)
-            weights = {g: w * life.weight(g) for g, w in weights.items()}
+            weights = {g: w * life.weight(g, with_him=g in with_him)
+                       for g, w in weights.items()}
         return weights, reasons
 
     def _context(self, now: float, topic: set[str] | None = None, *, opener: bool = False,
@@ -1032,17 +1036,23 @@ class Pipeline:
         return self.pending_turns() + [t for task, behind in self._behind.items()
                                        if task in self._tasks for t in behind]
 
-    def waiting_turns(self) -> list[tuple[asyncio.Task, Turn, TurnMeta]]:
+    def waiting_turns(self, *, started: bool = False) -> list[tuple[asyncio.Task, Turn, TurnMeta]]:
         """(job, turn, meta) for each queued turn that has not begun yet or is waiting out its
-        delay with a wake (_delay; [life] availability above 0): what hurry and withdraw act
-        on. A turn composing, typing or past its delay is not waiting."""
+        delay with a wake (_delay; [life] availability above 0): what hurry and coalescing act
+        on. With `started`, also each job's turn past its delay (composing, typing) that has
+        said nothing and has no line at the bridge: what his logout can still carry
+        (LifeService.on_logout)."""
         out = []
         for task, items in list(self._job_items.items()):
             if task not in self._tasks or task.done():
                 continue
             behind, delaying = self._behind.get(task, ()), self._delaying.get(task)
+            current = self._current.get(task) if started and task not in self._sending else None
             for turn, meta in items:
-                if not meta.settled and (turn is delaying or any(turn is b for b in behind)):
+                if meta.settled:
+                    continue
+                if (turn is delaying or any(turn is b for b in behind)
+                        or (turn is current and meta.said == 0)):
                     out.append((task, turn, meta))
         return out
 
@@ -1055,16 +1065,17 @@ class Pipeline:
 
     def withdraw(self, task: asyncio.Task, turn: Turn, meta: TurnMeta,
                  reason: str) -> float:
-        """Take one waiting turn (waiting_turns) out of its job, dropped with `reason`, as
+        """Take one turn of waiting_turns out of its job, dropped with `reason`, as
         _cancel_refused cancels one turn of a job; the rest of the job goes on. What was left
-        of its delay (its full delay if it had not begun, 0 if hurried)."""
+        of its delay: its full delay if it had not begun, 0 if hurried or past its delay
+        (composing, typing)."""
         now = self.clock.now()
         left = turn.delay
-        if self._delaying.get(task) is turn:
-            left = meta.wake_at - now
+        if self._current.get(task) is turn:  # in its delay, composing or typing
+            left = meta.wake_at - now if self._delaying.get(task) is turn else 0.0
             self._cancelling[task] = turn
             task.cancel()
-            del self._delaying[task]
+            self._delaying.pop(task, None)
             self._current.pop(task, None)
             self._phases.pop(task, None)
         if meta.wake is not None and meta.wake.is_set():
@@ -3215,6 +3226,9 @@ class Pipeline:
             inner = asyncio.ensure_future(self._deliver(turn, meta, p, text, memory_ids))
             self._delivering.add(inner)
             inner.add_done_callback(self._delivering.discard)
+            job = asyncio.current_task()
+            self._sending.add(job)  # its line is at the bridge: no logout carries it
+            inner.add_done_callback(lambda _: self._sending.discard(job))
             try:
                 return await asyncio.shield(inner)
             except asyncio.CancelledError:

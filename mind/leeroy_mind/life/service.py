@@ -17,7 +17,10 @@ one who answers (her attention, times her social mood while state is on) and `an
 soon (late but at most `game_cap_s` for an answer he is owed, missed past NON_OWED_MAX_S for any
 other), both on her state snapshot (STATE_SNAPSHOT_S: StateBook.get reads about three queries,
 review-334). `on_logout` (the engine's end_session with him offline) carries each answer to his
-whisper still in its delay to her Discord DM (CARRY_TEXT): never whispered to an offline player."""
+whisper not yet said (in its delay, composing or typing, but not at the bridge) to her Discord DM
+(CARRY_TEXT): never whispered to an offline player. The carried answers live on through later
+logouts (`carried_jobs`); at a mind stop the owed watch keeps them in meta instead
+(OwedWatch.persist) and the next start answers them again."""
 from __future__ import annotations
 
 import logging
@@ -52,6 +55,7 @@ class LifeService:
         self._availability = 0
         self.state: StateBook | None = None
         self._states: dict[int, tuple[float, State]] = {}  # guid -> (read at, her state)
+        self._carried: set = set()  # the jobs carrying an answer to her DM, until each ends
         self.configure(cfg)
 
     @property
@@ -111,13 +115,15 @@ class LifeService:
         self._states[guid] = (now, st)
         return st
 
-    def weight(self, guid: int) -> float:
+    def weight(self, guid: int, *, with_him: bool = False) -> float:
         """How likely she is the one who answers in game, relative to a member giving him full
-        attention (a member in his group always does): her attention's weight, times
-        1 + social / 2 while state is on. 1.0 at availability 0."""
+        attention (a member in his group, or `with_him`: in the voice room he speaks in, always
+        does): her attention's weight, times 1 + social / 2 while state is on. 1.0 at
+        availability 0."""
         if self._availability <= 0:
             return 1.0
-        lp = self.presence(guid, medium="game", in_his_group=self._in_group(guid))
+        lp = self.presence(guid, medium="game",
+                           in_his_group=with_him or self._in_group(guid))
         if lp is None:
             return 1.0
         w = attention_weight(lp.attention, self._availability)
@@ -139,51 +145,72 @@ class LifeService:
             return min(d, game_cap_s(self._availability))
         return None if d > NON_OWED_MAX_S else d
 
-    def on_logout(self) -> set:
-        """He logged off (the engine's end_session with him offline): each answer to his
-        whisper still in its delay is dropped `carried` (Pipeline.withdraw) and, per member,
-        her answer goes to her Discord DM instead: a REPLY_HUMAN turn on dm:<guid> to him with
-        CARRY_TEXT, owed, after what was left of the delay; the owed watch waits for it
-        (OwedWatch.carried). Returns the carried jobs, which the session's end leaves running.
-        Nothing at availability 0; a failure is logged (`life_carry_failed`), never raised."""
-        if self._availability <= 0 or self.engine is None:
-            return set()
-        try:
-            return self._carry()
-        except Exception as exc:
-            log_event("life_carry_failed", level=logging.WARNING, reason=type(exc).__name__)
-            return set()
-
-    def _carry(self) -> set:
-        from leeroy_mind.talk.pipeline import REPLY_KINDS, TurnMeta
+    def carry_turn(self, guid: int, line: int, *, delay: float, heard_at: float = 0.0,
+                   life_presence=None):
+        """(Turn, TurnMeta) of her answer in her Discord DM to his whisper `line`: REPLY_HUMAN
+        on dm:<guid> to him, CARRY_TEXT with his forms, owed, his whisper as recall's query
+        (the prompt shows it in its "elsewhere" block), after `delay`."""
+        from leeroy_mind.talk.pipeline import TurnMeta
         from leeroy_mind.talk.turns import Turn, TurnKind
         pipe = self.engine
         hg = pipe.human.guid
-        if not hg:
+        rows = self.store.chat_lines([line])
+        turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=guid, channel=f"dm:{guid}", to_guid=hg,
+                    addressee=hg, delay=max(0.0, delay),
+                    instruction=CARRY_TEXT.format(He=pipe.human.forms[0].capitalize()))
+        meta = TurnMeta(pipe._new_id(), answers_human=True, owed_answer=True, why=CARRY_WHY,
+                        recall_query=rows[0].text if rows else "", heard_at=heard_at,
+                        life_presence=life_presence)
+        return turn, meta
+
+    def keep(self, job) -> None:
+        """A job carrying her answer to her DM: later logouts leave it running (carried_jobs)."""
+        if job is not None and not job.done():
+            self._carried.add(job)
+            job.add_done_callback(self._carried.discard)
+
+    def carried_jobs(self) -> set:
+        return {job for job in self._carried if not job.done()}
+
+    def on_logout(self) -> set:
+        """He logged off (the engine's end_session with him offline): each answer to his
+        whisper not yet said (in its delay, composing or typing, never one at the bridge) is
+        dropped `carried` (Pipeline.withdraw) and, per member, her answer goes to her Discord DM
+        instead (carry_turn), after what was left of its delay (none once it was composing);
+        the owed watch waits for it (OwedWatch.carried). Returns every job carrying an answer
+        to her DM, this logout's and earlier ones' still running, which the session's end
+        leaves running. Nothing at availability 0; a failure is logged (`life_carry_failed`),
+        never raised, and the answers carried before it stay carried."""
+        if self._availability <= 0 or self.engine is None:
             return set()
+        try:
+            self._carry()
+        except Exception as exc:
+            log_event("life_carry_failed", level=logging.WARNING, reason=type(exc).__name__)
+        return self.carried_jobs()
+
+    def _carry(self) -> None:
+        from leeroy_mind.talk.pipeline import REPLY_KINDS
+        pipe = self.engine
+        hg = pipe.human.guid
+        if not hg:
+            return
         waiting: dict[int, list] = {}
-        for task, turn, meta in pipe.waiting_turns():
+        for task, turn, meta in pipe.waiting_turns(started=True):
             if (turn.channel == "whisper" and turn.to_guid == hg and turn.kind in REPLY_KINDS
                     and meta.answers_human and turn.trigger_line):
                 waiting.setdefault(turn.speaker, []).append((task, turn, meta))
-        jobs = set()
         for g, found in waiting.items():
             left = [pipe.withdraw(task, turn, meta, "carried") for task, turn, meta in found]
             line = max(turn.trigger_line for _, turn, _ in found)
-            rows = self.store.chat_lines([line])
             heard = min((meta.heard_at for _, _, meta in found if meta.heard_at), default=0.0)
-            turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=g, channel=f"dm:{g}", to_guid=hg,
-                        addressee=hg, delay=min(left),
-                        instruction=CARRY_TEXT.format(He=pipe.human.forms[0].capitalize()))
-            meta = TurnMeta(pipe._new_id(), answers_human=True, owed_answer=True, why=CARRY_WHY,
-                            recall_query=rows[0].text if rows else "", heard_at=heard,
-                            life_presence=found[0][2].life_presence)
-            jobs.add(pipe._queue([(turn, meta)]))
+            turn, meta = self.carry_turn(g, line, delay=min(left), heard_at=heard,
+                                         life_presence=found[0][2].life_presence)
+            self.keep(pipe._queue([(turn, meta)]))
             log.info("life_carried: guid=%d line=%d", g, line)
             watch = getattr(pipe, "owed", None)
             if watch is not None:
                 watch.carried(g, line)
-        return jobs
 
     def tick(self, now: float) -> None:
         if self.state is not None:

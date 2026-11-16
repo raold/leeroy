@@ -31,7 +31,8 @@ What it looks at:
   no cached guild name: a FAIL), the newest weekly evaluation incomplete, no secret probe ever
   recorded while secrets exist, and offline raids blocked on each of the last 3 days (notes);
 - his messages of the last 24 h that no member answered within 5 minutes (talk/owed.py's
-  count: a note from one, a FAIL from OWNER_UNANSWERED_FAIL), by medium, counts only.
+  count: a note from one, a FAIL from OWNER_UNANSWERED_FAIL), by medium, counts only; with
+  [life] availability above 0 (meta life:availability) within her day's bounds instead.
 
 [health] in mind.toml: min_cast (default 100), the floor for both counts in the cast line and
 for the endpoint's cast; grace_minutes (default 6), how long after a server or mind start a
@@ -87,6 +88,7 @@ SELFIE_QUEUED_S = 30 * 3600
 OWNER_WINDOW_S = 24 * 3600  # his messages of the last day, each answered within OWNER_ANSWER_S
 OWNER_ANSWER_S = 300.0
 OWNER_UNANSWERED_FAIL = 10
+OWNER_LATE_MARGIN_S = 120.0  # [life] availability: past her day's bound, generation and typing
 CYCLE_ROWS = 100000
 CYCLE_SECONDS = 0.8
 NIGHT_LOG_BYTES = 4 * 1024 * 1024
@@ -1257,7 +1259,12 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
 def _owner_replies(conn, now: float) -> Check:
     """His messages of the last OWNER_WINDOW_S that no member answered within OWNER_ANSWER_S
     (talk.owed.count_unanswered): ok at none, a note from one, a FAIL from
-    OWNER_UNANSWERED_FAIL. Counts by medium only, never a text."""
+    OWNER_UNANSWERED_FAIL. Counts by medium only, never a text. With [life] availability above
+    0 (meta life:availability, as the mind put it in force) the bounds are her day's: a game
+    line within game_cap_s plus OWNER_LATE_MARGIN_S, a DM or group DM by when her own time
+    answers it (discord.owntime.due_at) plus the margin, and her line in her DM answers his
+    whisper too (a whisper carried there at his logout)."""
+    from .life import config as life_config
     from .talk.owed import count_unanswered
     name = "owner-replies"
 
@@ -1266,17 +1273,73 @@ def _owner_replies(conn, now: float) -> Check:
         human = row[0] if row is not None else None
         if not (isinstance(human, str) and human.isdecimal() and int(human) > 0):
             return Check(name, OK, "his messages: none yet (no human guid stored)")
-        got = count_unanswered(conn, int(human), now - OWNER_WINDOW_S, now, window=OWNER_ANSWER_S)
+        availability = life_config.stored(conn)
+        late = {}
+        if availability > 0:
+            from .life.presence import game_cap_s
+            late = dict(game_window=game_cap_s(availability) + OWNER_LATE_MARGIN_S,
+                        dm_due=_own_time_due(conn, int(human), now, availability),
+                        whisper_dm=True)
+        got = count_unanswered(conn, int(human), now - OWNER_WINDOW_S, now,
+                               window=OWNER_ANSWER_S, **late)
         if not got.total:
             return Check(name, OK, "his messages, last 24 h: none yet")
         if not got.missed:
             return Check(name, OK, f"his messages, last 24 h: all {got.total} answered")
         by = ", ".join(f"{k} {n}" for k, n in sorted(got.unanswered.items()))
         status = FAIL if got.missed >= OWNER_UNANSWERED_FAIL else NOTE
+        within = (f"within {int(OWNER_ANSWER_S // 60)} min" if not late else
+                  f"in time (her day: game {int(late['game_window'] // 60)} min, "
+                  "DMs by her own time)")
         return Check(name, status, f"his messages, last 24 h: {got.missed} of {got.total} "
-                     f"unanswered within {int(OWNER_ANSWER_S // 60)} min ({by}); "
+                     f"unanswered {within} ({by}); "
                      "mind.log owed_rescue / owed_held / owed_given_up say why")
     return _table_check(name, check)
+
+
+def _own_time_due(conn, human: int, now: float, availability: int):
+    """When her own time answers his DM or group DM post (discord.owntime.due_at, at
+    `availability`, never urgent or insisting: the latest she would) plus OWNER_LATE_MARGIN_S;
+    a group DM by its slowest member. Personas are read once each; a member without one, or a
+    read that fails, answers at once."""
+    from .clock import SystemClock, local_at
+    from .discord import owntime
+    from .discord.channels import is_group
+    from .groups.store import readers
+    from .life import config as life_config
+    from .personas.io import load_persona
+    from .storage.store import Store
+    store = Store(conn, clock=SystemClock())
+    personas: dict[int, object] = {}
+    local_now = local_at(now)
+
+    def persona(guid: int):
+        if guid not in personas:
+            try:
+                personas[guid] = load_persona(store, guid)
+            except Exception:
+                personas[guid] = None
+        return personas[guid]
+
+    def due(channel: str, message: int, ts: float) -> float:
+        if is_group(channel):
+            members = [g for g in readers(conn, channel, include_closed=True) if g != human]
+        else:
+            peer = channel[3:]
+            members = [int(peer)] if peer.isdecimal() else []
+        pinned = life_config.availability(), life_config.state_on()
+        life_config.pin(availability, pinned[1])
+        try:
+            times = [owntime.due_at(p, post_ts=ts, now=now, local_now=local_now,
+                                    message_id=message, urgent=False, talking=False,
+                                    insist=False)
+                     for g in members if (p := persona(g)) is not None]
+        except Exception:
+            times = []
+        finally:
+            life_config.pin(*pinned)
+        return max(times, default=ts) + OWNER_LATE_MARGIN_S
+    return due
 
 
 def _gpu_pause(conn, now):

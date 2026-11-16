@@ -122,6 +122,8 @@ def test_first_guild_answer_is_the_most_attentive(store, clock, tmp_path, caplog
 
 
 def test_second_whisper_coalesces_and_urgent_hurries(store, clock, tmp_path, caplog):
+    """His second whisper joins the answer still waiting; its urgent words (his second line
+    only, so not his third: review-336 P3-I) send it at once, one answer for both."""
     caplog.set_level(logging.INFO)
 
     async def main():
@@ -132,19 +134,53 @@ def test_second_whisper_coalesces_and_urgent_hurries(store, clock, tmp_path, cap
         t0 = clock.now()
         first = await r.human("did the new bags come through", channel="whisper", to_guid=101)
         await r.advance(20, step=1)
-        second = await r.human("the ones from the auction", channel="whisper", to_guid=101)
-        await r.advance(20, step=1)
         assert _whispers_from(r, 101, t0) == []
+        t1 = clock.now()
+        second = await r.human("hey r u around?", channel="whisper", to_guid=101)  # urgent
         assert any(f"reply_coalesced: line={second.id} guid=101" in m for m in caplog.messages)
         planned = [m for m in caplog.messages if m.startswith("reply_planned")]
         assert len(planned) == 1 and f"line={first.id}" in planned[0]
-        t1 = clock.now()
-        await r.human("hey r u around?", channel="whisper", to_guid=101)  # urgent words
         await r.advance(10, step=1)
         said = _whispers_from(r, 101, t0)
         assert len(said) == 1 and t1 <= said[0][0] <= t1 + 10
         await r.advance(game_cap_s(6), step=2)
-        assert len(_whispers_from(r, 101, t0)) == 1  # one answer for the three lines
+        assert len(_whispers_from(r, 101, t0)) == 1  # one answer for both lines
+    run(main())
+
+
+def test_a_second_whisper_without_urgent_words_waits(store, clock, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("here, {n} sorry"),
+                     availability=6)
+        await r.session()
+        await r.advance(NIGHT_S, step=60)
+        t0 = clock.now()
+        await r.human("did the new bags come through", channel="whisper", to_guid=101)
+        await r.advance(20, step=1)
+        second = await r.human("the ones from the auction", channel="whisper", to_guid=101)
+        await r.advance(30, step=1)
+        assert _whispers_from(r, 101, t0) == []
+        assert any(f"reply_coalesced: line={second.id} guid=101" in m for m in caplog.messages)
+        await r.advance(game_cap_s(6), step=2)
+        assert len(_whispers_from(r, 101, t0)) == 1
+    run(main())
+
+
+def test_a_first_urgent_whisper_is_answered_at_once(store, clock, tmp_path):
+    """review-336 P3-F: urgent words wake her for his first whisper too."""
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("here, {n} sorry"),
+                     availability=6)
+        await r.session()
+        await r.advance(NIGHT_S, step=60)
+        assert r.engine.life.presence(101, medium="game").attention is Attention.NONE
+        t0 = clock.now()
+        await r.human("hey r u around?", channel="whisper", to_guid=101)
+        await r.advance(12, step=1)
+        said = _whispers_from(r, 101, t0)
+        assert len(said) == 1 and said[0][0] - t0 <= 12
     run(main())
 
 
@@ -154,12 +190,37 @@ def test_his_third_line_hurries_the_waiting_answer(store, clock, tmp_path):
         await r.session()
         await r.advance(NIGHT_S, step=60)
         t0 = clock.now()
-        for text in ("got a sec later", "about the raid roster", "need a healer for sunday"):
+        for n, text in enumerate(("got a sec later", "about the raid roster",
+                                  "need a healer for sunday")):
+            if n == 2:
+                assert _whispers_from(r, 101, t0) == []  # two lines: still waiting
             await r.human(text, channel="whisper", to_guid=101)
             await r.advance(5, step=1)
         await r.advance(15, step=1)
         said = _whispers_from(r, 101, t0)
         assert len(said) == 1 and said[0][0] - t0 <= 30
+    run(main())
+
+
+def test_his_third_line_counts_only_the_last_ten_minutes(store, clock, tmp_path):
+    """review-336 P3-G: two whispers of his from 20 minutes ago she never answered make no
+    "third line" of today's second."""
+    from leeroy_mind.protocol import Chat
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("back now {n}"), availability=6)
+        await r.session()
+        await r.advance(NIGHT_S, step=60)
+        for text, ago in (("left you a note in the bank", 1300), ("check the bank tab", 1250)):
+            ev = Chat(ts=0, channel="whisper", from_guid=HUMAN, from_name="Testmage",
+                      to_guid=101, text=text, map=0, zone=10)
+            store.insert_chat_line(ev, session_id=None, origin="human", ts=clock.now() - ago)
+        t0 = clock.now()
+        await r.human("got a sec later", channel="whisper", to_guid=101)
+        await r.advance(5, step=1)
+        await r.human("about the raid roster", channel="whisper", to_guid=101)
+        await r.advance(25, step=1)
+        assert _whispers_from(r, 101, t0) == []
     run(main())
 
 
@@ -208,6 +269,199 @@ def test_goodbye_hurries_and_logout_carries_to_dm(store, clock, tmp_path, caplog
         assert not any(m.startswith("owed_rescue:") for m in caplog.messages)
         user = [c["messages"] for c in r.chat_calls()][-1][-1]["content"]
         assert CARRY_TEXT.format(He="He") in user and "save me a seat at the raid" in user
+    run(main())
+
+
+def test_goodbye_then_logout_carries_the_answer_being_typed(store, clock, tmp_path, caplog):
+    """review-336 P2-1: his goodbye sends her waiting whisper answer on its way, and he logs off
+    2 s later while it is still being typed: it is never whispered to him offline; her DM
+    answers it at once instead."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("night {n}, sleep well"),
+                     availability=6)
+        w = _watch(r)
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await r.advance(NIGHT_S, step=60)
+        t0 = clock.now()
+        whisper = await r.human("you around tomorrow?", channel="whisper", to_guid=101)
+        await r.advance(10, step=1)
+        await r.human("gn all")
+        await r.advance(2, step=1)
+        assert any(t.speaker == 101 and t.channel == "whisper" and phase in ("composing", "typing")
+                   for t, phase, _ in r.engine.turn_phases())
+        t1 = clock.now()
+        await r.event(Logout(ts=0, guid=HUMAN, human=True))
+        await r.engine.end_session()
+        assert any(f"life_carried: guid=101 line={whisper.id}" in m for m in caplog.messages)
+        assert any(f"owed_carried: line={whisper.id} guid=101" in m for m in caplog.messages)
+        await _tick(r, w, 30)
+        assert _whispers_from(r, 101, t0) == []
+        rows = r.store.conn.execute(
+            "SELECT author, ts FROM discord_message WHERE channel = 'dm:101'").fetchall()
+        assert [a for a, _ in rows] == [101] and rows[0][1] - t1 <= 15
+        dropped = r.store.conn.execute(
+            "SELECT dropped FROM utterance WHERE guid = 101 AND channel = 'whisper'").fetchall()
+        assert [d[0] for d in dropped] == ["carried"]
+        assert ("whisper", 101) not in w._game
+    run(main())
+
+
+def test_a_relog_and_logout_keep_the_carried_answer(store, clock, tmp_path, caplog):
+    """review-336 P3-B: he logs back in and out again before her DM answer lands: it still
+    lands."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("ok {n}"), availability=6)
+        w = _watch(r)
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await r.advance(NIGHT_S, step=60)
+        r.engine.life.answer_delay = lambda guid, *, rng, owed: 200.0
+        await r.human("can you craft me a cloak", channel="whisper", to_guid=104)
+        await r.advance(5, step=1)
+        await r.event(Logout(ts=0, guid=HUMAN, human=True))
+        await r.engine.end_session()
+        await _tick(r, w, 20)
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await _tick(r, w, 20)
+        await r.event(Logout(ts=0, guid=HUMAN, human=True))
+        await r.engine.end_session()
+        await _tick(r, w, 200)
+        rows = r.store.conn.execute(
+            "SELECT author FROM discord_message WHERE channel = 'dm:104'").fetchall()
+        assert [a[0] for a in rows] == [104]
+        cancelled = r.store.conn.execute(
+            "SELECT count(*) FROM utterance WHERE channel = 'dm:104' AND dropped IS NOT NULL"
+            ).fetchone()[0]
+        assert cancelled == 0
+    run(main())
+
+
+# -- a mind stop: the answers still owed are kept for the next start ---------------------------
+
+def _record(store):
+    import json
+    from leeroy_mind.talk.owed import PERSIST_KEY
+    raw = store.get_meta(PERSIST_KEY)
+    return None if raw is None else json.loads(raw)
+
+
+def test_a_clean_stop_keeps_a_waiting_whisper_answer_and_the_next_start_whispers_it(
+        store, clock, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("sorry {n}, was out cold"),
+                     availability=6)
+        _watch(r)
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await r.advance(NIGHT_S, step=60)
+        whisper = await r.human("still awake over there?", channel="whisper", to_guid=101)
+        await r.advance(10, step=1)
+        r.engine.stopping = True  # MindApp._shutdown, him online
+        await r.engine.end_session()
+        assert not any("life_carried" in m for m in caplog.messages)
+        assert _record(store) == [{"line": whisper.id, "guid": 101, "dm": 0}]
+        assert "still awake" not in store.get_meta("life:carried")
+
+        r2 = make_rig(store, clock, tmp_path, script=numbered("sorry {n}, was out cold"),
+                      availability=6)
+        w2 = _watch(r2)
+        assert _record(store) is None  # cleared once read
+        assert any(f"owed_restored: line={whisper.id} guid=101 dm=0" in m
+                   for m in caplog.messages)
+        t1 = clock.now()
+        await _tick(r2, w2, 80)
+        assert len(_whispers_from(r2, 101, t1)) == 1
+        assert ("whisper", 101) not in w2._game
+    run(main())
+
+
+def test_a_stop_after_the_bridge_dropped_carries_nothing_live_and_the_next_start_dms_it(
+        store, clock, tmp_path, caplog):
+    """review-336 P3-C: with the bridge gone (him unknown, read as offline) a stop carries no
+    turn into the shutdown; the next start, with him offline, answers in her DM."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("ok {n}"), availability=6)
+        _watch(r)
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await r.advance(NIGHT_S, step=60)
+        whisper = await r.human("save me a seat at the raid", channel="whisper", to_guid=103)
+        await r.advance(5, step=1)
+        r.world.human_online = False  # MindApp._on_connection(False)
+        r.engine.stopping = True
+        await r.engine.end_session()
+        assert not any("life_carried" in m for m in caplog.messages)
+        assert not [t for t in r.engine._tasks if not t.done()]
+        assert _record(store) == [{"line": whisper.id, "guid": 103, "dm": 0}]
+
+        r2 = make_rig(store, clock, tmp_path, script=numbered("ok {n}"), availability=6)
+        r2.world.human_online = False
+        w2 = _watch(r2)
+        t1 = clock.now()
+        await _tick(r2, w2, 80)
+        rows = store.conn.execute(
+            "SELECT author FROM discord_message WHERE channel = 'dm:103'").fetchall()
+        assert [a[0] for a in rows] == [103]
+        assert any("owed_rescue: medium=whisper channel=dm:103" in m and "reason=restored" in m
+                   for m in caplog.messages)
+        assert _whispers_from(r2, 103, t1) == []
+        assert ("whisper", 103) not in w2._game
+    run(main())
+
+
+def test_a_carried_answer_pending_at_a_stop_is_answered_after_the_start(store, clock,
+                                                                          tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("ok {n}"), availability=6)
+        _watch(r)
+        await r.session()
+        await r.event(Login(ts=0, guid=HUMAN, human=True))
+        await r.advance(NIGHT_S, step=60)
+        r.engine.life.answer_delay = lambda guid, *, rng, owed: 300.0
+        whisper = await r.human("can you craft me a cloak", channel="whisper", to_guid=104)
+        await r.advance(5, step=1)
+        await r.event(Logout(ts=0, guid=HUMAN, human=True))
+        await r.engine.end_session()
+        assert any("life_carried: guid=104" in m for m in caplog.messages)
+        await r.advance(30, step=1)
+        r.engine.stopping = True
+        await r.engine.end_session()
+        assert _record(store) == [{"line": whisper.id, "guid": 104, "dm": 1}]
+        assert store.conn.execute(
+            "SELECT count(*) FROM discord_message WHERE channel = 'dm:104'").fetchone()[0] == 0
+
+        r2 = make_rig(store, clock, tmp_path, script=numbered("ok {n}"), availability=6)
+        r2.world.human_online = False
+        w2 = _watch(r2)
+        await _tick(r2, w2, 80)
+        rows = store.conn.execute(
+            "SELECT author FROM discord_message WHERE channel = 'dm:104'").fetchall()
+        assert [a[0] for a in rows] == [104]
+        assert ("whisper", 104) not in w2._game
+    run(main())
+
+
+def test_availability_zero_keeps_nothing_at_a_stop(store, clock, tmp_path):
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("ok {n}"))
+        _watch(r)
+        await r.session()
+        await r.human("one sec", channel="whisper", to_guid=102)
+        r.engine.stopping = True
+        await r.engine.end_session()
+        assert _record(store) is None
     run(main())
 
 
@@ -289,6 +543,116 @@ def test_a_line_he_spoke_is_answered_on_todays_timing(store, clock, tmp_path, ca
         assert 1.0 <= queued[0][0].delay <= 4.0 and queued[0][1].wake is None
         assert not any(m.startswith("reply_latency") for m in caplog.messages)
     run(main())
+
+
+def test_the_answer_he_is_owed_is_the_most_attentive_members(store, clock, tmp_path, caplog):
+    """review-336 P3-A: an asleep member planned first is not the one owed while a member in his
+    group is there: the owed answer is 102's, and 103's is skipped past NON_OWED_MAX_S or said
+    sooner as any other."""
+    from leeroy_mind.talk.select import ReplyTurn
+    from leeroy_mind.talk.turns import TurnKind
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, availability=6)
+        await r.advance(NIGHT_S, step=60)
+        await r.event(Group(ts=0, leader_guid=HUMAN, raid=False, members=(HUMAN, 102)))
+        row = await r.human("anyone know a good farming spot")
+        for n in range(30):
+            planned = [ReplyTurn(g, f"x{n}-{g}", TurnKind.REPLY_HUMAN, "guild", "guild")
+                       for g in (103, 102)]
+            caplog.clear()
+            timed = r.engine._life_delays(replace(row, id=row.id + 1000 + n), planned,
+                                          whisper=False, called=[], push=None)
+            assert timed[0][0].speaker == 102
+            assert all(d <= NON_OWED_MAX_S for rt, d, _ in timed if rt.speaker == 103)
+            assert any("guid=102" in m and "owed=1" in m for m in caplog.messages)
+            assert not any("guid=103" in m and "owed=1" in m for m in caplog.messages)
+    run(main())
+
+
+def test_the_voice_room_he_speaks_in_gives_him_full_attention(store, clock, tmp_path):
+    """review-336 P3-E: an asleep member in the voice room with him weighs as one with him."""
+    from leeroy_mind.talk.select import SpeakerContext
+    from leeroy_mind.talk.budget import DayPhase
+    r = make_rig(store, clock, tmp_path, availability=6)
+    r.sync(r.advance(NIGHT_S, step=60))
+    life = r.engine.life
+    assert life.weight(101) == 0.05 and life.weight(101, with_him=True) == 1.0
+    ctx = SpeakerContext(now=clock.now(), topic=set(), opener=False, phase=DayPhase.LATE)
+    away, _ = r.engine._weigh([101], last=HUMAN, ctx=ctx, reply=True)
+    room, _ = r.engine._weigh([101], last=HUMAN, ctx=ctx, reply=True, with_him=frozenset({101}))
+    assert room[101] == pytest.approx(away[101] / 0.05)
+    r.close()
+
+
+# -- owner-replies health, with her day (review-336 P2-2) ------------------------------------
+
+def _his(store, text, ts, channel="whisper", to_guid=101):
+    from leeroy_mind.protocol import Chat
+    ev = Chat(ts=0, channel=channel, from_guid=HUMAN, from_name="Testmage", to_guid=to_guid,
+              text=text, map=0, zone=10)
+    return store.insert_chat_line(ev, session_id=None, origin="human", ts=ts)
+
+
+def _hers(store, guid, text, ts, channel="whisper"):
+    from leeroy_mind.protocol import Chat
+    ev = Chat(ts=0, channel=channel, from_guid=guid, from_name="M", to_guid=HUMAN, text=text,
+              map=0, zone=10)
+    store.insert_chat_line(ev, session_id=None, origin="mind", ts=ts)
+
+
+def test_health_counts_her_day_late_answers_and_her_dm_answer(store):
+    import time
+    from conftest import seed_test_cast
+    from leeroy_mind import health
+    seed_test_cast(store)
+    now = time.time()
+    store.set_meta("human_guid", str(HUMAN))
+    _his(store, "did the new bags come through", now - 7200)
+    _hers(store, 101, "yes they did", now - 7200 + 360)  # 6 minutes: her day's bound
+    _his(store, "save me a seat at the raid", now - 5400, to_guid=103)
+    _hers(store, 103, "seat's yours, held it", now - 5400 + 90, channel="dm:103")  # carried to her DM
+    at_zero = health._owner_replies(store.conn, now)
+    assert at_zero.status == health.NOTE and "2 of 2 unanswered within 5 min" in at_zero.text
+    store.set_meta(life_config.META_KEY, "6")
+    check = health._owner_replies(store.conn, now)
+    assert check.status == health.OK and "all 2 answered" in check.text
+    _his(store, "can you craft me a cloak", now - 3600, to_guid=104)
+    _hers(store, 104, "can do, give me an hour", now - 3600 + game_cap_s(6) + 200)  # past the bound and margin
+    late = health._owner_replies(store.conn, now)
+    assert late.status == health.NOTE and "1 of 3 unanswered in time" in late.text
+    assert "craft me a cloak" not in late.text
+
+
+def test_health_waits_for_her_own_time_on_a_dm(store):
+    """A DM to a member asleep by her day is answered in time when she answers it after she
+    wakes (discord.owntime.due_at), not within 5 minutes; one never answered past that is
+    counted."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from conftest import seed_test_cast
+    from leeroy_mind import health
+    from leeroy_mind.discord import store as dstore
+    seed_test_cast(store)
+    store.set_meta("human_guid", str(HUMAN))
+    store.set_meta(life_config.META_KEY, "6")
+    ny = ZoneInfo("America/New_York")
+    posted = datetime(2026, 11, 18, 18, 0, tzinfo=ny).timestamp()  # Wed 23:00 in the UK
+    now = posted + 20 * 3600
+    dm = dstore.post(store, channel="dm:105", author=HUMAN, origin="human",
+                     text="are the bags still on sale", now=posted)
+    due = health._own_time_due(store.conn, HUMAN, now, 6)("dm:105", dm, posted)
+    assert due - posted > 3 * 3600  # asleep: she answers after she wakes
+    dstore.post(store, channel="dm:105", author=105, origin="mind", text="still on, half price",
+                now=due - 300, reply_to=dm)
+    assert health._owner_replies(store.conn, now).status == health.OK
+    other = dstore.post(store, channel="dm:102", author=HUMAN, origin="human",
+                        text="got a sec later", now=posted)
+    assert other
+    check = health._owner_replies(store.conn, now)
+    assert check.status == health.NOTE and "discord_dm 1" in check.text
+    assert life_config.availability() == 0  # the health read leaves the process pin alone
 
 
 # -- LifeService --------------------------------------------------------------------------------
