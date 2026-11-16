@@ -111,3 +111,54 @@ def test_gym_after_the_commute_on_gym_days():
     assert day_plan(p, tue, event=DayEvent.NONE).block_at(18 * 60 + 30) is not Block.GYM
     uplift = make_persona(101, "Arkon", rhythm="9-5 office", life_thread="an uplifting recycling job")
     assert day_plan(uplift, mon, event=DayEvent.NONE).block_at(18 * 60 + 30) is not Block.GYM
+
+
+def test_student_only_when_she_studies():
+    a = lambda **kw: job_shape(make_persona(101, "Arkon", **kw))
+    assert a(job="veterinary student", rhythm="exams in spring") is JobShape.STUDENT
+    assert a(job="shop assistant", rhythm="studying for an accounting exam") is JobShape.STUDENT
+    assert a(job="trainee", rhythm="back to uni in October") is JobShape.STUDENT
+    assert a(job="cashier", rhythm="night classes on Tuesdays") is JobShape.STUDENT
+    assert a(job="cashier", rhythm="a college degree part-time") is JobShape.STUDENT
+    assert a(job="caretaker at Hillcrest College", rhythm="weekdays") is JobShape.DAY
+    assert a(job="technician at a university lab", rhythm="regular hours") is JobShape.DAY
+    assert a(job="assistant coach for a college rowing team", rhythm="regattas") is JobShape.DAY
+    assert a(job="dance teacher", rhythm="teaches two classes a night") is JobShape.DAY
+
+
+def test_night_shift_spellings():
+    a = lambda **kw: job_shape(make_persona(101, "Arkon", **kw))
+    assert a(job="hospital porter", rhythm="on the night-shift team") is JobShape.NIGHTS
+    assert a(job="baker", rhythm="third shift, bed at dawn") is JobShape.NIGHTS
+    assert a(job="baker", rhythm="third-shift baking") is JobShape.NIGHTS
+    assert a(job="security guard", rhythm="graveyard hours") is JobShape.NIGHTS
+    assert a(job="packer", rhythm="day shift, raid nights") is JobShape.DAY
+
+
+def test_kids_only_dependents_at_home():
+    k = lambda household: has_kids(make_persona(101, "Arkon", household=household))
+    for home in ("married, two kids (6 and 9)", "single dad with a 7-year-old daughter",
+                 "wife and a baby girl", "partner, a son (12) and a dog",
+                 "she and her teenage son share a flat",
+                 "two daughters; the elder at university, the younger at home",
+                 "lives alone with her son"):
+        assert k(home), home
+    for away in ("lives alone, no kids", "her sons are grown up now",
+                 "shares the house with two adult daughters",
+                 "one daughter who is away at university", "son studying in college in another state",
+                 "her kids live with their mother", "a son who stays with her ex",
+                 "an empty nest since the twins left", "her stepkids visit every other weekend",
+                 "lives alone with a cat; one son", "son moved out last year",
+                 "no children, two cats"):
+        assert not k(away), away
+
+
+def test_plans_are_cached_by_her_facts():
+    from leeroy_mind.life import day
+    p = make_persona(101, "Arkon", rhythm="9-5 office")
+    first = day_plan(p, THU)
+    hits = day._build.cache_info().hits
+    assert day_plan(make_persona(101, "Arkon", rhythm="9-5 office"), THU) is first
+    assert day._build.cache_info().hits > hits
+    edited = day_plan(make_persona(101, "Arkon", rhythm="night shifts"), THU, event=DayEvent.NONE)
+    assert edited.job is JobShape.NIGHTS and edited.block_at(23 * 60) is Block.WORK

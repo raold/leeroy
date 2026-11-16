@@ -9,7 +9,9 @@ it in behind `[life] availability` (0-10, default 0: always present, today's beh
 no switch to set, no migration and no native change.
 
 Everything here is pure: no clock, no database, no model, no log. The same persona and date
-always give the same plan. Draws use `life.seed` (`unit(*parts)` for one number in [0, 1),
+always give the same plan. Plans are immutable and cached (`PLAN_CACHE`, 1024: two a member, today's
+and yesterday's for a late evening), keyed by the schedule facts (guid, job, rhythm, household,
+life thread, night_owl) and the date, so an edited persona gets a fresh plan. Draws use `life.seed` (`unit(*parts)` for one number in [0, 1),
 `seeded(what, night, guid, minute, extra)` for a generator of its own), never the talk engine's
 shared rng, so a switch that is off draws nothing and moves no other draw.
 
@@ -28,16 +30,20 @@ From `job + " " + rhythm`, case-folded; the first word-bounded match wins, else 
 
 | Shape | Pattern |
 |---|---|
-| `nights` | `night shifts?\|works? nights\|on nights\|overnights?\|graveyard` ("raid nights" and "late nights" are no night shift) |
+| `nights` | `night[- ]shifts?\|third[- ]shifts?\|works? nights\|on nights\|overnights?\|graveyard` ("raid nights" and "late nights" are no night shift) |
 | `rotating` | `\d+\s*on\s*,?\s*\d+\s*off\|\d+\s*(?:days\|weeks)\s*on\|rotating\|rota\|12[- ]hour\|on call` |
 | `early` | `early shifts?\|early starts?\|[4-6]\s*a\.?m\.?\s*starts?\|starts? at [4-6]` |
 | `late` | `late shifts?\|evening shifts?\|swing shifts?\|afternoon shifts?` |
-| `student` | `student\|studying\|uni\|college\|university\|lectures?` |
+| `student` | `student\|studying\|lectures?\|(?:takes?\|taking\|attends?\|attending\|night\|evening) classes\|(?:at\|in\|to) (?:uni\|university\|college)\|(?:uni\|college) (?:classes\|courses?\|lectures?\|degree\|work)`: only what she does, so an employer named "... College" or "a university" (or a teacher's classes) is no study |
 | `remote` | `wfh\|works? from home\|from home\|freelanc\w*\|self[- ]employed` |
 | `home` | `stay[- ]at[- ]home\|unemployed\|between jobs\|retired` |
 
-**Kids**: `household` names kids, sons, daughters, a baby, toddlers, children, twins or stepkids,
-and does not say "no kids".
+**Kids** (home duty) means a dependent child at home. `household` is split into clauses (at
+`, ; . ( ) /` and "and"); one clause must name kids, sons, daughters, a baby, toddlers, children,
+twins or stepkids without putting them elsewhere or grown up (grown, grown-up, adult, away, at
+or in college/uni/university, with (the/their/her/his) dad/ex/mum/mom/father/mother, visits,
+visiting, moved out). A household that says "no kids", "no children", "empty nest" or that she
+lives alone (unless "alone with her/his/their ...") has none.
 
 ### Hours (her local time)
 

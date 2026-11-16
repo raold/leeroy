@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 
@@ -13,6 +14,7 @@ from .seed import unit
 
 DAY_MIN = 1440
 LATE_SHIFT_MIN = 120
+PLAN_CACHE = 1024   # plans kept: two a member (today's, and yesterday's for the late evening)
 
 
 class Block(StrEnum):
@@ -51,18 +53,30 @@ def _bounded(pattern: str) -> re.Pattern:
 
 # first match wins, in this order; "raid nights" and "late nights" are no night shift
 _JOB_PATTERNS = (
-    (JobShape.NIGHTS, _bounded(r"night shifts?|works? nights|on nights|overnights?|graveyard")),
+    (JobShape.NIGHTS, _bounded(r"night[- ]shifts?|third[- ]shifts?|works? nights|on nights"
+                               r"|overnights?|graveyard")),
     (JobShape.ROTATING, _bounded(r"\d+\s*on\s*,?\s*\d+\s*off|\d+\s*(?:days|weeks)\s*on|rotating"
                                  r"|rota|12[- ]hour|on call")),
     (JobShape.EARLY, _bounded(r"early shifts?|early starts?|[4-6]\s*a\.?m\.?\s*starts?"
                               r"|starts? at [4-6]")),
     (JobShape.LATE, _bounded(r"late shifts?|evening shifts?|swing shifts?|afternoon shifts?")),
-    (JobShape.STUDENT, _bounded(r"student|studying|uni|college|university|lectures?")),
+    # only what she does: an employer named "... College" or "a university" is no study
+    (JobShape.STUDENT, _bounded(r"student|studying|lectures?"
+                                r"|(?:takes?|taking|attends?|attending|night|evening) classes"
+                                r"|(?:at|in|to) (?:uni|university|college)"
+                                r"|(?:uni|college) (?:classes|courses?|lectures?|degree|work)")),
     (JobShape.REMOTE, _bounded(r"wfh|works? from home|from home|freelanc\w*|self[- ]employed")),
     (JobShape.HOME, _bounded(r"stay[- ]at[- ]home|unemployed|between jobs|retired")),
 )
 _KIDS = _bounded(r"kids?|sons?|daughters?|bab(?:y|ies)|toddlers?|child(?:ren)?|twins|stepkids?")
-_NO_KIDS = _bounded(r"no kids")
+# a household with no child at home: none, an empty nest, or she lives alone
+_NO_KIDS = _bounded(r"no (?:kids|children)|empty nest"
+                    r"|(?:lives|living) alone(?!\s+with\s+(?:her|his|their)\b)")
+# a child who is not a dependent at home (checked in the child's own clause)
+_AWAY = _bounded(r"grown(?:[- ]up)?|adult|away|(?:at|in) (?:college|uni|university)"
+                 r"|with (?:(?:the|their|her|his) )?(?:dad|ex|mum|mom|father|mother)"
+                 r"|visits?|visiting|moved out")
+_CLAUSE = re.compile(r"[,;.()/]|\band\b")
 # a word start only, so "gyms" and "5km" count and "uplifting", "recycling" and "25k" do not
 _GYM = re.compile(r"\b(?:gym|climbing|lifting|crossfit|yoga|swimming|cycling|marathon|5k)")
 
@@ -132,22 +146,49 @@ class DayPlan:
         raise ValueError("plan does not cover the minute")
 
 
-def job_shape(p: Persona) -> JobShape:
-    text = f"{p.real_life.job} {p.real_life.rhythm}".casefold()
+@dataclass(frozen=True, slots=True)
+class _Facts:
+    """What her plan is built from: the cache key, so an edited persona gets a fresh plan."""
+    guid: int
+    job: str
+    rhythm: str
+    household: str
+    life_thread: str
+    night_owl: bool
+
+
+def _facts(p: Persona) -> _Facts:
+    rl = p.real_life
+    return _Facts(p.guid, rl.job, rl.rhythm, rl.household, rl.life_thread, rl.night_owl)
+
+
+def _job_shape(job: str, rhythm: str) -> JobShape:
+    text = f"{job} {rhythm}".casefold()
     for shape, pattern in _JOB_PATTERNS:
         if pattern.search(text):
             return shape
     return JobShape.DAY
 
 
+def _kids_at_home(household: str) -> bool:
+    """A dependent child at home: named in a clause of her household that does not put the
+    child elsewhere or grown up."""
+    text = household.casefold()
+    if _NO_KIDS.search(text):
+        return False
+    return any(_KIDS.search(c) and not _AWAY.search(c) for c in _CLAUSE.split(text))
+
+
+def job_shape(p: Persona) -> JobShape:
+    return _job_shape(p.real_life.job, p.real_life.rhythm)
+
+
 def has_kids(p: Persona) -> bool:
-    text = p.real_life.household.casefold()
-    return bool(_KIDS.search(text)) and not _NO_KIDS.search(text)
+    return _kids_at_home(p.real_life.household)
 
 
-def _gym(p: Persona) -> bool:
-    rl = p.real_life
-    return bool(_GYM.search(f"{rl.job} {rl.rhythm} {rl.life_thread}".casefold()))
+def _gym(f: _Facts) -> bool:
+    return bool(_GYM.search(f"{f.job} {f.rhythm} {f.life_thread}".casefold()))
 
 
 def _workday(job: JobShape, guid: int, day: date) -> bool:
@@ -245,9 +286,10 @@ def _spans(minutes: list[Block]) -> tuple[Span, ...]:
     return tuple(out)
 
 
-def _build(p: Persona, day: date, event: DayEvent | None, *, carry: bool) -> DayPlan:
-    guid, owl = p.guid, p.real_life.night_owl
-    job, kids = job_shape(p), has_kids(p)
+@lru_cache(maxsize=PLAN_CACHE)
+def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan:
+    guid, owl = f.guid, f.night_owl
+    job, kids = _job_shape(f.job, f.rhythm), _kids_at_home(f.household)
     shifts = _shifts(job, guid, day)
     event = _event(guid, day, work_ends_today=any(_ends_today(s) for s in shifts), kids=kids,
                    event=event)
@@ -268,7 +310,7 @@ def _build(p: Persona, day: date, event: DayEvent | None, *, carry: bool) -> Day
     if day.weekday() >= 5 and unit("game_day", guid, day) < GAMING_DAY_SHARE:
         _paint(minutes, GAMING_WEEKEND, Block.GAMING)
     if carry and morning[0] > 0:   # last night's gaming runs on to a bedtime past midnight
-        yesterday = _build(p, day - timedelta(days=1), None, carry=False)
+        yesterday = _build(f, day - timedelta(days=1), None, False)
         if yesterday.block_at(DAY_MIN - 1) is Block.GAMING:
             _paint(minutes, (0, morning[0]), Block.GAMING)
     if kids:
@@ -277,7 +319,7 @@ def _build(p: Persona, day: date, event: DayEvent | None, *, carry: bool) -> Day
         _paint(minutes, KIDS_EVENING, Block.HOME_DUTY)
     for _, span in duty:
         _paint(minutes, span, Block.HOME_DUTY)
-    if _gym(p) and day.weekday() in GYM_DAYS:
+    if _gym(f) and day.weekday() in GYM_DAYS:
         ends = [min(DAY_MIN, e) for block, (s, e) in work
                 if block is Block.COMMUTE and s < DAY_MIN and e > 0]
         start = max(GAMING_EVENING[0], max(ends, default=0))
@@ -302,8 +344,9 @@ def _build(p: Persona, day: date, event: DayEvent | None, *, carry: bool) -> Day
 
 def day_plan(p: Persona, day: date, *, event: DayEvent | None = None) -> DayPlan:
     """Her plan for one local date. `event` None draws the day's event; an event the day cannot
-    have (a late shift with no shift ending today, a sick kid without kids) reads as none."""
-    return _build(p, day, event, carry=True)
+    have (a late shift with no shift ending today, a sick kid without kids) reads as none.
+    Plans are immutable and cached by her schedule facts and the date (PLAN_CACHE)."""
+    return _build(_facts(p), day, event, True)
 
 
 def block_at(p: Persona, her_local: datetime) -> tuple[Block, DayEvent]:
