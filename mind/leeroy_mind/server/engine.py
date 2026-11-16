@@ -365,7 +365,9 @@ class ServerEngine:
                     row = self._message(conversation, parent)
                     if row is not None and set(eligible) <= {row[0]}:
                         # Only its own author could answer an earlier message: answer the last
-                        # one instead, whose author spoke last and is never eligible.
+                        # one instead. Its author is usually the last speaker, never eligible;
+                        # after a dry turn she may be the only one left, and the filter below
+                        # then ends the conversation (no_cast) rather than let her answer herself.
                         parent = conversation.messages[-1]
                         row = self._message(conversation, parent)
                     if row is None or row[2] is not None:

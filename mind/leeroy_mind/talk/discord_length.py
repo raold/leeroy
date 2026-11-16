@@ -30,6 +30,7 @@ _SENTENCE_END = re.compile(r"(?:[.!?…]+[\"'”’)\]]*|" + EMOJI_RE.pattern + 
 # setting itself): 55% quick, 30% a couple of sentences, 15% a paragraph. The quick share is
 # split (2026-11-15): 30% only a few words ("lmao same", "wait which boss"), 25% a quick line;
 # asked for 20 words, the model wrote about 20, so only 6% of channel messages had 7 or fewer.
+# A conversation's opener and an answer to him keep the old mix (opener_draw).
 CHANNEL_BANDS = ((0.30, 6), (0.55, 20), (0.85, 45), (1.0, 0))
 SHORT_WORDS, QUICK_WORDS, FEW_WORDS = 6, 25, 50  # the wording each band reads (prompt.discord_length)
 # A quick burst (server.engine, realism.plan) is a couple of sentences split into 2-3 messages:
@@ -44,9 +45,10 @@ def burst_draw(rng) -> float:
 
 
 def opener_draw(rng) -> float:
-    """A server conversation opener's band draw: it carries its subject, so never only a few
-    words; it keeps the mix openers had before the few-words band (55% a quick line, 30% a
-    couple of sentences, 15% a paragraph)."""
+    """The band draw of a server conversation's opener, which carries its subject, and of an
+    answer to him (Pipeline._discord_words), which owes him something real: never only a few
+    words; the mix these had before the few-words band (55% a quick line, 30% a couple of
+    sentences, 15% a paragraph)."""
     u = rng.random()
     short_edge, quick_edge = CHANNEL_BANDS[0][0], CHANNEL_BANDS[1][0]
     return u if u >= quick_edge else short_edge + u * (quick_edge - short_edge) / quick_edge

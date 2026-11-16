@@ -142,6 +142,45 @@ def test_a_line_still_naming_its_speaker_is_dropped_and_the_game_is_untouched(st
     rig.close()
 
 
+def test_an_everyday_word_or_a_running_joke_is_not_her_naming_herself(store, tmp_path):
+    from leeroy_mind.talk.pipeline import _names_self
+    assert _names_self('Belra is so done with raids', 'Belra')
+    assert _names_self('honestly @Belra would never', 'Belra')
+    assert not _names_self('the belra in me says no', 'Belra')  # lower case: the ordinary word
+    assert not _names_self('Belrae and Belras are not her name', 'Belra')  # whole words only
+    assert not _names_self('Dawn raid tomorrow, who is in?', 'Dawn')  # an everyday word
+    assert not _names_self('the Belra Bridge strikes again', 'Belra', labels=('Belra Bridge',))
+    assert _names_self('the Belra Bridge strikes again, Belra says hi', 'Belra', labels=('Belra Bridge',))
+    rig = make_rig(store, engine_clock(), tmp_path)
+    now = rig.clock.now()
+    store.conn.execute("INSERT INTO lexicon(kind,term,target,origin_ref,originator,born,last_used) "
+                       "VALUES ('joke','the Belra Bridge',102,'invented',101,?,?)", (now, now))
+    rig.script('the Belra Bridge is open for business lol')
+    turn = Turn(kind=TurnKind.CONTINUE, speaker=102, channel='discord:general', addressee=103,
+                discord_draw=.99)
+    assert rig.speak_turn(turn, seconds=90)
+    assert len(rig.chat_calls()) == 1  # no retry for the joke's own label
+    rig.close()
+
+
+@pytest.mark.parametrize('channel', ['discord:general', 'gdm:7'])
+def test_an_answer_to_him_never_draws_only_a_few_words(store, tmp_path, channel):
+    """The few-words band is for chat among them. An answer to his channel or group-DM post
+    (D1, a selfie request) keeps the opener's mix: it owes him something real."""
+    rig = make_rig(store, engine_clock(), tmp_path)
+    rig.engine._length_rng = random.Random(4)
+    to_him, among = [], []
+    for _ in range(400):
+        to_him.append(rig.engine._discord_words(Turn(kind=TurnKind.REPLY_HUMAN, speaker=101,
+                                                     channel=channel, addressee=HUMAN)))
+        among.append(rig.engine._discord_words(Turn(kind=TurnKind.CONTINUE, speaker=101,
+                                                    channel=channel, addressee=103)))
+    assert discord_length.SHORT_WORDS not in to_him
+    assert {20, 45, 90} == set(to_him)
+    assert discord_length.SHORT_WORDS in among
+    rig.close()
+
+
 def test_an_answer_owed_to_him_is_never_held_up_by_her_name(store, tmp_path):
     rig = make_rig(store, engine_clock(), tmp_path)
     rig.script('Belra reporting in, of course i will be there')

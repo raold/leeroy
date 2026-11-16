@@ -39,6 +39,7 @@ import math
 import random
 import re
 import secrets
+import sqlite3
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, field, replace
@@ -73,7 +74,8 @@ from leeroy_mind.talk.budget import PHASE_MODS, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.discord_length import (FEW_WORDS, QUICK_WORDS, SHORT_WORDS,
                                              TYPING_CAP_S as DISCORD_TYPING_S,
-                                             band, preset_for, trim_to_sentence, words_for)
+                                             band, opener_draw, preset_for, trim_to_sentence,
+                                             words_for)
 from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, is_silence,
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
@@ -101,6 +103,7 @@ from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_
                                     line_cap, split_emotes, style_lines, turn_lines)
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
+from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.text import EMOJI_RE, strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
@@ -447,12 +450,16 @@ def _emoji_only(text: str) -> bool:
     return EMOJI_RE.search(text) is not None and not any(c.isalnum() for c in text)
 
 
-def _names_self(text: str, name: str) -> bool:
-    """The model's words name their own speaker (`name`, her character name, as written or in
-    capitals; "@Name" too): she talks about herself as someone else. A lower-case word is left
-    alone, as the ordinary word a name may also be."""
-    if not name:
+def _names_self(text: str, name: str, *, labels: tuple[str, ...] = ()) -> bool:
+    """The model's words name their own speaker (`name`, her character name, as a whole word,
+    as written or in capitals; "@Name" too): she talks about herself as someone else. Never for
+    a name that is an everyday word (words.COMMON_WORDS: "Dawn" opening a sentence is the word),
+    nor inside one of `labels`, the guild's running jokes and slang that carry her name ("the
+    Belra bridge"). A lower-case word is left alone, as the ordinary word a name may also be."""
+    if not name or name.casefold() in COMMON_WORDS:
         return False
+    for label in labels:
+        text = re.sub(rf"(?<!\w){re.escape(label)}(?!\w)", " ", text, flags=re.IGNORECASE)
     return any(re.search(rf"(?<!\w)@?{re.escape(form)}(?!\w)", text)
                for form in {name, name.upper()})
 
@@ -2275,9 +2282,9 @@ class Pipeline:
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
                     tells.append(Tell("member flirt", True))
-                # never on an answer owed to him, which a second miss must not drop
-                if (is_discord(turn.channel) and _names_self(text, name)
-                        and not self.live_review.owed(turn, meta)):
+                # never on an answer to him, which a second miss must not drop
+                if (is_discord(turn.channel) and not meta.answers_human
+                        and not self.live_review.owed(turn, meta) and self._self_named(text, name)):
                     tells.append(Tell("self name", False, True))
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
                            for t in tells):
@@ -2334,6 +2341,18 @@ class Pipeline:
                         winks=p is not None and p.identity.player_gender == "female"):
             return True
         return turn.kind is TurnKind.FLIRT and aimed_off_him(text, members, his)
+
+    def _self_named(self, text: str, name: str) -> bool:
+        """_names_self, once the guild's own terms that carry her name (lexicon: running jokes,
+        slang) are set aside; they are read only when her name is there at all."""
+        if not _names_self(text, name):
+            return False
+        try:
+            labels = tuple(r[0] for r in self.store.conn.execute(
+                "SELECT term FROM lexicon WHERE instr(lower(term), lower(?)) > 0 LIMIT 50", (name,)))
+        except sqlite3.OperationalError:
+            labels = ()
+        return _names_self(text, name, labels=labels)
 
     def _his_names(self) -> list[str]:
         h = self.human
@@ -2402,7 +2421,11 @@ class Pipeline:
         if not words or is_private(turn.channel):
             return words
         if turn.discord_draw is None:
-            turn.discord_draw = self._length_rng.random()
+            # an answer to him (D1, a group DM, a selfie request) is owed something real: the
+            # opener's mix, never only a few words
+            to_him = bool(self.human.guid) and turn.addressee == self.human.guid
+            turn.discord_draw = (opener_draw(self._length_rng) if to_him
+                                 else self._length_rng.random())
         return band(words, turn.discord_draw)
 
     @staticmethod
