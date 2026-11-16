@@ -62,19 +62,21 @@ def test_new_content_sends_and_empty_drops(store):
 def test_spoken_history_requires_same_room_and_captured_reader(store,room,readers,expected):
     text='The copper lantern hangs above the doorway'
     line(store,text,channel='voice:'+room,audience=readers)
-    result=review(sources(store),draft(text,channel='voice',room='guild_hall'))
+    lines=GuardsCfg(enabled=True,phrase_cooldown=False)  # the whole-line fences; phrases count her own lines anywhere
+    result=review(sources(store,config=lines),draft(text,channel='voice',room='guild_hall'))
     assert result.action == expected
-    assert review(sources(store),draft(text)).action == 'send'
+    assert review(sources(store,config=lines),draft(text)).action == 'send'
 
 
 def test_officers_voice_room_requires_officer_role_even_with_audience(store):
     text='The copper lantern hangs above the doorway'
     line(store,text,channel='voice:officers',audience=(101,102))
-    assert review(sources(store),draft(text,channel='voice',room='officers')).action == 'send'
+    lines=GuardsCfg(enabled=True,phrase_cooldown=False)
+    assert review(sources(store,config=lines),draft(text,channel='voice',room='officers')).action == 'send'
     seed_test_cast(store)
     p=make_persona(101,'Arkon',guild_role='officer')
     save_persona(store,p,source='seed',ts=NOW,race='Orc',class_name='Warrior')
-    assert review(sources(store),draft(text,channel='voice',room='officers')).action == 'drop'
+    assert review(sources(store,config=lines),draft(text,channel='voice',room='officers')).action == 'drop'
 
 
 @pytest.mark.parametrize('channel,to,expected',[
@@ -100,16 +102,17 @@ def test_officer_history_needs_stored_role_and_current_officer_turn(store):
     seed_test_cast(store)
     text='The copper lantern hangs above the doorway'
     line(store,text,channel='officer')
-    assert review(sources(store),draft(text,channel='officer')).action=='send'
+    lines=GuardsCfg(enabled=True,phrase_cooldown=False)
+    assert review(sources(store,config=lines),draft(text,channel='officer')).action=='send'
     save_persona(store,make_persona(101,'Arkon',guild_role='officer'),race='Human',class_name='Warrior',source='seed',ts=NOW)
-    assert review(sources(store),draft(text,channel='officer')).action=='drop'
-    assert review(sources(store),draft(text)).action=='send'
+    assert review(sources(store,config=lines),draft(text,channel='officer')).action=='drop'
+    assert review(sources(store,config=lines),draft(text)).action=='send'
 
 
 def test_repeat_window_and_future_rows(store):
     text='The copper lantern hangs above the doorway'
     line(store,text,ts=NOW-10)
-    cfg=GuardsCfg(enabled=True,repeat_seconds=10)
+    cfg=GuardsCfg(enabled=True,repeat_seconds=10,phrase_cooldown=False)
     assert review(sources(store,config=cfg),draft(text)).action=='drop'
     assert review(sources(store,config=cfg),draft(text,now=NOW+.001)).action=='send'
     assert review(sources(store),draft(text,now=NOW-11)).action=='send'
@@ -156,7 +159,8 @@ def test_overlap_override_uses_shared_detector_score(store):
     line(store,earlier)
     overlap=repetition.shingle_overlap(repetition.ngrams(tuple(earlier.split())),repetition.ngrams(tuple(later.split())))
     assert review(sources(store,config=GuardsCfg(enabled=True,repeat_overlap=overlap)),draft(later)).action=='drop'
-    assert review(sources(store,config=GuardsCfg(enabled=True,repeat_overlap=overlap+.001)),draft(later)).action=='send'
+    assert review(sources(store,config=GuardsCfg(enabled=True,repeat_overlap=overlap+.001,
+                                                 phrase_cooldown=False)),draft(later)).action=='send'
 
 
 def test_shared_evening_phrase_requires_two_other_members_and_exempts_stop_phrases(store):
@@ -412,7 +416,7 @@ def test_fast_path_is_read_only_bounded_deterministic_and_logs_no_text(store,cap
     try:
         with caplog.at_level(logging.DEBUG):
             first=review(s,draft('PRIVATE_CANDIDATE must stay out of logs'))
-        assert all(sql.startswith('SELECT') for sql in statements) and len(statements)<=8
+        assert all(sql.startswith('SELECT') for sql in statements) and len(statements)<=10  # +2: phrase cooldown
         assert not caplog.text and 'PRIVATE_CANDIDATE' not in repr(first)
         assert first==review(s,draft('PRIVATE_CANDIDATE must stay out of logs'))
     finally:

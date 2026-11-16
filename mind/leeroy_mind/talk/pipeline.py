@@ -83,6 +83,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
+from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, strip as strip_phrases
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -1948,6 +1949,10 @@ class Pipeline:
                     return drop("guard_react")
                 if verdict.action == "drop" and not owed:
                     return drop("guard_drop")
+                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(PHRASE_CODES)
+                                                for v in verdicts):
+                    return await self._without_phrases(turn, meta, p, lines, verdicts, owed,
+                                                       close=close, spoken=spoken)
                 if meta.guard_rewritten or meta.before_transport is not None:
                     if owed:
                         return await fallback()
@@ -1965,7 +1970,8 @@ class Pipeline:
                 else:
                     retry = replace(composed, messages=[*composed.messages,
                         {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
-                        {"role": "user", "content": rewrite_hint(verdict.codes)}])
+                        {"role": "user", "content": rewrite_hint(
+                            verdict.codes, tuple(x for v in verdicts for x in v.phrases))}])
                 text, why = await self._generate(turn, meta, retry, spoken=spoken, max_attempts=1)
                 if why:
                     if owed:
@@ -2045,6 +2051,36 @@ class Pipeline:
             codes.extend(verdict.codes)
         meta.guard_codes = tuple(dict.fromkeys(codes))
         return lines
+
+    async def _without_phrases(self, turn, meta, p, lines, verdicts, owed, *, close, spoken):
+        """The retry still leans on a phrase the cooldown named (guards/phrases.py): cut it and
+        send what survives, checked once more, else drop the line. An answer owed to him only
+        loses a closing epithet (`epithet_only`: a clause cut can reverse what she said, review
+        326), is never dropped for a phrase alone and never dropped `expired` here, its retry
+        being in hand (#325): it goes as it was written."""
+        named = tuple(dict.fromkeys(x for v in verdicts for x in v.phrases))
+        joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
+        text = (strip_phrases(joined.join(s.plain for s in lines), named, epithet_only=owed)
+                if named else None)
+        if text is not None:
+            kept = ([Styled(text, text)] if spoken else
+                    self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
+            kept = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in kept]
+            checked = []
+            for line in kept:
+                checked.append(await self.live_review.check(turn, meta, line.plain))
+                if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
+                    return self._drop(turn, meta, "scope_changed")
+                if not owed and self.scheduler.expired(self._deadline(turn, meta)):
+                    return self._drop(turn, meta, "expired")
+            if kept and all(v.action == "send" for v in checked):
+                return kept
+        meta.guard_codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
+        if owed:
+            meta.guard_verdict = "rewrite"
+            return lines
+        meta.guard_verdict = "drop"
+        return self._drop(turn, meta, "guard_phrase_refused", meta.memory_ids)
 
     async def _guard_react(self, turn, meta, reaction):
         self._release_photo(meta, 'reaction')
