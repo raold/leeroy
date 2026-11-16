@@ -1428,6 +1428,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "lexicon":
         from .nightly.lexicon_cli import lexicon_main
         return lexicon_main(argv[1:])
+    if argv and argv[0] == "life":
+        from .life.cli import life_main
+        return life_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
@@ -1455,6 +1458,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                                     "book, and extract local DBM facts")
     sub.add_parser("lexicon", help="clean-junk: retire stored slang that is an ordinary word "
                                    "(a dry run unless --go, with the mind stopped)")
+    sub.add_parser("life", help="read-only looks at a member's day models: shapes")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

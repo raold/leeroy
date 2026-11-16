@@ -266,3 +266,50 @@ instruction at 200 characters a message, and the trim emptied her memories first
   "Auto-reply:") are not his words: never stored, never answered, no handler sees them
   (`pastes.is_addon_whisper`, `app._on_chat`; log `his_addon_whisper_skipped`). "<3", a tag he
   types himself ("<AFK> back in 5", "<Sigh> fine") and his pasted "<Flask>" checks are his.
+
+# Reply shape
+
+`talk/shape.py` (human-likeness design, section 4) draws what kind of message a member's reply
+is before it is generated: an emoji reaction, a word or two, a short line, a two- or
+three-message burst, a paragraph, a short line asking something back, a late reply that says
+so, or nothing (left on read). It is pure (no clock, I/O or logging) and draws only from the
+caller's seeded `rng`. **Nothing calls it yet**: the pipeline wiring, `[talk] shape` and
+`[talk] dm_mirror` come with the plan's Task 9, so until then no prompt, room or send changes.
+
+- **Odds** (`ROWS`, then renormalized): an answer he is owed is a short line, a burst or a
+  question (game and whispers .65/.15/.20; Discord channels and group DMs .55/.10/.15 and .20 a
+  paragraph; DMs .55/.20/.25), **never** left on read, a reaction or a word or two. A turn he is
+  not owed: in game (a second answer, CONTINUE) .25 left, .25 a word or two, .35 short, .07
+  burst, .08 question; in a Discord channel or group DM .20 left, .15 reaction, .12 a word or
+  two, .30 short, .08 burst, .05 question, .10 paragraph. A whisper or DM is never left on read
+  (channels only): its unowed turns take its owed row. An opener (OPEN) is .60 short, .15 burst,
+  .25 question (and .15 paragraph on Discord); her own whisper or flirt .60/.25/.15. Other kinds
+  (greetings, gz, raid calls, bits, asides) stay one short line.
+- **Multipliers**: her intent (react x3 a word or two and reaction; ask x4 question; vent x2
+  burst, x1.5 paragraph; boundary x2 short; logistics x1.5 question), her state (energy <= -0.3:
+  a word or two and reactions x1.5, bursts and paragraphs x0.5; social <= -0.3: leaves x1.5;
+  social >= 0.3: bursts x1.5 and leaves x0.5), her attention (glancing: paragraph x0.3, burst
+  x0.5, short x1.5; half: paragraph x0.6), her typing (bursts x(0.5 + split_rate); a longest
+  line of 6 words or fewer makes a word or two x1.5). A Discord burst needs `[talk] realism`; a
+  reaction in game is a word or two; a paragraph needs Discord length (its setting above 0).
+- **Forced**: a game or whisper answer 120 s or more after his line (`LATE_SHAPE_S`) is LATE
+  ("You're only now seeing this (you were at work): ..."). A DM with `dm_mirror` 0 is today's DM:
+  a paragraph of up to `dm_words` in `DISCORD_DM`'s words. The explicit whisper band
+  (`two_lines`) keeps at least two lines.
+- **Words and room** (`ShapeDraw`): a word or two is 1-3 words with `num_predict` 24; in game a
+  short line, question or late reply takes her own line's words (`typing.words_per_line`) and a
+  burst twice that over 2 lines, with the preset's room; on Discord a short line is 20 words
+  (never over `discord_words`), a burst a couple of sentences over 2-3 messages, a paragraph
+  `discord_words`, each with `discord_length.num_predict`. Discord at a setting of 0 is sized as
+  the game. Left on read and a reaction write nothing.
+- **DM mirroring** (`dm_words_for`, `[talk] dm_mirror` 0-10, default 5, Task 9): a DM's words
+  follow his message's length (x0.7-1.8) and her habit (her longest line x1-3), as a geometric
+  mean, pulled from the owner's `dm_words` cap toward it by the dial (10 follows it alone), with
+  the full cap a quarter of the time when he wrote 40 words or more; always 3 to `dm_words`.
+  `dm_mirror` 0 (or `dm_words` 0) is exactly today's.
+- **Shape lines** (`shape_line`): the one length line the shape puts in the prompt ("" for left
+  on read and a reaction). Discord paragraphs keep `DISCORD_LENGTH` / `DISCORD_DM`.
+- **Inspect**: `python -m leeroy_mind life --data-dir "$D" shapes --guid N --family dm
+  --his-words 28 [--owed] [--kind continue] [--dm-mirror 5] [--samples 1000]` reads her stored
+  typing profile (mind.db opened read-only) and `[talk]` from mind.toml, and prints the shapes'
+  shares and the words' p10/p50/p90 as JSON: numbers and codes only.
