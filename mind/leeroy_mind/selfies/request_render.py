@@ -24,6 +24,7 @@ from .scene_choices import RECIPE
 from .slot import SetRefused, TRIES, render_slot
 from .snaps import looks_hash, mark_rendered
 from .store import current, face_pick
+from .words_scene import WORDS_RECIPE, build_words_prompt, face_scale, is_words
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
 
 SIZE = 1024
@@ -69,11 +70,14 @@ def _fresh(app, snap):
         return None, "looks_changed"
     if not files.history(app.data_dir, snap.guid, snap.pick).is_file():
         return None, "missing"
-    if type(snap.scene.get("recipe")) is not int or snap.scene["recipe"] != RECIPE:
+    recipe = snap.scene.get("recipe")
+    if type(recipe) is not int or recipe not in (RECIPE, WORDS_RECIPE):
         return None, "legacy_scene_schema"
     try:
         if scene_renderable(p, scene_from(snap.scene)):
             return None, "unrenderable"
+        if is_words(snap.scene):
+            build_words_prompt(p, snap.scene)
     except (KeyError, TypeError, ValueError):
         return None, "scene_invalid"
     return p, None
@@ -108,12 +112,14 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
     thumb = files.snap(app.data_dir, snap.guid, snap.id, thumb=True).absolute()
     if out.exists() or thumb.exists():
         return RenderOutcome("failed", "files_exist")
-    scene = scene_from(snap.scene)
-    spec = build_scene_prompt(p, scene)
+    if is_words(snap.scene):  # read from his words ([photos] scene_from_words)
+        spec = build_words_prompt(p, snap.scene)
+    else:
+        spec = build_scene_prompt(p, scene_from(snap.scene))
     face = _face(app, p, snap.guid, snap.pick)
     if face is None or not face[0].is_file():
         return RenderOutcome("failed", "no_face_ref" if face is None else "missing")
-    identity = Identity(face[0], ref_crop(face[1]), cfg.identity_scale)
+    identity = Identity(face[0], ref_crop(face[1]), face_scale(snap.scene, cfg.identity_scale))
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{snap.id}.request-", dir=out.parent))
     staged, small = stage / "photo.jpg", stage / "thumb.jpg"

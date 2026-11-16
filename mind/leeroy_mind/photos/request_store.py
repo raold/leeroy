@@ -113,8 +113,10 @@ def bind_snap(store, message: int, snap_id: int, *, kind: str) -> None:
 
 
 def plan_fresh(store, request: Request, *, scene: dict, pick: int, looks: str,
-               now: float) -> snaps.SnapRow:
-    """Bind an immutable request scene before borrowing. Safe to repeat after a restart."""
+               now: float, not_before: float | None = None) -> snaps.SnapRow:
+    """Bind an immutable request scene before borrowing. Safe to repeat after a restart.
+    `not_before`: not rendered or offered before then (her day plan's next free block,
+    `[photos] scene_from_words`); by default the request's own time."""
     with store.transaction():
         latest = get(store, request.message)
         if latest is None or latest.ended or latest.failure:
@@ -125,7 +127,8 @@ def plan_fresh(store, request: Request, *, scene: dict, pick: int, looks: str,
             raise RequestError('request scene is unavailable')
         sid = snaps.plan_snap(store, kind='situation', guid=latest.guid, source='request',
             request=latest.message, ref=f'request:{latest.message}:fresh', night='request',
-            scene=scene, audience=latest.audience, phases=PHASES, not_before=latest.created,
+            scene=scene, audience=latest.audience, phases=PHASES,
+            not_before=latest.created if not_before is None else not_before,
             expires=latest.expires, now=now, pick=pick, looks=looks)
         if sid is None:
             raise RequestError('request photo already exists without its binding')
