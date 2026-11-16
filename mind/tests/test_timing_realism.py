@@ -381,3 +381,75 @@ def test_disabled_realism_uses_original_delay_and_no_new_planner(rig, monkeypatc
     assert rig.sent.timed_says()[0][0] - before == pytest.approx(8, abs=1)
     assert [s for s in waits if s > 0] == [7.25]
     assert not e.realism.members
+
+
+# -- [talk] texture: her own slips, corrected at her share ----------------------------------------
+
+SLIPPED = Styled("reqdy with a flask", "ready with a flask", "reqdy", "ready")
+
+
+class Never(Always):
+    def random(self):
+        return 0.99
+
+
+def test_her_own_slip_is_corrected_quickly_without_spending_the_allowance(rig):
+    e = rig.engine
+    e.rng = Always()
+    p = e.realism.plan(e, turn(), TurnMeta("t1"), e.personas.get(101), [SLIPPED], [2])
+    assert p.correction == "*ready" and 2 <= p.correction_delay <= 6
+    assert e.realism.member(101).credit == 0
+    e.rng = Never()  # her share (realism uses style.fix_share) not drawn: no correction
+    assert not e.realism.plan(e, turn(), TurnMeta("t1"), e.personas.get(101), [SLIPPED], [2]).correction
+    # a slip no longer in the line, or one not worth a fix, is never corrected
+    e.rng = Always()
+    for line in (Styled("ready with a flask", "ready with a flask", "reqdy", "ready"),
+                 Styled("readyy with a flask", "ready with a flask")):
+        assert not e.realism.plan(e, turn(), TurnMeta("t1"), e.personas.get(101), [line],
+                                  [2]).correction
+
+
+def test_a_busy_or_single_line_turn_never_corrects_a_slip(rig):
+    e = rig.engine
+    e.rng = Always()
+    e.world.members[101] = replace(e.world.members[101], map=574)
+    assert not e.realism.plan(e, turn("whisper"), TurnMeta("t1"), e.personas.get(101), [SLIPPED],
+                              [2]).correction
+    e.world.members[101] = replace(e.world.members[101], map=0)
+    assert not e.realism.plan(e, turn(), TurnMeta("t1", single_line=True), e.personas.get(101),
+                              [SLIPPED], [2]).correction
+
+
+@pytest.mark.parametrize("channel", ["guild", "discord:general"])
+def test_a_slip_keeps_its_fix_through_the_pipeline_and_its_correction_follows(rig, monkeypatch,
+                                                                               channel):
+    e = rig.engine
+    e.rng = Always()
+    monkeypatch.setattr(e, "_style", lambda *a, **kw: [SLIPPED])
+    assert len(rig.speak_turn(turn(channel), seconds=50)) == 2
+    if channel == "guild":
+        sent = rig.sent.timed_says()
+        assert [s.text for _, s in sent] == ["reqdy with a flask", "*ready"]
+        assert 2 <= sent[1][0] - sent[0][0] <= 6
+    else:
+        rows = rig.store.conn.execute("SELECT text FROM chat_line ORDER BY id").fetchall()
+        assert [r[0] for r in rows] == ["reqdy with a flask", "*ready"]
+    assert e.realism.member(101).credit == .02  # the slip spent nothing; its line earned credit
+
+
+@pytest.mark.parametrize("texture", [False, True])
+def test_the_switch_reaches_the_styler_and_a_discord_message_keeps_its_slip(rig, monkeypatch,
+                                                                            texture):
+    import leeroy_mind.talk.pipeline as pipeline
+    e = rig.engine
+    # discord_words 0: a Discord turn's lines become one message, as in game (the slip is kept)
+    e.cfg = replace(e.cfg, talk=replace(e.cfg.talk, texture=texture, discord_words=0))
+    seen = []
+
+    def styler(text, *a, **kw):
+        seen.append(kw["texture"])
+        return [Styled("first", "first"), Styled("secnod one", "second one", "secnod", "second")]
+    monkeypatch.setattr(pipeline, "style_lines", styler)
+    (msg,) = e._style(turn("discord:general"), e.personas.get(101), "first. second one", close=False)
+    assert seen == [texture]
+    assert msg == Styled("first\nsecnod one", "first second one", "secnod", "second")

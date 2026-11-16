@@ -53,6 +53,72 @@ message into separate short posts, still in the same channel/thread or DM pair.
 
 Run `python -m pytest -q tests/test_timing_realism.py` for the fake-clock checks.
 
+With `[talk] texture` on, a slip the styler made in a word that matters (below) is corrected at
+the member's own share instead: about 12% of such slips for a lower-case typer with no end
+punctuation, up to 32% for a proper-case typer with full stops. That correction comes 2-6
+seconds after the line, spends none of the allowance above, and needs the same safe, unhurried,
+multi-line-capable turn as any correction. The six-word list and its allowance stay for lines
+with no slip of their own.
+
+# Typing texture
+
+`[talk] texture = true` (default false; anything but a boolean is off; read at mind start and
+each login; no migration or native rebuild) types each member's lines the way people type in
+chat, around her declared typing (`persona_core.json` `typing`), with nothing new in the
+persona. `talk/style.py` `texture_of` fixes her habits from her character name and her declared
+case and end punctuation (a lower-case, no-full-stop typer is the most casual, a proper-case,
+full-stop typer the most careful):
+
+- **Apostrophes.** Contractions lose theirs ("dont", "im", "thats") at her rate, about 90% of uses
+  for the most casual and 3% for the most careful; one member in ten keeps most of hers whatever
+  her case. "we're", "we'll", "he'll", "she'll", "we'd" and "she'd" always keep theirs: without
+  it each is another word.
+- **Run-ons.** Her full stops between fragments run on at her rate ("x, y", "x y", now and then
+  "x and y" between two clauses), short fragments most readily; "?", "!" and "..." stay, and one
+  member in eight keeps her full stops. A fragment of one or two words always takes a comma
+  ("stop, pull the boss", never "stop pull the boss"). A run-on is punctuation, so the line's
+  stored words show it too; an ordinary word after it loses its capital, "I", names and acronyms
+  keep theirs.
+- **Shorthand.** Her own list applies use by use, not every time: a real entry ("u", "brb",
+  "dps") at 55-95%, an entry no one types ("tht", "wt", "nt", "2") at about a third of that.
+  A casual typer (at least mixed case with some end punctuation) also has two to four real
+  shorthands of her own from u, ur, rn, idk, tbh, ngl, imo, ofc, prob, def, w/e, bc, tho,
+  gonna (only before a verb) and wanna, used some of the time. "you're" never becomes "u're"
+  (with the switch off too).
+- **Spelling habits.** Two or three per member ("definately", "alot", "wierd"; casual typers can
+  also have "your" for "you're", "then" for "than", or a finger habit such as "teh" or
+  "jsut"), each used some of the time. None for a persona with `typo_rate` 0.
+- **Slips.** At most one per line, in some lines: about 5 x `typo_rate` of the lines of six words
+  or more (x the drink multiplier, at most 60%), fewer in shorter ones, 0.8 x that on Discord.
+  At a keyboard: a neighbouring key, a letter dropped (often the last), doubled or swapped
+  ("teh", "ponit"), a space left out ("inthe") or hit early ("abou tthe"); short words and the
+  first letter now and then; never another common word. On Discord (a phone) a third are
+  autocorrect's wrong real words ("form", "wife"). Names, item links, marks and shorthand never
+  slip, and no slip ever types a swear, sexual word or slur she did not write (`NEVER_TYPED`:
+  "sec" never becomes "sex", nor "count" a worse word; the switch-off typo path keeps this rule
+  too). A slip in a word of four letters or more that is not a little word, or an autocorrect
+  one, may be followed by "*word" (with `[talk] realism` on, above).
+- **Kept as written.** A quoted phrase (straight or curly quotes) and a web address get no
+  shorthand, spelling habit, apostrophe drop, run-on, slip or autocorrect, just like item links.
+
+Measured on the live corpus (2026-11-15, read-only; members' stored lines rebuilt as drafts and
+typed again), against his own lines:
+
+| | him, game | members before | members after | him, Discord | members before | members after |
+|---|---:|---:|---:|---:|---:|---:|
+| lines with a contraction's apostrophe | 4.8% | 36.5% | 14.6% | 8.9% | 67.1% | 37.5% |
+| lines with one dropped | 22.5% | 2.7% | 24.1% | 43.9% | 4.4% | 44.7% |
+| lines with an inner ". " | 20.9% | 40.7% | 15.7% | 50.4% | 79.6% | 53.5% |
+| lines with a comma | 25.9% | 9.0% | 28.8% | 43.1% | 20.4% | 47.9% |
+| "u're" per 100 lines | 0 | 3.2 | 0 | 0 | 6.5 | 0 |
+| lines with a typo | 18.0% | 15.3% | 18.4% | 18.7% | 33.8% | 18.8% |
+| lines with two or more | 3.3% | 1.2% | 0.8% | 8.9% | 10.7% | 1.9% |
+
+About 9.5% of game lines then carry a slip worth correcting, and about 1.4% of lines would be
+followed by a "*word". The persona-declared "u" stays a persona choice (about 30% of "you"s).
+
+Run `python -m pytest -q tests/test_typing_texture.py tests/test_timing_realism.py`.
+
 # Discord message length
 
 `[talk] discord_words` (an integer 0-200, default 90; owner 2026-11-13, "Long and chatty") is
@@ -100,3 +166,42 @@ Since the second round (owner, 2026-11-13: channels a mix, "DMs max expressive")
   extraction and the console take the longer line as it is.
 - 0 is the rollback: one short line on Discord, with the prompts, room, typing and retries as
   before. A game turn never changes, at any value.
+
+# A guild that talks among itself
+
+Owner's "pass the Turing test" push (2026-11-15): 82% of the members' typed game lines were aimed
+at him, every login drew 2-5 greeters, 23 of 147 greetings opened "there he is", and a quarter of
+the openers to him asked how his day was or what he was up to.
+
+- **Openers.** The openers' clock (`budget.BurstBudget.to_him`) runs at `[talk] openers_per_hour`,
+  now 2 by default (was 6), still scaled by chattiness and the talkative dials. Each due opener goes
+  to him only `[talk] openers_to_him` of the time (a number 0-1, default 0.35; 1 is the old
+  behaviour, 0 none); the rest start a conversation among the members in guild chat about the
+  guild's own business (`engine._open_to_guild`, `guild_topics.py`): a kind of subject first
+  (raid, the member's own game, loot, a life beat, the calendar, a rival guild), then a topic, from
+  the seeds the Discord server reads (`server.seeds.public_seeds`, never an officers' one, never
+  his loot) and the member's wants and pastimes. A life beat is raised only by its member, a loot
+  or birthday topic never by the member it is about, a topic once a night; others answer it as a
+  social burst, which holds the social bursts' own clock while it runs and rests it a gap after
+  (`BurstBudget.begin`), and it gives way to a social burst already running. With every candidate
+  just having spoken nobody opens. Utterance `why` is `burst:guild:<subject>`. An opener to him
+  never asks how his day went or what he is up to (`engine.TO_HIM_TOPICS`).
+- **Greetings** (`greetings.py`): nobody greets about 30% of his logins, else one or two; the login
+  quiet starts either way (`greet_skipped: reason=nobody_noticed`). A later greeter who is a man or
+  a woman with no romance toward him types a plain hello half the time (`greet_plain:<how>`). A
+  stock greeting ("there he is", "welcome back"...) said in any greeting within 3 days, this
+  login's included, and the opening three words of an earlier login's greeting within a day,
+  rest: each greeter's instruction names them as it is composed (an instruction hook, so a later
+  greeter knows what an earlier one just said), and a line that still says one is asked again
+  once with a hint naming exactly that phrase, then dropped (`phrase: resting`). Simulated with a
+  fake model that ignores the list (40 logins): 0.93 greeters a login, 14 with none, 1 dropped.
+- **The flirt rule** (`prompt.FLIRT_RULE`) reaches a woman only on a turn that is his (addressed to
+  him, a whisper or DM to him, a FLIRT), and a man's "the women only have eyes for him" only on a
+  turn that is his or where he is in the last three lines; every other turn reads
+  `FLIRT_RULE_AWAY`, which still keeps flirting off every guildmate (and `filters.member_flirt`
+  still screens every line). The golden prompts are unchanged: every prompt of the tuning scenario
+  is a turn to him, and the scenario keeps its recorded greeter draw.
+- No switch (ruling on the #319 review): the dials are `[talk] openers_per_hour` and
+  `openers_to_him`. Rollback values: `openers_per_hour = 6`, `openers_to_him = 1`. The greeter draw
+  is not a mind.toml key (`reactions.greeter_draw`, which the tuning scenario pins to 2-3); it, the
+  topics and the flirt-rule scope roll back only with the code from before.
