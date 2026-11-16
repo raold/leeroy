@@ -50,6 +50,17 @@ meetings stay in officer chat. Purpose seeds are topics, and rival activity carr
 no invented contents.
 With `[decisions]` on, each guild decision seeds one conversation per stage (proposed, poll
 open, settled) with a code-built fact and its stakeholders as `about` (`decisions/seeds.py`).
+With `[talk] recall_diversity` on (2026-11-16; `seeds.varied`, read each tick): the officers'
+weekly attendance thread is the only attendance seed, and starts at most once in 7 days
+guild-wide whatever the ISO week (the W46 and W47 threads had started hours apart); a life
+beat or plan about the bench or attendance seeds nothing. A topic seed (`seeds.TOPIC_KINDS`:
+life, plan, purpose, officer, rival) whose fact's content words are 0.5 Jaccard or more like
+one that opened a conversation within 7 days is passed over while any other seed is
+available; raid, loot, calendar, decision, intent and culture seeds are new events or keep
+their own cooldowns. Its receipt (`server:subject:<seed key>`, written when the opener is
+posted) holds the words as hashes, never the fact, and the daily sweep drops it after a week.
+In practice a channel's purpose is talked about about once a week instead of once a day while
+other seeds wait. Off: no receipt, no filter.
 New and running conversations stop during raid holds and his login quiet period.
 The inherited login quiet period is 180 seconds. The D2 plan's ten-minute review
 target is not implemented or certified by this rehearsal.

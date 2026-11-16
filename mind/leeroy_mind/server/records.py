@@ -79,6 +79,11 @@ def prune(store, local_date, now):
                 old = False
         elif key.startswith('server:seed:decision:'):
             old = False
+        elif key.startswith('server:subject:'):  # seeds.note_subject: a week, then gone
+            try:
+                old = float(json.loads(value)['at']) < now - 7 * 86400
+            except (ValueError, TypeError, KeyError):
+                old = True
         elif key.startswith(('server:seed:', 'server:conversation:', 'server:dm:open:')):
             try:
                 old = float(value) < now - 7 * 86400
