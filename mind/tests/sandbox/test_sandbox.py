@@ -103,15 +103,17 @@ async def fast(clock):
         await clock.advance(1, 0.5)
 
 
-def run(tmp_path, layout, body, *, online=False, llm=None):
-    """Start a sandbox and its API on the fast clock, run `body(sandbox, api, client)`, stop."""
+def run(tmp_path, layout, body, *, online=False, llm=None, real_clock=False, quick=False):
+    """Start a sandbox and its API on the fast clock (the system's with real_clock), run
+    `body(sandbox, api, client)`, stop. `quick`: the sandbox's --fast."""
     async def go():
-        clock = FakeClock(datetime(2026, 11, 5, 20, tzinfo=ZoneInfo("America/New_York")))
-        ticker = asyncio.create_task(fast(clock))
+        clock = None if real_clock else FakeClock(
+            datetime(2026, 11, 5, 20, tzinfo=ZoneInfo("America/New_York")))
+        ticker = asyncio.create_task(fast(clock)) if clock is not None else None
         cfg = load_config(tmp_path / "defaults.toml")  # absent: the default models
         model = llm or FakeLLM(script, models={cfg.models.live, cfg.models.embedding})
         sandbox = Sandbox(layout, make_llm=lambda cfg: model, clock=clock, online=online, seed=1,
-                          ollama_conf=tmp_path / "no-ollama-chat.conf")
+                          ollama_conf=tmp_path / "no-ollama-chat.conf", fast=quick)
         api = Api(sandbox)
         teardown = _logging(layout.data / "logs", "INFO")
         try:
@@ -125,7 +127,8 @@ def run(tmp_path, layout, body, *, online=False, llm=None):
         finally:
             await api.close()
             await sandbox.close()
-            ticker.cancel()
+            if ticker is not None:
+                ticker.cancel()
             teardown()
     return asyncio.run(go())
 
@@ -245,6 +248,7 @@ def test_quiet_mind(tmp_path):
             await app.llm.chat(app.cfg.models.reflection, [], options={})
         assert app.llm.refused["chat"] == 1
         assert app.engine.bakeoff_capture
+        assert app.engine.wait_scale == 1.0  # her delay and typing as in the live mind
     run(tmp_path, layout, body)
 
 
@@ -427,3 +431,40 @@ def test_sandbox_talk_runs_a_script(tmp_path):
     assert any(line.strip().startswith("|   ") for line in printed)  # --prompts
     saved.unlink()
     talk.unlink()
+
+
+def test_fast_answers_in_model_time(tmp_path):
+    """--fast: on the system's clock, an answer comes as soon as the (fake, instant) model has
+    made it: no reading delay and no typing time, and a reset keeps it."""
+    live, store = make_live(tmp_path)
+    store.close()
+    layout = prepared(tmp_path, live)
+
+    async def body(sandbox, api, call):
+        assert sandbox.app.engine.wait_scale == 0.0
+        assert (await call("GET", "/status"))["fast"]
+        res = await call("POST", "/say", {"channel": "dm", "to": 105, "text": "evening"})
+        [answer] = res["answers"]
+        assert answer["latency_s"] < 3 and res["settled"]
+        await call("POST", "/login", {})
+        whisper = await call("POST", "/say", {"channel": "whisper", "to": 101, "text": "hi"})
+        assert whisper["answers"][0]["latency_s"] < 3
+        await call("POST", "/reset", {})
+        assert sandbox.app.engine.wait_scale == 0.0
+    run(tmp_path, layout, body, real_clock=True, quick=True)
+
+
+def test_wait_scale_skips_the_delay():
+    """Pipeline._delay waits turn.delay times wait_scale on the clock: 0 returns at once."""
+    from types import SimpleNamespace
+    from leeroy_mind.talk.pipeline import Pipeline
+
+    async def go():
+        clock = FakeClock(datetime(2026, 11, 5, 20, tzinfo=ZoneInfo("America/New_York")))
+        turn, meta = SimpleNamespace(delay=30.0), SimpleNamespace(wake=None)
+        await asyncio.wait_for(Pipeline._delay(SimpleNamespace(clock=clock, wait_scale=0.0),
+                                               turn, meta), 1)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(Pipeline._delay(SimpleNamespace(clock=clock, wait_scale=1.0),
+                                                   turn, meta), 0.2)
+    asyncio.run(go())

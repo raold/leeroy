@@ -17,7 +17,7 @@ From `mind/`, with the live mind running or not:
 D=F:/azerothcore/mind-data
 OUT=C:/Users/<you>/leeroy-sandbox      # outside the data dir and outside any git checkout
 .venv/Scripts/python -m leeroy_mind sandbox --data-dir "$D" --out "$OUT" [--port N] [--online]
-    [--seed S] [--reuse] [--fresh-library]
+    [--fast] [--seed S] [--reuse] [--fresh-library]
 ```
 
 It prints `sandbox: http://127.0.0.1:N` once the mind is up and has been greeted by its bridge.
@@ -26,6 +26,13 @@ and only DMs are possible until `POST /login`). `--reuse` runs on the snapshot a
 instead of copying the live data again: the way to replay a conversation on the same state with
 different code. library.db (about 1.6 GB) is copied once per `OUT`; `--fresh-library` copies it
 again.
+
+`--fast` waits out no reading delay and no typing time: each line goes out as soon as the model
+has made it (the talk pipeline's `wait_scale`, 1 everywhere else, is 0 in the sandbox), so a
+scripted turn takes model time (a few seconds) instead of her typing time (half a minute for a
+long DM), and `/say` settles 1 second after the last line instead of 4. Everything else is as
+without it: the same prompts, beat, guards and lines. Leave it off to see the timing itself
+(`latency_s`), or how realism's bursts and corrections behave over time.
 
 A scripted conversation, one of his lines per line of the script (blank lines and lines
 starting with `#` are skipped):

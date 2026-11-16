@@ -657,6 +657,9 @@ class Pipeline:
     human: HumanIdentity
     facts: LibraryFacts | None  # the library's facts, None without a library.db
     comms = None  # the voice extension's Comms; None: voice off, and nothing here changes
+    # what a turn's delay and its typing are waited out at: 1 everywhere but the sandbox mind's
+    # --fast (sandbox/README.md), whose 0 sends each line as soon as it is made
+    wait_scale: float = 1.0
     # when the members away were read, and who they were (_away_now)
     _away_cache: tuple[float, frozenset[int]] = (-math.inf, frozenset())
 
@@ -1814,16 +1817,17 @@ class Pipeline:
     async def _delay(self, turn: Turn, meta: TurnMeta) -> None:
         """Wait out turn.delay on the clock, or until meta.wake is set (hurry). Without a wake
         (every turn at availability 0) it is the clock's plain sleep, as before."""
+        delay = turn.delay * self.wait_scale
         if meta.wake is None:
-            await self.clock.sleep(turn.delay)
+            await self.clock.sleep(delay)
             return
         task = asyncio.current_task()
-        meta.wake_at = self.clock.now() + max(0.0, turn.delay)
-        if meta.wake.is_set() or turn.delay <= 0:
+        meta.wake_at = self.clock.now() + max(0.0, delay)
+        if meta.wake.is_set() or delay <= 0:
             await self.clock.sleep(0)
             return
         self._delaying[task] = turn
-        sleep = asyncio.ensure_future(self.clock.sleep(turn.delay))
+        sleep = asyncio.ensure_future(self.clock.sleep(delay))
         wake = asyncio.ensure_future(meta.wake.wait())
         try:
             await asyncio.wait({sleep, wake}, return_when=asyncio.FIRST_COMPLETED)
@@ -2083,7 +2087,8 @@ class Pipeline:
                 if turn.template is None:
                     self._phase(turn, TYPING)
                 with self.timing.span(meta.timing_trace, "typing"):
-                    wait = self._first_typing(turn, typing, meta) if i == 0 else typing
+                    wait = (self._first_typing(turn, typing, meta) if i == 0 else typing
+                            ) * self.wait_scale
                     if plan:
                         await self._realistic_sleep(turn, wait)
                     else:

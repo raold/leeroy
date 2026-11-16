@@ -47,13 +47,13 @@ def _logging(log_dir: Path, level: str):
 
 async def serve(layout: prepare.Layout, *, port: int = 0, make_llm=None, online: bool = False,
                 seed: int | None = None, clock=None, ollama_conf: Path | None = None,
-                ready=None, say=print) -> int:
+                fast: bool = False, ready=None, say=print) -> int:
     """Start the sandbox mind and its API, serve until POST /stop or a cancel (Ctrl+C), then
     stop both. `ready(sandbox, api)` is told once both run (tests)."""
     from .api import Api
     from .runtime import Sandbox
     sandbox = Sandbox(layout, make_llm=make_llm, online=online, seed=seed, clock=clock,
-                      ollama_conf=ollama_conf)
+                      ollama_conf=ollama_conf, fast=fast)
     api = Api(sandbox)
     try:
         await sandbox.start()
@@ -89,6 +89,8 @@ def _sandbox_parser():
     p.add_argument("--port", type=int, default=0, help="the API's port (default: a free one)")
     p.add_argument("--online", action="store_true", help="start with him in game")
     p.add_argument("--seed", type=int, default=None, help="the mind's random seed")
+    p.add_argument("--fast", action="store_true",
+                   help="no reading delay or typing time: each answer comes in model time")
     p.add_argument("--reuse", action="store_true",
                    help="run on DIR's existing snapshot instead of copying the live data again")
     p.add_argument("--fresh-library", action="store_true",
@@ -129,7 +131,7 @@ def sandbox_main(argv=None, *, make_llm=None) -> int:
                 print("sandbox: copying library.db (once)", flush=True)
             prepare.copy_library(live, layout, fresh=args.fresh_library)
             return asyncio.run(serve(layout, port=args.port, make_llm=make_llm,
-                                     online=args.online, seed=args.seed,
+                                     online=args.online, seed=args.seed, fast=args.fast,
                                      say=lambda s: print(s, flush=True)))
         except prepare.Refused as e:
             print(f"sandbox: {e}", file=sys.stderr)

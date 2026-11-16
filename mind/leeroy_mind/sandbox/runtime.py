@@ -30,6 +30,7 @@ log = logging.getLogger("leeroy_mind")
 SPEECH = frozenset({"ping", "get_cast", "say", "emote", "afk"})
 CHANNELS = ("dm", "whisper", "guild", "officer", "party")
 SETTLE_S = 4.0  # an answered line is done once nothing is planned or typed for this long
+SETTLE_FAST_S = 1.0  # the same with --fast, where a follow-up line comes at once
 MAX_WAIT_S = 600.0
 NL = b"\n"
 EVENT_PREFIXES = ("say_", "guard_", "think_beat", "owed_", "discord_", "talk_", "photo_answer",
@@ -191,8 +192,10 @@ def _summary(p) -> str:
 
 class Sandbox:
     def __init__(self, layout: prepare.Layout, *, make_llm=None, online: bool = False,
-                 seed: int | None = None, clock=None, ollama_conf: Path | None = None):
+                 seed: int | None = None, clock=None, ollama_conf: Path | None = None,
+                 fast: bool = False):
         self.layout = layout
+        self.fast = fast
         self.make_llm = make_llm
         self.start_online = online
         self.seed = seed
@@ -267,6 +270,8 @@ class Sandbox:
         llm = SandboxLLM(inner, chat_models={cfg.models.live}, embed_models={cfg.models.embedding})
         app = MindApp(cfg, self.layout.data, llm=llm, clock=self.clock, rng_seed=self.seed)
         self.app = app
+        if self.fast:  # no reading delay or typing time is waited out: answers in model time
+            app.engine.wait_scale = 0.0
         self.dropped_tasks = quiet(app)
         armory = getattr(getattr(app, "guild", None), "armory", None)
         if armory is not None and getattr(armory, "available", False):
@@ -286,8 +291,9 @@ class Sandbox:
         self._ro = sqlite3.connect(f"{(self.layout.data / prepare.DB).resolve().as_uri()}?mode=ro",
                                    uri=True, check_same_thread=False)
         self._ro.row_factory = sqlite3.Row
-        log.info("sandbox_started: cast=%d dropped=%d online=%d resets=%d", len(app.world.members),
-                 len(self.dropped_tasks), int(self.start_online), self.resets)
+        log.info("sandbox_started: cast=%d dropped=%d online=%d fast=%d resets=%d",
+                 len(app.world.members), len(self.dropped_tasks), int(self.start_online),
+                 int(self.fast), self.resets)
 
     async def _halt(self) -> None:
         if self._ro is not None:
@@ -334,7 +340,7 @@ class Sandbox:
         return {
             "ok": True, "running": app is not None and app.running,
             "data_dir": str(self.layout.data), "snapshot_taken": info.get("taken"),
-            "resets": self.resets,
+            "resets": self.resets, "fast": self.fast,
             "human": {"guid": self.human, "name": self.human_name,
                       "online": bool(world and world.human_online)},
             "group": list(group.members) if group is not None else [],
@@ -555,7 +561,7 @@ class Sandbox:
 
     async def _settle(self, channel, target, marks, his, t0, deadline, message) -> dict:
         seen, last = -1, self._now()
-        settled = False
+        settled, settle_s = False, SETTLE_FAST_S if self.fast else SETTLE_S
         while True:
             rows = self._lines_after(marks)
             now = self._now()
@@ -563,7 +569,7 @@ class Sandbox:
                 seen, last = len(rows), now
             answered = any(self._answers(channel, target, r) for r in rows)
             busy = self._busy()
-            if answered and not busy and now - last >= SETTLE_S:
+            if answered and not busy and now - last >= settle_s:
                 settled = True
                 break
             if now >= deadline:
