@@ -1,6 +1,6 @@
 """Optional bounded typing cadence. Pure plans; no model, probe or stored chat reads."""
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import random
 import re
 
@@ -9,7 +9,7 @@ from leeroy_mind.fingerprint import fingerprint
 from leeroy_mind.protocol import Boss, Hello, Logout, Zone
 from leeroy_mind.talk.discord_length import TYPING_CAP_S as DISCORD_TYPING_S, words_for
 from leeroy_mind.talk.raid import MAX_FIGHT_S, RaidPhase
-from leeroy_mind.talk.style import Styled
+from leeroy_mind.talk.style import Styled, carries, fix_share
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.states import effects_for
 from leeroy_mind.wow import DUNGEONS, RAID_INSTANCES
@@ -20,6 +20,7 @@ CORRECTION_RATE = .02
 BURST_RATE = .25
 BURST_GAP = 90.0
 BURST_MIN_WORDS = 4  # a drawn burst (TurnMeta.burst) splits a line this long or longer
+SLIP_FIX_DELAY = (2.0, 6.0)  # a "*word" for her own slip comes quickly
 MAX_MEMBERS = 1024
 _CLAUSE = re.compile(r"(?<=[.!?;])\s+|,\s+(?=(?:but|then|and|so)\b)")
 _WORD = re.compile(r"(?<![\w@])([a-z]{4,})(?!\w)")
@@ -81,7 +82,12 @@ def split_line(line):
         typed, plain = [*typed[:2], " ".join(typed[2:])], [*plain[:2], " ".join(plain[2:])]
     if any(not a.strip() or not b.strip() for a, b in zip(typed, plain)):
         return [line]
-    return [Styled(a.strip(), b.strip()) for a, b in zip(typed, plain)]
+    parts = [Styled(a.strip(), b.strip()) for a, b in zip(typed, plain)]
+    # A slip worth correcting stays with the part it is in (the last, if it could be either).
+    at = next((i for i in reversed(range(len(parts))) if carries(parts[i].line, line.slip)), None)
+    if at is not None:
+        parts[at] = replace(parts[at], slip=line.slip, fix=line.fix)
+    return parts
 
 
 def typo(line, protected, rng):
@@ -191,7 +197,13 @@ class Realism:
         desired = [duration(s.line, wpm, rng, first=i == 0, busy=busy) * delay_mult +
                    (rng.uniform(.8, 2) if i else 0) for i, s in enumerate(out)]
         correction, correction_delay = "", 0.0
-        if safe and not busy and not meta.single_line and len(out) < 3 and state.credit >= 1 and rng.random() < CORRECTION_RATE:
+        may_fix = safe and not busy and not meta.single_line and len(out) < 3
+        slipped = next((s for s in reversed(out) if carries(s.line, s.slip) and s.fix), None)
+        if may_fix and slipped is not None:
+            # her own slip ([talk] texture), noticed at her share: no allowance spent
+            if rng.random() < fix_share(persona.typing):
+                correction, correction_delay = "*" + slipped.fix, rng.uniform(*SLIP_FIX_DELAY)
+        elif may_fix and state.credit >= 1 and rng.random() < CORRECTION_RATE:
             chosen = typo(out[-1], engine._protect(turn.channel), rng)
             if chosen is not None:
                 out[-1], correction = chosen

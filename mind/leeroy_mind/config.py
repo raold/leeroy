@@ -24,6 +24,7 @@ openers_per_hour = 6          # members starting a line to him in party or guild
 selfies = 3                    # 0-10, member photos in your DMs and guild channels (rendered at night)
 aware = false                  # include a bounded card of visible observations in talk
 realism = false                # bounded member typing, small bursts and rare corrections
+texture = false                # members type like people: apostrophes, run-ons, shorthand and slips some of the time
 dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
 discord_words = 90             # 0-200: most words in a member's Discord channel message (0: one short line, as in game)
 dm_words = 200                 # 0-200: most words in a member's DM to him (0: one short line)
@@ -88,6 +89,7 @@ class TalkCfg:
     selfies: int = 3
     aware: bool = False
     realism: bool = False
+    texture: bool = False  # [talk] texture; talk/style.py texture_of
     dm_own_time: bool = False
     discord_words: int = 90  # [talk] discord_words; talk/discord_length.py
     dm_words: int = 200  # [talk] dm_words: his DMs, as full as she likes
@@ -187,6 +189,7 @@ _RULES = {
     "talk": {
         "aware": (lambda v: type(v) is bool, "a boolean"),
         "realism": (lambda v: type(v) is bool, "a boolean"),
+        "texture": (lambda v: type(v) is bool, "a boolean"),
         "dm_own_time": (lambda v: type(v) is bool, "a boolean"),
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "raid_rule": (lambda v: v in RAID_RULES, f"one of {sorted(RAID_RULES)}"),
@@ -249,7 +252,7 @@ def _build(data: dict, source: str) -> MindConfig:
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
-            if section == "talk" and key in ("realism", "dm_own_time") and type(v) is not bool:
+            if section == "talk" and key in ("realism", "texture", "dm_own_time") and type(v) is not bool:
                 v = False
             if section == "talk" and key in ("discord_words", "dm_words") and not check(v):
                 if (key, repr(v)) not in _WARNED:  # the default, logged once (each login reads it again)

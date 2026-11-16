@@ -57,6 +57,72 @@ message into separate short posts, still in the same channel/thread or DM pair.
 
 Run `python -m pytest -q tests/test_timing_realism.py` for the fake-clock checks.
 
+With `[talk] texture` on, a slip the styler made in a word that matters (below) is corrected at
+the member's own share instead: about 12% of such slips for a lower-case typer with no end
+punctuation, up to 32% for a proper-case typer with full stops. That correction comes 2-6
+seconds after the line, spends none of the allowance above, and needs the same safe, unhurried,
+multi-line-capable turn as any correction. The six-word list and its allowance stay for lines
+with no slip of their own.
+
+# Typing texture
+
+`[talk] texture = true` (default false; anything but a boolean is off; read at mind start and
+each login; no migration or native rebuild) types each member's lines the way people type in
+chat, around her declared typing (`persona_core.json` `typing`), with nothing new in the
+persona. `talk/style.py` `texture_of` fixes her habits from her character name and her declared
+case and end punctuation (a lower-case, no-full-stop typer is the most casual, a proper-case,
+full-stop typer the most careful):
+
+- **Apostrophes.** Contractions lose theirs ("dont", "im", "thats") at her rate, about 90% of uses
+  for the most casual and 3% for the most careful; one member in ten keeps most of hers whatever
+  her case. "we're", "we'll", "he'll", "she'll", "we'd" and "she'd" always keep theirs: without
+  it each is another word.
+- **Run-ons.** Her full stops between fragments run on at her rate ("x, y", "x y", now and then
+  "x and y" between two clauses), short fragments most readily; "?", "!" and "..." stay, and one
+  member in eight keeps her full stops. A fragment of one or two words always takes a comma
+  ("stop, pull the boss", never "stop pull the boss"). A run-on is punctuation, so the line's
+  stored words show it too; an ordinary word after it loses its capital, "I", names and acronyms
+  keep theirs.
+- **Shorthand.** Her own list applies use by use, not every time: a real entry ("u", "brb",
+  "dps") at 55-95%, an entry no one types ("tht", "wt", "nt", "2") at about a third of that.
+  A casual typer (at least mixed case with some end punctuation) also has two to four real
+  shorthands of her own from u, ur, rn, idk, tbh, ngl, imo, ofc, prob, def, w/e, bc, tho,
+  gonna (only before a verb) and wanna, used some of the time. "you're" never becomes "u're"
+  (with the switch off too).
+- **Spelling habits.** Two or three per member ("definately", "alot", "wierd"; casual typers can
+  also have "your" for "you're", "then" for "than", or a finger habit such as "teh" or
+  "jsut"), each used some of the time. None for a persona with `typo_rate` 0.
+- **Slips.** At most one per line, in some lines: about 5 x `typo_rate` of the lines of six words
+  or more (x the drink multiplier, at most 60%), fewer in shorter ones, 0.8 x that on Discord.
+  At a keyboard: a neighbouring key, a letter dropped (often the last), doubled or swapped
+  ("teh", "ponit"), a space left out ("inthe") or hit early ("abou tthe"); short words and the
+  first letter now and then; never another common word. On Discord (a phone) a third are
+  autocorrect's wrong real words ("form", "wife"). Names, item links, marks and shorthand never
+  slip, and no slip ever types a swear, sexual word or slur she did not write (`NEVER_TYPED`:
+  "sec" never becomes "sex", nor "count" a worse word; the switch-off typo path keeps this rule
+  too). A slip in a word of four letters or more that is not a little word, or an autocorrect
+  one, may be followed by "*word" (with `[talk] realism` on, above).
+- **Kept as written.** A quoted phrase (straight or curly quotes) and a web address get no
+  shorthand, spelling habit, apostrophe drop, run-on, slip or autocorrect, just like item links.
+
+Measured on the live corpus (2026-11-15, read-only; members' stored lines rebuilt as drafts and
+typed again), against his own lines:
+
+| | him, game | members before | members after | him, Discord | members before | members after |
+|---|---:|---:|---:|---:|---:|---:|
+| lines with a contraction's apostrophe | 4.8% | 36.5% | 14.6% | 8.9% | 67.1% | 37.5% |
+| lines with one dropped | 22.5% | 2.7% | 24.1% | 43.9% | 4.4% | 44.7% |
+| lines with an inner ". " | 20.9% | 40.7% | 15.7% | 50.4% | 79.6% | 53.5% |
+| lines with a comma | 25.9% | 9.0% | 28.8% | 43.1% | 20.4% | 47.9% |
+| "u're" per 100 lines | 0 | 3.2 | 0 | 0 | 6.5 | 0 |
+| lines with a typo | 18.0% | 15.3% | 18.4% | 18.7% | 33.8% | 18.8% |
+| lines with two or more | 3.3% | 1.2% | 0.8% | 8.9% | 10.7% | 1.9% |
+
+About 9.5% of game lines then carry a slip worth correcting, and about 1.4% of lines would be
+followed by a "*word". The persona-declared "u" stays a persona choice (about 30% of "you"s).
+
+Run `python -m pytest -q tests/test_typing_texture.py tests/test_timing_realism.py`.
+
 # Discord message length
 
 `[talk] discord_words` (an integer 0-200, default 90; owner 2026-11-13, "Long and chatty") is

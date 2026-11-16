@@ -958,7 +958,8 @@ class Pipeline:
         styled = style_lines(text, persona.typing, EFFECTS[Altered.SOBER],
                              random.Random(seed), protect=self._protect(),
                              speaker=persona.character_name, kind=turn.kind,
-                             max_lines=max(1, turn.max_lines), aliases=aliases(persona))
+                             max_lines=max(1, turn.max_lines), aliases=aliases(persona),
+                             texture=self.cfg.talk.texture)
         return "\n".join(s.line for s in styled), None
 
     def _may_carry(self, turn: Turn, row: ChatLineRow) -> bool:
@@ -1691,7 +1692,7 @@ class Pipeline:
                                                 realism=self.realism.eligible(self, turn, meta))
         # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
         # each line is defused once more as it is kept and sent (talk/items.py).
-        lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+        lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
@@ -1862,7 +1863,7 @@ class Pipeline:
                     return fallback() if owed else drop("guard_rewrite_failed")
                 lines = ([Styled(text, text)] if spoken else
                          self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
-                lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+                lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
                 break
             else:
                 return lines
@@ -2488,10 +2489,13 @@ class Pipeline:
                                    piece, [m.name for g, m in self._members_for(turn.channel).items()
                                            if g != self.human.guid])), game=not discord,
                                cap=math.ceil(words * LONG_SLACK) if words else None,
-                               max_chars=DISCORD_MAX_TEXT if discord else None)
+                               max_chars=DISCORD_MAX_TEXT if discord else None,
+                               texture=self.cfg.talk.texture)
         out = out[:max(1, most)]
         if discord and out:
-            return [Styled("\n".join(s.line for s in out), " ".join(s.plain for s in out))]
+            slipped = next((s for s in reversed(out) if s.slip), Styled("", ""))
+            return [Styled("\n".join(s.line for s in out), " ".join(s.plain for s in out),
+                           slipped.slip, slipped.fix)]
         return out
 
     def _real_name_spelling(self) -> frozenset[str]:
