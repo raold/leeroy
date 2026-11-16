@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
 from typing import Literal
 
 from ..personas.schema import Persona
 from .day import Block, DayEvent, day_plan
+
+# the blocks in which she cannot take a photo of herself (photos/requests.py): asleep, driving
+NO_PHOTO = frozenset({Block.ASLEEP, Block.COMMUTE})
 
 DESIGN_AVAILABILITY = 6
 DISCORD_CAP_S = 2700.0
@@ -77,6 +80,21 @@ def presence_at(p: Persona, her_local: datetime, *, medium: Literal["game", "dis
     return LifePresence(block, where, attention, plan.event, plan.kids)
 
 
+def free_after(p: Persona, her_local: datetime, busy=NO_PHOTO) -> datetime | None:
+    """Her local wall-clock time when her day plan next leaves the blocks of `busy`, from
+    `her_local` (the start of the first minute in another block); None when she is not in one of
+    them now. Today's plan, then the next two days'."""
+    minute = her_local.hour * 60 + her_local.minute
+    if day_plan(p, her_local.date()).block_at(minute) not in busy:
+        return None
+    midnight = her_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    for days in range(3):
+        for span in day_plan(p, her_local.date() + timedelta(days=days)).spans:
+            if span.block not in busy and (days or span.start > minute):
+                return midnight + timedelta(days=days, minutes=span.start)
+    return None
+
+
 def attention_weight(att: Attention, availability: int) -> float:
     """How likely she is the one who answers, relative to a member giving full attention."""
     if availability <= 0:
@@ -113,6 +131,36 @@ def discord_state(lp: LifePresence, *, dnd_day: bool) -> str:
     if lp.attention is Attention.GLANCING:
         return "dnd" if dnd_day and lp.block is Block.WORK else "idle"
     return "online"
+
+
+# Where she is, as her prompt's "Right now" says it (core plan Task 8, with [life] availability
+# above 0): asleep and at work read differently in game and on her phone, home duty names the
+# kids only when she has them at home.
+WHERE_TEXT = {
+    (Block.ASLEEP, "game"): "You're half asleep at the keyboard.",
+    (Block.ASLEEP, "discord"): "Your phone woke you up.",
+    (Block.WORK, "game"): "You're at work, the game open on your PC.",
+    (Block.WORK, "discord"): "You're at work, checking your phone between tasks.",
+    (Block.COMMUTE, ""): "You're on your way somewhere.",
+    (Block.HOME_DUTY, "kids"): "You're at home sorting the kids out.",
+    (Block.HOME_DUTY, ""): "You're busy at home.",
+    (Block.GYM, ""): "You're at the gym.",
+    (Block.OUT, ""): "You're out tonight.",
+    (Block.FREE, ""): "You're at home with some free time.",
+    (Block.GAMING, ""): "You're at your PC, playing.",
+}
+
+
+def where_text(lp: LifePresence, medium: str, *, playing: bool = False) -> str:
+    """WHERE_TEXT for her presence on `medium` ("game" or "discord"). `playing`: she is in his
+    group in game while he plays, so she is at her PC playing whatever her day plan says (PM log
+    D15: she answers him at once then too)."""
+    medium = _medium(medium)
+    if playing:
+        return WHERE_TEXT[(Block.GAMING, "")]
+    if lp.block is Block.HOME_DUTY:
+        return WHERE_TEXT[(Block.HOME_DUTY, "kids" if lp.kids else "")]
+    return WHERE_TEXT.get((lp.block, medium)) or WHERE_TEXT[(lp.block, "")]
 
 
 def away_words(lp: LifePresence, medium: str) -> str:
