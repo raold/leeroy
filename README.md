@@ -481,4 +481,7 @@ section, what it is planned for. The main threads:
 
 GPL-2.0, matching AzerothCore and mod-playerbots, except the separate `voice/`
 service and `selfie/` worker, which are GPL-3.0-or-later under [voice/LICENSE](voice/LICENSE)
-and [selfie/LICENSE](selfie/LICENSE).
+and [selfie/LICENSE](selfie/LICENSE). Two bundled data sets keep their own permissive licences:
+the console's fonts (SIL OFL, `mind/leeroy_mind/console/static/fonts/OFL-*.txt`) and the everyday
+English word list the slang filter reads, a selection from SCOWL
+([mind/leeroy_mind/talk/data/SCOWL-Copyright.txt](mind/leeroy_mind/talk/data/SCOWL-Copyright.txt)).

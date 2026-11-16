@@ -98,7 +98,9 @@ def test_undo_puts_back_exactly_what_it_changed(h, tmp_path, lex, capsys):
     assert run(tmp_path, "--go") == 0
     retired = state(h)
     assert run(tmp_path, "--undo", "1") == 0  # a dry run of the undo
-    assert "restore 2 terms (0 changed since, left alone), 6 adopters, 4 memories" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "restore 2 terms (0 changed since" in out and "6 adopters (0 left out" in out
+    assert "4 memories (0 changed since" in out
     assert state(h) == retired
     assert run(tmp_path, "--undo", "1", "--go") == 0
     assert state(h) == before
@@ -112,12 +114,44 @@ def test_undo_leaves_alone_what_changed_since(h, tmp_path, lex, capsys):
     assert run(tmp_path, "--go") == 0
     with h.store.transaction():
         h.store.conn.execute("UPDATE memory SET status='rejected' WHERE key='slang:you' AND owner=102")
-        h.store.conn.execute("UPDATE lexicon SET status='vetoed' WHERE id=?", (lex["the"],))
+        h.store.conn.execute("UPDATE lexicon SET status='vetoed' WHERE id=?", (lex["the"],))  # his veto
     assert run(tmp_path, "--undo", "1", "--go") == 0
-    assert "restore 1 terms (1 changed since, left alone), 6 adopters, 3 memories (1 changed since"         in capsys.readouterr().out
-    status = {row["id"]: row["status"] for row in state(h)[0]}
+    out = capsys.readouterr().out
+    assert "restore 1 terms (1 changed since, left alone with their adopters and copies)" in out
+    assert "3 adopters (0 left out" in out and "1 memories (1 changed since, left alone)" in out
+    terms, adopters, _ = state(h)
+    status = {row["id"]: row["status"] for row in terms}
     assert status[lex["you"]] == "active" and status[lex["the"]] == "vetoed"
-    assert {m.key: m.status for m in h.rows(102)}["slang:you"] == "rejected"
+    assert not any(row["active"] for row in adopters if row["term"] == lex["the"])
+    assert {m.key: m.status for m in h.rows(102)} == {"slang:you": "rejected", "slang:the": "archived",
+                                                      "slang:zugzug": "active", "nick:101": "active"}
+    assert {m.key: m.status for m in h.rows(103)}["slang:the"] == "archived"
+
+
+def test_undo_gives_back_no_adoption_past_the_cap_of_active_terms(h, tmp_path, lex, capsys):
+    assert run(tmp_path, "--go") == 0
+    with h.store.transaction():  # 102 adopted terms since: with zugzug and the nickname, 7 active
+        for n in range(5):
+            ident = h.store.conn.execute("INSERT INTO lexicon(kind,term,origin_ref,originator,born,last_used) "
+                                         "VALUES ('slang',?,'chat:1',101,?,?)", (f"blorp{n}", h.T, h.T)).lastrowid
+            h.store.conn.execute("INSERT INTO lexicon_adopter(term,guid,first_use) VALUES (?,102,?)", (ident, h.T))
+    assert run(tmp_path, "--undo", "1", "--go") == 0
+    assert "5 adopters (1 left out: the member holds 8 terms)" in capsys.readouterr().out
+    h.store.conn.commit()
+    active = {r[0] for r in h.store.conn.execute(
+        "SELECT l.term FROM lexicon_adopter a JOIN lexicon l ON l.id=a.term WHERE a.guid=102 AND a.active=1")}
+    assert len(active) == 8 and "you" in active and "the" not in active  # the receipt's order: you, the
+    assert {m.key: m.status for m in h.rows(102)}["slang:the"] == "archived"
+    assert {m.key: m.status for m in h.rows(103)} == {"slang:you": "active", "slang:the": "active",
+                                                      "slang:zugzug": "active"}
+
+
+def test_typos_and_capitalised_everyday_words_already_promoted_are_retired_too(h, tmp_path, capsys):
+    ids = {word: stored(h, word) for word in ("conrats", "thanksgiving", "tuesday", "zugzug", "pwned")}
+    assert run(tmp_path, "--go") == 0
+    assert "retire by reason: common 2, typo 1" in capsys.readouterr().out
+    status = {row["id"]: row["status"] for row in state(h)[0]}
+    assert [w for w, i in ids.items() if status[i] == "dormant"] == ["conrats", "thanksgiving", "tuesday"]
 
 
 def test_go_and_undo_refuse_while_the_mind_holds_its_lock(h, tmp_path, lex, capsys):
@@ -151,19 +185,19 @@ def test_an_older_schema_is_refused(tmp_path, capsys):
     assert "older than the code" in capsys.readouterr().out
 
 
-def test_spread_never_revives_or_spreads_everyday_slang(h, monkeypatch):
+def test_spread_never_revives_or_spreads_everyday_or_typo_slang(h, monkeypatch):
     for n, guid in enumerate((101, 102, 103)):
-        h.say(h.T + n, guid, "you zug")
+        h.say(h.T + n, guid, "you zug conrats")
     ctx = h.ctx()
     with monkeypatch.context() as m:  # the old stage: every word with three speakers promoted
         m.setattr(vocab, "junk_reason", lambda *a, **k: None)
         vocab.vocab(ctx)
         vocab.slang(ctx)
     ids = {r["term"]: r["id"] for r in h.store.conn.execute("SELECT id,term FROM lexicon WHERE kind='slang'")}
-    assert set(ids) == {"you", "zug"}
-    h.say(h.T + 10, 104, "you zug")
+    assert set(ids) == {"you", "zug", "conrats"}
+    h.say(h.T + 10, 104, "you zug conrats")
     lexicon.spread(ctx)
     uses = dict(h.store.conn.execute("SELECT term,uses FROM lexicon WHERE kind='slang'").fetchall())
-    assert uses["zug"] > 0 and uses["you"] == 0
-    assert h.store.conn.execute("SELECT 1 FROM lexicon_adopter WHERE term=? AND guid=104",
-                                (ids["you"],)).fetchone() is None
+    assert uses["zug"] > 0 and uses["you"] == uses["conrats"] == 0
+    assert h.store.conn.execute("SELECT 1 FROM lexicon_adopter WHERE term IN (?,?) AND guid=104",
+                                (ids["you"], ids["conrats"])).fetchone() is None

@@ -315,20 +315,43 @@ def test_slang_term_copies_flags_and_receipt_rollback_together(h, monkeypatch):
 
 # -- the junk filter: ordinary words are never slang ----------------------------------------------
 
-@pytest.mark.parametrize("word", ["you", "now", "can", "the", "doing", "literally", "tonight", "Valley"])
+@pytest.mark.parametrize("word", ["you", "now", "can", "the", "doing", "literally", "tonight", "Valley",
+                                  "monday", "Friday", "december", "thanksgiving", "Christmas", "halloween",
+                                  "easter", "english", "canadian", "europe", "pilgrim", "tv"])
 def test_everyday_words_are_not_slang(word):
     from leeroy_mind.talk.everyday import is_everyday
     assert is_everyday(word) and vocab.junk_reason(word.casefold(), 101) == "common"
 
 
-@pytest.mark.parametrize("word", ["lol", "gonna", "grats", "congrats", "didn", "isn", "dont", "tht", "dkp", "loot"])
+@pytest.mark.parametrize("word", ["lol", "gonna", "grats", "congrats", "didn", "isn", "dont", "tht", "dkp", "loot",
+                                  "wat", "mvp", "bro", "mins"])
 def test_chat_shorthand_contraction_stubs_and_stock_jargon_are_not_slang(word):
     assert vocab.junk_reason(word, 101) == "common"
 
 
-@pytest.mark.parametrize("word", ["zug", "zugzug", "gank", "noob", "nerf", "kekw", "pewpew", "bonkfest"])
+@pytest.mark.parametrize("word", ["zug", "zugzug", "gank", "noob", "nerf", "kekw", "pewpew", "bonkfest",
+                                  "lolret", "huntard", "boomkin", "pally", "shammy", "imba", "zerg", "plox",
+                                  "naxx", "ulduar", "arathi", "valithria", "dalaran", "stormwind", "orgrimmar",
+                                  "pwned", "gief", "leet", "mage", "spec", "homies", "bruh", "twinking"])
 def test_coined_words_and_game_slang_pass_the_word_lists(word):
     assert vocab.junk_reason(word, 101) is None
+
+
+@pytest.mark.parametrize("word,everyday", [
+    ("conrats", "congrats"), ("cograts", "congrats"), ("grtas", "grats"), ("wehre", "where"),
+    ("alerady", "already"), ("withut", "without"), ("someoe", "someone"), ("diffreence", "difference"),
+    ("reallly", "really"), ("tooo", "too"), ("heyyyy", "hey"), ("gats", "grats"), ("tonightt", "tonight")])
+def test_typos_and_elongations_of_everyday_words_are_not_slang(word, everyday):
+    from leeroy_mind.talk.everyday import is_everyday
+    assert is_everyday(everyday) and vocab.junk_reason(word, 101) == "typo"
+
+
+def test_a_near_miss_of_a_short_word_is_no_typo():
+    # Only an everyday word of TYPO_MIN letters or more makes a near-miss a typo: "noob" is not
+    # "nob"+o, "zerg" is not a slip of "erg", and a word with digits is never a typo.
+    from leeroy_mind.talk.everyday import TYPO_MIN, everyday_reason
+    assert TYPO_MIN == 5
+    assert [everyday_reason(w) for w in ("noob", "zerg", "kekw", "thsi", "g2g")] == [None] * 5
 
 
 def test_ordinary_words_said_by_three_members_never_promote_but_a_coinage_beside_them_does(h):

@@ -41,3 +41,19 @@ def test_coined_slang_and_a_running_joke_of_common_words_are_still_rationed(stor
         assert sent(store, s, text, n)
         result = review(s, Draft(101, 'guild', text, now=NOW))
         assert result.action == 'rewrite' and result.codes == ('gag_ration',)
+
+
+def test_a_stored_typo_of_an_everyday_word_is_not_rationed_either(store):
+    term(store, 7, 'conrats')
+    s = GuardStores(store.conn, config=GuardsCfg(enabled=True, gag_daily_cap=1, stock_daily_cap=100))
+    for n in range(2):
+        sent(store, s, 'conrats on the drop', n)
+    assert review(s, Draft(101, 'guild', 'conrats on the drop', now=NOW)).action == 'send'
+
+
+def test_a_one_word_running_joke_is_rationed_even_when_the_word_is_everyday(store):
+    term(store, 7, 'pancakes', kind='joke')
+    s = GuardStores(store.conn, config=GuardsCfg(enabled=True, gag_daily_cap=1))
+    assert sent(store, s, 'pancakes again', 0)
+    result = review(s, Draft(101, 'guild', 'pancakes again', now=NOW))
+    assert result.action == 'rewrite' and result.codes == ('gag_ration',)

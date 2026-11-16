@@ -18,7 +18,7 @@ from leeroy_mind.discord.text import is_emoji_message
 from leeroy_mind.eval.talk import contradiction, nonsequitur, repetition, unawareness
 from leeroy_mind.eval.talk.common import Line, day, evening, similarity, words
 from leeroy_mind.memory.recall import whisper_ok
-from leeroy_mind.talk.everyday import is_everyday
+from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.moves import topics
 
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
@@ -293,12 +293,12 @@ def _gags(reader, draft):
     tokens = words(draft.text)
     keys = {f'{kind}:{hashlib.sha256(" ".join(key).encode()).hexdigest()}'
             for kind, key in repetition.stock_keys(tokens)}
-    for row in reader.rows('gags_unavailable', 'SELECT l.id,l.term FROM lexicon l '
+    for row in reader.rows('gags_unavailable', 'SELECT l.id,l.term,l.kind FROM lexicon l '
             'JOIN lexicon_adopter a ON a.term=l.id WHERE a.guid=? AND a.active=1 '
             "AND l.status='active' AND l.kind IN ('joke','slang') ORDER BY l.id LIMIT 100", (draft.guid,)):
         phrase = words(row['term'])
-        if len(phrase) == 1 and is_everyday(phrase[0]):
-            continue  # a common word is never a running joke, even when one is still stored
+        if row['kind'] == 'slang' and len(phrase) == 1 and everyday_reason(phrase[0]):
+            continue  # an everyday word is never slang, even when one is still stored
         if phrase and phrase in [tokens[i:i+len(phrase)] for i in range(len(tokens)-len(phrase)+1)]:
             keys.add(f'gag:{row["id"]}')
     return keys

@@ -2,8 +2,8 @@
 
 A word is slang only when it is new to the guild, not merely new to the log: the first night
 read the whole history at once, so every ordinary word looked "first seen" then. So no
-everyday word is ever promoted (talk.everyday), nor one the cast already uses commonly, nor
-one its first speaker uses no more than anyone else (junk_reason)."""
+everyday word is ever promoted (talk.everyday), nor a typo of one, nor one the cast already
+uses commonly, nor one its first speaker uses no more than anyone else (junk_reason)."""
 import hashlib
 import json
 import re
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from leeroy_mind.discord.channels import is_public
 from leeroy_mind.logs import log
 from leeroy_mind.nightly import lexicon
-from leeroy_mind.talk.everyday import is_everyday
+from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.text import strip_wow_markup
 
 SLANG_USERS = 3
@@ -60,10 +60,12 @@ def corpus(conn, words, *, eligible, human, end) -> Corpus:
 
 def junk_reason(word, origin, counts=None):
     """Why `word` (first said by `origin`) is no slang, or None: "common" (everyday vocabulary),
-    "cast_common" (the cast's common word) or "not_distinct" (its first speaker uses it no
-    more than anyone). Without `counts` only the word lists are read."""
-    if is_everyday(word):
-        return "common"
+    "typo" (a near-miss or elongation of an everyday word), "cast_common" (the cast's common
+    word) or "not_distinct" (its first speaker uses it no more than anyone). Without `counts`
+    only the word lists are read."""
+    reason = everyday_reason(word)
+    if reason is not None:
+        return reason
     if counts is None:
         return None
     uses = counts.uses.get(word) or Counter()

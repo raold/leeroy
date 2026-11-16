@@ -42,7 +42,8 @@ def _report(conn, plans, sample):
     print(f"'Picked up' memories to archive: {memories} ({owners} members)")
     print(f"retire (adopters): {_listing(junk, sample)}")
     print(f"keep (adopters): {_listing(kept, sample)}")
-    other = conn.execute("SELECT kind,count(*) FROM lexicon WHERE kind!='slang' GROUP BY kind ORDER BY kind").fetchall()
+    other = conn.execute("SELECT kind,count(*) FROM lexicon WHERE kind!='slang' "
+                         "GROUP BY kind ORDER BY kind").fetchall()
     print("untouched: " + (", ".join(f"{n} {k} terms" for k, n in other) or "no other terms")
           + "; vetoed and already retired slang are left alone")
 
@@ -118,8 +119,9 @@ def _undo(conn, root, args, now, snapshot):
         return 0
     result = junk_slang.undo(conn, args.undo, now=now, write=False)
     print(f"receipt {args.undo}: restore {result.terms} terms ({result.terms_changed} changed since, "
-          f"left alone), {result.adopters} adopters, {result.memories} memories "
-          f"({result.memories_changed} changed since, left alone)")
+          f"left alone with their adopters and copies), {result.adopters} adopters "
+          f"({result.capped} left out: the member holds {junk_slang.ADOPT_MAX} terms), "
+          f"{result.memories} memories ({result.memories_changed} changed since, left alone)")
     if not args.go:
         print("dry run, nothing written")
         return 0

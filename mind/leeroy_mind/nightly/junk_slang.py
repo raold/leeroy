@@ -8,14 +8,17 @@ keeps slang=1, so the word is never promoted again. A receipt in meta (RECEIPT +
 prior value for undo. The caller holds mind.lock and the transaction; nothing here commits."""
 import json
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 from leeroy_mind.nightly import lexicon, vocab
+from leeroy_mind.nightly.settings import NightlySettings
 from leeroy_mind.personas.tiers import cast_sql
 from leeroy_mind.wow import CAST_MIN_LEVEL
 
 RECEIPT = "lexicon:clean-junk:"
+ADOPT_MAX = NightlySettings.adopt_max  # lexicon.adopt's per-member limit of active terms
 
 
 @dataclass(frozen=True)
@@ -38,7 +41,8 @@ def _columns(conn, table):
 
 def check_schema(conn):
     need = {"lexicon": {"id", "kind", "term", "status", "originator", "retired"},
-            "lexicon_adopter": {"term", "guid", "active"}, "memory": {"id", "owner", "key", "status", "evidence"},
+            "lexicon_adopter": {"term", "guid", "active"},
+            "memory": {"id", "owner", "key", "status", "evidence"},
             "chat_line": {"ts", "channel", "from_guid", "origin", "text"}, "meta": {"key", "value"}}
     for table, columns in need.items():
         if not columns <= _columns(conn, table):
@@ -102,7 +106,8 @@ def apply(conn, plans, *, now, snapshot) -> int | None:
     if not junk:
         return None
     for p in junk:
-        conn.execute("UPDATE lexicon SET status='dormant',retired=? WHERE id=? AND retired IS NULL", (now, p.id))
+        conn.execute("UPDATE lexicon SET status='dormant',retired=? WHERE id=? AND retired IS NULL",
+                     (now, p.id))
         conn.executemany("UPDATE lexicon_adopter SET active=0 WHERE term=? AND guid=? AND active=1",
                          [(p.id, guid) for guid in p.adopters])
         conn.executemany("UPDATE memory SET status='archived' WHERE id=? AND status='active'",
@@ -118,47 +123,67 @@ def apply(conn, plans, *, now, snapshot) -> int | None:
 @dataclass(frozen=True)
 class UndoResult:
     terms: int
-    terms_changed: int
+    terms_changed: int  # left alone with their adopters and copies
     adopters: int
     memories: int
     memories_changed: int
+    capped: int  # adopters (and their copies) left out: the member already holds `cap` terms
 
 
-def undo(conn, number, *, now, write=True) -> UndoResult:
-    """Put back what receipt `number` changed, where nothing changed it since (a term no longer
-    retired by this receipt, a copy no longer archived: left alone). `write=False` only counts."""
+def undo(conn, number, *, now, cap=ADOPT_MAX, write=True) -> UndoResult:
+    """Put back what receipt `number` changed, where nothing changed it since. A term no longer
+    retired by this receipt (the owner vetoed it, say) stays as it is with its adopters and
+    copies; a copy no longer archived is left alone; a member who now holds `cap` active terms
+    (lexicon.adopt's limit) gets no adoption back, nor its copy. The human has no cap.
+    `write=False` only counts."""
     check_schema(conn)
     body = receipts(conn).get(number)
     if body is None:
         raise KeyError(number)
     if body.get("undone_at") is not None:
         raise ValueError("already undone")
-    terms = changed = adopters = memories = moved = 0
+    row = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
+    human = int(row[0] or 0) if row else 0
+    held = Counter(r[0] for r in conn.execute("SELECT guid FROM lexicon_adopter WHERE active=1"))
+    terms = changed = adopters = memories = moved = capped = 0
     for t in body["terms"]:
         row = conn.execute("SELECT status,retired FROM lexicon WHERE id=?", (t["id"],)).fetchone()
         if row is None or row["status"] != "dormant" or row["retired"] != body["at"]:
             changed += 1
-        else:
-            terms += 1
-            if write:
-                conn.execute("UPDATE lexicon SET status=?,retired=NULL WHERE id=?", (t["status"], t["id"]))
+            continue
+        terms += 1
+        if write:
+            conn.execute("UPDATE lexicon SET status=?,retired=NULL WHERE id=?", (t["status"], t["id"]))
+        back = set()
         for guid in t["adopters"]:
-            hit = conn.execute("SELECT 1 FROM lexicon_adopter WHERE term=? AND guid=? AND active=0",
-                               (t["id"], guid)).fetchone()
-            adopters += hit is not None
-            if hit and write:
+            if conn.execute("SELECT 1 FROM lexicon_adopter WHERE term=? AND guid=? AND active=0",
+                            (t["id"], guid)).fetchone() is None:
+                continue
+            if guid != human and held[guid] >= cap:
+                capped += 1
+                continue
+            held[guid] += 1
+            back.add(guid)
+            adopters += 1
+            if write:
                 conn.execute("UPDATE lexicon_adopter SET active=1 WHERE term=? AND guid=?", (t["id"], guid))
         for ident in t["memories"]:
-            if conn.execute("SELECT 1 FROM memory WHERE id=? AND status='archived'", (ident,)).fetchone() is None:
+            copy = conn.execute("SELECT owner FROM memory WHERE id=? AND status='archived'",
+                                (ident,)).fetchone()
+            if copy is None:
                 moved += 1
                 continue
+            if copy["owner"] not in back and conn.execute(
+                    "SELECT 1 FROM lexicon_adopter WHERE term=? AND guid=? AND active=1",
+                    (t["id"], copy["owner"])).fetchone() is None:
+                continue  # its adoption stayed out (capped): so does the copy
             memories += 1
             if write:
                 conn.execute("UPDATE memory SET status='active' WHERE id=?", (ident,))
     if write:
         body["undone_at"] = now
         conn.execute("UPDATE meta SET value=? WHERE key=?", (json.dumps(body), f"{RECEIPT}{number}"))
-    return UndoResult(terms, changed, adopters, memories, moved)
+    return UndoResult(terms, changed, adopters, memories, moved, capped)
 
 
 def connect(path, *, write):

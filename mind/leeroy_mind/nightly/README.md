@@ -50,18 +50,24 @@ looked new, and ordinary words ("you", "now", "the") became slang: each adopter 
 word. A word is now slang only when `vocab.junk_reason` finds none of:
 
 - `common`: an everyday word (`talk/everyday.py`): about 45,000 English words from SCOWL
-  levels 10 to 40 (`talk/data/everyday_english.txt`, permissive licence and its sources'
-  notices in `talk/data/SCOWL-Copyright.txt`), the typo step's `COMMON_WORDS`, and a short list
-  of chat shorthand, apostrophe-less contractions and their stubs ("don" from "don't"),
-  congratulations and stock MMO abbreviations (dps, dkp, afk, loot).
+  levels 10 to 40, capitalised ones lowercased (weekdays, months, holidays, nationalities, "tv";
+  `talk/data/everyday_english.txt`, permissive licence and its sources' notices in
+  `talk/data/SCOWL-Copyright.txt`), the typo step's `COMMON_WORDS`, and a short list of chat
+  shorthand, apostrophe-less contractions and their stubs ("don" from "don't"), congratulations
+  and stock MMO abbreviations (dps, dkp, afk, loot).
+- `typo`: a slip of an everyday word: runs of three or more letters collapse into one
+  ("reallly", "heyyyy"), or one inserted letter, one swap of neighbours or one dropped doubled
+  letter turns it into one of 5 letters or more ("conrats", "grtas", "wehre", "withut").
+  `GAMER_WORDS` keeps gamer slang and game shorthand that reads as such a slip ("pwned",
+  "gief", "leet", "mage", "spec"); add to it when the night screens a real one.
 - `cast_common`: the cast already says it in more than 1 public line in 200 (and more than 10).
 - `not_distinct`: on a corpus of 500 public lines or more, its first speaker uses it less than
   twice as often per line as the cast does: they did not coin it.
 
 Coined words and game slang stay possible ("zugzug", "gank", "kekw"). Each night logs
-`slang_screened night= common= cast_common= not_distinct=` (counts only). `spread` never
-revives or spreads a retired slang term or one that is an everyday word, and the guard never
-rations a one-word everyday term.
+`slang_screened night= common= typo= cast_common= not_distinct=` (counts only, for the reasons
+met). `spread` never revives or spreads a retired slang term or an everyday or typo one, and
+the guard never rations a one-word everyday or typo slang term (a running joke it rations).
 
 Stored junk from before the fix is retired by a data step, never deleted:
 
@@ -77,6 +83,8 @@ before writing, then in one transaction sets each junk term `dormant` with `reti
 adopters inactive and its holders' keyed copies archived (also early copies without a joke
 tag), and writes receipt `lexicon:clean-junk:<n>` in meta with every prior value. A second
 `--go` finds nothing. `--undo N --go` (also lock and snapshot first) restores what the receipt
-changed where nothing changed it since. Vocab rows keep `slang = 1`, nicknames and jokes are
-untouched, and member nicknames an old junk term displaced from their 8 adoption slots are not
-reactivated.
+changed where nothing changed it since: a term no longer retired by that receipt (vetoed, say)
+keeps its adopters inactive and its copies archived, and a member already holding 8 active
+terms (lexicon's adoption limit) gets no adoption back, nor its copy. Vocab rows keep
+`slang = 1`, nicknames and jokes are untouched, and member nicknames an old junk term displaced
+from their 8 adoption slots are not reactivated.
