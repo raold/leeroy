@@ -16,7 +16,8 @@ from leeroy_mind.personas.schema import (GLUTES, HIPS, OWNER_LOOKS, WAISTS, Pers
                                          validate_persona)
 from leeroy_mind.selfies import kind, varied
 from leeroy_mind.selfies.kind import EXPLICIT_RE, WEAR_RE
-from leeroy_mind.selfies.prompt import (BUILD_WORDS, GLUTES_VIEWS, GLUTES_WORDS, HIPS_WORDS,
+from leeroy_mind.selfies.prompt import (BUILD_WORDS, GLUTES_SIDE, GLUTES_VIEWS, GLUTES_WORDS,
+                                        HIPS_WORDS,
                                         LUST_NEGATIVE, NEGATIVE, VARIED_NEGATIVE, WAIST_WORDS,
                                         body_words, build_prompt, build_varied_prompt, build_words,
                                         glutes_words, hair_skin, hair_skin_short, over_fit,
@@ -149,11 +150,13 @@ def _looks(views=None):
                                               kind.LUST_COLOURS[0], "an over-the-shoulder glance")
 
 
-def test_glutes_are_required_from_behind_and_the_side_and_last_from_the_front():
-    """Required right after her build from behind and the side; in a front view the last
-    phrase of priority 2, after her eye colour and the details that tell her apart (review of
-    #318: optional glutes had taken their room)."""
-    assert set(GLUTES_VIEWS) == set(kind.BACK_VIEWS) | {"side"}
+def test_glutes_are_required_from_behind_after_who_she_is_from_the_side_last_from_the_front():
+    """Required right after her build from behind, where her face is mostly hidden; from the
+    side, where it shows, priority 2 right after her eye colour and the details that tell her
+    apart (controller ruling, 2026-11-15); in a front view the last phrase of priority 2 (review
+    of #318: optional glutes had taken their room)."""
+    assert set(GLUTES_VIEWS) == set(kind.BACK_VIEWS)
+    assert GLUTES_SIDE == ("side",)
     p = woman(build="curvy", glutes="large", face=("thin glasses", "a tired half-smile"))
     for look in _looks():
         spec = build_varied_prompt(p, look)
@@ -161,6 +164,11 @@ def test_glutes_are_required_from_behind_and_the_side_and_last_from_the_front():
         if look.view in GLUTES_VIEWS:
             assert ("large round glutes", 0) in spec.phrases, look
             assert texts.index("large round glutes") == texts.index(build_words(p)) + 1
+        elif look.view in GLUTES_SIDE:
+            assert ("large round glutes", 2) in spec.phrases, look
+            assert texts.index("large round glutes") == texts.index("thin glasses") + 1
+            assert texts.index("hazel eyes") < texts.index("thin glasses")
+            assert texts.index("large round glutes") < texts.index("a tired half-smile")
         else:
             assert spec.phrases[-1] == ("large round glutes", 2), look
             for detail in ("hazel eyes", "thin glasses"):
@@ -210,7 +218,7 @@ def _never_cut(spec, p):
 def test_every_varied_look_keeps_its_pose_with_her_largest_shapes(build, kg, looks):
     """Controller ruling, 2026-11-15, after the GPU: a back view without its pose phrase renders
     from the front, so the pose is never yielded. Her body, hair and skin are never cut; glutes
-    are required from behind and the side while they fit, and yield (after the framing) before
+    are required from behind while they fit, and yield (after the framing) before
     the pose; last of all "from behind, looking over her shoulder" says "from behind". What
     cannot fit even so, pinned here: a voluptuous woman of BMI 32 or more with every shape at
     its largest and long hair and skin words, 2 of 458 looks at 76 tokens. The worker refuses
@@ -233,6 +241,8 @@ def test_every_varied_look_keeps_its_pose_with_her_largest_shapes(build, kg, loo
         if look.view in GLUTES_VIEWS and "very large round glutes" not in required:
             assert ("very large round glutes", 1) in spec.phrases  # yielded, still offered
             assert parts["framing"] not in required  # the framing gave way first
+        if look.view not in GLUTES_VIEWS:
+            assert "very large round glutes" not in required, look  # never required elsewhere
     if build == "voluptuous" and kg >= 88 and looks:
         assert len(over) <= 2 and max(over) <= 76
     else:
@@ -245,13 +255,42 @@ def test_a_back_view_keeps_its_pose_with_every_shape_largest_and_25_kg_more():
     back and side look keeps its pose required, whole or (last of all) as "from behind"."""
     p = woman(build="voluptuous", weight_kg=APPEARANCE.weight_kg + 25, **LARGEST, **LONG_LOOKS)
     seen = 0
-    for look in _looks(views=GLUTES_VIEWS):
+    for look in _looks(views=GLUTES_VIEWS + GLUTES_SIDE):
         spec = build_varied_prompt(p, look)
         view = varied_parts(look, look.phrase)["view"]
         assert (view, 0) in spec.phrases or (POSE_SHORT.get(view), 0) in spec.phrases, look
         seen += 1
     assert seen > 100
     assert POSE_SHORT == {"from behind, looking over her shoulder": "from behind"}
+
+
+@pytest.mark.parametrize("over", [dict(glutes="very_large"), LARGEST])
+@pytest.mark.parametrize("kg", [64, 100])
+@pytest.mark.parametrize("looks", [{}, LONG_LOOKS])
+def test_from_the_side_glutes_never_cost_her_eye_colour_or_what_tells_her_apart(over, kg, looks):
+    """Controller ruling, 2026-11-15: in a side view her face shows, so her glutes come after
+    her eye colour and the details that tell her apart. The worker's own fit, with the mind's
+    count, keeps every one of those it keeps with glutes unset."""
+    from selfies.test_weight_bust import _worker_fit
+    fit = _worker_fit()
+    p = woman(build="voluptuous", weight_kg=kg, **over, **looks,
+              face=("round wire glasses", "a small nose stud", "a faint scar on her chin",
+                    "a dimpled smile", "freckles across her nose"))
+    q = replace(p, appearance=replace(p.appearance, glutes=None))
+    ident = ("hazel eyes", "round wire glasses", "a small nose stud", "a faint scar on her chin")
+    for look in _looks(views=GLUTES_SIDE):
+        with_glutes = fit(build_varied_prompt(p, look).phrases, estimate)[1]
+        without = fit(build_varied_prompt(q, look).phrases, estimate)[1]
+        assert [t for t in ident if t in with_glutes and t not in without] == [], look
+
+
+def test_from_the_side_glutes_are_still_said_where_there_is_room():
+    from selfies.test_weight_bust import _worker_fit
+    fit = _worker_fit()
+    p = woman(build="average", weight_kg=64, glutes="large")
+    kept = [look for look in _looks(views=GLUTES_SIDE)
+            if "large round glutes" not in fit(build_varied_prompt(p, look).phrases, estimate)[1]]
+    assert len(kept) > 60
 
 
 @pytest.mark.parametrize("build", ["curvy", "voluptuous"])

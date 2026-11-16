@@ -137,14 +137,16 @@ PART_WORDS = {"bust": BUST_WORDS, "waist": WAIST_WORDS, "hips": HIPS_WORDS}  # i
 _BUILD_PARTS = {"curvy": {"bust": "full bust", "hips": "wide hips", "waist": "narrow waist"},
                 "voluptuous": {"bust": "large full bust", "hips": "wide hips"}}
 # Her glutes, a phrase of their own (owner, 2026-11-15), a clothed fitness and body-shape word:
-# required right after her build in a varied candidate seen from behind or from the side;
-# elsewhere, where the framing shows her figure (a front view, three-quarter, full length),
-# optional at priority 2 after her eye colour and identity details (review of #318); not said
-# in a closer photo.
+# required right after her build in a varied candidate seen from behind (her face mostly hidden);
+# from the side, where her face shows, optional at priority 2 right after her eye colour and the
+# details that tell her apart (controller ruling, 2026-11-15); elsewhere, where the framing shows
+# her figure (a front view, three-quarter, full length), the last phrase of priority 2 (review of
+# #318); not said in a closer photo.
 GLUTES_WORDS = {"small": "slim backside", "medium": "rounded glutes",
                 "large": "large round glutes", "very_large": "very large round glutes"}
 GLUTES_FRAMINGS = ("three_quarter", "full_body")
-GLUTES_VIEWS = ("behind", "rear_three_quarter", "side")  # kind.BACK_VIEWS and the profile view
+GLUTES_VIEWS = ("behind", "rear_three_quarter")  # kind.BACK_VIEWS: required
+GLUTES_SIDE = ("side",)  # her face shows: right after who she is, at priority 2
 # The pose's short form, fit_required's very last step: still a view from behind
 POSE_SHORT = {"from behind, looking over her shoulder": "from behind"}
 # The weight said as a body size (owner 2026-11-15: curvy and voluptuous members rendered slim),
@@ -378,13 +380,15 @@ IDENTITY_DETAIL = re.compile(r"\b(glasses|spectacles|stubble|beard|moustache|mus
                              r"sideburns|scars?|tattoos?|piercings?)\b", re.IGNORECASE)
 
 
-def identity_first(p: Persona, details: list[tuple[str, int]]) -> list[tuple[str, int]]:
+def identity_first(p: Persona, details: list[tuple[str, int]],
+                   then: tuple[str, int] | None = None) -> list[tuple[str, int]]:
     """`details` (eyes_face) in the order the fit should offer them room: her eye colour, then the
-    details that tell her apart (IDENTITY_DETAIL), then the rest, each group in its own order."""
+    details that tell her apart (IDENTITY_DETAIL), then `then` when given, then the rest, each
+    group in its own order."""
     eye = f"{_clean(p.appearance.eye_colour)} eyes"
     first = [d for d in details if d[0] == eye]
     rest = [d for d in details if d[0] != eye]
-    return (first + [d for d in rest if IDENTITY_DETAIL.search(d[0])]
+    return (first + [d for d in rest if IDENTITY_DETAIL.search(d[0])] + ([then] if then else [])
             + [d for d in rest if not IDENTITY_DETAIL.search(d[0])])
 
 
@@ -442,20 +446,21 @@ def build_varied_prompt(p: Persona, look) -> PromptSpec:
     add(*subject_phrase(p))
     body, plain_build = body_phrases(p)
     out += body or [(plain_build[0], 0)]  # right after who she is, always required here
-    if glutes_words(p) and look.view in GLUTES_VIEWS:  # required from behind or the side
-        out.append((glutes_words(p), 0))
+    glutes = glutes_words(p)
+    if glutes and look.view in GLUTES_VIEWS:  # required from behind
+        out.append((glutes, 0))
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # her hair and skin, required
     add(parts["wearing"], 0, True)
     add(parts["expression"], 1, True)
-    out += identity_first(p, eyes_face(p, name_re))
+    side = (glutes, 2) if glutes and look.view in GLUTES_SIDE else None
+    out += identity_first(p, eyes_face(p, name_re), then=side)  # from the side: after who she is
     add(_PHONE_TAIL, 2)
-    if glutes_words(p) and look.view not in GLUTES_VIEWS:  # optional: after who she is
-        out.append((glutes_words(p), 2))
+    if glutes and look.view not in GLUTES_VIEWS + GLUTES_SIDE:  # optional: last of all
+        out.append((glutes, 2))
     # the pose is never yielded (controller ruling, 2026-11-15, after the GPU: a back view
     # without its pose phrase renders from the front): the framing yields, then her glutes,
     # and only then, for a look that could not fit at all, the pose takes its short form
-    out = fit_required(out, p, [parts["framing"]], name_re, last=(glutes_words(p),),
-                       pose=parts["view"])
+    out = fit_required(out, p, [parts["framing"]], name_re, last=(glutes,), pose=parts["view"])
     return PromptSpec(tuple(out), VARIED_NEGATIVE)
 
 
