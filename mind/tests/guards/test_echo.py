@@ -57,12 +57,16 @@ def test_rewrite_hint_says_what_is_wrong_in_words():
 
 
 @pytest.mark.parametrize("channel", ["whisper", "dm:101"])
-def test_an_owed_answer_drops_instead_of_sending_an_echo(rig, monkeypatch, channel):
+def test_an_owed_answer_never_sends_an_echo(rig, monkeypatch, channel):
+    """Both drafts said his message back: neither goes out. It was dropped; since 2026-11-15 his
+    owed answer is the fallback line instead, built from his message and never his words
+    (talk/owed.py)."""
     monkeypatch.setattr(live, "review", lambda *args: Verdict("drop", ("echo_parent",)))
     rig.script(HIS, HIS)
     sent, meta = speak(rig, turn(channel), TurnMeta("owed", why="reply:named", answers_human=True,
                                                     whisper_reply=channel == "whisper"))
-    assert not sent and meta.guard_rewritten
+    assert len(sent) == 1 and meta.guard_rewritten and meta.owed_rescued == "guard_echo"
+    assert not echoes(sent[0], HIS) and HIS.casefold() not in sent[0].casefold()
     [first, retry] = rig.chat_calls()
     assert "own words" in retry["messages"][-1]["content"]
 

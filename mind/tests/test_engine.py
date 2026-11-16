@@ -1207,16 +1207,23 @@ def test_the_chain_counts_answers_and_reactions_but_never_stops_them(store, cloc
 
 
 def test_guild_wide_six_per_minute(store, clock, tmp_path):
-    """The limit counts turns (ruling 4); every reply here is one line, so Says are turns."""
+    """The limit counts turns (ruling 4); every reply here is one line, so Says are turns. Since
+    2026-11-15 the one answer he is owed for each line of his is never held back (talk/owed.py):
+    the limit holds the extra answers, so in any minute at most 6 more go out than he sent
+    lines."""
     async def main():
         r = make_rig(store, clock, tmp_path)
+        his = []
         for i in range(60):
+            his.append(r.clock.now())
             await r.human(f"anyone up for heroics {i}?")
             await r.advance(2)
         await r.advance(40)
         times = [t for t, _ in r.sent.timed_says()]
-        assert len(times) >= 12
-        assert all(sum(1 for u in times if t <= u < t + 60) <= 6 for t in times)
+        assert len(times) >= 60
+        assert all(sum(1 for u in times if t <= u < t + 60)
+                   <= 6 + sum(1 for h in his if t - 60 <= h < t + 60) for t in times)
+        assert [u for u in r.utterances() if u["dropped"] == "guards"]  # the extras are held
     run(main())
 
 
@@ -2542,11 +2549,12 @@ def test_her_answer_to_his_whisper_goes_out_right_after_a_guild_line_of_hers(sto
         assert task.done()
         assert [s.channel for s in r.sent.says() if s.guid == 102][:2] == ["guild", "whisper"]
         assert not [u for u in r.utterances() if u["dropped"] == "guards"]
-        # in guild chat the guard keeps its job: her answer to his guild line waits 10 s
+        # in guild chat the guard held back her answer to his guild line for 10 s, and that was
+        # his only answer; since 2026-11-15 the one answer he is owed goes out (talk/owed.py)
         r.engine.guards.record("t-guild", 102, r.clock.now(), TurnKind.OPEN)
         await r.human("belra you there?")
         await r.advance(30)
-        assert [u["dropped"] for u in r.utterances() if u["guid"] == 102][-1] == "guards"
+        assert [u["dropped"] for u in r.utterances() if u["guid"] == 102][-1] is None
     run(main())
 
 
@@ -2554,7 +2562,7 @@ def test_a_woman_with_an_attitude_toward_him_answers_every_whisper_of_his(store,
                                                                           tmp_path):
     """Rehearsal 3, check 4: his third whisper to a drawn woman drew no reply, the one in ten
     WHISPER_REPLY_P leaves out. A woman fond of him, drawn to him or wanting him answers every
-    whisper; a man keeps the 0.9."""
+    whisper; since 2026-11-15 a man does too (the owner: every whisper gets its reply)."""
     async def main():
         _women(store)
         r = make_rig(store, clock, tmp_path, script=numbered())
@@ -2562,7 +2570,7 @@ def test_a_woman_with_an_attitude_toward_him_answers_every_whisper_of_his(store,
         for g in (101, 102, 103, 104):
             await r.human("you around?", channel="whisper", to_guid=g)
         await r.advance(40)
-        assert {s.guid for s in r.sent.says() if s.channel == "whisper"} == {102, 103, 104}
+        assert {s.guid for s in r.sent.says() if s.channel == "whisper"} == {101, 102, 103, 104}
     run(main())
 
 

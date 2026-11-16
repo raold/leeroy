@@ -81,6 +81,8 @@ from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
 from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
+from leeroy_mind.talk.owed import RESCUABLE as OWED_RESCUABLE
+from leeroy_mind.talk.owed import fallback_lines, owed_deadline, owes_him, rescue_text
 from leeroy_mind.talk.prompt import (PromptParts, chat_line_text, comms_rules, facts_head,
                                      knows_real_name, mood_line, quest_help, real_name_line,
                                      redact_for, relationship_card, render_instruction,
@@ -397,6 +399,11 @@ class TurnMeta:
     server_thread: tuple[int, ...] = ()
     server_conversation: str = ''
     godmode_intent: int | None = None  # the owner's intent this turn carries out (godmode)
+    # the answer he is owed for his line or post (talk/owed.py): the guild's pace never holds it
+    # back, its review keeps a draft, and a lost draft is rescued; owed_rescued names the drop
+    # reason a rescue answered (one rescue a turn)
+    owed_answer: bool = False
+    owed_rescued: str = ""
 
 
 class _ScopeChanged(SchedulerError):
@@ -764,7 +771,12 @@ class Pipeline:
             if task in self._behind:
                 self._behind[task] = [t for t, _ in items[i + 1:]]
             try:
-                await self._speak(turn, meta)
+                said = await self._speak(turn, meta)
+                if not said and owes_him(self, turn, meta) and i + 1 < len(items):
+                    nxt, nmeta = items[i + 1]  # the next answer to his line takes on the debt
+                    if (nxt.trigger_line == turn.trigger_line and nxt.kind in REPLY_KINDS
+                            and (nmeta.discord or None) == (meta.discord or None)):
+                        nmeta.owed_answer = True
             except asyncio.CancelledError:
                 if self._cancelling.get(task) is not turn or task.cancelling() > 1:
                     raise
@@ -1516,6 +1528,8 @@ class Pipeline:
         if turn.deadline <= 0:
             turn.deadline = now + (DISCORD_DEADLINE_S if is_discord(turn.channel)
                                    else DEADLINE_S.get(turn.priority, OTHER_DEADLINE_S))
+            if owes_him(self, turn, meta):
+                turn.deadline = max(turn.deadline, now + owed_deadline(turn.channel))
             self._mark_borrow(meta, reset=True)
         if not turn.channel:
             turn.channel = choose_channel(turn.kind, speaker=turn.speaker, world=self.world,
@@ -1598,6 +1612,8 @@ class Pipeline:
                 return self._drop(turn, meta, "scope_changed", c.memory_ids)
             memory_ids, close = c.memory_ids, c.close
             text, why = await self._generate(turn, meta, c, spoken=voiced)
+            if why in OWED_RESCUABLE and _scope_valid(meta):  # his answer, asked once more
+                text, why = await rescue_text(self, turn, meta, c, why, text, spoken=voiced)
             self._phase(turn, None)  # its text exists
             if not _scope_valid(meta):
                 return self._drop(turn, meta, "scope_changed", memory_ids, text=text)
@@ -1651,6 +1667,9 @@ class Pipeline:
         # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
         # each line is defused once more as it is kept and sent (talk/items.py).
         lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+        if not lines and text.strip() and meta.before_transport is None:
+            lines = fallback_lines(self, turn, meta, p, close=close, composed=c,
+                                   reason="emote_only" if emotes else "command" if only else "empty")
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
@@ -1765,6 +1784,10 @@ class Pipeline:
                 best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)))
         def fallback():
             if best is None:
+                rescued = fallback_lines(self, turn, meta, p, close=close, composed=composed,
+                                         reason="guard_echo")
+                if rescued:  # every draft said his words back: a short line of hers instead
+                    return rescued
                 meta.guard_verdict = "drop"
                 return drop("guard_echo")
             meta.guard_verdict = best[2]
@@ -1776,7 +1799,7 @@ class Pipeline:
             return self._drop(turn,meta,code,meta.memory_ids)
         for attempt in range(2):
             if not lines:
-                return fallback() if owed and best is not None else drop("guard_rewrite_failed")
+                return fallback() if owed and (best is not None or owes_him(self, turn, meta)) else drop("guard_rewrite_failed")
             verdicts = []
             for line in lines:
                 verdict = await self.live_review.check(turn, meta, line.plain)
@@ -1826,7 +1849,7 @@ class Pipeline:
             else:
                 return lines
         meta.guard_verdict = "drop"
-        return fallback() if owed and best is not None else drop("guard_rewrite_failed")
+        return fallback() if owed and (best is not None or owes_him(self, turn, meta)) else drop("guard_rewrite_failed")
 
     async def _guard_react(self, turn, meta, reaction):
         self._release_photo(meta, 'reaction')
@@ -2036,11 +2059,14 @@ class Pipeline:
         if not self.raid.allows(g, turn.kind, now):
             return "raid"
         guards = meta.guards or self.guards
-        # a whisper to him that starts a conversation is, like an answer to his whisper or to
-        # his Discord DM, read by no one else: the guild's pace and her lines elsewhere never
-        # hold it back
+        # a whisper to him that starts a conversation is, like any answer whispered to him or an
+        # answer to his Discord DM, read by no one else: the guild's pace and her lines elsewhere
+        # never hold it back; nor do they hold back the one answer he is owed for a line of his
+        # (owed_answer, talk/owed.py)
         unread = (meta.whisper_reply or (meta.initiates and turn.channel == "whisper")
-                  or self._answers_his_dm(turn, meta))
+                  or self._answers_his_dm(turn, meta) or meta.owed_answer
+                  or (turn.channel == "whisper" and turn.to_guid == self.human.guid
+                      and turn.kind in REPLY_KINDS))
         if not guards.allow(g, turn.kind, now, continuation=not first,
                             reply=unread, pushback=bool(meta.pushback)):
             return "guards"

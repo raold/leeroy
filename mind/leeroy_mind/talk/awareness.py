@@ -183,6 +183,7 @@ class LiveReview:
         from leeroy_mind.talk.turns import TurnKind
         human = self.engine.human.guid
         return bool(human and (meta.whisper_reply or self.engine._answers_his_dm(turn,meta) or
+            getattr(meta, "owed_answer", False) or
             meta.why == "reply:named" or meta.pushback or meta.discord_named or meta.first_question_answer or
             turn.kind == TurnKind.EMOTE_REACT and meta.why.startswith("emote:")))
 

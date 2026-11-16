@@ -4,7 +4,10 @@ settings means identical prompts") compares a run of it against golden_prompts.j
 written by this same scenario with the code from before tuning existed. Re-recorded since for
 members starting conversations (2026-11-07): its one evening whisper says she starts it and
 what she brings up, and it no longer comes from Belra, whom he had whispered a minute before
-(a member in a whisper with him starts none), so the draws after it moved too."""
+(a member in a whisper with him starts none), so the draws after it moved too. Re-recorded for
+every message of his answered (2026-11-15, talk/owed.py): his bare remarks always get an answer
+and his hello in the login quiet keeps one, so more turns are planned and the draws after them
+moved; no prompt's wording changed."""
 import asyncio
 import json
 import random

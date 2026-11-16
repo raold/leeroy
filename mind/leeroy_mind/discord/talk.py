@@ -12,7 +12,9 @@ Who answers (plan):
   whose Discord presence is online or idle (not away, with a persona; her body in the
   game need not be online, ruling R14), weighted by warmth toward him (romance.WHISPER_WEIGHT
   and FOND_SHARE for a woman's stance, affinity, the talkative dial) times fit: CLASS_FIT for a
-  class channel's own class, ROLE_FIT for raiders and officers in RAID_CHANNELS.
+  class channel's own class, ROLE_FIT for raiders and officers in RAID_CHANNELS. With nobody
+  online or idle, one of the rest who isn't away answers (his post is always answered,
+  talk/owed.py), and the first answer of every post carries TurnMeta.owed_answer.
 Each answer is a REPLY_HUMAN turn on `discord:<id>` (or the DM, to him), its meta why WHY with
 DiscordTarget(reply_to=his post, thread=its thread), after a delay of 2-25 s by her presence
 (answer_delay). A post's answers are one job, so each comes after the one before it.
@@ -473,6 +475,7 @@ class DiscordTalk:
                             discord_named=g in group_named if is_group(channel) else how == "named",
                             first_question_answer=not items and classify_human_line(text) == "question_all",
                             recall_query=self.recall_query(message_id) or "")
+            meta.owed_answer = not items  # the answer he is owed (talk/owed.py)
             requests = getattr(getattr(app, 'photos', None), 'requests', None)
             if requests is not None:
                 requests.decorate(turn, meta, message_id)
@@ -494,20 +497,34 @@ class DiscordTalk:
                 and personas.get(g) is not None][:MAX_NAMED]
 
     def _draw(self, ch: layout.Channel, audience) -> list[int]:
+        """One member (two with SECOND_P) of the audience online or idle, by warmth and fit;
+        with none of them online or idle, one of the rest who isn't away, so his post is
+        always answered (talk/owed.py; it went unanswered at night before)."""
         app = self.app
         world, hg = app.world, app.human_guid
         away = away_now(app.store, app.clock.now())
         local = app.clock.local()
         weights: dict[int, float] = {}
+        others = []
         for g in sorted(audience):
             if g == hg or g in away:
                 continue
             p = app.personas.get(g)
-            if p is None or self._presence(g, p, local).state not in ANSWERING:
+            if p is None:
+                continue
+            if self._presence(g, p, local).state not in ANSWERING:
+                others.append((g, p))
                 continue
             w = warmth(p, app.store.get_relationship(g, hg, lens=True)) * self._fit(ch, g, p)
             if w > 0:
                 weights[g] = w
+        if not weights:
+            rest = {g: w for g, p in others
+                    if (w := warmth(p, app.store.get_relationship(g, hg, lens=True))
+                        * self._fit(ch, g, p)) > 0}
+            if rest:
+                log.info("discord_draw_widened: channel=%s pool=%d", ch.id, len(rest))
+            return pick_speakers(rest, 1, self.rng)
         n = 2 if len(weights) > 1 and self.rng.random() < SECOND_P else 1
         return pick_speakers(weights, n, self.rng)
 

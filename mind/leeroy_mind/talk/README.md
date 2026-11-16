@@ -100,3 +100,39 @@ Since the second round (owner, 2026-11-13: channels a mix, "DMs max expressive")
   extraction and the console take the longer line as it is.
 - 0 is the rollback: one short line on Discord, with the prompts, room, typing and retries as
   before. A game turn never changes, at any value.
+
+# Every message of his is answered
+
+Owner, 2026-11-15: "make sure they actually reply something. doesn't have to be a profound reply
+but something, and needs to add to the conversation." Code: `owed.py` (its docstring is the
+full rule); no switch, no migration, no native rebuild.
+
+- **Planning.** A remark of his gets one or two answers, never none (`select.REPLY_COUNT_REMARK`);
+  every whisper is answered by its member (`WHISPER_REPLY_P` 1.0); when everyone who could answer
+  spoke in the last minute (weight 0), one of them answers anyway; his hello in the login quiet
+  keeps one answer; a Discord channel post with nobody online or idle draws from the rest of its
+  audience (`discord_draw_widened`).
+- **The owed answer** (`TurnMeta.owed_answer`: the first answer to each line or post, a whisper
+  answer, an answer to his DM) passes the guild's pace, keeps a reviewed draft instead of being
+  dropped, and has a 90 s (game) or 300 s (Discord) deadline. If its member cannot speak, the next
+  answer to that line in the job takes the debt.
+- **In the turn.** A silence, two drafts that kept a tell, a failed or late model request: one
+  more plain ask (`OWED_HINT`); only fatal tells, an unbacked shared-history claim or a flirt at a
+  member block that draft (a summons, a repeated move or length no longer do: a long draft is cut
+  at a sentence). Without a usable draft the answer is `fallback_line`, a short reaction to his
+  message that asks something back. Logs `owed_rescue_line reason= how=model|fallback`.
+- **The watchdog** (ticked by the app): a message still unanswered 45 s (whisper, voice), 60 s
+  (game channels) or 150 s (Discord) after it, with nothing in flight, gets a rescue turn (at most
+  two, 90 s apart): `owed_rescue reason=not_planned|dropped:<reason>|no_answer`. Messages older than
+  15 min (game) or 30 min (Discord) are let go (`owed_given_up reason=too_old`).
+- **Held, then answered just after** (`owed_held reason=`): his raid's boss fight and wipe silence
+  (`raid`; `dead` for a /say nobody alive can answer yet), a Free GPU pause (`gpu_paused`), the
+  whispered member AFK (`afk`), him offline for a game line (`human_offline`), a DM she answers on
+  her own time (`own_time`), a group DM's pacing (`group_pacing`), a selfie request still being
+  made (`photo_request`), his voice note still being transcribed (`voice_note`).
+- **Never owed:** his bot commands and raid orders, emotes, addon pastes (one answer per paste
+  burst already) and DBM/BigWigs/AFK auto-whispers; a line nobody with a persona can hear (an
+  empty voice room, a whisper to someone offline or outside the cast: `owed_given_up
+  reason=nobody_present|target_offline`); game lines from before a mind restart.
+- **Health:** `owner-replies` counts his messages of the last 24 h with no member answer within
+  5 minutes, by medium (a note from one, a FAIL from 10); counts only, never text.
