@@ -401,3 +401,67 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
   read at mind start; a login's reload of mind.toml does not change them. Rollback:
   `think_private = false` and restart the mind. Older code logs both keys as unknown and ignores
   them, so they need not be removed before rolling back.
+
+# Wants (`talk/intent.py`, 2026-11-16)
+
+What she wants from a turn (human-likeness spec section 2). There is one want enum and one block
+for every channel, never a second.
+
+- **One enum**: `intent.Intent`, the twelve codes of think-dm's beat in its order (vent, share,
+  ask, tease, flirt, reassure_seek, gossip, deflect, small_talk, react, boundary, logistics),
+  with the words "You want to:" reads (`WANT_WORDS`, the beat's words as merged in #329; `{who}`
+  is the addressee: his called name on his turns, the member's name on a member's, "everyone" on
+  an opener). `beat.WANTS` is built from it (keyed by code, `{human}`) and `beat.wants_for` lists
+  its codes, so the beat's ask, schema and lines are unchanged (`golden_beat.json`).
+- **One block**: `beat.render(read=, lands=, want=, who=, topic=, use=)`, a line for each field
+  given, in this order: "You read it as", "It lands", "You want to" (`want_words`: the words,
+  then the topic in brackets), "Bring in"; "" for none. `beat.lines` is `render` from the beat.
+- **Who chooses**: on his whisper and DM answers the beat (the model) chooses; everywhere else
+  code draws (`draw_intent`). From `[talk] intent` (core plan Task 8) the beat chooses among the
+  wants `allowed` permits, leaning to the drawn one. Until then nothing calls the draw on a live
+  turn.
+- **The draw** (`weights(ctx)`, `IntentContext`): a base row, then multipliers in order. Turn
+  kinds outside `INTENT_KINDS` (reply_human, continue, open, whisper, flirt) want nothing. Rows
+  (vent, share, ask, tease, flirt, reassure_seek, gossip, deflect, small_talk, react, boundary,
+  logistics); his line's row by `select.classify_human_line` (a goodbye reads as a greeting), a
+  flirt (`filters.flirty`) overriding it:
+
+  | Situation | weights |
+  |---|---|
+  | his question | .7 3 1 1.5 1 .3 .3 .7 .5 1 .3 .5 |
+  | his greeting | 1 2 .5 1 1 .3 .3 .2 3 2 0 .5 |
+  | his remark | 1 2 1 2 1 .3 .5 .5 1 3 .3 .5 |
+  | his flirt | .3 1 .5 2 4 1 0 1 .5 1 .5 0 |
+  | continue | 1 1.5 1 2 0 0 1 .5 1 3 .3 .5 |
+  | open | 1.5 3 1.5 0 0 0 1 0 1 0 0 0 |
+  | whisper, flirt (hers to him) | 1 2 1 1.5 4 1 0 0 1 0 0 0 |
+
+  Multipliers: flirt only from a woman, to him, with an attitude (fond 0.3, drawn 0.7, lust 1),
+  never toward a member; reassure_seek only then too, x2 when anxious; neither in a group DM. Under
+  his explicit whisper overlay (`tail`) vent, gossip, deflect, boundary, logistics and small_talk
+  are 0 (PM log 2026-11-16: the overlay wins, for the draw and the beat). An owed answer never just
+  reacts (react 0); owed and his question: deflect and boundary x0.3, vent x0.5. Vent x(1 + 2 max(0,
+  stress)), x2 on a bad day or a sick kid, x1.5 at work; share x(1 + max(0, valence)), x1.5 on a
+  night out; tease x1.5 for teasing humour or agreeableness 4 or less, 0 to him when she is sore
+  with him (toward_him -0.3 or less); boundary x(1 + max(0, stress)), x1.5 when toward_him is below
+  0; deflect x(1 + max(0, -toward_him)), x1.5 when shy or guarded; small_talk and react x2 when
+  tired (energy -0.3 or less); unsociable (social -0.3 or less): react and boundary x1.5, share and
+  ask x0.6; logistics x3 when his line has a plan (`questions.is_plan`) or a time ("8pm", "20:30");
+  gossip 0 in a whisper or DM not to him; her last want x0.5. Without a state every state multiplier
+  is 1.
+- `allowed(ctx)`: the wants above 0, enum order. `draw_intent(ctx, rng)`: one weighted draw (one
+  `rng.random()`), None when every weight is 0; `rng` is the caller's seeded draw, never
+  `engine.rng`.
+- **Topics** (`topic_for`, code-built, never invented; "" for the rest and on an opener, whose
+  own topic is its subject): vent "about a rough day" (bad day), "about your kid being ill",
+  "about being stuck late at work", "about work" (at work or commuting), "about the kids" (kids),
+  else "about your day"; share "your night out" or "something from your day"; gossip "only from
+  what you remember"; logistics "raid times, gear or who's coming".
+- **Her day and feeling** (`attention`, `state`, `event`, `block`, `kids`) come from `life/`
+  (plan Tasks 1 and 3). `intent.py` reads them by value only (an event or block by its code, a
+  state's five floats by name, a missing one 0), so it imports none of them.
+- `python -m leeroy_mind life intents --data-dir "$D" --guid N [--kind reply_human] [--family
+  whisper] [--line TEXT] [--owed|--no-owed] [--tail] [--event CODE] [--samples 500]`: each
+  want's share in percent from her stored persona (a `none` line when a draw has none),
+  read-only on mind.db `mode=ro`, codes and numbers only, never persona text, names or the line.
+  It does not read her presence or state yet (attention, state and block none, kids no).
