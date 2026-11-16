@@ -64,11 +64,11 @@ MODEL_PINS: dict[str, ModelPin] = {
     # opencv-contrib-python beside the pinned opencv-python-headless: two packages, one cv2).
     "palm": ModelPin(
         "palm", "MediaPipe palm detector (OpenCV Zoo, 2023feb)", "Apache-2.0",
-        "opencv/palm_detection_mediapipe", "233e619dcea1759bf6de707b9b904fe30881ea55",
+        "opencv/palm_detection_mediapipe", "233e619dcea1759bf6de707b9b904fe30881ea55",  # gitleaks:allow
         ("palm_detection_mediapipe_2023feb.onnx",)),
     "handpose": ModelPin(
         "handpose", "MediaPipe hand landmarker (OpenCV Zoo, 2023feb)", "Apache-2.0",
-        "opencv/handpose_estimation_mediapipe", "4b2a0b446e5cf2f11fb6b2c7251091c035d2c1f7",
+        "opencv/handpose_estimation_mediapipe", "4b2a0b446e5cf2f11fb6b2c7251091c035d2c1f7",  # gitleaks:allow
         ("handpose_estimation_mediapipe_2023feb.onnx",)),
 }
 BASE_PINS = ("realvisxl", "nsfw")  # what every worker needs
