@@ -279,9 +279,10 @@ def test_use_is_null_unless_it_bears_on_his_last_line(rig, channel, to_guid):
 
 def test_topic_words_are_content_words_only():
     for word in ("actually", "three", "honestly", "literally", "something", "line", "still",
-                 "really", "want", "this", "they"):
+                 "really", "want", "this", "they", "telling", "thinking", "saying", "wanted",
+                 "getting", "making"):
         assert not moves.topic_word(word), word
-    for word in ("glider", "lantern", "fishing", "blizzcon", "festival"):
+    for word in ("glider", "lantern", "fishing", "blizzcon", "festival", "cooking", "gliders"):
         assert moves.topic_word(word), word
 
 
