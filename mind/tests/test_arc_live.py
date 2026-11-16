@@ -473,9 +473,12 @@ def test_a_summons_outside_a_plan_he_shaped_is_asked_again_then_dropped(
         r.script("get over here", "come over already")
         r.whisper_from_him(102, "hi")
         r.run()
-        assert r.utterances()[-1]["dropped"] == "tells" and len(r.chat_calls()) == 2
+        # the summons is never sent; since 2026-11-15 his whisper's owed answer gets one plain
+        # ask that warns of it, then the fallback line (talk/owed.py)
+        assert len(r.chat_calls()) == 3
         assert SUMMONS_HINT.format(**FILL) in r.last_user()
-        assert not r.sent.says()
+        said = [s.text for s in r.sent.says()]
+        assert len(said) == 1 and "over" not in said[0].casefold()
     finally:
         r.close()
 

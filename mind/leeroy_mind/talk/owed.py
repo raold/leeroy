@@ -16,8 +16,9 @@ Three layers, cheapest first:
 2. In the turn (rescue_text): an owed answer the model left silent, whose drafts both kept a
    tell, whose request failed or whose time ran out (RESCUABLE) is asked a third time with a
    plainer instruction (OWED_HINT). Only tells a reader must never see block that draft
-   (BLOCKING: the fatal ones, an unbacked shared-history claim, a flirt at a member); a summons,
-   a repeated move or a long draft no longer cost him his answer (a long one is cut to its
+   (BLOCKING: the fatal ones, an unbacked shared-history claim, a flirt at a member, and a
+   summons out of the game where her arc doesn't allow one, which the plain ask warns of); a
+   repeated move or a long draft no longer cost him his answer (a long one is cut to its
    budget). With no usable draft, a short line built from his own message is the answer
    (fallback_line): never empty, never emoji alone, never his words said back, and always a
    reaction plus a question back. The same fallback stands in when every reviewed draft only
@@ -67,7 +68,7 @@ OWED_DEADLINE_S = {"game": 90.0, "discord": 300.0}
 # The drop reasons an owed answer is rescued from inside its turn
 RESCUABLE = frozenset({"tells", "silent", "llm_error", "expired"})
 # Soft tells that still block a rescue's draft (fatal ones always do)
-BLOCKING = frozenset({"history", "member flirt"})
+BLOCKING = frozenset({"history", "member flirt", "summons"})
 OWED_HINT = ("Answer {human} now, in {length}, in your own voice. Say something real back to "
              "what {they} just said: react to it and add one thing of your own, an answer, a "
              "thought or a question. Don't say {their} words back, and don't answer (nothing).")
@@ -242,6 +243,12 @@ async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
     they, _, their = pipe.human.forms
     messages = _with_hint(composed.messages, OWED_HINT.format(
         human=pipe.human.called, length=length, they=they, their=their))
+    hg = pipe.human.guid
+    summons_ok = pipe._summons_ok(turn) if pipe._counterpart(turn) == hg else None
+    if summons_ok is False:  # her arc keeps it in the game: said up front, not after a miss
+        from leeroy_mind.talk.pipeline import SUMMONS_HINT
+        forms = dict(zip(("they", "them", "their"), pipe._forms_of(hg)))
+        messages = _with_hint(messages, SUMMONS_HINT.format(**forms))
     if spoken:
         messages = _with_hint(messages, SPOKEN_HINT)
     emoji = turn.channel.startswith(("dm:", "discord:", "gdm:"))
@@ -269,7 +276,7 @@ async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
                            people=list(pipe._protect(turn.channel)), window=composed.window,
                            held=composed.held, tonight=meta.again_tonight,
                            recent_moves=[(r.clause, r.main) for r in composed.moves],
-                           summons_ok=None, keep_emoji=emoji)
+                           summons_ok=summons_ok, keep_emoji=emoji)
         if pipe._flirts_at_a_member(turn, text):
             text = ""
         elif any(t.fatal or t.reason in BLOCKING for t in tells):

@@ -117,9 +117,9 @@ full rule); no switch, no migration, no native rebuild.
   dropped, and has a 90 s (game) or 300 s (Discord) deadline. If its member cannot speak, the next
   answer to that line in the job takes the debt.
 - **In the turn.** A silence, two drafts that kept a tell, a failed or late model request: one
-  more plain ask (`OWED_HINT`); only fatal tells, an unbacked shared-history claim or a flirt at a
-  member block that draft (a summons, a repeated move or length no longer do: a long draft is cut
-  at a sentence). Without a usable draft the answer is `fallback_line`, a short reaction to his
+  more plain ask (`OWED_HINT`, with the summons warning where her arc keeps it in the game); only
+  fatal tells, an unbacked shared-history claim, a flirt at a member or such a summons block that
+  draft (a repeated move or length no longer do: a long draft is cut at a sentence). Without a usable draft the answer is `fallback_line`, a short reaction to his
   message that asks something back. Logs `owed_rescue_line reason= how=model|fallback`.
 - **The watchdog** (ticked by the app): a message still unanswered 45 s (whisper, voice), 60 s
   (game channels) or 150 s (Discord) after it, with nothing in flight, gets a rescue turn (at most

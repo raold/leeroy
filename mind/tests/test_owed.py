@@ -108,10 +108,12 @@ def test_an_owed_whisper_answer_whose_drafts_both_echo_him_is_asked_a_third_time
 
 def test_a_summons_no_longer_costs_him_his_answer(store, clock, tmp_path):
     """Live 2026-11-15 (a DM): both drafts asked him over (summons), so his answer was
-    dropped. The third ask's draft may keep a summons."""
+    dropped. The third ask warns of it up front; its draft without one goes out (a third
+    summons would give way to the fallback line: her arc keeps them in the game)."""
     def script(model, messages):
-        return "come over here, i made dinner" if HINT in messages[-1]["content"] else \
-            "come over to my place tonight"
+        if HINT in messages[-1]["content"]:
+            return "made dinner, wish you could taste it"
+        return "come over to my place tonight"
 
     async def main():
         r = make_rig(store, clock, tmp_path, script=script)
@@ -119,6 +121,7 @@ def test_a_summons_no_longer_costs_him_his_answer(store, clock, tmp_path):
         await r.advance(40)
         said = [s.text for s in r.sent.says() if s.guid == 102]
         assert said and "dinner" in " ".join(said)
+        assert "only talk through the game" in r.last_user()
     run(main())
 
 
