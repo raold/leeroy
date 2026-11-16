@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from conftest import HUMAN, OFFICERS, TEST_CAST, make_persona, seed_test_cast
 from leeroy_mind.config import HumanCfg, RomanceCfg, TalkCfg, load_config
 from leeroy_mind.library.chunks import Chunk
+from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import LLMScheduler
 from leeroy_mind.memory.recall import Recall
 from leeroy_mind.memory.writer import Embedder
@@ -99,14 +100,25 @@ class FakeLibrary:
         self.closed = True
 
 
+ORION_THINKING_TOKENS = 1000  # Orion's thinking on real DM and whisper prompts: 600-1000 tokens
+ORION_THOUGHT = "PRIVATE-THOUGHT recap of the prompt"  # never to be seen past the client
+
+
 class OrionLLM(FakeLLM):
-    """FakeLLM as the live model answers (CLAUDE.md): a request that does not turn thinking
-    off gets empty content, so a call site that forgets think=False leaves the guild silent
-    and the engine tests fail."""
+    """FakeLLM as the live model answers (measured 2026-11-16): `think: true` is refused (HTTP
+    400); a request that leaves `think` out thinks first, and its content comes only when
+    num_predict leaves room after ORION_THINKING_TOKENS of thinking, else it is empty. So a
+    call site that forgets think=False (num_predict 80) leaves the guild silent and the engine
+    tests fail, while a thinking request ([talk] think_private) gets its answer."""
 
     async def chat(self, model, messages, *, options, think=None, **kw):
+        if think is True:
+            raise LLMError(f"/api/chat: HTTP 400 {model} does not support thinking")
         result = await super().chat(model, messages, options=options, think=think, **kw)
-        return result if think is False else replace(result, text="")
+        if think is False:
+            return result
+        room = options.get("num_predict", 0) > ORION_THINKING_TOKENS
+        return replace(result, text=result.text if room else "", thinking=ORION_THOUGHT)
 
     def set_script(self, script) -> None:
         """What the model answers from now on: a script(model, messages)."""

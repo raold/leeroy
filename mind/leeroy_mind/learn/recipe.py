@@ -48,13 +48,19 @@ def templates_used(meta, used):
                                        template_version=digest)
 
 
-def called_model(meta, model, options=None):
+THINK_SUFFIX = "+think"  # a line whose request thought first ([talk] think_private)
+
+
+def called_model(meta, model, options=None, *, think=False):
+    """The request a line came from. One that thought first is recorded as `<model>+think`
+    with `think` in its parameters, so its rewards and arms never pool with lines that did not."""
     snapshot = getattr(meta, "recipe_snapshot", None)
     if isinstance(snapshot, Snapshot):
         params = tuple((k,v) for k,v in (options or {}).items()
                        if k in ('temperature','min_p','top_p','num_predict','num_ctx','seed')
                        and type(v) in (int,float))
-        meta.recipe_snapshot = replace(snapshot, model_id=model, parameters=params)
+        meta.recipe_snapshot = replace(snapshot, model_id=model + THINK_SUFFIX if think else model,
+                                       parameters=params + (("think", bool(think)),))
 
 
 def record(conn, line_id, turn, meta, persona, config, *, settings=None):

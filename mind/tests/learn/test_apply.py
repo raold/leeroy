@@ -377,6 +377,7 @@ def test_every_live_transport_applies_and_credits_the_recipe(rig,monkeypatch,cha
     from leeroy_mind.llm.presets import LIVE
     from leeroy_mind.talk.discord_length import preset_for
     expected = preset_for(LIVE, rig.engine._discord_words(turn)).options['num_predict'] if is_discord(channel) else 40
+    expected += rig.engine._think_budget(turn, meta)  # his DM's answer thinks first ([talk] think_private)
     assert rig.chat_calls()[-1]['options']['num_predict']==expected
     rows=rig.store.conn.execute('SELECT p.*,c.channel FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id').fetchall()
     assert len(rows)==1 and rows[0]['channel']==channel

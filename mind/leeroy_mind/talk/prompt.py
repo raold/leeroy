@@ -45,9 +45,19 @@ LIVE_BUDGET = 1800
 # prompt holds the DM's history in Chat and asks for up to [talk] dm_words, so it gets more
 # room. num_ctx 4096 less num_predict for 200 words (discord_length.num_predict: 344) leaves
 # 3752; 2600 estimated tokens stays under that even if the real count runs 25% over the
-# estimate (3250, plus the chat template's few dozen), with about 400 to spare.
+# estimate (3250, plus the chat template's few dozen), with about 400 to spare. An answer that
+# thinks first ([talk] think_private) gets less (room_for).
 DM_BUDGET = 2600
 ESTIMATE_SLACK = 1.25  # how far over the 4-characters estimate a real token count may run
+TEMPLATE_TOKENS = 64  # the chat template's own tokens around the messages (a few dozen)
+
+
+def room_for(budget: int, *, predict: int, num_ctx: int) -> int:
+    """`budget`, or less when a request that may generate `predict` tokens would not fit
+    num_ctx with its prompt ESTIMATE_SLACK over the estimate: an answer that thinks first
+    ([talk] think_private) asks for its thinking budget on top of the line. num_ctx 4096 and
+    think_budget 1400: a whisper keeps LIVE_BUDGET (room 2041), his DM gets 1830, not DM_BUDGET."""
+    return min(budget, int((num_ctx - TEMPLATE_TOKENS - predict) / ESTIMATE_SLACK))
 EXTRA_CAP_TOKENS = 300  # an overlay's bit, romance or aside text, at most
 MIN_MEMORIES, MIN_CHAT, MIN_REL_CARDS, MIN_OWN = 3, 5, 1, 3
 # The last resort keeps this many memories, and the awareness card's claims, until her own

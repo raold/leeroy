@@ -266,3 +266,44 @@ instruction at 200 characters a message, and the trim emptied her memories first
   "Auto-reply:") are not his words: never stored, never answered, no handler sees them
   (`pastes.is_addon_whisper`, `app._on_chat`; log `his_addon_whisper_skipped`). "<3", a tag he
   types himself ("<AFK> back in 5", "<Sigh> fine") and his pasted "<Flask>" checks are his.
+
+# Thinking first (`[talk] think_private`, 2026-11-16)
+
+An answer to his whisper or to his Discord DM thinks before it writes (owner, 2026-11-16: "i'd
+like thinking turned on for DMs and whispers"). `[talk] think_private` (default true) and
+`[talk] think_budget` (128-2048 tokens, default 1400) are read at mind start: a login's reload
+of mind.toml does not change them, so restart the mind after editing either.
+
+- **Which turns.** `Pipeline._think_budget`: an answer to his whisper (`_answers_his_whisper`, or
+  a `whisper_reply` turn in a whisper to him) or to his DM (`_answers_his_dm`, `dm:<guid>`).
+  Never game channels, Discord channels, group DMs (`gdm:`), voice rooms or the night. Every
+  request such a turn makes asks through `_ask`, so the drafts, a guard's rewrite, the owed
+  fallback (`owed_fallback`) and the fresh answer (`_fresh_answer`) all think.
+- **The request** (`llm/presets.py` `thinking`, `LIVE_THINK`). Orion thinks when `think` is
+  left out and refuses `think: true` (HTTP 400), so `think` is tri-state per model and the live
+  model's thinking request omits it (`THINK_FLAG = None`). Ollama has no separate thinking
+  budget: the thinking counts against `num_predict`, which is the line's own allowance plus
+  `think_budget` (game whisper 80 + 1400 = 1480; a DM at `dm_words` 200: 344 + 1400 = 1744; a
+  learned length bound lowers only the allowance). It sends no `stop`: Ollama applies stop
+  sequences to the thinking too, and LIVE's blank-line stop fired inside Orion's thinking
+  (measured 2026-11-16), so the answer is cut at its first blank line afterwards
+  (`cut_at_stop`). `num_ctx` stays 4096 (one value per model, or Ollama reloads it; mod-ollama-
+  chat shares it).
+- **The room** (`prompt.room_for`). A thinking request's prompt budget is at most
+  `(num_ctx - 64 - num_predict) / 1.25` estimated tokens (the chat template's few dozen, the
+  estimate up to 25% low). At the defaults a whisper keeps `LIVE_BUDGET` 1800 (room 2041); his DM
+  gets 1830 instead of `DM_BUDGET` 2600, so its oldest history and least relevant memories are
+  trimmed first. A smaller `think_budget` gives the DM more prompt (`think_budget` 1000: 2150).
+- **What comes back.** The thinking (`message.thinking`, or a `<think>` block the client strips)
+  never reaches the line, a log, a store or a receipt. Content empty after the thinking (it used
+  up `num_predict`, or ended before the answer) is asked once more with `think: false`, the
+  live path's ordinary request (`talk_think_empty: guid= kind= done_reason= eval_count=`), before
+  the usual silence handling. A thought answer cut at `num_predict` goes back to its last
+  sentence end (`think_line_trimmed`, counts only).
+- **Learning.** A thought line's recipe has `model_id` `<model>+think` and `think` in its
+  parameters (`learn/recipe.py` `called_model`), so `learn report` and later analyses never pool
+  its rewards with lines that did not think. The bandit's context key is unchanged.
+- The golden prompts are unchanged: only the request's options differ, never the prompt text
+  (the tuning scenario's prompts are far under either budget).
+- Rollback: `think_private = false` and restart. Older code logs the two keys as unknown and
+  ignores them, so they need not be removed before rolling back.
