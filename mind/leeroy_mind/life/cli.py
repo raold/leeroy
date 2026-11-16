@@ -1,7 +1,8 @@
-"""`python -m leeroy_mind life day|now|intents|shapes`: the members' day plans, where they are
-now, what they want on a turn (talk/intent.py) and their reply shapes, read-only on mind.db opened
-mode=ro (shapes also reads mind.toml). Prints guids, codes, times, counts and percentages only,
-never persona text, names or the line given with --line.
+"""`python -m leeroy_mind life day|now|intents|shapes|state`: the members' day plans, where
+they are now, what they want on a turn (talk/intent.py), their reply shapes and how they feel
+right now (life/statebook.py), read-only on mind.db opened mode=ro (shapes also reads
+mind.toml). Prints guids, codes, times, numbers, counts and percentages only, never persona
+text, names or the line given with --line.
 
 `shapes --guid N --family dm --his-words 28 [--owed] [--samples 1000]` draws her reply shapes
 (talk/shape.py) from her stored typing profile and prints, as JSON, each shape's share and the
@@ -32,6 +33,8 @@ from leeroy_mind.talk.turns import TurnKind
 from .day import DayEvent, day_plan
 from .presence import Attention, LifePresence, Where, presence_at
 from .seed import seeded
+from .state import AXES, decayed
+from .statebook import STATE_KEY, arousal_of, baseline_at, decode, toward_seed_of
 
 
 def _date(text: str) -> date:
@@ -199,6 +202,45 @@ def _shapes(personas: dict[int, Persona], args, root: Path) -> int:
     return 0
 
 
+def _numbers(state) -> str:
+    return " ".join(f"{axis}={getattr(state, axis):.2f}" for axis in AXES)
+
+
+def _state(db: Path, personas: dict[int, Persona], args) -> int:
+    """Each member's feeling now (the stored state eased toward her baseline) and the baseline,
+    at this PC's time; what is stored is never changed."""
+    from leeroy_mind.tuning.edits import fold_mood, mood_overlay
+    if args.guid is not None:
+        if args.guid not in personas:
+            print(f"life state: no persona for guid {args.guid}", file=sys.stderr)
+            return 1
+        personas = {args.guid: personas[args.guid]}
+    now = time.time()
+    owner_now = local_at(now)
+    conn = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
+    try:
+        meta = lambda key: conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        raw = meta("human_guid")
+        human = int(raw[0]) if raw and str(raw[0]).isdecimal() else 0
+        for guid, p in personas.items():
+            row = conn.execute("SELECT mood FROM persona_state WHERE guid = ?", (guid,)).fetchone()
+            mood = fold_mood(float(row[0]) if row else 0.0, mood_overlay(conn, guid, now))
+            base = baseline_at(p, owner_local=owner_now, mood=mood, arousal=arousal_of(conn, guid),
+                               toward_seed=toward_seed_of(conn, guid, human, owner_now))
+            stored = meta(STATE_KEY.format(guid=guid))
+            kept = decode(stored[0] if stored else None)
+            state = base if kept is None else decayed(kept[0], base, now - kept[1])
+            age = "none" if kept is None else f"{max(0, round(now - kept[1]))}s ago"
+            print(f"{guid} now {_numbers(state)} stored={age}")
+            print(f"{guid} baseline {_numbers(base)}")
+    except sqlite3.Error as exc:
+        print(f"life state failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+    return 0
+
+
 ACTIONS = {"day": _day, "now": _now, "intents": _intents}  # shapes also reads mind.toml (root)
 
 
@@ -237,7 +279,9 @@ def life_main(argv=None) -> int:
     p_shapes.add_argument("--dm-mirror", type=int, choices=range(0, 11), default=None)
     p_shapes.add_argument("--realism", action=argparse.BooleanOptionalAction, default=None)
     p_shapes.add_argument("--samples", type=_samples, default=1000)
-    for p in (p_day, p_now, p_int, p_shapes):
+    p_state = sub.add_parser("state", help="how each member feels right now, and her baseline")
+    p_state.add_argument("--guid", type=int)
+    for p in (p_day, p_now, p_int, p_shapes, p_state):
         p.add_argument("--data-dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
@@ -258,4 +302,6 @@ def life_main(argv=None) -> int:
         print(f"life: {unreadable} stored personas unreadable, left out", file=sys.stderr)
     if args.action == "shapes":
         return _shapes(personas, args, root)
+    if args.action == "state":
+        return _state(db, personas, args)
     return ACTIONS[args.action](personas, args)

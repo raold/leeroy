@@ -6,10 +6,12 @@ the human-likeness design ("Her day: presence and availability").
 
 **`[life] availability`** (0-10, code default 0: always present, today's behaviour; the release
 sets 6, the design point) moves Discord presence and the replies on her own time today (below,
-"Presence on Discord"); game latency and who answers come with later tasks. There is no migration
-and no native change.
+"Presence on Discord"); game latency and who answers come with later tasks. **`[life] state`**
+(default false; the release sets true) records each member's feeling through the day (below, "Her
+feeling right now"); nothing reads it in a prompt yet. There is no migration and no native change.
 
-Everything here is pure: no clock, no database, no model, no log. The same persona and date
+The day, presence and state models (`day.py`, `presence.py`, `state.py`) are pure: no clock, no
+database, no model, no log (`statebook.py` keeps the state in meta). The same persona and date
 always give the same plan. Plans are immutable and cached (`PLAN_CACHE`, 1024: two a member, today's
 and yesterday's for a late evening), keyed by the schedule facts (guid, job, rhythm, household,
 life thread, night_owl) and the date, so an edited persona gets a fresh plan. Draws use `life.seed` (`unit(*parts)` for one number in [0, 1),
@@ -135,7 +137,7 @@ the callers keep today's behaviour):
 ```toml
 [life]
 availability = 0   # 0-10: how often members are away, busy or slow to answer (0: always there)
-state = false      # her feeling through the day (Task 3)
+state = false      # her feeling through the day (below, "Her feeling right now")
 wow_vs_life = 5    # 0-10: the night's WoW-vs-life theme (nightly.settings.load_life)
 ```
 
@@ -195,6 +197,97 @@ presence, so the Discord tab shows the members away that the mind has away.
 Availability 0 is exactly today's presence, status line and DM timing (pinned by a hash of a
 week of states in `tests/life/test_discord_presence_life.py`).
 
+## Her feeling right now (`life/state.py`, `life/statebook.py`)
+
+Section 3 of the human-likeness design. **`[life] state`** (default false; the release sets
+true): while it is on, `LifeService.state` is a `StateBook` and each member carries five numbers,
+each in [-1, 1], that move through her day. While it is off, `LifeService.state` is None and
+nothing is read or written. **Recorded only for now**: no prompt, latency, intent or shape reads
+it yet (later tasks: her mood line, "It lands", and the draws). Only cast members move: a guild
+member at level 80 or more with a persona, never him.
+
+| Axis | Baseline (where it rests) |
+|---|---|
+| valence | the night's PAD pleasure (`store.get_state(guid, lens=True).mood`, his godmode mood edits folded in); bad day -0.25, night out +0.10, sick kid -0.10 |
+| energy | half the night's PAD arousal (`pad_mood.a`, 0 when none); -0.4 in the hour after she wakes, -0.3 in the 90 minutes before bed, -0.15 in the hour after a shift ends, -0.15 all day on a late shift |
+| stress | (neuroticism - 5.5) / 9; +0.15 at work; sick kid +0.25, bad day +0.20 |
+| social | (extraversion - 5.5) / 9 |
+| toward_him | last night's feelings of hers about him: 0.1 x the sum of sign x intensity / 3 over her `emotion` rows with him as target (joy, pride, admiration, gratitude, hope, happy_for +; distress, shame, reproach, anger, fear, resentment -), within +-0.3; the night is the latest of tonight's and last night's that has rows |
+
+Wake, bedtime and shift ends come from her day plans for yesterday, today and tomorrow, so a
+shift or a sleep across midnight counts once. A stored state eases back to the baseline with a
+half-life of 3 hours (6 for toward_him).
+
+What moves it (`Impulse`, deltas in `state.IMPULSES`):
+
+| Impulse | When | Deltas |
+|---|---|---|
+| his_warm / his_harsh / his_plain | a line of his to her, by `state.tone` | toward_him +0.15 / -0.25 / +0.04, valence +0.08 / -0.12, social +0.05 / +0.02, stress +0.10 (harsh) |
+| ignored | once per burst of hers to him (below) | toward_him -0.08, valence -0.04, social -0.03 |
+| talked | each line of hers, except to him or answering him (below) | social -0.04, never past 0.4 below her baseline |
+| kill / wipe | a boss killed or wiped, its members | valence +0.15 / -0.06, energy +0.10 / -0.04, stress -0.08 / +0.08 |
+| loot_won / loot_lost | she won an item; she lost one to his claim (guild ports' `loot_lost`) | valence +0.20 / -0.12, stress +0.04 (lost) |
+
+`tone(text)`: harsh when `talk.select.pushback_kind` says anger or the line has a cutting word
+(stupid, idiot, useless, pathetic, shut up, piss off, ...); else warm when `talk.filters.flirty`
+or thanks and praise (thanks, ty, love you, miss you, you're the best, good job, gj, well
+done, ...); else plain. Phone apostrophes read as typed ones.
+
+**Whom his line reaches.** A game whisper: the member he whispered. Any other game line: only the
+members it names (`talk.select.mentioned`) among those who could read it (the row's audience), so
+a guild or party line that names nobody moves nobody and a name in officer chat reaches only an
+officer. A Discord DM: its member. A group DM: the members he @-named or replied to among the
+post's captured readers. A channel post: the members he @-named or replied to among the
+channel's audience (an officers' channel: its officers).
+
+**Talking tires her, him never.** Each line of hers drains social by 0.04, but talking alone
+never takes it more than 0.4 below her baseline (`TALK_DRAIN_MAX`; other impulses can still move
+it). A line to him (a whisper to him, her DM with him) or answering him (a reply to his Discord
+post, or a line in a channel he wrote in within 120 s before it, `ANSWER_S`) drains nothing:
+engagement with him is not fatigue.
+
+**Ignored, once per burst.** Her lines to him (whispers and DMs are one conversation) at most 90 s
+apart (`BURST_S`) with no answer of his between are one burst. The burst counts IGNORED once when
+he wrote nothing to her in that conversation from its first line until 1200 s after its last,
+while he wrote somewhere else in that window (he was around and did not answer). Bursts are kept
+in memory: a restart forgets the open ones.
+
+**Contagion**, damped: a member's line in guild, party or raid pulls each other reader (the row's
+audience, online now) 3% of the way from her valence to the speaker's; a member's post in a public
+Discord channel does the same for the members of its audience whose Discord presence is online.
+At most one pull per member a tick, and at most 0.3 of valence moved by contagion per member in
+any hour (`CONTAGION_PER_HOUR`, kept in memory), so a busy night still leaves members different.
+Never from a whisper, a DM, a group DM, officer chat or an officers' or unknown Discord channel.
+
+**The tick** (`LifeService.tick`, from the app's ticker; a pass every 30 s) reads `chat_line` for
+the game (the guild Discord's lines there are skipped) and `discord_message` for Discord, from
+read marks that start at the newest rows on its first pass and advance row by row, so no history
+is replayed after a start, a restart or turning it on; at most 1000 rows a table a pass. A row
+that cannot be read is skipped and logged once (`life_state_row_skipped table= id= reason=`).
+Boss and loot events come through the app's `boss` and `loot_won` handlers. A row or event more
+than 10 minutes old when it is read (`STALE_S`) moves nothing, so a bridge replay after a restart
+applies no old tone. `LifeService.tick`, `on_event` and `loot_lost` keep any failure inside
+(`life_state_failed op= reason=<class>`): the app's ticker, its handlers and the guild's loot go
+on.
+
+**Stored** in meta `life:state:<guid>` as `{"v","e","s","o","h","ts"}` (valence, energy, stress,
+social, toward him, written at), numbers only; no migration. `StateBook.get(guid)` is the stored
+state eased to now (her baseline when none is stored; neutral without a persona); a malformed
+value reads as none. Turning the switch off leaves the keys, unread; to forget them, delete the
+`life:state:%` meta rows with the mind stopped.
+
+**Words** (for her prompt, later): `words(state, to_him=, forms=)` is one line of at most three
+parts ("You're tired and a bit short today.", "You're in a great mood and not feeling chatty
+today."); her feeling about him ("happy with him right now", "a bit annoyed with him right now")
+only when `to_him`, never on another member's turn.
+`lands(state, tone, agreeableness=, forms=)` is how his line lands on her now ("it stings", "it
+annoys you", "nice, but you're still a bit sore with him", "it makes you smile", "one more thing
+on a busy day", "you're too tired to say much", "you're not really in the mood to chat", or "").
+
+**Logs**: `life_state_tick impulses=<n> members=<n>`, at most once a minute when something moved;
+`life_state_row_skipped` and `life_state_failed` as above. Ids, counts and codes only: no text,
+no names.
+
 ## Command line
 
 Read-only, on `mind.db` opened `mode=ro` (the cast's stored personas); prints guids, codes,
@@ -204,10 +297,13 @@ times and counts, never persona text or names:
 python -m leeroy_mind life day --data-dir "$D" [--guid N] [--date YYYY-MM-DD]
 python -m leeroy_mind life now --data-dir "$D" [--at YYYY-MM-DDTHH:MM]
 python -m leeroy_mind life intents --data-dir "$D" --guid N [--kind reply_human] [--family whisper] [--at ...]
+python -m leeroy_mind life state --data-dir "$D" [--guid N]
 ```
 
 `day` prints `<guid> job=<shape> event=<code>` and one `HH:MM-HH:MM <block>` line per span (the
 date defaults to today on this PC). `now` counts the members per where, per attention in game
 and on Discord, and per event, at this PC's time (or `--at`). `intents` prints each want's share
-on a turn from her persona and her presence then (talk/README.md, "Wants"). Exit 0 done, 1
-unknown guid or a database error, 2 no `mind.db`.
+on a turn from her persona and her presence then (talk/README.md, "Wants"). `state` prints, per
+member, `<guid> now valence= energy= stress= social= toward_him= stored=<age>|none` (her
+feeling now, two decimals) and `<guid> baseline ...`; it never writes, even while `[life]
+state` is off. Exit 0 done, 1 unknown guid or a database error, 2 no `mind.db`.

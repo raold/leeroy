@@ -331,6 +331,7 @@ class LivePorts:
         return await self.app.writer.write(candidate, enforce_limits=False)
 
     async def loot_lost(self, guid, item_name):
+        self.app.engine.life.loot_lost(guid)  # her feeling right now ([life] state)
         return await self.app.event_rules.on_loot_lost(guid, item_name, ())
 
     def relationship(self, a, b):
