@@ -532,15 +532,20 @@ availability 6, state, intent and situation on, the beat off).
     owner's string, his lore or game question with facts, the watchdog's rescue, a room he is not
     in, a hot mic or the 24/7 server's turn) that answers a line of his (`_his_line`: its trigger
     line when his, his Discord post, or his whisper a carried DM answers): `meta.lands` =
-    `life.state.lands(state, tone(his line), agreeableness=, forms=his)`. Never why she is sore.
+    `life.state.lands(state, tone(his line), agreeableness=, forms=his)`. Never why she is sore,
+    and a feeling only, never how much she says ("it barely registers", "you're not feeling it
+    right now"; the reply's length is the shape's: review-340).
   - `meta.intent` (`[talk] intent`, an eligible turn): one `draw_intent` over her
     `IntentContext` (her persona and forward dial, her presence's block, event, attention and
-    kids, her state, owed by `owes_him`, his explicit whisper overlay as `tail` (whether
-    `whisper_tail` applies; no draw), her last want in this conversation), seeded by
-    `life.seed.seeded("intent", night, her, minute, his line or post)`, never `engine.rng`.
-    On his private turns a woman `romance.flirt_chance` keeps from flirting with him (a fond
-    one, her forward dial at 0) draws no flirt there (review-332). `want_source` "draw"; log
-    `talk_want: guid= kind= want= source=draw owed=0|1`.
+    kids, her state, owed by `owes_him`, his explicit overlay as `tail`, her last want in this
+    conversation), seeded by `life.seed.seeded("intent", night, her, minute, his line or post)`,
+    never `engine.rng`. His explicit overlay (PM log D13, the review-340 S1 ruling): the whisper
+    overlay in a whisper to him (`whisper_tail` applies) or, in his DM, her explicit band with
+    the owner's `romance_explicit` overlay (`romance.dm_explicit`), whether or not her romance
+    text is rolled in this turn; never in guild chat. On a turn only he reads (his whisper and
+    DM answers and her own whisper starts) a woman `romance.flirt_chance` keeps from flirting
+    with him (a fond one, her forward dial at 0) draws no flirt (review-332, review-340).
+    `want_source` "draw"; log `talk_want: guid= kind= want= source=draw owed=0|1`.
 - **One block after the instruction** (`beat.render`, where think-dm puts its lines):
   - His private turns with the beat on: the beat still runs. With intent on its wants are
     `intent.allowed(ctx)` (within `beat.wants_for`, so the overlay tail, the owed rule and the
@@ -548,7 +553,10 @@ availability 6, state, intent and situation on, the beat off).
     tease (tease Zan)."); the beat's want, when it parses, is the turn's (`want_source` "beat";
     `think_beat: ... lean=<code>`), else the drawn one. With state on it is asked without
     `lands` (`ask_lands=False`) and "It lands" is `meta.lands`. Its block then carries the
-    want's topic. With intent and state off it is exactly think-dm's.
+    want's topic. With intent and state off it is think-dm's, except that under his explicit
+    overlay in his DM (her romance text at the explicit band with the `romance_explicit`
+    overlay) the beat, like under the whisper overlay, offers none of `intent.TAIL_OFF`
+    (`Composed.tail`; the S1 ruling, live whatever `[talk] intent` says).
   - Every other eligible turn (any channel; his private turn with the beat off or skipped):
     `render(lands=meta.lands, want=meta.intent, who=<his called name, the member's name, or
     "everyone" on an opener>, topic=topic_for(...))`; nothing when neither switch gives a line.
@@ -558,20 +566,28 @@ availability 6, state, intent and situation on, the beat off).
   situation or state is on: the prompt is trimmed to its budget less the block's room (the
   beat's block at its caps before the beat is asked, `beat.block_room`; its own lines after;
   else the code's block), so a DM answer's prompt with the block is within `DM_BUDGET` and,
-  with the answer's `num_predict`, inside `num_ctx`. Off: as before (the beat's block outside
-  the budget, inside `num_ctx`).
+  with the answer's `num_predict`, inside `num_ctx`. It applies to his whisper answers too
+  (about 118-130 of `LIVE_BUDGET`'s 1800 before the beat) and with `situation` alone. Off: as
+  before (the beat's block outside the budget, inside `num_ctx`).
+- **Her last want** (`last`) is kept per conversation when a line is said, typed or spoken in a
+  voice room.
 - **Right now** (`mood_line`): with availability above 0 her own clock (`day_line` of
   `discord.presence.local_time`) and where she is (`life.presence.WHERE_TEXT` by block, medium
   and kids: "You're at work, the game open on your PC.", "Your phone woke you up.", ...; "You're
   at your PC, playing." while she is in his group in game as he plays, as PM log D15 has her
-  answer him then; never in a raid call, CALLOUT or URGENT); with state on her feeling (`life.state.words`, how she feels
-  about him only on a turn of his, `_aimed_at_him`) in place of the mood words.
+  answer him then; never in a raid call, CALLOUT or URGENT, nor in a voice room he is in:
+  `Pipeline._where_line`); with state on her feeling (`life.state.words`, how she feels about
+  him only on a turn of his, `_aimed_at_him`) in place of the mood words. While the where line
+  shows, the awareness card's self line leaves out her Discord status, and a member free or
+  gaming by her day has none anyway (`discord.presence.status_text`; review-340 P2-1: never
+  "online (out for a walk), playing WoW"; at availability 0 a member playing WoW takes none of
+  the clock's evening phrases either).
 - **The situation mode** (`[talk] situation`): `situation_rules` for the system message,
   `PromptParts.situation` ("Right now:" just before the instruction), and every situation
   template's length from `prompt.situation_length` (review of #333, requirement 1): an explicit
-  whisper's two lines ("In a line or two, more than your usual one line."), else the Discord
-  length where one applies (its wording kept, "more than your usual one line" included: her
-  usual line is the game's), else her usual line (`length_rule`). Other kinds keep their game
+  whisper's two lines ("In a line or two."), else the Discord length where one applies (without
+  its "more than your usual one line", `prompt.USUAL_LINE`: a situation prompt states no usual
+  line; noted as `talk.situation_discord_length`), else her usual line (`length_rule`). Other kinds keep their game
   templates and lengths. The learn recipe versions on the situation rules and template
   (`talk.situation_instruction.<kind>`; requirement 4).
 

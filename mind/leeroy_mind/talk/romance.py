@@ -406,6 +406,19 @@ def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: st
     return f"{variant} {distance_text(stage).format(they=they, them=them, their=their)}"
 
 
+def dm_explicit(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
+                data_dir: Path) -> bool:
+    """A Discord DM with him at the explicit band, with the owner's romance_explicit overlay to
+    read there: his explicit overlay in a DM, as whisper_tail's is in a whisper (PM log D13,
+    the review-340 S1 ruling: the brakes intent.TAIL_OFF lists are off under either). `dial` is
+    the owner's; her own replaces it."""
+    if not is_private(channel) or channel == "whisper" or not _is_woman(p):
+        return False
+    stage = rel.romance_stage if rel is not None else "none"
+    return (effective_band(p.romance.stance, stage, dial_for(p, dial)) == "explicit"
+            and bool(overlay_variants("romance_explicit", data_dir)))
+
+
 def passage_key(stage: str) -> str:
     """The arc stage whose passage a stored stage reads: an old ladder's name maps to its new
     one (LEGACY_STAGE), any other is itself."""

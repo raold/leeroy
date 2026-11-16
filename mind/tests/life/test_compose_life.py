@@ -22,7 +22,9 @@ from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.learn import apply, arms, bandit, recipe
 from leeroy_mind.learn.config import LearnCfg
-from leeroy_mind.life.day import Block, DayEvent
+from leeroy_mind.discord import presence as dpresence
+from leeroy_mind.life import config as life_config
+from leeroy_mind.life.day import Block, DayEvent, day_plan
 from leeroy_mind.life.presence import WHERE_TEXT, Attention, LifePresence, Where, where_text
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.life.state import State
@@ -34,9 +36,9 @@ from leeroy_mind.talk.discord_length import num_predict
 from leeroy_mind.talk.intent import TAIL_OFF, Intent, allowed, draw_intent, topic_for, want_words
 from leeroy_mind.talk.pipeline import TurnMeta, _with_hint
 from leeroy_mind.talk.prompt import (DM_BUDGET, ESTIMATE_SLACK, FLIRT_RULE, MORE_LINES_TEXT,
-                                     SITUATION_INSTRUCTIONS, PromptParts, discord_length,
-                                     length_rule, render_instruction, render_messages,
-                                     situation_length, trim_to_budget)
+                                     SITUATION_INSTRUCTIONS, USUAL_LINE, PromptParts,
+                                     discord_length, length_rule, render_instruction,
+                                     render_messages, situation_length, trim_to_budget)
 from leeroy_mind.talk.romance import flirt_chance
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.text import estimate_tokens
@@ -453,9 +455,11 @@ def test_every_situation_turn_has_a_length(channel, words):
         text = render_instruction(kind, addressee="Zan", topic="TOPIC", forms=HE,
                                   channel=channel, discord_words=words, length_text=given,
                                   situation=True, typing=typing)
-        assert (given or on_discord) in text
+        assert (given or on_discord.replace(USUAL_LINE, "")) in text
+        # review-340: a situation prompt states no usual line to be more than
+        assert "usual one line" not in text
         assert situation_length(kind, channel=channel, words=words, typing=typing,
-                                two_lines=True) == MORE_LINES_TEXT
+                                two_lines=True) == MORE_LINES_TEXT == "In a line or two."
 
 
 def test_a_dm_at_zero_words_in_the_situation_mode_is_answered(store, clock, tmp_path):
@@ -676,3 +680,160 @@ def test_the_recipe_versions_on_the_situation_templates():
     assert on_r.template_version == hashlib.sha256(
         (prompt.SITUATION_RULES + prompt.SITUATION_INSTRUCTIONS[TurnKind.REPLY_HUMAN])
         .encode()).hexdigest()[:16]
+
+
+# -- review-340 ----------------------------------------------------------------------------------
+
+def dm_turn(r, guid=102, text="you looked lovely in that green robe tonight"):
+    mid = dstore.post(r.store, channel=f"dm:{guid}", author=HUMAN, origin="human", text=text,
+                      now=r.clock.now())
+    turn = Turn(TurnKind.REPLY_HUMAN, guid, f"dm:{guid}", to_guid=HUMAN, addressee=HUMAN)
+    meta = TurnMeta(r.engine._new_id(), answers_human=True, why="discord:reply",
+                    discord=DiscordTarget(reply_to=mid, thread=None))
+    return turn, meta
+
+
+@pytest.mark.parametrize("intent", [False, True])
+@pytest.mark.parametrize("overlay", [True, False])
+def test_his_explicit_overlay_in_a_dm_drops_the_brakes(store, clock, tmp_path, intent, overlay):
+    """The S1 ruling on review-340 (PM log D13): under his explicit overlay in his DM (her
+    explicit band with the owner's romance_explicit overlay) as under the whisper overlay, the
+    beat (whatever [talk] intent says) and the draw offer none of intent.TAIL_OFF. A lust woman
+    at her own full dial (the explicit band, her romance text on every turn to him); without the
+    overlay file the brakes stay."""
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", stance="lust", dial=10, typo_rate=0.0,
+                split_rate=0.0, emoticon_rate=0.0, abbreviations={})
+    r = make_rig(store, clock, tmp_path, intent=intent, beat=True)
+    try:
+        if not overlay:
+            (tmp_path / "prompts" / "romance_explicit.txt").unlink()
+        seen = spy(r)
+        r.llm.set_script(model({**BEAT, "want": "tease"}, "mm you are sweet when you try"))
+        assert speak(r, *dm_turn(r))
+        enum = set(beat_calls(r)[0]["format"]["properties"]["want"]["enum"])
+        assert (enum & BRAKES) == (set() if overlay else BRAKES)
+        if intent:
+            ctx = seen[0][1].intent_ctx
+            assert ctx.tail is overlay
+            drawn = {draw_intent(ctx, seeded("intent", "2026-10-29", 102, m, 3)) for m in range(200)}
+            assert None not in drawn
+            assert bool({i.value for i in drawn} & BRAKES) is not overlay
+        # in guild chat the band overlay takes no brake away
+        q = said(r, "who has the key to the tram depot tonight?")
+        meta = TurnMeta("guild")
+        r.engine._draw_situation(Turn(TurnKind.REPLY_HUMAN, 102, "guild", addressee=HUMAN,
+                                      trigger_line=q.id), meta, r.engine.personas.get(102),
+                                 r.clock.now())
+        assert meta.intent_ctx is None or not meta.intent_ctx.tail
+    finally:
+        r.close()
+
+
+def test_a_fond_womans_own_whisper_start_draws_no_flirt(store, clock, tmp_path):
+    """Review-340 P3-10: her whisper start is private to him too; the beat's flirt rule holds."""
+    seed_test_cast(store)
+    save_member(store, 105, player_gender="female", stance="fond", typo_rate=0.0,
+                split_rate=0.0, emoticon_rate=0.0, abbreviations={})
+    r = make_rig(store, clock, tmp_path, intent=True)
+    try:
+        meta = TurnMeta("start", initiates=True, why="whisper:start")
+        r.engine._draw_situation(Turn(TurnKind.WHISPER, 105, "whisper", to_guid=HUMAN,
+                                      addressee=HUMAN), meta, r.engine.personas.get(105),
+                                 r.clock.now())
+        assert meta.intent and Intent.FLIRT not in allowed(meta.intent_ctx)
+    finally:
+        r.close()
+
+
+def test_the_card_drops_her_status_while_right_now_says_where(store, clock, tmp_path,
+                                                             monkeypatch):
+    """Review-340 P2-1: the awareness card's "You're online (out for a walk), playing WoW" (seen
+    in the sandbox) never sits beside "Right now"'s where she is; without a where line her
+    status stays."""
+    from leeroy_mind.server import state as server_state
+    monkeypatch.setattr(server_state, "capture",
+                        lambda app, guid: SimpleNamespace(cast={}, human=HUMAN))
+    monkeypatch.setattr(server_state, "state_of", lambda *a, **k: SimpleNamespace(
+        presence=dpresence.Presence("online", True, 0), status="out for a walk"))
+    monkeypatch.setattr(server_state, "company_in", lambda *a, **k: ())
+    for availability in (6, 0):
+        r = (rig_of if availability else make_rig)(store, clock, tmp_path / str(availability),
+                                                   availability=availability)
+        try:
+            cfg = r.engine.cfg
+            r.engine.apply_config(replace(cfg, talk=replace(cfg.talk, aware=True)))
+            r.engine.server_app = SimpleNamespace(server=object())
+            turn, meta = dm_turn(r)
+            r.engine._draw_situation(turn, meta, r.engine.personas.get(102), r.clock.now())
+            assert bool(r.engine._where_line(turn, meta)) is (availability > 0)
+            card = r.sync(r.engine.live_review.block_async(turn, meta, close=False))
+            text = "\n".join(card.parts)
+            if availability:
+                assert "You're online, playing WoW" in text and "out for a walk" not in text
+            else:
+                assert "You're online (out for a walk), playing WoW" in text
+        finally:
+            r.close()
+
+
+@pytest.mark.parametrize("availability", [0, 6])
+def test_no_evening_status_while_she_plays_or_her_day_has_her_free(availability):
+    """Review-340 P2-1, the sandbox's case: a week for the test cast, every 15 minutes: while
+    she plays her status is never out for a walk, at the gym or making dinner (the card's
+    "online (out for a walk), playing WoW"); at availability above 0 a free or gaming block has
+    no status at all."""
+    from datetime import datetime as dt, timedelta
+    from conftest import TEST_CAST
+    life_config.pin(availability, False)
+    evening = set(dpresence.STATUS_PHRASES["evening"]) - {"chilling"}
+    for g, (name, _, _) in TEST_CAST.items():
+        p = make_persona(g, name)
+        for day in range(23, 30):
+            for step in range(0, 24 * 4):
+                t = dt(2026, 11, day) + timedelta(minutes=15 * step)
+                for body in (True, False):
+                    pr = dpresence.presence_of(p, local=t, body_online=body, body_zone=0,
+                                               rng_seed=0)
+                    status = dpresence.status_text(p, t, pr, rng_seed=0)
+                    if pr.playing:  # the card would read "online (<status>), playing WoW"
+                        assert status not in evening, (g, t, status)
+                    if availability:
+                        block = day_plan(p, t.date()).block_at(t.hour * 60 + t.minute)
+                        if block in (Block.FREE, Block.GAMING) or pr.playing:
+                            assert status is None, (g, t, block, status)
+
+
+def test_a_voice_room_with_him_shows_no_where_line(store, clock, tmp_path):
+    r = rig_of(store, clock, tmp_path, availability=6)
+    try:
+        work = LifePresence(Block.WORK, Where.AT_WORK, Attention.GLANCING, DayEvent.NONE, False)
+        room = Turn(TurnKind.REPLY_HUMAN, 102, "voice:3", addressee=HUMAN)
+        assert r.engine._where_line(room, TurnMeta("v", life_presence=work)) == ""
+        away = TurnMeta("e", life_presence=work, elsewhere=True)  # a room he is not in
+        assert r.engine._where_line(room, away) == "You're at work, the game open on your PC."
+    finally:
+        r.close()
+
+
+def test_a_voiced_line_records_her_want(store, clock, tmp_path, monkeypatch):
+    """Review-340 P3-3: a line she says in a voice room feeds her next turn's `last`."""
+    r = rig_of(store, clock, tmp_path, intent=True)
+    try:
+        r.script("ha fair, i can do that")
+        monkeypatch.setattr(r.engine, "_route", lambda turn, meta: True)
+
+        async def hold(turn):
+            return None
+
+        async def voice(turn, meta, p, text, memory_ids):
+            return [text]
+        monkeypatch.setattr(r.engine, "_hold", hold)
+        monkeypatch.setattr(r.engine, "_speak_voice", voice)
+        q = said(r, "who has the key to the tram depot tonight?")
+        turn = Turn(TurnKind.REPLY_HUMAN, 102, "guild", addressee=HUMAN, trigger_line=q.id)
+        meta = TurnMeta(r.engine._new_id(), answers_human=True)
+        assert speak(r, turn, meta) == ["ha fair, i can do that"]
+        assert meta.intent and r.engine._wants[r.engine._want_key(turn)] == Intent(meta.intent)
+    finally:
+        r.close()

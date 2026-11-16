@@ -119,13 +119,10 @@ def test_status_text_names_her_block():
                     continue
                 key = {Block.WORK: "work", Block.COMMUTE: "commute", Block.HOME_DUTY: "home",
                        Block.GYM: "gym", Block.OUT: "out"}.get(span.block)
-                if key is not None:
-                    assert text in phrase[key], (span.block, text)
-                    seen.add(key)
-                else:   # free and gaming: the clock's evening and late phrases, never work
-                    assert span.block in (Block.FREE, Block.GAMING)
-                    assert text in (presence.STATUS_PHRASES["evening"]
-                                    + presence.STATUS_PHRASES["late"]), (span.block, text)
+                # free and gaming have none, just online (review-340 P2-1)
+                assert key is not None, (span.block, text)
+                assert text in phrase[key], (span.block, text)
+                seen.add(key)
     assert seen == set(phrase)
 
 

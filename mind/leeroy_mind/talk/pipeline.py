@@ -108,9 +108,9 @@ from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_l
                                      situation_rules, trim_to_budget)
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
-from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, explicit_whisper,
-                                      flirt_chance, forward, his_moves, own_dial,
-                                      romance_instruction, scene_notes, whisper_tail)
+from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, dm_explicit,
+                                      explicit_whisper, flirt_chance, forward, his_moves,
+                                      own_dial, romance_instruction, scene_notes, whisper_tail)
 from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, is_quest_talk,
                                      mentioned, quest_helper, speaker_weight, typing_delay)
 from leeroy_mind.talk.states import (EFFECTS, RAID_CALLS, Altered, Effects, effects_for,
@@ -1429,24 +1429,34 @@ class Pipeline:
     def _want_key(self, turn: Turn) -> tuple[int, str]:
         return turn.speaker, self._turn_base(turn)
 
+    def _private_to_him(self, turn: Turn) -> bool:
+        """A turn only he reads: a whisper to him (his answer or her own start) or his DM."""
+        hg = self.human.guid
+        return bool(hg) and ((turn.channel == "whisper" and turn.to_guid == hg)
+                             or turn.channel.startswith(DM_PREFIX))
+
     def _intent_context(self, turn: Turn, meta: TurnMeta, p: Persona, his: str) -> IntentContext:
         """Her context for the want's draw: the turn, her persona and dials, her day
         (meta.life_presence; neutral at availability 0) and feeling (meta.state), his explicit
-        whisper overlay (whisper_tail without a draw: whether it applies, never which variant)
-        and her last want in this conversation. On his private turns flirting follows the
-        beat's own rule (romance.flirt_chance; review-332): a woman who may not flirt with him
-        there draws none, so the beat is never leant toward a want it does not offer."""
+        overlay as `tail` (whisper_tail in a whisper, romance.dm_explicit in his DM: whether it
+        applies, never which variant, and whether or not her romance text is rolled in) and her
+        last want in this conversation. On a turn only he reads (_private_to_him: his answers
+        and her own whisper starts) flirting follows the beat's own rule (romance.flirt_chance;
+        review-332, review-340): a woman who may not flirt with him there draws none, so the
+        beat is never leant toward a want it does not offer."""
         hg, channel = self.human.guid, turn.channel
         family = ("group" if is_group(channel) else "dm" if channel.startswith(DM_PREFIX)
                   else "discord" if is_discord(channel) else "whisper" if channel == "whisper"
                   else "game")
         lp = meta.life_presence
         rel = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
-        tail = bool(hg and turn.to_guid == hg and whisper_tail(
-            p, rel, dial=self.cfg.romance.dial, channel=channel, data_dir=self.data_dir,
-            forms=self.human.forms))
+        dial = self.cfg.romance.dial
+        tail = bool(hg and turn.to_guid == hg and (
+            whisper_tail(p, rel, dial=dial, channel=channel, data_dir=self.data_dir,
+                         forms=self.human.forms)
+            or dm_explicit(p, rel, dial=dial, channel=channel, data_dir=self.data_dir)))
         fwd = forward(p)
-        if self._his_private(turn, meta) and flirt_chance(p, 1.0) <= 0:
+        if self._private_to_him(turn) and flirt_chance(p, 1.0) <= 0:
             fwd = 0.0
         return IntentContext(
             kind=turn.kind, to_him=self._aimed_at_him(turn), owed=owes_him(self, turn, meta),
@@ -1512,6 +1522,20 @@ class Pipeline:
         meta.intent, meta.want_source = want.value, "draw"
         log.info("talk_want: guid=%d kind=%s want=%s source=draw owed=%d", turn.speaker,
                  turn.kind.value, want.value, ctx.owed)
+
+    def _where_line(self, turn: Turn, meta: TurnMeta) -> str:
+        """Where she is, as "Right now" says it ([life] availability above 0, her presence on
+        the meta): "" in a raid call (CALLOUT, URGENT) and in a voice room he is in (the room
+        says where she is, review-340); at her PC playing while she is in his group as he plays
+        (PM log D15); else by her block (life.presence.where_text). The awareness card leaves
+        her Discord status out while this line shows (review-340 P2-1)."""
+        lp = meta.life_presence if self._life_on() else None
+        if (lp is None or turn.kind in RAID_CALLS
+                or (turn.channel.startswith("voice:") and not meta.elsewhere)):
+            return ""
+        return where_text(lp, "discord" if is_discord(turn.channel) else "game",
+                          playing=bool(self.world.human_online
+                                       and self.world.in_group(turn.speaker)))
 
     def _remember_want(self, turn: Turn, meta: TurnMeta) -> None:
         """Her want on a line she said, as `last` for her next turn in this conversation."""
@@ -1821,6 +1845,10 @@ class Pipeline:
         romance = self._romance(turn, meta, p, rel_h, phase, now, draws("roll"), trigger, dial,
                                 tail_follows=bool(tail_text), vary=draws("vary"))
         tail = tail_text if romance else ""
+        # his explicit overlay in his DM (the band overlay in her romance text): the beat drops
+        # the same brakes as under the whisper tail (PM log D13, review-340 S1)
+        overlaid = bool(tail) or bool(romance and hg and turn.to_guid == hg and dm_explicit(
+            p, rel_h, dial=dial, channel=turn.channel, data_dir=self.data_dir))
         two = False
         if romance:  # a line or two, unless the turn holds one (her answer to his pushback)
             two = turn.max_lines > 1 and explicit_whisper(p, rel_h, dial=dial,
@@ -1865,14 +1893,9 @@ class Pipeline:
             situation=situation, typing=p.typing)
         # her day ([life] availability above 0: her own clock and where she is; never in a raid
         # call) and her feeling ([life] state; how she feels about him only on a turn of his)
-        today, where = day_line(local, p.identity.region), ""
-        lp = meta.life_presence if self._life_on() else None
-        if lp is not None:
+        today, where = day_line(local, p.identity.region), self._where_line(turn, meta)
+        if self._life_on() and meta.life_presence is not None:
             today = day_line(local_time(local, p.identity.region), p.identity.region)
-            if turn.kind not in RAID_CALLS:
-                where = where_text(lp, "discord" if is_discord(turn.channel) else "game",
-                                   playing=bool(self.world.human_online
-                                                and self.world.in_group(turn.speaker)))
         feels = (life_state.words(meta.state, to_him=self._aimed_at_him(turn), forms=human.forms)
                  if meta.state is not None else "")
         rules_of = situation_rules if situation else comms_rules
@@ -1972,7 +1995,7 @@ class Pipeline:
                             [beats.unframed(x) for x in trimmed.memories],
                             [plain(r.text) for r in recent[:-1]
                              if r.from_guid != turn.speaker and r.id != turn.trigger_line]),
-                        tail=bool(tail))
+                        tail=overlaid)
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:
@@ -2297,6 +2320,8 @@ class Pipeline:
                 emotes = []
             spoken = await self._speak_voice(turn, meta, p, text, memory_ids)
             if spoken is not None:
+                if spoken and meta.intent:
+                    self._remember_want(turn, meta)
                 if spoken:
                     await self._send_emotes(turn, meta, emotes)
                 return spoken
