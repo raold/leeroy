@@ -196,3 +196,36 @@ def test_embedding_failure_does_not_advance_or_log_text(context, store, caplog):
         run(go())
     assert 'PRIVATE_EMBED_TEXT' not in caplog.text
     assert 'claims_unit_failed' in caplog.text
+
+
+def test_lines_that_echo_him_are_not_read_for_claims(context, store):
+    """Identity audit, 2026-11-15: a member said his answer back ("single, no kids") and it was
+    stored as her claim. A line saying his last line back is never sent to extraction."""
+    say(store, 1, 'single and no kids. five and eight are good ages, youre lucky', origin='human')
+    echo = say(store, 101, 'single, no kids. five and eight are good ages, youre lucky')
+    own = say(store, 101, 'I love Saurfang')
+
+    async def go():
+        async with context(lambda *_: json.dumps({'claims': [raw(source_line=own)]})) as (ctx, llm):
+            await stage.stage_claims(ctx)
+            [call] = [c for c in llm.calls if 'messages' in c]
+            sent = json.loads(call['messages'][1]['content'].split('\n\n')[0])['lines']
+            assert [line['id'] for line in sent] == [own] and echo < own
+            assert cursor(store.conn, 101) == own
+    run(go())
+
+
+def test_a_claim_that_contradicts_her_persona_is_never_stored(context, store):
+    """The persona outranks chat: "is single" from a married member is an invention."""
+    from leeroy_mind.personas.io import save_persona
+    from conftest import make_persona
+    save_persona(store, make_persona(101, 'Ashlen', household='Lives with her husband'),
+                 source='seed', ts=0.0, race='Orc', class_name='Warrior')
+    line = say(store, 101, 'honestly im single these days and I love Saurfang')
+    single = raw(kind='fact', subject='relationship', text='is single', polarity=0, source_line=line)
+
+    async def go():
+        async with context(lambda *_: json.dumps({'claims': [single, raw(source_line=line)]})) as (ctx, _):
+            await stage.stage_claims(ctx)
+            assert [c.text for c in live_claims(store.conn, 101)] == ['loves the Saurfang fight']
+    run(go())
