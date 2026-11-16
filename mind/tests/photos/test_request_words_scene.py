@@ -13,6 +13,7 @@ from leeroy_mind.photos import request_store as records
 from leeroy_mind.photos.config import PhotosConfig, load_photos_config
 from leeroy_mind.photos.requests import CANT_NOW, SENT_LATER
 from leeroy_mind.selfies import files
+from leeroy_mind.selfies.render import scene_scale
 from leeroy_mind.selfies.words_scene import WORDS_RECIPE
 from photos.test_request_rehearsal import check_handback, rig, script, snapshot
 from photos.test_request_service import ON, drive, offline
@@ -69,7 +70,7 @@ def test_offline_request_renders_his_scene_with_her_face_and_she_knows_it(tmp_pa
                 assert (phrase, 0) in req.phrases
             # her face: the reference is her chosen photo, at the identity scale
             assert req.identity.ref == files.history(app.data_dir, 101, photo.pick).absolute()
-            assert req.identity.scale == app.selfies.cfg.identity_scale
+            assert req.identity.scale == scene_scale(app.selfies.cfg.identity_scale, "upper_body")
             assert (req.shape, req.size) == ("portrait", 1024)  # the snaps size, 832 x 1216
             assert any(TOOK + photo.scene["shows"] in text for text in prompts(app))
             check_handback(app, workers, pids)

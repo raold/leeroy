@@ -37,6 +37,7 @@ from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
 from .kind import _saver, chosen_style, kind_one
 from .prompt import build_prompt, build_varied_prompt, renderable
+from .render import scene_scale
 from .scene import ABOUT, build_scene_prompt, build_tile_prompt
 from .scenes import STAGE as SCENES_STAGE
 from .scenes import ask_scene
@@ -392,7 +393,8 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
                                       spec=build_scene_prompt(p, scene), ref=ref,
                                       framing=p.photo.framing, out=folder / "snap.jpg",
                                       thumb=folder / "snap.thumb.jpg", thumb_size=SNAP_THUMB_PX,
-                                      shape="portrait", rid=f"t{n}")
+                                      shape="portrait", rid=f"t{n}",
+                                      scale=scene_scale(scfg.identity_scale, scene.framing))
                         rendered += 1
                         _snap_result(results, guid, "rendered", nsfw=got.nsfw)
                     except SetRefused:
@@ -440,6 +442,7 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
     from .request_render import SIZE, THUMB_PX, seed_for
     from .request_scene import RequestSceneError, choose_words_scene
     from .scene import ref_crop, scene_from
+    from .render import scene_scale
     from .slot import render_slot
     from .store import face_pick
     from .worker import Identity, RenderRequest
@@ -491,8 +494,8 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
         shutil.copyfile(ref, folder / "ref.jpg")
         (folder / "scene.json").write_bytes((json.dumps(scene, indent=1, sort_keys=True)
                                              + "\n").encode("utf-8"))
-        identity = Identity(ref.absolute(), ref_crop(face[1] or p.photo.framing),
-                            face_scale(scene, scfg.identity_scale))
+        identity = Identity(ref.absolute(), ref_crop(face[1] or p.photo.framing), face_scale(
+            scene, scene_scale(scfg.identity_scale, scene_from(scene).framing)))
         worker = _Measured(SelfieWorker(worker_command(scfg, identity=True), env=worker_env(scfg)))
 
         def request(attempt):

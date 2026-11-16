@@ -94,8 +94,8 @@ def test_the_scene_prompt_runs_in_the_briefs_order():
         (SCENE["outfit"], 2), ("soft morning light", 2), (SCENE["expression"], 3),
         ("average build", 1),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
-    assert SNAP_NEGATIVE == NEGATIVE + (("another person, crowd, group of people", 0),
-                                                      (scene.ONE_FACE_NEGATIVE, 0))
+    # the profile's covered line and the anatomy line required (test_snap_anatomy.py)
+    assert SNAP_NEGATIVE[1] == (NEGATIVE[1][0], 0) and (scene.SNAP_ANATOMY, 0) in SNAP_NEGATIVE
 
 
 @pytest.mark.parametrize("when,light", [("morning", "soft morning light"), ("day", "daylight"),
@@ -152,7 +152,7 @@ def test_the_tile_prompt_wears_what_they_wear_at_the_pc():
             (scene.GAME_MONITOR, 0), (scene.TILE_DESK, 1), (APPEARANCE.at_the_pc, 2),
             ("looking at the screen, smiling", 3),
             ("recent photo, natural skin texture, unretouched", 1))
-        assert spec.negative == SNAP_NEGATIVE
+        assert spec.negative == scene.TILE_NEGATIVE
 
 
 def test_crops_are_squares_inside_the_photo():
@@ -404,8 +404,7 @@ def test_the_lust_prompt_joins_outfit_and_setting_at_priority_0():
     assert not any(t in ("a low-cut emerald cocktail dress", "a rooftop bar at night")
                    for t, _ in hot.phrases)
     assert [x for x in hot.phrases if x != joined] == [x for x in plain.phrases if x not in parts]
-    assert hot.negative == SNAP_NEGATIVE_LUST == LUST_NEGATIVE + (
-        ("another person, crowd, group of people", 0), (scene.ONE_FACE_NEGATIVE, 0))
+    assert hot.negative == SNAP_NEGATIVE_LUST and SNAP_NEGATIVE_LUST[1] == (LUST_NEGATIVE[1][0], 0)
     assert plain.negative == SNAP_NEGATIVE
 
 

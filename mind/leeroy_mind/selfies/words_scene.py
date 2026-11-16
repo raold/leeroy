@@ -68,7 +68,8 @@ from .prompt import (_PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, f
                      glutes_words, hair_skin, identity_first, names_re, phrase_adder,
                      subject_phrase)
 from .scene import (_NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
-                    SNAP_NEGATIVE_LUST, _text_codes, _young_number, scene_from, scene_renderable)
+                    SNAP_NEGATIVE_LUST, _text_codes, _young_number, limb_detail, scene_from,
+                    scene_renderable)
 from .scene_choices import OUTFITS, PLACES, PLAIN_PLACES
 from .style import AGE_RE, LUST, style_of
 
@@ -491,7 +492,7 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     """The prompt for a scene read from his words, in this order: the framing (0), who she is (0),
     her body (0), `wearing <outfit>` (0), the place (0; with swimwear, a waist-up framing, 0), her
     hair and skin (0), the moment (1), looking at the camera (3, not from behind), her eyes and
-    face details (2), the prop (2), the lighting (2), her glutes when seen from behind (2), the
+    face details (2; none about her hands, arms, legs or feet), the prop (2), the lighting (2), her glutes when seen from behind (2), the
     time of day (3), a plain average build (1) and the phone look (1, without natural light
     unless the lighting is daylight). fit_required shortens her hair's style, her skin's
     modifiers, her size and a back view's pose; nothing at priority 0 yields. ValueError when
@@ -522,7 +523,8 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     add(s.activity, 1, True)
     if w["framing"] != BEHIND:
         add("looking at the camera", 3)
-    out += identity_first(p, eyes_face(p, name_re))
+    # none of her face details about her hands, arms, legs or feet (scene.limb_detail)
+    out += identity_first(p, [d for d in eyes_face(p, name_re) if not limb_detail(d[0])])
     if w.get("prop"):
         add(f"with {w['prop']}", 2, True)
     add(LIGHT_WORDS[w["lighting"]], 2)
@@ -538,8 +540,9 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
 
 
 def face_scale(scene: dict, scale: float) -> float:
-    """The identity reference's scale: a photo from behind takes it at render.REAR_SCALE (never
-    below the worker's floor), or the adapter turns her to the camera."""
+    """The identity reference's scale from the scene's own (`scale`, render.scene_scale): a photo
+    from behind takes it at render.REAR_SCALE (never below the worker's floor), or the adapter
+    turns her to the camera."""
     from .render import MIN_SCALE, REAR_SCALE
     if is_words(scene) and scene["words"].get("framing") == BEHIND:
         return max(MIN_SCALE, round(scale * REAR_SCALE, 2))
