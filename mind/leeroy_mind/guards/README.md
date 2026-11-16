@@ -186,6 +186,12 @@ nouns only she repeated in one conversation: "grain density", "chicken wrap"). M
 4.4 ms. A flag is a rewrite, so a false positive costs one model call, not the line.
 Replay measures flag rate on what was said, not behaviour after rewrites.
 
+To replay (for example after extending the list), open `mind.db` with `?mode=ro` and, for
+each member line of `chat_line` (`origin='mind'`, oldest first), call
+`phrases.check(review.Reader(conn), Draft(guid, channel, text, to_guid=..., room=...,
+now=ts, line_id=id), ts)`: `line_id` keeps the line and everything after it out of its
+own evidence. Leave out template lines (`utterance.why` `say_as`) and short `gz`.
+
 Rollback: remove `phrase_cooldown` from `[guards]` before running older code, which reads
 an unknown key as an invalid table and turns all guards off.
 

@@ -15,7 +15,9 @@
 # - Matching is on whole words, so "menace" does not match "menaced".
 # - Only add phrases that are stock whoever says them. An ordinary phrase a member overuses
 #   is already caught by the plain cooldown, which needs no entry here.
-# - Check a new entry with the replay in guards/README.md before releasing it.
+# - Before releasing a new entry, replay it on a read-only copy of the history (guards/README.md,
+#   "Phrase cooldown") and read what it flags. The list is read once: restart the mind after
+#   an edit.
 
 # The exasperated-affection frame (audit 2026-11-15, 1a and 1d).
 menace
