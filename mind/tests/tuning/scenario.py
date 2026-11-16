@@ -33,7 +33,18 @@ latency draw. Re-recorded with [talk] shape on as well (core plan Task 9): each 
 length is its drawn shape's line ("One short line, about 5 words.", "Keep it short and ask him
 something back.", the evening whisper's "Say it in a line or two, about 16 words.") in place of
 her usual line; every answer in the script is still said (none drew a shape that leaves it on
-read or only reacts), so the sent lines are as before."""
+read or only reacts), so the sent lines are as before.
+
+[romance] realism (talk/romance.py REALISM_LEAD, 2026-11-16) is off in all of these;
+golden_romance.json (record_romance) holds the plain scenario with it on: her romance text with
+the lead and without what pushed every reply to escalate, his card's note as one current
+sentence, old plans out of recall. With it off every prompt is the one golden_prompts.json
+recorded.
+
+His DM as the Chat's last line (2026-11-16, Pipeline._his_dm_row: every DM answer to him, no
+switch) changed none of these goldens: the scenario has no Discord DM, only game channels and
+whispers (whose trigger line was already in the Chat). tests/discord/test_dm_prompt.py and
+tests/test_romance_realism.py cover it."""
 import asyncio
 import json
 import random
@@ -51,6 +62,7 @@ from leeroy_mind.talk import beat
 GOLDEN = Path(__file__).with_name("golden_prompts.json")
 BEAT_GOLDEN = Path(__file__).with_name("golden_beat.json")
 CORE_GOLDEN = Path(__file__).with_name("golden_core.json")
+ROMANCE_GOLDEN = Path(__file__).with_name("golden_romance.json")
 
 
 def cast(store) -> None:
@@ -68,10 +80,10 @@ def cast(store) -> None:
                 habits=[{"substance": "weed", "when": "daily", "odds": 0.5, "max_state": "high"}])
 
 
-async def _run(store, clock, data_dir, core: bool = False) -> dict:
+async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = False) -> dict:
     r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7,
                  availability=6 if core else 0, life_state=core, intent=core, situation=core,
-                 shape=core)
+                 shape=core, romance_realism=realism)
     # the initiation clocks came later and have their own tests (test_initiate.py): off here,
     # so the scenario's draws stay the ones the golden recorded
     r.engine.whispers.set_rate(0.0)
@@ -120,6 +132,21 @@ def record(store, clock, data_dir, core: bool = False) -> dict:
     golden_core.json was recorded."""
     cast(store)
     return asyncio.run(_run(store, clock, data_dir, core))
+
+
+def record_romance(store, clock, data_dir) -> dict:
+    """The scenario with [romance] realism on (golden_romance.json)."""
+    cast(store)
+    return asyncio.run(_run(store, clock, data_dir, realism=True))
+
+
+def write_golden_romance(result: dict) -> None:
+    ROMANCE_GOLDEN.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n",
+                              encoding="utf-8", newline="\n")
+
+
+def golden_romance() -> dict:
+    return json.loads(ROMANCE_GOLDEN.read_text(encoding="utf-8"))
 
 
 def write_golden(result: dict) -> None:
@@ -184,5 +211,6 @@ def golden_beat() -> dict:
     return json.loads(BEAT_GOLDEN.read_text(encoding="utf-8"))
 
 
-__all__ = ["TEST_CAST", "cast", "engine_clock", "golden", "golden_beat", "golden_core", "record",
-           "record_beat", "write_golden", "write_golden_beat", "write_golden_core"]
+__all__ = ["TEST_CAST", "cast", "engine_clock", "golden", "golden_beat", "golden_core",
+           "golden_romance", "record", "record_beat", "record_romance", "write_golden",
+           "write_golden_beat", "write_golden_core", "write_golden_romance"]
