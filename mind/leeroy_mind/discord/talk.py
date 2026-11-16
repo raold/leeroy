@@ -20,7 +20,10 @@ DiscordTarget(reply_to=his post, thread=its thread), after a delay of 2-25 s by 
 The prompt: the turn's instruction is purpose_line, the channel's recent messages (context_lines:
 that channel or thread only, so only what its audience reads, and none for a speaker outside it)
 and his message, fitted under the compose's extra cap (prompt.EXTRA_CAP_TOKENS): the oldest lines
-go first, and a long line or post is cut. Memory recall looks for his words (recall_query: the
+go first, and a long line or post is cut. A DM's answer (2026-11-15) carries no recent messages
+in its instruction: the DM's history is the prompt's Chat (dm_chat, TurnMeta.discord_chat), his
+messages whole up to DM_HIS_CHARS and hers as their opening words, and his message may take the
+room the instruction has left; the DM's prompt has its own budget (prompt.DM_BUDGET). Memory recall looks for his words (recall_query: the
 message he replied to, his thread's last lines and his post; ruling R13). Both are built again
 just before composing (an instruction hook), so a later answer sees the ones before it; once his
 post is gone (deleted) the hook drops the turn there (TurnWithdrawn, GONE), with no model call.
@@ -42,8 +45,9 @@ from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presenc
 from leeroy_mind.discord.transport import DiscordTarget, channel_id
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.realm.config import RealmConfig
+from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.talk.pipeline import TurnMeta, TurnWithdrawn
-from leeroy_mind.talk.prompt import EXTRA_CAP_TOKENS
+from leeroy_mind.talk.prompt import EXTRA_CAP_TOKENS, replay
 from leeroy_mind.talk.romance import FOND_SHARE, WHISPER_AFFINITY_SCALE, WHISPER_WEIGHT
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -84,6 +88,11 @@ QUERY_LINES = 2  # his thread's last lines that go into recall's query with his 
 INSTRUCTION_CHARS = EXTRA_CAP_TOKENS * 4 - 100
 HIS_CHARS = 500
 LINE_CHARS = 200
+# A DM's answer (2026-11-15): the DM's history is the prompt's Chat (dm_chat), its last DM_LINES
+# messages, his each up to DM_HIS_CHARS and hers as their opening words (prompt.replay); the
+# instruction keeps only where she is and his message, up to what INSTRUCTION_CHARS leaves.
+DM_LINES = CONTEXT_LINES
+DM_HIS_CHARS = 600
 _MENTION = re.compile(r"(?<!\w)@(\w+)")
 
 
@@ -585,6 +594,39 @@ class DiscordTalk:
                 out[mid] = f" ({t})"
         return out
 
+    def dm_chat(self, conn, channel: str, thread: int | None, *,
+                exclude: int = 0) -> tuple[ChatLineRow, ...]:
+        """A DM's history for its answer's Chat section (the pipeline shows it as the chat she
+        answers in, TurnMeta.discord_chat): the DM's last DM_LINES messages but `exclude` (the
+        post she answers, which the instruction carries), oldest first, deleted messages and
+        typo corrections left out, as context_lines reads them. His each up to DM_HIS_CHARS,
+        hers as their opening words (prompt.replay: she remembers what she said, not every
+        word of it), each with its photo note. Rows keyed by Discord message ids."""
+        peer, hg = layout.dm_peer(channel), self.app.human_guid
+        if peer is None or not hg:
+            return ()
+        rows = conn.execute(
+            "SELECT author, text, id, ts FROM discord_message WHERE channel = ? AND thread IS ? "
+            "AND deleted IS NULL AND id != ? "
+            "AND (turn IS NULL OR substr(turn,1,19)!='realism_correction:') ORDER BY id DESC LIMIT ?",
+            (channel, thread, exclude, DM_LINES)).fetchall()
+        from leeroy_mind.photos.notes import by_messages
+        photos = by_messages(conn, [r[2] for r in rows],
+            uploads=getattr(self.app.engine, 'photos_enabled', False),
+            members=getattr(self.app.engine, 'photos_send', False),
+            memes=getattr(self.app.engine, 'culture_memes', False))
+        out = []
+        for author, text, mid, ts in reversed(rows):
+            his = author == hg
+            words = _clip(fold(text), DM_HIS_CHARS) if his else replay(fold(text))
+            if mid in photos:
+                words += ' ' + photos[mid]
+            out.append(ChatLineRow(id=mid, ts=ts, channel=channel, from_guid=author,
+                                   from_name=self._name(author), to_guid=peer if his else hg,
+                                   text=words, map=0, zone=0, session_id=None, thread_id=None,
+                                   origin="human" if his else "mind"))
+        return tuple(out)
+
     def _name(self, g: int) -> str:
         app = self.app
         if g == 0:
@@ -617,23 +659,29 @@ class DiscordTalk:
                 if not visible(message_readers(store.conn,message),place,speaker=speaker,to_guid=0,
                                readers=app.groups.readers(place)):
                     return None
+            dm = layout.dm_peer(cid) is not None
+            # a DM's history is its Chat (dm_chat), not packed in here
             lines = (self.context_lines(store.conn, cid, thread, exclude=message, speaker=speaker)
-                     if reads else [])
+                     if reads and not dm else [])
             photo = self._photos(store.conn, [message]).get(message) if reads else None
         their = app.engine.human.forms[2]
         purpose = self.purpose_line(cid)
-        tail = f"Answer {their} message: {_clip(fold(row[0]), HIS_CHARS)}"
-        if getattr(app,'voice_notes',None) is not None and app.voice_notes.config.enabled:
-            from leeroy_mind.voice_notes.service import rows as voice_rows, failure
-            note=voice_rows(store.conn,[message]).get(message)
-            if note is not None and not note['transcript_ok']:
-                tail=failure(app.engine.human.forms)
         late = ""
         if (layout.dm_peer(cid) is not None or is_group(cid)) and self.own_time():
             p = app.personas.get(speaker)
             if p is not None:
                 late = owntime.late_note(p, post_ts=row[2], now=app.clock.now(),
                                          local_now=app.clock.local(), forms=app.engine.human.forms)
+        answer = f"Answer {their} message: "
+        # a DM's instruction holds no history: his message may take the room it leaves
+        his_chars = (max(HIS_CHARS, INSTRUCTION_CHARS - len(purpose) - len(late) - len(answer) - 8)
+                     if dm else HIS_CHARS)
+        tail = answer + _clip(fold(row[0]), his_chars)
+        if getattr(app,'voice_notes',None) is not None and app.voice_notes.config.enabled:
+            from leeroy_mind.voice_notes.service import rows as voice_rows, failure
+            note=voice_rows(store.conn,[message]).get(message)
+            if note is not None and not note['transcript_ok']:
+                tail=failure(app.engine.human.forms)
         if photo is not None:
             subject, _, possessive = app.engine.human.forms
             verb, says = ('are', 'say') if subject == 'they' else ('is', 'says')
@@ -704,6 +752,11 @@ class DiscordTalk:
         if fresh is None or query is None:
             raise TurnWithdrawn(GONE)
         meta.recall_query = query
+        cid = channel_id(turn.channel)
+        if layout.dm_peer(cid) is not None:
+            with self.app.store.transaction():
+                meta.discord_chat = self.dm_chat(self.app.store.conn, cid, target.thread,
+                                                 exclude=target.reply_to)
         return fresh
 
     # -- the lease -------------------------------------------------------------------------

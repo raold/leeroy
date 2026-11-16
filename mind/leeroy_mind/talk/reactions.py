@@ -37,7 +37,7 @@ from leeroy_mind.talk.seasons import holiday_topics
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.states import substance_of
 from leeroy_mind.talk.turns import Turn, TurnKind
-from leeroy_mind.wow import BOSS_NAMES, RAID_INSTANCES, boss_name, is_raid_fight
+from leeroy_mind.wow import BOSS_NAMES, RAID_INSTANCES, bg_played, boss_name, is_raid_fight
 
 GZ_TEMPLATES = ("gz", "grats", "gratz", "congrats", "gz!", "nice")
 # A boss the guild kills every week gets these, not a "congrats" (prompts lens, minor 5).
@@ -198,8 +198,8 @@ class Reactions(Pipeline):
         elif isinstance(ev, Boss) and ev.state == "killed" and is_raid_fight(ev.map, ev.boss_id):
             name = boss_name(ev.map, ev.boss_id, ev.boss_name)
             notes = [(g, "kill", f"you helped kill {name}") for g in ev.members]
-        elif isinstance(ev, BgEnd):
-            notes = [(g, "bg", "you played a battleground") for g in ev.members]
+        elif isinstance(ev, BgEnd):  # by name: "a battleground" next to a zone fused with it
+            notes = [(g, "bg", f"you played {bg_played(ev.bg_type)}") for g in ev.members]
         else:
             return
         for g, what, text in notes:
@@ -214,7 +214,9 @@ class Reactions(Pipeline):
         recent = sorted(((at, text) for what, (at, text) in self._lately.get(guid, {}).items()
                          if now - at < LATELY_S and (intentions is None
                              or intentions.fallback_lately(guid, what))), reverse=True)
-        return ", ".join(text for _, text in recent[:LATELY_ITEMS])
+        # the latest few, in the order they happened, each its own fact (2026-11-15: "you were
+        # in Tanaris, you played a battleground" became "a battleground in Tanaris")
+        return "; then ".join(text for _, text in reversed(recent[:LATELY_ITEMS]))
 
     def _open_topic(self, p: Persona, now: float) -> str:
         """The next thing this member's opener brings up tonight: their own material
