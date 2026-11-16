@@ -138,3 +138,25 @@ def test_off_leaves_existing_photo_out_of_prompts(tmp_path):
         assert 'photo' not in instruction and 'blue rug' not in instruction
     finally:
         run(app.stop())
+
+
+def test_his_photo_dm_ends_the_chat_with_its_note(tmp_path):
+    """His DM a member answers ends her Chat (Pipeline._his_dm_row) as dm_chat shows his lines:
+    a photo of his carries its note there too."""
+    app = mind_app(tmp_path, toml='[photos]\nenabled=true')
+    try:
+        mid = ds.post(app.store, channel='dm:101', author=app.human_guid, origin='human',
+            text='look at this', now=app.clock.now(),
+            attachment=ds.AttachmentIn('upload', 'discord/images/1.jpg', 32, 24, 100))
+        ds.set_look(app.store, mid, 'a lake at dusk', now=app.clock.now())
+        turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=101, channel='dm:101',
+                    to_guid=app.human_guid, addressee=app.human_guid)
+        meta = TurnMeta('t1', answers_human=True,
+                        discord=DiscordTarget(reply_to=mid, thread=None))
+        row = app.engine._his_dm_row(turn, meta)
+        assert row.id == mid and row.from_guid == app.human_guid and row.to_guid == 101
+        assert row.text.startswith('look at this') and 'a lake at dusk' in row.text
+        app.store.conn.execute('UPDATE discord_message SET deleted = 1 WHERE id = ?', (mid,))
+        assert app.engine._his_dm_row(turn, meta) is None  # gone: nothing added
+    finally:
+        run(app.stop())

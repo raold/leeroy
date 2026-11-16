@@ -1370,11 +1370,18 @@ class Pipeline:
         if found is None:
             return None
         from leeroy_mind.discord.talk import DM_HIS_CHARS, _clip
-        hg = self.human.guid
-        return ChatLineRow(id=meta.discord.reply_to, ts=found[1], channel=turn.channel,
-                           from_guid=hg, from_name=self.human.called, to_guid=turn.speaker,
-                           text=_clip(fold(found[0]), DM_HIS_CHARS), map=0, zone=0,
-                           session_id=None, thread_id=None, origin="human")
+        from leeroy_mind.photos.notes import by_messages
+        hg, mid = self.human.guid, meta.discord.reply_to
+        text = _clip(fold(found[0]), DM_HIS_CHARS)
+        photo = by_messages(self.store.conn, [mid],
+                            uploads=getattr(self, 'photos_enabled', False),
+                            members=getattr(self, 'photos_send', False),
+                            memes=getattr(self, 'culture_memes', False)).get(mid)
+        if photo:
+            text += ' ' + photo
+        return ChatLineRow(id=mid, ts=found[1], channel=turn.channel, from_guid=hg,
+                           from_name=self.human.called, to_guid=turn.speaker, text=text,
+                           map=0, zone=0, session_id=None, thread_id=None, origin="human")
 
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
