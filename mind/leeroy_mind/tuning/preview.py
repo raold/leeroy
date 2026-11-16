@@ -171,6 +171,18 @@ def _world_numbers(dial: str, before: int, after: int) -> list[dict]:
                  "after": per_day(after), "unit": ""},
                 {"what": "photos posted in guild channels a day", "before": channel_per_day(before),
                  "after": channel_per_day(after), "unit": ""}]
+    if dial == "availability":
+        from leeroy_mind.discord.owntime import LIFE_FLOOR_S, PHONE_S
+        from leeroy_mind.life.presence import DESIGN_AVAILABILITY
+
+        def glance(a):
+            if a <= 0:
+                return 0  # always there: his DM is answered at once
+            k = a / DESIGN_AVAILABILITY
+            lo, hi = (max(LIFE_FLOOR_S, b * k) for b in PHONE_S["idle"])
+            return round((lo + hi) / 2 / 60, 1)
+        return [{"what": "minutes before a member at work sees your DM, on average",
+                 "before": glance(before), "after": glance(after), "unit": "min"}]
     if dial == "jealousy":
         return [{"what": "envy asides an hour, at most", "before": round(2 * before / 5),
                  "after": round(2 * after / 5), "unit": ""},

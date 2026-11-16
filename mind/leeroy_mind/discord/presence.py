@@ -1,4 +1,9 @@
-"""When a cast member shows as online in the guild Discord."""
+"""When a cast member shows as online in the guild Discord.
+
+With `[life] availability` above 0 (life/config.py's pin) her state comes from her day plan
+(life.presence: asleep offline, at work, commuting, at the gym or out idle, or do not disturb at
+work on her dnd day, otherwise online), she is playing only in a gaming block, and her status line
+names her block; at 0 every answer is today's clock."""
 
 from __future__ import annotations
 
@@ -8,6 +13,9 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from ..life import config as life_config
+from ..life.day import Block
+from ..life.presence import discord_state, presence_at
 from ..personas.schema import Persona
 
 OWNER_ZONE = ZoneInfo("America/New_York")
@@ -19,7 +27,14 @@ STATUS_PHRASES = {
     'commute': ('commuting', 'on my way home'),
     'evening': ('making dinner', 'at the gym', 'out for a walk', 'chilling'),
     'late': ("can't sleep", 'up late'),
+    'home': ("kids' bedtime", 'family time', 'making dinner'),
+    'gym': ('at the gym',),
+    'out': ('out tonight',),
 }
+# her day's blocks with a status of their own ([life] availability above 0); free and gaming
+# take the clock's evening and late phrases
+LIFE_STATUS = {Block.WORK: 'work', Block.COMMUTE: 'commute', Block.HOME_DUTY: 'home',
+               Block.GYM: 'gym', Block.OUT: 'out'}
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,17 +87,31 @@ def presence_of(p: Persona, *, local: datetime, body_online: bool, body_zone: in
                 rng_seed: int, in_his_group: bool = False) -> Presence:
     if in_his_group:
         return Presence("online", True, body_zone)
+    if life_config.availability() > 0:
+        lp = presence_at(p, local, medium="discord")
+        state = discord_state(lp, dnd_day=_dnd_day(p.guid, local.date(), rng_seed))
+        return Presence(state, state == "online" and body_online and lp.block is Block.GAMING,
+                        body_zone)
     state = _state(p, local, rng_seed)
     return Presence(state, state == "online" and body_online, body_zone)
+
+
+def _clock_block(local: datetime, mins: int) -> str | None:
+    return ('work' if local.weekday() < 5 and 540 <= mins < 1020 else
+            'commute' if 420 <= mins < 510 or 1020 <= mins < 1080 else
+            'evening' if 1080 <= mins < 1320 else 'late' if mins >= 1320 or mins < 180 else None)
 
 
 def status_text(p: Persona, local: datetime, presence: Presence, *, rng_seed: int) -> str | None:
     if presence.state == 'offline':
         return None
     mins = local.hour * 60 + local.minute
-    block = ('work' if local.weekday() < 5 and 540 <= mins < 1020 else
-             'commute' if 420 <= mins < 510 or 1020 <= mins < 1080 else
-             'evening' if 1080 <= mins < 1320 else 'late' if mins >= 1320 or mins < 180 else None)
+    block = _clock_block(local, mins)
+    if life_config.availability() > 0:
+        # her day's block; playing (or free) she is at her keyboard: the clock's evening or
+        # late phrases, never the clock's work or commute
+        day = Block.GAMING if presence.playing else presence_at(p, local, medium="discord").block
+        block = LIFE_STATUS.get(day) or (block if block in ('evening', 'late') else None)
     if block is None:
         return None
     # The share is stable for the day; the phrase changes with her current block.

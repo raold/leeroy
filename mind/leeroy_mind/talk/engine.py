@@ -39,6 +39,7 @@ from typing import Awaitable, Callable, Protocol
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
 from leeroy_mind.human import human_identity
+from leeroy_mind.life.service import LifeService
 from leeroy_mind.llm.presets import BEAT
 from leeroy_mind.llm.scheduler import LLMScheduler
 from leeroy_mind.memory.recall import Recall
@@ -179,6 +180,8 @@ class TalkEngine(EmoteReactions):
             raise ValueError("library_search requires library")
         self.store, self.world, self.raid, self.recall = store, world, raid, recall
         self.scheduler, self.personas, self.cfg = scheduler, personas, cfg
+        # [life]: her day (life/service.py), pinned here and at every apply_config
+        self.life = LifeService(store=store, clock=clock, personas=personas, world=world, cfg=cfg)
         # [talk] think_private and think_budget (the beat, talk/beat.py): read at mind start,
         # never at a login's reload
         self.think_private = getattr(cfg.talk, "think_private", False) is True
@@ -220,6 +223,7 @@ class TalkEngine(EmoteReactions):
         the live model, the memory depth and the human's names take effect from the next
         turn."""
         self.cfg = cfg
+        self.life.configure(cfg)
         self.live_review.configure()
         self.budget.set_chattiness(cfg.talk.chattiness)
         self.budget.set_to_him_rate(cfg.talk.openers_per_hour)

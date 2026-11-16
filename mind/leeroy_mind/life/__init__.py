@@ -1,3 +1,4 @@
 """A member's life outside the game: her day plan, where she is, and how closely she is watching.
 
-Pure and deterministic (see README.md). Nothing in talk reads it until `[life]` is wired in."""
+The models are pure and deterministic (see README.md); `[life] availability` above 0 puts them
+in force for Discord presence and the replies on her own time (config.py, service.py)."""

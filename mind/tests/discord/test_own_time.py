@@ -316,6 +316,56 @@ def test_a_lost_late_answer_is_tried_again_then_let_go(store, tmp_path, caplog):
     assert "discord_dm_let_go: guid=101" in caplog.text
 
 
+def life(rig, availability=6):
+    """[life] availability through the engine's own config, as the mind applies mind.toml."""
+    cfg = rig.engine.cfg
+    rig.engine.apply_config(replace(cfg, life=replace(cfg.life, availability=availability)))
+
+
+@pytest.mark.parametrize("hour,away", [(12, True), (20, False)])
+def test_life_defers_a_dm_only_while_away(store, tmp_path, caplog, hour, away):
+    from leeroy_mind.life.day import Block, block_at
+    rig = rig_for(store, at(2026, 11, 18, hour), tmp_path)  # a Wednesday, her own clock (US)
+    life(rig)
+    assert rig.engine.cfg.talk.dm_own_time is False
+    talk = talk_for(rig)
+    assert talk.own_time()
+    block = block_at(rig.engine.personas.get(101), datetime(2026, 11, 18, hour))[0]
+    assert (block is Block.WORK) if away else block in (Block.FREE, Block.GAMING)
+    caplog.set_level("INFO", logger="leeroy_mind.discord")
+    mid = post(rig, "dm:101", "the kettle finally died this morning")
+    hand(rig, talk, mid)
+    run_for(rig, talk, 200)
+    if away:
+        assert answers(rig, "dm:101", mid) == []
+        assert store.get_meta(DEFERRED_KEY.format(guid=101)) == str(mid)
+        assert "discord_dm_later: guid=101" in caplog.text and talk.owes(101)
+        run_for(rig, talk, owntime.PHONE_S["dnd"][1] + 120)  # she glances at her phone
+        assert len(answers(rig, "dm:101", mid)) == 1
+        assert "discord_dm_answered_later: guid=101" in caplog.text
+        note = talk.instruction(101, "dm:101", mid, None)
+        assert "ago while you were at work" in note and "only now seeing it" in note
+    else:
+        assert len(answers(rig, "dm:101", mid)) == 1
+        assert store.get_meta(DEFERRED_KEY.format(guid=101)) is None
+        assert "discord_dm_later" not in caplog.text
+    assert "the kettle finally died" not in caplog.text
+
+
+@pytest.mark.parametrize("hour", [3, 12, 20])
+def test_availability_zero_and_own_time_off_answers_at_once(store, tmp_path, hour):
+    rig = rig_for(store, at(2026, 11, 18, hour), tmp_path)
+    life(rig, 0)
+    talk = talk_for(rig)
+    assert not talk.own_time()
+    mid = post(rig, "dm:101", "the kettle finally died this morning")
+    hand(rig, talk, mid)
+    run_for(rig, talk, 200)
+    assert len(answers(rig, "dm:101", mid)) == 1
+    assert store.get_meta(DEFERRED_KEY.format(guid=101)) is None
+    assert store.get_meta(ANSWERED_KEY.format(guid=101)) is None
+
+
 def test_an_edit_to_urgent_words_reads_the_moment_again(store, tmp_path):
     from leeroy_mind.discord import store as dstore
     rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)

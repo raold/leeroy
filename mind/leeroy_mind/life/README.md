@@ -4,9 +4,10 @@ A member's day outside the game: a deterministic plan of her local day built fro
 where she is at any minute, and how closely she is watching the game and Discord. Section 1 of
 the human-likeness design ("Her day: presence and availability").
 
-**Inert for now.** Nothing in talk, Discord or the night reads this package yet; later tasks wire
-it in behind `[life] availability` (0-10, default 0: always present, today's behaviour). There is
-no switch to set, no migration and no native change.
+**`[life] availability`** (0-10, code default 0: always present, today's behaviour; the release
+sets 6, the design point) moves Discord presence and the replies on her own time today (below,
+"Presence on Discord"); game latency and who answers come with later tasks. There is no migration
+and no native change.
 
 Everything here is pure: no clock, no database, no model, no log. The same persona and date
 always give the same plan. Plans are immutable and cached (`PLAN_CACHE`, 1024: two a member, today's
@@ -128,6 +129,67 @@ the callers keep today's behaviour):
 - `away_words(lp, medium)`: asleep, at work, driving, with the kids / busy at home, at the gym,
   out, away from the keyboard (game) / away from your phone (Discord), in the middle of
   something in game.
+
+## Settings (`[life]`, `life/config.py`, `life/service.py`)
+
+```toml
+[life]
+availability = 0   # 0-10: how often members are away, busy or slow to answer (0: always there)
+state = false      # her feeling through the day (Task 3)
+wow_vs_life = 5    # 0-10: the night's WoW-vs-life theme (nightly.settings.load_life)
+```
+
+`config.LifeCfg(availability=0, state=False, wow_vs_life=5)` is `MindConfig.life`. An
+`availability` that is not an integer 0-10 (a bool is not) reads as 0 and logs
+`life_availability_invalid` once per value; a `state` that is not a boolean reads as false and
+logs `life_state_invalid` once per value; `wow_vs_life` keeps its rule (an integer 0-10, else a
+`ConfigError`, as `nightly.settings.load_life` says). `availability` is also a world dial
+(console Tuning, `tuning.dials.WORLD_DIALS["availability"]`): an override in mind.db replaces
+mind.toml's value without writing it.
+
+The talk engine owns `LifeService` (`TalkEngine.life`). It is configured at mind start, at each
+login (mind.toml read again), when a world dial moves and when the night reloads its settings:
+`configure(cfg)` pins the values for the whole process (`life.config.pin(availability, state)`;
+`availability()` and `state_on()` read them, 0 and false until pinned) and writes the
+availability in force to meta `life:availability` when it changed (a missing value counts as 0).
+`LifeService.presence(guid, *, medium, in_his_group=False)` is her `LifePresence` at her local
+time (`discord.presence.local_time(clock.local(), region)`), or None at availability 0 or for a
+member without a persona.
+
+## Presence on Discord
+
+With availability above 0, `discord.presence.presence_of` (unchanged signature, so every caller
+follows: the Discord talk, the server engine and its seats, DMs and reactions, banter, decisions
+and the console) reads her day:
+
+- **State:** `discord_state(presence_at(p, local, medium="discord"), dnd_day=...)` with the same
+  dnd day as today (one weekday in seven): asleep offline; at work idle, or dnd on her dnd day;
+  driving, at the gym or out idle; home duty, free and gaming online. A member in his group is
+  online and playing, as today.
+- **Playing:** online, her game body online and a gaming block (or in his group).
+- **Status line** (`status_text`, `STATUS_SHARE` unchanged): work `at work` / `in meetings` /
+  `working` (and `lunch break` 12:00-13:00), commute `commuting` / `on my way home`, home duty
+  `kids' bedtime` / `family time` / `making dinner`, gym `at the gym`, out `out tonight`; free and
+  gaming (or playing) take today's clock evening and late phrases, never the clock's work or
+  commute.
+
+**Replies on her own time.** `DiscordTalk.own_time()` is `[talk] dm_own_time` or availability
+above 0. So with availability above 0 his DM is answered at once while she is online by her day
+(free, gaming, home duty) or talking with him, and waits while she is away by her schedule
+(asleep, at work, driving, at the gym, out): `discord_dm_later`, meta
+`discord:dm:deferred:<guid>`, then `discord_dm_answered_later` (urgent words and three posts in a
+row still cut the wait). The waits (`owntime.PHONE_S` for idle and dnd, `BACK_S` after she is
+back) are scaled by `max(availability, 1) / 6`, never under 30 s (`LIFE_FLOOR_S`): 6 keeps
+today's bounds. A late answer says where she was from her day (`life.presence.away_words(...,
+"discord")`: asleep, at work, driving, at the gym, out, with the kids, away from your phone).
+`[talk] dm_own_time` keeps its meaning and stays the owner's.
+
+**The console** has no mind.toml of the mind's: `console/discordview._members` reads meta
+`life:availability` (an integer string 0-10; anything else is 0) and pins it before computing
+presence, so the Discord tab shows the members away that the mind has away.
+
+Availability 0 is exactly today's presence, status line and DM timing (pinned by a hash of a
+week of states in `tests/life/test_discord_presence_life.py`).
 
 ## Command line
 

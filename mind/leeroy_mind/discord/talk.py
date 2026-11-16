@@ -192,8 +192,13 @@ class DiscordTalk:
     # -- replies on her own time -------------------------------------------------------------
 
     def own_time(self) -> bool:
-        talk = getattr(getattr(getattr(self.app, "engine", None), "cfg", None), "talk", None)
-        return bool(getattr(talk, "dm_own_time", False))
+        """[talk] dm_own_time, or her day ([life] availability above 0): his DM waits while her
+        Discord presence says she is away (asleep, at work, driving, at the gym, out)."""
+        cfg = getattr(getattr(self.app, "engine", None), "cfg", None)
+        talk, life = getattr(cfg, "talk", None), getattr(cfg, "life", None)
+        availability = getattr(life, "availability", 0)
+        return bool(getattr(talk, "dm_own_time", False)) or (
+            type(availability) is int and availability > 0)
 
     def _already(self, message_id: int) -> bool:
         """His DM post the tick answered already (a photo's, during its look): not twice."""

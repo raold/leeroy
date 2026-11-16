@@ -3,7 +3,7 @@ import logging
 import os
 import tomllib
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger("leeroy_mind")
@@ -31,6 +31,11 @@ discord_words = 90             # 0-200: most words in a member's Discord channel
 dm_words = 200                 # 0-200: most words in a member's DM to him (0: one short line)
 think_private = true           # a short structured beat before answering his whispers and DMs (read at mind start)
 think_budget = 240             # 120-320: the beat's num_predict, in tokens
+
+[life]
+availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
+state = false                 # her feeling through the day
+wow_vs_life = 5               # 0-10: how present the WoW-vs-life theme is in the night's stories (0: off)
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -64,7 +69,7 @@ MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 DISCORD_WORDS_MAX = 200  # [talk] discord_words and dm_words
 THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] values already logged in this process
-EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
+EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
                                 "banter", "photos", "voice_notes", "groups", "culture", "outreach",
@@ -100,6 +105,14 @@ class TalkCfg:
     dm_words: int = 200  # [talk] dm_words: his DMs, as full as she likes
     think_private: bool = True  # [talk] think_private: talk/beat.py, read at mind start
     think_budget: int = 240  # [talk] think_budget: the beat's num_predict
+
+
+@dataclass(frozen=True)
+class LifeCfg:
+    """[life]: her day (life/), and the night's WoW-vs-life theme (nightly.settings.load_life)."""
+    availability: int = 0  # 0-10; 0: always present, today's behaviour (life/config.py pin)
+    state: bool = False  # her feeling through the day
+    wow_vs_life: int = 5
 
 
 @dataclass(frozen=True)
@@ -150,6 +163,7 @@ class MindConfig:
     bridge: BridgeCfg
     ollama: OllamaCfg
     human: HumanCfg
+    life: LifeCfg = field(default_factory=LifeCfg)
 
 
 def _int_in(v, lo, hi):
@@ -209,6 +223,11 @@ _RULES = {
            for k in ("whispers_per_hour", "openers_per_hour")},
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
     },
+    "life": {
+        "availability": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
+        "state": (lambda v: type(v) is bool, "a boolean"),
+        "wow_vs_life": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
+    },
     "romance": {
         "dial": (lambda v: _int_in(v, 1, 10), "an integer 1-10"),
         "jealousy": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
@@ -237,6 +256,7 @@ _RULES = {
 _CLASSES = {
     "models": ModelsCfg, "talk": TalkCfg, "romance": RomanceCfg, "cast": CastCfg,
     "memory": MemoryCfg, "bridge": BridgeCfg, "ollama": OllamaCfg, "human": HumanCfg,
+    "life": LifeCfg,
 }
 
 
@@ -274,6 +294,13 @@ def _build(data: dict, source: str) -> MindConfig:
                 v = defaults[section][key]
             if section == 'romance' and key == 'activities' and type(v) is not bool:
                 v = False
+            if section == "life" and key in ("availability", "state") and not check(v):
+                # neutral (0, false), logged once a value (each login reads it again)
+                if ("life." + key, repr(v)) not in _WARNED:
+                    _WARNED.add(("life." + key, repr(v)))
+                    log.warning("life_%s_invalid key=%s want=%s default=%s", key, key, want,
+                                defaults[section][key])
+                v = defaults[section][key]
             if not check(v):
                 raise ConfigError(f"{section}.{key}: expected {want}, got {_shown(section, v)}")
             values[key] = v.strip() if section == "human" else v
