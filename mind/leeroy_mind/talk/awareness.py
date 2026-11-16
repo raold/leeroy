@@ -149,7 +149,12 @@ class LiveReview:
         return turn.template is None and (self.config.enabled or getattr(meta,"review_required",False))
 
     def config_for(self,meta):
-        return replace(self.config,enabled=True) if meta.review_required else self.config
+        # A review-required turn (banter, the server) under a disabled [guards] table gets the
+        # review but no phrase cooldown the operator did not switch on (review 326, P3-9).
+        if meta.review_required:
+            return replace(self.config,enabled=True,
+                           phrase_cooldown=self.config.enabled and self.config.phrase_cooldown)
+        return self.config
 
     async def read(self,question):
         def snapshot(conn):

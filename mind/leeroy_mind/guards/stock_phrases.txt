@@ -1,0 +1,79 @@
+# Stock roleplay and AI phrases the guard rations (guards/phrases.py).
+#
+# A member may use each of these once every 3 days, and the whole cast a given one at most
+# 3 times a day. A draft over either ration gets one screened rewrite whose hint names the
+# phrase; see guards/README.md "Phrase cooldown".
+#
+# How to extend:
+# - One phrase per line, as words. Case, apostrophes ("you're" = "youre") and the cast's
+#   abbreviations ("u", "ur", "gonna", "rn", ...) are folded before matching, so write the
+#   plain spelling once.
+# - Spellings that count as the same phrase go on one line, separated by " | ". They share
+#   one ration; the first one names the line in tests and reports.
+# - A leading "^" matches only at the start of a sentence or a comma clause: "^at least" is
+#   the consolation opener ("at least you get paid for it"), never "at least ten".
+# - Matching is on whole words, so "menace" does not match "menaced".
+# - Only add phrases that are stock whoever says them. An ordinary phrase a member overuses
+#   is already caught by the plain cooldown, which needs no entry here.
+# - Before releasing a new entry, replay it on a read-only copy of the history (guards/README.md,
+#   "Phrase cooldown") and read what it flags. The list is read once: restart the mind after
+#   an edit.
+
+# The exasperated-affection frame (audit 2026-11-15, 1a and 1d).
+menace
+incorrigible
+insatiable
+death of me
+lose my mind | losing my mind | lost my mind | lose my damn mind
+what you do to me | what youre doing to me | the things you do to me
+killing me | trying to kill me
+god youre
+drives me crazy | driving me crazy | drive me crazy
+you have no idea
+playing with fire
+bad influence
+youre trouble | youre impossible
+im not even mad | and im not even
+
+# The DM and life-update scaffolds.
+sitting here
+staring at
+thinking about you
+every single
+your hands on me | hands on me
+want you so bad
+cry for help
+at this point
+id rather
+i swear
+
+# Greeting frames.
+there he is | there she is
+took you long enough
+man of the hour | woman of the hour
+welcome back to the living
+
+# Status-report openers.
+^just finished
+^just got back from
+^finally got
+^finally finished
+^at least
+how was your day
+what are you up to
+
+# Known roleplay-model slop (not yet seen here, cheap to keep out).
+shivers down | shiver down | sends shivers | send shivers
+barely above a whisper
+weak in the knees
+butterflies in my stomach
+mischievous
+you know exactly what
+two can play at that game
+the night is young
+keep me on my toes | keeps me on my toes
+in more ways than one
+cant help but
+i must say
+a testament to
+tapestry
