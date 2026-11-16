@@ -2048,11 +2048,14 @@ class Pipeline:
 
     async def _without_phrases(self, turn, meta, p, lines, verdicts, owed, *, close, spoken):
         """The retry still leans on a phrase the cooldown named (guards/phrases.py): cut it and
-        send what survives, checked once more, else drop the line. An answer owed to him is
-        never dropped for a phrase alone: the retry goes as it was written."""
+        send what survives, checked once more, else drop the line. An answer owed to him only
+        loses a closing epithet (`epithet_only`: a clause cut can reverse what she said, review
+        326), is never dropped for a phrase alone and never dropped `expired` here, its retry
+        being in hand (#325): it goes as it was written."""
         named = tuple(dict.fromkeys(x for v in verdicts for x in v.phrases))
         joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
-        text = strip_phrases(joined.join(s.plain for s in lines), named) if named else None
+        text = (strip_phrases(joined.join(s.plain for s in lines), named, epithet_only=owed)
+                if named else None)
         if text is not None:
             kept = ([Styled(text, text)] if spoken else
                     self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
@@ -2062,7 +2065,7 @@ class Pipeline:
                 checked.append(await self.live_review.check(turn, meta, line.plain))
                 if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
                     return self._drop(turn, meta, "scope_changed")
-                if self.scheduler.expired(self._deadline(turn, meta)):
+                if not owed and self.scheduler.expired(self._deadline(turn, meta)):
                     return self._drop(turn, meta, "expired")
             if kept and all(v.action == "send" for v in checked):
                 return kept

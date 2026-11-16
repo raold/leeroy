@@ -80,6 +80,10 @@ FOLD = {'u': ('you',), 'ur': ('your',), 'gonna': ('going', 'to'), 'wanna': ('wan
         'thnik': ('think',)}
 _I = frozenset({'i', 'im', 'id', 'ill', 'ive'})
 _LEAD = frozenset('a an the and but or so then just also oh um uh well lol haha'.split())
+# Clause openers that turn or condition what came before them: a cut across one reverses the
+# line (review-326 P2-1). The strip never removes such a clause and never leaves one hanging.
+TURNS = frozenset('but though although unless if except until because cause cuz bc so while whereas yet'.split())
+_DANGLE = re.compile(r'(^|[.!?]\s+|\n)(?:' + '|'.join(sorted(TURNS | {'and', 'or'})) + r')\b[,\s]*', re.I)
 _TAIL = frozenset('a an the and but or so to of for with at in on from by like lol haha'.split())
 _HIDE = re.compile(r'\{\{item:\d+\}\}|\[[^\[\]\n]{0,80}\]|https?://\S+|<[@#:][^<>\n]{0,80}>')
 _SENTENCE = re.compile(r'[.!?]+(?=[\s"\')]|$)|\n')
@@ -190,15 +194,36 @@ def _has(clauses, alts):
     return any(_at(c, words, anchored) for c in clauses for anchored, words in alts)
 
 
+@lru_cache(maxsize=1)
+def game_names() -> frozenset:
+    """The bosses, raids, dungeons, battlegrounds and arenas the code knows (talk/wow.py), as
+    folded word tuples with and without a leading "the": a name typed in lowercase ("the lich
+    king") is as much a name as a capitalised one."""
+    from leeroy_mind.wow import (ARENAS, BATTLEGROUNDS, BOSS_NAMES, DUNGEON_BOSS_NAMES, DUNGEONS,
+                                 ENCOUNTER_MEMBERS, RAID_INSTANCES)
+    raw = [*BOSS_NAMES.values(), *DUNGEON_BOSS_NAMES.values(), *RAID_INSTANCES.values(),
+           *DUNGEONS.values(), *BATTLEGROUNDS.values(), *ARENAS, *ENCOUNTER_MEMBERS,
+           *(n for names in ENCOUNTER_MEMBERS.values() for n in names)]
+    found = set()
+    for name in raw:
+        words = _words(name) if isinstance(name, str) else ()
+        if words:
+            found.add(words)
+            if words[0] == 'the' and len(words) > 1:
+                found.add(words[1:])
+    return frozenset(found)
+
+
 def names(reader) -> frozenset:
-    """Members', his and the nicknames' names as folded word tuples (one bounded read; an
-    older schema without one of the tables reads none)."""
+    """Members', his, the nicknames' and the game's names as folded word tuples (one bounded
+    read; an older schema without one of the tables reads none)."""
     rows = reader.rows('names_unavailable',
         "SELECT name FROM (SELECT json_extract(json,'$.character_name') AS name FROM persona_core "
         "WHERE json_valid(json) LIMIT 2000) UNION ALL SELECT value FROM meta WHERE key='human_name' "
         "UNION ALL SELECT name FROM (SELECT term AS name FROM lexicon WHERE kind='nickname' "
         "AND status='active' LIMIT 1000)")
-    return frozenset(w for row in rows if isinstance(row['name'], str) and (w := _words(row['name'])))
+    return game_names() | frozenset(w for row in rows if isinstance(row['name'], str)
+                                    and (w := _words(row['name'])))
 
 
 def candidates(text: str, known=frozenset()):
@@ -319,7 +344,7 @@ def check(reader, draft, now: float) -> Found:
                 hits['phrase_conversation'] += spans
             if words not in topic and sum(words in grams for grams in day) >= DAY_USES:
                 hits['phrase_day'] += spans
-            if len(others.get(words, ())) >= CAST_MEMBERS:
+            if words not in topic and len(others.get(words, ())) >= CAST_MEMBERS:
                 hits['phrase_cast'] += spans
     if stocked:
         mine = [_seen(r['text'])[0] for r in own if now - r['ts'] <= STOCK_MEMBER_SECONDS]
@@ -345,10 +370,18 @@ def hint(phrases) -> str:
     return f"Don't say {said} again; say it your own way or not at all."
 
 
+@lru_cache(maxsize=256)
+def _anchored(words):
+    """A named phrase that is only a clause-opener stock entry ("^at least") counts where a
+    clause opens with it; "at least ten" mid-sentence is never the entry."""
+    kinds = {anchored for _, alts in stock() for anchored, alt in alts if alt == words}
+    return kinds == {True}
+
+
 def _occurrences(toks, phrase):
     words = _words(phrase)
     return [(c[i].i, c[i].i + len(words) - 1) for c in _clauses(toks)
-            for i in _at([t.norm for t in c], words, False)] if words else []
+            for i in _at([t.norm for t in c], words, _anchored(words))] if words else []
 
 
 def _cut(text, start, end):
@@ -376,7 +409,9 @@ def _sentence_span(text, tok):
 
 def _clause_span(toks, first, last):
     """The comma clause holding tokens first..last, with the comma that joins it, when its
-    sentence keeps two or more words without it."""
+    sentence keeps two or more words without it. None when the clause opens with a word of
+    TURNS ("..., but i'd rather stay in" cut to "that sounds really fun" says the opposite) or
+    the clause after it does (the rest would hang on its "but")."""
     a = toks[first]
     if any(t.clause != a.clause for t in toks[first:last + 1]):
         return None
@@ -384,9 +419,13 @@ def _clause_span(toks, first, last):
     if sum(t.clause != a.clause for t in same) < 2:
         return None
     mine = [t for t in same if t.clause == a.clause]
+    if mine[0].norm in TURNS:
+        return None
     before = [t for t in same if t.clause < a.clause]
     if before:  # a later clause: from the end of the clause before it
         return before[-1].end, mine[-1].end
+    # The opening clause: cut to the start of the next; a "but" the next clause opens with is
+    # left for the dangle trim ("you're trouble, but yes, i'll come" -> "yes, i'll come").
     return mine[0].start, next(t for t in same if t.clause > a.clause).start
 
 
@@ -408,10 +447,18 @@ def _vocative(toks, first, last):
     return None
 
 
-def strip(text: str, phrases, *, min_words: int = 3) -> str | None:
-    """The text without the named phrases: a closing epithet ("..., you absolute menace") or the
-    comma clause holding a phrase is cut, else its whole sentence. None when fewer than
-    `min_words` words would survive or a phrase is still there."""
+def _asks(text, start, stop):
+    return bool(re.search(r'\?["\')]*\s*$', text[start:stop]))
+
+
+def strip(text: str, phrases, *, min_words: int = 3, epithet_only: bool = False) -> str | None:
+    """The text without the named phrases: a closing epithet ("..., you absolute menace") is
+    cut, else the phrase's comma clause (never one across a word of TURNS), else its whole
+    sentence; a conjunction the cut leaves hanging at the front of a sentence goes with it. A
+    cut that takes a sentence's question mark takes the question: the rest ends in a full stop,
+    never a stray "?". With `epithet_only` (an answer owed to him) only the epithet cut is made,
+    so the answer keeps its meaning or goes as written. None when fewer than `min_words` words
+    would survive or a phrase is still there."""
     text = strip_wow_markup(text or '')
     for phrase in phrases:
         for _ in range(8):
@@ -424,9 +471,17 @@ def strip(text: str, phrases, *, min_words: int = 3) -> str | None:
             if start is not None:
                 text = _cut(text, start, toks[last].end)
                 continue
-            span = _clause_span(toks, first, last) or _sentence_span(text, toks[first])
-            text = _cut(text, *span)
-        text = _tidy(text)
+            if epithet_only:
+                return None
+            a, b = _clause_span(toks, first, last) or _sentence_span(text, toks[first])
+            _, stop = _sentence_span(text, toks[first])
+            if b < stop and _asks(text, b, stop) and not tokens(text[b:stop]):
+                b = stop  # the clause carried its sentence's question mark: take it too
+            head = text[:a]
+            if b == stop and head.strip() and head.rstrip()[-1] not in '.!?' and _asks(text, a, b):
+                head = head.rstrip() + '.'  # the question went with its clause: a statement stays
+            text = head + ' ' + text[b:]
+        text = _DANGLE.sub(r'\1', _tidy(text))
     toks = tokens(text)
     if len(toks) < min_words or any(_occurrences(toks, p) for p in phrases):
         return None

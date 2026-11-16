@@ -56,11 +56,19 @@ def test_words_fold_the_casts_typing():
     ('we got over here', ('over', 'here'), False),             # two words need two outside STOP
     ('hey rabbi you there', ('hey', 'rabbi', 'you'), False),   # his name
     ('the Lich King again', ('lich', 'king', 'again'), False), # a proper noun
+    ('we see the lich king', ('the', 'lich', 'king'), False),  # a game name typed in lowercase
+    ('wipe in icecrown citadel again', ('icecrown', 'citadel', 'again'), False),
     ('death of me', ('death', 'of', 'me'), True),
 ])
 def test_eligible_phrases(text, phrase, eligible):
-    _, found_ = phrases.candidates(text, frozenset({('rabbi',)}))
+    _, found_ = phrases.candidates(text, frozenset({('rabbi',)}) | phrases.game_names())
     assert (phrase in found_) is eligible
+
+
+def test_lowercase_game_names_are_never_worn_phrases(store):
+    for guid in (102, 103, 104):
+        put(store, 'we are so close to the lich king', guid=guid, channel='discord:general', ts=NOW - 3600)
+    assert found(store, draft('one more pull and we see the lich king')).codes == ()
 
 
 def test_stock_list_loads_and_covers_the_audit():
@@ -123,6 +131,15 @@ def test_three_other_members_make_a_phrase_worn(store):
     put(store, 'a cry for help if i ever saw one', guid=104, ts=NOW - 40 * 3600)
     assert 'phrase_cast' in found(store, d).codes
     assert 'phrase_cast' not in found(store, draft('a cry for help', now=NOW + 9 * 3600)).codes
+
+
+def test_the_conversations_topic_is_never_worn_either(store):
+    # three members in this guild talk just said it: naming the subject is no tic (review 326, P2-2)
+    for guid, ago in ((102, 600), (103, 420), (104, 180)):
+        put(store, 'did anyone read the new patch notes', guid=guid, channel='guild', ts=NOW - ago)
+    assert 'phrase_cast' not in found(store, draft('the new patch notes nerfed my class')).codes
+    # said elsewhere, it is the cast's worn phrase as before
+    assert 'phrase_cast' in found(store, draft('the new patch notes nerfed my class', channel='party')).codes
 
 
 def test_an_ordinary_idiom_is_never_worn_across_the_cast(store):
@@ -217,16 +234,40 @@ def test_hint_names_her_words_in_quotes():
     ('God, you are such a menace, doing it on purpose. I love it though.', 'menace',
      'God, doing it on purpose. I love it though.'),
     ("you're gonna be the death of me. but fine, ill bring the flasks", 'death of me',
-     'but fine, ill bring the flasks'),
+     'fine, ill bring the flasks'),                              # the "but" left hanging goes too
     ("sexy back at you. come here and i'll show you exactly what that means.", 'what that means',
      'sexy back at you.'),
     ('first part stays.\n\nI am sitting here at my desk. thinking about tonight\nlast line',
      'sitting here', 'first part stays.\n\nthinking about tonight\nlast line'),
     ('the death of me', 'death of me', None),
     ('lol ;) at least you tried', 'at least', None),
+    # review 326: a cut across but/if/unless/though/because would reverse the line
+    ("that sounds really fun, but i'd rather stay in tonight lol", "i'd rather", None),
+    ("I'd love to come, but at this point I'm way too tired", 'at this point', None),
+    ("Of course I'll come, if you stop staring at me like that", 'staring at', None),
+    ('i would never say that, at least not to his face', 'at least', 'i would never say that'),
+    ("i swear i got it. lol you're so impatient", 'i swear', "lol you're so impatient"),
+    ('honestly i swear the boss bugged out, we wiped twice', 'i swear', 'we wiped twice'),
+    ('no. i swear i never told her. you believe me right?', 'i swear', 'no. you believe me right?'),
+    ("you're trouble, but yes, i'll come", 'youre trouble', "yes, i'll come"),
+    ('it was good, how was your day?', 'how was your day', 'it was good.'),  # never "it was good?"
+    # an anchored entry is cut only where a clause opens with it: "at least ten" is not the entry
+    ('at least we tried. we need at least ten for the run though', 'at least',
+     'we need at least ten for the run though'),
 ])
 def test_strip_cuts_the_epithet_clause_or_sentence(text, phrase, expected):
     assert phrases.strip(text, [phrase]) == expected
+
+
+@pytest.mark.parametrize('text,phrase,expected', [
+    (MENACE, 'absolute menace', 'send it now'),
+    ('doing it on purpose, you absolute menace!', 'absolute menace', 'doing it on purpose!'),
+    ("that sounds really fun, but i'd rather stay in tonight lol", "i'd rather", None),
+    ("i swear i got it. lol you're so impatient", 'i swear', None),
+    ('it was good, how was your day?', 'how was your day', None),
+])
+def test_an_owed_answer_only_loses_a_closing_epithet(text, phrase, expected):
+    assert phrases.strip(text, [phrase], epithet_only=True) == expected
 
 
 def test_strip_keeps_emoticons():
@@ -274,6 +315,65 @@ def test_an_owed_answer_is_never_dropped_for_a_phrase(rig, monkeypatch, channel)
                                                      whisper_reply=channel == 'whisper'))
     assert len(sent) == 1 and 'yes' in sent[0] and 'first draft' not in sent[0]
     assert meta.guard_rewritten
+
+
+def rather_review(stores, d):
+    if 'rather' in d.text:
+        return Verdict('rewrite', ('stock_member',), phrases=("i'd rather",))
+    return Verdict('send')
+
+
+RATHER = "that sounds really fun, but i'd rather stay in tonight lol"
+
+
+def test_an_owed_answer_keeps_its_clause_and_goes_as_written(rig, monkeypatch):
+    # review 326, P2-1: "that sounds really fun" alone would say the opposite to him
+    monkeypatch.setattr(live, 'review', rather_review)
+    rig.script("i'd rather not tonight", RATHER)
+    sent, meta = speak(rig, turn('whisper'), TurnMeta('owed', why='reply:named', answers_human=True,
+                                                       whisper_reply=True))
+    assert len(sent) == 1 and 'rather' in sent[0] and 'really fun' in sent[0]
+    assert meta.guard_verdict == 'rewrite' and len(rig.chat_calls()) == 2
+
+
+def test_an_owed_answer_still_loses_a_closing_epithet(rig, monkeypatch):
+    monkeypatch.setattr(live, 'review', menace_review)
+    rig.script('the first draft, absolute menace', 'doing it on purpose, you absolute menace!')
+    sent, meta = speak(rig, turn('whisper'), TurnMeta('owed', why='reply:named', answers_human=True,
+                                                       whisper_reply=True))
+    assert len(sent) == 1 and 'menace' not in sent[0] and 'on purpose' in sent[0]
+
+
+def test_a_bystander_line_is_dropped_rather_than_reversed(rig, monkeypatch):
+    monkeypatch.setattr(live, 'review', rather_review)
+    rig.script("i'd rather not tonight", RATHER)
+    sent, meta = speak(rig, turn())
+    assert not sent and rig.utterances()[-1]['dropped'] == 'guard_phrase_refused'
+
+
+@pytest.mark.parametrize('owed', [True, False])
+def test_the_strips_review_never_expires_an_owed_answer(rig, monkeypatch, owed):
+    monkeypatch.setattr(live, 'review', menace_review)
+    import sys
+    def expired(deadline, **kw):  # the deadline lapses exactly during the strip's re-review
+        return sys._getframe(1).f_code.co_name == '_without_phrases'
+    monkeypatch.setattr(rig.engine.scheduler, 'expired', expired)
+    rig.script('the first draft, absolute menace', 'doing it on purpose, you absolute menace!')
+    meta = (TurnMeta('owed', why='reply:named', answers_human=True, whisper_reply=True) if owed
+            else TurnMeta('bystander', why='test'))
+    sent, meta = speak(rig, turn('whisper' if owed else 'guild'), meta)
+    if owed:
+        assert len(sent) == 1 and 'on purpose' in sent[0]
+    else:
+        assert not sent and rig.utterances()[-1]['dropped'] == 'expired'
+
+
+def test_a_disabled_guards_table_gives_review_required_turns_no_cooldown(rig):
+    review_ = rig.engine.live_review
+    review_.config = GuardsCfg(enabled=False)
+    assert review_.config_for(TurnMeta('t', review_required=True)) == GuardsCfg(enabled=True, phrase_cooldown=False)
+    review_.config = GuardsCfg(enabled=True)
+    assert review_.config_for(TurnMeta('t', review_required=True)).phrase_cooldown is True
 
 
 def test_another_problem_on_the_retry_keeps_the_old_rule(rig, monkeypatch):

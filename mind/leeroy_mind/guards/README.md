@@ -203,11 +203,12 @@ one of its phrases is:
 | `stock_cast` | a line of `stock_phrases.txt` the cast used 3 or more times in the last 24 hours |
 
 A phrase is 2-5 words inside one comma clause, with a word outside `STOP` (two for a
-two-word phrase), no member's, his or an active nickname's name and no capitalised proper
-noun. Words are folded first: case, apostrophes, `u`/`ur`, `gonna`, `rn` and the cast's
+two-word phrase), no member's, his or an active nickname's name, no boss, raid, dungeon,
+battleground or arena name the code knows (`wow.py`, so a lowercase "the lich king" is a
+name too) and no capitalised proper noun. Words are folded first: case, apostrophes, `u`/`ur`, `gonna`, `rn` and the cast's
 other abbreviations, so stored (styled) lines and the plain draft compare. Item placeholders,
 bracketed names, URLs and mentions break a phrase. A phrase he or another member used in
-the current conversation is its topic, never her tic, for the conversation and day rules.
+the current conversation is its topic, never her tic, for all three phrase rules.
 `stock_phrases.txt` holds the curated stock roleplay and AI phrases; its header says how to
 extend it ("^" anchors one to a clause opening: `^at least` is the consolation frame).
 
@@ -218,15 +219,28 @@ already dropped as a whole-line repeat or echo stays dropped; phrases only add a
 in `repr`); `rewrite_hint(codes, phrases)` adds "Don't say 'X' again; say it your own way
 or not at all." Evidence is her own lines in any channel (including group DMs) and other
 members' lines counted, never quoted: the hint names only the draft's own words, never
-who else said them or where. Like the stock ration's receipts, her private lines can
-count toward a ration on a public draft; nothing from them reaches the prompt.
+who else said them or where. Like the stock ration's receipts, the reads cross audiences
+(`memory/AUDIENCES.md`): her whispers, DMs, officer and group-DM lines, and other members'
+private lines, count toward a ration on a public draft. Only the decision crosses; no text
+does, and nothing from them reaches the prompt. A review-required turn (banter, the
+server) under a disabled `[guards]` table gets the review but no cooldown
+(`LiveReview.config_for`), so an operator with guards off sees no phrase rewrites.
 
 If the screened retry still has a flagged phrase and nothing else is wrong
-(`talk/pipeline.py` `_without_phrases`), the phrase's comma clause, a closing epithet
-("..., you absolute menace") or else its sentence is cut, the rest is styled again and
-reviewed once more. When fewer than three words survive the line is dropped
-(`guard_phrase_refused`). An answer owed to him is never dropped for a phrase alone: the
-retry goes as written. Any other code on the retry keeps the old rule.
+(`talk/pipeline.py` `_without_phrases`), `phrases.strip` cuts a closing epithet ("..., you
+absolute menace"), else the phrase's comma clause, else its sentence; the rest is styled again
+and reviewed once more. A clause is never cut across a word of `TURNS` (but, though, if,
+unless, because, except, until, so, while, yet: "that sounds fun, but i'd rather stay in" cut
+to "that sounds fun" says the opposite; the sentence goes instead, or the line); a
+conjunction the cut leaves hanging at the front of a sentence goes with it ("you're trouble,
+but yes, i'll come" -> "yes, i'll come"); a cut that takes the sentence's question takes its
+"?" ("it was good, how was your day?" -> "it was good."); an anchored stock entry
+(`^at least`) is cut only where a clause opens with it, never from "at least ten". When
+fewer than three words survive, or no cut is possible, the line is dropped
+(`guard_phrase_refused`). **An answer owed to him only ever loses a closing epithet**: any
+other cut could change what she answered, so the retry goes as written; it is never dropped
+for a phrase alone and never dropped `expired` on this path. Any other code on the retry
+keeps the old rule.
 
 Replay on the live history (read-only, 2026-10-31 to 2026-11-15, 4,425 member lines
 without templates and short `gz`): 502 lines flagged (11.3%; game 7.4%, voice 9.3%,
@@ -236,8 +250,9 @@ carry several). Of the 226 lines reusing a 4-word run of hers from the last 3 da
 (62%) are flagged. A hand-judged sample of 60 flagged lines: 45 real tics or cross-member
 sameness, 9 borderline (ordinary "at least", "every single"), 6 false positives (topic
 nouns only she repeated in one conversation: "grain density", "chicken wrap"). Mean check
-4.7 ms. A flag is a rewrite, so a false positive costs one model call, not the line.
-Replay measures flag rate on what was said, not behaviour after rewrites.
+4.7 ms. A false positive costs the one retry; if the retry keeps the phrase (a topic noun
+often is the subject), a non-owed line is then clause-cut or dropped, an owed one goes as
+written. Replay measures flag rate on what was said, not behaviour after rewrites.
 
 To replay (for example after extending the list), open `mind.db` with `?mode=ro` and, for
 each member line of `chat_line` (`origin='mind'`, oldest first), call
