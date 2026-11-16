@@ -20,6 +20,7 @@ from leeroy_mind.personas.io import load_persona
 from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.storage.rows import MemoryRow
 from leeroy_mind.storage.provenance import MAX_NODES, ProvenanceError, WalkLimit, edges, reaches
+from leeroy_mind.talk.everyday import is_everyday
 from leeroy_mind.text import has_meta, strip_wow_markup, truncate_words, word_jaccard
 
 JOKE_LAUGHS = 2
@@ -427,6 +428,8 @@ def spread(ctx):
             ident = term["id"]
             if culture and term["retired"] is not None:
                 continue
+            if term["kind"] == "slang" and (term["retired"] is not None or is_everyday(term["term"])):
+                continue  # retired (lexicon clean-junk) or an everyday word: never revived or spread
             cited_joke = term["kind"] == "joke" and ident in recalled
             if not has_word(line["text"], term["term"]) and not cited_joke:
                 continue

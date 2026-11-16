@@ -1,17 +1,80 @@
-"""Public vocabulary and evidence-backed slang, with immutable ingestion receipts."""
+"""Public vocabulary and evidence-backed slang, with immutable ingestion receipts.
+
+A word is slang only when it is new to the guild, not merely new to the log: the first night
+read the whole history at once, so every ordinary word looked "first seen" then. So no
+everyday word is ever promoted (talk.everyday), nor one the cast already uses commonly, nor
+one its first speaker uses no more than anyone else (junk_reason)."""
 import hashlib
 import json
 import re
+from collections import Counter
+from dataclasses import dataclass, field
 
 from leeroy_mind.discord.channels import is_public
+from leeroy_mind.logs import log
 from leeroy_mind.nightly import lexicon
+from leeroy_mind.talk.everyday import is_everyday
 from leeroy_mind.text import strip_wow_markup
 
 SLANG_USERS = 3
 SLANG_NEW_DAYS = 14
 DAY_S = 86400
+# A word in more than 1 public line in 200 (and in more than 10 lines) is the cast's common
+# vocabulary, whatever the word list says.
+COMMON_SHARE = 0.005
+COMMON_MIN_LINES = 10
+# On a corpus of this many public lines or more, the first speaker must use the word at least
+# DISTINCT_LIFT times as often (per line of their own) as the cast does: a coinage is theirs.
+DISTINCT_LINES = 500
+DISTINCT_LIFT = 2.0
 _WORDS = re.compile(r"[a-z]{3,}")
 _BOOTSTRAP = "nightly:vocab-bootstrap"
+
+
+@dataclass(frozen=True)
+class Corpus:
+    """Public lines of the cast and the human: how many in all, per author, and per author
+    holding each counted word."""
+    lines: int = 0
+    authors: Counter = field(default_factory=Counter)
+    uses: dict = field(default_factory=dict)
+
+
+def corpus(conn, words, *, eligible, human, end) -> Corpus:
+    """Count the public lines before `end` as the vocabulary reads them (an eligible speaker,
+    the human's own typing, a member's sent or game line), and the lines holding each of
+    `words`. Counts only: nothing here admits a line as evidence."""
+    words = frozenset(words)
+    authors, uses = Counter(), {w: Counter() for w in words}
+    for row in conn.execute("SELECT channel,from_guid,origin,text FROM chat_line WHERE ts<?", (end,)):
+        guid = row["from_guid"]
+        if not is_public(row["channel"]) or guid not in eligible:
+            continue
+        if (row["origin"] != "human") if guid == human else (row["origin"] not in {"mind", "game"}):
+            continue
+        authors[guid] += 1
+        for word in words.intersection(_WORDS.findall(strip_wow_markup(row["text"] or "").casefold())):
+            uses[word][guid] += 1
+    return Corpus(sum(authors.values()), authors, uses)
+
+
+def junk_reason(word, origin, counts=None):
+    """Why `word` (first said by `origin`) is no slang, or None: "common" (everyday vocabulary),
+    "cast_common" (the cast's common word) or "not_distinct" (its first speaker uses it no
+    more than anyone). Without `counts` only the word lists are read."""
+    if is_everyday(word):
+        return "common"
+    if counts is None:
+        return None
+    uses = counts.uses.get(word) or Counter()
+    total = sum(uses.values())
+    if total > max(COMMON_MIN_LINES, COMMON_SHARE * counts.lines):
+        return "cast_common"
+    if counts.lines >= DISTINCT_LINES:
+        own = uses[origin] / max(1, counts.authors[origin])
+        if total == 0 or own < DISTINCT_LIFT * total / counts.lines:
+            return "not_distinct"
+    return None
 
 
 def _eligible(ctx):
@@ -181,11 +244,25 @@ def slang(ctx):
         end = ctx.window[1]
         rows = store.conn.execute("SELECT * FROM vocab WHERE slang=0 AND first_seen>=? "
             "AND first_seen<? ORDER BY first_seen,word", (end - SLANG_NEW_DAYS * DAY_S, end)).fetchall()
+        screened, candidates = Counter(), []
         for row in rows:
+            word = row["word"]
+            if _WORDS.fullmatch(word) is None or word in excluded or not lexicon.era_ok(word):
+                continue
+            reason = junk_reason(word, row["origin"])
+            if reason is None:
+                candidates.append(row)
+            else:
+                screened[reason] += 1
+        counts = (corpus(store.conn, [r["word"] for r in candidates], eligible=eligible,
+                         human=ctx.human, end=end) if candidates else None)
+        for row in candidates:
             if not room:
                 break
             word = row["word"]
-            if _WORDS.fullmatch(word) is None or word in excluded or not lexicon.era_ok(word):
+            reason = junk_reason(word, row["origin"], counts)
+            if reason is not None:
+                screened[reason] += 1
                 continue
             sources = _sources(ctx, word, eligible, excluded)
             origin = row["origin"]
@@ -212,3 +289,5 @@ def slang(ctx):
             created.append(ident)
             store.set_meta(receipt, json.dumps(created))
             room -= 1
+        if screened:
+            log("slang_screened", night=ctx.night, **dict(sorted(screened.items())))

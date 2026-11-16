@@ -127,6 +127,7 @@ Receipts live in existing `meta` keys `guards:sent:<local-day>:<guid>`; no migra
 is needed. Values contain hashed receipt IDs, hashed stock phrases and gag IDs,
 not text. Rejected candidates and reactions spend no text allowance. Caps count
 across channels per member/day; lexicon joke/slang caps require active adoption.
+A term of one everyday word (`talk/everyday.py`) is never rationed or recorded.
 Confirmed delivery prunes receipt keys older than the preceding fourteen local
 calendar days, in the caller's transaction. Retries outside that retention window
 are not deduplicated. Other metadata is untouched. Missing receipt tables omit the
