@@ -1560,6 +1560,7 @@ class MindApp:
         for drain in tuple(self._shutdown_drains):
             if await drain() is False:
                 raise RuntimeError("extension shutdown drain did not complete")
+        self.engine.stopping = True  # its answers still owed are kept for the next start
         await self._step("turns", self.engine.end_session())
         if self._stats_since is not None and self.clock.now() > self._stats_since:
             self._log_stats(self.clock.now(), final=True)

@@ -26,7 +26,7 @@ _REASONS = frozenset({
     "tells", "emote_only", "command", "empty", "offline", "afk", "dead",
     "human_offline", "flirt_target", "flirt_stance", "raid", "guards", "chain",
     "elsewhere_changed", "hotmic_changed", "cancel", "stall", "room", "ptt",
-    "scope_changed", "transport_refused",
+    "scope_changed", "transport_refused", "carried",
 })
 _OUTCOMES = frozenset({"completed", "dropped", "cancelled", "error", "incomplete",
                        "started", "done", "cut", "first_ack", "echo_confirmed"})

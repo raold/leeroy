@@ -26,7 +26,16 @@ plan is as usual (_pushback).
 
 Silence is valid: a reply count can be 0, the model can answer (nothing), and every guard, raid
 rule and chain cap drops a turn rather than delaying it. Nothing here waits on a turn: on_event,
-on_human_chat and tick spawn them and return."""
+on_human_chat and tick spawn them and return.
+
+With [life] availability above 0 (life/service.py) her day decides who answers him in game and how
+soon (_life_delays): every weight follows her attention (Pipeline._weigh), each answer waits her
+latency (an owed one at most game_cap_s, any other missed past NON_OWED_MAX_S), the most attentive
+answers first, a whisper of his to a member whose answer is still waiting joins it, urgent words,
+his third line and his goodbye hurry it (_life_waiting), and at his logout a whisper answer still
+waiting goes to her Discord DM instead (end_session, LifeService.on_logout). At 0 every draw is
+today's."""
+import asyncio
 import dataclasses
 import math
 import random
@@ -38,7 +47,11 @@ from typing import Awaitable, Callable, Protocol
 
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
+from leeroy_mind.discord import owntime
+from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.human import human_identity
+from leeroy_mind.life.presence import Attention
+from leeroy_mind.life.seed import seeded
 from leeroy_mind.life.service import LifeService
 from leeroy_mind.llm.presets import BEAT
 from leeroy_mind.llm.scheduler import LLMScheduler
@@ -59,9 +72,9 @@ from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.items import ItemLinker
 from leeroy_mind.talk.pastes import PASTE_BURST_S, PASTE_SETTLE_S, PasteBurst, is_addon_row
 from leeroy_mind.talk.filters import holds, word_counts
-from leeroy_mind.talk.pipeline import (FOLLOW_SOURCES, KEEPER, NOBODY, NOBODY_WHO, THEIRS,
-                                       TurnMeta, _asks, _names_list, chain_base, log,
-                                       picked_why)
+from leeroy_mind.talk.pipeline import (FOLLOW_SOURCES, KEEPER, NOBODY, NOBODY_WHO,
+                                       REPLY_KINDS, THEIRS, TurnMeta, _asks, _names_list,
+                                       chain_base, log, picked_why)
 from leeroy_mind.talk.prompt import pushback_help
 from leeroy_mind.talk.questions import FIT_TIERS, fit_tier, game_question, is_plan
 from leeroy_mind.talk.raid import RaidPhase, RaidState
@@ -181,11 +194,13 @@ class TalkEngine(EmoteReactions):
         self.store, self.world, self.raid, self.recall = store, world, raid, recall
         self.scheduler, self.personas, self.cfg = scheduler, personas, cfg
         # [life]: her day (life/service.py), pinned here and at every apply_config
-        self.life = LifeService(store=store, clock=clock, personas=personas, world=world, cfg=cfg)
+        self.life = LifeService(store=store, clock=clock, personas=personas, world=world, cfg=cfg,
+                                engine=self)
         # [talk] think_private and think_budget (the beat, talk/beat.py): read at mind start,
         # never at a login's reload
         self.think_private = getattr(cfg.talk, "think_private", False) is True
         self.think_budget = getattr(cfg.talk, "think_budget", BEAT.options["num_predict"])
+        self.stopping = False  # the mind is shutting down (MindApp._shutdown): end_session
         self.data_dir, self.clock, self.rng, self.send = Path(data_dir), clock, rng, send
         self.on_line_sent = on_line_sent
         self.items = items  # the item links (talk/items.py); None: lines link nothing
@@ -269,12 +284,24 @@ class TalkEngine(EmoteReactions):
                     st, altered_state=new.value, state_session=session_id, updated=int(now),
                     state_since=int(now) if new != old else st.state_since))
 
-    async def end_session(self) -> None:
+    async def end_session(self, *, stopping: bool | None = None) -> None:
         """The human logged off (or the mind is stopping): cancel every pending turn, give each
         line still waiting for an echo its row, end his login stretch (the next login greets),
         and keep the altered states, with the time they were last in effect, for the next
-        session."""
-        await self._cancel_all()
+        session. With [life] availability above 0: with him offline (his logout, or a hello
+        saying he left) each answer to his whisper not yet said goes to her Discord DM instead
+        (LifeService.on_logout), and those answers, and the ones earlier logouts carried, are
+        not cancelled; when the mind is `stopping` nothing is carried and every answer to his
+        whispers still owed is kept in meta for the next start (OwedWatch.persist). `stopping`
+        None reads TalkEngine.stopping, which the app sets as its shutdown begins."""
+        stopping = self.stopping if stopping is None else stopping
+        carried = set()
+        if stopping:
+            if (owed := getattr(self, "owed", None)) is not None and self.life.availability > 0:
+                owed.persist()
+        elif not self.world.human_online:
+            carried = self.life.on_logout()
+        await self._cancel_all(keep=carried)
         if self.cfg.talk.realism:
             self.realism.fights.clear()
         self._pastes.clear()
@@ -319,18 +346,23 @@ class TalkEngine(EmoteReactions):
         if (owed := getattr(self, "owed", None)) is not None:
             owed.note_line(row, reply_to)  # owed an answer until a member gives one (talk/owed.py)
         whisper = reply_to == "whisper"
+        life = self.life.availability > 0  # her day: who answers and how soon (life/service.py)
+        if life and self._life_waiting(row, whisper):
+            return  # his whisper joins her answer still waiting
         audience, cands = self._reply_candidates(row, reply_to, now)
         if not cands:  # liveops M5: a line nobody answers says why in the log
             log.info("reply_skipped: line=%d reason=no_candidates channel=%s audience=%d "
                      "online=%d", row.id, reply_to, len(audience), len(self.world.online))
             return
         ctx = self._context(now, topic_words([row.text]), quest=is_quest_talk(row.text))
-        weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True)
+        # in the voice room he speaks in, the members there are with him ([life])
+        room = frozenset(cands) if reply_to.startswith("voice:") else frozenset()
+        weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True, with_him=room)
         if cands and not any(weights.values()):
             # everyone who could answer spoke in the last minute: weighed again with that
             # ignored, so his line still gets its answer and the dials still apply (talk/owed.py)
             weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True,
-                                        fresh=frozenset(cands))
+                                        fresh=frozenset(cands), with_him=room)
         names = {g: self.world.members[g].name for g in cands if g in self.world.members}
         push = self._pushback(row, reply_to, cands)
         planned = plan_reply_turns(row.text, channel=reply_to, to_guid=row.to_guid,
@@ -369,6 +401,12 @@ class TalkEngine(EmoteReactions):
                 and classify_human_line(row.text) == "greeting"):
             # the login's 2-3 hellos in all, and one answer to his own hello whatever they were
             planned = self._cap_hellos(planned, held) or planned[:1]
+        timed = None
+        # each answer's delay by her attention, the most attentive first; a line he spoke is
+        # answered by members in the room with him, as today
+        if life and not reply_to.startswith("voice:"):
+            timed = self._life_delays(row, planned, whisper=whisper, called=called, push=push)
+            planned = [rt for rt, _, _ in timed]
         log.info("reply_planned: line=%d channel=%s pool=%d replies=%d game=%s", row.id,
                  reply_to, len(pool), len(planned), question.topic if question else "-")
         if question is not None and planned:
@@ -379,13 +417,20 @@ class TalkEngine(EmoteReactions):
             rt.kind is TurnKind.GOODNIGHT for rt in planned) else None)
         lead = self.raid.lead() if group_chat else None
         items = []
+        drawn = {rt.turn_id: (d, lp) for rt, d, lp in timed} if timed is not None else {}
+        before = None  # the delay drawn for the answer before (life)
         for i, rt in enumerate(planned):
             channel = choose_channel(rt.kind, speaker=rt.speaker, world=self.world,
                                      raid=self.raid, now=now, rng=self.rng, reply_to=reply_to)
             if channel is None:
                 log.info("reply_skipped: line=%d reason=no_channel guid=%d", row.id, rt.speaker)
                 continue
-            delay = self.rng.uniform(*(REPLY_FIRST_S if i == 0 else REPLY_NEXT_S))
+            if timed is None:
+                delay = self.rng.uniform(*(REPLY_FIRST_S if i == 0 else REPLY_NEXT_S))
+            else:  # the job says them one after another: each waits what is left of its draw
+                d = drawn[rt.turn_id][0]
+                delay = d if before is None else max(self.rng.uniform(*REPLY_NEXT_S), d - before)
+                before = d
             pushed = push is not None and rt.speaker == push.target
             how = ("whisper" if whisper else "named" if rt.speaker in called
                    else "pushback" if pushed
@@ -401,12 +446,16 @@ class TalkEngine(EmoteReactions):
             turn = Turn(kind=rt.kind, speaker=rt.speaker,
                         channel=reply_to if rt.kind is TurnKind.GOODNIGHT else channel,
                         to_guid=rt.to_guid, addressee=hg, trigger_line=row.id,
-                        instruction=told, delay=delay * self._effects(rt.speaker).delay_mult)
+                        instruction=told, delay=delay if timed is not None
+                        else delay * self._effects(rt.speaker).delay_mult)
             meta = TurnMeta(rt.turn_id, answers_human=True, whisper_reply=whisper,
                             why=f"reply:{how}", facts_line=facts, lore=said_lore,
                             lore_memory=pin, first_question_answer=(rt.kind is TurnKind.REPLY_HUMAN
                                 and not any(t.kind is TurnKind.REPLY_HUMAN for t,_ in items)
                                 and classify_human_line(row.text) == "question_all"))
+            if timed is not None:
+                meta.wake, meta.heard_at = asyncio.Event(), row.ts
+                meta.life_presence = drawn[rt.turn_id][1]
             if pushed:  # one line, told he is pushing back, by how agreeable they are
                 ease = self.personas.get(rt.speaker).big_five.agreeableness.score
                 turn.instruction = " ".join(
@@ -426,7 +475,83 @@ class TalkEngine(EmoteReactions):
             meta.timing_origin = timing_origin
         if items:
             items[0][1].owed_answer = True  # the answer he is owed (talk/owed.py)
+            if timed is not None and (classify_human_line(row.text) == "goodbye"
+                                      or (whisper and owntime.URGENT_RE.search(row.text))):
+                # he is leaving: his goodnight back comes at once; his urgent whisper wakes her
+                self.hurry(items[0][1])
         self._queue(items)
+
+    # -- her day in game ([life] availability above 0) -----------------------------------------
+
+    def _life_delays(self, row: ChatLineRow, planned: list[ReplyTurn], *, whisper: bool,
+                     called: list[int], push: Pushback | None
+                     ) -> list[tuple[ReplyTurn, float, object]]:
+        """Each planned answer with its delay (LifeService.answer_delay, drawn from
+        seeded("delay", night, speaker, minute, his line)) and her presence, sorted by delay
+        (the most attentive first). Owed: the first planned answer once they are ordered by
+        attention (so the one owed is the most attentive, never an away member while another is
+        there), a whisper's, a member he named and his pushback's target; any other answer she
+        would only see past NON_OWED_MAX_S is skipped (`reply_skipped reason=away`)."""
+        local = self.clock.local()
+        night, minute = night_of(local), local.hour * 60 + local.minute
+        seen = [(rt, self.life.presence(rt.speaker, medium="game",
+                                        in_his_group=self.world.in_group(rt.speaker)))
+                for rt in planned]
+        seen.sort(key=lambda x: -(x[1].attention if x[1] is not None else Attention.FULL))
+        out = []
+        for i, (rt, lp) in enumerate(seen):
+            owed = (i == 0 or whisper or rt.speaker in called
+                    or (push is not None and rt.speaker == push.target))
+            d = self.life.answer_delay(rt.speaker, owed=owed,
+                                       rng=seeded("delay", night, rt.speaker, minute, row.id))
+            if d is None:
+                log.info("reply_skipped: line=%d reason=away guid=%d", row.id, rt.speaker)
+                continue
+            log.info("reply_latency: line=%d guid=%d att=%s delay_s=%.1f owed=%d", row.id,
+                     rt.speaker, lp.attention.name if lp is not None else "FULL", d, owed)
+            out.append((rt, d, lp))
+        return sorted(out, key=lambda x: x[1])
+
+    def _waiting_to_him(self) -> list[tuple[Turn, TurnMeta]]:
+        """The answers to him in game still waiting out their delay (Pipeline.waiting_turns);
+        his Discord's answers keep their own pace."""
+        hg = self.human.guid
+        return [(t, m) for _, t, m in self.waiting_turns()
+                if hg and t.kind in REPLY_KINDS and not is_discord(t.channel)
+                and (t.addressee == hg or (t.channel == "whisper" and t.to_guid == hg))]
+
+    def _his_lines_since_hers(self, guid: int) -> int:
+        """His whispers to `guid` since her last whisper to him, within owntime.TALKING_S."""
+        hg = self.human.guid
+        return self.store.conn.execute(
+            "SELECT count(*) FROM chat_line WHERE channel = 'whisper' AND origin = 'human' "
+            "AND from_guid = ? AND to_guid = ? AND ts >= ? AND ts > coalesce((SELECT max(ts) "
+            "FROM chat_line WHERE channel = 'whisper' AND origin = 'mind' AND from_guid = ? "
+            "AND to_guid = ?), 0)",
+            (hg, guid, self.clock.now() - owntime.TALKING_S, guid, hg)).fetchone()[0]
+
+    def _life_waiting(self, row: ChatLineRow, whisper: bool) -> bool:
+        """His goodbye hurries every answer to him still waiting. His whisper to a member whose
+        answer to him is still waiting plans nothing new (True): that answer answers his newest
+        line, now, when the whisper has urgent words (owntime.URGENT_RE) or is his third line
+        since her last (owntime.INSIST)."""
+        waiting = self._waiting_to_him()
+        if classify_human_line(row.text) == "goodbye":
+            for _, meta in waiting:
+                self.hurry(meta)
+        if not whisper:
+            return False
+        waiting = [(t, m) for t, m in waiting
+                   if t.speaker == row.to_guid and t.channel == "whisper"]
+        if not waiting:
+            return False
+        turn, meta = waiting[0]
+        turn.trigger_line = row.id
+        if (owntime.URGENT_RE.search(row.text)
+                or self._his_lines_since_hers(row.to_guid) >= owntime.INSIST):
+            self.hurry(meta)
+        log.info("reply_coalesced: line=%d guid=%d", row.id, row.to_guid)
+        return True
 
     def _reply_candidates(self, row: ChatLineRow, reply_to: str, now: float
                           ) -> tuple[set[int] | list[int], list[int]]:

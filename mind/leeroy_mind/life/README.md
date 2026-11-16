@@ -5,8 +5,9 @@ where she is at any minute, and how closely she is watching the game and Discord
 the human-likeness design ("Her day: presence and availability").
 
 **`[life] availability`** (0-10, code default 0: always present, today's behaviour; the release
-sets 6, the design point) moves Discord presence and the replies on her own time today (below,
-"Presence on Discord"); game latency and who answers come with later tasks. **`[life] state`**
+sets 6, the design point) moves Discord presence and the replies on her own time (below,
+"Presence on Discord") and who answers him in game and how soon (below, "In game: who answers and
+how soon"). **`[life] state`**
 (default false; the release sets true) records each member's feeling through the day (below, "Her
 feeling right now"); nothing reads it in a prompt yet. There is no migration and no native change.
 
@@ -197,13 +198,73 @@ presence, so the Discord tab shows the members away that the mind has away.
 Availability 0 is exactly today's presence, status line and DM timing (pinned by a hash of a
 week of states in `tests/life/test_discord_presence_life.py`).
 
+## In game: who answers and how soon
+
+With availability above 0 (at 0 every line below is skipped and the talk engine draws exactly
+today's numbers from its own generator):
+
+- **Who.** Every speaker weight in game (`talk.pipeline._weigh`: answers to his lines, greeters,
+  openers, whispers, raid reactions, the owed watch's rescues) is multiplied by
+  `LifeService.weight(guid)`: `attention_weight` of her attention in game, times `1 + social / 2`
+  while `[life] state` is on. A member in his group, or in the voice room he speaks in
+  (`with_him`), always gives full attention. 1.0 at 0.
+- **How soon.** The answers `on_human_chat` plans are ordered by attention (most attentive first,
+  the plan's order otherwise), and each draws `LifeService.answer_delay` from `seeded("delay",
+  night, speaker, local minute of the day, his line id)`: `latency` with her energy and stress. An
+  answer he is owed (the first in that order, a whisper's, a member he named, his pushback's
+  target) waits at most `game_cap_s` (384 s at 6, 600 s at 10). Any other answer drawn past
+  `NON_OWED_MAX_S` (240 s) is skipped: she missed it (`reply_skipped: line= reason=away guid=`).
+  The rest go out in order of their delay: the first waits its own draw, each later one
+  `max(uniform(2, 6), its draw - the one before)` (one job says them one after another), and the
+  first carries the owed answer. Logged `reply_latency: line= guid= att= delay_s= owed=0|1`. A line
+  he spoke in a voice room is answered on today's timing (the members there are in the room with
+  him). The altered states' delay multiplier is not applied to these draws, so the cap holds.
+- **Waiting answers.** An answer in its delay can be hurried (`Pipeline.hurry`: `TurnMeta.wake`,
+  `Pipeline._delay`). His whisper to a member whose answer to him is still waiting plans nothing
+  new (`reply_coalesced: line= guid=`): that answer answers his newest line. Urgent words
+  (`discord.owntime.URGENT_RE`: "are you up", "need help", ...), in his first whisper or a later
+  one, or his third whisper since her last within the last 10 minutes (`owntime.TALKING_S`), hurry
+  it; his goodbye hurries every game answer to him still waiting, and its own first answer.
+- **His logout.** A whisper to him is never sent while he is offline (`_blocked`: `human_offline`,
+  his whisper's own answer included). When the session ends with him offline (his logout, or a
+  hello saying he left: `TalkEngine.end_session`), `LifeService.on_logout` drops each answer to his
+  whisper not yet said (in its delay, composing or typing; never one whose line is at the bridge)
+  with reason `carried` (`Pipeline.withdraw`) and queues, per member, her answer in her Discord DM
+  instead (`carry_turn`): a REPLY_HUMAN turn on `dm:<guid>` to him with `CARRY_TEXT` ("He
+  whispered you in game and logged off before you saw it; answer it here."), owed, his whisper as
+  recall's query and in the prompt's "elsewhere" block, after what was left of her delay (none
+  once it was being composed: his "gn all" then /logout still reaches him). Neither this session's
+  end nor a later logout cancels it (`carried_jobs`). Logged `life_carried: guid= line=`; the owed
+  watch logs `owed_carried: line= guid=` and keeps the stretch until her DM answer lands (it
+  closes it); if that answer never comes, the whisper waits for his next login, as before.
+- **A mind stop** (`MindApp._shutdown` sets `TalkEngine.stopping`; a clean stop, or one after the
+  bridge dropped) carries nothing into the shutdown: the owed watch keeps every whisper of his
+  still owed (an answer waiting, composing, held, or carried to her DM) in meta `life:carried`, a
+  JSON list of `{"line", "guid", "dm"}` (his line id, the member, carried; never a text;
+  `owed_persisted: whispers=`). The next start reads and clears it (`owed_restored: line= guid=
+  dm=`) and, once its start grace has passed, answers each again: in her DM while he is offline
+  (`owed_rescue ... channel=dm:<guid> ... reason=restored`, then `owed_carried`), else by whisper.
+  A crash writes nothing (as before).
+- **Health.** `owner-replies` reads `life:availability` from meta: above 0 a game line is answered
+  in time within `game_cap_s` plus 2 minutes, a DM or group DM by when her own time answers it
+  (`owntime.due_at`, the latest she would: never urgent; a group DM's slowest member) plus 2
+  minutes, and her DM line answers his whisper too. At 0 it is today's 5 minutes.
+- **Her state** is read once per member per `STATE_SNAPSHOT_S` (30 s; `StateBook.get` costs about
+  three queries).
+- **Discord.** His group DM drawn to one member (no one named) goes to its members online by their
+  day when there are any, never first to one idle at work while another is online (review-335
+  P3-E).
+
+Unverified without a live model: how her late answers read (the late excuse is Task 9's shape).
+
 ## Her feeling right now (`life/state.py`, `life/statebook.py`)
 
 Section 3 of the human-likeness design. **`[life] state`** (default false; the release sets
 true): while it is on, `LifeService.state` is a `StateBook` and each member carries five numbers,
 each in [-1, 1], that move through her day. While it is off, `LifeService.state` is None and
-nothing is read or written. **Recorded only for now**: no prompt, latency, intent or shape reads
-it yet (later tasks: her mood line, "It lands", and the draws). Only cast members move: a guild
+nothing is read or written. Game latency and who answers read her energy, stress and social (above,
+"In game"); no prompt, intent or shape reads it yet (later tasks: her mood line, "It lands", and
+the draws). Only cast members move: a guild
 member at level 80 or more with a persona, never him.
 
 | Axis | Baseline (where it rests) |

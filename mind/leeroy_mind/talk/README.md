@@ -335,7 +335,8 @@ full rule); no switch, no migration, no native rebuild.
   (`discord_lease_kept`, checked every 30 s past its 10-min idle end, 15 min at most), so the
   live model stays pinned; his login lease pins it already. The night and the offline raid leases are untouched.
 - **Health:** `owner-replies` counts his messages of the last 24 h with no member answer within
-  5 minutes, by medium (a note from one, a FAIL from 10); counts only, never text.
+  5 minutes, by medium (a note from one, a FAIL from 10); counts only, never text. With `[life]
+  availability` above 0 the bounds are her day's (life/README.md, "Health").
 
 # The beat before his whisper and DM answers (`[talk] think_private`, 2026-11-16)
 

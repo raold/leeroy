@@ -36,8 +36,16 @@ Three layers, cheapest first:
    nobody with a persona can hear ends (`owed_given_up reason=nobody_present|target_offline`),
    a goodbye once he has logged out (`goodbye`), and a line in a game channel once he logs
    out (`logout`: his chat frame is fresh at the next login; a whisper is kept and answered
-   then, its age shown in the prompt). A Discord channel post is rescued for CHANNEL_MAX_S,
-   then dropped (`too_old`, logged); his DMs and group DMs are kept whatever their age.
+   then, its age shown in the prompt). With [life] availability above 0 a whisper whose answer
+   was still waiting at his logout is carried to her Discord DM (LifeService.on_logout,
+   OwedWatch.carried, logged `owed_carried`): her DM answer closes the stretch, and if it never
+   comes the whisper waits for his next login as before. At a mind stop (with availability above
+   0) every whisper of his still owed, waiting, held or carried, is kept in meta PERSIST_KEY
+   (persist: his line, the member, whether it was carried; never a text), and the next start
+   answers each again (_restore, `owed_restored`): in her DM while he is offline, else by
+   whisper, logged `owed_rescue ... reason=restored`. A Discord channel post is rescued for
+   CHANNEL_MAX_S, then dropped (`too_old`, logged); his DMs and group DMs are kept whatever their
+   age.
    A rescue the model failed (INFRA_DROPS) takes no backoff, and every backoff resets on the
    next line the guild sends.
 
@@ -59,6 +67,7 @@ game line (they never reached it; Discord posts are read back from mind.db after
 Logs carry ids, channels, counts and codes, never a text."""
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -84,6 +93,9 @@ HIS_TALK_WAIT_S = 120.0
 KEEP_WHISPERS = ("whisper:after_kill", "whisper:evening")
 # Lines he sends this close together, before anyone answers, are one message to answer
 BURST_S = 90.0
+# his whispers still owed at a mind stop ([life] availability above 0): [{"line", "guid", "dm"}]
+PERSIST_KEY = "life:carried"
+PERSIST_MAX = 64
 # An owed answer's deadline (after its delay): long enough for a cold model load or a night's
 # hand-over, never the 20-30 s a social line gets. With several answers to him in flight it
 # scales with their number (owner, 2026-11-16: "allow longer periods of gpu usage if chatting
@@ -210,6 +222,8 @@ class Owed:
     retry_s: float = RETRY_S  # the gap before the next rescue, doubling while nothing comes
     tried: set[int] = field(default_factory=set)
     held: str = ""
+    carried: bool = False  # a whisper's answer carried to her DM at his logout (OwedWatch.carried)
+    restored: bool = False  # kept at the last stop (persist): offline, her DM answers it
 
 
 def _game_medium(reply_to: str) -> str:
@@ -241,6 +255,59 @@ class OwedWatch:
                 "SELECT max(id) FROM utterance WHERE dropped IS NULL").fetchone()[0] or 0
         except Exception:
             self._last_sent = 0
+        self._restore()
+
+    # -- across a stop -------------------------------------------------------------------------
+
+    def persist(self) -> None:
+        """At a mind stop (TalkEngine.end_session stopping, [life] availability above 0): every
+        whisper of his still owed (an answer waiting, composing, held or carried to her DM) is
+        kept in meta PERSIST_KEY as {"line": his newest line, "guid": the member, "dm": carried},
+        ids only, for the next start (_restore). Logged `owed_persisted: whispers=`."""
+        items = [{"line": o.ids[-1], "guid": o.to, "dm": int(o.carried)}
+                 for (medium, _), o in self._game.items()
+                 if medium == "whisper" and o.to and o.ids][:PERSIST_MAX]
+        try:
+            if items:
+                self.app.store.set_meta(PERSIST_KEY, json.dumps(items))
+            else:
+                self.app.store.conn.execute("DELETE FROM meta WHERE key = ?", (PERSIST_KEY,))
+        except Exception as e:
+            log.warning("owed_persist_failed: reason=%s", type(e).__name__)
+            return
+        if items:
+            log.info("owed_persisted: whispers=%d", len(items))
+
+    def _restore(self) -> None:
+        """The whispers the last stop kept (persist) are owed again, each as a stretch of his
+        line, and the record is cleared: answered in her DM while he is offline, else by
+        whisper (_tick_game). A line that is not his whisper to that member is left out."""
+        store = self.app.store
+        try:
+            raw = store.get_meta(PERSIST_KEY)
+            if raw is None:
+                return
+            store.conn.execute("DELETE FROM meta WHERE key = ?", (PERSIST_KEY,))
+            items = json.loads(raw)
+        except Exception as e:
+            log.warning("owed_restore_failed: reason=%s", type(e).__name__)
+            return
+        hg = getattr(getattr(self.app.engine, "human", None), "guid", 0)
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            line, guid, dm = item.get("line"), item.get("guid"), item.get("dm")
+            if not (type(line) is int and type(guid) is int and dm in (0, 1) and guid > 0):
+                continue
+            rows = store.chat_lines([line])
+            row = rows[0] if rows else None
+            if (row is None or row.channel != "whisper" or row.origin != "human"
+                    or row.to_guid != guid or (hg and row.from_guid != hg)):
+                continue
+            self._game[("whisper", guid)] = Owed("whisper", "whisper", guid, [line], row.ts,
+                                                 row.ts, reply_to="whisper", rows=[row],
+                                                 carried=bool(dm), restored=True)
+            log.info("owed_restored: line=%d guid=%d dm=%d", line, guid, dm)
 
     # -- what he said --------------------------------------------------------------------------
 
@@ -260,6 +327,19 @@ class OwedWatch:
         o.rows.append(row)
         o.last = row.ts
         del o.ids[:-32], o.rows[:-32]
+
+    def carried(self, guid: int, line: int) -> None:
+        """LifeService.on_logout carried her answer to his whisper `line` to her Discord DM: the
+        stretch is closed by her DM answer (_answered_at), not given up at his logout, and
+        waits for his next login only if that answer never comes. Takes his Discord lease so the
+        live model stays for it."""
+        o = self._game.get(("whisper", guid))
+        if o is not None:
+            o.carried, o.held = True, ""
+        log.info("owed_carried: line=%d guid=%d", line, guid)
+        take = getattr(getattr(self.app, "discord_talk", None), "_take_lease", None)
+        if take is not None:
+            take()
 
     # -- the tick ------------------------------------------------------------------------------
 
@@ -319,9 +399,13 @@ class OwedWatch:
         an answer to (it answers that line and those before it)."""
         conn, hg = self.app.store.conn, self.app.engine.human.guid
         if o.medium == "whisper":
+            # a carried stretch: her line in her DM with him answers it too
+            places = ("whisper", f"dm:{o.to}") if o.carried else ("whisper",)
+            marks = ",".join("?" * len(places))
             row = conn.execute(
-                "SELECT max(ts) FROM chat_line WHERE channel = 'whisper' AND origin = 'mind' "
-                "AND from_guid = ? AND to_guid = ? AND ts >= ?", (o.to, hg, o.first)).fetchone()
+                f"SELECT max(ts) FROM chat_line WHERE channel IN ({marks}) AND origin = 'mind' "
+                "AND from_guid = ? AND to_guid = ? AND ts >= ?",
+                (*places, o.to, hg, o.first)).fetchone()
         else:
             marks = ",".join("?" * len(o.ids))
             row = conn.execute(
@@ -364,8 +448,9 @@ class OwedWatch:
         for t in eng.planned_turns():
             if t.trigger_line in ids:
                 return True
-            if (o.medium == "whisper" and t.speaker == o.to and t.channel == "whisper"
-                    and t.to_guid == hg and t.kind in REPLY_KINDS):
+            if (o.medium == "whisper" and t.speaker == o.to and t.to_guid == hg
+                    and t.kind in REPLY_KINDS and (t.channel == "whisper" or (
+                        o.carried and t.channel == f"dm:{o.to}"))):
                 return True
         return False
 
@@ -380,6 +465,14 @@ class OwedWatch:
             if self._in_flight_game(o):
                 continue
             self._unrewarded(o)
+            if o.restored and not eng.world.human_online:
+                # owed at the last stop, and he is offline: her DM answers it
+                if self._paused() or self.model_away():
+                    self._hold(o, key, "gpu_paused" if self._paused() else "model_away")
+                elif not self._rescue_carried(o, now):
+                    self._give_up(o, "target_offline")
+                    del self._game[key]
+                continue
             if not eng.world.human_online and (o.medium != "whisper"
                                                or self._goodbye(o.rows[-1].text)):
                 # never answered at his relog (review-327 P3-4, r2 P3-N1): a goodbye, or a line
@@ -401,6 +494,29 @@ class OwedWatch:
                 del self._game[key]
             elif done:
                 self._hold(o, key, done)
+
+    def _rescue_carried(self, o: Owed, now: float) -> bool:
+        """A whisper of his the last stop kept (_restore), him offline: her answer in her
+        Discord DM (LifeService.carry_turn), after which the stretch is a carried one. False when
+        nothing can answer it (no talk engine life, no persona)."""
+        eng = self.app.engine
+        life = getattr(eng, "life", None)
+        if life is None or getattr(life, "engine", None) is None or eng.personas.get(o.to) is None:
+            return False
+        row = o.rows[-1]
+        turn, meta = life.carry_turn(o.to, row.id, delay=self.rng.uniform(1.0, 3.0),
+                                     heard_at=o.first)
+        meta.owed_rescue = True
+        o.restored, o.carried, o.held = False, True, ""
+        o.rescues += 1
+        o.rescued_at = now
+        o.tried.add(o.to)
+        log.info("owed_rescue: medium=whisper channel=dm:%d line=%d lines=%d age_s=%d speaker=%d "
+                 "reason=restored try=%d", o.to, row.id, len(o.ids), int(now - o.first), o.to,
+                 o.rescues)
+        self.carried(o.to, row.id)
+        life.keep(eng._queue([(turn, meta)]))
+        return True
 
     def _rescue_game(self, o: Owed, now: float) -> str | None:
         """Queue one rescue answer to the stretch's newest line; None when queued, else why
@@ -437,8 +553,9 @@ class OwedWatch:
             # recent speech ignored (everyone may have just spoken), the dials still apply:
             # a member at talkative 0 never answers unless he named her
             ctx = eng._context(now, topic_words([row.text]))
+            room = frozenset(fresh) if o.medium == "voice" else frozenset()  # with him there
             weights, pool = eng._weigh(fresh, last=hg, ctx=ctx, reply=True,
-                                       fresh=frozenset(fresh))
+                                       fresh=frozenset(fresh), with_him=room)
             picked = pick_speakers({g: v for g, v in weights.items() if v > 0}, 1, self.rng, pool)
             if not picked:
                 return "no_speaker"
@@ -454,7 +571,7 @@ class OwedWatch:
         o.rescues += 1
         o.rescued_at = now
         o.tried.add(speaker)
-        o.held = ""
+        o.held, o.restored = "", False
         log.info("owed_rescue: medium=%s channel=%s line=%d lines=%d age_s=%d speaker=%d "
                  "reason=%s try=%d", o.medium, o.channel, row.id, len(o.ids), int(now - o.first),
                  speaker, reason, o.rescues)
@@ -675,20 +792,26 @@ def _game_family(channel: str) -> str:
 
 
 def count_unanswered(conn, human: int, since: float, now: float, *,
-                     window: float = 300.0) -> Unanswered:
+                     window: float = 300.0, game_window: float | None = None,
+                     dm_due=None, whisper_dm: bool = False) -> Unanswered:
     """His messages since `since` (game chat, voice, Discord channels, DMs and group DMs) and
     those no member answered within `window` seconds, read-only: lines he sent together (BURST_S
     apart, nobody answering between) are one message; a whisper or DM is answered by its member's
     next line, a channel line by an answer to it (utterance.trigger_line) or, on Discord, a reply
     to it. His addon pastes, DBM-style auto-whispers and party/raid bot commands are not
     messages; raid orders the raid lead took can't be told apart here and still count. A message
-    younger than `window` is left out (not yet due)."""
+    younger than `window` is left out (not yet due). With [life] availability above 0 (health,
+    owner-replies): `game_window` replaces `window` for game lines (her day's late answers),
+    `dm_due(channel, message_id, ts)` is when her own time answers a DM or group DM post (it is
+    answered in time up to then, and not yet due before), and `whisper_dm` counts her DM line
+    to him as the answer to his whisper (a whisper carried at his logout)."""
+    game_window = window if game_window is None else game_window
     from leeroy_mind.talk.world import looks_like_bot_command
     out = Unanswered()
     game = conn.execute("SELECT id, ts, channel, to_guid, text FROM chat_line WHERE from_guid = ? "
                         "AND origin = 'human' AND ts >= ? AND ts <= ? AND channel NOT LIKE 'dm:%' "
                         "AND channel NOT LIKE 'discord:%' AND channel NOT LIKE 'gdm:%' ORDER BY ts, id",
-                        (human, since, now - window)).fetchall()
+                        (human, since, now - game_window)).fetchall()
     stretches: list[tuple[str, int, list]] = []  # (key channel, to, [(id, ts)])
     open_: dict[tuple[str, int], list] = {}
     for lid, ts, channel, to, text in game:
@@ -702,7 +825,7 @@ def count_unanswered(conn, human: int, since: float, now: float, *,
         key = (channel, to if channel == "whisper" else 0)
         cur = open_.get(key)
         if cur is not None and ts - cur[-1][1] <= BURST_S and not _game_reply(
-                conn, key, human, [i for i, _ in cur], cur[-1][1], ts):
+                conn, key, human, [i for i, _ in cur], cur[-1][1], ts, whisper_dm=whisper_dm):
             cur.append((lid, ts))
             continue
         cur = open_[key] = [(lid, ts)]
@@ -711,7 +834,8 @@ def count_unanswered(conn, human: int, since: float, now: float, *,
         fam = _game_family(channel)
         out.messages[fam] = out.messages.get(fam, 0) + 1
         last = lines[-1][1]
-        if not _game_reply(conn, (channel, to), human, [i for i, _ in lines], last, last + window):
+        if not _game_reply(conn, (channel, to), human, [i for i, _ in lines], last,
+                           last + game_window, whisper_dm=whisper_dm):
             out.unanswered[fam] = out.unanswered.get(fam, 0) + 1
     posts = conn.execute("SELECT id, channel, thread, ts FROM discord_message WHERE origin = 'human' "
                          "AND author = ? AND deleted IS NULL AND ts >= ? AND ts <= ? ORDER BY id",
@@ -730,19 +854,28 @@ def count_unanswered(conn, human: int, since: float, now: float, *,
     for channel, lines in dstretch:
         fam = ("discord_dm" if channel.startswith("dm:") else "group_dm"
                if channel.startswith("gdm:") else "discord_channel")
-        out.messages[fam] = out.messages.get(fam, 0) + 1
         last = lines[-1][1]
-        if not _discord_reply(conn, channel, [m for m, _ in lines], last, last + window):
+        until = last + window
+        if dm_due is not None and channel.startswith(("dm:", "gdm:")):
+            until = max(until, dm_due(channel, lines[-1][0], last))
+            if until > now:
+                continue  # her own time has not come yet: not due
+        out.messages[fam] = out.messages.get(fam, 0) + 1
+        if not _discord_reply(conn, channel, [m for m, _ in lines], last, until):
             out.unanswered[fam] = out.unanswered.get(fam, 0) + 1
     return out
 
 
-def _game_reply(conn, key, human, ids, after: float, until: float) -> bool:
+def _game_reply(conn, key, human, ids, after: float, until: float, *,
+                whisper_dm: bool = False) -> bool:
     channel, to = key
-    if channel == "whisper":
-        return conn.execute("SELECT 1 FROM chat_line WHERE channel = 'whisper' AND origin = 'mind' "
-                            "AND from_guid = ? AND to_guid = ? AND ts > ? AND ts <= ? LIMIT 1",
-                            (to, human, after, until)).fetchone() is not None
+    if channel == "whisper":  # with whisper_dm, her line in her DM with him answers it too
+        places = ("whisper", f"dm:{to}") if whisper_dm else ("whisper",)
+        marks = ",".join("?" * len(places))
+        return conn.execute(f"SELECT 1 FROM chat_line WHERE channel IN ({marks}) "
+                            "AND origin = 'mind' AND from_guid = ? AND to_guid = ? AND ts > ? "
+                            "AND ts <= ? LIMIT 1",
+                            (*places, to, human, after, until)).fetchone() is not None
     marks = ",".join("?" * len(ids))
     return conn.execute(f"SELECT 1 FROM utterance WHERE dropped IS NULL AND trigger_line IN ({marks}) "
                         "AND ts >= ? AND ts <= ? LIMIT 1",
