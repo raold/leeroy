@@ -1,13 +1,18 @@
 """The first invariant: with no tuning rows (or only rows that reach nobody), every prompt, weight
 and decision is byte-for-byte what it was before tuning existed. golden_prompts.json was recorded
-by scenario.py with the code from before tuning touched talk."""
+by scenario.py with the code from before tuning touched talk.
+
+The beat before an answer to his whisper or DM ([talk] think_private, talk/beat.py, 2026-11-16)
+adds a request and three or four lines after such an answer's instruction: golden_prompts.json
+records the scenario with it off, and golden_beat.json (scenario.record_beat) holds those
+answers' requests with it on. No other turn's prompt changes."""
 import pytest
 
 from conftest import seed_test_cast
 from leeroy_mind.personas.io import PersonaCache, load_persona
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.tuning import changes as C
-from tuning.scenario import cast, engine_clock, golden, record
+from tuning.scenario import cast, engine_clock, golden, golden_beat, record, record_beat
 
 HUMAN = 1
 
@@ -23,6 +28,13 @@ def _pic(store):
 
 def test_no_tuning_rows_means_identical_prompts_weights_and_lines(store, clock, tmp_path):
     assert record(store, clock, tmp_path) == golden()
+
+
+def test_the_beat_before_his_whisper_answers_is_its_own_golden(store, clock, tmp_path):
+    """Two answers to his whispers with the beat on: the beat's request (its prompt with the
+    beat's instruction, format and options) and each line's prompt with "You read it as",
+    "It lands", "You want to" (and "Bring in") after its instruction, as golden_beat.json."""
+    assert record_beat(store, clock, tmp_path) == golden_beat()
 
 
 def test_rows_that_reach_nobody_change_nothing(store, clock, tmp_path):

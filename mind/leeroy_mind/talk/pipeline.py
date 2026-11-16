@@ -58,7 +58,7 @@ from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.llm.client import LLMError, GpuPaused
-from leeroy_mind.llm.presets import LIVE, LIVE_BIT, Preset, cut_at_stop, thinking
+from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.recall import Recall, whisper_ok
 from leeroy_mind.nightly.settings import night_bounds
@@ -71,6 +71,7 @@ from leeroy_mind.photos.offer import PhotoOffer, caption_ok
 from leeroy_mind.protocol import Ack, Chat, Command, Emote, Say
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
+from leeroy_mind.talk import beat as beats
 from leeroy_mind.talk.budget import PHASE_MODS, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.discord_length import (FEW_WORDS, QUICK_WORDS, SHORT_WORDS,
@@ -92,7 +93,7 @@ from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
 from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_line_text,
                                      comms_rules, facts_head, knows_real_name, mood_line,
                                      quest_help, real_name_line, redact_for, relationship_card,
-                                     render_instruction, render_messages, replay, room_for,
+                                     render_instruction, render_messages, replay,
                                      said_hi_text, select_samples, trim_to_budget)
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
@@ -109,7 +110,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
-from leeroy_mind.text import EMOJI_RE, strip_wow_markup
+from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
@@ -434,6 +435,9 @@ class TurnMeta:
     server_thread: tuple[int, ...] = ()
     server_conversation: str = ''
     godmode_intent: int | None = None  # the owner's intent this turn carries out (godmode)
+    # the beat's lines for this answer (talk/beat.py): None not asked yet, "" skipped; never
+    # logged or stored
+    beat: str | None = field(default=None, repr=False)
 
 
 class _ScopeChanged(SchedulerError):
@@ -525,6 +529,8 @@ class Composed:
     # her last moves with this turn's counterpart, as its Lately line read them: the repeat
     # check uses the same rows
     moves: list[MoveRow] = field(default_factory=list)
+    # the memories and chat lines it showed, as the beat may offer them (beat.items_of)
+    beat_items: list[str] = field(default_factory=list)
 
 
 def _hinted(composed: "Composed", hint: str) -> "Composed":
@@ -1196,8 +1202,89 @@ class Pipeline:
                 templates_used(meta,used)
             except Exception:
                 log.warning("learn_recipe_describe_failed")
-            return result
-        return await self._compose_prompt(turn,meta,**kwargs)
+            return await self._with_beat(turn, meta, result)
+        result = await self._compose_prompt(turn,meta,**kwargs)
+        return await self._with_beat(turn, meta, result) if live else result
+
+    def _beat_on(self, turn: Turn, meta: TurnMeta | None) -> bool:
+        """[talk] think_private (read at mind start, TalkEngine): an answer to his whisper or to
+        his Discord DM gets a beat first (talk/beat.py). Never game channels, Discord channels,
+        group DMs, voice rooms or a template's turn."""
+        if meta is None or not getattr(self, "think_private", False) or turn.template is not None:
+            return False
+        hg = self.human.guid
+        whisper = self._answers_his_whisper(turn) or (
+            bool(hg) and meta.whisper_reply and turn.channel == "whisper" and turn.to_guid == hg)
+        return bool(whisper or self._answers_his_dm(turn, meta))
+
+    async def _with_beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> "Composed":
+        """`c` with the beat's lines after its instruction, on an answer that gets one. The beat
+        is asked once a turn: a later composition (a guard's rewrite, a fresh answer) reuses it,
+        and every request of the turn, the owed fallback's included, carries the same lines."""
+        if not self._beat_on(turn, meta):
+            return c
+        if meta.beat is None:
+            meta.beat = await self._beat(turn, meta, c)
+        return replace(c, messages=_with_hint(c.messages, meta.beat)) if meta.beat else c
+
+    async def _beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> str:
+        """One short call on the turn's own prompt, constrained to beat.schema with think false:
+        the lines it gives the answer, or "" when it is skipped (an error, BEAT.timeout seconds
+        passed, the queue's included, or a reply that is empty or not the schema), and the line
+        goes as it would without it. Its time counts in the turn's llm_s. Logs carry the want
+        code and times, never its words."""
+        human = self.human.called
+        wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0)
+        options = dict(BEAT.options)
+        options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
+        items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
+                              wants, c.beat_items, predict=options["num_predict"],
+                              num_ctx=options["num_ctx"])
+        if items is None:
+            log.info("think_beat_skipped: guid=%d reason=room ms=0", turn.speaker)
+            return ""
+        messages = _with_hint(c.messages, beats.instruction(human, wants, items))
+        fmt = beats.schema(wants, human)
+
+        async def job(llm):
+            if not _scope_valid(meta):
+                raise _ScopeChanged("scope_changed")
+            if self.live_admission is not None:
+                await self.live_admission()
+            return await llm.chat(self.cfg.models.live, messages, options=options, think=False,
+                                  format=fmt, timeout=BEAT.timeout)
+        started, reason = self.clock.now(), ""
+        try:
+            credit = meta.borrow_credit
+            extra = {'credit': credit} if credit is not None else {}
+            result = await asyncio.wait_for(
+                self.scheduler.submit(turn.priority, job, deadline=turn.deadline, **extra),
+                BEAT.timeout)
+        except TimeoutError:
+            reason = "timeout"
+        except GpuPaused:
+            reason = "gpu_paused"
+        except Expired:
+            reason = "expired"
+        except _ScopeChanged:
+            reason = "scope_changed"
+        except (SchedulerError, LLMError) as e:
+            reason = "timeout" if "timed out" in str(e) else "llm_error"
+        except Exception as e:  # the beat is optional: nothing in it may cost him his answer
+            reason = "error"
+            log.warning("think_beat_failed: guid=%d error=%s", turn.speaker, type(e).__name__)
+        elapsed = self.clock.now() - started
+        meta.llm_s = (meta.llm_s or 0.0) + elapsed
+        found = None
+        if not reason:
+            found, reason = beats.parse(result.text, wants, items)
+        if found is None:
+            log.info("think_beat_skipped: guid=%d reason=%s ms=%d", turn.speaker, reason,
+                     round(elapsed * 1000))
+            return ""
+        log.info("think_beat: guid=%d want=%s use=%d ms=%d", turn.speaker, found.want,
+                 found.use is not None, round(elapsed * 1000))
+        return beats.lines(found, human)
 
     async def _compose_prompt(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
@@ -1450,8 +1537,8 @@ class Pipeline:
                 log.warning("awareness_card_failed guid=%d",turn.speaker)
                 if meta.review_required:
                     raise ValueError("awareness_unavailable") from None
-        trimmed = trim_to_budget(redact_for(parts, human, bool(real)),
-                                 budget=self._prompt_budget(turn, meta))
+        redacted = redact_for(parts, human, bool(real))
+        trimmed = trim_to_budget(redacted, budget=self._prompt_budget(turn))
         if meta.learning is not None:
             from leeroy_mind.learn.apply import used
             used(meta, len(trimmed.style))
@@ -1488,19 +1575,17 @@ class Pipeline:
                         # repeat check's): the audit's answer that sent his message back
                         support, [r.text for r in recent if r.from_guid == hg] if dm_rows
                         else [r.text for r in recent if r.id != turn.trigger_line],
-                        [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves)
+                        [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves,
+                        # others' earlier lines, never hers nor the line she answers
+                        beat_items=beats.items_of(trimmed.memories, [
+                            text for r, text in zip(recent[:-1], redacted.chat)
+                            if r.from_guid != turn.speaker and r.id != turn.trigger_line]))
 
-    def _prompt_budget(self, turn: Turn, meta: TurnMeta | None = None) -> int:
+    @staticmethod
+    def _prompt_budget(turn: Turn) -> int:
         """The input budget of the turn's prompt: DM_BUDGET in a Discord DM (its history in
-        Chat, a reply of up to dm_words), LIVE_BUDGET everywhere else; less for an answer that
-        thinks first, so its thinking fits num_ctx beside them (prompt.room_for)."""
-        budget = DM_BUDGET if turn.channel.startswith(DM_PREFIX) else LIVE_BUDGET
-        think = self._think_budget(turn, meta)
-        if not think:
-            return budget
-        base = self._base_preset(turn)
-        return room_for(budget, predict=base.options.get("num_predict", 80) + think,
-                        num_ctx=base.options["num_ctx"])
+        Chat, a reply of up to dm_words), LIVE_BUDGET everywhere else."""
+        return DM_BUDGET if turn.channel.startswith(DM_PREFIX) else LIVE_BUDGET
 
     def _their_story(self, turn: Turn, meta: TurnMeta, line: str, memories) -> str:
         """For a member answering his public question to other members (it opens on a
@@ -2325,45 +2410,16 @@ class Pipeline:
         self._last_talk_at = now
         self._quiet_fired = False
 
-    def _base_preset(self, turn: Turn) -> Preset:
-        """The turn's request settings before any thinking: LIVE, or LIVE_BIT for a bit of
-        several rows (it keeps the rows a blank line separates: prompts lens, minor 9), with
-        room for a longer Discord message in this request only (preset_for)."""
-        preset = LIVE_BIT if turn.kind is TurnKind.BIT and turn.max_lines > 1 else LIVE
-        words = self._discord_words(turn)
-        return preset_for(preset, words) if words else preset
-
-    def _think_budget(self, turn: Turn, meta: TurnMeta | None) -> int:
-        """[talk] think_private (read at mind start, TalkEngine): an answer to his whisper or to
-        his Discord DM thinks first, with [talk] think_budget tokens to think in; 0 for every
-        other turn (game channels, Discord channels, group DMs; the night never asks here).
-        Every request of such a turn takes it, since all of them ask through _ask: the drafts,
-        a guard's rewrite, the owed fallback and the fresh answer."""
-        if meta is None or not getattr(self, "think_private", False):
-            return 0
-        hg = self.human.guid
-        whisper = self._answers_his_whisper(turn) or (
-            bool(hg) and meta.whisper_reply and turn.channel == "whisper" and turn.to_guid == hg)
-        if not (whisper or self._answers_his_dm(turn, meta)):
-            return 0
-        return max(0, getattr(self, "think_budget", 0))
-
-    def _recipe_model(self, meta: TurnMeta | None, model: str, options: dict,
-                      thought: bool) -> None:
-        if meta is not None and getattr(self, "learn_enabled", False):
-            from leeroy_mind.learn.recipe import called_model
-            called_model(meta, model, options, think=thought)
-
     async def _ask(self, turn: Turn, messages: list[dict], *,
                    meta: TurnMeta | None = None, attempt: int = 0) -> str:
-        preset = self._base_preset(turn)
+        # a bit of several rows keeps the rows a blank line separates (prompts lens, minor 9)
+        preset = LIVE_BIT if turn.kind is TurnKind.BIT and turn.max_lines > 1 else LIVE
         words = self._discord_words(turn)
-        think = self._think_budget(turn, meta)
-        thought = False  # the words came from a request that thought first
+        if words:  # a longer Discord message: room for it in this request only
+            preset = preset_for(preset, words)
         trace = meta.timing_trace if meta is not None else None
 
         async def job(llm):
-            nonlocal thought
             self.timing.model(trace, attempt, "started")
             self.timing.deadline_check(trace, "mind_model_queue", expired=False)
             outcome = "completed"
@@ -2390,32 +2446,11 @@ class Pipeline:
                     options["seed"] = meta.seed
                 self.timing.model(trace, attempt, "call")
                 model = self.cfg.models.live
-                if not think:
-                    self._recipe_model(meta, model, options, False)
-                    return await llm.chat(model, messages, options=options,
-                                          think=preset.think, timeout=preset.timeout)
-                # thinking first (llm/presets.py thinking): the line's own allowance, the
-                # learned bound included, plus the budget, and no stop; the thinking itself is
-                # never read here, logged or kept
-                asked = thinking(Preset(preset.think, options), think)
-                self._recipe_model(meta, model, dict(asked.options), True)
-                result = await llm.chat(model, messages, options=dict(asked.options),
-                                        think=asked.think, timeout=preset.timeout)
-                if result.text:
-                    thought = True
-                    return result
-                # nothing after the thinking (it used up num_predict, or ended first): once
-                # more without it, as an answer that never thought is asked
-                log.info("talk_think_empty: guid=%d kind=%s done_reason=%s eval_count=%d",
-                         turn.speaker, turn.kind, getattr(result.diagnostics, "done_reason", None),
-                         result.eval_count)
-                if not _scope_valid(meta):
-                    raise _ScopeChanged("scope_changed")
-                if self.scheduler.expired(self._deadline(turn, meta)):
-                    raise Expired(turn.deadline)
-                self._recipe_model(meta, model, options, False)
-                return await llm.chat(model, messages, options=options, think=False,
-                                      timeout=preset.timeout)
+                if meta is not None and getattr(self, "learn_enabled", False):
+                    from leeroy_mind.learn.recipe import called_model
+                    called_model(meta, model, options, beat=bool(meta.beat))
+                return await llm.chat(model, messages, options=options,
+                                      think=preset.think, timeout=preset.timeout)
             except asyncio.CancelledError:
                 outcome = "cancelled"
                 raise
@@ -2454,15 +2489,11 @@ class Pipeline:
         finally:
             self.timing.model(trace, attempt, outcome)
         text = result.text
-        stops = preset.options.get("stop", ()) if thought else ()
-        if stops and (cut := cut_at_stop(text, stops)) != text:
-            text = cut  # where the stop the thinking request could not send would have ended it
-        elif (words or thought) and getattr(result.diagnostics, "done_reason", None) == "length":
+        if words and getattr(result.diagnostics, "done_reason", None) == "length":
             # cut off by num_predict: back to its last full sentence (none: as it is)
             cut = trim_to_sentence(text)
             if cut != text:
-                log.info("%s: guid=%d kind=%s words=%d kept=%d",
-                         "discord_line_trimmed" if words else "think_line_trimmed", turn.speaker,
+                log.info("discord_line_trimmed: guid=%d kind=%s words=%d kept=%d", turn.speaker,
                          turn.kind, len(text.split()), len(cut.split()))
             text = cut
         return text

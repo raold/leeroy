@@ -245,7 +245,7 @@ class OllamaClient:
         if not content and thinking:
             # Counts only. Thinking counts against num_predict, so a thinking request can
             # spend all of it before the answer begins.
-            why = ("is think:false sent and honoured?" if think is False else
+            why = ("is think:false sent and honoured?" if not think else
                    "the thinking used up num_predict" if diagnostics.done_reason == "length"
                    else "nothing came after the thinking")
             log.warning("chat: empty content but the model thought (%s; think=%s, done_reason=%s, "

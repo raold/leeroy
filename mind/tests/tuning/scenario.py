@@ -10,7 +10,13 @@ have their own tests (test_orbit.py), as the initiation clocks do. Re-recorded o
 for the identity card (identity audit): each card opens with the member's age and sex in
 words, pronouns and household ("You are Sam, a 34-year-old woman from the UK (she/her)...",
 "At home: ..."), and each other member is shown once with their pronoun ("Belra (she): ...");
-no draw, weight or sent line moved."""
+no draw, weight or sent line moved.
+
+The beat before an answer to his whisper or DM ([talk] think_private, talk/beat.py, 2026-11-16) is
+off in this scenario, so its whisper answer is the one recorded before; the beat has its own
+golden, golden_beat.json (record_beat): two answers to his whispers with the beat on, every
+request as sent (the beat's prompt, format and options, and each line's prompt with the beat's
+lines after its instruction)."""
 import asyncio
 import json
 import random
@@ -23,8 +29,10 @@ from leeroy_mind.talk.romance import flirt_chance, attitude_text
 from leeroy_mind.talk.select import SpeakerContext, speaker_weight
 from leeroy_mind.talk.budget import DayPhase
 from leeroy_mind.talk.states import roll_session_state
+from leeroy_mind.talk import beat
 
 GOLDEN = Path(__file__).with_name("golden_prompts.json")
+BEAT_GOLDEN = Path(__file__).with_name("golden_beat.json")
 
 
 def cast(store) -> None:
@@ -50,6 +58,7 @@ async def _run(store, clock, data_dir) -> dict:
     r.engine.budget.set_to_him_rate(0.0)
     r.engine.greeter_draw = lambda rng: rng.randint(2, 3)
     r.engine.plain_hello_p = 0.0
+    r.engine.think_private = False  # the beat has its own golden (record_beat)
     await r.session()
     await r.event(Login(ts=0, guid=HUMAN, human=True))
     await r.advance(90, step=2)
@@ -98,4 +107,49 @@ def golden() -> dict:
     return json.loads(GOLDEN.read_text(encoding="utf-8"))
 
 
-__all__ = ["TEST_CAST", "cast", "engine_clock", "golden", "record", "write_golden"]
+def _beat_model():
+    """The model in record_beat: a beat (bringing in the first thing it was offered, when there
+    is one) for the beat's request, the next line for the line's."""
+    lines = iter(["mm hey you, was hoping you'd whisper", "ugh, what did he do this time?"])
+
+    def reply(model, messages) -> str:
+        last = messages[-1]["content"]
+        if beat.MARK not in last:
+            return next(lines)
+        return json.dumps({"read": "he had a rough day and wants someone to listen",
+                           "lands": "a soft spot, a little worried", "want": "share",
+                           "use": 1 if "\n1. " in last else None})
+    return reply
+
+
+async def _run_beat(store, clock, data_dir) -> dict:
+    r = make_rig(store, clock, data_dir, script=_beat_model(), seed=7)
+    r.engine.whispers.set_rate(0.0)
+    r.engine.budget.set_to_him_rate(0.0)
+    await r.session()
+    await r.human("hey you", channel="whisper", to_guid=102)
+    await r.advance(40, step=2)
+    await r.human("long day, my boss was on my case again", channel="whisper", to_guid=102)
+    await r.advance(40, step=2)
+    calls = [{k: c[k] for k in ("messages", "format", "options", "think")}
+             for c in r.chat_calls()]
+    return {"calls": calls, "sent": [[s.guid, s.channel, s.text] for s in r.sent.says()]}
+
+
+def record_beat(store, clock, data_dir) -> dict:
+    """Two answers to his whispers with the beat on: every request as sent, and the lines."""
+    cast(store)
+    return asyncio.run(_run_beat(store, clock, data_dir))
+
+
+def write_golden_beat(result: dict) -> None:
+    BEAT_GOLDEN.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n", encoding="utf-8",
+                           newline="\n")
+
+
+def golden_beat() -> dict:
+    return json.loads(BEAT_GOLDEN.read_text(encoding="utf-8"))
+
+
+__all__ = ["TEST_CAST", "cast", "engine_clock", "golden", "golden_beat", "record", "record_beat",
+           "write_golden", "write_golden_beat"]

@@ -29,8 +29,8 @@ texture = false                # members type like people: apostrophes, run-ons,
 dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
 discord_words = 90             # 0-200: most words in a member's Discord channel message (0: one short line, as in game)
 dm_words = 200                 # 0-200: most words in a member's DM to him (0: one short line)
-think_private = true           # members think before answering his whispers and DMs (read at mind start)
-think_budget = 1400            # 128-2048: tokens of thinking those answers may spend before the line
+think_private = true           # a short structured beat before answering his whispers and DMs (read at mind start)
+think_budget = 240             # 120-320: the beat's num_predict, in tokens
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -62,7 +62,7 @@ max_inflight = 3              # 1-4 of Ollama's 4 slots
 RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 DISCORD_WORDS_MAX = 200  # [talk] discord_words and dm_words
-THINK_BUDGET_RANGE = (128, 2048)  # [talk] think_budget, tokens
+THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] values already logged in this process
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
@@ -98,8 +98,8 @@ class TalkCfg:
     dm_own_time: bool = False
     discord_words: int = 90  # [talk] discord_words; talk/discord_length.py
     dm_words: int = 200  # [talk] dm_words: his DMs, as full as she likes
-    think_private: bool = True  # [talk] think_private: llm/presets.py thinking, read at mind start
-    think_budget: int = 1400  # [talk] think_budget: its tokens, on top of the line's own
+    think_private: bool = True  # [talk] think_private: talk/beat.py, read at mind start
+    think_budget: int = 240  # [talk] think_budget: the beat's num_predict
 
 
 @dataclass(frozen=True)

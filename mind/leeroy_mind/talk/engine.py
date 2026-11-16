@@ -39,6 +39,7 @@ from typing import Awaitable, Callable, Protocol
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
 from leeroy_mind.human import human_identity
+from leeroy_mind.llm.presets import BEAT
 from leeroy_mind.llm.scheduler import LLMScheduler
 from leeroy_mind.memory.recall import Recall
 from leeroy_mind.personas.io import PersonaCache
@@ -178,9 +179,10 @@ class TalkEngine(EmoteReactions):
             raise ValueError("library_search requires library")
         self.store, self.world, self.raid, self.recall = store, world, raid, recall
         self.scheduler, self.personas, self.cfg = scheduler, personas, cfg
-        # [talk] think_private and think_budget: read at mind start, never at a login's reload
+        # [talk] think_private and think_budget (the beat, talk/beat.py): read at mind start,
+        # never at a login's reload
         self.think_private = getattr(cfg.talk, "think_private", False) is True
-        self.think_budget = getattr(cfg.talk, "think_budget", 0)
+        self.think_budget = getattr(cfg.talk, "think_budget", BEAT.options["num_predict"])
         self.data_dir, self.clock, self.rng, self.send = Path(data_dir), clock, rng, send
         self.on_line_sent = on_line_sent
         self.items = items  # the item links (talk/items.py); None: lines link nothing
