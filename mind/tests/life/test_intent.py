@@ -80,6 +80,13 @@ def test_render_keeps_the_beats_order_and_bring_in():
     assert beat.render(read="r", use="") == "You read it as: r"
 
 
+def test_no_trailing_space_without_an_addressee():   # review-332, P3-2
+    assert want_words(Intent.TEASE, "") == "tease"
+    assert beat.render(want=Intent.FLIRT) == "You want to: flirt with"
+    assert want_words(Intent.VENT, "", "about work") == "get something off your chest (about work)"
+    assert all(not want_words(i, "").endswith(" ") for i in Intent)
+
+
 def test_owed_never_just_reacts():   # Review Focus 4
     assert weights(BASE)[Intent.REACT] == 0 and Intent.REACT not in allowed(BASE)
 

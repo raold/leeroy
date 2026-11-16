@@ -84,8 +84,9 @@ Family = Literal["game", "whisper", "discord", "dm", "group"]
 
 
 def want_words(intent: Intent, who: str, topic: str = "") -> str:
-    """The words "You want to:" reads, then ` (<topic>)` when there is one."""
-    words = WANT_WORDS[intent].format(who=who)
+    """The words "You want to:" reads, then ` (<topic>)` when there is one. Without `who` the
+    words end where the addressee would be, with no trailing space (review-332, P3-2)."""
+    words = WANT_WORDS[intent].format(who=who).rstrip()
     return f"{words} ({topic})" if topic else words
 
 
