@@ -1,0 +1,27 @@
+# He asks for a picture. Members' photos are off in the lab's sandbox, so she answers in words.
+
+[[script]]
+id = "photo-1"
+kind = "photo"
+channels = ["dm"]
+lines = [
+  { text = "send me a pic of your setup" },
+  { text = "aw come on" },
+]
+
+[[script]]
+id = "photo-2"
+kind = "photo"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "what does your view look like right now" },
+]
+
+[[script]]
+id = "photo-3"
+kind = "photo"
+channels = ["dm"]
+lines = [
+  { text = "you never sent me that picture you promised" },
+  { text = "still waiting lol" },
+]

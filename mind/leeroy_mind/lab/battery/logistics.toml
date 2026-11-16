@@ -1,0 +1,28 @@
+# Plans and times: who, when, what to bring.
+
+[[script]]
+id = "logistics-1"
+kind = "logistics"
+channels = ["guild", "party", "dm"]
+lines = [
+  { text = "{name} you free at 8 tonight for a raid?", ask = "yesno" },
+  { text = "cool, can you bring flasks for yourself" },
+]
+
+[[script]]
+id = "logistics-2"
+kind = "logistics"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "what time are you usually on during the week", ask = "number" },
+  { text = "ok ill try to be on around then too" },
+]
+
+[[script]]
+id = "logistics-3"
+kind = "logistics"
+channels = ["party", "guild"]
+lines = [
+  { text = "{name} how many pots do you have on you right now", ask = "number" },
+  { text = "grab a few more before we go in" },
+]

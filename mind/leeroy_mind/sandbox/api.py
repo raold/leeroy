@@ -7,7 +7,8 @@ POST /say    {"channel", "to", "text"[, "wait"]}   his line, and what came back 
 POST /login  {["wait"]}           he enters the game (members may greet him; wait collects them)
 POST /logout {}                   he leaves the game
 POST /group  {"members": [...]}   his group (empty: none)
-POST /reset  {}                   the copy as it was at the start, a new mind on it
+POST /reset  {["overlays"]}      the copy as it was at the start, a new mind on it (with the
+                                  conversation lab's piece overlays in its prompts/)
 POST /stop   {}                   the sandbox stops
 
 The copy is private, so the API answers only what a local program asks directly: the Host must
@@ -149,7 +150,11 @@ class Api:
         if path == "/group":
             return 200, await sb.group(body.get("members"))
         if path == "/reset":
-            return 200, await sb.reset()
+            overlays = body.get("overlays", {})
+            if (not isinstance(overlays, dict)
+                    or not all(isinstance(k, str) and isinstance(v, str) for k, v in overlays.items())):
+                raise SandboxError("overlays: an object of piece name to its text")
+            return 200, await sb.reset(overlays=overlays)
         if path == "/stop":
             self.stop_requested.set()
             return 200, {"ok": True, "stopping": True}

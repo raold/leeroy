@@ -481,6 +481,10 @@ class MindApp:
         self.engine.learn_settings = load_learn_config(self.data_dir / "mind.toml")
         self.engine.learn_enabled = self.engine.learn_settings.enabled and learn_ready(self.store)
         self.engine.learn_capture_preferences = self.engine.learn_enabled and self.engine.learn_settings.capture_preferences
+        from .lab.config import load as load_lab
+        # [lab] overlays (a sandbox's copied mind.toml only): the lab's prompt pieces by name
+        self.engine.lab_overlays = (self.data_dir if load_lab(self.data_dir / "mind.toml").overlays
+                                    else None)
         attach_rewards(self.night_runner, self.data_dir, self.store)
         self.control = attach_control(self)
         from .playstyle.service import attach as attach_playstyle
@@ -510,6 +514,8 @@ class MindApp:
         self.drama = attach_drama(self)  # [drama] member_romance: off adds no stage
         from .turing.night import attach as attach_turing
         attach_turing(self.night_runner, self.data_dir)  # [turing]: off adds no stage
+        from .lab.night import attach as attach_lab
+        attach_lab(self.night_runner, self.data_dir)  # [lab]: off adds no stage
         from .bakeoff.capture import attach as attach_bakeoff
         attach_bakeoff(self)  # [bakeoff] capture: off captures nothing, still prunes old rows
         for name in ("boss", "loot_won"):  # [life] state: her feeling; off moves nothing

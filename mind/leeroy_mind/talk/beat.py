@@ -140,7 +140,10 @@ def instruction(human: str, wants: tuple[str, ...], items: list[str], their: str
     listed = "\n".join(f"- {m}" for m in _meanings(human, wants, their))
     use = (USE_ITEMS.format(items="\n".join(f"{i}. {x}" for i, x in enumerate(items, 1)))
            if items else USE_NONE)
-    text = INSTRUCTION.format(human=human, wants=listed, use=use)
+    from leeroy_mind.talk.pieces import text as piece_text  # the lab's variant of the ask
+    ask = piece_text("beat_ask", MARK)
+    template = INSTRUCTION if ask == MARK else INSTRUCTION.replace(MARK, ask, 1)
+    text = template.format(human=human, wants=listed, use=use)
     if lean is not None:
         lean = Intent(lean)
         text = text.replace(WANT_DESCRIPTION, WANT_DESCRIPTION + LEAN.format(
