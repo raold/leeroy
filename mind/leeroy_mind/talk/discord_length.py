@@ -67,6 +67,14 @@ def preset_for(preset: Preset, words: int) -> Preset:
     return replace(preset, options=options)
 
 
+def fit_words(text: str, words: int) -> str:
+    """A reply over `words` words cut to that many, then back to its last sentence end
+    (trim_to_sentence); as it is when it is no longer. An owed answer is cut this way instead
+    of being asked again for its length (2026-11-15)."""
+    parts = text.split()
+    return text if len(parts) <= words else trim_to_sentence(" ".join(parts[:words]))
+
+
 def trim_to_sentence(text: str) -> str:
     """A reply cut off by num_predict, back to its last sentence end (_SENTENCE_END); as it is
     when it has none, or when it ends on one."""

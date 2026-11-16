@@ -40,3 +40,24 @@ Pipeline expiry checks and the scheduler share that token rather than independen
 time to copied deadlines. The credit covers safe cleanup/reload as well as the bounded
 image work, and does not extend unrelated queue waits. The off path attaches no borrow gate
 or credit tokens and keeps the ordinary deadline behavior.
+
+# Life beats: he lives far away (2026-11-15)
+
+The night's life beats invented his texts, notes in her flat and visits, and those memories
+surfaced in chat as real. Now every life prompt ends on `life.FAR_AWAY` (after the built-in
+prompt or the owner's overlay): he lives far away, they only talk in the game and on the guild's
+Discord. A beat or new thread title that names him with contact off the game (a text, call,
+note, gift, visit, his presence: `life.meets_him`) is refused before the judge (grounding log
+`meets him offline`; the thread tries again next night), and such a beat is never shown as one
+of the last three again. A beat that names him or shares two content words with her secret or
+deep disclosure is stored `private` with him (`life.private_beat`), so it reaches only her
+whispers and DMs with him; every other beat stays open.
+
+`python -m leeroy_mind nightly life-contact --data-dir "$D" [--show] [--go]` handles the beats
+already stored. A dry run (the default) reads mind.db read-only and lists ids and owners (texts
+with `--show`). `--go` needs the mind stopped (it holds the instance lock), snapshots first
+(`snapshots/mind-pre-life-contact-*.db`), retires every active offscreen memory that meets him
+(status `archived`, never deleted) and raises every other open offscreen memory that names him
+or touches her secret to private with him. Receipts: meta `life_contact:retired:<id>` and
+`life_contact:rescoped:<id>` with the earlier status or scope. Measured on a scratch copy of the
+live database (2026-11-15): 13 to retire, 72 to make private; a second run changes nothing.

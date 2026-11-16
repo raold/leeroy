@@ -28,7 +28,7 @@ from leeroy_mind.protocol import (Achievement, Ack, Boss, Chat, Death, Group, Lo
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.budget import BurstPlan
 from leeroy_mind.talk.engine import flirt_chance, share_reason_pool
-from leeroy_mind.talk.pipeline import TurnMeta
+from leeroy_mind.talk.pipeline import HOLDING_LINES, TurnMeta
 from leeroy_mind.talk.romance import DISTANCE, INVARIANTS
 from leeroy_mind.talk.select import ReplyTurn
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -861,7 +861,9 @@ def test_her_greeting_and_goodnight_let_her_feelings_show(store, clock, tmp_path
     run(main())
 
 
-def test_a_reply_that_parrots_his_line_is_asked_again_then_dropped(store, clock, tmp_path):
+def test_a_reply_that_parrots_his_line_is_asked_again_then_never_said(store, clock, tmp_path):
+    """His whisper is owed an answer (2026-11-15): when every draft parrots him, she sends a
+    holding line of hers, never his words and never nothing."""
     async def main():
         seed_test_cast(store)
         save_member(store, 102, typo_rate=0.0, split_rate=0.0, emoticon_rate=0.0)
@@ -872,10 +874,12 @@ def test_a_reply_that_parrots_his_line_is_asked_again_then_dropped(store, clock,
         assert await spoken(r, whisper_back(102, line.id)) == ["lol a summon costs a drink at "
                                                                "the inn"]
         assert len(r.chat_calls()) == 2 and "own words" in r.prompts()[1]
-        r = make_rig(store, clock, tmp_path, script=script_from([parrot, HIS_WHISPER]))
+        r = make_rig(store, clock, tmp_path, script=script_from([parrot, HIS_WHISPER,
+                                                                  HIS_WHISPER]))
         await r.advance(15)
-        assert await spoken(r, whisper_back(102, line.id)) == []
-        assert r.utterances()[-1]["dropped"] == "tells" and r.sent.says() == []
+        [said] = await spoken(r, whisper_back(102, line.id))
+        assert said in HOLDING_LINES and len(r.chat_calls()) == 3
+        assert r.utterances()[-1]["dropped"] is None
     run(main())
 
 

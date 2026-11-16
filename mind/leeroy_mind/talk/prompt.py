@@ -41,8 +41,23 @@ log = logging.getLogger("leeroy_mind")
 # LIVE has num_ctx=4096 and num_predict=80: 1800 estimated input tokens leaves
 # 2216 for token-estimation error and the model's message template/output.
 LIVE_BUDGET = 1800
+# A Discord DM with him (2026-11-15: all 18 last-resort trims since 11-14 were DM answers). Its
+# prompt holds the DM's history in Chat and asks for up to [talk] dm_words, so it gets more
+# room. num_ctx 4096 less num_predict for 200 words (discord_length.num_predict: 344) leaves
+# 3752; 2600 estimated tokens stays under that even if the real count runs 25% over the
+# estimate (3250, plus the chat template's few dozen), with about 400 to spare.
+DM_BUDGET = 2600
+ESTIMATE_SLACK = 1.25  # how far over the 4-characters estimate a real token count may run
 EXTRA_CAP_TOKENS = 300  # an overlay's bit, romance or aside text, at most
 MIN_MEMORIES, MIN_CHAT, MIN_REL_CARDS, MIN_OWN = 3, 5, 1, 3
+# The last resort keeps this many memories, and the awareness card's claims, until her own
+# last lines are gone (2026-11-15: the DM trims emptied memories and kept 640 tokens of her own
+# paragraphs).
+PROTECTED_MEMORIES = 2
+CLAIMS_PART = "claims"  # the awareness card's part (awareness.card PRIORITY) the trim keeps last
+# Her own long lines (a Discord message of up to 200 words) are shown as their opening words;
+# the repeat check still reads them whole (Pipeline._own_lines).
+REPLAY_WORDS = 30
 SHORT_CHAT_CHARS = 80
 NOTE_CHARS = 100
 HUMAN_NOTE_CHARS = 160  # her note toward him: the one fact about him that is hers
@@ -90,6 +105,16 @@ class PromptParts:
     # chat_line_text lines oldest first, shown before the chat and never the line answered
     elsewhere: list[str] = field(default_factory=list)
     style: list[str] = field(default_factory=list)
+    # Whole sections the trim never cuts or shortens (the persona's own facts, an "About you"
+    # block), each with its own heading, first in the user message
+    untrimmed: list[str] = field(default_factory=list)
+
+
+def replay(text: str, words: int = REPLAY_WORDS) -> str:
+    """A long line of hers as a prompt shows it: its first `words` words and "...", whole when
+    it is no longer than that."""
+    parts = text.split()
+    return text if len(parts) <= words else " ".join(parts[:words]) + "..."
 
 
 ELSEWHERE_HEAD = "Earlier between you two, elsewhere (you remember it; it is not the line you answer):"
@@ -638,6 +663,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         p.card.strip(), _section(SAMPLES_HEAD, p.samples), p.rules.strip()) if x)
     people = [*p.rel_cards, *([p.real_name] if p.real_name else [])]
     user = "\n\n".join(x for x in (
+        *(u.strip() for u in p.untrimmed),
         _section("People here:", people),
         _section("You remember:", p.memories),
         _section("Right now:", [p.mood]),
@@ -660,6 +686,7 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
     return {name: estimate_tokens(text) for name, text in (
         ("card", p.card.strip()), ("samples", _section(SAMPLES_HEAD, p.samples)),
         ("rules", p.rules.strip()),
+        ("untrimmed", "\n\n".join(u.strip() for u in p.untrimmed if u.strip())),
         ("people", _section("People here:", [*p.rel_cards, *([p.real_name] if p.real_name else [])])),
         ("memories", _section("You remember:", p.memories)),
         ("mood", _section("Right now:", [p.mood])),
@@ -671,22 +698,25 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
 
 
 def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
-    """A copy that fits the budget. Re-render the optional card into remaining room first.
-    Then, in order: memories down to 3 (the least relevant go), chat
+    """A copy that fits the budget. Learned style goes first, then the awareness card is
+    re-rendered into the remaining room, but never below its claims (CLAIMS_PART, kept whole).
+    Then, in order: the other medium's lines, memories down to 3 (the least relevant go), chat
     down to 5 (the oldest go), relationship cards down to 1 (the addressee's stays), own lines
     down to 3 (the oldest go), then the oldest chat lines are shortened (never the newest).
-    Past that, a logged last resort empties memories, then own lines, then relationship
-    cards, and drops chat down to the newest line. With facts, the older chat goes first in
+    Past that, a logged last resort empties her own lines first, then lets the claims go, then
+    memories down to PROTECTED_MEMORIES, then relationship cards, drops chat down to the newest
+    line, and only then the last memories and the rest of the awareness card (2026-11-15: her
+    memories and claims outrank her own long lines). With facts, the older chat goes first in
     both rounds (fix wave E: the facts answer his line, the chat before it matters less), and
     his line the reply answers (pinned) is never cut nor shortened: it is the floor, even
     when later answers came after it. The speaker's own line his pushback is about (kept, fix
     wave G6) is never cut nor shortened either, and the last resort keeps it with the floor.
-    The system message, mood, real-name line, facts and instruction are never cut. Memories
-    stay a prefix of the input, so len(result.memories) says which recalled memories were
-    used."""
+    The system message, the untrimmed sections, mood, real-name line, facts and instruction
+    are never cut. Memories stay a prefix of the input, so len(result.memories) says which
+    recalled memories were used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
                 elsewhere=list(p.elsewhere), style=list(p.style),
-                own_recent=list(p.own_recent))
+                own_recent=list(p.own_recent), untrimmed=list(p.untrimmed))
     pin = p.pinned if p.facts and p.pinned is not None and 0 <= p.pinned < len(p.chat) else None
     kept = p.kept if p.kept is not None and 0 <= p.kept < len(p.chat) else None
     least = 1 if kept is None else 2  # the chat the last resort leaves
@@ -698,11 +728,16 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     # timeline. Drop whole notes so attribution remains a prefix, never half a fact.
     while t.style and (estimate_tokens(_section(STYLE_HEAD, t.style)) > STYLE_CAP_TOKENS or over()):
         t.style.pop()
-    if t.awareness and over():
+
+    def fit_awareness(keep: tuple[str, ...] = ()) -> None:
+        if not t.awareness or not over():
+            return
         awareness, t.awareness = t.awareness, ""
         room = budget - _tokens(render_messages(t)) - 2  # separators and rounding
         if hasattr(awareness, "fit"):
-            t.awareness = awareness.fit(room)  # keep the highest-priority whole sections
+            # the highest-priority whole sections; with `keep`, those stay whole past the room
+            t.awareness = awareness.fit(room, keep=keep) if keep else awareness.fit(room)
+    fit_awareness((CLAIMS_PART,))
 
     def drop(items: list[str], floor: int, oldest_first: bool) -> None:
         while len(items) > floor and over():
@@ -737,10 +772,14 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
                     section_tokens(t))
     if t.facts:
         drop_chat(least)
-    drop(t.memories, 0, False)
-    drop(t.own_recent, 0, True)
+    drop(t.own_recent, 0, True)  # her own lines before her claims and memories
+    fit_awareness()  # now the claims may go too
+    drop(t.memories, PROTECTED_MEMORIES, False)
     drop(t.rel_cards, 0, False)
     drop_chat(least)
+    drop(t.memories, 0, False)
+    if t.awareness and over():
+        t.awareness = ""
     t.pinned, t.kept = pin, kept
     return t
 
@@ -766,6 +805,7 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
                    chat=[r(x) for x in parts.chat], own_recent=[r(x) for x in parts.own_recent],
                    elsewhere=[r(x) for x in parts.elsewhere],
                    style=[r(x) for x in parts.style],
+                   untrimmed=[r(x) for x in parts.untrimmed],
                    instruction=r(parts.instruction), awareness=(parts.awareness.redacted(r)
                        if hasattr(parts.awareness,"redacted") else r(parts.awareness)), facts=[r(x) for x in parts.facts],
                    real_name="")

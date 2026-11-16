@@ -100,3 +100,49 @@ Since the second round (owner, 2026-11-13: channels a mix, "DMs max expressive")
   extraction and the console take the longer line as it is.
 - 0 is the rollback: one short line on Discord, with the prompts, room, typing and retries as
   before. A game turn never changes, at any value.
+
+# DM prompts, owed answers and game names (2026-11-15)
+
+All 18 last-resort trims logged since 11-14 were answers to his Discord DMs: her own 200-word
+paragraphs filled "Your last lines", the DM's history was packed into a 1,100-character
+instruction at 200 characters a message, and the trim emptied her memories first.
+
+- **The DM's history is the Chat section.** `discord.talk.DiscordTalk.dm_chat` gives the answer
+  turn (`TurnMeta.discord_chat`) the DM's last 12 messages, oldest first: his up to 600
+  characters, hers as their first 30 words (`prompt.replay`), each with its photo note and age.
+  Her own long lines are replayed the same way in "Your last lines" and in the elsewhere block;
+  the repeat check still reads them whole. The DM's instruction keeps only where she is and his
+  message. The copy check does not read the DM's history (as before: it had none).
+- **A DM has its own budget**, `prompt.DM_BUDGET` = 2600 estimated tokens: num_ctx 4096 less a
+  full `dm_words` reply (344) leaves room even if the real count runs 25% over the estimate.
+  Every other turn keeps `LIVE_BUDGET` (1800). Measured on the 18 logged DM trims (a scratch
+  copy, the logged section sizes): the same turns now come to about 1,600-2,200 with five
+  memories and twelve history lines, so none reaches its last resort.
+- **The trim keeps evidence over her own words.** The awareness card is first fitted without
+  its claims part ("Your claims", kept whole); the last resort then empties her own last lines
+  first, lets the claims go, keeps two memories (`PROTECTED_MEMORIES`) past the relationship
+  cards, and only drops them and the rest of the card at the very end. `PromptParts.untrimmed`
+  holds whole sections the trim never touches (for the persona's own "About you" block),
+  rendered first in the user message.
+- **An answer he is owed in private never vanishes for its tells** (his whisper or his DM:
+  `Pipeline._owed_to_him`; in a channel the old rule stands). A draft whose tells are all soft and none of
+  `DROP_ON_RETRY` is kept; when the retry is worse, it is sent (`say_owed_kept`). Otherwise one
+  more attempt asks for a sentence or two (`OWED_HINT`), and if that fails too she sends a
+  holding line (`HOLDING_LINES`, never one she just said; `say_owed_holding`). An owed Discord
+  answer over its length is cut back to a sentence end (`discord_length.fit_words`) instead of
+  being asked again. A second silence still stands; other turns keep the old rule.
+  Seen live 11-15: her first draft to "leave him for me" was asked again for a repeated move and
+  its length, the retry asked him over, and both were dropped.
+- **Game names** (`talk/gamenames.py`, the soft tell "game name", dropped on retry): a
+  battleground put in or named after a library zone that has none ("a battleground in Tanaris"),
+  or a word in a boss context ("parse X", "wipe on X", "get X down") that the library's text
+  never uses (`Library.known_words`, its full-text vocabulary) and that is no everyday word,
+  shorthand or member. Without a library nothing is flagged. Over the live corpus it flags the
+  three invented bosses (9 lines) and the 3 misplaced battlegrounds, and only typos the typing
+  adds after the check otherwise. "Tonight so far" names the battleground she played
+  (`wow.bg_played`) and lists her evening in order ("you were in Tanaris; then you played a game
+  of Warsong Gulch").
+- **His addons' whispers** ("<DBM> ... has wiped on ...", "<Deadly Boss Mods>", "<BigWigs>",
+  any capitalised `<Tag>`, "[AutoReply]") are not his words: never stored, never answered, no
+  handler sees them (`pastes.is_addon_whisper`, `app._on_chat`; log
+  `his_addon_whisper_skipped`). "<3", a typed "<sigh>" and his pasted "<Flask>" checks are his.

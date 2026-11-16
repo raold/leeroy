@@ -148,3 +148,19 @@ NON_FIGHT_STEPS = frozenset({(631, 13), (631, 14), (724, 3), (724, 4), (724, 5)}
 
 def is_raid_fight(map_id: int, boss_id: int) -> bool:
     return map_id in RAID_MAPS and (map_id, boss_id) not in NON_FIGHT_STEPS
+
+
+# The battlegrounds and arenas by BattlegroundTypeId (bg_end's bg_type): a member's evening names
+# the one she played, never a zone it is not in (talk/reactions.py, 2026-11-15). Random (32) and
+# the custom Slavery Valley (31) are a battleground with no name here.
+BATTLEGROUNDS = {1: "Alterac Valley", 2: "Warsong Gulch", 3: "Arathi Basin",
+                 7: "Eye of the Storm", 9: "Strand of the Ancients", 30: "Isle of Conquest"}
+ARENAS = frozenset({4, 5, 6, 8, 10, 11})
+
+
+def bg_played(bg_type: int) -> str:
+    """What she played, as her evening says it: the battleground by name, an arena match, else
+    a battleground."""
+    if bg_type in BATTLEGROUNDS:
+        return f"a game of {BATTLEGROUNDS[bg_type]}"
+    return "an arena match" if bg_type in ARENAS else "a battleground"

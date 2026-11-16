@@ -19,6 +19,22 @@ def is_addon_row(text: str) -> bool:
     return bool(ADDON_RE.match(text))
 
 
+# His addons' automatic whispers (2026-11-15: on 11-09, 40 boss-mod auto-replies such as "<DBM>
+# <name> has wiped on ..." were stored as his whispers and 34 were answered): a whisper
+# that opens on an addon's <Tag> (a capitalised one, or a known boss mod's in any case; never
+# "<3" or a typed "<sigh>", nor the <Flask>/<Food> checks he pastes) or an auto-reply marker.
+_ADDON_TAG = re.compile(r"^\s*<(?:DBM|Deadly Boss Mods|BigWigs|BW|DXE|GTFO|RCLootCouncil|WIM)>",
+                        re.I)
+_TAG = re.compile(r"^\s*<(?!(?:Flask|Food)\b)[A-Z][A-Za-z0-9!'&. _-]{1,30}>\s*\S")
+_AUTO_REPLY = re.compile(r"^\s*[\[<(]?\s*auto[- ]?(?:reply|response|respond)\b", re.I)
+
+
+def is_addon_whisper(text: str) -> bool:
+    """A whisper his addon sent by itself, not his words: never stored as his line, never
+    answered (app._on_chat)."""
+    return bool(_ADDON_TAG.match(text) or _TAG.match(text) or _AUTO_REPLY.match(text))
+
+
 _CHECK_RE = re.compile(r"^\s*(RBS::|<Flask|<Food|\[RBS\])", re.I)
 
 
