@@ -31,6 +31,7 @@ discord_words = 90             # 0-200: most words in a member's Discord channel
 dm_words = 200                 # 0-200: most words in a member's DM to him (0: one short line)
 think_private = true           # a short structured beat before answering his whispers and DMs (read at mind start)
 think_budget = 240             # 120-320: the beat's num_predict, in tokens
+recall_diversity = false       # memories: past plans read as past, no repeats in a conversation, tired subjects rest
 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
@@ -106,6 +107,7 @@ class TalkCfg:
     dm_words: int = 200  # [talk] dm_words: his DMs, as full as she likes
     think_private: bool = True  # [talk] think_private: talk/beat.py, read at mind start
     think_budget: int = 240  # [talk] think_budget: the beat's num_predict
+    recall_diversity: bool = False  # [talk] recall_diversity: memory/diversity.py
 
 
 @dataclass(frozen=True)
@@ -219,6 +221,7 @@ _RULES = {
         "discord_words": (lambda v: _int_in(v, 0, DISCORD_WORDS_MAX), f"an integer 0-{DISCORD_WORDS_MAX}"),
         "dm_words": (lambda v: _int_in(v, 0, DISCORD_WORDS_MAX), f"an integer 0-{DISCORD_WORDS_MAX}"),
         "think_private": (lambda v: type(v) is bool, "a boolean"),
+        "recall_diversity": (lambda v: type(v) is bool, "a boolean"),
         "think_budget": (lambda v: _int_in(v, *THINK_BUDGET_RANGE), "an integer %d-%d" % THINK_BUDGET_RANGE),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
@@ -290,7 +293,7 @@ def _build(data: dict, source: str) -> MindConfig:
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
             if section == "talk" and key in ("realism", "texture", "dm_own_time",
-                                             "think_private") and type(v) is not bool:
+                                             "think_private", "recall_diversity") and type(v) is not bool:
                 v = False
             if section == "talk" and key in ("discord_words", "dm_words",
                                              "think_budget") and not check(v):

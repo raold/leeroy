@@ -1532,9 +1532,12 @@ class Pipeline:
             + ([hg] if hg and self.world.human_online else [])))
         from leeroy_mind.bond.policy import eligible as bond_eligible
         bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(p, self.cfg.romance.dial) else {}
+        diverse = None if preview else self._recall_diversity(turn, meta, trigger, live=live)
+        aged = {"aged": True} if diverse is not None else {}
         memories = [] if preview else await self.recall.recall(
             turn.speaker, query, present=present, addressee=turn.addressee, k=5,
-            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid, **bond_options)
+            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid, **bond_options,
+            **({"diversity": diverse} if diverse is not None else {}))
         if meta.lore_memory and all(m.id != meta.lore_memory for m in memories):
             # the memory she answers his question from leads, even while it rests
             pinned = self.recall._shareable(self.store.get_memories([meta.lore_memory]),
@@ -1553,7 +1556,7 @@ class Pipeline:
               if greet else set())
         follow = ""
         if meta.follow_up and (m := self._follow_up_memory(memories)) is not None:
-            follow = FOLLOW_UP.format(memory=self.recall.format(m).removeprefix("- "))
+            follow = FOLLOW_UP.format(memory=self.recall.format(m, **aged).removeprefix("- "))
         before = list(dict.fromkeys(names[r.from_guid] for r in earlier if r.from_guid in names))
         lore = meta.lore if to_human else ""  # his question about the guild's past
         seen = ""
@@ -1632,7 +1635,7 @@ class Pipeline:
                               channel=turn.channel, recipient=turn.to_guid,
                               at_him=self._aimed_at_him(turn),
                               with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
-            memories=[self.recall.format(m) for m in memories],
+            memories=[self.recall.format(m, **aged) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
                            lately=self._lately_line(turn.speaker, now),
@@ -1740,6 +1743,30 @@ class Pipeline:
             return ""
         who = _names_list([members[g] for g in named[:2]])
         return THEIR_STORY.format(name=self.human.called, names=who)
+
+    def _recall_diversity(self, turn: Turn, meta: TurnMeta, trigger: str, *, live: bool):
+        """[talk] recall_diversity (memory/diversity.py, read at each turn): what its rules need
+        from this turn, or None with the switch off (recall and its lines exactly as before). His
+        line is the line the turn answers when it is his, or his post or whisper a Discord answer
+        recalls on (`recall_query` of a turn that answers him). A live turn's recipe records the
+        rules' version (learn.recipe.recall_used)."""
+        if getattr(self.cfg.talk, "recall_diversity", False) is not True:
+            return None
+        from leeroy_mind.memory.diversity import VERSION, Diversity, name_words
+        hg = self.human.guid
+        his = ""
+        if hg and turn.trigger_line and trigger:
+            rows = self.store.chat_lines([turn.trigger_line])
+            his = trigger if rows and rows[0].from_guid == hg else ""
+        elif hg and meta.answers_human and meta.recall_query:
+            his = meta.recall_query
+        if live and getattr(self, "learn_enabled", False):
+            from leeroy_mind.learn.recipe import recall_used
+            try:
+                recall_used(meta, VERSION)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
+        return Diversity(human=hg or 0, his_line=his, names=name_words(self._protect(turn.channel)))
 
     def _follow_up_memory(self, memories):
         """The one memory a greeting may follow up on: something he said or did in an earlier

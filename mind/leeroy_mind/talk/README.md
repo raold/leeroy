@@ -566,3 +566,35 @@ caller's seeded `rng`. **Nothing calls it yet**: the pipeline wiring, `[talk] sh
   --his-words 28 [--owed] [--kind continue] [--dm-mirror 5] [--samples 1000]` reads her stored
   typing profile (mind.db opened read-only) and `[talk]` from mind.toml, and prints the shapes'
   shares and the words' p10/p50/p90 as JSON: numbers and codes only.
+
+# Recall diversity (`[talk] recall_diversity`, 2026-11-16)
+
+The owner's DM audit: a week-old "finish the story draft so I can hear him say it tomorrow"
+plan came back as current in five replies (four near-copies of it were active); her most used
+memories had been shown 20-25 times, since recall's recency counts from the last use. With the
+switch on (read at each turn; `memory/diversity.py`), recall applies three rules after the
+scope and audience rules, so they can only drop or lower a memory those already let into the
+turn, never add one:
+
+- **Past intentions.** A plan, or a first-person "I need to / I'll / I want to / we're going
+  to / let's", bound to a time ("tonight", "today", "tomorrow", "in the morning", "this
+  weekend", a weekday, "next raid", "next week") reads as past once that time has gone by
+  nights (`clock.night_of`): "- five days ago: (I was going to, but that time has passed) ..."
+  (a week or more: "I meant to"). The stored text is never rewritten. Older than 48 h it also
+  loses 1.5 from its score (a score is recency, importance and relevance, 0..1 each, plus 1 for
+  the addressee). The owner's words, game events and stories are never marked.
+- **No repeats in a conversation.** A memory her prompt showed for a line she sent in this
+  conversation within 3 h (the utterance log's memory ids: her pair with him in either medium,
+  a whisper's pair, else the channel) is left out, unless his line this turn is about it
+  (embedding cosine 0.6 or more; on the live guild 0.7% of the pairs of his line and a memory
+  recall showed reach it, each one his line being about that memory, while from 0.55 spurious
+  matches begin). One memory per subject: content-word Jaccard 0.5 or more keeps the
+  best-scored one.
+- **Tired subjects.** Talking with him privately, a memory sharing two or more content words
+  with three or more of her own lines to him in the last 7 days loses 1.5, unless he raised it
+  (his line this turn or his lines to her in the last 3 h share a word with it).
+
+The beat's "Bring in" items are the memories as shown, so they carry the past mark too. A live
+line's recipe names the rules (`template_id` gains `recall.diversity-1`, `learn.recipe.recall_used`)
+so `learn report` separates its rewards. The same switch varies the server's seeds
+(`server/README.md`). Off: recall and its lines are exactly as before.

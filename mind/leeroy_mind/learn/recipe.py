@@ -48,6 +48,24 @@ def templates_used(meta, used):
                                        template_version=digest)
 
 
+RECALL_PREFIX = "recall."  # the recall rules a line's memories were picked by ([talk] recall_diversity)
+
+
+def recall_used(meta, version):
+    """A line whose memories were picked by recall's diversity rules (memory/diversity.py,
+    `version` its VERSION): its template id gains `recall.<version>` and its template version is
+    hashed again with it, so `learn report` separates its rewards (its template_id and
+    template_version rows); the bandit's context does not change. With
+    the switch off it is never called and the recipe is as before."""
+    snapshot = getattr(meta, "recipe_snapshot", None)
+    if isinstance(snapshot, Snapshot):
+        tag = RECALL_PREFIX + version
+        digest = sha256(json.dumps([snapshot.template_version, tag],
+                                   separators=(",", ":")).encode("ascii")).hexdigest()[:16]
+        meta.recipe_snapshot = replace(snapshot, template_id="+".join(sorted({snapshot.template_id, tag})),
+                                       template_version=digest)
+
+
 BEAT_SUFFIX = "+beat"  # a line asked for after a beat ([talk] think_private, talk/beat.py)
 
 

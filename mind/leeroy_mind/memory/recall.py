@@ -12,6 +12,7 @@ from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.scheduler import Priority, SchedulerError
 from leeroy_mind.memory.privacy import OFFICERS, GROUP, restricted_channels
 from leeroy_mind.groups.audience import GroupSource, visible as group_visible, turn_readers
+from leeroy_mind.memory import diversity as diverse
 from leeroy_mind.memory.writer import Embedder
 from leeroy_mind.retrieval import mmr, vector_or_word_similarity  # mmr remains a public import
 from leeroy_mind.storage.rows import MemoryRow, cosine, unpack_vec
@@ -141,13 +142,14 @@ def resting(m: MemoryRow, now: float) -> bool:
     return m.access_n > 0 and now - m.t_accessed < REST_S
 
 
-def format_memory(m: MemoryRow, now: float, *, tz: tzinfo) -> str:
+def format_memory(m: MemoryRow, now: float, *, tz: tzinfo, aged: bool = False) -> str:
     """One prompt line: how long ago it happened (memory_age), then the text. `tz` is the
     mind clock's zone (clock.local().tzinfo), required so the host's zone never leaks in;
     Recall.format passes it. A game memory (events.py's templates, whose stored text stays as
     written) reads "3 times" for "3\u00d7", and one from before tonight loses the "tonight" the
     template baked in, since the age says when (prompts lens, minor 4). A private or secret
-    memory ends with PRIVATE_TAIL."""
+    memory ends with PRIVATE_TAIL. `aged` ([talk] recall_diversity): a time-bound intention whose
+    time has passed says so before its words (memory.diversity.lead); the stored text stays."""
     when = memory_age(m.t_event, now, tz)
     text = m.text
     if m.kind == "event":
@@ -159,7 +161,7 @@ def format_memory(m: MemoryRow, now: float, *, tz: tzinfo) -> str:
     tail = " (heard)" if m.confidence < HEARD else ""
     if m.scope != "open":
         tail += OFFICERS_TAIL if m.scope_with == OFFICERS else ' (only among those in the group then)' if m.scope_with == GROUP else PRIVATE_TAIL
-    return f"- {when}: {text}{tail}"
+    return f"- {when}: {diverse.lead(m, now, tz) if aged else ''}{text}{tail}"
 
 
 _BAKED_TONIGHT = re.compile(r"^Tonight: |(?<=\w) tonight(?=[.!]?$)")
@@ -241,8 +243,8 @@ class Recall:
             log.warning("recall query embed failed, using text and recency: %s", e)
             return None
 
-    def format(self, m: MemoryRow) -> str:
-        return format_memory(m, self._clock.now(), tz=self._clock.local().tzinfo)
+    def format(self, m: MemoryRow, *, aged: bool = False) -> str:
+        return format_memory(m, self._clock.now(), tz=self._clock.local().tzinfo, aged=aged)
 
     def _shareable(self, rows: list[MemoryRow], owner: int, channel: str,
                    to_guid: int, *, include_bond: bool = False) -> list[MemoryRow]:
@@ -336,7 +338,8 @@ class Recall:
     async def recall(self, owner: int, query: str, *, present: Sequence[int],
                      addressee: int | None, k: int = 5, priority: Priority = Priority.SOCIAL,
                      touch: bool = True, channel: str | None = None,
-                     to_guid: int = 0, include_bond: bool = False) -> list[MemoryRow]:
+                     to_guid: int = 0, include_bond: bool = False,
+                     diversity: diverse.Diversity | None = None) -> list[MemoryRow]:
         """The k memories to bring up. `touch` marks them accessed (recency); a look that
         doesn't use them (an evaluation, a quiz) passes False. `channel` is that of the turn
         they are for and `to_guid` whom its whisper goes to. With a channel, a private or
@@ -349,7 +352,12 @@ class Recall:
         Scores add recency (from the last access, with the tau_days half-life, not stretched
         over the candidates), importance and relevance (both spread 0..1) and 1.0 for one the
         addressee is in. A memory a live prompt used within REST_S rests: it comes after every
-        other candidate, so one member's lines don't circle the same few stories."""
+        other candidate, so one member's lines don't circle the same few stories.
+
+        `diversity` ([talk] recall_diversity, memory.diversity): after the scope and audience
+        rules, past intentions and subjects she keeps raising to him are lowered, a memory
+        already shown in this conversation is left out unless his line is about it, and one
+        memory per subject is kept. None: exactly as before."""
         store = self._store
         text = " ".join(strip_wow_markup(query).split())
         qbytes = await self._embed_query(text, priority)
@@ -396,10 +404,18 @@ class Recall:
                  + (1.0 if addressee is not None and addressee in m.actors else 0.0)
                  - (REST_PENALTY if resting(m, now) else 0.0)
                  for m in rows}
+        if diversity is not None:
+            rows, total = diverse.rerank(store.conn, rows, total, diversity, owner=owner,
+                                         channel=channel, to_guid=to_guid, now=now,
+                                         tz=self._clock.local().tzinfo, qvec=qvec, vecs=vecs)
+            if not rows:
+                return []
 
         sim = vector_or_word_similarity(vecs, {m.id: m.text for m in rows})
 
         order = sorted(rows, key=lambda m: (-total[m.id], -m.t_created, m.id))
+        if diversity is not None:
+            order = diverse.one_per_subject(order, diversity.names)
         picked = mmr([m.id for m in order], total, sim, k)
         if touch:
             store.touch_memories(picked, now)
