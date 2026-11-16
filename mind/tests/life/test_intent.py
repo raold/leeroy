@@ -4,38 +4,19 @@ one block every channel renders through (beat.render). Nothing calls the draw on
 The test cast and invented lines only."""
 import random
 from dataclasses import replace
-from enum import StrEnum
 from typing import NamedTuple
 
 import pytest
 
 from conftest import seed_test_cast
+from leeroy_mind.life.day import Block, DayEvent
 from leeroy_mind.talk import beat
 from leeroy_mind.talk.intent import (INTENT_KINDS, TAIL_OFF, Intent, IntentContext, allowed,
                                      draw_intent, topic_for, want_words, weights)
 from leeroy_mind.talk.turns import TurnKind
 
-# Lane A's types (plan Tasks 1 and 3) may reach main after this lane: the real ones once they are
-# there, else stand-ins with their values. talk/intent.py reads them by value, never imports them.
-try:
-    from leeroy_mind.life.day import Block, DayEvent
-except ImportError:
-    class DayEvent(StrEnum):
-        NONE = "none"
-        LATE_SHIFT = "late_shift"
-        SICK_KID = "sick_kid"
-        NIGHT_OUT = "night_out"
-        BAD_DAY = "bad_day"
-
-    class Block(StrEnum):
-        ASLEEP = "asleep"
-        WORK = "work"
-        COMMUTE = "commute"
-        HOME_DUTY = "home_duty"
-        GYM = "gym"
-        OUT = "out"
-        FREE = "free"
-        GAMING = "gaming"
+# Her feeling right now (plan Task 3) may reach main after this: the real State once it is there,
+# else a stand-in with its fields in its order. talk/intent.py reads a state's floats by name.
 try:
     from leeroy_mind.life.state import State
 except ImportError:
@@ -305,11 +286,15 @@ def test_life_intents_prints_codes_only(tmp_path, store, capsys):
     from leeroy_mind.life.cli import life_main
     seed_test_cast(store)
     before = store.conn.execute("SELECT count(*) FROM meta").fetchone()[0]
+    noon = ["--at", "2026-11-19T12:00+00:00"]   # Thursday noon in Britain: 101 (early shifts) at work
     assert main(["life", "intents", "--data-dir", str(tmp_path), "--guid", "101",
-                 "--line", "how was the warehouse today?"]) == 0
+                 "--line", "how was the warehouse today?", *noon]) == 0
     out = capsys.readouterr().out
     lines = out.splitlines()
-    assert lines[0] == "101 kind=reply_human family=whisper owed=yes samples=500"
+    head = lines[0].split()
+    assert head[:4] == ["101", "kind=reply_human", "family=whisper", "owed=yes"]
+    assert head[4:6] == ["block=work", "attention=glancing"] and head[-1] == "samples=500"
+    assert head[6] in {f"event={e}" for e in DayEvent}   # her plan's event that day
     shares = dict(line.split() for line in lines[1:])
     assert list(shares) == [i.value for i in Intent]
     assert shares["flirt"] == "0.0%" and shares["react"] == "0.0%"   # a man; an owed answer
@@ -319,6 +304,19 @@ def test_life_intents_prints_codes_only(tmp_path, store, capsys):
     assert life_main(["intents", "--data-dir", str(tmp_path), "--guid", "101",
                       "--kind", "greet"]) == 0
     assert capsys.readouterr().out.splitlines()[-1] == "none 100.0%"
+
+    def vent(*extra):
+        assert life_main(["intents", "--data-dir", str(tmp_path), "--guid", "101",
+                          "--owed", *noon, *extra]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        return lines[0], float(dict(line.split() for line in lines[1:])["vent"].rstrip("%"))
+    head, calm = vent("--event", "none")
+    bad_head, bad = vent("--event", "bad_day")   # --event overrides her plan's event
+    assert "event=none" in head and "event=bad_day" in bad_head and bad > calm
+    asleep = ["--at", "2026-11-19T03:00+00:00"]
+    assert life_main(["intents", "--data-dir", str(tmp_path), "--guid", "101", "--family", "dm",
+                      *asleep]) == 0
+    assert "block=asleep attention=none" in capsys.readouterr().out.splitlines()[0]
     assert life_main(["intents", "--data-dir", str(tmp_path), "--guid", "999"]) == 1
     assert "no persona for guid 999" in capsys.readouterr().err
     assert life_main(["intents", "--data-dir", str(tmp_path / "empty"), "--guid", "101"]) == 2

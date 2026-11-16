@@ -15,10 +15,10 @@ overlay (`tail`) she never vents, gossips, deflects, draws a line, sorts out pla
 light (the overlay wins: PM log 2026-11-16; beat.wants_for drops the same wants from the beat);
 her feeling about him moves only her turns to him.
 
-Her day and feeling come from life.day (Block, DayEvent; plan Task 1), life.presence (Attention)
-and life.state (State; plan Task 3). This module reads them by value only: an event or block is
-compared with its code ("bad_day", "work"), a state's five floats are read by name (a missing one
-reads 0), so a plain string or None works too and nothing here imports them.
+Her day comes from life.day (Block, DayEvent) and life.presence (Attention); her feeling from
+life.state (State; plan Task 3, not built yet). An event or block is compared with its code (a
+StrEnum, so a plain code string works too) and a state's five floats are read by name (a missing
+one reads 0), so this module never needs life.state at run time.
 
 Pure: no clock, no I/O, no logging. `rng` is the caller's seeded draw (life.seed), never
 engine.rng. Nothing calls the draw on a live turn until the pipeline wiring ([talk] intent, plan
@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
+from leeroy_mind.life.day import Block, DayEvent
 from leeroy_mind.talk.filters import flirty
 from leeroy_mind.talk.questions import is_plan
 from leeroy_mind.talk.select import classify_human_line
@@ -38,7 +39,6 @@ from leeroy_mind.talk.turns import TurnKind
 if TYPE_CHECKING:
     import random
 
-    from leeroy_mind.life.day import Block, DayEvent
     from leeroy_mind.life.presence import Attention
     from leeroy_mind.life.state import State
 
@@ -81,9 +81,6 @@ INTENT_KINDS = frozenset({TurnKind.REPLY_HUMAN, TurnKind.CONTINUE, TurnKind.OPEN
 
 Family = Literal["game", "whisper", "discord", "dm", "group"]
 
-# Lane A's codes (life.day.DayEvent and Block values), compared by value
-BAD_DAY, SICK_KID, LATE_SHIFT, NIGHT_OUT = "bad_day", "sick_kid", "late_shift", "night_out"
-WORK, COMMUTE = "work", "commute"
 
 
 def want_words(intent: Intent, who: str, topic: str = "") -> str:
@@ -208,12 +205,12 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
             w[Intent.BOUNDARY] *= 0.3
             w[Intent.VENT] *= 0.5
     w[Intent.VENT] *= 1 + 2 * max(0.0, stress)
-    if ctx.event in (BAD_DAY, SICK_KID):
+    if ctx.event in (DayEvent.BAD_DAY, DayEvent.SICK_KID):
         w[Intent.VENT] *= 2
-    if ctx.block == WORK:
+    if ctx.block == Block.WORK:
         w[Intent.VENT] *= 1.5
     w[Intent.SHARE] *= 1 + max(0.0, valence)
-    if ctx.event == NIGHT_OUT:
+    if ctx.event == DayEvent.NIGHT_OUT:
         w[Intent.SHARE] *= 1.5
     if ctx.humour == "teasing" or ctx.agreeableness <= 4:
         w[Intent.TEASE] *= 1.5
@@ -277,17 +274,17 @@ def topic_for(intent: Intent, ctx: IntentContext) -> str:
     if ctx.kind == TurnKind.OPEN:
         return ""
     if intent == Intent.VENT:
-        if ctx.event == BAD_DAY:
+        if ctx.event == DayEvent.BAD_DAY:
             return "about a rough day"
-        if ctx.event == SICK_KID:
+        if ctx.event == DayEvent.SICK_KID:
             return "about your kid being ill"
-        if ctx.event == LATE_SHIFT:
+        if ctx.event == DayEvent.LATE_SHIFT:
             return "about being stuck late at work"
-        if ctx.block in (WORK, COMMUTE):
+        if ctx.block in (Block.WORK, Block.COMMUTE):
             return "about work"
         return "about the kids" if ctx.kids else "about your day"
     if intent == Intent.SHARE:
-        return "your night out" if ctx.event == NIGHT_OUT else "something from your day"
+        return "your night out" if ctx.event == DayEvent.NIGHT_OUT else "something from your day"
     if intent == Intent.GOSSIP:
         return "only from what you remember"
     if intent == Intent.LOGISTICS:

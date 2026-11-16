@@ -463,14 +463,19 @@ for every channel, never a second.
   "about being stuck late at work", "about work" (at work or commuting), "about the kids" (kids),
   else "about your day"; share "your night out" or "something from your day"; gossip "only from
   what you remember"; logistics "raid times, gear or who's coming".
-- **Her day and feeling** (`attention`, `state`, `event`, `block`, `kids`) come from `life/`
-  (plan Tasks 1 and 3). `intent.py` reads them by value only (an event or block by its code, a
-  state's five floats by name, a missing one 0), so it imports none of them.
+- **Her day and feeling**: `block`, `event`, `kids` and `attention` come from her presence
+  (`life.presence.presence_at`, her day plan); `state` from her feeling right now (`life.state`,
+  plan Task 3, not built yet). An event or block compares by its code (`DayEvent` and `Block` are
+  StrEnums); a state's five floats are read by name (a missing one 0), so `intent.py` needs no
+  `life.state` at run time.
 - `python -m leeroy_mind life intents --data-dir "$D" --guid N [--kind reply_human] [--family
-  whisper] [--line TEXT] [--owed|--no-owed] [--tail] [--event CODE] [--samples 500]`: each
-  want's share in percent from her stored persona (a `none` line when a draw has none),
-  read-only on mind.db `mode=ro`, codes and numbers only, never persona text, names or the line.
-  It does not read her presence or state yet (attention, state and block none, kids no).
+  whisper] [--line TEXT] [--owed|--no-owed] [--tail] [--event CODE] [--at YYYY-MM-DDTHH:MM]
+  [--samples 500]`: each want's share in percent from her stored persona and her presence at
+  `--at` (this PC's clock, default now; Discord families read her Discord attention, the others
+  her game attention), `--event` in place of her plan's event; a header with the kind, family,
+  owed, block, attention and event, then a line per want (a `none` line when a draw has none).
+  Read-only on mind.db `mode=ro`, codes and numbers only, never persona text, names or the line.
+  It does not read her feeling (state none) or tuning dials beyond the stored persona's.
 
 # The prompt as a situation (human-likeness core, 2026-11-16)
 
