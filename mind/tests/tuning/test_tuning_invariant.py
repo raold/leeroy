@@ -12,7 +12,8 @@ from conftest import seed_test_cast
 from leeroy_mind.personas.io import PersonaCache, load_persona
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.tuning import changes as C
-from tuning.scenario import cast, engine_clock, golden, golden_beat, record, record_beat
+from tuning.scenario import (cast, engine_clock, golden, golden_beat, golden_romance, record,
+                             record_beat, record_romance)
 
 HUMAN = 1
 
@@ -35,6 +36,14 @@ def test_the_beat_before_his_whisper_answers_is_its_own_golden(store, clock, tmp
     beat's instruction, format and options) and each line's prompt with "You read it as",
     "It lands", "You want to" (and "Bring in") after its instruction, as golden_beat.json."""
     assert record_beat(store, clock, tmp_path) == golden_beat()
+
+
+def test_romance_realism_is_its_own_golden(store, clock, tmp_path):
+    """[romance] realism on (golden_romance.json): only the turns that carry her romance text or
+    show his card change, and they differ from golden_prompts.json; off is the golden above."""
+    got = record_romance(store, clock, tmp_path)
+    assert got == golden_romance()
+    assert got["prompts"] != golden()["prompts"]
 
 
 def test_rows_that_reach_nobody_change_nothing(store, clock, tmp_path):
