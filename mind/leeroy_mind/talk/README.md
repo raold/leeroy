@@ -402,6 +402,37 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
   `think_private = false` and restart the mind. Older code logs both keys as unknown and ignores
   them, so they need not be removed before rolling back.
 
+# The prompt as a situation (human-likeness core, 2026-11-16)
+
+Spec section 9 (bake-off 1: the rule list primed compliance; the variant cut to the hard rules
+scored best on public turns: with the beat 1.82 against 1.65, alone 1.71). These are prompt functions only: nothing calls
+them until the pipeline wiring reads `[talk] situation` (core plan, Task 8), so every live prompt
+and `tests/tuning/golden_prompts.json` are unchanged.
+
+- **The hard rules** (`prompt.SITUATION_RULES`, `situation_rules`): a real person in 2009 in her
+  WoW guild who never says the year, not an assistant, only her own words (no name in front, no
+  quotes, no one else's lines, no narrated actions), shared history only from her memories, never
+  guilt-tripping him, and "(nothing)" when she wouldn't say anything (the measured variant kept
+  it; ruling S1 on #333). Same signature, prefix ("In your guild: ...") and suffix (flirt rule,
+  tuning lines, nudges) as `comms_rules`, without `length_rule`, so the system message stays the
+  same on every turn for a speaker (Ollama's prompt cache). Noted as `talk.situation_rules`.
+- **The situation templates** (`prompt.SITUATION_INSTRUCTIONS` for reply_human, continue, open,
+  whisper and flirt, `OPEN_TO_HIM_SITUATION`): no length of their own and no "respond to what they
+  actually said". `render_instruction(..., situation=True)` uses them (a kind without one keeps
+  its game template), noted as `talk.situation_instruction.<kind>`.
+- **The length is the caller's.** `render_instruction(..., length_text=...)` puts the reply's
+  drawn length where the template's own was (`DISCORD_DROPS`, then before `{extra}`), never cut,
+  winning over the Discord length and `long`; on any template, so a game template can take a
+  drawn shape too. A situation template with neither `length_text` nor a Discord length (a game
+  channel, a voice room, Discord at 0 words) takes her usual line, `length_rule(typing)` (the
+  `typing` keyword; `SHORT_LINE` without it), never an error, so no turn is dropped `bad_turn`
+  for it. `long` does not apply to a situation template. The pipeline (Task 8) passes the shape,
+  the two-lines sentence or the Discord length explicitly, and `typing=p.typing` for the rest.
+- **Right now, last.** `PromptParts.situation` renders "Right now:" after the awareness card,
+  just before the instruction (the want and "It lands" stay in the beat's block after the
+  instruction). The trim treats it as before: never cut. `mood_line(..., where=, state_words=)`:
+  where she is in her day right after the time of day, and her feeling in place of the mood words.
+
 # Reply shape
 
 `talk/shape.py` (human-likeness design, section 4) draws what kind of message a member's reply

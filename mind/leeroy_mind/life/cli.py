@@ -1,24 +1,48 @@
-"""`python -m leeroy_mind life ...`: read-only looks at the life models, on mind.db opened
-mode=ro. No service, model, migration or write.
+"""`python -m leeroy_mind life day|now|shapes`: the members' day plans, where they are now and
+their reply shapes, read-only on mind.db opened mode=ro. Prints guids, codes, times and counts
+only, never persona text or names.
 
 `shapes --guid N --family dm --his-words 28 [--owed] [--samples 1000]` draws her reply shapes
 (talk/shape.py) from her stored typing profile and prints, as JSON, each shape's share and the
-words' p10/p50/p90 of the shapes that write something: numbers and codes only, never persona
-text. `[talk]` discord_words, dm_words and realism come from mind.toml; `--dm-mirror` (default
-5), `--kind` and `--realism`/`--no-realism` override."""
+words' p10/p50/p90 of the shapes that write something. `[talk]` discord_words, dm_words and
+realism come from mind.toml; `--dm-mirror` (default 5), `--kind` and `--realism`/`--no-realism`
+override."""
 import argparse
 import json
 import math
 import random
 import sqlite3
 import sys
+import time
 from collections import Counter
+from datetime import date, datetime
 from pathlib import Path
 
+from leeroy_mind.clock import local_at
 from leeroy_mind.config import ConfigError, default_data_dir, load_config
-from leeroy_mind.personas.schema import PersonaError, persona_from_dict
+from leeroy_mind.discord.presence import local_time
+from leeroy_mind.personas.schema import Persona, persona_from_dict
+from leeroy_mind.personas.tiers import cast_sql
 from leeroy_mind.talk.shape import Shape, ShapeContext, draw_shape
 from leeroy_mind.talk.turns import TurnKind
+
+from .day import DayEvent, day_plan
+from .presence import Attention, Where, presence_at
+
+
+def _date(text: str) -> date:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("date must be YYYY-MM-DD") from None
+
+
+def _at(text: str) -> datetime:
+    try:
+        return datetime.fromisoformat(text).astimezone()
+    except ValueError:
+        raise argparse.ArgumentTypeError("at must be YYYY-MM-DDTHH:MM (this PC's clock)") from None
+
 
 FAMILIES = ("game", "whisper", "discord", "dm", "group")
 DM_MIRROR_DEFAULT = 5
@@ -39,28 +63,83 @@ def _pct(values: list[int], p: int) -> int:
     return ordered[max(0, math.ceil(p / 100 * len(ordered)) - 1)]
 
 
-def _typing(root: Path, guid: int):
-    conn = sqlite3.connect(f"{(root / 'mind.db').resolve().as_uri()}?mode=ro", uri=True)
+def _hhmm(minute: int) -> str:
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def _personas(conn) -> tuple[dict[int, Persona], int]:
+    """The cast's stored personas; one the code cannot read is counted, never shown."""
     try:
-        row = conn.execute("SELECT json FROM persona_core WHERE guid = ?", (guid,)).fetchone()
-    finally:
-        conn.close()
-    return None if row is None else persona_from_dict(json.loads(row[0])).typing
+        rows = conn.execute(f"SELECT guid, json FROM persona_core WHERE {cast_sql(conn)} "
+                            "ORDER BY guid").fetchall()
+    except sqlite3.OperationalError as exc:
+        if str(exc).startswith("no such table"):
+            return {}, 0
+        raise
+    out, unreadable = {}, 0
+    for guid, raw in rows:
+        try:
+            out[int(guid)] = persona_from_dict(json.loads(raw))
+        except Exception:
+            unreadable += 1
+    return out, unreadable
 
 
-def _shapes(args, root: Path) -> int:
-    talk = load_config(root / "mind.toml").talk
-    typing = _typing(root, args.guid)
-    if typing is None:
-        print("life shapes: no persona for that guid", file=sys.stderr)
+def _day(personas: dict[int, Persona], args) -> int:
+    if args.guid is not None:
+        if args.guid not in personas:
+            print(f"life day: no persona for guid {args.guid}", file=sys.stderr)
+            return 1
+        personas = {args.guid: personas[args.guid]}
+    day = args.date or local_at(time.time()).date()
+    for guid, p in personas.items():
+        plan = day_plan(p, day)
+        print(f"{guid} job={plan.job} event={plan.event}")
+        for span in plan.spans:
+            print(f"{_hhmm(span.start)}-{_hhmm(span.end)} {span.block}")
+    return 0
+
+
+def _counts(counter: Counter, keys) -> str:
+    return " ".join(f"{k}={counter[k]}" for k in keys)
+
+
+def _now(personas: dict[int, Persona], args) -> int:
+    owner_now = args.at or local_at(time.time())
+    where, game, discord, events = Counter(), Counter(), Counter(), Counter()
+    for p in personas.values():
+        her = local_time(owner_now, p.identity.region)
+        on_game = presence_at(p, her, medium="game")
+        where[on_game.where] += 1
+        events[on_game.event] += 1
+        game[on_game.attention.name.lower()] += 1
+        discord[presence_at(p, her, medium="discord").attention.name.lower()] += 1
+    attention = [a.name.lower() for a in Attention]
+    print(f"now {owner_now:%Y-%m-%d %H:%M} (this PC's clock): {len(personas)} members")
+    print("where: " + _counts(where, list(Where)))
+    print("game attention: " + _counts(game, attention))
+    print("discord attention: " + _counts(discord, attention))
+    print("events: " + _counts(events, list(DayEvent)))
+    return 0
+
+
+def _shapes(personas: dict[int, Persona], args, root: Path) -> int:
+    if args.guid not in personas:
+        print(f"life shapes: no persona for guid {args.guid}", file=sys.stderr)
+        return 1
+    try:
+        talk = load_config(root / "mind.toml").talk
+    except (ConfigError, OSError) as exc:
+        print(f"life shapes failed: {type(exc).__name__}", file=sys.stderr)
         return 1
     dm_mirror = args.dm_mirror if args.dm_mirror is not None else getattr(
         talk, "dm_mirror", DM_MIRROR_DEFAULT)
     ctx = ShapeContext(
-        family=args.family, kind=TurnKind(args.kind), owed=args.owed, intent=None, typing=typing,
-        attention=None, state=None, late_by=0.0, his_words=args.his_words,
-        discord_words=talk.discord_words, dm_words=talk.dm_words, dm_mirror=dm_mirror,
-        realism=talk.realism if args.realism is None else args.realism, two_lines=False)
+        family=args.family, kind=TurnKind(args.kind), owed=args.owed, intent=None,
+        typing=personas[args.guid].typing, attention=None, state=None, late_by=0.0,
+        his_words=args.his_words, discord_words=talk.discord_words, dm_words=talk.dm_words,
+        dm_mirror=dm_mirror, realism=talk.realism if args.realism is None else args.realism,
+        two_lines=False)
     rng = random.Random(args.guid)
     draws = [draw_shape(ctx, rng) for _ in range(args.samples)]
     counts = Counter(d.shape for d in draws)
@@ -75,24 +154,45 @@ def _shapes(args, root: Path) -> int:
 
 
 def life_main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="leeroy_mind life")
+    parser = argparse.ArgumentParser(prog="leeroy_mind life",
+                                     description="The members' day plans, presence and reply "
+                                                 "shapes (read-only).")
     parser.add_argument("--data-dir")
     sub = parser.add_subparsers(dest="action", required=True)
-    shapes = sub.add_parser("shapes", help="her reply shapes' shares and words (numbers only)")
-    shapes.add_argument("--data-dir", default=argparse.SUPPRESS)
-    shapes.add_argument("--guid", type=int, required=True)
-    shapes.add_argument("--family", choices=FAMILIES, required=True)
-    shapes.add_argument("--his-words", type=int, default=12)
-    shapes.add_argument("--owed", action="store_true")
-    shapes.add_argument("--kind", choices=[k.value for k in TurnKind],
-                        default=TurnKind.REPLY_HUMAN.value)
-    shapes.add_argument("--dm-mirror", type=int, choices=range(0, 11), default=None)
-    shapes.add_argument("--realism", action=argparse.BooleanOptionalAction, default=None)
-    shapes.add_argument("--samples", type=_samples, default=1000)
+    p_day = sub.add_parser("day", help="her day plan: job shape, the day's event and the blocks")
+    p_day.add_argument("--guid", type=int)
+    p_day.add_argument("--date", type=_date, help="YYYY-MM-DD (default: today on this PC)")
+    p_now = sub.add_parser("now", help="how many members are where, and their attention, now")
+    p_now.add_argument("--at", type=_at, help="YYYY-MM-DDTHH:MM on this PC's clock (default: now)")
+    p_shapes = sub.add_parser("shapes", help="her reply shapes' shares and words (numbers only)")
+    p_shapes.add_argument("--guid", type=int, required=True)
+    p_shapes.add_argument("--family", choices=FAMILIES, required=True)
+    p_shapes.add_argument("--his-words", type=int, default=12)
+    p_shapes.add_argument("--owed", action="store_true")
+    p_shapes.add_argument("--kind", choices=[k.value for k in TurnKind],
+                          default=TurnKind.REPLY_HUMAN.value)
+    p_shapes.add_argument("--dm-mirror", type=int, choices=range(0, 11), default=None)
+    p_shapes.add_argument("--realism", action=argparse.BooleanOptionalAction, default=None)
+    p_shapes.add_argument("--samples", type=_samples, default=1000)
+    for p in (p_day, p_now, p_shapes):
+        p.add_argument("--data-dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
+    db = root / "mind.db"
+    if not db.is_file():
+        print(f"life: no mind.db in {root}", file=sys.stderr)
+        return 2
     try:
-        return _shapes(args, root)
-    except (sqlite3.Error, ValueError, PersonaError, ConfigError, OSError) as exc:
+        conn = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
+        try:
+            personas, unreadable = _personas(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
         print(f"life {args.action} failed: {type(exc).__name__}", file=sys.stderr)
         return 1
+    if unreadable:
+        print(f"life: {unreadable} stored personas unreadable, left out", file=sys.stderr)
+    if args.action == "shapes":
+        return _shapes(personas, args, root)
+    return _day(personas, args) if args.action == "day" else _now(personas, args)

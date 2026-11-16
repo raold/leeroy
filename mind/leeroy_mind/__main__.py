@@ -1422,6 +1422,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "turing":
         from .turing.cli import turing_main
         return turing_main(argv[1:])
+    if argv and argv[0] == "bakeoff":
+        from .bakeoff.cli import bakeoff_main
+        return bakeoff_main(argv[1:])
     if argv and argv[0] == "raidplay":
         from .raidplay.cli import raidplay_main
         return raidplay_main(argv[1:])
@@ -1447,6 +1450,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("signals", help="read-only response signal counts")
     sub.add_parser("learn", help="read-only reward report")
     sub.add_parser("turing", help="how distinguishable the members are from you: report, run")
+    sub.add_parser("bakeoff", help="other models and prompts on captured turns, judged by the "
+                   "Turing judge: run (mind stopped), sheet, tally")
     sub.add_parser("selfies", help="profile photos: status, a trial render with the mind "
                    "stopped, and varied sets (vary)")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
@@ -1458,7 +1463,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                                     "book, and extract local DBM facts")
     sub.add_parser("lexicon", help="clean-junk: retire stored slang that is an ordinary word "
                                    "(a dry run unless --go, with the mind stopped)")
-    sub.add_parser("life", help="read-only looks at a member's day models: shapes")
+    sub.add_parser("life", help="the members' day plans, where they are now and their reply "
+                                "shapes (read-only)")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

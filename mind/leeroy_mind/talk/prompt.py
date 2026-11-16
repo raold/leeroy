@@ -15,7 +15,13 @@ him very well): real_name_line gates the one line that tells them, and redact_fo
 from everything anyone else is shown.
 
 A reply to his game question carries facts from the library (talk/facts.py) after the chat,
-under FACTS_HEAD; the budget never cuts them and gives up older chat first."""
+under FACTS_HEAD; the budget never cuts them and gives up older chat first.
+
+The situation mode (human-likeness core, spec section 9; wired by the pipeline only with
+[talk] situation) keeps only the hard rules in the system message (SITUATION_RULES,
+situation_rules), moves "Right now:" next to the instruction (PromptParts.situation) and takes
+the reply's length from the caller (SITUATION_INSTRUCTIONS, render_instruction's
+`length_text`)."""
 import logging
 import random
 import re
@@ -108,6 +114,9 @@ class PromptParts:
     # Whole sections the trim never cuts or shortens (the persona's own facts, an "About you"
     # block), each with its own heading, first in the user message
     untrimmed: list[str] = field(default_factory=list)
+    # The situation mode: "Right now:" goes after the awareness card, just before the
+    # instruction, so her situation is what she reads last (never cut, as before)
+    situation: bool = False
 
 
 def replay(text: str, words: int = REPLAY_WORDS) -> str:
@@ -145,6 +154,21 @@ polite.
 - React only to the chat shown. Shared history comes only from your memories, never invent it.
 - You can be moody, blunt, bored or wrong.
 - Never guilt-trip {{human}} for being away.
+- If you wouldn't say anything, answer exactly (nothing)"""
+
+# The situation mode's rules (spec section 9, bake-off 1: the rule list primed compliance; the
+# variant cut to the hard rules scored best on public turns): only the hard ones, the 2009 rule
+# without the year leak the DM audit found, the history and guilt-trip rules kept, and the
+# nothing-rule, which the measured variant kept (1.71 public alone, 1.82 with the beat; review
+# of #333, ruling S1). No length: the instruction carries the reply's (render_instruction).
+SITUATION_RULES = """\
+How you talk here:
+- You're a real person in 2009, in your WoW guild. Real life stays in 2009 or is timeless. Never \
+say the year.
+- You're not an assistant. Never mention AI, language models, prompts or bots.
+- Write only your own words: no name in front, no quotes, no one else's lines, no narrated actions.
+- Shared history comes only from your memories. Never invent it.
+- Never guilt-trip {human} for being away.
 - If you wouldn't say anything, answer exactly (nothing)"""
 
 
@@ -200,6 +224,31 @@ def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
     rules = COMMS_RULES.format(human=human.called)
     if persona is not None:
         rules = rules.replace(SHORT_LINE, length_rule(persona.typing))
+    return _in_guild(human, persona, rules, data_dir=data_dir, now=now, channel=channel,
+                     recipient=recipient, at_him=at_him, with_him=with_him)
+
+
+def situation_rules(human: HumanIdentity, persona: Persona | None = None, *,
+                    data_dir: Path | None = None, now: float | None = None,
+                    channel: str = "", recipient: int | None = None,
+                    at_him: bool | None = None, with_him: bool = False) -> str:
+    """comms_rules for the situation mode: the same prefix (who the human is) and suffix (the
+    flirt rule, tuning lines and nudges), with SITUATION_RULES in place of COMMS_RULES and no
+    length_rule (the instruction carries the length). The same on every turn for a speaker of
+    the same kind, for Ollama's prompt cache."""
+    from leeroy_mind.prompts import note_template
+    note_template("talk.situation_rules", SITUATION_RULES)
+    return _in_guild(human, persona, SITUATION_RULES.format(human=human.called),
+                     data_dir=data_dir, now=now, channel=channel, recipient=recipient,
+                     at_him=at_him, with_him=with_him)
+
+
+def _in_guild(human: HumanIdentity, persona: Persona | None, rules: str, *,
+              data_dir: Path | None, now: float | None, channel: str, recipient: int | None,
+              at_him: bool | None, with_him: bool) -> str:
+    """`rules` after who the human is (never his real name), then for a persona its flirt rule
+    (comms_rules says which), its tuning lines and its nudges."""
+    from leeroy_mind.prompts import note_template
     out = f"In your guild: {human.describe(include_real_name=False)}.\n" + rules
     if persona is None:
         return out
@@ -306,6 +355,22 @@ OPEN_TO_HIM = ("Start a conversation with {addressee} in one short line, the way
                "say {their} name and {topic}. It's your line to start: nothing in chat is "
                "addressed to you. {extra}")
 
+# The situation mode's templates (render_instruction's `situation`): no length of their own and
+# no "respond to what they actually said" (the rule list primed compliance, bake-off 1). The
+# caller's length goes before {extra}; every other kind keeps its INSTRUCTIONS template.
+SITUATION_INSTRUCTIONS: dict[TurnKind, str] = {
+    TurnKind.REPLY_HUMAN: "Reply to {addressee}'s last line, as yourself. {extra}",
+    TurnKind.CONTINUE: ("Reply to {addressee}'s last line only if you have something to add. If "
+                        "you'd let it go, answer (nothing). {extra}"),
+    TurnKind.OPEN: ("{quiet}Bring up {topic}, the way you'd type it. It has to make sense on its "
+                    "own: nothing in chat is addressed to you. If it isn't worth saying, answer "
+                    "(nothing). {extra}"),
+    TurnKind.WHISPER: "You're whispering {addressee} privately. {extra}",
+    TurnKind.FLIRT: "Say something to {addressee} in chat, the way you feel about {them}. {extra}",
+}
+OPEN_TO_HIM_SITUATION = ("Start a conversation with {addressee}, the way you'd type it: say "
+                         "{their} name and {topic}. Nothing in chat is addressed to you. {extra}")
+
 _TOPIC = {
     TurnKind.OPEN: "something from your own evening so far",
     TurnKind.GZ: "an achievement",
@@ -371,7 +436,8 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
                        extra: str = "", forms: tuple[str, str, str] = THEY_FORMS,
                        lead: str = "", after: str = "", tail: str = "", long: bool = False,
                        quiet: bool = True, to_him: bool = False, channel: str = "",
-                       discord_words: int = 0) -> str:
+                       discord_words: int = 0, length_text: str = "",
+                       situation: bool = False, typing: Typing | None = None) -> str:
     """The TurnKind template on one line. `lead` (her romance text) comes before it, so the
     turn's own instruction is what the model reads last (prompts I5); `extra` (a bit, an aside,
     a fact) goes after it, cut to EXTRA_CAP_TOKENS, and a cut is logged without the text.
@@ -383,9 +449,25 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     is assumed without them. `to_him` on an OPEN: the opener addressed to him (OPEN_TO_HIM).
     A turn on a Discord `channel` with `discord_words` writes as on Discord (discord_length, in
     place of the one short line and of `long`, at the template's end before `extra`, never cut);
-    any other turn is as before."""
-    tmpl = OPEN_TO_HIM if to_him and kind is TurnKind.OPEN else INSTRUCTIONS[kind]
-    length = discord_length(channel, discord_words)
+    any other turn is as before. `length_text` (the reply's drawn length) goes in the same place
+    the same way and wins over the Discord length and `long`.
+    `situation` takes the template from SITUATION_INSTRUCTIONS (OPEN_TO_HIM_SITUATION for an
+    opener to him; a kind it has none for keeps its INSTRUCTIONS template). Those carry no
+    length of their own, so one with neither `length_text` nor a Discord length (a game channel,
+    a voice room, Discord at 0 words) takes the speaker's usual line, length_rule(`typing`), or
+    SHORT_LINE without one: never an error, so no turn is dropped for it. `long` does not apply
+    to them: the pipeline passes the shape, two-lines or Discord length explicitly."""
+    own = situation and kind in SITUATION_INSTRUCTIONS
+    if own:
+        tmpl = (OPEN_TO_HIM_SITUATION if to_him and kind is TurnKind.OPEN
+                else SITUATION_INSTRUCTIONS[kind])
+    else:
+        tmpl = OPEN_TO_HIM if to_him and kind is TurnKind.OPEN else INSTRUCTIONS[kind]
+    shaped = length_text.strip()
+    on_discord = "" if shaped else discord_length(channel, discord_words)
+    length = shaped or on_discord
+    if own and not length:  # her usual line, in the words comms_rules has for it
+        length = length_rule(typing) if typing is not None else SHORT_LINE
     if length:
         for old, new in DISCORD_DROPS:
             tmpl = tmpl.replace(old, new)
@@ -395,8 +477,8 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
         tmpl = tmpl.replace("in one short line", MORE_LINES).replace(
             "One short line", MORE_LINES[3:].capitalize())
     from leeroy_mind.prompts import note_template
-    note_template("talk.instruction."+kind.value,tmpl)
-    if length:
+    note_template(("talk.situation_instruction." if own else "talk.instruction.")+kind.value,tmpl)
+    if on_discord:
         note_template("talk.discord_length", discord_template(channel, discord_words))
     if "{addressee}" in tmpl and not addressee:
         raise ValueError(f"a {kind} turn needs an addressee")
@@ -568,19 +650,23 @@ def _mood_words(mood: float) -> str:
 
 def mood_line(state: PersonaStateRow, altered: Altered, substance: str | None,
               phase: DayPhase, *, kind: TurnKind | None = None, life_thread: str = "",
-              lately: str = "", variant: int = 0, today: str = "") -> str:
+              lately: str = "", variant: int = 0, today: str = "", where: str = "",
+              state_words: str = "") -> str:
     """The "Right now:" line: time of day (`today`, the weekday and tonight's holidays from
     seasons.day_line, in its place when given), mood and any altered state. Openers
     (IDLE_KINDS) also get what has been on their mind (state.life_thread, else the persona's
     own `life_thread`: P1b writes no state, spec I3), what they did tonight (`lately`) and a
-    smoker's habit; raid calls (CALLOUT, URGENT) get no altered state."""
+    smoker's habit; raid calls (CALLOUT, URGENT) get no altered state. `where` (where she is in
+    her day) follows the time of day; `state_words` (how she feels right now) takes the place
+    of the mood words when given."""
     idle = kind in IDLE_KINDS
     life = " ".join((state.life_thread or life_thread).split()).rstrip(".") if idle else ""
     tonight = " ".join(lately.split()).rstrip(".") if idle else ""
     shown = "" if kind in RAID_CALLS else state_line(
         altered, substance if idle or Altered(altered) is not Altered.SOBER else None,
         variant=variant)
-    parts = [today or _PHASE[phase], _mood_words(state.mood), shown,
+    parts = [today or _PHASE[phase], " ".join(where.split()),
+             " ".join(state_words.split()) or _mood_words(state.mood), shown,
              f"On your mind lately: {truncate_words(life, LIFE_THREAD_CHARS)}." if life else "",
              f"Tonight so far: {truncate_words(tonight, LATELY_CHARS)}." if tonight else ""]
     return " ".join(x for x in parts if x)
@@ -682,21 +768,24 @@ SAMPLES_HEAD = "How you type (examples of your style; don't repeat them):"
 
 
 def render_messages(p: PromptParts) -> list[dict]:
-    """The two messages, untrimmed. Empty sections are left out."""
+    """The two messages, untrimmed. Empty sections are left out. In the situation mode
+    (p.situation) "Right now:" comes after the awareness card, just before the instruction."""
     system = "\n\n".join(x for x in (
         p.card.strip(), _section(SAMPLES_HEAD, p.samples), p.rules.strip()) if x)
     people = [*p.rel_cards, *([p.real_name] if p.real_name else [])]
+    right_now = _section("Right now:", [p.mood])
     user = "\n\n".join(x for x in (
         *(u.strip() for u in p.untrimmed),
         _section("People here:", people),
         _section("You remember:", p.memories),
-        _section("Right now:", [p.mood]),
+        "" if p.situation else right_now,
         _section(STYLE_HEAD, p.style),
         _section(ELSEWHERE_HEAD, p.elsewhere),
         _section("Chat:", p.chat),
         _section(p.facts_head or facts_head("them"), p.facts),
         _section("Your last lines (don't make the same move again):", p.own_recent),
         p.awareness.strip(),
+        right_now if p.situation else "",
         p.instruction.strip()) if x)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -736,8 +825,8 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     when later answers came after it. The speaker's own line his pushback is about (kept, fix
     wave G6) is never cut nor shortened either, and the last resort keeps it with the floor.
     The system message, the untrimmed sections, mood, real-name line, facts and instruction
-    are never cut. Memories stay a prefix of the input, so len(result.memories) says which
-    recalled memories were used."""
+    are never cut (the mood in either place: PromptParts.situation). Memories stay a prefix of
+    the input, so len(result.memories) says which recalled memories were used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
                 elsewhere=list(p.elsewhere), style=list(p.style),
                 own_recent=list(p.own_recent), untrimmed=list(p.untrimmed))
