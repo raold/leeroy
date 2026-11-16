@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
 from typing import Literal
 
 from ..personas.schema import Persona
 from .day import Block, DayEvent, day_plan
+
+# the blocks in which she cannot take a photo of herself (photos/requests.py): asleep, driving
+NO_PHOTO = frozenset({Block.ASLEEP, Block.COMMUTE})
 
 DESIGN_AVAILABILITY = 6
 DISCORD_CAP_S = 2700.0
@@ -75,6 +78,21 @@ def presence_at(p: Persona, her_local: datetime, *, medium: Literal["game", "dis
     game, discord, where = _BY_BLOCK[block]
     attention = discord if medium == "discord" else Attention.FULL if in_his_group else game
     return LifePresence(block, where, attention, plan.event, plan.kids)
+
+
+def free_after(p: Persona, her_local: datetime, busy=NO_PHOTO) -> datetime | None:
+    """Her local wall-clock time when her day plan next leaves the blocks of `busy`, from
+    `her_local` (the start of the first minute in another block); None when she is not in one of
+    them now. Today's plan, then the next two days'."""
+    minute = her_local.hour * 60 + her_local.minute
+    if day_plan(p, her_local.date()).block_at(minute) not in busy:
+        return None
+    midnight = her_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    for days in range(3):
+        for span in day_plan(p, her_local.date() + timedelta(days=days)).spans:
+            if span.block not in busy and (days or span.start > minute):
+                return midnight + timedelta(days=days, minutes=span.start)
+    return None
 
 
 def attention_weight(att: Attention, availability: int) -> float:

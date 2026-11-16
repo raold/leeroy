@@ -54,8 +54,8 @@ def script(model, messages):
     return "the quiet afternoon made a good excuse for a photo"
 
 
-def rig(tmp_path, *, gate=None, entered=None, fail=False):
-    app = make_app(tmp_path)
+def rig(tmp_path, *, gate=None, entered=None, fail=False, toml=None):
+    app = make_app(tmp_path) if toml is None else make_app(tmp_path, toml)
     app.llm._script = script
     workers, requests = [], []
     pids = tmp_path / "worker-pids.json"
