@@ -246,6 +246,7 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
     else:
         codes = critic.scene_codes(scene)
     run = f"request:{snap.request}"
+    critic.forget_pending(app.store, snap.id, run)
     worker = (worker_factory() if worker_factory is not None else
               SelfieWorker(worker_command(cfg, identity=True), env=worker_env(cfg)))
     room.own_worker(worker)  # startup itself can leave a process that needs teardown

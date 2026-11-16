@@ -366,6 +366,7 @@ async def _situation_critic(ctx: "NightContext", r: SnapRenderer, row: SnapRow,
     spec = build_scene_prompt(p, scene)
     codes = critic.scene_codes(scene)
     crop = ref_crop(framing)
+    critic.forget_pending(ctx.store, row.id, ctx.night)
     shots = []
     for k in range(cfg.best_of):
         params = choose(ctx.store, cfg, data, shape="portrait", framing=scene.framing,

@@ -166,3 +166,14 @@ def test_a_profile_set_gets_a_row_per_candidate_settled_after_the_worker(h, tmp_
     assert len(rows) == 4 and {r["verdict"] for r in rows} == {"clean"}
     assert all(r["steps"] == 30 and r["scale"] is None for r in rows)  # a first set: no face
     assert ctx.done(SETS, "101:1") and not ctx.failures
+
+
+def test_a_resumed_night_measures_each_seed_once(h, tmp_path):
+    cast(h, 101); s = situation(h, 101)
+    seeds = ",".join(str(seed_for(h.night, 101, s, k, 0)) for k in range(3))
+    from leeroy_mind.selfies import critic
+    critic.insert(h.store, run=h.night, purpose="snap", guid=101, snap_id=s, seed=1,
+                  file="selfies/101/snaps/critic/x.jpg", critique=None, now=1.0)  # a cut-off run's
+    ctx = h.ctx()
+    run(make_snaps_stage(CRITIC, worker=Tracked(tmp_path, FAKE_SELFIE_CRITIC_BAD=seeds))(ctx))
+    assert len(critic_rows(h, snap_id=s)) == 3

@@ -205,6 +205,15 @@ def insert(store, *, run: str, purpose: str, guid: int, seed: int, file: str,
         return cur.lastrowid
 
 
+def forget_pending(store, snap_id: int, run: str) -> None:
+    """A situational or request photo rendering again in the same run (a resumed night, a
+    request after an interrupted borrow) renders the same seeds: its earlier unsettled rows go,
+    so no seed is counted twice."""
+    with store.transaction():
+        store.conn.execute("DELETE FROM selfie_critic WHERE snap_id=? AND run=? AND "
+                           "verdict='pending'", (snap_id, run))
+
+
 def _critique_of(r) -> Critique | None:
     """The detector fields of a stored row back as a Critique (hands' shapes as counts)."""
     if r["detectors"] is None:
