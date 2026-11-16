@@ -104,8 +104,8 @@ Since the second round (owner, 2026-11-13: channels a mix, "DMs max expressive")
 # A guild that talks among itself
 
 Owner's "pass the Turing test" push (2026-11-15): 82% of the members' typed game lines were aimed
-at him, every login drew 2-5 greeters, "there he is" was 28 of 147 greetings, and a quarter of the
-openers to him asked how his day was or what he was up to.
+at him, every login drew 2-5 greeters, 23 of 147 greetings opened "there he is", and a quarter of
+the openers to him asked how his day was or what he was up to.
 
 - **Openers.** The openers' clock (`budget.BurstBudget.to_him`) runs at `[talk] openers_per_hour`,
   now 2 by default (was 6), still scaled by chattiness and the talkative dials. Each due opener goes

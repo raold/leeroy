@@ -1,5 +1,5 @@
 """His login's greetings (reactions._greet), so they read like a guild that half noticed
-(2026-11-15: every login drew 2-5 greeters and "there he is" was said 23 times in 147).
+(2026-11-15: every login drew 2-5 greeters, and 23 of 147 greetings opened "there he is").
 
 - How many greet him: none about a third of the time, else one or two (greeters).
 - A greeter after the first who has no romance toward him may just type a plain hello, a
@@ -11,7 +11,6 @@
   asked again, then dropped.
 Reads utterance rows only; writes nothing."""
 import random
-import re
 import sqlite3
 from collections.abc import Iterable, Sequence
 
@@ -21,8 +20,9 @@ from leeroy_mind.text import normalize_words
 GREETERS = ((0, 0.30), (1, 0.45), (2, 0.25))
 # A later greeter with no romance toward him types a plain hello this often
 TEMPLATE_P = 0.5
+# no time of day in them ("evening" at noon reads wrong)
 TEMPLATES = ("o/", "hey", "heya", "yo", "hi", "hey {name}", "hi {name}", "yo {name}",
-             "o/ {name}", "sup {name}", "wb", "wb {name}", "evening {name}")
+             "o/ {name}", "sup {name}", "wb", "wb {name}")
 STOCK = ("there he is", "there she is", "there they are", "look who", "welcome back",
          "man of the hour", "woman of the hour", "finally", "i was starting to think",
          "about time", "miss me", "speak of the devil", "look what the cat dragged in",
