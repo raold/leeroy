@@ -410,6 +410,7 @@ def feature_state(data, section):
 SWITCHES = (
     ('talk','aware','Awareness cards',''), ('guards','enabled','Guards',''),
     ('claims','enabled','Claims',''), ('talk','realism','Typing realism',''),
+    ('talk','recall_diversity','Recall diversity',''),
     ('signals','enabled','Signals',''), ('fingerprint','enabled','Typing fingerprint',''),
     ('callbacks','enabled','Memory callbacks',''), ('learn','enabled','Rewards',''),
     ('learn','bandit','Bandit credit','learn.enabled'), ('learn','coach','Talk coach','learn.enabled'),

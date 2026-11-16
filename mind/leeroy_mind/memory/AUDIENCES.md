@@ -42,6 +42,11 @@ conversation by **who is in it**, never by where it was said.
   that night (`privacy._secret_threads`).
 - **Guards and claims.** Her repeat check covers her own whispers and DM lines to him together;
   a claim from their DM guards her whispers to him and the reverse.
+- **Recall diversity** (`[talk] recall_diversity`, `memory/diversity.py`). Its rules run after
+  `scope_ok` and `_shareable`, so they only drop or lower a memory the turn's audience already
+  allows. "This conversation" is the pair in either medium (her whispers to him and their DM),
+  else the channel, a group DM its own; her lines to him are read for tired subjects only in a
+  whisper or DM turn with him, and only as counts of shared words.
 
 ## Replies on her own time (`[talk] dm_own_time`)
 

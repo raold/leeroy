@@ -127,3 +127,20 @@ def test_talk_selfies_defaults_to_three_and_refuses_eleven(tmp_path):
     p.write_text("[talk]\nselfies = 11\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="talk.selfies:"):
         load_config(p)
+
+
+def test_talk_recall_diversity_is_off_by_default_and_a_non_boolean_reads_off(tmp_path):
+    """[talk] recall_diversity (memory/diversity.py): off unless set true."""
+    assert load_config(tmp_path / "missing.toml").talk.recall_diversity is False
+    assert "\nrecall_diversity = false " in DEFAULT_TOML
+    for raw, want in (("true", True), ("false", False), ('"yes"', False), ("1", False)):
+        p = tmp_path / "m.toml"
+        p.write_text(f"[talk]\nrecall_diversity = {raw}\n", encoding="utf-8")
+        assert load_config(p).talk.recall_diversity is want
+
+
+def test_the_raidplay_table_is_read_by_its_own_module_without_a_warning(tmp_path, caplog):
+    p = tmp_path / "m.toml"
+    p.write_text("[raidplay]\nrespond = true\n", encoding="utf-8")
+    load_config(p)
+    assert "unknown section" not in caplog.text
