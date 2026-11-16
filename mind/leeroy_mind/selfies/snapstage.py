@@ -7,13 +7,14 @@ looks are the ones it was planned from (else it ends photo_changed or looks_chan
 its reference, the immutable history/<pick>.jpg of that photo (never chosen.jpg), is there (else
 missing). A lust scene renders only while scene_renderable allows it; a held one stays planned.
 It is a portrait (832 x 1216) with that photo's face as the identity reference, cut by its photo
-kind's framing (ref_crop); three flagged seeds end it flagged. A guild photo renders each of its
-members alone, a square tile into its .part folder, then one grid of the tiles; a member whose
-photo changed or who cannot render is left out, and fewer than GUILD_MIN tiles end it. The
-commit checks the photos once more: a situation whose photo or looks moved during its render
-ends, and a guild photo with a member whose photo moved stays planned for a later night. No
-file is ever deleted here but a guild photo's own .part tiles, cleared before it renders and
-removed once it is ready; an expired photo keeps whatever files it has.
+kind's framing (ref_crop), at identity_scale or, in a waist-up or three-quarter scene, at
+render.WIDE_SCALE of it (render.scene_scale); three flagged seeds end it flagged. A guild photo
+renders each of its members alone, a square tile into its .part folder, then one grid of the
+tiles; a member whose photo changed or who cannot render is left out, and fewer than GUILD_MIN
+tiles end it. The commit checks the photos once more: a situation whose photo or looks moved
+during its render ends, and a guild photo with a member whose photo moved stays planned for a
+later night. No file is ever deleted here but a guild photo's own .part tiles, cleared before it
+renders and removed once it is ready; an expired photo keeps whatever files it has.
 
 The worker (the identity one) starts only when a photo is about to render, never while a live
 lease is held. Contention, a lease and the final stop are P2's (stage.py): an oom makes room and
@@ -38,6 +39,7 @@ from leeroy_mind.personas.schema import Persona
 from . import files
 from .config import SelfieCfg, worker_command, worker_env
 from .prompt import LUST_HELD, LUST_NAMED, renderable
+from .render import scene_scale
 from .scene import build_scene_prompt, build_tile_prompt, ref_crop, scene_from, scene_renderable
 from .scene_choices import RECIPE
 from .scenes import GUILD_MIN
@@ -276,11 +278,14 @@ class SnapRenderer:
         self._leases()
 
     async def image(self, *, snap_id: int, guid: int, idx: int, spec, ref: Path, framing: str,
-                    out: Path, thumb: Path, thumb_size: int, shape: str, rid: str):
+                    out: Path, thumb: Path, thumb_size: int, shape: str, rid: str,
+                    scale: float | None = None):
         """(the answer, its seed, the attempts used). SetRefused after TRIES flagged seeds;
-        WorkerError("unwritten") for an answer whose two files are not both there."""
+        WorkerError("unwritten") for an answer whose two files are not both there. `framing` is
+        the reference's (its crop); `scale` the face's (render.scene_scale for a situation),
+        identity_scale when None (a guild tile)."""
         ctx, cfg = self.ctx, self.cfg
-        identity = Identity(ref, ref_crop(framing), cfg.identity_scale)
+        identity = Identity(ref, ref_crop(framing), cfg.identity_scale if scale is None else scale)
 
         def request(attempt: int) -> RenderRequest:
             self._leases()
@@ -311,11 +316,15 @@ async def _situation(ctx: "NightContext", r: SnapRenderer, row: SnapRow, began: 
     thumb = files.snap(data, row.guid, row.id, thumb=True).absolute()
     out.parent.mkdir(parents=True, exist_ok=True)
     ref, framing = _face(ctx, p, row.guid, row.pick)  # the loop held a faceless one
+    scene = scene_from(row.scene)
+    scale = scene_scale(r.cfg.identity_scale, scene.framing)
+    log("selfies_snap_face", night=ctx.night, snap=row.id, guid=row.guid, scale=scale)
     try:
         got, seed, tries = await r.image(
-            snap_id=row.id, guid=row.guid, idx=0, spec=build_scene_prompt(p, scene_from(row.scene)),
+            snap_id=row.id, guid=row.guid, idx=0, spec=build_scene_prompt(p, scene),
             ref=ref, framing=framing, out=out,
-            thumb=thumb, thumb_size=SNAP_THUMB_PX, shape="portrait", rid=f"s{row.id}")
+            thumb=thumb, thumb_size=SNAP_THUMB_PX, shape="portrait", rid=f"s{row.id}",
+            scale=scale)
     except SetRefused:
         return "expired" if _expiry(ctx, row, "flagged") else "failed"
     moved = None
