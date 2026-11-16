@@ -39,22 +39,23 @@ SCHEMA = {
                  "overall"],
 }
 PROMPT = (
-    "The first image is an AI-generated photo of one adult woman. Check it for rendering "
-    "defects. Look closely at her arms, legs, hands, fingers, feet and eyes.\n"
-    'limbs: "defect" if an arm or leg is missing, merged with another, extra, cut off where it '
-    'should continue, or a stray limb appears; else "ok".\n'
+    "The first image is an AI-generated photo of one adult. Such photos often have anatomy "
+    "errors; be strict and look closely at every arm, leg, hand, finger, foot and both eyes.\n"
+    'limbs: "defect" if an arm, leg or foot is missing, extra, merged with another, cut off '
+    "where it should continue, bent the wrong way, or a stray limb or a shoe without a leg "
+    'appears; else "ok".\n'
     'hands: "defect" if a hand is fused, melted, twisted, has extra or missing parts, or merges '
-    'into an object; "not_visible" if no hand shows; else "ok".\n'
-    "fingers_ok: false if any visible hand has more or fewer than five fingers or fingers fused "
-    "together.\n"
-    "eyes_ok: false if one eye looks a different way from the other, the eyes are uneven, or an "
-    "eye is malformed.\n"
+    'into an object or the other hand; "not_visible" if no hand shows; else "ok".\n'
+    "fingers_ok: false if any visible hand has more or fewer than five fingers, or fingers fused "
+    "together or bent impossibly.\n"
+    "eyes_ok: false if one eye looks a different way from the other, the eyes are uneven or "
+    "differently sized, or an eye is malformed.\n"
     "extra_people: true if any other person, face or body part of someone else appears (in a "
     "mirror, screen or picture too).\n"
     "same_person: {same}\n"
     "overall: 0 badly broken, 1 a clear defect, 2 a small flaw, 3 clean and natural.\n"
     "Answer with the JSON object only.")
-SAME_WITH_REF = "true if the second image shows the same woman as the first."
+SAME_WITH_REF = "true if the second image shows the same person as the first."
 SAME_WITHOUT_REF = "true (there is no second image)."
 OPTIONS = {"temperature": 0, "num_predict": 160, "num_ctx": 6144}
 

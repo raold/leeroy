@@ -116,7 +116,7 @@ def test_the_judge_sends_both_photos_as_images_with_its_fixed_schema(tmp_path):
     assert call["model"] == MODEL and call["think"] is False and call["format"] == SCHEMA
     (message,) = call["messages"]
     assert message["images"] == [base64.b64encode(JPEG).decode()] * 2
-    assert "second image shows the same woman" in message["content"]
+    assert "second image shows the same person" in message["content"]
     assert call["options"]["temperature"] == 0
 
 
