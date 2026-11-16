@@ -297,20 +297,17 @@ def test_her_dm_answer_turns_up_only_on_his_heated_message(store, clock, tmp_pat
     assert lead in heated and any(a in heated for a in aching)
 
 
-def test_his_dm_ends_the_chat_she_answers(store, clock, tmp_path):
-    """dm_chat leaves out the message she answers (the instruction quotes it): with realism it
-    is her Chat's last line, so the chat no longer ends on his previous message."""
+@pytest.mark.parametrize("on,her", [(True, LUST), (False, LUST),
+                                     (False, dict(player_gender="male"))])
+def test_his_dm_ends_the_chat_she_answers(store, clock, tmp_path, on, her):
+    """dm_chat leaves out the message a member answers (the instruction quotes it): it is her
+    Chat's last line on every DM answer to him, any member, with or without the switch
+    (controller ruling 2026-11-16: a correctness fix), so the chat no longer ends on his
+    previous message."""
     first, second = _dm_prompts(store, clock, tmp_path, (
-        "ever had a cat?", "which boss are we on tonight?"), **LUST)
+        "ever had a cat?", "which boss are we on tonight?"), on=on, **her)
     assert _chat(first)[-1].endswith("Zan (Discord DM to Belra): ever had a cat?")
     assert _chat(second)[-1].endswith(
         "Zan (Discord DM to Belra): which boss are we on tonight?")
     assert sum("which boss are we on" in x for x in _chat(second)) == 1
-
-
-@pytest.mark.parametrize("on,her", [(False, LUST), (True, dict(player_gender="male"))])
-def test_off_or_without_romance_the_dm_chat_is_as_before(store, clock, tmp_path, on, her):
-    _, second = _dm_prompts(store, clock, tmp_path, (
-        "ever had a cat?", "which boss are we on tonight?"), on=on, **her)
-    assert not any("which boss are we on" in x for x in _chat(second))
-    assert "which boss are we on" in second  # the instruction quotes it, as before
+    assert "Answer his message: which boss are we on tonight?" in second  # still quoted

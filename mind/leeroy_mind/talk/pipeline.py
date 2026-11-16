@@ -1361,7 +1361,8 @@ class Pipeline:
         return (row[0], row[1]) if row else None
 
     def _his_dm_row(self, turn: Turn, meta: TurnMeta) -> ChatLineRow | None:
-        """His DM she answers as the last line of her Chat ([romance] realism): discord.talk's
+        """His DM a member answers, as the last line of her Chat, on every DM answer to him
+        (controller ruling 2026-11-16, a correctness fix, not behind a switch): discord.talk's
         dm_chat leaves it out (the instruction quotes it), so the chat she read ended on his
         previous message and her answer to it, and she answered that one (the owner's sandbox
         audit, 2026-11-16). Shown as dm_chat shows his lines."""
@@ -1785,7 +1786,7 @@ class Pipeline:
             recent = [ChatLineRow(h.id, h.ts, turn.channel, h.guid, names.get(h.guid, 'someone'),
                                  h.to_guid, h.text, 0, 0, None, h.thread_id, h.origin, h.readers)
                       for h in context]
-        dm_rows, answered = False, None  # answered: his DM shown at the chat's end (realism)
+        dm_rows, answered = False, None  # answered: his DM shown at the chat's end
         if not preview and not from_thread and meta.discord_chat is not None:
             # his Discord DM's history (discord.talk dm_chat): the chat she answers in, in place
             # of the game's window, which never holds a Discord line (2026-11-15: it was packed
@@ -1794,11 +1795,11 @@ class Pipeline:
             recent = [r for r in meta.discord_chat if whisper_ok(
                 r.channel, r.from_guid, r.to_guid, speaker=turn.speaker,
                 turn_channel=turn.channel, to_guid=turn.to_guid)]
-            if (self.cfg.romance.realism and p.identity.player_gender == "female"
-                    and p.romance.stance in ROMANCE_SHARE
-                    and (row := self._his_dm_row(turn, meta)) is not None
+            # his DM she answers ends the chat (_his_dm_row): kept out of the copy window, the
+            # claim support and the beat's items below, as a trigger line is
+            if ((row := self._his_dm_row(turn, meta)) is not None
                     and all(r.id != row.id for r in recent)):
-                recent.append(row)  # [romance] realism: his DM ends the chat she answers
+                recent.append(row)
                 answered = row.id
 
         people = [turn.addressee] if turn.addressee else []

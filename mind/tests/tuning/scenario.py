@@ -35,7 +35,12 @@ latency draw.
 golden_romance.json (record_romance) holds the plain scenario with it on: her romance text with
 the lead and without what pushed every reply to escalate, his card's note as one current
 sentence, old plans out of recall. With it off every prompt is the one golden_prompts.json
-recorded."""
+recorded.
+
+His DM as the Chat's last line (2026-11-16, Pipeline._his_dm_row: every DM answer to him, no
+switch) changed none of these goldens: the scenario has no Discord DM, only game channels and
+whispers (whose trigger line was already in the Chat). tests/discord/test_dm_prompt.py and
+tests/test_romance_realism.py cover it."""
 import asyncio
 import json
 import random

@@ -223,6 +223,13 @@ instruction at 200 characters a message, and the trim emptied her memories first
   the repeat check still reads them whole. The DM's instruction keeps only where she is and his
   message. The copy check reads his earlier messages there (not hers: hers are the repeat
   check's), so she never sends one of his messages back as her own.
+- **His message she answers ends the Chat** (2026-11-16, `Pipeline._his_dm_row`, every DM answer
+  to him, any member, no switch: a correctness fix). `dm_chat` leaves it out because the
+  instruction quotes it, so the Chat ended on his previous message and her answer to it, and in
+  the owner's sandbox audit a romance DM answered that previous message instead (6 of 24 answers
+  with the romance-text fixes alone; 0 of 36 with this line). It is shown as `dm_chat` shows his
+  lines, after the history, and kept out of the copy check's window, the claim support and the
+  beat's items, as a game turn's trigger line is.
 - **A DM has its own budget**, `prompt.DM_BUDGET` = 2600 estimated tokens: num_ctx 4096 less a
   full `dm_words` reply (344) leaves room even if the real count runs 25% over the estimate.
   Every other turn keeps `LIVE_BUDGET` (1800). Measured on the 18 logged DM trims (a scratch
@@ -671,13 +678,8 @@ read at mind start and at each login's reload, like `dial`):
   attitude, her way, her arc's lines, cooling, the band's wording (the owner's overlays, as
   before), `INVARIANTS`, the audience and the hour stay. Every turn that carries her romance text
   reads it this way, public ones included; nothing changes for men or women with no attitude.
-- **His DM in her Chat** (`Pipeline._his_dm_row`): `discord.talk.dm_chat` leaves out the message
-  she answers (the instruction quotes it), so the Chat she read ended on his previous message and
-  her own answer to it, and behind ~300 tokens of romance text she often answered that one in the
-  sandbox. With the switch on, a woman with an attitude toward him (fond, drawn, lust) answering
-  his DM reads it as the Chat's last line too, shown as `dm_chat` shows his lines; it is kept out
-  of the copy check's window, the claim support and the beat's items, as a trigger line is. Other
-  members' DMs are as before.
+- **His DM in her Chat** is no longer the switch's: it ends every DM answer's Chat ("His message
+  she answers ends the Chat" above), on or off.
 - **His card** (`prompt.relationship_card`'s `realism`, his card only): her note toward him is one
   sentence (`prompt.realism_note`): the first without a time word (tonight, tomorrow, today, right
   now, this morning/week/weekend, next week) and without a "picked up" word list; none when no
