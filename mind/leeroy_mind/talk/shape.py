@@ -340,7 +340,8 @@ def shape_template(draw: ShapeDraw, ctx: ShapeContext, *, excuse: bool = False,
                 else LINE_QUESTION)
     if shape is Shape.PARAGRAPH and discord:
         if dm:
-            return DISCORD_DM
+            from leeroy_mind.talk.pieces import text
+            return text("discord_dm", DISCORD_DM)
         tmpl = DISCORD_LENGTH.replace("{where}", DISCORD_WHERE["channel"])
         return tmpl if usual else tmpl.replace(USUAL_LINE, "")
     if ctx.two_lines:

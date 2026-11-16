@@ -145,6 +145,65 @@ def choose(conn, guid, context, *, rng=None, now=None):
     return result
 
 
+def choose_pieces(conn, guid, context, families, *, rng=None, now=None):
+    """The conversation lab's prompt-piece families (arms.prompt_families) a turn may render, each
+    chosen like choose's: Thompson sampling between the control and the family's active arms,
+    the same maturity rule and the same exploration budget (it shares bandit_turn's exploratory
+    count and leaves its turn count to choose). Only families with an active arm are drawn; {} when
+    learning is off or frozen for him, so a turn without lab arms draws nothing and writes nothing.
+    Caller owns the transaction."""
+    cfg = effective(conn, context.settings)
+    if not enabled(cfg, guid) or not arms.available(conn):
+        return {}
+    registry = arms.read(conn)
+    wanted = [f for f in dict.fromkeys(families) if arms.is_prompt(f) and f not in cfg.frozen_families
+              and any(a.family == f and a.status == "active" and arms.valid(f, a.params) for a in registry)]
+    if not wanted:
+        return {}
+    key = context.key
+    rng = rng or random.Random()
+    p = posterior(conn, guid, key, now=now)
+    shares = dict(conn.execute("SELECT arm_id,turns FROM bandit_share WHERE context=?", (key,)))
+    row = conn.execute("SELECT turns,exploratory FROM bandit_turn WHERE guid=?", (guid,)).fetchone()
+    turns, explored = (row[0] + 1, row[1]) if row else (1, 0)
+    can_explore = explored + 1 <= turns // 5
+    used_exploration = False
+    result = {}
+    for family in wanted:
+        control = arms.control_of(family)
+        conn.execute("INSERT OR IGNORE INTO learn_arm VALUES (?,?,?,?,?,?,?)",
+                     (control, family, json.dumps({"mode": "control"}), 1, "control", "builtin",
+                      time.time() if now is None else now))
+        base = p.get(control, dict(alpha=1., beta=1., uses=0, bad=0))
+        candidates, immature = [control], set()
+        family_turns = sum(shares.get(a.id, 0) for a in registry if a.family == family)
+        for arm in registry:
+            if arm.family != family or arm.status != "active" or not arms.valid(family, arm.params):
+                continue
+            stats = p.get(arm.id, dict(alpha=1., beta=1., uses=0, bad=0))
+            if stats["uses"] < 30 and 2 * (shares.get(arm.id, 0) + 1) > family_turns + 1:
+                continue
+            qualified = (stats["uses"] >= 30 and stats["alpha"] / (stats["alpha"] + stats["beta"])
+                         > base["alpha"] / (base["alpha"] + base["beta"]))
+            if qualified or (can_explore and not used_exploration):
+                candidates.append(arm.id)
+                if not qualified:
+                    immature.add(arm.id)
+
+        def sample(aid):
+            stats = p.get(aid, dict(alpha=1., beta=1.))
+            return rng.betavariate(stats["alpha"], stats["beta"])
+        selected = max(candidates, key=sample)
+        used_exploration |= selected in immature
+        result[family] = selected
+        conn.execute("INSERT INTO bandit_share VALUES (?,?,1) ON CONFLICT(context,arm_id) "
+                     "DO UPDATE SET turns=turns+1", (key, selected))
+    if used_exploration:
+        conn.execute("INSERT INTO bandit_turn VALUES (?,0,?) ON CONFLICT(guid) DO UPDATE SET "
+                     "exploratory=exploratory+1", (guid, 1))
+    return result
+
+
 def update(conn, line_id, *, settings=LearnCfg(), now=None):
     """One reward observation, divided equally among recipe families; revisions replace it."""
     settings = effective(conn, settings)
@@ -161,7 +220,7 @@ def update(conn, line_id, *, settings=LearnCfg(), now=None):
         return False  # never relabel a private/Discord observation as game/public credit
     try:
         ids = json.loads(encoded)
-        if type(ids) is not list or not 1 <= len(ids) <= len(arms.FAMILIES) or any(type(i) is not str for i in ids) or len(set(ids)) != len(ids):
+        if type(ids) is not list or not 1 <= len(ids) <= len(arms.all_families()) or any(type(i) is not str for i in ids) or len(set(ids)) != len(ids):
             return False
     except (ValueError, TypeError):
         return False
@@ -195,7 +254,7 @@ def retirement_candidates(conn, *, settings=LearnCfg()):
     result=[]
     for arm in arms.read(conn):
         n,bad=stats.get(arm.id,(0,0))
-        cn,cbad=stats.get(arms.controls()[arm.family],(0,0))
+        cn,cbad=stats.get(arms.control_of(arm.family),(0,0))
         if arm.status!='active' or arm.family in settings.frozen_families or min(n,cn)<20:
             continue
         rate,control=bad/n,cbad/cn
@@ -230,7 +289,7 @@ def reject(conn, guid, context, selected, *, attempt_id, reason):
     if reason not in ("guard", "content") or not isinstance(attempt_id,str) or not 1 <= len(attempt_id) <= 64:
         raise ValueError("bandit_rejection_invalid")
     registry = {a.id:a for a in arms.read(conn)}
-    if not selected or any(f not in arms.FAMILIES or a not in registry or registry[a].family != f for f,a in selected.items()):
+    if not selected or any(f not in arms.all_families() or a not in registry or registry[a].family != f for f,a in selected.items()):
         raise ValueError("bandit_rejection_invalid")
     active=[aid for family,aid in selected.items() if family not in cfg.frozen_families]
     for aid in active:

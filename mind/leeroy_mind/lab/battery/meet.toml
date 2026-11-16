@@ -1,0 +1,27 @@
+# He asks to meet up, in game or in person.
+
+[[script]]
+id = "meet-1"
+kind = "meet"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "we should hang out sometime outside the game", ask = "yesno" },
+  { text = "im serious" },
+]
+
+[[script]]
+id = "meet-2"
+kind = "meet"
+channels = ["whisper", "party"]
+lines = [
+  { text = "{name} meet me at the dalaran fountain in 5?", ask = "yesno" },
+]
+
+[[script]]
+id = "meet-3"
+kind = "meet"
+channels = ["dm"]
+lines = [
+  { text = "if i was ever in your city would you want to grab a coffee", ask = "yesno" },
+  { text = "ok its a deal then" },
+]

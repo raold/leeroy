@@ -1,0 +1,31 @@
+# Flirting. Invented lines in the owner's typing style (lowercase, short); no real line of his.
+# Each script: id, kind, the channels it may run on, and his lines in order. A line may carry
+# `ask` (what its answer must hold in her first sentence: yesno, number, name or noun) and
+# `nouns` (the words that count for name and noun); `{name}` is her character name.
+
+[[script]]
+id = "flirt-1"
+kind = "flirt"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "ok i have to admit something, i kinda look forward to talking to you every night" },
+  { text = "does that weird you out?", ask = "yesno" },
+]
+
+[[script]]
+id = "flirt-2"
+kind = "flirt"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "you were really good on the last pull. kinda distracting tbh" },
+  { text = "what are you wearing to the guild thing saturday", ask = "noun", nouns = ["wear", "wearing", "dress", "jeans", "shirt", "top", "outfit", "hoodie", "skirt", "sweater", "pajamas", "nothing"] },
+]
+
+[[script]]
+id = "flirt-3"
+kind = "flirt"
+channels = ["dm"]
+lines = [
+  { text = "random question but whats your idea of a perfect date" },
+  { text = "ok that actually sounds nice. you pick the place next time" },
+]

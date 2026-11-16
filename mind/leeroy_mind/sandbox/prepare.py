@@ -53,6 +53,8 @@ QUIET: dict[str, dict] = {
     "personas": {"auto_newcomers": False},
     "guild": {"offline_raids_per_day": 0, "regear_to": 0},
     "bakeoff": {"capture": True},
+    # the conversation lab: never its night here; its piece overlays read by name (talk/pieces.py)
+    "lab": {"enabled": False, "overlays": True},
 }
 # Tables set only where the live mind.toml has them: absent, the feature is off already (and
 # the core loader would warn about a section it does not know).
@@ -233,14 +235,18 @@ def write_toml(path: Path, doc: dict) -> None:
 
 # -- snapshot and restore -------------------------------------------------------------------------
 
-def take_snapshot(live: Path, layout: Layout, *, now: float | None = None) -> dict:
-    """Copy the live data into DIR/snapshot (replacing any earlier snapshot there)."""
+def take_snapshot(live: Path, layout: Layout, *, now: float | None = None,
+                  extra: dict | None = None) -> dict:
+    """Copy the live data into DIR/snapshot (replacing any earlier snapshot there). `extra`
+    (table -> keys) goes over QUIET in its mind.toml: the conversation lab's own settings."""
     snap = layout.snapshot
     staging = layout.root / "snapshot.part"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir()
     doc = quiet_toml((live / TOML).read_bytes().decode("utf-8-sig"))
+    for table, keys in (extra or {}).items():
+        doc[table] = {**(doc.get(table) or {}), **keys}
     write_toml(staging / TOML, with_bridge(doc, 0))
     backup_db(live / DB, staging / DB)
     _migrate(staging / DB)
@@ -274,9 +280,36 @@ def copy_library(live: Path, layout: Layout, *, fresh: bool = False) -> bool:
     return True
 
 
-def restore(layout: Layout, *, bridge_port: int) -> None:
+def check_overlays(overlays: dict) -> dict[str, str]:
+    """The conversation lab's piece overlays for a restore: piece name -> text, each a
+    registered piece (talk/pieces.py) whose text fits it. Refused otherwise, in words."""
+    from leeroy_mind.talk import pieces
+    for name, text in overlays.items():
+        if name not in pieces.PIECES:
+            raise Refused(f"overlays: {name!r} is not a prompt piece")
+        if not pieces.fits(name, text):
+            raise Refused(f"overlays: the {name} text does not keep its placeholders and "
+                          "kept phrases")
+    return dict(overlays)
+
+
+def lab_layout(live) -> Layout:
+    """The conversation lab's sandbox: DIR = <data dir>/scratch/lab, the one place inside the
+    data dir a sandbox may be (scratch is never backed up); refused through a link or junction."""
+    live = Path(live).expanduser().resolve()
+    root = live / "scratch" / "lab"
+    for p in (live / "scratch", root):
+        if p.is_symlink() or p.is_junction() or (p.exists() and not p.is_dir()):
+            raise Refused("the lab's scratch folder is a link, a junction or a file")
+    if root.exists() and any(root.iterdir()) and not (root / MARKER).is_file():
+        raise Refused("the lab's scratch folder has files in it and is not a sandbox")
+    return Layout(root)
+
+
+def restore(layout: Layout, *, bridge_port: int, overlays: dict | None = None) -> None:
     """DIR/mind-data from the snapshot: mind.db, the copied folders and mind.toml with the
-    bridge's port. library.db, logs and the lock file are left as they are."""
+    bridge's port, and the lab's piece `overlays` (check_overlays) written into its prompts/ as
+    lab_<piece>.txt. library.db, logs and the lock file are left as they are."""
     snap, data = layout.snapshot, layout.data
     if not (snap / DB).is_file():
         raise Refused("the sandbox has no snapshot: run it without --reuse once")
@@ -288,5 +321,10 @@ def restore(layout: Layout, *, bridge_port: int) -> None:
             shutil.rmtree(data / name)
         if (snap / name).is_dir():
             shutil.copytree(snap / name, data / name, symlinks=False)
+    if overlays:
+        from leeroy_mind.talk.pieces import overlay_name
+        (data / "prompts").mkdir(exist_ok=True)
+        for name, text in check_overlays(overlays).items():
+            (data / "prompts" / f"{overlay_name(name)}.txt").write_bytes(text.strip().encode("utf-8"))
     doc = tomllib.loads((snap / TOML).read_bytes().decode("utf-8"))
     write_toml(data / TOML, with_bridge(doc, bridge_port))

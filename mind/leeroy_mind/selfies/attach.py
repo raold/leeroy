@@ -44,6 +44,10 @@ def attach_selfies(app) -> SelfieService:
     except Exception as e:  # a repair that fails never keeps the mind from starting
         log("selfies_repair_failed", level=logging.WARNING, error=type(e).__name__)
     log("selfies_on" if cfg.enabled else "selfies_off")
+    if cfg.enabled and cfg.critic:  # the photo critic: critic.py, judge.py, params.py
+        log("selfies_critic_on", best_of=cfg.best_of, bandit=cfg.param_bandit)
+    elif cfg.best_of > 1 or cfg.param_bandit:
+        log("selfies_critic_needed")  # best_of and param_bandit act only with critic on
     if cfg.snaps and not cfg.enabled:
         log("selfies_snaps_need_enabled")
     else:

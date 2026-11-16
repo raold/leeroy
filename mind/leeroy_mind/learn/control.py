@@ -25,7 +25,7 @@ def effective(conn, cfg=None):
     cfg = cfg or LearnCfg()
     saved = overrides(conn)
     families = set(cfg.frozen_families)
-    for family in arms.FAMILIES:
+    for family in arms.all_families():
         if saved.get('family:'+family) is True:
             families.add(family)
     return replace(cfg, freeze=cfg.freeze or saved.get('freeze') is True,
@@ -62,7 +62,7 @@ def arguments(args):
     if action in ('freeze', 'family'):
         if type(args['frozen']) is not bool:
             raise ValueError('Freeze must be on or off.')
-        if action == 'family' and args['family'] not in arms.FAMILIES:
+        if action == 'family' and args['family'] not in arms.all_families():
             raise ValueError('Choose a known arm family.')
     elif action == 'arm':
         if (type(args['id']) is not str or not 1 <= len(args['id']) <= 100

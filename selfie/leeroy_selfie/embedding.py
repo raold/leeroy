@@ -5,7 +5,7 @@ head crop is not face detection and its similarity is not identity verification.
 """
 import math
 import time
-from . import jpeg, models
+from . import critic, jpeg, models
 from .render import ReadyError
 from .similarity import HEAD_CROP
 
@@ -33,8 +33,18 @@ class Embedder:
     identity = False
     embedding_only = True
 
-    def __init__(self, encoder, processor, torch, info):
+    def __init__(self, encoder, processor, torch, info, data=None):
         self.encoder, self.processor, self.torch, self.info = encoder, processor, torch, info
+        self.data = data
+        self._detectors = None
+
+    def critic(self, req):
+        """The photo critic's measurements (critic.answer) with this worker's encoder: the
+        `selfies critic` command's worker, on the GPU when there is room, else the CPU."""
+        if self._detectors is None:
+            self._detectors = critic.load_detectors(self.data)
+        return critic.answer(self._detectors, req,
+                             critic.encoder(self.encoder, self.processor, self.torch))
 
     def embed(self, req):
         started = time.perf_counter()
@@ -69,6 +79,7 @@ def load(root, *, min_free_gib):
                 torch.cuda.empty_cache()
         return Embedder(encoder, processor, torch, {
             "device": str(encoder.device), "free_gib": free, "versions": {"torch": str(torch.__version__)},
-            "check_ms": round((checked-started)*1000), "load_ms": round((time.perf_counter()-checked)*1000)})
+            "check_ms": round((checked-started)*1000), "load_ms": round((time.perf_counter()-checked)*1000)},
+            root)
     except Exception:
         raise ReadyError("encoder_failed") from None

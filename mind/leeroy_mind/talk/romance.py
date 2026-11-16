@@ -39,6 +39,7 @@ from leeroy_mind.prompts import load_prompt
 from leeroy_mind.storage.rows import ROMANCE_STAGES, Relationship
 from leeroy_mind.talk.budget import GAP_SPREAD, HOLD_PUSH_S, DayPhase
 from leeroy_mind.talk.moves import classify
+from leeroy_mind.talk.pieces import text as pieces_text
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.turns import TurnKind
@@ -693,7 +694,8 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
         INVARIANTS,
         audience_text(channel),
         "It's late, and late-night talk runs warmer." if phase in _LATE else "",
-        REALISM_LEAD if realism else SPECIFIC,
+        (pieces_text("romance_lead", REALISM_LEAD) if realism
+         else pieces_text("romance_hook", SPECIFIC)),
     ]
     head = " ".join(x.format(**fill) for x in parts if x)
     if private:

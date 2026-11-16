@@ -1251,7 +1251,8 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("training-lab", _training_lab, conn, now),
                 _guarded("gpu-pause", _gpu_pause, conn, now),
                 _guarded("owner-replies", _owner_replies, conn, now),
-                _guarded("regear", _regear, conn, now)]
+                _guarded("regear", _regear, conn, now),
+                _guarded("conversation-lab", _conversation_lab, conn, data, now)]
     finally:
         conn.close()
 
@@ -1589,4 +1590,31 @@ def _regear(conn, now: float) -> Check:
         if now - started > REGEAR_STUCK_S:
             return Check(name, FAIL, text + "; running over two days: see regear_* lines in mind.log")
         return Check(name, NOTE, text + "; batches run while he is offline")
+    return _table_check(name, check)
+
+
+LAB_STALE_S = 3 * 86400
+
+
+def _conversation_lab(conn, data: Path, now: float) -> Check:
+    """[lab] enabled (lab/README.md): a note when no night run finished in the last three nights
+    though runs began three or more nights ago; codes and numbers only."""
+    from .lab.config import load as load_lab
+    from .lab.report import last_completed
+    name = "conversation-lab"
+    if not load_lab(data / "mind.toml").enabled:
+        return Check(name, OK, "conversation lab: off ([lab] enabled is false)")
+
+    def check():
+        finished = last_completed(conn)
+        if finished is not None and now - finished <= LAB_STALE_S:
+            return Check(name, OK, f"conversation lab: last night run finished {_when(finished)}")
+        first = conn.execute("SELECT min(started) FROM lab_run WHERE source='night'").fetchone()[0]
+        if first is None or now - first < LAB_STALE_S:
+            return Check(name, OK, "conversation lab: on; its first nights are still to finish")
+        row = conn.execute("SELECT status, reason FROM lab_run WHERE source='night' "
+                           "ORDER BY id DESC LIMIT 1").fetchone()
+        last = f"{row[0]}" + (f" ({row[1]})" if row[1] else "") if row else "none"
+        return Check(name, NOTE, "conversation lab: no night run finished in 3 nights (newest: "
+                     f"{last}); see lab_* lines in mind.log")
     return _table_check(name, check)

@@ -20,15 +20,46 @@ PRESETS = {
 }
 
 
+# The conversation lab's arms (lab/README.md): one family per prompt piece (talk/pieces.py),
+# "prompt.<piece>", whose arms carry {"piece", "variant"} (a prompt_variant id). They are never in
+# controls(): a turn samples one only when it renders that piece and a lab arm for it is active
+# (lab/live.py), so without lab arms every recipe, credit and choice is as it was.
+PROMPT_PREFIX = "prompt."
+
+
+def prompt_families():
+    from leeroy_mind.talk.pieces import NAMES
+    return tuple(PROMPT_PREFIX + name for name in NAMES)
+
+
+def is_prompt(family):
+    return type(family) is str and family in prompt_families()
+
+
+def all_families():
+    return FAMILIES + prompt_families()
+
+
+def control_of(family):
+    return f"{family}.control.v1"
+
+
 def controls():
-    return {family: f"{family}.control.v1" for family in FAMILIES}
+    return {family: control_of(family) for family in FAMILIES}
+
+
+def all_controls():
+    return {family: control_of(family) for family in all_families()}
 
 
 def valid(family, params, *, control=False):
-    if family not in FAMILIES or type(params) is not dict:
+    if family not in all_families() or type(params) is not dict:
         return False
     if control:
         return params == {"mode": "control"}
+    if is_prompt(family):
+        return (set(params) == {"piece", "variant"} and params["piece"] == family[len(PROMPT_PREFIX):]
+                and type(params["variant"]) is int and params["variant"] > 0)
     def number(value, low, high):
         return type(value) in (int, float) and math.isfinite(value) and low <= value <= high
     if family == "length":

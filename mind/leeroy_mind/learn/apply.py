@@ -88,31 +88,50 @@ async def banter_hint(engine, guid, channel):
     return render_style_hint(profile)
 
 
-async def prepare(engine, turn, meta, persona, *, now):
-    cfg = active(engine, turn.speaker)
-    if cfg is None or turn.template is not None:
-        return None
-    dials = dials_of(persona)
+def _features(engine):
     path = engine.data_dir/'mind.toml'
     # Loaded once per engine/start, just like the learning switch itself.
     if not hasattr(engine, '_learn_features'):
         engine._learn_features = (load_callbacks_config(path), fingerprint_enabled(path))
-    callbacks, fingerprint = engine._learn_features
+    return engine._learn_features
+
+
+def _readers(engine, turn):
+    return tuple(engine.world.conversation_readers(turn.channel, from_guid=turn.speaker,
+        to_guid=turn.to_guid, comms=engine.comms, human_officer=engine.human.is_guild_master))
+
+
+def context_for(engine, turn, persona, cfg, readers=None):
+    """The turn's bandit context: what prepare samples in, and lab/live.py's piece draw too."""
+    dials = dials_of(persona)
+    callbacks, fingerprint = _features(engine)
     member_romance = persona.romance.dial
     romance = min(engine.cfg.romance.dial, engine.cfg.romance.dial if member_romance is None else member_romance)
-    readers = tuple(engine.world.conversation_readers(turn.channel, from_guid=turn.speaker,
-        to_guid=turn.to_guid, comms=engine.comms, human_officer=engine.human.is_guild_master))
+    readers = _readers(engine, turn) if readers is None else readers
     human = engine.human.guid
     owner_present = bool(human and (human in (turn.addressee, turn.to_guid)
         or not is_discord(turn.channel) and human in readers and engine.world.human_online))
-    context = bandit.Context(turn.channel, persona.romance.stance if is_woman(persona) else 'none',
+    return bandit.Context(turn.channel, persona.romance.stance if is_woman(persona) else 'none',
         int(dials.value('talkative', persona)), cfg, is_woman(persona),
         int(dials.value('humour', persona)), int(dials.value('forward', persona)),
         romance, callbacks, fingerprint, length=not is_discord(turn.channel) and turn.max_lines == 1,
         tease=owner_present)
+
+
+async def prepare(engine, turn, meta, persona, *, now):
+    cfg = active(engine, turn.speaker)
+    if cfg is None or turn.template is not None:
+        return None
+    callbacks, fingerprint = _features(engine)
+    readers = _readers(engine, turn)
+    human = engine.human.guid
+    context = context_for(engine, turn, persona, cfg, readers)
     with engine.store.transaction():
         selected = bandit.choose(engine.store.conn, turn.speaker, context, rng=engine.rng, now=now)
         registry = {a.id:a for a in arms.read(engine.store.conn)}
+    lab = getattr(meta, 'lab', None)
+    if lab is not None:  # prompt-piece arms, drawn before the prompt was composed (lab/live.py)
+        selected.update(lab.selected)
     result = Applied(context, selected)
     officer = bool(engine.world.is_officer(turn.speaker))
     # WorldView's game audience intentionally lists cast only. Callback context
@@ -170,7 +189,8 @@ async def prepare(engine, turn, meta, persona, *, now):
     if current is None:
         return None
     for family in current.frozen_families:
-        result.selected[family] = arms.controls()[family]
+        if family in result.selected:
+            result.selected[family] = arms.control_of(family)
     result.entries = [entry for entry in result.entries if registry[entry[1]].family not in current.frozen_families]
     if 'length' in current.frozen_families:
         result.num_predict = None
@@ -235,6 +255,8 @@ def used(meta, count):
     used_arms = {i for kind,i,_ in applied.used if kind == 'arm'}
     selected = dict(applied.selected)
     for family, aid in selected.items():
+        if arms.is_prompt(family):
+            continue  # a piece's arm shaped the prompt where it was rendered (lab/live.py settles it)
         if aid != arms.controls()[family] and aid not in used_arms:
             if family != 'callback' or not any(k == 'callback' for k,_,_ in applied.used):
                 selected[family] = arms.controls()[family]

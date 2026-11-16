@@ -34,7 +34,7 @@ SETTLE_FAST_S = 1.0  # the same with --fast, where a follow-up line comes at onc
 MAX_WAIT_S = 600.0
 NL = b"\n"
 EVENT_PREFIXES = ("say_", "guard_", "think_beat", "owed_", "discord_", "talk_", "photo_answer",
-                  "emote_dropped", "sandbox_")
+                  "emote_dropped", "sandbox_", "lab_")
 
 
 class SandboxError(Exception):
@@ -257,11 +257,11 @@ class Sandbox:
             store.close()
         self.bridge.set_greeting(cast={"type": "cast", "members": members})
 
-    async def _boot(self) -> None:
+    async def _boot(self, overlays: dict | None = None) -> None:
         from leeroy_mind.app import MindApp, startup_checks
         from leeroy_mind.config import load_config
         from leeroy_mind.llm.client import OllamaClient
-        prepare.restore(self.layout, bridge_port=self.bridge.port)
+        prepare.restore(self.layout, bridge_port=self.bridge.port, overlays=overlays)
         self._read_copy()
         hello, cast = self._greeting(self.start_online)
         self.bridge.set_greeting(hello=hello, cast=cast)
@@ -317,13 +317,18 @@ class Sandbox:
             logging.getLogger("leeroy_mind").removeHandler(self.tap)
         self.stopped.set()
 
-    async def reset(self) -> dict:
+    async def reset(self, *, overlays: dict | None = None) -> dict:
         """Stop the mind, restore DIR/mind-data from the snapshot and start a new mind on it,
-        with him as the sandbox started (the bridge and the API stay up)."""
+        with him as the sandbox started (the bridge and the API stay up). `overlays` (piece name
+        to text, talk/pieces.py) go into the restored prompts/ as the lab's overlays."""
+        try:
+            prepare.check_overlays(overlays or {})
+        except prepare.Refused as e:
+            raise SandboxError(str(e)) from None
         async with self._lock:
             await self._halt()
             self.resets += 1
-            await self._boot()
+            await self._boot(overlays)
             return self.status()
 
     # -- what the API reads ------------------------------------------------------------------------

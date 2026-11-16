@@ -2,9 +2,11 @@
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 import json
 import logging
 import math
+import re
 import sqlite3
 
 from leeroy_mind.claims.visibility import audience_class
@@ -45,6 +47,21 @@ ATTENDANCE_WINDOW, ATTENDANCE_MISSED = 4, 3
 ATTENDANCE_BEFORE, ATTENDANCE_REGULAR = 8, 2
 ATTENDANCE_NAMES = 6
 ATTENDANCE_MAX_SHARE = 0.10
+# [talk] recall_diversity (memory/diversity.py; PM log 2026-11-16: "bench" in 61 of 2,869 member
+# lines in 7 days, 43 of them in officers' attendance threads): one guild theme can't dominate.
+# A topic seed (TOPIC_KINDS: subjects that come round again; raid, loot, calendar, decision,
+# intent and culture seeds are each a new event or have their own cooldowns) whose fact is
+# SUBJECT_JACCARD or more like one that started a conversation within SUBJECT_S is passed over
+# while any other seed is available (`varied`); its receipt (SUBJECT_KEY) holds the fact's words
+# as hashes, never text. The officers' weekly attendance thread is the only attendance seed and
+# starts at most once in SUBJECT_S guild-wide, whatever the week.
+SUBJECT_KEY = 'server:subject:{key}'
+SUBJECT_S = 7 * 86400.0
+SUBJECT_JACCARD = 0.5
+TOPIC_KINDS = frozenset({'life', 'plan', 'purpose', 'officer', 'rival'})
+ATTENDANCE_SEED = 'officer:attendance:'
+ATTENDANCE_RE = re.compile(r"\b(?:bench(?:ed|es|ing)?|attendance|s[ai]t(?:ting)? out|standby)\b",
+                           re.IGNORECASE)
 # Seeds the game's openers to the guild may bring up (talk.engine): public, never officers'.
 GAME_KINDS = ('raid_before', 'raid_after', 'reset', 'loot', 'life', 'calendar', 'birthday',
               'weekend', 'rival')
@@ -429,3 +446,72 @@ def fresh(conn, seeds: Iterable[Seed], *, now: float) -> list[Seed]:
 
 def mark_used(store, seed: Seed, *, now: float) -> None:
     store.set_meta(USED_KEY.format(key=seed.key), str(now))
+
+
+def attendance(seed: Seed) -> bool:
+    """A seed about attendance or the bench: the officers' weekly thread, or a topic seed whose
+    fact names either (a member's life beat, a plan). Never a channel's purpose, a raid, loot,
+    calendar or decision seed (a lineup names its bench)."""
+    return seed.key.startswith(ATTENDANCE_SEED) or (
+        seed.kind in TOPIC_KINDS and seed.kind != 'purpose' and bool(ATTENDANCE_RE.search(seed.fact)))
+
+
+def subject_words(seed: Seed, names: frozenset[str] = frozenset()) -> frozenset[str]:
+    """A seed's subject: its fact's content words (memory.diversity.words), as short hashes."""
+    from leeroy_mind.memory.diversity import words
+    return frozenset(sha256(w.encode('utf-8')).hexdigest()[:12] for w in words(seed.fact, names))
+
+
+def note_subject(store, seed: Seed, *, now: float, names: frozenset[str] = frozenset()) -> None:
+    """A topic seed's conversation began (its opener was posted): its subject receipt, pruned
+    with the other seed receipts after a week (records.prune)."""
+    if seed.kind in TOPIC_KINDS:
+        store.set_meta(SUBJECT_KEY.format(key=seed.key), json.dumps(
+            {'at': now, 'kind': seed.kind, 'words': sorted(subject_words(seed, names))},
+            separators=(',', ':')))
+
+
+def recent_subjects(conn, *, now: float) -> list[frozenset[str]]:
+    """The subjects of the topic conversations begun within SUBJECT_S."""
+    out = []
+    for _, value in _read('subjects', lambda: conn.execute(
+            "SELECT key,value FROM meta WHERE key GLOB 'server:subject:*'")):
+        try:
+            data = json.loads(value)
+            at, found = float(data['at']), data['words']
+        except (TypeError, ValueError, KeyError):
+            continue
+        if math.isfinite(at) and now - at < SUBJECT_S and isinstance(found, list):
+            out.append(frozenset(w for w in found if isinstance(w, str)))
+    return out
+
+
+def last_attendance(conn) -> float | None:
+    """When an officers' attendance thread last began (its seed receipts), None for never."""
+    found = []
+    for _, value in _read('used', lambda: conn.execute(
+            "SELECT key,value FROM meta WHERE key GLOB ?", (USED_KEY.format(key=ATTENDANCE_SEED) + '*',))):
+        try:
+            found.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return max((t for t in found if math.isfinite(t)), default=None)
+
+
+def varied(seeds: Iterable[Seed], *, subjects: list[frozenset[str]], attendance_at: float | None,
+           now: float, names: frozenset[str] = frozenset()) -> list[Seed]:
+    """The seeds a conversation may start on under [talk] recall_diversity: no attendance seed
+    but the officers' weekly one, and that one only when no attendance thread began within
+    SUBJECT_S; then a topic seed whose subject is like a recent one's (`subjects`) only while
+    nothing else is left."""
+    from leeroy_mind.memory.diversity import jaccard
+    kept = [seed for seed in seeds if not attendance(seed) or (
+        seed.key.startswith(ATTENDANCE_SEED)
+        and (attendance_at is None or now - attendance_at >= SUBJECT_S))]
+    def spent(seed):
+        if seed.kind not in TOPIC_KINDS:
+            return False
+        mine = subject_words(seed, names)
+        return any(jaccard(mine, done) >= SUBJECT_JACCARD for done in subjects)
+    new = [seed for seed in kept if not spent(seed)]
+    return new if new else kept

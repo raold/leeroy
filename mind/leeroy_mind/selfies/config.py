@@ -32,6 +32,15 @@ class SelfieCfg:
     variety: bool = False  # balanced lust choices and recent plain-photo observations
     varied_sets: bool = False  # varied.py: four looks and poses in one set for the lust style
     identity_sets: bool = False  # profile sets carry her chosen photo's face (the identity worker)
+    # The photo critic (critic.py): detectors and a vision judge measure every rendered
+    # situational, request and profile-set photo; a defective situational or request photo is
+    # never sent. best_of renders that many seeds of a situational or request photo and sends
+    # the best (needs critic; 1 = one seed, as before). param_bandit lets the critic and his
+    # picks choose identity scale and steps (params.py; needs critic).
+    critic: bool = False
+    best_of: int = 1
+    critic_model: str = "qwen2.5vl:7b"  # pulled by the operator; absent: detectors only
+    param_bandit: bool = False
 
 
 def _bool(v) -> bool:
@@ -70,6 +79,11 @@ _RULES = {
     "variety": (_bool, "true or false"),
     "varied_sets": (_bool, "true or false"),
     "identity_sets": (_bool, "true or false"),
+    "critic": (_bool, "true or false"),
+    "best_of": (_int(1, 4), "an integer 1-4"),
+    "critic_model": (lambda v: type(v) is str and 1 <= len(v) <= 100 and v.strip() == v
+                     and v.isprintable(), "an Ollama model name"),
+    "param_bandit": (_bool, "true or false"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib"}
 _PATHS = {"python", "data"}
@@ -104,6 +118,9 @@ def load_selfie_config(path: Path) -> SelfieCfg:
     if set(table) - _RULES.keys():
         values["variety"] = False  # an invalid/unknown table never opts into new behaviour
         values["varied_sets"] = False
+        values["critic"] = False
+        values["best_of"] = 1
+        values["param_bandit"] = False
     return SelfieCfg(**values)
 
 

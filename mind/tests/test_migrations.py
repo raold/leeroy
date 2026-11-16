@@ -307,7 +307,8 @@ def test_a_v17_db_gains_the_empty_selfie_tables(tmp_path, monkeypatch):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == latest_version() >= 18
         names = {r[0]: r[1] for r in conn.execute(
             "SELECT name, type FROM sqlite_master WHERE name LIKE 'selfie_%' "
-            "AND name NOT LIKE 'selfie_snap%' AND name NOT LIKE 'selfie_request%'")}
+            "AND name NOT LIKE 'selfie_snap%' AND name NOT LIKE 'selfie_request%' "
+            "AND name NOT LIKE 'selfie_critic%' AND name NOT LIKE 'selfie_param%'")}
         assert names == {"selfie_set": "table", "selfie_candidate": "table",
                          "selfie_pick": "table", "selfie_current": "table",
                          "selfie_set_one_queued": "index", "selfie_embedding": "table"}

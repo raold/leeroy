@@ -570,13 +570,74 @@ def test_generate_rejects_a_record_containing_the_real_name():
 
 def test_second_collision_with_no_free_candidate_is_a_failure(caplog):
     llm = FakeLLM(script_from(["profile", _persona_json("Pat Reeve"), _persona_json("Pat Reeve"),
-                               _names_json("Pat Reeve", "pat moss", "Sam Carter")]))
+                               _names_json("Pat Reeve", "pat moss", "Sam Carter"),
+                               _names_json("Sam Carter")]))
     notes = GenNotes()
     with caplog.at_level(logging.WARNING), pytest.raises(NameCollision):
         run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES,
                              taken_names=frozenset({"Pat Reeve", "Sam Carter"}), notes=notes))
     assert "name collision" in caplog.text and notes.collisions == ["Pat Reeve"]
-    assert notes.renames == [] and len(llm.calls) == 4  # the rename was asked once
+    assert notes.renames == [] and len(llm.calls) == 5  # the rename was asked twice
+
+
+def _alpha(i, stem="Name"):
+    """A letters-only name (a candidate with digits is not a name)."""
+    return stem + "".join(chr(97 + int(c)) for c in str(i))
+
+
+def test_a_rename_whose_first_eight_collide_succeeds_on_the_re_ask():
+    taken = [f"{_alpha(i)} Taken" for i in range(8)]
+    llm = FakeLLM(script_from(["profile", _persona_json("Namea Reed"), _persona_json("Namea Reed"),
+                               _names_json(*taken), _names_json("Dale Finch")]))
+    notes = GenNotes()
+    p = run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES,
+                             taken_names=frozenset(taken), notes=notes))
+    assert p.identity.real_name == "Dale Finch" and len(llm.calls) == 5
+    assert notes.renames == [("Namea Reed", "Dale Finch")]
+    first, second = (llm.calls[i]["messages"][-1]["content"] for i in (3, 4))
+    assert "Namea" in first  # the list already held them (taken)
+    assert second.count("Nameh") == first.count("Nameh")  # no duplicates added
+
+
+def test_the_re_ask_lists_candidates_the_cut_list_had_hidden():
+    taken = [f"{_alpha(i, 'Zed')} Taken" for i in range(1000, 1900)]  # more than the cap shows
+    colliding = taken[-8:]
+    last = _alpha(1899, "Zed")
+    llm = FakeLLM(script_from(["profile", _persona_json(f"{last} Reed"),
+                               _persona_json(f"{last} Reed"),
+                               _names_json(*colliding), _names_json("Dale Finch")]))
+    p = run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES,
+                             taken_names=frozenset(taken)))
+    assert p.identity.real_name == "Dale Finch"
+    first, second = (llm.calls[i]["messages"][-1]["content"] for i in (3, 4))
+    assert last not in first and last in second
+
+
+def test_a_re_ask_that_also_collides_still_refuses():
+    taken = [f"{_alpha(i)} Taken" for i in range(8)]
+    llm = FakeLLM(script_from(["profile", _persona_json("Namea Reed"), _persona_json("Namea Reed"),
+                               _names_json(*taken), _names_json("Nameb Other")]))
+    with pytest.raises(NameCollision):
+        run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES,
+                             taken_names=frozenset(taken)))
+    assert len(llm.calls) == 5
+
+
+def test_the_taken_list_cap_keeps_the_record_prompt_inside_the_context():
+    from leeroy_mind.personas import generate as g
+    from leeroy_mind.personas.schema import persona_json_schema
+    from leeroy_mind.llm.presets import STRUCTURE
+    from leeroy_mind.text import estimate_tokens
+    names = [_alpha(i, "Aridon") for i in range(700)]
+    shown = g._printable_first_names(frozenset(names), H)
+    assert 300 < len(shown) < len(names)  # well over the old 110, still capped
+    assert estimate_tokens(", ".join(shown)) <= g.TAKEN_LIST_TOKEN_CAP + len(shown)
+    profile = "x" * 4 * 700  # a profile well over its 250 words
+    prompt = g._record_prompt(_slot(), _member_char(), profile, H, shown)
+    used = (estimate_tokens(GENERATION_RULES) + estimate_tokens(prompt)
+            + estimate_tokens(json.dumps(persona_json_schema())))
+    reply_reserve = 2500
+    assert used + reply_reserve < STRUCTURE.options["num_ctx"]
 
 
 def _self_naming_json():
@@ -952,7 +1013,7 @@ def test_retry_name_list_is_first_names_deduplicated_and_capped(caplog):
     taken = {f"Name{i:04d} Surname" for i in range(2000)} | {"Sam Carter", "Sam Young", "sam"}
     with caplog.at_level(logging.INFO):
         out = _printable_first_names(taken, HumanIdentity(1, "T", "", "Name0001", True))
-    assert "Name0001" not in out and len(out) < 200 and "cut to" in caplog.text
+    assert "Name0001" not in out and len(out) < 700 and "cut to" in caplog.text
 
 
 def test_retry_name_list_deduplicates_first_names():
@@ -1075,6 +1136,7 @@ def test_a_name_sharing_a_word_with_a_two_word_real_name_is_never_printed(caplog
 def test_a_two_word_real_name_is_masked_when_no_candidate_fits(caplog):
     from leeroy_mind.personas.generate import _redact
     llm = FakeLLM(script_from(["profile", _persona_json("Pat Moss"), _persona_json("Pat Moss"),
+                               _names_json("Pat Reeve", "Wim Tolley"),
                                _names_json("Pat Reeve", "Wim Tolley")]))
     with caplog.at_level(logging.INFO), pytest.raises(NameCollision) as e:
         run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES, human=H2,

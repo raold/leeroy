@@ -1,7 +1,7 @@
 import { $, api, clear, el, on, post, refused } from "./core.mjs";
 import { S } from "./state.mjs";
 import { pollTab } from "./tabkit.mjs";
-import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords, turingView, CHART } from "./labmodel.mjs";
+import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords, turingView, conversationView, CHART } from "./labmodel.mjs";
 import { BoundedMap } from "./resilience.mjs";
 
 let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null, withWeights=false;
@@ -180,6 +180,21 @@ function turing(value) {
     box.appendChild(part);
   });
 }
+function conversation(value) {
+  const box=$('lab-conversation'); clear(box); const view=conversationView(value);
+  if (!view.available) { empty(box,'Not set up yet. Turn on [lab] enabled in mind.toml; each night then runs the battery in a sandbox copy.'); return; }
+  box.appendChild(el('p','hint','Each night: invented lines of yours to sampled members in a sandbox copy, graded 0-3 (3: would pass as her) with rule checks and the blind judge; prompt variants tried against the wording in use. Variants tried: '+view.tried+', promoted into the learn bandit: '+view.promoted+'.'));
+  if (!view.runs.length) { empty(box,'No nights stored yet.'); }
+  view.runs.forEach((r,i) => {
+    const part=el('div','turing-family'); part.appendChild(el('p','lab-stat',r.headline));
+    [['By kind','kinds','No grades yet.'],['Rule checks','flags','No flags.'],['Variants','variants','None tried.']].forEach(([title,key,none]) => {
+      const d=details(title+' ('+r[key].length+')','lab-conv-'+key+'-'+i);
+      r[key].forEach(t => d.appendChild(el('p','lab-stat',t)));
+      if (!r[key].length) { empty(d,none); } part.appendChild(d);
+    });
+    box.appendChild(part);
+  });
+}
 $('lab-weights-form').addEventListener('submit',event => {
   event.preventDefault();
   const values=weightValues(Object.fromEntries(WEIGHTS.map(k => [k,$('lab-weight-'+k).value.trim()==='' ? NaN : Number($('lab-weight-'+k).value)])));
@@ -208,7 +223,7 @@ function render(value) {
   $('lab-freeze').disabled=!!value.config_freeze;
   $('lab-learning-state').textContent=value.config_freeze ? 'Learning is frozen in mind.toml ([learn] freeze). Change it there.' : value.freeze ? 'Learning is frozen.' : value.enabled ? 'Learning is enabled by its config.' : 'Learning is disabled in config. Controls do not enable it.';
   rewards(value.rewards); arms(value.arms); lessons(value.lessons); weights(value.weights);
-  weekly(value); turing(value.turing);
+  weekly(value); turing(value.turing); conversation(value.conversation);
   $('tab-lab').querySelectorAll('details').forEach(d => {
     d.open=open.has(d.dataset.detail || d.id);
     d.querySelectorAll(':scope > button').forEach(b => { b.dataset.labFocus=(d.dataset.detail || d.id)+'-'+b.textContent; });

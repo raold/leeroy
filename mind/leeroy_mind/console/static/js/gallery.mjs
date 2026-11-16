@@ -2,7 +2,7 @@
 // only the shown full image and its neighbours are retained. Closing revokes every blob URL.
 import { api, clear, el, emit, on, post, refused, str } from "./core.mjs";
 import { face } from "./faces.mjs";
-import { coverWhy, initial, lookWords, ordered, step, swipe } from "./gallerymodel.mjs";
+import { coverWhy, flagCodes, initial, lookWords, ordered, step, swipe } from "./gallerymodel.mjs";
 
 var active = null;
 
@@ -18,6 +18,16 @@ export function photoButton(guid, name, kind) {
   });
   button.addEventListener("keydown", function (ev) { ev.stopPropagation(); });
   return button;
+}
+
+// The photo critic's mark on a flagged candidate: a small red dot whose title names the codes.
+function flagDot(p) {
+  var codes = flagCodes(p);
+  if (!codes) { return null; }
+  var dot = el("span", "flag-dot");
+  dot.title = "Flagged by the photo critic: " + codes;
+  dot.setAttribute("aria-label", dot.title);
+  return dot;
 }
 
 function button(text, action) {
@@ -177,12 +187,16 @@ function drawStrip(g) {
     var b = button(String(i + 1), function () { g.at = i; draw(g); });
     b.dataset.photoIndex = String(i);
     b.dataset.photoId = String(p.id);
-    b.setAttribute("aria-label", "Photo " + (i + 1));
+    b.setAttribute("aria-label", "Photo " + (i + 1) + (flagCodes(p) ? ", flagged: " + flagCodes(p) : ""));
+    var dot = flagDot(p);
+    if (dot) { b.appendChild(dot); }
     g.strip.appendChild(b);
     imageURL(g, g.thumbs, p.thumbnail).then(function (url) {
       if (!url || g.closed) { return; }
       var img = el("img"); img.alt = g.name; img.src = url;
       clear(b); b.appendChild(img);
+      var mark = flagDot(p);
+      if (mark) { b.appendChild(mark); }
     });
   });
   var back = Array.from(g.strip.children).find(b => b.dataset.photoId === focusedId) ||
