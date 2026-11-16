@@ -92,6 +92,12 @@ def test_intent_multipliers():
     assert _shares(vent)[Shape.PARAGRAPH] > _shares(replace(vent, intent=None))[Shape.PARAGRAPH]
 
 
+def test_a_plain_want_code_counts_as_its_intent():
+    from leeroy_mind.talk.beat import WANTS  # think-dm's want codes (#329)
+    assert {"react", "ask", "vent", "boundary", "logistics"} <= set(WANTS)
+    assert _shares(replace(OWED, intent="ask")) == _shares(replace(OWED, intent=Intent.ASK))
+
+
 def test_attention_and_state_multipliers():
     ctx = replace(OWED, family="discord")
     glancing = _shares(replace(ctx, attention=Attention.GLANCING))
