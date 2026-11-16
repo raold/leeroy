@@ -1,0 +1,285 @@
+"""The phrase cooldown (owner's Turing-test push, 2026-11-15): a member's 2-5 word phrases and
+the stock list are rationed per conversation, per day and across the cast; the retry is told the
+phrase in her own words, and a retry that keeps it loses the phrase, or the line."""
+from datetime import datetime, timezone
+import json
+
+import pytest
+
+from leeroy_mind.guards import Draft, GuardsCfg, GuardStores, Verdict, parse_config, review
+from leeroy_mind.guards import phrases
+from leeroy_mind.guards.review import Reader, rewrite_hint
+from leeroy_mind.talk import awareness as live
+from leeroy_mind.talk.pipeline import TurnMeta
+
+from .test_live import rig, speak, turn  # noqa: F401  (the rig fixture)
+
+NOW = datetime(2026, 10, 29, 23, tzinfo=timezone.utc).timestamp()
+MENACE = 'send it now you absolute menace'
+
+
+def put(store, text, *, guid=101, channel='guild', to=0, ts=NOW - 60, audience=None):
+    with store.transaction():
+        cur = store.conn.execute(
+            'INSERT INTO chat_line(ts,channel,from_guid,from_name,to_guid,text,origin,audience) '
+            'VALUES (?,?,?,?,?,?,?,?)', (ts, channel, guid, 'Invented', to, text,
+                                         'human' if guid == 1 else 'mind',
+                                         json.dumps(audience) if audience is not None else None))
+    return cur.lastrowid
+
+
+def draft(text, **kw):
+    return Draft(kw.pop('guid', 101), kw.pop('channel', 'guild'), text, now=kw.pop('now', NOW), **kw)
+
+
+def found(store, d):
+    return phrases.check(Reader(store.conn), d, d.now)
+
+
+# -- words ---------------------------------------------------------------------------------------
+
+def test_words_fold_the_casts_typing():
+    assert [t.norm for t in phrases.tokens("u're gonna lose ur mind rn")] == \
+        ['youre', 'going', 'to', 'lose', 'your', 'mind', 'right', 'now']
+    toks = phrases.tokens('Bring the {{item:42}} to Naxx, Arkon. Then rest')
+    assert [t.norm for t in toks] == ['bring', 'the', 'to', 'naxx', 'arkon', 'then', 'rest']
+    assert [t.clause for t in toks] == [0, 0, 1, 1, 2, 3, 3]
+    assert [t.proper for t in toks] == [False, False, False, True, True, False, False]
+
+
+@pytest.mark.parametrize('text,phrase,eligible', [
+    ('you absolute menace', ('absolute', 'menace'), True),
+    ('i want to', ('i', 'want', 'to'), False),                  # nothing outside STOP
+    ('im sitting here', ('sitting', 'here'), True),
+    ('we got over here', ('over', 'here'), False),             # two words need two outside STOP
+    ('hey rabbi you there', ('hey', 'rabbi', 'you'), False),   # his name
+    ('the Lich King again', ('lich', 'king', 'again'), False), # a proper noun
+    ('death of me', ('death', 'of', 'me'), True),
+])
+def test_eligible_phrases(text, phrase, eligible):
+    _, found_ = phrases.candidates(text, frozenset({('rabbi',)}))
+    assert (phrase in found_) is eligible
+
+
+def test_stock_list_loads_and_covers_the_audit():
+    names = {name for name, _ in phrases.stock()}
+    assert {'menace', 'death of me', 'lose my mind', 'sitting here', 'staring at', 'cry for help',
+            'there he is', 'at least'} <= names
+    anchored = dict(phrases.stock())['at least']
+    assert anchored == ((True, ('at', 'least')),)
+    raw = (phrases.resources.files('leeroy_mind.guards') / 'stock_phrases.txt').read_text(encoding='utf-8')
+    assert 'How to extend' in raw and '\r' not in raw
+
+
+# -- the rules -----------------------------------------------------------------------------------
+
+def test_same_conversation_flags_a_second_use(store):
+    put(store, 'god you are such an absolute menace', channel='whisper', to=1, ts=NOW - 600)
+    result = found(store, draft(MENACE, channel='whisper', to_guid=1))
+    assert 'phrase_conversation' in result.codes and 'absolute menace' in result.phrases
+
+
+def test_a_whisper_and_her_dm_with_him_are_one_conversation(store):
+    put(store, 'god you are such an absolute menace', channel='dm:101', to=1, ts=NOW - 600)
+    assert 'phrase_conversation' in found(store, draft(MENACE, channel='whisper', to_guid=1)).codes
+
+
+@pytest.mark.parametrize('channel,to,ts', [('whisper', 102, NOW - 600), ('guild', 0, NOW - 600),
+                                           ('whisper', 1, NOW - 31 * 60)])
+def test_another_conversation_or_an_old_one_needs_the_daily_count(store, channel, to, ts):
+    put(store, 'god you are such an absolute menace', channel=channel, to=to, ts=ts)
+    codes = found(store, draft('so proud of you, absolute menace', channel='whisper', to_guid=1)).codes
+    assert 'phrase_conversation' not in codes and 'phrase_day' not in codes
+
+
+@pytest.mark.parametrize('channel,who,to,mine', [
+    ('whisper', 1, 101, dict(channel='whisper', to_guid=1)),         # his whisper to her
+    ('dm:101', 1, 101, dict(channel='dm', room='101', to_guid=1)),  # his DM to her
+    ('guild', 102, 0, dict(channel='guild'))])                       # another member here
+def test_a_phrase_someone_else_in_the_conversation_used_is_its_topic(store, channel, who, to, mine):
+    put(store, 'grilled cheese with sharp cheddar wins', channel=channel, to=1 if to else 0, ts=NOW - 900)
+    d = draft('grilled cheese forever', **mine)
+    assert 'phrase_conversation' in found(store, d).codes
+    put(store, 'grilled cheese is the only answer', guid=who, channel=channel, to=to, ts=NOW - 600)
+    assert 'phrase_conversation' not in found(store, d).codes
+
+
+def test_the_third_use_in_a_day_anywhere_is_flagged(store):
+    put(store, 'that absolute menace again', channel='guild', ts=NOW - 5 * 3600)
+    put(store, 'what an absolute menace', channel='discord:general', ts=NOW - 3 * 3600)
+    result = found(store, draft('you absolute menace', channel='whisper', to_guid=1))
+    assert 'phrase_day' in result.codes
+    # 20 h later the first is 25 h old: one use left in the day
+    assert 'phrase_day' not in found(store, draft('you absolute menace', now=NOW + 20 * 3600)).codes
+
+
+def test_three_other_members_make_a_phrase_worn(store):
+    for guid in (102, 103):
+        put(store, 'that is a cry for help honestly', guid=guid, ts=NOW - 3600)
+    d = draft('this spreadsheet is a cry for help lol', channel='discord', room='general')
+    assert 'phrase_cast' not in found(store, d).codes
+    put(store, 'a cry for help if i ever saw one', guid=104, ts=NOW - 40 * 3600)
+    assert 'phrase_cast' in found(store, d).codes
+    assert 'phrase_cast' not in found(store, draft('a cry for help', now=NOW + 9 * 3600)).codes
+
+
+def test_an_ordinary_idiom_is_never_worn_across_the_cast(store):
+    for guid in (102, 103, 104, 105):
+        put(store, f'{guid} games in a row', guid=guid)
+    assert found(store, draft('three wipes in a row')).codes == ()
+
+
+def test_stock_phrases_once_per_member_in_three_days(store):
+    put(store, 'you will be the death of me', channel='whisper', to=1, ts=NOW - 70 * 3600)
+    result = found(store, draft('rabbi, the death of me, i swear', channel='guild'))
+    assert 'stock_member' in result.codes and 'death of me' in result.phrases
+    assert 'stock_member' not in found(store, draft('the death of me', now=NOW + 3 * 3600)).codes
+
+
+def test_stock_phrases_three_times_a_day_across_the_cast(store):
+    for guid in (102, 103, 104):
+        put(store, 'staring at the ceiling again', guid=guid, ts=NOW - 3600)
+    assert 'stock_cast' in found(store, draft('just staring at my phone')).codes
+    assert found(store, draft('just staring at my phone', now=NOW + 86400)).codes == ()
+
+
+def test_an_anchored_stock_phrase_is_only_a_clause_opener(store):
+    put(store, 'at least you get paid for it', ts=NOW - 3600)
+    assert 'stock_member' in found(store, draft('rough day. at least the boss died')).codes
+    assert 'stock_member' not in found(store, draft('we need at least ten for the run')).codes
+
+
+def test_names_never_make_a_phrase(store):
+    with store.transaction():
+        store.conn.execute("INSERT INTO meta(key,value) VALUES ('human_name','Rabbi')")
+    put(store, 'hey rabbi hey rabbi', channel='whisper', to=1, ts=NOW - 60)
+    assert found(store, draft('hey rabbi', channel='whisper', to_guid=1)).codes == ()
+
+
+def test_replay_excludes_the_line_itself_and_later_rows(store):
+    first = put(store, 'god you are such an absolute menace', channel='whisper', to=1, ts=NOW - 600)
+    second = put(store, MENACE, channel='whisper', to=1, ts=NOW - 300)
+    assert found(store, draft(MENACE, channel='whisper', to_guid=1, line_id=first)).codes == ()
+    assert found(store, draft(MENACE, channel='whisper', to_guid=1, line_id=second)).codes
+
+
+def test_group_dm_lines_count_but_are_never_quoted(store):
+    put(store, 'SECRETWORD absolute menace SECRETWORD', channel='gdm:7', ts=NOW - 600, audience=[1, 101, 102])
+    put(store, 'another absolute menace moment', channel='guild', ts=NOW - 3600)
+    d = draft('you absolute menace', channel='discord', room='general')
+    verdict = review(GuardStores(store.conn, GuardsCfg(enabled=True)), d)
+    assert 'phrase_day' in verdict.codes and verdict.action == 'rewrite'
+    hint = rewrite_hint(verdict.codes, verdict.phrases)
+    assert verdict.phrases == ('absolute menace',) and 'SECRETWORD' not in hint + repr(verdict)
+    assert 'phrase_conversation' in found(store, draft('the absolute menace', channel='group', room='7')).codes
+
+
+# -- review and config ---------------------------------------------------------------------------
+
+def test_review_rewrites_and_keeps_its_words_out_of_repr(store):
+    put(store, 'god you are such an absolute menace', channel='whisper', to=1, ts=NOW - 600)
+    verdict = review(GuardStores(store.conn, GuardsCfg(enabled=True)), draft(MENACE, channel='whisper', to_guid=1))
+    assert verdict.action == 'rewrite' and 'phrase_conversation' in verdict.codes
+    assert 'menace' not in repr(verdict) and verdict.phrases == ('absolute menace',)
+
+
+def test_a_whole_line_repeat_stays_a_drop(store):
+    put(store, MENACE, ts=NOW - 60)
+    verdict = review(GuardStores(store.conn, GuardsCfg(enabled=True)), draft(MENACE))
+    assert verdict.action == 'drop' and not set(verdict.codes) & set(phrases.CODES)
+
+
+def test_switch_off_and_config_parsing(store):
+    put(store, 'god you are such an absolute menace', channel='whisper', to=1, ts=NOW - 600)
+    off = GuardsCfg(enabled=True, phrase_cooldown=False)
+    assert review(GuardStores(store.conn, off), draft(MENACE, channel='whisper', to_guid=1)).action == 'send'
+    assert parse_config({'enabled': True, 'phrase_cooldown': False}).phrase_cooldown is False
+    assert parse_config({'enabled': True}).phrase_cooldown is True
+    assert parse_config({'enabled': True, 'phrase_cooldown': 1}) == GuardsCfg()
+
+
+def test_hint_names_her_words_in_quotes():
+    hint = rewrite_hint(('phrase_day', 'stock_member'), ('absolute menace', 'death of me'))
+    assert "Don't say 'absolute menace' or 'death of me' again; say it your own way or not at all." in hint
+    assert 'phrase_day' not in hint and hint.startswith('Rewrite your reply once in your own words.')
+    assert rewrite_hint(('nothing_new',)) == ('Rewrite your reply once in your own words. Your draft has '
+                                              'a problem: it only repeats what was already said')
+
+
+# -- strip ---------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('text,phrase,expected', [
+    (MENACE, 'absolute menace', 'send it now'),
+    (MENACE, 'menace', 'send it now'),
+    ('doing it on purpose, you absolute menace!', 'absolute menace', 'doing it on purpose!'),
+    ('God, you are such a menace, doing it on purpose. I love it though.', 'menace',
+     'God, doing it on purpose. I love it though.'),
+    ("you're gonna be the death of me. but fine, ill bring the flasks", 'death of me',
+     'but fine, ill bring the flasks'),
+    ("sexy back at you. come here and i'll show you exactly what that means.", 'what that means',
+     'sexy back at you.'),
+    ('first part stays.\n\nI am sitting here at my desk. thinking about tonight\nlast line',
+     'sitting here', 'first part stays.\n\nthinking about tonight\nlast line'),
+    ('the death of me', 'death of me', None),
+    ('lol ;) at least you tried', 'at least', None),
+])
+def test_strip_cuts_the_epithet_clause_or_sentence(text, phrase, expected):
+    assert phrases.strip(text, [phrase]) == expected
+
+
+def test_strip_keeps_emoticons():
+    assert phrases.strip('ugh :) you absolute menace. bring the flasks ;)', ['absolute menace']) == \
+        'bring the flasks ;)'
+
+
+# -- the pipeline --------------------------------------------------------------------------------
+
+def menace_review(stores, d):
+    if 'menace' in d.text:
+        return Verdict('rewrite', ('phrase_day',), phrases=('absolute menace',))
+    return Verdict('send')
+
+
+def test_the_retry_is_told_the_phrase(rig, monkeypatch):
+    monkeypatch.setattr(live, 'review', menace_review)
+    rig.script(MENACE, 'fine, i will wait by the bank')
+    sent, meta = speak(rig, turn())
+    assert sent and 'menace' not in ' '.join(sent)
+    assert "Don't say 'absolute menace' again" in rig.last_user() and meta.guard_rewritten
+
+
+def test_a_retry_that_keeps_the_phrase_loses_it(rig, monkeypatch):
+    monkeypatch.setattr(live, 'review', menace_review)
+    rig.script(MENACE, 'fine, the raid waits for nobody. you absolute menace')
+    sent, meta = speak(rig, turn())
+    assert sent and 'menace' not in ' '.join(sent).casefold()
+    assert 'raid waits for nobody' in ' '.join(sent) and len(rig.chat_calls()) == 2
+
+
+def test_a_retry_with_nothing_else_is_dropped(rig, monkeypatch):
+    monkeypatch.setattr(live, 'review', menace_review)
+    rig.script(MENACE, 'absolute menace')
+    sent, meta = speak(rig, turn())
+    assert not sent and meta.guard_verdict == 'drop'
+    assert rig.utterances()[-1]['dropped'] == 'guard_phrase_refused'
+
+
+@pytest.mark.parametrize('channel', ['whisper', 'dm:101'])
+def test_an_owed_answer_is_never_dropped_for_a_phrase(rig, monkeypatch, channel):
+    monkeypatch.setattr(live, 'review', menace_review)
+    rig.script('the first draft, absolute menace', 'absolute menace, yes')
+    sent, meta = speak(rig, turn(channel), TurnMeta('owed', why='reply:named', answers_human=True,
+                                                     whisper_reply=channel == 'whisper'))
+    assert len(sent) == 1 and 'yes' in sent[0] and 'first draft' not in sent[0]
+    assert meta.guard_rewritten
+
+
+def test_another_problem_on_the_retry_keeps_the_old_rule(rig, monkeypatch):
+    calls = []
+    def review_(stores, d):
+        calls.append(d.text)
+        return Verdict('rewrite', ('phrase_day', 'claim_conflict'), phrases=('absolute menace',))
+    monkeypatch.setattr(live, 'review', review_)
+    rig.script(MENACE, 'fine, the raid waits for nobody. you absolute menace')
+    sent, meta = speak(rig, turn())
+    assert not sent and rig.utterances()[-1]['dropped'] == 'guard_rewrite_refused'

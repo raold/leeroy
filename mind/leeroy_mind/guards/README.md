@@ -29,6 +29,7 @@ thread_cosine = 0.25
 repeat_seconds = 259200
 gag_daily_cap = 2
 stock_daily_cap = 3
+phrase_cooldown = true
 
 [guards.gag_caps]
 "7" = 1
@@ -131,6 +132,62 @@ Confirmed delivery prunes receipt keys older than the preceding fourteen local
 calendar days, in the caller's transaction. Retries outside that retention window
 are not deduplicated. Other metadata is untouched. Missing receipt tables omit the
 check; malformed receipts return a fixed rewrite code rather than resetting caps.
+
+## Phrase cooldown
+
+`phrases.py` (2026-11-15, the owner's Turing-test push) works on phrases, where the
+line overlap above works on whole lines: of 255 lines that reused a 4-word run from the
+member's last 3 days, only 14 reached the 0.70 overlap. With `phrase_cooldown = true`
+(the default; `false` turns it off, restart the mind) a draft gets a rewrite code when
+one of its phrases is:
+
+| Code | Rule |
+|---|---|
+| `phrase_conversation` | one she already used in this conversation: her lines in the same room, or her whispers and DM with him (one conversation), each within 30 minutes of the next, at most 3 hours back |
+| `phrase_day` | one she used in 2 or more of her lines in the last 24 hours, any channel (the third use is flagged) |
+| `phrase_cast` | one 3 or more other members used in the last 48 hours; 3+ words with 2 outside STOP |
+| `stock_member` | a line of `stock_phrases.txt` she used in the last 72 hours |
+| `stock_cast` | a line of `stock_phrases.txt` the cast used 3 or more times in the last 24 hours |
+
+A phrase is 2-5 words inside one comma clause, with a word outside `STOP` (two for a
+two-word phrase), no member's, his or an active nickname's name and no capitalised proper
+noun. Words are folded first: case, apostrophes, `u`/`ur`, `gonna`, `rn` and the cast's
+other abbreviations, so stored (styled) lines and the plain draft compare. Item placeholders,
+bracketed names, URLs and mentions break a phrase. A phrase he or another member used in
+the current conversation is its topic, never her tic, for the conversation and day rules.
+`stock_phrases.txt` holds the curated stock roleplay and AI phrases; its header says how to
+extend it ("^" anchors one to a clause opening: `^at least` is the consolation frame).
+
+Two bounded reads per draft: the names (persona, `meta human_name`, active nicknames) and
+the last 72 hours of member and owner lines (`chat_line_ts`, at most 4,000 rows). A line
+already dropped as a whole-line repeat or echo stays dropped; phrases only add a rewrite.
+`Verdict.phrases` carries up to three phrases in the draft's own words (never logged, not
+in `repr`); `rewrite_hint(codes, phrases)` adds "Don't say 'X' again; say it your own way
+or not at all." Evidence is her own lines in any channel (including group DMs) and other
+members' lines counted, never quoted: the hint names only the draft's own words, never
+who else said them or where. Like the stock ration's receipts, her private lines can
+count toward a ration on a public draft; nothing from them reaches the prompt.
+
+If the screened retry still has a flagged phrase and nothing else is wrong
+(`talk/pipeline.py` `_without_phrases`), the phrase's comma clause, a closing epithet
+("..., you absolute menace") or else its sentence is cut, the rest is styled again and
+reviewed once more. When fewer than three words survive the line is dropped
+(`guard_phrase_refused`). An answer owed to him is never dropped for a phrase alone: the
+retry goes as written. Any other code on the retry keeps the old rule.
+
+Replay on the live history (read-only, 2026-10-31 to 2026-11-15, 4,392 member lines
+without templates and short `gz`): 497 lines flagged (11.3%; game 7.4%, voice 9.3%,
+Discord 20.9%), 185 of them answers owed to him. `phrase_conversation` 159,
+`phrase_day` 94, `phrase_cast` 36, `stock_member` 120, `stock_cast` 289 (a line can
+carry several). Of the 223 lines reusing a 4-word run of hers from the last 3 days, 138
+(62%) are flagged. A hand-judged sample of 60 flagged lines: 45 real tics or cross-member
+sameness, 9 borderline (ordinary "at least", "every single"), 6 false positives (topic
+nouns only she repeated in one conversation: "grain density", "chicken wrap"). Mean check
+4.4 ms. A flag is a rewrite, so a false positive costs one model call, not the line.
+Replay measures flag rate on what was said, not behaviour after rewrites.
+
+Rollback: remove `phrase_cooldown` from `[guards]` before running older code, which reads
+an unknown key as an invalid table and turns all guards off.
 
 ## Live adapter
 

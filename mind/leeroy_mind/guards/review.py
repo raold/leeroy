@@ -20,6 +20,7 @@ from leeroy_mind.eval.talk.common import Line, day, evening, similarity, words
 from leeroy_mind.memory.recall import whisper_ok
 from leeroy_mind.talk.moves import topics
 
+from . import phrases
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
 
 OWN_LINES = 128
@@ -51,6 +52,11 @@ HINTS = {
     'low_parent_and_thread_relevance': 'it does not answer what was said',
     'off_anchor': 'it wanders off the subject',
     'claim_conflict': 'it contradicts something already known',
+    'phrase_conversation': 'it reuses a phrase you already said in this conversation',
+    'phrase_day': 'it leans on a phrase you keep using today',
+    'phrase_cast': 'it leans on a worn-out phrase',
+    'stock_member': 'it leans on a stock phrase you used lately',
+    'stock_cast': 'it leans on a worn-out stock phrase',
 }
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
           'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
@@ -87,12 +93,15 @@ def echoes(text: str, parent: str) -> bool:
     return False
 
 
-def rewrite_hint(codes) -> str:
-    """The screened retry's instruction in words; a code without words is named as it is."""
+def rewrite_hint(codes, named=()) -> str:
+    """The screened retry's instruction in words; a code without words is named as it is.
+    `named` are the phrase cooldown's words from the draft itself (Verdict.phrases)."""
     reasons = list(dict.fromkeys(HINTS.get(code, code) for code in codes))
+    said = phrases.hint(named)
     if not reasons:
-        return 'Rewrite your reply once.'
-    return 'Rewrite your reply once in your own words. Your draft has a problem: ' + '; '.join(reasons)
+        return 'Rewrite your reply once.' + (' ' + said if said else '')
+    hint = 'Rewrite your reply once in your own words. Your draft has a problem: ' + '; '.join(reasons)
+    return hint + '. ' + said if said else hint
 
 
 def _action(codes):
@@ -505,6 +514,9 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         drop.append('echo_parent')
     if not filler and _pairs(draft.text, draft.embedding, [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
+    # A line already dropped as a repeat or echo stays dropped; phrases only add a rewrite.
+    cooled = phrases.check(reader, draft, now) if cfg.phrase_cooldown and not drop else phrases.Found()
+    rewrite.extend(cooled.codes)
     filler_code = 'server_filler' if draft.server else 'filler_after_question'
     codes = tuple(dict.fromkeys([*rewrite, *drop, *([filler_code] if filler else [])]))
     action = 'drop' if draft.server and drop else _action(codes)
@@ -512,4 +524,4 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         scores.append(Score('missing_sources', len(reader.missing)))
     reaction = '👍' if parent and parent.text.rstrip().endswith('?') else '😄' if set(words(draft.text)) & {'lol','haha','hehe'} else '👍'
     return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)),
-                   (server_reaction or reaction) if action == 'react' else None)
+                   (server_reaction or reaction) if action == 'react' else None, cooled.phrases)

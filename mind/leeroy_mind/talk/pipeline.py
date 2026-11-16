@@ -77,6 +77,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.guards.review import rewrite_hint
+from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, strip as strip_phrases
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
@@ -1796,6 +1797,10 @@ class Pipeline:
                     return drop("guard_react")
                 if verdict.action == "drop" and not owed:
                     return drop("guard_drop")
+                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(PHRASE_CODES)
+                                                for v in verdicts):
+                    return await self._without_phrases(turn, meta, p, lines, verdicts, owed,
+                                                       close=close, spoken=spoken)
                 if meta.guard_rewritten or meta.before_transport is not None:
                     if owed:
                         return fallback()
@@ -1805,7 +1810,7 @@ class Pipeline:
                 if getattr(self,'learn_capture_preferences',False):
                     meta.preference_original = ' '.join(s.plain for s in lines)[:4001]
                 composed = composed or await self._compose(turn, meta, live=True)
-                hint = rewrite_hint(verdict.codes)
+                hint = rewrite_hint(verdict.codes, tuple(x for v in verdicts for x in v.phrases))
                 retry = replace(composed, messages=[*composed.messages,
                     {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
                     {"role": "user", "content": hint}])
@@ -1827,6 +1832,33 @@ class Pipeline:
                 return lines
         meta.guard_verdict = "drop"
         return fallback() if owed and best is not None else drop("guard_rewrite_failed")
+
+    async def _without_phrases(self, turn, meta, p, lines, verdicts, owed, *, close, spoken):
+        """The retry still leans on a phrase the cooldown named (guards/phrases.py): cut it and
+        send what survives, checked once more, else drop the line. An answer owed to him is
+        never dropped for a phrase alone: the retry goes as it was written."""
+        named = tuple(dict.fromkeys(x for v in verdicts for x in v.phrases))
+        joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
+        text = strip_phrases(joined.join(s.plain for s in lines), named) if named else None
+        if text is not None:
+            kept = ([Styled(text, text)] if spoken else
+                    self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
+            kept = [Styled(defuse(s.line), defuse(s.plain)) for s in kept]
+            checked = []
+            for line in kept:
+                checked.append(await self.live_review.check(turn, meta, line.plain))
+                if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
+                    return self._drop(turn, meta, "scope_changed")
+                if self.scheduler.expired(self._deadline(turn, meta)):
+                    return self._drop(turn, meta, "expired")
+            if kept and all(v.action == "send" for v in checked):
+                return kept
+        meta.guard_codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
+        if owed:
+            meta.guard_verdict = "rewrite"
+            return lines
+        meta.guard_verdict = "drop"
+        return self._drop(turn, meta, "guard_phrase_refused", meta.memory_ids)
 
     async def _guard_react(self, turn, meta, reaction):
         self._release_photo(meta, 'reaction')
