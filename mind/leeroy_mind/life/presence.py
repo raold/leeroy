@@ -115,6 +115,36 @@ def discord_state(lp: LifePresence, *, dnd_day: bool) -> str:
     return "online"
 
 
+# Where she is, as her prompt's "Right now" says it (core plan Task 8, with [life] availability
+# above 0): asleep and at work read differently in game and on her phone, home duty names the
+# kids only when she has them at home.
+WHERE_TEXT = {
+    (Block.ASLEEP, "game"): "You're half asleep at the keyboard.",
+    (Block.ASLEEP, "discord"): "Your phone woke you up.",
+    (Block.WORK, "game"): "You're at work, the game open on your PC.",
+    (Block.WORK, "discord"): "You're at work, checking your phone between tasks.",
+    (Block.COMMUTE, ""): "You're on your way somewhere.",
+    (Block.HOME_DUTY, "kids"): "You're at home sorting the kids out.",
+    (Block.HOME_DUTY, ""): "You're busy at home.",
+    (Block.GYM, ""): "You're at the gym.",
+    (Block.OUT, ""): "You're out tonight.",
+    (Block.FREE, ""): "You're at home with some free time.",
+    (Block.GAMING, ""): "You're at your PC, playing.",
+}
+
+
+def where_text(lp: LifePresence, medium: str, *, playing: bool = False) -> str:
+    """WHERE_TEXT for her presence on `medium` ("game" or "discord"). `playing`: she is in his
+    group in game while he plays, so she is at her PC playing whatever her day plan says (PM log
+    D15: she answers him at once then too)."""
+    medium = _medium(medium)
+    if playing:
+        return WHERE_TEXT[(Block.GAMING, "")]
+    if lp.block is Block.HOME_DUTY:
+        return WHERE_TEXT[(Block.HOME_DUTY, "kids" if lp.kids else "")]
+    return WHERE_TEXT.get((lp.block, medium)) or WHERE_TEXT[(lp.block, "")]
+
+
 def away_words(lp: LifePresence, medium: str) -> str:
     """Where she is, in words for her prompt and catch-up lines."""
     if lp.block is Block.HOME_DUTY:
