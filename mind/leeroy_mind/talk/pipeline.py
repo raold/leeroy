@@ -321,6 +321,8 @@ class TurnMeta:
     - gz_loot:weighted_draw (his loot), kill_gz:weighted_draw, wipe_react:weighted_draw or
       wipe_react:died_first (offered to whoever died first);
     - reply:raid_lead, the lead told he is leaving mid-raid;
+    - reply:carried, her answer to his whisper in her Discord DM, carried there at his logout
+      while it was still waiting ([life] availability, LifeService.on_logout);
     - kill:<how> and wipe:<how>: lead (the raid lead) or weighted_draw;
     - burst:<how>, social talk: an opener is weighted_draw, a follow-on reason_pool or
       weighted_draw;
