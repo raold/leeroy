@@ -89,10 +89,12 @@ def test_a_repeated_summons_is_asked_again_then_dropped(rig):
     rig.script("get over here", "come over already")
     rig.whisper_from_him(102, "hi")
     rig.run()
-    assert rig.utterances()[-1]["dropped"] == "tells"
-    assert len(rig.chat_calls()) == 2
+    # the summons is never sent; since 2026-11-15 his whisper's owed answer gets one plain ask
+    # that warns of it, then the fallback line (talk/owed.py), which is no summons
+    assert len(rig.chat_calls()) == 3
     assert SUMMONS_HINT.format(**HE) in rig.last_user()
-    assert not rig.sent.says() and _moves(rig.store) == []
+    assert len(rig.sent.says()) == 1
+    assert "summon" not in {m[4] for m in _moves(rig.store)}
 
 
 def test_a_summons_in_a_typed_guild_reply_to_him_is_asked_again_then_dropped(rig):

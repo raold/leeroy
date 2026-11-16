@@ -134,5 +134,8 @@ full rule); no switch, no migration, no native rebuild.
   burst already) and DBM/BigWigs/AFK auto-whispers; a line nobody with a persona can hear (an
   empty voice room, a whisper to someone offline or outside the cast: `owed_given_up
   reason=nobody_present|target_offline`); game lines from before a mind restart.
+- **His talk first.** With every line of his answered, a whisper or opener that starts a
+  conversation with him waits while an answer to him is still on its way, and is dropped
+  (`his_talk`) when he spoke or was answered after it was planned (ruling 2, `AFTER_BURST_S`).
 - **Health:** `owner-replies` counts his messages of the last 24 h with no member answer within
   5 minutes, by medium (a note from one, a FAIL from 10); counts only, never text.

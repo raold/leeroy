@@ -565,11 +565,16 @@ class Reactions(Pipeline):
         return bool(self._group_fights)
 
     def _his_talk_at(self) -> float:
-        """When he last said a line or a member last said one to him: the talk the clocks
-        that start conversations with him wait out (budget.AFTER_BURST_S)."""
+        """When he last said a line or a member last said one to him, or now while an answer
+        to him is still on its way (every line of his has one since 2026-11-15, talk/owed.py):
+        the talk the clocks that start conversations with him wait out (budget.AFTER_BURST_S)."""
         hg = self.human.guid
-        return max([self.world.last_spoke.get(hg, -math.inf),
-                    *self._answered_at.values()]) if hg else -math.inf
+        if not hg:
+            return -math.inf
+        if any(t.addressee == hg and t.kind in (TurnKind.REPLY_HUMAN, TurnKind.GOODNIGHT)
+               for t in self.planned_turns()):
+            return self.clock.now()
+        return max([self.world.last_spoke.get(hg, -math.inf), *self._answered_at.values()])
 
     def _initiation_held(self, now: float) -> bool:
         """Nothing starts a conversation with him now: his raid's fight, its wipe or debrief,

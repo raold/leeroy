@@ -68,7 +68,7 @@ from leeroy_mind.photos.offer import PhotoOffer, caption_ok
 from leeroy_mind.protocol import Ack, Chat, Command, Emote, Say
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
-from leeroy_mind.talk.budget import PHASE_MODS, DayPhase, day_phase
+from leeroy_mind.talk.budget import AFTER_BURST_S, PHASE_MODS, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.discord_length import (FEW_WORDS, QUICK_WORDS, TYPING_CAP_S as DISCORD_TYPING_S,
                                              band, preset_for, trim_to_sentence, words_for)
@@ -2058,6 +2058,11 @@ class Pipeline:
                 return "expired"
         if not self.raid.allows(g, turn.kind, now):
             return "raid"
+        # a line that starts a conversation with him waits out his talk (budget.AFTER_BURST_S):
+        # he spoke, or was answered, after it was planned (every line of his is answered now)
+        talk_at = getattr(self, "_his_talk_at", None)
+        if meta.initiates and talk_at is not None and now - talk_at() < AFTER_BURST_S:
+            return "his_talk"
         guards = meta.guards or self.guards
         # a whisper to him that starts a conversation is, like any answer whispered to him or an
         # answer to his Discord DM, read by no one else: the guild's pace and her lines elsewhere
