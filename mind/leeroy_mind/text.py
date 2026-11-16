@@ -10,18 +10,20 @@ _MARKUP = re.compile(
 # Talk about the model or its prompt (identity audit, 2026-11-15: a member told officer chat what
 # "the prompt" showed her and that she had "no chat history"). Each phrase is one a player in
 # 2009 never types about their own chat: "follow my instructions", "accept the summon prompt",
-# "i'm an assistant manager" and "i was instructed to bring snacks" stay.
+# "the system message says the raid is locked", "scroll up the chat history", "my prompt timed
+# out", "your last lines were hilarious" and "i'm an assistant manager" stay.
 _I_AM = r"(?:i'm|i’m|i am|im)"
+_NOT_HAVE = r"(?:don't|don’t|dont|do not|can't|can’t|cant|cannot) (?:have|see)"
 META_RE = re.compile(
     r"\b(as an ai|language model|llm|chatgpt|openai|my programming|as a bot"
     rf"|{_I_AM} (?:just )?an? (?:ai|chatbot|ai assistant)|an ai (?:assistant|model)"
-    r"|system prompt|system message|my prompt"
-    r"|the prompt (?:shows|showed|tells|told|gives|gave|only (?:has|shows)) (?:me|us)"
-    r"|the prompt (?:doesn't|does not|didn't|did not) (?:show|give|tell) (?:me|us)"
+    r"|system prompt|(?:in|from) my prompt|my prompt (?:says|shows|tells me)"
+    r"|the prompt (?:shows|showed|tells|told) me|the prompt only (?:has|shows)"
+    r"|the prompt (?:doesn't|does not|didn't|did not) (?:show|tell) me"
     r"|my (?:system )?instructions (?:say|said|are not|aren't|don't|do not|won't|tell me|told me"
-    r"|forbid|prevent|only)|against my (?:instructions|guidelines|programming)|my guidelines"
-    r"|(?:no|the|full|whole|my) chat history|no chat shown|chat (?:shown|provided|given)"
-    r"|(?:my|your) (?:previous|last) lines)\b",
+    r"|forbid|prevent|only)|against my (?:instructions|guidelines|programming)"
+    rf"|{_NOT_HAVE} (?:the |my |any |his )?(?:full |whole |entire )?chat history"
+    r"|no chat history|no chat shown|chat (?:shown|provided|given)|my previous lines)\b",
     re.IGNORECASE)
 
 _WORDS = re.compile(r"\w+")

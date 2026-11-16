@@ -12,15 +12,17 @@ A line is contaminated when it echoes his last line in its conversation, slips, 
 speaker's persona, or is the source of a claim retired for contradicting the persona. The plan
 retires (never deletes):
 
-- live claims cited to a contaminated line or contradicting the persona: superseded by
-  themselves (`superseded_by = id`), their search vector removed;
+- live claims (never the owner's, source `owner`) cited to a contaminated line or
+  contradicting the persona: superseded by themselves (`superseded_by = id`), their search
+  vector removed;
 - disclosures whose `ref` is a contaminated line: `ref` becomes `retired:<ref>` and `response`
   `none`, so no ladder, depth or "remembered" check reads them;
 - active memories (never the owner's own, source `owner`) whose text slips or contradicts the
   persona, or all of whose owner's own evidence lines are contaminated: status `archived`;
 - live coach lessons opening with the other sex's pronoun: expired.
 
-The run writes one receipt (meta `personas:clean-contamination:<stamp>`) holding every row's
+The persona's facts include the owner's own edits of her life (`facts.owner_texts`: godmode
+implants and life events), which win over the stored persona. The run writes one receipt (meta `personas:clean-contamination:<stamp>`) holding every row's
 prior state, which `--undo <stamp>` puts back. Trust a retired disclosure once added stays: it
 was applied to a relationship row and is not undone here."""
 import json
@@ -30,7 +32,7 @@ from dataclasses import dataclass, field
 from leeroy_mind.guards.identity import slips
 from leeroy_mind.learn.lessons import misgendered
 
-from .facts import Facts, conflicts, facts_of_json
+from .facts import Facts, conflicts, facts_of_json, owner_texts
 
 RECEIPT = "personas:clean-contamination:"
 ECHO_SECONDS = 600  # his line a member's line may be saying back (claims.extract's)
@@ -107,11 +109,13 @@ def contaminated_lines(conn, human: int, personas: dict[int, dict],
 def plan(conn, *, human: int, now: float) -> Plan:
     """What the run would retire; reads only (works on a read-only connection)."""
     personas = _personas(conn)
-    facts = {g: facts_of_json(d) for g, d in personas.items()}
+    # his own edits of her life (godmode implants and life events) win over the stored persona
+    facts = {g: facts_of_json(d, owner=owner_texts(conn, g)) for g, d in personas.items()}
     result = Plan(lines=contaminated_lines(conn, human, personas, facts))
     if _table(conn, "member_claim"):
         claims = [r for r in conn.execute("SELECT id, guid, text, source_line FROM member_claim "
-                                          "WHERE superseded_by IS NULL ORDER BY id")
+                                          "WHERE superseded_by IS NULL AND source != 'owner' "
+                                          "ORDER BY id")
                   if r[1] in facts]
         wrong = {}
         for cid, guid, text, source_line in claims:  # first: the line a wrong claim came from
@@ -232,8 +236,9 @@ def undo(conn, stamp: str, *, now: float) -> Counter:
         done["memories"] += conn.execute("UPDATE memory SET status = ? WHERE id = ? "
                                          "AND status = 'archived'", (status, mid)).rowcount
     for lid, expires in receipt["lessons"]:
-        done["lessons"] += conn.execute("UPDATE talk_lesson SET expires = ? WHERE id = ?",
-                                        (expires, lid)).rowcount
+        # only one still expired by this run: a lesson the Lab vetoed or expired since stays so
+        done["lessons"] += conn.execute("UPDATE talk_lesson SET expires = ? WHERE id = ? "
+                                        "AND expires = ?", (expires, lid, receipt["at"])).rowcount
     receipt["undone"] = now
     conn.execute("UPDATE meta SET value = ? WHERE key = ?", (json.dumps(receipt), RECEIPT + stamp))
     return done

@@ -58,7 +58,8 @@ def test_estimate_tokens_and_meta():
 @pytest.mark.parametrize("text", [
     "cant see the whole chat history, the prompt shows me only his line",
     "no chat shown", "my previous lines were about the raid", "as an ai i can't",
-    "i'm just an AI", "my instructions say i can't", "the system prompt", "your last lines",
+    "i'm just an AI", "my instructions say i can't", "the system prompt",
+    "i don't have the full chat history to see it", "the prompt only has his first line",
 ])
 def test_talk_about_the_prompt_is_meta(text):
     """Identity audit, 2026-11-15: scaffold talk went out in officer chat."""
@@ -69,6 +70,10 @@ def test_talk_about_the_prompt_is_meta(text):
     "follow my instructions on the pull", "accept the summon prompt", "the prompt shows up late",
     "i'm an assistant manager at the bank", "i was instructed to bring snacks",
     "check the chat log", "my last raid was rough",
+    # Review 323 P3-4: ordinary chat.
+    "did you see the system message?", "the system message says the raid is locked",
+    "scroll up the chat history", "check the whole chat history", "the prompt gave us two minutes",
+    "my prompt timed out", "your last lines were hilarious", "my guidelines for loot",
 ])
 def test_a_players_own_words_are_not_meta(text):
     assert not has_meta(text)

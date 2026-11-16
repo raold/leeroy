@@ -54,7 +54,8 @@ def stained(store, clock):
     ids["m_derived"] = mem("Told Zan something real.", [ids["kids"], ids["his"]], "reflection")
     ids["m_slip"] = mem("I told Zan I'm not some nice gentleman", [ids["ok"]])
     ids["m_ok"] = mem("The saurfang fight went well", [ids["ok"]])
-    ids["m_owner"] = mem("I told Zan about my two daughters", [ids["kids"]], "owner")
+    # his own memory of her, which reads like a slip: never retired (and it names no family)
+    ids["m_owner"] = mem("I told Zan I'm a real gentleman about it", [ids["ok"]], "owner")
     return ids
 
 
@@ -135,3 +136,31 @@ def test_the_cli_go_snapshots_retires_and_undoes(store, stained, tmp_path, capsy
     assert _state(store, stained) == before
     assert main(["personas", "clean-contamination", "--data-dir", str(tmp_path),
                  "--go", "--undo", stamp]) == 2
+
+
+def test_the_owners_claims_and_edits_are_never_retired(store, clock, stained):
+    """Review 323 P3-2: a claim of source owner is his; a godmode implant that gives her kids
+    makes her kids hers."""
+    owned = add(store, 102, kind="fact", subject="children", polarity=0, embedding=pack_vec(unit(0)),
+                text="has two daughters aged five and eight", source="owner")
+    plan = C.plan(store.conn, human=1, now=clock.now())
+    assert ("claim", owned) not in {(i.kind, i.id) for i in plan.items}
+    store.insert_memory(make_mem(owner=102, kind="event", source="owner",
+                                 text="She has two daughters, five and eight",
+                                 evidence=("owner:godmode:3",)))
+    plan = C.plan(store.conn, human=1, now=clock.now())
+    kinds = {(i.kind, i.id) for i in plan.items}
+    assert ("claim", stained["c_kids"]) not in kinds and ("memory", stained["m_kids"]) not in kinds
+    assert ("claim", stained["c_echo"]) in kinds  # an echo is still his words
+
+
+def test_undo_leaves_a_lesson_the_lab_changed_since(store, clock, stained):
+    """Review 323 P3-5: a lesson vetoed or expired again after the run stays as the Lab left it."""
+    plan = C.plan(store.conn, human=1, now=clock.now())
+    with store.transaction():
+        C.apply(store.conn, plan, now=clock.now(), stamp="t2")
+        store.conn.execute("UPDATE talk_lesson SET expires=? WHERE id=1", (clock.now() - 5,))
+    with store.transaction():
+        done = C.undo(store.conn, "t2", now=clock.now())
+    assert done["lessons"] == 0
+    assert store.conn.execute("SELECT expires FROM talk_lesson WHERE id=1").fetchone()[0] == clock.now() - 5

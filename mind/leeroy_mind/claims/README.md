@@ -84,6 +84,10 @@ defended the inventions. Now:
   and the guard checks drafts against the persona itself (`persona_conflict`). The persona
   facts are deterministic and read from the stored persona; they are not `member_claim`
   rows (that table's sources stay `chat` and `owner`, and no migration is needed).
+- The owner's own edits of her life win everywhere above: her active `owner` memories
+  (godmode implants, his seeded history) and his godmode life events in force
+  (`personas.facts.owner_texts`) leave each topic they name unsettled, so a line, claim or
+  memory about it is never held against her.
 
 ### Retiring what already leaked
 
@@ -92,9 +96,10 @@ defended the inventions. Now:
 lock (the mind must be stopped), snapshots `mind.db` (`pre-clean-contamination`) and
 retires, never deletes:
 
-- live claims cited to a contaminated line (an echo of his line, a gender slip, a line
-  contradicting the persona, or the source of a claim that contradicts it) or themselves
-  contradicting the persona: `superseded_by` set to their own id, vector removed;
+- live chat claims (never `owner` ones) cited to a contaminated line (an echo of his line,
+  a gender slip, a line contradicting the persona, or the source of a claim that contradicts
+  it) or themselves contradicting the persona: `superseded_by` set to their own id, vector
+  removed;
 - disclosures whose `ref` is such a line: `ref` becomes `retired:<ref>`, `response` `none`;
 - active memories (never `owner`-sourced) whose text slips or contradicts the persona, or all
   of whose owner's own evidence lines are contaminated: status `archived`;
@@ -102,10 +107,12 @@ retires, never deletes:
 
 It writes one receipt, meta `personas:clean-contamination:<stamp>`, with every row's prior
 state; `--undo <stamp>` (same conditions, its own snapshot) puts each row back that is
-still as the run left it and marks the receipt undone. Trust already added for a retired
-disclosure is not taken back. Measured on a scratch copy of the live database (2026-11-15):
-17 contaminated lines (4 echoes, 4 slips, 9 persona); it would retire 4 claims, 1
-disclosure, 9 memories and 2 lessons.
+still as the run left it (a lesson only while it still carries this run's expiry, so one the
+Lab vetoed or expired since stays) and marks the receipt undone. Trust already added for a
+retired disclosure is not taken back. The persona's facts include the owner's own edits, and
+the slip and persona rules are the guard's. Measured on a scratch copy of the live database
+(2026-11-15): 14 contaminated lines (4 echoes, 4 slips, 6 persona); it would retire 4 claims,
+1 disclosure, 9 memories and 2 lessons.
 
 ## CLI and evaluation
 

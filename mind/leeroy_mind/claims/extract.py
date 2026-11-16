@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.llm import check_schema, schema
-from leeroy_mind.personas.facts import conflicts as persona_conflicts, facts_of
+from leeroy_mind.personas.facts import conflicts as persona_conflicts, facts_of, owner_texts
 from leeroy_mind.personas.screens import has_word, names_real_name, redact_real_name
 from leeroy_mind.text import META_RE, strip_wow_markup
 
@@ -144,7 +144,9 @@ def _facts(ctx, guid):
         persona = ctx.persona(guid)
     except (AttributeError, KeyError, ValueError):
         return None
-    return facts_of(persona) if persona is not None else None
+    # his own edits of her life (godmode implants and life events) win over the stored persona
+    return (facts_of(persona, owner=owner_texts(ctx.store.conn, guid)) if persona is not None
+            else None)
 
 
 async def extract(ctx, guid: int, lines: list[Line]) -> list[Candidate]:

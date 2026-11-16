@@ -53,6 +53,20 @@ MARRIED = facts_from(gender="female", household="Lives with her husband and a te
     ("she said her son is ill", []),  # about someone else
     ("my mum's cat hates me", []),
     ("you're single? lucky you", []),
+    # Review 323 P3-2: idioms, jokes, hypotheticals, people named in fun, the guild, game pets.
+    ("i'm not married to this spec", []),
+    ("i never married the idea", []),
+    ("i'm single lol jk", []),
+    ("i'd say i'm single if you asked my husband lol", []),
+    ("she's my wife now", []),
+    ("if i had kids my kids would play wow", []),
+    ("listen up my children", []),
+    ("my kids in this guild never listen", []),
+    ("i'm dad", []),
+    ("my cat form is bugged", []),
+    ("my kitty is dead lol", []),
+    ("my cat pulled the boss again", []),
+    ("our dog barked", []),
 ])
 def test_first_person_lines_that_contradict_her(text, codes):
     assert conflicts(text, MARRIED) == codes
@@ -95,3 +109,53 @@ def test_pronouns_and_the_stored_json_agree():
     assert pronoun_pair("female") == "she/her" and pronoun_of(None) == ""
     assert facts_of(p) == facts_of_json(persona_to_dict(p))
     assert facts_of_json({}) == facts_from()
+
+
+def test_his_own_edits_of_her_life_leave_their_topics_unsettled():
+    """Review 323 P3-2: godmode implants and life events (owner_texts) win over the stored
+    persona: a topic one names is never held against her."""
+    f = facts_from(household="Lives with her husband in a flat",
+                   owner=("Zan helped her adopt a kitten", "she split up with her husband",
+                          "she is pregnant", "she moved to London", "she lost her job"))
+    for text in ("my cat is asleep", "i'm single now", "my kids", "here in the uk", "i'm unemployed"):
+        assert conflicts(text, f) == [], text
+    assert conflicts("my wife says hi", facts_from(household="Lives with her husband",
+                                                   owner=("Zan helped her adopt a kitten",))) == [
+        "partner"]  # an edit settles only what it names
+
+
+def test_owner_texts_reads_his_implants_and_life_events(store):
+    import json
+    from conftest import make_mem, seed_test_cast
+    from leeroy_mind.personas.facts import owner_texts
+    seed_test_cast(store)
+    store.insert_memory(make_mem(owner=101, source="owner", text="adopted a kitten"))
+    store.insert_memory(make_mem(owner=101, source="extract", text="not his"))
+    store.insert_memory(make_mem(owner=102, source="owner", text="someone else's"))
+    store.set_meta("tuning:edit:value:4", json.dumps(
+        {"id": 4, "kind": "life_event", "args": {"member": 101, "title": "a new job"}}))
+    store.set_meta("tuning:edit:value:5", json.dumps(
+        {"id": 5, "kind": "life_event", "retired": 9, "args": {"member": 101, "title": "gone"}}))
+    assert sorted(owner_texts(store.conn, 101)) == ["a new job", "adopted a kitten"]
+
+
+@pytest.mark.parametrize("text,codes", [
+    ("my cat would wreck the porch if she got out", ["pets"]),  # the "if" is not hers
+    ("worst sleep ever, my cat did that and i had to check raids on my phone", ["pets"]),
+    ("my daughter asked about my raids", ["kids"]),
+    ("if i had a husband he'd raid with us", []),
+])
+def test_the_exemptions_stay_narrow(text, codes):
+    """Review 323 re-measure: a passing "if" or raid word in a sentence never hides her own
+    invented cat or daughter."""
+    petless = facts_from(household="Lives with her husband in a flat")
+    assert conflicts(text, petless) == codes
+
+
+def test_the_games_words_in_his_edits_settle_nothing():
+    f = facts_from(household="Lives with her husband in a flat",
+                   owner=("Children's Week 2009, we escorted an orphan", "the boss moved mid-pull",
+                          "First UK meet-up at the pub"))
+    assert conflicts("my two kids", f) == ["kids"]
+    assert conflicts("i'm unemployed", facts_from(household="flat", job="nurse",
+                                                  owner=("the boss moved",))) == ["job"]

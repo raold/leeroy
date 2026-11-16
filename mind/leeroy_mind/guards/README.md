@@ -109,32 +109,53 @@ question into its answer ("Are the flasks ready?" / "The flasks are ready.") is 
 Widened (identity audit, 2026-11-15) with the thresholds otherwise unchanged: a run of
 8 words copied across his sentences (a question among them) is an echo, and so is her
 line opening with his first 5 words or more when the copy carries past the end of his
-first sentence ("are you sure? its kinda..."). A run inside one question of his is still
-an answer, and so is his short first sentence said back alone ("you drive me wild" /
-"you drive me wild too"). On 2,063 stored replies that follow his line in their
-conversation it flags exactly the 4 known echoes (the 3 above and the cross-sentence copy
-that passed the first version).
+first sentence and that first sentence has 3 words or more ("are you sure? its
+kinda..."). A run inside one question of his is still an answer, and so is his short first
+sentence said back alone ("you drive me wild" / "you drive me wild too") or after a short
+interjection ("haha. you drive me wild" / "haha you drive me wild too"). Words he asked
+for are the answer, never an echo ("repeat after me...", "now say it:"; never "i'd say
+that's fair"). On 2,063 stored replies that follow his line in their conversation it
+flags exactly the 4 known echoes (the 3 above and the cross-sentence copy that passed the
+first version).
 
 ## Identity (identity audit, 2026-11-15)
 
 `self_male_slip` (a woman's draft) and `self_female_slip` (a man's) are rewrite codes
 for a member speaking with the other sex's body or role in the first person (`identity.py`:
-"my" plus anatomy, "i'm (not) some nice gentleman", "as a guy, i", "bury myself in you";
-the mirror list for men). Her words about him and a bare correction ("i'm not a guy lol")
-never count. Like `echo_parent` they are in `HARD_CODES`: never sent and never chosen as an
-owed answer's fallback. The retry is told in words ("you are a woman, so say it as
-yourself"). When an owed answer's retry slips too, the pipeline sends the last draft cut
-short of every sentence that slipped (at least 3 words, reviewed again with nothing hard
-left), else drops it (`guard_identity`). An unowed line that slips twice is dropped.
-On the stored history the lists flag the 5 known slips and nothing else.
+"my" plus anatomy, "i'm a real gentleman", "i'm not some nice gentleman", "as a guy, i",
+"bury myself in you", a first-person "i'll ... in you"; the mirror list for men). Never
+counted: her words about him, a bare correction ("i'm not a guy lol"), self-mockery and
+idioms ("i'm such a dad", "a dad joke", "i'm your man for the job", "i'm not some guy",
+"i'm such a mom", "a mom friend"), quoted words, and a sentence reporting what someone said
+("he said i'm a real man"). Like `echo_parent` they are in `HARD_CODES`: never sent and
+never chosen as an owed answer's fallback.
+
+A draft with a hard code is never the turn the model goes on from: its retry is the composed
+prompt with what was wrong said at the end of the instruction (`review.fresh_hint`), never
+the draft as an assistant turn (the audit: the model reads the last text and continues it).
+Owed answers never vanish (owner, 2026-11-15: every message from him gets a reply): when
+every draft had a hard problem, the pipeline sends the longest clean part of any draft that
+slipped (each slipping sentence left out, at least 3 words, a tie to the earlier draft,
+reviewed again with nothing hard left), else makes one fresh generation the same way and
+sends it if nothing hard remains, and only then drops (`guard_identity` after a slip,
+`guard_echo` after echoes). An unowed line that slips twice is dropped. On the stored
+history the lists flag the 5 known slips and nothing else.
 
 `persona_conflict` is a rewrite code for a first-person line contradicting the speaker's
 own persona (`personas.facts`: who she lives with, her kids, her pets, her job, her
-country; "i'm single" from a married member, "my dog" from a cat owner). The persona also
-outranks stored chat claims: a `claim_conflict` whose claim itself contradicts the persona
-(an echo or an invention stored as hers) is ignored. On the stored history it flags the 9
-known inventions (pets, a son, an echoed "single, no kids") and nothing else. The persona
-row is read with the role, in the same statement.
+country; "i'm single" from a married member, "my dog" from a cat owner). Never counted:
+idioms ("not married to this spec"), jokes ("lol jk"), a hedge ("i'd say"), what follows
+"if i ...", someone named in fun ("she's my wife now", "listen up my children", "my kids in
+this guild"), a pet in the game ("my cat form", "my cat pulled the boss"; "kitty" is never
+read as a pet). The owner's own edits of her life win: when the persona is about to hold
+something against her, the guard reads her active `owner` memories (godmode implants, his
+seeded history) and his godmode life events in force (`facts.owner_texts`), and a topic one
+names (a partner, kids, pets, where she lives, her job) is never held against her. The
+persona also outranks stored chat claims: a `claim_conflict` whose claim itself contradicts
+the persona (an echo or an invention stored as hers) is ignored. On the stored history it
+flags 6 lines, all inventions (pets, a son, an echoed "single, no kids"); one member's "my
+dog" lines are not flagged because the owner's seeded history gives her a dog. The persona
+row is read with the role, in the same statement; the owner's edits only on a conflict.
 
 A rewrite takes priority over drop, which takes priority over react. The optional
 `await judge_relevance(reasoner, stores, draft)` is a separate model call that may
