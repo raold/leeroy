@@ -7,10 +7,11 @@ phrase; no member's, his or a nickname's name; no capitalised proper noun) is on
 used in 2 or more of her earlier lines in this conversation, or in one when it holds a stock
 entry (`phrase_conversation`), one she used in 2 or more of her lines in the last 24 h
 (`phrase_day`), or one 3 or more other members used in the last 48 h (`phrase_cast`, 3+
-words). The conversation's subject is never her tic (owner's live DM test, 2026-11-16: "in
-greece" and "greek food" in a talk about his villa in Greece): the content words he and other
-members wrote in this conversation in the last 3 h (each speaker's newest 10 lines), folded so
-"greece"/"greek" and "hard"/"harder" are one word (`_subject`, `_same_word`). A phrase whose
+words). The conversation's subject is never her tic (owner's live DM test, 2026-11-16: the
+place and the plans he was writing about, said back, were flagged as her tic): the content words
+he and other members wrote in this conversation in the last 3 h (each speaker's newest 10
+lines), folded so "norway"/"norwegian" and "fast"/"faster" are one word (`_subject`,
+`_same_word`). A phrase whose
 every content word is in the subject is its topic, for every rule here; a stock entry only when
 its content words are his ("thinking about you" said back to his: other members saying it is the
 cast's sameness the stock ration is for). A two-word phrase is no candidate when either word is
@@ -316,8 +317,8 @@ def _subject(rows, guid, key, now):
 
 def _same_word(a, b):
     """Two folded words as one for the subject: equal, or (both 4+ letters) sharing a prefix of
-    at least 4 letters and all but 2 letters of the shorter ("greece"/"greek", "hard"/"harder",
-    "thinking"/"think")."""
+    at least 4 letters and all but 2 letters of the shorter ("norway"/"norwegian",
+    "fast"/"faster", "thinking"/"think")."""
     if a == b:
         return True
     if len(a) < 4 or len(b) < 4:
@@ -387,9 +388,9 @@ def check(reader, draft, now: float) -> Found:
     cast = [r for r in rows if r['from_guid'] != draft.guid and r['origin'] == 'mind']
     hits = {code: [] for code in CODES}
     key = _key(raw_channel(draft), draft.guid, draft.to_guid)
-    # The conversation's subject is everyone's (owner's live DM test, 2026-11-16: "in greece"
-    # and "greek food" in a talk about his villa in Greece were flagged as her tic): a phrase
-    # whose every content word he or another member used in this conversation is its topic.
+    # The conversation's subject is everyone's (owner's live DM test, 2026-11-16: the place he
+    # was writing about, said back, was flagged as her tic): a phrase whose every content word
+    # he or another member used in this conversation is its topic.
     subject, his = _subject(rows, draft.guid, key, now)
     if phrases:
         talk, _ = _conversation(own, key, now)

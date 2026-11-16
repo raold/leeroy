@@ -390,9 +390,8 @@ def test_another_problem_on_the_retry_keeps_the_old_rule(rig, monkeypatch):
 
 
 # -- the conversation's subject (owner's live DM test, 2026-11-16) -------------------------------
-# A sandbox replay of his DM session had every answer rewritten: "in greece" and "greek food" in a
-# talk about his villa in Greece, his own words said back. Each rule on a guild line, his whisper
-# and his DM alike.
+# A sandbox replay of his DM session had every answer rewritten, four of them for the place and
+# plans he was writing about, said back. Each rule on a guild line, his whisper and his DM alike.
 
 ROOMS = [('guild', 0, 0, dict(channel='guild')),
          ('whisper', 1, 101, dict(channel='whisper', to_guid=1)),
@@ -448,8 +447,8 @@ def test_his_own_stock_words_said_back_are_no_stock_tic(store, channel, her_to, 
 
 
 def test_the_subject_folds_simple_inflections():
-    assert phrases._same_word('greece', 'greek') and phrases._same_word('hard', 'harder')
+    assert phrases._same_word('norway', 'norwegian') and phrases._same_word('fast', 'faster')
     assert phrases._same_word('thinking', 'think') and not phrases._same_word('food', 'fool')
     assert not phrases._same_word('run', 'running')  # under four letters: only itself
-    assert phrases._topic(('in', 'greek', 'food'), frozenset({'greece', 'foods'}))
-    assert not phrases._topic(('greek', 'salad'), frozenset({'greece'}))
+    assert phrases._topic(('in', 'norwegian', 'waffles'), frozenset({'norway', 'waffle'}))
+    assert not phrases._topic(('norwegian', 'salmon'), frozenset({'norway'}))

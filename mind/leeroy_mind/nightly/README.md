@@ -92,7 +92,7 @@ from their 8 adoption slots are not reactivated.
 ## Relationship notes (`personas clean-notes`, 2026-11-16)
 
 The `notes` stage had already written sentences from those copies into `relationship.notes`
-("I picked up 'get', 'still' and 'this' from him"; "so I can hear him say 'want' to me"), which
+("I picked up '<word>' and '<word>' from him"; "... hear him say '<word>' to me"), which
 every prompt with the other end in the talk shows. Since then the stage neither reads a slang
 copy whose word is everyday (`relations._everyday_slang`, notes evidence and pins) nor keeps such
 a sentence in what the model writes (`personas/clean_notes.strip`: a sentence citing an

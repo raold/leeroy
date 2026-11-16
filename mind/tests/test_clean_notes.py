@@ -11,7 +11,7 @@ from leeroy_mind.__main__ import main
 from leeroy_mind.personas import clean_notes as N
 from leeroy_mind.storage.rows import Relationship
 
-JUNK_PICKED = "I picked up 'still', 'only', and 'this' from him on the ferry."
+JUNK_PICKED = "I picked up 'maybe', 'only', and 'there' from him on the ferry."
 JUNK_SAID = "I want the lantern night to end so I can hear him say 'yes' to me."
 KEPT = "He fixed my paper kite twice."
 SLANG = "I picked up 'zugzug' from them at the docks."
@@ -29,12 +29,12 @@ def test_strip_takes_out_only_the_junk_sentences(note, removed):
     if not removed:
         assert kept == note
     else:
-        assert "picked up 'still'" not in kept and "say 'yes' to me" not in kept
+        assert "picked up 'maybe'" not in kept and "say 'yes' to me" not in kept
         assert (KEPT in kept) is (KEPT in note)
 
 
 def test_a_mixed_list_counts_as_junk_when_any_word_is_everyday():
-    assert N.junk("I picked up 'zugzug' and 'still' from them.")
+    assert N.junk("I picked up 'zugzug' and 'maybe' from them.")
     assert not N.junk("I picked up 'zugzug' and 'kekw' from them.")
 
 

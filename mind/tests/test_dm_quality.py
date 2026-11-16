@@ -282,7 +282,7 @@ def test_topic_words_are_content_words_only():
                  "really", "want", "this", "they", "telling", "thinking", "saying", "wanted",
                  "getting", "making"):
         assert not moves.topic_word(word), word
-    for word in ("glider", "lantern", "fishing", "blizzcon", "festival", "cooking", "gliders"):
+    for word in ("glider", "lantern", "fishing", "kayaking", "festival", "cooking", "gliders"):
         assert moves.topic_word(word), word
 
 

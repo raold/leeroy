@@ -209,11 +209,11 @@ name too) and no capitalised proper noun. Words are folded first: case, apostrop
 other abbreviations, so stored (styled) lines and the plain draft compare. Item placeholders,
 bracketed names, URLs and mentions break a phrase. The conversation's subject is never her
 tic (owner's live DM test, 2026-11-16: a sandbox replay of his DM session had all 6 answers
-rewritten, "in greece" and "greek food" in a talk about his villa in Greece among them): the
+rewritten, four of them for the place and plans he was writing about, said back): the
 subject is the content words (outside `STOP`) he and other members wrote in this conversation
 in the last 3 hours, each speaker's newest 10 lines, with simple inflections folded (two words
 of 4+ letters sharing a prefix of 4 letters and all but 2 letters of the shorter:
-"greece"/"greek", "hard"/"harder"). A phrase whose every content word is in the subject is its
+"norway"/"norwegian", "fast"/"faster"). A phrase whose every content word is in the subject is its
 topic for all three phrase rules; a two-word phrase is no candidate when either word is; a
 stock entry is skipped only when its content words are his (his "thinking about you" said
 back), since the cast saying it is what the stock ration is for.

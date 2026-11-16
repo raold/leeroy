@@ -4,9 +4,9 @@ live DM test, 2026-11-16).
 Until the slang filter (talk/everyday.py, #320) the slang stage promoted everyday words and gave
 their holders "Picked up 'X' from Y." memories; the night's notes writer (nightly/relations.py)
 then wrote sentences from them into `relationship.notes`, which every prompt with the other end
-in the talk shows: a note that she "picked up 'get', 'still' and 'this' from him", or that she
-wants "to hear him say 'want' to me". `lexicon clean-junk` archived the memories; the notes kept
-the sentences.
+in the talk shows: a note that she "picked up '<word>', '<word>' and '<word>' from him", or
+that she wants "to hear him say '<word>' to me", each <word> an everyday one. `lexicon
+clean-junk` archived the memories; the notes kept the sentences.
 
 `strip` takes out of a note each sentence that cites an everyday word (talk.everyday's
 everyday_reason, "common" or "typo") as picked up ("picked up 'X'", a list of quoted words
