@@ -522,7 +522,9 @@ def plan_replies(text: str, *, channel: str, to_guid: int, weights: dict[int, fl
     members with a real reason (see has_reason) and are drawn first; `allowed` is the raid
     gate, e.g. lambda g: raid.allows(g, TurnKind.REPLY_HUMAN, now). A whisper is answered by
     the one he whispered, `whisper_p` of the time (whisper_reply_p). Any other line gets at
-    least one answer while anyone can give it: when every weight is zero, one of them. A line that names one
+    least one answer while anyone can give it (the engine weighs again with recent speech
+    ignored when every weight is zero, so a member dialled to talkative 0 still never answers
+    unnamed). A line that names one
     member and speaks to no one else is answered by that member alone (aimed_at_one); the
     members it names answer first in any other.
     `target`: the member his pushback is aimed at (Pushback.target, fix wave G6). They answer
@@ -550,12 +552,7 @@ def plan_replies(text: str, *, channel: str, to_guid: int, weights: dict[int, fl
         n = 2 + (rng.random() >= 0.5)
     n = max(n, len(called))
     rest = {g: w for g, w in weights.items() if g not in called and g not in afk}
-    out = called + pick_speakers(rest, n - len(called), rng, reasons)
-    if not out and rest:
-        # everyone who could answer spoke in the last minute (a zero weight): one answers anyway,
-        # since every line of his gets an answer (owner, 2026-11-15; talk/owed.py)
-        out = [rng.choice(sorted(rest))]
-    return out
+    return called + pick_speakers(rest, n - len(called), rng, reasons)
 
 
 def plan_reply_turns(text: str, *, channel: str, to_guid: int, weights: dict[int, float],

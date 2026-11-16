@@ -288,19 +288,23 @@ full rule); no switch, no migration, no native rebuild.
   its hard screens (`OWED_HARD_TELLS`) also refuse other people's lines, a list, an *action* and a
   copied sample line, and a refused or silent fallback is asked once more with what was wrong in
   words (`OWED_RETRY_HINT`, review-325-r2 P3-C). A turn whose model request failed or ran late
-  (`llm_error`, `expired`: `_generate` gives up before its fallback) asks `owed_fallback` with the
-  owed deadline (`owed.rescue_text`, log `owed_rescue_line`). An owed turn that still ends with
-  nothing is the watchdog's.
+  (`llm_error`, `expired`) sends its late draft when it passes the hard screens
+  (`owed_late_draft_sent`), else asks `owed_fallback` under the owed deadline
+  (`owed.rescue_text`, log `owed_rescue_line`). An owed turn that still ends with nothing is
+  the watchdog's. **There is no canned line** (review-327 P2-1): the only words ever sent are a
+  draft of the member's that passed the hard screens.
 - **The watchdog** (ticked by the app): a message still unanswered 45 s (whisper, voice), 60 s
-  (game channels) or 150 s (Discord) after it, with nothing in flight, gets a rescue turn (at most
-  two, 90 s apart): `owed_rescue reason=not_planned|dropped:<reason>|no_answer`. A rescue turn
-  (`TurnMeta.owed_rescue`) is the guarantee: when even `owed_fallback` finds nothing (or the guard
-  review refuses everything, or the styling leaves nothing), it sends `fallback_line`, a short
-  reaction to his message that asks something back, never his words (`say_owed_last_resort`).
-  Messages older than 15 min (game) or 30 min (Discord) are let go (`owed_given_up reason=too_old`).
+  (game channels) or 150 s (Discord) after it, with nothing in flight, gets a rescue turn
+  (`owed_rescue reason=not_planned|dropped:<reason>|no_answer`): a real generation (its member
+  weighed with recent speech ignored, so the dials still apply; `no_speaker` holds when nobody
+  present speaks at all). A rescue that finds no clean draft holds the message
+  (`owed_held reason=no_clean_draft`) and tries again on a backoff (90 s, doubling to 15 min),
+  and at once when the live model is back. A held message is never given up for its age; only
+  `nobody_present`, `target_offline` (she logged out) and his goodbye after he logged out
+  (`goodbye`) end one.
 - **Held, then answered just after** (`owed_held reason=`): his raid's boss fight and wipe silence
-  (`raid`; `dead` for a /say nobody alive can answer yet), a Free GPU pause (`gpu_paused`), the
-  live model away (`model_away`: the app refuses every line then), the
+  (`raid`, Discord answers too; `dead` for a /say nobody alive can answer yet), a Free GPU pause
+  (`gpu_paused`), the live model away (`model_away`: the app refuses every line then), the
   whispered member AFK (`afk`), him offline for a game line (`human_offline`), a DM she answers on
   her own time (`own_time`), a group DM's pacing (`group_pacing`), a selfie request still being
   made (`photo_request`), his voice note still being transcribed (`voice_note`).
@@ -308,9 +312,11 @@ full rule); no switch, no migration, no native rebuild.
   burst already) and DBM/BigWigs/AFK auto-whispers; a line nobody with a persona can hear (an
   empty voice room, a whisper to someone offline or outside the cast: `owed_given_up
   reason=nobody_present|target_offline`); game lines from before a mind restart.
-- **His talk first.** With every line of his answered, a whisper or opener that starts a
-  conversation with him waits while an answer to him is still on its way, and is dropped
-  (`his_talk`) when he spoke or was answered after it was planned (ruling 2, `AFTER_BURST_S`).
+- **His talk first** (review-327 P2-2). A whisper or opener that starts a conversation with him
+  (`TurnMeta.initiates`) waits once, up to 2 min, while answers to him are on their way, and is
+  dropped `his_talk` only when he spoke after it was planned (`TurnMeta.planned_at`) and an
+  answer to him is still in flight. After-kill and loot whispers (`KEEP_WHISPERS`) are never
+  dropped for this.
 - **Several answers to him at once** (owner, 2026-11-16: "allow longer periods of gpu usage if
   chatting with multiple bots at the same time"). An owed answer's deadline is its base (90 s
   game, 300 s Discord) times the answers to him in flight (`owed.answers_in_flight`: the turn
@@ -321,7 +327,7 @@ full rule); no switch, no migration, no native rebuild.
   those cuts an owed answer short; the per-request client timeout (60 s) stays. The `[ollama]
   max_inflight` slots (3) are unchanged: the extra answers wait their turn with the longer
   deadline. The Discord lease is kept while answers to him on Discord are in flight
-  (`discord_lease_kept`, checked every 30 s past its 10-min idle end), so the live model stays
-  pinned; his login lease pins it already. The night and the offline raid leases are untouched.
+  (`discord_lease_kept`, checked every 30 s past its 10-min idle end, 15 min at most), so the
+  live model stays pinned; his login lease pins it already. The night and the offline raid leases are untouched.
 - **Health:** `owner-replies` counts his messages of the last 24 h with no member answer within
   5 minutes, by medium (a note from one, a FAIL from 10); counts only, never text.

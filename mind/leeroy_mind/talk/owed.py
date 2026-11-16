@@ -25,20 +25,25 @@ Three layers, cheapest first:
 3. The watchdog (OwedWatch, ticked by the app every second, working every TICK_S): a message of
    his still unanswered GRACE_S after it, with no answer to it in flight, gets a rescue turn,
    logged `owed_rescue` with a reason code: from the member a whisper or DM went to, else a
-   member present where he said it (one he named first, then the reply draw). A rescue turn
-   (TurnMeta.owed_rescue) is the guarantee: where even owed_fallback finds nothing, its answer
-   is a short line built from his message (fallback_line: never empty, never emoji alone, never
-   his words said back, a reaction plus a question back), also in the guard review and when the
-   styling leaves nothing. At most RESCUE_TRIES rescues a message, RETRY_S apart; a message
-   older than MAX_AGE_S is let go (`owed_given_up`).
+   member present where he said it (one he named first, then the reply draw, with recent speech
+   ignored so the dials still apply). A rescue turn (TurnMeta.owed_rescue) is a real
+   generation like any other: its best draft that passed the hard screens goes out; there is
+   no canned line (review-327 P2-1: "ha, morning. then what happened?" to "my dog died this
+   morning" is worse than silence). With no clean draft (the model down, timeouts, every
+   draft hard-refused) the message is held (`owed_held reason=no_clean_draft`) and the rescue
+   is tried again on a backoff (RETRY_S, doubling to RETRY_MAX_S) and at once when the live
+   model is back (model_ready). A held message is never given up for its age: only a message
+   nobody with a persona can hear ends (`owed_given_up reason=nobody_present|target_offline`),
+   and a goodbye once he has logged out (`goodbye`).
 
 Deliberate silences are held, never dropped: the watchdog waits and answers just after them,
 logging `owed_held` once per reason: his raid's boss fight and wipe silence (RaidState.allows),
 a /say whose hearers are all dead, a Free GPU pause, the live model away (the app's silent
-latch: every line is refused then, MindApp._send), his whisper's member being AFK, him being
-offline in game (for a game line), a DM she answers on her own time ([talk] dm_own_time) or a
-group DM's own pacing, a selfie request still being made and his voice note still being
-transcribed.
+latch: every line is refused then, MindApp._send), his whisper's member being AFK (answered
+when she is back, however long), him being offline in game (for a game line), a DM she
+answers on her own time ([talk] dm_own_time) or a group DM's own pacing, a selfie request
+still being made, his voice note still being transcribed, and no member present who speaks at
+all (`no_speaker`: everyone dialled to talkative 0).
 
 Not owed, by design: his bot commands and raid orders (app.his_command, the raid lead's
 claims), emotes, addon pastes (Recount, RBS, DBM and the like: a paste burst has its own single
@@ -60,9 +65,13 @@ log = logging.getLogger("leeroy_mind.talk")
 GRACE_S = {"whisper": 45.0, "game": 60.0, "voice": 45.0, "discord": 150.0}
 TICK_S = 5.0
 START_GRACE_S = 60.0  # after the mind starts: the bridge, his session and the model settle
-RETRY_S = 90.0
-RESCUE_TRIES = 2
-MAX_AGE_S = {"game": 900.0, "discord": 1800.0}  # a boss fight can hold an answer ten minutes
+RETRY_S = 90.0  # between rescues of one message, doubling to RETRY_MAX_S while nothing comes
+RETRY_MAX_S = 900.0
+SCAN_S = 86400.0  # how far back his Discord posts are read for the watch
+# an initiation that waits for the answers to him in flight waits this long at most
+HIS_TALK_WAIT_S = 120.0
+# whispers set off by the game that his talk never drops (review-327 P2-2)
+KEEP_WHISPERS = ("whisper:after_kill", "whisper:evening")
 # Lines he sends this close together, before anyone answers, are one message to answer
 BURST_S = 90.0
 # An owed answer's deadline (after its delay): long enough for a cold model load or a night's
@@ -119,130 +128,35 @@ def answers_in_flight(pipe, discord: bool | None = None) -> int:
 
 def extend_owed_deadline(pipe, turn, meta, now: float) -> None:
     """Give an owed turn its deadline by the answers to him in flight (owed_deadline), never
-    shorter than the one it has; logs `owed_deadline_extended` with the count when more than
-    one answer shares the model."""
+    shorter than the one it has and never past its hard cap, the ceiling from its first
+    extension (meta.owed_cap: a later extension cannot run past it); logs
+    `owed_deadline_extended` with the count when more than one answer shares the model."""
+    from leeroy_mind.discord.transport import is_discord
+    if not meta.owed_cap:
+        meta.owed_cap = now + OWED_DEADLINE_CEILING_S["discord" if is_discord(turn.channel)
+                                                      else "game"]
     n = answers_in_flight(pipe)
     seconds = owed_deadline(turn.channel, n)
-    if now + seconds > turn.deadline:
-        turn.deadline = now + seconds
+    deadline = min(meta.owed_cap, now + seconds)
+    if deadline > turn.deadline:
+        turn.deadline = deadline
         if n > 1:
             log.info("owed_deadline_extended: guid=%d channel=%s in_flight=%d seconds=%d",
-                     turn.speaker, turn.channel, n, int(seconds))
+                     turn.speaker, turn.channel, n, int(deadline - now))
 
 
-# -- the fallback line -------------------------------------------------------------------------
-
-_TOKEN = re.compile(r"[a-z][a-z']*")
-_STOP = frozenset("""about after again also always another around been before being both but
-could does doing done each even ever from have having here into just keep know like little made
-make many more most much must never only other over really same should some still such than that
-their them then there these they thing think this those through very want wants wanna was were
-what when where which while will with would your youre you're tonight anyone good people time
-guys yeah okay nice thanks thank back lets let's gonna pretty maybe getting going something
-everyone everybody yall y'all fam love baby babe dont don't cant can't wont won't im i'm ive
-i've its it's thats that's whats what's hows how's whos who's honestly literally right well
-""".split())
-_SUMMON = re.compile(r"\b(?:come (?:here|to|find|over|meet)|meet (?:me|us|at|in)|get (?:here|over)"
-                     r"|on me\b|summon|port (?:to|me))", re.I)
-_THANKS = re.compile(r"\b(?:thanks|thank you|thx|ty|tyvm|appreciate)\b", re.I)
-_FRAMES = {
-    "greeting": ("hey {called}! good to see you, what are you up to?",
-                 "hi {called} :) how's your day going?",
-                 "heyy {called}, what's new with you?"),
-    "goodbye": ("night {called}, talk soon", "later {called}! get some rest",
-                "bye {called}, see you tomorrow?"),
-    "summon": ("omw {called}", "on my way, give me a sec", "coming! where exactly?"),
-    "thanks": ("anytime {called}", "of course, what else is going on?",
-               "no problem :) what's next?"),
-    "question_topic": ("{topic}... honestly not sure yet. what do you think?",
-                       "good question about {topic}, i'd have to think. why do you ask?",
-                       "hmm, {topic}? i'm torn. what's your take?"),
-    "question": ("hmm good question. what's your take?",
-                 "honestly not sure, what are you thinking?",
-                 "ooh i'd have to think about that one. you first?"),
-    "remark_topic": ("wait, {topic}? tell me more", "ha, {topic}. then what happened?",
-                     "{topic} huh? how'd that go?"),
-    "remark": ("ha, i hear you. how are you feeling about it?", "mm, tell me more?",
-               "fair. so what's next for you?"),
-}
-
-
-def topic_word(text: str, avoid=()) -> str:
-    """One word of his message to answer about: the longest that says something (four letters
-    or more, not a filler word, not a name in `avoid`), the first of the longest."""
-    banned = {a.casefold() for a in avoid if a}
-    words = [w.strip("'") for w in _TOKEN.findall(text.casefold())]
-    words = [w for w in words if len(w) >= 4 and w not in _STOP and w not in banned
-             and not re.search(r"(.)\1\1", w)]
-    return max(words, key=len) if words else ""
-
-
-def fallback_line(his: str, *, called: str, seed, avoid=()) -> str:
-    """A short answer to his message `his`, built from it alone: a greeting, goodbye, summons or
-    thanks gets its own kind of line, a question or a remark one about a word of his (topic_word,
-    never more of his words), and every line but a goodbye asks him something back. `seed` keeps
-    a turn's choice steady."""
-    from leeroy_mind.talk.select import classify_human_line
-    text = " ".join(his.split())
-    kind = classify_human_line(text) if text else "remark"
-    if _THANKS.search(text):
-        kind = "thanks"
-    elif _SUMMON.search(text):
-        kind = "summon"
-    topic = topic_word(text, avoid=(called, *avoid))
-    if kind in ("question_all", "remark"):
-        base = "question" if kind == "question_all" else "remark"
-        kind = f"{base}_topic" if topic else base
-    rng = random.Random(f"owed:{seed}:{kind}")
-    return rng.choice(_FRAMES[kind]).format(called=called or "you", topic=topic)
-
-
-def his_words(pipe, turn, meta, composed) -> str:
-    """What he said that the turn answers: its trigger line, else his Discord post."""
-    if composed is not None and composed.answers:
-        return composed.answers[0]
-    target = getattr(meta, "discord", None)
-    if target is not None and target.reply_to:
-        row = pipe.store.conn.execute("SELECT text FROM discord_message WHERE id = ?",
-                                      (target.reply_to,)).fetchone()
-        if row is not None:
-            return row[0]
-    if turn.trigger_line:
-        rows = pipe.store.chat_lines([turn.trigger_line])
-        if rows:
-            return rows[0].text
-    return ""
-
-
-def fallback_for(pipe, turn, meta, composed=None) -> str:
-    his = his_words(pipe, turn, meta, composed)
-    names = [m.name for m in pipe.world.members.values()]
-    return fallback_line(his, called=pipe.human.called, seed=meta.turn_id, avoid=names)
-
-
-def fallback_lines(pipe, turn, meta, p, *, close: bool, reason: str, composed=None) -> list:
-    """The fallback line styled as the member types, for the watchdog's rescue turn whose drafts
-    are all gone (the guard review refused them, or the styling left nothing); [] for any other
-    turn, which drops and is the watchdog's to answer."""
-    if not meta.owed_rescue or not owes_him(pipe, turn, meta):
-        return []
-    from dataclasses import replace
-    from leeroy_mind.talk.items import defuse
-    text = fallback_for(pipe, turn, meta, composed)
-    lines = pipe._style(turn, p, text, close=close, two_lines=False, romance=meta.romance)
-    lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
-    if lines:
-        meta.owed_rescued = reason
-        log.info("owed_rescue_line: guid=%d kind=%s channel=%s reason=%s how=fallback",
-                 turn.speaker, turn.kind, turn.channel, reason)
-    return lines
+def his_talk_after(pipe, meta) -> bool:
+    """He spoke after this initiation was planned (TurnMeta.planned_at)."""
+    hg = pipe.human.guid
+    return bool(hg) and pipe.world.last_spoke.get(hg, -float("inf")) > meta.planned_at
 
 
 async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
                       spoken: bool = False) -> tuple[str, str | None]:
-    """An owed answer whose model request failed or ran late (RESCUABLE): Pipeline.owed_fallback
-    once, with the owed deadline. Its words, or the drop as it was (the watchdog answers later;
-    its own rescue turn ends in a line built from his message)."""
+    """An owed answer whose model request failed or ran late (RESCUABLE): a draft that arrived
+    after its deadline is sent when it passes the hard screens (review-327 P3-2), else
+    Pipeline.owed_fallback once, under the owed deadline. Its words, or the drop as it was
+    (the watchdog answers later)."""
     if why not in RESCUABLE or meta.owed_rescued or not owes_him(pipe, turn, meta):
         return rejected, why
     from leeroy_mind.talk.pipeline import _scope_valid
@@ -250,7 +164,13 @@ async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
     extend_owed_deadline(pipe, turn, meta, pipe.clock.now())
     if meta.borrow_credit is not None:
         pipe._mark_borrow(meta, reset=True)
-    text = await pipe.owed_fallback(turn, meta, composed, spoken=spoken)
+    text = None
+    if why == "expired" and rejected:
+        text, refused = pipe.owed_clean_draft(turn, meta, composed, rejected)
+        if text:
+            log.info("owed_late_draft_sent: guid=%d kind=%s", turn.speaker, turn.kind)
+    if text is None:
+        text = await pipe.owed_fallback(turn, meta, composed, spoken=spoken)
     if not _scope_valid(meta):
         return text or rejected, "scope_changed"
     watch = getattr(pipe, "owed", None)
@@ -277,6 +197,7 @@ class Owed:
     rows: list = field(default_factory=list)  # the game's ChatLineRows, as `ids`
     rescues: int = 0
     rescued_at: float = -float("inf")
+    retry_s: float = RETRY_S  # the gap before the next rescue, doubling while nothing comes
     tried: set[int] = field(default_factory=set)
     held: str = ""
 
@@ -304,6 +225,7 @@ class OwedWatch:
         self._done: dict[int, None] = {}  # Discord posts answered, rescued out or let go
         self._started = app.clock.now()
         self._at = -float("inf")
+        self._was_away = False  # the live model's latch last tick: back means retry at once
 
     # -- what he said --------------------------------------------------------------------------
 
@@ -332,6 +254,11 @@ class OwedWatch:
         self._at = now
         if now - self._started < START_GRACE_S:
             return
+        away = self.model_away()
+        if self._was_away and not away:  # the model answers again: every held message, now
+            for o in (*self._game.values(), *self._discord.values()):
+                o.retry_s, o.rescued_at = RETRY_S, -float("inf")
+        self._was_away = away
         try:
             self._tick_game(now)
         except Exception:
@@ -350,7 +277,7 @@ class OwedWatch:
         every line would be refused `model_away`: a deliberate silence, waited out."""
         return getattr(self.app, "model_ready", True) is False
 
-    def _hold(self, o: Owed, key, reason: str) -> None:
+    def _hold(self, o: Owed, key, reason: str) -> None:  # `key` is unused: the log names the line
         if o.held != reason:
             o.held = reason
             log.info("owed_held: medium=%s channel=%s line=%d reason=%s", o.medium,
@@ -388,8 +315,20 @@ class OwedWatch:
             return True
         o.ids, o.rows = [i for i, _ in keep], [r for _, r in keep]
         o.first, o.rescues, o.rescued_at, o.held = o.rows[0].ts, 0, -float("inf"), ""
+        o.retry_s = RETRY_S
         o.tried.clear()
         return False
+
+    def _unrewarded(self, o: Owed) -> None:
+        """A rescue ended with no clean draft: held, and the next one waits longer."""
+        if o.rescues and not o.held:
+            self._hold(o, None, "no_clean_draft")
+            o.retry_s = min(RETRY_MAX_S, o.retry_s * 2)
+
+    @staticmethod
+    def _goodbye(text: str) -> bool:
+        from leeroy_mind.talk.select import classify_human_line
+        return classify_human_line(text) == "goodbye"
 
     def _in_flight_game(self, o: Owed) -> bool:
         from leeroy_mind.talk.pipeline import REPLY_KINDS
@@ -409,17 +348,16 @@ class OwedWatch:
             if self._settle(o):
                 del self._game[key]
                 continue
-            if now - o.first > MAX_AGE_S["game"]:
-                self._give_up(o, "too_old")
-                del self._game[key]
-                continue
-            if now - o.last < GRACE_S[o.medium] or now - o.rescued_at < RETRY_S:
+            if now - o.last < GRACE_S[o.medium]:
                 continue
             if self._in_flight_game(o):
                 continue
-            if o.rescues >= RESCUE_TRIES:
-                self._give_up(o, "tries")
+            self._unrewarded(o)
+            if not eng.world.human_online and self._goodbye(o.rows[-1].text):
+                self._give_up(o, "goodbye")  # never answered at his relog (review-327 P3-4)
                 del self._game[key]
+                continue
+            if now - o.rescued_at < o.retry_s:
                 continue
             if self._paused() or self.model_away():
                 self._hold(o, key, "gpu_paused" if self._paused() else "model_away")
@@ -466,10 +404,15 @@ class OwedWatch:
         elif named:
             speaker = named[0]
         else:
+            # recent speech ignored (everyone may have just spoken), the dials still apply:
+            # a member at talkative 0 never answers unless he named her
             ctx = eng._context(now, topic_words([row.text]))
-            weights, pool = eng._weigh(fresh, last=hg, ctx=ctx, reply=True)
+            weights, pool = eng._weigh(fresh, last=hg, ctx=ctx, reply=True,
+                                       fresh=frozenset(fresh))
             picked = pick_speakers({g: v for g, v in weights.items() if v > 0}, 1, self.rng, pool)
-            speaker = picked[0] if picked else self.rng.choice(sorted(fresh))
+            if not picked:
+                return "no_speaker"
+            speaker = picked[0]
         channel = choose_channel(TurnKind.REPLY_HUMAN, speaker=speaker, world=w, raid=eng.raid,
                                  now=now, rng=eng.rng, reply_to=o.reply_to) or o.reply_to
         reason = self._reason(o)
@@ -508,7 +451,7 @@ class OwedWatch:
         rows = app.store.conn.execute(
             "SELECT id, channel, thread, ts FROM discord_message WHERE origin = 'human' AND "
             "author = ? AND deleted IS NULL AND ts >= ? ORDER BY id",
-            (hg, now - MAX_AGE_S["discord"] - GRACE_S["discord"])).fetchall()
+            (hg, now - SCAN_S)).fetchall()
         live: dict[str, Owed] = {}
         for mid, channel, thread, ts in rows:
             if mid in self._done:
@@ -528,19 +471,14 @@ class OwedWatch:
             if covered:
                 self._close(key, o, covered)
                 continue
-            if now - o.first > MAX_AGE_S["discord"]:
-                self._give_up(o, "too_old")
-                self._close(key, o, o.ids)
-                continue
-            if now - o.last < GRACE_S["discord"] or now - o.rescued_at < RETRY_S:
+            if now - o.last < GRACE_S["discord"]:
                 continue
             if self._in_flight_discord(o):
                 continue
-            if o.rescues >= RESCUE_TRIES:
-                self._give_up(o, "tries")
-                self._close(key, o, o.ids)
+            self._unrewarded(o)
+            if now - o.rescued_at < o.retry_s:
                 continue
-            hold = self._discord_hold(o)
+            hold = self._discord_hold(o, now)
             if hold:
                 self._hold(o, key, hold)
                 continue
@@ -594,12 +532,18 @@ class OwedWatch:
         tasks = getattr(requests, "_tasks", None) or {}
         return any(m in tasks for m in o.ids)
 
-    def _discord_hold(self, o: Owed) -> str:
-        """A deliberate wait: a Free GPU pause, her own time for a DM, a group DM's pacing."""
+    def _discord_hold(self, o: Owed, now: float) -> str:
+        """A deliberate wait: a Free GPU pause, the model away, his raid's fight (a Discord
+        answer is refused then too), her own time for a DM, a group DM's pacing."""
+        from leeroy_mind.talk.raid import RaidPhase
         if self._paused():
             return "gpu_paused"
         if self.model_away():
             return "model_away"
+        raid = getattr(self.app.engine, "raid", None)
+        if raid is not None and raid.phase(now) in (RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE,
+                                                    RaidPhase.WIPE_DEBRIEF):
+            return "raid"
         store = self.app.store
         if o.channel.startswith("dm:") and o.to:
             deferred = store.get_meta(f"discord:dm:deferred:{o.to}")

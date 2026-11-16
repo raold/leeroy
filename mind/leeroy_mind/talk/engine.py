@@ -317,6 +317,11 @@ class TalkEngine(EmoteReactions):
             return
         ctx = self._context(now, topic_words([row.text]), quest=is_quest_talk(row.text))
         weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True)
+        if cands and not any(weights.values()):
+            # everyone who could answer spoke in the last minute: weighed again with that
+            # ignored, so his line still gets its answer and the dials still apply (talk/owed.py)
+            weights, pool = self._weigh(cands, last=hg, ctx=ctx, reply=True,
+                                        fresh=frozenset(cands))
         names = {g: self.world.members[g].name for g in cands if g in self.world.members}
         push = self._pushback(row, reply_to, cands)
         planned = plan_reply_turns(row.text, channel=reply_to, to_guid=row.to_guid,

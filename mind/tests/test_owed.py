@@ -15,9 +15,9 @@ from engine_rig import engine_clock, make_rig, numbered
 from leeroy_mind import health
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.llm.client import LLMError
-from leeroy_mind.protocol import Boss, Chat, Group
+from leeroy_mind.protocol import Boss, Chat, Group, Login
 from leeroy_mind.talk import owed
-from leeroy_mind.talk.owed import OwedWatch, count_unanswered, fallback_line, topic_word
+from leeroy_mind.talk.owed import OwedWatch, count_unanswered
 from leeroy_mind.talk.turns import TurnKind
 
 HINT = "Answer what Zan just said"
@@ -37,43 +37,6 @@ def _shares_run(a, b, n=4):
     wa, wb = _words(a), _words(b)
     runs = {tuple(wb[i:i + n]) for i in range(len(wb) - n + 1)}
     return any(tuple(wa[i:i + n]) in runs for i in range(len(wa) - n + 1))
-
-
-# -- the fallback line -------------------------------------------------------------------------
-
-HIS = ["hey fam", "gn everyone, logging off", "come to brazen please", "thanks for the heals",
-       "what bg should we queue next?", "ate a bunch of ground beef and rice in a curry broth",
-       "thats it? oh :p?", "i love yall so much thank you for all you do",
-       "do you want to come over tonight?", "...", "", "<3"]
-
-
-@pytest.mark.parametrize("his", HIS)
-def test_the_fallback_line_is_never_empty_and_never_says_his_words_back(his):
-    for seed in range(20):
-        line = fallback_line(his, called="Zan", seed=seed)
-        assert line.strip() and any(c.isalpha() for c in line)
-        assert not _shares_run(line, his, 3), (his, line)
-
-
-def test_the_fallback_line_answers_by_the_kind_of_message_and_asks_back():
-    assert "omw" in fallback_line("come to brazen please", called="Zan", seed=1) or \
-        "way" in fallback_line("come to brazen please", called="Zan", seed=1) or \
-        "coming" in fallback_line("come to brazen please", called="Zan", seed=1)
-    bye = {fallback_line("gn everyone", called="Zan", seed=s) for s in range(30)}
-    assert all(not line.endswith("?") or "tomorrow" in line for line in bye)
-    for his in ("hey fam", "what bg should we queue next?",
-                "ate a bunch of ground beef and rice in a curry broth"):
-        assert all("?" in fallback_line(his, called="Zan", seed=s) for s in range(30)), his
-    assert "ground" in fallback_line("ate a bunch of ground beef and rice in a curry broth",
-                                     called="Zan", seed=3)
-    assert fallback_line("hey", called="Zan", seed=7) == fallback_line("hey", called="Zan", seed=7)
-
-
-def test_the_topic_word_skips_filler_names_and_stretched_words():
-    assert topic_word("ate a bunch of ground beef and rice in a curry broth") == "ground"
-    assert topic_word("belra you there?", avoid=["Belra"]) == ""
-    assert topic_word("so fulllllll right now") == ""
-    assert topic_word("honestly literally whatever") == "whatever"
 
 
 # -- inside the turn: Pipeline.owed_fallback, the one fallback (#325) ----------------------------
@@ -145,29 +108,40 @@ def _owed_rig(store, clock, tmp_path, script):
     return r, _watch(r)
 
 
-def test_a_model_that_keeps_failing_still_leaves_him_an_answer(store, clock, tmp_path):
+def test_a_model_that_keeps_failing_holds_the_message_until_it_answers_again(store, clock,
+                                                                             tmp_path, caplog):
     """Every request fails (a timeout): the turn drops (llm_error) after its owed fallback also
-    failed; the watchdog's rescue turn ends in the line built from his message."""
+    failed; the watchdog's rescue finds no clean draft either and holds the message
+    (`no_clean_draft`, review-327 P2-1: never a canned line), tries again on a backoff, and
+    answers once the model answers again. Nothing canned is ever sent."""
+    caplog.set_level(logging.INFO)
+    broken = [True]
+
     def script(model, messages):
-        raise LLMError("/api/chat: timed out")
+        if broken[0]:
+            raise LLMError("/api/chat: timed out")
+        return "ooh, warsong. i'm in"
 
     async def main():
         r, w = _owed_rig(store, clock, tmp_path, script)
         await _tick(r, w, owed.START_GRACE_S)
         await r.human("what bg should we queue next?", channel="whisper", to_guid=103)
-        await _tick(r, w, 30)
+        await _tick(r, w, 400)
         assert r.sent.says() == []
-        assert [u["dropped"] for u in r.utterances()] == ["llm_error"]
-        await _tick(r, w, 60)
+        assert any("owed_held" in m and "reason=no_clean_draft" in m for m in caplog.messages)
+        assert not any("owed_given_up" in m for m in caplog.messages)
+        rescues = [m for m in caplog.messages if "owed_rescue:" in m]
+        assert 1 <= len(rescues) <= 3  # a backoff, not a loop
+        broken[0] = False
+        await _tick(r, w, 2 * owed.RETRY_MAX_S)
         said = [s for s in r.sent.says() if s.guid == 103]
-        assert len(said) == 1 and "?" in said[0].text
+        assert len(said) == 1 and "warsong" in said[0].text
     run(main())
 
 
-def test_every_draft_echoing_him_still_ends_in_an_answer(store, clock, tmp_path, caplog):
-    """The model only ever says his words back: the turn drops, the rescue turn's own drafts and
-    fallbacks echo too, and its last resort is the line built from his message, never his
-    words."""
+def test_every_draft_echoing_him_is_held_never_his_words(store, clock, tmp_path, caplog):
+    """The model only ever says his words back: the turn drops, every rescue's drafts echo too,
+    and the message stays held; his words never go back to him and nothing canned stands in."""
     his = "i need you to tell me about your day at the office"
     caplog.set_level(logging.INFO)
 
@@ -175,25 +149,44 @@ def test_every_draft_echoing_him_still_ends_in_an_answer(store, clock, tmp_path,
         r, w = _owed_rig(store, clock, tmp_path, lambda m, msgs: his)
         await _tick(r, w, owed.START_GRACE_S)
         await r.human(his, channel="whisper", to_guid=104)
-        await _tick(r, w, 120)
-        said = [s.text for s in r.sent.says() if s.guid == 104]
-        assert len(said) == 1 and not _shares_run(said[0], his, 4)
-        assert any("say_owed_last_resort" in m for m in caplog.messages)
+        await _tick(r, w, 400)
+        assert r.sent.says() == []
+        assert any("owed_held" in m and "reason=no_clean_draft" in m for m in caplog.messages)
     run(main())
 
 
-def test_a_silent_guild_ends_in_one_answer(store, clock, tmp_path):
-    """The model only says (nothing): every answer drops; the watchdog's rescue turn answers
-    once, and only once."""
+def test_a_rescue_sends_its_best_clean_draft(store, clock, tmp_path, caplog):
+    """The planned answers all echo him; the rescue turn's own fallback gives a clean draft,
+    which is what goes out (never a template)."""
+    his = "i need you to tell me about your day at the office"
+    caplog.set_level(logging.INFO)
+    calls = [0]
+
+    def script(model, messages):
+        calls[0] += 1
+        return "it was long. the printer jammed twice. how was yours?" if calls[0] > 4 else his
+
+    async def main():
+        r, w = _owed_rig(store, clock, tmp_path, script)
+        await _tick(r, w, owed.START_GRACE_S)
+        await r.human(his, channel="whisper", to_guid=104)
+        await _tick(r, w, 200)
+        said = [s.text for s in r.sent.says() if s.guid == 104]
+        assert len(said) == 1 and "printer" in said[0] and not _shares_run(said[0], his, 4)
+        assert any("owed_rescue:" in m for m in caplog.messages)
+    run(main())
+
+
+def test_a_silent_guild_is_held_not_answered_with_a_template(store, clock, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+
     async def main():
         r, w = _owed_rig(store, clock, tmp_path, lambda m, msgs: "(nothing)")
         await _tick(r, w, owed.START_GRACE_S)
         await r.human("evening all, how is everyone?")
         await _tick(r, w, 300)
-        said = r.sent.says()
-        assert len(said) == 1
-        sent = r.store.conn.execute("SELECT why FROM utterance WHERE dropped IS NULL").fetchall()
-        assert [x[0] for x in sent] == ["reply:rescue"]
+        assert r.sent.says() == []
+        assert any("owed_held" in m and "reason=no_clean_draft" in m for m in caplog.messages)
     run(main())
 
 
@@ -360,11 +353,14 @@ def test_nothing_is_rescued_while_he_is_offline_or_the_gpu_is_paused(store, cloc
     run(main())
 
 
-def test_a_line_nobody_can_hear_is_let_go_and_an_old_one_too(store, clock, tmp_path, caplog):
+def test_a_line_nobody_can_hear_is_let_go_but_a_held_one_never_is(store, clock, tmp_path,
+                                                                   caplog):
+    """A whisper to someone offline is let go (`target_offline`); a held message is never given
+    up for its age (review-327 P3-3): a member AFK for half an hour is answered when back."""
     caplog.set_level(logging.INFO)
 
     async def main():
-        r = make_rig(store, clock, tmp_path, script=numbered("hm {n}"))
+        r = make_rig(store, clock, tmp_path, script=numbered("hm {n}, back now"))
         w = _watch(r)
         await _tick(r, w, owed.START_GRACE_S)
         r.world.online.discard(105)
@@ -373,13 +369,34 @@ def test_a_line_nobody_can_hear_is_let_go_and_an_old_one_too(store, clock, tmp_p
         assert any("owed_given_up" in m and "reason=target_offline" in m
                    for m in caplog.messages)
         assert r.sent.says() == [] and not w._game
-        # held the whole time (paused): let go once too old
-        gate = SimpleNamespace(paused=True)
-        w.app.scheduler = SimpleNamespace(gpu_gate=gate)
-        w.note_line(_line(r, "anyone up for a dungeon"), "guild")
-        await _tick(r, w, owed.MAX_AGE_S["game"] + 10)
-        assert any("owed_given_up" in m and "reason=too_old" in m for m in caplog.messages)
-        assert r.sent.says() == []
+        r.world.afk.add(103)
+        await r.human("you around?", channel="whisper", to_guid=103)
+        await _tick(r, w, 1800)
+        assert r.sent.says() == [] and not any("owed_given_up" in m and "reason=too_old" in m
+                                               for m in caplog.messages)
+        r.world.afk.discard(103)
+        await _tick(r, w, 120)
+        assert [(s.guid, s.channel) for s in r.sent.says()] == [(103, "whisper")]
+    run(main())
+
+
+def test_his_goodbye_is_not_answered_at_his_relog(store, clock, tmp_path, caplog):
+    """He says gn and logs out before the answer: nothing greets him with it when he relogs
+    (review-327 P3-4)."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("night {n}"))
+        w = _watch(r)
+        await _tick(r, w, owed.START_GRACE_S)
+        await r.human("gn all, logging off")
+        await r.engine.end_session()
+        r.world.human_online = False
+        await _tick(r, w, 120)
+        assert any("owed_given_up" in m and "reason=goodbye" in m for m in caplog.messages)
+        r.world.human_online = True
+        await _tick(r, w, 120)
+        assert r.sent.says() == [] and not w._game
     run(main())
 
 
@@ -504,3 +521,118 @@ def test_four_whispers_at_once_are_all_answered_on_a_slow_model(store, clock, tm
         assert not [u for u in r.utterances() if u["dropped"]]
         assert any("owed_deadline_extended" in m and "in_flight=4" in m for m in caplog.messages)
     run(main())
+
+
+def test_the_deadline_ceiling_is_hard(store, clock, tmp_path):
+    """A later extension (a rescue after an expiry) never runs past the ceiling counted from
+    the first extension (review-327 P3-1)."""
+    from leeroy_mind.talk.pipeline import TurnMeta
+    from leeroy_mind.talk.turns import Turn, TurnKind
+    r = make_rig(store, clock, tmp_path)
+    turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel="whisper", to_guid=1, addressee=1)
+    meta = TurnMeta("t", whisper_reply=True)
+    t0 = r.clock.now()
+    owed.extend_owed_deadline(r.engine, turn, meta, t0)
+    assert turn.deadline == t0 + 90 and meta.owed_cap == t0 + 600
+    owed.extend_owed_deadline(r.engine, turn, meta, t0 + 550)
+    assert turn.deadline == t0 + 600
+    owed.extend_owed_deadline(r.engine, turn, meta, t0 + 800)
+    assert turn.deadline == t0 + 600
+    r.close()
+
+
+def test_a_draft_that_arrives_after_its_deadline_is_sent_when_clean(store, clock, tmp_path,
+                                                                   caplog):
+    """The model answered late (review-327 P3-2): the late draft is screened and sent, not thrown
+    away for two more generations."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("sorry, was afk. yes {n}"))
+        chat = r.llm.chat
+
+        async def slow(*args, **kwargs):
+            await r.clock.sleep(100)  # past the 90 s an owed whisper answer gets alone
+            return await chat(*args, **kwargs)
+        r.llm.chat = slow
+        await r.human("you there?", channel="whisper", to_guid=102)
+        await r.advance(200, 2)
+        said = [s.text for s in r.sent.says() if s.guid == 102]
+        assert len(said) == 1 and "afk" in said[0]
+        assert len(r.chat_calls()) == 1
+        assert any("owed_late_draft_sent" in m for m in caplog.messages)
+    run(main())
+
+
+# -- his talk first (review-327 P2-2) ---------------------------------------------------------
+
+def _initiation(r, why, guid=102):
+    from leeroy_mind.talk.pipeline import TurnMeta
+    from leeroy_mind.talk.turns import Turn, TurnKind
+    turn = Turn(kind=TurnKind.WHISPER, speaker=guid, channel="whisper", to_guid=1, addressee=1,
+                instruction="Tell him what's on your mind.")
+    meta = TurnMeta(r.engine._new_id(), why=why, initiates=True)
+    return turn, meta
+
+
+def test_an_after_kill_whisper_still_goes_out_after_his_gg(store, clock, tmp_path):
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("that was clean {n}"))
+        await r.human("gg", channel="raid")
+        r.engine._queue([_initiation(r, "whisper:after_kill")])
+        await r.advance(60)
+        assert [s.guid for s in r.sent.says() if s.channel == "whisper"] == [102]
+        assert not [u for u in r.utterances() if u["dropped"] == "his_talk"]
+    run(main())
+
+
+def test_an_idle_whisper_planned_before_his_line_waits_then_goes_out(store, clock, tmp_path):
+    """Planned, then he speaks: it waits for the answers to him, then goes out."""
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("thinking of you {n}"))
+        chat = r.llm.chat
+
+        async def slow(*args, **kwargs):
+            await r.clock.sleep(10)
+            return await chat(*args, **kwargs)
+        r.llm.chat = slow
+        turn, meta = _initiation(r, "whisper:idle", guid=103)
+        turn.delay = 5.0
+        r.engine._queue([(turn, meta)])
+        await r.advance(1)
+        await r.human("anyone up for voa?")  # answers to him now in flight
+        await r.advance(120, 2)
+        whispers = [s for s in r.sent.says() if s.channel == "whisper"]
+        answers = [s for s in r.sent.says() if s.channel == "guild"]
+        assert answers and len(whispers) == 1 and whispers[0].guid == 103
+        assert meta.his_talk_waited
+        assert not [u for u in r.utterances() if u["dropped"] == "his_talk"]
+    run(main())
+
+
+def test_an_idle_whisper_he_spoke_after_is_dropped_while_his_answer_is_in_flight(store, clock,
+                                                                                tmp_path,
+                                                                                monkeypatch):
+    """Planned, he speaks, and an answer to him is on its way: dropped `his_talk`. The same
+    whisper planned after his line, or with nothing in flight, is not; a kill or loot whisper
+    never is."""
+    from leeroy_mind.talk import pipeline as pl
+    r = make_rig(store, clock, tmp_path)
+    eng = r.engine
+    turn, meta = _initiation(r, "whisper:idle", guid=103)
+    turn.deadline = r.clock.now() + 100
+    meta.planned_at = r.clock.now() - 30
+    r.world.last_spoke[1] = r.clock.now() - 10  # he spoke after it was planned
+    monkeypatch.setattr(pl, "answers_in_flight", lambda pipe, discord=None: 1)
+    assert eng._blocked(turn, meta, r.clock.now(), first=True) == "his_talk"
+    monkeypatch.setattr(pl, "answers_in_flight", lambda pipe, discord=None: 0)
+    assert eng._blocked(turn, meta, r.clock.now(), first=True) is None
+    monkeypatch.setattr(pl, "answers_in_flight", lambda pipe, discord=None: 1)
+    meta.planned_at = r.clock.now()  # planned after his line
+    assert eng._blocked(turn, meta, r.clock.now(), first=True) is None
+    for why in ("whisper:after_kill", "whisper:evening"):
+        kept, kmeta = _initiation(r, why, guid=103)
+        kept.deadline = r.clock.now() + 100
+        kmeta.planned_at = r.clock.now() - 30
+        assert eng._blocked(kept, kmeta, r.clock.now(), first=True) is None
+    r.close()

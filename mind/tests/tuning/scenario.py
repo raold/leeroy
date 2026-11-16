@@ -12,7 +12,9 @@ words, pronouns and household ("You are Sam, a 34-year-old woman from the UK (sh
 "At home: ..."), and each other member is shown once with their pronoun ("Belra (she): ...").
 Re-recorded for every message of his answered (2026-11-15, talk/owed.py): his bare remarks
 always get an answer and his hello in the login quiet keeps one, so more turns are planned and
-the draws after them moved; no prompt's wording changed."""
+the draws after them moved; no prompt's wording changed. The evening whisper after his loot is
+a fixed draw since then (Dunna, 104, whose draw the extra turns had consumed), so the
+whisper-start instruction stays covered."""
 import asyncio
 import json
 import random
@@ -64,6 +66,9 @@ async def _run(store, clock, data_dir) -> dict:
     await r.human("hey you", channel="whisper", to_guid=102)
     await r.advance(40, step=2)
     await r.event(LootWon(ts=0, guid=HUMAN, item_id=1, name="Shiny Helm", method="roll"))
+    await r.advance(60, step=2)
+    # the evening whisper after his loot, as a fixed draw: 104 starts it (2026-11-16)
+    r.engine._queue_whisper(104, "evening", clock.now(), about="Zan just won Shiny Helm.")
     await r.advance(60, step=2)
     for n in range(6):  # he stays active: social bursts
         await r.advance(280, step=4)

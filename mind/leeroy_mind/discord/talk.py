@@ -63,6 +63,7 @@ LEASE_IDLE_S = 600.0
 # the lease is kept while answers to him on Discord are still in flight (owner, 2026-11-16:
 # longer GPU use when several members answer him at once), checked this often past its idle end
 LEASE_HOLD_S = 30.0
+LEASE_KEEP_MAX_S = 900.0  # past its idle end the lease is kept this long at most
 WHY = "discord:reply"
 GONE = "discord_deleted_parent"  # the drop reason of an answer whose post was deleted
 MAX_NAMED = 3
@@ -806,13 +807,16 @@ class DiscordTalk:
 
     async def _expire(self) -> None:
         clock = self.app.clock
+        cap = None  # the idle end's absolute keep cap (review-327 P3-10)
         while True:
             while (left := self._until - clock.now()) > 0:
                 await clock.sleep(left)
-            if not self._answers_in_flight():
+            if cap is None:
+                cap = clock.now() + LEASE_KEEP_MAX_S
+            if not self._answers_in_flight() or clock.now() >= cap:
                 break
             log.info("discord_lease_kept: reason=answers_in_flight")
-            self._until = clock.now() + LEASE_HOLD_S  # the live model stays for them
+            self._until = min(cap, clock.now() + LEASE_HOLD_S)  # the live model stays for them
         await self._release()
 
     def _answers_in_flight(self) -> bool:

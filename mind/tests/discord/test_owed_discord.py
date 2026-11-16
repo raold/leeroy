@@ -92,9 +92,10 @@ def test_a_dm_she_answers_on_her_own_time_is_held(store, clock, tmp_path, caplog
     rig.close()
 
 
-def test_a_silent_model_still_answers_his_dm(store, clock, tmp_path):
-    """Her DM answer stays (nothing) through its retry and both fallback asks: the turn drops,
-    and the watchdog's rescue turn ends in the line built from his message."""
+def test_a_silent_model_holds_his_dm_never_a_template(store, clock, tmp_path, caplog):
+    """Her DM answer stays (nothing) through its retry and both fallback asks: the turn drops;
+    the watchdog's rescue finds nothing either and holds the message (review-327 P2-1)."""
+    caplog.set_level(logging.INFO)
     rig = rig_for(store, clock, tmp_path, script=lambda m, msgs: "(nothing)")
     talk = talk_for(rig)
     w = _watch(rig, talk)
@@ -104,11 +105,10 @@ def test_a_silent_model_still_answers_his_dm(store, clock, tmp_path):
     async def hand_over():
         talk.on_his_post(mid)
     rig.sync(hand_over())
-    _tick(rig, w, 100)
+    _tick(rig, w, 400)
     assert answers(rig, "dm:105", mid) == []
-    _tick(rig, w, 200)
-    said = answers(rig, "dm:105", mid)
-    assert len(said) == 1 and said[0]["text"].strip() and "?" in said[0]["text"]
+    assert any("owed_held" in m and "reason=no_clean_draft" in m for m in caplog.messages)
+    assert not any("owed_given_up" in m for m in caplog.messages)
     rig.close()
 
 
