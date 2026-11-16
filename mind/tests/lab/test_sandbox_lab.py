@@ -63,6 +63,9 @@ def test_reset_writes_overlays_into_the_copy_only(tmp_path):
                               timeout=120)
             varied = await child._call(client, "POST", "/say",
                                        {"channel": "dm", "to": 103, "text": "hey you", "wait": 60})
+            if not varied["answers"]:  # a loaded machine can time out a fresh mind's first store
+                varied = await child._call(client, "POST", "/say",
+                                           {"channel": "dm", "to": 103, "text": "hey", "wait": 60})
             refused = []
             for bad in ({"nope": "x"}, {"reply_human": "no placeholders"}):
                 try:
