@@ -70,7 +70,7 @@ def test_off_reaches_recall_exactly_as_before(store, clock, tmp_path, monkeypatc
     monkeypatch.setattr(r.engine.recall, "format", fmt)
     r.whisper_from_him(102, "hey you")
     r.run()
-    assert ("format", []) in seen
+    assert any(name == "format" for name, _ in seen)
     assert all("diversity" not in kw and "aged" not in kw for _, kw in seen)
     lines = remembered(whisper_prompts(r)[0])
     assert lines and all(d.PAST_SOON not in x and d.PAST_LONG not in x for x in lines)

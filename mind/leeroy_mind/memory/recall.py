@@ -33,6 +33,19 @@ OFFICERS_TAIL = " (officers only)"  # one the officers may know (privacy.OFFICER
 REST_S = 1800.0
 REST_PENALTY = 10.0
 HEARD = 0.8  # a memory held below this confidence is hearsay (format_memory: "(heard)")
+# [romance] realism (owner's sandbox audit, 2026-11-16): a time-bound memory this old reads as
+# past. A plan (kind "plan": the night's "sort the bank tabs tonight", "farm herbs tomorrow")
+# this old is left out of recall (Recall.recall's `stale_plans`): its tonight and tomorrow are
+# gone and nobody knows whether it happened, yet a week-old plan of one member came back as
+# current in every DM answer, one of the seven copies the night had written of it each time.
+# Any other memory this old says its "tonight", "tomorrow"... as past (format_memory's `past`).
+STALE_S = 48 * 3600.0
+_PAST = tuple((re.compile(rf"\b{a}\b", re.IGNORECASE), b) for a, b in (
+    (r"tomorrow (morning|afternoon|evening|night)", r"the next \1"), ("tomorrow", "the next day"),
+    ("later (?:today|tonight)", "later that day"), ("tonight", "that night"), ("today", "that day"),
+    (r"this (morning|afternoon|evening|weekend|week)", r"that \1"), ("right now", "back then"),
+    ("next week", "the week after"), ("yesterday", "the day before"),
+    ("last night", "the night before")))
 HOLDER_HITS = 40  # how many matches Recall.holders reads, best first
 _MAX_TERMS = 8
 _MIN_LEN = 3
@@ -142,16 +155,33 @@ def resting(m: MemoryRow, now: float) -> bool:
     return m.access_n > 0 and now - m.t_accessed < REST_S
 
 
-def format_memory(m: MemoryRow, now: float, *, tz: tzinfo, aged: bool = False) -> str:
+def past_tense(text: str) -> str:
+    """`text` with its "tonight", "tomorrow", "right now"... said as past ("that night", "the
+    next day", "back then"), a leading capital kept (_PAST)."""
+    for rx, then in _PAST:
+        text = rx.sub(lambda m, then=then: _cased(m.expand(then), m.group(0)), text)
+    return text
+
+
+def _cased(new: str, old: str) -> str:
+    return new[:1].upper() + new[1:] if old[:1].isupper() else new
+
+
+def format_memory(m: MemoryRow, now: float, *, tz: tzinfo, past: bool = False,
+                  aged: bool = False) -> str:
     """One prompt line: how long ago it happened (memory_age), then the text. `tz` is the
     mind clock's zone (clock.local().tzinfo), required so the host's zone never leaks in;
     Recall.format passes it. A game memory (events.py's templates, whose stored text stays as
     written) reads "3 times" for "3\u00d7", and one from before tonight loses the "tonight" the
     template baked in, since the age says when (prompts lens, minor 4). A private or secret
-    memory ends with PRIVATE_TAIL. `aged` ([talk] recall_diversity): a time-bound intention whose
-    time has passed says so before its words (memory.diversity.lead); the stored text stays."""
+    memory ends with PRIVATE_TAIL. `past` ([romance] realism): one older than STALE_S says its
+    time words as past (past_tense). `aged` ([talk] recall_diversity): a time-bound intention
+    whose time has passed says so before its words (memory.diversity.lead); the stored text
+    stays."""
     when = memory_age(m.t_event, now, tz)
     text = m.text
+    if past and m.kind != "event" and now - m.t_event > STALE_S:
+        text = past_tense(text)
     if m.kind == "event":
         text = text.replace("\u00d7", " times")
         if night_of(datetime.fromtimestamp(m.t_event, tz)) != night_of(
@@ -243,8 +273,9 @@ class Recall:
             log.warning("recall query embed failed, using text and recency: %s", e)
             return None
 
-    def format(self, m: MemoryRow, *, aged: bool = False) -> str:
-        return format_memory(m, self._clock.now(), tz=self._clock.local().tzinfo, aged=aged)
+    def format(self, m: MemoryRow, *, past: bool = False, aged: bool = False) -> str:
+        return format_memory(m, self._clock.now(), tz=self._clock.local().tzinfo, past=past,
+                             aged=aged)
 
     def _shareable(self, rows: list[MemoryRow], owner: int, channel: str,
                    to_guid: int, *, include_bond: bool = False) -> list[MemoryRow]:
@@ -339,6 +370,7 @@ class Recall:
                      addressee: int | None, k: int = 5, priority: Priority = Priority.SOCIAL,
                      touch: bool = True, channel: str | None = None,
                      to_guid: int = 0, include_bond: bool = False,
+                     stale_plans: bool = False,
                      diversity: diverse.Diversity | None = None) -> list[MemoryRow]:
         """The k memories to bring up. `touch` marks them accessed (recency); a look that
         doesn't use them (an evaluation, a quiz) passes False. `channel` is that of the turn
@@ -353,6 +385,7 @@ class Recall:
         over the candidates), importance and relevance (both spread 0..1) and 1.0 for one the
         addressee is in. A memory a live prompt used within REST_S rests: it comes after every
         other candidate, so one member's lines don't circle the same few stories.
+        `stale_plans` ([romance] realism): a plan older than STALE_S is no candidate.
 
         `diversity` ([talk] recall_diversity, memory.diversity): after the scope and audience
         rules, past intentions and subjects she keeps raising to him are lowered, a memory
@@ -377,7 +410,8 @@ class Recall:
         hits = dict(store.fts(owner, q, 20)) if q else {}
         for m in store.get_memories([i for i in (*knn_ids, *hits) if i not in by_id]):
             by_id[m.id] = m
-        rows = [m for m in by_id.values() if m.status == "active" and m.owner == owner]
+        rows = [m for m in by_id.values() if m.status == "active" and m.owner == owner
+                and not (stale_plans and m.kind == "plan" and now - m.t_event > STALE_S)]
         if channel is not None:
             if not include_bond:
                 rows = [m for m in rows if not (m.key or '').startswith('bond:')]

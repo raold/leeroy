@@ -639,7 +639,8 @@ class DiscordTalk:
                 exclude: int = 0) -> tuple[ChatLineRow, ...]:
         """A DM's history for its answer's Chat section (the pipeline shows it as the chat she
         answers in, TurnMeta.discord_chat): the DM's last DM_LINES messages but `exclude` (the
-        post she answers, which the instruction carries), oldest first, deleted messages and
+        post she answers, which the instruction carries and the pipeline adds as the Chat's last
+        line: Pipeline._his_dm_row), oldest first, deleted messages and
         typo corrections left out, as context_lines reads them. His each up to DM_HIS_CHARS,
         hers as their opening words (prompt.replay: she remembers what she said, not every
         word of it), each with its photo note. Rows keyed by Discord message ids."""

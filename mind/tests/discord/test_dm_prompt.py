@@ -111,7 +111,10 @@ def test_the_dm_history_is_the_chat_and_not_the_instruction(store, clock, tmp_pa
     assert f"w{REPLAY_WORDS - 1}..." in chat and f"w{REPLAY_WORDS} " not in chat  # hers short
     assert chat.index("zorblat") < chat.index("w0")  # oldest first
     assert "Recent messages:" not in prompt
-    assert prompt.count("so what do you think?") == 1  # his message only in the instruction
+    # his message she answers ends the Chat (2026-11-16, the owner's sandbox audit: without it
+    # the Chat ended on his previous message and she answered that) and the instruction quotes it
+    assert chat.rstrip().splitlines()[-1].endswith("so what do you think?")
+    assert prompt.count("so what do you think?") == 2
     assert prompt.rstrip().endswith("so what do you think?") or (
         "Answer his message: so what do you think?" in prompt)
     assert "quaxle" not in prompt and "vorpine" not in prompt  # that DM only

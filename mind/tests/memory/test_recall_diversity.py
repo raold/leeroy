@@ -300,3 +300,11 @@ def test_without_a_channel_only_past_intentions_are_lowered(rig, store, clock):
     got = run(rig.recall(102, "anything new", present=[], addressee=None, k=1, touch=False,
                          diversity=Diversity(human=HUMAN)))
     assert ids(got) == [other]
+
+
+def test_with_romance_realism_too_the_mark_leads_and_its_time_words_read_as_past(clock):
+    tz = clock.local().tzinfo
+    m = mem(clock, QUILT, age=5 * DAY, kind="plan", source="reflection")
+    assert format_memory(m, clock.now(), tz=tz, past=True, aged=True) == (
+        "- five days ago: " + d.PAST_SOON
+        + "Finish the quilt border the next day so I can show it at the fair.")
