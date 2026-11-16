@@ -512,6 +512,8 @@ class MindApp:
         attach_turing(self.night_runner, self.data_dir)  # [turing]: off adds no stage
         from .bakeoff.capture import attach as attach_bakeoff
         attach_bakeoff(self)  # [bakeoff] capture: off captures nothing, still prunes old rows
+        for name in ("boss", "loot_won"):  # [life] state: her feeling; off moves nothing
+            self.register_event_handler(name, self.engine.life.on_event)
 
     # -- extension points --------------------------------------------------------------------
 
@@ -1311,6 +1313,10 @@ class MindApp:
                 self.owed.tick(now)  # a message of his still unanswered gets its answer
             except Exception:
                 log.exception("owed_tick_failed")
+            try:
+                self.engine.life.tick(now)  # her feeling right now ([life] state)
+            except Exception:
+                log.exception("life_tick_failed")
             if now - last_embed >= EMBED_EVERY_S:
                 last_embed = now
                 if self._embed_task is None or self._embed_task.done():
