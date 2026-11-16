@@ -1,20 +1,18 @@
 """The prompt as a situation (human-likeness core, Task 6): the hard rules in the system message,
-"Right now:" next to the instruction, situation templates that take their length from the caller.
-Pure prompt functions; nothing calls the situation paths until the pipeline wiring (Task 8)."""
+"Right now:" next to the instruction, situation templates that take their length from the caller
+(her usual line when it gives none). Pure prompt functions; nothing calls the situation paths until the pipeline wiring (Task 8)."""
 import dataclasses
 from dataclasses import replace
-
-import pytest
 
 from conftest import make_persona
 from leeroy_mind.prompts import trace_templates
 from leeroy_mind.storage.rows import PersonaStateRow
 from leeroy_mind.talk.budget import DayPhase
-from leeroy_mind.talk.prompt import (DM_BUDGET, INSTRUCTIONS, OPEN_TO_HIM_SITUATION,
+from leeroy_mind.talk.prompt import (DM_BUDGET, INSTRUCTIONS, OPEN_TO_HIM_SITUATION, SHORT_LINE,
                                      SITUATION_INSTRUCTIONS, SITUATION_RULES, PromptParts,
-                                     comms_rules, mood_line, redact_for, render_instruction,
-                                     render_messages, section_tokens, situation_rules,
-                                     trim_to_budget)
+                                     comms_rules, length_rule, mood_line, redact_for,
+                                     render_instruction, render_messages, section_tokens,
+                                     situation_rules, trim_to_budget)
 from leeroy_mind.talk.states import Altered
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.text import estimate_tokens
@@ -48,9 +46,30 @@ def test_shape_length_replaces_the_game_length():
     assert "one short line" not in text and "Just a word or two this time." in text
 
 
-def test_situation_on_a_game_channel_needs_a_length():
-    with pytest.raises(ValueError):
-        render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", situation=True)
+def test_situation_without_a_length_takes_her_usual_line():
+    """Review of #333, P2-2: a situation template with no length never raises (the pipeline
+    would drop the turn as bad_turn, an owed answer too): it takes her usual line."""
+    bare = render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", situation=True, extra="X")
+    assert bare == f"Reply to Zan's last line, as yourself. {SHORT_LINE} X"
+    typing = make_persona(101, "Arkon").typing
+    usual = render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", situation=True, extra="X",
+                               typing=typing)
+    assert usual == f"Reply to Zan's last line, as yourself. {length_rule(typing)} X"
+    assert "usually 3-12 words" in usual
+    for kind in SITUATION_INSTRUCTIONS:
+        for channel in ("guild", "party", "whisper", "voice:1", "discord:general", "dm:101",
+                        "gdm:7"):
+            for words in (0, 90):
+                text = render_instruction(kind, addressee="Zan", topic="TOPIC", forms=HE,
+                                          situation=True, channel=channel, discord_words=words,
+                                          typing=typing, to_him=kind is TurnKind.OPEN)
+                usual_line = length_rule(typing) in text
+                assert usual_line == (words == 0 or not channel.startswith(("discord:", "dm:",
+                                                                            "gdm:")))
+                assert "Discord" in text or usual_line
+    # a game template keeps its own length, typing or not
+    assert render_instruction(TurnKind.GREET, addressee="Zan", situation=True,
+                              typing=typing) == render_instruction(TurnKind.GREET, addressee="Zan")
 
 
 def test_state_words_replace_mood_words():
@@ -98,8 +117,12 @@ def test_situation_rules_keep_the_hard_rules_and_the_comms_prefix():
     assert "guilt-trip Zan" in rules and "Shared history comes only from your memories" in rules
     assert "Quillon" not in rules and "{" not in rules
     assert not any(c in rules for c in TELLS)
-    for gone in ("usually", "One short line", "Specific beats polite", "(nothing)", "2009 slang"):
+    for gone in ("usually", "One short line", "Specific beats polite", "2009 slang"):
         assert gone not in rules
+    # the nothing-rule stays (review of #333, ruling S1: bake-off 1's variant kept it)
+    assert SITUATION_RULES.endswith(
+        "\n- If you wouldn't say anything, answer exactly (nothing)")
+    assert rules.count("(nothing)") == 1
     # the flirt rule follows the turn as comms_rules has it: away on a turn that isn't his
     away = situation_rules(he, woman, at_him=False)
     assert "You don't flirt with anyone here" in away and "flirt only with Zan" not in away
@@ -130,7 +153,7 @@ def test_situation_templates_cover_five_kinds_and_read_without_tells():
         assert "{extra}" in tmpl and not any(c in tmpl for c in TELLS)
         assert "one short line" not in tmpl.lower() and "actually said" not in tmpl
     for kind in SITUATION_INSTRUCTIONS:
-        text = render_instruction(kind, addressee="Zan", topic="the new mount", extra="EXTRA BIT.",
+        text = render_instruction(kind, addressee="Zan", topic="TOPIC", extra="EXTRA BIT.",
                                   forms=HE, situation=True, length_text="A LENGTH.")
         assert "{" not in text and "}" not in text and text.endswith("A LENGTH. EXTRA BIT.")
         assert text == text.strip() and "  " not in text
@@ -180,9 +203,10 @@ def test_situation_on_discord_takes_its_length_and_length_text_wins():
     plain = render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", channel="discord:general",
                                discord_words=90, length_text="Two lines.")
     assert "Discord" not in plain and "Two lines." in plain and "one short line" not in plain
-    with pytest.raises(ValueError):  # Discord with no words gives no length either
-        render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", situation=True,
-                           channel="discord:general", discord_words=0)
+    # Discord with no words gives no Discord length: her usual line
+    assert render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", situation=True,
+                              channel="discord:general", discord_words=0) == (
+        f"Reply to Zan's last line, as yourself. {SHORT_LINE}")
 
 
 def test_length_text_wins_over_long_and_is_never_cut():
@@ -213,6 +237,10 @@ def test_situation_instructions_are_noted_by_their_own_names():
         render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", channel="dm:101",
                            discord_words=200, length_text="L.")
     assert "talk.discord_length" not in used  # the length the line reads is the caller's
+    with trace_templates() as used:
+        render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", situation=True,
+                           channel="discord:general", discord_words=0)
+    assert "talk.situation_instruction.reply_human" in used and "talk.discord_length" not in used
 
 
 def test_situation_right_now_is_never_cut_and_is_counted():

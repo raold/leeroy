@@ -158,8 +158,9 @@ polite.
 
 # The situation mode's rules (spec section 9, bake-off 1: the rule list primed compliance; the
 # variant cut to the hard rules scored best on public turns): only the hard ones, the 2009 rule
-# without the year leak the DM audit found, the history and guilt-trip rules kept. No length:
-# the instruction carries the reply's (render_instruction's `length_text`).
+# without the year leak the DM audit found, the history and guilt-trip rules kept, and the
+# nothing-rule, which the measured variant kept (1.71 public alone, 1.82 with the beat; review
+# of #333, ruling S1). No length: the instruction carries the reply's (render_instruction).
 SITUATION_RULES = """\
 How you talk here:
 - You're a real person in 2009, in your WoW guild. Real life stays in 2009 or is timeless. Never \
@@ -167,7 +168,8 @@ say the year.
 - You're not an assistant. Never mention AI, language models, prompts or bots.
 - Write only your own words: no name in front, no quotes, no one else's lines, no narrated actions.
 - Shared history comes only from your memories. Never invent it.
-- Never guilt-trip {human} for being away."""
+- Never guilt-trip {human} for being away.
+- If you wouldn't say anything, answer exactly (nothing)"""
 
 
 # Every woman in the guild is eager to help him with quests (owner, 2026-10-30), and claims
@@ -435,7 +437,7 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
                        lead: str = "", after: str = "", tail: str = "", long: bool = False,
                        quiet: bool = True, to_him: bool = False, channel: str = "",
                        discord_words: int = 0, length_text: str = "",
-                       situation: bool = False) -> str:
+                       situation: bool = False, typing: Typing | None = None) -> str:
     """The TurnKind template on one line. `lead` (her romance text) comes before it, so the
     turn's own instruction is what the model reads last (prompts I5); `extra` (a bit, an aside,
     a fact) goes after it, cut to EXTRA_CAP_TOKENS, and a cut is logged without the text.
@@ -451,8 +453,10 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     the same way and wins over the Discord length and `long`.
     `situation` takes the template from SITUATION_INSTRUCTIONS (OPEN_TO_HIM_SITUATION for an
     opener to him; a kind it has none for keeps its INSTRUCTIONS template). Those carry no
-    length, so one with neither `length_text` nor a Discord length raises ValueError: the caller
-    always gives it."""
+    length of their own, so one with neither `length_text` nor a Discord length (a game channel,
+    a voice room, Discord at 0 words) takes the speaker's usual line, length_rule(`typing`), or
+    SHORT_LINE without one: never an error, so no turn is dropped for it. `long` does not apply
+    to them: the pipeline passes the shape, two-lines or Discord length explicitly."""
     own = situation and kind in SITUATION_INSTRUCTIONS
     if own:
         tmpl = (OPEN_TO_HIM_SITUATION if to_him and kind is TurnKind.OPEN
@@ -460,9 +464,10 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     else:
         tmpl = OPEN_TO_HIM if to_him and kind is TurnKind.OPEN else INSTRUCTIONS[kind]
     shaped = length_text.strip()
-    length = shaped or discord_length(channel, discord_words)
-    if own and not length:
-        raise ValueError(f"a situation {kind} turn needs its length")
+    on_discord = "" if shaped else discord_length(channel, discord_words)
+    length = shaped or on_discord
+    if own and not length:  # her usual line, in the words comms_rules has for it
+        length = length_rule(typing) if typing is not None else SHORT_LINE
     if length:
         for old, new in DISCORD_DROPS:
             tmpl = tmpl.replace(old, new)
@@ -473,7 +478,7 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
             "One short line", MORE_LINES[3:].capitalize())
     from leeroy_mind.prompts import note_template
     note_template(("talk.situation_instruction." if own else "talk.instruction.")+kind.value,tmpl)
-    if length and not shaped:
+    if on_discord:
         note_template("talk.discord_length", discord_template(channel, discord_words))
     if "{addressee}" in tmpl and not addressee:
         raise ValueError(f"a {kind} turn needs an addressee")
