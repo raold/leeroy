@@ -648,3 +648,50 @@ caller's seeded `rng`. **Nothing calls it yet**: the pipeline wiring, `[talk] sh
   --his-words 28 [--owed] [--kind continue] [--dm-mirror 5] [--samples 1000]` reads her stored
   typing profile (mind.db opened read-only) and `[talk]` from mind.toml, and prints the shapes'
   shares and the words' p10/p50/p90 as JSON: numbers and codes only.
+
+# Romance realism (`[romance] realism`, 2026-11-16)
+
+The owner's sandbox audit (2026-11-16): a non-romance DM and a game whisper read as a person, a
+lust woman's DM read as a bot: 60-150 words to his 5-24, a flirt on every beat, his question often
+dodged, the same week-old plan (a "tonight ... tomorrow" intention of hers) in most
+answers, and every draft rewritten by the phrase cooldown. Her romance text told her to escalate on
+every turn (her heat, the stage's passage, her own recent moves, a rival, "Bring want, longing, a
+tease", a game hook), his card's note carried that week-old plan with no age, and recall brought
+back one of seven nightly copies of it each turn. With `[romance] realism = true` (default false;
+read at mind start and at each login's reload, like `dial`):
+
+- **Her romance text** (`romance.romance_instruction`'s `realism`): her heat line and the stage's
+  passage only when his line turns it up (`romance.his_heat`: a flirt, a declaration, compliment or
+  pet name of his, or desire and sex in his own words); never the "Between you two lately" scene
+  notes or the rival line (the scene's notes are still written; the Lately line still counts her
+  moves); the distance frame without "Bring want, longing, a tease" (`DISTANCE_REAL`,
+  `DISTANCE_PLAN_REAL`; the whisper tail takes it too); and `REALISM_LEAD` last in place of the game
+  hook (`SPECIFIC`): she is herself, answers what he said first, talks about her day and life as
+  much as about him, flirts back to his flirting and goes further only where his lines lead. Her
+  attitude, her way, her arc's lines, cooling, the band's wording (the owner's overlays, as
+  before), `INVARIANTS`, the audience and the hour stay. Every turn that carries her romance text
+  reads it this way, public ones included; nothing changes for men or women with no attitude.
+- **His DM in her Chat** (`Pipeline._his_dm_row`): `discord.talk.dm_chat` leaves out the message
+  she answers (the instruction quotes it), so the Chat she read ended on his previous message and
+  her own answer to it, and behind ~300 tokens of romance text she often answered that one in the
+  sandbox. With the switch on, a woman with an attitude toward him (fond, drawn, lust) answering
+  his DM reads it as the Chat's last line too, shown as `dm_chat` shows his lines; it is kept out
+  of the copy check's window, the claim support and the beat's items, as a trigger line is. Other
+  members' DMs are as before.
+- **His card** (`prompt.relationship_card`'s `realism`, his card only): her note toward him is one
+  sentence (`prompt.realism_note`): the first without a time word (tonight, tomorrow, today, right
+  now, this morning/week/weekend, next week) and without a "picked up" word list; none when no
+  sentence is left.
+- **Old memories** (`memory.recall`): a plan (kind `plan`, the night's intentions) older than
+  `STALE_S` (48 h) is no recall candidate (`Recall.recall`'s `stale_plans`); any other memory that
+  old says its time words as past in the prompt (`format_memory`'s `past`, `past_tense`: "tonight"
+  -> "that night", "tomorrow" -> "the next day", "right now" -> "back then"). Stored memories are
+  never changed. This applies to every turn's recall while the switch is on, not only romance
+  turns. Game memories keep their own rule.
+- **Not here**: the DM's length wording (`DISCORD_DM`, the dm-quality lane), the beat's bring-in
+  ledger and question-first wants (dm-quality), the phrase cooldown's topic exemption
+  (dm-quality), the reply-shape draw. The owner's overlays are read exactly as before.
+- **Golden prompts**: with the switch off every prompt is `golden_prompts.json`'s;
+  `golden_romance.json` (`scenario.record_romance`) is the same scenario with it on.
+- Rollback: `realism = false` (or remove the key). Older code logs the key as unknown and ignores
+  it.
