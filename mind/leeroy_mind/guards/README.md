@@ -106,6 +106,36 @@ Measured on the live history before the change: it flagged exactly the 3 echoes
 among 84 Discord replies to him and none of 683 whisper replies. Turning his
 question into its answer ("Are the flasks ready?" / "The flasks are ready.") is an answer.
 
+Widened (identity audit, 2026-11-15) with the thresholds otherwise unchanged: a run of
+8 words copied across his sentences (a question among them) is an echo, and so is her
+line opening with his first 5 words or more when the copy carries past the end of his
+first sentence ("are you sure? its kinda..."). A run inside one question of his is still
+an answer, and so is his short first sentence said back alone ("you drive me wild" /
+"you drive me wild too"). On 2,063 stored replies that follow his line in their
+conversation it flags exactly the 4 known echoes (the 3 above and the cross-sentence copy
+that passed the first version).
+
+## Identity (identity audit, 2026-11-15)
+
+`self_male_slip` (a woman's draft) and `self_female_slip` (a man's) are rewrite codes
+for a member speaking with the other sex's body or role in the first person (`identity.py`:
+"my" plus anatomy, "i'm (not) some nice gentleman", "as a guy, i", "bury myself in you";
+the mirror list for men). Her words about him and a bare correction ("i'm not a guy lol")
+never count. Like `echo_parent` they are in `HARD_CODES`: never sent and never chosen as an
+owed answer's fallback. The retry is told in words ("you are a woman, so say it as
+yourself"). When an owed answer's retry slips too, the pipeline sends the last draft cut
+short of every sentence that slipped (at least 3 words, reviewed again with nothing hard
+left), else drops it (`guard_identity`). An unowed line that slips twice is dropped.
+On the stored history the lists flag the 5 known slips and nothing else.
+
+`persona_conflict` is a rewrite code for a first-person line contradicting the speaker's
+own persona (`personas.facts`: who she lives with, her kids, her pets, her job, her
+country; "i'm single" from a married member, "my dog" from a cat owner). The persona also
+outranks stored chat claims: a `claim_conflict` whose claim itself contradicts the persona
+(an echo or an invention stored as hers) is ignored. On the stored history it flags the 9
+known inventions (pets, a son, an echoed "single, no kids") and nothing else. The persona
+row is read with the role, in the same statement.
+
 A rewrite takes priority over drop, which takes priority over react. The optional
 `await judge_relevance(reasoner, stores, draft)` is a separate model call that may
 clear only the relevance finding. Errors remain rewrites; changed context is

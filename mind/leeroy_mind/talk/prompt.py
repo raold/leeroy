@@ -431,13 +431,18 @@ def _note_fits(note: str, forms: tuple[str, str, str], speaker: str = "") -> boo
 def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
                       is_guild_master: bool = False,
                       forms: tuple[str, str, str] = THEY_FORMS, attitude: str = "",
-                      speaker: str = "", friendship_only: bool = False) -> str:
+                      speaker: str = "", friendship_only: bool = False,
+                      pronoun: str = "") -> str:
     """How the speaker feels about one person, in a few words. Only the warm side of trust
     and respect is shown: a low score usually just means "not yet". The human is tagged "(the
     guild master)" when he is one (HumanIdentity.is_guild_master) and referred to by `forms`
-    (HumanIdentity.forms); anyone else as them/their. On his card a woman's `attitude` (her
-    stance) shows as her attraction band, and her note toward him gets HUMAN_NOTE_CHARS. A
-    member with no row at all is GUILDMATE; a label reads as how the two get on."""
+    (HumanIdentity.forms); anyone else as them/their, a member tagged with their `pronoun`
+    ("Razke (she)": identity audit, 2026-11-15, the officers called women "him" for want of
+    it). On his card a woman's `attitude` (her stance) shows as her attraction band, and her
+    note toward him gets HUMAN_NOTE_CHARS. A member with no row at all is GUILDMATE; a label
+    reads as how the two get on."""
+    if pronoun and not is_human:
+        name = f"{name} ({pronoun})"
     if not is_human and (r is None or r == Relationship(a=r.a, b=r.b)):
         return f"{name}: {GUILDMATE}"
     r = r or Relationship(a=0, b=0)
@@ -588,10 +593,11 @@ def line_age(seconds: float) -> str:
 
 
 def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
-                   now: float | None = None, photo: str = '') -> str:
+                   now: float | None = None, photo: str = '', pronoun: str = '') -> str:
     """'Name: text' for guild chat, 'Name (raid): text' elsewhere, 'Name (on vent): text' in a
     voice room, markup stripped, and with `now` its age in front ('[3m ago] Name: text'), so an
-    old line never reads as current.
+    old line never reads as current. A `pronoun` goes in the same brackets ('Razke (she):',
+    'Razke (she, raid):'), so the frame keeps one tag a copied speaker tag is read by.
     `names` maps guids to how the speaker knows them (the human by his nickname)."""
     who = names.get(row.from_guid) or row.from_name or "someone"
     text = " ".join(strip_wow_markup(row.text).split())
@@ -611,6 +617,8 @@ def chat_line_text(row: ChatLineRow, names: dict[int, str], *,
         tag = f" (Discord #{row.channel.removeprefix('discord:')})"
     else:
         tag = f" ({row.channel})"
+    if pronoun:
+        tag = f" ({pronoun}, {tag[2:-1]})" if tag else f" ({pronoun})"
     age = "" if now is None else f"[{line_age(now - row.ts)}] "
     return f"{age}{who}{tag}: {text}"
 

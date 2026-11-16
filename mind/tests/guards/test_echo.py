@@ -29,6 +29,19 @@ HIS = "how many kids do you have? what about their dad?"
     ("i love you", "i love you", False),
     ("how are you doing tonight?", "how are you doing tonight?", False),
     ("how are you doing tonight babe?", "how are you doing tonight babe?", True),
+    # Identity audit, 2026-11-15: his opening carried past his first sentence, and runs that
+    # cross his sentences (a question among them), are his words said back as hers.
+    ("are you sure? its kinda late. you know im a night owl, not a morning person",
+     "are you sure? it's kinda late. you know i'm up with you anyway", True),
+    ("are you sure? its kinda wild. you know", "are you sure? its kinda wild", True),
+    ("are we still on for tonight? the raid starts at eight sharp",
+     "ok. still on for tonight? the raid starts at eight. bring flasks", True),
+    # ...but his whole short first sentence said back, and a run inside one question, are not.
+    ("you drive me wild", "you drive me wild too. trust me.", False),
+    ("i love you so much. see you tonight", "i love you so much too", False),
+    ("do you want to come to the raid tonight with me?",
+     "i do want to come to the raid tonight with you", False),
+    ("are you sure? its kinda wild", "are you sure? yes", False),
 ])
 def test_echo_is_a_copied_run_of_his_words(parent, reply, expected):
     assert echoes(reply, parent) is expected

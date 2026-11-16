@@ -18,8 +18,10 @@ from leeroy_mind.discord.text import is_emoji_message
 from leeroy_mind.eval.talk import contradiction, nonsequitur, repetition, unawareness
 from leeroy_mind.eval.talk.common import Line, day, evening, similarity, words
 from leeroy_mind.memory.recall import whisper_ok
+from leeroy_mind.personas.facts import Facts, conflicts as persona_conflicts, facts_of_json
 from leeroy_mind.talk.moves import topics
 
+from .identity import CODES as SLIP_CODES, code_for as slip_code, slips
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
 
 OWN_LINES = 128
@@ -34,7 +36,11 @@ _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
                         'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener',
                         'echo_parent'})
+# Never sent, and never an owed answer's fallback: his words said back as hers, and her speaking
+# with the other sex's body or role (identity.py). A slip is a rewrite, so it gets one retry.
+HARD_CODES = frozenset({'echo_parent', *SLIP_CODES.values()})
 ECHO_RUN, ECHO_RATIO, ECHO_MIN_WORDS = 8, .9, 6
+ECHO_OPENING = 5  # his first words said back as hers, carried past his first sentence
 _ASKING = re.compile(r'^(?:can|could|would|will|do|does|did|are|is|am|was|were|have|has|had|'
                      r'should|what|how|when|where|why|who|which|whats|hows|wanna)\b')
 HINTS = {
@@ -51,6 +57,12 @@ HINTS = {
     'low_parent_and_thread_relevance': 'it does not answer what was said',
     'off_anchor': 'it wanders off the subject',
     'claim_conflict': 'it contradicts something already known',
+    'self_male_slip': ("it speaks as if you were a man, with a man's body or a man's role; you "
+                       'are a woman, so say it as yourself, about your own body'),
+    'self_female_slip': ("it speaks as if you were a woman, with a woman's body or a woman's "
+                         'role; you are a man, so say it as yourself, about your own body'),
+    'persona_conflict': ('it gets your own life wrong: keep to who you live with, your kids, your '
+                         'pets, your job and where you live as your card says'),
 }
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
           'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
@@ -63,10 +75,14 @@ _EMOTICONS = re.compile(r':[pd](?!\w)|:[()]|<3(?!\w)|(?<!\w)xd(?!\w)', re.IGNORE
 def echoes(text: str, parent: str) -> bool:
     """True when `text` says `parent` back instead of answering it: the whole of a parent of at
     least ECHO_MIN_WORDS words in the same mood (a question as a question, a statement as a
-    statement; their letters ECHO_RATIO alike), or a run of ECHO_RUN words copied from one of his
-    statements. Turning his question into its answer ("Are the flasks ready?" / "The flasks are
-    ready.") is an answer, and a short line said back ("i love you") is not an echo. Apostrophes
-    are dropped first, so "you're" and "youre" match."""
+    statement; their letters ECHO_RATIO alike), a run of ECHO_RUN words copied from one of his
+    statements, a run of ECHO_RUN words copied across his sentences (a question among them
+    too), or her line opening with his first ECHO_OPENING words or more, carried past the end
+    of his first sentence ("are you sure? its kinda..." said back as hers). Turning his question
+    into its answer ("Are the flasks ready?" / "The flasks are ready.") is an answer, and a
+    short line said back ("i love you") is not an echo, nor is one that opens with his whole
+    first sentence and stops there ("you drive me wild" / "you drive me wild too").
+    Apostrophes are dropped first, so "you're" and "youre" match."""
     def bare(value):
         return words(re.sub(r"['\u2019]", "", value or ""))
 
@@ -78,13 +94,22 @@ def echoes(text: str, parent: str) -> bool:
     if (len(his) >= ECHO_MIN_WORDS and asking(text) == asking(parent)
             and SequenceMatcher(None, ' '.join(his), ' '.join(mine), autojunk=False).ratio() >= ECHO_RATIO):
         return True
+    sentences = [bare(s) for s in re.split(r'(?<=[.!?])\s+|\n+', parent or '')]
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', parent or ''):
         said = bare(sentence)
         if len(said) >= ECHO_RUN and not asking(sentence):
             blocks = SequenceMatcher(None, said, mine, autojunk=False).get_matching_blocks()
             if max(block.size for block in blocks) >= ECHO_RUN:
                 return True
-    return False
+    # Which of his sentences each of his words is in, so a copy can be seen to cross one.
+    where = [i for i, said in enumerate(s for s in sentences if s) for _ in said]
+    if len(where) != len(his):  # markup split by a sentence break: read it as one sentence
+        where = [0] * len(his)
+    for block in SequenceMatcher(None, his, mine, autojunk=False).get_matching_blocks():
+        if block.size >= ECHO_RUN and where[block.a] != where[block.a + block.size - 1]:
+            return True
+    opening = next((i for i, (a, b) in enumerate(zip(his, mine)) if a != b), min(len(his), len(mine)))
+    return opening >= ECHO_OPENING and where[opening - 1] != where[0]
 
 
 def rewrite_hint(codes) -> str:
@@ -406,9 +431,11 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     cfg, reader = stores.config, Reader(stores.conn)
     if draft.server:
         cfg = replace(cfg, semantic_enabled=True)
-    role = reader.rows('role_unavailable', "SELECT json_extract(json,'$.play.guild_role') AS role "
-                       'FROM persona_core WHERE guid=? AND json_valid(json)', (draft.guid,))
+    role = reader.rows('role_unavailable', "SELECT json_extract(json,'$.play.guild_role') AS role,"
+                       'json FROM persona_core WHERE guid=? AND json_valid(json)', (draft.guid,))
     officer = bool(role and role[0]['role'] == 'officer')
+    stored = _json(role[0]['json'], None) if role else None
+    facts = facts_of_json(stored) if isinstance(stored, dict) else Facts()  # none: settles nothing
     history = _history(reader, stores, draft, now, officer)
     parent, thread = _context(history, draft, now)
     scores, refs, rewrite, drop = [], [], [], []
@@ -478,7 +505,16 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
                 refs.append(Reference('gag', ident))
         elif counts[key] >= cfg.stock_daily_cap:
             rewrite.append('stock_phrase_ration')
-    conflicts = _claim_hits(reader, stores, draft, now, officer)
+    # Her own persona (personas.facts), read with her role above.
+    if slips(draft.text, facts.gender):
+        rewrite.append(slip_code(facts.gender))
+    if persona_conflicts(draft.text, facts):
+        rewrite.append('persona_conflict')
+        refs.append(Reference('persona', draft.guid))
+    # The persona outranks what she said in chat: a stored claim that contradicts it (an echo
+    # of his words, an invented family) never holds a draft back.
+    conflicts = [hit for hit in _claim_hits(reader, stores, draft, now, officer)
+                 if not persona_conflicts(hit.claim_text, facts, claim=True)]
     if conflicts:
         rewrite.append('claim_conflict')
         refs.extend(Reference('claim', hit.claim_id) for hit in conflicts)
