@@ -8,9 +8,9 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from . import caption, face, grid, jpeg, models, similarity
+from . import caption, critic, face, grid, jpeg, models, similarity
 from .fit import fit
-from .protocol import PORTRAIT_SIZE, Caption, Grid, Identity, Render, RenderFailed
+from .protocol import PORTRAIT_SIZE, Caption, Critic, Grid, Identity, Render, RenderFailed
 
 
 RETRY_WAIT_S = 10.0  # a retry's wait for the VRAM an unload is still freeing
@@ -48,10 +48,11 @@ class Renderer:
     """`identity` says the pipeline has the adapter: a render with a reference is conditioned on
     it, one without renders with the adapter at scale 0 (2026-11-14: one identity worker serves
     a night's sets with and without a reference); without the adapter none may carry one.
-    `face_ref` (face.FaceRef, or None) cuts the reference tight around her face."""
+    `face_ref` (face.FaceRef, or None) cuts the reference tight around her face. `data` is the
+    data dir whose fetched detectors the critic loads at its first request."""
 
     def __init__(self, pipe, processor, classifier, nsfw_index: int, torch, info: dict,
-                 identity: bool = False, face_ref=None):
+                 identity: bool = False, face_ref=None, data: Path | None = None):
         self.pipe = pipe
         self.processor = processor
         self.classifier = classifier
@@ -62,6 +63,8 @@ class Renderer:
         self.face_ref = face_ref
         self._refs: OrderedDict = OrderedDict()  # (ref, st_mtime_ns, crop, cfg) -> embeds
         self._blanks: dict = {}  # cfg -> the embeds a render without a reference carries
+        self.data = data
+        self._detectors = None  # critic.Detectors, loaded at the first critic request
 
     def _count(self, text: str) -> int:
         return max(len(tok(text, add_special_tokens=False).input_ids)
@@ -158,6 +161,16 @@ class Renderer:
                     do_classifier_free_guidance=cfg)
         return self._blanks[cfg]
 
+    def critic(self, req: Critic) -> dict:
+        """The photo critic's measurements of one image (critic.answer): faces, hands, eyes and,
+        with a reference, the identity cosine through the adapter's image encoder (an identity
+        worker's; a plain one answers identity_code encoder_unavailable)."""
+        if self._detectors is None:
+            self._detectors = critic.load_detectors(self.data)
+        encode = critic.encoder(getattr(self.pipe, "image_encoder", None),
+                                getattr(self.pipe, "feature_extractor", None), self.torch)
+        return critic.answer(self._detectors, req, encode)
+
     def caption(self, req: Caption) -> dict:
         """A meme: the caption drawn over the base JPEG (caption.draw), scored by the NSFW
         classifier like every render, and written to out_path (quality 92) only when it scores
@@ -253,7 +266,7 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
         raise ReadyError("model", fields=timings)
     loaded = _OnCpu(pipe, processor, classifier, labels["nsfw"], torch,
                     {"torch": torch.__version__, "diffusers": diffusers.__version__}, identity,
-                    _face_ref(data) if identity else None)
+                    _face_ref(data) if identity else None, data)
     return _to_gpu(loaded, min_free_gib, timings, wait_s=0.0)
 
 
@@ -261,10 +274,10 @@ class _OnCpu:
     """What a start loaded before its VRAM check, kept for a retry after a vram refusal."""
 
     def __init__(self, pipe, processor, classifier, nsfw_index: int, torch, versions: dict,
-                 identity: bool, face_ref=None):
+                 identity: bool, face_ref=None, data: Path | None = None):
         self.pipe, self.processor, self.classifier = pipe, processor, classifier
         self.nsfw_index, self.torch, self.versions = nsfw_index, torch, versions
-        self.identity, self.face_ref = identity, face_ref
+        self.identity, self.face_ref, self.data = identity, face_ref, data
 
 
 def _face_ref(data: Path):
@@ -316,4 +329,4 @@ def _to_gpu(c: _OnCpu, min_free_gib: float, timings: dict, *, wait_s: float) -> 
     info = {"device": "cuda", "free_gib": round(free_gib, 1), "versions": dict(c.versions),
             **timings}
     return Renderer(pipe, c.processor, c.classifier, c.nsfw_index, torch, info, c.identity,
-                    c.face_ref)
+                    c.face_ref, c.data)
