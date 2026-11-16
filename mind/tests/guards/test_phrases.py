@@ -41,6 +41,8 @@ def found(store, d):
 def test_words_fold_the_casts_typing():
     assert [t.norm for t in phrases.tokens("u're gonna lose ur mind rn")] == \
         ['youre', 'going', 'to', 'lose', 'your', 'mind', 'right', 'now']
+    assert [t.norm for t in phrases.tokens('finaly got it, jsut gonna loose my mind ngl')] == \
+        ['finally', 'got', 'it', 'just', 'going', 'to', 'lose', 'my', 'mind', 'not', 'going', 'to', 'lie']
     toks = phrases.tokens('Bring the {{item:42}} to Naxx, Arkon. Then rest')
     assert [t.norm for t in toks] == ['bring', 'the', 'to', 'naxx', 'arkon', 'then', 'rest']
     assert [t.clause for t in toks] == [0, 0, 1, 1, 2, 3, 3]

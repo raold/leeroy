@@ -68,7 +68,16 @@ FOLD = {'u': ('you',), 'ur': ('your',), 'gonna': ('going', 'to'), 'wanna': ('wan
         'cuz': ('because',), 'abt': ('about',), 'vr': ('very',), 'gd': ('good',), 'wk': ('week',),
         'rdy': ('ready',), 'sry': ('sorry',), 'tho': ('though',), 'rn': ('right', 'now'),
         'hw': ('how',), 'wh': ('who',), 'th': ('the',), 'pls': ('please',), 'plz': ('please',),
-        'ppl': ('people',), 'idk': ('i', 'dont', 'know'), 'tbh': ('to', 'be', 'honest')}
+        'ppl': ('people',), 'idk': ('i', 'dont', 'know'), 'tbh': ('to', 'be', 'honest'),
+        'ngl': ('not', 'going', 'to', 'lie'), 'imo': ('in', 'my', 'opinion'), 'ofc': ('of', 'course'),
+        'prob': ('probably',), 'probs': ('probably',), 'cos': ('because',),
+        # talk/style.py's spelling habits and finger slips (typing texture, 2026-11-15)
+        'finaly': ('finally',), 'realy': ('really',), 'probly': ('probably',), 'literaly': ('literally',),
+        'basicly': ('basically',), 'tonite': ('tonight',), 'alot': ('a', 'lot'), 'awhile': ('a', 'while'),
+        'everytime': ('every', 'time'), 'noone': ('no', 'one'), 'wich': ('which',), 'loose': ('lose',),
+        'teh': ('the',), 'adn': ('and',), 'jsut': ('just',), 'waht': ('what',), 'taht': ('that',),
+        'wiht': ('with',), 'ahve': ('have',), 'konw': ('know',), 'baout': ('about',),
+        'thnik': ('think',)}
 _I = frozenset({'i', 'im', 'id', 'ill', 'ive'})
 _LEAD = frozenset('a an the and but or so then just also oh um uh well lol haha'.split())
 _TAIL = frozenset('a an the and but or so to of for with at in on from by like lol haha'.split())
