@@ -317,6 +317,40 @@ _AUDIENCE = {"guild": "whole guild", "officer": "officers", "party": "party", "r
              "say": "people standing nearby"}
 _LATE = frozenset({DayPhase.LATE, DayPhase.DEAD})
 
+# [romance] realism (owner's sandbox audit, 2026-11-16: her romance DMs read as a bot, 60-100
+# words to his 10-20, every beat a flirt, his question dodged). Her romance text says she stays
+# herself and answers him first, and takes it further only when his own line does (his_heat):
+# on any other line it leaves out what pushed every reply to escalate (her heat, the stage's
+# passage, her own recent moves, the rival, "Bring want, longing, a tease" and the game hook).
+# The band's wording (the owner's overlay) and every frame stay.
+REALISM_LEAD = ("You're still yourself with {name}, as with any close friend: answer what {they} "
+                "just said first, in your own words, and talk about your day and your life as "
+                "much as about {them}. Flirt back to {their} flirting, and go further only where "
+                "{their} lines lead.")
+DISTANCE_REAL = ("You two live far apart and meet only in game: don't ask {them} to come over, "
+                 "don't say you're waiting.")
+DISTANCE_PLAN_REAL = ("You two live far apart and meet only in game. A trip is the real meeting: "
+                      "don't ask {them} to come over, don't say you're waiting or invent where or "
+                      "when.")
+# His line turns it up (realism): a flirt (filters.flirty), a declaration, compliment or pet
+# name of his (his_moves), or desire and sex in his own words.
+_HEAT_MOVES = frozenset({"declare", "compliment", "petname"})
+_HIS_HEAT_RE = re.compile(
+    r"\b(?:lover|sexy|horny|naked|nude|sex\w*|fuck\w*|dick|cock|cum|wet|lick\w*|suck\w*"
+    r"|kiss\w*|in bed|bed with|touch(?:ing)? (?:you|u|me)|turn(?:s|ed|ing)? (?:me|you|u) on"
+    r"|(?:talk|talking) dirty|dirty talk|(?:i'?m|im|so|rock) hard|hard as"
+    r"|(?:thinking|think|dreaming|dream) (?:about|of) (?:you|u)|can'?t stop thinking"
+    r"|miss (?:you|u)|wish (?:you|u) were here)\b",
+    re.IGNORECASE)
+
+
+def his_heat(text: str) -> bool:
+    """His line turns it up ([romance] realism): a flirt, a declaration, compliment or pet name,
+    or desire in his own words. Her heat and the stage's passage are said only then."""
+    from leeroy_mind.talk.filters import flirty
+    return bool(text) and bool(flirty(text) or his_moves(text) & _HEAT_MOVES
+                               or _HIS_HEAT_RE.search(text))
+
 
 def audience_text(channel: str) -> str:
     """Who reads her line, for the romance text: a whisper or a Discord DM is the two of them
@@ -390,13 +424,14 @@ def explicit_whisper(p: Persona, rel: Relationship | None, *, dial: int, channel
 
 def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
                  data_dir: Path, forms: tuple[str, str, str],
-                 rng: random.Random | None = None) -> str:
+                 rng: random.Random | None = None, realism: bool = False) -> str:
     """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt; one of
     its variants, the first without `rng`), capped like the band overlays, then the stage's
     distance frame filled with his `forms` (HumanIdentity.forms), for a whisper to him at the
     explicit band; "" otherwise or when there is no overlay (the band as before). The pipeline
     puts it after the turn's instruction; romance_instruction then leaves the frame out
-    (`tail_follows`), so it is said once, after his overlay."""
+    (`tail_follows`), so it is said once, after his overlay. `realism`: the realism frame
+    (distance_text)."""
     if not explicit_whisper(p, rel, dial=dial, channel=channel):
         return ""
     variant = _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng)
@@ -404,7 +439,8 @@ def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: st
         return ""
     they, them, their = forms
     stage = rel.romance_stage if rel is not None else "none"
-    return f"{variant} {distance_text(stage).format(they=they, them=them, their=their)}"
+    frame = distance_text(stage, realism=realism)
+    return f"{variant} {frame.format(they=they, them=them, their=their)}"
 
 
 def dm_explicit(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
@@ -440,10 +476,14 @@ def stage_text(stance: str, stage: str, rng: random.Random | None = None, *,
     return _pick(variants, rng) or ""
 
 
-def distance_text(stage: str) -> str:
+def distance_text(stage: str, *, realism: bool = False) -> str:
     """The distance frame for this stage (a template taking {them}): the planning stage's frame
-    names the trip as the one real meeting."""
-    return DISTANCE_PLAN if passage_key(stage) == "planning" else DISTANCE
+    names the trip as the one real meeting. `realism` ([romance] realism): the frame without
+    what it told her to bring every time."""
+    plan = passage_key(stage) == "planning"
+    if realism:
+        return DISTANCE_PLAN_REAL if plan else DISTANCE_REAL
+    return DISTANCE_PLAN if plan else DISTANCE
 
 
 def heat_step(attraction: float) -> str | None:
@@ -612,7 +652,8 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
                         data_dir: Path, rng: random.Random | None = None,
                         tail_follows: bool = False, scene: Sequence[str] = (),
                         arc_lines: Sequence[str] = (), rival: str = "",
-                        cooling: bool = False) -> str | None:
+                        cooling: bool = False, realism: bool = False,
+                        heat: bool = False) -> str | None:
     """The romance text for a turn by `p` (rel is p's relationship to the human), or None
     when p is a man, has no attitude toward him or is not talking to him. The human is named
     by human.called with his pronouns from human.forms; his real name never appears here. A
@@ -627,7 +668,12 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     last. After the heat line, for a whisper or DM to him only (whisper scope; any other
     channel leaves them out even if passed): SCENE_HEAD and at most SCENE_MAX `scene` notes, the
     `arc_lines`, the rival's line and a cooling variant. `dial` is the owner's; the band
-    follows her own when she has one."""
+    follows her own when she has one.
+
+    `realism` ([romance] realism): the stage's passage and her heat only when `heat` (his line
+    turns it up: his_heat), no scene notes and no rival line, the distance frame without what it
+    told her to bring, and REALISM_LEAD in place of SPECIFIC, last. Her attitude, her way, the
+    band's wording, her arc's lines, cooling, the frame, the audience and the hour stay."""
     stance = p.romance.stance
     if not addressee_is_human or stance not in ATTITUDE_REACH or not _is_woman(p):
         return None
@@ -636,23 +682,26 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     they, them, their = human.forms
     fill = dict(name=human.called, they=they, them=them, their=their)
     private = is_private(channel)
+    warm = heat or not realism
     parts = [
         attitude_text(p),
         style_text(p),
-        stage_text(stance, stage, rng, private=private),
-        heat_text(stance, stage, rel, rng),
+        stage_text(stance, stage, rng, private=private) if warm else "",
+        heat_text(stance, stage, rel, rng) if warm else "",
     ]
     rest = [
-        "" if tail_follows else distance_text(stage),
+        "" if tail_follows else distance_text(stage, realism=realism),
         INVARIANTS,
         audience_text(channel),
         "It's late, and late-night talk runs warmer." if phase in _LATE else "",
-        pieces_text("romance_hook", SPECIFIC),
+        (pieces_text("romance_lead", REALISM_LEAD) if realism
+         else pieces_text("romance_hook", SPECIFIC)),
     ]
     head = " ".join(x.format(**fill) for x in parts if x)
     if private:
-        head = " ".join(x for x in (head, *_slots(scene, arc_lines, rival, cooling, fill, human,
-                                                   rng)) if x)
+        slots = (_slots((), arc_lines, "", cooling, fill, human, rng) if realism
+                 else _slots(scene, arc_lines, rival, cooling, fill, human, rng))
+        head = " ".join(x for x in (head, *slots) if x)
     tail = " ".join(x.format(**fill) for x in rest if x)
     return f"{head} {_band_text(effective_band(stance, stage, dial), data_dir, rng)} {tail}"
 

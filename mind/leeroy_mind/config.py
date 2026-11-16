@@ -43,6 +43,7 @@ wow_vs_life = 5               # 0-10: how present the WoW-vs-life theme is in th
 dial = 3                      # 1 milquetoast .. 10 filth
 jealousy = 5                  # 0-10: women's rivalry and the men's envy
 activities = false            # private shared moments, moods and inn invitations
+realism = false               # her romance DMs and whispers answer him first and escalate only when he does
 
 [cast]
 female_share = 0.7
@@ -125,6 +126,7 @@ class RomanceCfg:
     dial: int
     jealousy: int
     activities: bool = False
+    realism: bool = False  # [romance] realism: talk/romance.py REALISM_LEAD
 
 
 @dataclass(frozen=True)
@@ -239,6 +241,7 @@ _RULES = {
         "dial": (lambda v: _int_in(v, 1, 10), "an integer 1-10"),
         "jealousy": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "activities": (lambda v: type(v) is bool, "a boolean"),
+        "realism": (lambda v: type(v) is bool, "a boolean"),
     },
     "cast": {
         "female_share": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -310,7 +313,7 @@ def _build(data: dict, source: str) -> MindConfig:
                     log.warning("talk_%s_invalid key=%s want=%s default=%s", key, key,
                                 want, defaults[section][key])
                 v = defaults[section][key]
-            if section == 'romance' and key == 'activities' and type(v) is not bool:
+            if section == 'romance' and key in ('activities', 'realism') and type(v) is not bool:
                 v = False
             if section == "life" and not check(v):
                 # the default (availability 0, state false, wow_vs_life 5), logged once a value

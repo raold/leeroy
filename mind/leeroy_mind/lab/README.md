@@ -102,8 +102,11 @@ uses, no guard regression, no veto); its retirement rule applies too. The Lab's 
 
 `reply_human`, `continue`, `goodnight` (INSTRUCTIONS), `situation_reply_human`
 (SITUATION_INSTRUCTIONS), `discord_dm` (DISCORD_DM), `romance_hook` (the romance lead's closing
-sentence, SPECIFIC: the attitude sentences differ by stance and forwardness, so the hook is the one
-sentence every romance lead shares), `beat_ask` (the beat's first sentence, MARK). A variant reaches
+sentence, SPECIFIC, with `[romance] realism` off), `romance_lead` (REALISM_LEAD, its place with
+`[romance] realism` on; the attitude sentences differ by stance and forwardness, so the lead's
+last sentence is the one every romance text shares), `beat_ask` (the beat's first sentence, MARK).
+A piece the night's turns never render (the other romance one, situation mode off) ends its
+variants `untested`. A variant reaches
 a prompt only at render time, by name, inside `pieces.using` while a turn composes; outside it the
 built-in wording is used and nothing is marked, so the golden prompts and template traces are
 unchanged. A piece whose `lab_<piece>.txt` name exists in the live prompts dir is passed over by

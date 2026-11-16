@@ -131,7 +131,8 @@ def test_families_for_follow_the_turn():
     def fams(kind, channel, to=0, addressee=0):
         return lab_live.families_for(Turn(kind, 101, channel, to_guid=to, addressee=addressee), 1)
     assert fams(TurnKind.REPLY_HUMAN, "guild", addressee=1) == [
-        "prompt.reply_human", "prompt.situation_reply_human", "prompt.romance_hook"]
+        "prompt.reply_human", "prompt.situation_reply_human", "prompt.romance_hook",
+        "prompt.romance_lead"]
     assert "prompt.beat_ask" in fams(TurnKind.REPLY_HUMAN, "whisper", to=1, addressee=1)
     assert "prompt.discord_dm" in fams(TurnKind.REPLY_HUMAN, "dm:101", addressee=1)
     assert fams(TurnKind.CONTINUE, "guild") == ["prompt.continue"]

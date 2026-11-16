@@ -25,6 +25,7 @@ FIELD_WORDS = {
     "their": "that person's possessive, his, her or their",
     "extra": "more of this turn's own instructions, filled in at the end; keep it last",
     "words": "a number of words",
+    "name": "the owner's name, as the guild calls him",
 }
 IDEA_CHARS = 120
 OVERASK = 2  # candidates asked per variant kept: some always drop a placeholder or run long

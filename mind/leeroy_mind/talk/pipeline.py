@@ -109,8 +109,9 @@ from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_l
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, dm_explicit,
-                                      explicit_whisper, flirt_chance, forward, his_moves,
-                                      own_dial, romance_instruction, scene_notes, whisper_tail)
+                                      explicit_whisper, flirt_chance, forward, his_heat,
+                                      his_moves, own_dial, romance_instruction, scene_notes,
+                                      whisper_tail)
 from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, is_quest_talk,
                                      mentioned, quest_helper, speaker_weight, typing_delay)
 from leeroy_mind.talk.states import (EFFECTS, RAID_CALLS, Altered, Effects, effects_for,
@@ -1301,7 +1302,9 @@ class Pipeline:
         (PairNotes.recent: a whisper's only in a whisper between the two, a DM's only in that
         DM), then her arc's recent events, and with them her arc's lines, rival and cooling
         (arc.live.arc_view, all of them for a whisper or DM to him only); the romance text
-        shows them only in a whisper or a Discord DM (is_private)."""
+        shows them only in a whisper or a Discord DM (is_private). With [romance] realism the
+        text is romance_instruction's `realism` one, turned up only when his line (`trigger`, or
+        on Discord his message: _his_words) is (romance.his_heat)."""
         hg = self.human.guid
         if (is_group(turn.channel) or not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE or meta.casual):
@@ -1329,11 +1332,57 @@ class Pipeline:
         arc = self._arc_view(turn, p, now, vary or rng)
         scene = [*self.notes.recent(p.guid, hg, turn_channel=turn.channel, to_guid=turn.to_guid,
                                     now=now), *arc.scene]
+        realism = self.cfg.romance.realism
+        heat = realism and his_heat(self._his_words(meta, trigger))
         return romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
                                    addressee_is_human=True, phase=phase, human=self.human,
                                    data_dir=self.data_dir, rng=vary or rng,
                                    tail_follows=tail_follows, scene=scene,
-                                   arc_lines=arc.arc_lines, rival=arc.rival, cooling=arc.cooling)
+                                   arc_lines=arc.arc_lines, rival=arc.rival, cooling=arc.cooling,
+                                   realism=realism, heat=heat)
+
+    def _his_words(self, meta: TurnMeta, trigger: str) -> str:
+        """His line the turn answers, for [romance] realism's his_heat: the trigger line's text,
+        or on a Discord answer (no trigger line) his message it answers, "" when it is gone."""
+        if trigger:
+            return trigger
+        found = self._his_message(meta)
+        return found[0] if found else ""
+
+    def _his_message(self, meta: TurnMeta) -> tuple[str, float] | None:
+        """The text and time of his Discord message a turn answers (meta.discord.reply_to; his,
+        not deleted), or None."""
+        if meta.discord is None or meta.discord.reply_to is None or not self.human.guid:
+            return None
+        with self.store.transaction():
+            row = self.store.conn.execute(
+                "SELECT text, ts FROM discord_message WHERE id = ? AND author = ? "
+                "AND origin = 'human' AND deleted IS NULL",
+                (meta.discord.reply_to, self.human.guid)).fetchone()
+        return (row[0], row[1]) if row else None
+
+    def _his_dm_row(self, turn: Turn, meta: TurnMeta) -> ChatLineRow | None:
+        """His DM a member answers, as the last line of her Chat, on every DM answer to him
+        (controller ruling 2026-11-16, a correctness fix, not behind a switch): discord.talk's
+        dm_chat leaves it out (the instruction quotes it), so the chat she read ended on his
+        previous message and her answer to it, and she answered that one (the owner's sandbox
+        audit, 2026-11-16). Shown as dm_chat shows his lines."""
+        found = self._his_message(meta)
+        if found is None:
+            return None
+        from leeroy_mind.discord.talk import DM_HIS_CHARS, _clip
+        from leeroy_mind.photos.notes import by_messages
+        hg, mid = self.human.guid, meta.discord.reply_to
+        text = _clip(fold(found[0]), DM_HIS_CHARS)
+        photo = by_messages(self.store.conn, [mid],
+                            uploads=getattr(self, 'photos_enabled', False),
+                            members=getattr(self, 'photos_send', False),
+                            memes=getattr(self, 'culture_memes', False)).get(mid)
+        if photo:
+            text += ' ' + photo
+        return ChatLineRow(id=mid, ts=found[1], channel=turn.channel, from_guid=hg,
+                           from_name=self.human.called, to_guid=turn.speaker, text=text,
+                           map=0, zone=0, session_id=None, thread_id=None, origin="human")
 
     async def _compose(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
@@ -1760,7 +1809,7 @@ class Pipeline:
             recent = [ChatLineRow(h.id, h.ts, turn.channel, h.guid, names.get(h.guid, 'someone'),
                                  h.to_guid, h.text, 0, 0, None, h.thread_id, h.origin, h.readers)
                       for h in context]
-        dm_rows = False
+        dm_rows, answered = False, None  # answered: his DM shown at the chat's end
         if not preview and not from_thread and meta.discord_chat is not None:
             # his Discord DM's history (discord.talk dm_chat): the chat she answers in, in place
             # of the game's window, which never holds a Discord line (2026-11-15: it was packed
@@ -1769,6 +1818,12 @@ class Pipeline:
             recent = [r for r in meta.discord_chat if whisper_ok(
                 r.channel, r.from_guid, r.to_guid, speaker=turn.speaker,
                 turn_channel=turn.channel, to_guid=turn.to_guid)]
+            # his DM she answers ends the chat (_his_dm_row): kept out of the copy window, the
+            # claim support and the beat's items below, as a trigger line is
+            if ((row := self._his_dm_row(turn, meta)) is not None
+                    and all(r.id != row.id for r in recent)):
+                recent.append(row)
+                answered = row.id
 
         people = [turn.addressee] if turn.addressee else []
         # the addressee and up to 2 others who spoke recently; a whisper is only between two
@@ -1778,6 +1833,7 @@ class Pipeline:
             if len(people) < room and g != turn.speaker and g not in people and g in names:
                 people.append(g)
         attitude = p.romance.stance if p.identity.player_gender == "female" else ""
+        realism = self.cfg.romance.realism  # [romance] realism: his card's note, stale memories
         pronouns = self._pronoun_tags(turn, people, recent)
         cards = [relationship_card(names.get(g, "someone"),
                                    self.store.get_relationship(turn.speaker, g, lens=True),
@@ -1787,7 +1843,8 @@ class Pipeline:
                                    attitude=attitude if g == hg else "",
                                    speaker=p.identity.player_gender,
                                    friendship_only=is_group(turn.channel),
-                                   pronoun=pronouns.get(("card", g), ""))
+                                   pronoun=pronouns.get(("card", g), ""),
+                                   realism=realism and g == hg)
                  for g in people]
 
         trigger = ""
@@ -1810,7 +1867,8 @@ class Pipeline:
         bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(p, self.cfg.romance.dial) else {}
         memories = [] if preview else await self.recall.recall(
             turn.speaker, query, present=present, addressee=turn.addressee, k=5,
-            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid, **bond_options)
+            priority=turn.priority, touch=False, channel=turn.channel, to_guid=turn.to_guid,
+            **bond_options, **({"stale_plans": True} if realism else {}))
         if meta.lore_memory and all(m.id != meta.lore_memory for m in memories):
             # the memory she answers his question from leads, even while it rests
             pinned = self.recall._shareable(self.store.get_memories([meta.lore_memory]),
@@ -1829,7 +1887,8 @@ class Pipeline:
               if greet else set())
         follow = ""
         if meta.follow_up and (m := self._follow_up_memory(memories)) is not None:
-            follow = FOLLOW_UP.format(memory=self.recall.format(m).removeprefix("- "))
+            follow = FOLLOW_UP.format(
+                memory=self.recall.format(m, past=realism).removeprefix("- "))
         before = list(dict.fromkeys(names[r.from_guid] for r in earlier if r.from_guid in names))
         lore = meta.lore if to_human else ""  # his question about the guild's past
         seen = ""
@@ -1856,7 +1915,8 @@ class Pipeline:
         # at the explicit band in a whisper to him: the owner's overlay, read last, then the
         # distance frame, which her romance text then leaves out, so it is said once
         tail_text = (whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
-                                  data_dir=self.data_dir, forms=human.forms, rng=draws("tail"))
+                                  data_dir=self.data_dir, forms=human.forms, rng=draws("tail"),
+                                  **({"realism": True} if realism else {}))
                      if hg and turn.to_guid == hg else "")
         romance = self._romance(turn, meta, p, rel_h, phase, now, draws("roll"), trigger, dial,
                                 tail_follows=bool(tail_text), vary=draws("vary"))
@@ -1927,7 +1987,7 @@ class Pipeline:
                            channel=turn.channel, recipient=turn.to_guid,
                            at_him=self._aimed_at_him(turn),
                            with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
-            memories=[self.recall.format(m) for m in memories],
+            memories=[self.recall.format(m, past=realism) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
                            lately=self._lately_line(turn.speaker, now),
@@ -1980,7 +2040,7 @@ class Pipeline:
         support = [*trimmed.memories, *trimmed.rel_cards, parts.card, rl.job, rl.rhythm,
                    rl.household, rl.money, rl.sleep, rl.life_thread,
                    *(r.text for r in recent
-                     if not turn.trigger_line or r.id < turn.trigger_line),
+                     if (not turn.trigger_line or r.id < turn.trigger_line) and r.id != answered),
                    *(r.text for r in pair),
                    *([follow] if follow else []),
                    *([turn.instruction] if turn.kind in (TurnKind.BIT, TurnKind.ASIDE)
@@ -2002,7 +2062,8 @@ class Pipeline:
                         [trigger] if trigger else [], [r.text for r in earlier], samples,
                         # a DM's copy check reads his earlier messages there (her own are the
                         # repeat check's): the audit's answer that sent his message back
-                        support, [r.text for r in recent if r.from_guid == hg] if dm_rows
+                        support, [r.text for r in recent
+                                  if r.from_guid == hg and r.id != answered] if dm_rows
                         else [r.text for r in recent if r.id != turn.trigger_line],
                         [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves,
                         # as plain text (no age, speaker or bullet): the shown memories, then the
@@ -2010,7 +2071,8 @@ class Pipeline:
                         beat_items=beats.items_of(
                             [beats.unframed(x) for x in trimmed.memories],
                             [plain(r.text) for r in recent[:-1]
-                             if r.from_guid != turn.speaker and r.id != turn.trigger_line]),
+                             if r.from_guid != turn.speaker and r.id != turn.trigger_line
+                             and r.id != answered]),
                         tail=overlaid)
 
     @staticmethod

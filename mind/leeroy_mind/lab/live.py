@@ -44,7 +44,7 @@ def families_for(turn, human: int) -> list[str]:
     if is_discord(turn.channel) and is_private(turn.channel):
         out.append("discord_dm")
     if to_him:
-        out.append("romance_hook")
+        out += ["romance_hook", "romance_lead"]
         if turn.channel == "whisper" or is_discord(turn.channel) and is_private(turn.channel):
             out.append("beat_ask")
     return [PROMPT_PREFIX + n for n in out]

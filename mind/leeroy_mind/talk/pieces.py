@@ -54,6 +54,11 @@ def _romance_hook() -> str:
     return SPECIFIC
 
 
+def _romance_lead() -> str:
+    from leeroy_mind.talk.romance import REALISM_LEAD
+    return REALISM_LEAD
+
+
 def _beat_ask() -> str:
     from leeroy_mind.talk.beat import MARK
     return MARK
@@ -78,6 +83,9 @@ PIECES: dict[str, tuple[Piece, object]] = {
     "romance_hook": (Piece("romance_hook", "the last sentence of a woman's romance lead toward "
                            "the owner: tie it to what is happening, never a canned line"),
                      _romance_hook),
+    "romance_lead": (Piece("romance_lead", "the closing lead of a woman's romance text toward the "
+                           "owner with [romance] realism: answer him first, stay herself, follow "
+                           "his lead"), _romance_lead),
     "beat_ask": (Piece("beat_ask", "the first sentence of the short think-first step before she "
                        "answers his whisper or DM"), _beat_ask),
 }
