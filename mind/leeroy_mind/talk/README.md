@@ -440,7 +440,8 @@ question. Since then, on every channel and for every member:
   reads "Answer his question first, plainly, then whatever else." at the instruction's end; with
   a Lately line it reads "Answer his question first, plainly, then whatever else; tonight you've
   already ..." without "do something else". Not when another member already answered his line
-  (the turn then says to add what they didn't). `his` follows his pronouns.
+  (the turn then says to add what they didn't), nor on an answer to his pushback (its own
+  instruction says to answer him plainly). `his` follows his pronouns.
 
 # Wants (`talk/intent.py`, 2026-11-16)
 

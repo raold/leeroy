@@ -11,9 +11,10 @@ Both were re-recorded on 2026-11-16 for DM quality (owner's live DM test), no tu
 golden_prompts.json because the "Lately you've..." hint names content words only (the scenario's
 "brought up the line N times" named a chat word, so those hints are gone) and an answer to his
 question that nobody answered yet reads "Answer his question first, plainly, then whatever
-else." (his "anyone know what gear a tank should chase first?" and "what are you talking
-about?"); golden_beat.json because `use` is described as only for an item that bears directly
-on his last line, and can only be null when nothing is offered. No other wording moved."""
+else." (the first answer to his "anyone know what gear a tank should chase first?"; his
+pushback "what are you talking about?" keeps its own "Answer him plainly"); golden_beat.json
+because `use` is described as only for an item that bears directly on his last line, and can
+only be null when nothing is offered. No other wording moved."""
 import pytest
 
 from conftest import seed_test_cast

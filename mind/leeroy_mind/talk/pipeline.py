@@ -1680,10 +1680,11 @@ class Pipeline:
                            forms=self._forms_of(self._counterpart(turn)))
         # an answer to his question, on any channel: answer it first (asking.QUESTION_FIRST,
         # in place of the hint's "do something else"), unless another member already answered
-        # it (`seen` then says to add what they didn't); a question or a request leads the
+        # it (`seen` then says to add what they didn't) or it is his pushback (its own
+        # instruction already says to answer him plainly); a question or a request leads the
         # beat's answering wants (Composed.asking)
         his = his if to_human else ""
-        if his and is_question(his) and not before:
+        if his and is_question(his) and not before and not meta.pushback_line:
             after = question_first(after, human.forms[2])
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
