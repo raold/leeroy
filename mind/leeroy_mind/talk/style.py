@@ -264,11 +264,28 @@ def _abbreviate(text: str, abbreviations: dict[str, str]) -> str:
         lambda m: table.get(m.group(0).casefold(), m.group(0)), seg))
 
 
+# What a typo may never make of a word the model wrote otherwise: a swear, a sexual word or a
+# slur ("sec" -> "sex", "count" -> "cunt", "bigger" -> a slur; review of #321, P3-1). The guards
+# never see the typed line, so the typo step itself refuses them and tries another.
+NEVER_TYPED = frozenset("""
+anal anus arse ass asses asshole bitch bitches boob boobs butt chink cock cocks coon crap cum
+cumming cums cunt cunts damn dick dicks dildo dyke fag fags faggot fuck fucked fucker fucking
+fucks gook hell homo horny jizz kike nazi nigga nigger niggers nude nudes penis piss pissed porn
+pussy rape raped rapes rapist retard retarded sex sexy shag shit shits shitty slut sluts spic
+tit tits titty tranny twat vagina wank wanker whore whores wop
+""".split())
+
+
+def _never(*words: str) -> bool:
+    """A typo would type one of NEVER_TYPED."""
+    return any(w.casefold() in NEVER_TYPED for w in words)
+
+
 def _typo(word: str, rng: random.Random) -> str:
     """Swap two neighbouring letters or drop one, now and then double one (TYPO_DOUBLE_P:
     rehearsal 2's "reead" and "thhat" looked machine-made); the first letter stays, and the
-    result is never another real word (words.COMMON_WORDS: "still" became "sill"). A word
-    every try of which is a real word is left as it is."""
+    result is never another real word (words.COMMON_WORDS: "still" became "sill") nor one of
+    NEVER_TYPED ("count"). A word every try of which is one of those is left as it is."""
     for _ in range(TYPO_TRIES):
         r = rng.random()
         i = rng.randrange(1, len(word) - 1)
@@ -280,7 +297,7 @@ def _typo(word: str, rng: random.Random) -> str:
             out = word[:i] + word[i + 1:]
         else:
             out = word[:i] + word[i] + word[i:]
-        if out.casefold() not in COMMON_WORDS:
+        if out.casefold() not in COMMON_WORDS and not _never(out):
             return out
     return word
 
@@ -489,9 +506,35 @@ def _words_cf(words) -> frozenset[str]:
     return frozenset(part.casefold() for w in words for part in w.split())
 
 
+# What the texture leaves as written, beside item links (review of #321, P3-4): a quoted phrase,
+# in straight or curly quotes (a straight single quote only where it cannot be an apostrophe),
+# and a web address.
+_QUOTED = re.compile(r'"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’'
+                     r"|(?<![\w'’])'(?=\S)[^\n]*?(?<=\S)'(?!\w)")
+_URL = re.compile(r"\S*(?:://|www\.)\S*", re.IGNORECASE)
+
+
+def _kept_spans(text: str) -> list[tuple[int, int]]:
+    """Links, quoted phrases and web addresses: merged, in order."""
+    spans = sorted(m.span() for p in (_LINK, _QUOTED, _URL) for m in p.finditer(text))
+    out: list[tuple[int, int]] = []
+    for a, b in spans:
+        if out and a < out[-1][1]:
+            out[-1] = (out[-1][0], max(b, out[-1][1]))
+        else:
+            out.append((a, b))
+    return out
+
+
 def _sub_each(text: str, pat: re.Pattern, fn) -> str:
-    """pat's matches outside links, each replaced by fn(match), in order."""
-    return _outside_links(text, lambda seg: pat.sub(fn, seg))
+    """pat's matches outside links, quoted phrases and web addresses, each replaced by
+    fn(match), in order."""
+    out, last = [], 0
+    for a, b in _kept_spans(text):
+        out += [pat.sub(fn, text[last:a]), text[a:b]]
+        last = b
+    out.append(pat.sub(fn, text[last:]))
+    return "".join(out)
 
 
 def _like(found: str, spelt: str) -> str:
@@ -588,15 +631,20 @@ def _run_on(text: str, tex: Texture, rng: random.Random, protect: frozenset[str]
             room: int) -> str:
     """Some of her full stops between fragments, run on the way chat is typed: "x. y" becomes
     "x, y", "x y" or "x and y", short fragments most readily; "?" and "!" stay, and so does
-    "...". After "lol" or a mark it is just a space. "and" only between two clauses of three
-    words or more, when the line has a word to spare (room)."""
+    "...". A fragment of one or two words takes a comma, never a bare space ("stop, pull the
+    boss", not "stop pull the boss": review of #321, P3-3). After a mark it is just a space, and
+    after "lol" ending a longer fragment too. "and" only between two clauses of three words or
+    more, when the line has a word to spare (room). A quoted phrase keeps its full stops."""
     if tex.join <= 0 or ". " not in text:
         return text
-    toks = _TOKEN.findall(text)
+    found = list(_TOKEN.finditer(text))
+    kept = _kept_spans(text)
+    toks = [m.group(0) for m in found]
     ends = [i for i, w in enumerate(toks) if w.rstrip("\"')").endswith((".", "!", "?"))]
     out, n = list(toks), len(toks)
     for b in range(n - 1):
-        if not _full_stop(toks[b]):
+        if not _full_stop(toks[b]) or any(a < found[b + 1].end() and found[b].start() < z
+                                          for a, z in kept):
             continue
         prev = max((e for e in ends if e < b), default=-1)
         nxt = min((e for e in ends if e > b), default=n - 1)
@@ -604,7 +652,11 @@ def _run_on(text: str, tex: Texture, rng: random.Random, protect: frozenset[str]
         if rng.random() >= tex.join * (1 if min(left, right) <= SHORT_FRAGMENT else LONG_JOIN):
             continue
         head = out[b][:-1]
-        if _bare(head) in _INTERJECTIONS or _EMOTICON.fullmatch(head):
+        if _EMOTICON.fullmatch(head):
+            pass
+        elif min(left, right) <= 2:
+            head += ","
+        elif _bare(head) in _INTERJECTIONS:
             pass
         elif (left >= 3 and right >= 3 and _bare(toks[b + 1]) in _AND_STARTS and n < room
               and rng.random() < AND_SHARE):
@@ -643,11 +695,12 @@ def _misstrike(word: str, kind: str, rng: random.Random) -> str | None:
 
 def _slip_words(text: str, skip: frozenset[str]) -> list[tuple[int, int, bool]]:
     """The plain words a slip may hit: (start, end, whether its token is the bare word), outside
-    links, never a word in `skip`, a mark ("xD") or shouting."""
-    links = [m.span() for m in _LINK.finditer(text)]
+    links, quoted phrases and web addresses, never a word in `skip`, a mark ("xD") or
+    shouting."""
+    kept = _kept_spans(text)
     out = []
     for m in re.finditer(r"\S+", text):
-        if any(a < m.end() and m.start() < b for a, b in links):
+        if any(a < m.end() and m.start() < b for a, b in kept):
             continue
         tok = m.group(0)
         core = tok.lstrip("\"'(").rstrip(".,!?;:\"')")
@@ -673,7 +726,7 @@ def _slip_once(text: str, kind: str, words: list[tuple[int, int, bool]], rng: ra
         a, b = rng.choice(pairs)
         first, second = text[a[0]:a[1]], text[b[0]:b[1]]
         new = first + second if kind == "merge" else first[:-1] + " " + first[-1] + second
-        if kind == "merge" and new.casefold() in COMMON_WORDS:
+        if (kind == "merge" and new.casefold() in COMMON_WORDS) or _never(*new.split()):
             return None  # "in"+"to" is "into"
         return text[:a[0]] + new + text[b[1]:], "", ""
     if kind == "auto":
@@ -690,6 +743,8 @@ def _slip_once(text: str, kind: str, words: list[tuple[int, int, bool]], rng: ra
         new = _misstrike(word, kind, rng)
         if new is None or new.casefold() in COMMON_WORDS or new.casefold() in skip:
             return None
+    if _never(new):  # never a swear, sexual word or slur she did not write ("sec" -> "sex")
+        return None
     fixable = kind in _FIXABLE and (kind == "auto" or (len(word) >= 4
                                                         and word.casefold() not in _SMALL))
     return text[:a] + new + text[b:], new if fixable else "", word if fixable else ""

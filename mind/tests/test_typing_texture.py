@@ -319,8 +319,8 @@ def test_textured_lines_keep_protected_and_real_name_spelling():
     for who in NAMES[:20]:
         for seed in range(10):
             text = "Quillon, Arkon thinks you're ready. definitely. Arkon pulls"
-            line = " ".join(apply_style(text, t, DRUNK, random.Random(seed), speaker=who, texture=True,
-                                        protect=frozenset({"Arkon"}),
+            line = " ".join(apply_style(text, t, DRUNK, random.Random(seed), speaker=who,
+                                        texture=True, protect=frozenset({"Arkon"}),
                                         keep_case=frozenset({"Quillon"})))
             assert line.startswith("Quillon") and line.count("arkon") == 2, line
 
@@ -357,3 +357,73 @@ def test_a_burst_keeps_the_slip_with_its_part():
     parts = split_line(line)
     assert len(parts) == 3
     assert [(p.slip, p.fix) for p in parts] == [("", ""), ("amking", "making"), ("", "")]
+
+
+# -- review of #321 -----------------------------------------------------------------------------
+
+SWEAR_BAIT = ["give me a sec to log", "nice shirt you have on", "count me in",
+              "we one shot the boss", "the duck pond", "sick pull", "that was bigger",
+              "i like it a lot", "pass the flask", "think about it, regard the boss"]
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_a_slip_never_types_a_swear_or_sexual_word_she_did_not_write(phone):
+    """P3-1: "sec" -> "sex", "shirt" -> "shit", "count" -> "cunt", "duck" -> "dick"."""
+    from leeroy_mind.talk.style import NEVER_TYPED
+    changed = 0
+    for line in SWEAR_BAIT:
+        for seed in range(3000):
+            out, _, _ = _slip(line, 0.12, random.Random(seed), frozenset(), phone)
+            changed += out != line
+            assert not set(re.findall(r"[a-z]+", out.lower())) & NEVER_TYPED, (line, out)
+    assert changed > 1000  # these lines still get their ordinary slips
+
+
+def test_the_old_typo_path_never_types_one_either():
+    from leeroy_mind.talk.style import NEVER_TYPED, _typo
+    for word in ("count", "shirt", "duck", "sick", "shot", "bigger", "pass", "fact", "shitt"):
+        for seed in range(3000):
+            out = _typo(word, random.Random(seed))
+            assert out == word or out.casefold() not in NEVER_TYPED, (word, out)
+    # the switch-off path as a whole: "count" is typo'd, but never into "cunt"
+    t = T(typo_rate=0.15)
+    outs = {apply_style("count me in", t, DRUNK, random.Random(s))[0] for s in range(2000)}
+    assert len(outs) > 1 and "cunt me in" not in outs
+
+
+def test_a_one_or_two_word_fragment_runs_on_with_a_comma_never_a_space():
+    """P3-3: "stop. pull the boss" must never become "stop pull the boss"."""
+    seen = set()
+    for who in NAMES:
+        for seed in range(6):
+            for text, short in (("stop. pull the boss", "stop"), ("pull the boss. now", "boss"),
+                                ("ok sure. we go after the next pull", "sure")):
+                line = typed(text, T(), seed, who)
+                rest = line.replace(f"{short}, ", "").replace(f"{short}. ", "")
+                assert f"{short} " not in rest, line
+                seen.add(line)
+    assert {"stop, pull the boss", "pull the boss, now",
+            "ok sure, we go after the next pull"} <= seen
+
+
+def test_quotes_and_web_addresses_are_typed_as_written():
+    """P3-4: shorthand, habits, apostrophes, slips and autocorrect never touch a quoted phrase
+    or a web address."""
+    t = T(abbreviations={"you": "u", "because": "bc"}, typo_rate=0.15)
+    tex = Texture(casual=1, apostrophes=1, join=0, commas=0, shorthand=1,
+                  habits=(("weird", "wierd", 1.0), ("were", "where", 1.0)))
+    kept = ['"i don\'t know because you were weird"', "“you were weird”",
+            "‘because you were weird’", "'you were weird'",
+            "https://www.weird.com/because/you"]
+    for quote in kept:
+        changed = 0
+        for seed in range(300):
+            text = f"you said {quote} because you were weird"
+            out, _, _ = _textured(text, t, tex, DRUNK, random.Random(seed), frozenset(),
+                                  phone=bool(seed % 2))
+            assert quote in out, (quote, out)
+            changed += out.endswith("bc u where wierd") or "u said" in out
+        assert changed == 300  # outside it, all of them apply
+    # run-ons too: a quoted phrase keeps its full stops
+    line = typed('he said "stop. pull now" ok. go', T(), 0, "Member1")
+    assert '"stop. pull now"' in line
