@@ -86,44 +86,56 @@ OTHER = "Belra"  # another test cast member
 
 @pytest.mark.parametrize("place,code", [
     (f"{OTHER} desk at work", "member_name"),
-    ("zorbly corner", "word"),
     ("desk 42 at work", "chars"),
     ("desk (masterpiece:1.4)", "chars"),
+    ("supply cupboard, best quality", "chars"),
     ("the quiet corner of the big supply cupboard at work", "long"),
     ("shower block at work", "undress"),
-    ("kids corner at home", "minor"),
-    ("school staff room", "age"),
     ("office with colleagues", "other_person"),
     ("cupboard behind my manager", "other_person"),
     ("vintage camera shop", "era"),
+    ("Starbucks corner", "name"),
     ("", "empty"),
 ])
-def test_a_refused_place_takes_the_enum_paths_setting(app, place, code):
+def test_a_refused_place_falls_back_without_a_second_model_call(app, place, code):
     app.llm.answers = [dict(REPLY, place=place), PICKS]
     scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
-    assert len(app.llm.calls) == 2  # the words, then the enum path's own choice
-    assert app.llm.calls[1][2]["format"]["title"] == "scene"
-    assert scene["setting"] == "on a quiet park path" and scene["recipe"] == W.WORDS_RECIPE
-    assert f"place:{code}" in scene["words"]["fallbacks"]
+    assert len(app.llm.calls) == 1  # his words' reading only: the fallback asks no model
+    assert scene["setting"] == "in a living room" and scene["recipe"] == W.WORDS_RECIPE
+    assert scene["words"]["fallbacks"][:2] == [f"place:{code}", "place:everyday"]
     assert place not in json.dumps(scene) or not place
     assert scene["outfit"] == HIVIS  # the other fields keep his words' reading
 
 
+@pytest.mark.parametrize("his,place", [
+    ("sneak off from work and send me one from the staff toilets", W.WORK_BATHROOM),
+    ("on your break? send me a pic", W.WORK_BREAK),
+    ("send me one from your kitchen", "in a home kitchen"),
+    ("go on, one from the garden", "in a small garden"),
+])
+def test_the_place_fallback_follows_his_words(app, his, place):
+    app.llm.answers = [dict(REPLY, place="staff toilets")]
+    scene = run(choose_words_scene(app, 101, his, "him", request=7))
+    assert len(app.llm.calls) == 1 and scene["setting"] == place
+    assert "place:toilet" in scene["words"]["fallbacks"]
+
+
 def test_her_own_names_in_the_place_are_refused(app):
     p = load_persona(app.store, 101)
-    for place, code in ((f"{p.character_name} corner of the cupboard", "place:her_name"),
-                        (f"{p.identity.real_name.split()[0]} corner of the cupboard", "place:word")):
-        app.llm.answers = [dict(REPLY, place=place), PICKS]
+    for place, code in ((f"{p.character_name.lower()} corner of the cupboard", "place:her_name"),
+                        (f"{p.character_name} corner of the cupboard", "place:name"),
+                        (f"{p.identity.real_name.split()[0]} corner of the cupboard", "place:name")):
+        app.llm.answers = [dict(REPLY, place=place)]
         scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
-        assert code in scene["words"]["fallbacks"] and scene["setting"] == "on a quiet park path"
+        assert code in scene["words"]["fallbacks"] and scene["setting"] == "in a living room"
 
 
 @pytest.mark.parametrize("field,text,code", [
     ("moment", "topless and soaked", "explicit"),
     ("moment", "hiding from my coworkers", "other_person"),
     ("moment", "quick 2 second one", "chars"),
-    ("prop", "baby bottle", "minor"),
     ("prop", "my sunglasses", "looks"),
+    ("prop", "mug, plate", "chars"),
 ])
 def test_a_refused_moment_or_prop_is_none_alone(app, field, text, code):
     scene = words(app, {field: text})
@@ -193,10 +205,10 @@ def test_lust_gym_wear_on_a_sofa_is_casual_and_her_bed_is_refused(app):
     lusty(app)
     sofa = words(app, {"wearing": "gym", "place": "sofa at home"})
     assert "wearing:indoor_pairing" in sofa["words"]["fallbacks"]
-    app.llm.answers = [dict(REPLY, place="her bedroom at home"), LUST_PICKS]
+    app.llm.answers = [dict(REPLY, place="her bedroom at home")]
     bed = run(choose_words_scene(app, 101, HIS, "him", request=7))
     assert bed["setting"] == "her living room couch" and bed["style"] == "lust"
-    assert "place:bed" in bed["words"]["fallbacks"]
+    assert "place:bed" in bed["words"]["fallbacks"] and len(app.llm.calls) == 2  # one a request
 
 
 def test_the_lust_outfit_draw_is_seeded_by_the_request(app):
@@ -209,7 +221,9 @@ def test_a_reply_off_the_schema_twice_takes_todays_enum_scene(app, caplog):
     caplog.set_level(logging.INFO, logger="leeroy_mind")
     app.llm.answers = [{**REPLY, "framing": "drone shot"}, "not json", PICKS]
     scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
-    assert len(app.llm.calls) == 3 and scene["recipe"] == RECIPE and "words" not in scene
+    assert len(app.llm.calls) == 2  # chat_json's own retry; the enum path asks no model
+    assert scene["recipe"] == RECIPE and "words" not in scene
+    assert scene["setting"] == "in a living room"
     assert any(r.leeroy_fields == {"request": 7, "guid": 101, "source": "enum", "reason": "schema"}
                for r in caplog.records if getattr(r, "leeroy_event", "") == "selfie_request_scene")
 
@@ -239,15 +253,21 @@ def test_logs_carry_ids_and_codes_never_his_words_or_the_free_text(app, caplog):
     his = "PRIVATEASKWORDS please, from the supply cupboard"
     words(app, {"place": "supply cupboard at work", "moment": "slipped out for a minute",
                 "prop": "paper coffee cup"}, his=his)
-    app.llm.answers = [dict(REPLY, place="zorbly corner"), PICKS]
+    app.llm.answers = [dict(REPLY, place="shower block at work")]
     run(choose_words_scene(app, 101, his, "him", request=8))
+    app.llm.answers = [dict(REPLY, moment="looking young and sweet")]
+    run(choose_words_scene(app, 101, his, "him", request=9))
     rows = [r for r in caplog.records if getattr(r, "leeroy_event", "") == "selfie_request_scene"]
-    assert len(rows) == 2 and rows[0].leeroy_fields["source"] == "words"
-    assert rows[0].leeroy_fields["place"] == "words" and rows[1].leeroy_fields["place"] == "enum"
+    assert len(rows) == 3 and rows[0].leeroy_fields["source"] == "words"
+    assert rows[0].leeroy_fields["place"] == "words" and rows[1].leeroy_fields["place"] == "everyday"
+    assert rows[2].leeroy_fields == {"request": 9, "guid": 101, "source": "enum", "reason": "age"}
+    refused = [r.leeroy_fields for r in caplog.records
+               if getattr(r, "leeroy_event", "") == "scene_words_refused"]
+    assert refused == [{"request": 9, "guid": 101, "reason": "age"}]
     text = "\n".join(r.getMessage() + json.dumps(getattr(r, "leeroy_fields", {}), default=str)
                      for r in caplog.records)
-    for secret in ("PRIVATEASKWORDS", "supply", "cupboard", "slipped", "coffee", "zorbly",
-                   "hi-vis"):
+    for secret in ("PRIVATEASKWORDS", "supply", "cupboard", "slipped", "coffee", "shower",
+                   "young", "sweet", "hi-vis"):
         assert secret not in text
 
 
@@ -327,14 +347,113 @@ def test_a_place_the_fit_cannot_carry_takes_the_enum_setting(app):
     scene = W.scene_of(p, W.resolve(p, dict(REPLY, place=long), W.Screened(long, None, None, ()),
                                     place=long, block=None, hour=10, seed=7), audience="him")
     assert over_fit(W.build_words_prompt(p, scene))  # the precondition of the fallback
-    app.llm.answers = [dict(REPLY, place=long, wearing="casual"), PICKS]
+    app.llm.answers = [dict(REPLY, place=long, wearing="casual")]
     got = run(choose_words_scene(app, 101, HIS, "him", request=7))
-    assert "place:prompt_fit" in got["words"]["fallbacks"] and got["setting"] != long
+    assert "place:prompt_fit" in got["words"]["fallbacks"] and got["setting"] == "in a living room"
+    assert len(app.llm.calls) == 1
     assert not over_fit(W.build_words_prompt(load_persona(app.store, 101), got))
 
 
 def test_his_names_never_reach_the_scene(app):
     app.engine.human = replace(IDENT, nickname="Cupboard")
-    app.llm.answers = [dict(REPLY), PICKS]
+    app.llm.answers = [dict(REPLY)]
     scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
     assert "place:member_name" in scene["words"]["fallbacks"]
+
+
+# The review of #339's hostile reads of his asks (a model copying them): each is refused, the
+# whole reply for an age word or a child, the field alone otherwise; none ever reaches a render.
+AGE_ASKS = [
+    ("moment", "looking young and cute"), ("moment", "young"), ("moment", "looking younger"),
+    ("moment", "youngest one here"), ("moment", "tiny and cute"), ("moment", "little and cute"),
+    ("moment", "petite and cute"), ("moment", "small girl energy"), ("moment", "naive"),
+    ("moment", "virgin"), ("moment", "innocent"), ("moment", "after class"),
+    ("moment", "in uniform skirt"), ("moment", "just turned eighteen"), ("place", "classroom"),
+    ("place", "college campus"), ("place", "school staff room"), ("place", "dorm room"),
+    ("prop", "homework"), ("prop", "lollipop"), ("place", "kids corner at home"),
+    ("prop", "baby bottle"),
+]
+
+
+@pytest.mark.parametrize("field,text", AGE_ASKS)
+def test_an_age_word_or_a_child_refuses_all_his_free_text(app, caplog, field, text):
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    app.llm.answers = [dict(REPLY, **{field: text})]
+    scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
+    assert len(app.llm.calls) == 1 and scene["recipe"] == RECIPE and "words" not in scene
+    assert scene["setting"] == "in a living room"  # the enum path's everyday choice
+    for kept in (text, "supply cupboard", "slipped out", "paper coffee"):
+        assert kept not in json.dumps(scene)
+    reasons = [r.leeroy_fields["reason"] for r in caplog.records
+               if getattr(r, "leeroy_event", "") == "scene_words_refused"]
+    assert reasons in (["age"], ["minor"])
+
+
+HOSTILE = [
+    ("moment", "shirt half open"), ("moment", "blouse open"), ("moment", "open shirt"),
+    ("moment", "top undone"), ("moment", "buttons undone"), ("moment", "pants down"),
+    ("moment", "skirt hiked up"), ("moment", "skirt riding up"), ("moment", "wearing his shirt"),
+    ("moment", "scrubs top undone"), ("moment", "tits out"), ("moment", "ass out"),
+    ("moment", "big ass"), ("moment", "showing my butt"), ("moment", "showing off curves"),
+    ("moment", "showing legs"), ("moment", "on her knees"), ("moment", "kneeling"),
+    ("moment", "biting lip"), ("moment", "sitting on the toilet"), ("moment", "peeing"),
+    ("moment", "pretending to pee"), ("moment", "two women kissing"),
+    ("moment", "two guys behind"), ("moment", "kissing the mirror"), ("moment", "with someone"),
+    ("moment", "posing like amber heard"), ("moment", "drake style"),
+    ("moment", "cleavage on show"), ("moment", "thong peeking"),
+    ("place", "bathroom, plunging neckline"), ("place", "bathroom, low cut top, tight"),
+    ("place", "bathroom, thick curvy booty"), ("place", "bathroom, low angle from below"),
+    ("place", "bathroom, masterpiece, best quality"), ("place", "work toilets"),
+    ("place", "bra shop changing area"), ("prop", "christian bale poster"),
+    ("prop", "poster of my idol"), ("prop", "her bra"),
+]
+
+
+@pytest.mark.parametrize("field,text", HOSTILE)
+def test_hostile_free_text_falls_back_or_drops_and_never_renders(app, field, text):
+    app.llm.answers = [dict(REPLY, **{field: text})]
+    scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
+    assert len(app.llm.calls) == 1
+    assert any(c.startswith(f"{field}:") for c in scene["words"]["fallbacks"])
+    spec = W.build_words_prompt(load_persona(app.store, 101), scene)
+    rendered = " | ".join(t for t, _ in spec.phrases)
+    assert text not in json.dumps(scene) and text not in rendered
+
+
+FALSE_REFUSALS = [
+    ("place", "staff loo"), ("place", "work loos"), ("place", "loo at work"), ("place", "the loos"),
+    ("place", "restroom"), ("place", "office restroom"), ("place", "women's restroom"),
+    ("place", "staffroom"), ("place", "shop backroom"), ("place", "en suite"), ("place", "ensuite"),
+    ("place", "café at work"), ("place", "nurses\u2019 station"),
+    ("moment", "quick selfie"), ("moment", "sneaky selfie"), ("moment", "quick pic"),
+    ("moment", "cheeky one"), ("moment", "hungover"), ("moment", "between patients"),
+    ("prop", "latte"), ("prop", "lanyard"), ("prop", "takeaway coffee"), ("prop", "vape"),
+    ("prop", "headset"), ("prop", "teddy bear"),
+]
+PASS_TOO = [
+    ("place", "work bathroom"), ("place", "ladies' room"), ("place", "bathroom stall"),
+    ("place", "break room"), ("place", "behind the bar"), ("place", "walk-in fridge"),
+    ("place", "front seat of the van"), ("place", "hotel bathroom"), ("place", "gym mirror"),
+    ("moment", "sneaked away, hurried"), ("moment", "on my lunch break"),
+    ("moment", "blowing a kiss"), ("prop", "handcuffs"), ("prop", "a whip"), ("prop", "condom"),
+]
+
+
+@pytest.mark.parametrize("field,text", FALSE_REFUSALS + PASS_TOO)
+def test_ordinary_free_text_passes(app, field, text):
+    scene = words(app, {field: text})
+    assert scene["words"]["fallbacks"] == [] and len(app.llm.calls) == 1
+    folded = W.fold(text)
+    got = {"place": scene["setting"], "moment": scene["activity"],
+           "prop": scene["words"]["prop"]}[field]
+    assert got == folded
+    phrases = [t for t, _ in W.build_words_prompt(load_persona(app.store, 101), scene).phrases]
+    assert (f"with {folded}" if field == "prop" else folded) in phrases
+
+
+def test_names_in_finds_a_member_named_since_in_any_free_text():
+    p = woman(age=30)
+    scene = _scene(p)
+    assert not W.names_in(scene, ["Belra", "Ownerly"])
+    assert W.names_in(scene, ["Cupboard"]) and W.names_in(scene, ["coffee"])
+    assert W.names_in(scene, ["minute"])

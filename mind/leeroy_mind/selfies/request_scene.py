@@ -61,17 +61,10 @@ def _subject(app, guid: int, audience: str):
         raise RequestSceneError("no_profile")
     # A lust member always sends privately, including a request made in a channel.
     audience = "him" if style_of(p) == LUST else audience
-    ident, roster = app.engine.human, app.store.cast()
-    member = roster.get(guid)
+    ident, member = app.engine.human, app.store.cast().get(guid)
     if member is None:
         raise RequestSceneError("no_member")
-    names = [ident.nickname, ident.character_name]
-    for other in roster.values():
-        if other.guid != guid:
-            names.append(other.name)
-            if (persona := app.personas.base(other.guid)) is not None:
-                names.append(persona.identity.real_name)
-    return p, member, ident, names, audience
+    return p, member, ident, request_names(app, guid), audience
 
 
 async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool = True) -> Scene:
@@ -130,24 +123,31 @@ async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool
         raise RequestSceneError("unrenderable") from None
 
 
-async def _enum_setting(app, guid: int, words: str, audience: str) -> str:
-    """The enum path's setting (choose_scene), for a place his words could not give."""
-    try:
-        return (await choose_scene(app, guid, words, audience)).setting
-    except GpuPaused:
-        return (await choose_scene(app, guid, words, audience, model=False)).setting
+def request_names(app, guid: int) -> list[str]:
+    """The names no request scene of `guid` may hold: his nickname and character name, and every
+    other cast member's name and real name (as _subject reads them)."""
+    ident, roster = app.engine.human, app.store.cast()
+    names = [ident.nickname, ident.character_name]
+    for other in roster.values():
+        if other.guid != guid:
+            names.append(other.name)
+            if (persona := app.personas.base(other.guid)) is not None:
+                names.append(persona.identity.real_name)
+    return [n for n in names if n]
 
 
 async def choose_words_scene(app, guid: int, words: str, audience: str, *, request: int,
                              block=None, hour: int | None = None) -> dict:
     """The request's scene read from his words (words_scene): one structured call on the live
     model through its queue and admission (`format` = SCHEMA, think false; chat_json's single
-    retry for a reply off the schema), then the screens, each refused field falling back on its
-    own (the place to choose_scene's setting, also when the prompt would not fit the worker).
-    A call that still fails takes today's enum scene (choose_scene; without the model after a
-    model error). Returns the snap's scene dict. GpuPaused propagates (the caller takes the enum
-    path without a model). `block`: her day plan's block at the photo's time, or None; `hour`:
-    her local hour then. Logs `selfie_request_scene` with ids and codes only."""
+    retry for a reply off the schema), and no other model call. An age word or a child anywhere
+    in the reply's free text refuses all of it (log `scene_words_refused reason=age|minor`): the
+    enum path's everyday choice. Otherwise each refused field falls back on its own, the place to
+    words_scene.fallback_place (also when the prompt would not fit the worker). A reply still off
+    the schema, a model error or an unrenderable result takes the enum path's everyday choice.
+    Returns the snap's scene dict. GpuPaused propagates (the caller takes the everyday choice).
+    `block`: her day plan's block at the photo's time, or None; `hour`: her local hour then.
+    Logs `selfie_request_scene` with ids and codes only."""
     from . import words_scene as W
     p, member, ident, names, audience = _subject(app, guid, audience)
     hour = app.clock.local().hour if hour is None else hour
@@ -172,34 +172,37 @@ async def choose_words_scene(app, guid: int, words: str, audience: str, *, reque
         return await chat_json(llm, app.cfg.models.live, messages, W.SCHEMA,
                                preset=WORDS_LIVE, validate=validate)
 
+    async def everyday(reason: str) -> dict:
+        log("selfie_request_scene", request=request, guid=guid, source="enum", reason=reason)
+        return scene_json(await choose_scene(app, guid, words, audience, model=False))
+
     try:
         data = await app.scheduler.submit(Priority.REPLY_HUMAN, job)
     except GpuPaused:
         raise
     except (JSONJobFailed, LLMError) as error:
-        failed = isinstance(error, JSONJobFailed)
-        log("selfie_request_scene", request=request, guid=guid, source="enum",
-            reason="schema" if failed else "model")
-        return scene_json(await choose_scene(app, guid, words, audience, model=failed))
+        return await everyday("schema" if isinstance(error, JSONJobFailed) else "model")
+    if (hit := W.age_hit(data)) is not None:
+        log("scene_words_refused", request=request, guid=guid, reason=hit)
+        return await everyday(hit)
     screened = W.screen_reply(p, data, ident=ident, names=names)
     codes = list(screened.fallbacks)
-    place = screened.place or await _enum_setting(app, guid, words, audience)
+    place, where = (screened.place, "words") if screened.place else W.fallback_place(p, words)
     w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request)
     scene = W.scene_of(p, w, audience=audience)
     if screened.place is not None and (scene_renderable(p, scene_from(scene)) is None
                                        and over_fit(W.build_words_prompt(p, scene))):
+        place, where = W.fallback_place(p, words)
         codes.append("place:prompt_fit")
-        place = await _enum_setting(app, guid, words, audience)
         w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request)
         scene = W.scene_of(p, w, audience=audience)
     if scene_renderable(p, scene_from(scene)) is not None:
-        log("selfie_request_scene", request=request, guid=guid, source="enum",
-            reason="unrenderable")
-        return scene_json(await choose_scene(app, guid, words, audience))
+        return await everyday("unrenderable")
+    if where != "words":
+        codes.append(where)
     scene["words"]["fallbacks"] = codes + [c for c in w.fallbacks if c not in codes]
     log("selfie_request_scene", request=request, guid=guid, source="words",
         framing=w.framing, wearing=w.wearing, time=w.time, lighting=w.lighting,
-        place="enum" if screened.place is None or "place:prompt_fit" in codes else "words",
-        moment="words" if w.moment else "none", prop="words" if w.prop else "none",
-        fallbacks=scene["words"]["fallbacks"])
+        place=where.removeprefix("place:"), moment="words" if w.moment else "none",
+        prop="words" if w.prop else "none", fallbacks=scene["words"]["fallbacks"])
     return scene

@@ -7,6 +7,7 @@ take it: she says so now, and it is rendered and sent then with a line (its snap
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
+import re
 import time
 
 from leeroy_mind.discord import layout
@@ -26,15 +27,22 @@ from .offer import PhotoOffer
 from .request_words import request_target
 from . import request_store as records
 
-# Her answer while she cannot take the photo yet (the scene's `wait`: her day plan's block).
+# Her answer while she cannot take the photo yet (the scene's `wait`, by her day plan's block):
+# a commute reads as her way to or from work, driving only when her job or rhythm says she
+# drives (the day plan does not know how she travels).
+_LATER = (" Tell him so briefly in your own words, and that you'll send one {when}. Don't claim "
+          "anything is attached.")
 CANT_NOW = {
-    'asleep': ("You're in bed for the night, so you can't take a photo right now. Tell him so "
-               "briefly in your own words, and that you'll send one when you're up. Don't claim "
-               "anything is attached."),
-    'commute': ("You're driving right now, so you can't take a photo. Tell him so briefly in your "
-                "own words, and that you'll send one when you get there. Don't claim anything is "
-                "attached."),
+    'asleep': "You're in bed for the night, so you can't take a photo right now."
+              + _LATER.format(when="when you're up"),
+    'driving': "You're driving right now, so you can't take a photo."
+               + _LATER.format(when="when you get there"),
+    'to_work': "You're on your way to work right now, so you can't take a photo."
+               + _LATER.format(when="when you get there"),
+    'from_work': "You're on your way home from work right now, so you can't take a photo."
+                 + _LATER.format(when="when you get home"),
 }
+DRIVES_RE = re.compile(r"\b(?:drives?|driving|driver|by car|in the car|van|lorry|truck)\b", re.I)
 SENT_LATER = ("This is the photo he asked you for earlier, when you couldn't take one; you just "
               "took it. Send it now with a short line in your own words.")
 
@@ -254,9 +262,11 @@ class RequestPhotos:
             reserve_fallback(app, request, now=app.clock.now())
 
     def _wait(self, request, p):
-        """(her day plan's block, when she can next take a photo) while it has her asleep or
-        driving ([life] availability on), else None; never past the request's expiry."""
+        """(her day plan's block, when she can next take a photo, the CANT_NOW code) while it has
+        her asleep or commuting ([life] availability on), else None; never past the request's
+        expiry."""
         from leeroy_mind.discord.presence import local_time
+        from leeroy_mind.life.day import Block, block_at
         from leeroy_mind.life.presence import NO_PHOTO, free_after
         app = self.app
         life = getattr(app.engine, 'life', None)
@@ -268,7 +278,13 @@ class RequestPhotos:
         if until is None:
             return None
         at = app.clock.now() + max(0.0, (until - her).total_seconds())
-        return (lp.block, at) if at < request.expires - 600 else None
+        if lp.block is Block.ASLEEP:
+            code = 'asleep'
+        elif DRIVES_RE.search(f'{p.real_life.job} {p.real_life.rhythm}'):
+            code = 'driving'
+        else:
+            code = 'to_work' if block_at(p, until)[0] is Block.WORK else 'from_work'
+        return (lp.block, at, code) if at < request.expires - 600 else None
 
     async def _words_scene(self, request, words, p):
         """(her scene read from his words, the time it is taken or None for now)."""
@@ -294,8 +310,8 @@ class RequestPhotos:
         if wait is None:
             return scene, None
         log('selfie_request_deferred', request=request.message, guid=request.guid,
-            block=wait[0].value, wait_s=round(at - app.clock.now()))
-        return {**scene, 'wait': wait[0].value}, at
+            block=wait[0].value, wait=wait[2], wait_s=round(at - app.clock.now()))
+        return {**scene, 'wait': wait[2]}, at
 
     def _waiting(self, request):
         """Her scene's `wait` code while her photo is put off by her day plan, else None."""

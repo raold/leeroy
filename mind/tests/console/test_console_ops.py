@@ -557,10 +557,13 @@ def test_the_live_photo_request_keys_are_valid_and_listed(tmp_path):
                                       'scene_from_words=true\n')
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
     states = {(r['table'],r['key']):r['state'] for r in rows}
-    assert states['photos','enabled'] == states['photos','requests'] == 'on'
+    assert states['photos','enabled'] == states['photos','send'] == states['photos','requests'] == 'on'
     assert states['photos','scene_from_words'] == 'on'
     row = next(r for r in rows if r['key']=='scene_from_words')
     assert row['needs'] == 'photos.requests' and row['unmet'] == []
+    (tmp_path/'mind.toml').write_text('[photos]\nrequests=true\n')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert 'photos.send' in next(r for r in rows if r['key']=='requests')['unmet']
     (tmp_path/'mind.toml').write_text('[photos]\nrequests=true\nscene_from_words=1\n')
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
     assert all(r['state']=='invalid' for r in rows if r['table']=='photos')

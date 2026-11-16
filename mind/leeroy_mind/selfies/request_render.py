@@ -24,7 +24,7 @@ from .scene_choices import RECIPE
 from .slot import SetRefused, TRIES, render_slot
 from .snaps import looks_hash, mark_rendered
 from .store import current, face_pick
-from .words_scene import WORDS_RECIPE, build_words_prompt, face_scale, is_words
+from .words_scene import WORDS_RECIPE, build_words_prompt, face_scale, is_words, names_in
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
 
 SIZE = 1024
@@ -80,6 +80,10 @@ def _fresh(app, snap):
             build_words_prompt(p, snap.scene)
     except (KeyError, TypeError, ValueError):
         return None, "scene_invalid"
+    if is_words(snap.scene):  # a deferred render: the cast's names as they are now
+        from .request_scene import request_names
+        if names_in(snap.scene, request_names(app, snap.guid)):
+            return None, "scene_names"
     return p, None
 
 

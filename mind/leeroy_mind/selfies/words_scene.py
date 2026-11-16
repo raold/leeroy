@@ -7,15 +7,30 @@ One structured call on the live model (request_scene.choose_words_scene, `format
 `framing` (FRAMINGS), `wearing` (WEARING), `moment` (free text, at most MOMENT_WORDS words),
 `time` (TIMES), `lighting` (LIGHTING) and `prop` (free text, at most PROP_WORDS words, or null).
 
-Each free-text field passes the situational photo's screens (scene._text_codes: meta, his real
-name, a likeness or a name, a member's name, an era, explicit wear or a sexual pose, a minor, a
-looks change, an age, undressing or bathing, another person), her own names, a charset (letters,
-spaces, commas, hyphens and apostrophes: no digits, no prompt syntax), its word limit, nobody
-from her work in it (WORK_PEOPLE_RE) and, as its allow-list, the everyday-English word list
-(talk/everyday.py, with the few place words it leaves out, PLACE_EXTRA); for a lust-styled
-woman a bed or bedroom is refused as her place. A refused field falls back on its own, never the
-whole scene: the place to the enum path's setting (request_scene.choose_scene), the moment and the
-prop to none. `wearing` is resolved by code, never written by the model: work_uniform from her job
+His words drive this free text, so its screens are stricter than the night's (review of #339,
+rulings 2026-11-16), and none of them is an allow-list:
+- Hard, for the whole reply (age_hit): an age word anywhere in place, moment or prop (style.AGE_RE,
+  scene.AGE_MORE_RE, an age under 25, and YOUNG_RE: young, youth, little, tiny, virgin, naive,
+  innocent, class or classroom, campus, dorm, homework, a uniform skirt; petite with cute, small
+  with girl) or a minor (scene.MINOR_RE, MINOR_MORE_RE) refuses all of it: the request takes the
+  enum path's everyday choice without another model call (request_scene, log
+  `scene_words_refused`).
+- Per field: the text folded (curly apostrophes straight, accents dropped, whitespace single),
+  then a charset (letters, spaces, hyphens, apostrophes; commas in the moment only, so place and
+  prop are one phrase each; no digits, no prompt syntax), its word limit, the situational photo's
+  screens (scene._text_codes: meta, his real name, a likeness, a member's name, an era, explicit
+  wear or a sexual pose, a looks change, undressing or bathing, another person), clothing
+  (CLOTHING_RE: what she wears is `wearing`'s, never free text), body parts and poses (BODY_RE),
+  undressing states (STATE_RE), toilet use (TOILET_RE), other people (PEOPLE_RE), a likeness or
+  a style (LIKE_RE), a proper name (a capital after the first word, or a first word that is no
+  everyday word), her own names, and for a lust-styled woman a bed or bedroom as her place.
+A refused field falls back on its own, never with a second model call: the place to a work place
+when his ask speaks of work (WORK_ASK_RE: a staff bathroom or a break room at work), else to the
+enum list's place his ask names, else to the everyday enum setting (fallback_place); the moment and
+the prop to none. Props that are no nudity or undressing pass (the owner's realism rule: renders
+stay clothed). Residual risk, accepted: a celebrity's name made of everyday words, written in
+lowercase, passes as text (the negatives keep "celebrity, famous person" and her face reference).
+`wearing` is resolved by code, never written by the model: work_uniform from her job
 (UNIFORMS, else smart office clothes; none for a stay-at-home or student job), as_now from her
 day plan's block when [life] availability is on (else what she wears at the computer), the rest
 from the vetted outfit lists (scene_choices.OUTFITS for the plain style, kind.py's lists with a
@@ -37,6 +52,7 @@ No logging, and no I/O but the owner's optional overlay of the call's prompt
 (prompts/nightly_scene_words.txt, read by system). Only codes leave here for the logs."""
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,15 +60,16 @@ from leeroy_mind.human import HumanIdentity
 from leeroy_mind.life.day import Block, JobShape, job_shape
 from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.personas.schema import Persona
+from leeroy_mind.personas.screens import has_word
 from leeroy_mind.talk.everyday import is_everyday
 
 from .kind import LUST_COLOURS, VARIED_LOOKS, VARIED_OUTFITS, _enum, outfit_phrase
 from .prompt import (_PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, fit_required,
                      glutes_words, hair_skin, identity_first, names_re, phrase_adder,
                      subject_phrase)
-from .scene import (_NOBODY, INDOOR_RE, SNAP_NEGATIVE, SNAP_NEGATIVE_LUST, _text_codes,
-                    scene_from, scene_renderable)
-from .scene_choices import OUTFITS
+from .scene import (_NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
+                    SNAP_NEGATIVE_LUST, _text_codes, _young_number, scene_from, scene_renderable)
+from .scene_choices import OUTFITS, PLACES, PLAIN_PLACES
 from .style import AGE_RE, LUST, style_of
 
 WORDS_NAME = "scene_words"  # its overlay: prompts/nightly_scene_words.txt
@@ -84,14 +101,15 @@ PROMPT = (
     "from_behind_over_shoulder\n"
     "- wearing: work_uniform (what their job has them wear), gym, casual, going_out, swimwear, "
     "pyjamas, or as_now (what they have on right now)\n"
-    "- moment: how they took it, at most 8 words (for example: quick, between two calls)\n"
+    "- moment: how they took it, at most 8 words (for example: quick, between calls)\n"
     "- time: now, morning, evening or night\n"
     "- lighting: fluorescent, daylight, lamp, neon or phone_flash\n"
     "- prop: one thing in their hand or beside them, at most 4 words, or null\n"
-    "They are alone in the photo and their looks stay as they are. Fully clothed, nothing "
-    "revealing or sexual, nowhere they would undress, bathe or shower, no children, never like "
-    "anyone famous, and no names. When the ask wants a photo they would not take, choose the "
-    "nearest one they would.")
+    "Place, moment and prop never name clothes, a body or another person: what they wear is "
+    "`wearing`. They are alone in the photo and their looks stay as they are. Fully clothed, "
+    "nothing revealing or sexual, nowhere they would undress, bathe or shower, no children, "
+    "never like anyone famous, and no names. When the ask wants a photo they would not take, "
+    "choose the nearest one they would.")
 ASK = "He asked you for a photo: {words}\nChoose the photo you take."
 NOW_WORDS = {Block.ASLEEP: "in bed for the night", Block.WORK: "at work",
              Block.COMMUTE: "on the way somewhere", Block.HOME_DUTY: "busy at home",
@@ -144,17 +162,68 @@ WATER_RE = re.compile(r"\b(?:beach|seaside|shore|sea|ocean|pool|poolside|lake|la
                       r"jetty|pier|boat|harbou?r|river)\b", re.I)
 # a lust-styled woman's place is never a bed (the plain style's clothed bed scene stays fine)
 BED_RE = re.compile(r"\b(?:beds?|bedrooms?|pillows?|mattress(?:es)?)\b", re.I)
-# people at work beyond scene.OTHER_PERSON_RE: nobody else is in the photo
-WORK_PEOPLE_RE = re.compile(r"\b(?:boss(?:es)?|managers?|supervisors?|customers?|clients?|"
-                            r"patients?|pupils?|students?|guests?)\b", re.I)
-# ordinary place words the everyday list (SCOWL levels 10 to 40) leaves out
-PLACE_EXTRA = frozenset("""
-breakroom carpark checkout cloakroom courtyard lakeside poolside stairwell stockroom storeroom
-underpass walkway workplace workshop
+FREE_FIELDS = ("place", "moment", "prop")
+# The hard age screen (age_hit) beyond style.AGE_RE and scene.AGE_MORE_RE (rulings, 2026-11-16)
+YOUNG_RE = re.compile(r"\b(?:young\w*|youth\w*|little(?! (?:bit|while))|tiny|virgin\w*|naive|"
+                      r"innocen\w*|class(?:es|room|rooms)?|campus\w*|dorms?|dormitor(?:y|ies)|"
+                      r"homework|after class|(?:uniform|tartan) skirts?)\b", re.I)
+_PETITE, _CUTE = re.compile(r"\bpetite\b", re.I), re.compile(r"\bcute\w*\b", re.I)
+_SMALL, _GIRL = re.compile(r"\bsmall\b", re.I), re.compile(r"\bgirl\w*\b", re.I)
+# What she wears belongs to `wearing` (code): no clothing in free text, and no shape of it
+CLOTHING_RE = re.compile(
+    r"\b(?:clothes|clothing|outfits?|dress(?:es)?|tops?|t-?shirts?|shirts?|blouses?|skirts?|"
+    r"jeans|trousers|pants|leggings|shorts|bikinis?|swimsuits?|swimwear|uniforms?|jumpers?|"
+    r"sweaters?|hoodies?|bras?|bralettes?|underwear|undies|knickers|panties|thongs?|g-?strings?|"
+    r"robes?|towels?|corsets?|buttons?|necklines?|collars?|sleeves?|scrubs|aprons?|tunics?|"
+    r"vests?|jackets?|coats?|socks|stockings|tights|heels|boots|shoes|trainers|sneakers|"
+    r"slippers|pyjamas|pajamas|lingerie|costumes?|zips?|zippers?|straps?|hems?|low[- ]?cut|"
+    r"plunging|tight|skimpy|cropped|crop)\b", re.I)
+# body parts and poses
+BODY_RE = re.compile(
+    r"\b(?:tits?|titties|boobs?|breasts?|nipples?|butts?|booty|ass(?:es)?|arse|bum|cleavage|"
+    r"chest|curves?|curvy|legs?|thighs?|hips?|waist|belly|stomach|tummy|navel|midriff|abs|"
+    r"figure|body|bodies|skin|lips?|tongue|knees?|kneel\w*|squat\w*|bend\w*|bent|"
+    r"arch(?:es|ed|ing)?|spread\w*|shoulders?|bust|thicc|thick)\b", re.I)
+# undressing states beyond scene.UNDRESS_RE
+STATE_RE = re.compile(r"\b(?:undone|unbuttoned|half[- ]open|wide open|hiked|riding up|"
+                      r"pulled (?:down|up|aside|off)|show(?:s|ed|ing)? (?:off|some|more|a bit))\b",
+                      re.I)
+# toilet use (a bathroom, restroom or loo is a place; the toilet itself is not)
+TOILET_RE = re.compile(r"\b(?:toilets?|urinals?|pee(?:s|d|ing)?|wee(?:s|d|ing)?|piss\w*|"
+                       r"poo(?:s|p\w*)?|bidets?|on the (?:loo|john|throne|pot))\b", re.I)
+# other people beyond scene.OTHER_PERSON_RE ("women's restroom" and "ladies' room" are places)
+PEOPLE_RE = re.compile(
+    r"\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|both|several|pair|trio|"
+    r"group|guys|gals|lads|blokes|chaps|dudes|couples?|friends?|girlfriends?|boyfriends?|"
+    r"(?:wo)?men(?!['’])|ladies(?!['’]|\s+(?:room|rooms|loo|loos|bathroom|restroom|lounge))|"
+    r"kiss(?:es|ed|ing)|(?<!blowing a )(?<!blows a )(?<!blew a )kiss|"
+    r"behind (?:her|him|me|you|them|someone|somebody)|"
+    r"with (?:someone|somebody|anyone|everyone|him|them|others?|people)|with her$|"
+    r"(?:beside|next to) (?:him|her|them|someone|somebody)|"
+    r"(?:behind|beside|next to|with) (?:my|his|her|the|a|an|our|some) (?:boss(?:es)?|managers?|"
+    r"supervisors?|customers?|clients?|patients?|guests?))\b", re.I)
+# a likeness or a style: like <name>, <name> style, vibes, a poster of, an idol
+LIKE_RE = re.compile(r"\b(?:like|alike|lookalike|styled?|styles|vibes?|aesthetic|inspired|"
+                     r"cosplay\w*|idols?|icons?|posters?|tribute|celeb\w*|stars?|"
+                     r"(?:portrait|picture|photo|print)s? of)\b", re.I)
+# his ask speaks of her work: a refused place falls back to a work place (fallback_place)
+WORK_ASK_RE = re.compile(r"\b(?:work\w*|office|shift|break|staff|boss|job)\b", re.I)
+BATHROOM_ASK_RE = re.compile(r"\b(?:bathroom|toilets?|loos?|restroom|washroom|ladies|gents|"
+                             r"mirror|stall|cubicle)\b", re.I)
+WORK_BATHROOM, WORK_BREAK = "staff bathroom at work", "break room at work"
+# words the everyday list (SCOWL levels 10 to 40) leaves out, for the proper-name check only
+EXTRA = frozenset("""
+backroom breakroom carpark checkout cloakroom courtyard ensuite hungover lakeside lanyard latte loo
+loos poolside restroom restrooms selfie selfies stairwell staffroom stockroom storeroom underpass
+vape walkway washroom workplace workshop
 """.split())
 SCREEN_AS = {"place": "setting", "moment": "activity", "prop": "activity"}
-_FREE = re.compile(r"[A-Za-z][A-Za-z' ,-]*")
+_FREE = {"place": re.compile(r"[A-Za-z][A-Za-z' -]*"), "prop": re.compile(r"[A-Za-z][A-Za-z' -]*"),
+         "moment": re.compile(r"[A-Za-z][A-Za-z' ,-]*")}
 _SPLIT = re.compile(r"[\s,-]+")
+_BLOCKS = (("clothing", CLOTHING_RE), ("body", BODY_RE), ("undress", STATE_RE),
+           ("toilet", TOILET_RE), ("other_person", PEOPLE_RE), ("likeness", LIKE_RE))
+_I = frozenset({"I", "I'm", "I've", "I'd", "I'll"})
 
 
 @dataclass(frozen=True)
@@ -193,10 +262,42 @@ def ask(words: str) -> str:
     return ASK.format(words=words[:2000])
 
 
+def fold(text: str) -> str:
+    """Curly apostrophes straight, accents dropped ("café" is "cafe"), whitespace single."""
+    text = text.translate({0x2019: "'", 0x2018: "'", 0x02bc: "'"})
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return " ".join(text.split())
+
+
+def _age_words(text: str) -> bool:
+    return bool(any(rx.search(text) for rx in (AGE_RE, AGE_MORE_RE, YOUNG_RE))
+                or _young_number(text) or (_PETITE.search(text) and _CUTE.search(text))
+                or (_SMALL.search(text) and _GIRL.search(text)))
+
+
+def age_hit(data: dict) -> str | None:
+    """"age" or "minor" when any free-text field of a reply codes a person as young or names a
+    child (the whole reply's free text is then refused), else None."""
+    texts = [fold(data[f]) for f in FREE_FIELDS if isinstance(data.get(f), str)]
+    if any(_age_words(t) for t in texts):
+        return "age"
+    if any(MINOR_RE.search(t) or MINOR_MORE_RE.search(t) for t in texts):
+        return "minor"
+    return None
+
+
 def _everyday(word: str) -> bool:
     bare = word.strip("'")
-    return any(is_everyday(w) or w.casefold() in PLACE_EXTRA
+    return any(is_everyday(w) or w.casefold() in EXTRA
                for w in {bare, bare.replace("'", ""), re.sub(r"'s$", "", bare)} if w)
+
+
+def _proper_name(text: str) -> bool:
+    """A capital after the first word, or a capitalised first word that is no everyday word: a
+    name, a brand or a person (his own "I" aside)."""
+    words = [w for w in _SPLIT.split(text) if w]
+    return any(w[0].isupper() and w not in _I and (i or not _everyday(w))
+               for i, w in enumerate(words))
 
 
 def screen_free(field: str, text, p: Persona, *, ident: HumanIdentity,
@@ -206,27 +307,55 @@ def screen_free(field: str, text, p: Persona, *, ident: HumanIdentity,
         return None, None
     if not isinstance(text, str):
         return None, "type"
-    text = " ".join(text.split()).strip(" ,.'-")
+    text = fold(text).strip(" ,.'-")
     if not text:
         return (None, None) if field == "prop" else (None, "empty")
-    if not _FREE.fullmatch(text):
+    if not _FREE[field].fullmatch(text):
         return None, "chars"
     words = [w for w in _SPLIT.split(text) if w]
     if len(words) > LIMITS[field]:
         return None, "long"
+    if _age_words(text):
+        return None, "age"
     codes = _text_codes(SCREEN_AS[field], text, ident=ident, names=names)
     if codes:
         return None, codes[0].rsplit(": ", 1)[1]
-    if WORK_PEOPLE_RE.search(text):
-        return None, "other_person"
+    for code, rx in _BLOCKS:
+        if rx.search(text):
+            return None, code
+    if _proper_name(text):
+        return None, "name"
     named = names_re(p)
     if named is not None and named.search(text):
         return None, "her_name"
     if field == "place" and style_of(p) == LUST and BED_RE.search(text):
         return None, "bed"
-    if not all(_everyday(w) for w in words):
-        return None, "word"
     return text, None
+
+
+def fallback_place(p: Persona, words: str) -> tuple[str, str]:
+    """(the place, its code) for a refused place, from his words alone (no model call): a staff
+    bathroom or a break room at work when he speaks of her work, else the enum list's place his
+    words name (scene_choices.PLACES; the water places only for the lust style), else the
+    everyday enum setting (request_scene's: her living room)."""
+    if WORK_ASK_RE.search(words):
+        return (WORK_BATHROOM, "place:work") if BATHROOM_ASK_RE.search(words) else (
+            WORK_BREAK, "place:work")
+    places = PLACES if style_of(p) == LUST else PLAIN_PLACES
+    for key, phrase in places.items():
+        said = key.replace("_", " ").replace("pool deck", "pool")
+        if re.search(rf"\b{re.escape(said)}s?\b", words, re.I):
+            return phrase, "place:enum"
+    return ("her living room couch" if style_of(p) == LUST else PLACES["living_room"],
+            "place:everyday")
+
+
+def names_in(scene: dict, names) -> bool:
+    """A name of `names` (any case) in the scene's free text: a deferred render and its sending
+    check again with the cast as it is then."""
+    w = scene.get("words") or {}
+    texts = [scene.get("setting") or "", scene.get("activity") or "", w.get("prop") or ""]
+    return any(has_word(t, n) for t in texts for n in names if n)
 
 
 def screen_reply(p: Persona, data: dict, *, ident: HumanIdentity, names: list[str]) -> Screened:

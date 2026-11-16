@@ -134,6 +134,64 @@ def test_asleep_she_says_so_and_the_photo_waits_for_her_next_block(tmp_path, cap
     run(scenario())
 
 
+def test_a_deferred_render_rescreens_the_cast_names(tmp_path):
+    """A member renamed while she slept to a word of her place: the render is refused and she
+    says it didn't work out, rather than a photo whose scene names a member."""
+    from leeroy_mind.protocol import Member
+
+    async def scenario():
+        app, workers, rendered, pids = rig(tmp_path, toml=ASLEEP_ON)
+        app.llm._script = words_script
+        try:
+            await app.clock.advance(90 * 60, 600)
+            await offline(app)
+            reply = await app.discord.handle({"action": "post", "channel": "dm:101", "text": ASK})
+            message = reply["id"]
+            await drive(app, lambda: bool((r := snapshot(app, message)) and r.initial_message))
+            photo = records.snap(app.store, snapshot(app, message).fresh_snap)
+            assert photo.status == "planned" and photo.scene["wait"] == "asleep"
+            app.store.upsert_cast([Member(guid=102, name="Supply", race=4, class_=11, gender=0,
+                                          level=80, rank=3, online=False, map=0, zone=0,
+                                          spec_tab=-1)], app.clock.now())
+            await app.clock.advance(photo.not_before - app.clock.now() + 1, 600)
+            pending = asyncio.create_task(app.photos.requests.tick())
+            await drive(app, lambda: bool(snapshot(app, message).failure_message))
+            await pending
+            done = snapshot(app, message)
+            assert done.failure == "scene_names" and done.fresh_message is None
+            assert not rendered and not workers
+            assert not app.store.conn.execute("SELECT 1 FROM discord_attachment").fetchone()
+        finally:
+            await app.stop()
+    run(scenario())
+
+
+def test_commuting_reads_her_way_to_or_from_work_unless_she_drives():
+    from datetime import datetime
+    from types import SimpleNamespace
+    from conftest import make_persona
+    from leeroy_mind.life.presence import presence_at
+    from leeroy_mind.photos.requests import RequestPhotos
+
+    def wait(p, at):
+        clock = SimpleNamespace(local=lambda: at, now=lambda: 1000.0)
+        life = SimpleNamespace(presence=lambda guid, medium: presence_at(p, at, medium=medium))
+        service = SimpleNamespace(app=SimpleNamespace(clock=clock, engine=SimpleNamespace(life=life)))
+        request = SimpleNamespace(guid=101, expires=1000.0 + 86400)
+        return RequestPhotos._wait(service, request, p)
+
+    office = make_persona(101, "Arkon", rhythm="office admin, nine till five", region="US")
+    assert wait(office, datetime(2026, 11, 19, 8, 30))[2] == "to_work"
+    assert wait(office, datetime(2026, 11, 19, 17, 10))[2] == "from_work"
+    assert wait(office, datetime(2026, 11, 19, 3, 0))[2] == "asleep"
+    assert wait(office, datetime(2026, 11, 19, 12, 0)) is None  # at work she can sneak one
+    driver = make_persona(101, "Arkon", job="delivery driver", rhythm="nine till five",
+                          region="US")
+    assert wait(driver, datetime(2026, 11, 19, 8, 30))[2] == "driving"
+    assert "driving" not in CANT_NOW["to_work"] and "on your way to work" in CANT_NOW["to_work"]
+    assert "on your way home" in CANT_NOW["from_work"]
+
+
 def test_switch_off_never_reads_his_words_into_a_scene(tmp_path, monkeypatch):
     def refused(*args, **kwargs):
         raise AssertionError("the words path ran with the switch off")
