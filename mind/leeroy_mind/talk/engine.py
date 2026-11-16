@@ -223,7 +223,6 @@ class TalkEngine(EmoteReactions):
         the live model, the memory depth and the human's names take effect from the next
         turn."""
         self.cfg = cfg
-        self.life.configure(cfg)
         self.live_review.configure()
         self.budget.set_chattiness(cfg.talk.chattiness)
         self.budget.set_to_him_rate(cfg.talk.openers_per_hour)
@@ -232,6 +231,7 @@ class TalkEngine(EmoteReactions):
         self.recall.set_tau(cfg.memory.depth_days)
         self.asides.set_jealousy(cfg.romance.jealousy)
         self.set_human(self.human.guid)
+        self.life.configure(cfg)  # last: its meta write never stops the rest
 
     def register_source(self, src: TurnSource) -> None:
         self._sources.append(src)

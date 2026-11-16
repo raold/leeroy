@@ -148,3 +148,22 @@ def test_the_engine_owns_the_service_and_each_config_pins_it(store, clock, tmp_p
     assert rig.engine.life.availability == 4
     assert (life_config.availability(), life_config.state_on()) == (4, True)
     assert store.get_meta(life_config.META_KEY) == "4"
+
+
+def test_a_failed_meta_write_never_stops_a_reconfigure(store, clock, tmp_path, caplog):
+    import sqlite3
+    from engine_rig import make_rig
+    rig = make_rig(store, clock, tmp_path)
+
+    def locked(key, value):
+        raise sqlite3.OperationalError("database is locked")
+    store.set_meta = locked
+    cfg = rig.engine.cfg
+    rig.engine.apply_config(replace(cfg, talk=replace(cfg.talk, chattiness=9),
+                                    memory=replace(cfg.memory, depth_days=9),
+                                    life=replace(cfg.life, availability=6)))
+    assert rig.engine.cfg.talk.chattiness == 9 and rig.engine.budget._c == 9
+    assert rig.engine.recall.tau_days == 9
+    assert rig.engine.life.availability == 6 and life_config.availability() == 6
+    assert "life_meta_failed reason=OperationalError" in caplog.text
+    assert "locked" not in caplog.text.split("life_meta_failed", 1)[1].splitlines()[0]
