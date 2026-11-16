@@ -12,6 +12,7 @@ class PhotosConfig:
     enabled: bool = False
     send: bool = False
     requests: bool = False
+    scene_from_words: bool = False  # a requested photo read from his words (photos/README.md)
 
 
 def load_photos_config(path: Path) -> PhotosConfig:
@@ -25,7 +26,7 @@ def load_photos_config(path: Path) -> PhotosConfig:
         table, key = {}, 'file'
     if not isinstance(table, dict):
         key = 'photos'
-    elif set(table) - {'enabled', 'send', 'requests'}:
+    elif set(table) - {'enabled', 'send', 'requests', 'scene_from_words'}:
         key = 'unknown'
     else:
         key = key or next((k for k, v in table.items() if type(v) is not bool), None)

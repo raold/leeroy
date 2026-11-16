@@ -32,6 +32,8 @@ dm_words = 200                 # 0-200: most words in a member's DM to him (0: o
 think_private = true           # a short structured beat before answering his whispers and DMs (read at mind start)
 think_budget = 240             # 120-320: the beat's num_predict, in tokens
 recall_diversity = false       # memories: past plans read as past, no repeats in a conversation, tired subjects rest
+intent = false                 # her want for each turn, drawn by code, in the beat's block on every channel
+situation = false              # the prompt as her situation: hard rules only, "Right now" by the instruction
 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
@@ -108,6 +110,8 @@ class TalkCfg:
     think_private: bool = True  # [talk] think_private: talk/beat.py, read at mind start
     think_budget: int = 240  # [talk] think_budget: the beat's num_predict
     recall_diversity: bool = False  # [talk] recall_diversity: memory/diversity.py
+    intent: bool = False  # [talk] intent: talk/intent.py's want on every eligible turn (core Task 8)
+    situation: bool = False  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
 
 
 @dataclass(frozen=True)
@@ -223,6 +227,8 @@ _RULES = {
         "think_private": (lambda v: type(v) is bool, "a boolean"),
         "recall_diversity": (lambda v: type(v) is bool, "a boolean"),
         "think_budget": (lambda v: _int_in(v, *THINK_BUDGET_RANGE), "an integer %d-%d" % THINK_BUDGET_RANGE),
+        "intent": (lambda v: type(v) is bool, "a boolean"),
+        "situation": (lambda v: type(v) is bool, "a boolean"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -294,6 +300,11 @@ def _build(data: dict, source: str) -> MindConfig:
             v = given.get(key, defaults[section][key])
             if section == "talk" and key in ("realism", "texture", "dm_own_time",
                                              "think_private", "recall_diversity") and type(v) is not bool:
+                v = False
+            if section == "talk" and key in ("intent", "situation") and type(v) is not bool:
+                if (key, repr(v)) not in _WARNED:  # off, logged once (each login reads it again)
+                    _WARNED.add((key, repr(v)))
+                    log.warning("talk_%s_invalid key=%s want=%s default=false", key, key, want)
                 v = False
             if section == "talk" and key in ("discord_words", "dm_words",
                                              "think_budget") and not check(v):

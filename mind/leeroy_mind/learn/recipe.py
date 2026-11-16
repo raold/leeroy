@@ -32,6 +32,12 @@ def describe(turn, persona, config):
     from leeroy_mind.talk import prompt
     template = ("talk.template." if turn.template is not None else "talk.instruction.") + turn.kind.value
     text = turn.template if turn.template is not None else prompt.COMMS_RULES + prompt.INSTRUCTIONS[turn.kind]
+    if turn.template is None and getattr(getattr(config, "talk", None), "situation", False) is True:
+        # [talk] situation: the situation rules and template (review of #333, requirement 4)
+        own = turn.kind in prompt.SITUATION_INSTRUCTIONS
+        template = ("talk.situation_instruction." if own else "talk.instruction.") + turn.kind.value
+        text = prompt.SITUATION_RULES + (prompt.SITUATION_INSTRUCTIONS if own
+                                         else prompt.INSTRUCTIONS)[turn.kind]
     if turn.kind.value in ("bit","aside","emote_react"):
         text += turn.instruction
     version = sha256(text.encode("utf-8",errors="replace")).hexdigest()[:16]

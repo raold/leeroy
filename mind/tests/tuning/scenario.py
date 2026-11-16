@@ -20,7 +20,16 @@ The beat before an answer to his whisper or DM ([talk] think_private, talk/beat.
 off in this scenario, so its whisper answer is the one recorded before; the beat has its own
 golden, golden_beat.json (record_beat): two answers to his whispers with the beat on, every
 request as sent (the beat's prompt, format and options, and each line's prompt with the beat's
-lines after its instruction)."""
+lines after its instruction).
+
+The core golden, golden_core.json (record(..., core=True); human-likeness core plan Task 8), runs
+the same script with [life] availability 6, [life] state, [talk] intent and [talk] situation on and
+the beat off, so every block after an instruction is the code's (the drawn want and the state's
+"It lands"). The rig's clock is fixed (Thursday 2026-10-29, 20:00 UTC, which the test cast's UK
+members read as 20:00 GMT, the week UK and US clocks differ; the script ends near 20:36): every
+member is at her PC playing then (her gaming block, full attention in game; early shifts, asleep
+from 21:15), so nobody is away by schedule and each answer comes after her attention's seeded
+latency draw."""
 import asyncio
 import json
 import random
@@ -37,6 +46,7 @@ from leeroy_mind.talk import beat
 
 GOLDEN = Path(__file__).with_name("golden_prompts.json")
 BEAT_GOLDEN = Path(__file__).with_name("golden_beat.json")
+CORE_GOLDEN = Path(__file__).with_name("golden_core.json")
 
 
 def cast(store) -> None:
@@ -54,8 +64,9 @@ def cast(store) -> None:
                 habits=[{"substance": "weed", "when": "daily", "odds": 0.5, "max_state": "high"}])
 
 
-async def _run(store, clock, data_dir) -> dict:
-    r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7)
+async def _run(store, clock, data_dir, core: bool = False) -> dict:
+    r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7,
+                 availability=6 if core else 0, life_state=core, intent=core, situation=core)
     # the initiation clocks came later and have their own tests (test_initiate.py): off here,
     # so the scenario's draws stay the ones the golden recorded
     r.engine.whispers.set_rate(0.0)
@@ -99,10 +110,11 @@ async def _run(store, clock, data_dir) -> dict:
             "weights": weights, "flirts": flirts, "attitudes": attitudes, "states": states}
 
 
-def record(store, clock, data_dir) -> dict:
-    """`clock`: engine_clock(), the store's own."""
+def record(store, clock, data_dir, core: bool = False) -> dict:
+    """`clock`: engine_clock(), the store's own. `core`: the core prompt's switches on, as
+    golden_core.json was recorded."""
     cast(store)
-    return asyncio.run(_run(store, clock, data_dir))
+    return asyncio.run(_run(store, clock, data_dir, core))
 
 
 def write_golden(result: dict) -> None:
@@ -112,6 +124,15 @@ def write_golden(result: dict) -> None:
 
 def golden() -> dict:
     return json.loads(GOLDEN.read_text(encoding="utf-8"))
+
+
+def write_golden_core(result: dict) -> None:
+    CORE_GOLDEN.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n", encoding="utf-8",
+                           newline="\n")
+
+
+def golden_core() -> dict:
+    return json.loads(CORE_GOLDEN.read_text(encoding="utf-8"))
 
 
 def _beat_model():
@@ -158,5 +179,5 @@ def golden_beat() -> dict:
     return json.loads(BEAT_GOLDEN.read_text(encoding="utf-8"))
 
 
-__all__ = ["TEST_CAST", "cast", "engine_clock", "golden", "golden_beat", "record", "record_beat",
-           "write_golden", "write_golden_beat"]
+__all__ = ["TEST_CAST", "cast", "engine_clock", "golden", "golden_beat", "golden_core", "record",
+           "record_beat", "write_golden", "write_golden_beat", "write_golden_core"]

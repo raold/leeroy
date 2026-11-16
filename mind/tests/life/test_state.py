@@ -31,7 +31,9 @@ def test_lands_from_state_and_tone():
     assert lands(Z, "harsh", agreeableness=8, forms=HE) == "it stings"
     assert lands(State(0, 0, 0, 0, -0.4), "warm", agreeableness=5, forms=HE) == \
         "nice, but you're still a bit sore with him"
-    assert lands(State(0, -0.5, 0, 0, 0), "plain", agreeableness=5, forms=HE) == "you're too tired to say much"
+    assert lands(State(0, -0.5, 0, 0, 0), "plain", agreeableness=5, forms=HE) == "it barely registers"
+    assert lands(State(0, 0, 0, -0.5, 0), "plain", agreeableness=5, forms=HE) == (
+        "you're not feeling it right now")
     assert lands(Z, "plain", agreeableness=5, forms=HE) == ""
 
 
