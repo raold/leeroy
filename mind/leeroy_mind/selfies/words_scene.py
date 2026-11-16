@@ -222,6 +222,10 @@ SCREEN_AS = {"place": "setting", "moment": "activity", "prop": "activity"}
 _FREE = {"place": re.compile(r"[A-Za-z][A-Za-z' -]*"), "prop": re.compile(r"[A-Za-z][A-Za-z' -]*"),
          "moment": re.compile(r"[A-Za-z][A-Za-z' ,-]*")}
 _SPLIT = re.compile(r"[\s,-]+")
+# A gym and its equipment name a place, not an undressing context: its words ("weight" reads as a
+# looks change, "squat" as a body word) are read as plain "gym" by the place's screens. A gym's
+# locker room, showers or spa still carry their own words and are refused.
+GYM_PLACE_RE = re.compile(r"\b(?:gym(?: floor)?|weights? rooms?|squat racks?|treadmills?)\b", re.I)
 _BLOCKS = (("clothing", CLOTHING_RE), ("body", BODY_RE), ("undress", STATE_RE),
            ("toilet", TOILET_RE), ("other_person", PEOPLE_RE), ("likeness", LIKE_RE))
 _I = frozenset({"I", "I'm", "I've", "I'd", "I'll"})
@@ -318,11 +322,12 @@ def screen_free(field: str, text, p: Persona, *, ident: HumanIdentity,
         return None, "long"
     if _age_words(text):
         return None, "age"
-    codes = _text_codes(SCREEN_AS[field], text, ident=ident, names=names)
+    seen = GYM_PLACE_RE.sub("gym", text) if field == "place" else text
+    codes = _text_codes(SCREEN_AS[field], seen, ident=ident, names=names)
     if codes:
         return None, codes[0].rsplit(": ", 1)[1]
     for code, rx in _BLOCKS:
-        if rx.search(text):
+        if rx.search(seen):
             return None, code
     if _proper_name(text):
         return None, "name"
