@@ -5,6 +5,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from leeroy_mind.life.presence import Attention
 from leeroy_mind.personas.schema import Typing
 from leeroy_mind.talk.shape import Shape, ShapeContext, draw_shape, dm_words_for, shape_line
 from leeroy_mind.talk.turns import TurnKind
@@ -47,8 +48,9 @@ def test_late_line_copy():
     assert line == "You're only now seeing this (you were at work): say so in a few words, then answer."
 
 
-# Stand-ins for Task 1's Attention, Task 3's State and Task 4's Intent: talk.shape reads them by
-# member name (an enum's `.name`, lower case) and by the `energy` / `social` attributes only.
+# Stand-ins for Task 3's State and Task 4's Intent (Task 1's Attention is the real one, #330):
+# talk.shape reads them by member name (an enum's `.name`, lower case) and by the `energy` /
+# `social` attributes only.
 class Intent(StrEnum):
     VENT = "vent"
     ASK = "ask"
@@ -56,12 +58,6 @@ class Intent(StrEnum):
     BOUNDARY = "boundary"
     LOGISTICS = "logistics"
     SMALL_TALK = "small_talk"
-
-
-class Attention(StrEnum):
-    FULL = "full"
-    HALF = "half"
-    GLANCING = "glancing"
 
 
 @dataclass(frozen=True)
@@ -102,8 +98,12 @@ def test_attention_and_state_multipliers():
     ctx = replace(OWED, family="discord")
     glancing = _shares(replace(ctx, attention=Attention.GLANCING))
     full = _shares(replace(ctx, attention=Attention.FULL))
+    half = _shares(replace(ctx, attention=Attention.HALF))
+    none = _shares(replace(ctx, attention=Attention.NONE))
     assert glancing[Shape.PARAGRAPH] < 0.5 * full[Shape.PARAGRAPH]
     assert glancing[Shape.SHORT] > full[Shape.SHORT]
+    assert half[Shape.PARAGRAPH] < 0.8 * full[Shape.PARAGRAPH]
+    assert none == full  # only glancing and half move the odds
     chan = replace(ctx, owed=False)
     tired = _shares(replace(chan, state=State(energy=-0.5)))
     rested = _shares(replace(chan, state=State()))
