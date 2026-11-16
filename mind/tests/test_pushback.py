@@ -140,7 +140,7 @@ W = {**{g: 1.0 for g in NAMES}, KORVIN: 0.0}  # Korvin just spoke: his weight is
 
 
 class _HighRoll(random.Random):
-    """Every roll lands at 0.95, over WHISPER_REPLY_P's 0.9."""
+    """Every roll lands at 0.95, over a whisper_p of 0.9."""
 
     def random(self):
         return 0.95
@@ -185,12 +185,15 @@ def test_a_named_pushback_that_speaks_to_the_guild_keeps_the_draw_after_him():
 
 
 def test_a_whispered_pushback_is_always_answered():
-    """The one he whispers answers his pushback every time, not WHISPER_REPLY_P of the time."""
-    def plan(target):
+    """The one he whispers answers his pushback every time, not whisper_p of the time (and since
+    2026-11-15 every whisper of his is answered: WHISPER_REPLY_P is 1)."""
+    def plan(target, **kw):
         return plan_replies("wtf?", channel="whisper", to_guid=KORVIN, weights=W, names=NAMES,
-                            afk=set(), rng=_HighRoll(1), target=target)
+                            afk=set(), rng=_HighRoll(1), target=target, **kw)
     assert plan(KORVIN) == [KORVIN]
-    assert plan(0) == []
+    assert plan(0) == [KORVIN]
+    assert plan(KORVIN, whisper_p=0.9) == [KORVIN]
+    assert plan(0, whisper_p=0.9) == []
 
 
 def test_a_target_who_cannot_answer_changes_nothing():
@@ -541,11 +544,12 @@ def test_his_quick_pushback_is_answered_inside_the_reply_guard(store, clock, tmp
         await r.advance(45, step=2)
         assert [s.guid for s in r.sent.says()][:2] == [KORVIN, KORVIN]
         assert not [u for u in r.utterances() if u["guid"] == KORVIN and u["dropped"]]
-        # a line of his that pushes back on nobody: the guard keeps its job
+        # a line of his that pushes back on nobody: since 2026-11-15 the guild's pace never
+        # holds back the one answer he is owed either (talk/owed.py)
         r.engine.guards.record("t-guild", KORVIN, r.clock.now(), TurnKind.OPEN)
         await r.human("korvin you there?")
         await r.advance(30)
-        assert [u["dropped"] for u in r.utterances() if u["guid"] == KORVIN][-1] == "guards"
+        assert [u["dropped"] for u in r.utterances() if u["guid"] == KORVIN][-1] is None
     run(main())
 
 
@@ -650,11 +654,13 @@ def test_his_pushback_that_asks_the_past_is_still_its_targets_first(store, clock
 
 def test_his_nothing_is_asked_again_then_the_fallback(store, clock, tmp_path):
     """His pushback is owed an answer (LiveReview.owed; owner, 2026-11-15: every message of his
-    gets a reply): silence is asked again, then the short fallback; only its silence stands."""
+    gets a reply): silence is asked again, then the short fallback, asked once more
+    when it is silent too (review-325-r2 P3-C); only then does silence stand, and the
+    watchdog (talk/owed.py) answers later."""
     async def main():
         r = korvin_rig(store, clock, tmp_path, script=lambda m, msgs: "(nothing)")
         await r.human("you are fixing to get the boot from this guild korvin")
         await r.advance(45, step=2)
-        assert len(korvins(r)) == 3 and r.sent.says() == []
+        assert len(korvins(r)) == 4 and r.sent.says() == []
         assert [u["dropped"] for u in r.utterances()] == ["silent"]
     run(main())

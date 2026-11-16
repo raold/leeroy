@@ -92,7 +92,7 @@ def test_a_repeated_summons_in_his_whisper_is_never_said(rig):
     rig.script("get over here", "come over already")
     rig.whisper_from_him(102, "hi")
     rig.run()
-    assert len(rig.chat_calls()) == 3
+    assert len(rig.chat_calls()) == 4  # and the fallback asked again (P3-C)
     assert SUMMONS_HINT.format(**HE) in rig.chat_calls()[1]["messages"][-1]["content"]
     assert rig.last_user().endswith(OWED_FALLBACK_HINT.format(human="Zan"))
     assert not rig.sent.says() and rig.utterances()[-1]["dropped"] == "tells"
