@@ -8,7 +8,7 @@ import random
 import statistics
 from dataclasses import asdict, dataclass, field
 from datetime import tzinfo
-from typing import Sequence
+from typing import Callable, Sequence
 
 from . import classify
 from .corpus import FAMILIES, Line, name_pattern, names_by_guid, read_lines
@@ -20,6 +20,10 @@ SEGMENT_GAP_S = 1800.0  # a conversation silent this long starts a new cross-val
 TOP = 6                 # features reported
 MIN_SEPARATION = 0.05   # |univariate AUC - 0.5| below this is not a tell
 MEMBER_SHARE = 0.05     # one member's most of the members' sample (an equal share if fewer speak)
+# The features a line's own words carry; the rest come from when it was typed and what came
+# before it (the bake-off reads these alone too, since a new model leaves the timing as it was).
+CONTEXT_KEYS = frozenset({"latency", "hour", "followup", "burst"})
+TEXT_KEYS = frozenset(key for key, _, _ in FEATURES) - CONTEXT_KEYS
 
 
 @dataclass
@@ -102,14 +106,17 @@ def _value(key: str, raw: list, rows: list[int]):
 
 
 def top_features(columns: list[list[float]], raw: dict[str, list], his: list[int],
-                 members: list[int]) -> list[dict]:
+                 members: list[int], keys: frozenset[str] | None = None) -> list[dict]:
     """The features whose single-feature AUC is furthest from 0.5 on the balanced rows, at
-    most TOP, each with his value and the members' (a share, a median or an hour)."""
+    most TOP, each with his value and the members' (a share, a median or an hour); only those
+    of `keys` when given."""
     rows = his + members
     labels = [0] * len(his) + [1] * len(members)
     by_column = dict(zip(COLUMNS, columns))
     out = []
     for key, _, _ in FEATURES:
+        if keys is not None and key not in keys:
+            continue
         cols = [key + "_sin", key + "_cos"] if key == "hour" else [key]
         aucs = [classify.auc([by_column[c][i] for i in rows], labels) for c in cols]
         aucs = [a for a in aucs if a is not None]
@@ -127,10 +134,17 @@ def top_features(columns: list[list[float]], raw: dict[str, list], his: list[int
 
 
 def analyse(lines: Sequence[Line], family: str, *, names=None, by_guid: dict[int, str] | None = None,
-            tz: tzinfo | None = None, seed: str = "turing") -> FamilyResult:
+            tz: tzinfo | None = None, seed: str = "turing",
+            eligible: Callable[[Line], bool] | None = None,
+            keys: frozenset[str] | None = None) -> FamilyResult:
+    """`eligible`: which members' lines may be sampled (the bake-off's regenerated lines); every
+    line still gives the others their context (latency, bursts). None: every member line.
+    `keys`: the features the classifier and the tells use (TEXT_KEYS: the words alone); None:
+    every feature."""
     fam = [line for line in lines if line.family == family]
     his = [i for i, line in enumerate(fam) if line.human]
-    members = [i for i, line in enumerate(fam) if not line.human]
+    members = [i for i, line in enumerate(fam)
+               if not line.human and (eligible is None or eligible(line))]
     result = FamilyResult(family, "too_few", len(his), len(members))
     if len(his) < MIN_LINES or len(members) < MIN_LINES:
         return result
@@ -143,7 +157,8 @@ def analyse(lines: Sequence[Line], family: str, *, names=None, by_guid: dict[int
     pick_his = sorted(rng.sample(his, n))
     tab = table(fam, names=names, names_by_guid=by_guid, tz=tz)
     rows = pick_his + pick_members
-    columns = [[col[i] for i in rows] for col in tab.columns]
+    columns = [[col[i] for i in rows] for name, col in zip(COLUMNS, tab.columns)
+               if keys is None or name.removesuffix("_sin").removesuffix("_cos") in keys]
     labels = [0] * n + [1] * n
     groups = groups_of(fam)
     cv = classify.cross_validate(columns, labels, [groups[i] for i in rows], seed=f"{seed}|{family}|cv")
@@ -155,7 +170,7 @@ def analyse(lines: Sequence[Line], family: str, *, names=None, by_guid: dict[int
     result.auc = round(cv.auc, 4)
     result.low = None if cv.low is None else round(cv.low, 4)
     result.high = None if cv.high is None else round(cv.high, 4)
-    result.features = top_features(tab.columns, tab.raw, pick_his, pick_members)
+    result.features = top_features(tab.columns, tab.raw, pick_his, pick_members, keys)
     return result
 
 
