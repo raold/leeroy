@@ -14,6 +14,7 @@ from leeroy_mind.selfies.scene import Scene, scene_from, scene_json, scene_rende
 from leeroy_mind.selfies.scene_choices import RECIPE
 from leeroy_mind.selfies.store import current, lust_set
 from leeroy_mind.selfies.style import LUST, PLAIN, style_of
+from leeroy_mind.selfies.words_scene import is_words, names_in
 from .images import ImageRefused, _safe_dir, _write_new, check_jpeg
 from . import request_store as records
 
@@ -61,6 +62,10 @@ def _safe_snap(app, request, photo, *, now, member):
         return False
     try:
         scene = scene_from(photo.scene)
+        if is_words(photo.scene):  # read from his words: the cast's names as they are at sending
+            from leeroy_mind.selfies.request_scene import request_names
+            if names_in(photo.scene, request_names(app, request.guid)):
+                return False
         return (scene.audience == request.audience and scene_renderable(p, scene) is None
                 and (request.audience != 'anyone' or scene.style == PLAIN))
     except (KeyError, ValueError, TypeError):
