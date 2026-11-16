@@ -271,14 +271,17 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
              ack=None, gate=None, online=tuple(TEST_CAST), chattiness: int = 4,
              jealousy: int = 5, real_name: str = REAL, send=None, library=None,
              dial: int = ROMANCE_DIAL, items=None,
-             greeters: tuple[int, int] | None = None) -> Rig:
+             greeters: tuple[int, int] | None = None, beat: bool = False) -> Rig:
     """A fresh engine over `store` (the test cast is seeded if the store has no personas).
     The FakeLLM answers `reply` unless a `script` is given; `send` replaces the recording
     send; `library` (a FakeLibrary) gives the engine the library's facts; `dial` is the
     owner's romance dial (ROMANCE_DIAL unless a test says otherwise); `items` its item
     links (an ItemLinker). `greeters` (lo, hi): every login greeted by that many members, all
     through the model, as the greeting tests were written (before 2026-11-15's 0-2 draw and
-    plain hellos, which test_orbit.py covers)."""
+    plain hellos, which test_orbit.py covers). `beat`: [talk] think_private, the beat before
+    an answer to his whisper or DM (talk/beat.py); off unless a test asks, so every other test's
+    requests and scripted replies are the ones it was written for (tests/test_think_private.py
+    and the tuning goldens cover the beat)."""
     if not store.persona_versions():
         seed_test_cast(store)
     store.upsert_cast([Member(guid=HUMAN, name=HUMAN_NAME, race=1, class_=8, gender=0, level=80,
@@ -287,7 +290,7 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     prompts.mkdir(parents=True, exist_ok=True)
     (prompts / "romance_explicit.txt").write_text(OVERLAY + "\n", encoding="utf-8")
     base = load_config(data_dir / "absent.toml")
-    cfg = replace(base, talk=TalkCfg(chattiness, base.talk.raid_rule),
+    cfg = replace(base, talk=TalkCfg(chattiness, base.talk.raid_rule, think_private=beat),
                   romance=RomanceCfg(dial, jealousy),
                   human=HumanCfg(NICK, real_name, "he"))
     world = WorldView(is_officer=lambda g: g in OFFICERS)
