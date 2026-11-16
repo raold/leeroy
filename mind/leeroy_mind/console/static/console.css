@@ -39,6 +39,9 @@ body { display: flex; flex-direction: column; background: var(--bg); color: var(
 .gallery-strip button { padding: 2px; min-width: 56px; width: 56px; height: 64px; flex-shrink: 0; }
 .gallery-strip img { width: 100%; height: 100%; object-fit: cover; }
 .gallery-strip [aria-current="true"] { border: 2px solid var(--accent); }
+.gallery-strip button { position: relative; }
+.flag-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bad); box-shadow: 0 0 0 1px var(--bg); }
 .gallery-opener { flex-shrink: 0; }
 .tile-detail { padding: 1px 4px; border: 0; background: transparent; }
 @keyframes gallery-enter { from { opacity: .65; transform: translateX(8px); } to { opacity: 1; transform: none; } }

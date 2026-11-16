@@ -5,7 +5,7 @@ from leeroy_mind.nightly.budget import register_counter
 from .config import SelfieCfg, worker_command, worker_env
 from .render import (CONTENDED, SET_SIZE, STAGE, THUMB_PX, TRIES, SetRefused, RoomFailed,
                      _held, _stored, _unleased, queue, todo, render, render_candidates, seed_for,
-                     start_worker)
+                     settle_sets, start_worker)
 from .store import needing_first, queued_sets
 from .worker import SelfieWorker, to_the_end
 
@@ -32,6 +32,7 @@ def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = No
             # Never call the arbiter from cancellation cleanup: hand_over holds its lock.
             # The whole process tree must end before the live preload can start.
             await to_the_end(w.stop())
+        await settle_sets(ctx, cfg)  # [selfies] critic: the judge, the worker's VRAM free now
     return stage_selfies
 
 

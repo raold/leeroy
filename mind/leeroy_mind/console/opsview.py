@@ -410,6 +410,7 @@ def feature_state(data, section):
 SWITCHES = (
     ('talk','aware','Awareness cards',''), ('guards','enabled','Guards',''),
     ('claims','enabled','Claims',''), ('talk','realism','Typing realism',''),
+    ('talk','recall_diversity','Recall diversity',''),
     ('signals','enabled','Signals',''), ('fingerprint','enabled','Typing fingerprint',''),
     ('callbacks','enabled','Memory callbacks',''), ('learn','enabled','Rewards',''),
     ('learn','bandit','Bandit credit','learn.enabled'), ('learn','coach','Talk coach','learn.enabled'),
@@ -424,6 +425,8 @@ SWITCHES = (
     ('photos','scene_from_words','Selfie scenes from his words','photos.requests'),
     ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
     ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
+    ('selfies','critic','Photo critic','selfies.enabled; critic_model pulled by the operator'),
+    ('selfies','param_bandit','Photo parameter bandit','selfies.critic'),
     ('personas','auto_newcomers','Newcomer personas',''),
     ('world','enabled','World personas','realm.enabled; Leeroy.World.Enable = 1'),
     ('playstyle','enabled','Play styles','Leeroy.PlayStyle.Enable = 1'),

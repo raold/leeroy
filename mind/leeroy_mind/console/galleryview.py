@@ -6,6 +6,9 @@ Guild composites are not a member's portrait. Missing tables and files read as e
 Only photos of her current looks are listed or served, by the photo request path's rule: her
 cover's set and sets rendered from a persona at least as new (store.looks_floor), and situations
 planned from the looks she has now. With no cover nothing is hidden. Rows and files are kept.
+
+A candidate the photo critic flagged (selfies/critic.py) carries `flag`: its defect codes,
+comma-separated. It is listed, served and choosable as before.
 """
 import json
 from pathlib import Path
@@ -118,6 +121,8 @@ def gallery(conn, data_dir, guid: int) -> dict:
     photos = out["photos"]
     p = _persona(conn, have, guid)
     held, floor = _lust_held(p), _floor(conn, have, guid)
+    from leeroy_mind.selfies.critic import flags
+    flagged = flags(conn, guid)  # the photo critic's defect codes by (set, index)
     if {"selfie_set", "selfie_candidate"} <= have:
         for row in conn.execute(
                 "SELECT s.set_no, c.idx, s.rendered, s.persona_version FROM selfie_set s "
@@ -136,6 +141,8 @@ def gallery(conn, data_dir, guid: int) -> dict:
                              ) or _look(varied_look(conn, guid, row[0], row[1]))
                 if look is not None:
                     entry["look"] = look
+                if (row[0], row[1]) in flagged:
+                    entry["flag"] = flagged[(row[0], row[1])]
                 photos.append(entry)
     if "selfie_snap" in have:
         looks = _looks(p)

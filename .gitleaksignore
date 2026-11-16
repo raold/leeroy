@@ -2,3 +2,7 @@
 # A fixed test key for the guild console's tests (not a secret; replaced in the next commit).
 993301d78b092d51d2f9e6cc526f559a4c15a572:mind/tests/console/rig.py:generic-api-key:12
 d3d1da1ced6cd466551145973e35d587dd021444:mind/tests/console/js/key.test.mjs:generic-api-key:7
+# The photo critic's model pins: a HuggingFace commit id after a repo name holding "api"
+# (mediapipe); the lines carry gitleaks:allow since.
+8da0949613104a5ec27bd75b361f742aea7e1580:selfie/leeroy_selfie/models.py:generic-api-key:67
+8da0949613104a5ec27bd75b361f742aea7e1580:selfie/leeroy_selfie/models.py:generic-api-key:71

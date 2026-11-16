@@ -162,6 +162,15 @@ def snap(data_dir, guid: int, snap_id: int, *, thumb: bool = False) -> Path:
     return member_dir(data_dir, guid) / "snaps" / (f"{n}.thumb.jpg" if thumb else f"{n}.jpg")
 
 
+def snap_candidate(data_dir, guid: int, snap_id: int, key: int, *, thumb: bool = False) -> Path:
+    """One seed of a situational or request photo the critic measured (best-of-N): kept under
+    snaps/critic/ whether it was sent or not, never served. `key` is that seed's first seed."""
+    n = _int("snap_id", snap_id, 1, _ROWID_MAX)
+    k = _int("key", key, 0, (1 << 32) - 1)
+    name = f"{n}-{k}.thumb.jpg" if thumb else f"{n}-{k}.jpg"
+    return member_dir(data_dir, guid) / "snaps" / "critic" / name
+
+
 def _guild_dir(data_dir) -> Path:
     return Path(data_dir) / "selfies" / "guild"
 

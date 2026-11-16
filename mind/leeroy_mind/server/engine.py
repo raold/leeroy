@@ -144,6 +144,11 @@ class ServerEngine:
             from dataclasses import replace
             available = [replace(seed, channels=tuple(c for c in seed.channels if c not in busy and
                          now >= self._human_until.get(c,0))) for seed in available]
+            if self._diverse():  # [talk] recall_diversity: one guild theme can't dominate
+                conn = self.app.store.conn
+                available = seeds.varied(available, subjects=seeds.recent_subjects(conn, now=now),
+                                         attendance_at=seeds.last_attendance(conn), now=now,
+                                         names=self._seed_names(observed))
             from leeroy_mind.tuning.effective import edits_of
             # every free member counts (an unedited one weighs 1), so one member's 0 never
             # takes a channel from the others
@@ -177,6 +182,17 @@ class ServerEngine:
             conversation.task.add_done_callback(lambda task,c=conversation:self._finished(c))
             log.info('server_conversation_started id=%s channel=%s seed_kind=%s cast=%s',
                      conversation.id, channel, seed.kind, ','.join(map(str,cast)))
+
+    def _diverse(self) -> bool:
+        """[talk] recall_diversity, read at each use (seeds.varied, seeds.note_subject)."""
+        return getattr(self.app.engine.cfg.talk, 'recall_diversity', False) is True
+
+    @staticmethod
+    def _seed_names(observed) -> frozenset[str]:
+        """The cast's names, never a seed's subject word."""
+        from leeroy_mind.memory.diversity import name_words
+        return name_words([*(p.character_name for p in observed.personas.values()),
+                           *(getattr(m, 'name', '') for m in getattr(observed, 'cast', {}).values())])
 
     def _end(self, conversation, reason):
         if not conversation.reason:
@@ -478,6 +494,9 @@ class ServerEngine:
                 if (parent is None and dry == 0 and not opening_photo
                         and joke_of(conversation.seed) is None and conversation.seed.kind != 'joke'):
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
+                    if self._diverse():
+                        seeds.note_subject(app.store, conversation.seed, now=app.clock.now(),
+                                           names=self._seed_names(observed))
                 conversation.in_flight, conversation.in_flight_turn = speaker, turn
                 try:
                     await app.engine.speak_meta(turn, meta)
