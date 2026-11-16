@@ -6,7 +6,6 @@ import json
 import logging
 from dataclasses import replace
 
-import pytest
 
 from conftest import run
 from leeroy_mind.photos import request_store

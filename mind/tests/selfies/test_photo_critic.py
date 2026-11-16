@@ -2,7 +2,6 @@
 worker's answer parsed, the verdicts, the vision judge on a FakeLLM, the rows and their settling,
 the parameter bandit, the gallery's flag, the CLI and the migration. Every person and photo here
 is invented."""
-import asyncio
 import base64
 import json
 import logging
@@ -14,7 +13,7 @@ import pytest
 from conftest import run
 from dbtemplate import open_migrated
 from leeroy_mind.llm.client import GpuPaused
-from leeroy_mind.selfies import critic, files, params
+from leeroy_mind.selfies import critic, params
 from leeroy_mind.selfies.config import SelfieCfg, load_selfie_config
 from leeroy_mind.selfies.judge import MODEL, SCHEMA, Judged, VisionJudge, parse
 from leeroy_mind.storage.store import Store
