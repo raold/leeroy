@@ -291,6 +291,37 @@ def test_his_whisper_gets_a_beat_then_the_line(rig):
     assert [s.text for s in rig.sent.says()] == ["ugh, that sounds rough, tell me everything"]
 
 
+@pytest.mark.parametrize("overlay", [False, True])
+def test_his_whisper_overlay_keeps_the_put_offs_out_of_the_beat(store, clock, tmp_path, overlay):
+    """PM log 2026-11-16 ruling (2), review-332: under his explicit whisper overlay she never
+    vents, gossips, deflects, draws a line, sorts out plans or keeps it light, so the beat does
+    not offer those wants whenever the overlay is in the line's prompt, [talk] intent or not.
+    A lust woman at the explicit band (the rig's dial 9); without the overlay file, every want."""
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", stance="lust", typo_rate=0.0,
+                split_rate=0.0, emoticon_rate=0.0, abbreviations={})
+    if overlay:
+        (tmp_path / "prompts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "prompts" / "romance_explicit_whisper.txt").write_bytes(b"WHISPER-OVERLAY\n")
+    r = make_rig(store, clock, tmp_path, beat=True)
+    try:
+        r.llm.set_script(model({**VENT, "want": "tease"}, "mm come here then"))
+        r.whisper_from_him(102, "long shift, dead on my feet")
+        r.run()
+        first, second = beat_calls(r)[0], line_calls(r)[0]  # the beat is asked once a turn
+        assert len(beat_calls(r)) == 1
+        offered = first["format"]["properties"]["want"]["enum"]
+        assert offered == list(beats.wants_for(True, tail=overlay))
+        cut = {"vent", "gossip", "deflect", "boundary", "logistics", "small_talk"}
+        assert (cut & set(offered)) == (set() if overlay else cut)
+        assert ("WHISPER-OVERLAY" in last_user(second)) is overlay
+        for want in cut:  # nor named in the ask's list
+            assert (f"- {want}:" in last_user(first)) is not overlay
+        assert last_user(second).endswith("You want to: tease Zan")
+    finally:
+        r.close()
+
+
 def test_his_dm_gets_a_beat_then_the_line(rig):
     rig.llm.set_script(model(VENT, "oh no, what happened? tell me"))
     assert dm_answer(rig) == "oh no, what happened? tell me"

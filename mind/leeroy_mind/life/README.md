@@ -199,9 +199,11 @@ times and counts, never persona text or names:
 ```bash
 python -m leeroy_mind life day --data-dir "$D" [--guid N] [--date YYYY-MM-DD]
 python -m leeroy_mind life now --data-dir "$D" [--at YYYY-MM-DDTHH:MM]
+python -m leeroy_mind life intents --data-dir "$D" --guid N [--kind reply_human] [--family whisper] [--at ...]
 ```
 
 `day` prints `<guid> job=<shape> event=<code>` and one `HH:MM-HH:MM <block>` line per span (the
 date defaults to today on this PC). `now` counts the members per where, per attention in game
-and on Discord, and per event, at this PC's time (or `--at`). Exit 0 done, 1 unknown guid or a
-database error, 2 no `mind.db`.
+and on Discord, and per event, at this PC's time (or `--at`). `intents` prints each want's share
+on a turn from her persona and her presence then (talk/README.md, "Wants"). Exit 0 done, 1
+unknown guid or a database error, 2 no `mind.db`.
