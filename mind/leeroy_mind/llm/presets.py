@@ -14,7 +14,7 @@ class JSONJobFailed(Exception):
 
 @dataclass(frozen=True)
 class Preset:
-    think: bool
+    think: bool | None  # sent as `think`; None leaves it out (the model's default: Orion thinks)
     options: dict
     timeout: float | None = None  # seconds; None means the client default
 
@@ -34,6 +34,13 @@ LIVE = Preset(False, {"temperature": 0.9, "min_p": 0.05, "top_p": 1.0,
 # the turn's max_lines still bound it.
 LIVE_BIT = Preset(LIVE.think, {k: v for k, v in LIVE.options.items() if k != "stop"},
                   timeout=LIVE.timeout)
+# The beat before an answer to his whisper or DM (talk/beat.py, [talk] think_private): LIVE's
+# sampling and num_ctx, think false (Orion thinks unless told not to, and refuses think: true),
+# num_predict [talk] think_budget (240: at 160 a long `lands` cut two of the bake-off's beats off
+# mid-string), no stop (the reply is a JSON object under Ollama's `format`)
+# and 10 s at most, queue included (Pipeline._beat).
+BEAT = Preset(False, {"temperature": 0.9, "min_p": 0.05, "top_p": 1.0, "num_predict": 240,
+                      "num_ctx": 4096}, timeout=10.0)
 EXTRACT = Preset(False, {"temperature": 0.2, "num_ctx": 4096})
 LOOK = Preset(False, {"num_predict": 140, "num_ctx": 4096, "temperature": 0.2})
 # The 27B reflection model with thinking on easily outlasts the 60 s client default.
