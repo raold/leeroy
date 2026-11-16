@@ -168,11 +168,12 @@ def test_block_on_eligible_turns_only(store, clock, tmp_path):
         m = said(r, "the trade stall ran dry of copper wire", guid=101, name="Arkon")
         assert r.speak_turn(Turn(TurnKind.CONTINUE, 103, "guild", addressee=101,
                                  trigger_line=m.id))
-        for call, who in zip(r.chat_calls(), ("Zan", "Arkon")):
+        assert len(r.chat_calls()) == 2
+        for call, other in zip(r.chat_calls(), ("Arkon", "Zan")):
             rows = last_user(call).split("\n")
             assert sum(x.startswith("You want to: ") for x in rows) == 1
             assert rows[-1].startswith("You want to: ")  # think-dm's slot: after the instruction
-        assert last_user(r.chat_calls()[1]).split("\n")[-1].count("Arkon") <= 1
+            assert other not in rows[-1]  # his turn names him, the member's turn the member
 
         now = r.clock.now()
         pushback = (Turn(TurnKind.REPLY_HUMAN, 102, "guild", addressee=HUMAN, trigger_line=q.id),
