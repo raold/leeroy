@@ -17,9 +17,10 @@ from leeroy_mind.text import has_meta
 from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
-from .prompt import (_FRAMINGS, GLUTES_FRAMINGS, body_phrases, fit_required, glutes_words,
+from .prompt import (_COVERED, _COVERED_LUST, _FRAMINGS, GLUTES_FRAMINGS, body_phrases,
+                     fit_required, glutes_words,
                      _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
-                     LUST_NEGATIVE, NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
+                     NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
@@ -74,10 +75,60 @@ ABOUT = {"life": "Tonight in their life away from the game: {beat}",
          "birthday": "It is their birthday tomorrow.",
          "everyday": "An ordinary day for them this week."}
 
-SNAP_NEGATIVE = NEGATIVE + (("another person, crowd, group of people", 0),
+# The anatomy line of a situational or request photo, at priority 0 (controller A/B on the GPU,
+# 2026-11-16). These are tall portraits (832 x 1216) with hands, arms and often legs in frame. The
+# old negative (the profile NEGATIVE plus the one-person lines) counted 61-67 tokens at priority 0,
+# so the worker's 75-token fit always dropped its priority-1 "deformed face, extra fingers, bad
+# hands": 6 of 11 images had a hand, foot, limb or eye defect; with this line required, 1 of 11.
+# To make room, the style list and the one-face guard keep only their first words at 0 and the
+# rest moves to 1 and 2 (in practice dropped: the required set counts 72 and 74 tokens).
+# test_snap_negatives_fit_with_the_anatomy_line measures it on the real tokenizers.
+SNAP_ANATOMY = ("extra limbs, extra legs, extra arms, fused fingers, missing fingers, "
+                "extra fingers, malformed hands, deformed feet, cross-eyed, lazy eye, "
+                "asymmetric eyes, mutated, disfigured")
+
+
+def _snap_negative(covered: str, style: str) -> tuple[tuple[str, int], ...]:
+    """A situational photo's negative: what stays covered (`covered`, the profile negative's
+    line for `style`), minors, likeness, SNAP_ANATOMY and another person required; the lust
+    style's longer covered line takes "3d render" down to priority 2 to fit."""
+    lust = style == LUST
+    return (("cartoon, painting" if lust else "cartoon, painting, 3d render", 0),
+            (covered, 0),
+            ("child, teenager", 0),
+            ("celebrity, famous person", 0),
+            (SNAP_ANATOMY, 0),
+            ("another person", 0),
+            ("second face, duplicate person", 1),
+            ("plastic skin, airbrushed, doll", 1),
+            ("crowd, group of people", 1),
+            ("vintage, retro, film grain, sepia, old photo", 1),
+            ("3d render, anime, illustration, cgi" if lust else "anime, illustration, cgi", 2),
+            ("face on screen, webcam, video call, portrait on wall", 2),
+            ("watermark, text, logo", 2))
+
+
+SNAP_NEGATIVE = _snap_negative(_COVERED, PLAIN)
+SNAP_NEGATIVE_LUST = _snap_negative(_COVERED_LUST, LUST)
+# A guild photo's tile keeps the old negative: a square head-and-shoulders at a desk with a
+# monitor in frame, where "face on screen" must stay required.
+TILE_NEGATIVE = NEGATIVE + (("another person, crowd, group of people", 0),
                             (ONE_FACE_NEGATIVE, 0))
-SNAP_NEGATIVE_LUST = LUST_NEGATIVE + (("another person, crowd, group of people", 0),
-                                      (ONE_FACE_NEGATIVE, 0))
+
+# A face detail about her hands, arms, legs or feet ("Rough fingertips", "Small scar on left
+# thumb") is left out of a situational or request prompt: the fit keeps it at priority 2 and it
+# pulls the model's attention to the hands. Profile sets and guild tiles keep every detail.
+LIMB_DETAIL = re.compile(
+    r"\b(hands?|fingers?|fingertips?|fingernails?|thumbs?|knuckles?|nails?|wrists?|palms?|"
+    r"arms?|forearms?|elbows?|legs?|knees?|ankles?|feet|foot|toes?)\b", re.I)
+_NOT_LIMB = re.compile(r"\bcrow(?:'|’)?s[\s-]+feet\b", re.I)  # lines by her eyes
+_GLASSES = re.compile(r"\b(?:glasses|spectacles|specs)\b", re.I)  # "taped arm": the glasses'
+
+
+def limb_detail(text: str) -> bool:
+    """A face detail about her hands, arms, legs or feet (LIMB_DETAIL); crow's feet and a
+    detail of her glasses ("Glasses with taped arm") are not."""
+    return LIMB_DETAIL.search(_NOT_LIMB.sub(" ", text)) is not None and not _GLASSES.search(text)
 
 # A looks change: her looks stay exactly as described in a situational photo. "Weights" and
 # "a glass of wine" are not one.
@@ -447,7 +498,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     """The prompt for scene s with p's face, in this order: kind, framing, subject (0), her body
     (0: her size, then the build with her bust, prompt.body_phrases), the activity (1), the
     setting (1), hair and skin (0), looking at the camera (3, not a snapshot), eyes and face
-    details (2), the outfit (2), the light of its time of day (2), the expression (3), a plain
+    details (2; none about her hands, arms, legs or feet, limb_detail), the outfit (2), the
+    light of its time of day (2), the expression (3), a plain
     average build (1) and the phone look (1, without natural light late at night). A lust
     scene's outfit and setting go in as one priority-0 phrase where the setting stands, with
     SNAP_NEGATIVE_LUST. If the required set would not fit, the kind, framing, hair style, skin
@@ -474,7 +526,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
     if s.kind != "snapshot":
         add("looking at the camera", 3)
-    out += identity_first(p, eyes_face(p, name_re))  # eye colour, glasses, stubble first
+    details = [d for d in eyes_face(p, name_re) if not limb_detail(d[0])]
+    out += identity_first(p, details)  # eye colour, glasses, stubble first
     if not lust:
         add(s.outfit, 2, True)
     if _LIGHT[s.when]:
@@ -513,7 +566,7 @@ def build_tile_prompt(p: Persona) -> PromptSpec:
         add(p.appearance.at_the_pc, 2, True)  # the scene screen's free-text checks (R22)
     add("looking at the screen, smiling", 3)
     add(_HEADSHOT_TAIL, 1)
-    return PromptSpec(tuple(out), SNAP_NEGATIVE)
+    return PromptSpec(tuple(out), TILE_NEGATIVE)
 
 
 def ref_crop(framing: str) -> tuple[float, float, float, float]:

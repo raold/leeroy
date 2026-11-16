@@ -152,7 +152,8 @@ def test_a_planned_snap_is_rendered_with_its_identity_reference_as_a_portrait(h,
     (req,) = seen
     assert (req.shape, req.size, req.thumb_size, req.steps, req.cfg, req.nsfw_max) == (
         "portrait", 1024, SNAP_THUMB_PX, SNAPS_CFG.steps, SNAPS_CFG.guidance, SNAPS_CFG.nsfw_max)
-    assert req.identity == Identity(ref, ref_crop("upper_body"), SNAPS_CFG.identity_scale)
+    # a waist-up scene: the face at WIDE_SCALE of identity_scale (render.scene_scale)
+    assert req.identity == Identity(ref, ref_crop("upper_body"), 0.45)
     p = load_persona(h.store, 101)
     spec = build_scene_prompt(p, scene_from(SCENE))
     assert (req.phrases, req.negative) == (spec.phrases, spec.negative)
@@ -163,6 +164,23 @@ def test_a_planned_snap_is_rendered_with_its_identity_reference_as_a_portrait(h,
     assert row.prompt == ", ".join(t for t, _ in spec.phrases)       # what was rendered
     assert snap(data, 101, s).read_bytes() == JPEG and snap(data, 101, s, thumb=True).read_bytes() == JPEG
     assert ctx.done(STAGE, f"snap:{s}") and not ctx.failures
+
+
+@pytest.mark.parametrize("framing,scale", [("face", 0.6), ("head_and_shoulders", 0.6),
+                                           ("upper_body", 0.45), ("three_quarter", 0.45)])
+def test_a_wide_scene_takes_a_lighter_face_and_logs_it(h, tmp_path, caplog, framing, scale):
+    cast(h, 101)
+    s = situation(h, 101, scene=scene_json(scene_from(compose_choices({**PICKS, "framing": framing}))))
+    seen = []
+    ctx = h.ctx()
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(make_snaps_stage(SNAPS_CFG, worker=watching(tmp_path, seen))(ctx))
+    (req,) = seen
+    ref = history(h.settings.data_dir, 101, current(h.store, 101).pick)
+    # the crop is her reference's framing; only the scale follows the scene's framing
+    assert req.identity == Identity(ref, ref_crop("upper_body"), scale)
+    assert f"selfies_snap_face: night={ctx.night} snap={s} guid=101 scale={scale}" in caplog.text
+    assert snap_row(h.store, s).status == "ready" and not ctx.failures
 
 
 def test_a_photo_changed_during_its_render_expires_the_snap_and_keeps_its_files(h, tmp_path):

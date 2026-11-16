@@ -33,6 +33,7 @@ from .config import load_selfie_config, worker_command, worker_env
 from .kind import STAGE as KIND_STAGE
 from .kind import _saver, chosen_style, kind_one
 from .prompt import build_prompt, build_varied_prompt, renderable
+from .render import scene_scale
 from .scene import ABOUT, build_scene_prompt, build_tile_prompt
 from .scenes import STAGE as SCENES_STAGE
 from .scenes import ask_scene
@@ -384,7 +385,8 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
                                       spec=build_scene_prompt(p, scene), ref=ref,
                                       framing=p.photo.framing, out=folder / "snap.jpg",
                                       thumb=folder / "snap.thumb.jpg", thumb_size=SNAP_THUMB_PX,
-                                      shape="portrait", rid=f"t{n}")
+                                      shape="portrait", rid=f"t{n}",
+                                      scale=scene_scale(scfg.identity_scale, scene.framing))
                         rendered += 1
                         _snap_result(results, guid, "rendered", nsfw=got.nsfw)
                     except SetRefused:
