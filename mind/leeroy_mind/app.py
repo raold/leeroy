@@ -72,6 +72,7 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.engine import COMMAND_CHANNELS, TalkEngine
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import NATIVE_FEATURE, ItemLinker
+from leeroy_mind.talk.owed import OwedWatch
 from leeroy_mind.talk.pastes import is_addon_whisper
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
@@ -472,6 +473,8 @@ class MindApp:
         self.discord = DiscordDesk(self)  # his Discord actions from the console: the discord op
         # the members' answers to his posts, and his `discord` lease on the GPU
         self.discord_talk = DiscordTalk(self)
+        # every message of his answered: the watchdog behind the answers (talk/owed.py)
+        self.owed = self.engine.owed = OwedWatch(self)
         self.signals = attach_signals(self)
         from .learn.config import load_learn_config
         from .learn.night import attach as attach_rewards, ready as learn_ready
@@ -1304,6 +1307,10 @@ class MindApp:
                 self.discord_talk.tick(now)  # DM answers on her own time ([talk] dm_own_time)
             except Exception:
                 log.exception("discord_owed_failed")
+            try:
+                self.owed.tick(now)  # a message of his still unanswered gets its answer
+            except Exception:
+                log.exception("owed_tick_failed")
             if now - last_embed >= EMBED_EVERY_S:
                 last_embed = now
                 if self._embed_task is None or self._embed_task.done():

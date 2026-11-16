@@ -288,14 +288,9 @@ def test_the_night_stage_prunes_once(store, clock):
 BEAT = "You read it as: he wants her to come\nIt lands: warm\nYou want to: tease Zan"
 
 
-def test_a_beat_s_lines_never_reach_the_store(monkeypatch):
+def test_a_beat_s_lines_never_reach_the_store():
     """review-329: a private answer's beat (talk/beat.py, appended to the instruction before any
     hint) is taken back out; only that there was one and its want code are kept."""
-    import sys
-    import types
-    fake = types.ModuleType("leeroy_mind.talk.beat")
-    fake.WANTS = {"vent": "get something off your chest", "tease": "tease {human}"}
-    monkeypatch.setitem(sys.modules, "leeroy_mind.talk.beat", fake)
     base = [{"role": "system", "content": "card"}, {"role": "user", "content": "Answer Zan."}]
     with_beat = [base[0], {"role": "user", "content": "Answer Zan.\n" + BEAT + "\nAnswer in a line."}]
     req = capture.request("m", with_beat, {}, False, "x", max_lines=1, words=0, two_lines=False,
@@ -308,8 +303,7 @@ def test_a_beat_s_lines_never_reach_the_store(monkeypatch):
     assert capture.without_beat(rewrite, BEAT)[1]["content"] == "Answer Zan.\nAnswer in a line."
     plain = capture.request("m", base, {}, False, "x", max_lines=1, words=0, two_lines=False)
     assert plain["messages"] == base and plain["beat"] is False and plain["want"] is None
-    monkeypatch.delitem(sys.modules, "leeroy_mind.talk.beat")
-    assert capture.want_of(BEAT) in (None, "tease")  # without talk/beat.py: no code, never words
+    assert capture.want_of("You want to: something else") is None and capture.want_of(None) is None
 
 
 def test_the_ops_switchboard_lists_the_capture_switch(tmp_path):
@@ -320,3 +314,40 @@ def test_the_ops_switchboard_lists_the_capture_switch(tmp_path):
         (tmp_path / "mind.toml").write_text(text)
         rows_ = opsview.switches_view(tmp_path, time.monotonic() + 10, mind_started=None)["rows"]
         assert next(r for r in rows_ if r["table"] == "bakeoff")["state"] == state
+
+
+def test_a_live_beat_is_taken_out_of_the_captured_request(store, clock, tmp_path):
+    """review-329 rule, through the pipeline: with [talk] think_private on, his whisper's answer
+    has a beat; the stored request is the line request before the beat's lines, with beat = 1
+    and the want code; the beat's words are nowhere in the row."""
+    from leeroy_mind.talk import beat as beats
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", stance="drawn", typo_rate=0.0,
+                split_rate=0.0, emoticon_rate=0.0, abbreviations={})
+    rig = make_rig(store, clock, tmp_path, beat=True)
+    try:
+        rig.engine.bakeoff_capture = True
+        vent = {"read": "he is wiped out after a long shift", "lands": "soft, a bit protective",
+                "want": "vent", "use": None}
+
+        def reply(model, messages):
+            if beats.MARK in messages[-1]["content"]:
+                return json.dumps(vent)
+            return "rough one, put your feet up"
+        rig.llm.set_script(reply)
+        rig.whisper_from_him(102, "long shift, i'm wiped")
+        rig.run()
+        line_calls = [c for c in rig.chat_calls() if c["format"] is None]
+        assert len(line_calls) == 1 and "You read it as:" in line_calls[0]["messages"][-1]["content"]
+        [row] = rows(store)
+        assert row["beat"] == 1 and row["want"] == "vent"
+        stored = json.loads(row["messages"])
+        assert stored[-1]["content"] + "\n" + beats.lines(beats.Beat(
+            vent["read"], vent["lands"], "vent", None), rig.engine.human.called) \
+            == line_calls[0]["messages"][-1]["content"]
+        text = json.dumps(dict(row))
+        for words in ("wiped out after a long shift", "soft, a bit protective", "You read it as",
+                      "get something off your chest"):
+            assert words not in text
+    finally:
+        rig.close()

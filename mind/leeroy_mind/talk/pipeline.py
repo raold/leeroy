@@ -58,7 +58,7 @@ from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.llm.client import LLMError, GpuPaused
-from leeroy_mind.llm.presets import LIVE, LIVE_BIT
+from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.recall import Recall, whisper_ok
 from leeroy_mind.nightly.settings import night_bounds
@@ -71,6 +71,7 @@ from leeroy_mind.photos.offer import PhotoOffer, caption_ok
 from leeroy_mind.protocol import Ack, Chat, Command, Emote, Say
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
+from leeroy_mind.talk import beat as beats
 from leeroy_mind.talk.budget import PHASE_MODS, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.discord_length import (FEW_WORDS, QUICK_WORDS, SHORT_WORDS,
@@ -89,6 +90,9 @@ from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
 from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
+from leeroy_mind.talk.owed import (HIS_TALK_WAIT_S, KEEP_WHISPERS, RESCUABLE as OWED_RESCUABLE,
+                                   answers_in_flight, extend_owed_deadline, his_talk_after,
+                                   owes_him, rescue_text)
 from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_line_text,
                                      comms_rules, facts_head, knows_real_name, mood_line,
                                      quest_help, real_name_line, redact_for, relationship_card,
@@ -109,7 +113,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
-from leeroy_mind.text import EMOJI_RE, strip_wow_markup
+from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
@@ -204,7 +208,21 @@ LONG_SLACK = 1.25
 # reviewed only for OWED_HARD_TELLS.
 OWED_FALLBACK_HINT = ("Answer what {human} just said in one or two short sentences, in your own "
                       "voice.")
-OWED_HARD_TELLS = frozenset({"meta", "member flirt", "echo", "summons"})
+OWED_HARD_TELLS = frozenset({"meta", "member flirt", "echo", "summons", "dialogue", "list",
+                             "action", "sample"})
+# A refused fallback is asked once more with what was wrong, in words (review-325-r2 P3-C).
+OWED_REFUSED = {
+    "meta": "don't talk about being an AI, a prompt or instructions",
+    "member flirt": "keep it to {human}: no flirting with anyone else",
+    "echo": "don't say {their} words back",
+    "summons": "don't ask {them} over, you two only talk online",
+    "dialogue": "write only your own words, no one else's lines",
+    "list": "no list, just talk",
+    "action": "no *actions*, only what you'd type",
+    "sample": "don't copy your example lines",
+    "silent": "say something back, not (nothing)",
+}
+OWED_RETRY_HINT = "Not like that: {reasons}. " + OWED_FALLBACK_HINT
 # The second and third answers to his line see the ones before them (prompts I8), and so do
 # the second and third greetings (the rehearsal's second greeter copied the first).
 ANSWERED = "{names} already answered {them}. Add something they didn't, or answer (nothing)."
@@ -434,6 +452,21 @@ class TurnMeta:
     server_thread: tuple[int, ...] = ()
     server_conversation: str = ''
     godmode_intent: int | None = None  # the owner's intent this turn carries out (godmode)
+    # the answer he is owed for his line or post (talk/owed.py): the guild's pace never holds it
+    # back, its review keeps a draft, and a lost draft is rescued; owed_rescue marks the watchdog's
+    # rescue turn; owed_rescued names the drop reason a late draft or fallback answered (one
+    # rescue a turn); owed_cap is the deadline's hard ceiling, set at its first extension
+    owed_answer: bool = False
+    owed_rescue: bool = False
+    owed_rescued: str = ""
+    owed_cap: float = 0.0
+    # when the turn was queued (Pipeline._queue): an initiation he spoke after is dropped while
+    # an answer to him is in flight, one planned before his line waits (his_talk_waited)
+    planned_at: float = 0.0
+    his_talk_waited: bool = False
+    # the beat's lines for this answer (talk/beat.py): None not asked yet, "" skipped; never
+    # logged or stored
+    beat: str | None = field(default=None, repr=False)
     # [bakeoff] capture: the model calls this turn made since its last recorded line (the sent
     # words pick theirs), and the row the generation's first line wrote (bakeoff/capture.py);
     # empty and None while capture is off
@@ -530,6 +563,8 @@ class Composed:
     # her last moves with this turn's counterpart, as its Lately line read them: the repeat
     # check uses the same rows
     moves: list[MoveRow] = field(default_factory=list)
+    # the memories and chat lines it showed, as the beat may offer them (beat.items_of)
+    beat_items: list[str] = field(default_factory=list)
 
 
 def _hinted(composed: "Composed", hint: str) -> "Composed":
@@ -856,7 +891,12 @@ class Pipeline:
             if task in self._behind:
                 self._behind[task] = [t for t, _ in items[i + 1:]]
             try:
-                await self._speak(turn, meta)
+                said = await self._speak(turn, meta)
+                if not said and owes_him(self, turn, meta) and i + 1 < len(items):
+                    nxt, nmeta = items[i + 1]  # the next answer to his line takes on the debt
+                    if (nxt.trigger_line == turn.trigger_line and nxt.kind in REPLY_KINDS
+                            and (nmeta.discord or None) == (meta.discord or None)):
+                        nmeta.owed_answer = True
             except asyncio.CancelledError:
                 if self._cancelling.get(task) is not turn or task.cancelling() > 1:
                     raise
@@ -866,7 +906,10 @@ class Pipeline:
     def _queue(self, items: list[tuple[Turn, TurnMeta]]) -> asyncio.Task | None:
         """Queue the complete turn chain and return its terminal job to an optional owner."""
         if items:
+            now = self.clock.now()
             for turn, meta in items:
+                if not meta.planned_at:
+                    meta.planned_at = now
                 self._mark_borrow(meta)
                 self._answer_queued(turn, meta)
                 self._admit_timing(meta)
@@ -1201,8 +1244,94 @@ class Pipeline:
                 templates_used(meta,used)
             except Exception:
                 log.warning("learn_recipe_describe_failed")
-            return result
-        return await self._compose_prompt(turn,meta,**kwargs)
+            return await self._with_beat(turn, meta, result)
+        result = await self._compose_prompt(turn,meta,**kwargs)
+        return await self._with_beat(turn, meta, result) if live else result
+
+    def _beat_on(self, turn: Turn, meta: TurnMeta | None) -> bool:
+        """[talk] think_private (read at mind start, TalkEngine): an answer to his whisper or to
+        his Discord DM gets a beat first (talk/beat.py). Never game channels, Discord channels,
+        group DMs, voice rooms or a template's turn."""
+        if meta is None or not getattr(self, "think_private", False) or turn.template is not None:
+            return False
+        hg = self.human.guid
+        whisper = self._answers_his_whisper(turn) or (
+            bool(hg) and meta.whisper_reply and turn.channel == "whisper" and turn.to_guid == hg)
+        return bool(whisper or self._answers_his_dm(turn, meta))
+
+    async def _with_beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> "Composed":
+        """`c` with the beat's lines after its instruction, on an answer that gets one. The beat
+        is asked once a turn: a later composition (a guard's rewrite, a fresh answer) reuses it,
+        and every request of the turn, the owed fallback's included, carries the same lines."""
+        if not self._beat_on(turn, meta):
+            return c
+        if meta.beat is None:
+            meta.beat = await self._beat(turn, meta, c)
+        return replace(c, messages=_with_hint(c.messages, meta.beat)) if meta.beat else c
+
+    async def _beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> str:
+        """One short call on the turn's own prompt, constrained to beat.schema with think false:
+        the lines it gives the answer, or "" when it is skipped (an error, BEAT.timeout seconds
+        passed, the queue's included, or a reply that is empty or not the schema), and the line
+        goes as it would without it. Its preparation runs inside the same guard, and after a wait
+        for admission the scope and the deadline are checked again, as _ask does. Its time counts
+        in the turn's llm_s. Logs carry the want code and times, never its words."""
+        started, reason, wants, items = self.clock.now(), "", (), []
+        try:
+            human, their = self.human.called, self.human.forms[2]
+            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0)
+            options = dict(BEAT.options)
+            options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
+            items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
+                                  wants, c.beat_items, predict=options["num_predict"],
+                                  num_ctx=options["num_ctx"], their=their)
+            if items is None:
+                reason = "room"
+            else:
+                messages = _with_hint(c.messages, beats.instruction(human, wants, items, their))
+                fmt = beats.schema(wants, human, their)
+
+                async def job(llm):
+                    if not _scope_valid(meta):
+                        raise _ScopeChanged("scope_changed")
+                    if self.live_admission is not None:
+                        await self.live_admission()
+                        if not _scope_valid(meta):
+                            raise _ScopeChanged("scope_changed")
+                        if self.scheduler.expired(self._deadline(turn, meta)):
+                            raise Expired(turn.deadline)
+                    return await llm.chat(self.cfg.models.live, messages, options=options,
+                                          think=False, format=fmt, timeout=BEAT.timeout)
+                credit = meta.borrow_credit
+                extra = {'credit': credit} if credit is not None else {}
+                result = await asyncio.wait_for(
+                    self.scheduler.submit(turn.priority, job, deadline=turn.deadline, **extra),
+                    BEAT.timeout)
+        except TimeoutError:
+            reason = "timeout"
+        except GpuPaused:
+            reason = "gpu_paused"
+        except Expired:
+            reason = "expired"
+        except _ScopeChanged:
+            reason = "scope_changed"
+        except (SchedulerError, LLMError) as e:
+            reason = "timeout" if "timed out" in str(e) else "llm_error"
+        except Exception as e:  # the beat is optional: nothing in it may cost him his answer
+            reason = "error"
+            log.warning("think_beat_failed: guid=%d error=%s", turn.speaker, type(e).__name__)
+        elapsed = self.clock.now() - started
+        meta.llm_s = (meta.llm_s or 0.0) + elapsed
+        found = None
+        if not reason:
+            found, reason = beats.parse(result.text, wants, items)
+        if found is None:
+            log.info("think_beat_skipped: guid=%d reason=%s ms=%d", turn.speaker, reason,
+                     round(elapsed * 1000))
+            return ""
+        log.info("think_beat: guid=%d want=%s use=%d ms=%d", turn.speaker, found.want,
+                 found.use is not None, round(elapsed * 1000))
+        return beats.lines(found, human)
 
     async def _compose_prompt(self, turn: Turn, meta: TurnMeta, *, live: bool,
                        persona: Persona | None = None, window: list | None = None,
@@ -1485,6 +1614,11 @@ class Pipeline:
             support.append(callback.seed)
             meta.memory_ids = list(dict.fromkeys([*meta.memory_ids, callback.memory_id]))
         messages = render_messages(trimmed)
+
+        def plain(text: str) -> str:  # a chat line as a beat item, redacted as redact_for does
+            text = strip_wow_markup(text)
+            return text if real or not human.real_name else redact_real_name(text, human,
+                                                                            human.called)
         return Composed(messages,
                         list(dict.fromkeys([m.id for m in memories[:len(trimmed.memories)]] +
                              ([callback.memory_id] if callback else []))), p, close,
@@ -1493,7 +1627,13 @@ class Pipeline:
                         # repeat check's): the audit's answer that sent his message back
                         support, [r.text for r in recent if r.from_guid == hg] if dm_rows
                         else [r.text for r in recent if r.id != turn.trigger_line],
-                        [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves)
+                        [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves,
+                        # as plain text (no age, speaker or bullet): the shown memories, then the
+                        # others' earlier lines, never hers nor the line she answers
+                        beat_items=beats.items_of(
+                            [beats.unframed(x) for x in trimmed.memories],
+                            [plain(r.text) for r in recent[:-1]
+                             if r.from_guid != turn.speaker and r.id != turn.trigger_line]))
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:
@@ -1605,6 +1745,8 @@ class Pipeline:
         return Priority.SOCIAL
 
     async def _speak(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        if not meta.planned_at:  # a turn spoken without _queue (an opener to him, a DM opener)
+            meta.planned_at = self.clock.now()
         self._mark_borrow(meta)
         self._answer_queued(turn, meta)
         self._admit_timing(meta)
@@ -1652,6 +1794,8 @@ class Pipeline:
         if turn.deadline <= 0:
             turn.deadline = now + (DISCORD_DEADLINE_S if is_discord(turn.channel)
                                    else DEADLINE_S.get(turn.priority, OTHER_DEADLINE_S))
+            if owes_him(self, turn, meta):  # by the answers to him in flight (talk/owed.py)
+                extend_owed_deadline(self, turn, meta, now)
             self._mark_borrow(meta, reset=True)
         if not turn.channel:
             turn.channel = choose_channel(turn.kind, speaker=turn.speaker, world=self.world,
@@ -1691,6 +1835,21 @@ class Pipeline:
         if voiced:
             with self.timing.span(meta.timing_trace, "hold"):
                 await self._hold(turn)
+        if (meta.initiates and not meta.his_talk_waited and not meta.why.startswith(KEEP_WHISPERS)
+                and answers_in_flight(self)):
+            # a conversation starter waits for the answers to him on their way (review-327
+            # P2-2), once, HIS_TALK_WAIT_S at most; dropped below only if he spoke after it was
+            # planned and an answer is still in flight
+            meta.his_talk_waited = True
+            with self.timing.span(meta.timing_trace, "hold"):
+                started = self.clock.now()
+                until = started + HIS_TALK_WAIT_S
+                while answers_in_flight(self) and self.clock.now() < until:
+                    await self.clock.sleep(2.0)
+            if not _scope_valid(meta):
+                return self._drop(turn, meta, "scope_changed")
+            turn.deadline += self.clock.now() - started  # the wait is not its own time
+            self._mark_borrow(meta, reset=True)
         why = self._blocked(turn, meta, self.clock.now(), first=True)
         if why:
             return self._drop(turn, meta, why)
@@ -1734,6 +1893,8 @@ class Pipeline:
                 return self._drop(turn, meta, "scope_changed", c.memory_ids)
             memory_ids, close = c.memory_ids, c.close
             text, why = await self._generate(turn, meta, c, spoken=voiced)
+            if why in OWED_RESCUABLE and _scope_valid(meta):  # his answer, asked once more
+                text, why = await rescue_text(self, turn, meta, c, why, text, spoken=voiced)
             self._phase(turn, None)  # its text exists
             if not _scope_valid(meta):
                 return self._drop(turn, meta, "scope_changed", memory_ids, text=text)
@@ -1927,7 +2088,8 @@ class Pipeline:
             return self._drop(turn,meta,code,meta.memory_ids)
         for attempt in range(2):
             if not lines:
-                return (await fallback() if owed and (best is not None or hard_seen)
+                return (await fallback() if owed and (best is not None or hard_seen
+                                                      or owes_him(self, turn, meta))
                         else drop("guard_rewrite_failed"))
             verdicts = []
             for line in lines:
@@ -1988,7 +2150,8 @@ class Pipeline:
             else:
                 return lines
         meta.guard_verdict = "drop"
-        return (await fallback() if owed and (best is not None or hard_seen)
+        return (await fallback() if owed and (best is not None or hard_seen
+                                              or owes_him(self, turn, meta))
                 else drop("guard_rewrite_failed"))
 
     async def _short_answer(self, turn, meta, p, slipped, *, close, spoken=False):
@@ -2288,12 +2451,21 @@ class Pipeline:
                 return "expired"
         if not self.raid.allows(g, turn.kind, now):
             return "raid"
+        # a conversation starter he spoke after, while an answer to him is on its way, is
+        # dropped: his talk comes first (review-327 P2-2); a whisper the game set off (a kill,
+        # his loot) never is
+        if (meta.initiates and not meta.why.startswith(KEEP_WHISPERS)
+                and his_talk_after(self, meta) and answers_in_flight(self)):
+            return "his_talk"
         guards = meta.guards or self.guards
-        # a whisper to him that starts a conversation is, like an answer to his whisper or to
-        # his Discord DM, read by no one else: the guild's pace and her lines elsewhere never
-        # hold it back
+        # a whisper to him that starts a conversation is, like any answer whispered to him or an
+        # answer to his Discord DM, read by no one else: the guild's pace and her lines elsewhere
+        # never hold it back; nor do they hold back the one answer he is owed for a line of his
+        # (owed_answer, talk/owed.py)
         unread = (meta.whisper_reply or (meta.initiates and turn.channel == "whisper")
-                  or self._answers_his_dm(turn, meta))
+                  or self._answers_his_dm(turn, meta) or meta.owed_answer
+                  or (turn.channel == "whisper" and turn.to_guid == self.human.guid
+                      and turn.kind in REPLY_KINDS))
         if not guards.allow(g, turn.kind, now, continuation=not first,
                             reply=unread, pushback=bool(meta.pushback)):
             return "guards"
@@ -2362,7 +2534,7 @@ class Pipeline:
                 model = self.cfg.models.live
                 if meta is not None and getattr(self, "learn_enabled", False):
                     from leeroy_mind.learn.recipe import called_model
-                    called_model(meta, model, options)
+                    called_model(meta, model, options, beat=bool(meta.beat))
                 result = await llm.chat(model, messages, options=options,
                                         think=preset.think, timeout=preset.timeout)
                 if meta is not None and getattr(self, "bakeoff_capture", False):
@@ -2564,51 +2736,100 @@ class Pipeline:
                 return line, None
         return text, why
 
+    def owed_clean_draft(self, turn: Turn, meta: TurnMeta, c: Composed,
+                         raw: str) -> tuple[str | None, list[str]]:
+        """A draft of an owed answer against the hard screens only (OWED_HARD_TELLS, a flirt at a
+        member, silence): its words repaired, or None with what refused it."""
+        p = c.persona
+        name, own, his = p.character_name, aliases(p), self._his_names()
+        emoji = is_discord(turn.channel)
+
+        def quiet(t: str) -> bool:
+            return is_silence(t) and not (emoji and _emoji_only(t))
+        if not raw or quiet(raw):
+            return None, ["silent"]
+        text = raw if c.close else redact_real_name(raw, self.human, self.human.called)
+        text = strip_copied(text, (name, *own), him=his)
+        if meta.pushback:
+            text = text.split("\n", 1)[0].rstrip()
+        if quiet(text):
+            return None, ["silent"]
+        hg = self.human.guid
+        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        tells = find_tells(text, answers=c.answers, held=c.held, samples=c.samples,
+                           summons_ok=summons_ok, keep_emoji=emoji)
+        refused = list(dict.fromkeys(t.reason for t in tells if t.reason in OWED_HARD_TELLS))
+        if self._flirts_at_a_member(turn, text):
+            refused.append("member flirt")
+        if refused:
+            return None, refused
+        text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
+        return (None, ["silent"]) if quiet(text) else (text, [])
+
+    def owed_late_draft(self, turn: Turn, meta: TurnMeta, c: Composed, raw: str) -> str | None:
+        """A draft that arrived after its deadline (owed.rescue_text): the hard screens
+        (owed_clean_draft) and then the kept-draft rule of _generate (review-327-r2 P3-N6): a
+        fatal tell, or one a retry may not keep (DROP_ON_RETRY), refuses it."""
+        text, _ = self.owed_clean_draft(turn, meta, c, raw)
+        if not text:
+            return None
+        p = c.persona
+        hg = self.human.guid
+        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        tells = find_tells(text, recent_own=self._own_lines(turn), speaker=p.character_name,
+                           answers=c.answers, others=c.others, samples=c.samples,
+                           support=c.support, people=list(self._protect(turn.channel)),
+                           window=c.window, held=c.held, tonight=meta.again_tonight,
+                           recent_moves=[(r.clause, r.main) for r in c.moves],
+                           summons_ok=summons_ok, keep_emoji=is_discord(turn.channel))
+        if self._invents_game_name(text):
+            tells.append(Tell("game name", False, True))
+        if any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
+            log.info("owed_late_draft_refused: guid=%d tells=%s", turn.speaker,
+                     ",".join(sorted({t.reason for t in tells if t.fatal or t.reason in DROP_ON_RETRY})))
+            return None
+        return text
+
     async def owed_fallback(self, turn: Turn, meta: TurnMeta, c: Composed, *,
                             spoken: bool = False) -> str | None:
         """The last answer to a message of his when no draft could stand (owner, 2026-11-15:
         every message of his gets a reply that adds something): one more short generation on
         the turn's own prompt, told only to answer what he just said (OWED_FALLBACK_HINT), and
         reviewed only for silence and the hard screens (OWED_HARD_TELLS: talk of AI or prompts,
-        a flirt at a member, his words said back, asking him over). Its words, repaired, or
-        None when even this fails (the turn is then dropped). The one fallback the lanes share."""
-        p = c.persona
-        name, own, his = p.character_name, aliases(p), self._his_names()
-        emoji = is_discord(turn.channel)
-        messages = _with_hint(c.messages, OWED_FALLBACK_HINT.format(human=self.human.called))
-        if spoken:
-            messages = _with_hint(messages, SPOKEN_HINT)
-        asked = self.clock.now()
-        try:
-            raw = await self._ask(turn, messages, meta=meta, attempt=2)  # past the timed two
-        except (_ScopeChanged, Expired, GpuPaused, SchedulerError, LLMError):
-            return None
-        finally:
-            meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
-        if not _scope_valid(meta) or self.scheduler.expired(self._deadline(turn, meta)):
-            return None
-
-        def quiet(t: str) -> bool:
-            return is_silence(t) and not (emoji and _emoji_only(t))
-        if quiet(raw):
-            return None
-        text = raw if c.close else redact_real_name(raw, self.human, self.human.called)
-        text = strip_copied(text, (name, *own), him=his)
-        if meta.pushback:
-            text = text.split("\n", 1)[0].rstrip()
-        if quiet(text):
-            return None
-        hg = self.human.guid
-        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
-        tells = find_tells(text, answers=c.answers, held=c.held, summons_ok=summons_ok,
-                           keep_emoji=emoji)
-        hard = [t.reason for t in tells if t.reason in OWED_HARD_TELLS]
-        if hard or self._flirts_at_a_member(turn, text):
-            log.info("say_owed_fallback_refused: guid=%d kind=%s tells=%s", turn.speaker,
-                     turn.kind, ",".join(hard) or "member flirt")
-            return None
-        text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
-        return None if quiet(text) else text
+        a flirt at a member, his words said back, asking him over, other people's lines, a list,
+        an *action*, a sample line copied; owed_clean_draft). A refused or silent one is asked
+        once more with what was wrong in words (OWED_RETRY_HINT). Its words, repaired, or None
+        when even that fails: the turn is then dropped and talk/owed.py's watchdog holds the
+        message and tries a rescue generation again later. Never a canned line (review-327
+        P2-1). The one fallback the lanes share."""
+        they, them, their = self.human.forms
+        hint = OWED_FALLBACK_HINT.format(human=self.human.called)
+        for attempt in range(2):
+            messages = _with_hint(c.messages, hint)
+            if spoken:
+                messages = _with_hint(messages, SPOKEN_HINT)
+            asked = self.clock.now()
+            try:
+                raw = await self._ask(turn, messages, meta=meta, attempt=2 + attempt)  # untimed
+            except (_ScopeChanged, GpuPaused):
+                return None
+            except (Expired, SchedulerError, LLMError):
+                return None
+            finally:
+                meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
+            if not _scope_valid(meta) or self.scheduler.expired(self._deadline(turn, meta)):
+                return None
+            text, refused = self.owed_clean_draft(turn, meta, c, raw)
+            if text:
+                return text
+            log.info("say_owed_fallback_refused: guid=%d kind=%s attempt=%d tells=%s",
+                     turn.speaker, turn.kind, attempt, ",".join(refused))
+            hint = OWED_RETRY_HINT.format(
+                human=self.human.called,
+                reasons="; ".join(OWED_REFUSED[r].format(human=self.human.called, they=they,
+                                                         them=them, their=their)
+                                  for r in refused))
+        return None
 
     def _answers_his_whisper(self, turn: Turn) -> bool:
         """The turn answers a line of his in a whisper to him: its silence is asked again once

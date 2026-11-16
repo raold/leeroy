@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS result (
   thinking_tokens INTEGER NOT NULL DEFAULT 0,
   eval_count INTEGER NOT NULL DEFAULT 0,
   seconds REAL,
+  beat TEXT,                        -- a beat candidate's want code, or skipped:<why>; never its words
   PRIMARY KEY (candidate, turn));
 CREATE TABLE IF NOT EXISTS judged (
   candidate TEXT NOT NULL, unit TEXT NOT NULL, family TEXT NOT NULL,
@@ -71,15 +72,16 @@ def put(conn, key: str, value) -> None:
 
 def put_result(conn, candidate: str, turn: int, *, status: str, lines: list[str],
                masked: list[str], text: str | None = None, code: str | None = None,
-               thinking_tokens: int = 0, eval_count: int = 0, seconds: float | None = None) -> None:
+               thinking_tokens: int = 0, eval_count: int = 0, seconds: float | None = None,
+               beat: str | None = None) -> None:
     conn.execute(
         "INSERT INTO result(candidate, turn, status, code, text, lines, masked, thinking_tokens, "
-        "eval_count, seconds) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(candidate, turn) DO UPDATE "
+        "eval_count, seconds, beat) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(candidate, turn) DO UPDATE "
         "SET status=excluded.status, code=excluded.code, text=excluded.text, lines=excluded.lines, "
         "masked=excluded.masked, thinking_tokens=excluded.thinking_tokens, "
-        "eval_count=excluded.eval_count, seconds=excluded.seconds",
+        "eval_count=excluded.eval_count, seconds=excluded.seconds, beat=excluded.beat",
         (candidate, turn, status, code, text, json.dumps(lines, ensure_ascii=False),
-         json.dumps(masked, ensure_ascii=False), thinking_tokens, eval_count, seconds))
+         json.dumps(masked, ensure_ascii=False), thinking_tokens, eval_count, seconds, beat))
 
 
 def results(conn, candidate: str) -> dict[int, sqlite3.Row]:

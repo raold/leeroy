@@ -341,3 +341,44 @@ def test_situation_keeps_the_hard_rules_bake_off_1_s_two_and_an_unknown_bullet()
         assert gone not in system
     assert out[1] == messages[1] and messages[0]["content"].startswith("You are Belra")
     assert variants.as_is(messages) == messages
+
+
+def test_a_beat_candidate_asks_its_own_beat_first(data, tmp_path, clock):
+    """review-329: a beat candidate (beat = true) asks a beat through talk/beat.py on the request
+    (which never holds the live beat), then its line with the beat's lines after the
+    instruction; the result keeps the want code, never the words."""
+    llm, admin, _ = ollama(data)
+    cfg = ('[[candidate]]\nname = "polite-beat"\nmodel = "polite:1"\nthink = false\n'
+           'beat = true\nprompt_variant = "situation"\n')
+    out = tmp_path / "o"
+    assert run(data, tmp_path, "--turns", "20", "--windows", "0", "--out", str(out), llm=llm,
+               admin=admin, clock=clock, cfg_text=cfg) == 0
+    calls = [c for c in llm.calls if c.get("model") == "polite:1"]
+    beat_calls = [c for c in calls if c["format"] is not None]
+    line_calls = [c for c in calls if c["format"] is None]
+    assert len(beat_calls) == len(line_calls) == 20
+    assert all(c["think"] is False and c["options"]["num_predict"] == 240 for c in beat_calls)
+    assert all(c["messages"][-1]["content"].endswith("You want to: just react") for c in line_calls)
+    assert all("Your slang is 2009" not in c["messages"][0]["content"] for c in beat_calls)
+    conn = sqlite3.connect(out / "results.sqlite")
+    stored = conn.execute("SELECT beat, text FROM result WHERE candidate='polite-beat'").fetchall()
+    conn.close()
+    assert {b for b, _ in stored} == {"react"}
+    assert not any("he asks if she is around" in (t or "") for _, t in stored)
+    report = json.loads((out / "report.json").read_text())
+    beat = next(c for c in report["candidates"] if c["name"] == "polite-beat")
+    assert beat["beat"] is True and beat["lines"]["beat"] == {
+        "used": 20, "asked": 20, "wants": {"react": 20}, "skipped": {}}
+    md = (out / "report.md").read_text()
+    assert "situation + beat" in md and "beat used on 20 of 20 turns; wants: react 20" in md
+    assert "he asks if she is around" not in md
+
+
+def test_beat_items_are_read_back_from_the_request():
+    from leeroy_mind.bakeoff import beat
+    user = ("You remember:\n- 2d ago: we cleared ICC together\n\nChat:\n"
+            "[3m ago] Belra (whisper to Zan): her own earlier line\n"
+            "[2m ago] Zan (whisper to Belra): his earlier line\n"
+            "[just now] Zan (whisper to Belra): the line she answers\n\nAnswer Zan.")
+    assert beat.items([{"role": "system", "content": "card"}, {"role": "user", "content": user}],
+                      "Belra") == ["we cleared ICC together", "his earlier line"]

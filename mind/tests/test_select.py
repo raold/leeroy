@@ -125,12 +125,14 @@ def test_ordinary_words_that_open_a_goodbye_or_a_hello():
 
 
 def test_reply_count_distribution():
+    """A bare remark of his gets one answer or two, never none (owner, 2026-11-15: every message
+    of his is answered; it was 18% none)."""
     rng = random.Random(11)
     n = Counter(len(plan_replies("that boss was rough", channel="guild", to_guid=0, weights=W,
                                  names=NAMES, afk=set(), rng=rng)) for _ in range(10_000))
-    for k, p in ((0, 0.18), (1, 0.52), (2, 0.30)):
+    for k, p in ((1, 0.70), (2, 0.30)):
         assert abs(n[k] / 10_000 - p) <= 0.02, n
-    assert set(n) <= {0, 1, 2}
+    assert set(n) <= {1, 2}
 
 
 def test_greeting_question_and_goodbye_get_2_to_3():
@@ -264,23 +266,24 @@ def test_whisper_needs_a_valid_target():
 
 
 def test_whisper_reply_goes_to_target():
+    """Every whisper of his is answered by the one he whispered (owner, 2026-11-15; it was
+    0.9 for anyone without an attitude toward him)."""
     rng = random.Random(8)
     n = Counter(tuple(plan_replies("you around?", channel="whisper", to_guid=102, weights=W,
                                    names=NAMES, afk=set(), rng=rng)) for _ in range(5_000))
-    assert set(n) <= {(102,), ()}
-    assert abs(n[(102,)] / 5_000 - 0.9) < 0.02
+    assert n == {(102,): 5_000}
 
 
 def test_a_woman_with_an_attitude_toward_him_answers_every_whisper():
     """Rehearsal 3, check 4: his third whisper to a drawn woman drew no reply, one in ten by
     design (WHISPER_REPLY_P). A woman fond of him, drawn to him or wanting him answers every
-    one; anyone else keeps 0.9."""
+    one; since 2026-11-15 everyone else does too (the owner: every whisper gets its reply)."""
     for stance in ("fond", "drawn", "lust"):
         her = make_persona(102, "Belra", player_gender="female", stance=stance)
         assert whisper_reply_p(her) == 1.0, stance
-    assert whisper_reply_p(make_persona(102, "Belra", player_gender="female")) == 0.9
-    assert whisper_reply_p(make_persona(101, "Arkon", stance="lust")) == 0.9  # a man's stance
-    assert whisper_reply_p(None) == 0.9
+    assert whisper_reply_p(make_persona(102, "Belra", player_gender="female")) == 1.0
+    assert whisper_reply_p(make_persona(101, "Arkon", stance="lust")) == 1.0  # a man's stance
+    assert whisper_reply_p(None) == 1.0
     rng = random.Random(8)
     assert all(plan_replies("you around?", channel="whisper", to_guid=102, weights=W,
                             names=NAMES, afk=set(), rng=rng, whisper_p=1.0) == [102]

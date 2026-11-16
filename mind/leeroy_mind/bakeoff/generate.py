@@ -146,10 +146,31 @@ def error_code(e: BaseException) -> str:
     return type(e).__name__
 
 
-async def ask(llm, candidate, turn, seed: str, source: str = "first") -> dict:
-    """One call: {"status", "code", "text", "thinking_tokens", "eval_count", "seconds"}."""
+async def ask(llm, candidate, turn, seed: str, source: str = "first", who=None) -> dict:
+    """One turn: {"status", "code", "text", "thinking_tokens", "eval_count", "seconds", "beat"}.
+    A `beat` candidate asks its beat first (bakeoff/beat.py; `who(turn)` gives his name, his
+    possessive, whether she may flirt with him and her character name); "beat" is then its want
+    code or "skipped:<why>", never its words, and its time counts in "seconds"."""
     messages, options = request(candidate, turn, seed, source)
     started = time.monotonic()
+    beat_code = None
+    if candidate.beat:
+        from . import beat
+        info = who(turn) if who is not None else {}
+        lines, beat_code = await beat.ask(
+            llm, candidate.model, messages, human=info.get("human", ""),
+            their=info.get("their", "their"), can_flirt=bool(info.get("can_flirt")),
+            speaker=info.get("speaker", ""), timeout=candidate.timeout, keep_alive=KEEP_ALIVE)
+        if lines is None:
+            beat_code = f"skipped:{beat_code}"
+        else:
+            messages = beat.with_lines(messages, lines)
+    result = await _line(llm, candidate, turn, messages, options, source, started)
+    result["beat"] = beat_code
+    return result
+
+
+async def _line(llm, candidate, turn, messages, options, source, started) -> dict:
     try:
         r = await llm.chat(candidate.model, messages, options=options, think=candidate.think,
                            keep_alive=KEEP_ALIVE, timeout=candidate.timeout)
@@ -163,4 +184,4 @@ async def ask(llm, candidate, turn, seed: str, source: str = "first") -> dict:
                    done_reason=getattr(r.diagnostics, "done_reason", None))
     return {"status": "ok", "code": None, "text": text,
             "thinking_tokens": estimate_tokens(r.thinking) if r.thinking else 0,
-            "eval_count": r.eval_count, "seconds": round(r.seconds or (time.monotonic() - started), 3)}
+            "eval_count": r.eval_count, "seconds": round(time.monotonic() - started, 3)}

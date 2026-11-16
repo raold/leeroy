@@ -38,9 +38,9 @@ captured, nor is a voice-room turn (spoken lines are outside the Turing corpus).
 
 **The beat** (`[talk] think_private`, talk/beat.py): a private answer's beat lines are appended
 to its line request. They never reach this table: each request is stored as it was before the
-beat's lines, with only `beat = 1` and its `want` code. So every captured request is the line's
-request without the beat; a bake-off variant that asks each candidate for a beat of its own comes
-in a follow-up once talk/beat.py is on main.
+beat's lines (their `"\n" + beat` suffix taken out once from the last user message that holds
+it), with only `beat = 1` and its `want` code. So every captured request is the line's request
+without the beat; a candidate with `beat = true` asks a beat of its own (below).
 
 Capture never slows or changes a turn: the request is kept on the turn after the model answers
 and written after the line is recorded, inside a savepoint of the line's own transaction; any
@@ -176,8 +176,21 @@ think = false                  # true, false, or left out (see below)
 # think_budget = 1400          # a thinking candidate's extra num_predict (default 1400)
 # num_ctx = 6144               # default: as captured, or for a thinking one captured + budget, rounded up to 1024
 # prompt_variant = "as_is"     # or "situation"
+# beat = false                 # true: ask its own beat first (talk/beat.py), as [talk] think_private does
 # timeout = 120                # seconds per call, 10-900
 ```
+
+**`beat = true`** (bakeoff/beat.py): the candidate first asks a beat on the turn's request through
+talk/beat.py, as the live pipeline does for his whispers and DMs (the beat's instruction after the
+request, `format` = the beat's schema, `think` false, the BEAT preset's sampling and num_predict
+240), then asks its line with the beat's lines after the instruction. A beat that fails the
+schema, does not fit or errs is skipped and the line goes without it. What it may bring in is
+read back from the request (the memories under "You remember:", the earlier chat lines that are
+not hers, never the line she answers), since the composed prompt's own list is not stored. The
+result keeps the beat's want code or why it was skipped, never its words; the report gives how
+many turns used one and the wants. It combines with `prompt_variant` (bake-off 1's best was
+Orion + beat + situation on public channels). The beat is asked on every captured turn, game
+channels too, which the live pipeline does not do.
 
 **`think` has three settings.** `true` and `false` are sent as the request's flag; **left out,
 no flag is sent and the model does what it does by default**. So a plain candidate must say
@@ -214,6 +227,19 @@ think = false
 name = "orion-situation"
 model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
 think = false
+prompt_variant = "situation"
+
+[[candidate]]
+name = "orion-beat"
+model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
+think = false
+beat = true
+
+[[candidate]]
+name = "orion-beat-situation"
+model = "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS"
+think = false
+beat = true
 prompt_variant = "situation"
 
 [[candidate]]
@@ -265,5 +291,5 @@ machine).
   model comparison, the all-features table the night's view.
 - No guard (`[guards]`), retry or owed-answer fallback runs on a candidate's reply: a silence
   is counted as a silence.
-- No beat: the beat's lines are never stored, so candidates answer without one (a beat variant
-  is a follow-up).
+- The live beat is not replayed: its lines are never stored, so a candidate answers without
+  one unless it asks its own (`beat = true`), whose items are read back from the request.

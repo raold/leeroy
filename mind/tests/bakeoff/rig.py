@@ -156,6 +156,10 @@ class BakeLLM(FakeLLM):
     def answer(self, model, messages):
         if messages[0]["content"] == judge.SYSTEM:
             return judge_reply(messages)
+        from leeroy_mind.talk import beat as beats
+        if beats.MARK in messages[-1]["content"]:  # a beat candidate's beat
+            return json.dumps({"read": "he asks if she is around", "lands": "fine",
+                               "want": "react", "use": None})
         if model == "terse:1":  # types as he does
             self.terse = getattr(self, "terse", -1) + 1
             return HIS[self.terse % len(HIS)]

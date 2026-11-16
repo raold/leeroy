@@ -163,12 +163,16 @@ def _no_photo_files_lost(app, sid):
     return files.snap(app.data_dir,101,sid).exists() and files.snap(app.data_dir,101,sid,thumb=True).exists()
 
 
+@pytest.mark.parametrize('beat',[False,True])
 @pytest.mark.parametrize('cause',['words','words_at_send','stale_at_send','stale_at_store'])
-def test_owed_dm_answer_loses_only_its_photo(tmp_path,cause,monkeypatch):
+def test_owed_dm_answer_loses_only_its_photo(tmp_path,cause,monkeypatch,beat):
     """His DM is always answered: a caption the screens refuse or a photo gone stale at send
-    releases the photo, and the answer is asked once more without it."""
+    releases the photo, and the answer is asked once more without it. With the beat
+    ([talk] think_private, talk/beat.py) its one request comes first, on the prompt with the
+    photo, and the answer asked again without the photo reuses it."""
     async def go():
         app=mind_app(tmp_path)
+        app.engine.think_private=beat
         photo,called=offer(app)
         asked=[]
         def script(model,messages):
@@ -188,7 +192,7 @@ def test_owed_dm_answer_loses_only_its_photo(tmp_path,cause,monkeypatch):
         try:
             lines=await finish(app,asyncio.create_task(app.engine.speak_meta(turn,meta)))
             assert len(lines)==1 and 'pajamas' not in lines[0]
-            assert asked==[True,False]
+            assert asked==([True,True,False] if beat else [True,False])
             assert called.asked==1 and called.released==1 and called.sent==[]
             assert meta.photo is None and meta.said==1
             assert [r[0] for r in app.store.conn.execute('SELECT text FROM discord_message')]==lines

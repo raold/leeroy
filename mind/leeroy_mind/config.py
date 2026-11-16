@@ -29,6 +29,8 @@ texture = false                # members type like people: apostrophes, run-ons,
 dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
 discord_words = 90             # 0-200: most words in a member's Discord channel message (0: one short line, as in game)
 dm_words = 200                 # 0-200: most words in a member's DM to him (0: one short line)
+think_private = true           # a short structured beat before answering his whispers and DMs (read at mind start)
+think_budget = 240             # 120-320: the beat's num_predict, in tokens
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
@@ -60,6 +62,7 @@ max_inflight = 3              # 1-4 of Ollama's 4 slots
 RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 DISCORD_WORDS_MAX = 200  # [talk] discord_words and dm_words
+THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] values already logged in this process
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "life", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
@@ -95,6 +98,8 @@ class TalkCfg:
     dm_own_time: bool = False
     discord_words: int = 90  # [talk] discord_words; talk/discord_length.py
     dm_words: int = 200  # [talk] dm_words: his DMs, as full as she likes
+    think_private: bool = True  # [talk] think_private: talk/beat.py, read at mind start
+    think_budget: int = 240  # [talk] think_budget: the beat's num_predict
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,8 @@ _RULES = {
         "selfies": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "discord_words": (lambda v: _int_in(v, 0, DISCORD_WORDS_MAX), f"an integer 0-{DISCORD_WORDS_MAX}"),
         "dm_words": (lambda v: _int_in(v, 0, DISCORD_WORDS_MAX), f"an integer 0-{DISCORD_WORDS_MAX}"),
+        "think_private": (lambda v: type(v) is bool, "a boolean"),
+        "think_budget": (lambda v: _int_in(v, *THINK_BUDGET_RANGE), "an integer %d-%d" % THINK_BUDGET_RANGE),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -255,9 +262,11 @@ def _build(data: dict, source: str) -> MindConfig:
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
-            if section == "talk" and key in ("realism", "texture", "dm_own_time") and type(v) is not bool:
+            if section == "talk" and key in ("realism", "texture", "dm_own_time",
+                                             "think_private") and type(v) is not bool:
                 v = False
-            if section == "talk" and key in ("discord_words", "dm_words") and not check(v):
+            if section == "talk" and key in ("discord_words", "dm_words",
+                                             "think_budget") and not check(v):
                 if (key, repr(v)) not in _WARNED:  # the default, logged once (each login reads it again)
                     _WARNED.add((key, repr(v)))
                     log.warning("talk_%s_invalid key=%s want=%s default=%s", key, key,

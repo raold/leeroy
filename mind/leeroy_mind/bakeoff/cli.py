@@ -202,10 +202,22 @@ async def _dry(root, cfg, candidates, args, make_llm, clock) -> int:
     print("models: " + ("all pulled" if not missing else "missing (not pulled): "
                         + ", ".join(dict.fromkeys(missing))))
     for c in candidates:
-        print(f"candidate {c.name}: " + _think_mode(c))
+        print(f"candidate {c.name}: " + _think_mode(c) + ("; asks its own beat first" if c.beat else ""))
     print("reflection model (the judge): " + ("pulled" if _has(models, cfg.models.reflection)
                                               else "missing"))
     return 0
+
+
+def _who(ctx, personas):
+    """For a beat candidate: his name and possessive, whether she may flirt with him, her name."""
+    from leeroy_mind.talk.romance import flirt_chance
+
+    def who(turn) -> dict:
+        p = personas.get(turn.captured.guid)
+        return {"human": ctx.ident.called, "their": ctx.ident.forms[2],
+                "can_flirt": p is not None and flirt_chance(p, 1.0) > 0,
+                "speaker": p.character_name if p is not None else ""}
+    return who
 
 
 def _think_mode(c) -> str:
@@ -286,7 +298,7 @@ async def _unload(admin, model: str) -> None:
 
 
 async def _generate(llm, admin, res, built, candidates, typist, ctx, seed, source,
-                    used: list[str]) -> None:
+                    used: list[str], who=None) -> None:
     """Every candidate's answers, one model at a time; each model goes into `used` before its
     first call, so an interrupted run still unloads it."""
     from . import generate
@@ -302,9 +314,9 @@ async def _generate(llm, admin, res, built, candidates, typist, ctx, seed, sourc
                 if t.id in done and done[t.id]["status"] != "error":
                     counts[done[t.id]["status"]] += 1
                     continue
-                r = await generate.ask(llm, c, t, seed, source)
+                r = await generate.ask(llm, c, t, seed, source, who)
                 timing = dict(thinking_tokens=r["thinking_tokens"], eval_count=r["eval_count"],
-                              seconds=r["seconds"])
+                              seconds=r["seconds"], beat=r.get("beat"))
                 if r["status"] == "error":
                     results.put_result(res, c.name, t.id, status="error", code=r["code"], lines=[],
                                        masked=[], **timing)
@@ -436,7 +448,8 @@ async def _go(root, store, cfg, candidates, args, out, make_llm, make_admin, clo
                   "first (only turns of the last 14 days that are in the Turing corpus count)")
             return 1
         _store_plan(res, built, ctx, args=args, candidates=candidates)
-        typist = Typist(PersonaCache(store), his=ctx.his,
+        personas = PersonaCache(store)
+        typist = Typist(personas, his=ctx.his,
                         protect=frozenset(ctx.by_guid.values()), texture=cfg.talk.texture,
                         seed=built.seed)
         _baselines(res, built, ctx, typist)
@@ -452,7 +465,8 @@ async def _go(root, store, cfg, candidates, args, out, make_llm, make_admin, clo
             if missing:
                 print("missing (not pulled, skipped): " + ", ".join(missing))
             await _make_room(admin, cfg.models.embedding)
-            await _generate(llm, admin, res, built, ready, typist, ctx, built.seed, args.source, used)
+            await _generate(llm, admin, res, built, ready, typist, ctx, built.seed, args.source, used,
+                            who=_who(ctx, personas))
             names = [*score.BASELINES, *(c.name for c in ready)]
             judge_ran, judge_note = False, ""
             if not built.windows:

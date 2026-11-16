@@ -97,4 +97,5 @@ def test_discord_drawn_question_keeps_first_answer_in_its_own_medium(rig,monkeyp
     items = talk.plan(post(rig,"general",text))
     assert [m.first_question_answer for _,m in items] == expected
     assert all(t.channel == "discord:general" for t,_ in items)
-    assert [rig.engine.live_review.owed(t,m) for t,m in items] == expected
+    # since 2026-11-15 the first answer to every post of his is owed (talk/owed.py)
+    assert [rig.engine.live_review.owed(t,m) for t,m in items] == [True,False]

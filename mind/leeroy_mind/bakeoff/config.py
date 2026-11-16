@@ -47,6 +47,7 @@ class Candidate:
     prompt_variant: str = "as_is"
     timeout: int = DEFAULT_TIMEOUT
     num_ctx: int | None = None
+    beat: bool = False  # ask its own beat first (talk/beat.py; bakeoff/beat.py)
 
     @property
     def thinks(self) -> bool:
@@ -64,14 +65,14 @@ class Candidate:
     def describe(self) -> dict:
         return {"name": self.name, "model": self.model, "think": self.think,
                 "think_budget": self.think_budget, "prompt_variant": self.prompt_variant,
-                "timeout": self.timeout, "num_ctx": self.num_ctx}
+                "timeout": self.timeout, "num_ctx": self.num_ctx, "beat": self.beat}
 
 
 class CandidateError(ValueError):
     pass
 
 
-_KEYS = {"name", "model", "think", "think_budget", "prompt_variant", "timeout", "num_ctx"}
+_KEYS = {"name", "model", "think", "think_budget", "prompt_variant", "timeout", "num_ctx", "beat"}
 
 
 def _candidate(i: int, raw) -> Candidate:
@@ -103,7 +104,10 @@ def _candidate(i: int, raw) -> Candidate:
     ctx = raw.get("num_ctx")
     if ctx is not None and (type(ctx) is not int or not NUM_CTX_RANGE[0] <= ctx <= NUM_CTX_RANGE[1]):
         raise CandidateError(f"{where}: num_ctx must be {NUM_CTX_RANGE[0]}-{NUM_CTX_RANGE[1]}")
-    return Candidate(name, model.strip(), think, budget if thinks else 0, variant, timeout, ctx)
+    beat = raw.get("beat", False)
+    if type(beat) is not bool:
+        raise CandidateError(f"{where}: beat must be true or false")
+    return Candidate(name, model.strip(), think, budget if thinks else 0, variant, timeout, ctx, beat)
 
 
 def load_candidates(path: Path) -> list[Candidate]:

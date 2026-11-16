@@ -236,7 +236,13 @@ def line_stats(conn, candidate: str, plan, sent: dict[int, list[str]],
     seconds = [r["seconds"] for r in rows if r["seconds"] is not None]
     thinking = [r["thinking_tokens"] for r in rows if r["status"] != "error"]
     codes = Counter(r["code"] for r in rows if r["status"] == "error" and r["code"])
+    beats = [r["beat"] for r in rows if r["beat"]]
+    beat = None if not beats else {
+        "used": sum(not b.startswith("skipped:") for b in beats), "asked": len(beats),
+        "wants": dict(Counter(b for b in beats if not b.startswith("skipped:"))),
+        "skipped": dict(Counter(b[len("skipped:"):] for b in beats if b.startswith("skipped:")))}
     return {"turns": len(keep), "answered": len(rows), "ok": status["ok"], "codes": dict(codes),
+            "beat": beat,
             "silent": status["silent"], "error": status["error"],
             "distinct": None if candidate == "sent" else _rate(distinct, len(compared)),
             "median_words": statistics.median(len(t.split()) for t in spoken.values()) if spoken else None,
@@ -322,7 +328,8 @@ def render(report: dict) -> str:
     for c in report["candidates"]:
         think = ("no" if c["think"] is False else
                  f"{'yes' if c['think'] else 'default'} ({c['think_budget']}, ctx {c.get('num_ctx') or 'fit'})")
-        out.append(f"| {c['name']} | {c['model']} | {think} | {c['prompt_variant']} | "
+        out.append(f"| {c['name']} | {c['model']} | {think} | {c['prompt_variant']}"
+                   f"{' + beat' if c.get('beat') else ''} | "
                    + " | ".join(_auc(c["families"][f]) for f in FAMILIES) + " | "
                    + " | ".join(_judge(c["judge"][f]) for f in FAMILIES) + " |")
     out += ["", "## Lines", "",
@@ -350,6 +357,11 @@ def render(report: dict) -> str:
             out.append(f"- judge caught: {j['label']} ({j['count']}){quoted}")
         if not t["style"] and not t["judge"]:
             out.append("- none measured")
+        if b := c["lines"].get("beat"):
+            wants = ", ".join(f"{k} {n}" for k, n in sorted(b["wants"].items(), key=lambda kv: -kv[1]))
+            skipped = ", ".join(f"{k} {n}" for k, n in sorted(b["skipped"].items()))
+            out.append(f"- beat used on {b['used']} of {b['asked']} turns" + (f"; wants: {wants}" if wants else "")
+                       + (f"; skipped: {skipped}" if skipped else ""))
         if c["lines"].get("codes"):
             out.append("- errors: " + ", ".join(f"{k} {n}" for k, n in sorted(c["lines"]["codes"].items())))
         out.append("")
