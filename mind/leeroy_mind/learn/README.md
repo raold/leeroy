@@ -375,6 +375,16 @@ lines. No lexical phrase is injected. This deliberately avoids applying a global
 profile learned from private or officer samples to public chat. Reads run on an
 owned SQLite snapshot; there is no extra model or embedding call.
 
+## The conversation lab's arms
+
+`lab/README.md`: a prompt variant that wins the nightly lab becomes an active arm of the family
+`prompt.<piece>` (params `{"piece", "variant"}`). These families are outside `arms.controls()`:
+a turn draws one only when it may render that piece and a lab arm for it is active
+(`bandit.choose_pieces`, the same Thompson sampling, maturity rule and exploration budget), and it
+stays in the recipe only when the piece was rendered. Without lab arms nothing here changes. The
+weekly cycle, retirement, freezes (`frozen_families = ["prompt.reply_human"]`), the Lab's buttons
+and `learn rollback` treat them as any arm.
+
 ## The weekly cycle
 
 ```toml

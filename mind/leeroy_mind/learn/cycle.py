@@ -391,7 +391,7 @@ def evaluate(conn, *, week, cfg, now, tz, owner):
     frozen_families = set(cfg.frozen_families)
     mine = [row for row in this if row.guid not in frozen_members]
     registry = {a.id: a for a in arms.read(conn)}
-    controls = arms.controls()
+    controls = arms.all_controls()
     promotions, holds = _promotions(conn), _holds(conn)
     in_force = {k: v for k, v in promotions.items() if v['status'] == 'promoted'}
     plan = dict(week=week, previous_week=last_week, measured=measured, rose=rose,

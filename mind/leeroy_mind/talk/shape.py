@@ -296,7 +296,8 @@ def shape_line(draw: ShapeDraw, ctx: ShapeContext, *, forms, excuse: str = "") -
         return (LINE_TWO_LINES_QUESTION if ctx.two_lines else LINE_QUESTION).format(them=them)
     if shape is Shape.PARAGRAPH and discord:
         if ctx.family == "dm":
-            return DISCORD_DM.format(words=words, they=forms[0])
+            from leeroy_mind.talk.pieces import text
+            return text("discord_dm", DISCORD_DM).format(words=words, they=forms[0])
         return DISCORD_LENGTH.format(where=DISCORD_WHERE["channel"], words=words)
     if ctx.two_lines:
         return LINE_TWO_LINES.format(words=words)

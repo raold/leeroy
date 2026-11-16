@@ -1,0 +1,28 @@
+# Bored small talk: nothing much at stake.
+
+[[script]]
+id = "smalltalk-1"
+kind = "smalltalk"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "so bored right now" },
+  { text = "entertain me" },
+]
+
+[[script]]
+id = "smalltalk-2"
+kind = "smalltalk"
+channels = ["guild", "party"]
+lines = [
+  { text = "anyone else just sitting in dalaran doing nothing" },
+  { text = "{name} what are you up to" },
+]
+
+[[script]]
+id = "smalltalk-3"
+kind = "smalltalk"
+channels = ["dm"]
+lines = [
+  { text = "rainy all day here, how is it by you" },
+  { text = "lol fair. anything fun planned for the weekend?" },
+]
