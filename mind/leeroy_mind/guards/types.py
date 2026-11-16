@@ -78,3 +78,5 @@ class Verdict:
     scores: tuple[Score, ...] = ()
     related: tuple[Reference, ...] = ()
     reaction: str | None = None
+    # The phrase cooldown's words, quoted from the draft itself for the rewrite hint; never logged.
+    phrases: tuple[str, ...] = field(default=(), repr=False)

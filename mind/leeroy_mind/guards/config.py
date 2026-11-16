@@ -33,6 +33,8 @@ class GuardsCfg:
     gag_daily_cap: int = GAG_DAILY_CAP
     stock_daily_cap: int = STOCK_DAILY_CAP
     gag_caps: dict[int, int] = field(default_factory=dict)
+    # guards/phrases.py: 2-5 word phrases and the stock list, rationed (2026-11-15).
+    phrase_cooldown: bool = True
 
 
 def parse_config(table) -> GuardsCfg:
@@ -40,7 +42,7 @@ def parse_config(table) -> GuardsCfg:
         if not isinstance(table, dict) or set(table) - {f.name for f in fields(GuardsCfg)}:
             return _invalid(table)
         values = dict(table)
-        for name in ('enabled', 'semantic_enabled'):
+        for name in ('enabled', 'semantic_enabled', 'phrase_cooldown'):
             if name in values and type(values[name]) is not bool:
                 return _invalid({name:None})
         for name in ('repeat_overlap', 'repeat_cosine', 'parent_cosine', 'thread_cosine', 'anchor_cosine'):

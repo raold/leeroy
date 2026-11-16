@@ -29,6 +29,7 @@ thread_cosine = 0.25
 repeat_seconds = 259200
 gag_daily_cap = 2
 stock_daily_cap = 3
+phrase_cooldown = true
 
 [guards.gag_caps]
 "7" = 1
@@ -184,6 +185,83 @@ Confirmed delivery prunes receipt keys older than the preceding fourteen local
 calendar days, in the caller's transaction. Retries outside that retention window
 are not deduplicated. Other metadata is untouched. Missing receipt tables omit the
 check; malformed receipts return a fixed rewrite code rather than resetting caps.
+
+## Phrase cooldown
+
+`phrases.py` (2026-11-15, the owner's Turing-test push) works on phrases, where the
+line overlap above works on whole lines: of 255 lines that reused a 4-word run from the
+member's last 3 days, only 14 reached the 0.70 overlap. With `phrase_cooldown = true`
+(the default; `false` turns it off, restart the mind) a draft gets a rewrite code when
+one of its phrases is:
+
+| Code | Rule |
+|---|---|
+| `phrase_conversation` | one she already used in this conversation: her lines in the same room, or her whispers and DM with him (one conversation), each within 30 minutes of the next, at most 3 hours back |
+| `phrase_day` | one she used in 2 or more of her lines in the last 24 hours, any channel (the third use is flagged) |
+| `phrase_cast` | one 3 or more other members used in the last 48 hours; 3+ words with 2 outside STOP |
+| `stock_member` | a line of `stock_phrases.txt` she used in the last 72 hours |
+| `stock_cast` | a line of `stock_phrases.txt` the cast used 3 or more times in the last 24 hours |
+
+A phrase is 2-5 words inside one comma clause, with a word outside `STOP` (two for a
+two-word phrase), no member's, his or an active nickname's name, no boss, raid, dungeon,
+battleground or arena name the code knows (`wow.py`, so a lowercase "the lich king" is a
+name too) and no capitalised proper noun. Words are folded first: case, apostrophes, `u`/`ur`, `gonna`, `rn` and the cast's
+other abbreviations, so stored (styled) lines and the plain draft compare. Item placeholders,
+bracketed names, URLs and mentions break a phrase. A phrase he or another member used in
+the current conversation is its topic, never her tic, for all three phrase rules.
+`stock_phrases.txt` holds the curated stock roleplay and AI phrases; its header says how to
+extend it ("^" anchors one to a clause opening: `^at least` is the consolation frame).
+
+Two bounded reads per draft: the names (persona, `meta human_name`, active nicknames) and
+the last 72 hours of member and owner lines (`chat_line_ts`, at most 4,000 rows). A line
+already dropped as a whole-line repeat or echo stays dropped; phrases only add a rewrite.
+`Verdict.phrases` carries up to three phrases in the draft's own words (never logged, not
+in `repr`); `rewrite_hint(codes, phrases)` adds "Don't say 'X' again; say it your own way
+or not at all." Evidence is her own lines in any channel (including group DMs) and other
+members' lines counted, never quoted: the hint names only the draft's own words, never
+who else said them or where. Like the stock ration's receipts, the reads cross audiences
+(`memory/AUDIENCES.md`): her whispers, DMs, officer and group-DM lines, and other members'
+private lines, count toward a ration on a public draft. Only the decision crosses; no text
+does, and nothing from them reaches the prompt. A review-required turn (banter, the
+server) under a disabled `[guards]` table gets the review but no cooldown
+(`LiveReview.config_for`), so an operator with guards off sees no phrase rewrites.
+
+If the screened retry still has a flagged phrase and nothing else is wrong
+(`talk/pipeline.py` `_without_phrases`), `phrases.strip` cuts a closing epithet ("..., you
+absolute menace"), else the phrase's comma clause, else its sentence; the rest is styled again
+and reviewed once more. A clause is never cut across a word of `TURNS` (but, though, if,
+unless, because, except, until, so, while, yet: "that sounds fun, but i'd rather stay in" cut
+to "that sounds fun" says the opposite; the sentence goes instead, or the line); a
+conjunction the cut leaves hanging at the front of a sentence goes with it ("you're trouble,
+but yes, i'll come" -> "yes, i'll come"); a cut that takes the sentence's question takes its
+"?" ("it was good, how was your day?" -> "it was good."); an anchored stock entry
+(`^at least`) is cut only where a clause opens with it, never from "at least ten". When
+fewer than three words survive, or no cut is possible, the line is dropped
+(`guard_phrase_refused`). **An answer owed to him only ever loses a closing epithet**: any
+other cut could change what she answered, so the retry goes as written; it is never dropped
+for a phrase alone and never dropped `expired` on this path. Any other code on the retry
+keeps the old rule.
+
+Replay on the live history (read-only, 2026-10-31 to 2026-11-15, 4,425 member lines
+without templates and short `gz`): 502 lines flagged (11.3%; game 7.4%, voice 9.3%,
+Discord 20.8%), 185 of them answers owed to him. `phrase_conversation` 161,
+`phrase_day` 95, `phrase_cast` 36, `stock_member` 120, `stock_cast` 291 (a line can
+carry several). Of the 226 lines reusing a 4-word run of hers from the last 3 days, 140
+(62%) are flagged. A hand-judged sample of 60 flagged lines: 45 real tics or cross-member
+sameness, 9 borderline (ordinary "at least", "every single"), 6 false positives (topic
+nouns only she repeated in one conversation: "grain density", "chicken wrap"). Mean check
+4.7 ms. A false positive costs the one retry; if the retry keeps the phrase (a topic noun
+often is the subject), a non-owed line is then clause-cut or dropped, an owed one goes as
+written. Replay measures flag rate on what was said, not behaviour after rewrites.
+
+To replay (for example after extending the list), open `mind.db` with `?mode=ro` and, for
+each member line of `chat_line` (`origin='mind'`, oldest first), call
+`phrases.check(review.Reader(conn), Draft(guid, channel, text, to_guid=..., room=...,
+now=ts, line_id=id), ts)`: `line_id` keeps the line and everything after it out of its
+own evidence. Leave out template lines (`utterance.why` `say_as`) and short `gz`.
+
+Rollback: remove `phrase_cooldown` from `[guards]` before running older code, which reads
+an unknown key as an invalid table and turns all guards off.
 
 ## Live adapter
 
