@@ -37,6 +37,9 @@ def test_the_panel_reads_the_trend_and_the_tells(store):
     assert [p["auc"] for p in fam["points"]] == [0.95, 0.9]
     assert fam["latest"]["features"][0]["words"] == "lines inside a burst of two or more: him 9%, members 67%"
     assert fam["judge"]["accuracy"] == 0.5 and fam["judge"]["his_accuracy"] == 0.0
+    # each night: one member caught, him called AI: balanced 0.5, charted as such
+    assert fam["judge"]["balanced"] == 0.5 and fam["judge"]["members_ai"] == 1.0
+    assert [p["judge"] for p in fam["points"]] == [0.5, 0.5]
     assert fam["tells"] == [{"code": "timing", "label": "reply speed and timing", "count": 2, "phrases": []}]
 
 

@@ -7,7 +7,7 @@
   same ones.
 - `w1`..`wN`: one judge call each; writes its turing_judgement row and its family's totals.
 
-N is `[turing] windows` (default 12), which the night's budget may lower (degrade step
+N is `[turing] windows` (default 8), which the night's budget may lower (degrade step
 `turing`, never below 4). A judge call that fails is that unit's failure and is tried again on
 a resumed run; the owner's GPU pause stops the night as any stage's would. Logs carry the
 night, unit, family and counts, never text."""
@@ -22,7 +22,7 @@ from leeroy_mind.nightly.llm import ReflectionError
 
 from . import judge, store, stylo
 from .config import load
-from .corpus import name_pattern, names_by_guid, read_lines, read_refs
+from .corpus import names_by_guid, persona_names, read_lines, read_refs
 
 STAGE = "turing"
 AFTER = "forget"
@@ -129,11 +129,13 @@ def make_stage(cfg):
         if not windows or all(ctx.done(STAGE, w["unit"]) for w in windows):
             return
         try:
-            by_guid = await _read(ctx, lambda conn: names_by_guid(conn, human=human, his=names))
+            by_guid, aliases = await _read(ctx, lambda conn: (
+                names_by_guid(conn, human=human, his=names), persona_names(conn)))
         except Exception:
             ctx.fail(STAGE, "names", ValueError("turing_names_failed"))
             return
-        pattern = name_pattern([*by_guid.values(), *names])
+        owners = judge.name_owners(by_guid, human=human, his_names=names, aliases=aliases)
+        pattern = judge.masking(owners)  # the judge's input and its stored phrases alike
         by_unit = {w["unit"]: w for w in windows}
 
         async def one(unit: str) -> None:
@@ -143,7 +145,7 @@ def make_stage(cfg):
                 scored = {"status": "missing", "speakers": 0, "correct": 0, "his": 0,
                           "his_correct": 0, "tells": []}
             else:
-                shown = judge.render(lines, by_guid=by_guid, human=human, his_names=names)
+                shown = judge.render(lines, by_guid=by_guid, human=human, owners=owners)
                 try:
                     reply = await ctx.reasoner.json(judge.SYSTEM, shown.prompt,
                                                     judge.response_schema(list(shown.letters)))

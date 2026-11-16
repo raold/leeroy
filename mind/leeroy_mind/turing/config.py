@@ -11,7 +11,9 @@ DAYS_MAX = 90
 @dataclass(frozen=True)
 class TuringCfg:
     enabled: bool = False
-    windows: int = 12  # blind-judge windows a night (the night budget may lower it)
+    # blind-judge windows a night (the budget may lower it); 8 keeps a night whose every call
+    # fails under health's 10 failed units a stage
+    windows: int = 8
     days: int = 14     # the stylometric window, in days back from the night's end
 
 

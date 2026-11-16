@@ -32,7 +32,8 @@ def conversations(h, *, his_style="ok sounds good", member_style="Sure, that's l
     t += 3600
     for i in range(60):  # guild: he speaks every fourth line in the first half
         speaker = 1 if i < 30 and i % 4 == 0 else MEMBERS[i % 3]
-        text = "anyone up for voa" if speaker == 1 else f"Arkon, Quillon and Testy said {i}."
+        text = ("anyone up for voa" if speaker == 1
+                else f"Arkon, Quillon, Testy, jo and Sams said {i}.")  # Jo, Sam: persona names
         h.say(t + 12 * i, speaker, text)
     return t + 800
 
@@ -91,8 +92,10 @@ def test_the_stage_scores_style_and_judges_its_windows(h):
     prompts = [c["messages"][-1]["content"] for c in ctx.reasoner.llm.calls]
     assert len(prompts) == 4
     for p in prompts:
+        body = p.split("matching this schema:")[0]
         for name in ("Quillon", "Testy", "Testmage", "Arkon", "Belra", "Coros"):
-            assert name not in p.split("matching this schema:")[0]
+            assert name not in body
+        assert not re.search(r"\b(jo|sams?|mercer|carter)\b", body, re.IGNORECASE)
     assert all(h.store.conn.execute("SELECT count(*) FROM night_step WHERE night=? AND stage='turing' "
                                     "AND unit=?", (h.night, u)).fetchone()[0] == 1
                for u in ("stylo", "plan", "w1", "w4"))
@@ -183,7 +186,7 @@ def test_attached_only_when_switched_on_after_the_last_reflection_stage(tmp_path
 
 @pytest.mark.parametrize("text,expected", [
     (b"", TuringCfg()),
-    (b"[turing]\nenabled = true\n", TuringCfg(True, 12, 14)),
+    (b"[turing]\nenabled = true\n", TuringCfg(True, 8, 14)),
     (b"[turing]\nenabled = true\nwindows = 0\ndays = 90\n", TuringCfg(True, 0, 90)),
     (b"[turing]\nenabled = 1\n", TuringCfg()),
     (b"[turing]\nenabled = true\nwindows = 61\n", TuringCfg()),
@@ -198,6 +201,7 @@ def test_config_fails_off(tmp_path, text, expected):
 def test_the_budget_counts_judge_calls_and_can_cut_them(h, tmp_path):
     assert "turing" in budget.EXTENSION_STAGES and budget.unit_calls("turing") == 1
     assert any(step.name == "turing" for step in budget.DEGRADE)
+    assert h.settings.turing_windows == 8  # the default, under health's 10 failed units
     ctx = ctx_for(h, switch=False)
     assert night.count(ctx) == 0  # the switch is off in this data dir
     ctx = ctx_for(h)

@@ -25,9 +25,9 @@ def discord(store, ts, channel, author, text, *, origin=None, deleted=None):
 
 def test_families_and_exclusions(store):
     keep = {
-        chat(store, T0 + 1, "guild", HUMAN, "anyone up for voa"): ("game", "guild", True),
-        chat(store, T0 + 2, "guild", 101, "Sure, I'm in."): ("game", "guild", False),
-        chat(store, T0 + 3, "officer", 102, "bench him"): ("game", "officer", False),
+        chat(store, T0 + 1, "guild", HUMAN, "anyone up for voa"): ("game", "guild#-", True),
+        chat(store, T0 + 2, "guild", 101, "Sure, I'm in."): ("game", "guild#-", False),
+        chat(store, T0 + 3, "officer", 102, "bench him"): ("game", "officer#-", False),
         chat(store, T0 + 4, "whisper", HUMAN, "hey", to=101): ("private", "w:101", True),
         chat(store, T0 + 5, "whisper", 101, "hi you", to=HUMAN): ("private", "w:101", False),
     }
@@ -134,3 +134,60 @@ def test_describe_formats_each_kind():
     assert stylo.describe({"key": "apostrophe", "human": 0.004, "member": 0.31}) == \
         "contractions with an apostrophe (i'm, don't): him <1%, members 31%"
     assert stylo.describe({"key": "nonsense"}) == ""
+
+
+def test_spoken_whispers_are_not_typed_lines(store):
+    typed = chat(store, T0 + 1, "whisper", HUMAN, "typed by hand", to=101)
+    heard = chat(store, T0 + 2, "whisper", HUMAN, "Spoken into the mic, then transcribed.", to=101)
+    voiced = chat(store, T0 + 3, "whisper", 101, "a turn the voice service spoke", to=HUMAN)
+    answer = chat(store, T0 + 4, "whisper", 101, "typed back", to=HUMAN)
+    with store.transaction():
+        store.conn.execute("INSERT INTO voice_heard(line_id, raw, confidence, speech_ms, latency_ms) "
+                           "VALUES (?, 'spoken', 0.9, 900, 120)", (heard,))
+        store.conn.execute("INSERT INTO voice_line(speak_id, line_id, room, state, ts) "
+                           "VALUES ('run.t1', ?, 'whisper', 'done', ?)", (voiced, T0 + 3))
+    refs = [line.ref for line in corpus.read_lines(store.conn, human=HUMAN, start=T0, end=T0 + 10)]
+    assert refs == [f"c:{typed}", f"c:{answer}"]
+    assert corpus.read_refs(store.conn, [f"c:{typed}", f"c:{heard}"], human=HUMAN) is None
+    assert corpus.read_refs(store.conn, [f"c:{voiced}"], human=HUMAN) is None
+
+
+def test_game_conversations_are_kept_apart_by_session_place_and_group(store):
+    one, two = store.start_session(T0), store.start_session(T0 + 50)
+
+    def game(ts, channel, sender, *, session, audience=None, zone=10):
+        return store.insert_chat_line(Chat(0, channel, sender, f"M{sender}", 0, "words here", 0, zone),
+                                      session_id=session, audience=audience,
+                                      origin="human" if sender == HUMAN else "mind", ts=ts)
+    rows = {
+        game(T0 + 1, "guild", 101, session=one): "guild#1",
+        game(T0 + 2, "guild", 101, session=two): "guild#2",
+        game(T0 + 3, "say", 101, session=one, zone=10): "say#1#0:10",
+        game(T0 + 4, "say", 102, session=one, zone=11): "say#1#0:11",
+        game(T0 + 5, "party", HUMAN, session=one): "party#1",                      # his own line
+        game(T0 + 6, "party", 101, session=one, audience=[101, 102]): "party#1",   # his group
+    }
+    hidden = [game(T0 + 7, "party", 103, session=one, audience=[104]),  # not his group
+              game(T0 + 8, "raid", 101, session=None, audience=[101]),  # no session: offline raid
+              game(T0 + 9, "raid", 102, session=one)]                   # audience unknown
+    got = {line.ref: line.conv for line in corpus.read_lines(store.conn, human=HUMAN, start=T0, end=T0 + 20)}
+    want = {f"c:{i}": conv.replace("#1", f"#{one}", 1).replace("#2", f"#{two}", 1) for i, conv in rows.items()}
+    assert got == want
+    assert not any(f"c:{i}" in got for i in hidden)
+
+
+def test_one_chatty_member_cannot_fill_the_sample():
+    rng = random.Random(0)
+    speaker_of = [1] * 600 + [2] * 600 + [3 + i // 20 for i in range(600)]  # two chatty, 30 with 20 each
+    members = list(range(len(speaker_of)))
+    pick = stylo.member_sample(members, speaker_of, 400, rng)
+    assert len(pick) == 400 and len(set(pick)) == 400
+    from collections import Counter
+    shares = Counter(speaker_of[i] for i in pick)
+    assert max(shares.values()) <= 20  # 5% of 400
+    # few members: an equal share each, and the sample shrinks to what the cap allows
+    few = [7] * 300 + [8] * 10 + [9] * 10
+    pick = stylo.member_sample(list(range(len(few))), few, 200, random.Random(1))
+    counts = Counter(few[i] for i in pick)
+    assert counts[8] == counts[9] == 10 and counts[7] == max(counts.values())
+    assert counts[7] <= len(pick) / 3 + 1

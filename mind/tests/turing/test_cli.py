@@ -66,15 +66,17 @@ def test_report_reads_stored_nights(store, capsys):
             now=now)
     assert main(["turing", "report", "--data-dir", str(data_dir(store))]) == 0
     out = capsys.readouterr().out
-    assert f"{night}  AUC 0.95 (0.94-0.96)" in out
+    assert f"{night}  AUC 0.95 (approx. 0.94-0.96)" in out
     assert "contractions with an apostrophe (i'm, don't): him 6%, members 50%" in out
     assert "not measured (too_few: 3 of your lines, 80 of theirs)" in out
-    assert "Blind judge: 67% right over 3 speakers in 1 windows; you read as human 100% of 1 times." in out
+    assert ("Blind judge: 75% balanced accuracy in 1 windows: members called AI 50% of 2 times, "
+            "you called human 100% of 1 times (raw 67%, which an always-AI judge would score 67%).") in out
     assert 'writing too polished or literary (2) "too tidy"' in out
     assert main(["turing", "report", "--json", "--data-dir", str(data_dir(store))]) == 0
     data = json.loads(capsys.readouterr().out)
     game = next(f for f in data["families"] if f["family"] == "game")
-    assert game["judge"]["accuracy"] == 2 / 3 and game["tells"][0]["code"] == "polish"
+    assert game["judge"]["accuracy"] == 2 / 3 and game["judge"]["balanced"] == 0.75
+    assert game["points"][0]["judge"] == 0.75 and game["tells"][0]["code"] == "polish"
 
 
 def test_an_older_database_reads_not_set_up_and_is_left_alone(tmp_path, capsys):

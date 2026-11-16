@@ -22,7 +22,8 @@ WINDOW_MIN, WINDOW_MAX = 8, 12
 WINDOW_GAP_S = 900.0    # lines further apart than this never share a window
 RECENT_DAYS = 3         # windows come from the newest days first, then the whole window
 LINE_CHARS = 400        # a long line is cut for the judge, the same for everyone
-PHRASE_CHARS = 80
+PHRASE_CHARS = 80       # kept
+PHRASE_ASK = 100        # the schema's cap: the prompt asks for at most 12 words
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 # The judge's tell codes, each with the words the judge reads and the report shows.
@@ -162,31 +163,43 @@ def _offset(seconds: float) -> str:
 
 
 def mask(text: str, pattern, owner: dict[str, int], letter_of: dict[int, str]) -> str:
-    """Every known name in `text` as its speaker's letter, or [name] for anyone not speaking."""
+    """Every known name in `text` as its speaker's letter, or [name] for anyone not speaking,
+    keeping the ending as typed ("arkons" -> "Bs", "Arkon's" -> "B's")."""
     if pattern is None:
         return text
     def swap(m):
         guid = owner.get(m.group(1).casefold())
-        return letter_of.get(guid, "[name]") if guid is not None else "[name]"
+        ending = m.group(0)[len(m.group(1)):]
+        return (letter_of.get(guid, "[name]") if guid is not None else "[name]") + ending
     return pattern.sub(swap, text)
 
 
-def name_owners(by_guid: dict[int, str], *, human: int, his_names: Sequence[str]) -> dict[str, int]:
+def name_owners(by_guid: dict[int, str], *, human: int, his_names: Sequence[str],
+                aliases: Iterable[tuple[str, int]] = ()) -> dict[str, int]:
+    """Every name the judge must not read -> whose it is: character names, the personas' own
+    real and first names (`aliases`), and his names last, so his always win."""
     owners = {n.strip().casefold(): g for g, n in by_guid.items() if n and n.strip()}
+    for n, g in aliases:
+        owners.setdefault(n.strip().casefold(), g)
     for n in his_names:
         if n and n.strip():
             owners[n.strip().casefold()] = human
     return owners
 
 
+def masking(owners: dict[str, int]):
+    """The pattern for `owners`, every length of name included, a two-letter one too."""
+    return name_pattern(owners, min_len=1)
+
+
 def render(lines: Sequence[Line], *, by_guid: dict[int, str], human: int,
-           his_names: Sequence[str] = ()) -> Shown:
+           his_names: Sequence[str] = (), owners: dict[str, int] | None = None) -> Shown:
     letter_of: dict[int, str] = {}
     for line in lines:
         if line.speaker not in letter_of:
             letter_of[line.speaker] = LETTERS[len(letter_of) % len(LETTERS)]
-    owners = name_owners(by_guid, human=human, his_names=his_names)
-    pattern = name_pattern(owners)
+    owners = owners if owners is not None else name_owners(by_guid, human=human, his_names=his_names)
+    pattern = masking(owners)
     start = lines[0].ts
     rows = []
     for line in lines:
@@ -211,7 +224,7 @@ def response_schema(letters: Sequence[str]) -> dict:
                          "human": {"type": "boolean"},
                          "tells": {"type": "array", "maxItems": 3, "items": schema("tell", {
                              "code": {"type": "string", "enum": list(TELL_CODES)},
-                             "phrase": {"type": "string", "maxLength": 200}})}})}})
+                             "phrase": {"type": "string", "maxLength": PHRASE_ASK}})}})}})
 
 
 # -- the score ---------------------------------------------------------------------------------
@@ -221,7 +234,8 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f|]")
 
 def clean_phrase(text, pattern=None) -> str | None:
     """The judge's phrase as kept: control characters and pipes out, whitespace folded, any
-    name masked again, cut to PHRASE_CHARS; None when nothing is left."""
+    name masked again with `pattern` (judge.masking: endings and short names included), cut to
+    PHRASE_CHARS; None when nothing is left."""
     if not isinstance(text, str):
         return None
     text = " ".join(_CONTROL.sub(" ", text).split())

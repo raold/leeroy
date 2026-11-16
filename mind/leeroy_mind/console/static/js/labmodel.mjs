@@ -99,15 +99,18 @@ export function turingView(value) {
     const points=(Array.isArray(f.points) ? f.points : []).filter(record);
     const latest=record(f.latest) ? f.latest : null, judge=record(f.judge) ? f.judge : {};
     const headline=!latest ? 'No style measurement stored yet.' : latest.status==='ok'
-      ? 'AUC '+fixed(latest.auc)+(Number.isFinite(latest.low) && Number.isFinite(latest.high) ? ' ('+fixed(latest.low)+'–'+fixed(latest.high)+')' : '')
+      ? 'AUC '+fixed(latest.auc)+(Number.isFinite(latest.low) && Number.isFinite(latest.high) ? ' (approx. '+fixed(latest.low)+'–'+fixed(latest.high)+')' : '')
         +' on '+latest.night+' · '+latest.sample+' lines each'
       : 'Not measured on '+latest.night+': '+(STATUS[latest.status] || latest.status)+' ('+latest.human_lines+' of yours, '+latest.member_lines+' of theirs)';
-    const verdict=Number.isSafeInteger(judge.speakers) && judge.speakers>0
-      ? 'Blind judge: '+pct(judge.accuracy)+' right over '+judge.speakers+' speakers in '+judge.windows+' windows; you read as human '+pct(judge.his_accuracy)+' of '+judge.his+' times.'
-      : 'Blind judge: no windows judged yet.';
+    // Balanced accuracy, never raw: members are most speakers, so an always-AI judge scores high raw.
+    const sides=[Number.isSafeInteger(judge.members) && judge.members>0 ? 'members called AI '+pct(judge.members_ai)+' of '+judge.members+' times' : '',
+      Number.isSafeInteger(judge.his) && judge.his>0 ? 'you called human '+pct(judge.his_human)+' of '+judge.his+' times' : ''].filter(Boolean);
+    const verdict=!(Number.isSafeInteger(judge.speakers) && judge.speakers>0) ? 'Blind judge: no windows judged yet.'
+      : Number.isFinite(judge.balanced) ? 'Blind judge: '+pct(judge.balanced)+' balanced accuracy (50% is chance): '+sides.join(', ')+'.'
+      : 'Blind judge: '+sides.join(', ')+'; balanced accuracy needs both sides.';
     return {family:String(f.family || ''), label:String(f.label || f.family || ''), headline, verdict,
       auc:chartPoints(points.map(p => p.auc)), judge:chartPoints(points.map(p => p.judge)),
-      nights:points.map(p => p.night+' · AUC '+fixed(p.auc)+(Number.isSafeInteger(p.speakers) && p.speakers ? ' · judge '+pct(p.judge)+' of '+p.speakers : '')),
+      nights:points.map(p => p.night+' · AUC '+fixed(p.auc)+(Number.isSafeInteger(p.speakers) && p.speakers ? ' · judge '+pct(p.judge)+' balanced ('+p.speakers+' speakers)' : '')),
       features:(latest && Array.isArray(latest.features) ? latest.features : []).map(x => x?.words).filter(w => typeof w==='string' && w),
       tells:(Array.isArray(f.tells) ? f.tells : []).filter(record).map(t => String(t.label)+' ('+t.count+')'+
         (Array.isArray(t.phrases) ? t.phrases.filter(p => typeof p==='string').map(p => ' · “'+p+'”').join('') : ''))};

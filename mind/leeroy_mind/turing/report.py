@@ -25,6 +25,20 @@ def _json(value, default):
     return out if isinstance(out, type(default)) else default
 
 
+def judge_rates(speakers: int, correct: int, his: int, his_correct: int) -> dict:
+    """The judge's scores on a 0.5-is-chance scale. Members are most of the speakers, so a judge
+    that says "AI" to everyone gets a high raw accuracy; balanced accuracy, the mean of the
+    members it called AI and the times it called him human, does not. None where a side is
+    missing."""
+    members = speakers - his
+    caught = correct - his_correct
+    members_ai = caught / members if members else None
+    his_human = his_correct / his if his else None
+    balanced = (members_ai + his_human) / 2 if members_ai is not None and his_human is not None else None
+    return {"members": members, "members_ai": members_ai, "his_human": his_human,
+            "balanced": balanced, "accuracy": correct / speakers if speakers else None}
+
+
 def report(conn, *, now: float, days: int = 14) -> dict:
     if not available(conn):
         return {"available": False, "days": days, "families": []}
@@ -53,8 +67,10 @@ def report(conn, *, now: float, days: int = 14) -> dict:
         latest = None
         for (night, _, status, human, member, sample, auc, low, high, feats, windows, speakers,
              correct, his, his_correct, tells) in mine:
+            rates = judge_rates(speakers, correct, his, his_correct)
             points.append({"night": night, "auc": auc, "low": low, "high": high,
-                           "judge": correct / speakers if speakers else None, "speakers": speakers})
+                           "judge": rates["balanced"], "members_ai": rates["members_ai"],
+                           "his_human": rates["his_human"], "speakers": speakers})
             totals["speakers"] += speakers
             totals["correct"] += correct
             totals["his"] += his
@@ -68,8 +84,8 @@ def report(conn, *, now: float, days: int = 14) -> dict:
                 latest = {"night": night, "status": status, "human_lines": human,
                           "member_lines": member, "sample": sample, "auc": auc, "low": low,
                           "high": high, "features": [dict(f, words=describe(f)) for f in features]}
-        judge = dict(totals, accuracy=totals["correct"] / totals["speakers"] if totals["speakers"] else None,
-                     his_accuracy=totals["his_correct"] / totals["his"] if totals["his"] else None)
+        rates = judge_rates(totals["speakers"], totals["correct"], totals["his"], totals["his_correct"])
+        judge = dict(totals, **rates, his_accuracy=rates["his_human"])
         tells = [{"code": code, "label": TELLS[code], "count": n,
                   "phrases": phrases.get((family, code), [])}
                  for code, n in sorted(caught.items(), key=lambda kv: (-kv[1], kv[0]))[:TOP_TELLS]]
@@ -90,7 +106,7 @@ def _pct(value) -> str:
 def _auc(value, low, high) -> str:
     if value is None:
         return "n/a"
-    band = f" ({low:.2f}-{high:.2f})" if low is not None and high is not None else ""
+    band = f" (approx. {low:.2f}-{high:.2f})" if low is not None and high is not None else ""
     return f"{value:.2f}{band}"
 
 
@@ -99,13 +115,15 @@ def render_report(data: dict) -> str:
         return ("Not set up yet: no Turing nights are stored. Turn on [turing] enabled in "
                 "mind.toml; each night then writes one. `turing run` measures now.")
     lines = [f"Turing judge, the last {data['days']} days. AUC 0.50 means members read like you; "
-             "1.00 means they are always told apart."]
+             "1.00 means they are always told apart. The judge's score is balanced accuracy (0.50 is "
+             "chance): the mean of the members it called AI and the times it called you human."]
     if not data["families"]:
         lines.append("No nights stored in that period.")
     for fam in data["families"]:
         lines += ["", fam["label"]]
         for p in fam["points"]:
-            judge = (f"  judge {_pct(p['judge'])} of {p['speakers']} speakers" if p["speakers"] else "")
+            judge = (f"  judge {_pct(p['judge'])} balanced ({p['speakers']} speakers)"
+                     if p["speakers"] else "")
             lines.append(f"  {p['night']}  AUC {_auc(p['auc'], p['low'], p['high'])}{judge}")
         latest = fam["latest"]
         if latest is not None:
@@ -117,9 +135,11 @@ def render_report(data: dict) -> str:
                              f"{latest['human_lines']} of your lines, {latest['member_lines']} of theirs)")
         j = fam["judge"]
         if j["speakers"]:
-            lines.append(f"  Blind judge: {_pct(j['accuracy'])} right over {j['speakers']} speakers "
-                         f"in {j['windows']} windows; you read as human {_pct(j['his_accuracy'])} "
-                         f"of {j['his']} times.")
+            lines.append(f"  Blind judge: {_pct(j['balanced'])} balanced accuracy in {j['windows']} "
+                         f"windows: members called AI {_pct(j['members_ai'])} of {j['members']} times, "
+                         f"you called human {_pct(j['his_human'])} of {j['his']} times "
+                         f"(raw {_pct(j['accuracy'])}, which an always-AI judge would score "
+                         f"{_pct(j['members'] / j['speakers'])}).")
         for t in fam["tells"]:
             quoted = "".join(f' "{p}"' for p in t["phrases"])
             lines.append(f"    {t['label']} ({t['count']}){quoted}")

@@ -19,6 +19,7 @@ MAX_PER_CLASS = 1500    # the balanced sample's cap, per class
 SEGMENT_GAP_S = 1800.0  # a conversation silent this long starts a new cross-validation group
 TOP = 6                 # features reported
 MIN_SEPARATION = 0.05   # |univariate AUC - 0.5| below this is not a tell
+MEMBER_SHARE = 0.05     # one member's most of the members' sample (an equal share if fewer speak)
 
 
 @dataclass
@@ -50,6 +51,30 @@ def groups_of(lines: Sequence[Line]) -> list[str]:
         last[line.conv] = (line.ts, seg)
         out.append(f"{line.conv}#{seg}")
     return out
+
+
+def member_sample(members: list[int], speaker_of: Sequence[int], n: int,
+                  rng: random.Random) -> list[int]:
+    """At most `n` of the members' lines with no member above MEMBER_SHARE of them, or above an
+    equal share when fewer than 1/MEMBER_SHARE members spoke, so one chatty member cannot set
+    the tells. When the capped lines fall short, the sample shrinks to what the cap allows
+    (and his side with it)."""
+    by_member: dict[int, list[int]] = {}
+    for i in members:
+        by_member.setdefault(speaker_of[i], []).append(i)
+    if not by_member or n <= 0:
+        return []
+    for _ in range(64):
+        cap = max(math.ceil(MEMBER_SHARE * n), math.ceil(n / len(by_member)))
+        total = sum(min(len(v), cap) for v in by_member.values())
+        if total >= n:
+            break
+        n = total
+    pool: list[int] = []
+    for g in sorted(by_member):
+        lines = by_member[g]
+        pool += lines if len(lines) <= cap else rng.sample(lines, cap)
+    return sorted(rng.sample(pool, min(n, len(pool))))
 
 
 def _circular_hour(hours: list[float]) -> float | None:
@@ -110,9 +135,12 @@ def analyse(lines: Sequence[Line], family: str, *, names=None, by_guid: dict[int
     if len(his) < MIN_LINES or len(members) < MIN_LINES:
         return result
     rng = random.Random(f"{seed}|{family}")
-    n = min(len(his), len(members), MAX_PER_CLASS)
+    pick_members = member_sample(members, [line.speaker for line in fam],
+                                 min(len(his), len(members), MAX_PER_CLASS), rng)
+    n = len(pick_members)
+    if n < MIN_LINES:
+        return result
     pick_his = sorted(rng.sample(his, n))
-    pick_members = sorted(rng.sample(members, n))
     tab = table(fam, names=names, names_by_guid=by_guid, tz=tz)
     rows = pick_his + pick_members
     columns = [[col[i] for i in rows] for col in tab.columns]

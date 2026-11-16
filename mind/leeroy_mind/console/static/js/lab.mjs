@@ -168,7 +168,7 @@ function turing(value) {
   const box=$('lab-turing'); clear(box); const view=turingView(value);
   if (!view.available) { empty(box,'Not set up yet. Turn on [turing] enabled in mind.toml; each night then stores a score.'); return; }
   box.appendChild(el('p','hint','Last '+view.days+' days. AUC 0.50: the members read like you; 1.00: always told apart. '+
-    'The solid line is the style AUC, the dotted one the blind judge’s accuracy; the dashed line is 0.50.'));
+    'The solid line is the style AUC, the dotted one the blind judge’s balanced accuracy; the dashed line is 0.50, chance for both. Intervals are approximate: a change under 0.10 is within noise.'));
   if (!view.families.length) { empty(box,'No nights stored in the last '+view.days+' days.'); }
   view.families.forEach(f => {
     const part=el('div','turing-family'); part.append(el('h4','',f.label),el('p','lab-stat',f.headline),chart(f),el('p','lab-stat',f.verdict));

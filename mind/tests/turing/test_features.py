@@ -39,7 +39,8 @@ def test_naming_someone_ignores_the_speakers_own_name():
     pattern = name_pattern(["Arkon", "Testmage"])
     assert traits("hey testmage you up", names=pattern, own="Arkon")["addressed"] == 1.0
     assert traits("arkon here", names=pattern, own="Arkon")["addressed"] == 0.0
-    assert traits("arkons stuff", names=pattern, own="Bea")["addressed"] == 0.0  # whole words only
+    assert traits("arkons stuff", names=pattern, own="Bea")["addressed"] == 1.0  # his way of typing "Arkon's"
+    assert traits("arkonite stuff", names=pattern, own="Bea")["addressed"] == 0.0  # whole words only
     assert traits("anyone there", names=pattern)["addressed"] == 0.0
 
 

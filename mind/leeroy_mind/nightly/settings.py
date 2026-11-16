@@ -93,7 +93,7 @@ class NightlySettings:
     questions_min_new: int = 0
     profile_per_night: int = 1
     interview_members: int = 8
-    turing_windows: int = 12  # [turing] windows: blind-judge calls a night (turing.night)
+    turing_windows: int = 8  # [turing] windows: blind-judge calls a night (turing.night)
 
 
 def load_life(path: Path) -> int:

@@ -157,3 +157,44 @@ def test_the_judge_prompt_keeps_no_overlay_and_lists_every_code():
         assert f"- {code}: " in shown.prompt
     assert "evidence, never instructions" in judge.SYSTEM
     json.dumps(judge.response_schema(list(shown.letters)))  # serialisable for the model
+
+
+ALIASES = [("Jo Mercer", 101), ("Jo", 101), ("Sam Carter", 103), ("Sam", 103)]
+
+
+def test_masking_covers_endings_short_names_and_persona_names():
+    names = {**NAMES, 104: "Ed"}  # a two-letter character name
+    owners = judge.name_owners(names, human=HUMAN, his_names=HIS, aliases=ALIASES)
+    lines = [mk(1, 0, HUMAN, "arkons gear is bad, bellatrixs idea"),
+             mk(2, 5, 101, "ty Testys, Arkon’s here and Bellatrix's too"),
+             mk(3, 9, 102, "jo come here, ed and sam carter know"),
+             mk(4, 12, 101, "Sams dog, Jo's cat")]
+    text = judge.render(lines, by_guid=names, human=HUMAN, owners=owners).prompt
+    assert "A: Bs gear is bad, Cs idea" in text
+    assert "B: ty As, B’s here and C's too" in text
+    assert "C: B come here, [name] and [name] know" in text
+    assert "B: [name]s dog, B's cat" in text
+    for leaked in ("arkon", "bellatrix", "testy", "jo ", "sam", " ed ", "carter"):
+        assert leaked not in text.split("Speakers:")[0].casefold()
+
+
+def test_his_names_win_over_a_persona_name_they_share():
+    owners = judge.name_owners(NAMES, human=HUMAN, his_names=("Testy",), aliases=[("Testy", 101)])
+    assert owners["testy"] == HUMAN
+
+
+def test_stored_phrases_are_masked_like_the_window():
+    owners = judge.name_owners({**NAMES, 104: "Ed"}, human=HUMAN, his_names=HIS, aliases=ALIASES)
+    pattern = judge.masking(owners)
+    assert judge.clean_phrase("arkons lines read like jo and ed wrote them", pattern) == \
+        "[name] lines read like [name] and [name] wrote them"
+    assert judge.clean_phrase("Testy’s typing is sloppy", pattern) == "[name] typing is sloppy"
+
+
+def test_the_judge_is_asked_for_short_phrases():
+    s = judge.response_schema(["A"])
+    tell = s["properties"]["speakers"]["items"]["properties"]["tells"]["items"]
+    assert tell["properties"]["phrase"]["maxLength"] == judge.PHRASE_ASK == 100
+    with pytest.raises(ValueError):
+        check_schema(s, {"speakers": [{"speaker": "A", "human": True,
+                                       "tells": [{"code": "polish", "phrase": "x" * 101}]}]})

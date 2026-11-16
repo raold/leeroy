@@ -83,8 +83,9 @@ needed to exercise the Lab.
 
 The **Turing** panel reads `turing_night` and `turing_judgement` (`turing/README.md`)
 read-only for the last 14 days: per channel family a trend chart (solid: the style
-classifier's AUC; dotted: the blind judge's accuracy; dashed: 0.50, where the members
-read like him), the latest AUC with its interval, the judge's totals, the style tells in
+classifier's AUC; dotted: the blind judge's balanced accuracy, never its raw accuracy, which an
+always-AI judge would score high; dashed: 0.50, chance for both), the latest AUC with its
+approximate interval, the judge's balanced accuracy and both sides of it, the style tells in
 words ("contractions with an apostrophe (i'm, don't): him 6%, members 51%"), the tells
 the judge caught by code with up to three of its short phrases (kept only from windows
 on public channels), and the nights. The chart is a clone of the page's own empty
