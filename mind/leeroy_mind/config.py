@@ -20,7 +20,8 @@ embedding = "qwen3-embedding:0.6b"
 chattiness = 4                # 0-10, social chat outside raids
 raid_rule = "leaders_and_urgent"
 whispers_per_hour = 4         # members whispering him first, per hour of his play, at chattiness 4
-openers_per_hour = 6          # members starting a line to him in party or guild, per hour, likewise
+openers_per_hour = 2          # members starting a conversation in party or guild, per hour, likewise
+openers_to_him = 0.35         # 0-1: the share of those openers addressed to him; the rest are guild business
 selfies = 3                    # 0-10, member photos in your DMs and guild channels (rendered at night)
 aware = false                  # include a bounded card of visible observations in talk
 realism = false                # bounded member typing, small bursts and rare corrections
@@ -85,7 +86,8 @@ class TalkCfg:
     chattiness: int
     raid_rule: str
     whispers_per_hour: float = 4
-    openers_per_hour: float = 6
+    openers_per_hour: float = 2
+    openers_to_him: float = 0.35  # the share of the openers addressed to him (talk.engine)
     selfies: int = 3
     aware: bool = False
     realism: bool = False
@@ -198,6 +200,7 @@ _RULES = {
         "dm_words": (lambda v: _int_in(v, 0, DISCORD_WORDS_MAX), f"an integer 0-{DISCORD_WORDS_MAX}"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
+        "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
     },
     "romance": {
         "dial": (lambda v: _int_in(v, 1, 10), "an integer 1-10"),

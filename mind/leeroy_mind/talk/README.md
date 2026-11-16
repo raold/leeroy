@@ -166,3 +166,42 @@ Since the second round (owner, 2026-11-13: channels a mix, "DMs max expressive")
   extraction and the console take the longer line as it is.
 - 0 is the rollback: one short line on Discord, with the prompts, room, typing and retries as
   before. A game turn never changes, at any value.
+
+# A guild that talks among itself
+
+Owner's "pass the Turing test" push (2026-11-15): 82% of the members' typed game lines were aimed
+at him, every login drew 2-5 greeters, 23 of 147 greetings opened "there he is", and a quarter of
+the openers to him asked how his day was or what he was up to.
+
+- **Openers.** The openers' clock (`budget.BurstBudget.to_him`) runs at `[talk] openers_per_hour`,
+  now 2 by default (was 6), still scaled by chattiness and the talkative dials. Each due opener goes
+  to him only `[talk] openers_to_him` of the time (a number 0-1, default 0.35; 1 is the old
+  behaviour, 0 none); the rest start a conversation among the members in guild chat about the
+  guild's own business (`engine._open_to_guild`, `guild_topics.py`): a kind of subject first
+  (raid, the member's own game, loot, a life beat, the calendar, a rival guild), then a topic, from
+  the seeds the Discord server reads (`server.seeds.public_seeds`, never an officers' one, never
+  his loot) and the member's wants and pastimes. A life beat is raised only by its member, a loot
+  or birthday topic never by the member it is about, a topic once a night; others answer it as a
+  social burst, which holds the social bursts' own clock while it runs and rests it a gap after
+  (`BurstBudget.begin`), and it gives way to a social burst already running. With every candidate
+  just having spoken nobody opens. Utterance `why` is `burst:guild:<subject>`. An opener to him
+  never asks how his day went or what he is up to (`engine.TO_HIM_TOPICS`).
+- **Greetings** (`greetings.py`): nobody greets about 30% of his logins, else one or two; the login
+  quiet starts either way (`greet_skipped: reason=nobody_noticed`). A later greeter who is a man or
+  a woman with no romance toward him types a plain hello half the time (`greet_plain:<how>`). A
+  stock greeting ("there he is", "welcome back"...) said in any greeting within 3 days, this
+  login's included, and the opening three words of an earlier login's greeting within a day,
+  rest: each greeter's instruction names them as it is composed (an instruction hook, so a later
+  greeter knows what an earlier one just said), and a line that still says one is asked again
+  once with a hint naming exactly that phrase, then dropped (`phrase: resting`). Simulated with a
+  fake model that ignores the list (40 logins): 0.93 greeters a login, 14 with none, 1 dropped.
+- **The flirt rule** (`prompt.FLIRT_RULE`) reaches a woman only on a turn that is his (addressed to
+  him, a whisper or DM to him, a FLIRT), and a man's "the women only have eyes for him" only on a
+  turn that is his or where he is in the last three lines; every other turn reads
+  `FLIRT_RULE_AWAY`, which still keeps flirting off every guildmate (and `filters.member_flirt`
+  still screens every line). The golden prompts are unchanged: every prompt of the tuning scenario
+  is a turn to him, and the scenario keeps its recorded greeter draw.
+- No switch (ruling on the #319 review): the dials are `[talk] openers_per_hour` and
+  `openers_to_him`. Rollback values: `openers_per_hour = 6`, `openers_to_him = 1`. The greeter draw
+  is not a mind.toml key (`reactions.greeter_draw`, which the tuning scenario pins to 2-3); it, the
+  topics and the flirt-rule scope roll back only with the code from before.

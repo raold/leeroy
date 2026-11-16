@@ -154,3 +154,22 @@ def test_schema_limits():
                 {**BEAT, "next_title": "x" * 81}):
         with pytest.raises(ValueError):
             check_schema(BEAT_SCHEMA, bad)
+
+
+def test_a_beat_is_asked_for_as_a_short_first_person_chat_message(h):
+    """2026-11-15: beats were literary prose ("stood at the kitchen sink, staring at the cold
+    coffee...") and the Discord openers kept it. A new beat is what she would drop in chat: a
+    gripe, a brag, a question or a small update, first person, short, in her typing."""
+    due(h)
+    ctx = ctx_for(h)
+    run(stage_life(ctx))
+    call, = [c for c in ctx.reasoner.llm.calls if "messages" in c
+             and "life away from the game" in c["messages"][0]["content"]]
+    system, user = call["messages"][0]["content"], call["messages"][-1]["content"]
+    for words in ("first-person message", "a gripe", "a brag", "a question for the guild",
+                  "a small update", "the way Arkon types", "not a story", "no scenery"):
+        assert words in system, words
+    assert "Write the next small event" not in system
+    assert "first person, at most about 20 words" in user and "One sentence" not in user
+    assert "this one doesn't" in user  # older prose beats are not a style to copy
+    assert h.count("life_beat") == 1  # the beat itself is stored as before

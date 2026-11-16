@@ -4,7 +4,9 @@ settings means identical prompts") compares a run of it against golden_prompts.j
 written by this same scenario with the code from before tuning existed. Re-recorded since for
 members starting conversations (2026-11-07): its one evening whisper says she starts it and
 what she brings up, and it no longer comes from Belra, whom he had whispered a minute before
-(a member in a whisper with him starts none), so the draws after it moved too."""
+(a member in a whisper with him starts none), so the draws after it moved too. Its greetings keep
+the draw they were recorded with (2-3 greeters, no plain hello): the 0-2 greeters of 2026-11-15
+have their own tests (test_orbit.py), as the initiation clocks do."""
 import asyncio
 import json
 import random
@@ -42,6 +44,8 @@ async def _run(store, clock, data_dir) -> dict:
     # so the scenario's draws stay the ones the golden recorded
     r.engine.whispers.set_rate(0.0)
     r.engine.budget.set_to_him_rate(0.0)
+    r.engine.greeter_draw = lambda rng: rng.randint(2, 3)
+    r.engine.plain_hello_p = 0.0
     await r.session()
     await r.event(Login(ts=0, guid=HUMAN, human=True))
     await r.advance(90, step=2)
