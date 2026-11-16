@@ -54,7 +54,7 @@ def script(model, messages):
     return "the quiet afternoon made a good excuse for a photo"
 
 
-def rig(tmp_path, *, gate=None, entered=None, fail=False, toml=None):
+def rig(tmp_path, *, gate=None, entered=None, fail=False, toml=None, worker_env=None):
     app = make_app(tmp_path) if toml is None else make_app(tmp_path, toml)
     app.llm._script = script
     workers, requests = [], []
@@ -62,6 +62,7 @@ def rig(tmp_path, *, gate=None, entered=None, fail=False, toml=None):
     env = {"FAKE_SELFIE_IDENTITY": "1", "FAKE_SELFIE_CHILD": "1", "FAKE_SELFIE_PIDS": str(pids)}
     if fail:
         env["FAKE_SELFIE_DIE"] = "1"
+    env.update(worker_env or {})
     command, environ = fake_command(tmp_path, **env)
 
     class Worker(SelfieWorker):
@@ -374,5 +375,38 @@ def test_withdrawn_channel_request_cannot_send_private_photo_or_failure(tmp_path
             check_handback(app, workers, pids)
         finally:
             release.set()
+            await app.stop()
+    run(scenario())
+
+
+def test_a_render_the_critic_refuses_sends_a_ready_made_photo_instead(tmp_path, caplog, record_property):
+    """[selfies] critic with every seed refused (two faces), the judge's model absent: one seed,
+    one more at identity 0.45, then the ready-made copy takes the fresh photo's place."""
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    from leeroy_mind.selfies.request_render import RETRY_SCALE
+    from photos.test_request_service import ON
+    toml = ON.replace("snaps=true\n", "snaps=true\ncritic=true\nbest_of=1\n")
+    async def scenario():
+        app, workers, rendered, pids = rig(tmp_path, toml=toml,
+                                           worker_env={"FAKE_SELFIE_CRITIC_ALL_BAD": "1"})
+        app.critic_llm = FakeLLM(models=set())  # never the live Ollama; absent: detectors only
+        try:
+            await offline(app)
+            reply = await app.discord.handle({"action": "post", "channel": "dm:101", "text": "send me a selfie"})
+            message = reply["id"]
+            await drive(app, lambda: bool((r := snapshot(app, message)) and r.initial_message))
+            request = snapshot(app, message)
+            assert request.failure is None and request.fallback_snap is None
+            assert request.fresh_message == request.initial_message
+            photo = records.snap(app.store, request.fresh_snap)
+            assert photo.status == "sent" and photo.ref.endswith(":fallback")
+            assert [r.identity.scale for r in rendered][1:] == [RETRY_SCALE]
+            assert len(rendered) == 2 and len(workers) == 1
+            flagged = app.store.conn.execute("SELECT count(*) FROM selfie_critic WHERE "
+                                             "verdict='flagged' AND codes='extra_face'").fetchone()[0]
+            assert flagged == 2
+            check_handback(app, workers, pids)
+            assert metrics(caplog, record_property, message)["outcome"] == "critic_fallback"
+        finally:
             await app.stop()
     run(scenario())

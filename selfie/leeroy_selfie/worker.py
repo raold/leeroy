@@ -13,7 +13,7 @@ from typing import BinaryIO
 
 from . import protocol
 from .fit import PromptTooLong
-from .protocol import Caption, Embed, Grid, Quit, Render, RenderFailed, Retry
+from .protocol import Caption, Critic, Embed, Grid, Quit, Render, RenderFailed, Retry
 from .render import ReadyError, Renderer
 
 _EOF = object()
@@ -97,8 +97,8 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
     says the start asked for the adapter (worker --identity); a renderer that did not load it
     then answers ready ok false, model. Ready says identity only for a renderer that has the
     adapter; such a worker renders with or without an identity reference (without: the adapter
-    at scale 0), and one without it refuses a render with one (identity_unavailable). Either composites a grid
-    and draws a caption.
+    at scale 0), and one without it refuses a render with one (identity_unavailable). Either composites a grid,
+    draws a caption and answers the critic; an embed-only worker answers embed and critic.
     The reader runs from the start, so the end of stdin calls on_eof (the worker's: os._exit)
     at once, during the load, a wait for a retry or a render too."""
     lines: queue.Queue = queue.Queue()
@@ -136,6 +136,9 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
                 _send(out, {"id": req.id, "ok": False, "error": "encoder_failed"})
             else:
                 _send(out, {"id": req.id, "ok": True, "error": "", **answer})
+            continue
+        if isinstance(req, Critic):  # a render worker's and an embed-only worker's
+            _send(out, _critic_answer(renderer, req))
             continue
         if getattr(renderer, "embedding_only", False):
             _send(out, {"id": req.id, "ok": False, "error": "bad_request"})
@@ -178,6 +181,24 @@ def _caption_answer(renderer: Renderer, req: Caption) -> dict:
              f"lines={fields.get('lines')} seconds={fields.get('seconds')}")
         return {"id": req.id, "ok": True, "error": "", **fields}
     _log(f"{req.id} caption failed {error}")
+    return {"id": req.id, "ok": False, "error": error}
+
+
+def _critic_answer(renderer: Renderer, req: Critic) -> dict:
+    measure = getattr(renderer, "critic", None)
+    if measure is None:
+        return {"id": req.id, "ok": False, "error": "bad_request"}
+    try:
+        fields = measure(req)
+    except RenderFailed as e:
+        error = str(e)
+    except Exception as e:
+        error = type(e).__name__
+    else:
+        _log(f"{req.id} critic faces={fields.get('faces')} hands={fields.get('hands')} "
+             f"identity={fields.get('identity')} seconds={fields.get('seconds')}")
+        return {"id": req.id, "ok": True, "error": "", **fields}
+    _log(f"{req.id} critic failed {error}")
     return {"id": req.id, "ok": False, "error": error}
 
 

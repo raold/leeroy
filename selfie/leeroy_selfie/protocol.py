@@ -15,6 +15,7 @@ RENDER_KEYS = frozenset({"id", "op", "phrases", "negative", "seed", "steps", "cf
 IDENTITY_KEYS = frozenset({"ref", "crop", "scale"})
 GRID_KEYS = frozenset({"id", "op", "tiles", "tile", "gutter", "out", "thumb", "thumb_size"})
 CAPTION_KEYS = frozenset({"id", "op", "base_path", "top", "bottom", "out_path", "nsfw_max"})
+CRITIC_KEYS = frozenset({"id", "op", "path"})  # and optionally ref with crop, both or neither
 MAX_CAPTION = 60  # characters a caption line may hold
 # The characters the bundled caption font (fonts/Anton-Regular.ttf) draws: printable ASCII,
 # Latin-1 and Latin Extended-A, and the common typographic marks. Anything else (an emoji, CJK,
@@ -77,6 +78,17 @@ class Caption:
     bottom: str
     out_path: str
     nsfw_max: float
+
+
+@dataclass(frozen=True)
+class Critic:
+    """The photo critic's measurements of the JPEG at `path` (critic.py); with `ref` and `crop`
+    (a square in fractions of `ref`, as an Identity's) the identity cosine to her reference
+    too. Nothing is written."""
+    id: str
+    path: str
+    ref: str | None = None
+    crop: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -192,9 +204,20 @@ def _caption(d: dict, rid: str) -> Caption:
     return Caption(rid, base, top, bottom, out, _num(d, "nsfw_max", 0.01, 0.9))
 
 
-def parse(line: bytes) -> Render | Grid | Caption | Embed | Quit | Retry:
-    """A request line as a Render, a Grid, a Caption, a Quit or a Retry; ValueError for anything
-    else (a line too long, not JSON, an unknown or missing key, a wrong type or range)."""
+def _critic(d: dict, rid: str) -> Critic:
+    keys = set(d)
+    if keys not in (CRITIC_KEYS, CRITIC_KEYS | {"ref", "crop"}):
+        raise ValueError("critic keys are id, op, path and optionally ref with crop")
+    if "ref" not in d:
+        return Critic(rid, _jpg(d, "path"))
+    identity = _identity({"ref": d["ref"], "crop": d["crop"], "scale": 0.6})
+    return Critic(rid, _jpg(d, "path"), identity.ref, identity.crop)
+
+
+def parse(line: bytes) -> Render | Grid | Caption | Critic | Embed | Quit | Retry:
+    """A request line as a Render, a Grid, a Caption, a Critic, an Embed, a Quit or a Retry;
+    ValueError for anything else (a line too long, not JSON, an unknown or missing key, a wrong
+    type or range)."""
     if len(line) > MAX_LINE:
         raise ValueError("line too long")
     try:
@@ -215,6 +238,8 @@ def parse(line: bytes) -> Render | Grid | Caption | Embed | Quit | Retry:
         return _grid(d, rid)
     if d.get("op") == "caption":
         return _caption(d, rid)
+    if d.get("op") == "critic":
+        return _critic(d, rid)
     if d.get("op") == "embed":
         if set(d) != {"id", "op", "ref"}:
             raise ValueError("embed keys are id, op, ref")

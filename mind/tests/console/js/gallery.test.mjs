@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ordered, initial, step, swipe, coverWhy, lookWords, SWIPE_PX } from "../../../leeroy_mind/console/static/js/gallerymodel.mjs";
+import { ordered, initial, step, swipe, coverWhy, flagCodes, lookWords, SWIPE_PX } from "../../../leeroy_mind/console/static/js/gallerymodel.mjs";
 
 test("photos stay newest first and start at the cover without reordering", function () {
   const rows = [{ id: "a", rendered: 1, cover: true }, { id: "b", rendered: 3 }, { id: "c", rendered: 2 }];
@@ -38,4 +38,12 @@ test("a varied set's candidate names its look, other photos nothing", function (
   assert.equal(lookWords({ kind: "candidate" }), "");
   assert.equal(lookWords({ look: { label: 7 } }), "");
   assert.equal(lookWords(null), "");
+});
+test("a flagged candidate names the photo critic's codes, a clean one nothing", function () {
+  assert.equal(flagCodes({ flag: "limbs,hands" }), "limbs, hands");
+  assert.equal(flagCodes({ flag: "" }), "");
+  assert.equal(flagCodes({ kind: "candidate" }), "");
+  assert.equal(flagCodes({ flag: "limbs,<b>x</b>,eyes" }), "limbs, eyes");
+  assert.equal(flagCodes({ flag: 7 }), "");
+  assert.equal(flagCodes(null), "");
 });
