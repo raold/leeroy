@@ -66,8 +66,25 @@ that member's in-flight server turn
 or DM opener, releasing her review lock before the answer waits; pending pipeline
 speakers are excluded from new turns. Banter yields its Discord leg to this engine;
 its game-chat leg is unchanged. Reactions use observed ties
-and no model call, at most three per message, with visibility and ties checked
-again when their delay ends. Feuds never react; a dramatic rival can only roll eyes.
+and no model call, with visibility and ties checked again when their delay ends.
+Each message first draws how many react, from a skewed (negative binomial) count
+whose mean (0.9) grows with how reactable it is: a laugh or joke, a meme or photo,
+a win and his own post draw more; a question and a reply of a few words fewer. Most
+messages get none or one, some two to four, a rare popular one up to eight; then
+that many members who may react are picked by tie, and later reactors often pile
+onto an emoji already there. Feuds never react; a dramatic rival can only roll eyes.
+(Until 2026-11-15 each member reacted on her own at 12%, so 62% of member messages
+hit the old cap of three.)
+
+A reply never answers its own author's message: the speaker is drawn from the cast
+minus the last speaker and the parent's author, and when only that author could
+answer an earlier message the reply takes the last one instead. A member who is the
+seed's subject is told to say it in the first person. The thread is the messages each
+turn stored (`TurnMeta.discord_messages`), never a lookup by turn id; turn ids now
+carry their run's nonce, and older rows' ids restarted at `t1` each run. With
+`[talk] realism`, 12% of replies are drawn as a quick burst: a couple of sentences
+split into 2-3 messages a few seconds apart (realism's ninety-second cooldown
+applies); only the first is a formal reply.
 
 DM openers run only while he is out of game, spread across server hours. Their rate
 follows the world chattiness dial: zero disables openers and the gap rate scales
@@ -101,9 +118,12 @@ including the draft and anchor, prioritizing a late reply's parent and thread
 before newest repeat evidence. Older cached vectors
 and lexical evidence still participate. State reads run off the event loop.
 Openers use `anchor_cosine = 0.35`; short agreement,
-laughter, congratulations, thanks and sympathy become reactions. Without a parent,
-filler is dropped. ASCII emoticons such as `:P`, `:D`, `xD`, `:)`, `:(` and `<3`
-do not turn filler into a text line. D1 replies retain their existing guard rules.
+laughter, congratulations, thanks and sympathy in reply become reactions 40% of the
+time (`guards.review.FILLER_REACT_SHARE`, drawn from the speaker, parent and words,
+never the clock); the rest are posted as their short message, exempt from the
+repeat, nothing-new and relevance checks. Without a parent, filler is dropped.
+ASCII emoticons such as `:P`, `:D`, `xD`, `:)`, `:(` and `<3` do not turn filler
+into a text line. D1 replies retain their existing guard rules.
 
 The real-embedding replay covered 1,082 lines: 804 sends (74.307%), zero rewrites,
 232 reactions (21.442%) and 46 drops (4.251%) at the prior defaults. The 0.20

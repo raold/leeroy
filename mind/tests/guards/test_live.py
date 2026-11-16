@@ -52,8 +52,11 @@ def source(rig, text, channel="guild", who=1, to=0):
 
 
 @pytest.mark.parametrize('text,expected', [('same','👍'),('lol','😂'),('gz','🎉'),('ty','❤️'),('rip','🫡')])
-def test_server_filler_reaction_reaches_discord(rig,text,expected):
+def test_server_filler_reaction_reaches_discord(rig,text,expected,monkeypatch):
+    import importlib
     from leeroy_mind.guards import Draft, GuardStores, HistoryLine, review
+    # the reaction share of filler replies (the rest are posted: test_server_guards)
+    monkeypatch.setattr(importlib.import_module('leeroy_mind.guards.review'),'FILLER_REACT_SHARE',1.0)
     now = rig.clock.now()
     mid = dstore.post(rig.store,channel='general',author=102,origin='mind',text='Invented raid news',now=now)
     history = (HistoryLine(mid,now,102,'Invented raid news','discord',room='general',readers=(1,101,102)),)
