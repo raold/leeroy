@@ -35,6 +35,15 @@ bad influence
 youre trouble | youre impossible
 im not even mad | and im not even
 
+# Stock epithets (owner's live DM test, 2026-11-16). "you absolute ..." and "you're actually
+# mental" are never anything else, so they count anywhere in a clause ("omg you absolute
+# legend"); "proper mental" and "you're proper" only where a clause opens with them ("a proper
+# mental health day" is no epithet).
+you absolute tease | you absolute weapon | you absolute maniac | you absolute madman | you absolute madlad | you absolute lunatic | you absolute menace | you absolute legend | you absolute disaster | you absolute nightmare | you absolute animal | you absolute savage
+youre actually mental
+^proper mental
+^youre proper
+
 # The DM and life-update scaffolds.
 sitting here
 staring at
