@@ -14,5 +14,6 @@ def clock():
     return engine_clock()
 
 
-def test_core_switches_match_the_recorded_core_golden(store, tmp_path):
-    assert record(store, engine_clock(), tmp_path, core=True) == golden_core()
+def test_core_switches_match_the_recorded_core_golden(store, clock, tmp_path):
+    """`clock`: the store's own (record's contract), so his lines carry the scenario's time."""
+    assert record(store, clock, tmp_path, core=True) == golden_core()
