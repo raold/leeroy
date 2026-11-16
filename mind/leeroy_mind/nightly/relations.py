@@ -37,9 +37,11 @@ from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.nightly.runner import ATTITUDE_WORDS
 from leeroy_mind.nightly.settings import iso_week
 from leeroy_mind.nightly.store import step_finished_at
+from leeroy_mind.personas.clean_notes import strip as strip_junk_notes
 from leeroy_mind.personas.screens import ROMANCE_RE, check_romance, redact_real_name
 from leeroy_mind.storage.rows import REL_RANGES, Relationship
 from leeroy_mind.storage.store import Store, clean
+from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.prompt import LABEL_TEXT
 from leeroy_mind.text import strip_wow_markup
 from leeroy_mind.wow import is_raid_fight
@@ -321,12 +323,20 @@ def _open_ids(store: Store, sql: str, owner: int, about: int, limit: int) -> lis
         cursor = store.conn.execute(sql, (owner, about, -1))
         while len(out) < limit and (batch := cursor.fetchmany(max(limit, 16))):
             ids = [r["id"] for r in batch]
-            evidence = {r["id"]: json.loads(r["evidence"]) for r in store.conn.execute(
-                "SELECT id, evidence FROM memory WHERE id IN (SELECT value FROM json_each(?))",
-                (json.dumps(ids),))}
-            hidden = restricted_channels(store.conn, evidence)
+            rows = store.conn.execute(
+                "SELECT id, evidence, key FROM memory WHERE id IN (SELECT value FROM json_each(?))",
+                (json.dumps(ids),)).fetchall()
+            evidence = {r["id"]: json.loads(r["evidence"]) for r in rows}
+            hidden = set(restricted_channels(store.conn, evidence)) | {
+                r["id"] for r in rows if _everyday_slang(r["key"])}
             out += [i for i in ids if i not in hidden]
     return out[:limit]
+
+
+def _everyday_slang(key: str | None) -> bool:
+    """A slang copy ("Picked up 'X' from Y.", lexicon key "slang:X") whose word is everyday
+    vocabulary (talk.everyday): no note or pin rests on it (owner's live DM test, 2026-11-16)."""
+    return bool(key) and key.startswith("slang:") and everyday_reason(key[6:]) is not None
 
 
 def _text(s: str) -> str:
@@ -413,6 +423,7 @@ async def rewrite_notes(ctx: "NightContext", a: int, b: int, *, facts: Facts | N
                                 feeling=feeling, labels=LABEL_WORDS)
         reply = await ctx.reasoner.json(system, user, NOTES_SCHEMA)
         label, notes = _text(reply["label"]), _text(reply["notes"])
+        notes = strip_junk_notes(notes)[0]  # never a sentence of everyday-word slang
         claim = Claim(kind="notes", owner=a, text=notes, about=b,
                       evidence=[ev.ref(i) for i in dict.fromkeys(reply["evidence"])])
         rules = {"member": None if b == ctx.human else other, "attitude": stance is not None}

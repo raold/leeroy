@@ -1328,6 +1328,61 @@ def cmd_clean_contamination(args) -> int:
         _close_fix_store(store, lock)
 
 
+def cmd_clean_notes(args) -> int:
+    """`personas clean-notes` (personas/clean_notes.py): every relationship note without the
+    sentences built from retired everyday-word slang. A read-only plan unless --go (mind stopped,
+    snapshot first, a receipt); --undo STAMP --go puts a receipt's notes back. Counts and ids
+    only."""
+    import time
+    from collections import Counter
+    from .personas import clean_notes as N
+    root = _root(args)
+    if args.undo and not args.go:
+        print("--undo needs --go (the mind stopped; mind.db is snapshot first)", file=sys.stderr)
+        return 2
+    args.dry_run = not args.go
+    opened = _fix_store(args, root, "pre-clean-notes-undo" if args.undo else "pre-clean-notes")
+    if isinstance(opened, int):
+        return opened
+    store, lock = opened
+    try:
+        now = time.time()
+        if args.undo:
+            try:
+                with store.transaction():
+                    done = N.undo(store.conn, args.undo, now=now)
+            except KeyError:
+                print(f"no receipt {N.RECEIPT}{args.undo}", file=sys.stderr)
+                return 1
+            except ValueError as e:
+                print(f"receipt {args.undo}: {e}", file=sys.stderr)
+                return 1
+            print(f"put back {done} notes")
+            return 0
+        rows = store.conn.execute("SELECT count(*), sum(notes != '') FROM relationship").fetchone()
+        plan = N.plan(store.conn)
+        human = int(store.get_meta("human_guid") or 0)
+        for c in plan:
+            print(f"{c.a:>7} -> {c.b:<7}  sentences {c.removed}  chars {len(c.before)} -> "
+                  f"{len(c.after)}" + ("  (emptied)" if not c.after.strip() else ""))
+        holders = Counter(c.a for c in plan)
+        print(f"relationship rows {rows[0]}, with notes {rows[1] or 0}: "
+              f"{'would clean' if args.dry_run else 'cleaning'} {len(plan)} notes "
+              f"({sum(c.removed for c in plan)} sentences) of {len(holders)} members, "
+              f"{sum(c.b == human for c in plan)} toward him, "
+              f"{sum(not c.after.strip() for c in plan)} left empty")
+        if args.dry_run:
+            print("nothing was written")
+            return 0
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+        with store.transaction():
+            receipt = N.apply(store.conn, plan, now=now, stamp=stamp)
+        print(f"cleaned {len(receipt['rows'])} notes; undo with --undo {stamp} --go")
+        return 0
+    finally:
+        _close_fix_store(store, lock)
+
+
 def cmd_generate(args, root, store) -> int:
     import asyncio
     import random
@@ -1597,6 +1652,19 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_clean.add_argument("--data-dir", default=argparse.SUPPRESS,
                          help="the mind's data folder (as personas --data-dir)")
     p_clean.set_defaults(func=cmd_clean_contamination)
+    p_notes = psub.add_parser("clean-notes",
+                              help="take out of every relationship note the sentences built from "
+                                   "retired everyday-word slang ('picked up ...', 'say ... to "
+                                   "me'); a read-only plan unless --go")
+    p_notes.add_argument("--go", action="store_true",
+                         help="write them, with a receipt for --undo (the mind stopped; mind.db "
+                              "is snapshot first)")
+    p_notes.add_argument("--undo", default=None, metavar="STAMP",
+                         help="with --go, put back the notes the run with this receipt stamp "
+                              "changed")
+    p_notes.add_argument("--data-dir", default=argparse.SUPPRESS,
+                         help="the mind's data folder (as personas --data-dir)")
+    p_notes.set_defaults(func=cmd_clean_notes)
     p_pers.set_defaults(func=cmd_personas)
     from .world.cli import run as world_status
     p_world = psub.add_parser("world", help="read-only world target counts and generation plan")

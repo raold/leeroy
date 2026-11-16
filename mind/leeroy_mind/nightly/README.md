@@ -89,6 +89,28 @@ terms (lexicon's adoption limit) gets no adoption back, nor its copy. Vocab rows
 `slang = 1`, nicknames and jokes are untouched, and member nicknames an old junk term displaced
 from their 8 adoption slots are not reactivated.
 
+## Relationship notes (`personas clean-notes`, 2026-11-16)
+
+The `notes` stage had already written sentences from those copies into `relationship.notes`
+("I picked up 'get', 'still' and 'this' from him"; "so I can hear him say 'want' to me"), which
+every prompt with the other end in the talk shows. Since then the stage neither reads a slang
+copy whose word is everyday (`relations._everyday_slang`, notes evidence and pins) nor keeps such
+a sentence in what the model writes (`personas/clean_notes.strip`: a sentence citing an
+everyday or typo word as picked up, any word of a quoted list, or as said "to me"). The stored
+notes are cleaned by a data step over every relationship row of every member:
+
+```bash
+python -m leeroy_mind personas --data-dir "$D" clean-notes              # dry run: counts and ids
+python -m leeroy_mind personas --data-dir "$D" clean-notes --go         # mind stopped
+python -m leeroy_mind personas --data-dir "$D" clean-notes --undo STAMP --go
+```
+
+The dry run opens mind.db read-only. `--go` refuses while the mind holds `mind.lock`, snapshots
+mind.db (`snapshots/mind-pre-clean-notes-*.db`), takes the junk sentences out of each note (the
+rest stays as written; a note of nothing else is left empty) and writes receipt
+`personas:clean-notes:<stamp>` with each changed row's note before and after. `--undo STAMP
+--go` puts back each note still as the run left it and marks the receipt undone.
+
 # Life beats: he lives far away (2026-11-15)
 
 The night's life beats invented his texts, notes in her flat and visits, and those memories
