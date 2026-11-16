@@ -22,6 +22,7 @@ from leeroy_mind.memory.threads import ThreadTracker
 from leeroy_mind.memory.writer import Embedder, MemoryWriter
 from leeroy_mind.personas.io import PersonaCache, save_persona
 from leeroy_mind.personas.schema import Bit
+from leeroy_mind.personas.screens import redact_real_name
 from leeroy_mind.personas.seed import human_seed
 from leeroy_mind.protocol import (Achievement, Ack, Boss, Chat, Death, Group, Login, Logout,
                                   Member, Resurrect, TextEmote, Zone)
@@ -44,7 +45,8 @@ def clock():
 
 
 def reply_to_human(guid: int, channel: str = "guild") -> Turn:
-    return Turn(kind=TurnKind.REPLY_HUMAN, speaker=guid, channel=channel, addressee=HUMAN)
+    return Turn(kind=TurnKind.REPLY_HUMAN, speaker=guid, channel=channel, addressee=HUMAN,
+                to_guid=HUMAN if channel == "whisper" else 0)
 
 
 async def spoken(r, turn: Turn, seconds: float = 40, step: float = 1.0) -> list[str]:
@@ -587,7 +589,7 @@ def test_a_turn_spends_its_cooldowns_and_rests_its_memories_only_once_said(store
             return f"real name, {REAL}" in last and ROMANCE_MARK in last
 
         for _ in range(60):
-            assert await spoken(r, reply_to_human(102), seconds=15, step=5) == []
+            assert await spoken(r, reply_to_human(102, "whisper"), seconds=15, step=5) == []
             if offered():
                 break
         assert offered() and r.utterances()[-1]["dropped"] == "silent"
@@ -597,7 +599,7 @@ def test_a_turn_spends_its_cooldowns_and_rests_its_memories_only_once_said(store
         assert m.t_accessed == t and m.access_n == 0
         said[0] = True
         for _ in range(60):  # 25 s apart: her lines are said now, ten seconds apart at least
-            assert await spoken(r, reply_to_human(102), seconds=25, step=5)
+            assert await spoken(r, reply_to_human(102, "whisper"), seconds=25, step=5)
             if offered():
                 break
         assert offered()
@@ -1664,12 +1666,50 @@ def test_non_close_output_never_carries_the_real_name(store, clock, tmp_path):
         store.put_relationship(Relationship(a=101, b=HUMAN, affinity=10, familiarity=20))
         store.put_relationship(Relationship(a=102, b=HUMAN, affinity=60, familiarity=85))
         r = make_rig(store, clock, tmp_path, reply=f"{REAL} you legend, nice one")
-        far = " ".join(await spoken(r, reply_to_human(101))).casefold()
+        far = " ".join(await spoken(r, reply_to_human(101, "whisper"))).casefold()
         assert far and REAL.casefold() not in far and NICK.casefold() in far
         stored = store.conn.execute("SELECT text FROM chat_line WHERE from_guid = 101").fetchall()
         assert stored and all(REAL.casefold() not in x["text"].casefold() for x in stored)
-        close = " ".join(await spoken(r, reply_to_human(102))).casefold()
-        assert REAL.casefold() in close  # a close member may use it
+        close = " ".join(await spoken(r, reply_to_human(102, "whisper"))).casefold()
+        assert REAL.casefold() in close  # a close member may use it with him in private
+    run(main())
+
+
+@pytest.mark.parametrize("channel", ["guild", "party", "officer", "say", "discord:general",
+                                     "discord:officer-chat", "voice:raid"])
+def test_his_real_name_stays_out_of_public_channels(store, clock, tmp_path, channel):
+    """2026-11-15 audit: his real first name surfaced 9 times in guild, party and Discord
+    channels from inner-circle members. It is theirs to use only with him in private; in
+    public they call him what everyone does, however the model wrote it."""
+    async def main():
+        seed_test_cast(store)
+        store.put_relationship(Relationship(a=102, b=HUMAN, affinity=60, trust=40,
+                                            familiarity=85, interactions=30))
+        r = make_rig(store, clock, tmp_path, reply=f"{REAL} you legend, nice one")
+        turn = reply_to_human(102, channel)
+        turn.deadline = clock.now() + 60
+        assert not r.engine._real_name_private(turn)
+        composed = await r.engine._compose(turn, TurnMeta(r.engine._new_id()), live=False)
+        assert not composed.close
+        for _ in range(30):  # never offered, however many turns
+            prompt = text_of((await r.engine.compose(reply_to_human(102, channel)))[0])
+            assert f"real name, {REAL}" not in prompt and REAL not in prompt
+        text, why = await r.engine._generate(turn, TurnMeta(r.engine._new_id()), composed)
+        assert why is None and REAL not in text and NICK in text  # his nickname instead
+    run(main())
+
+
+@pytest.mark.parametrize("channel,to", [("whisper", HUMAN), ("dm:102", HUMAN), ("gdm:7", 0)])
+def test_his_real_name_is_kept_for_private_talk_with_him(store, clock, tmp_path, channel, to):
+    async def main():
+        seed_test_cast(store)
+        r = make_rig(store, clock, tmp_path)
+        turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=102, channel=channel, to_guid=to,
+                    addressee=HUMAN)
+        assert r.engine._real_name_private(turn)
+        # a whisper between two members is not his
+        assert not r.engine._real_name_private(Turn(kind=TurnKind.REPLY_HUMAN, speaker=102,
+                                                    channel="whisper", to_guid=103))
     run(main())
 
 
@@ -1688,14 +1728,14 @@ def test_only_the_inner_circle_uses_his_real_name(store, clock, tmp_path):
         offered = {101: [], 102: []}
         for i in range(80):
             g = (101, 102)[i % 2]
-            said = " ".join(await spoken(r, reply_to_human(g), seconds=15, step=5))
+            said = " ".join(await spoken(r, reply_to_human(g, "whisper"), seconds=15, step=5))
             if f"real name, {REAL}" in r.prompts()[-1]:
                 offered[g].append(clock.now())
             if g == 101:
                 assert said and REAL.casefold() not in said.casefold()
         assert offered[101] == [] and len(offered[102]) >= 2
         assert all(b - a >= 600 for a, b in zip(offered[102], offered[102][1:]))
-        friend = text_of((await r.engine.compose(reply_to_human(101)))[0])
+        friend = text_of((await r.engine.compose(reply_to_human(101, "whisper")))[0])
         assert REAL not in friend  # her prompt is redacted like any non-close member's
     run(main())
 
@@ -1708,7 +1748,7 @@ def test_real_name_line_goes_to_one_close_member_at_a_time(store, clock, tmp_pat
         r = make_rig(store, clock, tmp_path, seed=2)
         offered = []
         for i in range(80):
-            await spoken(r, reply_to_human((101, 102)[i % 2]), seconds=15, step=5)
+            await spoken(r, reply_to_human((101, 102)[i % 2], "whisper"), seconds=15, step=5)
             if f"real name, {REAL}" in r.prompts()[-1]:
                 offered.append(clock.now())
         assert len(offered) >= 2
@@ -1729,30 +1769,32 @@ def test_his_real_name_reaches_an_inner_prompt_only_on_the_turn_offered_it(store
                                                 familiarity=85, interactions=30))
         r = make_rig(store, clock, tmp_path, script=numbered(REAL + " you legend, round {n}"))
         for _ in range(60):  # until one of her turns is offered the name, and she says it
-            assert await spoken(r, reply_to_human(102), seconds=25, step=5)
+            assert await spoken(r, reply_to_human(102, "whisper"), seconds=25, step=5)
             if f"real name, {REAL}" in r.prompts()[-1]:
                 break
         else:
             raise AssertionError("never offered")
         his_line(r, store, f"haha yes {REAL} is my real name")
         for g in (103, 102):  # the gap is running: neither is offered it now
-            prompt = text_of((await r.engine.compose(reply_to_human(g)))[0])
-            assert REAL not in prompt and "Zan you legend" in prompt
-            assert "haha yes Zan is my real name" in prompt
+            prompt = text_of((await r.engine.compose(reply_to_human(g, "whisper")))[0])
+            assert REAL not in prompt and "haha yes Zan is my real name" in prompt
+        prompt = text_of((await r.engine.compose(reply_to_human(102, "whisper")))[0])
+        assert "Zan you legend" in prompt  # her own whisper to him, redacted too
         await r.advance(600, step=60)
         for _ in range(60):
-            assert await spoken(r, reply_to_human(103), seconds=25, step=5)
+            assert await spoken(r, reply_to_human(103, "whisper"), seconds=25, step=5)
             if f"real name, {REAL}" in r.prompts()[-1]:
                 break
         else:
             raise AssertionError("never offered")
-        assert f"Belra: {REAL} you legend" in r.prompts()[-1]  # on the turn offered it
+        assert f"haha yes {REAL} is my real name" in r.prompts()[-1]  # on the turn offered it
     run(main())
 
 
 def test_a_close_members_use_of_his_real_name_never_reaches_the_rest(store, clock, tmp_path):
-    """Belra is close and types in lower case; Arkon is not close. Her line keeps the name
-    capitalised in the log, so his prompt and his output never carry its Title or UPPER form."""
+    """Belra is close and types in lower case; Arkon is not close. In guild chat she calls him
+    what everyone does, however the model wrote it; whatever she says, his prompt and his output
+    never carry the name's Title or UPPER form."""
     def script(model, messages):
         if "You play Belra" in messages[0]["content"]:
             return f"{REAL} you legend"
@@ -1765,7 +1807,8 @@ def test_a_close_members_use_of_his_real_name_never_reaches_the_rest(store, cloc
         r = make_rig(store, clock, tmp_path, script=script)
         assert await spoken(r, reply_to_human(102))
         (row,) = store.conn.execute("SELECT text FROM chat_line WHERE from_guid = 102")
-        assert REAL in row["text"] and REAL in r.world.history[-1].row.text  # not lowered
+        assert REAL.casefold() not in row["text"].casefold()
+        assert NICK.casefold() in row["text"].casefold()
         out = await spoken(r, Turn(kind=TurnKind.CONTINUE, speaker=101, channel="guild",
                                    addressee=102))
         prompt = r.prompts()[-1]
@@ -1795,7 +1838,7 @@ def test_his_name_is_kept_in_a_form_the_redaction_catches(store, clock, tmp_path
                                             familiarity=85, interactions=30))
         r = make_rig(store, clock, tmp_path, script=script, real_name=name)
         for _ in range(60):
-            assert await spoken(r, reply_to_human(102), seconds=25, step=5)
+            assert await spoken(r, reply_to_human(102, "whisper"), seconds=25, step=5)
             if "real name" in r.prompts()[-1]:
                 break
         else:
@@ -1804,8 +1847,9 @@ def test_his_name_is_kept_in_a_form_the_redaction_catches(store, clock, tmp_path
             "SELECT text FROM chat_line WHERE from_guid = 102 ORDER BY id")]
         assert said[-1].startswith(f"hey {spelt} u legend")
         assert all(x.startswith("who pays the bill") for x in said[:-1])  # never the name
-        prompt = text_of((await r.engine.compose(reply_to_human(101)))[0])
-        assert f"hey {NICK} u legend" in prompt and name.casefold() not in prompt.casefold()
+        # the stored form is one the redaction catches, wherever the line is shown again
+        shown = redact_real_name(said[-1], r.engine.human, NICK)
+        assert shown.startswith(f"hey {NICK} u legend") and name.casefold() not in shown.casefold()
     run(main())
 
 

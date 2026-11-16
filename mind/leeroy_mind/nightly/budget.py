@@ -65,6 +65,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "rewards": {},                           # own measured wall cost; no generation calls
     "bandit": {},
     "learn_cycle": {},                       # the weekly cycle: model-free
+    "turing": {"json": 1},                   # one blind-judge call per window (turing.night)
     "encounters": {"json": 2},                # scene generation and one judge batch
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
@@ -110,7 +111,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies", "talk_coach", "bandit", "meme_plan", "meme_render"})
+EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies", "talk_coach", "bandit", "meme_plan", "meme_render", "turing"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -237,6 +238,7 @@ DEGRADE = (
     Degrade("realm", (Cut("realm_units", "fit", 0),)),
     Degrade("scenes", (Cut("scenes_per_night", "fit", 0),)),
     Degrade("snaps", (Cut("snaps_per_night", "fit", 0),)),
+    Degrade("turing", (Cut("turing_windows", "fit", 4),)),  # a smaller sample, never none
     Degrade("coach", (Cut("coach_units", "fit", 5),)),
     Degrade("selfies", (Cut("selfie_per_night", "fit", 10),)),
     Degrade("claims", (Cut("claims_per_night", "fit", 0),)),  # unread lines wait for another night

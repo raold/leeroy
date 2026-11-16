@@ -206,6 +206,7 @@ def test_interrupted_delivery_settles_only_real_first_post(app,monkeypatch,failu
                 message=dstore.post(app.store,channel='general',author=turn.speaker,origin='mind',
                             text='Invented joke delivery',turn=meta.turn_id,now=app.clock.now())
                 meta.on_discord_record(17,message,app.clock.now())
+            meta.discord_messages.append(message)
         raise failure()
     monkeypatch.setattr(app.engine,'speak_meta',interrupted)
     async def go():

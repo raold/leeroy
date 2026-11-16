@@ -93,6 +93,7 @@ class NightlySettings:
     questions_min_new: int = 0
     profile_per_night: int = 1
     interview_members: int = 8
+    turing_windows: int = 8  # [turing] windows: blind-judge calls a night (turing.night)
 
 
 def load_life(path: Path) -> int:
@@ -122,6 +123,7 @@ def load_settings(cfg: MindConfig, data_dir: Path, *, culture=None) -> NightlySe
     from leeroy_mind.personas.looks_diversity import enabled
     from leeroy_mind.culture.config import load_culture_config
     from leeroy_mind.drama.config import load_drama_config
+    from leeroy_mind.turing.config import load as load_turing
     data_dir = Path(data_dir)
     server = load_server_config(data_dir / "mind.toml")
     from leeroy_mind.world.config import load as load_world
@@ -140,7 +142,8 @@ def load_settings(cfg: MindConfig, data_dir: Path, *, culture=None) -> NightlySe
         world_selfies_per_night=world.world_selfies_per_night,
         looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None,
         romance_activities=cfg.romance.activities,
-        member_romance=load_drama_config(data_dir / "mind.toml").member_romance)
+        member_romance=load_drama_config(data_dir / "mind.toml").member_romance,
+        turing_windows=load_turing(data_dir / "mind.toml").windows)
 
 
 def _at_six(day: date, tz: tzinfo) -> float:

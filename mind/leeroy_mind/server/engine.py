@@ -14,6 +14,7 @@ from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.talk.budget import _HOLD
+from leeroy_mind.talk.discord_length import burst_draw, opener_draw
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.pipeline import TurnMeta, TurnWithdrawn
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -26,6 +27,8 @@ TICK_S = 5.0
 DAY_KEY = records.DAY_KEY
 DRY_TURNS = 2
 TIES = {'friend':2., 'crush':2., 'fond':1.5, 'neutral':1., 'rival':.6, 'feud':0.}
+BURST_SHARE = .12  # replies drawn to go out as a quick burst of 2-3 messages
+ABOUT_YOU = 'This is about you: say it in the first person, never by your own name.'
 
 
 class ConversationGuards(Guards):
@@ -59,6 +62,9 @@ class Conversation:
 class ServerEngine:
     def __init__(self, app, config, rng: random.Random):
         self.app, self.config, self.rng = app, config, rng
+        # the message-shape draws' own source (bursts, an opener's length), so they never
+        # shift the conversation's draws on `rng`
+        self.shape_rng = random.Random()
         self.next_start = app.clock.now()
         self._live: dict[str, Conversation] = {}
         self._closed = False
@@ -322,6 +328,13 @@ class ServerEngine:
                     self.app.store.set_meta(OWNER_KEY, night_of(local_at(now)))
                 self.app.store.set_meta(receipt, str(message))
 
+    def _message(self, conversation, message):
+        """(author, text, deleted) of one of this conversation's messages: in its channel and
+        posted since it started; None for any other, which is never a parent."""
+        return self.app.store.conn.execute(
+            'SELECT author,text,deleted FROM discord_message WHERE id=? AND channel=? AND ts>=?',
+            (message, conversation.channel, conversation.started)).fetchone()
+
     def _settle_joke(self, conversation, meta):
         """Read the committed receipt after success or shielded cancellation."""
         kind = 'close' if conversation.seed.kind in ('loot_close', 'his_loot') else 'joke'
@@ -349,13 +362,24 @@ class ServerEngine:
                 if conversation.messages:
                     parent = (conversation.messages[-1] if self.rng.random() < .7 else
                               self.rng.choice(conversation.messages))
-                    row = app.store.conn.execute('SELECT author,text,deleted FROM discord_message WHERE id=?',
-                                                 (parent,)).fetchone()
+                    row = self._message(conversation, parent)
+                    if row is not None and set(eligible) <= {row[0]}:
+                        # Only its own author could answer an earlier message: answer the last
+                        # one instead. Its author is usually the last speaker, never eligible;
+                        # after a dry turn she may be the only one left, and the filter below
+                        # then ends the conversation (no_cast) rather than let her answer herself.
+                        parent = conversation.messages[-1]
+                        row = self._message(conversation, parent)
                     if row is None or row[2] is not None:
                         conversation.reason = 'deleted_parent'
                         break
                     addressed.add(row[0])
                     parent_author = row[0]
+                    # Nobody answers her own message (she would talk about herself as someone else).
+                    eligible = [g for g in eligible if g != parent_author]
+                    if not eligible:
+                        conversation.reason = 'no_cast'
+                        break
                     for g in eligible:
                         name = observed.personas[g].character_name
                         if re.search(r'(?<!\w)@?'+re.escape(name)+r'\b', row[1], re.I):
@@ -407,20 +431,31 @@ class ServerEngine:
                     person = observed.personas.get(target)
                     name = app.engine.human.called if target == app.human_guid else person.character_name
                     instruction += f" Tease {name} about it the way friends do; keep it kind."
+                if speaker in conversation.seed.about:
+                    instruction += ' ' + ABOUT_YOU  # a life beat or a seed reads in the third person
                 if (conversation.seed.kind in ('joke', 'loot_close', 'his_loot', 'meme', 'meme_image')
                         and conversation.teaser is None):
                     conversation.teaser = speaker
                 turn = Turn(TurnKind.OPEN if parent is None else TurnKind.CONTINUE, speaker,
                     conversation.channel if is_group(conversation.channel) else 'discord:'+conversation.channel,
-                    addressee=parent_author, instruction=instruction,
+                    addressee=parent_author if parent_author != speaker else None, instruction=instruction,
                     priority=Priority.BACKGROUND, max_lines=1)
+                # Now and then a reply goes out as a quick burst of 2-3 messages a few seconds
+                # apart (realism.plan splits it at its sentence breaks; only with [talk] realism).
+                # An opener carries its subject: never only a few words.
+                burst = (parent is not None and getattr(app.engine.cfg.talk, 'realism', False) is True
+                         and self.shape_rng.random() < BURST_SHARE)
+                if burst:
+                    turn.discord_draw = burst_draw(self.shape_rng)
+                elif parent is None:
+                    turn.discord_draw = opener_draw(self.shape_rng)
                 topic = conversation.seed.fact if parent is None else ''
                 meta = TurnMeta('', why='server:'+conversation.seed.kind, topic=topic,
                     photo_seed=(int(conversation.seed.key.removeprefix('photo:'))
                                 if parent is None and conversation.seed.kind == 'photo' else None),
                     server_anchor=purpose+' '+topic, server_thread=tuple(conversation.messages),
-                    server_conversation=conversation.id, discord=DiscordTarget(parent,None), single_line=True,
-                    keep_channel=True, review_required=True, guards=guards,
+                    server_conversation=conversation.id, discord=DiscordTarget(parent,None), single_line=not burst,
+                    burst=burst, keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
                 from leeroy_mind.culture.seeds import joke_of
                 if joke_of(conversation.seed) is not None:  # a joke, or a meme about one
@@ -450,8 +485,10 @@ class ServerEngine:
                     conversation.in_flight = conversation.in_flight_turn = None
                     if conversation.seed.kind in ("joke", "loot_close", "his_loot", "meme", "meme_image"):
                         self._settle_joke(conversation, meta)
-                added = [r[0] for r in app.store.conn.execute('SELECT id FROM discord_message '
-                    'WHERE turn=? AND channel=? AND deleted IS NULL ORDER BY id', (meta.turn_id,conversation.channel))]
+                # The messages this turn stored, never a lookup by its turn id: an older run of
+                # the mind reused ids (t1, t2, ...), and its messages joined the thread.
+                added = [i for i in meta.discord_messages if (row := self._message(conversation, i)) is not None
+                         and row[2] is None and i not in conversation.messages]
                 conversation.messages.extend(added)
                 if added and conversation.seed.kind == 'group_start':
                     app.store.conn.execute('DELETE FROM meta WHERE key=?',

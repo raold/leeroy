@@ -1,7 +1,16 @@
-"""Delayed Discord reactions, drawn from observed ties without a model call."""
+"""Delayed Discord reactions, drawn from observed ties without a model call.
+
+A message first draws how many members react to it, from a skewed (negative binomial) count
+whose mean grows with how reactable it is (salience: a joke, a meme or photo, a win, his post);
+then that many of the members who may react are picked, by their tie to its author. Most
+messages get none or one, some two to four, and a rare popular one more. Before 2026-11-15
+every member reacted on her own at 12%, so with 50-80 members online 62% of member messages
+hit the cap of 3."""
 import asyncio
 import logging
 import random
+import re
+import sqlite3
 from collections import OrderedDict
 
 from leeroy_mind.discord import layout, store as discord_store
@@ -15,10 +24,17 @@ from .records import BadDayCounter, increment
 from .state import pulled_into_play, tie_kind
 
 log = logging.getLogger('leeroy_mind.server')
-BASE_P = 0.12
-HIS_POST_P = 0.25
-MAX_PER_MESSAGE = 3
+BASE_MEAN = 0.9  # reactions an ordinary member message draws on average
+SHAPE = 0.8  # the count's dispersion: lower is more skewed (more zeros, a longer tail)
+MAX_PER_MESSAGE = 8  # a rare popular message's most
+MAX_SALIENCE = 5.0
+HIS_POST = 2.0  # his posts draw about twice the reactions (was 0.25 against 0.12 a member)
+PILE_ON = 0.6  # a later reactor reuses an emoji already on the message, as people pile on
 DELAY_S = (20.0, 900.0)
+_LAUGH = re.compile(r'\b(?:lol|lmao|lmfao|haha\w*|rofl|kek)\b|😂|🤣|💀', re.I)
+_WIN = re.compile(r'\b(?:finally|(?:guild|realm|server) first|first kill|killed|downed|one[- ]?shot\w*'
+                  r'|dropped|looted|won|personal best|new record|dinged|achievement|got (?:my|the) )',
+                  re.I)
 TIE = {'friend':2.5, 'crush':3.0, 'fond':1.5, 'neutral':1.0, 'rival':0.3, 'feud':0.0}
 PALETTE = {'joke':('😂','💀','🤣'), 'question':('👀','🤔'), 'raid':('🔥','💪'),
            'gear':('🔥','🎉','👏'), 'complaint':('😬','🫂','😢'), 'plan':('👍','🙋'),
@@ -43,6 +59,58 @@ def pick_emoji(text: str, tie: str, rng: random.Random) -> str | None:
     if tie == 'rival':
         return '🙄'
     return rng.choice(PALETTE.get(main_move(classify(text)), PALETTE[None]))
+
+
+def salience(text: str, *, his: bool = False, attachment: str | None = None) -> float:
+    """How reactable a message is, 1 for an ordinary one: a joke or a laugh, a meme or a photo,
+    a win (a kill, a drop, a first) and his own post draw more; a question (it gets answers)
+    and a reply of a few words draw fewer."""
+    text = text or ''
+    moves = classify(text)
+    laugh = 'joke' in moves or 'tease' in moves or _LAUGH.search(text) is not None
+    value = HIS_POST if his else 1.0
+    if attachment == 'meme':
+        value *= 2.5
+    elif attachment:
+        value *= 1.8
+    if laugh:
+        value *= 1.8
+    win = _WIN.search(text) is not None
+    if win:
+        value *= 1.7
+    elif moves & {'raid', 'gear'}:
+        value *= 1.2
+    if 'compliment' in moves:
+        value *= 1.2
+    if 'question' in moves:
+        value *= 0.6
+    if len(text.split()) <= 3 and not (laugh or win or attachment):
+        value *= 0.6
+    return min(MAX_SALIENCE, value)
+
+
+def draw_count(u: float, mean: float, cap: int = MAX_PER_MESSAGE) -> int:
+    """How many react to a message, from one uniform draw `u` in [0, 1): a negative binomial
+    count of `mean` and SHAPE, at most `cap`, read from the top (u = 0 is the cap), so most
+    messages get none or one and a few get many."""
+    if mean <= 0 or cap <= 0:
+        return 0
+    p = mean / (SHAPE + mean)
+    pmf = (1 - p) ** SHAPE
+    cdf, n, v = pmf, 0, 1 - u
+    while n < cap and v >= cdf:
+        n += 1
+        pmf *= (SHAPE + n - 1) / n * p
+        cdf += pmf
+    return n
+
+
+def _weighted_pick(candidates, weights, n, rng):
+    """`n` of `candidates`, without replacement, each likelier by its weight (each one's key is
+    u ** (1 / weight), the largest keys win)."""
+    keys = [(rng.random() ** (1 / w), i) for i, w in enumerate(weights)]
+    keys.sort(key=lambda k: -k[0])
+    return [candidates[i] for _, i in keys[:n]]
 
 
 def _audience(snap, channel):
@@ -81,29 +149,45 @@ class Reactor:
             self._seen.popitem(last=False)
         self._spawn(self._plan(message_id,author,channel_id(channel),text,his))
 
+    def _attachment(self, mid):
+        try:
+            row = self.app.store.conn.execute('SELECT kind FROM discord_attachment WHERE message=?',
+                                              (mid,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return row[0] if row else None
+
     async def _plan(self, mid, author, channel, text, his):
         snap = await runtime.snapshot(self.app,self.app.clock.now())
         if not self._ready():
             return
-        candidates = [g for g in snap.personas if _allowed(snap,g,author,channel)]
-        self.rng.shuffle(candidates)
-        chosen = 0
-        for guid in candidates:
+        candidates, weights = [], []
+        for guid in [g for g in snap.personas if _allowed(snap,g,author,channel)]:
             p = snap.personas[guid]
             tie = snap.ties.get((guid,author),'neutral')
             if tie == 'feud' or (tie == 'rival' and dials_of(p).level('drama')<7):
                 continue
-            chance = (HIS_POST_P if his else BASE_P)*TIE.get(tie,1)*dials_of(p).mult('humour')
-            if self.rng.random()>=min(1,chance):
-                continue
+            weight = TIE.get(tie,1)*dials_of(p).mult('humour')
+            if weight > 0:
+                candidates.append(guid)
+                weights.append(weight)
+        order = list(range(len(candidates)))
+        self.rng.shuffle(order)
+        candidates, weights = [candidates[i] for i in order], [weights[i] for i in order]
+        mean = BASE_MEAN*salience(text, his=his, attachment=self._attachment(mid))
+        count = draw_count(self.rng.random(), mean, min(MAX_PER_MESSAGE, len(candidates)))
+        piled = []
+        for guid in _weighted_pick(candidates, weights, count, self.rng):
+            tie = snap.ties.get((guid,author),'neutral')
             emoji = pick_emoji(text,tie,self.rng)
             if emoji is None:
                 continue
+            if tie != 'rival' and piled and self.rng.random() < PILE_ON:
+                emoji = self.rng.choice(piled)
+            if emoji != '🙄':
+                piled.append(emoji)
             low = sum(DELAY_S)/2 if snap.states[guid].presence.state=='idle' else DELAY_S[0]
             self._spawn(self._write(mid,guid,author,channel,emoji,self.rng.uniform(low,DELAY_S[1])))
-            chosen += 1
-            if chosen>=MAX_PER_MESSAGE:
-                break
 
     def _ready(self):
         return (not self._closed and not getattr(self.app,'stopping',False)

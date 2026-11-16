@@ -27,9 +27,31 @@ _SENTENCE_END = re.compile(r"(?:[.!?…]+[\"'”’)\]]*|" + EMOJI_RE.pattern + 
 # Channels (and group DMs) mix lengths the way a group chat does (owner, 2026-11-13): most
 # messages a quick line, some a couple of sentences, now and then a paragraph of discord_words.
 # His DMs are as full as she likes, up to dm_words. (draws below this edge, words; 0 is the
-# setting itself): 55% quick, 30% a couple of sentences, 15% a paragraph.
-CHANNEL_BANDS = ((0.55, 20), (0.85, 45), (1.0, 0))
-QUICK_WORDS, FEW_WORDS = 25, 50  # the wording each band reads (prompt.discord_length)
+# setting itself): 55% quick, 30% a couple of sentences, 15% a paragraph. The quick share is
+# split (2026-11-15): 30% only a few words ("lmao same", "wait which boss"), 25% a quick line;
+# asked for 20 words, the model wrote about 20, so only 6% of channel messages had 7 or fewer.
+# A conversation's opener and an answer to him keep the old mix (opener_draw).
+CHANNEL_BANDS = ((0.30, 6), (0.55, 20), (0.85, 45), (1.0, 0))
+SHORT_WORDS, QUICK_WORDS, FEW_WORDS = 6, 25, 50  # the wording each band reads (prompt.discord_length)
+# A quick burst (server.engine, realism.plan) is a couple of sentences split into 2-3 messages:
+# its draw falls in that band.
+BURST_BAND = (0.55, 0.85)
+
+
+def burst_draw(rng) -> float:
+    """A channel message's band draw for a burst: within BURST_BAND (a couple of sentences)."""
+    low, high = BURST_BAND
+    return low + (high - low) * rng.random()
+
+
+def opener_draw(rng) -> float:
+    """The band draw of a server conversation's opener, which carries its subject, and of an
+    answer to him (Pipeline._discord_words), which owes him something real: never only a few
+    words; the mix these had before the few-words band (55% a quick line, 30% a couple of
+    sentences, 15% a paragraph)."""
+    u = rng.random()
+    short_edge, quick_edge = CHANNEL_BANDS[0][0], CHANNEL_BANDS[1][0]
+    return u if u >= quick_edge else short_edge + u * (quick_edge - short_edge) / quick_edge
 
 
 def words_for(talk, channel) -> int:

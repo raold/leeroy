@@ -38,6 +38,8 @@ import logging
 import math
 import random
 import re
+import secrets
+import sqlite3
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, field, replace
@@ -70,8 +72,10 @@ from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.budget import PHASE_MODS, DayPhase, day_phase
 from leeroy_mind.talk.channels import choose_channel
-from leeroy_mind.talk.discord_length import (FEW_WORDS, QUICK_WORDS, TYPING_CAP_S as DISCORD_TYPING_S,
-                                             band, preset_for, trim_to_sentence, words_for)
+from leeroy_mind.talk.discord_length import (FEW_WORDS, QUICK_WORDS, SHORT_WORDS,
+                                             TYPING_CAP_S as DISCORD_TYPING_S,
+                                             band, opener_draw, preset_for, trim_to_sentence,
+                                             words_for)
 from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, is_silence,
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
@@ -100,6 +104,7 @@ from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_
                                     line_cap, split_emotes, style_lines, turn_lines)
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
+from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.text import EMOJI_RE, strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
@@ -166,7 +171,8 @@ SILENT_START_HINT = "Start the conversation with {human} in {length}, in your ow
 # And for her answer to his Discord DM (ruling R9).
 SILENT_DM_HINT = "Answer {human}'s message in {length}, in your own voice."
 DISCORD_SILENT_LENGTH = "a few sentences"  # a longer Discord message's {length} above
-DISCORD_SILENT_SHORT = {QUICK_WORDS: "a sentence", FEW_WORDS: "a couple of sentences"}  # by band
+DISCORD_SILENT_SHORT = {SHORT_WORDS: "a few words", QUICK_WORDS: "a sentence",
+                        FEW_WORDS: "a couple of sentences"}  # by band
 # A move she just made with this person, made again (filters.move_repeat: "move repeat:
 # <move>"; "clause", her final clause again, takes REPEAT_HINT): the phrase carries the
 # pronoun (moves.MOVE_PHRASES). A summons out of the game (filters "summons").
@@ -174,11 +180,14 @@ MOVE_REPEAT = "move repeat: "
 MOVE_HINT = "You just {move}: say something new instead."
 SUMMONS_HINT = ("You two only talk through the game: don't ask {them} over or say you're "
                 "waiting; answer what {they} said.")
+# A Discord message that names its own speaker talks about her as someone else ("mejith being
+# a corporate strategist now", posted by that member, 2026-11-15 audit): asked again once.
+SELF_NAME_HINT = 'You are {name}: talk about yourself in the first person, never by your own name.'
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
-                     "history", "copy", "slang", "summons", "phrase: resting"})
+                     "history", "copy", "slang", "summons", "self name", "phrase: resting"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
-# a summons.
-DROP_ON_RETRY = frozenset({"history", "summons"})
+# a summons, and a message still naming its own speaker.
+DROP_ON_RETRY = frozenset({"history", "summons", "self name"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 LONG_SLACK = 1.25
 # The second and third answers to his line see the ones before them (prompts I8), and so do
@@ -397,6 +406,10 @@ class TurnMeta:
     guard_codes: tuple[str,...] = ()
     review_required: bool = False  # opt-in sources require their card and deterministic guards
     single_line: bool = False  # a bounded multi-member conversation owns its line count
+    # a server reply drawn to go out as a quick burst of 2-3 messages (realism.plan splits it)
+    burst: bool = False
+    # the Discord messages this turn stored, in order, once each is committed (_deliver_discord)
+    discord_messages: list[int] = field(default_factory=list)
     keep_channel: bool = False  # a public thread must stay on its chosen transport
     server_anchor: str = ''
     server_thread: tuple[int, ...] = ()
@@ -442,6 +455,20 @@ def _emoji_only(text: str) -> bool:
     return EMOJI_RE.search(text) is not None and not any(c.isalnum() for c in text)
 
 
+def _names_self(text: str, name: str, *, labels: tuple[str, ...] = ()) -> bool:
+    """The model's words name their own speaker (`name`, her character name, as a whole word,
+    as written or in capitals; "@Name" too): she talks about herself as someone else. Never for
+    a name that is an everyday word (words.COMMON_WORDS: "Dawn" opening a sentence is the word),
+    nor inside one of `labels`, the guild's running jokes and slang that carry her name ("the
+    Belra bridge"). A lower-case word is left alone, as the ordinary word a name may also be."""
+    if not name or name.casefold() in COMMON_WORDS:
+        return False
+    for label in labels:
+        text = re.sub(rf"(?<!\w){re.escape(label)}(?!\w)", " ", text, flags=re.IGNORECASE)
+    return any(re.search(rf"(?<!\w)@?{re.escape(form)}(?!\w)", text)
+               for form in {name, name.upper()})
+
+
 def _secs(s: float | None) -> str:
     return "-" if s is None else f"{s:.1f}"
 
@@ -457,8 +484,10 @@ def _bit_id(turn: Turn) -> str | None:
 
 @dataclass(slots=True)
 class Composed:
-    """close: the speaker is in his inner circle (prompt.knows_real_name), so his real name is
-    hers to see and use. What the reply must not say back (filters.find_tells): answers, the
+    """close: the speaker is in his inner circle (prompt.knows_real_name) and talks with him in
+    private (Pipeline._real_name_private), so his real name is hers to see and use; in public
+    her words are redacted like anyone's. What the reply must not say back
+    (filters.find_tells): answers, the
     line it answers; others, what other members already said to it; samples, the sample
     lines the prompt showed, never to be said word for word."""
     messages: list[dict]
@@ -557,8 +586,9 @@ class Pipeline:
         self._session_id: int | None = None
         self._altered: dict[int, Altered] = {}  # tonight's state per member
         self._dead: dict[int, float] = {}  # guid -> when they died
-        # jobs and sending
+        # jobs and sending; a turn id is unique across runs of the mind (_new_id)
         self._ids = itertools.count(1)
+        self._id_run = secrets.token_hex(4)
         self._tasks: set[asyncio.Task] = set()
         self._current: dict[asyncio.Task, Turn] = {}  # the turn each job is on
         self._behind: dict[asyncio.Task, list[Turn]] = {}  # the turns a job has not begun yet
@@ -644,7 +674,10 @@ class Pipeline:
         self.human = human_identity(self.cfg, self.store, guid)
 
     def _new_id(self) -> str:
-        return f"t{next(self._ids)}"
+        """A turn id no earlier run of the mind used: its run's nonce, then its number. Stored
+        rows keep it (discord_message.turn, utterance.turn_id), so an id that restarted at t1
+        found another run's messages under the same id."""
+        return f"t{self._id_run}.{next(self._ids)}"
 
     def _members_for(self, channel: str):
         return self.world.discord_members() if is_discord(channel) else self.world.members
@@ -1039,6 +1072,18 @@ class Pipeline:
         hg = self.human.guid
         return bool(hg) and (turn.addressee == hg or any(r.from_guid == hg for r in recent[-3:]))
 
+    def _real_name_private(self, turn: Turn) -> bool:
+        """Where his inner circle may use his real name: a private conversation with him, i.e. a
+        whisper to him, his Discord DM with her (a DM is always to him, _dm_to_him) or a group
+        DM (he is in every open one). Guild, officer, party, raid, say, a voice room and the
+        Discord channels are public: there he is his nickname or character name."""
+        hg = self.human.guid
+        if not hg:
+            return False
+        if turn.channel == "whisper":
+            return turn.to_guid == hg
+        return turn.channel.startswith(DM_PREFIX) or is_group(turn.channel)
+
     def _romance(self, turn: Turn, meta: TurnMeta, p: Persona, rel_h, phase: DayPhase,
                  now: float, rng: random.Random, trigger: str = "",
                  dial: int | None = None, tail_follows: bool = False,
@@ -1145,7 +1190,9 @@ class Pipeline:
         human, hg = self.human, self.human.guid
         names = self._names(turn.channel)
         rel_h = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
-        close = knows_real_name(rel_h)  # his inner circle: his real name is theirs to use
+        # his inner circle: his real name is theirs to use, only where they talk with him
+        # privately; anywhere else they call him what everyone does (_real_name_private)
+        close = knows_real_name(rel_h) and self._real_name_private(turn)
         recent = list(window) if preview else self.world.recent_visible(
             turn.speaker, 8,
             keep=lambda row: row.ts >= self._chat_from and self._may_carry(turn, row))
@@ -1615,7 +1662,8 @@ class Pipeline:
                 voiced = self._route(turn, meta)
         else:
             hg = self.human.guid
-            close = bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg, lens=True))
+            close = (bool(hg) and knows_real_name(self.store.get_relationship(turn.speaker, hg, lens=True))
+                     and self._real_name_private(turn))
         if meta.photo is not None and not caption_ok(text):
             if self._photo_owed(turn, meta):
                 return await self._answer_without_photo(turn, meta, 'photo_words')
@@ -2273,6 +2321,10 @@ class Pipeline:
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
                     tells.append(Tell("member flirt", True))
+                # never on an answer to him, which a second miss must not drop
+                if (is_discord(turn.channel) and not meta.answers_human
+                        and not self.live_review.owed(turn, meta) and self._self_named(text, name)):
+                    tells.append(Tell("self name", False, True))
                 if meta.phrase_rests is not None and (rest_hint := meta.phrase_rests(text)):
                     tells.append(Tell("phrase: resting", True))
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
@@ -2332,6 +2384,18 @@ class Pipeline:
             return True
         return turn.kind is TurnKind.FLIRT and aimed_off_him(text, members, his)
 
+    def _self_named(self, text: str, name: str) -> bool:
+        """_names_self, once the guild's own terms that carry her name (lexicon: running jokes,
+        slang) are set aside; they are read only when her name is there at all."""
+        if not _names_self(text, name):
+            return False
+        try:
+            labels = tuple(r[0] for r in self.store.conn.execute(
+                "SELECT term FROM lexicon WHERE instr(lower(term), lower(?)) > 0 LIMIT 50", (name,)))
+        except sqlite3.OperationalError:
+            labels = ()
+        return _names_self(text, name, labels=labels)
+
     def _his_names(self) -> list[str]:
         h = self.human
         return [x for x in (h.called, h.character_name, h.nickname) if x]
@@ -2379,6 +2443,8 @@ class Pipeline:
             hints.append(HISTORY_HINT)
         if "slang" in reasons:
             hints.append(SLANG_HINT)
+        if "self name" in reasons:
+            hints.append(SELF_NAME_HINT.format(name=p.character_name))
         if "long" in reasons and words:
             hints.append(DISCORD_LONG_HINT.format(words=words))
         elif "long" in reasons:
@@ -2397,7 +2463,11 @@ class Pipeline:
         if not words or is_private(turn.channel):
             return words
         if turn.discord_draw is None:
-            turn.discord_draw = self._length_rng.random()
+            # an answer to him (D1, a group DM, a selfie request) is owed something real: the
+            # opener's mix, never only a few words
+            to_him = bool(self.human.guid) and turn.addressee == self.human.guid
+            turn.discord_draw = (opener_draw(self._length_rng) if to_him
+                                 else self._length_rng.random())
         return band(words, turn.discord_draw)
 
     @staticmethod
@@ -2652,6 +2722,8 @@ class Pipeline:
                         meta.on_discord_record(line, message, posted_at)
             # The post and its budget are durable before _record updates memory-only
             # guards, chain state and hooks. Those effects cannot survive a rollback.
+            if not meta.realism_correction:  # the turn's own messages, never a stored id lookup
+                meta.discord_messages.append(message)
             if not atomic_record:
                 self._record(turn, meta, p, text, memory_ids, discord_id=message)
             else:
