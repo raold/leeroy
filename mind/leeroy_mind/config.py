@@ -68,7 +68,7 @@ RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 DISCORD_WORDS_MAX = 200  # [talk] discord_words and dm_words
 THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
-_WARNED: set[str] = set()  # invalid [talk] values already logged in this process
+_WARNED: set[str] = set()  # invalid [talk] and [life] values already logged in this process
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
