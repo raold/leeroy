@@ -2,13 +2,18 @@
 
 A member answers his Discord DM when she would see it, by her Discord presence (presence.py):
 - online, or in a conversation with him (her last line to him, in a whisper or this DM, within
-  TALKING_S before his post): at once, as before (talk.answer_delay's 2-25 s);
+  TALKING_S before his post), or in his WoW group while he plays (with_him: presence shows her
+  online and playing then): at once, as before (talk.answer_delay's 2-25 s);
 - idle (at work, say): when she next glances at her phone, PHONE_S["idle"] after his post, or a
   little after she comes online, whichever is first;
 - do not disturb: the same, with PHONE_S["dnd"];
 - offline (asleep, or not about): a little (BACK_S) after her presence is next online or idle.
 An urgent post (URGENT_RE) cuts any wait to URGENT_S, asleep included: a phone that keeps
 buzzing wakes people. INSIST posts of his in a row cut an idle or dnd wait the same way.
+
+With `[life] availability` above 0 (life/config.py) her presence is her day's (presence.py), the
+glance and back-online waits are PHONE_S and BACK_S scaled by availability / 6 (never under
+LIFE_FLOOR_S), and the words for where she was come from her day (life.presence.away_words).
 
 Every draw comes from a generator seeded by his post's id and her guid, so a restart finds the
 same moment. A DM still owed after LET_GO_S is let go. Nothing here reads the game: Discord is
@@ -17,6 +22,8 @@ import random
 import re
 from datetime import datetime, timedelta, timezone
 
+from ..life import config as life_config
+from ..life import presence as life_presence
 from .presence import OWNER_ZONE, RNG_SEED, local_time, presence_of
 
 URGENT_RE = re.compile(
@@ -32,6 +39,22 @@ SCAN_STEP_S = 300.0
 SCAN_MAX_S = 36 * 3600.0
 LET_GO_S = 3 * 86400.0
 LATE_S = 600.0  # an answer this long after his post says she is only now seeing it
+LIFE_FLOOR_S = 30.0  # [life] availability's scaled waits are never shorter
+
+
+def _scaled(bounds: tuple[float, float]) -> tuple[float, float]:
+    """A wait's bounds at the availability in force: today's at 0 and at the design point."""
+    a = life_config.availability()
+    if a <= 0:
+        return bounds
+    k = max(a, 1) / life_presence.DESIGN_AVAILABILITY
+    return tuple(max(LIFE_FLOOR_S, b * k) for b in bounds)
+
+
+def with_him(world, guid: int) -> bool:
+    """She is in his WoW group while he plays (presence_of's in_his_group): she is at her
+    keyboard with him, so his DM never waits on her schedule. Pass it as `due_at`'s talking."""
+    return bool(world is not None and world.human_online and world.in_group(guid))
 
 
 def shifted(local: datetime, seconds: float) -> datetime:
@@ -76,15 +99,19 @@ def due_at(p, *, post_ts: float, now: float, local_now: datetime, message_id: in
     if urgent or (insist and state in PHONE_S):
         return post_ts + span(URGENT_S, urgent_draw)
     if state in PHONE_S:
-        glance = post_ts + span(PHONE_S[state], glance_draw)
+        glance = post_ts + span(_scaled(PHONE_S[state]), glance_draw)
         back = _next(p, at, post_ts, frozenset({"online"}), glance)
-        return glance if back is None else min(glance, back + span(BACK_S, back_draw))
+        return glance if back is None else min(glance, back + span(_scaled(BACK_S), back_draw))
     back = _next(p, at, post_ts, frozenset({"online", "idle"}), post_ts + SCAN_MAX_S)
-    return (post_ts + SCAN_MAX_S if back is None else back) + span(BACK_S, back_draw)
+    return (post_ts + SCAN_MAX_S if back is None else back) + span(_scaled(BACK_S), back_draw)
 
 
 def away_words(p, local: datetime) -> str:
     """Why she did not answer at once, by her presence when he wrote (owner-local `local`)."""
+    if life_config.availability() > 0:
+        her = local_time(local, p.identity.region)
+        return life_presence.away_words(
+            life_presence.presence_at(p, her, medium="discord"), "discord")
     state = state_at(p, local)
     hour = local_time(local, p.identity.region).hour
     if state == "offline":

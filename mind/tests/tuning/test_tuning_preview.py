@@ -119,6 +119,21 @@ def test_the_preview_counts_photos(tmp_path):
     run(go())
 
 
+def test_the_preview_says_how_long_a_member_at_work_takes(tmp_path):
+    async def go():
+        app = _app(tmp_path)
+        try:
+            r = await app.tuning.handle(_args("world", "", "availability", 6))
+            (glance,) = r["world"]
+            assert (glance["before"], glance["after"], glance["unit"]) == (0, 10.5, "min")
+            r = await app.tuning.handle(_args("world", "", "availability", 3))
+            assert r["world"][0]["after"] == 5.2   # half the design point's (30 s + 600 s) / 2
+            assert app.llm.calls == []
+        finally:
+            app.store.close()
+    run(go())
+
+
 def test_a_wording_dial_shows_a_line_before_and_after_with_one_seed(tmp_path, caplog):
     async def go():
         app = _app(tmp_path)

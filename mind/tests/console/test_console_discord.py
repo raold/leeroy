@@ -576,3 +576,32 @@ def test_the_console_and_the_mind_read_presence_in_one_zone(data, cast, monkeypa
         datetime.fromtimestamp(NOW, EASTERN), p.identity.region), body_online=False,
         body_zone=0, rng_seed=presence.RNG_SEED).state for g, p in personas.items()}
     assert eastern != mind  # the zone matters at this instant: Friday morning in Tokyo
+
+
+@pytest.mark.parametrize("stored", ["6", "0", "6x", None])
+def test_presence_reads_the_minds_availability_from_meta(data, cast, stored):
+    """`[life] availability` lives in the mind's mind.toml and world dials; the mind writes the
+    value in force to meta life:availability and the console pins it before computing presence,
+    so both show the same members away (anything but an integer 0-10 is 0)."""
+    from leeroy_mind.discord import presence
+    from leeroy_mind.life import config as life_config
+    from leeroy_mind.personas.io import load_persona
+    save_member(cast, 101, region="US", rhythm="swing shifts at the depot")  # at work at 20:00
+    if stored is not None:
+        cast.set_meta(life_config.META_KEY, stored)
+    cast.conn.commit()
+    p = load_persona(cast, 101)
+    local = presence.local_time(datetime.fromtimestamp(NOW, EASTERN), "US")
+    want = {}
+    for a in (0, 6):
+        life_config.pin(a, False)
+        want[a] = presence.presence_of(p, local=local, body_online=False, body_zone=0,
+                                       rng_seed=presence.RNG_SEED).state
+    life_config.pin(0, False)
+    assert want[0] == "online" and want[6] in ("idle", "dnd")
+
+    async def go():
+        async with served(build(data)) as app:
+            return (await get(app)).json()
+    members = {m["guid"]: m for m in asyncio.run(go())["members"]}
+    assert members[101]["presence"]["state"] == want[6 if stored == "6" else 0]

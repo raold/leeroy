@@ -3,13 +3,15 @@ its members with their Discord presence, and one channel's messages with reactio
 pins. It is his view, so every channel is listed, the officers' ones with `officers_only` as a
 display flag. Its members are the mind's Discord audience: the cast at CAST_MIN_LEVEL or more,
 never him. Presence is computed as the mind computes it (discord.presence with the same seed,
-the member's regional clock and the configured trial rank). A table an older mind.db lacks is
+the member's regional clock, the configured trial rank and the mind's `[life] availability`
+from meta). A table an older mind.db lacks is
 named in `missing` and reads as empty."""
 import json
 from hashlib import sha256
 from datetime import datetime
 
 from leeroy_mind.discord import layout, presence, store
+from leeroy_mind.life import config as life_config
 from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.personas.tiers import is_cast
 from leeroy_mind.protocol import Member
@@ -69,7 +71,9 @@ def _personas(conn) -> dict:
 
 def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=False) -> list[dict]:
     """The cast as the mind's Discord audience has it (WorldView.audience): level
-    CAST_MIN_LEVEL or more, and not him (the stored roster keeps his own row)."""
+    CAST_MIN_LEVEL or more, and not him (the stored roster keeps his own row). Presence reads
+    the `[life] availability` the mind put in force (meta life:availability)."""
+    life_config.pin(life_config.stored(conn), life_config.state_on())
     personas = _personas(conn)
     from leeroy_mind.server.state import read_play
     playing = read_play(conn, owner_now.timestamp()) if server else frozenset()

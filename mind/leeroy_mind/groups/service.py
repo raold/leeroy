@@ -116,7 +116,8 @@ class Groups:
         urgent = any(owntime.URGENT_RE.search(text) for text in his)
         due = owntime.due_at(app.personas.get(guid),post_ts=row[1],now=app.clock.now(),
             local_now=app.clock.local(),message_id=mid,urgent=urgent,
-            talking=last is not None and row[1]-last<=owntime.TALKING_S,insist=len(his)>=owntime.INSIST)
+            talking=(last is not None and row[1]-last<=owntime.TALKING_S)
+            or owntime.with_him(getattr(app,'world',None),guid),insist=len(his)>=owntime.INSIST)
         return {'due':due,'urgent':urgent}
 
     def refresh_due(self):

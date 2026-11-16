@@ -237,6 +237,16 @@ def mem(guid, *, online=True, zone=10, level=80, rank=3):
 
 
 @pytest.fixture(autouse=True)
+def _life_unpinned():
+    """[life] availability and state are process-wide (life/config.py): every test starts and
+    ends at 0 and false, today's behaviour, whatever an engine or the console pinned."""
+    from leeroy_mind.life import config as life_config
+    life_config.pin(0, False)
+    yield
+    life_config.pin(0, False)
+
+
+@pytest.fixture(autouse=True)
 def _pictures_off():
     """The romance ladder skips "picture" unless a test attaches the photo sender."""
     from leeroy_mind.nightly.romance import set_pictures_available

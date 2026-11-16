@@ -99,8 +99,9 @@ class NightlySettings:
 def load_life(path: Path) -> int:
     """[life] wow_vs_life from the mind.toml at `path`: how present the WoW-vs-life theme is,
     0-10, and 0 turns it off. A missing file, section or key gives WOW_VS_LIFE; a value that is
-    not an integer 0-10 (a bool is not) raises ConfigError. P1b's loader skips the section
-    (config.EXTENSION_SECTIONS)."""
+    not an integer 0-10 (a bool is not) raises ConfigError here, so the night refuses it;
+    config.load_config reads such a value as its default with one log line instead, so a bad
+    [life] key never blocks the rest of mind.toml (config.LifeCfg)."""
     path = Path(path)
     if not path.exists():
         return WOW_VS_LIFE

@@ -68,3 +68,17 @@ def test_local_time_shifts_uk_five_hours_ahead_of_us():
     base = datetime(2026, 11, 9, 20, 0)
     assert local_time(base, "US") == base
     assert local_time(base, "UK") == datetime(2026, 11, 10, 1, 0)
+
+
+def test_her_day_above_zero_moves_presence_and_zero_brings_today_back():
+    """`[life] availability` above 0 reads her day plan (life.presence); 0 is today's clock."""
+    from leeroy_mind.life import config as life_config
+    p = make_persona(101, "Arkon", rhythm="swing shifts at the depot", region="US")
+    at = datetime(2026, 11, 9, 20, 0)  # Monday 20:00: online by the clock, at work by her day
+    today = presence_of(p, local=at, body_online=True, body_zone=2, rng_seed=1)
+    life_config.pin(6, False)
+    day = presence_of(p, local=at, body_online=True, body_zone=2, rng_seed=1)
+    life_config.pin(0, False)
+    assert today == Presence("online", True, 2)
+    assert day.state in ("idle", "dnd") and not day.playing and day.zone == 2
+    assert presence_of(p, local=at, body_online=True, body_zone=2, rng_seed=1) == today
