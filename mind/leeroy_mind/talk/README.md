@@ -299,9 +299,14 @@ full rule); no switch, no migration, no native rebuild.
   weighed with recent speech ignored, so the dials still apply; `no_speaker` holds when nobody
   present speaks at all). A rescue that finds no clean draft holds the message
   (`owed_held reason=no_clean_draft`) and tries again on a backoff (90 s, doubling to 15 min),
-  and at once when the live model is back. A held message is never given up for its age; only
-  `nobody_present`, `target_offline` (she logged out) and his goodbye after he logged out
-  (`goodbye`) end one.
+  and at once when the live model is back; a rescue the model itself failed (`llm_error`,
+  `expired`) takes no backoff, and every backoff resets on the next line the guild sends. A
+  held message is never given up for its age; what ends one: `nobody_present`,
+  `target_offline` (she logged out), his goodbye after he logged out (`goodbye`), a line in a
+  game channel once he logs out (`logout`: his chat frame is fresh at the next login; a whisper
+  is kept and answered then, its age in the prompt), and a Discord channel post 6 h on
+  (`too_old`; DMs and group DMs are kept whatever their age). A DM to a member her arc has
+  away holds as `away`.
 - **Held, then answered just after** (`owed_held reason=`): his raid's boss fight and wipe silence
   (`raid`, Discord answers too; `dead` for a /say nobody alive can answer yet), a Free GPU pause
   (`gpu_paused`), the live model away (`model_away`: the app refuses every line then), the

@@ -34,7 +34,12 @@ Three layers, cheapest first:
    is tried again on a backoff (RETRY_S, doubling to RETRY_MAX_S) and at once when the live
    model is back (model_ready). A held message is never given up for its age: only a message
    nobody with a persona can hear ends (`owed_given_up reason=nobody_present|target_offline`),
-   and a goodbye once he has logged out (`goodbye`).
+   a goodbye once he has logged out (`goodbye`), and a line in a game channel once he logs
+   out (`logout`: his chat frame is fresh at the next login; a whisper is kept and answered
+   then, its age shown in the prompt). A Discord channel post is rescued for CHANNEL_MAX_S,
+   then dropped (`too_old`, logged); his DMs and group DMs are kept whatever their age.
+   A rescue the model failed (INFRA_DROPS) takes no backoff, and every backoff resets on the
+   next line the guild sends.
 
 Deliberate silences are held, never dropped: the watchdog waits and answers just after them,
 logging `owed_held` once per reason: his raid's boss fight and wipe silence (RaidState.allows),
@@ -67,7 +72,12 @@ TICK_S = 5.0
 START_GRACE_S = 60.0  # after the mind starts: the bridge, his session and the model settle
 RETRY_S = 90.0  # between rescues of one message, doubling to RETRY_MAX_S while nothing comes
 RETRY_MAX_S = 900.0
-SCAN_S = 86400.0  # how far back his Discord posts are read for the watch
+# Discord channel posts are rescued this long (older ones, read back for a day, are dropped and
+# logged once); his DMs and group DMs whatever their age (review-327-r2 P3-N1)
+CHANNEL_MAX_S = 6 * 3600.0
+CHANNEL_SCAN_S = 86400.0
+# drop reasons of a rescue turn that are the model's failure, not a refused draft: no backoff
+INFRA_DROPS = frozenset({"llm_error", "expired", "gpu_paused", "model_away"})
 # an initiation that waits for the answers to him in flight waits this long at most
 HIS_TALK_WAIT_S = 120.0
 # whispers set off by the game that his talk never drops (review-327 P2-2)
@@ -166,7 +176,7 @@ async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
         pipe._mark_borrow(meta, reset=True)
     text = None
     if why == "expired" and rejected:
-        text, refused = pipe.owed_clean_draft(turn, meta, composed, rejected)
+        text = pipe.owed_late_draft(turn, meta, composed, rejected)
         if text:
             log.info("owed_late_draft_sent: guid=%d kind=%s", turn.speaker, turn.kind)
     if text is None:
@@ -226,6 +236,11 @@ class OwedWatch:
         self._started = app.clock.now()
         self._at = -float("inf")
         self._was_away = False  # the live model's latch last tick: back means retry at once
+        try:  # the newest line sent at start: a newer one resets every backoff
+            self._last_sent = app.store.conn.execute(
+                "SELECT max(id) FROM utterance WHERE dropped IS NULL").fetchone()[0] or 0
+        except Exception:
+            self._last_sent = 0
 
     # -- what he said --------------------------------------------------------------------------
 
@@ -259,6 +274,15 @@ class OwedWatch:
             for o in (*self._game.values(), *self._discord.values()):
                 o.retry_s, o.rescued_at = RETRY_S, -float("inf")
         self._was_away = away
+        try:
+            sent = self.app.store.conn.execute(
+                "SELECT max(id) FROM utterance WHERE dropped IS NULL").fetchone()[0] or 0
+            if sent > self._last_sent:  # the model answers: every held message's backoff resets
+                for o in (*self._game.values(), *self._discord.values()):
+                    o.retry_s = RETRY_S
+                self._last_sent = sent
+        except Exception:
+            log.exception("owed_tick_failed: step=sent")
         try:
             self._tick_game(now)
         except Exception:
@@ -320,10 +344,13 @@ class OwedWatch:
         return False
 
     def _unrewarded(self, o: Owed) -> None:
-        """A rescue ended with no clean draft: held, and the next one waits longer."""
+        """A rescue ended with nothing: held, and the next one waits longer unless the model
+        itself failed (INFRA_DROPS), which is retried on the plain gap (review-327-r2 P3-N2)."""
         if o.rescues and not o.held:
+            reason = self._reason(o)
             self._hold(o, None, "no_clean_draft")
-            o.retry_s = min(RETRY_MAX_S, o.retry_s * 2)
+            if reason.removeprefix("dropped:") not in INFRA_DROPS:
+                o.retry_s = min(RETRY_MAX_S, o.retry_s * 2)
 
     @staticmethod
     def _goodbye(text: str) -> bool:
@@ -353,8 +380,11 @@ class OwedWatch:
             if self._in_flight_game(o):
                 continue
             self._unrewarded(o)
-            if not eng.world.human_online and self._goodbye(o.rows[-1].text):
-                self._give_up(o, "goodbye")  # never answered at his relog (review-327 P3-4)
+            if not eng.world.human_online and (o.medium != "whisper"
+                                               or self._goodbye(o.rows[-1].text)):
+                # never answered at his relog (review-327 P3-4, r2 P3-N1): a goodbye, or a line
+                # in a channel his fresh chat frame won't show; a whisper waits for him
+                self._give_up(o, "goodbye" if self._goodbye(o.rows[-1].text) else "logout")
                 del self._game[key]
                 continue
             if now - o.rescued_at < o.retry_s:
@@ -433,11 +463,18 @@ class OwedWatch:
 
     def _reason(self, o: Owed) -> str:
         """Why the stretch has no answer, from its turns' rows: the newest drop reason
-        ("dropped:<reason>"), or "not_planned" when no answer was even tried."""
-        marks = ",".join("?" * len(o.ids))
-        row = self.app.store.conn.execute(
-            f"SELECT dropped FROM utterance WHERE trigger_line IN ({marks}) AND dropped IS NOT NULL "
-            "ORDER BY id DESC LIMIT 1", o.ids).fetchone()
+        ("dropped:<reason>"; a Discord stretch's by its place and the last rescue's time), or
+        "not_planned" when no answer was even tried."""
+        conn = self.app.store.conn
+        if o.medium == "discord":
+            row = conn.execute(
+                "SELECT dropped FROM utterance WHERE channel = ? AND dropped IS NOT NULL AND ts >= ? "
+                "ORDER BY id DESC LIMIT 1", (self._place(o), int(o.rescued_at) - 1)).fetchone()
+        else:
+            marks = ",".join("?" * len(o.ids))
+            row = conn.execute(
+                f"SELECT dropped FROM utterance WHERE trigger_line IN ({marks}) AND dropped IS NOT NULL "
+                "ORDER BY id DESC LIMIT 1", o.ids).fetchone()
         return f"dropped:{row[0]}" if row is not None else "not_planned"
 
     # -- Discord -------------------------------------------------------------------------------
@@ -450,8 +487,8 @@ class OwedWatch:
             return
         rows = app.store.conn.execute(
             "SELECT id, channel, thread, ts FROM discord_message WHERE origin = 'human' AND "
-            "author = ? AND deleted IS NULL AND ts >= ? ORDER BY id",
-            (hg, now - SCAN_S)).fetchall()
+            "author = ? AND deleted IS NULL AND (ts >= ? OR channel LIKE 'dm:%' OR "
+            "channel LIKE 'gdm:%') ORDER BY id", (hg, now - CHANNEL_SCAN_S)).fetchall()
         live: dict[str, Owed] = {}
         for mid, channel, thread, ts in rows:
             if mid in self._done:
@@ -470,6 +507,10 @@ class OwedWatch:
             covered = self._discord_answered(o)
             if covered:
                 self._close(key, o, covered)
+                continue
+            if not o.channel.startswith(("dm:", "gdm:")) and now - o.first > CHANNEL_MAX_S:
+                self._give_up(o, "too_old")  # a channel post, hours on (review-327-r2 P3-N1)
+                self._close(key, o, o.ids)
                 continue
             if now - o.last < GRACE_S["discord"]:
                 continue
@@ -545,6 +586,13 @@ class OwedWatch:
                                                     RaidPhase.WIPE_DEBRIEF):
             return "raid"
         store = self.app.store
+        if o.to:
+            from leeroy_mind.arc.live import away_now
+            try:
+                if o.to in away_now(store, now):
+                    return "away"  # her arc has her away: a DM waits (review-327-r2 P3-N4)
+            except Exception:
+                pass
         if o.channel.startswith("dm:") and o.to:
             deferred = store.get_meta(f"discord:dm:deferred:{o.to}")
             if deferred is not None and deferred.isdigit() and int(deferred) >= o.ids[0]:

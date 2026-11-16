@@ -1637,6 +1637,8 @@ class Pipeline:
         return Priority.SOCIAL
 
     async def _speak(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        if not meta.planned_at:  # a turn spoken without _queue (an opener to him, a DM opener)
+            meta.planned_at = self.clock.now()
         self._mark_borrow(meta)
         self._answer_queued(turn, meta)
         self._admit_timing(meta)
@@ -2636,6 +2638,30 @@ class Pipeline:
             return None, refused
         text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
         return (None, ["silent"]) if quiet(text) else (text, [])
+
+    def owed_late_draft(self, turn: Turn, meta: TurnMeta, c: Composed, raw: str) -> str | None:
+        """A draft that arrived after its deadline (owed.rescue_text): the hard screens
+        (owed_clean_draft) and then the kept-draft rule of _generate (review-327-r2 P3-N6): a
+        fatal tell, or one a retry may not keep (DROP_ON_RETRY), refuses it."""
+        text, _ = self.owed_clean_draft(turn, meta, c, raw)
+        if not text:
+            return None
+        p = c.persona
+        hg = self.human.guid
+        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        tells = find_tells(text, recent_own=self._own_lines(turn), speaker=p.character_name,
+                           answers=c.answers, others=c.others, samples=c.samples,
+                           support=c.support, people=list(self._protect(turn.channel)),
+                           window=c.window, held=c.held, tonight=meta.again_tonight,
+                           recent_moves=[(r.clause, r.main) for r in c.moves],
+                           summons_ok=summons_ok, keep_emoji=is_discord(turn.channel))
+        if self._invents_game_name(text):
+            tells.append(Tell("game name", False, True))
+        if any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
+            log.info("owed_late_draft_refused: guid=%d tells=%s", turn.speaker,
+                     ",".join(sorted({t.reason for t in tells if t.fatal or t.reason in DROP_ON_RETRY})))
+            return None
+        return text
 
     async def owed_fallback(self, turn: Turn, meta: TurnMeta, c: Composed, *,
                             spoken: bool = False) -> str | None:

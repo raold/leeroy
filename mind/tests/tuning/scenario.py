@@ -13,8 +13,8 @@ words, pronouns and household ("You are Sam, a 34-year-old woman from the UK (sh
 Re-recorded for every message of his answered (2026-11-15, talk/owed.py): his bare remarks
 always get an answer and his hello in the login quiet keeps one, so more turns are planned and
 the draws after them moved; no prompt's wording changed. The evening whisper after his loot is
-a fixed draw since then (Dunna, 104, whose draw the extra turns had consumed), so the
-whisper-start instruction stays covered."""
+a fixed draw since then (Dunna, 104, whose draw the extra turns had consumed), besides the
+natural one the planner may still make, so the whisper-start instruction stays covered."""
 import asyncio
 import json
 import random

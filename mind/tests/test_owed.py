@@ -131,9 +131,9 @@ def test_a_model_that_keeps_failing_holds_the_message_until_it_answers_again(sto
         assert any("owed_held" in m and "reason=no_clean_draft" in m for m in caplog.messages)
         assert not any("owed_given_up" in m for m in caplog.messages)
         rescues = [m for m in caplog.messages if "owed_rescue:" in m]
-        assert 1 <= len(rescues) <= 3  # a backoff, not a loop
+        assert 2 <= len(rescues) <= 5  # the plain gap (no backoff for the model's failure)
         broken[0] = False
-        await _tick(r, w, 2 * owed.RETRY_MAX_S)
+        await _tick(r, w, owed.RETRY_S + 60)  # a model failure takes no backoff (r2 P3-N2)
         said = [s for s in r.sent.says() if s.guid == 103]
         assert len(said) == 1 and "warsong" in said[0].text
     run(main())
@@ -343,13 +343,14 @@ def test_nothing_is_rescued_while_he_is_offline_or_the_gpu_is_paused(store, cloc
         assert r.sent.says() == []
         assert any("reason=gpu_paused" in m for m in caplog.messages)
         gate.paused = False
-        r.world.human_online = False
-        await _tick(r, w, 30)
+        r.world.human_online = False  # a whisper waits for him (a guild line is let go: logout)
+        w.note_line(_line(r, "you there?", channel="whisper", to_guid=102), "whisper")
+        await _tick(r, w, 60)
         assert r.sent.says() == []
         assert any("reason=human_offline" in m for m in caplog.messages)
         r.world.human_online = True
-        await _tick(r, w, 30)
-        assert [s.channel for s in r.sent.says()] == ["guild"]
+        await _tick(r, w, 120)
+        assert [s.channel for s in r.sent.says()] == ["whisper"]
     run(main())
 
 
@@ -636,3 +637,45 @@ def test_an_idle_whisper_he_spoke_after_is_dropped_while_his_answer_is_in_flight
         kmeta.planned_at = r.clock.now() - 30
         assert eng._blocked(kept, kmeta, r.clock.now(), first=True) is None
     r.close()
+
+
+def test_his_logout_gives_up_channel_lines_but_keeps_whispers(store, clock, tmp_path, caplog):
+    """review-327-r2 P3-N1: a guild line is given up at his logout (`logout`); his whisper is
+    kept and answered at his next login."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("sure {n}, sorry i missed this"))
+        w = _watch(r)
+        await _tick(r, w, owed.START_GRACE_S)
+        w.note_line(_line(r, "anyone want to run something?"), "guild")
+        w.note_line(_line(r, "you around later?", channel="whisper", to_guid=102), "whisper")
+        await r.engine.end_session()
+        r.world.human_online = False
+        await _tick(r, w, 120)
+        assert any("owed_given_up" in m and "reason=logout" in m for m in caplog.messages)
+        assert any("owed_held" in m and "reason=human_offline" in m for m in caplog.messages)
+        assert r.sent.says() == []
+        await _tick(r, w, 4 * 3600)  # hours later: still kept
+        r.world.human_online = True
+        await _tick(r, w, 120)
+        assert [(s.guid, s.channel) for s in r.sent.says()] == [(102, "whisper")]
+    run(main())
+
+
+def test_a_backoff_resets_on_the_next_sent_line(store, clock, tmp_path):
+    """review-327-r2 P3-N2: a held message's growing gap goes back to RETRY_S once the guild
+    sends any line again."""
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=lambda m, msgs: "(nothing)")
+        w = _watch(r)
+        await _tick(r, w, owed.START_GRACE_S)
+        await r.human("evening all, how is everyone?")
+        await _tick(r, w, 600)
+        o = next(iter(w._game.values()))
+        assert o.retry_s > 2 * owed.RETRY_S
+        before = o.rescues
+        r.store.log_utterance(r.clock.now(), 101, "guild", "open", "unrelated", [], None, None)
+        await _tick(r, w, owed.TICK_S + 1)  # the gap went back to RETRY_S: a rescue fires now
+        assert o.rescues == before + 1 and o.retry_s <= 2 * owed.RETRY_S
+    run(main())

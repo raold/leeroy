@@ -136,3 +136,41 @@ def test_the_discord_lease_is_kept_while_answers_to_him_are_in_flight(store, clo
         assert LEASE not in arbiter.holders
     rig.sync(go())
     rig.close()
+
+
+def test_a_dm_to_a_member_her_arc_has_away_holds_as_away(store, clock, tmp_path, caplog,
+                                                        monkeypatch):
+    """review-327-r2 P3-N4."""
+    import leeroy_mind.talk.owed as owed_mod
+    caplog.set_level(logging.INFO)
+    rig = rig_for(store, clock, tmp_path, script=numbered("hey {n}"))
+    talk = talk_for(rig)
+    w = _watch(rig, talk)
+    _tick(rig, w, owed.START_GRACE_S)
+    mid = post(rig, "dm:104", "free tonight?")
+    import leeroy_mind.arc.live as live
+    monkeypatch.setattr(live, "away_now", lambda store, now: frozenset({104}))
+    _tick(rig, w, 300)
+    assert answers(rig, "dm:104", mid) == []
+    assert any("owed_held" in m and "reason=away" in m for m in caplog.messages)
+    assert not any("reason=no_clean_draft" in m for m in caplog.messages)
+    rig.close()
+
+
+def test_an_old_channel_post_is_dropped_with_a_log_and_an_old_dm_is_kept(store, clock, tmp_path,
+                                                                        caplog):
+    """review-327-r2 P3-N1: a Discord channel post past 6 h is let go (`too_old`, logged); a
+    DM is kept whatever its age and answered."""
+    caplog.set_level(logging.INFO)
+    rig = rig_for(store, clock, tmp_path, script=numbered("sorry, just saw this {n}"))
+    talk = talk_for(rig)
+    w = _watch(rig, talk)
+    old = rig.clock.now() - 20 * 3600
+    from leeroy_mind.discord import store as dstore
+    ch = dstore.post(store, channel="general", author=1, origin="human", text="morning", now=old)
+    dm = dstore.post(store, channel="dm:102", author=1, origin="human", text="you up?", now=old)
+    _tick(rig, w, owed.START_GRACE_S + 200)
+    assert any("owed_given_up" in m and "reason=too_old" in m for m in caplog.messages)
+    assert answers(rig, "general", ch) == []
+    assert [m["author"] for m in answers(rig, "dm:102", dm)] == [102]
+    rig.close()
