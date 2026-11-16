@@ -1,0 +1,27 @@
+# A long silence, then he is back. The lab cannot wait hours, so his lines say it.
+
+[[script]]
+id = "silence-1"
+kind = "silence"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "sorry, been gone all day. you still around?", ask = "yesno" },
+  { text = "work was insane" },
+]
+
+[[script]]
+id = "silence-2"
+kind = "silence"
+channels = ["dm"]
+lines = [
+  { text = "hey stranger. been a few days huh" },
+  { text = "what did i miss", ask = "noun", nouns = ["nothing", "much", "raid", "guild", "drama", "boss", "kill", "loot", "naxx", "icc", "missed", "same", "usual"] },
+]
+
+[[script]]
+id = "silence-3"
+kind = "silence"
+channels = ["whisper", "dm"]
+lines = [
+  { text = "back. did you end up going to bed or are you still up", ask = "noun", nouns = ["up", "bed", "awake", "sleep", "slept", "still"] },
+]

@@ -1,0 +1,26 @@
+# Saying goodnight: short and warm, never a speech.
+
+[[script]]
+id = "goodbye-1"
+kind = "goodbye"
+channels = ["dm", "whisper"]
+lines = [
+  { text = "ok i gotta crash, early morning tomorrow" },
+  { text = "night" },
+]
+
+[[script]]
+id = "goodbye-2"
+kind = "goodbye"
+channels = ["party", "guild"]
+lines = [
+  { text = "thats it for me tonight guys, gn" },
+]
+
+[[script]]
+id = "goodbye-3"
+kind = "goodbye"
+channels = ["dm"]
+lines = [
+  { text = "this was fun. talk tomorrow?", ask = "yesno" },
+]

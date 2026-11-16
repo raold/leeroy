@@ -438,7 +438,8 @@ SWITCHES = (
     ('raidlead','briefs','Boss briefs','raidlead.enabled'),
     ('raidplay','respond','Mechanic responder','training.playbooks; Leeroy.Mechanics.Enable = 1'),
     ('drama','member_romance','Member romances',''), ('talk','texture','Typing texture',''),
-    ('bakeoff','capture','Bake-off capture (stores full prompts, 14 days)',''))
+    ('bakeoff','capture','Bake-off capture (stores full prompts, 14 days)',''),
+    ('lab','enabled','Conversation lab','learn.bandit and learn.apply for its arms to reach live talk'))
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:

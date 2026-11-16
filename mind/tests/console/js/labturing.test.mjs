@@ -53,3 +53,27 @@ test('the judge is charted and headlined as balanced accuracy, never raw accurac
     judge:{speakers:6,accuracy:0.83,windows:2,his:0,members:6,members_ai:0.83,balanced:null}}]}).families[0];
   assert.equal(one.verdict,'Blind judge: members called AI 83% of 6 times; balanced accuracy needs both sides.');
 });
+
+import {conversationView} from '../../../leeroy_mind/console/static/js/labmodel.mjs';
+
+test('the Conversation lab reads not set up from anything but an available panel',() => {
+  for (const bad of [null, undefined, 'x', [], {available:false}, {available:true}]) {
+    const view=conversationView(bad);
+    assert.equal(view.available,false); assert.deepEqual(view.runs,[]);
+  }
+});
+
+test('a lab night reads as a headline, kinds, flags and variants in words',() => {
+  const view=conversationView({available:true,tried:3,promoted:1,runs:[{night:'2026-11-16',status:'done',reason:null,
+    piece:'reply_human',pairs:12,spent:1500,rubric:1.42,graded:24,human:0.25,kinds:{flirt:1.5,raid:2,bad:'x'},
+    flags:{wordy:0.25,echo:0,silent:0.04},
+    variants:[{id:7,outcome:'won',delta:0.31,arm:'lab.reply_human.v7',arm_status:'active',diff:'a {+b+}'},
+      {id:8,outcome:'regressed',delta:0.5,arm:null,arm_status:null,diff:''},{id:9,outcome:'mystery',delta:null}]}]});
+  assert.equal(view.available,true); assert.equal(view.tried,3); assert.equal(view.promoted,1);
+  const r=view.runs[0];
+  assert.equal(r.headline,'2026-11-16 · reply_human · done · control 1.42 over 24 answers · judge called her human 25%');
+  assert.deepEqual(r.kinds,['flirt 1.50','raid 2.00']);
+  assert.deepEqual(r.flags,['wordy 25%','said nothing 4%']);
+  assert.deepEqual(r.variants,['Variant 7: promoted (+0.31) · arm lab.reply_human.v7 (active) · a {+b+}',
+    'Variant 8: a rule check got worse (+0.50)','Variant 9: mystery']);
+});

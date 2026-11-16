@@ -58,7 +58,7 @@ prompt, `--json` saves every result whole, `--reset` resets the sandbox first. F
 | `POST /say {"channel", "to", "text"[, "wait"]}` | his line; `channel` is `dm`, `whisper`, `guild`, `officer` or `party`; `to` the member for `dm` and `whisper`; waits up to `wait` (default 120, at most 600) seconds |
 | `POST /login {["wait"]}` / `POST /logout` | his presence in game, as the bridge's login and logout; `wait` collects the greetings |
 | `POST /group {"members": [...]}` | his group with those members (empty: no group; more than four: a raid) |
-| `POST /reset` | stop the mind, restore the copy from the snapshot taken at the start, start a new mind on it, him as at the start |
+| `POST /reset {["overlays"]}` | stop the mind, restore the copy from the snapshot taken at the start, start a new mind on it, him as at the start; `overlays` (piece name to text, `talk/pieces.py`) are written into the copy's `prompts/` as `lab_<piece>.txt` (the conversation lab's variants, refused unless each keeps its piece's placeholders and kept phrases) |
 | `POST /stop` | stop the sandbox |
 
 A DM goes through the control endpoint's `discord` op, the path the console's
@@ -99,6 +99,8 @@ The sandbox's `mind.toml` is the live one with these changes (`prepare.QUIET`):
   offline raids and the regear, and the Ops actions;
 - `[ollama] max_inflight` 2 (of Ollama's 4 slots, beside the live mind's own);
 - `[bakeoff] capture = true`, so every turn's prompt is kept in the sandbox's mind.db.
+- `[lab] enabled = false, overlays = true`: the lab's night never runs here, and a piece's
+  `prompts/lab_<piece>.txt` in the copy is read by name at render time (`lab/README.md`).
 
 At run time, on top of that:
 
@@ -119,6 +121,13 @@ At run time, on top of that:
 What stays as it is: the talk pipeline, guards, claims, awareness cards, the beat, typing
 (realism and texture), learned arms and lessons, signals, memories (closed threads are extracted
 on the live model, as in the live mind), the owner's dials and godmode edits.
+
+## The conversation lab's sandbox
+
+`--lab` (in place of `--out`) puts the sandbox in `<data dir>/scratch/lab`, the one place inside
+the data dir it may be (scratch is never backed up). The lab's night stage takes the snapshot
+there itself (with its own settings over QUIET) and starts `sandbox --lab --reuse --fast`; see
+`lab/README.md`.
 
 ## The GPU
 

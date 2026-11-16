@@ -84,8 +84,10 @@ def _sandbox_parser():
                     "Ollama's live model, nothing acting on its own; driven over HTTP as the owner.")
     p.add_argument("--data-dir", type=Path, default=None,
                    help=f"the live data dir to copy (read only; default {default_data_dir()})")
-    p.add_argument("--out", type=Path, required=True,
+    p.add_argument("--out", type=Path, default=None,
                    help="the sandbox's own directory (outside the data dir and any git checkout)")
+    p.add_argument("--lab", action="store_true",
+                   help="the conversation lab's sandbox: <data dir>/scratch/lab, in place of --out")
     p.add_argument("--port", type=int, default=0, help="the API's port (default: a free one)")
     p.add_argument("--online", action="store_true", help="start with him in game")
     p.add_argument("--seed", type=int, default=None, help="the mind's random seed")
@@ -103,9 +105,12 @@ def sandbox_main(argv=None, *, make_llm=None) -> int:
     from leeroy_mind.app import AlreadyRunning, acquire_instance_lock
     from leeroy_mind.config import default_data_dir
     args = _sandbox_parser().parse_args(argv)
+    if (args.out is None) != args.lab:
+        print("sandbox: --out DIR, or --lab", file=sys.stderr)
+        return 1
     try:
         live = prepare.check_live(args.data_dir or default_data_dir())
-        layout = prepare.check_out(args.out, live)
+        layout = prepare.lab_layout(live) if args.lab else prepare.check_out(args.out, live)
     except prepare.Refused as e:
         print(f"sandbox: {e}", file=sys.stderr)
         return 1

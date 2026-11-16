@@ -434,7 +434,8 @@ def discord_template(channel: str, words: int) -> str:
     if words <= 0 or not is_discord(channel):
         return ""
     if is_private(channel):
-        return DISCORD_DM
+        from leeroy_mind.talk.pieces import text
+        return text("discord_dm", DISCORD_DM)
     return DISCORD_QUICK if words <= QUICK_WORDS else DISCORD_FEW if words <= FEW_WORDS else DISCORD_LENGTH
 
 
@@ -481,12 +482,14 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     a voice room, Discord at 0 words) takes the speaker's usual line, length_rule(`typing`), or
     SHORT_LINE without one: never an error, so no turn is dropped for it. `long` does not apply
     to them: the pipeline passes the shape, two-lines or Discord length explicitly."""
+    from leeroy_mind.talk import pieces
     own = situation and kind in SITUATION_INSTRUCTIONS
     if own:
         tmpl = (OPEN_TO_HIM_SITUATION if to_him and kind is TurnKind.OPEN
-                else SITUATION_INSTRUCTIONS[kind])
+                else pieces.instruction(kind.value, True, SITUATION_INSTRUCTIONS[kind]))
     else:
-        tmpl = OPEN_TO_HIM if to_him and kind is TurnKind.OPEN else INSTRUCTIONS[kind]
+        tmpl = (OPEN_TO_HIM if to_him and kind is TurnKind.OPEN
+                else pieces.instruction(kind.value, False, INSTRUCTIONS[kind]))
     shaped = length_text.strip()
     on_discord = "" if shaped else discord_length(channel, discord_words)
     length = shaped or on_discord
