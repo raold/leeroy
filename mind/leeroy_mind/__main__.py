@@ -1489,6 +1489,12 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "life":
         from .life.cli import life_main
         return life_main(argv[1:])
+    if argv and argv[0] == "sandbox":
+        from .sandbox.cli import sandbox_main
+        return sandbox_main(argv[1:], make_llm=make_llm)
+    if argv and argv[0] == "sandbox-talk":
+        from .sandbox.cli import sandbox_talk_main
+        return sandbox_talk_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
@@ -1521,6 +1527,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("life", help="day, now, intents, shapes: the members' day plans, where they "
                                 "are now, what they want on a turn and their reply shapes "
                                 "(read-only)")
+    sub.add_parser("sandbox", help="a sandbox mind on a private copy of the data, driven over "
+                                   "HTTP as the owner (sandbox/README.md)")
+    sub.add_parser("sandbox-talk", help="a scripted conversation with a running sandbox mind")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)
