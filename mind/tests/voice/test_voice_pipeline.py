@@ -1173,6 +1173,13 @@ def caught(v, text: str) -> str:
 CASES = [REAL.lower(), REAL, REAL.upper(), "qUiLLoN"]
 
 
+def private_room(v, guid: int) -> None:
+    """She and he alone in a private room: her line is a whisper to him, where his inner
+    circle may use his real name (Pipeline._real_name_private; in a public room, never)."""
+    v.seat(guid, "private1")
+    v.him("private1")
+
+
 @pytest.mark.parametrize("written", CASES)
 def test_an_offered_voiced_line_spells_his_name(vrig, monkeypatch, written):
     """The stored line and the spoken one hold the name in the form redaction catches, however
@@ -1181,10 +1188,11 @@ def test_an_offered_voiced_line_spells_his_name(vrig, monkeypatch, written):
     inner_circle(v, 101)
     offered(monkeypatch)
     v.says(f"{written} you legend")
-    hall(v, 101)
+    private_room(v, 101)
     run(said(v, opener(addressee=HUMAN)))
     (s,) = v.speaks()
     (row,) = v.lines()
+    assert row["channel"] == "whisper"
     assert s.text == row["text"] == f"{REAL} you legend"
     assert REAL.casefold() not in caught(v, row["text"]).casefold()
 
@@ -1196,12 +1204,12 @@ def test_an_offered_line_is_guarded_the_same_voiced_or_typed(vrig, monkeypatch, 
     inner_circle(v, 103)
     offered(monkeypatch)
     v.says(f"{written} you legend")
-    hall(v, 101)
+    private_room(v, 101)
 
     async def go():
         await said(v, opener(addressee=HUMAN))
         v.engine._real_name_at = float("-inf")  # the guild-wide gap between two offers
-        await said(v, opener(103, addressee=HUMAN))
+        await said(v, opener(103, channel="whisper", to_guid=HUMAN, addressee=HUMAN))
     run(go())
     voiced, typed_line = v.speaks()[0].text, v.sent.says()[0].text
     for line in (voiced, typed_line):
@@ -1227,11 +1235,12 @@ def test_outside_the_circle_a_voiced_line_is_redacted_like_a_typed_one(vrig, wri
 
 
 def test_his_name_spelt_on_the_air_never_reaches_a_member_outside_the_circle(vrig, monkeypatch):
-    """What the guard is for: the next prompt of someone who must not know it."""
+    """What the guard is for: the next prompt of someone who must not know it. In a public
+    room his inner circle is not offered it either, and what she says is redacted at once."""
     v = vrig
     inner_circle(v, 101)
     offered(monkeypatch)
-    v.says(f"{REAL.lower()} you legend")
+    v.says(f"{REAL} you legend")
     hall(v, 101, 102)
 
     async def go():
@@ -1249,13 +1258,14 @@ def test_an_offered_line_that_falls_back_to_typed_is_spelt(vrig, monkeypatch):
     inner_circle(v, 101)
     offered(monkeypatch)
     v.says(f"{REAL.lower()} you legend")
-    hall(v, 101)
+    private_room(v, 101)
 
     def fail(msg):
         raise VoiceDown("gone")
     v.fake.send = fail
     run(said(v, opener(addressee=HUMAN)))
     (say,) = v.sent.says()
+    assert say.channel == "whisper"
     assert REAL in say.text and REAL.casefold() not in caught(v, say.text).casefold()
 
 

@@ -17,7 +17,11 @@ monotonic elapsed time, so a wall-clock adjustment cannot extend them. The exist
 typing dots refresh at least every ten seconds throughout the wait.
 
 An optional natural-clause burst has at most three lines and a ninety-second
-per-member cooldown. Combat and wipe silence/debrief suppress it. Rare corrections
+per-member cooldown. Combat and wipe silence/debrief suppress it. A server
+conversation's reply can be drawn as a burst (`TurnMeta.burst`): it splits at any
+clause break once it has four words, without the line-length rule or a second draw.
+On Discord only a turn's first message is a formal reply; its follow-ups and a
+correction are plain messages. Rare corrections
 use six reviewed adjacent-key nonwords, protect character/owner names and skip
 links and mentions. Authored and altered-state styler typos remain intact; a line
 already changed by styling gets no additional planned correction. A

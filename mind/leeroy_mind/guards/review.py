@@ -58,6 +58,9 @@ FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts
           'thanks': ({'ty','thx','thanks','tyty'}, '❤️'),
           'sympathy': ({'rip','oof','f','ouch'}, '🫡')}
 _EMOTICONS = re.compile(r':[pd](?!\w)|:[()]|<3(?!\w)|(?<!\w)xd(?!\w)', re.IGNORECASE)
+# A server reply that is only filler ("lol", "same", "rip") becomes a reaction this share of the
+# time; the rest are posted as the short messages a guild Discord is full of (2026-11-15).
+FILLER_REACT_SHARE = .4
 
 
 def echoes(text: str, parent: str) -> bool:
@@ -108,6 +111,15 @@ def _server_filler(text):
     if 0 < len(tokens) <= 4:
         return next((emoji for tokenset,emoji in FILLER.values() if set(tokens) <= tokenset), None)
     return None
+
+
+def _filler_posts(draft) -> bool:
+    """A server reply of only filler is posted as its short message, not turned into a reaction,
+    for 1 - FILLER_REACT_SHARE of drafts. The draw is fixed by the speaker, the message answered
+    and the words, never the clock, so the recheck before sending gives the same answer."""
+    key = f'{draft.guid}:{draft.parent_id}:{" ".join(draft.text.casefold().split())}'
+    draw = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') / 2**64
+    return draw >= FILLER_REACT_SHARE
 
 
 def _old_schema(exc):
@@ -413,6 +425,13 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     parent, thread = _context(history, draft, now)
     scores, refs, rewrite, drop = [], [], [], []
     server_reaction = _server_filler(draft.text) if draft.server else None
+    # A reply of only filler is posted as it is for a share of drafts (_filler_posts): a "lol"
+    # or "same" is no repeat, nothing new or off its parent, as its reaction would not be.
+    # An opener of filler still drops (filler_opener).
+    filler_post = bool(server_reaction and draft.parent_id is not None and _filler_posts(draft))
+    if filler_post:
+        server_reaction = None
+        scores.append(Score('filler_post', 1.0))
     if draft.server:
         # The all-channel shelf is only for her own repeats. It never enters
         # context, cross-member comparisons, relevance or a rewrite hint.
@@ -421,7 +440,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
             and (draft.line_id is None or h.id < draft.line_id)]
         day = [h for h in history if _same_room(h,draft) and h.origin == 'mind' and 0 <= now-h.ts <= 86400]
         for code, shelf in (('own_repeat_discord',own_discord), ('channel_repeat',day)):
-            matches = [] if server_reaction else _pairs(draft.text,draft.embedding,shelf,cfg,minimum=1)
+            matches = [] if server_reaction or filler_post else _pairs(draft.text,draft.embedding,shelf,cfg,minimum=1)
             if matches:
                 drop.append(code)
                 scores.append(Score(code,round(matches[0][1],6)))
@@ -433,7 +452,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
                 rewrite.append('off_anchor')
     own = [line for line in history if line.guid == draft.guid and line.origin == 'mind'
            and now-line.ts <= cfg.repeat_seconds][-OWN_LINES:]
-    repeats = _pairs(draft.text, draft.embedding, own, cfg)
+    repeats = [] if filler_post else _pairs(draft.text, draft.embedding, own, cfg)
     if repeats:
         previous, score = repeats[0]
         drop.append('own_repeat_same_channel' if _same_room(previous, draft) else 'own_repeat_cross_channel')
@@ -494,7 +513,7 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         filler = server_reaction is not None
         if filler and draft.parent_id is None:
             drop.append('filler_opener')
-    if parent and cfg.semantic_enabled and len(words(draft.text)) >= nonsequitur.MIN_REPLY_WORDS \
+    if parent and not filler_post and cfg.semantic_enabled and len(words(draft.text)) >= nonsequitur.MIN_REPLY_WORDS \
             and draft.embedding is not None and parent.embedding is not None:
         parent_score, thread_score = nonsequitur.relevance_scores(draft.embedding,
             checked_vector(parent.embedding), [checked_vector(line.embedding) for line in thread if line.embedding is not None])
@@ -503,7 +522,8 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
             rewrite.append('low_parent_and_thread_relevance')
     if parent and parent.guid != draft.guid and echoes(draft.text, parent.text):
         drop.append('echo_parent')
-    if not filler and _pairs(draft.text, draft.embedding, [line for line in thread if line.guid != draft.guid], cfg):
+    if not filler and not filler_post and _pairs(draft.text, draft.embedding,
+                                                 [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
     filler_code = 'server_filler' if draft.server else 'filler_after_question'
     codes = tuple(dict.fromkeys([*rewrite, *drop, *([filler_code] if filler else [])]))

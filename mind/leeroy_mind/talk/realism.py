@@ -19,6 +19,7 @@ BLOCK_BURSTS = frozenset({RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WI
 CORRECTION_RATE = .02
 BURST_RATE = .25
 BURST_GAP = 90.0
+BURST_MIN_WORDS = 4  # a drawn burst (TurnMeta.burst) splits a line this long or longer
 MAX_MEMBERS = 1024
 _CLAUSE = re.compile(r"(?<=[.!?;])\s+|,\s+(?=(?:but|then|and|so)\b)")
 _WORD = re.compile(r"(?<![\w@])([a-z]{4,})(?!\w)")
@@ -175,8 +176,11 @@ class Realism:
         out, burst = list(lines), False
         if (busy or not safe) and len(out) > 1:
             out = out[:1]  # keep the complete first styled line; no invented busy excuse
-        elif safe and not busy and not meta.single_line and len(out) == 1 and len(out[0].plain.split()) >= 18 \
-                and now-state.burst_at >= BURST_GAP and rng.random() < BURST_RATE:
+        elif safe and not busy and not meta.single_line and len(out) == 1 and now-state.burst_at >= BURST_GAP and (
+                # a server reply its conversation drew as a burst (server.engine): any line
+                # with a clause break to split at, without a second draw
+                getattr(meta, "burst", False) and len(out[0].plain.split()) >= BURST_MIN_WORDS
+                or len(out[0].plain.split()) >= 18 and rng.random() < BURST_RATE):
             out = split_line(out[0])
             burst = len(out) > 1
             if burst:
