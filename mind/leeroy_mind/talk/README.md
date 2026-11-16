@@ -402,6 +402,81 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
   `think_private = false` and restart the mind. Older code logs both keys as unknown and ignores
   them, so they need not be removed before rolling back.
 
+# Wants (`talk/intent.py`, 2026-11-16)
+
+What she wants from a turn (human-likeness spec section 2). There is one want enum and one block
+for every channel, never a second.
+
+- **One enum**: `intent.Intent`, the twelve codes of think-dm's beat in its order (vent, share,
+  ask, tease, flirt, reassure_seek, gossip, deflect, small_talk, react, boundary, logistics),
+  with the words "You want to:" reads (`WANT_WORDS`, the beat's words as merged in #329; `{who}`
+  is the addressee: his called name on his turns, the member's name on a member's, "everyone" on
+  an opener). `beat.WANTS` is built from it (keyed by code, `{human}`) and `beat.wants_for` lists
+  its codes, so the beat's ask, schema and lines are unchanged (`golden_beat.json`).
+- **One block**: `beat.render(read=, lands=, want=, who=, topic=, use=)`, a line for each field
+  given, in this order: "You read it as", "It lands", "You want to" (`want_words`: the words,
+  then the topic in brackets), "Bring in"; "" for none. `beat.lines` is `render` from the beat.
+- **Who chooses**: on his whisper and DM answers the beat (the model) chooses; everywhere else
+  code draws (`draw_intent`). Whenever his explicit whisper overlay is in the line's prompt
+  (`romance.whisper_tail`, `Composed.tail`), the beat is not offered the wants it rules out
+  (`beat.wants_for(..., tail=True)` drops `intent.TAIL_OFF`), whatever `[talk] intent` says
+  (review-332). From `[talk] intent` (core plan Task 8) the beat chooses among the
+  wants `allowed` permits, leaning to the drawn one. Until then nothing calls the draw on a live
+  turn.
+- **The draw** (`weights(ctx)`, `IntentContext`): a base row, then multipliers in order. Turn
+  kinds outside `INTENT_KINDS` (reply_human, continue, open, whisper, flirt) want nothing. Rows
+  (vent, share, ask, tease, flirt, reassure_seek, gossip, deflect, small_talk, react, boundary,
+  logistics); his line's row by `select.classify_human_line` (a goodbye reads as a greeting), a
+  flirt (`filters.flirty`) overriding it:
+
+  | Situation | weights |
+  |---|---|
+  | his question | .7 3 1 1.5 1 .3 .3 .7 .5 1 .3 .5 |
+  | his greeting | 1 2 .5 1 1 .3 .3 .2 3 2 0 .5 |
+  | his remark | 1 2 1 2 1 .3 .5 .5 1 3 .3 .5 |
+  | his flirt | .3 1 .5 2 4 1 0 1 .5 1 .5 0 |
+  | continue | 1 1.5 1 2 0 0 1 .5 1 3 .3 .5 |
+  | open | 1.5 3 1.5 0 0 0 1 0 1 0 0 0 |
+  | whisper, flirt (hers to him) | 1 2 1 1.5 4 1 0 0 1 0 0 0 |
+
+  Multipliers: flirt only from a woman, to him, with an attitude (fond 0.3, drawn 0.7, lust 1),
+  times her forward dial (`IntentContext.forward`, from `romance.forward`: 0-2, 1 when unset; at 0
+  she draws no flirt), never toward a member; reassure_seek only then too, x2 when anxious; neither
+  in a group DM. Under his explicit whisper overlay (`tail`) vent, gossip, deflect, boundary,
+  logistics and small_talk are 0 (PM log 2026-11-16: the overlay wins, for the draw and the beat;
+  the beat drops them too, below). An owed answer never just reacts (react 0); owed and his
+  question: deflect and boundary x0.3, vent x0.5. Vent x(1 + 2 max(0, stress)), x2 on a bad day or a
+  sick kid, x1.5 at work; share x(1 + max(0, valence)), x1.5 on a night out; tease x1.5 for teasing
+  humour or agreeableness 4 or less; boundary x(1 + max(0, stress)); deflect x1.5 when shy or
+  guarded; small_talk and react x2 when tired (energy -0.3 or less); unsociable (social -0.3 or
+  less): react and boundary x1.5, share and ask x0.6. Her feeling about him moves only her turns to
+  him (review-332), never how she treats the others: tease 0 when she is sore with him (toward_him
+  -0.3 or less), boundary x1.5 when toward_him is below 0, deflect x(1 + max(0, -toward_him)).
+  Logistics x3 when his line has a plan (`questions.is_plan`) or a real time of day ("8pm", "8:30
+  p.m.", "20:30", "server time"; never "lvl 80 pm me"); gossip 0 in a whisper or DM not to him; her
+  last want x0.5. Without a state every state multiplier is 1.
+- `allowed(ctx)`: the wants above 0, enum order. `draw_intent(ctx, rng)`: one weighted draw (one
+  `rng.random()`), None when every weight is 0; `rng` is the caller's seeded draw, never
+  `engine.rng`.
+- **Topics** (`topic_for`, code-built, never invented; "" for the rest and on an opener, whose
+  own topic is its subject): vent "about a rough day" (bad day), "about your kid being ill",
+  "about being stuck late at work", "about work" (at work or commuting), "about the kids" (kids),
+  else "about your day"; share "your night out" or "something from your day"; gossip "only from
+  what you remember"; logistics "raid times, gear or who's coming".
+- **Her day and feeling**: `block`, `event`, `kids` and `attention` come from her presence
+  (`life.presence.presence_at`, her day plan); `state` from her feeling right now (`life.state`,
+  plan Task 3, not built yet). An event or block compares by its code (`DayEvent` and `Block` are
+  StrEnums); a state's five floats are read by name (a missing one 0), so `intent.py` needs no
+  `life.state` at run time.
+- `python -m leeroy_mind life intents --data-dir "$D" --guid N [--kind reply_human] [--family
+  whisper] [--line TEXT] [--owed|--no-owed] [--tail] [--event CODE] [--at YYYY-MM-DDTHH:MM]
+  [--samples 500]`: each want's share in percent from her stored persona and her presence at
+  `--at` (this PC's clock, default now; Discord families read her Discord attention, the others
+  her game attention), `--event` in place of her plan's event; a header with the kind, family,
+  owed, block, attention and event, then a line per want (a `none` line when a draw has none).
+  Read-only on mind.db `mode=ro`, codes and numbers only, never persona text, names or the line.
+  It does not read her feeling (state none) or tuning dials beyond the stored persona's.
+
 # The prompt as a situation (human-likeness core, 2026-11-16)
 
 Spec section 9 (bake-off 1: the rule list primed compliance; the variant cut to the hard rules
