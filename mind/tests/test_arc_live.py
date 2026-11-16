@@ -475,7 +475,7 @@ def test_a_summons_outside_a_plan_he_shaped_is_asked_again_then_never_said(
         r.script("get over here", "come over already")
         r.whisper_from_him(102, "hi")
         r.run()
-        assert len(r.chat_calls()) == 3
+        assert len(r.chat_calls()) == 4  # and the fallback asked again (P3-C)
         assert SUMMONS_HINT.format(**FILL) in r.chat_calls()[1]["messages"][-1]["content"]
         assert not r.sent.says() and r.utterances()[-1]["dropped"] == "tells"
     finally:

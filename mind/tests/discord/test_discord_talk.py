@@ -432,7 +432,9 @@ def test_a_first_nothing_to_his_dm_is_asked_again(store, clock, tmp_path):
     assert len(rig.chat_calls()) == 2
     # a longer Discord message ([talk] discord_words, 90 by default) is not asked for a line
     assert "Answer Zan's message in a few sentences, in your own voice." in rig.prompts()[-1]
-    # An explicit mention also gets one retry; an ordinary drawn answer may stay quiet.
+    # An explicit mention also gets one retry. An ordinary drawn answer stayed quiet; since
+    # 2026-11-15 the first answer to his post is owed (talk/owed.py): its silence gets one plain
+    # ask and then the fallback line, while a second drawn member may still stay quiet.
     rig.script("(nothing)", "yes im here")
     calls = len(rig.chat_calls())
     named = post(rig, "general", "@Ebbo you there?")
@@ -444,8 +446,9 @@ def test_a_first_nothing_to_his_dm_is_asked_again(store, clock, tmp_path):
     answer(rig, talk, drawn)
     assert answers(rig, "general", drawn) == []
     # the first answer to his question to everyone is owed (LiveReview.owed): asked again, then
-    # the short fallback (2026-11-15); a second drawn member, one call, may stay quiet
-    assert len(rig.chat_calls()) <= calls + 4
+    # the short fallback, asked once more (2026-11-15); a second drawn member, one call,
+    # may stay quiet
+    assert len(rig.chat_calls()) <= calls + 5
     assert m["author"] == 104
     rig.close()
 
@@ -577,7 +580,9 @@ def test_a_member_s_own_post_and_a_deleted_one_bring_no_answer(store, clock, tmp
 
 def test_his_dm_is_answered_whatever_the_guild_s_pace(store, clock, tmp_path):
     """As an answer to his whisper: nobody else reads it, so the guild's minute never holds it
-    back. An answer in a channel the guild reads still keeps the pace."""
+    back. An answer in a channel the guild reads kept the pace; since 2026-11-15 the first answer
+    to his post is owed (talk/owed.py) and goes out whatever the pace (any further answer still
+    keeps it: test_engine's test_guild_wide_six_per_minute)."""
     rig = rig_for(store, clock, tmp_path, script=numbered("here {n}"))
     talk = talk_for(rig)
     for i in range(12):  # the guild has said its fill this minute
@@ -587,9 +592,9 @@ def test_his_dm_is_answered_whatever_the_guild_s_pace(store, clock, tmp_path):
     answer(rig, talk, dm, seconds=40)
     answer(rig, talk, named, seconds=40)
     assert [m["author"] for m in answers(rig, "dm:102", dm)] == [102]
-    assert answers(rig, "general", named) == []
+    assert [m["author"] for m in answers(rig, "general", named)] == [101]
     assert [r["dropped"] for r in store.conn.execute(
-        "SELECT dropped FROM utterance WHERE dropped IS NOT NULL")] == ["guards"]
+        "SELECT dropped FROM utterance WHERE dropped IS NOT NULL")] == []
     rig.close()
 
 
