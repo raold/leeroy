@@ -11,6 +11,7 @@ from pathlib import Path
 import tempfile
 import time
 
+from leeroy_mind.logs import log
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.photos import request_store
 from leeroy_mind.imagefiles import read_image
@@ -18,7 +19,7 @@ from leeroy_mind.imagefiles import read_image
 from . import files
 from .config import worker_command, worker_env
 from .ration import SEND_MIN_AGE
-from .render import start_worker
+from .render import scene_scale, start_worker
 from .scene import build_scene_prompt, ref_crop, scene_from, scene_renderable
 from .scene_choices import RECIPE
 from .slot import SetRefused, TRIES, render_slot
@@ -113,7 +114,9 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
     face = _face(app, p, snap.guid, snap.pick)
     if face is None or not face[0].is_file():
         return RenderOutcome("failed", "no_face_ref" if face is None else "missing")
-    identity = Identity(face[0], ref_crop(face[1]), cfg.identity_scale)
+    identity = Identity(face[0], ref_crop(face[1]), scene_scale(cfg.identity_scale, scene.framing))
+    log("selfies_snap_face", snap=snap.id, guid=snap.guid, request=snap.request,
+        scale=identity.scale)
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{snap.id}.request-", dir=out.parent))
     staged, small = stage / "photo.jpg", stage / "thumb.jpg"
