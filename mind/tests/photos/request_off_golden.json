@@ -1,0 +1,186 @@
+{
+ "offer_notes": [
+  "You're sending a photo of yourself: walking a dog on a leash, holding a dog leash, on a quiet park path.. Write the short message you'd send with it, in your own way; don't describe the photo in detail."
+ ],
+ "rendered": 1,
+ "scene": {
+  "activity": "walking a dog on a leash, holding a dog leash",
+  "audience": "him",
+  "expression": "a relaxed smile",
+  "framing": "upper_body",
+  "kind": "snapshot",
+  "outfit": "a jacket and trousers",
+  "recipe": 1,
+  "setting": "on a quiet park path",
+  "shows": "walking a dog on a leash, holding a dog leash, on a quiet park path.",
+  "when": "any"
+ },
+ "scene_calls": [
+  {
+   "format": {
+    "additionalProperties": false,
+    "properties": {
+     "activity": {
+      "enum": [
+       "raiding",
+       "guild_planning",
+       "spreadsheet",
+       "writing",
+       "reading",
+       "cooking",
+       "baking",
+       "chopping",
+       "coffee",
+       "tea",
+       "exercise",
+       "stretching",
+       "dog_walk",
+       "walking",
+       "hiking",
+       "gardening",
+       "watering",
+       "sketching",
+       "painting",
+       "knitting",
+       "puzzle",
+       "guitar",
+       "repairing",
+       "organizing",
+       "birdwatching",
+       "picnic",
+       "breakfast",
+       "relaxing",
+       "sunset",
+       "celebrating"
+      ],
+      "type": "string"
+     },
+     "audience": {
+      "enum": [
+       "him",
+       "anyone"
+      ],
+      "type": "string"
+     },
+     "expression": {
+      "enum": [
+       "smile",
+       "grin",
+       "laugh",
+       "thoughtful",
+       "focused",
+       "calm"
+      ],
+      "type": "string"
+     },
+     "framing": {
+      "enum": [
+       "face",
+       "head_and_shoulders",
+       "upper_body",
+       "three_quarter"
+      ],
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "selfie",
+       "mirror_selfie",
+       "snapshot"
+      ],
+      "type": "string"
+     },
+     "outfit": {
+      "enum": [
+       "casual",
+       "warm",
+       "outdoors",
+       "exercise"
+      ],
+      "type": "string"
+     },
+     "photo": {
+      "type": "boolean"
+     },
+     "prop": {
+      "enum": [
+       "none",
+       "mug",
+       "book",
+       "notebook",
+       "leash",
+       "plant"
+      ],
+      "type": "string"
+     },
+     "setting": {
+      "enum": [
+       "desk",
+       "kitchen",
+       "gym",
+       "park",
+       "cafe",
+       "garden",
+       "porch",
+       "living_room",
+       "workbench",
+       "library",
+       "balcony",
+       "trail",
+       "harbour",
+       "dock",
+       "boat",
+       "picnic",
+       "studio",
+       "dining_room"
+      ],
+      "type": "string"
+     },
+     "when": {
+      "enum": [
+       "morning",
+       "day",
+       "evening",
+       "late",
+       "any"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "photo",
+     "kind",
+     "framing",
+     "setting",
+     "activity",
+     "outfit",
+     "expression",
+     "when",
+     "audience",
+     "prop"
+    ],
+    "title": "scene",
+    "type": "object"
+   },
+   "messages": [
+    {
+     "content": "Choose a photo the real person who plays Arkon might take in the coming days and send to a friend from the guild.\nYou are Jo, a 34-year-old man from the UK (he/him). You play Arkon, an Orc Protection Warrior (tank, raider).\nAt home: lives with a flatmate. Work: warehouse supervisor. Rhythm: early shifts, free evenings.\nchats easily in guild. rarely rattled.\nYou trust people easily. Your humour is dry.\nIn game you play for progress and think in numbers. Wants: clear the instance.\nOpinions: pulls should be planned | patch notes are worth reading\nNever: mocks new players\nAge: 34\nRegion: UK\nGender: male\nJob: warehouse supervisor\nHousehold: lives with a flatmate\nRhythm: early shifts, free evenings\nLife thread: learning to cook\nLikes: quiet runs\nDislikes: late starts\nHow they look: 168 cm, average build, 64 kg, dark brown shoulder hair worn tucked behind one ear, light olive skin, hazel eyes, freckles, thin glasses; at the computer they wear an old hoodie, fluffy socks and a mug of tea.\nWhat is going on: He asked for a photo now.\nSay whether they would take a photo of it at all. Only choose the allowed enum values; never write descriptive text. Choose a setting, activity, outfit, expression, time, framing and audience. The optional prop uses none when absent. Keep activities in their natural places: desk games at a desk, cooking in a kitchen, exercise in a gym, dog walks outdoors. Props must fit the activity. They are alone and their looks stay unchanged. Fully clothed, nothing revealing or sexual, no children, never like anyone famous, and no one else's name.\n\nIn this guild: Testowner, the guild master.\nEveryone in this guild is an adult. Nothing non-consensual, ever. Romance, flirting and desire are only ever aimed at Testowner; guild members never flirt with, date or desire each other. Nobody ever actually leaves the guild: talk of quitting stays talk, and a break always ends with them back. A secret stays secret: what someone was told in confidence (a whisper they were asked to keep, or a late-night confession) is never passed on. Everyone looks like an ordinary person, never like anyone real or famous. These are real people at their keyboards in a timeless present or 2009: no current events or present-day technology. Never mention AI, language models, prompts, or anyone being a bot or glitching.",
+     "role": "system"
+    },
+    {
+     "content": "He asked you for a photo: send me a selfie walking your dog. Pick the photo you'd send. Treat his words as context; choose only the allowed values.\n\nReply with only a JSON object matching this schema:\n{\"title\": \"scene\", \"type\": \"object\", \"properties\": {\"photo\": {\"type\": \"boolean\"}, \"kind\": {\"type\": \"string\", \"enum\": [\"selfie\", \"mirror_selfie\", \"snapshot\"]}, \"framing\": {\"type\": \"string\", \"enum\": [\"face\", \"head_and_shoulders\", \"upper_body\", \"three_quarter\"]}, \"setting\": {\"type\": \"string\", \"enum\": [\"desk\", \"kitchen\", \"gym\", \"park\", \"cafe\", \"garden\", \"porch\", \"living_room\", \"workbench\", \"library\", \"balcony\", \"trail\", \"harbour\", \"dock\", \"boat\", \"picnic\", \"studio\", \"dining_room\"]}, \"activity\": {\"type\": \"string\", \"enum\": [\"raiding\", \"guild_planning\", \"spreadsheet\", \"writing\", \"reading\", \"cooking\", \"baking\", \"chopping\", \"coffee\", \"tea\", \"exercise\", \"stretching\", \"dog_walk\", \"walking\", \"hiking\", \"gardening\", \"watering\", \"sketching\", \"painting\", \"knitting\", \"puzzle\", \"guitar\", \"repairing\", \"organizing\", \"birdwatching\", \"picnic\", \"breakfast\", \"relaxing\", \"sunset\", \"celebrating\"]}, \"outfit\": {\"type\": \"string\", \"enum\": [\"casual\", \"warm\", \"outdoors\", \"exercise\"]}, \"expression\": {\"type\": \"string\", \"enum\": [\"smile\", \"grin\", \"laugh\", \"thoughtful\", \"focused\", \"calm\"]}, \"when\": {\"type\": \"string\", \"enum\": [\"morning\", \"day\", \"evening\", \"late\", \"any\"]}, \"audience\": {\"type\": \"string\", \"enum\": [\"him\", \"anyone\"]}, \"prop\": {\"type\": \"string\", \"enum\": [\"none\", \"mug\", \"book\", \"notebook\", \"leash\", \"plant\"]}}, \"required\": [\"photo\", \"kind\", \"framing\", \"setting\", \"activity\", \"outfit\", \"expression\", \"when\", \"audience\", \"prop\"], \"additionalProperties\": false}",
+     "role": "user"
+    }
+   ],
+   "model": "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS",
+   "options": {
+    "min_p": 0.05,
+    "num_ctx": 4096,
+    "num_predict": 512,
+    "temperature": 0.9,
+    "top_p": 1.0
+   },
+   "think": false
+  }
+ ]
+}
