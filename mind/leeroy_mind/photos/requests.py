@@ -1,6 +1,13 @@
-"""Explicit owner photo requests: prepare first, then use the ordinary Discord pipeline."""
+"""Explicit owner photo requests: prepare first, then use the ordinary Discord pipeline.
+
+With `[photos] scene_from_words` (`words`) her scene is read from his words
+(selfies.request_scene.choose_words_scene), and when her day plan has her asleep or driving
+(life.presence.NO_PHOTO, [life] availability on) the photo waits for her next block where she can
+take it: she says so now, and it is rendered and sent then with a line (its snap's not_before)."""
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import timedelta
+import re
 import time
 
 from leeroy_mind.discord import layout
@@ -11,6 +18,7 @@ from leeroy_mind.logs import log
 from leeroy_mind.selfies import files, snaps
 from leeroy_mind.selfies.ration import SEND_MIN_AGE
 from leeroy_mind.selfies.scene import scene_json
+from leeroy_mind.selfies.words_scene import is_words
 from leeroy_mind.selfies.store import current
 from leeroy_mind.selfies.style import LUST, style_of
 from leeroy_mind.talk.pipeline import COMPOSING, TurnMeta
@@ -19,10 +27,30 @@ from .offer import PhotoOffer
 from .request_words import request_target
 from . import request_store as records
 
+# Her answer while she cannot take the photo yet (the scene's `wait`, by her day plan's block):
+# a commute reads as her way to or from work, driving only when her job or rhythm says she
+# drives (the day plan does not know how she travels).
+_LATER = (" Tell him so briefly in your own words, and that you'll send one {when}. Don't claim "
+          "anything is attached.")
+CANT_NOW = {
+    'asleep': "You're in bed for the night, so you can't take a photo right now."
+              + _LATER.format(when="when you're up"),
+    'driving': "You're driving right now, so you can't take a photo."
+               + _LATER.format(when="when you get there"),
+    'to_work': "You're on your way to work right now, so you can't take a photo."
+               + _LATER.format(when="when you get there"),
+    'from_work': "You're on your way home from work right now, so you can't take a photo."
+                 + _LATER.format(when="when you get home"),
+}
+DRIVES_RE = re.compile(r"\b(?:drives?|driving|driver|by car|in the car|van|lorry|truck)\b", re.I)
+SENT_LATER = ("This is the photo he asked you for earlier, when you couldn't take one; you just "
+              "took it. Send it now with a short line in your own words.")
+
 
 class RequestPhotos:
-    def __init__(self, app, sender):
+    def __init__(self, app, sender, *, words=False):
         self.app, self.sender = app, sender
+        self.words = words is True  # [photos] scene_from_words, read at mind start
         self._tasks = {}
         self._reserved = set()
         self._retry_at = {}
@@ -202,27 +230,97 @@ class RequestPhotos:
         if request.fresh_snap is None:
             from leeroy_mind.llm.client import GpuPaused
             from leeroy_mind.selfies.request_scene import choose_scene
-            try:
-                scene = await choose_scene(app, request.guid, words, request.audience)
-            except GpuPaused:
-                # A pause (or one his post is ending) refuses the model, never the request.
-                scene = await choose_scene(app, request.guid, words, request.audience, model=False)
+            not_before = None
+            if self.words:
+                scene, not_before = await self._words_scene(request, words, p)
+            else:
+                try:
+                    scene = await choose_scene(app, request.guid, words, request.audience)
+                except GpuPaused:
+                    # A pause (or one his post is ending) refuses the model, never the request.
+                    scene = await choose_scene(app, request.guid, words, request.audience, model=False)
+                scene = scene_json(scene)
             if not self._source_open(request):
                 self._cancel(request)
                 return
-            photo = records.plan_fresh(app.store, request, scene=scene_json(scene), pick=pick.pick,
-                                      looks=snaps.looks_hash(p.appearance), now=app.clock.now())
+            photo = records.plan_fresh(app.store, request, scene=scene, pick=pick.pick,
+                                      looks=snaps.looks_hash(p.appearance), now=app.clock.now(),
+                                      not_before=not_before)
         else:
             photo = records.snap(app.store, request.fresh_snap)
         waited = self._offline_at is not None and app.clock.now() - self._offline_at >= 600
-        if photo is not None and photo.status == 'planned' and self.known_offline() and (immediate or waited):
+        # A photo her day plan puts off (not_before) is neither rendered nor replaced by a
+        # retained one now: she says she can't yet.
+        due = photo is None or photo.not_before <= app.clock.now()
+        if photo is not None and photo.status == 'planned' and due and self.known_offline() and (immediate or waited):
             await self._render(request, photo)
         request = records.get(app.store, request.message)
         fresh = records.snap(app.store, request.fresh_snap)
         if (not request.failure and not request.ended and request.fallback_snap is None
-                and fresh is not None and fresh.status == 'planned'):
+                and fresh is not None and fresh.status == 'planned' and due):
             from .request_stock import reserve_fallback
             reserve_fallback(app, request, now=app.clock.now())
+
+    def _wait(self, request, p):
+        """(her day plan's block, when she can next take a photo, the CANT_NOW code) while it has
+        her asleep or commuting ([life] availability on), else None; never past the request's
+        expiry."""
+        from leeroy_mind.discord.presence import local_time
+        from leeroy_mind.life.day import Block, block_at
+        from leeroy_mind.life.presence import NO_PHOTO, free_after
+        app = self.app
+        life = getattr(app.engine, 'life', None)
+        lp = life.presence(request.guid, medium='discord') if life is not None else None
+        if lp is None or lp.block not in NO_PHOTO:
+            return None
+        her = local_time(app.clock.local(), p.identity.region)
+        until = free_after(p, her)
+        if until is None:
+            return None
+        at = app.clock.now() + max(0.0, (until - her).total_seconds())
+        if lp.block is Block.ASLEEP:
+            code = 'asleep'
+        elif DRIVES_RE.search(f'{p.real_life.job} {p.real_life.rhythm}'):
+            code = 'driving'
+        else:
+            code = 'to_work' if block_at(p, until)[0] is Block.WORK else 'from_work'
+        return (lp.block, at, code) if at < request.expires - 600 else None
+
+    async def _words_scene(self, request, words, p):
+        """(her scene read from his words, the time it is taken or None for now)."""
+        from leeroy_mind.discord.presence import local_time
+        from leeroy_mind.life.presence import presence_at
+        from leeroy_mind.llm.client import GpuPaused
+        from leeroy_mind.selfies.request_scene import choose_scene, choose_words_scene
+        app = self.app
+        wait = self._wait(request, p)
+        at = wait[1] if wait else app.clock.now()
+        her = local_time(app.clock.local() + timedelta(seconds=at - app.clock.now()),
+                         p.identity.region)
+        life = getattr(app.engine, 'life', None)
+        block = (presence_at(p, her, medium='discord').block
+                 if life is not None and life.availability > 0 else None)
+        try:
+            scene = await choose_words_scene(app, request.guid, words, request.audience,
+                                             request=request.message, block=block, hour=her.hour)
+        except GpuPaused:
+            # A pause refuses the model, never the request: today's everyday enum choice.
+            scene = scene_json(await choose_scene(app, request.guid, words, request.audience,
+                                                  model=False))
+        if wait is None:
+            return scene, None
+        log('selfie_request_deferred', request=request.message, guid=request.guid,
+            block=wait[0].value, wait=wait[2], wait_s=round(at - app.clock.now()))
+        return {**scene, 'wait': wait[2]}, at
+
+    def _waiting(self, request):
+        """Her scene's `wait` code while her photo is put off by her day plan, else None."""
+        if not self.words or request is None:
+            return None
+        fresh = records.snap(self.app.store, request.fresh_snap)
+        if fresh is None or fresh.status != 'planned' or fresh.not_before <= self.app.clock.now():
+            return None
+        return fresh.scene.get('wait') if fresh.scene.get('wait') in CANT_NOW else None
 
     async def _render(self, request, photo):
         from leeroy_mind.llm.borrow import LiveReloadFailed
@@ -337,11 +435,21 @@ class RequestPhotos:
             delivered = request.fresh_message or request.fallback_message
             note = ("You sent the photo he asked for to him privately. Mention that in your own words; don't describe it here."
                     if delivered else "The photo he asked for will be private between you two. It isn't sent yet; don't describe it here.")
+            if not delivered and (wait := self._waiting(request)):
+                note = CANT_NOW[wait] + ' ' + note
         elif meta.photo is not None:
             note = ("This is the fresh photo he asked you for earlier; send it with a short follow-up in your own words."
                     if meta.photo_request_part == 'followup' else '')
+            if (self.words and meta.photo_request_part == 'followup'
+                    and meta.photo.snap.scene.get('wait') in CANT_NOW):
+                note = SENT_LATER
         else:
             note = "The fresh photo he asked for isn't ready yet. Answer him naturally; you can send it later. Don't claim it is attached."
+            fresh = records.snap(self.app.store, request.fresh_snap) if self.words else None
+            if (wait := self._waiting(request)):
+                note = CANT_NOW[wait]
+            elif fresh is not None and fresh.status == 'planned' and is_words(fresh.scene):
+                note += " The photo you'll take: " + fresh.scene['shows']
         return instruction + ('\n' + note if note else '')
 
     def offer(self, turn, meta, now):
@@ -389,6 +497,11 @@ class RequestPhotos:
                     raise records.RequestError('requested photo was already delivered')
                 release()
             shows = photo.scene['shows']
+            if is_words(photo.scene):  # she knows what she just did to take it
+                return PhotoOffer(photo, "You just took this photo of yourself for him: " + shows +
+                    " Write the short message you'd send with it, in your own way, as someone who"
+                    " just did that; don't describe the photo in detail.",
+                    sent, release, attachment, valid)
             return PhotoOffer(photo, "You're sending a photo of yourself: " + shows +
                 ". Write the short message you'd send with it, in your own way; don't describe the photo in detail.",
                 sent, release, attachment, valid)
@@ -488,6 +601,8 @@ class RequestPhotos:
                 await self._send(records.get(app.store, request.message), 'failure')
                 continue
             if photo is not None and photo.status == 'planned':
+                if photo.not_before > app.clock.now():
+                    continue  # her day plan: she can't take it yet
                 if (self._offline_at is None or app.clock.now()-self._offline_at < 600
                         or app.nightly.running is not None):
                     continue

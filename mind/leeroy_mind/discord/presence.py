@@ -3,7 +3,8 @@
 With `[life] availability` above 0 (life/config.py's pin) her state comes from her day plan
 (life.presence: asleep offline, at work, commuting, at the gym or out idle, or do not disturb at
 work on her dnd day, otherwise online), she is playing only in a gaming block, and her status line
-names her block; at 0 every answer is today's clock."""
+names her block (none while she is free or gaming: just online); at 0 every answer is today's
+clock, except that a member playing WoW takes none of the clock's evening phrases."""
 
 from __future__ import annotations
 
@@ -31,8 +32,9 @@ STATUS_PHRASES = {
     'gym': ('at the gym',),
     'out': ('out tonight',),
 }
-# her day's blocks with a status of their own ([life] availability above 0); free and gaming
-# take the clock's evening and late phrases
+# her day's blocks with a status of their own ([life] availability above 0). Free and gaming have
+# none: she is just online, never the clock's "at the gym" or "out for a walk" while her plan
+# has her home or at her PC (review-340 P2-1)
 LIFE_STATUS = {Block.WORK: 'work', Block.COMMUTE: 'commute', Block.HOME_DUTY: 'home',
                Block.GYM: 'gym', Block.OUT: 'out'}
 
@@ -108,10 +110,11 @@ def status_text(p: Persona, local: datetime, presence: Presence, *, rng_seed: in
     mins = local.hour * 60 + local.minute
     block = _clock_block(local, mins)
     if life_config.availability() > 0:
-        # her day's block; playing (or free) she is at her keyboard: the clock's evening or
-        # late phrases, never the clock's work or commute
+        # her day's block; playing or free she is at home or at her keyboard: no status
         day = Block.GAMING if presence.playing else presence_at(p, local, medium="discord").block
-        block = LIFE_STATUS.get(day) or (block if block in ('evening', 'late') else None)
+        block = LIFE_STATUS.get(day)
+    elif presence.playing and block == 'evening':
+        block = None  # playing WoW: never "out for a walk" or "at the gym" (review-340 P2-1)
     if block is None:
         return None
     # The share is stable for the day; the phrase changes with her current block.

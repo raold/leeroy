@@ -25,6 +25,8 @@ from .scene_choices import RECIPE
 from .slot import SetRefused, TRIES, render_slot
 from .snaps import looks_hash, mark_rendered
 from .store import current, face_pick
+from .words_scene import (BEHIND, WORDS_RECIPE, build_words_prompt, face_scale, is_words,
+                          names_in)
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
 
 SIZE = 1024
@@ -70,13 +72,20 @@ def _fresh(app, snap):
         return None, "looks_changed"
     if not files.history(app.data_dir, snap.guid, snap.pick).is_file():
         return None, "missing"
-    if type(snap.scene.get("recipe")) is not int or snap.scene["recipe"] != RECIPE:
+    recipe = snap.scene.get("recipe")
+    if type(recipe) is not int or recipe not in (RECIPE, WORDS_RECIPE):
         return None, "legacy_scene_schema"
     try:
         if scene_renderable(p, scene_from(snap.scene)):
             return None, "unrenderable"
+        if is_words(snap.scene):
+            build_words_prompt(p, snap.scene)
     except (KeyError, TypeError, ValueError):
         return None, "scene_invalid"
+    if is_words(snap.scene):  # a deferred render: the cast's names as they are now
+        from .request_scene import request_names
+        if names_in(snap.scene, request_names(app, snap.guid)):
+            return None, "scene_names"
     return p, None
 
 
@@ -110,14 +119,19 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
     if out.exists() or thumb.exists():
         return RenderOutcome("failed", "files_exist")
     scene = scene_from(snap.scene)
-    spec = build_scene_prompt(p, scene)
+    if is_words(snap.scene):  # read from his words ([photos] scene_from_words)
+        spec = build_words_prompt(p, snap.scene)
+    else:
+        spec = build_scene_prompt(p, scene)
     face = _face(app, p, snap.guid, snap.pick)
     if face is None or not face[0].is_file():
         return RenderOutcome("failed", "no_face_ref" if face is None else "missing")
     if getattr(cfg, "critic", False):
         return await _render_best(app, snap, room, p, scene, spec, face, out, thumb,
                                   worker_factory=worker_factory)
-    identity = Identity(face[0], ref_crop(face[1]), scene_scale(cfg.identity_scale, scene.framing))
+    # a scene read from his words from behind takes the face at REAR_SCALE of the scene's own
+    identity = Identity(face[0], ref_crop(face[1]),
+                        face_scale(snap.scene, scene_scale(cfg.identity_scale, scene.framing)))
     log("selfies_snap_face", snap=snap.id, guid=snap.guid, request=snap.request,
         scale=identity.scale)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -222,8 +236,15 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
     cfg = app.selfies.cfg
     data = app.data_dir
     crop = ref_crop(face[1])
-    control = (scene_scale(cfg.identity_scale, scene.framing), cfg.steps)
-    codes = critic.scene_codes(scene)
+    # a scene read from his words keeps its own scale (from behind: REAR_SCALE of it, and her
+    # face is not expected to show); the parameter bandit draws only for the composed scenes
+    words = is_words(snap.scene)
+    behind = words and snap.scene["words"].get("framing") == BEHIND
+    control = (face_scale(snap.scene, scene_scale(cfg.identity_scale, scene.framing)), cfg.steps)
+    if words:
+        codes = (snap.scene["words"].get("framing"), snap.scene["words"].get("wearing"), "none")
+    else:
+        codes = critic.scene_codes(scene)
     run = f"request:{snap.request}"
     worker = (worker_factory() if worker_factory is not None else
               SelfieWorker(worker_command(cfg, identity=True), env=worker_env(cfg)))
@@ -247,7 +268,8 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
         for _ in range(cfg.best_of):
             k = state["k"]
             state["k"] += 1
-            params = (Params(RETRY_SCALE, cfg.steps) if retry else
+            params = (Params(face_scale(snap.scene, RETRY_SCALE), cfg.steps) if retry else
+                      Params(*control) if words else
                       choose(app.store, cfg, data, shape="portrait", framing=scene.framing,
                              control=control))
             identity = Identity(face[0], crop, params.scale)
@@ -287,9 +309,10 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
                 app.store, run=run, purpose="request", guid=snap.guid, snap_id=snap.id, seed=seed,
                 file=critic.rel(data, cand), ref=critic.rel(data, face[0]), crop=crop,
                 critique=measured, framing=codes[0], outfit=codes[1], prop=codes[2],
-                scale=params.scale, steps=params.steps, arm=params.arm, now=app.clock.now())
+                scale=params.scale, steps=params.steps, arm=params.arm,
+                face_expected=not behind, now=app.clock.now())
             shots.append(bestof.Shot(row_id, cand, small, got, seed, tries))
-            if critic.verdict(measured, None).clean:
+            if critic.verdict(measured, None, face_expected=not behind).clean:
                 clean_on_detectors.add(row_id)
 
     def outcome(kind, code=None):

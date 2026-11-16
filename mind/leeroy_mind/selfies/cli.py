@@ -5,7 +5,11 @@ latest night's selfie stages. try is the acceptance run before enabling: it hold
 instance lock (a fresh arbiter here cannot see the running mind's live leases, so it could
 unload the live model in his session), copies the database, and renders one set for each chosen
 member into <data>/scratch/selfies-try/<guid>/. Nothing is written to the live data. Output
-carries counts, guids, timings and paths; never a prompt, persona text or a name.
+carries counts, guids, timings and paths; never a prompt, persona text or a name. try --ask
+"<text>" --guid N reads those words as his request (`[photos] scene_from_words`: the live model's
+structured scene, its screens and fallbacks) and renders that one photo with her face into
+scratch/selfies-try/ask/<guid>/ (photo.jpg, ref.jpg and scene.json, the scene as a request would
+store it); stdout carries the enum codes, the fallbacks and the NSFW score, never the words.
 
 vary --stance lust plans (the default, read-only) or queues (--go) a varied set (varied.py) for
 every cast member of the lust style. With the mind stopped --go holds its instance lock and
@@ -52,6 +56,7 @@ from .store import current
 from .worker import SelfieWorker, WorkerError, to_the_end
 
 DEFAULT_LIMIT = 2
+ASK_DIR = "ask"
 VARY_S = 30.0  # the running mind's answer to a vary: one transaction of queue rows
 
 
@@ -79,6 +84,9 @@ def _parser():
                      help="with --snaps: also one grid of up to 4 of them")
     sub.add_argument("--varied", action="store_true",
                      help="a varied set (four looks and poses) for lust-styled members")
+    sub.add_argument("--ask", metavar="TEXT",
+                     help="with --guid: one photo she would send for these words of his, read "
+                     "as [photos] scene_from_words reads them, into scratch/selfies-try/ask/")
     sub = subs.add_parser("restyle", help="plan or save varied photo choices (mind stopped)")
     sub.add_argument("--lust-only", action="store_true")
     sub.add_argument("--include-owner", action="store_true", help="also replace hand-set photo choices")
@@ -490,6 +498,107 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
         return int(not guids or rendered != len(guids) or (args.guild and not tiles))
 
 
+class _Direct:
+    """The live model asked straight through the client: the mind is stopped, so no queue."""
+
+    def __init__(self, llm):
+        self.llm = llm
+
+    async def submit(self, priority, job):
+        return await job(self.llm)
+
+
+async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
+    """One requested photo for `args.guid` from the words `args.ask`, as the running mind would
+    plan it now (her day plan's block only with [life] availability on), rendered at once with
+    her chosen photo's face into scratch/selfies-try/ask/<guid>/."""
+    from types import SimpleNamespace
+    from leeroy_mind.discord.presence import local_time
+    from leeroy_mind.life.presence import presence_at
+    from .ration import SEND_MIN_AGE
+    from .request_render import SIZE, THUMB_PX, seed_for
+    from .request_scene import RequestSceneError, choose_words_scene
+    from .scene import ref_crop, scene_from
+    from .render import scene_scale
+    from .slot import render_slot
+    from .store import face_pick
+    from .worker import Identity, RenderRequest
+    from .words_scene import build_words_prompt, face_scale, is_words
+    night = _default_night(clock)
+    guid = args.guid
+    async with _context(root, store, cfg, clock, night, make_llm=make_llm,
+                        live_locked=True) as ctx:
+        out_root = _child(_child(_child(root, "scratch"), TRY_DIR), ASK_DIR)
+        result = {"guid": guid, "rendered": 0, "flagged": 0, "nsfw": None, "scene": None,
+                  "path": str(out_root / str(guid))}
+        try:
+            p = ctx.base(guid)
+        except KeyError:
+            p = None
+        cur = current(store, guid)
+        with store.transaction():
+            face = None if cur is None else face_pick(store.conn, guid, cur.pick)
+        ref = None if face is None else files.history(root, guid, face[0])
+        why = ("no_persona" if p is None else "under_25" if p.identity.age < SEND_MIN_AGE
+               else "no_looks" if p.appearance is None else "no_photo" if cur is None
+               else "no_face_ref" if ref is None or not ref.is_file() else None)
+        if why is not None:
+            print(f"guid {guid}: {why}", file=sys.stderr)
+            _print({**result, "refused": why})
+            return 1
+        await ctx.arbiter.ensure_model(cfg.models.live)
+        app = SimpleNamespace(store=store, data_dir=root, personas=ctx.personas, clock=clock,
+                              engine=SimpleNamespace(human=ctx.ident), cfg=cfg,
+                              scheduler=_Direct(ctx.reasoner.llm))
+        her = local_time(clock.local(), p.identity.region)
+        block = (presence_at(p, her, medium="discord").block
+                 if getattr(getattr(cfg, "life", None), "availability", 0) > 0 else None)
+        try:
+            scene = await choose_words_scene(app, guid, args.ask, "him", request=0,
+                                             block=block, hour=her.hour)
+        except RequestSceneError as e:
+            print(f"guid {guid}: {e.code}", file=sys.stderr)
+            _print({**result, "refused": e.code})
+            return 1
+        words = scene.get("words", {})
+        result["scene"] = {"source": "words" if is_words(scene) else "enum",
+                           **{k: words.get(k) for k in ("framing", "wearing", "time", "lighting")},
+                           "fallbacks": words.get("fallbacks", []), "style": scene.get("style", "plain")}
+        spec = (build_words_prompt(p, scene) if is_words(scene)
+                else build_scene_prompt(p, scene_from(scene)))
+        folder = out_root / str(guid)
+        folder.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ref, folder / "ref.jpg")
+        (folder / "scene.json").write_bytes((json.dumps(scene, indent=1, sort_keys=True)
+                                             + "\n").encode("utf-8"))
+        identity = Identity(ref.absolute(), ref_crop(face[1] or p.photo.framing), face_scale(
+            scene, scene_scale(scfg.identity_scale, scene_from(scene).framing)))
+        worker = _Measured(SelfieWorker(worker_command(scfg, identity=True), env=worker_env(scfg)))
+
+        def request(attempt):
+            return RenderRequest(spec.phrases, spec.negative, seed_for(0, guid, attempt),
+                                 scfg.steps, scfg.guidance, SIZE, (folder / "photo.jpg").absolute(),
+                                 (folder / "photo.thumb.jpg").absolute(), THUMB_PX, scfg.nsfw_max,
+                                 identity=identity, shape="portrait")
+        try:
+            await ctx.arbiter.make_room()
+            await start_worker(worker.worker, ctx.arbiter.make_room)
+            got, _ = await render_slot(worker, request, rid=lambda attempt: f"ask:{attempt}",
+                                       make_room=ctx.arbiter.make_room)
+            result.update(rendered=1, nsfw=round(got.nsfw, 4))
+        except SetRefused:
+            result.update(refused="flagged", nsfw=worker.last_nsfw)
+        except WorkerError as e:
+            result.update(refused=e.reason, nsfw=worker.last_nsfw)
+        finally:
+            await to_the_end(worker.worker.stop())
+            await _room_after(ctx)
+        result.update(flagged=worker.flagged, seconds_per_image=round(
+            worker.seconds / worker.images, 2) if worker.images else None, peak_gib=worker.peak)
+        _print(result)
+        return int(not result["rendered"])
+
+
 def _call_running_mind(root, args: dict) -> dict:
     """The running mind's answer to one `selfie` op, through its control endpoint, located as the
     console locates it (this checkout's mind process family, control.json, the TCP table)."""
@@ -605,11 +714,15 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
         if args.varied and args.snaps:
             print("selfies try: --varied renders profile sets, not --snaps", file=sys.stderr)
             return 2
+        if args.ask is not None and (args.guid is None or args.snaps or args.varied):
+            print("selfies try: --ask goes with --guid, without --snaps or --varied",
+                  file=sys.stderr)
+            return 2
         cfg = load_config(root / "mind.toml")
         scfg = load_selfie_config(root / "mind.toml")
         with _exclusive(root, gpu=True):
             with _working_store(root, clock, live=False, label="selfies-try") as (store, _):
-                run = _try_snaps if args.snaps else _try
+                run = _try_ask if args.ask is not None else _try_snaps if args.snaps else _try
                 return asyncio.run(run(root, store, cfg, scfg, clock, args, make_llm))
     except AlreadyRunning as exc:
         if args.action == "restyle":

@@ -10,7 +10,8 @@ def valid_table(name, table, raw):
         return False
     simple = {'claims':{'enabled'},'signals':{'enabled'},'fingerprint':{'enabled'},
               'callbacks':{'enabled'},'looks':{'diversity'},'personas':{'auto_newcomers'},
-              'playstyle':{'enabled'},'photos':{'enabled','send'},'raidlead':{'enabled','briefs'},
+              'playstyle':{'enabled'},'photos':{'enabled','send','requests','scene_from_words'},
+              'raidlead':{'enabled','briefs'},
               'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'}}
     if name in simple:
         return not set(table)-simple[name] and all(type(v) is bool for v in table.values())

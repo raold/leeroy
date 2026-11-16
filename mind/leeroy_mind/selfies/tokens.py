@@ -73,6 +73,24 @@ WORD_TOKENS = {
     # the photo kinds and framings (prompt._KINDS, _FRAMINGS), measured 2026-11-15
     "by": 1, "candid": 1, "close": 1, "friend": 1, "headshot": 1, "mid": 1, "phone": 1,
     "professional": 1, "selfie": 1, "string": 1, "taken": 1, "thigh": 1, "upper": 1,
+    # a requested photo read from his words (words_scene.py): its fixed phrases and everyday
+    # place and moment words, measured 2026-11-16
+    "after": 1, "apron": 1, "away": 1, "backroom": 2, "bathroom": 1, "bedroom": 1, "before": 1,
+    "between": 1, "break": 1, "bus": 1, "busy": 1, "cab": 1, "calls": 1, "camera": 1, "canteen": 1,
+    "chef": 1, "clothes": 1, "corner": 1, "corridor": 1, "cotton": 1, "cubicle": 2, "cupboard": 1,
+    "daylight": 1, "desk": 1, "downstairs": 1, "during": 1, "early": 1, "empty": 1, "evening": 1,
+    "fast": 1, "flash": 1, "fluorescent": 1, "garage": 1, "harsh": 1, "hiding": 1, "home": 1,
+    "hospital": 1, "hurried": 2, "inside": 1, "jumper": 1, "just": 1, "kitchen": 1, "lake": 1,
+    "lamp": 1, "late": 1, "library": 1, "lift": 1, "lit": 1, "loading": 1, "lobby": 1, "loo": 1,
+    "lounge": 1, "lunch": 1, "medical": 1, "meeting": 1, "minute": 1, "morning": 1, "near": 1,
+    "neon": 1, "next": 1, "office": 1, "outside": 1, "parked": 1, "platform": 1, "polo": 1,
+    "printer": 1, "propped": 2, "pub": 1, "quick": 1, "quickly": 1, "quiet": 1, "reception": 1,
+    "restaurant": 1, "restroom": 1, "salon": 1, "scrubs": 1, "secret": 1, "shed": 1, "shift": 1,
+    "shop": 1, "slipped": 1, "smart": 1, "smiling": 1, "sneaked": 2, "sneaky": 1, "sofa": 1,
+    "staff": 1, "stairs": 1, "stairwell": 2, "stall": 1, "station": 1, "stockroom": 2, "store": 1,
+    "storeroom": 2, "supply": 1, "tee": 1, "timer": 1, "tired": 1, "toilet": 1, "toilets": 1,
+    "train": 1, "truck": 1, "tunic": 1, "under": 1, "upstairs": 1, "van": 1, "vest": 1, "vis": 1,
+    "ward": 1, "warehouse": 1, "washroom": 2, "whites": 1, "window": 1, "work": 1, "yard": 1,
 }
 
 

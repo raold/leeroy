@@ -384,6 +384,12 @@ _TOPIC = {
 # The explicit whisper may run longer than her usual one line: the instruction says it is
 # the exception to the standing rule (fix round 1, review minor 10).
 MORE_LINES = "in a line or two, more than your usual one line"
+# The same as a sentence of its own, for a situation template, which has no length to stretch:
+# without "more than your usual one line", since a situation prompt states no usual line
+# (review-340; core plan Task 8; Task 9's reply shapes take its place)
+MORE_LINES_TEXT = "In a line or two."
+# What a Discord length says of her game habit; a situation template leaves it out (review-340)
+USUAL_LINE = ", so more than your usual one line"
 
 # A Discord turn ([talk] discord_words, talk/discord_length.py; owner 2026-11-13, "Long and
 # chatty"): its template's game length goes (DISCORD_DROPS, each with its comma or space, so the
@@ -432,6 +438,24 @@ def discord_template(channel: str, words: int) -> str:
     return DISCORD_QUICK if words <= QUICK_WORDS else DISCORD_FEW if words <= FEW_WORDS else DISCORD_LENGTH
 
 
+def situation_length(kind: TurnKind, *, channel: str, words: int, typing: Typing | None,
+                     two_lines: bool = False) -> str:
+    """The `length_text` a situation-mode turn passes render_instruction (review of #333,
+    requirement 1: every situation template gets its length from the caller), for a
+    SITUATION_INSTRUCTIONS kind: an explicit whisper's two lines (MORE_LINES_TEXT); else ""
+    where a Discord length applies (discord_length, which render_instruction gives a situation
+    template without its "more than your usual one line": USUAL_LINE); else her usual line
+    (length_rule; SHORT_LINE without her typing), on a game channel, in a voice room or on
+    Discord at 0 words. "" for every other kind: it keeps its INSTRUCTIONS template and length."""
+    if kind not in SITUATION_INSTRUCTIONS:
+        return ""
+    if two_lines:
+        return MORE_LINES_TEXT
+    if discord_length(channel, words):
+        return ""
+    return length_rule(typing) if typing is not None else SHORT_LINE
+
+
 def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
                        extra: str = "", forms: tuple[str, str, str] = THEY_FORMS,
                        lead: str = "", after: str = "", tail: str = "", long: bool = False,
@@ -468,6 +492,8 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     length = shaped or on_discord
     if own and not length:  # her usual line, in the words comms_rules has for it
         length = length_rule(typing) if typing is not None else SHORT_LINE
+    if own:  # no usual line stated in a situation prompt to be more than (review-340)
+        length = length.replace(USUAL_LINE, "")
     if length:
         for old, new in DISCORD_DROPS:
             tmpl = tmpl.replace(old, new)
@@ -479,7 +505,9 @@ def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
     from leeroy_mind.prompts import note_template
     note_template(("talk.situation_instruction." if own else "talk.instruction.")+kind.value,tmpl)
     if on_discord:
-        note_template("talk.discord_length", discord_template(channel, discord_words))
+        noted = discord_template(channel, discord_words)
+        note_template(*(("talk.situation_discord_length", noted.replace(USUAL_LINE, "")) if own
+                        else ("talk.discord_length", noted)))
     if "{addressee}" in tmpl and not addressee:
         raise ValueError(f"a {kind} turn needs an addressee")
     extra = " ".join(extra.split())

@@ -132,6 +132,10 @@ the callers keep today's behaviour):
 - `away_words(lp, medium)`: asleep, at work, driving, with the kids / busy at home, at the gym,
   out, away from the keyboard (game) / away from your phone (Discord), in the middle of
   something in game.
+- `free_after(p, her_local, busy=NO_PHOTO)`: her local time at the start of the first minute
+  after `her_local` in a block outside `busy` (today's plan, then the next two days'), or None
+  when she is not in one of them now. `NO_PHOTO` is asleep and commute: a requested photo
+  (`[photos] scene_from_words`, photos/README.md) waits for that time.
 
 ## Settings (`[life]`, `life/config.py`, `life/service.py`)
 
@@ -343,7 +347,8 @@ today."); her feeling about him ("happy with him right now", "a bit annoyed with
 only when `to_him`, never on another member's turn.
 `lands(state, tone, agreeableness=, forms=)` is how his line lands on her now ("it stings", "it
 annoys you", "nice, but you're still a bit sore with him", "it makes you smile", "one more thing
-on a busy day", "you're too tired to say much", "you're not really in the mood to chat", or "").
+on a busy day", "it barely registers", "you're not feeling it right now", or ""): a feeling, never
+how much she says (review-340: the reply's length is the shape's).
 
 **Logs**: `life_state_tick impulses=<n> members=<n>`, at most once a minute when something moved;
 `life_state_row_skipped` and `life_state_failed` as above. Ids, counts and codes only: no text,
