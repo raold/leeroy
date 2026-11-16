@@ -2,14 +2,17 @@
 
 A variant wins when its rubric mean beats the control's by THRESHOLD or more over the answers
 both arms had graded (at least MIN_GRADED), its piece was in her prompt on at least one of them,
-and no rule check regressed: for every rule code its flagged answers are no more than the
-control's (silent and unanswered included). The best winner becomes an active arm of the learn
+and no rule check regressed: for no rule code does it have REGRESS_MIN or more, and at least
+REGRESS_SHARE of the paired answers, more flagged answers than the control (silent and
+unanswered included; one more wordy answer in 30 is the unseeded model's noise, not a
+regression). The best winner becomes an active arm of the learn
 bandit's family for its piece (learn.arms "prompt.<piece>"), sampled in live talk like any arm and
 promoted there only through the weekly cycle's own gate (learn/cycle.py: P(beats control) > 0.9
 on 30+ rewarded uses, no guard regression, no veto). Every other variant is retired with its
 outcome code. Every variant keeps its scoresheet (numbers only). A global learning freeze or a
 frozen family promotes nothing (outcome `frozen`)."""
 import json
+import math
 from statistics import mean
 
 from leeroy_mind.learn import arms
@@ -19,6 +22,7 @@ from . import rules, store
 
 THRESHOLD = 0.15
 MIN_GRADED = 8
+REGRESS_MIN, REGRESS_SHARE = 2, 0.10
 
 
 def compare(control: dict, variant: dict) -> dict:
@@ -30,7 +34,8 @@ def compare(control: dict, variant: dict) -> dict:
     c_flags = rules.tally([control[k]["rules"] for k in keys])
     v_flags = rules.tally([variant[k]["rules"] for k in keys])
     sheet["flags"] = {"control": c_flags, "variant": v_flags}
-    sheet["regressed"] = [c for c in rules.CODES if v_flags[c] > c_flags[c]]
+    margin = max(REGRESS_MIN, math.ceil(REGRESS_SHARE * len(keys)))
+    sheet["regressed"] = [c for c in rules.CODES if v_flags[c] - c_flags[c] >= margin]
     if graded:
         c_mean = mean(control[k]["rubric"] for k in graded)
         v_mean = mean(variant[k]["rubric"] for k in graded)

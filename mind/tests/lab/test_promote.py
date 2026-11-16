@@ -33,8 +33,14 @@ def test_a_variant_wins_by_the_threshold_with_no_regression():
 
 def test_a_rule_regression_or_no_application_or_too_few_answers_never_wins():
     control = rows([1] * 10)
-    worse = promote.compare(control, rows([3] * 10, flags={0: {"wordy": 1}}))
+    worse = promote.compare(control, rows([3] * 10, flags={0: {"wordy": 1}, 1: {"wordy": 1}}))
     assert worse["outcome"] == "regressed" and worse["regressed"] == ["wordy"]
+    # one more flagged answer is noise; with 30 answers the margin is 3
+    assert promote.compare(control, rows([3] * 10, flags={0: {"wordy": 1}}))["outcome"] == "won"
+    many = {i: {"echo": 1} for i in range(2)}
+    assert promote.compare(rows([1] * 30), rows([3] * 30, flags=many))["outcome"] == "won"
+    many[2] = {"echo": 1}
+    assert promote.compare(rows([1] * 30), rows([3] * 30, flags=many))["regressed"] == ["echo"]
     assert promote.compare(control, rows([3] * 10, applied=0))["outcome"] == "untested"
     assert promote.compare(rows([1] * 6), rows([3] * 6))["outcome"] == "too_few"
     # a flag the control has as often is no regression

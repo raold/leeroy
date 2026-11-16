@@ -24,9 +24,11 @@ def test_the_rubric_schema_and_parse():
                        {"reply": 1, "score": 3, "code": "passes"}]}
     check_schema(schema, good)
     assert grade.rubric_parse(good, 2) == [(3, "passes"), (0, "empty")]
+    # numbered wrong but one grade per reply: read in order
+    assert grade.rubric_parse({"grades": [{"reply": 1, "score": 3, "code": "passes"},
+                                          {"reply": 1, "score": 2, "code": "in_voice"}]}, 2) == [
+        (3, "passes"), (2, "in_voice")]
     for bad in ({"grades": [{"reply": 1, "score": 3, "code": "passes"}]},
-                {"grades": [{"reply": 1, "score": 3, "code": "passes"},
-                            {"reply": 1, "score": 2, "code": "in_voice"}]},
                 {"grades": [{"reply": 1, "score": 4, "code": "passes"},
                             {"reply": 2, "score": 2, "code": "in_voice"}]},
                 {"grades": [{"reply": 1, "score": 2, "code": "great"},

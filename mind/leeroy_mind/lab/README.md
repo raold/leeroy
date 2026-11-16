@@ -73,8 +73,9 @@ rest. `finish` always runs; arms the budget cut short are settled `budget`.
 
 **Promotion** (`lab/promote.py`): a variant wins when its rubric mean beats the control's by 0.15
 or more over the answers both arms had graded (8 or more), its piece was in her prompt at least
-once, and no rule check regressed (for every code its flagged answers are no more than the
-control's). The best winner becomes an **active arm** of the learn bandit's family for its piece,
+once, and no rule check regressed (no code has 2 or more, and 10% or more of the paired answers,
+more flagged answers than the control's: one more wordy answer in 30 is the unseeded model's
+noise). The best winner becomes an **active arm** of the learn bandit's family for its piece,
 `prompt.<piece>` (id `lab.<piece>.v<variant>`; its origin column says `coach` because migration
 0034's CHECK allows only builtin and coach, and the id and `prompt_variant.arm_id` mark it the
 lab's). Every other variant is retired with its outcome: `beaten` (beat the control, not the

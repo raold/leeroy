@@ -60,16 +60,20 @@ def rubric_parse(reply: dict, n: int) -> list[tuple[int, str]] | None:
     if not isinstance(items, list):
         return None
     out: dict[int, tuple[int, str]] = {}
+    ordered = []
     for item in items:
         if not isinstance(item, dict):
             return None
         i, score, code = item.get("reply"), item.get("score"), item.get("code")
-        if type(i) is not int or not 1 <= i <= n or i in out or score not in SCALE or code not in CODES:
+        if type(score) is not int or score not in SCALE or code not in CODES:
             return None
-        out[i] = (score, code)
-    if set(out) != set(range(1, n + 1)):
-        return None
-    return [out[i] for i in range(1, n + 1)]
+        ordered.append((score, code))
+        if type(i) is int and 1 <= i <= n and i not in out:
+            out[i] = (score, code)
+    if set(out) == set(range(1, n + 1)):
+        return [out[i] for i in range(1, n + 1)]
+    # numbered wrong (a reply named twice, one left out) but one grade per reply: in order
+    return ordered if len(ordered) == n else None
 
 
 # -- the blind judge ----------------------------------------------------------------------------

@@ -43,6 +43,7 @@ def _parser():
     run.add_argument("--minutes", type=int)
     run.add_argument("--scripts", help="comma-separated script ids (default: the whole battery)")
     run.add_argument("--members", help="comma-separated member guids (default: the sample)")
+    run.add_argument("--json", action="store_true")
     run.add_argument("--data-dir", default=argparse.SUPPRESS)
     return p
 
