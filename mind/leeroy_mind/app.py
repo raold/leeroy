@@ -510,6 +510,8 @@ class MindApp:
         self.drama = attach_drama(self)  # [drama] member_romance: off adds no stage
         from .turing.night import attach as attach_turing
         attach_turing(self.night_runner, self.data_dir)  # [turing]: off adds no stage
+        from .bakeoff.capture import attach as attach_bakeoff
+        attach_bakeoff(self)  # [bakeoff] capture: off captures nothing, still prunes old rows
 
     # -- extension points --------------------------------------------------------------------
 

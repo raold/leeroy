@@ -467,6 +467,11 @@ class TurnMeta:
     # the beat's lines for this answer (talk/beat.py): None not asked yet, "" skipped; never
     # logged or stored
     beat: str | None = field(default=None, repr=False)
+    # [bakeoff] capture: the model calls this turn made since its last recorded line (the sent
+    # words pick theirs), and the row the generation's first line wrote (bakeoff/capture.py);
+    # empty and None while capture is off
+    bakeoff_requests: list = field(default_factory=list, repr=False)
+    bakeoff_row: int | None = None
 
 
 class _ScopeChanged(SchedulerError):
@@ -2530,8 +2535,12 @@ class Pipeline:
                 if meta is not None and getattr(self, "learn_enabled", False):
                     from leeroy_mind.learn.recipe import called_model
                     called_model(meta, model, options, beat=bool(meta.beat))
-                return await llm.chat(model, messages, options=options,
-                                      think=preset.think, timeout=preset.timeout)
+                result = await llm.chat(model, messages, options=options,
+                                        think=preset.think, timeout=preset.timeout)
+                if meta is not None and getattr(self, "bakeoff_capture", False):
+                    self._bakeoff_keep(turn, meta, model, messages, options, preset.think,
+                                       result, words)
+                return result
             except asyncio.CancelledError:
                 outcome = "cancelled"
                 raise
@@ -2578,6 +2587,21 @@ class Pipeline:
                          turn.kind, len(text.split()), len(cut.split()))
             text = cut
         return text
+
+    @staticmethod
+    def _bakeoff_keep(turn: Turn, meta: TurnMeta, model, messages, options, think, result,
+                      words) -> None:
+        """[bakeoff] capture: keep what this call asked and answered on the turn, for _record to
+        store once its line is sent. Never raises: capture must not cost the turn anything."""
+        try:
+            from leeroy_mind.bakeoff.capture import keep, request
+            keep(meta, request(model, messages, options, think, result.text,
+                               max_lines=turn.max_lines, words=words or 0,
+                               two_lines=meta.two_lines,
+                               done_reason=getattr(result.diagnostics, "done_reason", None),
+                               beat=getattr(meta, "beat", None)))
+        except Exception as e:
+            log.warning("bakeoff_capture_failed: guid=%d code=%s", turn.speaker, type(e).__name__)
 
     async def _generate(self, turn: Turn, meta: TurnMeta, c: Composed, *,
                         spoken: bool = False, max_attempts: int = 2) -> tuple[str, str | None]:
@@ -3276,6 +3300,7 @@ class Pipeline:
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
                 if discord_id is not None:
                     self.store.set_meta(f'discord:line:{discord_id}',str(line_id))
+                self._bakeoff_record(turn, meta, line_id, discord_id, now, text)
                 if review:
                     self.live_review.record(turn, meta, meta.words or text, line_id)
                 if learn:
@@ -3301,6 +3326,7 @@ class Pipeline:
                 line_id = self.store.insert_chat_line(chat, session_id=sid, origin="mind", audience=audience)
                 if discord_id is not None:
                     self.store.set_meta(f'discord:line:{discord_id}',str(line_id))
+                self._bakeoff_record(turn, meta, line_id, discord_id, now, text)
         if meta.photo is not None and discord_id is not None and not meta.said:
             with self.store.transaction():
                 meta.photo.on_sent(line_id, discord_id)
@@ -3315,6 +3341,16 @@ class Pipeline:
         else:
             after_commit.append(finished)
         return line_id
+
+    def _bakeoff_record(self, turn: Turn, meta: TurnMeta, line_id: int,
+                        discord_id: int | None, now: float, text: str) -> None:
+        """[bakeoff] capture, inside the line's transaction: a savepoint of its own that never
+        raises (bakeoff/capture.py on_record)."""
+        if not meta.bakeoff_requests and meta.bakeoff_row is None:
+            return
+        from leeroy_mind.bakeoff.capture import on_record
+        on_record(self, turn, meta, line_id=line_id, discord_id=discord_id, now=now,
+                  words=meta.words or text)
 
     def _after_record(self, turn, meta, p, text, memory_ids, *, line_id, chat, now,
                       discord, heard, sid, zone, map_id, ack, discord_id):
