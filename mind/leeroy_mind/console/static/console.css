@@ -778,6 +778,17 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .lab-weight-fields label { display:grid; gap:5px; }
 .lab-weight-fields input { width:100%; min-width:0; }
 #lab-report { white-space:pre-wrap; overflow-wrap:anywhere; }
+/* The Turing panel: a trend per channel family (labmodel.CHART). */
+#lab-turing-chart { display:none; }
+.turing-family { margin:12px 0; border-top:1px solid var(--line); padding-top:10px; }
+.turing-family h4 { margin:0 0 4px; }
+.turing-chart { display:block; width:100%; max-width:360px; height:64px; margin:6px 0; }
+.turing-chart polyline { fill:none; stroke-width:2; }
+.turing-chance { stroke:var(--line); stroke-width:1; stroke-dasharray:4 4; }
+.turing-auc { stroke:var(--accent); fill:var(--accent); }
+.turing-judge { stroke:var(--ink-3); fill:var(--ink-3); stroke-dasharray:2 3; }
+.turing-chart polyline.turing-judge, .turing-chart polyline.turing-auc { fill:none; }
+.turing-dot { stroke:none; stroke-dasharray:none; }
 #lab-confirm { max-width:min(560px,calc(100vw - 32px)); color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); }
 #lab-confirm::backdrop { background:rgb(0 0 0 / .45); }
 .line-feedback { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:6px; min-width:0; }

@@ -76,3 +76,44 @@ export function rollbackWords(version, weights) {
     'later decisions of yours and the guards, your vetoes and freezes stay. Reward weights '+
     (weights ? 'return to that version too.' : 'stay as they are.')+' The current state is saved as a new version first.';
 }
+
+// The Turing panel (turing/report.py): numbers, fixed labels and the judge's short phrases.
+export const CHART = {width: 240, height: 64, pad: 4};
+function fixed(v) { return Number.isFinite(v) ? v.toFixed(2) : 'n/a'; }
+function pct(v) { return Number.isFinite(v) ? Math.round(100*v)+'%' : 'n/a'; }
+// Chart coordinates for values on a 0-1 axis, one per night; a night without one is left out.
+export function chartPoints(values) {
+  const {width, height, pad}=CHART, list=Array.isArray(values) ? values : [];
+  const step=list.length>1 ? (width-2*pad)/(list.length-1) : 0;
+  return list.map((v,i) => Number.isFinite(v) ? [
+    +(list.length>1 ? pad+i*step : width/2).toFixed(1),
+    +(pad+(1-Math.max(0,Math.min(1,v)))*(height-2*pad)).toFixed(1)] : null).filter(Boolean);
+}
+const STATUS = {too_few:'too few lines to compare', one_class:'only one side spoke'};
+export function turingView(value) {
+  const record=x => !!x && typeof x==='object' && !Array.isArray(x);
+  if (!record(value) || !value.available || !Array.isArray(value.families)) {
+    return {available:false, days: Number.isSafeInteger(value?.days) ? value.days : 14, families:[]};
+  }
+  const families=value.families.filter(record).map(f => {
+    const points=(Array.isArray(f.points) ? f.points : []).filter(record);
+    const latest=record(f.latest) ? f.latest : null, judge=record(f.judge) ? f.judge : {};
+    const headline=!latest ? 'No style measurement stored yet.' : latest.status==='ok'
+      ? 'AUC '+fixed(latest.auc)+(Number.isFinite(latest.low) && Number.isFinite(latest.high) ? ' (approx. '+fixed(latest.low)+'–'+fixed(latest.high)+')' : '')
+        +' on '+latest.night+' · '+latest.sample+' lines each'
+      : 'Not measured on '+latest.night+': '+(STATUS[latest.status] || latest.status)+' ('+latest.human_lines+' of yours, '+latest.member_lines+' of theirs)';
+    // Balanced accuracy, never raw: members are most speakers, so an always-AI judge scores high raw.
+    const sides=[Number.isSafeInteger(judge.members) && judge.members>0 ? 'members called AI '+pct(judge.members_ai)+' of '+judge.members+' times' : '',
+      Number.isSafeInteger(judge.his) && judge.his>0 ? 'you called human '+pct(judge.his_human)+' of '+judge.his+' times' : ''].filter(Boolean);
+    const verdict=!(Number.isSafeInteger(judge.speakers) && judge.speakers>0) ? 'Blind judge: no windows judged yet.'
+      : Number.isFinite(judge.balanced) ? 'Blind judge: '+pct(judge.balanced)+' balanced accuracy (50% is chance): '+sides.join(', ')+'.'
+      : 'Blind judge: '+sides.join(', ')+'; balanced accuracy needs both sides.';
+    return {family:String(f.family || ''), label:String(f.label || f.family || ''), headline, verdict,
+      auc:chartPoints(points.map(p => p.auc)), judge:chartPoints(points.map(p => p.judge)),
+      nights:points.map(p => p.night+' · AUC '+fixed(p.auc)+(Number.isSafeInteger(p.speakers) && p.speakers ? ' · judge '+pct(p.judge)+' balanced ('+p.speakers+' speakers)' : '')),
+      features:(latest && Array.isArray(latest.features) ? latest.features : []).map(x => x?.words).filter(w => typeof w==='string' && w),
+      tells:(Array.isArray(f.tells) ? f.tells : []).filter(record).map(t => String(t.label)+' ('+t.count+')'+
+        (Array.isArray(t.phrases) ? t.phrases.filter(p => typeof p==='string').map(p => ' · “'+p+'”').join('') : ''))};
+  });
+  return {available:true, days: Number.isSafeInteger(value.days) ? value.days : 14, families};
+}
