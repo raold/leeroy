@@ -79,11 +79,14 @@ def want_of(beat: str | None) -> str | None:
     except ImportError:
         return None
     said = m[1].strip()
+    # a want may carry its subject after it in brackets ("... (about work)"; core plan Task 8)
+    bare = said.rsplit(" (", 1)[0] if said.endswith(")") and " (" in said else said
     for code, words in WANTS.items():
         head, named, tail = words.partition("{human}")
-        if said == words or (named and said.startswith(head) and said.endswith(tail)
-                             and len(said) > len(head) + len(tail)):
-            return code
+        for text in dict.fromkeys((said, bare)):
+            if text == words or (named and text.startswith(head) and text.endswith(tail)
+                                 and len(text) > len(head) + len(tail)):
+                return code
     return None
 
 

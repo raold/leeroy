@@ -203,6 +203,18 @@ async def prepare(engine, turn, meta, persona, *, now):
     return result
 
 
+def yield_families(applied, families):
+    """The learned arms of `families` give way to something else that shapes this generation (core
+    plan Task 8: the turn's drawn want yields "tease"): their entries leave the style, so `used`
+    credits their control, and "length" going clears its num_predict. None: nothing to do."""
+    if applied is None or not families:
+        return
+    gone = {aid for family, aid in applied.selected.items() if family in families}
+    applied.entries = [e for e in applied.entries if not (e[0] == 'arm' and e[1] in gone)]
+    if 'length' in families:
+        applied.num_predict = None
+
+
 def used(meta, count):
     applied = meta.learning
     if applied is None:

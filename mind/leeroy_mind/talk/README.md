@@ -421,9 +421,9 @@ for every channel, never a second.
   code draws (`draw_intent`). Whenever his explicit whisper overlay is in the line's prompt
   (`romance.whisper_tail`, `Composed.tail`), the beat is not offered the wants it rules out
   (`beat.wants_for(..., tail=True)` drops `intent.TAIL_OFF`), whatever `[talk] intent` says
-  (review-332). From `[talk] intent` (core plan Task 8) the beat chooses among the
-  wants `allowed` permits, leaning to the drawn one. Until then nothing calls the draw on a live
-  turn.
+  (review-332). With `[talk] intent` (core plan Task 8; below) the beat chooses among the
+  wants `allowed` permits, leaning to the drawn one, and every other eligible turn's want is
+  drawn.
 - **The draw** (`weights(ctx)`, `IntentContext`): a base row, then multipliers in order. Turn
   kinds outside `INTENT_KINDS` (reply_human, continue, open, whisper, flirt) want nothing. Rows
   (vent, share, ask, tease, flirt, reassure_seek, gossip, deflect, small_talk, react, boundary,
@@ -481,9 +481,9 @@ for every channel, never a second.
 # The prompt as a situation (human-likeness core, 2026-11-16)
 
 Spec section 9 (bake-off 1: the rule list primed compliance; the variant cut to the hard rules
-scored best on public turns: with the beat 1.82 against 1.65, alone 1.71). These are prompt functions only: nothing calls
-them until the pipeline wiring reads `[talk] situation` (core plan, Task 8), so every live prompt
-and `tests/tuning/golden_prompts.json` are unchanged.
+scored best on public turns: with the beat 1.82 against 1.65, alone 1.71). The pipeline uses them
+only with `[talk] situation` (core plan Task 8; below), so with it off every live prompt and
+`tests/tuning/golden_prompts.json` are unchanged.
 
 - **The hard rules** (`prompt.SITUATION_RULES`, `situation_rules`): a real person in 2009 in her
   WoW guild who never says the year, not an assistant, only her own words (no name in front, no
@@ -508,6 +508,72 @@ and `tests/tuning/golden_prompts.json` are unchanged.
   just before the instruction (the want and "It lands" stay in the beat's block after the
   instruction). The trim treats it as before: never cut. `mood_line(..., where=, state_words=)`:
   where she is in her day right after the time of day, and her feeling in place of the mood words.
+
+# Her state, want and situation in every prompt (core plan Task 8, 2026-11-16)
+
+Three switches, each `false` by default (invalid means false, logged once by code:
+`talk_intent_invalid`, `talk_situation_invalid`, `life_state_invalid`), read at mind start and
+at each login: `[talk] intent`, `[talk] situation`
+and `[life] state` (with `[life] availability` above 0 for where she is). With all of them off
+every prompt is byte-identical (`golden_prompts.json`, `golden_beat.json`); with them on the
+prompts are pinned in `tests/tuning/golden_core.json` (`scenario.record(..., core=True)`:
+availability 6, state, intent and situation on, the beat off).
+
+- **Her situation** (`Pipeline._draw_situation`, called once a composition, after the turn's
+  checks and instruction hooks, before its prompt is built; a failure logs
+  `talk_situation_failed: guid= reason=<class>` and leaves the turn as it would be without it):
+  - `meta.life_presence` (availability above 0): her Discord presence now on a Discord turn (a
+    whisper answer carried to her DM included: review-336), her game presence on a game turn
+    the engine did not plan (a planned one keeps the presence it was planned with).
+  - `meta.state` (`[life] state`): her feeling, from `LifeService.state_of` (the 30 s snapshot);
+    None while the switch is off (`LifeService.state is None`).
+  - On an **eligible turn** (`_want_eligible`: `intent.INTENT_KINDS`, the model's own line, and
+    none of a template, his pushback's answer, a photo, a selfie request, an outreach item, the
+    owner's string, his lore or game question with facts, the watchdog's rescue, a room he is not
+    in, a hot mic or the 24/7 server's turn) that answers a line of his (`_his_line`: its trigger
+    line when his, his Discord post, or his whisper a carried DM answers): `meta.lands` =
+    `life.state.lands(state, tone(his line), agreeableness=, forms=his)`. Never why she is sore.
+  - `meta.intent` (`[talk] intent`, an eligible turn): one `draw_intent` over her
+    `IntentContext` (her persona and forward dial, her presence's block, event, attention and
+    kids, her state, owed by `owes_him`, his explicit whisper overlay as `tail` (whether
+    `whisper_tail` applies; no draw), her last want in this conversation), seeded by
+    `life.seed.seeded("intent", night, her, minute, his line or post)`, never `engine.rng`.
+    On his private turns a woman `romance.flirt_chance` keeps from flirting with him (a fond
+    one, her forward dial at 0) draws no flirt there (review-332). `want_source` "draw"; log
+    `talk_want: guid= kind= want= source=draw owed=0|1`.
+- **One block after the instruction** (`beat.render`, where think-dm puts its lines):
+  - His private turns with the beat on: the beat still runs. With intent on its wants are
+    `intent.allowed(ctx)` (within `beat.wants_for`, so the overlay tail, the owed rule and the
+    flirt rules gate the model too) and its ask names the drawn want as a lean ("You lean toward
+    tease (tease Zan)."); the beat's want, when it parses, is the turn's (`want_source` "beat";
+    `think_beat: ... lean=<code>`), else the drawn one. With state on it is asked without
+    `lands` (`ask_lands=False`) and "It lands" is `meta.lands`. Its block then carries the
+    want's topic. With intent and state off it is exactly think-dm's.
+  - Every other eligible turn (any channel; his private turn with the beat off or skipped):
+    `render(lands=meta.lands, want=meta.intent, who=<his called name, the member's name, or
+    "everyone" on an opener>, topic=topic_for(...))`; nothing when neither switch gives a line.
+  - With a want drawn, a learned "tease" arm yields to it (`learn.apply.yield_families`: its
+    style line goes and the recipe credits tease's control).
+- **The budget counts the block** (review of #333, requirement 3; Review Focus 5) while intent,
+  situation or state is on: the prompt is trimmed to its budget less the block's room (the
+  beat's block at its caps before the beat is asked, `beat.block_room`; its own lines after;
+  else the code's block), so a DM answer's prompt with the block is within `DM_BUDGET` and,
+  with the answer's `num_predict`, inside `num_ctx`. Off: as before (the beat's block outside
+  the budget, inside `num_ctx`).
+- **Right now** (`mood_line`): with availability above 0 her own clock (`day_line` of
+  `discord.presence.local_time`) and where she is (`life.presence.WHERE_TEXT` by block, medium
+  and kids: "You're at work, the game open on your PC.", "Your phone woke you up.", ...; "You're
+  at your PC, playing." while she is in his group in game as he plays, as PM log D15 has her
+  answer him then; never in a raid call, CALLOUT or URGENT); with state on her feeling (`life.state.words`, how she feels
+  about him only on a turn of his, `_aimed_at_him`) in place of the mood words.
+- **The situation mode** (`[talk] situation`): `situation_rules` for the system message,
+  `PromptParts.situation` ("Right now:" just before the instruction), and every situation
+  template's length from `prompt.situation_length` (review of #333, requirement 1): an explicit
+  whisper's two lines ("In a line or two, more than your usual one line."), else the Discord
+  length where one applies (its wording kept, "more than your usual one line" included: her
+  usual line is the game's), else her usual line (`length_rule`). Other kinds keep their game
+  templates and lengths. The learn recipe versions on the situation rules and template
+  (`talk.situation_instruction.<kind>`; requirement 4).
 
 # Reply shape
 

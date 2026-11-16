@@ -384,6 +384,9 @@ _TOPIC = {
 # The explicit whisper may run longer than her usual one line: the instruction says it is
 # the exception to the standing rule (fix round 1, review minor 10).
 MORE_LINES = "in a line or two, more than your usual one line"
+# The same as a sentence of its own, for a situation template, which has no length to stretch
+# (core plan Task 8; Task 9's reply shapes take its place)
+MORE_LINES_TEXT = MORE_LINES[0].upper() + MORE_LINES[1:] + "."
 
 # A Discord turn ([talk] discord_words, talk/discord_length.py; owner 2026-11-13, "Long and
 # chatty"): its template's game length goes (DISCORD_DROPS, each with its comma or space, so the
@@ -430,6 +433,24 @@ def discord_template(channel: str, words: int) -> str:
     if is_private(channel):
         return DISCORD_DM
     return DISCORD_QUICK if words <= QUICK_WORDS else DISCORD_FEW if words <= FEW_WORDS else DISCORD_LENGTH
+
+
+def situation_length(kind: TurnKind, *, channel: str, words: int, typing: Typing | None,
+                     two_lines: bool = False) -> str:
+    """The `length_text` a situation-mode turn passes render_instruction (review of #333,
+    requirement 1: every situation template gets its length from the caller), for a
+    SITUATION_INSTRUCTIONS kind: an explicit whisper's two lines (MORE_LINES_TEXT); else ""
+    where a Discord length applies (discord_length keeps its own wording, "more than your usual
+    one line" included: her usual line is the game's, as before); else her usual line
+    (length_rule; SHORT_LINE without her typing), on a game channel, in a voice room or on
+    Discord at 0 words. "" for every other kind: it keeps its INSTRUCTIONS template and length."""
+    if kind not in SITUATION_INSTRUCTIONS:
+        return ""
+    if two_lines:
+        return MORE_LINES_TEXT
+    if discord_length(channel, words):
+        return ""
+    return length_rule(typing) if typing is not None else SHORT_LINE
 
 
 def render_instruction(kind: TurnKind, *, addressee: str = "", topic: str = "",
