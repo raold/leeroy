@@ -48,6 +48,7 @@ from typing import Awaitable, Callable, Protocol
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
 from leeroy_mind.discord import owntime
+from leeroy_mind.discord.channels import is_discord
 from leeroy_mind.human import human_identity
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.life.service import LifeService
@@ -494,10 +495,11 @@ class TalkEngine(EmoteReactions):
         return sorted(out, key=lambda x: x[1])
 
     def _waiting_to_him(self) -> list[tuple[Turn, TurnMeta]]:
-        """The answers to him still waiting out their delay (Pipeline.waiting_turns)."""
+        """The answers to him in game still waiting out their delay (Pipeline.waiting_turns);
+        his Discord's answers keep their own pace."""
         hg = self.human.guid
         return [(t, m) for _, t, m in self.waiting_turns()
-                if hg and t.kind in REPLY_KINDS
+                if hg and t.kind in REPLY_KINDS and not is_discord(t.channel)
                 and (t.addressee == hg or (t.channel == "whisper" and t.to_guid == hg))]
 
     def _his_lines_since_hers(self, guid: int) -> int:
