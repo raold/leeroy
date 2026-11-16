@@ -62,6 +62,24 @@ preferring a face inside the mind's square, then evens out the crop's colour cas
 so a nightclub's purple light does not tint every new scene. Not fetched, no OpenCV, no face
 found or any detector error: the mind's square is cut as it is. `doctor` notes `yunet` as not
 fetched without failing.
+The photo critic (`critic.py`, the mind's `[selfies] critic`): a `critic` request (`id`, `op:
+"critic"`, an absolute JPEG `path`, optionally her reference `ref` with its square `crop`) is
+answered by any worker, `--embed-only` too, with numbers and codes only: `faces` (YuNet), `hands`
+and per hand its landmark confidence, `fingers` (fingertips that stand apart from every other tip:
+merged fingers share one) and `plausible` (no finger far longer than the palm or folded back
+through it), `eyes` (`tilt`, the eye line against the mouth line in degrees; `level`; `gaze_gap`,
+how far apart the irises sit in their eyes), `identity` (the image encoder's cosine between the
+face crops, an identity worker's or the embed-only worker's encoder) and per detector `ok`,
+`unavailable` or `failed`. The hands come from the `palm` and `handpose` pins (MediaPipe's palm
+detector and hand landmarker, OpenCV Zoo's ONNX exports, Apache-2.0, about 4 MB each, run by
+`cv2.dnn`; `fetch-models --only palm,handpose`); not fetched, `doctor` notes them and the critic
+reports hands `unavailable`. The `mediapipe` package was not used: it would install
+`opencv-contrib-python` beside the pinned `opencv-python-headless`. The landmarker always draws
+five fingers, so these are measurements, not verdicts: against the labelled snap-anatomy sheet
+of 2026-11-16 they caught none of its subtle defects (the mind's vision judge is the main check);
+they are there for the gross ones, a second face or a third hand. `pytest -m engines
+tests/test_critic_sheet.py` with `LEEROY_CRITIC_SHEET` pointing at that sheet prints their
+precision and recall.
 `worker --embed-only` loads only the already fetched IP-Adapter image encoder,
 with local files only. It uses the CPU if the VRAM floor is unavailable, and
 falls back to the CPU after a GPU allocation failure. An `embed` request has
