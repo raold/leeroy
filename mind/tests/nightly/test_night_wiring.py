@@ -137,6 +137,26 @@ def test_context_reload_updates_dials_and_extract_model_keeps_last_good(h, caplo
         run(app.stop())
 
 
+@pytest.mark.parametrize("life", ["[life]\nwow_vs_life = 11\navailability = true\n",
+                                  "[life]\nstate = 2\n"])
+def test_a_bad_life_key_never_blocks_the_login_reload(h, caplog, monkeypatch, life):
+    """His login reads mind.toml again: an invalid [life] key reads as its default with one
+    log line, and every other edit still applies (only the night refuses a bad theme)."""
+    from leeroy_mind import config
+    from leeroy_mind.life import config as life_config
+    monkeypatch.setattr(config, "_WARNED", set())
+    app = app_for(h)
+    try:
+        (app.data_dir / "mind.toml").write_text("[talk]\nchattiness = 7\n" + life,
+                                                encoding="utf-8")
+        app._reload_config()
+        assert app.cfg.talk.chattiness == app.engine.cfg.talk.chattiness == 7
+        assert app.cfg.life == config.LifeCfg() and life_config.availability() == 0
+        assert "config_invalid" not in caplog.text and "_invalid key=" in caplog.text
+    finally:
+        run(app.stop())
+
+
 def test_transport_and_embedding_stay_coherent_until_restart(h):
     app = app_for(h)
     original = app.cfg

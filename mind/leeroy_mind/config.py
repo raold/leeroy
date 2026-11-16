@@ -262,6 +262,12 @@ _CLASSES = {
 
 def _build(data: dict, source: str) -> MindConfig:
     defaults = tomllib.loads(DEFAULT_TOML)
+    if "life" in data and not isinstance(data["life"], dict):
+        # [life] never blocks the rest of mind.toml: read as empty, logged once a value
+        if ("life", repr(data["life"])) not in _WARNED:
+            _WARNED.add(("life", repr(data["life"])))
+            log.warning("life_invalid want=a table")
+        data = dict(data, life={})
     for section in data:
         if section in EXTENSION_SECTIONS:
             continue
@@ -294,8 +300,9 @@ def _build(data: dict, source: str) -> MindConfig:
                 v = defaults[section][key]
             if section == 'romance' and key == 'activities' and type(v) is not bool:
                 v = False
-            if section == "life" and key in ("availability", "state") and not check(v):
-                # neutral (0, false), logged once a value (each login reads it again)
+            if section == "life" and not check(v):
+                # the default (availability 0, state false, wow_vs_life 5), logged once a value
+                # (each login reads it again); the night's load_life still refuses wow_vs_life
                 if ("life." + key, repr(v)) not in _WARNED:
                     _WARNED.add(("life." + key, repr(v)))
                     log.warning("life_%s_invalid key=%s want=%s default=%s", key, key, want,
