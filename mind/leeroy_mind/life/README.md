@@ -203,7 +203,8 @@ Section 3 of the human-likeness design. **`[life] state`** (default false; the r
 true): while it is on, `LifeService.state` is a `StateBook` and each member carries five numbers,
 each in [-1, 1], that move through her day. While it is off, `LifeService.state` is None and
 nothing is read or written. **Recorded only for now**: no prompt, latency, intent or shape reads
-it yet (later tasks: her mood line, "It lands", and the draws).
+it yet (later tasks: her mood line, "It lands", and the draws). Only cast members move: a guild
+member at level 80 or more with a persona, never him.
 
 | Axis | Baseline (where it rests) |
 |---|---|
@@ -222,8 +223,8 @@ What moves it (`Impulse`, deltas in `state.IMPULSES`):
 | Impulse | When | Deltas |
 |---|---|---|
 | his_warm / his_harsh / his_plain | a line of his to her, by `state.tone` | toward_him +0.15 / -0.25 / +0.04, valence +0.08 / -0.12, social +0.05 / +0.02, stress +0.10 (harsh) |
-| ignored | once per line of hers to him in a whisper or DM when he wrote nothing to her in that conversation (whisper and DM are one) within 1200 s while he wrote somewhere else | toward_him -0.08, valence -0.04, social -0.03 |
-| talked | each line of hers | social -0.04 |
+| ignored | once per burst of hers to him (below) | toward_him -0.08, valence -0.04, social -0.03 |
+| talked | each line of hers, except to him or answering him (below) | social -0.04, never past 0.4 below her baseline |
 | kill / wipe | a boss killed or wiped, its members | valence +0.15 / -0.06, energy +0.10 / -0.04, stress -0.08 / +0.08 |
 | loot_won / loot_lost | she won an item; she lost one to his claim (guild ports' `loot_lost`) | valence +0.20 / -0.12, stress +0.04 (lost) |
 
@@ -239,18 +240,35 @@ officer. A Discord DM: its member. A group DM: the members he @-named or replied
 post's captured readers. A channel post: the members he @-named or replied to among the
 channel's audience (an officers' channel: its officers).
 
+**Talking tires her, him never.** Each line of hers drains social by 0.04, but talking alone
+never takes it more than 0.4 below her baseline (`TALK_DRAIN_MAX`; other impulses can still move
+it). A line to him (a whisper to him, her DM with him) or answering him (a reply to his Discord
+post, or a line in a channel he wrote in within 120 s before it, `ANSWER_S`) drains nothing:
+engagement with him is not fatigue.
+
+**Ignored, once per burst.** Her lines to him (whispers and DMs are one conversation) at most 90 s
+apart (`BURST_S`) with no answer of his between are one burst. The burst counts IGNORED once when
+he wrote nothing to her in that conversation from its first line until 1200 s after its last,
+while he wrote somewhere else in that window (he was around and did not answer). Bursts are kept
+in memory: a restart forgets the open ones.
+
 **Contagion**, damped: a member's line in guild, party or raid pulls each other reader (the row's
 audience, online now) 3% of the way from her valence to the speaker's; a member's post in a public
 Discord channel does the same for the members of its audience whose Discord presence is online.
-At most one pull per member a tick. Never from a whisper, a DM, a group DM, officer chat or an
-officers' or unknown Discord channel.
+At most one pull per member a tick, and at most 0.3 of valence moved by contagion per member in
+any hour (`CONTAGION_PER_HOUR`, kept in memory), so a busy night still leaves members different.
+Never from a whisper, a DM, a group DM, officer chat or an officers' or unknown Discord channel.
 
 **The tick** (`LifeService.tick`, from the app's ticker; a pass every 30 s) reads `chat_line` for
 the game (the guild Discord's lines there are skipped) and `discord_message` for Discord, from
-high-water marks that start at the newest rows on its first pass, so no history is replayed after
-a start, a restart or turning it on; at most 1000 rows a table a pass. Boss and loot events come
-through the app's `boss` and `loot_won` handlers; one replayed more than 10 minutes late moves
-nothing.
+read marks that start at the newest rows on its first pass and advance row by row, so no history
+is replayed after a start, a restart or turning it on; at most 1000 rows a table a pass. A row
+that cannot be read is skipped and logged once (`life_state_row_skipped table= id= reason=`).
+Boss and loot events come through the app's `boss` and `loot_won` handlers. A row or event more
+than 10 minutes old when it is read (`STALE_S`) moves nothing, so a bridge replay after a restart
+applies no old tone. `LifeService.tick`, `on_event` and `loot_lost` keep any failure inside
+(`life_state_failed op= reason=<class>`): the app's ticker, its handlers and the guild's loot go
+on.
 
 **Stored** in meta `life:state:<guid>` as `{"v","e","s","o","h","ts"}` (valence, energy, stress,
 social, toward him, written at), numbers only; no migration. `StateBook.get(guid)` is the stored
@@ -259,14 +277,16 @@ value reads as none. Turning the switch off leaves the keys, unread; to forget t
 `life:state:%` meta rows with the mind stopped.
 
 **Words** (for her prompt, later): `words(state, to_him=, forms=)` is one line of at most three
-parts ("You're tired and a bit short today."); her feeling about him ("happy with him right now",
-"a bit annoyed with him right now") only when `to_him`, never on another member's turn.
+parts ("You're tired and a bit short today.", "You're in a great mood and not feeling chatty
+today."); her feeling about him ("happy with him right now", "a bit annoyed with him right now")
+only when `to_him`, never on another member's turn.
 `lands(state, tone, agreeableness=, forms=)` is how his line lands on her now ("it stings", "it
 annoys you", "nice, but you're still a bit sore with him", "it makes you smile", "one more thing
 on a busy day", "you're too tired to say much", "you're not really in the mood to chat", or "").
 
-**Logs**: `life_state_tick impulses=<n> members=<n>`, at most once a minute when something moved.
-No text, no names.
+**Logs**: `life_state_tick impulses=<n> members=<n>`, at most once a minute when something moved;
+`life_state_row_skipped` and `life_state_failed` as above. Ids, counts and codes only: no text,
+no names.
 
 ## Command line
 

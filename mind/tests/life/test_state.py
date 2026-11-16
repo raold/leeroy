@@ -78,5 +78,7 @@ def test_words_keep_her_feeling_about_him_off_other_turns():
     assert words(sore, to_him=True, forms=HE) == \
         "You're a bit annoyed with him right now, in a great mood and chatty today."
     assert words(State(0, 0, 0, 0, 0.6), to_him=True, forms=HE) == "You're happy with him right now."
+    assert (words(State(0.5, 0, 0, -0.5, 0), to_him=False, forms=HE)
+            == "You're in a great mood and not feeling chatty today.")
     assert words(State(0, 0, 0, 0, 0.6), to_him=True, forms=("she", "her", "her")) == \
         "You're happy with her right now."

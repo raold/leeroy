@@ -9,13 +9,15 @@ today's behaviour) or for a member without a persona.
 `state` is her feeling right now (life/statebook.py), a StateBook only while `[life] state` is on
 (None otherwise, so nothing is read or written); the app feeds it every tick, boss and loot event
 and each loot lost to his claim through `tick`, `on_event` and `loot_lost`, which do nothing while
-it is off."""
+it is off. A failure inside them is logged (`life_state_failed op= reason=<class>`) and never
+reaches the app's ticker, its event handlers or the guild's loot."""
 from __future__ import annotations
 
 import logging
 import sqlite3
 
 from leeroy_mind.discord.presence import local_time
+from leeroy_mind.logs import log as log_event
 
 from . import config as life_config
 from .presence import LifePresence, presence_at
@@ -66,12 +68,25 @@ class LifeService:
 
     def tick(self, now: float) -> None:
         if self.state is not None:
-            self.state.tick(now)
+            try:
+                self.state.tick(now)
+            except Exception as exc:
+                _failed("tick", exc)
 
     async def on_event(self, ev) -> None:
         if self.state is not None:
-            await self.state.on_event(ev)
+            try:
+                await self.state.on_event(ev)
+            except Exception as exc:
+                _failed("event", exc)
 
     def loot_lost(self, guid: int) -> None:
         if self.state is not None:
-            self.state.loot_lost(guid)
+            try:
+                self.state.loot_lost(guid)
+            except Exception as exc:
+                _failed("loot_lost", exc)
+
+
+def _failed(op: str, exc: Exception) -> None:
+    log_event("life_state_failed", level=logging.WARNING, op=op, reason=type(exc).__name__)

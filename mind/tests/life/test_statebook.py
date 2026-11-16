@@ -4,8 +4,8 @@ import logging
 
 import pytest
 from conftest import HUMAN, OFFICERS, TEST_CAST, mem, run, seed_test_cast
-from leeroy_mind.life.state import Impulse
-from leeroy_mind.life.statebook import STATE_KEY, StateBook
+from leeroy_mind.life.state import Impulse, State
+from leeroy_mind.life.statebook import STATE_KEY, StateBook, encode
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.protocol import Boss, Chat, LootWon
 from leeroy_mind.talk.world import WorldView
@@ -35,18 +35,20 @@ def later(clock, book, s=31.0):
     book.tick(clock.now())
 
 
-def line(store, clock, channel, frm, text, *, to=0, origin="mind", audience=None):
+def line(store, clock, channel, frm, text, *, to=0, origin="mind", audience=None, ts=None):
     name = TEST_CAST[frm][0] if frm in TEST_CAST else "Owner"
-    chat = Chat(ts=int(clock.now() * 1000), channel=channel, from_guid=frm, from_name=name,
+    at = clock.now() if ts is None else ts
+    chat = Chat(ts=int(at * 1000), channel=channel, from_guid=frm, from_name=name,
                 to_guid=to, text=text, map=0, zone=10)
-    return store.insert_chat_line(chat, session_id=None, origin=origin, audience=audience)
+    return store.insert_chat_line(chat, session_id=None, origin=origin, audience=audience, ts=at)
 
 
-def post(store, clock, channel, author, text, *, origin="mind", reply_to=None):
+def post(store, clock, channel, author, text, *, origin="mind", reply_to=None, ts=None):
     with store.transaction():
         return store.conn.execute(
             "INSERT INTO discord_message(channel,author,origin,text,reply_to,ts) "
-            "VALUES (?,?,?,?,?,?)", (channel, author, origin, text, reply_to, clock.now())).lastrowid
+            "VALUES (?,?,?,?,?,?)", (channel, author, origin, text, reply_to,
+                                     clock.now() if ts is None else ts)).lastrowid
 
 
 def stored(store, g):
@@ -235,3 +237,147 @@ def test_the_app_feeds_her_state(tmp_path, clock):
         finally:
             await app.stop()
     run(main())
+
+
+def test_his_group_dm_and_officer_lines_reach_their_readers_only(store, clock):
+    from leeroy_mind.discord.talk import mentioned_names
+    assert mentioned_names("ping @Belra and @coros") == ["Belra", "coros"]
+    book, world = rig(store, clock)
+    msg = post(store, clock, "gdm:7", HUMAN, "@Belra @Coros thank you both", origin="human")
+    seen = line(store, clock, "gdm:7", HUMAN, "@Belra @Coros thank you both", origin="human",
+                audience=(HUMAN, 101, 102))
+    store.set_meta(f"discord:line:{msg}", str(seen))
+    line(store, clock, "officer", HUMAN, "thank you dunna", origin="human", audience=(102, 104))
+    line(store, clock, "whisper", HUMAN, "thank you kindly", to=105, origin="human",
+         audience=(105,))
+    del world.members[105]  # no longer in the guild: not cast, nothing moves
+    later(clock, book)
+    assert book.get(102).toward_him > 0.1    # named, and one of the group's readers
+    assert stored(store, 103) is None        # named, but not in that group
+    assert stored(store, 101) is None        # a reader he did not name
+    assert book.get(104).toward_him > 0.1    # an officer named in officer chat
+    assert stored(store, 105) is None
+    book.impulse(105, Impulse.LOOT_WON)
+    assert stored(store, 105) is None
+
+
+def test_old_rows_move_nothing(store, clock):
+    book, _ = rig(store, clock)
+    old = clock.now() - 700
+    line(store, clock, "whisper", HUMAN, "you suck", to=102, origin="human", audience=(102,),
+         ts=old)
+    post(store, clock, "dm:103", HUMAN, "are you kidding me", origin="human", ts=old)
+    line(store, clock, "guild", 104, "a line said long ago", audience=CAST, ts=old)
+    later(clock, book)
+    assert all(stored(store, g) is None for g in CAST)
+
+
+def test_a_bad_row_is_skipped_and_logged_once(store, clock, caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    book, _ = rig(store, clock)
+    bad = line(store, clock, "whisper", HUMAN, "thank you kindly", to=101, origin="human",
+               audience=(101,))
+    line(store, clock, "whisper", HUMAN, "thank you kindly", to=102, origin="human",
+         audience=(102,))
+    real = book._game_row
+
+    def flaky(row, *args):
+        if row["id"] == bad:
+            raise ValueError("unreadable row")
+        return real(row, *args)
+    monkeypatch.setattr(book, "_game_row", flaky)
+    later(clock, book)
+    later(clock, book)
+    assert stored(store, 101) is None and book.get(102).toward_him > 0.1
+    assert caplog.text.count(
+        f"life_state_row_skipped: table=chat_line id={bad} reason=ValueError") == 1
+    assert "unreadable row" not in caplog.text
+
+
+def test_the_service_keeps_failures_inside(store, clock, tmp_path, caplog):
+    import sqlite3
+    from leeroy_mind.config import load_config
+    from leeroy_mind.life.service import LifeService
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    cfg = load_config(tmp_path / "absent.toml")
+    on = dataclasses.replace(cfg, life=dataclasses.replace(cfg.life, state=True))
+    life = LifeService(store=store, clock=clock, personas=PersonaCache(store),
+                       world=world_of(store), cfg=on)
+
+    class Broken:
+        def tick(self, now):
+            raise RuntimeError("a private detail")
+
+        async def on_event(self, ev):
+            raise KeyError("a private detail")
+
+        def loot_lost(self, guid):
+            raise sqlite3.OperationalError("a private detail")
+    life.state = Broken()
+    life.tick(clock.now())
+    run(life.on_event(object()))
+    life.loot_lost(101)
+    for op, reason in (("tick", "RuntimeError"), ("event", "KeyError"),
+                       ("loot_lost", "OperationalError")):
+        assert f"life_state_failed: op={op} reason={reason}" in caplog.text
+    assert "a private detail" not in caplog.text
+
+
+def test_talking_drains_social_only_so_far_and_never_with_him(store, clock):
+    book, _ = rig(store, clock)
+    base = {g: book.baseline(g).social for g in CAST}
+    for i in range(15):  # 15 x 0.04 would be 0.6
+        line(store, clock, "guild", 101, f"a guild remark, the {i}th", audience=CAST)
+    for i in range(3):
+        line(store, clock, "whisper", 102, f"a line for him, the {i}th", to=HUMAN,
+             audience=(102,))
+    line(store, clock, "party", HUMAN, "anyone need a summon", origin="human", audience=(103,))
+    line(store, clock, "party", 103, "yes please, at the stone", audience=(103,))
+    his = post(store, clock, "general", HUMAN, "who wants a dungeon tonight", origin="human")
+    post(store, clock, "general", 104, "count me in later", reply_to=his)
+    post(store, clock, "dm:105", 105, "a dm for him")
+    later(clock, book)
+    assert book.get(101).social == pytest.approx(base[101] - 0.4, abs=2e-3)
+    for g in (102, 103, 104, 105):
+        assert book.get(g).social == pytest.approx(base[g], abs=2e-3)
+
+
+def test_contagion_moves_a_member_at_most_point_three_an_hour(store, clock):
+    book, _ = rig(store, clock)
+    store.set_meta(STATE_KEY.format(guid=101), encode(State(1.0, 0.0, 0.0, 0.0, 0.0),
+                                                      clock.now()))
+    start = book.get(103).valence
+    for _ in range(20):  # uncapped, 20 pulls of 3% would move her more than 0.4
+        line(store, clock, "guild", 101, "another bright guild line", audience=CAST)
+        later(clock, book)
+    moved = book.get(103).valence - start
+    assert 0.25 < moved <= 0.3
+    run(clock.advance(3600, step=3600))
+    before = book.get(103).valence
+    line(store, clock, "guild", 101, "a bright line an hour on", audience=CAST)
+    later(clock, book)
+    assert book.get(103).valence > before + 0.005
+
+
+def test_ignored_counts_once_per_burst(store, clock):
+    book, _ = rig(store, clock)
+    for i in range(3):  # 31 s apart: one burst
+        line(store, clock, "whisper", 102, f"a quick line, the {i}th", to=HUMAN, audience=(102,))
+        later(clock, book)
+    line(store, clock, "guild", HUMAN, "heading out to farm", origin="human", audience=CAST)
+    for _ in range(3):
+        later(clock, book)
+    post(store, clock, "dm:102", 102, "a dm after a pause")  # 124 s on: a second burst
+    later(clock, book)
+    line(store, clock, "guild", HUMAN, "back again", origin="human", audience=CAST)
+    line(store, clock, "whisper", 103, "a first quick line", to=HUMAN, audience=(103,))
+    later(clock, book)
+    line(store, clock, "whisper", HUMAN, "one sec", to=103, origin="human", audience=(103,))
+    later(clock, book)
+    line(store, clock, "whisper", 103, "a second quick line", to=HUMAN, audience=(103,))
+    later(clock, book)
+    line(store, clock, "guild", HUMAN, "sorting my bank tabs", origin="human", audience=CAST)
+    for _ in range(42):
+        later(clock, book)
+    assert -0.2 < book.get(102).toward_him < -0.12  # two bursts, not four lines
+    assert -0.06 < book.get(103).toward_him < -0.02  # answered between: only the second burst

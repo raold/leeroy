@@ -199,7 +199,7 @@ def _parts(state: State, to_him: bool, them: str) -> list[str]:
     elif state.valence <= -0.15:
         parts.append("a bit off")
     if state.social <= -0.4:
-        parts.append("not in a chatty mood")
+        parts.append("not feeling chatty")
     elif state.social >= 0.4:
         parts.append("chatty")
     return parts[:3]

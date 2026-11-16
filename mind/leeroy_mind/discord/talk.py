@@ -102,6 +102,11 @@ DM_HIS_CHARS = 600
 _MENTION = re.compile(r"(?<!\w)@(\w+)")
 
 
+def mentioned_names(text: str) -> list[str]:
+    """The names a post @mentions, in its order, as written (callers match them case-folded)."""
+    return [m.group(1) for m in _MENTION.finditer(text)]
+
+
 def answer_delay(state: str, rng) -> float:
     """Seconds before a member answers: slower when idle, slowest on do not disturb (or offline,
     for a DM), always 2-25 s."""
@@ -510,8 +515,7 @@ class DiscordTalk:
         names = {m.name.casefold(): g for g, m in self.app.world.discord_members().items()
                  if g != hg}
         out = [] if replied is None else [replied]
-        out += [g for m in _MENTION.finditer(text)
-                if (g := names.get(m.group(1).casefold())) is not None]
+        out += [g for n in mentioned_names(text) if (g := names.get(n.casefold())) is not None]
         return [g for g in dict.fromkeys(out) if g != hg and g in audience
                 and personas.get(g) is not None][:MAX_NAMED]
 
