@@ -550,3 +550,17 @@ def test_the_live_learn_keys_are_valid_and_the_cycle_has_a_row(tmp_path):
     (tmp_path/'mind.toml').write_text('[learn]\nenabled=true\nbandit=true\napply=true\ncycle=true\n')
     states = {(r['table'],r['key']):r['state'] for r in ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']}
     assert states['learn','enabled'] == states['learn','cycle'] == 'on'
+
+
+def test_the_live_photo_request_keys_are_valid_and_listed(tmp_path):
+    (tmp_path/'mind.toml').write_text('[photos]\nenabled=true\nsend=true\nrequests=true\n'
+                                      'scene_from_words=true\n')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    states = {(r['table'],r['key']):r['state'] for r in rows}
+    assert states['photos','enabled'] == states['photos','requests'] == 'on'
+    assert states['photos','scene_from_words'] == 'on'
+    row = next(r for r in rows if r['key']=='scene_from_words')
+    assert row['needs'] == 'photos.requests' and row['unmet'] == []
+    (tmp_path/'mind.toml').write_text('[photos]\nrequests=true\nscene_from_words=1\n')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert all(r['state']=='invalid' for r in rows if r['table']=='photos')

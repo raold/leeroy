@@ -418,6 +418,8 @@ SWITCHES = (
     ('server','enabled','24/7 server','nights only inside its quiet window'),
     ('romance','activities','Romance activities','realm.enabled; native rebuild'),
     ('photos','enabled','Discord photos','restart the console too'), ('selfies','enabled','Selfies',''),
+    ('photos','requests','Selfie requests','photos.send; selfies.enabled; selfies.snaps; server.enabled'),
+    ('photos','scene_from_words','Selfie scenes from his words','photos.requests'),
     ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
     ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
     ('personas','auto_newcomers','Newcomer personas',''),

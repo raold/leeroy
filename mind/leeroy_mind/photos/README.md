@@ -16,6 +16,10 @@ members who answer look at it first.
 - `requests = true` lets a member make a new selfie when the owner asks in Discord.
   It requires `send` and all its prerequisites. Restart the mind after changing it.
   With requests off, no request recognizer, queue, or GPU borrow gate is attached.
+- `scene_from_words = true` (with `requests`) reads his words into the requested photo's scene
+  (below, "His words as her scene"). Read at mind start; off keeps today's enum path byte for
+  byte. Older code reads the key as an invalid table and turns all of `[photos]` off, so remove
+  it before rolling back.
 
 ## Requested photos
 
@@ -25,8 +29,9 @@ already sent keep the ordinary answer path. Group DMs are outside this feature.
 
 When the bridge confirms the owner is out of WoW, the member chooses a scene using the
 existing allowed choices and makes the photo before answering. Comms shows her composing
-while she prepares it. The request's words provide context to the live model; they never
-become image-prompt text. A plain member answers in the channel where asked. A lust-style
+while she prepares it. The request's words provide context to the live model; with
+`scene_from_words` off they never become image-prompt text (on, see "His words as her scene").
+A plain member answers in the channel where asked. A lust-style
 member sends her photo privately and says so in her channel answer only after the private
 delivery commits. Adult age 25+, clothing, name, NSFW and caption checks still apply.
 
@@ -71,6 +76,54 @@ answer it once. Her first answer, the fresh photo's follow-up and a failure noti
 their first try and at most two retries (about three minutes apart for the first answer, one
 minute for the others). After that the request ends (`passed`, failure `retry_limit` unless a
 failure was already recorded) and its unsent photos are closed; their files stay.
+
+### His words as her scene (`scene_from_words`)
+
+Owner, 2026-11-16: "sneak away from work and shoot me a selfie from the bathroom" should give her
+in her work clothes, in the bathroom. With the switch on, the enum choice above is replaced by one
+structured call on the live model (`format` schema, `think: false`; `selfies/words_scene.py`):
+
+| field | kind | |
+|---|---|---|
+| `place` | free text, at most 8 words | "work bathroom mirror" |
+| `framing` | `mirror_selfie`, `handheld_selfie`, `timer`, `from_behind_over_shoulder` | |
+| `wearing` | `work_uniform`, `gym`, `casual`, `going_out`, `swimwear`, `pyjamas`, `as_now` | resolved by code |
+| `moment` | free text, at most 8 words | "sneaked away, hurried" |
+| `time` | `now`, `morning`, `evening`, `night` | `now` is her local hour |
+| `lighting` | `fluorescent`, `daylight`, `lamp`, `neon`, `phone_flash` | |
+| `prop` | free text, at most 4 words, or null | |
+
+Each free-text field passes the situational photo's screens (names, likeness, era, explicit wear,
+minors, age words, looks changes, undressing or bathing, another person), her own names, a charset
+(no digits or prompt syntax), its word limit, nobody from her work, and the everyday-English word
+list as an allow-list; a lust-styled woman's place is never a bed or bedroom. A refused field falls
+back on its own: the place to the enum path's setting (also when the prompt would not fit the
+worker's 75 tokens), the moment and the prop to none. `wearing` is never model text: her job gives
+her work clothes (scrubs, chef's whites, an apron, a hi-vis vest, a polo, a salon tunic, else smart
+office clothes; casual with no job to go to), `as_now` follows her day plan's block (else what she
+wears at the computer), the rest come from the vetted outfit lists; pyjamas are clothed loungewear,
+swimwear only for a lust-styled woman at the water in a handheld selfie framed waist-up. A reply
+off the schema twice, or a model error, takes today's enum scene; a Free GPU pause its everyday
+choice without a model.
+
+The render is the request render above (her chosen photo's face, 832 x 1216, NSFW gate unchanged)
+with the framing, `wearing <outfit>` and the place at priority 0, so the worker's fit keeps them;
+her looks keep their usual priorities, and a photo from behind takes her face at half strength.
+Her answer is composed with the scene in her prompt ("You just took this photo of yourself for him:
+..."), and an answer before the photo is ready names the photo she is about to take, never in a
+public channel for a private photo.
+
+When `[life] availability` is above 0 and her day plan has her asleep or driving, she says so, the
+photo is not rendered and no retained photo is sent instead: it waits for the start of her next
+block (`life.presence.free_after`, before the request's expiry), then renders under the usual
+offline and night rules and goes out as her follow-up with a line. At availability 0 she is always
+able, as everywhere else in her day.
+
+`selfie_request_scene` logs the request, the guid, `source` (words or enum), the enum codes, which
+free-text fields were kept and the fallback codes; `selfie_request_deferred` the request, the guid,
+the block and the wait in seconds. Never his words or the free text. With the mind stopped,
+`python -m leeroy_mind selfies try --ask "<his words>" --guid N` renders one such photo into
+`scratch/selfies-try/ask/<guid>/` (photo, reference and the scene as stored) for tuning.
 
 `selfie_request` logs ids, channel kinds and outcome codes. `selfie_request_render` reports
 total, unload, startup, render, stop and reload timings, without words or prompts. Rehearsal
