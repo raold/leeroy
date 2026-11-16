@@ -48,7 +48,7 @@ def _rig(store, clock, path):
     seed_test_cast(store)
     save_member(store, 102, player_gender="female", stance="drawn", typo_rate=0.0,
                 split_rate=0.0, emoticon_rate=0.0, abbreviations={})
-    return make_rig(store, clock, path)
+    return make_rig(store, clock, path, beat=True)
 
 
 @pytest.fixture

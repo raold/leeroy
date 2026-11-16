@@ -123,7 +123,7 @@ def _beat_model():
 
 
 async def _run_beat(store, clock, data_dir) -> dict:
-    r = make_rig(store, clock, data_dir, script=_beat_model(), seed=7)
+    r = make_rig(store, clock, data_dir, script=_beat_model(), seed=7, beat=True)
     r.engine.whispers.set_rate(0.0)
     r.engine.budget.set_to_him_rate(0.0)
     await r.session()
