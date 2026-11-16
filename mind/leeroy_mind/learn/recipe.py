@@ -53,14 +53,15 @@ BEAT_SUFFIX = "+beat"  # a line asked for after a beat ([talk] think_private, ta
 
 def called_model(meta, model, options=None, *, beat=False):
     """The request a line came from. One asked for after a beat is recorded as `<model>+beat`
-    with `beat` in its parameters, so its rewards and arms never pool with lines without one."""
+    with `beat` in its parameters (only then: with the switch off the receipt is as before), so
+    `learn report` separates its rewards; the bandit's context does not."""
     snapshot = getattr(meta, "recipe_snapshot", None)
     if isinstance(snapshot, Snapshot):
         params = tuple((k,v) for k,v in (options or {}).items()
                        if k in ('temperature','min_p','top_p','num_predict','num_ctx','seed')
                        and type(v) in (int,float))
         meta.recipe_snapshot = replace(snapshot, model_id=model + BEAT_SUFFIX if beat else model,
-                                       parameters=params + (("beat", bool(beat)),))
+                                       parameters=params + ((("beat", True),) if beat else ()))
 
 
 def record(conn, line_id, turn, meta, persona, config, *, settings=None):

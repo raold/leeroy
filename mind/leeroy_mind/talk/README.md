@@ -289,8 +289,9 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
   not asking a question; `flirt` only for a member `romance.flirt_chance` lets flirt with him)
   and `use` (the number of one offered item, or null). Offered: the memories the prompt showed,
   then the others' earlier chat lines in it, newest first (never hers, never the line she
-  answers), at most 6, each cut to 120 characters (`beat.items_of`); the last give way when the
-  request would not fit `num_ctx` (`beat.fitting`).
+  answers), as plain text (no age, speaker or bullet), at most 6, each cut to 120 characters
+  (`beat.items_of`); the last give way when the request would not fit `num_ctx`
+  (`beat.fitting`). `use` 0 counts as null (Orion writes it for nothing to bring in).
 - **Bake-off, 2026-11-16** (47 real turns, blind-judged 0-3): plain Orion 1.62, Orion with the
   beat 1.60, the beat with trimmed rules 1.62 and the most good lines (72%); Orion's own
   thinking 1.34 with 21% empty. With only the wants' names Orion chose "ask" on 34 of 47, hence
@@ -319,8 +320,10 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
   = 3806. A whisper at 1800 keeps all 6: 3160 (3240 at 320); its line 2542. All under `num_ctx`
   4096, so no prompt budget changes.
 - **Learning**: a line asked for after a beat has recipe `model_id` `<model>+beat` and `beat`
-  in its parameters (`learn/recipe.py` `called_model`), so its rewards and arms never pool with
-  lines without one. The bandit's context key is unchanged.
+  in its parameters (`learn/recipe.py` `called_model`; only then, so with the switch off a
+  receipt is as before): `learn report` separates its rewards. The bandit's context key is
+  unchanged, so its arms do pool with lines without a beat (a whisper opener to him shares the
+  `whisper` context).
 - **Golden prompts**: `golden_prompts.json` records the tuning scenario with the beat off (its
   one whisper answer is unchanged); `golden_beat.json` (`scenario.record_beat`) holds two answers
   to his whispers with it on: every request as sent.

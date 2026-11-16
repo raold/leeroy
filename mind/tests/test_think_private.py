@@ -138,10 +138,15 @@ def test_parse_takes_only_the_schema():
     assert beats.parse("[1, 2]", wants, items) == (None, "schema")
     assert beats.parse(json.dumps({"read": "x", "lands": "y", "want": "vent"}), wants, items) \
         == (None, "schema")  # no use
-    for bad in ({"want": "dance"}, {"use": 3}, {"use": 0}, {"use": True}, {"use": "1"},
-                {"read": 5}):
+    for bad in ({"want": "dance"}, {"use": 3}, {"use": -1}, {"use": True}, {"use": False},
+                {"use": "1"}, {"use": "0"}, {"read": 5}):
         assert beats.parse(json.dumps({**VENT, **bad}), wants, items) == (None, "schema"), bad
     assert beats.parse(json.dumps({**VENT, "read": "  "}), wants, items) == (None, "empty")
+    # Orion writes 0 for nothing to bring in: the beat stands, with nothing brought in
+    assert beats.parse(json.dumps({**VENT, "use": 0}), wants, items) == (
+        beats.Beat(VENT["read"], VENT["lands"], "vent", None), "")
+    assert beats.parse(json.dumps({**VENT, "use": 0}), wants, []) == (
+        beats.Beat(VENT["read"], VENT["lands"], "vent", None), "")
     assert beats.parse(json.dumps({**VENT, "want": "flirt"}), beats.wants_for(False), items) \
         == (None, "schema")
 
@@ -169,6 +174,29 @@ def test_items_are_memories_then_others_lines_newest_first():
     assert beats.items_of(["m1", "m2"], ["old", "new"]) == ["m1", "m2", "new", "old"]
     assert len(beats.items_of(["m"] * 9, [])) == beats.MAX_ITEMS
     assert len(beats.items_of(["x " * 200], [])[0]) <= beats.ITEM_CHARS
+
+
+def test_offered_memories_are_plain_text():
+    """A memory is offered as its text, not as the prompt's "- 2 days ago: ..." line; a private
+    memory keeps its tail."""
+    from datetime import timezone
+    from conftest import make_mem
+    from leeroy_mind.memory.recall import PRIVATE_TAIL, format_memory
+    now = 1000 + 2 * 86400
+    shown = format_memory(make_mem(text="Coros pulled early again: twice."), now, tz=timezone.utc)
+    assert shown.startswith("- ") and beats.unframed(shown) == "Coros pulled early again: twice."
+    private = format_memory(make_mem(text="He told you about his job.", scope="private",
+                                     scope_with=1), now, tz=timezone.utc)
+    assert beats.unframed(private) == "He told you about his job." + PRIVATE_TAIL
+    assert beats.unframed("no frame here") == "no frame here"
+
+
+def test_his_time_follows_his_configured_pronouns():
+    for their in ("his", "her", "their"):
+        asked = beats.instruction("Zan", beats.wants_for(True), [], their)
+        described = beats.schema(beats.wants_for(True), "Zan", their)["properties"]["want"]
+        assert f"ask: you want something from Zan: {their} time" in asked
+        assert f"{their} time" in described["description"]
 
 
 def test_each_want_is_described_and_ask_is_wanting_something_from_him():
@@ -249,7 +277,7 @@ def test_his_whisper_gets_a_beat_then_the_line(rig):
     rig.whisper_from_him(102, "long shift, dead on my feet")
     rig.run()
     first, second = rig.chat_calls()
-    assert first["format"] == beats.schema(beats.wants_for(True), "Zan")
+    assert first["format"] == beats.schema(beats.wants_for(True), "Zan", "his")  # he/him
     assert first["think"] is False  # never left out for Orion: it would think
     assert first["options"] == {"temperature": 0.9, "min_p": 0.05, "top_p": 1.0,
                                 "num_predict": 240, "num_ctx": NUM_CTX}
@@ -288,7 +316,7 @@ def test_bring_in_names_what_she_was_offered(rig):
     first_beat, second_beat = beat_calls(rig)
     assert last_user(first_beat).endswith(beats.USE_NONE)  # nothing before his line
     offered = last_user(second_beat).rsplit("\n", 1)[-1]
-    assert offered.startswith("1. ") and "Zan" in offered and "hey you" in offered
+    assert offered == "1. hey you"  # his earlier line as plain text: no age, no speaker
     listed = last_user(second_beat).split("worth bringing in, or null:", 1)[1]
     assert "mm hi stranger" not in listed and "my boss again" not in listed  # hers, his newest
     assert last_user(line_calls(rig)[-1]).endswith("\nBring in: " + offered[3:])
@@ -347,6 +375,38 @@ def test_a_paused_gpu_skips_the_beat(rig, caplog):
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         assert rig.sync(rig.engine._beat(turn, meta, composed(rig))) == ""
     assert "think_beat_skipped: guid=102 reason=gpu_paused" in caplog.text
+
+
+@pytest.mark.parametrize("change,reason", [("scope", "scope_changed"), ("deadline", "expired")])
+def test_scope_and_deadline_are_checked_again_after_admission(rig, caplog, change, reason):
+    rig.llm.set_script(model(VENT))
+    turn, meta = whisper_turn()
+    valid = [True]
+    meta.still_valid = lambda: valid[0]
+
+    async def admission():
+        if change == "scope":
+            valid[0] = False  # he deleted his post while the hand-back ran
+        else:
+            turn.deadline = rig.clock.now() - 1
+    rig.engine.live_admission = admission
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        assert rig.sync(rig.engine._beat(turn, meta, composed(rig))) == ""
+    assert f"think_beat_skipped: guid=102 reason={reason}" in caplog.text
+    assert not beat_calls(rig)  # no request was made after it
+
+
+def test_a_beat_that_cannot_be_prepared_is_skipped(rig, caplog, monkeypatch):
+    """Its preparation runs inside the same guard: nothing in it may cost him his answer."""
+    def broken(*args, **kwargs):
+        raise ValueError("unexpected")
+    monkeypatch.setattr(beats, "fitting", broken)
+    rig.llm.set_script(model(VENT, "hey, yeah"))
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        rig.whisper_from_him(102, "you up?")
+        rig.run()
+    assert "think_beat_skipped: guid=102 reason=error" in caplog.text
+    assert [s.text for s in rig.sent.says()] == ["hey, yeah"] and not beat_calls(rig)
 
 
 def test_a_slow_beat_is_given_up_after_its_timeout(rig, caplog, monkeypatch):
@@ -430,6 +490,17 @@ def test_a_line_after_a_beat_is_recorded_as_one(rig):
         "SELECT c.channel, p.model_id FROM talk_recipe p JOIN chat_line c ON c.id=p.line_id"))
     assert models == {"whisper": rig.cfg.models.live + BEAT_SUFFIX,
                       "guild": rig.cfg.models.live}
+
+
+def test_the_recipe_names_the_beat_only_when_it_ran():
+    from types import SimpleNamespace
+    from leeroy_mind.learn.recipe import Snapshot, called_model
+    options = {"temperature": 0.9, "num_predict": 80, "num_ctx": NUM_CTX}
+    for beat, want in ((False, ()), (True, (("beat", True),))):
+        meta = SimpleNamespace(recipe_snapshot=Snapshot("t", "0" * 16, "0" * 64, "m"))
+        called_model(meta, "orion", options, beat=beat)
+        params = meta.recipe_snapshot.parameters
+        assert params == tuple(options.items()) + want
 
 
 def test_the_beat_never_reaches_a_log_a_line_or_the_store(rig, caplog):

@@ -1231,35 +1231,40 @@ class Pipeline:
         """One short call on the turn's own prompt, constrained to beat.schema with think false:
         the lines it gives the answer, or "" when it is skipped (an error, BEAT.timeout seconds
         passed, the queue's included, or a reply that is empty or not the schema), and the line
-        goes as it would without it. Its time counts in the turn's llm_s. Logs carry the want
-        code and times, never its words."""
-        human = self.human.called
-        wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0)
-        options = dict(BEAT.options)
-        options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
-        items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
-                              wants, c.beat_items, predict=options["num_predict"],
-                              num_ctx=options["num_ctx"])
-        if items is None:
-            log.info("think_beat_skipped: guid=%d reason=room ms=0", turn.speaker)
-            return ""
-        messages = _with_hint(c.messages, beats.instruction(human, wants, items))
-        fmt = beats.schema(wants, human)
-
-        async def job(llm):
-            if not _scope_valid(meta):
-                raise _ScopeChanged("scope_changed")
-            if self.live_admission is not None:
-                await self.live_admission()
-            return await llm.chat(self.cfg.models.live, messages, options=options, think=False,
-                                  format=fmt, timeout=BEAT.timeout)
-        started, reason = self.clock.now(), ""
+        goes as it would without it. Its preparation runs inside the same guard, and after a wait
+        for admission the scope and the deadline are checked again, as _ask does. Its time counts
+        in the turn's llm_s. Logs carry the want code and times, never its words."""
+        started, reason, wants, items = self.clock.now(), "", (), []
         try:
-            credit = meta.borrow_credit
-            extra = {'credit': credit} if credit is not None else {}
-            result = await asyncio.wait_for(
-                self.scheduler.submit(turn.priority, job, deadline=turn.deadline, **extra),
-                BEAT.timeout)
+            human, their = self.human.called, self.human.forms[2]
+            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0)
+            options = dict(BEAT.options)
+            options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
+            items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
+                                  wants, c.beat_items, predict=options["num_predict"],
+                                  num_ctx=options["num_ctx"], their=their)
+            if items is None:
+                reason = "room"
+            else:
+                messages = _with_hint(c.messages, beats.instruction(human, wants, items, their))
+                fmt = beats.schema(wants, human, their)
+
+                async def job(llm):
+                    if not _scope_valid(meta):
+                        raise _ScopeChanged("scope_changed")
+                    if self.live_admission is not None:
+                        await self.live_admission()
+                        if not _scope_valid(meta):
+                            raise _ScopeChanged("scope_changed")
+                        if self.scheduler.expired(self._deadline(turn, meta)):
+                            raise Expired(turn.deadline)
+                    return await llm.chat(self.cfg.models.live, messages, options=options,
+                                          think=False, format=fmt, timeout=BEAT.timeout)
+                credit = meta.borrow_credit
+                extra = {'credit': credit} if credit is not None else {}
+                result = await asyncio.wait_for(
+                    self.scheduler.submit(turn.priority, job, deadline=turn.deadline, **extra),
+                    BEAT.timeout)
         except TimeoutError:
             reason = "timeout"
         except GpuPaused:
@@ -1537,8 +1542,8 @@ class Pipeline:
                 log.warning("awareness_card_failed guid=%d",turn.speaker)
                 if meta.review_required:
                     raise ValueError("awareness_unavailable") from None
-        redacted = redact_for(parts, human, bool(real))
-        trimmed = trim_to_budget(redacted, budget=self._prompt_budget(turn))
+        trimmed = trim_to_budget(redact_for(parts, human, bool(real)),
+                                 budget=self._prompt_budget(turn))
         if meta.learning is not None:
             from leeroy_mind.learn.apply import used
             used(meta, len(trimmed.style))
@@ -1567,6 +1572,11 @@ class Pipeline:
             support.append(callback.seed)
             meta.memory_ids = list(dict.fromkeys([*meta.memory_ids, callback.memory_id]))
         messages = render_messages(trimmed)
+
+        def plain(text: str) -> str:  # a chat line as a beat item, redacted as redact_for does
+            text = strip_wow_markup(text)
+            return text if real or not human.real_name else redact_real_name(text, human,
+                                                                            human.called)
         return Composed(messages,
                         list(dict.fromkeys([m.id for m in memories[:len(trimmed.memories)]] +
                              ([callback.memory_id] if callback else []))), p, close,
@@ -1576,10 +1586,12 @@ class Pipeline:
                         support, [r.text for r in recent if r.from_guid == hg] if dm_rows
                         else [r.text for r in recent if r.id != turn.trigger_line],
                         [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves,
+                        # as plain text (no age, speaker or bullet): the shown memories, then the
                         # others' earlier lines, never hers nor the line she answers
-                        beat_items=beats.items_of(trimmed.memories, [
-                            text for r, text in zip(recent[:-1], redacted.chat)
-                            if r.from_guid != turn.speaker and r.id != turn.trigger_line]))
+                        beat_items=beats.items_of(
+                            [beats.unframed(x) for x in trimmed.memories],
+                            [plain(r.text) for r in recent[:-1]
+                             if r.from_guid != turn.speaker and r.id != turn.trigger_line]))
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:

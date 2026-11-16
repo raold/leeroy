@@ -43,7 +43,7 @@ WANTS = {
 MEANING = {
     "vent": "you need to get something that is bothering you off your chest",
     "share": "you want to tell {human} something of your own: news, a story, your day",
-    "ask": "you want something from {human}: his time, a favour, attention, a yes "
+    "ask": "you want something from {human}: {their} time, a favour, attention, a yes "
            "(not just that you ask a question)",
     "tease": "you want to poke fun at {human}, playfully",
     "flirt": "you want to flirt with {human}",
@@ -91,47 +91,55 @@ def wants_for(can_flirt: bool) -> tuple[str, ...]:
 
 
 def items_of(memories: list[str], chat: list[str]) -> list[str]:
-    """What `use` may point at: the memories the prompt showed, then `chat` (the others' earlier
-    lines it showed, oldest first; never hers, nor the line she answers) newest first, at most
-    MAX_ITEMS, each cut to ITEM_CHARS."""
+    """What `use` may point at, as plain text (no age, speaker or bullet, so "Bring in" never
+    reads as a chat line to copy): `memories` (the memories the prompt showed), then `chat` (the
+    others' earlier lines in its chat window, oldest first; never hers, nor the line she answers)
+    newest first, at most MAX_ITEMS, each cut to ITEM_CHARS."""
     out = [*memories, *reversed(chat)]
     return [truncate_words(" ".join(x.split()), ITEM_CHARS) for x in out if x.strip()][:MAX_ITEMS]
 
 
-def _meanings(human: str, wants: tuple[str, ...]) -> list[str]:
-    return [f"{w}: {MEANING[w].format(human=human)}" for w in wants]
+def unframed(memory: str) -> str:
+    """A memory line as the prompt shows it (memory.recall.format_memory: "- <when>: <text>",
+    any scope tail kept) without its bullet and age."""
+    return memory.split(": ", 1)[1] if memory.startswith("- ") and ": " in memory else memory
 
 
-def schema(wants: tuple[str, ...], human: str) -> dict:
-    """The beat's JSON schema for Ollama's `format`, each field described as the ask describes it."""
+def _meanings(human: str, wants: tuple[str, ...], their: str) -> list[str]:
+    return [f"{w}: {MEANING[w].format(human=human, their=their)}" for w in wants]
+
+
+def schema(wants: tuple[str, ...], human: str, their: str = "their") -> dict:
+    """The beat's JSON schema for Ollama's `format`, each field described as the ask describes it.
+    `their`: his possessive form (HumanIdentity.forms)."""
     return {"type": "object",
             "properties": {
                 "read": {"type": "string", "description": READ_DESCRIPTION.format(human=human)},
                 "lands": {"type": "string", "description": LANDS_DESCRIPTION},
                 "want": {"type": "string", "enum": list(wants),
                          "description": " ".join([WANT_DESCRIPTION, *(
-                             m + "." for m in _meanings(human, wants))])},
+                             m + "." for m in _meanings(human, wants, their))])},
                 "use": {"type": ["integer", "null"], "description": USE_DESCRIPTION}},
             "required": ["read", "lands", "want", "use"]}
 
 
-def instruction(human: str, wants: tuple[str, ...], items: list[str]) -> str:
+def instruction(human: str, wants: tuple[str, ...], items: list[str], their: str = "their") -> str:
     """The beat call's own last words, after the turn's prompt; never in the line's prompt."""
-    listed = "\n".join(f"- {m}" for m in _meanings(human, wants))
+    listed = "\n".join(f"- {m}" for m in _meanings(human, wants, their))
     use = (USE_ITEMS.format(items="\n".join(f"{i}. {x}" for i, x in enumerate(items, 1)))
            if items else USE_NONE)
     return INSTRUCTION.format(human=human, wants=listed, use=use)
 
 
 def fitting(prompt_tokens: int, human: str, wants: tuple[str, ...], items: list[str], *,
-            predict: int, num_ctx: int) -> list[str] | None:
+            predict: int, num_ctx: int, their: str = "their") -> list[str] | None:
     """The offered items the beat's request can carry inside num_ctx, its prompt (the turn's,
     `prompt_tokens` estimated, plus the instruction) counted ESTIMATE_SLACK over the estimate:
     the last items go first (the oldest chat lines, then the least relevant memories). None when
     even no item fits (the beat is then skipped)."""
     items = list(items)
     while True:
-        asked = prompt_tokens + 1 + estimate_tokens(instruction(human, wants, items))
+        asked = prompt_tokens + 1 + estimate_tokens(instruction(human, wants, items, their))
         if asked * ESTIMATE_SLACK + TEMPLATE_TOKENS + predict <= num_ctx:
             return items
         if not items:
@@ -147,7 +155,8 @@ def _clean(value, limit: int) -> str | None:
 
 def parse(text: str, wants: tuple[str, ...], items: list[str]) -> tuple[Beat | None, str]:
     """The beat in the model's reply, or None and why it is skipped: "empty" (no reply, or no
-    read or lands) or "schema" (not the object the schema asks for)."""
+    read or lands) or "schema" (not the object the schema asks for). `use` 0 is none: Orion
+    writes 0 for nothing to bring in (2 of 30 live beats)."""
     if not text.strip():
         return None, "empty"
     try:
@@ -160,6 +169,8 @@ def parse(text: str, wants: tuple[str, ...], items: list[str]) -> tuple[Beat | N
                               data["want"], data["use"])
     if read is None or lands is None or want not in wants:
         return None, "schema"
+    if type(use) is int and use == 0:
+        use = None
     if use is not None and (type(use) is not int or not 1 <= use <= len(items)):
         return None, "schema"
     if not read or not lands:
