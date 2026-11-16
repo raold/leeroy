@@ -176,8 +176,10 @@ and the console) reads her day:
   commute.
 
 **Replies on her own time.** `DiscordTalk.own_time()` is `[talk] dm_own_time` or availability
-above 0. So with availability above 0 his DM is answered at once while she is online by her day
-(free, gaming, home duty) or talking with him, and waits while she is away by her schedule
+above 0. So with availability above 0 his DM (and his group DM, per member) is answered at once
+while she is online by her day (free, gaming, home duty), talking with him, or in his WoW group
+while he plays (`owntime.with_him`: Discord shows her online and playing then), and waits while
+she is away by her schedule
 (asleep, at work, driving, at the gym, out): `discord_dm_later`, meta
 `discord:dm:deferred:<guid>`, then `discord_dm_answered_later` (urgent words and three posts in a
 row still cut the wait). The waits (`owntime.PHONE_S` for idle and dnd, `BACK_S` after she is

@@ -161,3 +161,18 @@ def test_group_composed_prompt_has_friendship_without_romance_or_private_notes(s
             'PRIVATE_ROMANTIC_NOTE_FIXTURE','LOCAL-OVERLAY'))
     finally:
         rig.sync(talk.close()); rig.close()
+
+
+def test_group_dm_member_in_his_wow_group_answers_at_once_whatever_her_schedule(store,tmp_path):
+    from discord.test_own_time import in_his_group, life
+    rig,talk,desk=setup(store,tmp_path,hour=2)  # 02:00 for the US cast: asleep by schedule
+    try:
+        life(rig)
+        in_his_group(rig,101)
+        ch=ask(rig,desk,action='group_create',members=[101,102])['channel']
+        text=' '.join('@'+rig.engine.personas.get(g).character_name for g in (101,102))+' the kettle finally died'
+        mid=ask(rig,desk,action='post',channel=ch,text=text)['id']
+        run_for(rig,talk,150)
+        assert [m['author'] for m in answers(rig,ch,mid)]==[101]  # 102 waits for her morning
+    finally:
+        rig.sync(talk.close()); rig.close()
