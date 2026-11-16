@@ -1,4 +1,4 @@
-"""python -m leeroy_mind selfies status | try (P2 Task 14) | vary.
+"""python -m leeroy_mind selfies status | try (P2 Task 14) | vary | critic | critic-report.
 
 status is read-only (a mode=ro connection, never a migration): the queue's counts and the
 latest night's selfie stages. try is the acceptance run before enabling: it holds the mind's
@@ -14,7 +14,13 @@ store it); stdout carries the enum codes, the fallbacks and the NSFW score, neve
 vary --stance lust plans (the default, read-only) or queues (--go) a varied set (varied.py) for
 every cast member of the lust style. With the mind stopped --go holds its instance lock and
 writes the rows itself; while it runs, --go asks the running mind's `selfie` op (`vary`), the
-one writer of photo rows then. Rendering stays the night's and the booth's."""
+one writer of photo rows then. Rendering stays the night's and the booth's.
+
+critic --path FILE [--ref FILE [--crop L,T,R,B]] measures one JPEG as the photo critic does
+(selfies/critic.py) with the mind stopped: an embed-only selfie worker's detectors, then, once
+that worker has exited, the vision judge ([selfies] critic_model, never pulled here; --no-judge
+skips it). Nothing is written. critic-report reads the stored selfie_critic rows (mode=ro): defect
+rates by purpose, framing, outfit, prop, scale and steps, and the parameter bandit's arms."""
 import argparse
 import json
 import asyncio
@@ -96,6 +102,14 @@ def _parser():
     mode = sub.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
     mode.add_argument("--go", action="store_true", help="queue the sets for the night")
+    sub = subs.add_parser("critic", help="measure one JPEG as the photo critic does (mind "
+                          "stopped; writes nothing)")
+    sub.add_argument("--path", required=True, help="the JPEG to measure")
+    sub.add_argument("--ref", help="her reference JPEG, for the identity cosine and the judge")
+    sub.add_argument("--crop", type=_crop, default=(0.0, 0.0, 1.0, 1.0),
+                     help="the reference's square as fractions L,T,R,B (default: all of it)")
+    sub.add_argument("--no-judge", action="store_true", help="the detectors only")
+    subs.add_parser("critic-report", help="defect rates from the stored critic rows (read-only)")
     sub = subs.add_parser("variety", help="plan or re-roll similar chosen faces (mind stopped)")
     sub.add_argument("--top", type=_positive, default=30)
     sub.add_argument("--release", type=lambda text: tuple(_positive(g) for g in text.split(",")),
@@ -106,6 +120,69 @@ def _parser():
     for sub in subs.choices.values():
         _data_arg(sub, child=True)
     return parser
+
+
+def _crop(text: str) -> tuple[float, float, float, float]:
+    try:
+        crop = tuple(float(v) for v in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError("four fractions L,T,R,B") from None
+    if (len(crop) != 4 or not all(0 <= v <= 1 for v in crop) or not crop[0] < crop[2]
+            or not crop[1] < crop[3] or abs((crop[2] - crop[0]) - (crop[3] - crop[1])) > 0.001):
+        raise argparse.ArgumentTypeError("a square of four fractions L,T,R,B")
+    return crop
+
+
+def _jpeg(text: str | None) -> Path | None:
+    if text is None:
+        return None
+    path = Path(text).resolve()
+    if path.suffix.lower() != ".jpg" or not path.is_file():
+        raise ValueError("not_a_jpg_file")
+    return path
+
+
+async def _critic_one(cfg, scfg, args, make_worker, make_llm) -> dict:
+    """One JPEG measured: the embed-only worker's detectors, the worker stopped, then the
+    judge. Codes, counts and scores only."""
+    from . import critic
+    from .judge import VisionJudge
+    path, ref = _jpeg(args.path), _jpeg(args.ref)
+    worker = (make_worker() if make_worker is not None else
+              SelfieWorker(worker_command(scfg, embedding=True), env=worker_env(scfg)))
+    try:
+        await worker.start()
+        measured = await worker.critic(path, ref=ref, crop=args.crop if ref else None)
+    finally:
+        await to_the_end(worker.stop())
+    judged, model = None, None
+    if not args.no_judge:
+        from leeroy_mind.llm.client import OllamaClient
+        llm = make_llm(cfg) if make_llm is not None else OllamaClient(cfg.ollama.url)
+        judge = VisionJudge(llm, scfg.critic_model)
+        judged = await judge.judge(path, ref)
+        model = scfg.critic_model if judged is not None else None
+    verdict = critic.verdict(measured, judged)
+    return {"faces": measured.faces, "hands": measured.hands,
+            "fingers": [h.fingers for h in measured.hand], "hands_odd": measured.hands_odd,
+            "eye_tilt": measured.eye_tilt, "eye_level": measured.eye_level,
+            "gaze_gap": measured.gaze_gap, "identity": measured.identity,
+            "identity_code": measured.identity_code, "detectors": dict(measured.detectors),
+            "judge_model": model,
+            "judge": None if judged is None else {
+                "limbs": judged.limbs, "hands": judged.hands, "fingers_ok": judged.fingers_ok,
+                "eyes_ok": judged.eyes_ok, "extra_people": judged.extra_people,
+                "same_person": judged.same_person, "overall": judged.overall},
+            "verdict": "clean" if verdict.clean else "flagged", "codes": list(verdict.codes),
+            "score": verdict.score}
+
+
+def _critic_report(store) -> dict:
+    from . import critic, params
+    try:
+        return {**critic.report(store.conn), "arms": params.arms(store.conn)}
+    except sqlite3.OperationalError:
+        return {"missing": ["selfie_critic"]}
 
 
 def _stages(conn) -> dict:
@@ -587,6 +664,16 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             with _read_store(root / "mind.db", clock) as store:
                 _print(_status(store, clock))
             return 0
+        if args.action == "critic-report":
+            with _read_store(root / "mind.db", clock) as store:
+                _print(_critic_report(store))
+            return 0
+        if args.action == "critic":
+            cfg = load_config(root / "mind.toml")
+            scfg = load_selfie_config(root / "mind.toml")
+            with _exclusive(root, gpu=True):
+                _print(asyncio.run(_critic_one(cfg, scfg, args, make_worker, make_llm)))
+            return 0
         if args.action == "restyle":
             from .restyle import run
             from leeroy_mind.storage.db import open_db
@@ -642,6 +729,8 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             print("selfies restyle: mind must be stopped", file=sys.stderr)
         elif args.action == "variety":
             print("selfies variety: mind must be stopped", file=sys.stderr)
+        elif args.action == "critic":
+            print("selfies critic: mind must be stopped (it would share the GPU)", file=sys.stderr)
         else:
             print(f"{exc}; selfies try would share its GPU and could unload its live model")
         return 1
@@ -662,6 +751,10 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             from leeroy_mind.personas.looks_diversity import LooksRefused
             message = (str(exc) if isinstance(exc, (LooksRefused, WorkerError)) else
                        "filesystem_error" if isinstance(exc, OSError) else "variety_failed")
+        elif args.action in ("critic", "critic-report"):
+            message = (str(exc) if isinstance(exc, (WorkerError, ValueError)) else
+                       "database_error" if isinstance(exc, sqlite3.Error) else
+                       "filesystem_error" if isinstance(exc, OSError) else "critic_failed")
         else:
             message = f"{type(exc).__name__}: {exc}"
         print(f"selfies {args.action} failed: {message}", file=sys.stderr)

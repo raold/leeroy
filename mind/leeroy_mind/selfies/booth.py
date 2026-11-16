@@ -17,7 +17,7 @@ from leeroy_mind.logs import log
 from leeroy_mind.nightly.gpu import LiveLeaseHeld
 
 from .config import worker_command, worker_env
-from .render import RenderPolicy, done_sets, queue, render, todo
+from .render import RenderPolicy, done_sets, queue, render, settle_sets, todo
 from .worker import SelfieWorker, to_the_end
 
 STAGE = "selfies_booth"
@@ -190,6 +190,7 @@ class PhotoBooth:
                     outcome = "partial" if ctx.failures else "done"
                 finally:
                     await to_the_end(w.stop())
+                await settle_sets(ctx, self.cfg)  # [selfies] critic, the worker gone
                 # Normal completion only. A live lease now owns the next cold preload.
                 with suppress(LiveLeaseHeld):
                     await self.arbiter.make_room()

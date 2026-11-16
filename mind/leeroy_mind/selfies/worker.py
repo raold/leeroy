@@ -367,6 +367,40 @@ class SelfieWorker:
             await self._end_failed(tree)
             raise WorkerError("gone") from None
 
+    async def critic(self, path: Path, *, ref: Path | None = None,
+                     crop: tuple[float, float, float, float] | None = None,
+                     rid: str | None = None):
+        """The photo critic's measurements of the JPEG at `path` (critic.Critique), with `ref`
+        and its square `crop` the identity cosine to her reference too. An ok false answer
+        (missing_image, missing_ref, bad_request, ...) raises WorkerError(<error>) and leaves the
+        worker running; a malformed one ends the tree (WorkerError("gone"))."""
+        from .critic import Malformed, from_answer
+        self._sequence += 1
+        rid = f"k{self._sequence}" if rid is None else rid
+        if type(rid) is not str or not 1 <= len(rid) <= 32:
+            raise ValueError("a request id is 1-32 characters")
+        if (ref is None) != (crop is None):
+            raise ValueError("ref and crop go together")
+        body = {"id": rid, "op": "critic", "path": str(path)}
+        if ref is not None:
+            body.update(ref=str(ref), crop=list(crop))
+        line = json.dumps(body).encode("utf-8") + b"\n"
+        if len(line) - 1 > MAX_LINE:
+            raise WorkerError("bad_request")
+        tree = self._tree
+        if not self.running:
+            if tree is not None and tree.process.returncode is not None:
+                await self._end_failed(tree)
+            raise WorkerError("gone")
+        answer = await self._answer(tree, rid, self._render_s, line)
+        if not answer["ok"]:
+            raise WorkerError(_reason(answer))
+        try:
+            return from_answer(answer)
+        except Malformed:
+            await self._end_failed(tree)
+            raise WorkerError("gone") from None
+
     async def embed(self, ref: Path) -> tuple[float, ...]:
         """One chosen JPEG, with bounded numeric-only output from the pinned encoder."""
         from .similarity import MODEL, checked

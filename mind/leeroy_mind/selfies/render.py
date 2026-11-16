@@ -92,13 +92,79 @@ def seed_for(night: str, guid: int, set_no: int, idx: int, attempt: int) -> int:
     return int.from_bytes(digest[:4], "big")
 
 
+class SetMeasure:
+    """[selfies] critic for one profile set: the parameter bandit's scale and steps for a slot
+    that carries her face at full strength (params.choose; a back view or a looks-edit set keeps
+    its own), and the worker's detector measurements of each candidate, kept as the selfie_critic
+    rows the set's commit writes (pending: the judge settles them once the worker has exited)."""
+
+    def __init__(self, ctx, cfg: SelfieCfg, guid: int, set_no: int, framing: str | None,
+                 style: str, face_expected: tuple[bool, ...]):
+        self.ctx, self.cfg, self.guid, self.set_no = ctx, cfg, guid, set_no
+        self.framing, self.style, self.face_expected = framing, style, face_expected
+        self.rows: list[dict] = []
+
+    def params(self, identity: Identity | None):
+        """(identity, steps, arm) of one slot."""
+        from .params import choose
+        if (identity is None or self.framing is None
+                or abs(identity.scale - self.cfg.identity_scale) > 1e-9):
+            return identity, self.cfg.steps, False
+        got = choose(self.ctx.store, self.cfg, self.ctx.settings.data_dir, shape="square",
+                     framing=self.framing, control=(identity.scale, self.cfg.steps))
+        if got.scale != identity.scale:
+            identity = Identity(identity.ref, identity.crop, got.scale)
+        return identity, got.steps, got.arm
+
+    async def measure(self, worker, idx: int, out: Path, identity: Identity | None, seed: int,
+                      steps: int, arm: bool) -> None:
+        from . import bestof, critic
+        data = self.ctx.settings.data_dir
+        measured = await bestof.measure(worker, out, identity)
+        self.rows.append(dict(
+            run=self.ctx.night, purpose="set", guid=self.guid, set_no=self.set_no, idx=idx,
+            seed=seed, file=critic.rel(data, files.candidate(data, self.guid, self.set_no, idx)),
+            ref=None if identity is None else critic.rel(data, identity.ref),
+            crop=None if identity is None else identity.crop, critique=measured,
+            framing=self.framing, outfit=self.style, prop=None,
+            scale=None if identity is None else identity.scale, steps=steps, arm=arm,
+            face_expected=self.face_expected[idx]))
+
+    def write(self, store, now: float) -> None:
+        from . import critic
+        for row in self.rows:
+            critic.insert(store, now=now, **row)
+
+
+async def settle_sets(ctx: "NightContext", cfg: SelfieCfg) -> None:
+    """[selfies] critic, once the stage's worker has exited: the judge settles the pending
+    selfie_critic rows (critic.settle), the parameter bandit takes its credit from them and from
+    his picks since the last pass (params.credit_picks), and the judge's model leaves the GPU."""
+    if not getattr(cfg, "critic", False):
+        return
+    from . import critic, params
+    from .judge import VisionJudge
+    data = ctx.settings.data_dir
+    judge = VisionJudge(ctx.reasoner.llm, cfg.critic_model)
+    now = ctx.clock.now()
+
+    def credit(row, verdict, judged):
+        params.credit_row(ctx.store, cfg, data, row, verdict, judged,
+                          shape="square" if row["purpose"] == "set" else "portrait", now=now)
+    await critic.settle(ctx.store, data, judge, now=now, on_settled=credit)
+    params.credit_picks(ctx.store, cfg, data, now=now)
+    if judge.used:
+        await critic.unload(ctx.arbiter.admin, judge.model)
+
+
 async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], out_dir: Path, *,
                             night: str, guid: int,
                             set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
                             leases: Callable[[], frozenset[str]] | None = None,
                             fallback: PromptSpec | None = None,
                             dropped: set[int] | None = None,
-                            identity: tuple[Identity | None, ...] | None = None) -> list[Candidate]:
+                            identity: tuple[Identity | None, ...] | None = None,
+                            measure: SetMeasure | None = None) -> list[Candidate]:
     """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each: every slot
     from `spec`, or slot i from spec[i] when it is a tuple of four (a varied set). A slot whose
     prompt the worker finds too long ("prompt_too_long") renders from `fallback` instead when
@@ -107,7 +173,8 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
     and nothing is sent. Raises SetRefused when a slot is flagged TRIES times, RoomFailed when
     make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot, an
     image answered as written whose two files are not both there ("unwritten") or any other
-    worker failure, and LiveLeaseHeld. `identity` gives slot i its face reference (None: none)."""
+    worker failure, and LiveLeaseHeld. `identity` gives slot i its face reference (None: none).
+    `measure` ([selfies] critic) chooses each slot's parameters and measures each candidate."""
     out_dir = Path(out_dir).absolute()
     specs = (spec,) * SET_SIZE if isinstance(spec, PromptSpec) else tuple(spec)
     if len(specs) != SET_SIZE:
@@ -120,7 +187,7 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
         try:
             made.append(await _slot(worker, specs[idx], out_dir, idx, night=night, guid=guid,
                                     set_no=set_no, cfg=cfg, make_room=make_room, leases=leases,
-                                    identity=faces[idx]))
+                                    identity=faces[idx], measure=measure))
         except WorkerError as e:
             if e.reason != "prompt_too_long" or fallback is None or specs[idx] is fallback:
                 raise
@@ -131,7 +198,7 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
             front = next((f for f in faces if f is not None and f.scale >= cfg.identity_scale), None)
             made.append(await _slot(worker, fallback, out_dir, idx, night=night, guid=guid,
                                     set_no=set_no, cfg=cfg, make_room=make_room, leases=leases,
-                                    tag="o", identity=front or faces[idx]))
+                                    tag="o", identity=front or faces[idx], measure=measure))
     return made
 
 
@@ -156,13 +223,16 @@ async def _room(make_room: Callable[[], Awaitable[None]], *, night: str, guid: i
 async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str, guid: int,
                 set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
                 leases: Callable[[], frozenset[str]] | None, tag: str = "",
-                identity: Identity | None = None) -> Candidate:
+                identity: Identity | None = None, measure: SetMeasure | None = None) -> Candidate:
     out, thumb = out_dir / f"c{idx}.jpg", out_dir / f"c{idx}.thumb.jpg"
+    steps, arm = cfg.steps, False
+    if measure is not None:
+        identity, steps, arm = measure.params(identity)
 
     def request(attempt: int) -> RenderRequest:
         _unleased(leases)
         return RenderRequest(spec.phrases, spec.negative,
-                             seed_for(night, guid, set_no, idx, attempt), cfg.steps, cfg.guidance,
+                             seed_for(night, guid, set_no, idx, attempt), steps, cfg.guidance,
                              cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max, identity=identity)
 
     async def room() -> None:
@@ -178,6 +248,9 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
         raise refused from None
     if not (out.is_file() and thumb.is_file()):  # a ready set never points at nothing
         raise WorkerError("unwritten")
+    if measure is not None:
+        await measure.measure(worker, idx, out, identity,
+                              seed_for(night, guid, set_no, idx, attempts - 1), steps, arm)
     return Candidate(idx, seed_for(night, guid, set_no, idx, attempts - 1), attempts, got.nsfw,
                      got.prompt)
 
@@ -386,9 +459,29 @@ def _set_faces(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int, set_n
     return tuple(rear if v in BACK_VIEWS else full for v in views)
 
 
+def _set_measure(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int, set_no: int,
+                 varied: bool) -> SetMeasure | None:
+    """The set's SetMeasure while [selfies] critic is on: her photo kind's framing, the style it
+    rendered under, and which slots should show her face (a varied slot seen from behind not)."""
+    if not getattr(cfg, "critic", False):
+        return None
+    from .kind import BACK_VIEWS
+    views = (None,) * SET_SIZE
+    if varied:
+        from . import varied as varied_mod
+        with ctx.store.transaction():
+            plan = varied_mod.plan_of(ctx.store.conn, guid, set_no)
+        if plan:
+            views = tuple(None if x is None else x.view for x in plan)
+    style = "varied" if varied else (chosen_style(ctx.store, p) or PLAIN)
+    framing = p.photo.framing if p.photo is not None else None
+    return SetMeasure(ctx, cfg, guid, set_no, framing, style,
+                      tuple(v not in BACK_VIEWS for v in views))
+
+
 async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, p: Persona,
                       guid: int, set_no: int, varied: tuple[PromptSpec | None, ...] | None,
-                      dropped: set[int]) -> list[Candidate]:
+                      dropped: set[int], measured: list | None = None) -> list[Candidate]:
     """The set's candidates: every slot from her ordinary prompt, or a varied set's slots from
     their own prompts (`dropped` gets the slots that rendered her ordinary photo instead)."""
     data = ctx.settings.data_dir
@@ -406,18 +499,21 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     if faces is not None:
         log("selfies_set_face", night=ctx.night, guid=guid, set=set_no,
             scales=",".join(str(f.scale) for f in faces))
+    measure = _set_measure(ctx, cfg, p, guid, set_no, varied is not None)
+    if measure is not None and measured is not None:
+        measured.append(measure)
     made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders,
                                    fallback=None if varied is None else ordinary, dropped=dropped,
-                                   identity=faces)
+                                   identity=faces, measure=measure)
     files.publish_set(data, guid, set_no)
     return made
 
 
 def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate],
            lust: bool = False, varied: bool = False, dropped: frozenset[int] = frozenset(),
-           built_from: int | None = None):
+           built_from: int | None = None, measure: SetMeasure | None = None):
     """Mark the set ready, stamped with the persona version its prompts were built from
     (`built_from`; a weight or bust edit may have landed while it rendered), never the one in
     force at publish. A set that did not render as a varied one loses its plan, and one whose
@@ -430,6 +526,8 @@ def _ready(ctx: "NightContext", guid: int, set_no: int, made: list[Candidate],
                    else store.persona_versions(tier=None)[guid])
         mark_ready(store, guid, set_no, made, now=ctx.clock.now(), night=ctx.night,
                    persona_version=version, lust=lust)
+        if measure is not None:  # [selfies] critic: the candidates' rows, pending the judge
+            measure.write(store, ctx.clock.now())
         looks = plans.plan_of(store.conn, guid, set_no) if varied else None
         if looks is None or all(i in dropped or x is None for i, x in enumerate(looks)):
             plans.drop_plan(store, guid, set_no)
@@ -495,7 +593,8 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
             varied = specs is not None
             lust = lust or varied  # a varied set's looks are the lust style's
             dropped: set[int] = set()
-            made = await _render_set(ctx, cfg, worker, p, guid, set_no, specs, dropped)
+            measured: list = []
+            made = await _render_set(ctx, cfg, worker, p, guid, set_no, specs, dropped, measured)
         except LiveLeaseHeld:
             raise
         except WorkerError as e:  # RoomFailed too: contention either way
@@ -541,7 +640,8 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
             _discard(ctx,guid,set_no)
             continue
         if ctx.commit(policy.stage, unit, _ready(ctx, guid, set_no, made, lust, varied,
-                                                 frozenset(dropped), built_from)):
+                                                 frozenset(dropped), built_from,
+                                                 measured[0] if measured else None)):
             tally["ready"] += 1
             log("selfies_set_ready", night=ctx.night, guid=guid, set=set_no,
                 seconds=round(time.monotonic() - began, 1), tries=sum(c.tries for c in made),

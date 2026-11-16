@@ -567,3 +567,18 @@ def test_the_live_photo_request_keys_are_valid_and_listed(tmp_path):
     (tmp_path/'mind.toml').write_text('[photos]\nrequests=true\nscene_from_words=1\n')
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
     assert all(r['state']=='invalid' for r in rows if r['table']=='photos')
+
+
+def test_the_photo_critic_switches_are_listed_with_their_needs(tmp_path):
+    (tmp_path/'mind.toml').write_text('[selfies]\nenabled=true\ncritic=true\nbest_of=3\n'
+                                      'param_bandit=true\n')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    states = {(r['table'],r['key']):r['state'] for r in rows}
+    assert states['selfies','critic'] == states['selfies','param_bandit'] == 'on'
+    assert next(r for r in rows if r['key']=='param_bandit')['unmet'] == []
+    (tmp_path/'mind.toml').write_text('[selfies]\nparam_bandit=true\n')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert next(r for r in rows if r['key']=='param_bandit')['unmet'] == ['selfies.critic']
+    (tmp_path/'mind.toml').write_text('[selfies]\ncritic=true\nbest_of=9\n')
+    rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
+    assert all(r['state']=='invalid' for r in rows if r['table']=='selfies')

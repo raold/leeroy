@@ -424,6 +424,8 @@ SWITCHES = (
     ('photos','scene_from_words','Selfie scenes from his words','photos.requests'),
     ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
     ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
+    ('selfies','critic','Photo critic','selfies.enabled; critic_model pulled by the operator'),
+    ('selfies','param_bandit','Photo parameter bandit','selfies.critic'),
     ('personas','auto_newcomers','Newcomer personas',''),
     ('world','enabled','World personas','realm.enabled; Leeroy.World.Enable = 1'),
     ('playstyle','enabled','Play styles','Leeroy.PlayStyle.Enable = 1'),
