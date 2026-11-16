@@ -81,6 +81,12 @@ def _nightly_parser():
             sub.add_argument("--dry-run", action="store_true")
             sub.add_argument("--limit", type=_positive)
             sub.add_argument("--guid", type=_positive)
+    contact = subs.add_parser("life-contact", help="life beats that put him in a member's life "
+                              "off the game: a dry run unless --go (the mind stopped; snapshot "
+                              "first) retires them and makes beats naming him private")
+    _data_arg(contact, child=True)
+    contact.add_argument("--go", action="store_true")
+    contact.add_argument("--show", action="store_true", help="print the memories' texts too")
     return parser
 
 
@@ -413,6 +419,9 @@ def nightly_main(argv=None, *, make_llm=None):
     try:
         root = _root(args)
         cfg = load_config(root / "mind.toml")
+        if args.action == "life-contact":
+            from leeroy_mind.nightly.life_contact import run as life_contact
+            return life_contact(root, cfg, go=args.go, show=args.show, clock=clock)
         if args.action in ("status", "ledger"):
             with _read_store(root / "mind.db", clock) as store:
                 ident = _identity(cfg, store)

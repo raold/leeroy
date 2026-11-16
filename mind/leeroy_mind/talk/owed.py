@@ -15,22 +15,22 @@ Three layers, cheapest first:
    pushback's target, the first answer to his question, her line after his emote. When an owed
    turn ends with nothing said, the next answer to the same line in its job inherits the debt
    (Pipeline._run).
-2. In the turn (rescue_text): an owed answer the model left silent, whose drafts both kept a
-   tell, whose request failed or whose time ran out (RESCUABLE) gets owed_fallback, one more
-   short generation (OWED_HINT: a sentence or two, the contract #325 gives its own), checked
-   only against the hard screens (the fatal tells and BLOCKING: an unbacked shared-history
-   claim, a flirt at a member, a summons out of the game her arc doesn't allow, which the ask
-   warns of up front); a repeated move or a long draft no longer cost him his answer (a long
-   one is cut to its budget). With no usable draft, a short line built from his own message is
-   the answer (fallback_line): never empty, never emoji alone, never his words said back, and
-   always a reaction plus a question back. The same fallback stands in when every reviewed
-   draft only said his message back (guard_echo) or styling left nothing.
+2. In the turn: Pipeline._generate keeps an owed answer's soft-tells draft, else asks
+   Pipeline.owed_fallback, the one fallback (#325): a short generation on the turn's own prompt
+   checked only against the hard screens (OWED_HARD_TELLS), asked once more with what was wrong
+   in words when refused or silent. When the model request itself failed or ran late
+   (RESCUABLE: _generate gives up before its fallback), rescue_text asks owed_fallback with the
+   owed deadline. The guard review's own last tries (#323: a slip's clean part, a fresh draft)
+   stay as they are. An owed turn that still ends with nothing is the watchdog's to answer.
 3. The watchdog (OwedWatch, ticked by the app every second, working every TICK_S): a message of
    his still unanswered GRACE_S after it, with no answer to it in flight, gets a rescue turn,
    logged `owed_rescue` with a reason code: from the member a whisper or DM went to, else a
-   member present where he said it (one he named first, then the reply draw). At most
-   RESCUE_TRIES rescues a message, RETRY_S apart; a message older than MAX_AGE_S is let go
-   (`owed_given_up`).
+   member present where he said it (one he named first, then the reply draw). A rescue turn
+   (TurnMeta.owed_rescue) is the guarantee: where even owed_fallback finds nothing, its answer
+   is a short line built from his message (fallback_line: never empty, never emoji alone, never
+   his words said back, a reaction plus a question back), also in the guard review and when the
+   styling leaves nothing. At most RESCUE_TRIES rescues a message, RETRY_S apart; a message
+   older than MAX_AGE_S is let go (`owed_given_up`).
 
 Deliberate silences are held, never dropped: the watchdog waits and answers just after them,
 logging `owed_held` once per reason: his raid's boss fight and wipe silence (RaidState.allows),
@@ -68,20 +68,9 @@ BURST_S = 90.0
 # An owed answer's deadline (after its delay): long enough for a cold model load or a night's
 # hand-over, never the 20-30 s a social line gets
 OWED_DEADLINE_S = {"game": 90.0, "discord": 300.0}
-# The drop reasons an owed answer is rescued from inside its turn
-RESCUABLE = frozenset({"tells", "silent", "llm_error", "expired"})
-# The hard screens owed_fallback's draft must pass: every fatal tell, and these (a flirt at a
-# member, an unbacked shared-history claim, a summons out of the game her arc doesn't allow)
-BLOCKING = frozenset({"history", "member flirt", "summons"})
-# owed_fallback's one short generation (the same contract as #325's): a sentence or two
-OWED_HINT = ("Answer {human} in a sentence or two, in your own voice: how you feel about what "
-             "{they} just said, and one thing of your own. Don't say {their} words back, and "
-             "don't answer (nothing).")
-LONG_SLACK = 1.25
-ADDON_TAG = re.compile(r"^\s*<(?:DBM|Deadly Boss Mods|BigWigs|BW|GTFO|RCLootCouncil)>", re.I)
-AUTO_REPLY = re.compile(r"^\s*(?:AFK|DND|<AFK>|<Away)\b", re.I)
-
-
+# The drop reasons an owed answer is rescued from inside its turn: the model request failed or
+# ran late, so Pipeline._generate never reached its own owed_fallback
+RESCUABLE = frozenset({"llm_error", "expired"})
 def owes_him(pipe, turn, meta) -> bool:
     """The turn carries an answer he is owed, by the one definition the guards use
     (LiveReview.owed: the first answer to a line or post of his, TurnMeta.owed_answer, an answer
@@ -166,23 +155,6 @@ def fallback_line(his: str, *, called: str, seed, avoid=()) -> str:
     return rng.choice(_FRAMES[kind]).format(called=called or "you", topic=topic)
 
 
-def _trim(text: str, words: int) -> str:
-    """At most about `words` words: whole sentences while they fit (the first always), else the
-    first sentence cut at a word."""
-    if words <= 0 or len(text.split()) <= LONG_SLACK * words:
-        return text
-    sentences = re.findall(r"[^.!?]+[.!?]*\s*", text) or [text]
-    out = ""
-    for s in sentences:
-        if out and len((out + s).split()) > words:
-            break
-        out += s
-    out = out.strip()
-    if len(out.split()) > LONG_SLACK * words:
-        out = " ".join(out.split()[:words])
-    return out
-
-
 def his_words(pipe, turn, meta, composed) -> str:
     """What he said that the turn answers: its trigger line, else his Discord post."""
     if composed is not None and composed.answers:
@@ -207,9 +179,10 @@ def fallback_for(pipe, turn, meta, composed=None) -> str:
 
 
 def fallback_lines(pipe, turn, meta, p, *, close: bool, reason: str, composed=None) -> list:
-    """The fallback line styled as the member types, for an owed turn whose drafts are all gone;
-    [] for any other turn."""
-    if not owes_him(pipe, turn, meta):
+    """The fallback line styled as the member types, for the watchdog's rescue turn whose drafts
+    are all gone (the guard review refused them, or the styling left nothing); [] for any other
+    turn, which drops and is the watchdog's to answer."""
+    if not meta.owed_rescue or not owes_him(pipe, turn, meta):
         return []
     from dataclasses import replace
     from leeroy_mind.talk.items import defuse
@@ -223,89 +196,26 @@ def fallback_lines(pipe, turn, meta, p, *, close: bool, reason: str, composed=No
     return lines
 
 
-async def owed_fallback(pipe, turn, meta, composed, *, spoken: bool = False) -> str | None:
-    """One more short generation for an owed answer whose drafts are gone: OWED_HINT (a sentence
-    or two, how she feels about what he said and one thing of her own; the summons warning up
-    front where her arc keeps them in the game), checked only against the hard screens (fatal
-    tells and BLOCKING). A long draft is cut at a sentence. The words, or None when the request
-    failed, was paused or the draft is still refused."""
-    from leeroy_mind.llm.client import GpuPaused, LLMError
-    from leeroy_mind.llm.scheduler import Expired, SchedulerError
-    from leeroy_mind.personas.screens import redact_real_name
-    from leeroy_mind.talk.filters import find_tells, is_silence, repair, strip_copied
-    from leeroy_mind.talk.pipeline import SUMMONS_HINT, _ScopeChanged, _with_hint, aliases
-    from leeroy_mind.voice.comms import SPOKEN_HINT
-    p = composed.persona
-    name, own, him = p.character_name, aliases(p), pipe._his_names()
-    they, _, their = pipe.human.forms
-    messages = _with_hint(composed.messages, OWED_HINT.format(
-        human=pipe.human.called, they=they, their=their))
-    hg = pipe.human.guid
-    summons_ok = pipe._summons_ok(turn) if pipe._counterpart(turn) == hg else None
-    if summons_ok is False:  # her arc keeps it in the game: said up front, not after a miss
-        forms = dict(zip(("they", "them", "their"), pipe._forms_of(hg)))
-        messages = _with_hint(messages, SUMMONS_HINT.format(**forms))
-    if spoken:
-        messages = _with_hint(messages, SPOKEN_HINT)
-    emoji = turn.channel.startswith(("dm:", "discord:", "gdm:"))
-    try:
-        raw = await pipe._ask(turn, messages, meta=meta, attempt=2)
-    except (_ScopeChanged, GpuPaused):
-        return None
-    except (Expired, SchedulerError, LLMError) as e:
-        log.info("owed_fallback_model_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
-        return None
-    if not raw or is_silence(raw):
-        return None
-    text = raw if composed.close else redact_real_name(raw, pipe.human, pipe.human.called)
-    text = strip_copied(text, (name, *own), him=him)
-    if is_silence(text):
-        return None
-    tells = find_tells(text, recent_own=pipe._own_lines(turn), speaker=name,
-                       answers=composed.answers, others=composed.others,
-                       samples=composed.samples, support=composed.support,
-                       people=list(pipe._protect(turn.channel)), window=composed.window,
-                       held=composed.held, tonight=meta.again_tonight,
-                       recent_moves=[(r.clause, r.main) for r in composed.moves],
-                       summons_ok=summons_ok, keep_emoji=emoji)
-    if pipe._flirts_at_a_member(turn, text):
-        return None
-    refused = sorted({t.reason for t in tells if t.fatal or t.reason in BLOCKING})
-    if refused:
-        log.info("owed_fallback_refused: guid=%d tells=%s", turn.speaker, ",".join(refused))
-        return None
-    text = repair(_trim(text, pipe._word_budget(turn, p, meta.two_lines)), speaker=name,
-                  aliases=own, him=him, keep_emoji=emoji)
-    return None if is_silence(text) else text
-
-
 async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
                       spoken: bool = False) -> tuple[str, str | None]:
-    """The owed answer after `why` (RESCUABLE): owed_fallback, else fallback_line; never nothing.
-    A Free GPU pause or a changed scope keeps the drop (the watchdog waits out the pause)."""
+    """An owed answer whose model request failed or ran late (RESCUABLE): Pipeline.owed_fallback
+    once, with the owed deadline. Its words, or the drop as it was (the watchdog answers later;
+    its own rescue turn ends in a line built from his message)."""
     if why not in RESCUABLE or meta.owed_rescued or not owes_him(pipe, turn, meta):
         return rejected, why
     from leeroy_mind.talk.pipeline import _scope_valid
     meta.owed_rescued = why
-    now = pipe.clock.now()
-    turn.deadline = max(turn.deadline, now + owed_deadline(turn.channel))
+    turn.deadline = max(turn.deadline, pipe.clock.now() + owed_deadline(turn.channel))
     if meta.borrow_credit is not None:
         pipe._mark_borrow(meta, reset=True)
-    text = await owed_fallback(pipe, turn, meta, composed, spoken=spoken)
+    text = await pipe.owed_fallback(turn, meta, composed, spoken=spoken)
     if not _scope_valid(meta):
         return text or rejected, "scope_changed"
-    gate = getattr(pipe.scheduler, "gpu_gate", None)
-    if text is None and getattr(gate, "paused", False):
-        return rejected, "gpu_paused"
     watch = getattr(pipe, "owed", None)
-    if text is None and watch is not None and watch.model_away():
+    if not text or (watch is not None and watch.model_away()):
         return rejected, why  # the guild is silent while the model is away (app._send)
-    how = "model" if text else "fallback"
-    if not text:
-        text = fallback_line(his_words(pipe, turn, meta, composed), called=pipe.human.called,
-                             seed=meta.turn_id, avoid=[m.name for m in pipe.world.members.values()])
-    log.info("owed_rescue_line: guid=%d kind=%s channel=%s reason=%s how=%s", turn.speaker,
-             turn.kind, turn.channel, why, how)
+    log.info("owed_rescue_line: guid=%d kind=%s channel=%s reason=%s", turn.speaker, turn.kind,
+             turn.channel, why)
     return text, None
 
 
@@ -334,8 +244,10 @@ def _game_medium(reply_to: str) -> str:
 
 
 def is_addon_text(text: str) -> bool:
-    from leeroy_mind.talk.pastes import is_addon_row
-    return bool(is_addon_row(text) or ADDON_TAG.match(text) or AUTO_REPLY.match(text))
+    """An addon paste (pastes.is_addon_row) or an addon's own whisper (pastes.is_addon_whisper,
+    which the app keeps from talk, #325): never a message he is owed an answer to."""
+    from leeroy_mind.talk.pastes import is_addon_row, is_addon_whisper
+    return bool(is_addon_row(text) or is_addon_whisper(text))
 
 
 class OwedWatch:
@@ -523,7 +435,7 @@ class OwedWatch:
                     to_guid=hg if whisper else 0, addressee=hg, trigger_line=row.id,
                     delay=self.rng.uniform(1.0, 3.0))
         meta = TurnMeta(eng._new_id(), answers_human=True, whisper_reply=whisper,
-                        why="reply:rescue", owed_answer=True)
+                        why="reply:rescue", owed_answer=True, owed_rescue=True)
         o.rescues += 1
         o.rescued_at = now
         o.tried.add(speaker)
@@ -680,7 +592,7 @@ class OwedWatch:
             fresh = [it for it in items if it[0].speaker not in o.tried]
             items = (fresh or items)[:1]
         for turn, meta in items:
-            meta.owed_answer = True
+            meta.owed_answer = meta.owed_rescue = True
         speaker = items[0][0].speaker
         o.rescues += 1
         o.rescued_at = now

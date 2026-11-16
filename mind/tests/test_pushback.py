@@ -652,17 +652,15 @@ def test_his_pushback_that_asks_the_past_is_still_its_targets_first(store, clock
     run(main())
 
 
-def test_his_nothing_never_stands(store, clock, tmp_path):
-    """Silence from the one he pushes back on was accepted (no retry); since 2026-11-15 every
-    line of his gets an answer (talk/owed.py): the silence is asked once more, plainly, and when
-    the model still says nothing a short line of Korvin's built from his message goes out."""
+def test_his_nothing_is_asked_again_then_the_fallback(store, clock, tmp_path):
+    """His pushback is owed an answer (LiveReview.owed; owner, 2026-11-15: every message of his
+    gets a reply): silence is asked again, then the short fallback, asked once more
+    when it is silent too (review-325-r2 P3-C); only then does silence stand, and the
+    watchdog (talk/owed.py) answers later."""
     async def main():
         r = korvin_rig(store, clock, tmp_path, script=lambda m, msgs: "(nothing)")
         await r.human("you are fixing to get the boot from this guild korvin")
         await r.advance(45, step=2)
-        assert len(korvins(r)) == 2  # the answer, then the owed answer's plainer ask
-        assert "Answer Zan in a sentence or two" in korvins(r)[-1]
-        said = r.sent.says()
-        assert [s.guid for s in said] == [KORVIN] and said[0].text.strip()
-        assert [u["dropped"] for u in r.utterances()] == [None]
+        assert len(korvins(r)) == 4 and r.sent.says() == []
+        assert [u["dropped"] for u in r.utterances()] == ["silent"]
     run(main())

@@ -88,3 +88,30 @@ keeps its adopters inactive and its copies archived, and a member already holdin
 terms (lexicon's adoption limit) gets no adoption back, nor its copy. Vocab rows keep
 `slang = 1`, nicknames and jokes are untouched, and member nicknames an old junk term displaced
 from their 8 adoption slots are not reactivated.
+
+# Life beats: he lives far away (2026-11-15)
+
+The night's life beats invented his texts, notes in her flat and visits, and those memories
+surfaced in chat as real. Now every life prompt ends on `life.FAR_AWAY` (after the built-in
+prompt or the owner's overlay): he lives far away, they only talk in the game and on the guild's
+Discord. Once her romance arc has met him in person (stage weekend or after, an `arc_meetup`
+row) it reads `FAR_AWAY_MET` instead: no "never met", still no invented contact in her everyday
+life. His names match as whole words only (a pet rabbit is never him). A beat or new thread title that names him with contact off the game (a text, call,
+note, gift, visit, his presence: `life.meets_him`) is refused before the judge (grounding log
+`meets him offline`; the thread tries again next night), and such a beat is never shown as one
+of the last three again. A beat that names him or shares two content words with her secret or
+deep disclosure is stored `private` with him (`life.private_beat`), so it reaches only her
+whispers and DMs with him; every other beat stays open. The server's Discord seeds
+(`server.seeds._life`) skip a beat whose memory is private or retired, so it never opens a
+public conversation.
+
+`python -m leeroy_mind nightly life-contact --data-dir "$D" [--show] [--go]` handles the beats
+already stored. A dry run (the default) reads mind.db read-only and lists ids and owners (texts
+with `--show`). `--go` needs the mind stopped (it holds the instance lock), snapshots first
+(`snapshots/mind-pre-life-contact-*.db`), retires every active life-beat memory (offscreen,
+evidence `beat:<id>`) that meets him (status `archived`, never deleted) and raises every other
+open life-beat memory that names him or touches her secret to private with him. The night's
+encounters and the romance arc's weekend and visit memories (meetings by design) are never
+touched. Receipts: meta `life_contact:retired:<id>` and `life_contact:rescoped:<id>` with the
+earlier status or scope. Chat and extraction memories that repeated an invented contact ("you
+texted me about my sandwich") stay active: the step does not reach them.

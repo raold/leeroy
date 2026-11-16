@@ -172,6 +172,7 @@ class Library:
         self.embed_model = embed_model
         self._depth = 0
         self._search_cancelled: Callable[[], bool] | None = None
+        self._terms = False  # the temp vocabulary table known_words reads
 
     # -- plumbing ----------------------------------------------------------------------
 
@@ -431,6 +432,25 @@ class Library:
         """Every row of the item table (id, name, quality, ilvl, req_level), for the item links'
         names (talk/items.py); [] before a world build."""
         return self._all("SELECT id, name, quality, ilvl, req_level FROM item")
+
+    def known_words(self, words) -> set[str]:
+        """Of `words` (lower-case), those the library's text has as terms: its full-text index's
+        vocabulary, through a temp fts5vocab table made on first use (a read-only database
+        allows it). The live talk's check that a boss a member names exists (talk/gamenames.py);
+        on any error every word counts as known, so nothing is flagged."""
+        words = sorted({w for w in words if w})
+        if not words:
+            return set()
+        try:
+            if not self._terms:
+                self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.leeroy_terms "
+                                  "USING fts5vocab(main, chunks_fts, row)")
+                self._terms = True
+            marks = ",".join("?" * len(words))
+            return {r[0] for r in self._all(
+                f"SELECT term FROM temp.leeroy_terms WHERE term IN ({marks})", words)}
+        except Exception:  # an older library, a cancelled search: fail open
+            return set(words)
 
     def not_item_names(self) -> list[str]:
         """The places, NPCs and holidays the library names: zone and loot titles (a loot title

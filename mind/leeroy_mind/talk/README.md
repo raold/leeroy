@@ -210,6 +210,63 @@ the openers to him asked how his day was or what he was up to.
   is not a mind.toml key (`reactions.greeter_draw`, which the tuning scenario pins to 2-3); it, the
   topics and the flirt-rule scope roll back only with the code from before.
 
+# DM prompts, owed answers and game names (2026-11-15)
+
+All 18 last-resort trims logged since 11-14 were answers to his Discord DMs: her own 200-word
+paragraphs filled "Your last lines", the DM's history was packed into a 1,100-character
+instruction at 200 characters a message, and the trim emptied her memories first.
+
+- **The DM's history is the Chat section.** `discord.talk.DiscordTalk.dm_chat` gives the answer
+  turn (`TurnMeta.discord_chat`) the DM's last 12 messages, oldest first: his up to 600
+  characters, hers as their first 30 words (`prompt.replay`), each with its photo note and age.
+  Her own long lines are replayed the same way in "Your last lines" and in the elsewhere block;
+  the repeat check still reads them whole. The DM's instruction keeps only where she is and his
+  message. The copy check reads his earlier messages there (not hers: hers are the repeat
+  check's), so she never sends one of his messages back as her own.
+- **A DM has its own budget**, `prompt.DM_BUDGET` = 2600 estimated tokens: num_ctx 4096 less a
+  full `dm_words` reply (344) leaves room even if the real count runs 25% over the estimate.
+  Every other turn keeps `LIVE_BUDGET` (1800). Measured on the 18 logged DM trims (a scratch
+  copy, the logged section sizes): the same turns now come to about 1,600-2,200 with five
+  memories and twelve history lines, so none reaches its last resort.
+- **The trim keeps evidence over her own words.** The awareness card is first fitted without
+  its claims part ("Your claims", kept whole); the last resort then empties her own last lines
+  first, lets the claims go, keeps two memories (`PROTECTED_MEMORIES`) past the relationship
+  cards, and only drops them and the rest of the card at the very end. `PromptParts.untrimmed`
+  holds whole sections the trim never touches (for the persona's own "About you" block),
+  rendered first in the user message.
+- **An answer he is owed never ends in nothing** (owner, 2026-11-15: every message of his gets
+  a reply that adds something). Owed is `LiveReview.owed`, the one definition: his whisper, his
+  DM, a post naming her, his pushback, a first answer to his question, an emote at her. A draft
+  whose tells are all soft and none of `DROP_ON_RETRY` is kept, and sent when the retry is worse
+  or silent (`say_owed_kept`). A first silence is asked again. When nothing usable is left,
+  `Pipeline.owed_fallback` makes one more short generation on the same prompt, told only
+  "Answer what he just said in one or two short sentences, in your own voice"
+  (`OWED_FALLBACK_HINT`), reviewed only for silence and the hard screens (`OWED_HARD_TELLS`: AI
+  or prompt talk, a flirt at a member, his words said back, asking him over), and sends it
+  (`say_owed_fallback`); if even that fails it is dropped (`say_owed_fallback_refused`). An owed
+  Discord answer over its length is cut back to a sentence end (`discord_length.fit_words`)
+  instead of being asked again. Turns he is not owed keep the old rule. Seen live 11-15: her
+  first draft to "leave him for me" was asked again for a repeated move and its length, the
+  retry asked him over, and both were dropped.
+- **Game names** (`talk/gamenames.py`, the soft tell "game name", dropped on retry): a
+  battleground put in or named after a library zone that has none ("a battleground in Tanaris"),
+  or a word in a boss context ("parse X", "wipe on X", "get X down") that the library's text
+  never uses (`Library.known_words`, its full-text vocabulary) and that is no everyday word
+  (or everyday ending: "homework"), boss nickname (`SHORTHAND`: festy, rotty, valy, maexx,
+  levi...), known boss or place with its punctuation taken out ("lanathel") or member. A
+  battleground "near" a place, in a capital city or in a zone with a battleground's entrance
+  (`QUEUE_PLACES`), or named by its own longer name ("dalaran sewers"), is fine. Without a
+  library nothing is flagged. Over the live corpus it flags the
+  three invented bosses (9 lines) and the 3 misplaced battlegrounds, and only typos the typing
+  adds after the check otherwise. "Tonight so far" names the battleground she played
+  (`wow.bg_played`) and lists her evening in order ("you were in Tanaris; then you played a game
+  of Warsong Gulch").
+- **His addons' whispers** (a known addon's own tag, `pastes.ADDON_TAGS`: "<DBM> ... has wiped
+  on ...", "<Deadly Boss Mods>", "<BigWigs>", "<RCLootCouncil>", "<Details!>", "[AutoReply]",
+  "Auto-reply:") are not his words: never stored, never answered, no handler sees them
+  (`pastes.is_addon_whisper`, `app._on_chat`; log `his_addon_whisper_skipped`). "<3", a tag he
+  types himself ("<AFK> back in 5", "<Sigh> fine") and his pasted "<Flask>" checks are his.
+
 # Every message of his is answered
 
 Owner, 2026-11-15: "make sure they actually reply something. doesn't have to be a profound reply
@@ -227,21 +284,23 @@ full rule); no switch, no migration, no native rebuild.
   takes the debt. What is owed has one definition, the guards' `LiveReview.owed`: that first
   answer, an answer to his whisper or DM, a member he named, his pushback's target, the first
   answer to his question, her line after his emote.
-- **In the turn.** A silence, two drafts that kept a tell, a failed or late model request:
-  `owed_fallback`, one more short generation (`OWED_HINT`, a sentence or two, with the summons
-  warning where her arc keeps it in the game), checked only against the hard screens: the fatal
-  tells, an unbacked shared-history claim, a flirt at a member, such a summons (a repeated move
-  or length no longer do: a long draft is cut at a sentence). Without a usable draft the answer
-  is `fallback_line`, a short reaction to his message that asks something back. Logs
-  `owed_rescue_line reason= how=model|fallback`.
+- **In the turn.** `Pipeline.owed_fallback` is the one fallback (#325, above), extended here:
+  its hard screens (`OWED_HARD_TELLS`) also refuse other people's lines, a list, an *action* and a
+  copied sample line, and a refused or silent fallback is asked once more with what was wrong in
+  words (`OWED_RETRY_HINT`, review-325-r2 P3-C). A turn whose model request failed or ran late
+  (`llm_error`, `expired`: `_generate` gives up before its fallback) asks `owed_fallback` with the
+  owed deadline (`owed.rescue_text`, log `owed_rescue_line`). An owed turn that still ends with
+  nothing is the watchdog's.
 - **The watchdog** (ticked by the app): a message still unanswered 45 s (whisper, voice), 60 s
   (game channels) or 150 s (Discord) after it, with nothing in flight, gets a rescue turn (at most
-  two, 90 s apart): `owed_rescue reason=not_planned|dropped:<reason>|no_answer`. Messages older than
-  15 min (game) or 30 min (Discord) are let go (`owed_given_up reason=too_old`).
+  two, 90 s apart): `owed_rescue reason=not_planned|dropped:<reason>|no_answer`. A rescue turn
+  (`TurnMeta.owed_rescue`) is the guarantee: when even `owed_fallback` finds nothing (or the guard
+  review refuses everything, or the styling leaves nothing), it sends `fallback_line`, a short
+  reaction to his message that asks something back, never his words (`say_owed_last_resort`).
+  Messages older than 15 min (game) or 30 min (Discord) are let go (`owed_given_up reason=too_old`).
 - **Held, then answered just after** (`owed_held reason=`): his raid's boss fight and wipe silence
   (`raid`; `dead` for a /say nobody alive can answer yet), a Free GPU pause (`gpu_paused`), the
-  live model away (`model_away`: the app refuses every line then, so the in-turn fallback line is
-  skipped too and the turn keeps its drop), the
+  live model away (`model_away`: the app refuses every line then), the
   whispered member AFK (`afk`), him offline for a game line (`human_offline`), a DM she answers on
   her own time (`own_time`), a group DM's pacing (`group_pacing`), a selfie request still being
   made (`photo_request`), his voice note still being transcribed (`voice_note`).

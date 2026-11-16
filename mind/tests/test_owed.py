@@ -20,7 +20,7 @@ from leeroy_mind.talk import owed
 from leeroy_mind.talk.owed import OwedWatch, count_unanswered, fallback_line, topic_word
 from leeroy_mind.talk.turns import TurnKind
 
-HINT = "Answer Zan in a sentence or two"
+HINT = "Answer what Zan just said"
 
 
 @pytest.fixture
@@ -76,19 +76,12 @@ def test_the_topic_word_skips_filler_names_and_stretched_words():
     assert topic_word("honestly literally whatever") == "whatever"
 
 
-def test_a_long_rescue_draft_is_cut_at_a_sentence():
-    text = "first bit here. second bit is longer than the first one. third bit."
-    assert owed._trim(text, 6) == "first bit here."
-    assert owed._trim("one two three", 6) == "one two three"
-    assert len(owed._trim("a " * 40, 5).split()) == 5
+# -- inside the turn: Pipeline.owed_fallback, the one fallback (#325) ----------------------------
 
-
-# -- inside the turn ---------------------------------------------------------------------------
-
-def test_an_owed_whisper_answer_whose_drafts_both_echo_him_is_asked_a_third_time(store, clock,
-                                                                                tmp_path):
-    """Live 2026-11-12: his whisper's answer was dropped after two drafts kept a tell. The third
-    ask (owed_fallback: OWED_HINT, a sentence or two) and its clean draft goes out."""
+def test_an_owed_whisper_answer_whose_drafts_both_echo_him_gets_the_fallback(store, clock,
+                                                                            tmp_path):
+    """Live 2026-11-12: his whisper's answer was dropped after two drafts kept a tell. The owed
+    fallback (OWED_FALLBACK_HINT) is asked and its clean draft goes out."""
     his = "come find me by the docks after the raid tonight okay"
 
     def script(model, messages):
@@ -106,13 +99,13 @@ def test_an_owed_whisper_answer_whose_drafts_both_echo_him_is_asked_a_third_time
     run(main())
 
 
-def test_a_summons_no_longer_costs_him_his_answer(store, clock, tmp_path):
-    """Live 2026-11-15 (a DM): both drafts asked him over (summons), so his answer was
-    dropped. The third ask warns of it up front; its draft without one goes out (a third
-    summons would give way to the fallback line: her arc keeps them in the game)."""
+def test_a_refused_fallback_is_asked_once_more_with_what_was_wrong(store, clock, tmp_path):
+    """review-325-r2 P3-C: the fallback that still asks him over is asked once more, told in
+    words what was wrong, and its second draft goes out."""
     def script(model, messages):
-        if HINT in messages[-1]["content"]:
-            return "made dinner, wish you could taste it"
+        last = messages[-1]["content"]
+        if "Not like that" in last:
+            return "missed you today. how was work?"
         return "come over to my place tonight"
 
     async def main():
@@ -120,53 +113,87 @@ def test_a_summons_no_longer_costs_him_his_answer(store, clock, tmp_path):
         await r.human("what are you up to?", channel="whisper", to_guid=102)
         await r.advance(40)
         said = [s.text for s in r.sent.says() if s.guid == 102]
-        assert said and "dinner" in " ".join(said)
-        assert "only talk through the game" in r.last_user()
+        assert said and "work" in " ".join(said)
+        assert "don't ask him over" in r.last_user() and HINT in r.last_user()
+        assert len(r.chat_calls()) == 4
     run(main())
 
 
+@pytest.mark.parametrize("bad", ["- one thing\n- another thing", "*sighs deeply and looks away*",
+                                 "hm\nBelra: what about me"])
+def test_the_fallback_never_sends_a_list_an_action_or_dialogue(store, clock, tmp_path, bad):
+    """review-325-r2 P3-A: OWED_HARD_TELLS holds dialogue, list, action and sample too."""
+    his = "come find me by the docks after the raid tonight okay"
+
+    def script(model, messages):
+        last = messages[-1]["content"]
+        if "Not like that" in last:
+            return "sure, which docks?"
+        return bad if HINT in last else his
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=script)
+        await r.human(his, channel="whisper", to_guid=101)
+        await r.advance(40)
+        said = [s.text for s in r.sent.says() if s.guid == 101]
+        assert said == [said[0]] and "docks" in said[0].casefold()
+    run(main())
+
+
+def _owed_rig(store, clock, tmp_path, script):
+    r = make_rig(store, clock, tmp_path, script=script)
+    return r, _watch(r)
+
+
 def test_a_model_that_keeps_failing_still_leaves_him_an_answer(store, clock, tmp_path):
-    """Every request fails (timeout): the owed answer is the fallback line, built from his
-    message; nothing is dropped."""
+    """Every request fails (a timeout): the turn drops (llm_error) after its owed fallback also
+    failed; the watchdog's rescue turn ends in the line built from his message."""
     def script(model, messages):
         raise LLMError("/api/chat: timed out")
 
     async def main():
-        r = make_rig(store, clock, tmp_path, script=script)
+        r, w = _owed_rig(store, clock, tmp_path, script)
+        await _tick(r, w, owed.START_GRACE_S)
         await r.human("what bg should we queue next?", channel="whisper", to_guid=103)
-        await r.advance(40)
+        await _tick(r, w, 30)
+        assert r.sent.says() == []
+        assert [u["dropped"] for u in r.utterances()] == ["llm_error"]
+        await _tick(r, w, 60)
         said = [s for s in r.sent.says() if s.guid == 103]
-        assert len(said) == 1 and said[0].text.strip()
-        assert [u["dropped"] for u in r.utterances()] == [None]
+        assert len(said) == 1 and "?" in said[0].text
     run(main())
 
 
-def test_a_fatal_third_draft_gives_way_to_the_fallback(store, clock, tmp_path, caplog):
-    """A third draft that still says his words back (echo, fatal) is never sent: the fallback
-    line is."""
+def test_every_draft_echoing_him_still_ends_in_an_answer(store, clock, tmp_path, caplog):
+    """The model only ever says his words back: the turn drops, the rescue turn's own drafts and
+    fallbacks echo too, and its last resort is the line built from his message, never his
+    words."""
     his = "i need you to tell me about your day at the office"
     caplog.set_level(logging.INFO)
 
     async def main():
-        r = make_rig(store, clock, tmp_path, script=lambda m, msgs: his)
+        r, w = _owed_rig(store, clock, tmp_path, lambda m, msgs: his)
+        await _tick(r, w, owed.START_GRACE_S)
         await r.human(his, channel="whisper", to_guid=104)
-        await r.advance(40)
+        await _tick(r, w, 120)
         said = [s.text for s in r.sent.says() if s.guid == 104]
         assert len(said) == 1 and not _shares_run(said[0], his, 4)
-        assert any("owed_rescue_line" in m and "how=fallback" in m for m in caplog.messages)
+        assert any("say_owed_last_resort" in m for m in caplog.messages)
     run(main())
 
 
-def test_only_the_owed_answer_is_rescued(store, clock, tmp_path):
-    """The extra answers to a guild line keep their old rules: a silence stays a silence."""
+def test_a_silent_guild_ends_in_one_answer(store, clock, tmp_path):
+    """The model only says (nothing): every answer drops; the watchdog's rescue turn answers
+    once, and only once."""
     async def main():
-        r = make_rig(store, clock, tmp_path, script=lambda m, msgs: "(nothing)")
+        r, w = _owed_rig(store, clock, tmp_path, lambda m, msgs: "(nothing)")
+        await _tick(r, w, owed.START_GRACE_S)
         await r.human("evening all, how is everyone?")
-        await r.advance(60)
+        await _tick(r, w, 300)
         said = r.sent.says()
-        assert len(said) == 1  # the one he is owed
-        dropped = [u["dropped"] for u in r.utterances() if u["dropped"]]
-        assert dropped and set(dropped) == {"silent"}
+        assert len(said) == 1
+        sent = r.store.conn.execute("SELECT why FROM utterance WHERE dropped IS NULL").fetchall()
+        assert [x[0] for x in sent] == ["reply:rescue"]
     run(main())
 
 
@@ -361,7 +388,7 @@ def test_addon_lines_are_never_owed(store, clock, tmp_path):
         r = make_rig(store, clock, tmp_path)
         w = _watch(r)
         for text in ("<DBM> Testmage has wiped on Valithria Dreamwalker",
-                     "Recount - Damage Done for Overall Data", "AFK"):
+                     "Recount - Damage Done for Overall Data", "[BigWigs] Grobbulus engaged"):
             w.note_line(_line(r, text, channel="whisper", to_guid=102), "whisper")
         assert not w._game
     run(main())

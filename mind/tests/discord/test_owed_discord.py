@@ -93,12 +93,20 @@ def test_a_dm_she_answers_on_her_own_time_is_held(store, clock, tmp_path, caplog
 
 
 def test_a_silent_model_still_answers_his_dm(store, clock, tmp_path):
-    """Her DM answer was asked again after a first "(nothing)" and a second one stood; now the
-    owed answer gets one plainer ask, then the fallback line."""
+    """Her DM answer stays (nothing) through its retry and both fallback asks: the turn drops,
+    and the watchdog's rescue turn ends in the line built from his message."""
     rig = rig_for(store, clock, tmp_path, script=lambda m, msgs: "(nothing)")
     talk = talk_for(rig)
+    w = _watch(rig, talk)
+    _tick(rig, w, owed.START_GRACE_S)
     mid = post(rig, "dm:105", "how was work today?")
-    answer(rig, talk, mid)
+
+    async def hand_over():
+        talk.on_his_post(mid)
+    rig.sync(hand_over())
+    _tick(rig, w, 100)
+    assert answers(rig, "dm:105", mid) == []
+    _tick(rig, w, 200)
     said = answers(rig, "dm:105", mid)
     assert len(said) == 1 and said[0]["text"].strip() and "?" in said[0]["text"]
     rig.close()

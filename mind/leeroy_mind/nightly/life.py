@@ -1,13 +1,22 @@
-"""One grounded, fictional offscreen life beat per member and night (P1c Task 13)."""
+"""One grounded, fictional offscreen life beat per member and night (P1c Task 13).
+
+He lives far away (2026-11-15: beats invented his texts, notes in her flat and visits, and those
+memories surfaced in chat as real): every life prompt ends on FAR_AWAY (FAR_AWAY_MET once her
+romance arc has met him in person), a beat or title that
+pairs one of his names with contact off the game (meets_him) is refused before grounding and
+never shown as a last beat again, and a beat that names him or touches her secret is stored
+private to her and him (private_beat), not open to every turn."""
 import json
+import re
 
 from leeroy_mind.nightly import wowlife
 from leeroy_mind.nightly.budget import register_counter
 from leeroy_mind.nightly.evidence import Evidence, Item, load_facts
-from leeroy_mind.nightly.ground import Claim, ground, log_verdicts
+from leeroy_mind.nightly.ground import Claim, Verdict, ground, log_verdicts
 from leeroy_mind.nightly.llm import schema, system_prompt
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.storage.rows import MemoryRow
+from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.text import strip_wow_markup
 
 STAGE = "life"
@@ -29,6 +38,91 @@ ASK = ("One short chat message in {name}'s own words, first person, at most abou
        "happened next in their life away from the game. The earlier beats may read like a story; "
        "this one doesn't. Give its mood, whether the thread has resolved, and an optional next "
        "thread title.")
+FAR_AWAY = ("{human} lives far away: {name} and {human} have never met in person and only talk "
+            "in the game and on the guild's Discord. Never put {human} into {name}'s life away "
+            "from the game: no texts, calls, notes, gifts or visits from {them}, and {they} "
+            "never turns up there.")
+# The same for a woman whose romance arc has met him in person (arc stage weekend or after, an
+# arc_meetup row: arc/weekend.py writes those meetings itself): no "never met", but still no
+# invented contact in her everyday life.
+FAR_AWAY_MET = ("{human} lives far away: {name} and {human} talk in the game and on the guild's "
+                "Discord and don't share daily life off it. Never put {human} into {name}'s "
+                "everyday life away from the game: no texts, calls, notes, gifts or visits from "
+                "{them}, and {they} never turns up there.")
+MET_STAGES = frozenset({"weekend", "after"})
+# Contact off the game, said with one of his names (meets_him): a phone, a note or gift, a visit
+_THINGS = r"(?:note|card|letter|gift|present|flowers|package|parcel|text|message)"
+_CONTACT = re.compile(
+    r"\b(?:text(?:s|ed|ing)?|call(?:s|ed|ing)?|phon(?:es|ed|ing)|on the phone|rang|ringing|"
+    r"voicemail|facetime\w*|speakerphone|inbox|e-?mail\w*|"
+    rf"{_THINGS}s? from|(?:sticky|handwritten|little|love) notes?|"
+    rf"(?:left|sent|mailed|brought|handed) (?:me |her |him )?(?:a |an |his |her |some )?{_THINGS}s?|"
+    r"gifts?|flowers|deliver\w*|visit\w*|(?:came|come|coming) over|(?:stopped|dropped) by|"
+    r"showed up|turned up|knock\w*|drove|driv(?:e|es|ing|en)|picked (?:me|her|him) up|"
+    r"met (?:up|him|her)|meet(?:ing)? (?:up|him|her)|in person|hug\w*|kiss\w*|shadow|"
+    r"used to sit|beside (?:me|her)|next to (?:me|her)|walked (?:in|over))\b", re.I)
+_WORD = re.compile(r"[a-z']+")
+SECRET_WORDS = 2  # distinct content words a beat shares with her secret to be hers alone
+# words too plain or too much the game's to tie a beat to her secret (beside talk.words')
+_PLAIN = frozenset("""through finally because doesn't hasn't didn't isn't wasn't won't can't
+couldn't wouldn't shouldn't really always never every something nothing anything someone
+everyone feel feels felt feeling line empty character guild guilds raid raids raiding game
+games gaming playing player players play online quiet quietly little still""".split())
+
+
+def his_names(ident) -> tuple[str, ...]:
+    return tuple(n for n in (ident.nickname, ident.character_name, ident.real_name) if n)
+
+
+def _names_re(names) -> re.Pattern | None:
+    """His names as whole words (never a longer word that starts with one: an animal is not his
+    nickname)."""
+    alts = [re.escape(n) for n in sorted(set(names), key=len, reverse=True) if n]
+    return re.compile(r"(?<!\w)(?:" + "|".join(alts) + r")(?!\w)", re.I) if alts else None
+
+
+def met_him(store, guid: int, human: int) -> bool:
+    """Her romance arc has met him in person: stage weekend or after toward him, or a meetup
+    the arc wrote (arc_meetup). False when it cannot be read."""
+    try:
+        rel = store.get_relationship(guid, human) if human else None
+        if rel is not None and rel.romance_stage in MET_STAGES:
+            return True
+        return store.conn.execute("SELECT 1 FROM arc_meetup WHERE guid = ? LIMIT 1",
+                                  (guid,)).fetchone() is not None
+    except Exception:
+        return False
+
+
+def names_him(text: str, names) -> bool:
+    pattern = _names_re(names)
+    return pattern is not None and pattern.search(text or "") is not None
+
+
+def meets_him(text: str, names) -> bool:
+    """The text names him and contact off the game (_CONTACT): his text, call, note, gift or
+    visit. He lives far away; they only meet online."""
+    return names_him(text, names) and _CONTACT.search(text or "") is not None
+
+
+def _content(text: str) -> set[str]:
+    return {w.rstrip("s") for w in _WORD.findall((text or "").casefold().replace("’", "'"))
+            if len(w) >= 4 and w not in COMMON_WORDS and w not in _PLAIN}
+
+
+def touches_secret(text: str, persona) -> bool:
+    """The text shares SECRET_WORDS content words with her secret or her deep disclosure."""
+    if persona is None:
+        return False
+    secret = " ".join([persona.secret, *(d.text for d in persona.disclosures
+                                         if d.depth == "deep")])
+    return len(_content(text) & _content(secret)) >= SECRET_WORDS
+
+
+def private_beat(text: str, title: str, persona, names) -> bool:
+    """A beat stored private to her and him: it names him, or it or its thread touches her
+    secret."""
+    return names_him(text, names) or touches_secret(f"{text} {title}", persona)
 
 
 def ensure_thread(store, guid, title, now, rng, *, dial=5) -> int:
@@ -79,8 +173,13 @@ async def advance(ctx, thread):
             or current["next_beat_at"] > ctx.clock.now()):
         return
     thread = current
-    system = system_prompt("life", PROMPT, ctx.settings.data_dir, human=ctx.ident,
-                           name=ctx.name(guid), card=ctx.card(guid))
+    names = his_names(ctx.ident)
+    they, them, _ = ctx.ident.forms
+    system = (system_prompt("life", PROMPT, ctx.settings.data_dir, human=ctx.ident,
+                            name=ctx.name(guid), card=ctx.card(guid))
+              + "\n" + (FAR_AWAY_MET if met_him(ctx.store, guid, ctx.ident.guid) else FAR_AWAY)
+              .format(human=ctx.ident.called, name=ctx.name(guid), they=they, them=them))
+    recent = [r for r in recent if not meets_him(r["text"], names)]  # never primes the next
     user = (f"Life thread: {thread['title']}\nLast three beats:\n"
             + "\n".join(r["text"] for r in reversed(recent))
             + "\n" + ASK.format(name=ctx.name(guid)))
@@ -98,6 +197,13 @@ async def advance(ctx, thread):
     # name and fiction invariants as the beat, even though it is not a memory.
     if resolved and reply["next_title"] is not None:
         claims.append(Claim("life", guid, reply["next_title"], [ref]))
+    if any(meets_him(c.text, names) for c in claims):  # refused before the judge is asked
+        verdicts = [(c, Verdict(False, "deterministic", "meets him offline")
+                     if meets_him(c.text, names) else Verdict(True, "deterministic", ""))
+                    for c in claims]
+        ctx.commit(STAGE, unit, lambda store: log_verdicts(
+            store, ctx.night, STAGE, verdicts, ctx.clock.now(), ctx.ident))
+        return
     verdicts = await ground(ctx, claims, ev, load_facts(ctx))
     if not all(v.ok for _, v in verdicts):
         ctx.commit(STAGE, unit, lambda store: log_verdicts(
@@ -107,6 +213,8 @@ async def advance(ctx, thread):
     now = ctx.clock.now()
     rng = ctx.rng("life", guid, tid)
     next_due = now + rng.uniform(2, 5) * DAY
+    hidden = private_beat(reply["beat"], thread["title"], ctx.persona(guid), names)
+    scope, scope_with = ("private", ctx.ident.guid) if hidden else ("open", 0)
 
     def write(store):
         latest = store.conn.execute("SELECT * FROM life_thread WHERE id=?", (tid,)).fetchone()
@@ -123,7 +231,8 @@ async def advance(ctx, thread):
             id=None, owner=guid, kind="event", text=reply["beat"], t_event=int(now),
             t_created=int(now), t_accessed=int(now), access_n=0, actors=(), place=None,
             boss_id=None, raid_id=None, importance=6 if resolved else 5,
-            valence=reply["mood"], source="offscreen", evidence=evidence, embedding=vector))
+            valence=reply["mood"], source="offscreen", evidence=evidence, embedding=vector,
+            scope=scope, scope_with=scope_with))
         mood = reply["mood"]
         if abs(mood) >= .2:
             store.conn.execute(

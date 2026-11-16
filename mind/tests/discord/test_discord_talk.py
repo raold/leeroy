@@ -444,8 +444,11 @@ def test_a_first_nothing_to_his_dm_is_asked_again(store, clock, tmp_path):
     calls = len(rig.chat_calls())
     drawn = post(rig, "general", "anybody around?")
     answer(rig, talk, drawn)
-    assert len(answers(rig, "general", drawn)) == 1
-    assert len(rig.chat_calls()) <= calls + 3  # the owed answer's two calls, a second member's one
+    assert answers(rig, "general", drawn) == []
+    # the first answer to his question to everyone is owed (LiveReview.owed): asked again, then
+    # the short fallback, asked once more (2026-11-15); a second drawn member, one call,
+    # may stay quiet
+    assert len(rig.chat_calls()) <= calls + 5
     assert m["author"] == 104
     rig.close()
 

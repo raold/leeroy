@@ -73,6 +73,7 @@ from leeroy_mind.talk.engine import COMMAND_CHANNELS, TalkEngine
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import NATIVE_FEATURE, ItemLinker
 from leeroy_mind.talk.owed import OwedWatch
+from leeroy_mind.talk.pastes import is_addon_whisper
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.talk.world import WorldView, looks_like_bot_command
@@ -316,6 +317,11 @@ async def startup_checks(app: "MindApp", *, ollama_conf: Path | None = None) -> 
 
 def _name(fn) -> str:
     return getattr(fn, "__qualname__", None) or type(fn).__name__
+
+
+def _addon_whisper(ev: Chat) -> bool:
+    """His whisper that his addon sent by itself (talk.pastes.is_addon_whisper)."""
+    return ev.channel == "whisper" and is_addon_whisper(ev.text)
 
 
 def his_command(channel: str, text: str) -> bool:
@@ -1013,6 +1019,9 @@ class MindApp:
                                             or self._is_cast(ev.to_guid)):
             return False  # C27: his whispers with anyone outside the cast stay his
         origin = self.origin_of(ev)
+        if origin == "human" and _addon_whisper(ev):
+            log.info("his_addon_whisper_skipped: to=%d", ev.to_guid)
+            return False  # his addon's, not his words: no line, no answer, no handler
         audience = self.world.audience(ev.channel, from_guid=ev.from_guid, to_guid=ev.to_guid,
                                        zone=ev.zone)
         at = self._event_at(ev, now, backlog)
@@ -1078,6 +1087,8 @@ class MindApp:
             if isinstance(ev, Chat):
                 if ev.via_bridge or (ev.channel == "whisper" and not (
                         self._is_cast(ev.from_guid) or self._is_cast(ev.to_guid))):
+                    return
+                if self.origin_of(ev) == "human" and _addon_whisper(ev):
                     return
                 self.store.insert_chat_line(
                     ev, session_id=self._session_id, origin=self.origin_of(ev),

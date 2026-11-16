@@ -79,17 +79,15 @@ def test_rewrite_hint_says_what_is_wrong_in_words():
 
 
 @pytest.mark.parametrize("channel", ["whisper", "dm:101"])
-def test_an_owed_answer_never_sends_an_echo(rig, monkeypatch, channel):
-    """Owner, 2026-11-15: every message from him gets a reply. Both drafts said his message back,
-    so one fresh draft is tried (never going on from the echo, which is never an assistant turn;
-    what was wrong is said at the end of the instruction); when that one echoes too, his owed
-    answer is the fallback line, built from his message and never his words (talk/owed.py)."""
+def test_an_owed_answer_drops_instead_of_sending_an_echo(rig, monkeypatch, channel):
+    """Owner, 2026-11-15: every message from him gets a reply, so one fresh draft is tried before
+    an owed answer drops. Neither the retry nor the fresh draft goes on from the echo: it is
+    never an assistant turn, and what was wrong is said at the end of the instruction."""
     monkeypatch.setattr(live, "review", lambda *args: Verdict("drop", ("echo_parent",)))
     rig.script(HIS, HIS)
     sent, meta = speak(rig, turn(channel), TurnMeta("owed", why="reply:named", answers_human=True,
                                                     whisper_reply=channel == "whisper"))
-    assert len(sent) == 1 and meta.guard_rewritten and meta.owed_rescued == "guard_echo"
-    assert not echoes(sent[0], HIS) and HIS.casefold() not in sent[0].casefold()
+    assert not sent and meta.guard_rewritten
     [first, retry, fresh] = rig.chat_calls()
     for call in (retry, fresh):
         assert [m["role"] for m in call["messages"]] == ["system", "user"]

@@ -80,11 +80,7 @@ def test_cold_named_answer_keeps_name_protection_and_member_romance_screen(store
     assert "Belra" in rig.engine._protect("discord:general")
     assert "Belra" not in rig.engine._protect("guild")
     answer(rig, talk, mid)
-    # the flirt at Belra never goes out; since 2026-11-15 his owed answer is the fallback line
-    # instead (talk/owed.py)
-    said = answers(rig, "general", mid)
-    assert len(said) == 1 and "belra" not in said[0]["text"].casefold()
-    assert "crush" not in said[0]["text"].casefold()
+    assert not answers(rig, "general", mid)
     assert not rig.sent.log and not rig.world.online
     rig.close()
 
