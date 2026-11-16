@@ -16,7 +16,7 @@ from leeroy_mind.protocol import Group
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.filters import Tell
 from leeroy_mind.talk.moves import MOVE_PHRASES, MOVES
-from leeroy_mind.talk.pipeline import (HOLDING_LINES, MOVE_HINT, OWED_HINT, REGEN_HINT, REPEAT_HINT,
+from leeroy_mind.talk.pipeline import (MOVE_HINT, OWED_FALLBACK_HINT, REGEN_HINT, REPEAT_HINT,
                                        SUMMONS_HINT)
 from leeroy_mind.talk.prompt import LIVE_BUDGET
 from leeroy_mind.talk.romance import (HEAT_TEXT, NOTE_TEXT, OVERLAY_CAP_TOKENS, SCENE_HEAD,
@@ -86,19 +86,16 @@ def test_each_move_class_puts_the_lately_line_in_the_next_prompt(rig, move):
     assert LINES[move] not in user.split("Tonight you've already")[1]  # moves, never her words
 
 
-def test_a_repeated_summons_in_his_whisper_is_never_said_and_never_silence(rig):
-    """2026-11-15: an answer he is owed never vanishes. The summons is asked again, then for a
-    short answer, and when that still summons him she says she needs a moment."""
+def test_a_repeated_summons_in_his_whisper_is_never_said(rig):
+    """2026-11-15: an answer he is owed gets one more short attempt (owed_fallback); when that
+    still asks him over, the turn is dropped rather than summon him."""
     rig.script("get over here", "come over already")
     rig.whisper_from_him(102, "hi")
     rig.run()
     assert len(rig.chat_calls()) == 3
-    assert SUMMONS_HINT.format(**HE) in rig.last_user()
-    assert OWED_HINT.format(human="Zan", they="he") in rig.last_user()
-    said = [s.text.casefold() for s in rig.sent.says()]
-    assert len(said) == 1 and "over" not in said[0]
-    assert any(s.casefold().startswith(said[0][:6]) for s in HOLDING_LINES)
-    assert rig.utterances()[-1]["dropped"] is None
+    assert SUMMONS_HINT.format(**HE) in rig.chat_calls()[1]["messages"][-1]["content"]
+    assert rig.last_user().endswith(OWED_FALLBACK_HINT.format(human="Zan"))
+    assert not rig.sent.says() and rig.utterances()[-1]["dropped"] == "tells"
 
 
 def test_a_summons_in_a_typed_guild_reply_to_him_is_asked_again_then_dropped(rig):

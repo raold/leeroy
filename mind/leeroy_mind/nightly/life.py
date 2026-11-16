@@ -1,7 +1,8 @@
 """One grounded, fictional offscreen life beat per member and night (P1c Task 13).
 
 He lives far away (2026-11-15: beats invented his texts, notes in her flat and visits, and those
-memories surfaced in chat as real): every life prompt ends on FAR_AWAY, a beat or title that
+memories surfaced in chat as real): every life prompt ends on FAR_AWAY (FAR_AWAY_MET once her
+romance arc has met him in person), a beat or title that
 pairs one of his names with contact off the game (meets_him) is refused before grounding and
 never shown as a last beat again, and a beat that names him or touches her secret is stored
 private to her and him (private_beat), not open to every turn."""
@@ -41,6 +42,14 @@ FAR_AWAY = ("{human} lives far away: {name} and {human} have never met in person
             "in the game and on the guild's Discord. Never put {human} into {name}'s life away "
             "from the game: no texts, calls, notes, gifts or visits from {them}, and {they} "
             "never turns up there.")
+# The same for a woman whose romance arc has met him in person (arc stage weekend or after, an
+# arc_meetup row: arc/weekend.py writes those meetings itself): no "never met", but still no
+# invented contact in her everyday life.
+FAR_AWAY_MET = ("{human} lives far away: {name} and {human} talk in the game and on the guild's "
+                "Discord and don't share daily life off it. Never put {human} into {name}'s "
+                "everyday life away from the game: no texts, calls, notes, gifts or visits from "
+                "{them}, and {they} never turns up there.")
+MET_STAGES = frozenset({"weekend", "after"})
 # Contact off the game, said with one of his names (meets_him): a phone, a note or gift, a visit
 _THINGS = r"(?:note|card|letter|gift|present|flowers|package|parcel|text|message)"
 _CONTACT = re.compile(
@@ -66,11 +75,23 @@ def his_names(ident) -> tuple[str, ...]:
 
 
 def _names_re(names) -> re.Pattern | None:
-    """His names as words; a name of 5 letters or more also with up to two more letters, as the
-    model mangles it (a name with a letter added)."""
-    alts = [re.escape(n) + (r"\w{0,2}" if len(n) >= 5 else "")
-            for n in sorted(set(names), key=len, reverse=True) if n]
+    """His names as whole words (never a longer word that starts with one: an animal is not his
+    nickname)."""
+    alts = [re.escape(n) for n in sorted(set(names), key=len, reverse=True) if n]
     return re.compile(r"(?<!\w)(?:" + "|".join(alts) + r")(?!\w)", re.I) if alts else None
+
+
+def met_him(store, guid: int, human: int) -> bool:
+    """Her romance arc has met him in person: stage weekend or after toward him, or a meetup
+    the arc wrote (arc_meetup). False when it cannot be read."""
+    try:
+        rel = store.get_relationship(guid, human) if human else None
+        if rel is not None and rel.romance_stage in MET_STAGES:
+            return True
+        return store.conn.execute("SELECT 1 FROM arc_meetup WHERE guid = ? LIMIT 1",
+                                  (guid,)).fetchone() is not None
+    except Exception:
+        return False
 
 
 def names_him(text: str, names) -> bool:
@@ -156,8 +177,8 @@ async def advance(ctx, thread):
     they, them, _ = ctx.ident.forms
     system = (system_prompt("life", PROMPT, ctx.settings.data_dir, human=ctx.ident,
                             name=ctx.name(guid), card=ctx.card(guid))
-              + "\n" + FAR_AWAY.format(human=ctx.ident.called, name=ctx.name(guid), they=they,
-                                       them=them))
+              + "\n" + (FAR_AWAY_MET if met_him(ctx.store, guid, ctx.ident.guid) else FAR_AWAY)
+              .format(human=ctx.ident.called, name=ctx.name(guid), they=they, them=them))
     recent = [r for r in recent if not meets_him(r["text"], names)]  # never primes the next
     user = (f"Life thread: {thread['title']}\nLast three beats:\n"
             + "\n".join(r["text"] for r in reversed(recent))

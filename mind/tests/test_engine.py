@@ -28,7 +28,7 @@ from leeroy_mind.protocol import (Achievement, Ack, Boss, Chat, Death, Group, Lo
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.budget import BurstPlan
 from leeroy_mind.talk.engine import flirt_chance, share_reason_pool
-from leeroy_mind.talk.pipeline import HOLDING_LINES, TurnMeta
+from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.romance import DISTANCE, INVARIANTS
 from leeroy_mind.talk.select import ReplyTurn
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -862,8 +862,8 @@ def test_her_greeting_and_goodnight_let_her_feelings_show(store, clock, tmp_path
 
 
 def test_a_reply_that_parrots_his_line_is_asked_again_then_never_said(store, clock, tmp_path):
-    """His whisper is owed an answer (2026-11-15): when every draft parrots him, she sends a
-    holding line of hers, never his words and never nothing."""
+    """His whisper is owed an answer (2026-11-15): every draft and the short fallback parrot
+    him, so nothing is said; his own words never go back to him."""
     async def main():
         seed_test_cast(store)
         save_member(store, 102, typo_rate=0.0, split_rate=0.0, emoticon_rate=0.0)
@@ -877,9 +877,9 @@ def test_a_reply_that_parrots_his_line_is_asked_again_then_never_said(store, clo
         r = make_rig(store, clock, tmp_path, script=script_from([parrot, HIS_WHISPER,
                                                                   HIS_WHISPER]))
         await r.advance(15)
-        [said] = await spoken(r, whisper_back(102, line.id))
-        assert said in HOLDING_LINES and len(r.chat_calls()) == 3
-        assert r.utterances()[-1]["dropped"] is None
+        assert await spoken(r, whisper_back(102, line.id)) == []
+        assert len(r.chat_calls()) == 3  # the fallback parrots him too: never said
+        assert r.utterances()[-1]["dropped"] == "tells" and r.sent.says() == []
     run(main())
 
 
@@ -2582,8 +2582,9 @@ def test_a_woman_with_an_attitude_toward_him_answers_every_whisper_of_his(store,
 def test_a_silent_answer_to_his_whisper_is_asked_once_more(store, clock, tmp_path):
     """Seen live (coordinator, fix wave G3): an answer to his whisper came back "(nothing)" and
     was dropped as silent. It is asked once more, with a hint to answer him in a line in her
-    own voice (a line or two at the explicit band: fix round 1, review M5), and a second
-    silence is accepted. Silence anywhere else stays a valid answer."""
+    own voice (a line or two at the explicit band: fix round 1, review M5); a second silence
+    gets one short fallback (owner, 2026-11-15), and only its silence stands. Silence where he
+    is owed nothing stays a valid answer."""
     hint = "Answer Zan's whisper in a line, in your own voice."
     two = "Answer Zan's whisper in a line or two, in your own voice."
 
@@ -2594,10 +2595,12 @@ def test_a_silent_answer_to_his_whisper_is_asked_once_more(store, clock, tmp_pat
         line = his_line(r, store, "you around?", channel="whisper", to_guid=102).id
         assert await spoken(r, whisper_back(102, line)) == ["right here then"]
         assert len(r.chat_calls()) == 2 and two in r.prompts()[1] and two not in r.prompts()[0]
-        r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "/w Zan"]))
+        # a second silence gets the owed fallback (owner, 2026-11-15); a silent one stands
+        r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "/w Zan",
+                                                                  "(nothing)"]))
         line = his_line(r, store, "still there?", channel="whisper", to_guid=103).id
         assert await spoken(r, whisper_back(103, line)) == []
-        assert r.utterances()[-1]["dropped"] == "silent" and len(r.chat_calls()) == 2
+        assert r.utterances()[-1]["dropped"] == "silent" and len(r.chat_calls()) == 3
         assert hint in r.prompts()[1]  # the drawn woman is not at the explicit band
         r = make_rig(store, clock, tmp_path, script=script_from(["(nothing)", "hey"]))
         g = his_line(r, store, "anyone around?").id

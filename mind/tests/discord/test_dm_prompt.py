@@ -186,3 +186,18 @@ def test_a_channel_answer_keeps_its_recent_messages_in_the_instruction(store, cl
     assert "Recent messages:" in prompt and "brindle raid tonight" in prompt
     assert "Chat:" not in prompt
     rig.close()
+
+
+def test_her_answer_never_copies_his_earlier_dm_message(store, clock, tmp_path):
+    """Review #325: the copy check reads his earlier messages now in the DM's Chat (the audit's
+    answer that sent his earlier message back word for word)."""
+    rig = rig_for(store, clock, tmp_path)
+    rig.script("i am having trouble sleeping again tonight honestly", "aw, warm milk helps me")
+    talk = talk_for(rig)
+    post(rig, "dm:102", "i am having trouble sleeping again tonight honestly")
+    mid = post(rig, "dm:102", "want a drink?")
+    answer(rig, talk, mid)
+    assert len(rig.chat_calls()) == 2
+    [m] = answers(rig, "dm:102", mid)
+    assert "warm milk" in m["text"]
+    rig.close()

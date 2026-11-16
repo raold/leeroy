@@ -20,10 +20,12 @@ ADDON = ("<DBM> Testmage has wiped on Valithria Dreamwalker",
          "<Deadly Boss Mods> Testmage is busy fighting against Valithria Dreamwalker "
          "(unknown, 7/25 people alive)",
          "<BigWigs> Testmage is in combat", "<dbm> Testmage has defeated Sindragosa",
-         "<RaidHelper> Testmage is busy", "[AutoReply] I'm away right now",
-         "Auto-reply: back in 10")
-HIS = ("<3", "<3 you", "<sigh> fine", "<Flask> missing: Arkon", "<insert joke here>",
-       "dbm says i wiped lol", "auto attack is broken", "[Shadowmourne] dropped!")
+         "<RCLootCouncil> Testmage is not in a group", "[AutoReply] I'm away right now",
+         "Auto-reply: back in 10", "<Details!> Testmage is busy")
+# a tag he types himself is his (review #325): only known addons' tags are dropped
+HIS = ("<3", "<3 you", "<sigh> fine", "<Sigh> fine", "<AFK> back in 5", "<RaidHelper> lol",
+       "<Flask> missing: Arkon", "<insert joke here>", "dbm says i wiped lol",
+       "auto attack is broken", "[Shadowmourne] dropped!")
 
 
 @pytest.mark.parametrize("text", ADDON)

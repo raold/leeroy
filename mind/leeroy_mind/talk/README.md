@@ -217,7 +217,8 @@ instruction at 200 characters a message, and the trim emptied her memories first
   characters, hers as their first 30 words (`prompt.replay`), each with its photo note and age.
   Her own long lines are replayed the same way in "Your last lines" and in the elsewhere block;
   the repeat check still reads them whole. The DM's instruction keeps only where she is and his
-  message. The copy check does not read the DM's history (as before: it had none).
+  message. The copy check reads his earlier messages there (not hers: hers are the repeat
+  check's), so she never sends one of his messages back as her own.
 - **A DM has its own budget**, `prompt.DM_BUDGET` = 2600 estimated tokens: num_ctx 4096 less a
   full `dm_words` reply (344) leaves room even if the real count runs 25% over the estimate.
   Every other turn keeps `LIVE_BUDGET` (1800). Measured on the 18 logged DM trims (a scratch
@@ -229,25 +230,35 @@ instruction at 200 characters a message, and the trim emptied her memories first
   cards, and only drops them and the rest of the card at the very end. `PromptParts.untrimmed`
   holds whole sections the trim never touches (for the persona's own "About you" block),
   rendered first in the user message.
-- **An answer he is owed in private never vanishes for its tells** (his whisper or his DM:
-  `Pipeline._owed_to_him`; in a channel the old rule stands). A draft whose tells are all soft and none of
-  `DROP_ON_RETRY` is kept; when the retry is worse, it is sent (`say_owed_kept`). Otherwise one
-  more attempt asks for a sentence or two (`OWED_HINT`), and if that fails too she sends a
-  holding line (`HOLDING_LINES`, never one she just said; `say_owed_holding`). An owed Discord
-  answer over its length is cut back to a sentence end (`discord_length.fit_words`) instead of
-  being asked again. A second silence still stands; other turns keep the old rule.
-  Seen live 11-15: her first draft to "leave him for me" was asked again for a repeated move and
-  its length, the retry asked him over, and both were dropped.
+- **An answer he is owed never ends in nothing** (owner, 2026-11-15: every message of his gets
+  a reply that adds something). Owed is `LiveReview.owed`, the one definition: his whisper, his
+  DM, a post naming her, his pushback, a first answer to his question, an emote at her. A draft
+  whose tells are all soft and none of `DROP_ON_RETRY` is kept, and sent when the retry is worse
+  or silent (`say_owed_kept`). A first silence is asked again. When nothing usable is left,
+  `Pipeline.owed_fallback` makes one more short generation on the same prompt, told only
+  "Answer what he just said in one or two short sentences, in your own voice"
+  (`OWED_FALLBACK_HINT`), reviewed only for silence and the hard screens (`OWED_HARD_TELLS`: AI
+  or prompt talk, a flirt at a member, his words said back, asking him over), and sends it
+  (`say_owed_fallback`); if even that fails it is dropped (`say_owed_fallback_refused`). An owed
+  Discord answer over its length is cut back to a sentence end (`discord_length.fit_words`)
+  instead of being asked again. Turns he is not owed keep the old rule. Seen live 11-15: her
+  first draft to "leave him for me" was asked again for a repeated move and its length, the
+  retry asked him over, and both were dropped.
 - **Game names** (`talk/gamenames.py`, the soft tell "game name", dropped on retry): a
   battleground put in or named after a library zone that has none ("a battleground in Tanaris"),
   or a word in a boss context ("parse X", "wipe on X", "get X down") that the library's text
-  never uses (`Library.known_words`, its full-text vocabulary) and that is no everyday word,
-  shorthand or member. Without a library nothing is flagged. Over the live corpus it flags the
+  never uses (`Library.known_words`, its full-text vocabulary) and that is no everyday word
+  (or everyday ending: "homework"), boss nickname (`SHORTHAND`: festy, rotty, valy, maexx,
+  levi...), known boss or place with its punctuation taken out ("lanathel") or member. A
+  battleground "near" a place, in a capital city or in a zone with a battleground's entrance
+  (`QUEUE_PLACES`), or named by its own longer name ("dalaran sewers"), is fine. Without a
+  library nothing is flagged. Over the live corpus it flags the
   three invented bosses (9 lines) and the 3 misplaced battlegrounds, and only typos the typing
   adds after the check otherwise. "Tonight so far" names the battleground she played
   (`wow.bg_played`) and lists her evening in order ("you were in Tanaris; then you played a game
   of Warsong Gulch").
-- **His addons' whispers** ("<DBM> ... has wiped on ...", "<Deadly Boss Mods>", "<BigWigs>",
-  any capitalised `<Tag>`, "[AutoReply]") are not his words: never stored, never answered, no
-  handler sees them (`pastes.is_addon_whisper`, `app._on_chat`; log
-  `his_addon_whisper_skipped`). "<3", a typed "<sigh>" and his pasted "<Flask>" checks are his.
+- **His addons' whispers** (a known addon's own tag, `pastes.ADDON_TAGS`: "<DBM> ... has wiped
+  on ...", "<Deadly Boss Mods>", "<BigWigs>", "<RCLootCouncil>", "<Details!>", "[AutoReply]",
+  "Auto-reply:") are not his words: never stored, never answered, no handler sees them
+  (`pastes.is_addon_whisper`, `app._on_chat`; log `his_addon_whisper_skipped`). "<3", a tag he
+  types himself ("<AFK> back in 5", "<Sigh> fine") and his pasted "<Flask>" checks are his.

@@ -69,6 +69,25 @@ def test_life_only_uses_the_last_nights_cast_beats(store, seeded):
     assert found[0].openers == (101,)
 
 
+def test_a_private_or_retired_beat_seeds_nothing_public(store, seeded):
+    """2026-11-15: a beat stored private (it names him, or her secret) or retired (it put him in
+    her life off the game) never opens a public Discord conversation."""
+    now=store.clock.now()
+    store.conn.execute("INSERT INTO life_thread(id,guid,status) VALUES (1,101,'active')")
+    beats={}
+    for text in ('Open cooking class','Private thought about him','Retired visit'):
+        beats[text]=store.conn.execute("INSERT INTO life_beat(thread_id,night,text,ts) VALUES (1,'2026-10-29',?,?)",
+                                       (text,now-20)).lastrowid
+    for text,scope,status in (('Open cooking class','open','active'),('Private thought about him','private','active'),
+                              ('Retired visit','open','archived')):
+        store.conn.execute("INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,access_n,actors,importance,"
+                           "valence,source,evidence,status,scope,scope_with) VALUES (101,'event',?,?,?,?,0,'[]',5,0,'offscreen',?,?,?,?)",
+                           (text,int(now),int(now),int(now),json.dumps([f'beat:{beats[text]}']),status,scope,
+                            1 if scope=='private' else 0))
+    found=[s.fact for s in gather(store,seeded) if s.kind=='life']
+    assert found==['Open cooking class']
+
+
 def claim(store, now, channel, audience, *, expires=None, source=True):
     line=store.conn.execute("INSERT INTO chat_line(ts,channel,from_guid,from_name,to_guid,text,origin,audience) VALUES (?,?,101,'Arkon',1,'Source','mind',?)",
                            (now-30,channel,None if audience is None else json.dumps(audience))).lastrowid

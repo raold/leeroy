@@ -18,10 +18,16 @@ PLAIN = "The register drawer jammed again."
 
 def seed(h):
     h.persona(101, secret="works a second job at the casino on thursdays")
-    ids = {text: h.mem(101, text, source="offscreen") for text in (CONTACT, NAMED, SECRET, PLAIN)}
+    ids = {text: h.mem(101, text, source="offscreen", evidence=(f"beat:{n}",))
+           for n, text in enumerate((CONTACT, NAMED, SECRET, PLAIN), 1)}
     ids["kept"] = h.mem(102, "Testmage's note was on my desk.", source="offscreen",
-                        status="archived")
+                        status="archived", evidence=("beat:9",))
     ids["chat"] = h.mem(102, CONTACT, source="chat")  # not a night's beat: left alone
+    # the arc's weekend with him and an encounter are offscreen but no life beat: left alone
+    ids["arc"] = h.mem(102, "Testmage drove me to the airport after our weekend.",
+                       source="offscreen", evidence=("arc:weekend:1",))
+    ids["encounter"] = h.mem(103, "Saw Testmage's raid call in guild chat.", source="offscreen",
+                             evidence=("encounter:5",))
     return ids
 
 
@@ -42,10 +48,11 @@ def test_plan_and_apply_with_receipts(h):
     assert state(h, ids[NAMED]) == state(h, ids[SECRET]) == ("active", "private", 1)
     assert state(h, ids[PLAIN]) == ("active", "open", 0)
     assert state(h, ids["chat"])[0] == "active"
+    assert state(h, ids["arc"]) == state(h, ids["encounter"]) == ("active", "open", 0)
     assert json.loads(h.store.get_meta(RETIRED_KEY.format(id=ids[CONTACT]))) == {
         "status": "active", "at": 123.0}
     assert json.loads(h.store.get_meta(RESCOPED_KEY.format(id=ids[NAMED])))["scope"] == "open"
-    assert h.store.conn.execute("SELECT count(*) FROM memory").fetchone()[0] == 6  # none deleted
+    assert h.store.conn.execute("SELECT count(*) FROM memory").fetchone()[0] == 8  # none deleted
     assert apply(h.store, plan(h.store, ident), human=1, now=124.0) == (0, 0)  # idempotent
 
 

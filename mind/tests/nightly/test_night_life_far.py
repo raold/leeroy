@@ -9,8 +9,9 @@ import pytest
 from conftest import run
 from nightly.conftest import IDENT, yes
 from leeroy_mind.memory.recall import scope_ok
-from leeroy_mind.nightly.life import (FAR_AWAY, ensure_thread, his_names, meets_him,
-                                     private_beat, stage_life)
+from leeroy_mind.nightly.life import (FAR_AWAY, FAR_AWAY_MET, ensure_thread, his_names,
+                                     meets_him, private_beat, stage_life)
+from leeroy_mind.storage.rows import Relationship
 
 DAY = 86400
 BEAT = {"beat": "My supervisor pushed the deadline.", "mood": 0.5,
@@ -31,7 +32,7 @@ def ctx_for(h, **reply):
     "Testy's text lit up my screen: still at work?",
     "Found a note from Testy on the kitchen table.",
     "Testmage called while I was on the bus.",
-    "Testys shadow fell across the doorway.",  # a mangled name
+    "Testy's shadow fell across the doorway.",
     "Drove to the office park where Testy works.",
     "Testy sent flowers to the library.",
 ])
@@ -43,6 +44,7 @@ def test_contact_with_him_off_the_game_is_caught(text):
     "Stayed up thinking about the raid Testy led.",
     "Laughed at Testy's joke in guild chat on the bus home.",
     "My sister texted me about the wedding.",  # contact, but not his
+    "My Testyx sent flowers to the shop.",  # a longer word is never his name (review #325)
     "The register drawer jammed again.",
 ])
 def test_other_beats_pass(text):
@@ -58,6 +60,21 @@ def test_the_prompt_says_he_lives_far_away(h):
     system = call["messages"][0]["content"]
     assert system.rstrip().endswith(FAR_AWAY.format(human="Testy", name="Arkon", they="he",
                                                     them="him"))
+
+
+@pytest.mark.parametrize("stage", ["weekend", "after"])
+def test_once_her_arc_has_met_him_the_prompt_never_says_they_never_met(h, stage):
+    due(h)
+    with h.store.transaction():
+        h.store.put_relationship(Relationship(a=101, b=IDENT.guid, romance_stage=stage))
+    ctx = ctx_for(h)
+    run(stage_life(ctx))
+    call = next(c for c in ctx.reasoner.llm.calls
+                if (c.get("format") or {}).get("title") == "life_beat")
+    system = call["messages"][0]["content"]
+    assert system.rstrip().endswith(FAR_AWAY_MET.format(human="Testy", name="Arkon", they="he",
+                                                        them="him"))
+    assert "never met" not in system
 
 
 def test_a_beat_meeting_him_is_refused_before_the_judge(h):

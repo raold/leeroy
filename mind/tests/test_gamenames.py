@@ -15,7 +15,7 @@ from leeroy_mind.wow import bg_played
 PLACES = frozenset({"tanaris", "crystalsong forest", "dragonblight", "warsong gulch",
                     "wintergrasp", "dalaran"})
 LIBRARY = {"marrowgar", "festergut", "sindragosa", "putricide", "sapph", "valithria", "lord",
-           "lapse", "trash"}
+           "lapse", "trash", "lana", "thel"}
 
 
 def known(words):
@@ -34,6 +34,8 @@ def test_a_battleground_put_in_a_zone(text):
 @pytest.mark.parametrize("text", [
     "that battleground was a waste of time", "won a game of warsong gulch",
     "wintergrasp battle at 8", "back in dalaran after a bg", "tanaris is the vibe",
+    "did battlegrounds near orgrimmar", "the battleground at dalaran sewers",
+    "the bg in the barrens", "queued a battleground in dalaran",
 ])
 def test_battlegrounds_said_right(text):
     assert not misplaced_battleground(text, PLACES)
@@ -48,6 +50,7 @@ def test_boss_words_in_context():
     assert boss_words("if we get zorbath down i'll draw a diagram") == ["zorbath"]
     assert boss_words("zorbath is basically free") == ["zorbath"]
     assert boss_words("we wiped on Festergut's smell") == ["festergut"]
+    assert boss_words("stuck on homework") == []  # no boss context
 
 
 @pytest.mark.parametrize("text,unknown", [
@@ -60,6 +63,11 @@ def test_boss_words_in_context():
     ("pull lapsed. 5 min", []),  # an everyday word the library spells one way
     ("we wiped on trash", []),
     ("killed everything", []),
+    # boss nicknames and spellings players type (review #325)
+    ("wiped on festy again", []), ("rotty heroic tonight", []), ("valy is basically free", []),
+    ("we killed maexx", []), ("pulled levi", []), ("lanathel heroic", []),
+    ("wiped on lana'thel", []),
+    ("stuck on homework", []), ("pulled homework duty", []),  # everyday words
 ])
 def test_unknown_bosses(text, unknown):
     assert unknown_bosses(text, known, people=["Belra"]) == unknown

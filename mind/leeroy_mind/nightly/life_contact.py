@@ -5,10 +5,13 @@ surfaced in chat as real; nightly.life refuses new ones).
 A dry run (the default) reads mind.db read-only and prints what it would change: ids, owners and
 counts, the texts only with --show. With --go, the mind stopped (the instance lock is held
 throughout) and a snapshot taken first (label pre-life-contact), it
-- retires every active offscreen memory that meets him (life.meets_him): status `archived`,
-  never deleted;
-- raises every other active open offscreen memory that names him or touches her secret
+- retires every active life-beat memory (offscreen, evidence `beat:<id>`) that meets him
+  (life.meets_him): status `archived`, never deleted;
+- raises every other active open life-beat memory that names him or touches her secret
   (life.private_beat) to private with him, as new beats are stored.
+Other offscreen memories (the night's encounters, the romance arc's weekend and visits, which are
+meetings by design) are never touched. Chat and extraction memories that repeated an invented
+contact stay as they are.
 Each change leaves a receipt in meta (RETIRED_KEY, RESCOPED_KEY: the row's earlier status or
 scope and the time), so it can be undone by hand. Nothing else is touched: the beats' rows stay,
 and an outreach item resting on a retired memory lapses at its next fill (outreach.sources)."""
@@ -42,6 +45,9 @@ def plan(store: Store, ident) -> Plan:
         "SELECT m.id, m.owner, m.text, m.scope, (SELECT t.title FROM json_each(m.evidence) e "
         "JOIN life_beat b ON 'beat:' || b.id = e.value JOIN life_thread t ON t.id = b.thread_id "
         "LIMIT 1) AS title FROM memory m WHERE m.source = 'offscreen' AND m.status = 'active' "
+        # life beats only: the arc's weekend and visit memories are meetings by design, and
+        # encounters are the night's own
+        "AND EXISTS (SELECT 1 FROM json_each(m.evidence) e WHERE e.value LIKE 'beat:%') "
         "ORDER BY m.id").fetchall()
     for mid, owner, text, scope, title in rows:
         if meets_him(text, names):

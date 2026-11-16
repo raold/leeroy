@@ -79,7 +79,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.guards.review import rewrite_hint
 from leeroy_mind.talk.facts import LibraryFacts
-from leeroy_mind.talk.gamenames import misplaced_battleground, unknown_bosses
+from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
 from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
@@ -102,7 +102,7 @@ from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.world import WorldView
-from leeroy_mind.text import EMOJI_RE, normalize_words, strip_wow_markup
+from leeroy_mind.text import EMOJI_RE, strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
@@ -187,14 +187,12 @@ _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "s
 DROP_ON_RETRY = frozenset({"history", "summons", "game name"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 LONG_SLACK = 1.25
-# An answer he is owed whose retry still fails (2026-11-15, Pipeline._owed_to_him): one more,
-# short attempt, then a holding line of hers. Never his message unanswered.
-OWED_HINT = ("Answer {human} in a sentence or two, in your own voice: how you feel about what "
-             "{they} just said.")
-HOLDING_LINES = ("give me a sec, i need to think about that",
-                 "hold on. let me think about that one",
-                 "ok wait. i need a minute with that",
-                 "hang on, that's a lot. give me a minute")
+# An answer he is owed when no draft can stand (owner, 2026-11-15: every message of his gets a
+# reply that adds something; Pipeline.owed_fallback): one more short generation, told only this,
+# reviewed only for OWED_HARD_TELLS.
+OWED_FALLBACK_HINT = ("Answer what {human} just said in one or two short sentences, in your own "
+                      "voice.")
+OWED_HARD_TELLS = frozenset({"meta", "member flirt", "echo", "summons"})
 # The second and third answers to his line see the ones before them (prompts I8), and so do
 # the second and third greetings (the rehearsal's second greeter copied the first).
 ANSWERED = "{names} already answered {them}. Add something they didn't, or answer (nothing)."
@@ -1401,8 +1399,10 @@ class Pipeline:
                         list(dict.fromkeys([m.id for m in memories[:len(trimmed.memories)]] +
                              ([callback.memory_id] if callback else []))), p, close,
                         [trigger] if trigger else [], [r.text for r in earlier], samples,
-                        support, [] if dm_rows else [r.text for r in recent
-                                                     if r.id != turn.trigger_line],
+                        # a DM's copy check reads his earlier messages there (her own are the
+                        # repeat check's): the audit's answer that sent his message back
+                        support, [r.text for r in recent if r.from_guid == hg] if dm_rows
+                        else [r.text for r in recent if r.id != turn.trigger_line],
                         [*trimmed.memories, *trimmed.facts, *([callback.seed] if callback else [])], moves=recent_moves)
 
     @staticmethod
@@ -2238,15 +2238,15 @@ class Pipeline:
 
         def quiet(t: str) -> bool:  # an emoji-only line is a Discord message (ruling R9)
             return is_silence(t) and not (emoji and _emoji_only(t))
-        # An answer he is owed never vanishes for its tells (2026-11-15: two checks dropped her
-        # answer when he asked her to leave her husband): a draft with soft tells only is kept,
-        # sent if the retry is worse; else one more, short attempt; else a holding line.
-        owed = max_attempts > 1 and self._owed_to_him(turn, meta)
+        # An answer he is owed (LiveReview.owed) never ends in nothing (owner, 2026-11-15: every
+        # message of his gets a reply that adds something; two checks had dropped her answer
+        # when he asked her to leave her husband): a draft with soft tells only is kept and sent
+        # when the retry is worse or silent, else owed_fallback asks once more, simply.
+        owed = max_attempts > 1 and self.live_review.owed(turn, meta)
         fit = (int(LONG_SLACK * self._word_budget(turn, p, meta.two_lines))
                if owed and emoji else 0)  # an owed Discord answer is cut, never asked again
-        kept = ""
-        for attempt in range(max_attempts + (1 if owed else 0)):
-            rescue = attempt == max_attempts  # the owed answer's short attempt
+        kept, why = "", "tells"
+        for attempt in range(max_attempts):
             if not _scope_valid(meta):
                 return text, "scope_changed"
             asked = self.clock.now()
@@ -2302,54 +2302,83 @@ class Pipeline:
                     silent = True
                 elif not kept and not any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
                     kept = text  # soft tells only: what a retry may still not beat
-            if silent and rescue:
-                break
             if silent:
                 dm = self._answers_his_dm(turn, meta)
                 named = is_discord(turn.channel) and meta.discord_named and meta.answers_human
-                if attempt == 0 and (meta.initiates or self._answers_his_whisper(turn) or dm or named):
+                whisper = self._answers_his_whisper(turn)
+                if attempt == 0 and (meta.initiates or owed or whisper or dm or named):
                     log.info("say_silent: guid=%d kind=%s asked again", turn.speaker, turn.kind)
-                    hint = (SILENT_START_HINT if meta.initiates else SILENT_DM_HINT if dm or named
-                            else SILENT_WHISPER_HINT)
+                    hint = (SILENT_START_HINT if meta.initiates else SILENT_WHISPER_HINT if whisper
+                            else SILENT_DM_HINT)
                     messages = asking(hint.format(
                         human=self.human.called,
                         length=(self._silent_length(self._discord_words(turn)) if self._discord_words(turn)
                                 else "a line or two" if meta.two_lines else "a line")))
                     continue
-                return raw, "silent"
+                if not owed:
+                    return raw, "silent"
+                why = "silent"  # never silence for an answer he is owed: below
+                break
             log.info("say_tells: guid=%d kind=%s attempt=%d tells=%s", turn.speaker, turn.kind,
                      attempt, ",".join(t.reason for t in tells))
-            if owed and attempt == max_attempts - 1:
-                if kept and not quiet(best := repair(kept, speaker=name, aliases=own, him=his,
-                                                     keep_emoji=emoji)):
-                    log.info("say_owed_kept: guid=%d kind=%s", turn.speaker, turn.kind)
-                    return best, None
-                they = self.human.forms[0]
-                messages = asking(" ".join(x for x in (
-                    self._retry_hint(tells, p, turn), rest_hint,
-                    OWED_HINT.format(human=self.human.called, they=they)) if x))
-                continue
             messages = asking(" ".join(x for x in (self._retry_hint(tells, p, turn), rest_hint)
                                        if x))
         if owed:
-            line = self._holding_line(turn, meta)
-            log.info("say_owed_holding: guid=%d kind=%s", turn.speaker, turn.kind)
-            return line, None
-        return text, "tells"
+            if kept and not quiet(best := repair(kept, speaker=name, aliases=own, him=his,
+                                                 keep_emoji=emoji)):
+                log.info("say_owed_kept: guid=%d kind=%s", turn.speaker, turn.kind)
+                return best, None
+            line = await self.owed_fallback(turn, meta, c, spoken=spoken)
+            if line:
+                log.info("say_owed_fallback: guid=%d kind=%s", turn.speaker, turn.kind)
+                return line, None
+        return text, why
 
-    def _owed_to_him(self, turn: Turn, meta: TurnMeta) -> bool:
-        """The answer he is owed in private: to his whisper or his Discord DM. It never
-        vanishes for its tells. (In a channel a member who says nothing is ordinary; there the
-        old rule stands.)"""
-        return self._answers_his_whisper(turn) or self._answers_his_dm(turn, meta)
+    async def owed_fallback(self, turn: Turn, meta: TurnMeta, c: Composed, *,
+                            spoken: bool = False) -> str | None:
+        """The last answer to a message of his when no draft could stand (owner, 2026-11-15:
+        every message of his gets a reply that adds something): one more short generation on
+        the turn's own prompt, told only to answer what he just said (OWED_FALLBACK_HINT), and
+        reviewed only for silence and the hard screens (OWED_HARD_TELLS: talk of AI or prompts,
+        a flirt at a member, his words said back, asking him over). Its words, repaired, or
+        None when even this fails (the turn is then dropped). The one fallback the lanes share."""
+        p = c.persona
+        name, own, his = p.character_name, aliases(p), self._his_names()
+        emoji = is_discord(turn.channel)
+        messages = _with_hint(c.messages, OWED_FALLBACK_HINT.format(human=self.human.called))
+        if spoken:
+            messages = _with_hint(messages, SPOKEN_HINT)
+        asked = self.clock.now()
+        try:
+            raw = await self._ask(turn, messages, meta=meta, attempt=3)
+        except (_ScopeChanged, Expired, GpuPaused, SchedulerError, LLMError):
+            return None
+        finally:
+            meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
+        if not _scope_valid(meta) or self.scheduler.expired(self._deadline(turn, meta)):
+            return None
 
-    def _holding_line(self, turn: Turn, meta: TurnMeta) -> str:
-        """An owed answer's last resort when every draft failed: a short line of her own that
-        she needs a moment (HOLDING_LINES, drawn per turn), never one she just said."""
-        said = {" ".join(normalize_words(x).split()) for x in self._own_lines(turn)}
-        lines = [x for x in HOLDING_LINES if " ".join(normalize_words(x).split()) not in said]
-        return random.Random(f"{meta.turn_id}:{turn.speaker}:holding").choice(
-            lines or list(HOLDING_LINES))
+        def quiet(t: str) -> bool:
+            return is_silence(t) and not (emoji and _emoji_only(t))
+        if quiet(raw):
+            return None
+        text = raw if c.close else redact_real_name(raw, self.human, self.human.called)
+        text = strip_copied(text, (name, *own), him=his)
+        if meta.pushback:
+            text = text.split("\n", 1)[0].rstrip()
+        if quiet(text):
+            return None
+        hg = self.human.guid
+        summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        tells = find_tells(text, answers=c.answers, held=c.held, summons_ok=summons_ok,
+                           keep_emoji=emoji)
+        hard = [t.reason for t in tells if t.reason in OWED_HARD_TELLS]
+        if hard or self._flirts_at_a_member(turn, text):
+            log.info("say_owed_fallback_refused: guid=%d kind=%s tells=%s", turn.speaker,
+                     turn.kind, ",".join(hard) or "member flirt")
+            return None
+        text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
+        return None if quiet(text) else text
 
     def _answers_his_whisper(self, turn: Turn) -> bool:
         """The turn answers a line of his in a whisper to him: its silence is asked again once
@@ -2397,7 +2426,10 @@ class Pipeline:
         if not callable(known):
             return False
         people = [m.name for m in self.world.members.values()] + self._his_names()
-        return bool(unknown_bosses(text, known, people))
+        cached = getattr(self, "_place_words", None)
+        if cached is None or cached[0] is not places:  # the places' words, squashed, once
+            cached = self._place_words = (places, squashed(places))
+        return bool(unknown_bosses(text, known, people, cached[1]))
 
     def _his_names(self) -> list[str]:
         h = self.human

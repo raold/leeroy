@@ -466,8 +466,8 @@ def test_a_summons_inside_a_talked_plan_is_kept(rig):
 ])
 def test_a_summons_outside_a_plan_he_shaped_is_asked_again_then_never_said(
         store, clock, tmp_path, state, stage, stance):
-    """His whisper is owed an answer (2026-11-15): the summons is never said, and a holding line
-    of hers stands in for it once a short attempt still summons him."""
+    """His whisper is owed an answer (2026-11-15): the summons is never said, not even by the
+    short fallback attempt."""
     _cast(store, stance=stance)
     r = make_rig(store, clock, tmp_path)
     try:
@@ -476,10 +476,8 @@ def test_a_summons_outside_a_plan_he_shaped_is_asked_again_then_never_said(
         r.whisper_from_him(102, "hi")
         r.run()
         assert len(r.chat_calls()) == 3
-        assert SUMMONS_HINT.format(**FILL) in r.last_user()
-        said = [s.text for s in r.sent.says()]
-        assert len(said) == 1 and "over" not in said[0].casefold()
-        assert r.utterances()[-1]["dropped"] is None
+        assert SUMMONS_HINT.format(**FILL) in r.chat_calls()[1]["messages"][-1]["content"]
+        assert not r.sent.says() and r.utterances()[-1]["dropped"] == "tells"
     finally:
         r.close()
 
