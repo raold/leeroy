@@ -112,15 +112,19 @@ full rule); no switch, no migration, no native rebuild.
   spoke in the last minute (weight 0), one of them answers anyway; his hello in the login quiet
   keeps one answer; a Discord channel post with nobody online or idle draws from the rest of its
   audience (`discord_draw_widened`).
-- **The owed answer** (`TurnMeta.owed_answer`: the first answer to each line or post, a whisper
-  answer, an answer to his DM) passes the guild's pace, keeps a reviewed draft instead of being
-  dropped, and has a 90 s (game) or 300 s (Discord) deadline. If its member cannot speak, the next
-  answer to that line in the job takes the debt.
-- **In the turn.** A silence, two drafts that kept a tell, a failed or late model request: one
-  more plain ask (`OWED_HINT`, with the summons warning where her arc keeps it in the game); only
-  fatal tells, an unbacked shared-history claim, a flirt at a member or such a summons block that
-  draft (a repeated move or length no longer do: a long draft is cut at a sentence). Without a usable draft the answer is `fallback_line`, a short reaction to his
-  message that asks something back. Logs `owed_rescue_line reason= how=model|fallback`.
+- **The owed answer** (`TurnMeta.owed_answer`: the first answer to each line or post) passes
+  the guild's pace, keeps a reviewed draft instead of being dropped, and has a 90 s (game) or
+  300 s (Discord) deadline. If its member cannot speak, the next answer to that line in the job
+  takes the debt. What is owed has one definition, the guards' `LiveReview.owed`: that first
+  answer, an answer to his whisper or DM, a member he named, his pushback's target, the first
+  answer to his question, her line after his emote.
+- **In the turn.** A silence, two drafts that kept a tell, a failed or late model request:
+  `owed_fallback`, one more short generation (`OWED_HINT`, a sentence or two, with the summons
+  warning where her arc keeps it in the game), checked only against the hard screens: the fatal
+  tells, an unbacked shared-history claim, a flirt at a member, such a summons (a repeated move
+  or length no longer do: a long draft is cut at a sentence). Without a usable draft the answer
+  is `fallback_line`, a short reaction to his message that asks something back. Logs
+  `owed_rescue_line reason= how=model|fallback`.
 - **The watchdog** (ticked by the app): a message still unanswered 45 s (whisper, voice), 60 s
   (game channels) or 150 s (Discord) after it, with nothing in flight, gets a rescue turn (at most
   two, 90 s apart): `owed_rescue reason=not_planned|dropped:<reason>|no_answer`. Messages older than

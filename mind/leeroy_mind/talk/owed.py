@@ -10,19 +10,21 @@ Three layers, cheapest first:
    nobody online or idle draws from the rest of its audience). The first answer carries
    TurnMeta.owed_answer: the guild's pace never holds it back (Pipeline._blocked), its guard
    review keeps the best draft instead of dropping it (LiveReview.owed), and its deadline is at
-   least OWED_DEADLINE_S. A whisper answer and an answer to his Discord DM are owed already
-   (owes_him). When an owed turn ends with nothing said, the next answer to the same line in
-   its job inherits the debt (Pipeline._run).
+   least OWED_DEADLINE_S. What is owed has one definition, the guards' (LiveReview.owed, which
+   owes_him reads): that first answer, an answer to his whisper or DM, a member he named, his
+   pushback's target, the first answer to his question, her line after his emote. When an owed
+   turn ends with nothing said, the next answer to the same line in its job inherits the debt
+   (Pipeline._run).
 2. In the turn (rescue_text): an owed answer the model left silent, whose drafts both kept a
-   tell, whose request failed or whose time ran out (RESCUABLE) is asked a third time with a
-   plainer instruction (OWED_HINT). Only tells a reader must never see block that draft
-   (BLOCKING: the fatal ones, an unbacked shared-history claim, a flirt at a member, and a
-   summons out of the game where her arc doesn't allow one, which the plain ask warns of); a
-   repeated move or a long draft no longer cost him his answer (a long one is cut to its
-   budget). With no usable draft, a short line built from his own message is the answer
-   (fallback_line): never empty, never emoji alone, never his words said back, and always a
-   reaction plus a question back. The same fallback stands in when every reviewed draft only
-   said his message back (guard_echo) or styling left nothing.
+   tell, whose request failed or whose time ran out (RESCUABLE) gets owed_fallback, one more
+   short generation (OWED_HINT: a sentence or two, the contract #325 gives its own), checked
+   only against the hard screens (the fatal tells and BLOCKING: an unbacked shared-history
+   claim, a flirt at a member, a summons out of the game her arc doesn't allow, which the ask
+   warns of up front); a repeated move or a long draft no longer cost him his answer (a long
+   one is cut to its budget). With no usable draft, a short line built from his own message is
+   the answer (fallback_line): never empty, never emoji alone, never his words said back, and
+   always a reaction plus a question back. The same fallback stands in when every reviewed
+   draft only said his message back (guard_echo) or styling left nothing.
 3. The watchdog (OwedWatch, ticked by the app every second, working every TICK_S): a message of
    his still unanswered GRACE_S after it, with no answer to it in flight, gets a rescue turn,
    logged `owed_rescue` with a reason code: from the member a whisper or DM went to, else a
@@ -67,24 +69,28 @@ BURST_S = 90.0
 OWED_DEADLINE_S = {"game": 90.0, "discord": 300.0}
 # The drop reasons an owed answer is rescued from inside its turn
 RESCUABLE = frozenset({"tells", "silent", "llm_error", "expired"})
-# Soft tells that still block a rescue's draft (fatal ones always do)
+# The hard screens owed_fallback's draft must pass: every fatal tell, and these (a flirt at a
+# member, an unbacked shared-history claim, a summons out of the game her arc doesn't allow)
 BLOCKING = frozenset({"history", "member flirt", "summons"})
-OWED_HINT = ("Answer {human} now, in {length}, in your own voice. Say something real back to "
-             "what {they} just said: react to it and add one thing of your own, an answer, a "
-             "thought or a question. Don't say {their} words back, and don't answer (nothing).")
+# owed_fallback's one short generation (the same contract as #325's): a sentence or two
+OWED_HINT = ("Answer {human} in a sentence or two, in your own voice: how you feel about what "
+             "{they} just said, and one thing of your own. Don't say {their} words back, and "
+             "don't answer (nothing).")
 LONG_SLACK = 1.25
 ADDON_TAG = re.compile(r"^\s*<(?:DBM|Deadly Boss Mods|BigWigs|BW|GTFO|RCLootCouncil)>", re.I)
 AUTO_REPLY = re.compile(r"^\s*(?:AFK|DND|<AFK>|<Away)\b", re.I)
 
 
 def owes_him(pipe, turn, meta) -> bool:
-    """The turn carries an answer he is owed: the first answer to a line of his
-    (TurnMeta.owed_answer), an answer to his whisper or to his Discord DM. A selfie request's
-    answer is its service's to retry (photos/requests.py): never rescued here (the watchdog
-    waits for the request to end)."""
+    """The turn carries an answer he is owed, by the one definition the guards use
+    (LiveReview.owed: the first answer to a line or post of his, TurnMeta.owed_answer, an answer
+    to his whisper or DM, a member he named, his pushback's target, the first answer to his
+    question, her line after his emote). Never a line in a room he is not in, and never a
+    selfie request's answer, which its service retries (photos/requests.py; the watchdog waits
+    for the request to end)."""
     if not pipe.human.guid or meta.elsewhere or meta.photo_request is not None:
         return False
-    return bool(meta.owed_answer or meta.whisper_reply or pipe._answers_his_dm(turn, meta))
+    return bool(pipe.live_review.owed(turn, meta))
 
 
 def owed_deadline(channel: str) -> float:
@@ -216,78 +222,80 @@ def fallback_lines(pipe, turn, meta, p, *, close: bool, reason: str, composed=No
     return lines
 
 
-async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
-                      spoken: bool = False) -> tuple[str, str | None]:
-    """The owed answer's third try after `why` (RESCUABLE): one more model request with OWED_HINT,
-    taken unless a BLOCKING or fatal tell is still there (a long draft is cut to its budget),
-    else fallback_line. A Free GPU pause or a changed scope keeps the drop (the watchdog waits
-    out the pause)."""
-    if why not in RESCUABLE or meta.owed_rescued or not owes_him(pipe, turn, meta):
-        return rejected, why
+async def owed_fallback(pipe, turn, meta, composed, *, spoken: bool = False) -> str | None:
+    """One more short generation for an owed answer whose drafts are gone: OWED_HINT (a sentence
+    or two, how she feels about what he said and one thing of her own; the summons warning up
+    front where her arc keeps them in the game), checked only against the hard screens (fatal
+    tells and BLOCKING). A long draft is cut at a sentence. The words, or None when the request
+    failed, was paused or the draft is still refused."""
     from leeroy_mind.llm.client import GpuPaused, LLMError
     from leeroy_mind.llm.scheduler import Expired, SchedulerError
     from leeroy_mind.personas.screens import redact_real_name
     from leeroy_mind.talk.filters import find_tells, is_silence, repair, strip_copied
-    from leeroy_mind.talk.pipeline import _ScopeChanged, _scope_valid, _with_hint, aliases
+    from leeroy_mind.talk.pipeline import SUMMONS_HINT, _ScopeChanged, _with_hint, aliases
     from leeroy_mind.voice.comms import SPOKEN_HINT
-    meta.owed_rescued = why
-    now = pipe.clock.now()
-    turn.deadline = max(turn.deadline, now + owed_deadline(turn.channel))
-    if meta.borrow_credit is not None:
-        pipe._mark_borrow(meta, reset=True)
     p = composed.persona
     name, own, him = p.character_name, aliases(p), pipe._his_names()
-    words = pipe._discord_words(turn)
-    length = (pipe._silent_length(words) if words
-              else "a line or two" if meta.two_lines else "a line")
     they, _, their = pipe.human.forms
     messages = _with_hint(composed.messages, OWED_HINT.format(
-        human=pipe.human.called, length=length, they=they, their=their))
+        human=pipe.human.called, they=they, their=their))
     hg = pipe.human.guid
     summons_ok = pipe._summons_ok(turn) if pipe._counterpart(turn) == hg else None
     if summons_ok is False:  # her arc keeps it in the game: said up front, not after a miss
-        from leeroy_mind.talk.pipeline import SUMMONS_HINT
         forms = dict(zip(("they", "them", "their"), pipe._forms_of(hg)))
         messages = _with_hint(messages, SUMMONS_HINT.format(**forms))
     if spoken:
         messages = _with_hint(messages, SPOKEN_HINT)
     emoji = turn.channel.startswith(("dm:", "discord:", "gdm:"))
-    text = ""
     try:
         raw = await pipe._ask(turn, messages, meta=meta, attempt=2)
-    except _ScopeChanged:
-        return rejected, "scope_changed"
-    except GpuPaused:
-        return rejected, "gpu_paused"
+    except (_ScopeChanged, GpuPaused):
+        return None
     except (Expired, SchedulerError, LLMError) as e:
-        log.info("owed_rescue_model_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
-        raw = ""
+        log.info("owed_fallback_model_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
+        return None
+    if not raw or is_silence(raw):
+        return None
+    text = raw if composed.close else redact_real_name(raw, pipe.human, pipe.human.called)
+    text = strip_copied(text, (name, *own), him=him)
+    if is_silence(text):
+        return None
+    tells = find_tells(text, recent_own=pipe._own_lines(turn), speaker=name,
+                       answers=composed.answers, others=composed.others,
+                       samples=composed.samples, support=composed.support,
+                       people=list(pipe._protect(turn.channel)), window=composed.window,
+                       held=composed.held, tonight=meta.again_tonight,
+                       recent_moves=[(r.clause, r.main) for r in composed.moves],
+                       summons_ok=summons_ok, keep_emoji=emoji)
+    if pipe._flirts_at_a_member(turn, text):
+        return None
+    refused = sorted({t.reason for t in tells if t.fatal or t.reason in BLOCKING})
+    if refused:
+        log.info("owed_fallback_refused: guid=%d tells=%s", turn.speaker, ",".join(refused))
+        return None
+    text = repair(_trim(text, pipe._word_budget(turn, p, meta.two_lines)), speaker=name,
+                  aliases=own, him=him, keep_emoji=emoji)
+    return None if is_silence(text) else text
+
+
+async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
+                      spoken: bool = False) -> tuple[str, str | None]:
+    """The owed answer after `why` (RESCUABLE): owed_fallback, else fallback_line; never nothing.
+    A Free GPU pause or a changed scope keeps the drop (the watchdog waits out the pause)."""
+    if why not in RESCUABLE or meta.owed_rescued or not owes_him(pipe, turn, meta):
+        return rejected, why
+    from leeroy_mind.talk.pipeline import _scope_valid
+    meta.owed_rescued = why
+    now = pipe.clock.now()
+    turn.deadline = max(turn.deadline, now + owed_deadline(turn.channel))
+    if meta.borrow_credit is not None:
+        pipe._mark_borrow(meta, reset=True)
+    text = await owed_fallback(pipe, turn, meta, composed, spoken=spoken)
     if not _scope_valid(meta):
-        return raw or rejected, "scope_changed"
-    if raw and not is_silence(raw):
-        text = raw if composed.close else redact_real_name(raw, pipe.human, pipe.human.called)
-        text = strip_copied(text, (name, *own), him=him)
-        if is_silence(text):
-            text = ""
-    if text:
-        tells = find_tells(text, recent_own=pipe._own_lines(turn), speaker=name,
-                           answers=composed.answers, others=composed.others,
-                           samples=composed.samples, support=composed.support,
-                           people=list(pipe._protect(turn.channel)), window=composed.window,
-                           held=composed.held, tonight=meta.again_tonight,
-                           recent_moves=[(r.clause, r.main) for r in composed.moves],
-                           summons_ok=summons_ok, keep_emoji=emoji)
-        if pipe._flirts_at_a_member(turn, text):
-            text = ""
-        elif any(t.fatal or t.reason in BLOCKING for t in tells):
-            log.info("owed_rescue_draft_refused: guid=%d tells=%s", turn.speaker,
-                     ",".join(sorted({t.reason for t in tells if t.fatal or t.reason in BLOCKING})))
-            text = ""
-        else:
-            text = repair(_trim(text, pipe._word_budget(turn, p, meta.two_lines)), speaker=name,
-                          aliases=own, him=him, keep_emoji=emoji)
-            if is_silence(text):
-                text = ""
+        return text or rejected, "scope_changed"
+    gate = getattr(pipe.scheduler, "gpu_gate", None)
+    if text is None and getattr(gate, "paused", False):
+        return rejected, "gpu_paused"
     how = "model" if text else "fallback"
     if not text:
         text = fallback_line(his_words(pipe, turn, meta, composed), called=pipe.human.called,

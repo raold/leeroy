@@ -661,7 +661,7 @@ def test_his_nothing_never_stands(store, clock, tmp_path):
         await r.human("you are fixing to get the boot from this guild korvin")
         await r.advance(45, step=2)
         assert len(korvins(r)) == 2  # the answer, then the owed answer's plainer ask
-        assert "Answer Zan now" in korvins(r)[-1]
+        assert "Answer Zan in a sentence or two" in korvins(r)[-1]
         said = r.sent.says()
         assert [s.guid for s in said] == [KORVIN] and said[0].text.strip()
         assert [u["dropped"] for u in r.utterances()] == [None]

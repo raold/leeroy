@@ -20,7 +20,7 @@ from leeroy_mind.talk import owed
 from leeroy_mind.talk.owed import OwedWatch, count_unanswered, fallback_line, topic_word
 from leeroy_mind.talk.turns import TurnKind
 
-HINT = "Answer Zan now"
+HINT = "Answer Zan in a sentence or two"
 
 
 @pytest.fixture
@@ -88,7 +88,7 @@ def test_a_long_rescue_draft_is_cut_at_a_sentence():
 def test_an_owed_whisper_answer_whose_drafts_both_echo_him_is_asked_a_third_time(store, clock,
                                                                                 tmp_path):
     """Live 2026-11-12: his whisper's answer was dropped after two drafts kept a tell. The third
-    ask is plainer (OWED_HINT) and its clean draft goes out."""
+    ask (owed_fallback: OWED_HINT, a sentence or two) and its clean draft goes out."""
     his = "come find me by the docks after the raid tonight okay"
 
     def script(model, messages):
