@@ -18,7 +18,17 @@ BEAT_SCHEMA = schema("life_beat", {
     "resolved": {"type": "boolean"},
     "next_title": {"type": ["string", "null"], "maxLength": 80},
 })
-PROMPT = "Write the next small event in {name}'s life away from the game.\n{card}"
+# A beat reads as what she would drop in the guild's chat, never fiction narration (2026-11-15:
+# beats were literary prose, "stood at the kitchen sink, staring at the cold coffee...", and the
+# Discord openers made from them, server.seeds._life, kept their imagery).
+PROMPT = ("Write the next small thing that happens in {name}'s life away from the game, the way "
+          "{name} would drop it in the guild's chat: one short first-person message, a gripe, a "
+          "brag, a question for the guild or a small update, typed the way {name} types. Plain chat "
+          "words, not a story: no scenery and no description of how anything looked or felt.\n{card}")
+ASK = ("One short chat message in {name}'s own words, first person, at most about 20 words: what "
+       "happened next in their life away from the game. The earlier beats may read like a story; "
+       "this one doesn't. Give its mood, whether the thread has resolved, and an optional next "
+       "thread title.")
 
 
 def ensure_thread(store, guid, title, now, rng, *, dial=5) -> int:
@@ -73,8 +83,7 @@ async def advance(ctx, thread):
                            name=ctx.name(guid), card=ctx.card(guid))
     user = (f"Life thread: {thread['title']}\nLast three beats:\n"
             + "\n".join(r["text"] for r in reversed(recent))
-            + "\nOne sentence: what happened next in their life away from the game. "
-            "Give its mood, whether the thread has resolved, and an optional next thread title.")
+            + "\n" + ASK.format(name=ctx.name(guid)))
     reply = await ctx.reasoner.json(system, user, BEAT_SCHEMA, temperature=0.8)
     reply["beat"] = " ".join(strip_wow_markup(reply["beat"]).split())
     if reply["next_title"] is not None:

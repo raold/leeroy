@@ -414,6 +414,7 @@ def test_a_login_checks_the_live_model_the_reloaded_config_names(tmp_path, caplo
             port = h.app.cfg.bridge.port
             (tmp_path / "mind.toml").write_text(
                 toml(port) + '\n[models]\nlive = "next-live:1b"\n', encoding="utf-8")
+            h.app.engine.greeter_draw = lambda rng: rng.randint(2, 3)  # a login some greet
             await h.bridge.push(presence("login"))
             await h.wait(lambda: _count(caplog, "session_started") == 1)
             assert h.app.cfg.models.live == "next-live:1b" and not h.app.model_ready

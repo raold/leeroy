@@ -183,7 +183,7 @@ SUMMONS_HINT = ("You two only talk through the game: don't ask {them} over or sa
 # a corporate strategist now", posted by that member, 2026-11-15 audit): asked again once.
 SELF_NAME_HINT = 'You are {name}: talk about yourself in the first person, never by your own name.'
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
-                     "history", "copy", "slang", "summons", "self name"})
+                     "history", "copy", "slang", "summons", "self name", "phrase: resting"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, and a message still naming its own speaker.
 DROP_ON_RETRY = frozenset({"history", "summons", "self name"})
@@ -356,6 +356,10 @@ class TurnMeta:
     fight_end_ms: int = 0
     # An optional owner fence; omitted by ordinary engine callers.
     still_valid: Callable[[], bool] | None = None
+    # The retry hint naming the phrases a model line says that rest (a greeting the guild used
+    # lately, talk/greetings.py), "" when none does: a fatal tell, asked again once with that
+    # hint, then dropped. None: nothing rests.
+    phrase_rests: Callable[[str], str] | None = None
     # Optional DB-only receipt writer. Runs with the Discord post and chat mirror in
     # one transaction; it must not mutate memory-only delivery state before commit.
     on_discord_record: Callable[[int, int, float], None] | None = None
@@ -1351,7 +1355,9 @@ class Pipeline:
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
-                              channel=turn.channel, recipient=turn.to_guid), rel_cards=cards,
+                              channel=turn.channel, recipient=turn.to_guid,
+                              at_him=self._aimed_at_him(turn),
+                              with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
@@ -2265,6 +2271,7 @@ class Pipeline:
             if expired:
                 return raw, "expired"
             silent, tells = quiet(raw), []
+            rest_hint = ""
             if not silent:
                 text = raw if c.close else redact_real_name(raw, self.human, self.human.called)
                 text = strip_copied(text, (name, *own), him=his)
@@ -2286,6 +2293,8 @@ class Pipeline:
                 if (is_discord(turn.channel) and not meta.answers_human
                         and not self.live_review.owed(turn, meta) and self._self_named(text, name)):
                     tells.append(Tell("self name", False, True))
+                if meta.phrase_rests is not None and (rest_hint := meta.phrase_rests(text)):
+                    tells.append(Tell("phrase: resting", True))
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
                            for t in tells):
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
@@ -2307,7 +2316,8 @@ class Pipeline:
                 return raw, "silent"
             log.info("say_tells: guid=%d kind=%s attempt=%d tells=%s", turn.speaker, turn.kind,
                      attempt, ",".join(t.reason for t in tells))
-            messages = asking(self._retry_hint(tells, p, turn))
+            messages = asking(" ".join(x for x in (self._retry_hint(tells, p, turn), rest_hint)
+                                       if x))
         return text, "tells"
 
     def _answers_his_whisper(self, turn: Turn) -> bool:

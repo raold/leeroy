@@ -22,8 +22,47 @@ FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loo
            'intent': 1800.0, 'decision': math.inf, 'his_loot': 7 * 86400.0}
 FRESH_DEFAULT_S = 3 * 86400.0
 USED_KEY = 'server:seed:{key}'
+# The kind of subject each seed kind is (rhythm.choose_seed_and_channel draws the subject first,
+# then a seed within it, so a kind with many seeds never crowds out the rest; 2026-11-15: officer
+# and life seeds were 88% of the openers). A kind missing here is its own subject.
+SUBJECTS = {'raid': ('raid_before', 'raid_after', 'reset', 'his_day'),
+            'loot': ('loot', 'loot_close', 'loot_wish', 'his_loot'),
+            'life': ('life', 'weekend', 'photo'),
+            'meme': ('joke', 'meme', 'meme_image'),
+            'rival': ('rival',),
+            'officer': ('officer', 'decision'),
+            'calendar': ('calendar', 'birthday', 'wow_event'),
+            'chat': ('plan', 'purpose')}
+_SUBJECT_OF = {kind: subject for subject, kinds in SUBJECTS.items() for kind in kinds}
+# A public decision (a lineup, a loot rule, a boss strategy) is the guild's raid or loot
+# business, by the channel it is argued in; an officers' one stays officer business.
+DECISION_SUBJECTS = {'raid-planning': 'raid', 'strategy': 'raid', 'loot-and-dkp': 'loot'}
+# The weekly attendance thread (dropping_off): regulars who missed this many of the last
+# ATTENDANCE_WINDOW raids they could have joined after attending ATTENDANCE_REGULAR of the
+# ATTENDANCE_BEFORE before them; its fact names at most ATTENDANCE_NAMES of them, and there is
+# none when more than ATTENDANCE_MAX_SHARE of the cast would be named (no exodus is invented).
+ATTENDANCE_WINDOW, ATTENDANCE_MISSED = 4, 3
+ATTENDANCE_BEFORE, ATTENDANCE_REGULAR = 8, 2
+ATTENDANCE_NAMES = 6
+ATTENDANCE_MAX_SHARE = 0.10
+# Seeds the game's openers to the guild may bring up (talk.engine): public, never officers'.
+GAME_KINDS = ('raid_before', 'raid_after', 'reset', 'loot', 'life', 'calendar', 'birthday',
+              'weekend', 'rival')
 log = logging.getLogger(__name__)
 _unavailable = set()
+
+
+def subject_of(kind: str) -> str:
+    """The subject a seed kind belongs to (SUBJECTS); an unlisted kind is its own."""
+    return _SUBJECT_OF.get(kind, kind)
+
+
+def seed_subject(seed) -> str:
+    """A seed's subject: its kind's (subject_of), except a public decision, which is raid or loot
+    business by its channel (DECISION_SUBJECTS)."""
+    if seed.kind == 'decision' and not seed.officers_only and seed.channels:
+        return DECISION_SUBJECTS.get(seed.channels[0], subject_of(seed.kind))
+    return subject_of(seed.kind)
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,19 +266,52 @@ def _his_day(conn, c):
             continue
 
 
+def dropping_off(conn, now: float, cast) -> tuple[list[int], int]:
+    """The members of `cast` who missed at least ATTENDANCE_MISSED of the last
+    ATTENDANCE_WINDOW finished raids they could have joined, after attending at least
+    ATTENDANCE_REGULAR of the ATTENDANCE_BEFORE before those (regulars dropping off, not members
+    who never raid), in guid order, and how many raids the window holds. A raid with no
+    attendance rows (an offline start that failed) counts for nobody; one he called (not
+    offline) counts only for its roster and bench, since it records only his group; an offline
+    raid counts for everyone. A member on leave (an open away row) is never named. Nobody until
+    the window is full, so at least ATTENDANCE_WINDOW + ATTENDANCE_REGULAR raids with attendance
+    must have finished before anyone can be named."""
+    raids = [(r[0], bool(r[1])) for r in conn.execute(
+        'SELECT r.raid_id,r.offline FROM guild_raid r WHERE r.ended IS NOT NULL AND r.ended<=? '
+        'AND EXISTS (SELECT 1 FROM guild_attendance a WHERE a.raid_id=r.raid_id) '
+        'ORDER BY r.ended DESC,r.raid_id DESC LIMIT ?', (now, ATTENDANCE_WINDOW + ATTENDANCE_BEFORE))]
+    if len(raids) < ATTENDANCE_WINDOW:
+        return [], len(raids)
+    rows = {}
+    for rid, guid, status in conn.execute(
+            "SELECT raid_id,guid,status FROM guild_attendance WHERE raid_id IN "
+            '(SELECT value FROM json_each(?))', (json.dumps([rid for rid, _ in raids]),)):
+        rows.setdefault(guid, {})[rid] = status
+    away = {r[0] for r in conn.execute('SELECT guid FROM away WHERE returned_at IS NULL '
+                                       'AND (returns_at IS NULL OR returns_at>?)', (now,))}
+    recent, before = raids[:ATTENDANCE_WINDOW], raids[ATTENDANCE_WINDOW:]
+    out = []
+    for guid in sorted(cast):
+        mine = rows.get(guid, {})
+        attended = {rid for rid, status in mine.items() if status in ('raided', 'benched')}
+        could = [rid for rid, offline in recent if offline or rid in mine]
+        if (guid not in away and len([rid for rid in could if rid not in attended]) >= ATTENDANCE_MISSED
+                and len({rid for rid, _ in before} & attended) >= ATTENDANCE_REGULAR):
+            out.append(guid)
+    return out, len(recent)
+
+
 def _officer(conn, c):
-    raids = [r[0] for r in conn.execute('SELECT raid_id FROM guild_raid WHERE ended IS NOT NULL AND ended<=? '
-                                      'ORDER BY ended DESC,raid_id DESC LIMIT 4', (c.now,))]
-    if raids:
-        attended = {}
-        for rid, guid in conn.execute("SELECT raid_id,guid FROM guild_attendance WHERE status IN ('raided','benched') "
-                                     'AND raid_id IN (SELECT value FROM json_each(?))', (json.dumps(raids),)):
-            attended.setdefault(guid, set()).add(rid)
-        for guid in c.cast:
-            missed = len(raids)-len(attended.get(guid, ()))
-            if missed:
-                yield Seed(f'officer:attendance:{raids[0]}:{guid}:{c.week}', 'officer', ('officer-chat', 'applications'),
-                           f'{c.name(guid)} missed {missed} of the last {len(raids)} raids', (guid,), True)
+    # One attendance thread a week for the officers, never one per member (2026-11-15: 49 of
+    # 57 #officer-chat openers were "X missed N of the last 4 raids", one seed per member).
+    late, window = dropping_off(conn, c.now, c.cast)
+    if late and len(late) <= ATTENDANCE_MAX_SHARE * len(c.cast):
+        names = [c.name(g) for g in late[:ATTENDANCE_NAMES]]
+        more = len(late) - len(names)
+        listed = ', '.join(names) + (f' and {more} more' if more else '')
+        yield Seed(f'officer:attendance:{c.week}', 'officer', ('officer-chat', 'applications'),
+                   f'Attendance this week: {listed} missed {ATTENDANCE_MISSED} or more of the '
+                   f'last {window} raids after raiding regularly before', tuple(late), True)
     for guid, in conn.execute('SELECT guid FROM cast_member WHERE rank=? ORDER BY guid', (c.trial_rank,)):
         if guid in c.cast:
             yield Seed(f'officer:trial:{guid}:{c.week}', 'officer', ('applications', 'officer-chat'),
@@ -269,24 +341,41 @@ def _intent(conn, c):
                    officers_only=bool(definition and definition.officers_only), weight=SEED_WEIGHT)
 
 
+_SOURCES = {'raid_before': _raid_before, 'raid_after': _raid_after, 'loot': _loot, 'life': _life,
+            'plan': _plan, 'calendar': _calendar, 'birthday': lambda db, ctx: _calendar(db, ctx, birthday=True),
+            'reset': _reset, 'weekend': _weekend, 'rival': _rival, 'his_day': _his_day,
+            'officer': _officer, 'purpose': _purpose}
+
+
+def _names(conn, cast, human) -> dict:
+    names = {g: p.character_name for g, p in cast.items()}
+    for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
+        if guid in cast or guid == human:
+            names[guid] = name
+    return names
+
+
+def public_seeds(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
+                 human: int, kinds: Iterable[str] = GAME_KINDS) -> list[Seed]:
+    """The SELECT-only seeds of `kinds` that are never officers' business (GAME_KINDS by
+    default), for the game's openers to the guild (talk.engine): no officer, culture, decision
+    or intent source runs."""
+    c = _Context(now, local, cast, frozenset(), human, _names(conn, cast, human), 0)
+    return [seed for kind in kinds if kind in _SOURCES and kind not in ('officer', 'purpose')
+            for seed in _read(kind, lambda kind=kind: _SOURCES[kind](conn, c)) if not seed.officers_only]
+
+
 def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            officers: frozenset[int], human: int, human_name: str, trial_rank: int,
            culture_enabled: bool = False, culture_store=None, ident=None,
            culture_calendar: bool = False, culture_loot: bool = False,
            intents_enabled: bool = False, decisions_enabled: bool = False,
            culture_memes: bool = False) -> list[Seed]:
-    names = {g: p.character_name for g, p in cast.items()}
-    for guid, name in _read('names', lambda: conn.execute('SELECT guid,name FROM cast_member')):
-        if guid in cast or guid == human:
-            names[guid] = name
     # human_name is deliberately not a fallback: the persisted character row is the
     # authority; an operator's real name must not become a seed.
+    names = _names(conn, cast, human)
     c = _Context(now, local, cast, officers, human, names, trial_rank)
-    sources = {'raid_before': _raid_before, 'raid_after': _raid_after, 'loot': _loot, 'life': _life,
-               'plan': _plan, 'calendar': _calendar, 'birthday': lambda db, ctx: _calendar(db, ctx, birthday=True),
-               'reset': _reset, 'weekend': _weekend, 'rival': _rival, 'his_day': _his_day,
-               'officer': _officer, 'purpose': _purpose}
-    result = [seed for kind, source in sources.items() for seed in _read(kind, lambda: source(conn, c))]
+    result = [seed for kind, source in _SOURCES.items() for seed in _read(kind, lambda: source(conn, c))]
     if culture_enabled:
         from leeroy_mind.culture.seeds import culture_seeds
         if culture_store is None or culture_store.conn is not conn:
