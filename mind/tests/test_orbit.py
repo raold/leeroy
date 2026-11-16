@@ -141,11 +141,12 @@ def test_a_guild_opener_starts_a_conversation_among_the_members(store, clock, tm
         await play(r, 3 * 3600, step=6.0)
         await r.engine.end_session()
         subjects = Counter(why.split(":")[2] for _, _, _, why, _ in opened(r))
-        assert len(subjects) >= 2 and set(subjects) <= set(guild_topics.SUBJECT_WEIGHT)
+        assert len(subjects) >= 3 and set(subjects) <= set(guild_topics.SUBJECT_WEIGHT), subjects
+        assert subjects["life"] >= 1
         prompts = r.prompts()
         assert any("how the last raid went (Last raid: Icecrown Citadel 10" in p for p in prompts)
         life = [p for p in prompts if "my sourdough starter" in p and "Bring up something" in p]
-        assert all("You play Arkon" in p for p in life)
+        assert len(life) == subjects["life"] and all("You play Arkon" in p for p in life)
         rows = r.store.conn.execute("SELECT kind, why FROM utterance WHERE dropped IS NULL "
                                     "AND kind='continue'").fetchall()
         assert rows  # answered by the others
