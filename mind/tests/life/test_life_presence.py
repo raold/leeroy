@@ -1,8 +1,9 @@
 import random
 from datetime import datetime
 from conftest import make_persona
-from leeroy_mind.life.presence import (Attention, attention_weight, away_words, discord_state,
-                                       game_cap_s, latency, presence_at)
+from leeroy_mind.life.presence import (NO_PHOTO, Attention, attention_weight, away_words,
+                                       discord_state, free_after, game_cap_s, latency,
+                                       presence_at)
 
 def test_attention_by_medium():
     p = make_persona(101, "Arkon", rhythm="office admin, nine till five")
@@ -29,3 +30,15 @@ def test_discord_state_and_words():
     p = make_persona(101, "Arkon", rhythm="office admin, nine till five", household="three kids at home")
     lp = presence_at(p, datetime(2026, 11, 19, 18, 30), medium="discord")
     assert discord_state(lp, dnd_day=False) == "online" and away_words(lp, "discord") == "with the kids"
+
+def test_free_after_is_the_start_of_her_next_block_she_can_take_a_photo_in():
+    """Asleep and driving are the blocks a requested photo waits out (photos/requests.py)."""
+    p = make_persona(101, "Arkon", rhythm="office admin, nine till five")
+    assert free_after(p, datetime(2026, 11, 19, 3, 0)) == datetime(2026, 11, 19, 7, 30)
+    assert free_after(p, datetime(2026, 11, 19, 8, 30)) == datetime(2026, 11, 19, 9, 0)
+    assert free_after(p, datetime(2026, 11, 19, 17, 10)) == datetime(2026, 11, 19, 17, 45)
+    assert free_after(p, datetime(2026, 11, 19, 12, 0)) is None  # at work she can sneak one
+    early = make_persona(101, "Arkon")  # early shifts: in bed from 21:15 before a workday
+    assert free_after(early, datetime(2026, 11, 19, 22, 0)) == datetime(2026, 11, 20, 4, 45)
+    work_too = NO_PHOTO | {"work"}
+    assert free_after(p, datetime(2026, 11, 19, 12, 0), busy=work_too) == datetime(2026, 11, 19, 17, 45)

@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import replace
 import inspect
+import logging
 
 import pytest
 
@@ -117,8 +118,11 @@ def test_identity_worker_renders_portrait_with_profile_crop_and_request_seed(app
     req, = seen
     assert (req.size, req.shape, req.thumb_size, req.steps, req.cfg, req.nsfw_max) == (
         1024, "portrait", 384, app.selfies.cfg.steps, app.selfies.cfg.guidance, app.selfies.cfg.nsfw_max)
+    # the reference's crop is her cover's framing; the scale is the scene's (a waist-up scene:
+    # WIDE_SCALE of identity_scale, render.scene_scale)
+    assert scene_from(snap.scene).framing == "upper_body" and app.selfies.cfg.identity_scale == 0.6
     assert req.identity == Identity(files.history(app.data_dir, 101, snap.pick).absolute(),
-                                    ref_crop("face"), app.selfies.cfg.identity_scale)
+                                    ref_crop("face"), 0.45)
     assert "chosen.jpg" not in str(req.identity.ref)
     spec = build_scene_prompt(load_persona(app.store, 101), scene_from(snap.scene))
     assert (req.phrases, req.negative) == (spec.phrases, spec.negative)
@@ -128,6 +132,20 @@ def test_identity_worker_renders_portrait_with_profile_crop_and_request_seed(app
     assert files.snap(app.data_dir, 101, snap.id).is_file()
     assert files.snap(app.data_dir, 101, snap.id, thumb=True).is_file()
     assert req.out != files.snap(app.data_dir, 101, snap.id)
+
+
+def test_a_head_and_shoulders_request_keeps_the_full_face_and_logs_its_scale(app, caplog):
+    scene = scene_json(scene_from(compose_choices(
+        {**PICKS, "framing": "head_and_shoulders", "audience": "him", "when": "any"})))
+    snap, room = plan(app, scene=scene), Room()
+    worker = Worker(room)
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        result = render(app, snap, room, worker)
+    assert result.outcome == "ready"
+    (req,) = worker.calls
+    assert req.identity.scale == app.selfies.cfg.identity_scale == 0.6
+    assert (f"selfies_snap_face: snap={snap.id} guid=101 request={snap.request} scale=0.6"
+            in caplog.text)
 
 
 def test_seeds_are_request_scoped_repeatable_and_distinct():

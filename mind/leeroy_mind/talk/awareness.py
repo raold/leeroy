@@ -90,6 +90,9 @@ class Observed:
     human: int
     server: bool = False
     state_inputs: object = None
+    # "Right now" says where she is this turn (Pipeline._where_line): her self line then leaves
+    # out her Discord status, which could contradict it (review-340 P2-1)
+    where: bool = False
 
 
 def place(turn, meta):
@@ -228,8 +231,10 @@ class LiveReview:
         if server and is_discord(raw):
             from leeroy_mind.server.state import capture
             state_inputs = capture(app, turn.speaker)
+        where_line = getattr(e, '_where_line', None)
+        where = bool(where_line(turn, meta)) if where_line is not None else False
         return Observed(self.draft(turn,meta,""),raw,to,readers,bool(e.world.is_officer(turn.speaker)),
-                        world,e.human.guid,server,state_inputs)
+                        world,e.human.guid,server,state_inputs,where)
 
     def history(self, turn, meta, conn=None, *, observed=None):
         e = self.engine
@@ -377,7 +382,8 @@ class LiveReview:
                          company_in(conn, channel_id(raw), turn.speaker, now, inputs.cast, inputs.human)[:6])
             if is_group(raw):
                 here = tuple(names[g] for g in readers if g in names and g != turn.speaker)
-            self_line = (f"You're {state.presence.state}" + (f' ({state.status})' if state.status else '')
+            status = state.status if not observed.where else None  # where she is: Right now's
+            self_line = (f"You're {state.presence.state}" + (f' ({status})' if status else '')
                          + (', playing WoW' if state.presence.playing else ', not playing WoW'))
         intents = ()
         godmode = getattr(e, 'godmode', None)

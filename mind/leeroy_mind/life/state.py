@@ -218,7 +218,8 @@ def words(state: State, *, to_him: bool, forms: tuple[str, str, str]) -> str:
 
 
 def lands(state: State, tone: str, *, agreeableness: int, forms: tuple[str, str, str]) -> str:
-    """How his line (of `tone`) lands on her right now; "" when it just lands."""
+    """How his line (of `tone`) lands on her right now; "" when it just lands. A feeling only,
+    never how much she says: length is the reply shape's (review-340)."""
     if tone == "harsh":
         return "it stings" if agreeableness >= 7 else "it annoys you"
     if tone == "warm":
@@ -230,7 +231,7 @@ def lands(state: State, tone: str, *, agreeableness: int, forms: tuple[str, str,
     if state.stress >= 0.4:
         return "one more thing on a busy day"
     if state.energy <= -0.4:
-        return "you're too tired to say much"
+        return "it barely registers"
     if state.social <= -0.4:
-        return "you're not really in the mood to chat"
+        return "you're not feeling it right now"
     return ""

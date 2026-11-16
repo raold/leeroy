@@ -337,3 +337,64 @@ outside 22-25 (athletic outside 22-28), gets a size word. Of the 91 lust women (
 2026-11-15: curvy median BMI 21.3, range 19.6-24.8; voluptuous median 23.9, range 20.5-28.7), 81
 get no size word; 9 voluptuous members get "slightly chubby" and one "chubby, thick arms". Raise a
 weight in the Looks panel to make a body read heavier; that set renders under the light face.
+
+## Situational photos: anatomy and the face on wide shots
+
+The owner saw deformed hands, feet, limbs and eyes in situational and request photos
+(2026-11-16). These are tall portraits (832 x 1216) with hands, arms and often legs in frame. Their
+negative (`scene.SNAP_NEGATIVE`, `SNAP_NEGATIVE_LUST`: the profile `NEGATIVE` plus the one-person
+lines) counted 61-67 tokens at priority 0, so the worker's 75-token fit always dropped its
+priority-1 "deformed face, extra fingers, bad hands". Square profile sets are unaffected: their
+`NEGATIVE` keeps that line.
+
+**The anatomy line sits at priority 0.** `scene.SNAP_ANATOMY` ("extra limbs, extra legs, extra
+arms, fused fingers, missing fingers, extra fingers, malformed hands, deformed feet, cross-eyed,
+lazy eye, asymmetric eyes, mutated, disfigured") is required in both snap negatives
+(`scene._snap_negative`). To make room the style list keeps "cartoon, painting, 3d render" at 0
+(the lust style "cartoon, painting": her covered line is longer) and the one-person guard keeps
+"another person"; "second face, duplicate person", "plastic skin, airbrushed, doll", "crowd, group
+of people" and the period look move to priority 1, "anime, illustration, cgi" (lust: with "3d
+render"), the screen and webcam guard and "watermark, text, logo" to 2. The covered line, minors and
+likeness stay required. The required set counts 72 (plain) and 74 (lust) of the 75 on the real
+tokenizers, so in practice nothing below priority 0 is kept. Guild tiles keep the old negative
+(`scene.TILE_NEGATIVE`): a square at a desk with a monitor in frame, where "face on screen" must
+stay required.
+
+**The fit test.** `tests/selfies/test_snap_anatomy.py` fits both negatives with the worker's own
+`fit.py` and RealVisXL's tokenizer files when they are on the machine (`LEEROY_SELFIE_DATA`, else
+the checkout's `selfie-data`; CI has none and skips it, and pins both tuples exactly). A priority-0
+addition that pushes either set over 75 fails there: the worker would refuse every situational
+photo `prompt_too_long`.
+
+**A lighter face on wide shots.** A scene framed `upper_body` or `three_quarter` takes her face
+reference at `render.WIDE_SCALE` (0.75) of `identity_scale`, 0.45 at the default 0.6, never below
+`MIN_SCALE` (`render.scene_scale`); `face` and `head_and_shoulders` scenes keep `identity_scale`.
+The scene's framing decides it, not the reference's (whose framing still cuts the crop). It
+applies to the night's snaps (`snapstage`), photo requests (`request_render`) and `selfies try
+--snaps`; guild tiles keep `identity_scale`. Each render logs `selfies_snap_face snap= guid=
+scale=` (a request adds `request=`).
+
+**No hand or limb details.** A face detail naming her hands, fingers, thumbs, nails, wrists, arms,
+legs, knees, ankles, feet or toes ("Rough fingertips", "Small scar on left thumb",
+`scene.limb_detail`; crow's feet and a detail of her glasses such as "Glasses with taped arm" are
+not) is left out of situational and request prompts: the fit keeps it at priority 2 and it pulls
+the model's attention to the hands. Profile sets and guild tiles keep every detail. On the live
+cast (2026-11-16, read-only) that is 84 details of 73 of the 169 stored personas, most of them
+thumb scars, knuckles and nails.
+
+Measured by the controller on the GPU (identity worker, 832 x 1216, the live seed and two more for
+four stored snaps; counts are images with a hand, foot, limb or eye defect):
+
+| variant | images | anatomy defect |
+|---|---|---|
+| live (old negative, scale 0.6) | 11 | 6 |
+| anatomy line at priority 0, scale 0.6 | 11 | 1 |
+| that, and 0.45 on wide scenes (shipped) | 11 | 0 |
+
+Her likeness held at 0.45 in all but one seed. 40 steps at CFG 6.0 (slower, more NSFW-flagged)
+and a "hands visible" positive phrase did no better.
+
+**Open: waist-up scenes still render full length.** A scene framed "waist-up shot" often renders
+her full body in the tall portrait: #316's body phrases (her build and size, required) plus 832 x
+1216 pull the camera back. Untested fixes: a `three_quarter` crop hint in the framing phrase, or
+an 896 x 1152 portrait.

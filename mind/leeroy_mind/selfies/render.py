@@ -33,6 +33,23 @@ from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
 # chosen photo yet (her first set) renders without one.
 REAR_SCALE = 0.5
 MIN_SCALE = 0.3  # the worker's floor
+# A situational or request photo is a tall portrait: framed from the waist or mid-thigh up, her
+# face is small in it and the reference at full identity_scale crowds her hands and limbs. Such a
+# scene takes the face at WIDE_SCALE of identity_scale (0.6 x 0.75 = 0.45); a head-and-shoulders
+# or face scene keeps identity_scale (controller A/B on the GPU, 2026-11-16: with the anatomy
+# negative, 1 of 11 images with a defect at 0.6, 0 of 11 at 0.45, her likeness held in all but
+# one seed).
+WIDE_SCALE = 0.75
+WIDE_FRAMINGS = ("upper_body", "three_quarter")
+
+
+def scene_scale(identity_scale: float, framing: str) -> float:
+    """The face reference's scale for a situational or request photo of scene framing
+    `framing`: WIDE_SCALE of identity_scale in a WIDE_FRAMINGS scene, never below MIN_SCALE;
+    identity_scale otherwise."""
+    if framing not in WIDE_FRAMINGS:
+        return identity_scale
+    return max(MIN_SCALE, round(identity_scale * WIDE_SCALE, 2))
 
 if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext

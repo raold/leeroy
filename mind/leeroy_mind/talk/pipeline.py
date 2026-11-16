@@ -53,11 +53,16 @@ from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
 from leeroy_mind.discord.channels import is_private, same_medium, is_group
+from leeroy_mind.discord.presence import local_time
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
+from leeroy_mind.life import state as life_state
+from leeroy_mind.life.day import has_kids
+from leeroy_mind.life.presence import where_text
+from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
@@ -84,6 +89,8 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
+from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
+                                     ordered, topic_for)
 from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
 from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, strip as strip_phrases
 from leeroy_mind.talk.facts import LibraryFacts
@@ -99,15 +106,17 @@ from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_l
                                      comms_rules, facts_head, knows_real_name, mood_line,
                                      quest_help, real_name_line, redact_for, relationship_card,
                                      render_instruction, render_messages, replay,
-                                     said_hi_text, select_samples, trim_to_budget)
+                                     said_hi_text, select_samples, situation_length,
+                                     situation_rules, trim_to_budget)
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
-from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, explicit_whisper,
-                                      flirt_chance, forward, his_moves, own_dial,
-                                      romance_instruction, scene_notes, whisper_tail)
+from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, dm_explicit,
+                                      explicit_whisper, flirt_chance, forward, his_moves,
+                                      own_dial, romance_instruction, scene_notes, whisper_tail)
 from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, is_quest_talk,
                                      mentioned, quest_helper, speaker_weight, typing_delay)
-from leeroy_mind.talk.states import EFFECTS, Altered, Effects, effects_for, substance_of
+from leeroy_mind.talk.states import (EFFECTS, RAID_CALLS, Altered, Effects, effects_for,
+                                     substance_of)
 from leeroy_mind.talk.seasons import day_line
 from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_words,
                                     line_cap, split_emotes, style_lines, turn_lines)
@@ -275,6 +284,7 @@ DRAWN_TALKED_TO_SHARE = 0.75
 ROMANCE_LATE_BONUS = 0.15
 ROMANCE_COOL_S = 300.0
 OWN_LINES = 5
+WANTS_KEPT = 256  # her last want per conversation (_draw_situation's `last`), the latest kept
 DEAD_FORGET_S = 900.0  # a death with no resurrect event this old is forgotten
 ECHO_WAIT_S = 30.0  # an echo this late still confirms a line whose ack timed out
 SPOKEN_CHANNELS = frozenset({"say", "yell"})
@@ -484,10 +494,22 @@ class TurnMeta:
     # [life] availability above 0 (life/service.py): wake, set by Pipeline.hurry, ends the
     # turn's delay at once (None: a plain delay, today's); wake_at, when its delay ends (0 before
     # it begins); heard_at, his line's time; life_presence, her LifePresence when it was planned
+    # (a Discord turn's, a carried DM's included, as she starts composing: _draw_situation)
     wake: asyncio.Event | None = field(default=None, repr=False)
     wake_at: float = 0.0
     heard_at: float = 0.0
     life_presence: object | None = None
+    # core plan Task 8 (Pipeline._draw_situation, as she starts composing): intent, her want this
+    # turn ([talk] intent; an Intent code, "" for none) and want_source where it came from ("draw":
+    # the code's draw, "beat": the beat chose it); state, her feeling then ([life] state; a
+    # life.state.State, None while off); lands, how his line lands on her by it ("" for none);
+    # intent_ctx, the IntentContext the want was drawn from (the beat's wants, the want's topic).
+    # Only the want's code is ever logged
+    intent: str = ""
+    want_source: str = ""
+    state: object | None = None
+    lands: str = ""
+    intent_ctx: object | None = field(default=None, repr=False)
 
 
 class _ScopeChanged(SchedulerError):
@@ -721,6 +743,8 @@ class Pipeline:
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
         self._length_rng = random.Random()  # a channel message's length band (_discord_words)
+        # her last want in each conversation (speaker, chain base), the latest WANTS_KEPT
+        self._wants: dict[tuple[int, str], Intent] = {}
         # what each member did with each counterpart, kept in mind.db across restarts
         self.moves = MoveLog(self.store)
         self.notes = PairNotes(self.store)
@@ -1343,7 +1367,13 @@ class Pipeline:
         """[talk] think_private (read at mind start, TalkEngine): an answer to his whisper or to
         his Discord DM gets a beat first (talk/beat.py). Never game channels, Discord channels,
         group DMs, voice rooms or a template's turn."""
-        if meta is None or not getattr(self, "think_private", False) or turn.template is not None:
+        if meta is None or not getattr(self, "think_private", False):
+            return False
+        return self._his_private(turn, meta)
+
+    def _his_private(self, turn: Turn, meta: TurnMeta) -> bool:
+        """His private turn: an answer to his whisper or to his Discord DM, never a template's."""
+        if turn.template is not None:
             return False
         hg = self.human.guid
         whisper = self._answers_his_whisper(turn) or (
@@ -1351,14 +1381,224 @@ class Pipeline:
         return bool(whisper or self._answers_his_dm(turn, meta))
 
     async def _with_beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> "Composed":
-        """`c` with the beat's lines after its instruction, on an answer that gets one. The beat
-        is asked once a turn: a later composition (a guard's rewrite, a fresh answer) reuses it,
-        and every request of the turn, the owed fallback's included, carries the same lines."""
-        if not self._beat_on(turn, meta):
-            return c
-        if meta.beat is None:
-            meta.beat = await self._beat(turn, meta, c)
-        return replace(c, messages=_with_hint(c.messages, meta.beat)) if meta.beat else c
+        """`c` with the one block after its instruction (beat.render). On an answer that gets a
+        beat, the beat's lines: it is asked once a turn, so a later composition (a guard's
+        rewrite, a fresh answer) reuses them, and every request of the turn, the owed fallback's
+        included, carries the same lines. On any other turn, or when the beat was skipped, the
+        code's block (_block: her drawn want, her state's "It lands"; "" with [talk] intent and
+        [life] state off, so the turn is as before)."""
+        if self._beat_on(turn, meta):
+            if meta.beat is None:
+                meta.beat = await self._beat(turn, meta, c)
+            if meta.beat:
+                return replace(c, messages=_with_hint(c.messages, meta.beat))
+        block = self._block(turn, meta)
+        return replace(c, messages=_with_hint(c.messages, block)) if block else c
+
+    # -- her state, want and situation (human-likeness core, plan Task 8) ----------------------
+
+    def _core_on(self) -> bool:
+        """A switch of the core prompt is on: [talk] intent or situation, or [life] state."""
+        talk = getattr(self.cfg, "talk", None)
+        life = getattr(self, "life", None)
+        return (getattr(talk, "intent", False) is True or getattr(talk, "situation", False) is True
+                or getattr(life, "state", None) is not None)
+
+    def _want_eligible(self, turn: Turn, meta: TurnMeta) -> bool:
+        """A turn that gets a want and "It lands" (intent.INTENT_KINDS, the model's own line):
+        never a template's, his pushback's answer, a photo's or selfie request's, an outreach
+        item's, the owner's string, his lore or game question with its facts, the watchdog's
+        rescue, a room he is not in, a hot mic or the 24/7 server's turn: each of those carries
+        its own reason to speak."""
+        return (turn.kind in INTENT_KINDS and turn.template is None and not meta.pushback
+                and meta.photo is None and meta.photo_request is None
+                and meta.outreach_item is None and meta.godmode_intent is None
+                and not meta.lore and not meta.facts_line and not meta.owed_rescue
+                and not meta.elsewhere and meta.why != "hotmic"
+                and not self._server_turn(turn, meta))
+
+    def _his_line(self, turn: Turn, meta: TurnMeta) -> str:
+        """The line of his this turn answers, "" when it answers none: its trigger line when it is
+        his (and hers to see), his Discord post it replies to, or his whisper a carried DM answer
+        answers (its recall query). Read only to weigh it; never shown from here."""
+        hg = self.human.guid
+        if not hg:
+            return ""
+        if turn.trigger_line:
+            rows = self.store.chat_lines([turn.trigger_line])
+            ok = rows and rows[0].from_guid == hg and self._may_carry(turn, rows[0])
+            return rows[0].text if ok else ""
+        target = meta.discord
+        if target is not None and target.reply_to and meta.answers_human:
+            row = self.store.conn.execute(
+                "SELECT author, text FROM discord_message WHERE id = ? AND deleted IS NULL",
+                (target.reply_to,)).fetchone()
+            return row[1] if row is not None and row[0] == hg else ""
+        if meta.why == "reply:carried":  # life.service CARRY_WHY: his whisper, in her DM
+            return meta.recall_query
+        return ""
+
+    def _want_key(self, turn: Turn) -> tuple[int, str]:
+        return turn.speaker, self._turn_base(turn)
+
+    def _private_to_him(self, turn: Turn) -> bool:
+        """A turn only he reads: a whisper to him (his answer or her own start) or his DM."""
+        hg = self.human.guid
+        return bool(hg) and ((turn.channel == "whisper" and turn.to_guid == hg)
+                             or turn.channel.startswith(DM_PREFIX))
+
+    def _intent_context(self, turn: Turn, meta: TurnMeta, p: Persona, his: str) -> IntentContext:
+        """Her context for the want's draw: the turn, her persona and dials, her day
+        (meta.life_presence; neutral at availability 0) and feeling (meta.state), his explicit
+        overlay as `tail` (whisper_tail in a whisper, romance.dm_explicit in his DM: whether it
+        applies, never which variant, and whether or not her romance text is rolled in) and her
+        last want in this conversation. On a turn only he reads (_private_to_him: his answers
+        and her own whisper starts) flirting follows the beat's own rule (romance.flirt_chance;
+        review-332, review-340): a woman who may not flirt with him there draws none, so the
+        beat is never leant toward a want it does not offer."""
+        hg, channel = self.human.guid, turn.channel
+        family = ("group" if is_group(channel) else "dm" if channel.startswith(DM_PREFIX)
+                  else "discord" if is_discord(channel) else "whisper" if channel == "whisper"
+                  else "game")
+        lp = meta.life_presence
+        rel = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
+        dial = self.cfg.romance.dial
+        tail = bool(hg and turn.to_guid == hg and (
+            whisper_tail(p, rel, dial=dial, channel=channel, data_dir=self.data_dir,
+                         forms=self.human.forms)
+            or dm_explicit(p, rel, dial=dial, channel=channel, data_dir=self.data_dir)))
+        fwd = forward(p)
+        if self._private_to_him(turn) and flirt_chance(p, 1.0) <= 0:
+            fwd = 0.0
+        return IntentContext(
+            kind=turn.kind, to_him=self._aimed_at_him(turn), owed=owes_him(self, turn, meta),
+            his_line=his, family=family, female=p.identity.player_gender == "female",
+            stance=p.romance.stance, style=p.romance.style, attachment=p.attachment,
+            humour=p.humour, agreeableness=p.big_five.agreeableness.score,
+            extraversion=p.big_five.extraversion.score, tail=tail,
+            attention=lp.attention if lp is not None else None, state=meta.state,
+            event=lp.event if lp is not None else "none",
+            block=lp.block if lp is not None else None,
+            kids=lp.kids if lp is not None else has_kids(p),
+            last=self._wants.get(self._want_key(turn)), forward=fwd)
+
+    def _draw_situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
+        """Her situation as she starts composing (core plan Task 8; nothing with every switch
+        off): where she is (meta.life_presence, [life] availability above 0: her Discord presence
+        now on a Discord turn, a carried DM included, her game presence on a game turn when the
+        engine did not plan it), her feeling (meta.state, [life] state: the 30 s snapshot), and
+        on an eligible turn (_want_eligible) how his line lands on her (meta.lands) and her want
+        ([talk] intent: one draw seeded by (intent, night, her, the minute, his line or post),
+        never the engine's rng). Logs `talk_want: guid= kind= want= source=draw owed=` (codes
+        only). A failure is logged by its class and leaves the turn as it would be without it."""
+        try:
+            self._situation(turn, meta, p, now)
+        except Exception as e:  # her situation is colour: nothing in it may cost him an answer
+            meta.intent, meta.want_source, meta.lands, meta.intent_ctx = "", "", "", None
+            log.warning("talk_situation_failed: guid=%d reason=%s", turn.speaker,
+                        type(e).__name__)
+
+    def _situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
+        life = getattr(self, "life", None)
+        intent_on = getattr(getattr(self.cfg, "talk", None), "intent", False) is True
+        avail = life is not None and life.availability > 0
+        book = getattr(life, "state", None) is not None
+        if not (avail or book or intent_on):
+            return
+        if avail:
+            if is_discord(turn.channel):
+                meta.life_presence = life.presence(turn.speaker, medium="discord")
+            elif meta.life_presence is None:
+                meta.life_presence = life.presence(
+                    turn.speaker, medium="game", in_his_group=self.world.in_group(turn.speaker))
+        if book:
+            meta.state = life.state_of(turn.speaker)
+        if not self._want_eligible(turn, meta):
+            return
+        his = self._his_line(turn, meta) if (meta.state is not None or intent_on) else ""
+        if meta.state is not None and his:
+            meta.lands = life_state.lands(meta.state, life_state.tone(his),
+                                          agreeableness=p.big_five.agreeableness.score,
+                                          forms=self.human.forms)
+        if not intent_on:
+            return
+        ctx = self._intent_context(turn, meta, p, his)
+        meta.intent_ctx = ctx
+        local = self.clock.local()
+        trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
+                                        else 0) or 0
+        want = draw_intent(ctx, seeded("intent", night_of(local), turn.speaker,
+                                       local.hour * 60 + local.minute, trigger))
+        if want is None:
+            return
+        meta.intent, meta.want_source = want.value, "draw"
+        log.info("talk_want: guid=%d kind=%s want=%s source=draw owed=%d", turn.speaker,
+                 turn.kind.value, want.value, ctx.owed)
+
+    def _where_line(self, turn: Turn, meta: TurnMeta) -> str:
+        """Where she is, as "Right now" says it ([life] availability above 0, her presence on
+        the meta): "" in a raid call (CALLOUT, URGENT) and in a voice room he is in (the room
+        says where she is, review-340); at her PC playing while she is in his group as he plays
+        (PM log D15); else by her block (life.presence.where_text). The awareness card leaves
+        her Discord status out while this line shows (review-340 P2-1)."""
+        lp = meta.life_presence if self._life_on() else None
+        if (lp is None or turn.kind in RAID_CALLS
+                or (turn.channel.startswith("voice:") and not meta.elsewhere)):
+            return ""
+        return where_text(lp, "discord" if is_discord(turn.channel) else "game",
+                          playing=bool(self.world.human_online
+                                       and self.world.in_group(turn.speaker)))
+
+    def _remember_want(self, turn: Turn, meta: TurnMeta) -> None:
+        """Her want on a line she said, as `last` for her next turn in this conversation."""
+        key = self._want_key(turn)
+        self._wants.pop(key, None)
+        self._wants[key] = Intent(meta.intent)
+        while len(self._wants) > WANTS_KEPT:
+            del self._wants[next(iter(self._wants))]
+
+    def _want_who(self, turn: Turn) -> str:
+        """Whom "You want to:" names: him by what the guild calls him, a member by name,
+        "everyone" on an opener (no addressee)."""
+        hg = self.human.guid
+        if turn.addressee and hg and turn.addressee == hg:
+            return self.human.called
+        if turn.addressee:
+            return self._names(turn.channel).get(turn.addressee) or "everyone"
+        return "everyone"
+
+    def _block(self, turn: Turn, meta: TurnMeta) -> str:
+        """The code's block after the instruction (beat.render): her drawn want with its topic
+        and addressee, and "It lands" from her state on an answer to his line; "" when neither
+        [talk] intent nor [life] state gives it a line."""
+        want = Intent(meta.intent) if meta.intent else None
+        if want is None and not meta.lands:
+            return ""
+        ctx = meta.intent_ctx
+        topic = topic_for(want, ctx) if want is not None and ctx is not None else ""
+        return beats.render(lands=meta.lands, want=want, who=self._want_who(turn), topic=topic)
+
+    def _state_lands(self, turn: Turn, meta: TurnMeta) -> bool:
+        """Her state says how his line lands ([life] state, an eligible turn): the beat is then
+        asked without `lands` (beat.instruction's ask_lands)."""
+        return meta.state is not None and self._want_eligible(turn, meta)
+
+    def _block_reserve(self, turn: Turn, meta: TurnMeta) -> int:
+        """The room the block after the instruction takes in the prompt's budget (review of #333,
+        requirement 3; Review Focus 5), while a core switch is on (_core_on): before the beat is
+        asked its block at its caps (beat.block_room), once it has run its own lines, else the
+        code's block. 0 with every core switch off: as before, the beat's block then rides
+        outside the budget and inside num_ctx."""
+        if not self._core_on():
+            return 0
+        if self._beat_on(turn, meta):
+            if meta.beat is None:
+                state = self._state_lands(turn, meta)
+                return beats.block_room(self.human.called, lands=meta.lands if state else None)
+            if meta.beat:
+                return estimate_tokens("\n" + meta.beat)
+        block = self._block(turn, meta)
+        return estimate_tokens("\n" + block) if block else 0
 
     async def _beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> str:
         """One short call on the turn's own prompt, constrained to beat.schema with think false:
@@ -1368,25 +1608,36 @@ class Pipeline:
         for admission the scope and the deadline are checked again, as _ask does. Its time counts
         in the turn's llm_s. Logs carry the want code and times, never its words."""
         started, reason, wants, items, order = self.clock.now(), "", (), [], []
+        # core plan Task 8: with [talk] intent the wants are the ones the turn allows, leaning
+        # toward the drawn one; with [life] state her state says how his line lands
+        ctx = meta.intent_ctx if isinstance(meta.intent_ctx, IntentContext) else None
+        lean, ask_lands = None, not self._state_lands(turn, meta)
         try:
             human, their = self.human.called, self.human.forms[2]
             wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0, tail=c.tail,
                                     asking=c.asking)
+            if ctx is not None:
+                wants = tuple(i.value for i in allowed(ctx) if i.value in wants) or wants
+                lean = Intent(meta.intent) if meta.intent in wants else None
+            if c.asking:  # his line asks her something: the answering wants lead (intent.ordered)
+                wants = tuple(i.value for i in ordered(wants, True))
             options = dict(BEAT.options)
             options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
             offered = self._beat_offer(turn, meta, c, started)
             items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
                                   wants, [x for _, x in offered], predict=options["num_predict"],
-                                  num_ctx=options["num_ctx"], their=their, asking=c.asking)
+                                  num_ctx=options["num_ctx"], their=their, lean=lean,
+                                  ask_lands=ask_lands, asking=c.asking)
             if items is None:
                 reason = "room"
             else:
                 # what fits, in the turn's own order (beat.shuffled): position carries no bias
                 order = beats.shuffled(offered[:len(items)], self._beat_rng(turn, meta, started))
                 items = [x for _, x in order]
-                messages = _with_hint(c.messages, beats.instruction(human, wants, items, their,
-                                                                    asking=c.asking))
-                fmt = beats.schema(wants, human, their, offered=bool(items), asking=c.asking)
+                messages = _with_hint(c.messages, beats.instruction(
+                    human, wants, items, their, lean=lean, ask_lands=ask_lands, asking=c.asking))
+                fmt = beats.schema(wants, human, their, ask_lands=ask_lands, offered=bool(items),
+                                   asking=c.asking)
 
                 async def job(llm):
                     if not _scope_valid(meta):
@@ -1421,15 +1672,26 @@ class Pipeline:
         meta.llm_s = (meta.llm_s or 0.0) + elapsed
         found = None
         if not reason:
-            found, reason = beats.parse(result.text, wants, items)
+            found, reason = beats.parse(result.text, wants, items, ask_lands=ask_lands)
         if found is None:
             log.info("think_beat_skipped: guid=%d reason=%s ms=%d", turn.speaker, reason,
                      round(elapsed * 1000))
             return ""
         meta.beat_use = next((k for k, x in order if x == found.use), None) if found.use else None
-        log.info("think_beat: guid=%d want=%s use=%d ms=%d", turn.speaker, found.want,
-                 found.use is not None, round(elapsed * 1000))
-        return beats.lines(found, human)
+        if ctx is None:
+            log.info("think_beat: guid=%d want=%s use=%d ms=%d", turn.speaker, found.want,
+                     found.use is not None, round(elapsed * 1000))
+        else:  # the beat's want is the turn's; the drawn one was its lean
+            meta.intent, meta.want_source = found.want, "beat"
+            log.info("think_beat: guid=%d want=%s use=%d ms=%d lean=%s", turn.speaker,
+                     found.want, found.use is not None, round(elapsed * 1000),
+                     lean.value if lean is not None else "none")
+        if ctx is None and ask_lands:
+            return beats.lines(found, human)
+        want = Intent(found.want)
+        return beats.render(read=found.read, lands=meta.lands or found.lands, want=want,
+                            who=human, topic=topic_for(want, ctx) if ctx is not None else "",
+                            use=found.use)
 
     def _beat_offer(self, turn: Turn, meta: TurnMeta, c: "Composed",
                     now: float) -> list[tuple[str, str]]:
@@ -1611,7 +1873,7 @@ class Pipeline:
         phase = day_phase(local)
         to_human = bool(hg) and turn.addressee == hg
         if to_human and not his and not preview:
-            his = self._his_post(meta)  # his Discord post or DM the turn answers
+            his = self._his_line(turn, meta)  # his Discord post, DM or carried whisper
         them = human.forms[1] if to_human else "them"
         greet = turn.kind is TurnKind.GREET
         # the greetings of his login a later greeter sees, as who said hi and never the words
@@ -1651,6 +1913,10 @@ class Pipeline:
         romance = self._romance(turn, meta, p, rel_h, phase, now, draws("roll"), trigger, dial,
                                 tail_follows=bool(tail_text), vary=draws("vary"))
         tail = tail_text if romance else ""
+        # his explicit overlay in his DM (the band overlay in her romance text): the beat drops
+        # the same brakes as under the whisper tail (PM log D13, review-340 S1)
+        overlaid = bool(tail) or bool(romance and hg and turn.to_guid == hg and dm_explicit(
+            p, rel_h, dial=dial, channel=turn.channel, data_dir=self.data_dir))
         two = False
         if romance:  # a line or two, unless the turn holds one (her answer to his pushback)
             two = turn.max_lines > 1 and explicit_whisper(p, rel_h, dial=dial,
@@ -1686,6 +1952,10 @@ class Pipeline:
         his = his if to_human else ""
         if his and is_question(his) and not before and not meta.pushback_line:
             after = question_first(after, human.forms[2])
+        # [talk] situation (core plan Task 8): the hard rules, Right now by the instruction, and
+        # every situation template's length from here (situation_length)
+        situation = getattr(self.cfg.talk, "situation", False) is True
+        words = self._discord_words(turn)
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
@@ -1693,7 +1963,18 @@ class Pipeline:
                                        *ends) if x),
             forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN,
-            channel=turn.channel, discord_words=self._discord_words(turn))
+            channel=turn.channel, discord_words=words,
+            length_text=situation_length(turn.kind, channel=turn.channel, words=words,
+                                         typing=p.typing, two_lines=two) if situation else "",
+            situation=situation, typing=p.typing)
+        # her day ([life] availability above 0: her own clock and where she is; never in a raid
+        # call) and her feeling ([life] state; how she feels about him only on a turn of his)
+        today, where = day_line(local, p.identity.region), self._where_line(turn, meta)
+        if self._life_on() and meta.life_presence is not None:
+            today = day_line(local_time(local, p.identity.region), p.identity.region)
+        feels = (life_state.words(meta.state, to_him=self._aimed_at_him(turn), forms=human.forms)
+                 if meta.state is not None else "")
+        rules_of = situation_rules if situation else comms_rules
         chat_notes, pair_notes = {}, {}
         if getattr(self, 'photos_send', False):
             from leeroy_mind.photos.notes import by_lines
@@ -1702,16 +1983,16 @@ class Pipeline:
                 chat_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in recent])
         parts = PromptParts(
             card=self._card(p), samples=samples,
-            rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
-                              channel=turn.channel, recipient=turn.to_guid,
-                              at_him=self._aimed_at_him(turn),
-                              with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
+            rules=rules_of(human, p, data_dir=self.data_dir, now=now,
+                           channel=turn.channel, recipient=turn.to_guid,
+                           at_him=self._aimed_at_him(turn),
+                           with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
                            lately=self._lately_line(turn.speaker, now),
                            variant=random.Random(f"{p.guid}:{night_of(local)}:mood")
-                           .randrange(1000), today=day_line(local, p.identity.region)),
+                           .randrange(1000), today=today, where=where, state_words=feels),
             chat=[said_hi_text(r, names, human.called, now=now) if r.id in hi
                   else chat_line_text(r, names, now=now, photo=chat_notes.get(r.id,''),
                                       pronoun=pronouns.get(("line", r.id), ""))
@@ -1724,10 +2005,12 @@ class Pipeline:
                        for r in pair],
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
-            pinned=pinned if facts else None, kept=kept)
+            pinned=pinned if facts else None, kept=kept, situation=situation)
         if live and getattr(self, 'learn_enabled', False):
-            from leeroy_mind.learn.apply import prepare
+            from leeroy_mind.learn.apply import prepare, yield_families
             meta.learning = await prepare(self, turn, meta, p, now=now)
+            if meta.learning is not None and meta.intent:
+                yield_families(meta.learning, {"tease"})  # her want says whether she teases
             if meta.learning is not None:
                 parts.style = [entry[2] for entry in meta.learning.entries]
         if self.cfg.talk.aware or meta.review_required:
@@ -1738,7 +2021,8 @@ class Pipeline:
                 if meta.review_required:
                     raise ValueError("awareness_unavailable") from None
         trimmed = trim_to_budget(redact_for(parts, human, bool(real)),
-                                 budget=self._prompt_budget(turn))
+                                 budget=self._prompt_budget(turn) - (
+                                     self._block_reserve(turn, meta) if live else 0))
         if meta.learning is not None:
             from leeroy_mind.learn.apply import used
             used(meta, len(trimmed.style))
@@ -1790,24 +2074,8 @@ class Pipeline:
                         # as plain text (no age, speaker or bullet): the shown memories, then the
                         # others' earlier lines, never hers nor the line she answers
                         beat_items=[x for _, x in beat_offer],
-                        tail=bool(tail), beat_keys=[k for k, _ in beat_offer],
+                        tail=overlaid, beat_keys=[k for k, _ in beat_offer],
                         asking=bool(his) and asks(his))
-
-    def _his_post(self, meta: TurnMeta) -> str:
-        """The text of his Discord post the turn answers (meta.discord's reply_to, his own
-        message, not deleted), or ""."""
-        target = meta.discord
-        hg = self.human.guid
-        if target is None or not target.reply_to or not hg:
-            return ""
-        try:
-            with self.store.transaction():
-                row = self.store.conn.execute(
-                    "SELECT text FROM discord_message WHERE id = ? AND author = ? "
-                    "AND origin = 'human' AND deleted IS NULL", (target.reply_to, hg)).fetchone()
-        except sqlite3.Error:
-            return ""
-        return row[0] if row else ""
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:
@@ -2078,6 +2346,7 @@ class Pipeline:
                             log.warning("instruction_hook_failed")
                     if meta.photo is not None:
                         turn.instruction += '\n' + meta.photo.instruction
+                    self._draw_situation(turn, meta, p, now)
                     c = await self._compose(turn, meta, live=True)
             except ValueError as e:  # a turn the instruction can't be written for
                 log.warning("talk_bad_turn: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
@@ -2131,6 +2400,8 @@ class Pipeline:
                 emotes = []
             spoken = await self._speak_voice(turn, meta, p, text, memory_ids)
             if spoken is not None:
+                if spoken and meta.intent:
+                    self._remember_want(turn, meta)
                 if spoken:
                     await self._send_emotes(turn, meta, emotes)
                 return spoken
@@ -2237,6 +2508,8 @@ class Pipeline:
         if without_photo:
             return await self._answer_without_photo(turn, meta, without_photo)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
+            if meta.intent:
+                self._remember_want(turn, meta)
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
         return [s.line for s in sent]
