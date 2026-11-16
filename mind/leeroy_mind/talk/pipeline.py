@@ -2317,7 +2317,7 @@ class Pipeline:
                     continue
                 if not owed:
                     return raw, "silent"
-                why = "silent"  # never silence for an answer he is owed: below
+                text, why = raw, "silent"  # never silence for an answer he is owed: below
                 break
             log.info("say_tells: guid=%d kind=%s attempt=%d tells=%s", turn.speaker, turn.kind,
                      attempt, ",".join(t.reason for t in tells))
@@ -2350,7 +2350,7 @@ class Pipeline:
             messages = _with_hint(messages, SPOKEN_HINT)
         asked = self.clock.now()
         try:
-            raw = await self._ask(turn, messages, meta=meta, attempt=3)
+            raw = await self._ask(turn, messages, meta=meta, attempt=2)  # past the timed two
         except (_ScopeChanged, Expired, GpuPaused, SchedulerError, LLMError):
             return None
         finally:
