@@ -56,6 +56,16 @@ def _minute_in(p, day, block):
     return datetime(day.year, day.month, day.day) + timedelta(minutes=span.start)
 
 
+def _first(block):
+    """A member of the busy cast (BUSY_LIFE) and the first minute of `block` in her week."""
+    for g in range(100, 160):
+        p = make_persona(g, "Arkon", **BUSY_LIFE)
+        for d in range(16, 23):
+            if block in {s.block for s in day_plan(p, date(2026, 11, d)).spans}:
+                return p, _minute_in(p, date(2026, 11, d), block)
+    raise AssertionError(block)
+
+
 def test_the_state_follows_each_block():
     p = make_persona(101, "Arkon", rhythm="weekday desk hours", night_owl=False)
     life_config.pin(6, False)
@@ -154,26 +164,43 @@ def test_own_time_waits_scale_with_availability():
     assert owntime.BACK_S == (120.0, 900.0)
 
 
-def test_own_time_answers_at_once_while_she_is_online_by_her_day():
-    p = make_persona(101, "Arkon", rhythm="weekday desk hours", region="US")
+# a cast with kids at home and a climbing habit, so home duty, the gym and nights out all occur
+BUSY_LIFE = dict(rhythm="weekday desk hours", household="two kids at home",
+                 life_thread="training at the climbing wall", region="US")
+ONLINE = (Block.FREE, Block.GAMING, Block.HOME_DUTY)
+AWAY = (Block.ASLEEP, Block.WORK, Block.COMMUTE, Block.GYM, Block.OUT)
+
+
+@pytest.mark.parametrize("blocks,at_once", [(ONLINE, True), (AWAY, False)])
+def test_his_dm_waits_only_while_she_is_away_by_her_day(blocks, at_once):
+    """Availability 6: answered at once in free, gaming and home duty (Discord online), late
+    only while asleep, at work, driving, at the gym or out."""
     ny = ZoneInfo("America/New_York")
     life_config.pin(6, False)
-    for d in range(16, 23):
-        for span in day_plan(p, date(2026, 11, d)).spans:
-            if span.block not in (Block.FREE, Block.GAMING, Block.HOME_DUTY):
-                continue
-            local = datetime(2026, 11, d, tzinfo=ny) + timedelta(minutes=span.start)
-            now = local.timestamp()
-            assert owntime.due_at(p, post_ts=now, now=now, local_now=local, message_id=d,
-                                  urgent=False, talking=False, insist=False) == now
+    seen = dict.fromkeys(blocks, 0)
+    for g in range(100, 160):
+        p = make_persona(g, "Arkon", **BUSY_LIFE)
+        for d in range(16, 23):
+            for span in day_plan(p, date(2026, 11, d)).spans:
+                if span.block not in blocks or seen[span.block] >= 6:
+                    continue
+                local = datetime(2026, 11, d, tzinfo=ny) + timedelta(minutes=span.start)
+                now = local.timestamp()
+                due = owntime.due_at(p, post_ts=now, now=now, local_now=local,
+                                     message_id=100 * g + d, urgent=False, talking=False,
+                                     insist=False)
+                assert due == now if at_once else due > now, (span.block, g, d)
+                seen[span.block] += 1
+    assert min(seen.values()) == 6, seen
 
 
 @pytest.mark.parametrize("block,words", [(Block.WORK, "at work"), (Block.ASLEEP, "asleep"),
-                                         (Block.COMMUTE, "driving")])
+                                         (Block.COMMUTE, "driving"), (Block.GYM, "at the gym"),
+                                         (Block.OUT, "out")])
 def test_away_words_come_from_her_day(block, words):
-    p = make_persona(101, "Arkon", rhythm="weekday desk hours", region="US")
     life_config.pin(6, False)
-    local = _minute_in(p, date(2026, 11, 18), block) + timedelta(minutes=1)
+    p, local = _first(block)
+    local += timedelta(minutes=1)
     assert owntime.away_words(p, local.replace(tzinfo=ZoneInfo("America/New_York"))) == words
 
 

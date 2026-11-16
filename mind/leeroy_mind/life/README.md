@@ -141,11 +141,13 @@ state = false      # her feeling through the day (below, "Her feeling right now"
 wow_vs_life = 5    # 0-10: the night's WoW-vs-life theme (nightly.settings.load_life)
 ```
 
-`config.LifeCfg(availability=0, state=False, wow_vs_life=5)` is `MindConfig.life`. An
-`availability` that is not an integer 0-10 (a bool is not) reads as 0 and logs
-`life_availability_invalid` once per value; a `state` that is not a boolean reads as false and
-logs `life_state_invalid` once per value; `wow_vs_life` keeps its rule (an integer 0-10, else a
-`ConfigError`, as `nightly.settings.load_life` says). `availability` is also a world dial
+`config.LifeCfg(availability=0, state=False, wow_vs_life=5)` is `MindConfig.life`. An invalid
+`[life]` key never blocks the rest of mind.toml (a login still applies his other edits): an
+`availability` that is not an integer 0-10 (a bool is not) reads as 0, a `state` that is not a
+boolean as false and a `wow_vs_life` that is not an integer 0-10 as 5, each logged once per value
+(`life_<key>_invalid key= want= default=`, never the value); a `[life]` that is not a table reads
+as empty (`life_invalid`). The night still refuses an invalid `wow_vs_life` as before
+(`nightly.settings.load_life` raises `ConfigError`, logged `nightly_config_error`). `availability` is also a world dial
 (console Tuning, `tuning.dials.WORLD_DIALS["availability"]`): an override in mind.db replaces
 mind.toml's value without writing it.
 
@@ -176,8 +178,10 @@ and the console) reads her day:
   commute.
 
 **Replies on her own time.** `DiscordTalk.own_time()` is `[talk] dm_own_time` or availability
-above 0. So with availability above 0 his DM is answered at once while she is online by her day
-(free, gaming, home duty) or talking with him, and waits while she is away by her schedule
+above 0. So with availability above 0 his DM (and his group DM, per member) is answered at once
+while she is online by her day (free, gaming, home duty), talking with him, or in his WoW group
+while he plays (`owntime.with_him`: Discord shows her online and playing then), and waits while
+she is away by her schedule
 (asleep, at work, driving, at the gym, out): `discord_dm_later`, meta
 `discord:dm:deferred:<guid>`, then `discord_dm_answered_later` (urgent words and three posts in a
 row still cut the wait). The waits (`owntime.PHONE_S` for idle and dnd, `BACK_S` after she is

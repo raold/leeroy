@@ -32,9 +32,10 @@ def test_world_dial_merges(tmp_path):
     assert merged.life.availability == 6 and merged.life.wow_vs_life == 5
 
 
-def test_life_values_read_and_wow_vs_life_keeps_its_rule(tmp_path, caplog, monkeypatch):
+def test_life_values_read_and_an_invalid_one_reads_as_its_default(tmp_path, caplog, monkeypatch):
     monkeypatch.setattr(config, "_WARNED", set())
     from leeroy_mind.config import ConfigError, load_config
+    from leeroy_mind.nightly.settings import load_life
     p = tmp_path / "m.toml"
     p.write_bytes(b"[life]\navailability = 6\nstate = true\nwow_vs_life = 3\n")
     assert load_config(p).life == config.LifeCfg(availability=6, state=True, wow_vs_life=3)
@@ -49,9 +50,27 @@ def test_life_values_read_and_wow_vs_life_keeps_its_rule(tmp_path, caplog, monke
     p.write_bytes(b"[life]\nstate = 2\n")
     assert load_config(p).life.state is False and "life_state_invalid" in caplog.text
     for bad in (b"11", b"true", b'"5"'):
-        p.write_bytes(b"[life]\nwow_vs_life = " + bad + b"\n")
+        p.write_bytes(b"[talk]\nchattiness = 7\n[life]\nwow_vs_life = " + bad + b"\n")
+        cfg = load_config(p)          # never blocks the rest of mind.toml
+        assert cfg.life.wow_vs_life == 5 and cfg.talk.chattiness == 7
+        load_config(p)
         with pytest.raises(ConfigError, match="life.wow_vs_life"):
-            load_config(p)
+            load_life(p)              # the night still refuses its theme, as before
+    assert caplog.text.count("life_wow_vs_life_invalid") == 3   # once per value
+    assert "chattiness" not in caplog.text
+
+
+def test_a_life_that_is_no_table_reads_as_empty(tmp_path, caplog, monkeypatch):
+    monkeypatch.setattr(config, "_WARNED", set())
+    p = tmp_path / "m.toml"
+    p.write_bytes(b"life = 3\n[talk]\nchattiness = 7\n")
+    cfg = config.load_config(p)
+    assert cfg.life == config.LifeCfg() and cfg.talk.chattiness == 7
+    config.load_config(p)
+    assert caplog.text.count("life_invalid") == 1
+    p.write_bytes(b'life = "x6"\n')
+    assert config.load_config(p).life == config.LifeCfg()
+    assert caplog.text.count("life_invalid") == 2 and "x6" not in caplog.text
 
 
 def test_the_default_template_says_what_the_code_does(tmp_path):
@@ -129,3 +148,22 @@ def test_the_engine_owns_the_service_and_each_config_pins_it(store, clock, tmp_p
     assert rig.engine.life.availability == 4
     assert (life_config.availability(), life_config.state_on()) == (4, True)
     assert store.get_meta(life_config.META_KEY) == "4"
+
+
+def test_a_failed_meta_write_never_stops_a_reconfigure(store, clock, tmp_path, caplog):
+    import sqlite3
+    from engine_rig import make_rig
+    rig = make_rig(store, clock, tmp_path)
+
+    def locked(key, value):
+        raise sqlite3.OperationalError("database is locked")
+    store.set_meta = locked
+    cfg = rig.engine.cfg
+    rig.engine.apply_config(replace(cfg, talk=replace(cfg.talk, chattiness=9),
+                                    memory=replace(cfg.memory, depth_days=9),
+                                    life=replace(cfg.life, availability=6)))
+    assert rig.engine.cfg.talk.chattiness == 9 and rig.engine.budget._c == 9
+    assert rig.engine.recall.tau_days == 9
+    assert rig.engine.life.availability == 6 and life_config.availability() == 6
+    assert "life_meta_failed reason=OperationalError" in caplog.text
+    assert "locked" not in caplog.text.split("life_meta_failed", 1)[1].splitlines()[0]

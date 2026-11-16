@@ -2,7 +2,8 @@
 
 A member answers his Discord DM when she would see it, by her Discord presence (presence.py):
 - online, or in a conversation with him (her last line to him, in a whisper or this DM, within
-  TALKING_S before his post): at once, as before (talk.answer_delay's 2-25 s);
+  TALKING_S before his post), or in his WoW group while he plays (with_him: presence shows her
+  online and playing then): at once, as before (talk.answer_delay's 2-25 s);
 - idle (at work, say): when she next glances at her phone, PHONE_S["idle"] after his post, or a
   little after she comes online, whichever is first;
 - do not disturb: the same, with PHONE_S["dnd"];
@@ -48,6 +49,12 @@ def _scaled(bounds: tuple[float, float]) -> tuple[float, float]:
         return bounds
     k = max(a, 1) / life_presence.DESIGN_AVAILABILITY
     return tuple(max(LIFE_FLOOR_S, b * k) for b in bounds)
+
+
+def with_him(world, guid: int) -> bool:
+    """She is in his WoW group while he plays (presence_of's in_his_group): she is at her
+    keyboard with him, so his DM never waits on her schedule. Pass it as `due_at`'s talking."""
+    return bool(world is not None and world.human_online and world.in_group(guid))
 
 
 def shifted(local: datetime, seconds: float) -> datetime:

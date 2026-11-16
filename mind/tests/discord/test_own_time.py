@@ -366,6 +366,33 @@ def test_availability_zero_and_own_time_off_answers_at_once(store, tmp_path, hou
     assert store.get_meta(ANSWERED_KEY.format(guid=101)) is None
 
 
+def in_his_group(rig, *guids):
+    """He plays, and `guids` are in his WoW group (presence: online and playing)."""
+    from leeroy_mind.protocol import Group
+    rig.world.human_online = True
+    rig.world.group = Group(ts=0, leader_guid=1, raid=False, members=(1, *guids))
+
+
+def test_in_his_group_she_answers_his_dm_at_once_whatever_her_schedule(store, tmp_path, caplog):
+    from leeroy_mind.life.day import Block, block_at
+    rig = rig_for(store, at(2026, 11, 18, 2), tmp_path)  # 02:00 for the US cast: asleep
+    life(rig)
+    in_his_group(rig, 101)
+    talk = talk_for(rig)
+    assert block_at(rig.engine.personas.get(101), datetime(2026, 11, 18, 2))[0] is Block.ASLEEP
+    caplog.set_level("INFO", logger="leeroy_mind.discord")
+    mine = post(rig, "dm:101", "the kettle finally died this morning")
+    hand(rig, talk, mine)
+    other = post(rig, "dm:102", "the kettle finally died this morning")
+    hand(rig, talk, other)
+    run_for(rig, talk, 200)
+    assert len(answers(rig, "dm:101", mine)) == 1
+    assert store.get_meta(DEFERRED_KEY.format(guid=101)) is None
+    assert "discord_dm_later: guid=101" not in caplog.text
+    assert answers(rig, "dm:102", other) == []  # not with him: her schedule still holds her
+    assert store.get_meta(DEFERRED_KEY.format(guid=102)) == str(other)
+
+
 def test_an_edit_to_urgent_words_reads_the_moment_again(store, tmp_path):
     from leeroy_mind.discord import store as dstore
     rig = rig_for(store, at(2026, 10, 30, 3), tmp_path)

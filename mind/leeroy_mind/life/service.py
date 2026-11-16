@@ -12,11 +12,16 @@ and each loot lost to his claim through `tick`, `on_event` and `loot_lost`, whic
 it is off."""
 from __future__ import annotations
 
+import logging
+import sqlite3
+
 from leeroy_mind.discord.presence import local_time
 
 from . import config as life_config
 from .presence import LifePresence, presence_at
 from .statebook import StateBook
+
+log = logging.getLogger("leeroy_mind.life")
 
 
 class LifeService:
@@ -31,7 +36,9 @@ class LifeService:
         return self._availability
 
     def configure(self, cfg) -> None:
-        """`[life]` from a (re)loaded config, with the world dials over it."""
+        """`[life]` from a (re)loaded config, with the world dials over it. The pin is the
+        mind's truth; the meta copy is for the console, so a failed write is logged
+        (`life_meta_failed`) and never raised."""
         life = getattr(cfg, "life", None)
         life_config.pin(getattr(life, "availability", 0), getattr(life, "state", False))
         self._availability = life_config.availability()
@@ -40,8 +47,11 @@ class LifeService:
         elif self.state is None:
             self.state = StateBook(self.store, self.clock, self.personas, self.world,
                                    lambda: getattr(self.world, "human_guid", 0))
-        if life_config.parse(self.store.get_meta(life_config.META_KEY)) != self._availability:
-            self.store.set_meta(life_config.META_KEY, str(self._availability))
+        try:
+            if life_config.parse(self.store.get_meta(life_config.META_KEY)) != self._availability:
+                self.store.set_meta(life_config.META_KEY, str(self._availability))
+        except sqlite3.Error as e:
+            log.warning("life_meta_failed reason=%s", type(e).__name__)
 
     def presence(self, guid: int, *, medium: str,
                  in_his_group: bool = False) -> LifePresence | None:

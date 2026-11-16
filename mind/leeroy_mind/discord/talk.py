@@ -247,7 +247,8 @@ class DiscordTalk:
         due = owntime.due_at(
             app.personas.get(guid), post_ts=post_ts, now=app.clock.now(),
             local_now=app.clock.local(), message_id=message_id, urgent=urgent,
-            talking=hers is not None and post_ts - hers <= owntime.TALKING_S,
+            talking=(hers is not None and post_ts - hers <= owntime.TALKING_S)
+            or owntime.with_him(getattr(app, "world", None), guid),
             insist=len(his) >= owntime.INSIST)
         self._due[message_id] = (due, urgent)
         while len(self._due) > 256:
