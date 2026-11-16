@@ -132,17 +132,31 @@ def test_words_for_a_turn():
 
 
 def test_a_channel_message_draws_its_band():
-    """Most a quick line, some a couple of sentences, now and then the paragraph; never over
-    the setting."""
-    assert [discord_length.band(90, d) for d in (0.0, 0.54, 0.55, 0.84, 0.85, 0.999)] == [
-        20, 20, 45, 45, 90, 90]
-    assert [discord_length.band(30, d) for d in (0.1, 0.7, 0.9)] == [20, 30, 30]
-    assert [discord_length.band(10, d) for d in (0.1, 0.7, 0.9)] == [10, 10, 10]
+    """Most a few words or a quick line, some a couple of sentences, now and then the
+    paragraph; never over the setting."""
+    assert [discord_length.band(90, d) for d in (0.0, 0.29, 0.30, 0.54, 0.55, 0.84, 0.85, 0.999)] == [
+        6, 6, 20, 20, 45, 45, 90, 90]
+    assert [discord_length.band(30, d) for d in (0.1, 0.4, 0.7, 0.9)] == [6, 20, 30, 30]
+    assert [discord_length.band(10, d) for d in (0.1, 0.4, 0.7, 0.9)] == [6, 10, 10, 10]
     rng = random.Random(7)
     draws = [discord_length.band(90, rng.random()) for _ in range(10000)]
-    shares = {n: draws.count(n) / len(draws) for n in (20, 45, 90)}
-    assert abs(shares[20] - .55) < .03 and abs(shares[45] - .30) < .03
-    assert abs(shares[90] - .15) < .03
+    shares = {n: draws.count(n) / len(draws) for n in (6, 20, 45, 90)}
+    assert abs(shares[6] - .30) < .03 and abs(shares[20] - .25) < .03
+    assert abs(shares[45] - .30) < .03 and abs(shares[90] - .15) < .03
+
+
+def test_a_burst_draws_a_couple_of_sentences():
+    """A quick burst (server.engine) splits a couple of sentences: its draw is in that band."""
+    rng = random.Random(5)
+    assert {discord_length.band(90, discord_length.burst_draw(rng)) for _ in range(500)} == {45}
+
+
+def test_an_opener_keeps_its_old_mix_and_is_never_only_a_few_words():
+    rng = random.Random(9)
+    draws = [discord_length.band(90, discord_length.opener_draw(rng)) for _ in range(10000)]
+    shares = {n: draws.count(n) / len(draws) for n in (6, 20, 45, 90)}
+    assert shares[6] == 0 and abs(shares[20] - .55) < .03
+    assert abs(shares[45] - .30) < .03 and abs(shares[90] - .15) < .03
 
 
 # -- the instruction ---------------------------------------------------------------------------
@@ -298,7 +312,8 @@ def test_a_discord_turn_asks_for_room_and_a_game_turn_does_not(store, clock, tmp
 
 
 @pytest.mark.parametrize("draw,words,room,wording", [
-    (0.1, 20, 80, DISCORD_QUICK), (0.6, 45, 96, DISCORD_FEW), (0.9, 90, 168, DISCORD_LENGTH)])
+    (0.1, 6, 80, DISCORD_QUICK), (0.4, 20, 80, DISCORD_QUICK), (0.6, 45, 96, DISCORD_FEW),
+    (0.9, 90, 168, DISCORD_LENGTH)])
 def test_a_channel_turn_reads_and_asks_by_the_band_it_drew(store, clock, tmp_path, draw, words,
                                                             room, wording):
     rig = make_rig(store, clock, tmp_path, reply="sounds good, see you there")
@@ -327,8 +342,8 @@ def test_a_channel_turn_draws_once_and_a_dm_never_draws(store, clock, tmp_path):
 
 
 def test_a_silent_channel_answer_is_asked_again_for_its_band():
-    assert [Pipeline._silent_length(n) for n in (10, 20, 25, 45, 50, 90, 200)] == [
-        "a sentence", "a sentence", "a sentence", "a couple of sentences",
+    assert [Pipeline._silent_length(n) for n in (6, 10, 20, 25, 45, 50, 90, 200)] == [
+        "a few words", "a sentence", "a sentence", "a sentence", "a couple of sentences",
         "a couple of sentences", "a few sentences", "a few sentences"]
 
 

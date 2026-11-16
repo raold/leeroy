@@ -27,6 +27,7 @@ def test_real_server_engine_posts_or_drops_guarded_openers_without_game_commands
     (tmp_path/'mind.toml').write_text('[guards]\nenabled=true\n', encoding='utf-8')
     clock = engine_clock()
     rig = make_rig(store, clock, tmp_path)
+    rig.engine._length_rng = SteadyRandom(1)  # the quick band (20 words): the script's lines fit
     if learning:
         from leeroy_mind.learn import arms, bandit
         from leeroy_mind.learn.config import LearnCfg
