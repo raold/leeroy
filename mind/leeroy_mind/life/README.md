@@ -30,20 +30,25 @@ From `job + " " + rhythm`, case-folded; the first word-bounded match wins, else 
 
 | Shape | Pattern |
 |---|---|
-| `nights` | `night[- ]shifts?\|third[- ]shifts?\|works? nights\|on nights\|overnights?\|graveyard` ("raid nights" and "late nights" are no night shift) |
+| `nights` | `night[- ]?shifts?\|third[- ]shifts?\|work(?:s\|ing)?(?: on)? nights\|(?:i'm\|she's\|is\|was\|been) on nights\|overnights?\|graveyard` ("raid nights", "late nights" and "plays on nights" are no night shift) |
 | `rotating` | `\d+\s*on\s*,?\s*\d+\s*off\|\d+\s*(?:days\|weeks)\s*on\|rotating\|rota\|12[- ]hour\|on call` |
 | `early` | `early shifts?\|early starts?\|[4-6]\s*a\.?m\.?\s*starts?\|starts? at [4-6]` |
 | `late` | `late shifts?\|evening shifts?\|swing shifts?\|afternoon shifts?` |
-| `student` | `student\|studying\|lectures?\|(?:takes?\|taking\|attends?\|attending\|night\|evening) classes\|(?:at\|in\|to) (?:uni\|university\|college)\|(?:uni\|college) (?:classes\|courses?\|lectures?\|degree\|work)`: only what she does, so an employer named "... College" or "a university" (or a teacher's classes) is no study |
+| `student` | `student(?! loans?)\|studying\|(?:attends?\|attending\|has\|skips?\|skipping\|goes to\|going to) lectures?\|(?:takes?\|taking\|attends?\|attending\|night\|evening) classes\|(?:back\|off\|goes\|going\|still\|is\|she's\|been\|starts?\|starting) (?:to\|at\|in) (?:uni\|university\|college)\|(?:uni\|college) (?:classes\|courses?\|lectures?\|coursework\|assignments?)\|doing an? (?:[\w-]+ ){0,2}degree`, unless the text also says `teach\w*\|tutor\w*\|lecturer\|professor\|instructor\|gives? lectures?\|works? (?:at\|for) (?:the \|a )?(?:uni\|university\|college)`: only what she does, so an employer named "... College", a degree she holds, a job at a university or a class she teaches is no study |
 | `remote` | `wfh\|works? from home\|from home\|freelanc\w*\|self[- ]employed` |
 | `home` | `stay[- ]at[- ]home\|unemployed\|between jobs\|retired` |
 
-**Kids** (home duty) means a dependent child at home. `household` is split into clauses (at
-`, ; . ( ) /` and "and"); one clause must name kids, sons, daughters, a baby, toddlers, children,
-twins or stepkids without putting them elsewhere or grown up (grown, grown-up, adult, away, at
-or in college/uni/university, with (the/their/her/his) dad/ex/mum/mom/father/mother, visits,
-visiting, moved out). A household that says "no kids", "no children", "empty nest" or that she
-lives alone (unless "alone with her/his/their ...") has none.
+**Kids** (home duty) means a dependent child at home. A household that says "no kids", "no
+children", child-free, "empty nest", doesn't/does not/don't/do not/never/without (up to two words)
+kids or children, or that she lives alone (unless "alone with her/his/their ...") has none.
+Otherwise `household` is split into clauses (at `, ; . /` and "and"; brackets stay inside their
+clause); a clause after a comma that starts with a number or one of the "gone" words below belongs
+to the child before it ("a son, 19, at college"). One clause must name kids, sons, daughters, a
+baby, toddlers, children, twins or stepkids without putting them elsewhere or grown up (grown,
+grown-up, adult, away, at or in college/uni/university, with (the/their/her/his)
+dad/ex/mum/mom/father/mother, visits, visiting, moved out) or not born yet (on the way,
+expecting, pregnant, trying for: only in the child's own clause, so "three kids, expecting a
+fourth" still has kids).
 
 ### Hours (her local time)
 
@@ -71,8 +76,8 @@ marathon or 5k. Gaming: the free minutes from 18:00 to her bedtime when
 after it), and on Sat/Sun also 13:00-18:00 when `unit("game_day", guid, date) < 0.5`. Every
 other minute is free.
 
-**Paint order** (later wins): free, gaming, home duty, gym, commute, work, asleep, then a night
-shift's work and commute again, then out.
+**Paint order** (later wins): free, gaming, home duty, gym, commute, work, asleep, then a shift
+that runs past midnight again (every night shift; the tail of yesterday's late shift), then out.
 
 ### The day's event
 
@@ -80,13 +85,15 @@ One a day, `u = unit("event", guid, date)`:
 
 | u | Event | Effect |
 |---|---|---|
-| [0, .04) | `late_shift` | the shift that ends today ends 120 min later, its commute home too (none: no shift ends today) |
-| [.04, .07) | `sick_kid` | the shift that starts today (and its commutes) becomes home duty (none without kids) |
+| [0, .04) | `late_shift` | the shift that ends today ends 120 min later, its commute home too (none: no shift ends today); a late shape's late shift runs to 00:30 and home by 01:00 |
+| [.04, .07) | `sick_kid` | the shift that starts today (and its commutes) becomes home duty, including its hours after midnight (none without kids) |
 | [.07, .11) | `night_out` | out 19:30-23:30 |
 | [.11, .17) | `bad_day` | no block changes (the intraday state reads it) |
 | else | `none` | |
 
-Passing `event=` forces one (tests, the CLI); an event the day cannot have reads as `none`.
+The part of a shift after midnight sits in the next date's plan and follows the drawn event of
+the day the shift started. Passing `event=` forces one for that date only (tests, the CLI); an
+event the day cannot have reads as `none`.
 
 ## Presence (`life/presence.py`)
 

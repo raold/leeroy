@@ -51,32 +51,48 @@ def _bounded(pattern: str) -> re.Pattern:
     return re.compile(rf"\b(?:{pattern})\b")
 
 
-# first match wins, in this order; "raid nights" and "late nights" are no night shift
+_APOS = "['\u2019\u02bc]?"   # typed or phone apostrophe, or none
+
+# first match wins, in this order; "raid nights", "late nights" and "plays on nights" are no night
+# shift. A shape may name text that rules it out (a teacher's classes are no study).
 _JOB_PATTERNS = (
-    (JobShape.NIGHTS, _bounded(r"night[- ]shifts?|third[- ]shifts?|works? nights|on nights"
-                               r"|overnights?|graveyard")),
+    (JobShape.NIGHTS, _bounded(rf"night[- ]?shifts?|third[- ]shifts?|work(?:s|ing)?(?: on)? nights"
+                               rf"|(?:i{_APOS}m|she{_APOS}s|is|was|been) on nights"
+                               r"|overnights?|graveyard"), None),
     (JobShape.ROTATING, _bounded(r"\d+\s*on\s*,?\s*\d+\s*off|\d+\s*(?:days|weeks)\s*on|rotating"
-                                 r"|rota|12[- ]hour|on call")),
+                                 r"|rota|12[- ]hour|on call"), None),
     (JobShape.EARLY, _bounded(r"early shifts?|early starts?|[4-6]\s*a\.?m\.?\s*starts?"
-                              r"|starts? at [4-6]")),
-    (JobShape.LATE, _bounded(r"late shifts?|evening shifts?|swing shifts?|afternoon shifts?")),
-    # only what she does: an employer named "... College" or "a university" is no study
-    (JobShape.STUDENT, _bounded(r"student|studying|lectures?"
+                              r"|starts? at [4-6]"), None),
+    (JobShape.LATE, _bounded(r"late shifts?|evening shifts?|swing shifts?|afternoon shifts?"), None),
+    # only what she does: an employer named "... College", a degree she holds, a course she
+    # teaches or a job at a university is no study
+    (JobShape.STUDENT, _bounded(r"student(?! loans?)|studying"
+                                r"|(?:attends?|attending|has|skips?|skipping|goes to|going to) lectures?"
                                 r"|(?:takes?|taking|attends?|attending|night|evening) classes"
-                                r"|(?:at|in|to) (?:uni|university|college)"
-                                r"|(?:uni|college) (?:classes|courses?|lectures?|degree|work)")),
-    (JobShape.REMOTE, _bounded(r"wfh|works? from home|from home|freelanc\w*|self[- ]employed")),
-    (JobShape.HOME, _bounded(r"stay[- ]at[- ]home|unemployed|between jobs|retired")),
+                                rf"|(?:back|off|goes|going|still|is|she{_APOS}s|been|starts?|starting)"
+                                r" (?:to|at|in) (?:uni|university|college)"
+                                r"|(?:uni|college) (?:classes|courses?|lectures?|coursework|assignments?)"
+                                r"|doing an? (?:[\w-]+ ){0,2}degree"),
+     _bounded(r"teach\w*|tutor\w*|lecturer|professor|instructor|gives? lectures?"
+              r"|works? (?:at|for) (?:the |a )?(?:uni|university|college)")),
+    (JobShape.REMOTE, _bounded(r"wfh|works? from home|from home|freelanc\w*|self[- ]employed"), None),
+    (JobShape.HOME, _bounded(r"stay[- ]at[- ]home|unemployed|between jobs|retired"), None),
 )
 _KIDS = _bounded(r"kids?|sons?|daughters?|bab(?:y|ies)|toddlers?|child(?:ren)?|twins|stepkids?")
-# a household with no child at home: none, an empty nest, or she lives alone
-_NO_KIDS = _bounded(r"no (?:kids|children)|empty nest"
+# a household with no child at home: none, child-free, an empty nest, or she lives alone
+_NO_KIDS = _bounded(r"no (?:kids|children)|child[- ]?free|empty nest"
+                    rf"|(?:doesn{_APOS}t|does not|don{_APOS}t|do not|never|without)\s+(?:\w+\s+){{0,2}}"
+                    r"(?:kids|children)"
                     r"|(?:lives|living) alone(?!\s+with\s+(?:her|his|their)\b)")
-# a child who is not a dependent at home (checked in the child's own clause)
-_AWAY = _bounded(r"grown(?:[- ]up)?|adult|away|(?:at|in) (?:college|uni|university)"
-                 r"|with (?:(?:the|their|her|his) )?(?:dad|ex|mum|mom|father|mother)"
-                 r"|visits?|visiting|moved out")
-_CLAUSE = re.compile(r"[,;.()/]|\band\b")
+# a child who is not a dependent at home (checked in the child's own clause); these may also
+# follow the child after a comma ("a son, 19, away at uni")
+_GONE = (r"grown(?:[- ]up)?|adult|away|(?:at|in) (?:college|uni|university)"
+         r"|with (?:(?:the|their|her|his) )?(?:dad|ex|mum|mom|father|mother)"
+         r"|visits?|visiting|moved out")
+# a child not born yet (only in the child's own clause: "three kids, expecting a fourth")
+_AWAY = _bounded(_GONE + r"|on the way|expecting|pregnant|trying for")
+_QUALIFIER = re.compile(rf"\s*(?:\d|(?:{_GONE})\b)")
+_CLAUSE = re.compile(r"[,;./]|\band\b")
 # a word start only, so "gyms" and "5km" count and "uplifting", "recycling" and "25k" do not
 _GYM = re.compile(r"\b(?:gym|climbing|lifting|crossfit|yoga|swimming|cycling|marathon|5k)")
 
@@ -164,19 +180,26 @@ def _facts(p: Persona) -> _Facts:
 
 def _job_shape(job: str, rhythm: str) -> JobShape:
     text = f"{job} {rhythm}".casefold()
-    for shape, pattern in _JOB_PATTERNS:
-        if pattern.search(text):
+    for shape, pattern, unless in _JOB_PATTERNS:
+        if pattern.search(text) and not (unless and unless.search(text)):
             return shape
     return JobShape.DAY
 
 
 def _kids_at_home(household: str) -> bool:
     """A dependent child at home: named in a clause of her household that does not put the
-    child elsewhere or grown up."""
-    text = household.casefold()
+    child elsewhere, grown up or not born yet. Brackets stay in their clause, and a clause after
+    a comma that starts with a number or a word of `_GONE` belongs to the child before it."""
+    text = household.casefold().replace("(", " ").replace(")", " ")
     if _NO_KIDS.search(text):
         return False
-    return any(_KIDS.search(c) and not _AWAY.search(c) for c in _CLAUSE.split(text))
+    groups: list[str] = []
+    for clause in _CLAUSE.split(text):
+        if groups and not _KIDS.search(clause) and _QUALIFIER.match(clause):
+            groups[-1] += " " + clause
+        else:
+            groups.append(clause)
+    return any(_KIDS.search(g) and not _AWAY.search(g) for g in groups)
 
 
 def job_shape(p: Persona) -> JobShape:
@@ -251,6 +274,10 @@ def _ends_today(shift: _Shift) -> bool:
     return 0 < shift.work[1] <= DAY_MIN
 
 
+def _ended_yesterday(shift: _Shift) -> bool:
+    return -DAY_MIN < shift.work[1] <= 0
+
+
 def _late_shift(shift: _Shift) -> None:
     end = shift.work[1]
     shift.work = (shift.work[0], end + LATE_SHIFT_MIN)
@@ -286,22 +313,38 @@ def _spans(minutes: list[Block]) -> tuple[Span, ...]:
     return tuple(out)
 
 
+def _paint_shifts(minutes: list[Block], entries: list[tuple[Block, tuple[int, int]]]) -> None:
+    for block in (Block.COMMUTE, Block.WORK):
+        for b, span in entries:
+            if b is block:
+                _paint(minutes, span, block)
+
+
 @lru_cache(maxsize=PLAN_CACHE)
 def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan:
     guid, owl = f.guid, f.night_owl
     job, kids = _job_shape(f.job, f.rhythm), _kids_at_home(f.household)
     shifts = _shifts(job, guid, day)
-    event = _event(guid, day, work_ends_today=any(_ends_today(s) for s in shifts), kids=kids,
-                   event=event)
+    ending = [s for s in shifts if _ends_today(s)]
+    event = _event(guid, day, work_ends_today=bool(ending), kids=kids, event=event)
+    # yesterday's shift, in today's minutes, keeps yesterday's drawn event past midnight
+    carried = next((s for s in shifts if not s.starts_today), None)
+    before = DayEvent.NONE
+    if carried is not None:
+        earlier = _shifts(job, guid, day - timedelta(days=1))
+        before = _event(guid, day - timedelta(days=1), kids=kids, event=None,
+                        work_ends_today=any(_ends_today(s) for s in earlier))
+        if before is DayEvent.LATE_SHIFT and _ended_yesterday(carried):
+            _late_shift(carried)
     if event is DayEvent.LATE_SHIFT:
-        for shift in shifts:
-            if _ends_today(shift):
-                _late_shift(shift)
-    work, duty = [], []
+        for shift in ending:
+            _late_shift(shift)
+    work, tail, duty = [], [], []
     for shift in shifts:
-        own = event is DayEvent.SICK_KID and shift.starts_today
-        (duty if own else work).append((Block.WORK, shift.work))
-        (duty if own else work).extend((Block.COMMUTE, c) for c in shift.commutes)
+        sick = (event if shift.starts_today else before) is DayEvent.SICK_KID
+        into = duty if sick else work if shift.starts_today else tail
+        into.append((Block.WORK, shift.work))
+        into.extend((Block.COMMUTE, c) for c in shift.commutes)
     morning = _morning_sleep(job, guid, day, owl, kids)
 
     minutes = [Block.FREE] * DAY_MIN
@@ -320,23 +363,17 @@ def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan
     for _, span in duty:
         _paint(minutes, span, Block.HOME_DUTY)
     if _gym(f) and day.weekday() in GYM_DAYS:
-        ends = [min(DAY_MIN, e) for block, (s, e) in work
+        ends = [min(DAY_MIN, e) for block, (s, e) in work + tail
                 if block is Block.COMMUTE and s < DAY_MIN and e > 0]
         start = max(GAMING_EVENING[0], max(ends, default=0))
         _paint(minutes, (start, start + GYM_MIN), Block.GYM)
-    for block in (Block.COMMUTE, Block.WORK):
-        for b, span in work:
-            if b is block:
-                _paint(minutes, span, block)
+    _paint_shifts(minutes, work + tail)
     _paint(minutes, morning, Block.ASLEEP)
     evening = _evening_sleep(job, guid, day, owl)
     if evening:
         _paint(minutes, evening, Block.ASLEEP)
-    if job is JobShape.NIGHTS:   # a night shift is painted again over the sleep around it
-        for block in (Block.COMMUTE, Block.WORK):
-            for b, span in work:
-                if b is block:
-                    _paint(minutes, span, block)
+    # a shift that runs past midnight is painted again over the sleep around it
+    _paint_shifts(minutes, work + tail if job is JobShape.NIGHTS else tail)
     if event is DayEvent.NIGHT_OUT:
         _paint(minutes, NIGHT_OUT, Block.OUT)
     return DayPlan(guid, day, job, kids, event, _spans(minutes))
@@ -344,8 +381,10 @@ def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan
 
 def day_plan(p: Persona, day: date, *, event: DayEvent | None = None) -> DayPlan:
     """Her plan for one local date. `event` None draws the day's event; an event the day cannot
-    have (a late shift with no shift ending today, a sick kid without kids) reads as none.
-    Plans are immutable and cached by her schedule facts and the date (PLAN_CACHE)."""
+    have (a late shift with no shift ending today, a sick kid without kids) reads as none. A
+    forced event changes only this date: the part of a shift past midnight in the next date's
+    plan follows the drawn event of the day it started. Plans are immutable and cached by her
+    schedule facts and the date (PLAN_CACHE)."""
     return _build(_facts(p), day, event, True)
 
 
