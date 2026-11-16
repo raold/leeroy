@@ -115,7 +115,8 @@ def is_summon(text: str) -> bool:
 # What the "Lately you've..." hint may name as a topic (owner's live DM test, 2026-11-16: "brought
 # up the actually twice", "brought up the three twice"): a content word, never a chat word
 # (talk.words.COMMON_WORDS, everyday.CHAT_WORDS), a pronoun, a number, a stance adverb or a word
-# under four letters. Stored rows keep their topics; the hint filters them when it reads them.
+# under four letters, nor a form of a stopword ("telling", "thinking"). Stored rows keep their
+# topics; the hint filters them when it reads them.
 PRONOUNS = frozenset(
     "something anything nothing everything someone anyone everyone noone somebody anybody "
     "everybody nobody myself yourself himself herself itself ourselves yourselves themselves "
@@ -133,21 +134,40 @@ ADVERBS = frozenset(
     "usually exactly absolutely completely entirely apparently hopefully certainly genuinely "
     "lowkey highkey super mostly nearly barely hardly sometimes often somehow somewhere "
     "anywhere everywhere nowhere tonight today tomorrow yesterday later soon right okay".split())
+# the commonest verbs, whose forms ("saying", "talking") name no subject either
+VERBS = frozenset("say tell talk ask look see seem try let keep give take put call mean".split())
 
 
 def topic_word(word: str) -> bool:
-    """Whether `word` is a content word the hint may name as a topic (PRONOUNS, NUMBERS)."""
+    """Whether `word` is a content word the hint may name as a topic (the rule above)."""
     from .everyday import CHAT_WORDS, is_everyday
     from .words import COMMON_WORDS
     w = _fold(word or "")
     if len(w) < 4 or not w.isalpha():
         return False
-    if w in COMMON_WORDS or w in CHAT_WORDS or w in PRONOUNS or w in NUMBERS or w in ADVERBS:
+    if (w in COMMON_WORDS or w in CHAT_WORDS or w in PRONOUNS or w in NUMBERS or w in ADVERBS
+            or w in VERBS):
         return False
     if w in _STOP:
         return False
+    # a form of a stopword ("telling", "thinking", "wanted", "getting", "making")
+    if any(b in _STOP or b in CHAT_WORDS or b in VERBS for b in _bases(w)):
+        return False
     # an adverb of an everyday adjective: "honestly", "literally", "seriously", "totally"
     return not (len(w) >= 7 and w.endswith("ly") and is_everyday(w[:-2]))
+
+
+def _bases(w: str) -> set[str]:
+    """The words `w` may inflect: -ing, -ed, -s and -es off, a doubled consonant halved, an e
+    put back ("getting" -> "get", "making" -> "make", "liked" -> "like")."""
+    out = set()
+    for end in ("ing", "ed", "es", "s"):
+        if w.endswith(end) and len(w) - len(end) >= 2:
+            stem = w[:-len(end)]
+            out |= {stem, stem + "e"}
+            if len(stem) >= 3 and stem[-1] == stem[-2]:
+                out.add(stem[:-1])
+    return out
 
 
 def topics(text: str, *, names: Collection[str] = ()) -> tuple[str, ...]:
