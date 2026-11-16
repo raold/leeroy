@@ -20,7 +20,19 @@ Subjects come from observed raids, loot, life beats, public plans, calendar date
 public rival activity and officer-only business. A seed is held for three days
 after the first attempted opener, even if its lines are dropped; channel-purpose
 seeds renew daily. Live plans, officer attendance and trials return at most once
-per ISO week. Private poaching offers never become seeds. Only a life beat's owner
+per ISO week. Attendance is one weekly officers' thread (2026-11-15), never one seed per
+member: the regulars dropping off, who missed 3 or more of the last 4 raids after attending
+at least 2 of the 8 before them (`seeds.dropping_off`), up to six named and the rest counted;
+none until four raids have finished. An opener draws its kind of subject first
+(`seeds.SUBJECTS`: raid, loot, life, meme, chat, rival, calendar, officer, plus his godmode
+intents; weights `rhythm.SUBJECT_WEIGHT`, scaled by the godmode hangouts), then a seed and
+channel within it by their own weights, so a kind with many seeds (a life beat per member)
+no longer crowds out a singular one. Before the change the per-member officer seeds (31%) and
+the life beats (55%) made 86% of the drawn openers on the live seeds; after it, raid 25%, loot 21%,
+life 16%, chat 13%, meme 12%, calendar 8%, officer 6% (a static draw over one snapshot; a
+used seed then rests for its freshness window). Life beats written from 2026-11-15 on are a
+short first-person chat message (`nightly/life.py`), not prose. Private poaching offers
+never become seeds. Only a life beat's owner
 may open it, and only observed participants may open his group's kill or loot.
 Native `loot_won` events carry no member list today, so his loot seeds nothing
 (fails closed); only his group's boss kills seed his day.

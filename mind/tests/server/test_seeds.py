@@ -164,18 +164,63 @@ def test_his_real_name_never_appears_without_a_character_row(store, seeded):
     assert all('PRIVATE REAL NAME' not in s.fact for s in gather(store,seeded))
 
 
-def test_officer_seeds_only_in_officer_channels(store, seeded):
-    now=store.clock.now()
-    for rid in range(1,5):
+def dropping_off(store, now):
+    """Six raids, the four newest last: Arkon (101) raids them all, Coros (103) only the
+    two before them, Ebbo (105) none."""
+    for rid in range(1,7):
         raid(store,now,rid)
         store.conn.execute("INSERT INTO guild_attendance VALUES (?,101,'raided')",(rid,))
+    for rid in (1,2):
+        store.conn.execute("INSERT INTO guild_attendance VALUES (?,103,'raided')",(rid,))
+
+
+def test_officer_seeds_only_in_officer_channels(store, seeded):
+    now=store.clock.now()
+    dropping_off(store,now)
     store.conn.execute('UPDATE cast_member SET rank=4 WHERE guid=103')
     found=gather(store,seeded)
     private=[s for s in found if s.officers_only]
-    assert any('missed 4 of the last 4' in s.fact for s in private)
     assert any(s.key=='officer:trial:103:2026-W44' for s in private)
     assert all(layout.channel(ch).officers_only for s in private for ch in s.channels)
-    assert not any(s.kind=='officer' and s.about==(101,) for s in private)
+    assert not any(s.kind=='officer' and 101 in s.about for s in private)
+
+
+def test_attendance_is_one_weekly_thread_of_regulars_dropping_off(store, seeded):
+    """One seed a week for every member, never one per member (2026-11-15: 49 of 57
+    #officer-chat openers were one member's attendance); a member who never raids is no news."""
+    now=store.clock.now()
+    dropping_off(store,now)
+    found=[s for s in gather(store,seeded) if s.key.startswith('officer:attendance:')]
+    assert len(found)==1
+    seed=found[0]
+    assert seed.key=='officer:attendance:2026-W44' and seed.officers_only and seed.kind=='officer'
+    assert seed.about==(103,)  # Ebbo never raided, Arkon never missed
+    assert seed.fact==('Attendance this week: Coros missed 3 or more of the last 4 raids after '
+                       'raiding regularly before')
+    assert seeds.subject_of(seed.kind)=='officer'
+
+
+def test_attendance_names_six_and_counts_the_rest(store, seeded):
+    now=store.clock.now()
+    for rid in range(1,7):
+        raid(store,now,rid)
+    many={**seeded, **{900+i: seeded[101] for i in range(8)}}
+    for g in (*seeded, *range(900,908)):
+        for rid in (1,2):
+            store.conn.execute("INSERT INTO guild_attendance VALUES (?,?,'raided')",(rid,g))
+    seed=next(s for s in seeds.gather(store.conn, now=now, local=datetime.fromtimestamp(now, timezone.utc),
+                                      cast=many, officers=frozenset({102,104}), human=1, human_name='',
+                                      trial_rank=4) if s.key.startswith('officer:attendance:'))
+    assert len(seed.about)==13 and seed.fact.count(', ')==5 and ' and 7 more missed ' in seed.fact
+
+
+def test_no_attendance_thread_before_four_raids_or_without_regulars(store, seeded):
+    now=store.clock.now()
+    for rid in range(1,4):
+        raid(store,now,rid)
+    assert not [s for s in gather(store,seeded) if s.key.startswith('officer:attendance:')]
+    raid(store,now,4)  # four raids, nothing before them: nobody was a regular yet
+    assert not [s for s in gather(store,seeded) if s.key.startswith('officer:attendance:')]
 
 
 @pytest.mark.parametrize('start_day', [9,15])
@@ -183,7 +228,7 @@ def test_long_lived_seeds_return_only_in_a_new_iso_week(store, seeded, start_day
     local = datetime(2026,11,start_day,20,tzinfo=timezone.utc)
     now = local.timestamp()
     claim(store,now,'guild',None)
-    raid(store,now)
+    dropping_off(store,now)
     store.conn.execute('UPDATE cast_member SET rank=4 WHERE guid=103')
     original = [s for s in gather(store,seeded,now=now,local=local) if s.kind in {'plan','officer'}]
     assert any(s.kind=='plan' for s in original)

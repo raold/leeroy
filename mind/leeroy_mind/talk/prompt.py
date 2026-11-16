@@ -130,12 +130,20 @@ polite.
 QUEST_HELP = ("{human} brought up a quest, and you jump at it: end your line with an offer to "
               "help {them} with it or to come along. You only know which quests {human} has "
               "done if {they} told you.")
-# Flirting is only ever aimed at him (content invariant), on every turn (prompts I10).
+# Flirting is only ever aimed at him (content invariant, prompts I10; filters.member_flirt screens
+# every line). Since 2026-11-15 a woman reads that she may flirt with him, and a man that the women
+# only have eyes for him, only on a turn that is his (Pipeline._aimed_at_him; for the men, also
+# one where he is in the talk): on every other turn it pulled unrelated talk toward him. Those
+# turns read FLIRT_RULE_AWAY, which still keeps flirting off every guildmate.
 FLIRT_RULE = {
     "female": ("- You flirt only with {human}. Everyone else is a friend, a rival or just a "
                "guildie."),
     "male": ("- You don't flirt with anyone in the guild. The women only have eyes for {human} "
              "anyway."),
+}
+FLIRT_RULE_AWAY = {
+    "female": "- You don't flirt with anyone here: they're friends, rivals or just guildies.",
+    "male": "- You don't flirt with anyone in the guild.",
 }
 
 
@@ -152,12 +160,16 @@ def length_rule(t: Typing) -> str:
 
 def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
                 data_dir: Path | None = None, now: float | None = None,
-                channel: str = "", recipient: int | None = None) -> str:
+                channel: str = "", recipient: int | None = None,
+                at_him: bool | None = None, with_him: bool = False) -> str:
     """COMMS_RULES for this guild: who the human is (never his real name), then the rules
     with his name and the persona's line length (length_rule), then the persona's FLIRT_RULE,
     then the persona's tuning lines (tuning.lines: only when the owner has turned a wording dial
     far; the owner's overlays in `data_dir`'s prompts when given). The same on every turn for a
-    speaker, for Ollama's prompt cache."""
+    speaker of the same kind, for Ollama's prompt cache. `at_him`: whether the turn is his (the
+    pipeline's _aimed_at_him), `with_him` whether he is in the talk; with at_him False a woman
+    reads FLIRT_RULE_AWAY, and so does a man unless `with_him`. None (no turn: a probe, a card
+    preview) keeps FLIRT_RULE."""
     from leeroy_mind.prompts import note_template
     note_template("talk.comms",COMMS_RULES)
     rules = COMMS_RULES.format(human=human.called)
@@ -167,7 +179,11 @@ def comms_rules(human: HumanIdentity, persona: Persona | None = None, *,
     if persona is None:
         return out
     gender = persona.identity.player_gender
-    if gender in FLIRT_RULE:
+    away = at_him is False and not (gender == "male" and with_him)
+    if away and gender in FLIRT_RULE_AWAY:
+        note_template("talk.flirt_rule_away."+gender,FLIRT_RULE_AWAY[gender])
+        out += "\n" + FLIRT_RULE_AWAY[gender]
+    elif gender in FLIRT_RULE:
         note_template("talk.flirt_rule."+gender,FLIRT_RULE[gender])
         out += "\n" + FLIRT_RULE[gender].format(human=human.called)
     for line in tuning_lines(persona, data_dir):

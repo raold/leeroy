@@ -48,7 +48,7 @@ def test_login_greetings(store, clock, tmp_path):
             owner=101, kind="conversation", text="Zan said he starts the new job on Monday.",
             actors=(HUMAN,), t_event=t, t_created=t, t_accessed=t, source="extract",
             evidence=("chat:1",)))
-        r = make_rig(store, clock, tmp_path)
+        r = make_rig(store, clock, tmp_path, greeters=(2, 3))
         await r.session()
         t0 = clock.now()
         await r.event(Login(ts=0, guid=HUMAN, human=True))
@@ -91,7 +91,7 @@ def test_greetings_never_invent_history(store, clock, tmp_path):
         t = int(clock.now()) - 86400
         store.insert_memory(make_mem(owner=101, text="Coros pulled the whole room again.",
                                      actors=(103,), t_event=t, t_created=t, t_accessed=t))
-        r = make_rig(store, clock, tmp_path, script=script_from(GREETINGS))
+        r = make_rig(store, clock, tmp_path, script=script_from(GREETINGS), greeters=(2, 3))
         await r.session()
         await r.event(Login(ts=0, guid=HUMAN, human=True))
         await r.advance(120)
@@ -162,7 +162,7 @@ def test_thirty_logins_on_thin_memories_greet_him_and_invent_nothing(clock, tmp_
             store.put_relationship(Relationship(a=101 + seed % 5, b=HUMAN, affinity=55,
                                                 familiarity=80, interactions=20))
             real = _thin_login_memories(store, clock, seed)
-            r = make_rig(store, clock, tmp_path, script=script, seed=seed)
+            r = make_rig(store, clock, tmp_path, script=script, seed=seed, greeters=(2, 3))
             await r.session()
             await r.event(Login(ts=0, guid=HUMAN, human=True))
             await r.advance(120)
@@ -244,7 +244,7 @@ def test_each_utterance_says_why_it_was_said(store, clock, tmp_path):
         seed_test_cast(store)
         store.put_relationship(Relationship(a=101, b=HUMAN, affinity=55, familiarity=80,
                                             interactions=20))
-        r = make_rig(store, clock, tmp_path, script=numbered("evening there number {n}"))
+        r = make_rig(store, clock, tmp_path, script=numbered("evening there number {n}"), greeters=(2, 3))
         await r.session()
         await r.event(Login(ts=0, guid=HUMAN, human=True))
         await r.advance(120)
@@ -289,7 +289,7 @@ def test_the_first_greeting_waits_5_to_12_s(store, clock, tmp_path):
     async def main():
         delays = []
         for seed in range(30):
-            r = make_rig(store, clock, tmp_path, seed=seed)
+            r = make_rig(store, clock, tmp_path, seed=seed, greeters=(2, 3))
             await r.event(Login(ts=0, guid=HUMAN, human=True))
             await asyncio.sleep(0)  # the job starts on its first turn
             (first,) = r.engine.pending_turns()
@@ -303,7 +303,8 @@ def test_a_login_greets_once_whatever_the_order(store, clock, tmp_path):
     """Ruling 5 without depending on the app's order: the event may come before the session,
     and a replayed login in the same stretch greets nobody twice."""
     async def main():
-        r = make_rig(store, clock, tmp_path)
+        # each greeting its own words: one repeating the last login's opening rests
+        r = make_rig(store, clock, tmp_path, greeters=(2, 3), script=numbered("evening {n} all"))
         await r.event(Login(ts=0, guid=HUMAN, human=True))  # before any session
         await r.event(Login(ts=0, guid=HUMAN, human=True))  # replayed, still before it
         await r.session()

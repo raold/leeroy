@@ -347,6 +347,9 @@ class TurnMeta:
     fight_end_ms: int = 0
     # An optional owner fence; omitted by ordinary engine callers.
     still_valid: Callable[[], bool] | None = None
+    # Whether a model line says a phrase that rests (a greeting the guild used lately,
+    # talk/greetings.py): a fatal tell, asked again once, then dropped. None: nothing rests.
+    phrase_rests: Callable[[str], bool] | None = None
     # Optional DB-only receipt writer. Runs with the Discord post and chat mirror in
     # one transaction; it must not mutate memory-only delivery state before commit.
     on_discord_record: Callable[[int, int, float], None] | None = None
@@ -1303,7 +1306,9 @@ class Pipeline:
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
-                              channel=turn.channel, recipient=turn.to_guid), rel_cards=cards,
+                              channel=turn.channel, recipient=turn.to_guid,
+                              at_him=self._aimed_at_him(turn),
+                              with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
@@ -2233,6 +2238,8 @@ class Pipeline:
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
                     tells.append(Tell("member flirt", True))
+                if meta.phrase_rests is not None and meta.phrase_rests(text):
+                    tells.append(Tell("phrase: resting", True))
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
                            for t in tells):
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)

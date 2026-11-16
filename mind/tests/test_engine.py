@@ -951,7 +951,7 @@ def test_the_chat_window_starts_at_his_login(store, clock, tmp_path):
     """Prompts I2: twenty hours after his goodnight, the greetings never see last night's
     chat ("back already? thought you said gn")."""
     async def main():
-        r = make_rig(store, clock, tmp_path, script=numbered())
+        r = make_rig(store, clock, tmp_path, script=numbered(), greeters=(2, 3))
         await r.session()
         await r.event(Login(ts=0, guid=HUMAN, human=True))
         await r.advance(60)

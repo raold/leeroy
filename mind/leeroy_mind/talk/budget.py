@@ -4,7 +4,9 @@ decides whether a burst starts at all, the guards still brake each turn.
 
 The openers addressed to him (owner, 2026-11-07: nobody ever started a conversation with him)
 run on a clock of their own here (to_him): mind.toml's [talk] openers_per_hour at chattiness
-4, scaled with chattiness and the talkative dials of who could speak (engine._open_to_him)."""
+4, scaled with chattiness and the talkative dials of who could speak. Since 2026-11-15 only
+[talk] openers_to_him of them go to him (engine._open_to_him); the rest open a conversation
+among the members (engine._open_to_guild)."""
 import math
 import random
 from collections import deque, namedtuple

@@ -1,6 +1,7 @@
 """Pure choices for the Discord server's pace, subjects and participants."""
 import math
 import random
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
@@ -10,7 +11,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.talk.budget import DayPhase, day_phase
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.tuning.effective import dials_of, edits_of
-from .seeds import Seed
+from .seeds import Seed, subject_of
 from .state import DiscordState
 
 PHASE_RATE = {DayPhase.MORNING: 0.6, DayPhase.DAY: 0.8, DayPhase.EVENING: 1.5,
@@ -24,6 +25,13 @@ CHANNEL_BASE = {'general': 3.0, 'irl': 1.5, 'food': 1.0, 'pets': 0.6, 'pics': 0.
                 'pvp-arena': 0.4, 'professions-and-gold': 0.5, 'achievements-and-mounts': 0.5,
                 'lfg-and-alts': 0.5, 'officer-chat': 0.8, 'applications': 0.2, 'bank-requests': 0.2}
 CLASS_CHANNEL_BASE = 0.3
+# How often each kind of subject (seeds.SUBJECTS) is drawn when it has a seed, whatever its
+# number of seeds: the guild's own game (raids, loot) leads, life and memes follow, officers'
+# business and the calendar now and then; his godmode asks (intent) come soonest. A subject not
+# listed (a group's introduction) weighs SUBJECT_DEFAULT.
+SUBJECT_WEIGHT = {'raid': 3.0, 'loot': 2.5, 'life': 2.0, 'meme': 1.5, 'chat': 1.5, 'rival': 1.0,
+                  'calendar': 1.0, 'officer': 0.8, 'intent': 4.0}
+SUBJECT_DEFAULT = 2.0
 
 
 def starts_per_hour(local: datetime, *, per_hour: float, chattiness: float,
@@ -59,9 +67,30 @@ def _hangout(hangouts, seed: Seed, channel: str) -> float:
 
 def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_free: int,
                             rng: random.Random, hangouts=None) -> tuple[Seed, str] | None:
-    """`hangouts`: every free member -> their godmode overlays (MemberEdits), given only when
-    any has hangout weights; None leaves every weight as it was."""
-    options, weights = [], []
+    """The kind of subject first (seeds.subject_of, by SUBJECT_WEIGHT), then a seed and a
+    channel within it by their own weights, so a kind with many seeds (a life beat per member)
+    never crowds out a singular one (last night's raid). `hangouts`: every free member -> their
+    godmode overlays (MemberEdits), given only when any has hangout weights; None leaves every
+    weight as it was. They scale a subject by how much they took from its options."""
+    options, weights, plain = _options(seeds, local=local, officers_free=officers_free,
+                                       hangouts=hangouts)
+    if not options:
+        return None
+    total, raw = defaultdict(float), defaultdict(float)
+    for (seed, _), weight, unhangout in zip(options, weights, plain):
+        total[subject_of(seed.kind)] += weight
+        raw[subject_of(seed.kind)] += unhangout
+    subjects = sorted(total)
+    subject = rng.choices(subjects, weights=[
+        SUBJECT_WEIGHT.get(s, SUBJECT_DEFAULT) * total[s] / raw[s] for s in subjects], k=1)[0]
+    within = [(o, w) for o, w in zip(options, weights) if subject_of(o[0].kind) == subject]
+    return rng.choices([o for o, _ in within], weights=[w for _, w in within], k=1)[0]
+
+
+def _options(seeds: Sequence[Seed], *, local: datetime, officers_free: int, hangouts=None):
+    """Every (seed, channel) a conversation could start on, its weight, and its weight without
+    the godmode hangouts."""
+    options, weights, plain = [], [], []
     phase = day_phase(local)
     for seed in seeds:
         for index, name in enumerate(seed.channels):
@@ -82,12 +111,14 @@ def choose_seed_and_channel(seeds: Sequence[Seed], *, local: datetime, officers_
                 weight *= 3
             if name in {'loot-and-dkp', 'logs'} and seed.kind == 'raid_after':
                 weight *= 3
+            unhangout = weight
             if hangouts:
                 weight *= _hangout(hangouts, seed, name)
             if weight > 0:
                 options.append((seed, name))
                 weights.append(weight)
-    return rng.choices(options, weights=weights, k=1)[0] if options else None
+                plain.append(unhangout)
+    return options, weights, plain
 
 
 def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
