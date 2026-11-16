@@ -1,8 +1,8 @@
 """Recall diversity (`[talk] recall_diversity`, 2026-11-16): one member must not circle the same
 memory, or the same subject, turn after turn and day after day.
 
-The owner's DM audit (PM log 2026-11-16): a week-old "finish the story draft so I can hear him
-say it tomorrow" plan came back as current in five replies; four near-copies of it were active,
+The owner's DM audit (PM log 2026-11-16): a week-old plan of one member's ("finish X tonight so
+he sees it tomorrow") came back as current in five replies; four near-copies of it were active,
 and her most used memories had been shown 20 to 25 times. Recall's recency counts from the last
 access, so every use made a memory likelier to be used again. Three rules, all after the scope
 and audience filters (recall.scope_ok, Recall._shareable), so they only ever drop or lower a

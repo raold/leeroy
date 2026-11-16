@@ -700,8 +700,8 @@ read at mind start and at each login's reload, like `dial`):
 
 # Recall diversity (`[talk] recall_diversity`, 2026-11-16)
 
-The owner's DM audit: a week-old "finish the story draft so I can hear him say it tomorrow"
-plan came back as current in five replies (four near-copies of it were active); her most used
+The owner's DM audit: a week-old plan of one member's ("finish X tonight so he sees it
+tomorrow") came back as current in five replies (four near-copies of it were active); her most used
 memories had been shown 20-25 times, since recall's recency counts from the last use. With the
 switch on (read at each turn; `memory/diversity.py`), recall applies three rules after the
 scope and audience rules, so they can only drop or lower a memory those already let into the
