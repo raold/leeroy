@@ -1037,8 +1037,10 @@ def test_the_prompt_card_is_the_live_persona_said_as_behaviour(store, clock, tmp
         system = msgs[0]["content"]
         assert "STALE CARD" not in system and "Attachment:" not in system
         assert "You trust people easily" in system
-        who = f"You are {first_name(store, 101)}, 34, UK. You play Arkon, an Orc "
+        who = (f"You are {first_name(store, 101)}, a 34-year-old man from the UK (he/him). "
+               "You play Arkon, an Orc ")
         assert system.splitlines()[0].startswith(who)
+        assert system.splitlines()[1].startswith("At home: lives with a flatmate. Work: ")
     run(main())
 
 
@@ -1056,6 +1058,29 @@ def test_a_whisper_prompt_names_only_the_one_she_whispers(store, clock, tmp_path
         assert "Belra" not in people_here(whisper) and "Coros" not in people_here(whisper)
         guild, _ = await r.engine.compose(reply_to_human(101))  # in guild chat, who spoke
         assert "Belra" in people_here(guild) and "Coros" in people_here(guild)
+    run(main())
+
+
+def test_each_other_member_is_tagged_once_with_their_players_pronoun(store, clock, tmp_path):
+    """Identity audit, 2026-11-15: officers called women "him" for want of a pronoun. Each other
+    member is shown once with their persona's pronoun (the player's gender, owner ruling): on
+    their card, else on their newest line; never the speaker, never him."""
+    async def main():
+        r = make_rig(store, clock, tmp_path)
+        save_member(store, 102, player_gender="female")
+        r.engine.personas.invalidate()
+        member_line(r, store, 102, "anyone for toc tonight?")
+        member_line(r, store, 101, "i'm in")
+        member_line(r, store, 102, "after dinner then")
+        msgs, _ = await r.engine.compose(Turn(kind=TurnKind.CONTINUE, speaker=101,
+                                              channel="guild", addressee=102))
+        prompt = msgs[1]["content"]
+        assert people_here(msgs).startswith("Belra (she):")
+        assert prompt.count("(she") == 1 and "Arkon (he" not in prompt
+        guild, _ = await r.engine.compose(reply_to_human(103))
+        text = guild[1]["content"]
+        assert text.count("Belra (she") == 1 and text.count("Arkon (he") == 1
+        assert "Coros (he" not in text and "Zan (he" not in text
     run(main())
 
 

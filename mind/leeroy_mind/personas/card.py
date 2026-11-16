@@ -14,7 +14,10 @@ from ..wow import CLASSES, RACES
 from .schema import Persona
 
 CARD_BUDGET = 150
-PROMPT_CARD_BUDGET = 165  # behaviour takes a few more words than the schema's labels
+# Behaviour takes a few more words than the schema's labels. The prompt card's head (about_lines:
+# her sex, pronouns, household and job, never cut) comes on top, about 27 tokens more (40 at most
+# over the live cast, 2026-11-15).
+PROMPT_CARD_BUDGET = 165
 
 ATTACHMENT_TEXT = {
     "secure": "You trust people easily.",
@@ -74,8 +77,7 @@ def _furthest_trait(p: Persona):
     return name, getattr(p.big_five, name)
 
 
-def _identity_line(p: Persona, race: str, class_name: str) -> str:
-    first = _one_line(p.identity.real_name).split(" ")[0]
+def _play(p: Persona, race: str, class_name: str) -> str:
     role = f"{p.play.raid_role}, {p.play.guild_role}"
     if _one_line(p.play.officer_title):
         role += f" {_one_line(p.play.officer_title)}"
@@ -83,8 +85,37 @@ def _identity_line(p: Persona, race: str, class_name: str) -> str:
     play = f"You play {p.character_name}"
     if kind:
         play += f", {_article(kind)} {kind}"
+    return f"{play} ({role})."
+
+
+def _identity_line(p: Persona, race: str, class_name: str) -> str:
+    first = _one_line(p.identity.real_name).split(" ")[0]
     who = ", ".join(x for x in (first, str(p.identity.age), _one_line(p.identity.region)) if x)
-    return f"You are {who}. {play} ({role})."
+    return f"You are {who}. {_play(p, race, class_name)}"
+
+
+def about_lines(p: Persona, race: str, class_name: str) -> str:
+    """The prompt card's head, the "About you" block (identity audit, 2026-11-15: whatever was on
+    the card stayed consistent and whatever was off it got invented, so a woman whose card never
+    said she was one took his body in explicit talk, and married women said they were single):
+    her name, her age and sex in words with her pronouns ("a 31-year-old woman from the UK
+    (she/her)"), whom she plays, then who she lives with (her household: a partner, kids and
+    their ages, pets), her job and her rhythm. It is never dropped nor cut for the budget."""
+    from .facts import GENDER_WORD, pronoun_pair
+    first = _one_line(p.identity.real_name).split(" ")[0]
+    gender = p.identity.player_gender
+    who = f"a {p.identity.age}-year-old {GENDER_WORD.get(gender, 'person')}"
+    region = _one_line(p.identity.region)
+    if region:
+        who += f" from the {region}"
+    pair = pronoun_pair(gender)
+    if pair:
+        who += f" ({pair})"
+    ident = f"You are {first + ', ' if first else ''}{who}. {_play(p, race, class_name)}"
+    home = " ".join(x for x in (_field("At home", p.real_life.household),
+                                _field("Work", p.real_life.job),
+                                _field("Rhythm", p.real_life.rhythm)) if x)
+    return "\n".join(x for x in (ident, home) if x)
 
 
 def _wants(p: Persona) -> str:
@@ -107,11 +138,23 @@ def _prompt_mind(p: Persona) -> tuple[str, str]:
 
 
 def _render(p: Persona, race: str, class_name: str, mind: str, view: str, *,
-            budget: int = CARD_BUDGET) -> str:
+            budget: int = CARD_BUDGET, about: bool = False) -> str:
+    """The card's sections within `budget`. With `about` (the prompt card), the identity and
+    work lines give way to about_lines, kept whole, and the rest stays exactly what it was: the
+    sections are fitted as before and the head's few more words come on top."""
     ident = _identity_line(p, race, class_name)
     work = " ".join(x for x in (_field("Work", p.real_life.job),
                                 _field("Rhythm", p.real_life.rhythm)) if x)
+    card = _render_rest(p, mind, view, budget=budget, ident=ident, work=work)
+    if not about:
+        return card
+    old = "\n".join(x for x in (ident, work) if x)
+    rest = card[len(old):].lstrip("\n") if card.startswith(old) else ""
+    return "\n".join(x for x in (about_lines(p, race, class_name), rest) if x)
 
+
+def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = "",
+                 work: str = "") -> str:
     ext = p.big_five.extraversion
     name, far = _furthest_trait(p)
     behaviours = [_sentence(ext.behaviour)]
@@ -133,7 +176,7 @@ def _render(p: Persona, race: str, class_name: str, mind: str, view: str, *,
         if estimate_tokens(card) <= budget:
             return card
     # Still over: the persona's own strings are long. Trim the tail, keeping the identity line.
-    return truncate_words(card, budget * 4)
+    return truncate_words(card, max(0, budget) * 4)
 
 
 def render_core_card(p: Persona, *, race: str, class_name: str) -> str:
@@ -142,9 +185,11 @@ def render_core_card(p: Persona, *, race: str, class_name: str) -> str:
 
 
 def render_prompt_card(p: Persona, *, race: str, class_name: str) -> str:
-    """The card a prompt shows: the same sections, attachment, humour and how they play said as
-    behaviour, in at most PROMPT_CARD_BUDGET estimated tokens."""
-    return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET)
+    """The card a prompt shows: the "About you" head (about_lines: her sex and pronouns, her
+    household and her job, never cut), then the same sections as the stored card, attachment,
+    humour and how they play said as behaviour, chosen as they would be in PROMPT_CARD_BUDGET
+    estimated tokens with the stored card's shorter identity and work lines."""
+    return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET, about=True)
 
 
 # The identity line's "You play Name, a/an KIND (ROLE)." with the role the last parentheses,

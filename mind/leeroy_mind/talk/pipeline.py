@@ -63,6 +63,7 @@ from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, Scheduler
 from leeroy_mind.memory.recall import Recall, whisper_ok
 from leeroy_mind.nightly.settings import night_bounds
 from leeroy_mind.personas.card import card_race_class, render_prompt_card
+from leeroy_mind.personas.facts import pronoun_of
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.personas.screens import redact_real_name
@@ -80,7 +81,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
-from leeroy_mind.guards.review import rewrite_hint
+from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
@@ -220,6 +221,7 @@ FOLLOW_SOURCES = frozenset({"chat", "extract", "game"})
 FEELINGS = "Let how you feel about {them} show, if a memory fits."
 REAL_NAME_GAP_S = 600.0  # guild-wide: one inner-circle member is offered his real name at a time
 MAX_EMOTES = 2  # the emote commands a line may carry out
+SHORT_ANSWER_WORDS = 3  # an owed answer cut short of the sentences that slipped, at least
 ANSWERED_LINES = 256  # his lines whose answers are kept
 TURNS_KEPT = 256  # the turns whose lines said are kept, for a turn that follows one (I7)
 WORDS_KEPT = 4096  # said lines whose words before styling are kept for extraction
@@ -507,6 +509,17 @@ class Composed:
     moves: list[MoveRow] = field(default_factory=list)
 
 
+def _hinted(composed: "Composed", hint: str) -> "Composed":
+    """The composed prompt with `hint` at the end of its instruction (the last user message),
+    and no draft as an assistant turn."""
+    msgs = list(composed.messages)
+    if msgs and msgs[-1].get("role") == "user":
+        msgs[-1] = {**msgs[-1], "content": msgs[-1]["content"].rstrip() + "\n\n" + hint}
+    else:
+        msgs.append({"role": "user", "content": hint})
+    return replace(composed, messages=msgs)
+
+
 def aliases(p: Persona) -> tuple[str, ...]:
     """The speaker's real first name: the card introduces them by it ("You are Tarvo"), so the
     model may tag a line with it as with their character name."""
@@ -705,6 +718,25 @@ class Pipeline:
         else:
             race, class_name = card_race_class(self.store.get_card(p.guid) or "")
         return render_prompt_card(p, race=race, class_name=class_name)
+
+    def _pronoun_tags(self, turn: Turn, people: list[int], recent) -> dict:
+        """Each member shown other than the speaker and him, tagged once with their persona's
+        pronoun (the player's, never the character's: owner ruling 2026-11-15): on their card
+        under "People here", else on their newest chat line, the one a trim keeps longest. Keys
+        ("card", guid) and ("line", chat line id)."""
+        hg = self.human.guid
+
+        def of(g: int) -> str:
+            return (pronoun_of(self.personas.get(g))
+                    if g and g not in (hg, turn.speaker) else "")
+        out = {("card", g): t for g in people if (t := of(g))}
+        greet = turn.kind is TurnKind.GREET  # a greeter sees who said hi, never their line
+        newest = {r.from_guid: r.id for r in recent
+                  if not (greet and r.id in self._greet_lines and r.from_guid != turn.speaker)}
+        for g, line in newest.items():
+            if g not in people and (t := of(g)):
+                out[("line", line)] = t
+        return out
 
     def _altered_of(self, guid: int) -> Altered:
         a = self._altered.get(guid)
@@ -1230,6 +1262,7 @@ class Pipeline:
             if len(people) < room and g != turn.speaker and g not in people and g in names:
                 people.append(g)
         attitude = p.romance.stance if p.identity.player_gender == "female" else ""
+        pronouns = self._pronoun_tags(turn, people, recent)
         cards = [relationship_card(names.get(g, "someone"),
                                    self.store.get_relationship(turn.speaker, g, lens=True),
                                    is_human=g == hg,
@@ -1237,7 +1270,8 @@ class Pipeline:
                                    forms=human.forms if g == hg else THEY_FORMS,
                                    attitude=attitude if g == hg else "",
                                    speaker=p.identity.player_gender,
-                                   friendship_only=is_group(turn.channel))
+                                   friendship_only=is_group(turn.channel),
+                                   pronoun=pronouns.get(("card", g), ""))
                  for g in people]
 
         trigger = ""
@@ -1365,7 +1399,9 @@ class Pipeline:
                            variant=random.Random(f"{p.guid}:{night_of(local)}:mood")
                            .randrange(1000), today=day_line(local, p.identity.region)),
             chat=[said_hi_text(r, names, human.called, now=now) if r.id in hi
-                  else chat_line_text(r, names, now=now, photo=chat_notes.get(r.id,'')) for r in recent],
+                  else chat_line_text(r, names, now=now, photo=chat_notes.get(r.id,''),
+                                      pronoun=pronouns.get(("line", r.id), ""))
+                  for r in recent],
             own_recent=self._own_lines(turn), instruction=instruction,
             elsewhere=[chat_line_text(r, names, now=now, photo=pair_notes.get(r.id,'')) for r in pair],
             real_name=real, facts=list(facts),
@@ -1809,19 +1845,33 @@ class Pipeline:
     async def _review_lines(self,turn,meta,p,lines,composed,*,close,spoken=False):
         owed = self.live_review.owed(turn,meta)
         best = None
+        slipped = []  # every candidate whose only hard problem was speaking as the other sex
+        hard_seen = set()  # the hard problems met, for an owed answer's fresh draft
         def keep(candidate,verdicts):
             nonlocal best
-            if any('echo_parent' in v.codes for v in verdicts):
-                return  # his own words said back are never the answer he is owed
+            hard = {c for v in verdicts for c in v.codes} & HARD_CODES
+            if hard:
+                hard_seen.update(hard)
+                if 'echo_parent' not in hard:
+                    slipped.append(list(candidate))
+                return  # his own words said back, or her as a man, are never the answer he is owed
             severity = {"send":0,"react":1,"rewrite":2,"drop":3}
             worst = max(verdicts,key=lambda v:severity[v.action])
             rank = (severity[worst.action],sum(len(v.codes) for v in verdicts))
             if best is None or rank<best[0]:
                 best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)))
-        def fallback():
+        async def fallback():
             if best is None:
+                # Owner, 2026-11-15: every message from him gets a reply. The longest clean part
+                # of a draft that slipped, else one fresh draft, before an owed answer drops.
+                short = await self._short_answer(turn,meta,p,slipped,close=close,spoken=spoken)
+                if short is None:
+                    short = await self._fresh_answer(turn,meta,p,composed,hard_seen,close=close,
+                                                     spoken=spoken)
+                if short is not None:
+                    return short
                 meta.guard_verdict = "drop"
-                return drop("guard_echo")
+                return drop("guard_identity" if slipped else "guard_echo")
             meta.guard_verdict = best[2]
             meta.guard_codes = best[3]
             if ' '.join(' '.join(s.plain for s in best[1]).split()) == ' '.join(meta.preference_original.split()):
@@ -1831,7 +1881,8 @@ class Pipeline:
             return self._drop(turn,meta,code,meta.memory_ids)
         for attempt in range(2):
             if not lines:
-                return fallback() if owed and best is not None else drop("guard_rewrite_failed")
+                return (await fallback() if owed and (best is not None or hard_seen)
+                        else drop("guard_rewrite_failed"))
             verdicts = []
             for line in lines:
                 verdict = await self.live_review.check(turn, meta, line.plain)
@@ -1853,27 +1904,32 @@ class Pipeline:
                     return drop("guard_drop")
                 if meta.guard_rewritten or meta.before_transport is not None:
                     if owed:
-                        return fallback()
+                        return await fallback()
                     meta.guard_verdict = "drop"
                     return drop("guard_rewrite_refused")
                 meta.guard_rewritten = True
                 if getattr(self,'learn_capture_preferences',False):
                     meta.preference_original = ' '.join(s.plain for s in lines)[:4001]
                 composed = composed or await self._compose(turn, meta, live=True)
-                hint = rewrite_hint(verdict.codes)
-                retry = replace(composed, messages=[*composed.messages,
-                    {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
-                    {"role": "user", "content": hint}])
+                codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
+                if set(codes) & HARD_CODES:
+                    # never his words or her as a man as the turn the model goes on from (the
+                    # identity audit: it reads the last text and continues it)
+                    retry = _hinted(composed, fresh_hint(codes))
+                else:
+                    retry = replace(composed, messages=[*composed.messages,
+                        {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
+                        {"role": "user", "content": rewrite_hint(verdict.codes)}])
                 text, why = await self._generate(turn, meta, retry, spoken=spoken, max_attempts=1)
                 if why:
                     if owed:
-                        return fallback()
+                        return await fallback()
                     meta.guard_verdict = "drop"
                     return drop("guard_rewrite_failed")
                 text = self._spell_real_name(emote_words(self._link_items(turn, meta, text)),
                                             close=close, offered=meta.offered_real_name)
                 if command_only(text):
-                    return fallback() if owed else drop("guard_rewrite_failed")
+                    return await fallback() if owed else drop("guard_rewrite_failed")
                 lines = ([Styled(text, text)] if spoken else
                          self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
                 lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
@@ -1881,7 +1937,68 @@ class Pipeline:
             else:
                 return lines
         meta.guard_verdict = "drop"
-        return fallback() if owed and best is not None else drop("guard_rewrite_failed")
+        return (await fallback() if owed and (best is not None or hard_seen)
+                else drop("guard_rewrite_failed"))
+
+    async def _short_answer(self, turn, meta, p, slipped, *, close, spoken=False):
+        """An owed answer whose every candidate spoke as the other sex: of all those candidates,
+        the one whose clean part is longest (each sentence that slips left out:
+        guards.identity.without_slips; a tie goes to the earlier draft), styled and reviewed once
+        more (_reviewed_once), kept when SHORT_ANSWER_WORDS words or more are left. None when
+        there is no such answer; a drop's [] when the turn's scope changed meanwhile."""
+        from leeroy_mind.guards.identity import without_slips
+
+        def clean(candidate) -> str:
+            # line by line: the styling split the draft and may have dropped its periods
+            kept = [x for x in (without_slips(s.plain, p.identity.player_gender)
+                                for s in candidate) if x]
+            return " ".join(x if x[-1] in ".!?" else x + "." for x in kept)
+        parts = [clean(c) for c in slipped]
+        text = max(parts, key=lambda t: len(t.split()), default="")  # max keeps the first of a tie
+        if len(text.split()) < SHORT_ANSWER_WORDS:
+            return None
+        return await self._reviewed_once(turn, meta, p, text, close=close, spoken=spoken)
+
+    async def _fresh_answer(self, turn, meta, p, composed, codes, *, close, spoken=False):
+        """An owed answer's last try before it would drop (owner, 2026-11-15: every message from
+        him gets a reply): one fresh generation from the composed prompt, the failed drafts left
+        out and what was wrong said at the end of its instruction (review.fresh_hint), reviewed
+        once (_reviewed_once). None when there is none to send (no hard problem was met, a
+        transport already vouches for its text, the deadline passed, or the draft failed); a
+        drop's [] when the turn's scope changed meanwhile."""
+        if (not codes or meta.before_transport is not None
+                or self.scheduler.expired(self._deadline(turn, meta))):
+            return None
+        composed = composed or await self._compose(turn, meta, live=True)
+        text, why = await self._generate(turn, meta, _hinted(composed, fresh_hint(codes)),
+                                         spoken=spoken, max_attempts=1)
+        if why:
+            return None
+        text = self._spell_real_name(emote_words(self._link_items(turn, meta, text)),
+                                     close=close, offered=meta.offered_real_name)
+        if command_only(text):
+            return None
+        return await self._reviewed_once(turn, meta, p, text, close=close, spoken=spoken)
+
+    async def _reviewed_once(self, turn, meta, p, text, *, close, spoken=False):
+        """`text` styled as the turn's lines and reviewed once: the lines when nothing hard
+        (HARD_CODES) is left, else None; a drop's [] when the turn's scope changed meanwhile."""
+        lines = ([Styled(text, text)] if spoken else
+                 self._style(turn, p, text, close=close, two_lines=meta.two_lines,
+                             romance=meta.romance))
+        lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+        if not lines:
+            return None
+        codes = []
+        for line in lines:
+            verdict = await self.live_review.check(turn, meta, line.plain)
+            if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
+                return self._drop(turn, meta, "scope_changed")
+            if set(verdict.codes) & HARD_CODES:
+                return None
+            codes.extend(verdict.codes)
+        meta.guard_codes = tuple(dict.fromkeys(codes))
+        return lines
 
     async def _guard_react(self, turn, meta, reaction):
         self._release_photo(meta, 'reaction')

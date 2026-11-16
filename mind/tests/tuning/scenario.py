@@ -6,7 +6,11 @@ members starting conversations (2026-11-07): its one evening whisper says she st
 what she brings up, and it no longer comes from Belra, whom he had whispered a minute before
 (a member in a whisper with him starts none), so the draws after it moved too. Its greetings keep
 the draw they were recorded with (2-3 greeters, no plain hello): the 0-2 greeters of 2026-11-15
-have their own tests (test_orbit.py), as the initiation clocks do."""
+have their own tests (test_orbit.py), as the initiation clocks do. Re-recorded on 2026-11-15
+for the identity card (identity audit): each card opens with the member's age and sex in
+words, pronouns and household ("You are Sam, a 34-year-old woman from the UK (she/her)...",
+"At home: ..."), and each other member is shown once with their pronoun ("Belra (she): ...");
+no draw, weight or sent line moved."""
 import asyncio
 import json
 import random

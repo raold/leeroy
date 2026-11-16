@@ -14,6 +14,7 @@ from leeroy_mind.discord.channels import (OFFICER_GAME, is_private, is_discord, 
                                          is_group, is_officer_channel, same_medium)
 from leeroy_mind.talk.emote_names import ROMANTIC_EMOTES
 from leeroy_mind.memory.recall import scope_ok, whisper_ok
+from leeroy_mind.personas.facts import conflicts as persona_conflicts, facts_of_json, owner_texts
 from leeroy_mind.realm.action_store import released_members
 from leeroy_mind.text import estimate_tokens, strip_wow_markup
 
@@ -153,6 +154,8 @@ class _Reader:
         self.conn = conn
         self.tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.missing = set()
+        self.facts = None  # the member's persona facts, once card() has read her row
+        self.persona = None  # and that row's JSON
 
     def rows(self, tables, sql, params=()):
         absent = set(tables) - self.tables
@@ -368,6 +371,13 @@ def _claims(reader, guid, officer, ctx, now):
             "SELECT id,kind,subject,text,source,source_line FROM member_claim WHERE guid=? "
             "AND first_seen<=? AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
             "ORDER BY last_seen DESC,id DESC LIMIT 8", (guid, now, now))]
+    # The persona outranks what she said in chat: a claim contradicting it (an echo of his words,
+    # an invented family) is never shown to her as her own. card() read her persona's facts.
+    facts = getattr(reader, "facts", None)
+    if facts is not None and any(persona_conflicts(c.text, facts, claim=True) for c in candidates):
+        # his own edits of her life win: read only when a claim is about to be hidden
+        facts = facts_of_json(reader.persona, owner=owner_texts(reader.conn, guid))
+        candidates = [c for c in candidates if not persona_conflicts(c.text, facts, claim=True)]
     ids = [c.source_line for c in candidates if c.source_line is not None]
     provenance = {r["id"]: r for r in reader.rows(("chat_line",),
         "SELECT id,channel,from_guid,to_guid,audience FROM chat_line "
@@ -556,8 +566,11 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     tier = ("COALESCE((SELECT tier FROM persona_tier WHERE guid=p.guid),'cast')"
             if "persona_tier" in reader.tables else "'cast'")
     roles = reader.rows(("persona_core",), "SELECT CASE WHEN json_valid(json) THEN "
-        "json_extract(json,'$.play.guild_role') END AS role," + tier + " AS tier "
-        "FROM persona_core p WHERE guid=?", (guid,))
+        "json_extract(json,'$.play.guild_role') END AS role," + tier + " AS tier,"
+        "CASE WHEN json_valid(json) THEN json END AS json FROM persona_core p WHERE guid=?", (guid,))
+    stored = _json(roles[0]["json"]) if roles else None
+    reader.persona = stored if isinstance(stored, dict) else None
+    reader.facts = facts_of_json(stored) if isinstance(stored, dict) else None
     if roles and roles[0]["tier"] == "world":
         return Card(guid,(),("world_excluded",))
     meta = {r["key"]: r["value"] for r in reader.rows(("meta",),

@@ -67,6 +67,53 @@ Embedding the proposed line is a separate caller cost. `async judge(reasoner,
 text, conflict)` is an optional single JSON confirmation call; nothing calls it
 automatically. A future integration must decide its own failure/timeout policy.
 
+## The persona outranks chat (identity audit, 2026-11-15)
+
+A member once said his answer back as hers ("single, no kids") and invented a family
+for a married persona; both were stored as her claims, and `claim_conflict` would then have
+defended the inventions. Now:
+
+- Extraction never reads a line that echoes his last line in its conversation (his whisper
+  to her, his line in the same DM, group DM or channel, within 10 minutes; the guard's
+  `echoes`). The cursor still moves past it. `claims_extracted` logs `echoes=` and
+  `persona=` counts.
+- A screened claim that contradicts her persona (`personas.facts.conflicts` on the claim
+  read as her own words: who she lives with, her kids, her pets, her job, her country) is
+  never stored.
+- The live guard and the awareness card ignore a stored claim that contradicts the persona,
+  and the guard checks drafts against the persona itself (`persona_conflict`). The persona
+  facts are deterministic and read from the stored persona; they are not `member_claim`
+  rows (that table's sources stay `chat` and `owner`, and no migration is needed).
+- The owner's own edits of her life win everywhere above: her active `owner` memories
+  (godmode implants, his seeded history) and his godmode life events in force
+  (`personas.facts.owner_texts`) leave each topic they name unsettled, so a line, claim or
+  memory about it is never held against her.
+
+### Retiring what already leaked
+
+`python -m leeroy_mind personas clean-contamination --data-dir D` prints a read-only plan
+(ids, guids and why; `--show` adds each row's text, which is private). `--go` takes the mind
+lock (the mind must be stopped), snapshots `mind.db` (`pre-clean-contamination`) and
+retires, never deletes:
+
+- live chat claims (never `owner` ones) cited to a contaminated line (an echo of his line,
+  a gender slip, a line contradicting the persona, or the source of a claim that contradicts
+  it) or themselves contradicting the persona: `superseded_by` set to their own id, vector
+  removed;
+- disclosures whose `ref` is such a line: `ref` becomes `retired:<ref>`, `response` `none`;
+- active memories (never `owner`-sourced) whose text slips or contradicts the persona, or all
+  of whose owner's own evidence lines are contaminated: status `archived`;
+- live coach lessons that open with the other sex's pronoun: expired.
+
+It writes one receipt, meta `personas:clean-contamination:<stamp>`, with every row's prior
+state; `--undo <stamp>` (same conditions, its own snapshot) puts each row back that is
+still as the run left it (a lesson only while it still carries this run's expiry, so one the
+Lab vetoed or expired since stays) and marks the receipt undone. Trust already added for a
+retired disclosure is not taken back. The persona's facts include the owner's own edits, and
+the slip and persona rules are the guard's. Measured on a scratch copy of the live database
+(2026-11-15): 14 contaminated lines (4 echoes, 4 slips, 6 persona); it would retire 4 claims,
+1 disclosure, 9 memories and 2 lessons.
+
 ## CLI and evaluation
 
 From `mind/`, using the intended Python environment:

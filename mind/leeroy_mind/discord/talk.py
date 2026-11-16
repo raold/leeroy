@@ -549,9 +549,11 @@ class DiscordTalk:
         return f"You are in #{ch.name} on the guild's Discord: {ch.topic}"
 
     def context_lines(self, conn, channel: str, thread: int | None, *,
-                      limit: int = CONTEXT_LINES, exclude: int = 0) -> list[str]:
+                      limit: int = CONTEXT_LINES, exclude: int = 0,
+                      speaker: int = 0) -> list[str]:
         """The latest `limit` messages of a store channel's feed (or of `thread`) as "Name: text",
-        oldest first, each on one line (fold), deleted messages left out."""
+        oldest first, each on one line (fold), deleted messages left out. With `speaker`, each
+        other member's newest message names them with their pronoun once ("Razke (she): text")."""
         rows = conn.execute(
             "SELECT author, text, id FROM discord_message WHERE channel = ? AND thread IS ? "
             "AND deleted IS NULL AND id != ? "
@@ -566,8 +568,22 @@ class DiscordTalk:
             uploads=getattr(self.app.engine,'photos_enabled',False),
             members=getattr(self.app.engine,'photos_send',False),
             memes=getattr(self.app.engine,'culture_memes',False))
-        return [f"{self._name(a)}: {fold(t)}" + (' ' + photos[mid] if mid in photos else '')
-                for a, t, mid in reversed(rows)]
+        tags = self._pronoun_tags(rows, speaker) if speaker else {}
+        return [f"{self._name(a)}{tags.get(mid, '')}: {fold(t)}"
+                + (' ' + photos[mid] if mid in photos else '') for a, t, mid in reversed(rows)]
+
+    def _pronoun_tags(self, rows, speaker: int) -> dict[int, str]:
+        """" (she)" or " (he)" on each other member's newest message (rows are newest first),
+        from their persona: the player's gender (owner ruling 2026-11-15)."""
+        from leeroy_mind.personas.facts import pronoun_of
+        out, seen = {}, {0, speaker, self.app.human_guid}
+        for author, _, mid in rows:
+            if author in seen:
+                continue
+            seen.add(author)
+            if t := pronoun_of(self.app.personas.get(author)):
+                out[mid] = f" ({t})"
+        return out
 
     def _name(self, g: int) -> str:
         app = self.app
@@ -601,7 +617,8 @@ class DiscordTalk:
                 if not visible(message_readers(store.conn,message),place,speaker=speaker,to_guid=0,
                                readers=app.groups.readers(place)):
                     return None
-            lines = self.context_lines(store.conn, cid, thread, exclude=message) if reads else []
+            lines = (self.context_lines(store.conn, cid, thread, exclude=message, speaker=speaker)
+                     if reads else [])
             photo = self._photos(store.conn, [message]).get(message) if reads else None
         their = app.engine.human.forms[2]
         purpose = self.purpose_line(cid)
