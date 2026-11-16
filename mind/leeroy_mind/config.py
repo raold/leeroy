@@ -33,6 +33,8 @@ think_private = true           # a short structured beat before answering his wh
 think_budget = 240             # 120-320: the beat's num_predict, in tokens
 intent = false                 # her want for each turn, drawn by code, in the beat's block on every channel
 situation = false              # the prompt as her situation: hard rules only, "Right now" by the instruction
+shape = false                  # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
+dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length follows his (0: as full as she likes)
 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
@@ -69,6 +71,7 @@ max_inflight = 3              # 1-4 of Ollama's 4 slots
 RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 DISCORD_WORDS_MAX = 200  # [talk] discord_words and dm_words
+DM_MIRROR_MAX = 10  # [talk] dm_mirror
 THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] and [life] values already logged in this process
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", "realm",
@@ -109,6 +112,8 @@ class TalkCfg:
     think_budget: int = 240  # [talk] think_budget: the beat's num_predict
     intent: bool = False  # [talk] intent: talk/intent.py's want on every eligible turn (core Task 8)
     situation: bool = False  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
+    shape: bool = False  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
+    dm_mirror: int = 5  # [talk] dm_mirror: with shape on, a DM's length follows his (0: today's)
 
 
 @dataclass(frozen=True)
@@ -225,6 +230,8 @@ _RULES = {
         "think_budget": (lambda v: _int_in(v, *THINK_BUDGET_RANGE), "an integer %d-%d" % THINK_BUDGET_RANGE),
         "intent": (lambda v: type(v) is bool, "a boolean"),
         "situation": (lambda v: type(v) is bool, "a boolean"),
+        "shape": (lambda v: type(v) is bool, "a boolean"),
+        "dm_mirror": (lambda v: _int_in(v, 0, DM_MIRROR_MAX), f"an integer 0-{DM_MIRROR_MAX}"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -297,13 +304,14 @@ def _build(data: dict, source: str) -> MindConfig:
             if section == "talk" and key in ("realism", "texture", "dm_own_time",
                                              "think_private") and type(v) is not bool:
                 v = False
-            if section == "talk" and key in ("intent", "situation") and type(v) is not bool:
+            if (section == "talk" and key in ("intent", "situation", "shape")
+                    and type(v) is not bool):
                 if (key, repr(v)) not in _WARNED:  # off, logged once (each login reads it again)
                     _WARNED.add((key, repr(v)))
                     log.warning("talk_%s_invalid key=%s want=%s default=false", key, key, want)
                 v = False
-            if section == "talk" and key in ("discord_words", "dm_words",
-                                             "think_budget") and not check(v):
+            if section == "talk" and key in ("discord_words", "dm_words", "think_budget",
+                                             "dm_mirror") and not check(v):
                 if (key, repr(v)) not in _WARNED:  # the default, logged once (each login reads it again)
                     _WARNED.add((key, repr(v)))
                     log.warning("talk_%s_invalid key=%s want=%s default=%s", key, key,

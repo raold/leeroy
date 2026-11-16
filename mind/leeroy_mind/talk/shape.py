@@ -7,12 +7,13 @@ come from the context's row (ROWS: owed or not, the channel family, the turn kin
 multipliers of her intent, her state, her attention and her typing profile, renormalized. An
 owed answer (`ShapeContext.owed`) is never left on read, never a reaction and never a word or
 two; a whisper or DM is never left on read either (leave on read is for channels only).
-`shape_line` is the one length line the shape puts in the prompt ("" for LEAVE and REACTION);
+`shape_line` is the one length line the shape puts in the prompt ("" for LEAVE and REACTION;
+on Discord after the medium sentence, review of #331), `shape_template` its unfilled words;
 `dm_words_for` mirrors his DM's length within the owner's `dm_words` cap by the `dm_mirror`
 dial (0: a DM is exactly today's, a paragraph of up to `dm_words`).
 
 Pure: no clock, no I/O, no logging. `rng` is the caller's seeded draw (life.seed), never
-engine.rng. Nothing calls this until the pipeline wiring ([talk] shape, plan Task 9).
+engine.rng. Pipeline._draw_shape draws it with [talk] shape on (plan Task 9).
 
 The context's `intent`, `attention` and `state` come from talk.intent.Intent,
 life.presence.Attention and life.state.State, built in their own tasks. This module reads only
@@ -27,7 +28,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 from leeroy_mind.talk.discord_length import CHANNEL_BANDS, band, burst_draw, num_predict
-from leeroy_mind.talk.prompt import DISCORD_DM, DISCORD_LENGTH, DISCORD_WHERE, MORE_LINES
+from leeroy_mind.talk.prompt import (DISCORD_DM, DISCORD_LENGTH, DISCORD_WHERE, MORE_LINES,
+                                     USUAL_LINE)
 from leeroy_mind.talk.turns import TurnKind
 
 if TYPE_CHECKING:
@@ -92,14 +94,35 @@ LINE_SHORT = "One short line, about {words} words."
 LINE_SHORT_DM = ("This is your private Discord DM, not the game: a sentence or two (at most about "
                  "{words} words). No line breaks.")
 LINE_BURST = "Say it as two quick lines, the way you'd double-text."
-LINE_BURST_DISCORD = "Say it as two or three quick lines, the way you'd double-text."  # 2-3 lines
+# Discord bursts go out as 2-3 messages split at their sentence ends (realism.plan), so the
+# model writes short sentences in one paragraph; their words are the draw's (review of #331).
+LINE_BURST_DISCORD = ("Say it as two or three quick messages, the way you'd double-text: short "
+                      "sentences, about {words} words in all, no line breaks.")
 LINE_QUESTION = "Keep it short and ask {them} something back."
+LINE_QUESTION_DISCORD = ("Keep it to about {words} words and ask {them} something back. No line "
+                         "breaks.")
 LINE_LATE = "You're only now seeing this (you were {excuse}): say so in a few words, then answer."
 LINE_LATE_BARE = "You're only now seeing this: say so in a few words, then answer."
 # The explicit whisper band (`two_lines`) keeps at least two lines: its short line and its
 # question say so, in MORE_LINES' words, instead of "one short line" / "keep it short".
 LINE_TWO_LINES = "Say it " + MORE_LINES + ", about {words} words."
 LINE_TWO_LINES_QUESTION = "Say it " + MORE_LINES + ", and ask {them} something back."
+# A Discord shape says its medium first (review of #331, P2-2): without it a short line or a
+# question on Discord reads as game chat, and render_instruction relies on that sentence to
+# override the game's one line. A paragraph (DISCORD_LENGTH, DISCORD_DM) and a DM's short line
+# already say it.
+DISCORD_MEDIUM = {"dm": "This is your private Discord DM, not the game.",
+                  "chat": "This is Discord chat, not the game."}
+# The exception to the standing rules' one line (comms_rules' length_rule), said only while the
+# system message states that line (`usual`: [talk] situation off; review of #333, requirement
+# 7): MORE_LINES' own words, and a Discord burst's.
+USUAL = ", more than your usual one line"
+DISCORD_MEDIUM_MORE = "This is Discord chat, not the game, so more than your usual one line."
+# Still where she was when he wrote (the "Right now" line says so in the present tense): her
+# late answer says so in the present too (review-340: a "was at the gym" under "You're at the
+# gym." reads wrong). Asleep, free time and her own game are over once she answers.
+LATE_NOW = " (you're {excuse})"
+LATE_THEN = " (you were {excuse})"
 
 
 @dataclass(frozen=True)
@@ -275,34 +298,67 @@ def draw_shape(ctx: ShapeContext, rng) -> ShapeDraw:
     return _sized(_pick(weights(ctx), rng), ctx, rng)
 
 
-def shape_line(draw: ShapeDraw, ctx: ShapeContext, *, forms, excuse: str = "") -> str:
-    """The length line `draw` puts in the prompt: "" for LEAVE and REACTION (nothing is
-    generated). `forms` are the addressee's (they, them, their); `excuse` is where she was, for
-    LATE ("at work"), left out when empty. A Discord paragraph keeps DISCORD_LENGTH's wording
-    (DISCORD_DM's in a DM)."""
-    shape, words = draw.shape, draw.words
-    them = forms[1]
-    discord = _cap(ctx) > 0
+def shape_template(draw: ShapeDraw, ctx: ShapeContext, *, excuse: bool = False,
+                   still: bool = False, several: bool = False, usual: bool = True) -> str:
+    """The length line `draw` puts in the prompt, before its words: "" for LEAVE and REACTION
+    (nothing is generated), else a template with `{words}`, `{them}` and `{excuse}` (LATE, when
+    `excuse`) left to fill (shape_line). The pipeline notes it as `talk.shape.<shape>`, so a
+    recipe tells shapes apart and not their word counts. A Discord shape says its medium first
+    (DISCORD_MEDIUM); a Discord paragraph keeps DISCORD_LENGTH's wording (DISCORD_DM's in a
+    DM). `usual`: the system message states her one line ([talk] situation off), so a shape of
+    more lines says it is more than that (USUAL); without it no such words are left. `still`:
+    she is still where she was (LATE_NOW, else LATE_THEN); `several`: he wrote more than once
+    while she was away ("these")."""
+    shape = draw.shape
     if shape in (Shape.LEAVE, Shape.REACTION):
         return ""
+    discord = _cap(ctx) > 0
+    dm = discord and ctx.family == "dm"
+    medium = (DISCORD_MEDIUM["dm" if dm else "chat"] + " ") if discord else ""
+    more = USUAL if usual else ""
     if shape is Shape.ONE_WORD:
-        return LINE_ONE_WORD
+        return medium + LINE_ONE_WORD
     if shape is Shape.BURST:
-        return LINE_BURST_DISCORD if discord else LINE_BURST
+        if not discord:
+            return LINE_BURST.replace("two quick lines", "two quick lines" + more)
+        if usual and not dm:
+            medium = DISCORD_MEDIUM_MORE + " "
+        return medium + LINE_BURST_DISCORD
     if shape is Shape.LATE:
-        excuse = " ".join(excuse.split())
-        return LINE_LATE.format(excuse=excuse) if excuse else LINE_LATE_BARE
+        tmpl = LINE_LATE_BARE
+        if excuse:
+            tmpl = tmpl.replace("this:", "this" + (LATE_NOW if still else LATE_THEN) + ":")
+        if several:
+            tmpl = tmpl.replace("seeing this", "seeing these")
+        if ctx.two_lines:
+            tmpl = tmpl.removesuffix(".") + " in a line or two" + more + "."
+        return tmpl
     if shape is Shape.QUESTION:
-        return (LINE_TWO_LINES_QUESTION if ctx.two_lines else LINE_QUESTION).format(them=them)
+        if discord:
+            return medium + LINE_QUESTION_DISCORD
+        return (LINE_TWO_LINES_QUESTION.replace(USUAL, more) if ctx.two_lines
+                else LINE_QUESTION)
     if shape is Shape.PARAGRAPH and discord:
-        if ctx.family == "dm":
-            return DISCORD_DM.format(words=words)
-        return DISCORD_LENGTH.format(where=DISCORD_WHERE["channel"], words=words)
+        if dm:
+            return DISCORD_DM
+        tmpl = DISCORD_LENGTH.replace("{where}", DISCORD_WHERE["channel"])
+        return tmpl if usual else tmpl.replace(USUAL_LINE, "")
     if ctx.two_lines:
-        return LINE_TWO_LINES.format(words=words)
-    if discord and ctx.family == "dm":
-        return LINE_SHORT_DM.format(words=words)
-    return LINE_SHORT.format(words=words)
+        return LINE_TWO_LINES.replace(USUAL, more)
+    if dm:
+        return LINE_SHORT_DM
+    return medium + LINE_SHORT
+
+
+def shape_line(draw: ShapeDraw, ctx: ShapeContext, *, forms, excuse: str = "",
+               still: bool = False, several: bool = False, usual: bool = True) -> str:
+    """The length line `draw` puts in the prompt (shape_template, filled): "" for LEAVE and
+    REACTION. `forms` are the addressee's (they, them, their); `excuse` is where she was, for
+    LATE ("at work"), left out when empty."""
+    excuse = " ".join(excuse.split())
+    tmpl = shape_template(draw, ctx, excuse=bool(excuse), still=still, several=several,
+                          usual=usual)
+    return tmpl.format(words=draw.words, them=forms[1], excuse=excuse) if tmpl else ""
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:

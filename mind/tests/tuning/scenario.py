@@ -29,7 +29,11 @@ the beat off, so every block after an instruction is the code's (the drawn want 
 members read as 20:00 GMT, the week UK and US clocks differ; the script ends near 20:36): every
 member is at her PC playing then (her gaming block, full attention in game; early shifts, asleep
 from 21:15), so nobody is away by schedule and each answer comes after her attention's seeded
-latency draw."""
+latency draw. Re-recorded with [talk] shape on as well (core plan Task 9): each eligible answer's
+length is its drawn shape's line ("One short line, about 5 words.", "Keep it short and ask him
+something back.", the evening whisper's "Say it in a line or two, about 16 words.") in place of
+her usual line; every answer in the script is still said (none drew a shape that leaves it on
+read or only reacts), so the sent lines are as before."""
 import asyncio
 import json
 import random
@@ -66,7 +70,8 @@ def cast(store) -> None:
 
 async def _run(store, clock, data_dir, core: bool = False) -> dict:
     r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7,
-                 availability=6 if core else 0, life_state=core, intent=core, situation=core)
+                 availability=6 if core else 0, life_state=core, intent=core, situation=core,
+                 shape=core)
     # the initiation clocks came later and have their own tests (test_initiate.py): off here,
     # so the scenario's draws stay the ones the golden recorded
     r.engine.whispers.set_rate(0.0)

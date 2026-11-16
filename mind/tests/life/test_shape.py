@@ -240,18 +240,36 @@ def test_shape_lines():
     assert shape_line(ShapeDraw(Shape.SHORT, 40, 1, 88), dm, forms=him) == (
         "This is your private Discord DM, not the game: a sentence or two (at most about 40 "
         "words). No line breaks.")
-    assert shape_line(ShapeDraw(Shape.BURST, 12, 2, None), OWED, forms=him) == (
+    # the plan's copy where the system message states no usual line ([talk] situation on)...
+    assert shape_line(ShapeDraw(Shape.BURST, 12, 2, None), OWED, forms=him, usual=False) == (
         "Say it as two quick lines, the way you'd double-text.")
-    assert shape_line(ShapeDraw(Shape.BURST, 45, 3, 96), chan, forms=him) == (
-        "Say it as two or three quick lines, the way you'd double-text.")
+    # ...and the exception to it where comms_rules states one (review of #333, requirement 7)
+    assert shape_line(ShapeDraw(Shape.BURST, 12, 2, None), OWED, forms=him) == (
+        "Say it as two quick lines, more than your usual one line, the way you'd double-text.")
+    # Discord says its medium first and a burst its words (review of #331, P2-2 and P3-3)
+    assert shape_line(ShapeDraw(Shape.BURST, 45, 3, 96), chan, forms=him, usual=False) == (
+        "This is Discord chat, not the game. Say it as two or three quick messages, the way "
+        "you'd double-text: short sentences, about 45 words in all, no line breaks.")
+    assert shape_line(ShapeDraw(Shape.BURST, 45, 3, 96), chan, forms=him).startswith(
+        "This is Discord chat, not the game, so more than your usual one line. Say it as two")
     assert shape_line(ShapeDraw(Shape.BURST, 60, 2, 120), dm, forms=him) == (
-        "Say it as two or three quick lines, the way you'd double-text.")
+        "This is your private Discord DM, not the game. Say it as two or three quick messages, "
+        "the way you'd double-text: short sentences, about 60 words in all, no line breaks.")
     assert shape_line(ShapeDraw(Shape.QUESTION, 7, 1, None), OWED, forms=her) == (
         "Keep it short and ask her something back.")
+    assert shape_line(ShapeDraw(Shape.QUESTION, 64, 1, 127), dm, forms=him) == (
+        "This is your private Discord DM, not the game. Keep it to about 64 words and ask him "
+        "something back. No line breaks.")
+    assert shape_line(ShapeDraw(Shape.SHORT, 20, 1, 80), chan, forms=him) == (
+        "This is Discord chat, not the game. One short line, about 20 words.")
+    assert shape_line(ShapeDraw(Shape.ONE_WORD, 2, 1, 24), chan, forms=him) == (
+        "This is Discord chat, not the game. Just a word or two this time.")
     assert shape_line(ShapeDraw(Shape.LATE, 6, 1, None), OWED, forms=him) == (
         "You're only now seeing this: say so in a few words, then answer.")
     assert shape_line(ShapeDraw(Shape.PARAGRAPH, 90, 1, 168), chan, forms=him) == (
         DISCORD_LENGTH.format(where="Discord chat", words=90))
+    assert "usual one line" not in shape_line(ShapeDraw(Shape.PARAGRAPH, 90, 1, 168), chan,
+                                              forms=him, usual=False)
     for shape in (Shape.LEAVE, Shape.REACTION):
         assert shape_line(ShapeDraw(shape, 0, 0, None), chan, forms=him) == ""
 
@@ -264,6 +282,25 @@ def test_two_lines_copy_says_a_line_or_two():
     assert "One short line" not in line
     ask = shape_line(ShapeDraw(Shape.QUESTION, 12, 2, None), ctx, forms=("she", "her", "her"))
     assert ask == "Say it in a line or two, more than your usual one line, and ask her something back."
+    # [talk] situation on: no usual line is stated, so none is pointed at (review-340 P3-8)
+    assert shape_line(ShapeDraw(Shape.SHORT, 12, 2, None), ctx, forms=("he", "him", "his"),
+                      usual=False) == "Say it in a line or two, about 12 words."
+    late = shape_line(ShapeDraw(Shape.LATE, 12, 2, None), ctx, forms=("he", "him", "his"),
+                      excuse="at work", usual=False)
+    assert late == ("You're only now seeing this (you were at work): say so in a few words, "
+                    "then answer in a line or two.")
+
+
+def test_late_copy_follows_where_she_is_and_how_often_he_wrote():   # review-336, review-340
+    from leeroy_mind.talk.shape import LINE_LATE, LINE_LATE_BARE, ShapeDraw
+    him = ("he", "him", "his")
+    late = ShapeDraw(Shape.LATE, 6, 1, None)
+    assert shape_line(late, OWED, forms=him, excuse="at work") == LINE_LATE.format(excuse="at work")
+    assert shape_line(late, OWED, forms=him) == LINE_LATE_BARE
+    assert shape_line(late, OWED, forms=him, excuse="at the gym", still=True) == (
+        "You're only now seeing this (you're at the gym): say so in a few words, then answer.")
+    assert shape_line(late, OWED, forms=him, excuse="asleep", several=True) == (
+        "You're only now seeing these (you were asleep): say so in a few words, then answer.")
 
 
 def test_shapes_cli_prints_numbers_only(store, tmp_path, capsys):
@@ -290,3 +327,29 @@ def test_life_is_a_main_subcommand(store, tmp_path, capsys):
                  "game", "--kind", "continue", "--samples", "200"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["shares"]["reaction"] == 0 and out["shares"]["paragraph"] == 0
+
+
+def test_the_real_intents_states_and_attention_move_their_shapes():   # review #331 P3-2
+    """talk.shape reads Task 4's Intent and Task 1's Attention by member name and Task 3's State
+    by its floats: each of the real members' multipliers fires."""
+    from leeroy_mind.life.state import State as LifeState
+    from leeroy_mind.talk.intent import Intent as RealIntent
+    from leeroy_mind.talk.shape import weights
+    chan = replace(OWED, family="discord", owed=False)
+    base = weights(chan)
+    for intent, shape, factor in ((RealIntent.REACT, Shape.REACTION, 3.0),
+                                  (RealIntent.REACT, Shape.ONE_WORD, 3.0),
+                                  (RealIntent.ASK, Shape.QUESTION, 4.0),
+                                  (RealIntent.VENT, Shape.BURST, 2.0),
+                                  (RealIntent.VENT, Shape.PARAGRAPH, 1.5),
+                                  (RealIntent.BOUNDARY, Shape.SHORT, 2.0),
+                                  (RealIntent.LOGISTICS, Shape.QUESTION, 1.5)):
+        assert weights(replace(chan, intent=intent))[shape] == base[shape] * factor, intent
+    assert weights(replace(chan, attention=Attention.GLANCING))[Shape.PARAGRAPH] == (
+        base[Shape.PARAGRAPH] * 0.3)
+    assert weights(replace(chan, attention=Attention.HALF))[Shape.PARAGRAPH] == (
+        base[Shape.PARAGRAPH] * 0.6)
+    tired = LifeState(valence=0.0, energy=-0.5, stress=0.0, social=-0.5, toward_him=0.0)
+    w = weights(replace(chan, state=tired))
+    assert w[Shape.ONE_WORD] == base[Shape.ONE_WORD] * 1.5 and w[Shape.LEAVE] == (
+        base[Shape.LEAVE] * 1.5)

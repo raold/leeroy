@@ -48,10 +48,11 @@ def t(store) -> Tuning:
 
 # -- the registry -------------------------------------------------------------------------------
 
-def test_the_eleven_built_dials_and_five_world_dials_and_none_of_the_later_ones():
+def test_the_eleven_built_dials_and_six_world_dials_and_none_of_the_later_ones():
     assert set(MEMBER_DIALS) == {"talkative", "argumentative", "forward", "humour", "theorycraft",
                                  "lore", "drama", "jealousy", "party", "openup", "reliability"}
-    assert set(WORLD_DIALS) == {"chattiness", "romance", "jealousy", "selfies", "availability"}
+    assert set(WORLD_DIALS) == {"chattiness", "romance", "jealousy", "selfies", "availability",
+                                "dm_mirror"}
     assert not set(LATER) & (set(MEMBER_DIALS) | set(WORLD_DIALS))
 
 
@@ -226,3 +227,10 @@ def test_an_availability_world_override_reaches_the_life_config(tmp_path):
     out = merge(cfg, Tuning().with_value("world", "", "availability", 6))
     assert out.life.availability == 6 and cfg.life.availability == 0
     assert out.life.wow_vs_life == cfg.life.wow_vs_life
+
+
+def test_a_dm_mirror_world_override_reaches_the_talk_config(tmp_path):
+    cfg = load_config(tmp_path / "mind.toml")
+    out = merge(cfg, Tuning().with_value("world", "", "dm_mirror", 9))
+    assert out.talk.dm_mirror == 9 and cfg.talk.dm_mirror == 5 and not cfg.talk.shape
+    assert out.talk.dm_words == cfg.talk.dm_words

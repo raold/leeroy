@@ -40,3 +40,6 @@ class Turn:
     delay: float = 0.0
     template: str | None = None
     discord_draw: float | None = None  # a channel message's length band, drawn once (discord_length.band)
+    # its reply shape ([talk] shape, talk/shape.py ShapeDraw), drawn as she starts composing
+    # (Pipeline._draw_shape); None: today's length
+    shape: object | None = None

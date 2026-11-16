@@ -499,7 +499,8 @@ class DiscordTalk:
                             discord=DiscordTarget(reply_to=message_id, thread=thread),
                             discord_named=g in group_named if is_group(channel) else how == "named",
                             first_question_answer=not items and classify_human_line(text) == "question_all",
-                            recall_query=self.recall_query(message_id) or "")
+                            recall_query=self.recall_query(message_id) or "",
+                            his_words=len(text.split()))
             meta.owed_answer = not items  # the answer he is owed (talk/owed.py)
             requests = getattr(getattr(app, 'photos', None), 'requests', None)
             if requests is not None:

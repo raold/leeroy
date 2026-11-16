@@ -134,6 +134,23 @@ def test_the_preview_says_how_long_a_member_at_work_takes(tmp_path):
     run(go())
 
 
+def test_the_preview_says_how_long_a_dm_answer_runs(tmp_path):
+    async def go():
+        app = _app(tmp_path)
+        try:
+            r = await app.tuning.handle(_args("world", "", "dm_mirror", 10))
+            short, long = r["world"]
+            assert "5-word" in short["what"] and "40-word" in long["what"]
+            assert short["before"] < long["before"] < 200  # 5, the default: his length leads
+            assert short["after"] < short["before"] and long["after"] < long["before"]
+            r = await app.tuning.handle(_args("world", "", "dm_mirror", 0))
+            assert [x["after"] for x in r["world"]] == [200, 200]  # as full as she likes
+            assert app.llm.calls == []
+        finally:
+            app.store.close()
+    run(go())
+
+
 def test_a_wording_dial_shows_a_line_before_and_after_with_one_seed(tmp_path, caplog):
     async def go():
         app = _app(tmp_path)

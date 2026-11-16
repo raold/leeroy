@@ -597,8 +597,7 @@ availability 6, state, intent and situation on, the beat off).
 is before it is generated: an emoji reaction, a word or two, a short line, a two- or
 three-message burst, a paragraph, a short line asking something back, a late reply that says
 so, or nothing (left on read). It is pure (no clock, I/O or logging) and draws only from the
-caller's seeded `rng`. **Nothing calls it yet**: the pipeline wiring, `[talk] shape` and
-`[talk] dm_mirror` come with the plan's Task 9, so until then no prompt, room or send changes.
+caller's seeded `rng`; the pipeline draws it with `[talk] shape` on (below, "In the pipeline").
 
 - **Odds** (`ROWS`, then renormalized): an answer he is owed is a short line, a burst or a
   question (game and whispers .65/.15/.20; Discord channels and group DMs .55/.10/.15 and .20 a
@@ -641,10 +640,64 @@ caller's seeded `rng`. **Nothing calls it yet**: the pipeline wiring, `[talk] sh
   74 (57-96), his 120 about 141 (101-200). At 10: 5, 28 and 99. `dm_mirror` 0 (or `dm_words` 0)
   is exactly today's, with no draw. (Review of #331: the plan's `sqrt(mirrored * habit)` with no
   spread gave a 3-word DM about 39 words, and only +/-13% for one message.)
-- **Shape lines** (`shape_line`): the one length line the shape puts in the prompt ("" for left
-  on read and a reaction). Discord paragraphs keep `DISCORD_LENGTH` / `DISCORD_DM`; a Discord
-  burst (2-3 messages) says "two or three quick lines", a game burst "two quick lines".
+- **Shape lines** (`shape_line`, `shape_template` its unfilled words): the one length line the
+  shape puts in the prompt ("" for left on read and a reaction). A Discord shape says its medium
+  first ("This is Discord chat, not the game." / "This is your private Discord DM, not the
+  game."; review of #331 P2-2: without it a short line or a question on Discord reads as game
+  chat), and its burst and question their words ("Say it as two or three quick messages, the way
+  you'd double-text: short sentences, about 45 words in all, no line breaks."). Discord
+  paragraphs keep `DISCORD_LENGTH` / `DISCORD_DM`. `usual` (the system message states her one
+  line: `[talk] situation` off) makes a shape of more lines say it is more than that ("Say it as
+  two quick lines, more than your usual one line, ..."; review of #333 requirement 7); with
+  situation on no "usual one line" is left to point at nothing. A late reply says where she was
+  ("(you were asleep)"), in the present while she is still there as "Right now" says ("(you're
+  at work)"; review-340), and "these" when he wrote more than once.
 - **Inspect**: `python -m leeroy_mind life --data-dir "$D" shapes --guid N --family dm
   --his-words 28 [--owed] [--kind continue] [--dm-mirror 5] [--samples 1000]` reads her stored
   typing profile (mind.db opened read-only) and `[talk]` from mind.toml, and prints the shapes'
   shares and the words' p10/p50/p90 as JSON: numbers and codes only.
+
+## In the pipeline (`[talk] shape`, core plan Task 9, 2026-11-16)
+
+Two keys, read at mind start and at each login: `[talk] shape` (bool, `false`; invalid means
+false, logged once `talk_shape_invalid`) and `[talk] dm_mirror` (0-10, `5`; invalid means 5,
+logged once `talk_dm_mirror_invalid`; also the world dial "DM length follows yours", console
+Tuning). With shape off every prompt, room and send is as before (`golden_prompts.json`,
+`golden_beat.json`); `golden_core.json` is recorded with shape on as well.
+
+- **Which turns** (`Pipeline._draw_shape`, right after `_draw_situation`, before the prompt): an
+  eligible turn (`_want_eligible`: the five kinds the shape table names; every other kind keeps
+  today's length path) that is typed, not voiced, and not a line of a conversation that owns its
+  line count (`meta.single_line`: banter, the 24/7 server's). A DM with `dm_mirror` 0 draws none:
+  exactly today's DM (`DISCORD_DM`, `dm_words`, realism's own DM bursts untouched). The draw is
+  `life.seed.seeded("shape", night, her, minute, his line or post)`, a stream of its own (never
+  `engine.rng`, never the want's). Its context: owed by `owes_him`, her drawn want, her presence's
+  attention and her state from `_draw_situation`, `late_by` = now - `meta.heard_at` (game and
+  whisper, his first line's time: Task 7), his words (`TurnMeta.his_words`, set by the engine and
+  `discord.talk`; else read from the line it answers, a carried DM's from his whisper: review-336),
+  the explicit whisper band as `two_lines`, realism's eligibility for Discord bursts. Log
+  `talk_shape: guid= kind= shape= words= owed=0|1` (codes only); a failure logs
+  `talk_shape_failed: guid= reason=<class>` and leaves the turn on today's length.
+- **Left on read**: dropped `left_on_read` before any prompt or model call. Never an answer he
+  is owed (the shape's rows; should a draw ever give him one of the small shapes, the turn keeps
+  today's length instead).
+- **Reaction** (a Discord or group channel turn replying to a message): her emoji on it with no
+  model call (`server.reacting.pick_emoji` by its words and her tie to its author, seeded
+  `("react", ...)`, kept within the guards' reactions by `_guard_react` as a filler reaction
+  is), `guard_verdict` "react", the turn dropped `reacted`. With nothing to react to it is a word
+  or two.
+- **Lengths**: the shape's line is the instruction's `length_text` (it wins over the Discord
+  length and `long`), noted as `talk.shape.<shape>` for the learn recipe. A Discord shape's words
+  are `_discord_words` (so its wording, `preset_for` room, the "long" tell, the owed answer's
+  `fit_words` and the typing cap follow it; a word or two holds the few-words band). A game
+  shape's `num_predict` caps the preset's (a word or two: 24); its "long" tell keeps her own
+  line's cap on each of its lines, and a word or two holds 3 words, told "Shorter: just a word
+  or two." once (the retry loop's two attempts; Review Focus 4). The beat keeps its own
+  `think_budget`.
+- **Bursts**: a game shape of two lines (a burst, the explicit band's) sets `meta.two_lines`
+  (her typing styles it as two lines) and `turn.max_lines` at least 2; a Discord burst sets
+  `meta.burst`, which realism splits at its sentence ends (`[talk] realism`).
+- **Yields**: a drawn shape takes over the learned `length`, `questions` and `followup` arms
+  (`learn.apply.yield_families`: their lines leave the style, `length`'s `num_predict` goes, the
+  recipe credits their controls; PM log ruling 3), and her state line leaves out how chatty she
+  feels ("chatty", "not feeling chatty": the shape says how much she says; PM log D22).
