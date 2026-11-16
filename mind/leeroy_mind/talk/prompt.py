@@ -581,11 +581,28 @@ def _note_fits(note: str, forms: tuple[str, str, str], speaker: str = "") -> boo
     return True
 
 
+# [romance] realism: her note toward him on his card is one sentence about how things are, never
+# one with a time word (the night writes the note as of then, so "...to me tomorrow" read as
+# current for a week in every prompt) nor one citing words she picked up (dm-quality cleans
+# those from storage; this keeps a stale row off the card meanwhile).
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+_NOTE_DATED = re.compile(
+    r"\b(?:tonight|tomorrow|today|right now|next week"
+    r"|this (?:morning|afternoon|evening|weekend|week))\b|\bpicked up\b", re.IGNORECASE)
+
+
+def realism_note(notes: str) -> str:
+    """Her note's first sentence without a time word or a picked-up word list ([romance]
+    realism), "" when none is left."""
+    return next((s for s in (x.strip() for x in _SENTENCE.split(notes))
+                 if s and not _NOTE_DATED.search(s)), "")
+
+
 def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
                       is_guild_master: bool = False,
                       forms: tuple[str, str, str] = THEY_FORMS, attitude: str = "",
                       speaker: str = "", friendship_only: bool = False,
-                      pronoun: str = "") -> str:
+                      pronoun: str = "", realism: bool = False) -> str:
     """How the speaker feels about one person, in a few words. Only the warm side of trust
     and respect is shown: a low score usually just means "not yet". The human is tagged "(the
     guild master)" when he is one (HumanIdentity.is_guild_master) and referred to by `forms`
@@ -593,7 +610,8 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     ("Razke (she)": identity audit, 2026-11-15, the officers called women "him" for want of
     it). On his card a woman's `attitude` (her stance) shows as her attraction band, and her
     note toward him gets HUMAN_NOTE_CHARS. A member with no row at all is GUILDMATE; a label
-    reads as how the two get on."""
+    reads as how the two get on. `realism` ([romance] realism, his card only): the note is
+    realism_note's one sentence."""
     if pronoun and not is_human:
         name = f"{name} ({pronoun})"
     if not is_human and (r is None or r == Relationship(a=r.a, b=r.b)):
@@ -629,6 +647,8 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     # Group turns keep friendship scores, never romantic labels or free-form
     # relationship notes (which can contain private romantic material).
     notes = "" if friendship_only else " ".join(r.notes.split()).rstrip(".")
+    if realism and is_human:
+        notes = realism_note(notes).rstrip(".")
     if is_human and not _note_fits(notes, forms, speaker):
         notes = ""
     room = HUMAN_NOTE_CHARS if is_human else NOTE_CHARS
