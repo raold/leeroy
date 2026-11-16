@@ -175,15 +175,15 @@ reviewed once more. When fewer than three words survive the line is dropped
 (`guard_phrase_refused`). An answer owed to him is never dropped for a phrase alone: the
 retry goes as written. Any other code on the retry keeps the old rule.
 
-Replay on the live history (read-only, 2026-10-31 to 2026-11-15, 4,392 member lines
-without templates and short `gz`): 497 lines flagged (11.3%; game 7.4%, voice 9.3%,
-Discord 20.9%), 185 of them answers owed to him. `phrase_conversation` 159,
-`phrase_day` 94, `phrase_cast` 36, `stock_member` 120, `stock_cast` 289 (a line can
-carry several). Of the 223 lines reusing a 4-word run of hers from the last 3 days, 138
+Replay on the live history (read-only, 2026-10-31 to 2026-11-15, 4,425 member lines
+without templates and short `gz`): 502 lines flagged (11.3%; game 7.4%, voice 9.3%,
+Discord 20.8%), 185 of them answers owed to him. `phrase_conversation` 161,
+`phrase_day` 95, `phrase_cast` 36, `stock_member` 120, `stock_cast` 291 (a line can
+carry several). Of the 226 lines reusing a 4-word run of hers from the last 3 days, 140
 (62%) are flagged. A hand-judged sample of 60 flagged lines: 45 real tics or cross-member
 sameness, 9 borderline (ordinary "at least", "every single"), 6 false positives (topic
 nouns only she repeated in one conversation: "grain density", "chicken wrap"). Mean check
-4.4 ms. A flag is a rewrite, so a false positive costs one model call, not the line.
+4.7 ms. A flag is a rewrite, so a false positive costs one model call, not the line.
 Replay measures flag rate on what was said, not behaviour after rewrites.
 
 To replay (for example after extending the list), open `mind.db` with `?mode=ro` and, for
