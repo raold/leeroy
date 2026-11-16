@@ -120,6 +120,24 @@ def test_the_place_fallback_follows_his_words(app, his, place):
     assert "place:toilet" in scene["words"]["fallbacks"]
 
 
+@pytest.mark.parametrize("place", ["gym", "the gym", "gym floor", "weights room", "weight room",
+                                   "squat rack", "treadmill", "bathroom", "work bathroom",
+                                   "staff loo"])
+def test_a_gym_and_a_bathroom_are_places(app, place):
+    app.llm.answers = [dict(REPLY, place=place), PICKS]
+    scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
+    assert not any(f.startswith("place:") for f in scene["words"]["fallbacks"])
+
+
+@pytest.mark.parametrize("place", ["locker room", "changing room", "changing rooms", "gym locker room",
+                                   "dressing room", "spa", "sauna", "steam room", "shower",
+                                   "showers", "bath", "bathtub", "hot tub"])
+def test_locker_and_changing_rooms_stay_refused(app, place):
+    app.llm.answers = [dict(REPLY, place=place), PICKS]
+    scene = run(choose_words_scene(app, 101, HIS, "him", request=7))
+    assert scene["words"]["fallbacks"][0] == "place:undress"
+
+
 def test_her_own_names_in_the_place_are_refused(app):
     p = load_persona(app.store, 101)
     for place, code in ((f"{p.character_name.lower()} corner of the cupboard", "place:her_name"),

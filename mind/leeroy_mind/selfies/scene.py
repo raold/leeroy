@@ -174,7 +174,7 @@ UNDRESS_RE = re.compile(
     r"garters?|body ?stockings?|stockings|suspenders|bandeau|catsuit|latex|harness|fishnets?|"
     r"mesh|robes?|bathrobes?|monokini|micro[- ]?bikini|see[- ]?thr(?:ough|u)|sheer|"
     r"transparent|shower\w*|baths?|bathtubs?|bubble bath|tubs?|sheets?|covers|blankets?|"
-    r"duvets?|sauna|steam room|locker room|changing room|fitting room|nsfw|sex|sexual|"
+    r"duvets?|sauna|steam room|locker rooms?|changing rooms?|dressing rooms?|fitting rooms?|nsfw|sex|sexual|"
     r"sexually|sexuali[sz]ed|seductive|erotic|erotica|explicit|porn\w*|fetish|boudoir|horny|"
     r"aroused|kinky|lewd|xxx|onlyfans|on all fours|bent over|straddl\w*|legs spread|"
     r"spread legs|nudist|naturist|clothing-optional|strip(?!e)\w*|spa|stage|jacuzzi|"
