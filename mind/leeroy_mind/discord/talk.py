@@ -45,6 +45,7 @@ from leeroy_mind.discord import layout, owntime
 from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord, is_group
 from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presence_of
 from leeroy_mind.discord.transport import DiscordTarget, channel_id
+from leeroy_mind.life import config as life_config
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.realm.config import RealmConfig
 from leeroy_mind.storage.rows import ChatLineRow
@@ -522,12 +523,15 @@ class DiscordTalk:
     def _draw(self, ch: layout.Channel, audience) -> list[int]:
         """One member (two with SECOND_P) of the audience online or idle, by warmth and fit;
         with none of them online or idle, one of the rest who isn't away, so his post is
-        always answered (talk/owed.py; it went unanswered at night before)."""
+        always answered (talk/owed.py; it went unanswered at night before). With [life]
+        availability above 0 a group DM goes to its members online by their day when there are
+        any, never first to one idle at work while another is online (review-335 P3-E)."""
         app = self.app
         world, hg = app.world, app.human_guid
         away = away_now(app.store, app.clock.now())
         local = app.clock.local()
         weights: dict[int, float] = {}
+        online: set[int] = set()
         others = []
         for g in sorted(audience):
             if g == hg or g in away:
@@ -535,12 +539,18 @@ class DiscordTalk:
             p = app.personas.get(g)
             if p is None:
                 continue
-            if self._presence(g, p, local).state not in ANSWERING:
+            state = self._presence(g, p, local).state
+            if state not in ANSWERING:
                 others.append((g, p))
                 continue
             w = warmth(p, app.store.get_relationship(g, hg, lens=True)) * self._fit(ch, g, p)
             if w > 0:
                 weights[g] = w
+                if state == "online":
+                    online.add(g)
+        if (online and len(online) < len(weights) and is_group(ch.id)
+                and life_config.availability() > 0):
+            weights = {g: w for g, w in weights.items() if g in online}
         if not weights:
             rest = {g: w for g, p in others
                     if (w := warmth(p, app.store.get_relationship(g, hg, lens=True))

@@ -472,6 +472,13 @@ class TurnMeta:
     # empty and None while capture is off
     bakeoff_requests: list = field(default_factory=list, repr=False)
     bakeoff_row: int | None = None
+    # [life] availability above 0 (life/service.py): wake, set by Pipeline.hurry, ends the
+    # turn's delay at once (None: a plain delay, today's); wake_at, when its delay ends (0 before
+    # it begins); heard_at, his line's time; life_presence, her LifePresence when it was planned
+    wake: asyncio.Event | None = field(default=None, repr=False)
+    wake_at: float = 0.0
+    heard_at: float = 0.0
+    life_presence: object | None = None
 
 
 class _ScopeChanged(SchedulerError):
@@ -669,6 +676,10 @@ class Pipeline:
         # a model turn composing or typing, and since when (turn_phases); cleared at its end
         self._phases: dict[asyncio.Task, tuple[Turn, str, float]] = {}
         self._delivering: set[asyncio.Task] = set()
+        # each queued job's turns with their metas (_queue), and the turn each job is waiting
+        # out the delay of with a wake (_delay): waiting_turns, hurry and withdraw read them
+        self._job_items: dict[asyncio.Task, list[tuple[Turn, TurnMeta]]] = {}
+        self._delaying: dict[asyncio.Task, Turn] = {}
         self._send_lock = asyncio.Lock()
         self._unacked: dict[tuple[int, str, str], tuple] = {}  # ack timed out, echo awaited
         # what has been said; own lines are (channel, to_guid, the words before styling)
@@ -860,6 +871,9 @@ class Pipeline:
                                         self._effects(g).talk_mult)
             if has_reason(p, rel, ctx, rel_to_human=rel_h, reply=reply):
                 reasons.add(g)
+        life = getattr(self, "life", None)
+        if life is not None and life.availability > 0:  # her attention in game (life/service.py)
+            weights = {g: w * life.weight(g) for g, w in weights.items()}
         return weights, reasons
 
     def _context(self, now: float, topic: set[str] | None = None, *, opener: bool = False,
@@ -893,6 +907,8 @@ class Pipeline:
         for i, (turn, meta) in enumerate(items):
             if task in self._behind:
                 self._behind[task] = [t for t, _ in items[i + 1:]]
+            if meta.settled:  # withdrawn before it began (withdraw): its row is written
+                continue
             try:
                 said = await self._speak(turn, meta)
                 if not said and owes_him(self, turn, meta) and i + 1 < len(items):
@@ -920,10 +936,12 @@ class Pipeline:
             run = self._run(items)
             task = self._spawn(run)
             self._behind[task] = [t for t, _ in items]
+            self._job_items[task] = items
             # A task cancelled before its first step never enters _run or _speak.
             def done(t):
                 run.close()  # release an unawaited chain if the wrapper never started
                 self._behind.pop(t, None)
+                self._job_items.pop(t, None)
                 self.timing.queued_done(tokens, cancelled=t.cancelled())
                 if (outreach := getattr(self, 'outreach', None)) is not None:
                     for _, meta in items:
@@ -1012,6 +1030,47 @@ class Pipeline:
         return self.pending_turns() + [t for task, behind in self._behind.items()
                                        if task in self._tasks for t in behind]
 
+    def waiting_turns(self) -> list[tuple[asyncio.Task, Turn, TurnMeta]]:
+        """(job, turn, meta) for each queued turn that has not begun yet or is waiting out its
+        delay with a wake (_delay; [life] availability above 0): what hurry and withdraw act
+        on. A turn composing, typing or past its delay is not waiting."""
+        out = []
+        for task, items in list(self._job_items.items()):
+            if task not in self._tasks or task.done():
+                continue
+            behind, delaying = self._behind.get(task, ()), self._delaying.get(task)
+            for turn, meta in items:
+                if not meta.settled and (turn is delaying or any(turn is b for b in behind)):
+                    out.append((task, turn, meta))
+        return out
+
+    @staticmethod
+    def hurry(meta: TurnMeta) -> None:
+        """End the turn's delay now (a turn that has not begun yet skips it)."""
+        if meta.wake is None:
+            meta.wake = asyncio.Event()
+        meta.wake.set()
+
+    def withdraw(self, task: asyncio.Task, turn: Turn, meta: TurnMeta,
+                 reason: str) -> float:
+        """Take one waiting turn (waiting_turns) out of its job, dropped with `reason`, as
+        _cancel_refused cancels one turn of a job; the rest of the job goes on. What was left
+        of its delay (its full delay if it had not begun, 0 if hurried)."""
+        now = self.clock.now()
+        left = turn.delay
+        if self._delaying.get(task) is turn:
+            left = meta.wake_at - now
+            self._cancelling[task] = turn
+            task.cancel()
+            del self._delaying[task]
+            self._current.pop(task, None)
+            self._phases.pop(task, None)
+        if meta.wake is not None and meta.wake.is_set():
+            left = 0.0
+        self._drop(turn, meta, reason)
+        meta.settled = True  # its row is written: no "cancelled" row, and _run skips it
+        return max(0.0, left)
+
     def _cancel_refused(self, now: float) -> None:
         """A fight just started: cancel each pending turn the raid rules now refuse (that turn,
         not the rest of its job)."""
@@ -1023,11 +1082,12 @@ class Pipeline:
                 del self._current[task]  # not pending any more, even before it unwinds
                 self._phases.pop(task, None)
 
-    async def _cancel_all(self) -> None:
-        """Cancel every job, then wait for the lines already handed to the bridge (bounded by
-        its ack timeout) so they are recorded."""
+    async def _cancel_all(self, keep=frozenset()) -> None:
+        """Cancel every job but `keep` (the answers his logout carried to Discord), then wait
+        for the lines already handed to the bridge (bounded by its ack timeout) so they are
+        recorded."""
         me = asyncio.current_task()
-        tasks = [t for t in self._tasks if t is not me]
+        tasks = [t for t in self._tasks if t is not me and t not in keep]
         for t in tasks:
             t.cancel()
         if tasks:
@@ -1738,6 +1798,28 @@ class Pipeline:
         return bool(said) and not (self.comms is not None and self._comms_says(
             "unheard", False, turn.channel, meta))
 
+    async def _delay(self, turn: Turn, meta: TurnMeta) -> None:
+        """Wait out turn.delay on the clock, or until meta.wake is set (hurry). Without a wake
+        (every turn at availability 0) it is the clock's plain sleep, as before."""
+        if meta.wake is None:
+            await self.clock.sleep(turn.delay)
+            return
+        task = asyncio.current_task()
+        meta.wake_at = self.clock.now() + max(0.0, turn.delay)
+        if meta.wake.is_set() or turn.delay <= 0:
+            await self.clock.sleep(0)
+            return
+        self._delaying[task] = turn
+        sleep = asyncio.ensure_future(self.clock.sleep(turn.delay))
+        wake = asyncio.ensure_future(meta.wake.wait())
+        try:
+            await asyncio.wait({sleep, wake}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleep.cancel()
+            wake.cancel()
+            if self._delaying.get(task) is turn:
+                del self._delaying[task]
+
     def _rule_priority(self, turn: Turn, meta: TurnMeta) -> Priority:
         if meta.elsewhere:
             return Priority.BACKGROUND
@@ -1788,7 +1870,7 @@ class Pipeline:
         if not _scope_valid(meta):
             return self._drop(turn, meta, "scope_changed")
         with self.timing.span(meta.timing_trace, "delay"):
-            await self.clock.sleep(turn.delay)
+            await self._delay(turn, meta)
         if not _scope_valid(meta):
             return self._drop(turn, meta, "scope_changed")
         now = self.clock.now()
@@ -2440,8 +2522,9 @@ class Pipeline:
             return "away"
         if turn.channel in SPOKEN_CHANNELS and self._is_dead(g, now):
             return "dead"
-        if turn.channel == "whisper" and not meta.whisper_reply and not w.human_online:
-            return "human_offline"
+        if turn.channel == "whisper" and not w.human_online and (
+                not meta.whisper_reply or self._life_on()):
+            return "human_offline"  # with [life] on, his whisper's answer too (life.on_logout)
         if turn.kind is TurnKind.FLIRT:
             if not self.human.guid or turn.addressee != self.human.guid:
                 return "flirt_target"  # flirting is only ever aimed at him (content invariant)
@@ -2477,6 +2560,10 @@ class Pipeline:
                 and not guards.chain_open(self._chain_key(self._turn_base(turn), now))):
             return "chain"
         return None
+
+    def _life_on(self) -> bool:
+        life = getattr(self, "life", None)
+        return life is not None and life.availability > 0
 
     def _turn_base(self, turn: Turn) -> str:
         return chain_base(turn.channel, turn.speaker, turn.to_guid, self._zone_of(turn.speaker))

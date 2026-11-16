@@ -36,8 +36,12 @@ Three layers, cheapest first:
    nobody with a persona can hear ends (`owed_given_up reason=nobody_present|target_offline`),
    a goodbye once he has logged out (`goodbye`), and a line in a game channel once he logs
    out (`logout`: his chat frame is fresh at the next login; a whisper is kept and answered
-   then, its age shown in the prompt). A Discord channel post is rescued for CHANNEL_MAX_S,
-   then dropped (`too_old`, logged); his DMs and group DMs are kept whatever their age.
+   then, its age shown in the prompt). With [life] availability above 0 a whisper whose answer
+   was still waiting at his logout is carried to her Discord DM (LifeService.on_logout,
+   OwedWatch.carried, logged `owed_carried`): her DM answer closes the stretch, and if it never
+   comes the whisper waits for his next login as before. A Discord channel post is rescued for
+   CHANNEL_MAX_S, then dropped (`too_old`, logged); his DMs and group DMs are kept whatever their
+   age.
    A rescue the model failed (INFRA_DROPS) takes no backoff, and every backoff resets on the
    next line the guild sends.
 
@@ -210,6 +214,7 @@ class Owed:
     retry_s: float = RETRY_S  # the gap before the next rescue, doubling while nothing comes
     tried: set[int] = field(default_factory=set)
     held: str = ""
+    carried: bool = False  # a whisper's answer carried to her DM at his logout (OwedWatch.carried)
 
 
 def _game_medium(reply_to: str) -> str:
@@ -260,6 +265,19 @@ class OwedWatch:
         o.rows.append(row)
         o.last = row.ts
         del o.ids[:-32], o.rows[:-32]
+
+    def carried(self, guid: int, line: int) -> None:
+        """LifeService.on_logout carried her answer to his whisper `line` to her Discord DM: the
+        stretch is closed by her DM answer (_answered_at), not given up at his logout, and
+        waits for his next login only if that answer never comes. Takes his Discord lease so the
+        live model stays for it."""
+        o = self._game.get(("whisper", guid))
+        if o is not None:
+            o.carried, o.held = True, ""
+        log.info("owed_carried: line=%d guid=%d", line, guid)
+        take = getattr(getattr(self.app, "discord_talk", None), "_take_lease", None)
+        if take is not None:
+            take()
 
     # -- the tick ------------------------------------------------------------------------------
 
@@ -319,9 +337,13 @@ class OwedWatch:
         an answer to (it answers that line and those before it)."""
         conn, hg = self.app.store.conn, self.app.engine.human.guid
         if o.medium == "whisper":
+            # a carried stretch: her line in her DM with him answers it too
+            places = ("whisper", f"dm:{o.to}") if o.carried else ("whisper",)
+            marks = ",".join("?" * len(places))
             row = conn.execute(
-                "SELECT max(ts) FROM chat_line WHERE channel = 'whisper' AND origin = 'mind' "
-                "AND from_guid = ? AND to_guid = ? AND ts >= ?", (o.to, hg, o.first)).fetchone()
+                f"SELECT max(ts) FROM chat_line WHERE channel IN ({marks}) AND origin = 'mind' "
+                "AND from_guid = ? AND to_guid = ? AND ts >= ?",
+                (*places, o.to, hg, o.first)).fetchone()
         else:
             marks = ",".join("?" * len(o.ids))
             row = conn.execute(
@@ -364,8 +386,9 @@ class OwedWatch:
         for t in eng.planned_turns():
             if t.trigger_line in ids:
                 return True
-            if (o.medium == "whisper" and t.speaker == o.to and t.channel == "whisper"
-                    and t.to_guid == hg and t.kind in REPLY_KINDS):
+            if (o.medium == "whisper" and t.speaker == o.to and t.to_guid == hg
+                    and t.kind in REPLY_KINDS and (t.channel == "whisper" or (
+                        o.carried and t.channel == f"dm:{o.to}"))):
                 return True
         return False
 
