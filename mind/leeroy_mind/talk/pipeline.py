@@ -180,7 +180,8 @@ GAME_NAME_HINT = ("Name only bosses and battlegrounds that really exist and that
                   "battleground is a map of its own, never somewhere in a zone. Say \"the boss\" "
                   "if you're not sure of its name.")
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
-                     "history", "copy", "slang", "summons", "game name"})
+                     "history", "copy", "slang", "summons", "game name",
+                     "phrase: resting"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, and a boss or battleground that does not exist.
 DROP_ON_RETRY = frozenset({"history", "summons", "game name"})
@@ -361,6 +362,10 @@ class TurnMeta:
     fight_end_ms: int = 0
     # An optional owner fence; omitted by ordinary engine callers.
     still_valid: Callable[[], bool] | None = None
+    # The retry hint naming the phrases a model line says that rest (a greeting the guild used
+    # lately, talk/greetings.py), "" when none does: a fatal tell, asked again once with that
+    # hint, then dropped. None: nothing rests.
+    phrase_rests: Callable[[str], str] | None = None
     # Optional DB-only receipt writer. Runs with the Discord post and chat mirror in
     # one transaction; it must not mutate memory-only delivery state before commit.
     on_discord_record: Callable[[int, int, float], None] | None = None
@@ -949,7 +954,8 @@ class Pipeline:
         styled = style_lines(text, persona.typing, EFFECTS[Altered.SOBER],
                              random.Random(seed), protect=self._protect(),
                              speaker=persona.character_name, kind=turn.kind,
-                             max_lines=max(1, turn.max_lines), aliases=aliases(persona))
+                             max_lines=max(1, turn.max_lines), aliases=aliases(persona),
+                             texture=self.cfg.talk.texture)
         return "\n".join(s.line for s in styled), None
 
     def _may_carry(self, turn: Turn, row: ChatLineRow) -> bool:
@@ -1329,7 +1335,9 @@ class Pipeline:
         parts = PromptParts(
             card=self._card(p), samples=samples,
             rules=comms_rules(human, p, data_dir=self.data_dir, now=now,
-                              channel=turn.channel, recipient=turn.to_guid), rel_cards=cards,
+                              channel=turn.channel, recipient=turn.to_guid,
+                              at_him=self._aimed_at_him(turn),
+                              with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
             memories=[self.recall.format(m) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
                            kind=turn.kind, life_thread=p.real_life.life_thread,
@@ -1688,7 +1696,7 @@ class Pipeline:
                                                 realism=self.realism.eligible(self, turn, meta))
         # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
         # each line is defused once more as it is kept and sent (talk/items.py).
-        lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+        lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
         if not lines:
             if emotes:  # a line that was only an emote: the emote goes out (review minor 8)
                 await self._send_emotes(turn, meta, emotes)
@@ -1859,7 +1867,7 @@ class Pipeline:
                     return fallback() if owed else drop("guard_rewrite_failed")
                 lines = ([Styled(text, text)] if spoken else
                          self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
-                lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+                lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
                 break
             else:
                 return lines
@@ -2262,6 +2270,7 @@ class Pipeline:
             if expired:
                 return raw, "expired"
             silent, tells = quiet(raw), []
+            rest_hint = ""
             if not silent:
                 text = raw if c.close else redact_real_name(raw, self.human, self.human.called)
                 text = strip_copied(text, (name, *own), him=his)
@@ -2283,6 +2292,8 @@ class Pipeline:
                     tells.append(Tell("member flirt", True))
                 if self._invents_game_name(text):
                     tells.append(Tell("game name", False, True))
+                if meta.phrase_rests is not None and (rest_hint := meta.phrase_rests(text)):
+                    tells.append(Tell("phrase: resting", True))
                 if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
                            for t in tells):
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
@@ -2315,10 +2326,11 @@ class Pipeline:
                     return best, None
                 they = self.human.forms[0]
                 messages = asking(" ".join(x for x in (
-                    self._retry_hint(tells, p, turn),
+                    self._retry_hint(tells, p, turn), rest_hint,
                     OWED_HINT.format(human=self.human.called, they=they)) if x))
                 continue
-            messages = asking(self._retry_hint(tells, p, turn))
+            messages = asking(" ".join(x for x in (self._retry_hint(tells, p, turn), rest_hint)
+                                       if x))
         if owed:
             line = self._holding_line(turn, meta)
             log.info("say_owed_holding: guid=%d kind=%s", turn.speaker, turn.kind)
@@ -2541,10 +2553,13 @@ class Pipeline:
                                    piece, [m.name for g, m in self._members_for(turn.channel).items()
                                            if g != self.human.guid])), game=not discord,
                                cap=math.ceil(words * LONG_SLACK) if words else None,
-                               max_chars=DISCORD_MAX_TEXT if discord else None)
+                               max_chars=DISCORD_MAX_TEXT if discord else None,
+                               texture=self.cfg.talk.texture)
         out = out[:max(1, most)]
         if discord and out:
-            return [Styled("\n".join(s.line for s in out), " ".join(s.plain for s in out))]
+            slipped = next((s for s in reversed(out) if s.slip), Styled("", ""))
+            return [Styled("\n".join(s.line for s in out), " ".join(s.plain for s in out),
+                           slipped.slip, slipped.fix)]
         return out
 
     def _real_name_spelling(self) -> frozenset[str]:

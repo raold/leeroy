@@ -955,7 +955,7 @@ def test_the_chat_window_starts_at_his_login(store, clock, tmp_path):
     """Prompts I2: twenty hours after his goodnight, the greetings never see last night's
     chat ("back already? thought you said gn")."""
     async def main():
-        r = make_rig(store, clock, tmp_path, script=numbered())
+        r = make_rig(store, clock, tmp_path, script=numbered(), greeters=(2, 3))
         await r.session()
         await r.event(Login(ts=0, guid=HUMAN, human=True))
         await r.advance(60)
@@ -1172,8 +1172,17 @@ def test_flirts_and_asides_are_capped_like_any_social_turn(store, clock, tmp_pat
     async def main():
         seed_test_cast(store)
         save_member(store, 102, player_gender="female", stance="drawn", style="bold")
-        r = make_rig(store, clock, tmp_path,
-                     script=numbered("you're trouble, zan, take {n}"))  # flirts of his
+        # flirts of his, each in its own words: the copy and repeat tells drop the numbers, and
+        # only the old "u're" kept "you're trouble, zan, take {n}" from reading as a copy
+        lines = iter(["you're trouble, zan", "stop distracting the healers zan",
+                      "careful, i might start liking this", "zan keeps flexing again",
+                      "somebody hide his mount", "honestly the cheek of him",
+                      "behave yourself, mister", "is it warm in here or is it raid night",
+                      "look who finally showed up", "no more puns tonight please",
+                      "he thinks he's smooth", "save some charm for the boss",
+                      "zan bringing the drama again", "someone get this man a flask",
+                      "not in front of the guild", "you again, zan"])
+        r = make_rig(store, clock, tmp_path, script=lambda model, messages: next(lines))
         await cap_the_chain(r)
         now = clock.now()
         flirt = Turn(kind=TurnKind.FLIRT, speaker=102, channel="guild", addressee=HUMAN)

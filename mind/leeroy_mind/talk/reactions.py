@@ -5,15 +5,17 @@ asides, a rival's flirt, a bit's bookkeeping). Every reaction plans its turns an
 nothing here waits, because the bridge hands events over one at a time. The public names are
 imported from leeroy_mind.talk.engine.
 
-His login (final fix wave, from the rehearsal's seven hellos in two minutes): 2-3 greetings,
-then for LOGIN_QUIET_S only answers to him (his own hello gets what is left of HELLOS); no
-social bursts, member gz, asides, rival flirts or unprompted whispers. The lead's call and the
+His login (final fix wave, from the rehearsal's seven hellos in two minutes): 0-2 greetings
+(talk/greetings.py, 2026-11-15), then for LOGIN_QUIET_S only answers to him (his own hello gets
+what is left of HELLOS); no social bursts, member gz, asides, rival flirts or unprompted
+whispers. The lead's call and the
 reactions after a pull are given the facts (the boss, the pull's length, which wipe it is
 tonight, who died first) and told not to make mechanics up. With the library (fix wave part
 E), the lead's wipe debrief and kill line also get the boss's real mechanics from its tactics
 page (facts.boss_mechanics) and are told to talk about both and invent nothing."""
 import math
 import random
+from collections.abc import Callable
 
 from leeroy_mind.bridge import BridgeError
 from leeroy_mind.clock import night_of
@@ -21,6 +23,7 @@ from leeroy_mind.discord.channels import is_discord, is_private
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.protocol import (Achievement, BgEnd, Boss, Death, Emote, Group, Login,
                                   LootDrop, LootWon, Logout, Resurrect, Zone)
+from leeroy_mind.talk import greetings
 from leeroy_mind.talk.prompt import open_topics
 from leeroy_mind.talk.bits import BitScheduler
 from leeroy_mind.talk.budget import AFTER_BURST_S
@@ -40,7 +43,6 @@ GZ_TEMPLATES = ("gz", "grats", "gratz", "congrats", "gz!", "nice")
 # A boss the guild kills every week gets these, not a "congrats" (prompts lens, minor 5).
 KILL_CHEERS = ("gg", "gg!", "nice", "nice one", "ez")
 KILL_EMOTES = ("cheer", "dance")
-GREETERS = (2, 3)
 LOGIN_QUIET_S = 180.0  # after his login, only answers to him
 HELLOS = 3  # greetings plus answers to his own hello in that time, at most
 # The wipe debrief and the kill call say only what their facts give (rehearsal 2, finding 6:
@@ -115,6 +117,11 @@ class Reactions(Pipeline):
     def _init_reactions(self) -> None:
         self._greeted_login = False  # until his logout (or the session's end)
         self._greeters: set[int] = set()  # who greeted his last login
+        # how many greet his login, and how often a later greeter types a plain hello
+        # (talk/greetings.py; the tuning scenario pins both to keep its recorded draws)
+        self.greeter_draw: Callable[[random.Random], int] = greetings.greeter_count
+        self.plain_hello_p = greetings.TEMPLATE_P
+        self.add_instruction_hook(self._greeting_instruction)
         self._hellos = 0  # hellos planned since it (greetings, answers to his hello)
         self._fight_deaths: list[int] = []  # the group's deaths in the current pull, in order
         self._lately: dict[int, dict[str, tuple[float, str]]] = {}  # guid -> what -> (at, text)
@@ -252,18 +259,27 @@ class Reactions(Pipeline):
     # -- the human logs in ---------------------------------------------------------------------
 
     def _greet(self, now: float) -> None:
-        """2-3 greeters, those who know him first; the one who knows him best greets first and
-        may follow up on something he told them, when her prompt holds a memory with him
-        (TurnMeta.follow_up). The login quiet starts (LOGIN_QUIET_S)."""
+        """0-2 greeters (greetings.greeter_count: nobody about a third of the time), those who
+        know him first; the one who knows him best greets first and may follow up on something
+        he told them, when her prompt holds a memory with him (TurnMeta.follow_up). A later
+        greeter with no romance toward him may type a plain hello (greetings.TEMPLATES). Every
+        greeting keeps off the phrases the guild greeted him with lately (greetings.Cooled).
+        The login quiet starts (LOGIN_QUIET_S) whether or not anyone greets."""
         hg = self.human.guid
         self._login_at, self._greeters, self._hellos = now, set(), 0
+        count = self.greeter_draw(self.rng)
+        if count == 0:
+            log.info("greet_skipped: reason=nobody_noticed")
+            return
         cands = [g for g in self._candidates() if self.raid.allows(g, TurnKind.GREET, now)]
         weights, pool = self._weigh(cands, last=hg, ctx=self._context(now), reply=True)
-        picked = pick_speakers(weights, self.rng.randint(*GREETERS), self.rng, pool)
+        picked = pick_speakers(weights, count, self.rng, pool)
         if not picked:
             return
         known = {g: self.store.get_relationship(g, hg, lens=True).familiarity for g in picked}
         best = max(picked, key=lambda g: known[g])
+        him = self._his_names()
+        cooled = greetings.Cooled(greetings.recent(self.store.conn, now), now, him, login_at=now)
         items = []
         for g in [best] + [g for g in picked if g != best]:
             channel = choose_channel(TurnKind.GREET, speaker=g, world=self.world, raid=self.raid,
@@ -271,13 +287,52 @@ class Reactions(Pipeline):
             if channel is None:
                 continue
             delay = self.rng.uniform(*(GREET_NEXT_S if items else GREET_FIRST_S))
-            items.append((Turn(kind=TurnKind.GREET, speaker=g, channel=channel, addressee=hg,
-                               delay=delay),
-                          TurnMeta(self._new_id(), answers_human=True, follow_up=g == best,
-                                   why=picked_why("greet", g, pool))))
+            meta = TurnMeta(self._new_id(), answers_human=True, follow_up=g == best,
+                            why=picked_why("greet", g, pool),
+                            phrase_rests=lambda text, at=now: self._greeting_rests(text, at, him))
+            plain = None
+            if (items and self.plain_hello_p > 0 and self._plain_greeter(g)
+                    and self.rng.random() < self.plain_hello_p):
+                plain = cooled.template(self.rng, self.human.called)
+            if plain is not None:
+                turn = Turn(kind=TurnKind.GREET, speaker=g, channel=channel, addressee=hg,
+                            template=plain, delay=delay)
+                meta.why = picked_why("greet_plain", g, pool)
+            else:
+                turn = Turn(kind=TurnKind.GREET, speaker=g, channel=channel, addressee=hg,
+                            delay=delay)
+            items.append((turn, meta))
         self._greeters = {t.speaker for t, _ in items}
         self._hellos = len(items)
         self._queue(items)
+
+    def _greeting_rests(self, text: str, login_at: float, him: list[str]) -> str:
+        """The retry hint naming the phrases a model greeting of the login at `login_at` says
+        that rest now (greetings.Cooled, read again as it is screened, so an earlier greeting of
+        this login counts); "" when it says none."""
+        now = self.clock.now()
+        return greetings.Cooled(greetings.recent(self.store.conn, now), now, him,
+                                login_at=login_at).hint(text, self.human.called,
+                                                        self.human.forms[1])
+
+    def _greeting_instruction(self, turn: Turn, meta: TurnMeta, previous: str) -> str:
+        """A model greeting's instruction as it is composed (an instruction hook): the phrases
+        that rest right now, this login's earlier greetings included (greetings.avoid_line), so
+        each greeter is told what the ones before it said."""
+        if turn.kind is not TurnKind.GREET or meta.phrase_rests is None:
+            return previous
+        now = self.clock.now()
+        avoid = greetings.Cooled(greetings.recent(self.store.conn, now), now, self._his_names(),
+                                 login_at=self._login_at).avoid_line(self.human.called,
+                                                                     self.human.forms[1])
+        return " ".join(x for x in (previous, avoid) if x)
+
+    def _plain_greeter(self, guid: int) -> bool:
+        """A greeter who may type a plain hello: a man, or a woman with no romance toward him
+        (hers goes through the model, which may let it show)."""
+        p = self.personas.get(guid)
+        return p is not None and not (p.identity.player_gender == "female"
+                                      and p.romance.stance != "none")
 
     # -- gz ------------------------------------------------------------------------------------
 
