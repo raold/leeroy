@@ -9,9 +9,11 @@ and `topic_for` the code-built subject a want may carry ("about a rough day"), n
 want reaches a prompt only through beat.render, the one appended block.
 
 Rules the table keeps: flirting and seeking reassurance only from a woman, toward him, with an
-attitude (never toward a member, never in a group DM); an answer owed to him never "just reacts"
-(it adds something); under his explicit whisper overlay (`tail`) she never vents, gossips,
-deflects, draws a line, sorts out plans or keeps it light (the overlay wins: PM log 2026-11-16).
+attitude (never toward a member, never in a group DM), flirting scaled by her forward dial (0: no
+flirt); an answer owed to him never "just reacts" (it adds something); under his explicit whisper
+overlay (`tail`) she never vents, gossips, deflects, draws a line, sorts out plans or keeps it
+light (the overlay wins: PM log 2026-11-16; beat.wants_for drops the same wants from the beat);
+her feeling about him moves only her turns to him.
 
 Her day and feeling come from life.day (Block, DayEvent; plan Task 1), life.presence (Attention)
 and life.state (State; plan Task 3). This module reads them by value only: an event or block is
@@ -111,6 +113,9 @@ class IntentContext:
     block: Block | str | None  # where her day is now; None when unknown
     kids: bool
     last: Intent | None  # her want on her last turn in this conversation
+    # her forward / flirty dial (tuning), as romance.forward gives it: 0-2, 1 as written. It
+    # scales flirt, which only a turn to him can draw (review-332)
+    forward: float = 1.0
 
 
 def _row(vent=0.0, share=0.0, ask=0.0, tease=0.0, flirt=0.0, reassure_seek=0.0, gossip=0.0,
@@ -138,9 +143,10 @@ STANCE_FLIRT = {"fond": 0.3, "drawn": 0.7, "lust": 1.0}
 # Off under his explicit whisper overlay: it says not to put him off or make him wait.
 TAIL_OFF = frozenset({Intent.VENT, Intent.GOSSIP, Intent.DEFLECT, Intent.BOUNDARY,
                       Intent.LOGISTICS, Intent.SMALL_TALK})
-# A time of day in his line ("8pm", "8 p.m.", "20:30", "server time")
-_TIME = re.compile(r"\b\d{1,2}(?::\d{2})?\s*(?:[ap]m\b|[ap]\.m\.)|\b\d{1,2}:\d{2}\b"
-                   r"|\bserver time\b", re.IGNORECASE)
+# A time of day in his line: a real hour ("8pm", "8:30 p.m.", "20:30") or "server time";
+# never "lvl 80 pm me"
+_TIME = re.compile(r"\b(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*(?:[ap]m\b|[ap]\.m\.)"
+                   r"|\b(?:[01]?\d|2[0-3]):[0-5]\d\b|\bserver time\b", re.IGNORECASE)
 
 
 def _mood(ctx: IntentContext) -> tuple[float, float, float, float, float]:
@@ -185,6 +191,7 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
     # romance: only a woman, toward him, with an attitude; never in a group DM
     attitude = ctx.female and ctx.to_him and ctx.stance in STANCE_FLIRT
     w[Intent.FLIRT] *= STANCE_FLIRT[ctx.stance] if attitude else 0.0
+    w[Intent.FLIRT] *= max(0.0, ctx.forward)  # her forward dial: at 0 she draws no flirt
     if not attitude:
         w[Intent.REASSURE_SEEK] = 0.0
     elif ctx.attachment == "anxious":
@@ -213,9 +220,11 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
     if ctx.to_him and toward <= -0.3:
         w[Intent.TEASE] = 0.0
     w[Intent.BOUNDARY] *= 1 + max(0.0, stress)
-    if toward < 0:
+    # her feeling about him moves only her turns to him, never how she treats others (review-332)
+    if ctx.to_him and toward < 0:
         w[Intent.BOUNDARY] *= 1.5
-    w[Intent.DEFLECT] *= 1 + max(0.0, -toward)
+    if ctx.to_him:
+        w[Intent.DEFLECT] *= 1 + max(0.0, -toward)
     if ctx.style in ("shy", "guarded"):
         w[Intent.DEFLECT] *= 1.5
     if energy <= -0.3:
@@ -286,5 +295,5 @@ def topic_for(intent: Intent, ctx: IntentContext) -> str:
     return ""
 
 
-__all__ = ["INTENT_KINDS", "Intent", "IntentContext", "ROWS", "WANT_WORDS", "allowed",
+__all__ = ["INTENT_KINDS", "Intent", "IntentContext", "ROWS", "TAIL_OFF", "WANT_WORDS", "allowed",
            "draw_intent", "topic_for", "want_words", "weights"]

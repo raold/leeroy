@@ -11,8 +11,8 @@ import pytest
 
 from conftest import seed_test_cast
 from leeroy_mind.talk import beat
-from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
-                                     topic_for, want_words, weights)
+from leeroy_mind.talk.intent import (INTENT_KINDS, TAIL_OFF, Intent, IntentContext, allowed,
+                                     draw_intent, topic_for, want_words, weights)
 from leeroy_mind.talk.turns import TurnKind
 
 # Lane A's types (plan Tasks 1 and 3) may reach main after this lane: the real ones once they are
@@ -192,11 +192,54 @@ def test_her_day_her_mood_and_her_ways():
     assert ratio(Intent.TEASE, last=Intent.TEASE) == pytest.approx(0.5)
 
 
+def test_her_feeling_about_him_stays_on_his_turns():   # review-332, P2
+    sore = State(0, 0, 0, 0, -0.5)
+    member = replace(BASE, kind=TurnKind.CONTINUE, to_him=False, owed=False,
+                     his_line="", family="game")
+    w0, w = weights(member), weights(replace(member, state=sore))
+    assert w[Intent.BOUNDARY] == w0[Intent.BOUNDARY] and w[Intent.DEFLECT] == w0[Intent.DEFLECT]
+    assert w[Intent.TEASE] == w0[Intent.TEASE]
+    # her own state still moves them on every turn
+    stressed = weights(replace(member, state=State(0, 0, 0.5, 0, 0)))
+    assert stressed[Intent.BOUNDARY] == pytest.approx(w0[Intent.BOUNDARY] * 1.5)
+    assert weights(replace(member, style="shy"))[Intent.DEFLECT] == pytest.approx(
+        w0[Intent.DEFLECT] * 1.5)
+    to_him = replace(BASE, owed=False, his_line="that boss was rough")
+    assert weights(replace(to_him, state=sore))[Intent.DEFLECT] == pytest.approx(
+        weights(to_him)[Intent.DEFLECT] * 1.5)
+
+
+def test_her_forward_dial_scales_flirt():   # review-332, ruling 2
+    line = replace(BASE, owed=False, his_line="you look cute tonight ;)")
+    assert weights(replace(line, forward=0.0))[Intent.FLIRT] == 0
+    assert Intent.FLIRT not in allowed(replace(line, forward=0.0))
+    assert all(draw_intent(replace(line, forward=0.0), random.Random(i)) is not Intent.FLIRT
+               for i in range(200))
+    assert weights(replace(line, forward=2.0))[Intent.FLIRT] == 8
+    assert weights(replace(line, forward=0.5, stance="drawn"))[Intent.FLIRT] == \
+        pytest.approx(4 * 0.7 * 0.5)
+    assert weights(line)[Intent.FLIRT] == 4   # unset (1.0): as the table says
+
+
+def test_the_beat_drops_what_his_overlay_rules_out():   # review-332, ruling 1
+    assert beat.wants_for(True, tail=False) == beat.wants_for(True)
+    assert beat.wants_for(True, tail=True) == ("share", "ask", "tease", "flirt", "reassure_seek",
+                                               "react")
+    assert beat.wants_for(False, tail=True) == ("share", "ask", "tease", "reassure_seek", "react")
+    assert set(beat.wants_for(True, tail=True)) == {i.value for i in Intent} - {
+        i.value for i in TAIL_OFF}
+    assert {i for i in Intent if weights(replace(BASE, tail=True))[i] == 0} == TAIL_OFF | {
+        Intent.REACT}   # the draw under his overlay: the same, and an owed answer never reacts
+
+
 def test_his_plans_and_times_ask_for_logistics():
     plain = replace(BASE, owed=False, his_line="that boss was rough")
     base = weights(plain)[Intent.LOGISTICS]
-    for line in ("raid at 8pm?", "icc at 20:30 tonight", "anyone up for icc later?"):
+    for line in ("raid at 8pm?", "icc at 20:30 tonight", "anyone up for icc later?",
+                 "pulling at 8:30 p.m. server time"):
         assert weights(replace(plain, his_line=line))[Intent.LOGISTICS] == pytest.approx(base * 3)
+    for line in ("lvl 80 pm me", "i am 25 pm", "got 99:99 on the clock"):   # review-332, P3
+        assert weights(replace(plain, his_line=line))[Intent.LOGISTICS] == base, line
 
 
 def test_gossip_stays_out_of_private_talk_not_to_him():

@@ -13,6 +13,7 @@ from leeroy_mind.config import default_data_dir
 from leeroy_mind.personas.schema import Persona, persona_from_dict
 from leeroy_mind.personas.tiers import cast_sql
 from leeroy_mind.talk.intent import Intent, IntentContext, draw_intent
+from leeroy_mind.talk.romance import forward
 from leeroy_mind.talk.turns import TurnKind
 
 FAMILIES = ("game", "whisper", "discord", "dm", "group")
@@ -49,13 +50,15 @@ def intent_context(p: Persona, *, kind: TurnKind, family: str, owed: bool, his_l
                    tail: bool, event: str) -> IntentContext:
     """Her context from her stored persona. Where she is and how she feels (life.presence and
     life.state, plan Tasks 1 and 3) are not read here: attention, state and block stay None,
-    kids False and the day's event is `event` (the live context is the pipeline's, Task 8)."""
+    kids False and the day's event is `event` (the live context is the pipeline's, Task 8). Her
+    forward dial is the stored persona's (romance.forward: 1 unless a dial rides on it)."""
     return IntentContext(
         kind=kind, to_him=kind in TO_HIM, owed=owed, his_line=his_line, family=family,
         female=p.identity.player_gender == "female", stance=p.romance.stance,
         style=p.romance.style, attachment=p.attachment, humour=p.humour,
         agreeableness=p.big_five.agreeableness.score, extraversion=p.big_five.extraversion.score,
-        tail=tail, attention=None, state=None, event=event, block=None, kids=False, last=None)
+        tail=tail, attention=None, state=None, event=event, block=None, kids=False, last=None,
+        forward=forward(p))
 
 
 def _intents(personas: dict[int, Persona], args) -> int:

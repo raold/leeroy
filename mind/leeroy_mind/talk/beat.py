@@ -21,7 +21,7 @@ Pure: no I/O and no logging. The beat's words are never logged or stored (the pi
 import json
 from dataclasses import dataclass
 
-from leeroy_mind.talk.intent import WANT_WORDS, Intent, want_words
+from leeroy_mind.talk.intent import TAIL_OFF, WANT_WORDS, Intent, want_words
 from leeroy_mind.talk.prompt import ESTIMATE_SLACK
 from leeroy_mind.text import estimate_tokens, truncate_words
 
@@ -74,10 +74,14 @@ class Beat:
     use: str | None  # the memory or chat line to bring in, as the prompt showed it
 
 
-def wants_for(can_flirt: bool) -> tuple[str, ...]:
+def wants_for(can_flirt: bool, *, tail: bool = False) -> tuple[str, ...]:
     """The wants on offer: "flirt" only for a member who may flirt with him (romance.flirt_chance;
-    the content invariant: never a man, never a woman whose stance has no flirt)."""
-    return tuple(i.value for i in Intent if can_flirt or i is not Intent.FLIRT)
+    the content invariant: never a man, never a woman whose stance has no flirt). `tail`: his
+    explicit whisper overlay is in the line's prompt, so the wants it rules out are not on offer
+    (intent.TAIL_OFF: never vent, gossip, deflect, draw a line, sort out plans or keep it light;
+    PM log 2026-11-16, review-332), whatever [talk] intent says."""
+    return tuple(i.value for i in Intent if (can_flirt or i is not Intent.FLIRT)
+                 and not (tail and i in TAIL_OFF))
 
 
 def items_of(memories: list[str], chat: list[str]) -> list[str]:
