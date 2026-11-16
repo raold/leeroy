@@ -267,6 +267,141 @@ instruction at 200 characters a message, and the trim emptied her memories first
   (`pastes.is_addon_whisper`, `app._on_chat`; log `his_addon_whisper_skipped`). "<3", a tag he
   types himself ("<AFK> back in 5", "<Sigh> fine") and his pasted "<Flask>" checks are his.
 
+# Every message of his is answered
+
+Owner, 2026-11-15: "make sure they actually reply something. doesn't have to be a profound reply
+but something, and needs to add to the conversation." Code: `owed.py` (its docstring is the
+full rule); no switch, no migration, no native rebuild.
+
+- **Planning.** A remark of his gets one or two answers, never none (`select.REPLY_COUNT_REMARK`);
+  every whisper is answered by its member (`WHISPER_REPLY_P` 1.0); when everyone who could answer
+  spoke in the last minute (weight 0), one of them answers anyway; his hello in the login quiet
+  keeps one answer; a Discord channel post with nobody online or idle draws from the rest of its
+  audience (`discord_draw_widened`).
+- **The owed answer** (`TurnMeta.owed_answer`: the first answer to each line or post) passes
+  the guild's pace, keeps a reviewed draft instead of being dropped, and has a 90 s (game) or
+  300 s (Discord) deadline. If its member cannot speak, the next answer to that line in the job
+  takes the debt. What is owed has one definition, the guards' `LiveReview.owed`: that first
+  answer, an answer to his whisper or DM, a member he named, his pushback's target, the first
+  answer to his question, her line after his emote.
+- **In the turn.** `Pipeline.owed_fallback` is the one fallback (#325, above), extended here:
+  its hard screens (`OWED_HARD_TELLS`) also refuse other people's lines, a list, an *action* and a
+  copied sample line, and a refused or silent fallback is asked once more with what was wrong in
+  words (`OWED_RETRY_HINT`, review-325-r2 P3-C). A turn whose model request failed or ran late
+  (`llm_error`, `expired`) sends its late draft when it passes the hard screens
+  (`owed_late_draft_sent`), else asks `owed_fallback` under the owed deadline
+  (`owed.rescue_text`, log `owed_rescue_line`). An owed turn that still ends with nothing is
+  the watchdog's. **There is no canned line** (review-327 P2-1): the only words ever sent are a
+  draft of the member's that passed the hard screens.
+- **The watchdog** (ticked by the app): a message still unanswered 45 s (whisper, voice), 60 s
+  (game channels) or 150 s (Discord) after it, with nothing in flight, gets a rescue turn
+  (`owed_rescue reason=not_planned|dropped:<reason>|no_answer`): a real generation (its member
+  weighed with recent speech ignored, so the dials still apply; `no_speaker` holds when nobody
+  present speaks at all). A rescue that finds no clean draft holds the message
+  (`owed_held reason=no_clean_draft`) and tries again on a backoff (90 s, doubling to 15 min),
+  and at once when the live model is back; a rescue the model itself failed (`llm_error`,
+  `expired`) takes no backoff, and every backoff resets on the next line the guild sends. A
+  held message is never given up for its age; what ends one: `nobody_present`,
+  `target_offline` (she logged out), his goodbye after he logged out (`goodbye`), a line in a
+  game channel once he logs out (`logout`: his chat frame is fresh at the next login; a whisper
+  is kept and answered then, its age in the prompt), and a Discord channel post 6 h on
+  (`too_old`; DMs and group DMs are kept whatever their age). A DM to a member her arc has
+  away holds as `away`.
+- **Held, then answered just after** (`owed_held reason=`): his raid's boss fight and wipe silence
+  (`raid`, Discord answers too; `dead` for a /say nobody alive can answer yet), a Free GPU pause
+  (`gpu_paused`), the live model away (`model_away`: the app refuses every line then), the
+  whispered member AFK (`afk`), him offline for a game line (`human_offline`), a DM she answers on
+  her own time (`own_time`), a group DM's pacing (`group_pacing`), a selfie request still being
+  made (`photo_request`), his voice note still being transcribed (`voice_note`).
+- **Never owed:** his bot commands and raid orders, emotes, addon pastes (one answer per paste
+  burst already) and DBM/BigWigs/AFK auto-whispers; a line nobody with a persona can hear (an
+  empty voice room, a whisper to someone offline or outside the cast: `owed_given_up
+  reason=nobody_present|target_offline`); game lines from before a mind restart.
+- **His talk first** (review-327 P2-2). A whisper or opener that starts a conversation with him
+  (`TurnMeta.initiates`) waits once, up to 2 min, while answers to him are on their way, and is
+  dropped `his_talk` only when he spoke after it was planned (`TurnMeta.planned_at`) and an
+  answer to him is still in flight. After-kill and loot whispers (`KEEP_WHISPERS`) are never
+  dropped for this.
+- **Several answers to him at once** (owner, 2026-11-16: "allow longer periods of gpu usage if
+  chatting with multiple bots at the same time"). An owed answer's deadline is its base (90 s
+  game, 300 s Discord) times the answers to him in flight (`owed.answers_in_flight`: the turn
+  each job is on and those queued behind it, `REPLY_KINDS` addressed or whispered to him), up to
+  a hard ceiling of 600 s (game) / 900 s (Discord) so a stuck Ollama never wedges the mind; log
+  `owed_deadline_extended in_flight= seconds=` from two in flight. The deadline bounds the model
+  queue wait, the generation and the first line's typing alike (`_first_typing`), so none of
+  those cuts an owed answer short; the per-request client timeout (60 s) stays. The `[ollama]
+  max_inflight` slots (3) are unchanged: the extra answers wait their turn with the longer
+  deadline. The Discord lease is kept while answers to him on Discord are in flight
+  (`discord_lease_kept`, checked every 30 s past its 10-min idle end, 15 min at most), so the
+  live model stays pinned; his login lease pins it already. The night and the offline raid leases are untouched.
+- **Health:** `owner-replies` counts his messages of the last 24 h with no member answer within
+  5 minutes, by medium (a note from one, a FAIL from 10); counts only, never text.
+
+# The beat before his whisper and DM answers (`[talk] think_private`, 2026-11-16)
+
+Owner, 2026-11-16: "go with structured thinking for dms and whispers". Orion's own thinking (the
+`think` flag left out; `think: true` is an HTTP 400) was measured at 5-6 s and 400-550 words a
+line, mostly a recap of the prompt, needing ~1,400 tokens of room, and LIVE's blank-line stop
+fired inside it. So an answer to his whisper or DM gets a short structured beat first
+(`talk/beat.py`, `Pipeline._with_beat` / `_beat`).
+
+- **Which turns** (`Pipeline._beat_on`): an answer to his whisper (`_answers_his_whisper`, or a
+  `whisper_reply` turn in a whisper to him) or to his Discord DM (`_answers_his_dm`, `dm:<guid>`).
+  Never game channels, Discord channels, group DMs (`gdm:`), voice rooms, templates or the night.
+- **The beat**: one request on the turn's own composed prompt with `beat.instruction` after it,
+  `think: false` (never left out: Orion would think), Ollama `format` = `beat.schema` and
+  `BEAT` options (LIVE's sampling and `num_ctx` 4096, `num_predict` = `[talk] think_budget`,
+  no stop), 10 s at most including the queue. Fields: `read` (what he is actually saying, "one
+  short sentence", kept to 200 characters), `lands` (how it lands on her right now, "a few
+  words, not a sentence", kept to 60), `want` (vent, share, ask, tease, flirt, reassure_seek,
+  gossip, deflect, small_talk, react, boundary, logistics, each with a one-line meaning in the
+  ask and in the schema's description, `beat.MEANING`; "ask" is wanting something from him,
+  not asking a question; `flirt` only for a member `romance.flirt_chance` lets flirt with him)
+  and `use` (the number of one offered item, or null). Offered: the memories the prompt showed,
+  then the others' earlier chat lines in it, newest first (never hers, never the line she
+  answers), as plain text (no age, speaker or bullet), at most 6, each cut to 120 characters
+  (`beat.items_of`); the last give way when the request would not fit `num_ctx`
+  (`beat.fitting`). `use` 0 counts as null (Orion writes it for nothing to bring in).
+- **Bake-off, 2026-11-16** (47 real turns, blind-judged 0-3): plain Orion 1.62, Orion with the
+  beat 1.60, the beat with trimmed rules 1.62 and the most good lines (72%); Orion's own
+  thinking 1.34 with 21% empty. With only the wants' names Orion chose "ask" on 34 of 47, hence
+  the meanings; at num_predict 160 two beats were cut off inside a long `lands`, hence 240.
+- **The line** is asked for exactly as before, with these after its instruction:
+  ```
+  You read it as: <read>
+  It lands: <lands>
+  You want to: <the want in words, e.g. "get something off your chest", "get something from Zan">
+  Bring in: <the offered item>          (only when use is set)
+  ```
+  The beat is asked once a turn (`TurnMeta.beat`): the drafts, a guard's rewrite (which
+  composes again), the fresh answer and the owed fallback all carry the same lines; retry hints
+  and the owed fallback's own line come after them.
+- **Skipped**: an error, 10 s, a paused GPU, an expired turn, an empty reply (no `read` or
+  `lands`) or one that is not the schema (a want off the list, `use` out of range): the line goes
+  exactly as it would without the beat, never empty (`think_beat_skipped: guid= reason= ms=`;
+  reasons `empty`, `schema` (a cut-off JSON object too), `timeout`, `llm_error`, `gpu_paused`,
+  `expired`, `scope_changed`, `room`, `error`).
+- **Privacy**: the beat's words never reach a log, a store or a receipt; `think_beat: guid=
+  want= use=0|1 ms=` only. Its time counts in the turn's `llm_s`.
+- **Room** (estimates at 4 characters a token, real counts up to 25% over, 64 tokens of chat
+  template): the beat's ask is 286 tokens with nothing offered and 484 with six items, its lines
+  at most 118. His DM at `DM_BUDGET` 2600 with think_budget 240 keeps 4 items: (2600 + 1 + 422)
+  x 1.25 + 64 + 240 = 4083; at 320, 2 items: 4085. The DM's line: (2600 + 118) x 1.25 + 64 + 344
+  = 3806. A whisper at 1800 keeps all 6: 3160 (3240 at 320); its line 2542. All under `num_ctx`
+  4096, so no prompt budget changes.
+- **Learning**: a line asked for after a beat has recipe `model_id` `<model>+beat` and `beat`
+  in its parameters (`learn/recipe.py` `called_model`; only then, so with the switch off a
+  receipt is as before): `learn report` separates its rewards. The bandit's context key is
+  unchanged, so its arms do pool with lines without a beat (a whisper opener to him shares the
+  `whisper` context).
+- **Golden prompts**: `golden_prompts.json` records the tuning scenario with the beat off (its
+  one whisper answer is unchanged); `golden_beat.json` (`scenario.record_beat`) holds two answers
+  to his whispers with it on: every request as sent.
+- `[talk] think_private` (default true) and `[talk] think_budget` (120-320, default 240) are
+  read at mind start; a login's reload of mind.toml does not change them. Rollback:
+  `think_private = false` and restart the mind. Older code logs both keys as unknown and ignores
+  them, so they need not be removed before rolling back.
+
 # Reply shape
 
 `talk/shape.py` (human-likeness design, section 4) draws what kind of message a member's reply

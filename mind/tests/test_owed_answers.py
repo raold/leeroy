@@ -78,10 +78,13 @@ def test_the_fallback_is_reviewed_only_for_hard_screens(rig):
 
 
 def test_a_fallback_that_fails_a_hard_screen_is_never_said(rig):
+    """Asked once more with what was wrong in words (review-325-r2 P3-C), it still asks him
+    over: never said, and the turn drops (talk/owed.py's watchdog answers later)."""
     rig.script("happy to help with that", "come over already")
     rig.whisper_from_him(102, "leave him for me")
     rig.run()
-    assert len(rig.chat_calls()) == 3 and not rig.sent.says()
+    assert len(rig.chat_calls()) == 4 and not rig.sent.says()
+    assert "don't ask him over" in rig.last_user()
     assert rig.utterances()[-1]["dropped"] == "tells"
 
 
@@ -103,10 +106,12 @@ def test_silence_twice_gets_the_fallback(rig):
 
 
 def test_a_silent_fallback_leaves_the_turn_silent(rig):
+    """A silent fallback is asked once more (P3-C); silent again, the turn drops (the watchdog
+    answers later)."""
     rig.script("(nothing)")
     rig.whisper_from_him(102, "hey")
     rig.run()
-    assert not rig.sent.says() and len(rig.chat_calls()) == 3
+    assert not rig.sent.says() and len(rig.chat_calls()) == 4
     assert rig.utterances()[-1]["dropped"] == "silent"
 
 
