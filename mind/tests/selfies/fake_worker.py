@@ -23,6 +23,7 @@ FAKE_SELFIE_IDENTITY     ready says identity true; it renders with or without an
                          plain worker answers identity_unavailable to one with)
 FAKE_SELFIE_CRITIC_BAD   a comma list of seeds whose renders the critic op measures with two
                          faces (the mind's extra_face)
+FAKE_SELFIE_CRITIC_ALL_BAD  the critic op measures two faces in every image
 FAKE_SELFIE_CRITIC_ID    a JSON object seed -> the identity cosine the critic answers (default
                          0.8 for a render with a reference)
 FAKE_SELFIE_LOG_STEPS    the log line of a render ends " steps <n>"
@@ -118,6 +119,8 @@ def _critic(req: dict, seeds: dict) -> None:
     bad = {int(s) for s in env.get("FAKE_SELFIE_CRITIC_BAD", "").split(",") if s.strip()}
     cosines = json.loads(env.get("FAKE_SELFIE_CRITIC_ID") or "{}")
     identity = cosines.get(str(seed), 0.8) if req.get("ref") else None
+    if env.get("FAKE_SELFIE_CRITIC_ALL_BAD"):
+        bad.add(seed)
     _send({"id": req["id"], "ok": True, "error": "", "faces": 2 if seed in bad else 1,
            "face_score": 0.95, "hands": 2,
            "hand": [{"conf": 0.97, "fingers": 5, "plausible": True, "spread": 2.0}] * 2,
