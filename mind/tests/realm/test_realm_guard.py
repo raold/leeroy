@@ -1155,18 +1155,19 @@ def test_untagged_speech_output_is_unchanged(store, tmp_path):
          everyone),
         (5, t, "guild", 104, "Dunna", 0, "fair enough", 0, 10, "mind", everyone)]
     t = int(t)
+    run = f"t{r.engine._id_run}."  # turn ids carry their run's nonce (Pipeline._new_id)
     assert [tuple(row) for row in store.conn.execute(
         "SELECT id,ts,guid,channel,kind,text,memory_ids,dropped,session_id,bit,why,trigger_line,llm_s,to_guid,turn_id "
         "FROM utterance ORDER BY id")] == [
         (1, t + 10, 101, "guild", "aside", "fair enough, pulling in five", "[]", None, None, None, "say_as",
-         None, None, 0, "t1"),
+         None, None, 0, run + "1"),
         (2, t + 73, 102, "whisper", "whisper", "saw coros got kicked, want them back? (yes/no) :)", "[]", None,
-         None, None, "say_as", None, None, 1, "t2"),
+         None, None, "say_as", None, None, 1, run + "2"),
         (3, t + 133, 103, "guild", "aside", "we should clear the trash befoe the boss", "[]", None, None, None,
-         "say_as", None, None, 0, "t3"),
+         "say_as", None, None, 0, run + "3"),
         (4, t + 148, 103, "guild", "aside", "and then wait for everyone to drink up before the pull", "[]", None,
-         None, None, "say_as", None, None, 0, "t3"),
-        (5, t + 185, 104, "guild", "aside", "fair enough", "[]", None, None, None, "speak", None, 0.0, 0, "t4")]
+         None, None, "say_as", None, None, 0, run + "3"),
+        (5, t + 185, 104, "guild", "aside", "fair enough", "[]", None, None, None, "speak", None, 0.0, 0, run + "4")]
 
 
 def _whisper(r, text="want them back?", seconds=60, **hooks):

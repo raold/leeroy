@@ -1260,6 +1260,74 @@ def cmd_homes(args) -> int:
         _close_fix_store(store, lock)
 
 
+def cmd_clean_contamination(args) -> int:
+    """`personas clean-contamination` (personas/contamination.py): a read-only plan of what
+    members' echoes, persona contradictions and gender slips left in their stored state, by
+    kind and why; --go retires it with a receipt, --undo STAMP puts a receipt's rows back. Ids,
+    guids and counts only, unless --show."""
+    import time
+    from collections import Counter
+    from .personas import contamination as C
+    root = _root(args)
+    if args.go and args.undo:
+        print("--go and --undo are separate runs", file=sys.stderr)
+        return 2
+    args.dry_run = not (args.go or args.undo)
+    opened = _fix_store(args, root, "pre-clean-contamination" if args.go else
+                        "pre-clean-contamination-undo")
+    if isinstance(opened, int):
+        return opened
+    store, lock = opened
+    try:
+        now = time.time()
+        if args.undo:
+            try:
+                with store.transaction():
+                    done = C.undo(store.conn, args.undo, now=now)
+            except KeyError:
+                print(f"no receipt {C.RECEIPT}{args.undo}", file=sys.stderr)
+                return 1
+            except ValueError as e:
+                print(f"receipt {args.undo}: {e}", file=sys.stderr)
+                return 1
+            print("put back: " + ", ".join(f"{k} {done[k]}" for k in
+                                           ("claims", "disclosures", "memories", "lessons")))
+            return 0
+        human = int(store.get_meta("human_guid") or 0)
+        plan = C.plan(store.conn, human=human, now=now)
+        lines = Counter(why.split(":")[0] for why in plan.lines.values())
+        print(f"contaminated lines {len(plan.lines)}: " +
+              ", ".join(f"{k} {n}" for k, n in sorted(lines.items())))
+        texts = {"claim": "SELECT text FROM member_claim WHERE id=?",
+                 "memory": "SELECT text FROM memory WHERE id=?",
+                 "lesson": "SELECT text FROM talk_lesson WHERE id=?",
+                 "disclosure": "SELECT l.text FROM disclosure d JOIN chat_line l "
+                               "ON 'chat:' || l.id = d.ref WHERE d.id=?"}
+        for item in plan.items:
+            line = f"{item.kind:<10} {item.id:>7}  guid {item.guid:>6}  {item.why}"
+            if args.show:
+                row = store.conn.execute(texts[item.kind], (item.id,)).fetchone()
+                line += "  " + _ascii(" ".join(str(row[0] if row else "").split()))[:160]
+            print(line)
+        counts = plan.counts()
+        print("would retire" if args.dry_run else "retiring", ", ".join(
+            f"{kind} {sum(n for (k, _), n in counts.items() if k == kind)}"
+            for kind in ("claim", "disclosure", "memory", "lesson")) + " (" + ", ".join(
+            f"{k} {w} {n}" for (k, w), n in sorted(counts.items())) + ")")
+        if args.dry_run:
+            print("nothing was written")
+            return 0
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+        with store.transaction():
+            receipt = C.apply(store.conn, plan, now=now, stamp=stamp)
+        print(f"retired: claims {len(receipt['claims'])}, disclosures "
+              f"{len(receipt['disclosures'])}, memories {len(receipt['memories'])}, lessons "
+              f"{len(receipt['lessons'])}; undo with --undo {stamp}")
+        return 0
+    finally:
+        _close_fix_store(store, lock)
+
+
 def cmd_generate(args, root, store) -> int:
     import asyncio
     import random
@@ -1351,9 +1419,15 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "health":
         from .health import main as health_main
         return health_main(argv[1:])
+    if argv and argv[0] == "turing":
+        from .turing.cli import turing_main
+        return turing_main(argv[1:])
     if argv and argv[0] == "raidplay":
         from .raidplay.cli import raidplay_main
         return raidplay_main(argv[1:])
+    if argv and argv[0] == "lexicon":
+        from .nightly.lexicon_cli import lexicon_main
+        return lexicon_main(argv[1:])
     parser = argparse.ArgumentParser(prog="leeroy_mind")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("training", help="training ledger, gate, reports and spell checks")
@@ -1369,6 +1443,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser('fingerprint', help='read-only typing style profile')
     sub.add_parser("signals", help="read-only response signal counts")
     sub.add_parser("learn", help="read-only reward report")
+    sub.add_parser("turing", help="how distinguishable the members are from you: report, run")
     sub.add_parser("selfies", help="profile photos: status, a trial render with the mind "
                    "stopped, and varied sets (vary)")
     sub.add_parser("console", help="the guild console on http://127.0.0.1:7881/ (comms, the "
@@ -1378,6 +1453,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                                   "note or FAIL line each")
     sub.add_parser("raidplay", help="raid playbooks per boss: show, check against the spell "
                                     "book, and extract local DBM facts")
+    sub.add_parser("lexicon", help="clean-junk: retire stored slang that is an ordinary word "
+                                   "(a dry run unless --go, with the mind stopped)")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)
@@ -1493,6 +1570,22 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_home.add_argument("--data-dir", default=argparse.SUPPRESS,
                         help="the mind's data folder (as personas --data-dir)")
     p_home.set_defaults(func=cmd_homes)
+    p_clean = psub.add_parser("clean-contamination",
+                              help="retire (never delete) the claims, disclosures, memories and "
+                                   "coach lessons built from members' echoes of his words, from "
+                                   "lines contradicting their persona or from gender slips; a "
+                                   "read-only plan unless --go")
+    p_clean.add_argument("--go", action="store_true",
+                         help="retire them, with a receipt for --undo (the mind stopped; mind.db "
+                              "is snapshot first)")
+    p_clean.add_argument("--undo", default=None, metavar="STAMP",
+                         help="put back what the run with this receipt stamp retired (the mind "
+                              "stopped; mind.db is snapshot first)")
+    p_clean.add_argument("--show", action="store_true",
+                         help="also print each row's text (private: never paste it anywhere)")
+    p_clean.add_argument("--data-dir", default=argparse.SUPPRESS,
+                         help="the mind's data folder (as personas --data-dir)")
+    p_clean.set_defaults(func=cmd_clean_contamination)
     p_pers.set_defaults(func=cmd_personas)
     from .world.cli import run as world_status
     p_world = psub.add_parser("world", help="read-only world target counts and generation plan")

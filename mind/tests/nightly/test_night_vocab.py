@@ -311,3 +311,116 @@ def test_slang_term_copies_flags_and_receipt_rollback_together(h, monkeypatch):
     monkeypatch.setattr(lexicon, "adopt", adopt)
     vocab.slang(ctx)
     assert len(terms(h)) == 1
+
+
+# -- the junk filter: ordinary words are never slang ----------------------------------------------
+
+@pytest.mark.parametrize("word", ["you", "now", "can", "the", "doing", "literally", "tonight", "Valley",
+                                  "monday", "Friday", "december", "thanksgiving", "Christmas", "halloween",
+                                  "easter", "english", "canadian", "europe", "pilgrim", "tv"])
+def test_everyday_words_are_not_slang(word):
+    from leeroy_mind.talk.everyday import is_everyday
+    assert is_everyday(word) and vocab.junk_reason(word.casefold(), 101) == "common"
+
+
+@pytest.mark.parametrize("word", ["lol", "gonna", "grats", "congrats", "didn", "isn", "dont", "tht", "dkp", "loot",
+                                  "wat", "mvp", "bro", "mins"])
+def test_chat_shorthand_contraction_stubs_and_stock_jargon_are_not_slang(word):
+    assert vocab.junk_reason(word, 101) == "common"
+
+
+@pytest.mark.parametrize("word", ["zug", "zugzug", "gank", "noob", "nerf", "kekw", "pewpew", "bonkfest",
+                                  "lolret", "huntard", "boomkin", "pally", "shammy", "imba", "zerg", "plox",
+                                  "naxx", "ulduar", "arathi", "valithria", "dalaran", "stormwind", "orgrimmar",
+                                  "pwned", "gief", "leet", "mage", "spec", "homies", "bruh", "twinking"])
+def test_coined_words_and_game_slang_pass_the_word_lists(word):
+    assert vocab.junk_reason(word, 101) is None
+
+
+@pytest.mark.parametrize("word,everyday", [
+    ("conrats", "congrats"), ("cograts", "congrats"), ("grtas", "grats"), ("wehre", "where"),
+    ("alerady", "already"), ("withut", "without"), ("someoe", "someone"), ("diffreence", "difference"),
+    ("reallly", "really"), ("tooo", "too"), ("heyyyy", "hey"), ("gats", "grats"), ("tonightt", "tonight")])
+def test_typos_and_elongations_of_everyday_words_are_not_slang(word, everyday):
+    from leeroy_mind.talk.everyday import is_everyday
+    assert is_everyday(everyday) and vocab.junk_reason(word, 101) == "typo"
+
+
+def test_a_near_miss_of_a_short_word_is_no_typo():
+    # Only an everyday word of TYPO_MIN letters or more makes a near-miss a typo: "noob" is not
+    # "nob"+o, "zerg" is not a slip of "erg", and a word with digits is never a typo.
+    from leeroy_mind.talk.everyday import TYPO_MIN, everyday_reason
+    assert TYPO_MIN == 5
+    assert [everyday_reason(w) for w in ("noob", "zerg", "kekw", "thsi", "g2g")] == [None] * 5
+
+
+def test_ordinary_words_said_by_three_members_never_promote_but_a_coinage_beside_them_does(h):
+    say_word(h, "zug you now can the doing still here")
+    promote(h)
+    assert {"you", "now", "can", "doing", "zug"} <= set(rows(h))
+    assert [r["term"] for r in terms(h)] == ["zug"]
+    assert {m.key for g in (102, 103) for m in h.rows(g)} == {"slang:zug"}
+
+
+def test_a_word_the_cast_already_says_commonly_is_not_slang(h):
+    # More than COMMON_MIN_LINES public lines of a corpus this small: the cast's common word.
+    for n in range(vocab.COMMON_MIN_LINES + 1):
+        h.say(h.T + n, (101, 102, 103)[n % 3], "blorp")
+    promote(h)
+    assert terms(h) == []
+
+
+def test_ten_lines_are_still_rare_enough(h):
+    for n in range(vocab.COMMON_MIN_LINES):
+        h.say(h.T + n, (101, 102, 103)[n % 3], "blorp")
+    promote(h)
+    assert [r["term"] for r in terms(h)] == ["blorp"]
+
+
+def _corpus(h, origin_lines, filler=17):
+    """101 first says blorp in `origin_lines` of their own lines (the others are filler), then
+    102 and 103 say it once; 104 fills the corpus with ordinary words."""
+    t = h.T
+    for n in range(origin_lines[1]):
+        h.say(t, 101, "blorp" if n < origin_lines[0] else "the raid was good")
+        t += 1
+    for guid in (102, 103):
+        h.say(t, guid, "blorp")
+        t += 1
+    for _ in range(filler):
+        h.say(t, 104, "see you all tonight")
+        t += 1
+
+
+def test_a_first_speaker_who_uses_it_no_more_than_anyone_coined_nothing(h, monkeypatch, caplog):
+    monkeypatch.setattr(vocab, "DISTINCT_LINES", 20)
+    _corpus(h, (1, 11))  # 101: 1 of 11 lines; the cast: 3 of 30
+    with caplog.at_level("INFO", logger="leeroy_mind"):
+        promote(h)
+    assert terms(h) == []
+    assert "slang_screened" in caplog.text and "not_distinct=1" in caplog.text
+
+
+def test_a_first_speaker_who_keeps_saying_it_coined_it(h, monkeypatch):
+    monkeypatch.setattr(vocab, "DISTINCT_LINES", 20)
+    _corpus(h, (3, 4))  # 101: 3 of 4 lines; the cast: 5 of 23
+    promote(h)
+    assert [r["term"] for r in terms(h)] == ["blorp"]
+
+
+def test_distinctiveness_waits_for_a_corpus_large_enough_to_measure(h):
+    _corpus(h, (1, 11))  # 30 public lines, under DISTINCT_LINES
+    promote(h)
+    assert [r["term"] for r in terms(h)] == ["blorp"]
+
+
+def test_corpus_counts_only_public_lines_of_eligible_speakers_before_the_end(h):
+    h.say(h.T, 101, "blorp blorp")
+    h.say(h.T + 1, 102, "blorp", channel="whisper", to=1)
+    h.say(h.T + 2, 999, "blorp")
+    h.say(h.T + 3, 1, "blorp", origin="game")
+    h.say(h.T + 4, 1, "blorp")
+    h.say(h.T + 5, 103, "blorp")
+    counts = vocab.corpus(h.store.conn, ["blorp"], eligible={1, 101, 102, 103}, human=1, end=h.T + 5)
+    assert counts.lines == 2 and dict(counts.uses["blorp"]) == {101: 1, 1: 1}
+    assert dict(counts.authors) == {101: 1, 1: 1}

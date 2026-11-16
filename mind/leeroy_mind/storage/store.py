@@ -315,9 +315,10 @@ class Store:
         as it does with its own.
         - model_only: the turns the model wrote (llm_s set), as _own keeps; not a template's
           (a gz, a kill cheer, say_as).
-        - A turn is the rows of one turn_id. Ids start at t1 again in each run of the mind, so
-          the same id on another channel or more than TURN_GAP_S apart is another turn, and a
-          row with no turn_id is a turn of its own.
+        - A turn is the rows of one turn_id. Ids carry their run's nonce now (Pipeline._new_id),
+          but older rows' ids started at t1 again in each run of the mind, so the same id on
+          another channel or more than TURN_GAP_S apart is another turn, and a row with no
+          turn_id is a turn of its own.
         - The text is as it went out, typos and all; _own keeps the words before styling."""
         if n <= 0:
             return []

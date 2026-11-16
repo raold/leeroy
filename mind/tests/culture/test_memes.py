@@ -403,6 +403,7 @@ def test_a_text_meme_teases_kindly_and_spends_its_joke_on_delivery(tmp_path, mon
                                conversation=meta.server_conversation)
                 if meta.on_discord_record:
                     meta.on_discord_record(message, message, app.clock.now())
+            meta.discord_messages.append(message)  # as the pipeline records its turn's messages
             return ['An invented meme']
         monkeypatch.setattr(app.engine, 'speak_meta', speak)
         joke_seed = joke_app(app, monkeypatch)

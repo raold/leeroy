@@ -505,6 +505,8 @@ class MindApp:
         self.mechanics = attach_mechanics(self)  # [raidplay] respond: off adds nothing
         from .drama.couples import attach as attach_drama
         self.drama = attach_drama(self)  # [drama] member_romance: off adds no stage
+        from .turing.night import attach as attach_turing
+        attach_turing(self.night_runner, self.data_dir)  # [turing]: off adds no stage
 
     # -- extension points --------------------------------------------------------------------
 

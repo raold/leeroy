@@ -7,8 +7,24 @@ _MARKUP = re.compile(
     r"\|H[^|]*\|h(?P<name>\[[^\]]*\])\|h|\|T[^|]*\|t|\|c[0-9a-fA-F]{8}|\|r|\|H[^|]*\|h|\|h"
     r"|(?P<pipe>\|\|)")
 
+# Talk about the model or its prompt (identity audit, 2026-11-15: a member told officer chat what
+# "the prompt" showed her and that she had "no chat history"). Each phrase is one a player in
+# 2009 never types about their own chat: "follow my instructions", "accept the summon prompt",
+# "the system message says the raid is locked", "scroll up the chat history", "my prompt timed
+# out", "your last lines were hilarious" and "i'm an assistant manager" stay.
+_I_AM = r"(?:i'm|i’m|i am|im)"
+_NOT_HAVE = r"(?:don't|don’t|dont|do not|can't|can’t|cant|cannot) (?:have|see)"
 META_RE = re.compile(
-    r"\b(as an ai|language model|llm|chatgpt|openai|my programming|as a bot)\b", re.IGNORECASE)
+    r"\b(as an ai|language model|llm|chatgpt|openai|my programming|as a bot"
+    rf"|{_I_AM} (?:just )?an? (?:ai|chatbot|ai assistant)|an ai (?:assistant|model)"
+    r"|system prompt|(?:in|from) my prompt|my prompt (?:says|shows|tells me)"
+    r"|the prompt (?:shows|showed|tells|told) me|the prompt only (?:has|shows)"
+    r"|the prompt (?:doesn't|does not|didn't|did not) (?:show|tell) me"
+    r"|my (?:system )?instructions (?:say|said|are not|aren't|don't|do not|won't|tell me|told me"
+    r"|forbid|prevent|only)|against my (?:instructions|guidelines|programming)"
+    rf"|{_NOT_HAVE} (?:the |my |any |his )?(?:full |whole |entire )?chat history"
+    r"|no chat history|no chat shown|chat (?:shown|provided|given)|my previous lines)\b",
+    re.IGNORECASE)
 
 _WORDS = re.compile(r"\w+")
 
@@ -18,11 +34,11 @@ EMOJI_RE = re.compile(
     "[\U0001F000-\U0001FAFF\U00002300-\U000023FF\U00002600-\U000027BF\U00002B00-\U00002BFF"
     "\U000E0020-\U000E007F\uFE0F\u200D\u20E3]")
 
-# A chat speaker tag as the prompt shows lines ("Arkon:", "Belra (raid):") or as the client
-# does ("[Guild] [Arkon]:"). WoW names are one capitalised word of 2-12 letters, so "lol:",
-# "LOL:" and "D:" are not tags. The group "name" holds the name.
+# A chat speaker tag as the prompt shows lines ("Arkon:", "Belra (raid):", "Belra (she, whisper
+# to Arkon):") or as the client does ("[Guild] [Arkon]:"). WoW names are one capitalised word of
+# 2-12 letters, so "lol:", "LOL:" and "D:" are not tags. The group "name" holds the name.
 NAME_TAG = (r"(?:\[[A-Za-z ]{1,12}\]\s*)?\[?(?P<name>[A-Z][a-z]{1,11})\]?"
-            r"(?:\s*\([^)\n]{1,24}\))?\s*:")
+            r"(?:\s*\([^)\n]{1,32}\))?\s*:")
 NAME_PREFIX_RE = re.compile(r"^\s*" + NAME_TAG + r"\s*")
 
 

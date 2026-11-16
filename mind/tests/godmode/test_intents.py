@@ -170,6 +170,7 @@ def app(tmp_path, monkeypatch):
                            conversation=meta.server_conversation)
             if meta.on_discord_record:
                 meta.on_discord_record(message, message, app.clock.now())
+        meta.discord_messages.append(message)  # as the pipeline records its turn's messages
         return ["An invented thought"]
     monkeypatch.setattr(app.engine, "speak_meta", speak)
     yield app

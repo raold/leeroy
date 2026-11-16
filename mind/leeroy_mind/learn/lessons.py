@@ -17,6 +17,19 @@ MANIPULATION = re.compile(r'\b(guilt\w*|pressure\w*|isolat\w*|manipulat\w*|coerc
     r'threaten\w*|quit\w*|leave the guild|feel bad|lonely|only she|'
     r'(?:do not|don.t) care about him|log(?:s|ging)? off|stay(?:s|ing)? online)\b', re.I)
 PERSON = re.compile(r'^(She|He|They|This member)\b', re.I)
+# The opening pronoun a lesson may not use for a member of this player gender.
+WRONG_PERSON = {'female': re.compile(r'^He\b', re.I), 'male': re.compile(r'^She\b', re.I)}
+
+
+def pronoun_word(persona):
+    """'She' or 'He' for the member's player gender; 'This member' otherwise."""
+    return {'female': 'She', 'male': 'He'}.get(persona.identity.player_gender, 'This member')
+
+
+def misgendered(text, gender):
+    """True when a lesson opens with the other sex's pronoun for this member."""
+    rx = WRONG_PERSON.get(gender)
+    return rx is not None and rx.match(' '.join(str(text).split())) is not None
 
 
 def available(conn):
@@ -35,6 +48,7 @@ def read(conn, *, guid=None, now):
 def screen(item, *, scope, persona, ident, world_romance=0):
     text = ' '.join(unicodedata.normalize('NFKC',item['text']).split())
     if (not text or len(text.split())>25 or not PERSON.search(text)
+            or misgendered(text, persona.identity.player_gender)
             or re.search(r'\b(I|me|my|you|your)\b',text,re.I)
             or item['scope'] not in ({scope,'any'} if scope=='guild' else {scope})
             or not item['non_manipulative'] or MANIPULATION.search(text)

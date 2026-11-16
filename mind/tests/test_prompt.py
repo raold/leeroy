@@ -490,6 +490,25 @@ def test_chat_line_text():
         == "Zan (whisper to Arkon): hey"
 
 
+def test_a_pronoun_shares_the_lines_one_tag():
+    """Identity audit, 2026-11-15: members misgendered each other for want of a pronoun. It goes
+    in the line's own brackets, so a copied speaker tag still reads as one (text.NAME_TAG)."""
+    from leeroy_mind.text import NAME_PREFIX_RE
+    names = {1: "Zan", 101: "Arkon", 102: "Belra"}
+    guild = chat_line_text(chat_row(from_guid=102, text="gz"), names, pronoun="she")
+    raid = chat_line_text(chat_row(from_guid=102, channel="raid", text="gz"), names,
+                          pronoun="she", now=0.0)
+    whisper = chat_line_text(chat_row(from_guid=102, channel="whisper", to_guid=101, text="hi"),
+                             names, pronoun="she")
+    assert (guild, raid) == ("Belra (she): gz", "[just now] Belra (she, raid): gz")
+    assert whisper == "Belra (she, whisper to Arkon): hi"
+    assert NAME_PREFIX_RE.match(whisper).group("name") == "Belra"
+    assert relationship_card("Belra", None, is_human=False, pronoun="she") == (
+        "Belra (she): a guildmate, you know them from raids")
+    zan = relationship_card("Zan", None, is_human=True, is_guild_master=True, pronoun="he")
+    assert zan.startswith("Zan (the guild master):")  # his pronouns are in the rules
+
+
 def test_chat_lines_carry_their_age():
     """Prompts I2 and the final I3 ruling: a line from an hour ago never reads as current."""
     names = {1: "Zan", 102: "Belra"}

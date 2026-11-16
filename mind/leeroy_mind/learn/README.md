@@ -145,6 +145,10 @@ unsupported channels are excluded. An exchange without an
 identifiable recent owner line is omitted. Choosing one room per night is a
 deliberate privacy boundary; other rooms may be coached on later nights.
 
+The payload carries the member's own `member_pronoun` (She or He, from the player's
+gender), and a note opening with the other pronoun is refused at storage and at use
+(identity audit, 2026-11-15: two active lessons called a man She).
+
 The strict schema accepts up to two third-person style notes of at most 25 words,
 a no-manipulation attestation and a minimum forward dial. Real-name, explicit,
 manipulation, person, scope and dial screens apply before storage. These are
