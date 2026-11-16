@@ -1,12 +1,15 @@
 """Asking a candidate the captured turns again, and typing its answers as the guild types.
 
-Each turn goes to the candidate's model alone, one at a time, with the captured options (the same
-sampling and stop; a seed fixed per turn so every candidate draws from the same seed and a
-resumed run repeats), the candidate's think flag (always sent: Orion needs think:false) and, with
-thinking on, num_predict raised by its think_budget. Its messages pass through the candidate's
-prompt variant. A thinking reply's thinking is counted, never kept.
+Each turn goes to the candidate's model alone, one at a time, with one of the captured requests
+(`--from`: the generation's first call by default, before any retry hint; or the call whose words
+were sent) and its options: the same sampling and stop, a seed fixed per turn so every candidate
+draws from the same seed and a resumed run repeats. The candidate's think flag is sent as given
+(False for Orion as live; left out, the model's default). A thinking candidate (think not False)
+gets no stop (the live stop would fire inside the thinking; the content is cut at its first stop
+afterwards), num_predict raised by its think_budget and num_ctx raised to fit. Its messages pass
+through the candidate's prompt variant. A thinking reply's thinking is counted, never kept.
 
-Every reply, and the captured live reply (the `live` baseline), then takes the steps of the live
+Every reply, and the captured replies (the `first` and `live` baselines), then takes the steps of the live
 pipeline that need no live state: what the model copied from the chat frame goes
 (filters.strip_copied), the repairs (filters.repair), "(nothing)" is silence (filters.is_silence),
 then her typing (style.style_lines) as the console's tuning preview types a line: sober, her
@@ -15,6 +18,7 @@ its length band. One random generator per turn, the same for every candidate."""
 import asyncio
 import math
 import random
+import re
 import time
 import zlib
 
@@ -100,30 +104,63 @@ class Typist:
         return ("ok", lines) if lines else ("silent", [])
 
 
-def request(candidate, turn, seed: str) -> tuple[list[dict], dict]:
-    c = turn.captured
-    messages = variants.apply(candidate.prompt_variant, c.messages)
-    options = dict(c.options)
-    if candidate.think and candidate.think_budget:
+def request(candidate, turn, seed: str, source: str = "first") -> tuple[list[dict], dict]:
+    captured = turn.captured.request(source)
+    messages = variants.apply(candidate.prompt_variant, captured.messages)
+    options = dict(captured.options)
+    if candidate.thinks:
+        options.pop("stop", None)
         options["num_predict"] = int(options.get("num_predict", 80)) + candidate.think_budget
+    ctx = candidate.context(int(options.get("num_ctx", 4096)))
+    if ctx != options.get("num_ctx"):
+        options["num_ctx"] = ctx
     options.setdefault("seed", turn_seed(seed, turn.id))
     return messages, options
 
 
-async def ask(llm, candidate, turn, seed: str) -> dict:
+def cut_at_stop(text: str, stops) -> str:
+    """What the live stop would have kept: the content before its first stop string."""
+    if isinstance(stops, str):
+        stops = [stops]
+    cuts = [text.find(s) for s in stops or () if isinstance(s, str) and s and s in text]
+    return text[:min(cuts)].strip() if cuts else text
+
+
+def trimmed(text: str, *, words, done_reason) -> str:
+    """A Discord message cut off by num_predict back to its last full sentence, as _ask does."""
+    return trim_to_sentence(text) if words and done_reason == "length" else text
+
+
+_HTTP = re.compile(r"HTTP (\d{3})")
+
+
+def error_code(e: BaseException) -> str:
+    """A short reason for the report: http_400, timeout or the class's name; never its text."""
+    if isinstance(e, asyncio.TimeoutError):
+        return "timeout"
+    text = str(e)
+    if m := _HTTP.search(text):
+        return f"http_{m[1]}"
+    if "timed out" in text:
+        return "timeout"
+    return type(e).__name__
+
+
+async def ask(llm, candidate, turn, seed: str, source: str = "first") -> dict:
     """One call: {"status", "code", "text", "thinking_tokens", "eval_count", "seconds"}."""
-    messages, options = request(candidate, turn, seed)
+    messages, options = request(candidate, turn, seed, source)
     started = time.monotonic()
     try:
         r = await llm.chat(candidate.model, messages, options=options, think=candidate.think,
                            keep_alive=KEEP_ALIVE, timeout=candidate.timeout)
     except (LLMError, asyncio.TimeoutError) as e:
-        return {"status": "error", "code": type(e).__name__, "text": None, "thinking_tokens": 0,
+        return {"status": "error", "code": error_code(e), "text": None, "thinking_tokens": 0,
                 "eval_count": 0, "seconds": round(time.monotonic() - started, 3)}
     text = r.text
-    if (turn.captured.shape.get("words")
-            and getattr(r.diagnostics, "done_reason", None) == "length"):
-        text = trim_to_sentence(text)  # as the live pipeline cuts a long Discord message
+    if candidate.thinks:
+        text = cut_at_stop(text, turn.captured.request(source).options.get("stop"))
+    text = trimmed(text, words=turn.captured.shape.get("words"),
+                   done_reason=getattr(r.diagnostics, "done_reason", None))
     return {"status": "ok", "code": None, "text": text,
             "thinking_tokens": estimate_tokens(r.thinking) if r.thinking else 0,
             "eval_count": r.eval_count, "seconds": round(r.seconds or (time.monotonic() - started), 3)}

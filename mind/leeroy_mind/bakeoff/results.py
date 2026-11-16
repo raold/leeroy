@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS turn (
 CREATE TABLE IF NOT EXISTS window (
   unit TEXT PRIMARY KEY, family TEXT NOT NULL, refs TEXT NOT NULL, turns TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS result (
-  candidate TEXT NOT NULL,          -- a candidate's name, or sent / live (the baselines)
+  candidate TEXT NOT NULL,          -- a candidate's name, or sent / first / live (the baselines)
   turn INTEGER NOT NULL,
   status TEXT NOT NULL,             -- ok, silent or error
   code TEXT,                        -- an error's class
@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS judged (
   speakers INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0,
   his INTEGER NOT NULL DEFAULT 0, his_correct INTEGER NOT NULL DEFAULT 0,
   tells TEXT NOT NULL DEFAULT '[]',
+  digest TEXT,                      -- the lines it was judged on: a resumed run judges again if they changed
   PRIMARY KEY (candidate, unit));
 """
 

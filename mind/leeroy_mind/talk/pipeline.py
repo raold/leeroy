@@ -2425,7 +2425,9 @@ class Pipeline:
             from leeroy_mind.bakeoff.capture import keep, request
             keep(meta, request(model, messages, options, think, result.text,
                                max_lines=turn.max_lines, words=words or 0,
-                               two_lines=meta.two_lines))
+                               two_lines=meta.two_lines,
+                               done_reason=getattr(result.diagnostics, "done_reason", None),
+                               beat=getattr(meta, "beat", None)))
         except Exception as e:
             log.warning("bakeoff_capture_failed: guid=%d code=%s", turn.speaker, type(e).__name__)
 

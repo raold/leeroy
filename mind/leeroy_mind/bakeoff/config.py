@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 VARIANTS = ("as_is", "situation")
-RESERVED = frozenset({"sent", "live"})  # the run's own baselines
+RESERVED = frozenset({"sent", "first", "live"})  # the run's own baselines
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,39}")
 TIMEOUT_RANGE = (10, 900)
-THINK_BUDGET_MAX = 2048
-DEFAULT_THINK_BUDGET = 160  # the addendum's starting budget (section 7)
+THINK_BUDGET_MAX = 4096
+DEFAULT_THINK_BUDGET = 1400  # bake-off 1: about what a thinking reply needs before its line
 DEFAULT_TIMEOUT = 120
+NUM_CTX_RANGE = (2048, 32768)
+CTX_STEP = 1024
 
 
 @dataclass(frozen=True)
@@ -33,24 +35,43 @@ def load(path: Path) -> BakeoffCfg:
 
 @dataclass(frozen=True)
 class Candidate:
+    """`think`: True or False is sent as the request's flag; None (the key left out) sends no
+    flag, so the model does what it does by default (Orion thinks only then, and answers HTTP 400
+    to think: true). A candidate whose think is not False is a thinking one: no captured stop
+    (it would fire inside the thinking; the content is cut at its first stop afterwards),
+    num_predict raised by think_budget and num_ctx raised to fit (or `num_ctx`)."""
     name: str
     model: str
-    think: bool = False
+    think: bool | None = None
     think_budget: int = 0
     prompt_variant: str = "as_is"
     timeout: int = DEFAULT_TIMEOUT
+    num_ctx: int | None = None
+
+    @property
+    def thinks(self) -> bool:
+        return self.think is not False
+
+    def context(self, captured: int) -> int:
+        """The request's num_ctx: the candidate's own, else for a thinking candidate the captured
+        one plus its budget rounded up to CTX_STEP (4096 + 1400: 6144), else the captured one."""
+        if self.num_ctx is not None:
+            return self.num_ctx
+        if not self.thinks:
+            return captured
+        return -(-(captured + self.think_budget) // CTX_STEP) * CTX_STEP
 
     def describe(self) -> dict:
         return {"name": self.name, "model": self.model, "think": self.think,
                 "think_budget": self.think_budget, "prompt_variant": self.prompt_variant,
-                "timeout": self.timeout}
+                "timeout": self.timeout, "num_ctx": self.num_ctx}
 
 
 class CandidateError(ValueError):
     pass
 
 
-_KEYS = {"name", "model", "think", "think_budget", "prompt_variant", "timeout"}
+_KEYS = {"name", "model", "think", "think_budget", "prompt_variant", "timeout", "num_ctx"}
 
 
 def _candidate(i: int, raw) -> Candidate:
@@ -63,13 +84,14 @@ def _candidate(i: int, raw) -> Candidate:
     name, model = raw.get("name"), raw.get("model")
     if not isinstance(name, str) or not NAME.fullmatch(name) or name.casefold() in RESERVED:
         raise CandidateError(f"{where}: name must be 1-40 letters, digits, '.', '_' or '-' "
-                             f"and not {' or '.join(sorted(RESERVED))}")
+                             f"and not {', '.join(sorted(RESERVED))}")
     if not isinstance(model, str) or not model.strip() or len(model) > 200:
         raise CandidateError(f"{where}: model must be a model name")
-    think = raw.get("think", False)
-    if type(think) is not bool:
-        raise CandidateError(f"{where}: think must be true or false")
-    budget = raw.get("think_budget", DEFAULT_THINK_BUDGET if think else 0)
+    think = raw.get("think")
+    if think is not None and type(think) is not bool:
+        raise CandidateError(f"{where}: think must be true or false (or left out: the model's default)")
+    thinks = think is not False
+    budget = raw.get("think_budget", DEFAULT_THINK_BUDGET if thinks else 0)
     if type(budget) is not int or not 0 <= budget <= THINK_BUDGET_MAX:
         raise CandidateError(f"{where}: think_budget must be 0-{THINK_BUDGET_MAX}")
     variant = raw.get("prompt_variant", "as_is")
@@ -78,7 +100,10 @@ def _candidate(i: int, raw) -> Candidate:
     timeout = raw.get("timeout", DEFAULT_TIMEOUT)
     if type(timeout) is not int or not TIMEOUT_RANGE[0] <= timeout <= TIMEOUT_RANGE[1]:
         raise CandidateError(f"{where}: timeout must be {TIMEOUT_RANGE[0]}-{TIMEOUT_RANGE[1]} seconds")
-    return Candidate(name, model.strip(), think, budget if think else 0, variant, timeout)
+    ctx = raw.get("num_ctx")
+    if ctx is not None and (type(ctx) is not int or not NUM_CTX_RANGE[0] <= ctx <= NUM_CTX_RANGE[1]):
+        raise CandidateError(f"{where}: num_ctx must be {NUM_CTX_RANGE[0]}-{NUM_CTX_RANGE[1]}")
+    return Candidate(name, model.strip(), think, budget if thinks else 0, variant, timeout, ctx)
 
 
 def load_candidates(path: Path) -> list[Candidate]:

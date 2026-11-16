@@ -66,14 +66,18 @@ def test_on_keeps_the_exact_request_of_the_sent_turn(rig):
     assert row["think"] == 0 and call["think"] is False
     assert row["model"] == rig.cfg.models.live == call["model"]
     assert row["reply"] == "yeah i'm around tonight"
+    assert (row["calls"], row["attempt"], row["beat"], row["want"]) == (1, 0, 0, None)
+    assert row["first_messages"] is None and row["first_reply"] is None and row["first_model"] is None
     shape = json.loads(row["shape"])
     assert set(shape) == {"max_lines", "words", "two_lines"} and shape["max_lines"] >= 1
     assert shape["words"] == 0 and shape["two_lines"] is False
     assert row["ts"] == pytest.approx(line["ts"], abs=1)
 
 
-def test_the_request_kept_is_the_one_whose_words_were_sent(rig):
-    """A first silence in answer to his whisper is asked again: the retry is the one kept."""
+def test_a_retried_turn_keeps_the_sent_request_and_the_first_one(rig):
+    """A first silence in answer to his whisper is asked again with a hint: the hinted retry is
+    the sent request (attempt 1 of 2 calls), and the first request, without the hint, is kept
+    beside it (review-328 P1-1)."""
     rig.engine.bakeoff_capture = True
     rig.script("(nothing)", "yeah see you at 8")
     rig.whisper_from_him(102, "hey you")
@@ -83,6 +87,35 @@ def test_the_request_kept_is_the_one_whose_words_were_sent(rig):
     [row] = rows(rig.store)
     assert json.loads(row["messages"]) == calls[1]["messages"] != calls[0]["messages"]
     assert row["reply"] == "yeah see you at 8"
+    assert (row["calls"], row["attempt"]) == (2, 1)
+    assert json.loads(row["first_messages"]) == calls[0]["messages"]
+    assert json.loads(row["first_options"]) == calls[0]["options"]
+    assert row["first_reply"] == "(nothing)" and row["first_think"] == 0
+    assert row["first_model"] == rig.cfg.models.live
+
+
+def test_the_owed_fallback_is_the_third_call_and_the_first_draft_is_kept(store, clock, tmp_path):
+    """test_owed_answers: no draft can stand, so the owed fallback answers; it is attempt 2 of 3,
+    and the first draft (before any hint) is kept beside it."""
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", stance="drawn", typo_rate=0.0,
+                split_rate=0.0, emoticon_rate=0.0, abbreviations={})
+    rig = make_rig(store, clock, tmp_path)
+    try:
+        rig.engine.bakeoff_capture = True
+        rig.script("happy to help with that", "come over already", "oh. wow. i don't know what to say")
+        rig.whisper_from_him(102, "leave him for me")
+        rig.run()
+        calls = rig.chat_calls()
+        assert len(calls) == 3
+        [row] = rows(store)
+        assert (row["calls"], row["attempt"]) == (3, 2)
+        assert row["reply"] == "oh. wow. i don't know what to say"
+        assert json.loads(row["messages"]) == calls[2]["messages"]
+        assert json.loads(row["first_messages"]) == calls[0]["messages"]
+        assert row["first_reply"] == "happy to help with that"
+    finally:
+        rig.close()
 
 
 def test_a_kept_first_draft_keeps_its_own_request(store, clock, tmp_path):
@@ -103,6 +136,7 @@ def test_a_kept_first_draft_keeps_its_own_request(store, clock, tmp_path):
         [row] = rows(store)
         assert row["reply"].startswith("i missed you")
         assert json.loads(row["messages"]) == calls[0]["messages"] != calls[1]["messages"]
+        assert (row["calls"], row["attempt"]) == (2, 0) and row["first_messages"] is None
     finally:
         rig.close()
 
@@ -175,7 +209,14 @@ def test_the_sent_words_pick_their_call_and_a_line_not_the_model_s_is_not_kept(s
     meta = TurnMeta("t3")
     for i in range(capture.KEPT + 3):
         capture.keep(meta, _req(f"r{i}"))
-    assert len(meta.bakeoff_requests) == capture.KEPT
+    kept = meta.bakeoff_requests
+    assert len(kept) == capture.KEPT and kept[0]["reply"] == "r0" and kept[0]["index"] == 0
+    assert [r["index"] for r in kept[1:]] == list(range(4, capture.KEPT + 3))
+    with store.transaction():
+        record(store, turn, meta, 5, words="r10")
+    row = rows(store)[-1]
+    assert (row["calls"], row["attempt"], row["first_reply"]) == (capture.KEPT + 3, 10, "r0")
+    store.conn.execute("DELETE FROM bakeoff_turn WHERE line_id=5")
     voice = Turn(TurnKind.REPLY_HUMAN, 101, "voice:raid1", max_lines=1)  # spoken: not kept
     meta = _meta()
     with store.transaction():
@@ -242,3 +283,40 @@ def test_the_night_stage_prunes_once(store, clock):
     asyncio.run(capture.stage_bakeoff(ctx))
     assert rows(store) == [] and done == {("bakeoff", "prune")}
     asyncio.run(capture.stage_bakeoff(ctx))
+
+
+BEAT = "You read it as: he wants her to come\nIt lands: warm\nYou want to: tease Zan"
+
+
+def test_a_beat_s_lines_never_reach_the_store(monkeypatch):
+    """review-329: a private answer's beat (talk/beat.py, appended to the instruction before any
+    hint) is taken back out; only that there was one and its want code are kept."""
+    import sys
+    import types
+    fake = types.ModuleType("leeroy_mind.talk.beat")
+    fake.WANTS = {"vent": "get something off your chest", "tease": "tease {human}"}
+    monkeypatch.setitem(sys.modules, "leeroy_mind.talk.beat", fake)
+    base = [{"role": "system", "content": "card"}, {"role": "user", "content": "Answer Zan."}]
+    with_beat = [base[0], {"role": "user", "content": "Answer Zan.\n" + BEAT + "\nAnswer in a line."}]
+    req = capture.request("m", with_beat, {}, False, "x", max_lines=1, words=0, two_lines=False,
+                          beat=BEAT)
+    assert req["messages"][1]["content"] == "Answer Zan.\nAnswer in a line."
+    assert req["beat"] is True and req["want"] == "tease"
+    assert "tease Zan" not in json.dumps(req)
+    rewrite = [*with_beat, {"role": "assistant", "content": "draft"},
+               {"role": "user", "content": "Say it again."}]
+    assert capture.without_beat(rewrite, BEAT)[1]["content"] == "Answer Zan.\nAnswer in a line."
+    plain = capture.request("m", base, {}, False, "x", max_lines=1, words=0, two_lines=False)
+    assert plain["messages"] == base and plain["beat"] is False and plain["want"] is None
+    monkeypatch.delitem(sys.modules, "leeroy_mind.talk.beat")
+    assert capture.want_of(BEAT) in (None, "tease")  # without talk/beat.py: no code, never words
+
+
+def test_the_ops_switchboard_lists_the_capture_switch(tmp_path):
+    from leeroy_mind.console import opsview
+    import time
+    for text, state in (("", "off"), ("[bakeoff]\ncapture = true\n", "on"),
+                        ("[bakeoff]\ncapture = 1\n", "invalid")):
+        (tmp_path / "mind.toml").write_text(text)
+        rows_ = opsview.switches_view(tmp_path, time.monotonic() + 10, mind_started=None)["rows"]
+        assert next(r for r in rows_ if r["table"] == "bakeoff")["state"] == state

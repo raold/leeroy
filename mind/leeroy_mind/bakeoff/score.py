@@ -1,8 +1,15 @@
-"""Scoring a bake-off, per candidate and per channel family, the two baselines included:
+"""Scoring a bake-off, per candidate and per channel family, the three baselines included:
 
-- `sent`: the lines the guild actually sent for those turns;
-- `live`: the live model's captured reply, repaired and typed as every candidate's is, so the
-  candidates are compared with it on equal terms.
+- `sent`: the lines the guild actually sent for those turns (its real typing, after every guard,
+  retry and repair);
+- `first`: the live model's first draft of the generation, before any retry hint, repaired and
+  typed as every candidate's is;
+- `live`: the live model's reply whose words were sent, typed the same way.
+
+So `first` against a candidate asked the same first request is sampling and model; `first`
+against `live` is what the pipeline's retries and guards changed; `live` against `sent` is what
+happened after generation (typing, corrections). Every score is also split by turns the live
+pipeline asked more than once (`retried`) and turns it answered on the first try.
 
 (a) The stylometric AUC against his real lines (turing.stylo.analyse: the same features and
 sampling caps), where a candidate's lines stand in the corpus in place of the members' lines of
@@ -23,7 +30,8 @@ from leeroy_mind.turing.corpus import FAMILIES, FAMILY_LABELS, Line
 from leeroy_mind.turing.judge import TELLS
 from leeroy_mind.turing.report import judge_rates
 
-BASELINES = ("sent", "live")
+BASELINES = ("sent", "first", "live")
+SUBSETS = ("retried", "first_try")
 RECENT_OWN = 20       # her earlier lines a reply is checked against for repeats
 BURST_STEP_S = 2.0    # a candidate's extra line comes this long after the one before
 TOP_STYLE = 3
@@ -61,16 +69,26 @@ def _put(turn, lines: list[str], added: set[str]) -> list[Line]:
     return out
 
 
-def stylometry(plan, answers, *, names, by_guid, tz, seed: str) -> dict[str, dict]:
+def subset(plan, name: str) -> set[int]:
+    """The planned turns the live pipeline asked more than once (`retried`), or the others."""
+    want = name == "retried"
+    return {tid for tid, t in plan.turns.items() if t.captured.retried == want}
+
+
+def stylometry(plan, answers, *, names, by_guid, tz, seed: str, only: set[int] | None = None,
+               timing: bool = True) -> dict[str, dict]:
     """Per family the AUC from the words alone (`text`, stylo.TEXT_KEYS: what a model changes)
     and from every feature, timing included (`all`, the night's own measure, where a candidate
-    shares the live pipeline's timing)."""
+    shares the live pipeline's timing). `only`: sample the lines of these turns alone (every
+    planned turn is still swapped, so the context is the same)."""
     lines, added = substitute(plan, answers)
+    if only is not None:
+        added = {ref for ref in added if int(ref.split(":")[1]) in only}
     out = {}
     for f in FAMILIES:
         text, every = (stylo.analyse(lines, f, names=names, by_guid=by_guid, tz=tz,
                                      seed=f"bakeoff|{seed}", eligible=lambda line: line.ref in added,
-                                     keys=keys).as_dict()
+                                     keys=keys).as_dict() if keys is not None or timing else None
                        for keys in (stylo.TEXT_KEYS, None))
         out[f] = dict(text, all=every)
     return out
@@ -93,6 +111,16 @@ def window_lines(plan, window: dict, answers: dict[int, list[str]]) -> list[Line
     if not out or all(line.human for line in out) or len({line.speaker for line in out}) < 2:
         return None
     return out
+
+
+def digest(lines: list[Line] | None) -> str:
+    """What a window was judged on: a resumed run judges it again when its lines changed (a
+    candidate's turn that failed before and answered since)."""
+    import hashlib
+    if lines is None:
+        return "none"
+    rows = [[line.speaker, round(line.ts, 3), line.text] for line in lines]
+    return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()[:32]
 
 
 async def judge_window(reasoner, lines, *, by_guid, human: int, owners, pattern) -> dict:
@@ -196,16 +224,19 @@ def _same(a: tuple, b: tuple) -> bool:
     return repetition.shingle_overlap(repetition.ngrams(a), repetition.ngrams(b)) >= repetition.NGRAM_OVERLAP
 
 
-def line_stats(conn, candidate: str, plan, sent: dict[int, list[str]]) -> dict:
+def line_stats(conn, candidate: str, plan, sent: dict[int, list[str]],
+               only: set[int] | None = None) -> dict:
+    keep = plan.turns if only is None else only
     rows = [r for r in conn.execute("SELECT * FROM result WHERE candidate=?", (candidate,))
-            if r["turn"] in plan.turns]
+            if r["turn"] in keep]
     status = Counter(r["status"] for r in rows)
     spoken = {r["turn"]: " ".join(json.loads(r["lines"])) for r in rows if r["status"] == "ok"}
     compared = [tid for tid in spoken if sent.get(tid)]
     distinct = sum(not _same(words(spoken[tid]), words(" ".join(sent[tid]))) for tid in compared)
     seconds = [r["seconds"] for r in rows if r["seconds"] is not None]
     thinking = [r["thinking_tokens"] for r in rows if r["status"] != "error"]
-    return {"turns": len(plan.turns), "answered": len(rows), "ok": status["ok"],
+    codes = Counter(r["code"] for r in rows if r["status"] == "error" and r["code"])
+    return {"turns": len(keep), "answered": len(rows), "ok": status["ok"], "codes": dict(codes),
             "silent": status["silent"], "error": status["error"],
             "distinct": None if candidate == "sent" else _rate(distinct, len(compared)),
             "median_words": statistics.median(len(t.split()) for t in spoken.values()) if spoken else None,
@@ -262,9 +293,13 @@ def render(report: dict) -> str:
         "numbers, the style tells in words and the judge's own short phrases from public channels.",
         "",
         f"{report['turns']} captured turns asked again ({report['window_turns']} of them in "
-        f"{report['windows']} judge windows), from {report['since_text']} to {report['until_text']}. "
-        "`sent` is what the guild sent; `live` is the live model's captured reply typed as every "
-        "candidate's is, the fair baseline.",
+        f"{report['windows']} judge windows), from {report['since_text']} to {report['until_text']}; "
+        f"the live pipeline asked more than once on {report['retried']} of them. Candidates were "
+        f"asked the {'first request of each generation (before any retry hint)' if report['source'] == 'first' else 'request whose words were sent'}. "
+        "`sent` is what the guild sent; `first` is the live model's first draft and `live` the reply "
+        "whose words were sent, both typed as every candidate's is: `first` against a candidate is "
+        "the model, `first` against `live` the pipeline's retries and guards, `live` against `sent` "
+        "what came after generation.",
         "",
         "AUC 0.50 means the lines read like his; 1.00 means always told apart. The first table's "
         "AUC reads the words alone (what a model changes); the last one adds when and after what "
@@ -272,6 +307,9 @@ def render(report: dict) -> str:
         "pipeline. The judge's balanced accuracy is 0.50 at chance. A difference under about 0.10 "
         "is within noise (turing/README.md, Limits); with a few dozen lines a family it is wider.",
     ]
+    if report.get("beat_turns"):
+        out += ["", f"{report['beat_turns']} of the turns had a beat live (talk/beat.py). Its lines are "
+                "never stored, so every request here is the line's request without them."]
     if report["missing"]:
         out += ["", "Not pulled, so not run: " + ", ".join(f"`{m}`" for m in report["missing"]) + "."]
     if not report["judge_ran"]:
@@ -282,7 +320,8 @@ def render(report: dict) -> str:
                 f"judge {FAMILY_LABELS[f]}" for f in FAMILIES) + " |",
             "|" + "---|" * (4 + 2 * len(FAMILIES))]
     for c in report["candidates"]:
-        think = f"yes ({c['think_budget']})" if c["think"] else "no"
+        think = ("no" if c["think"] is False else
+                 f"{'yes' if c['think'] else 'default'} ({c['think_budget']}, ctx {c.get('num_ctx') or 'fit'})")
         out.append(f"| {c['name']} | {c['model']} | {think} | {c['prompt_variant']} | "
                    + " | ".join(_auc(c["families"][f]) for f in FAMILIES) + " | "
                    + " | ".join(_judge(c["judge"][f]) for f in FAMILIES) + " |")
@@ -311,6 +350,22 @@ def render(report: dict) -> str:
             out.append(f"- judge caught: {j['label']} ({j['count']}){quoted}")
         if not t["style"] and not t["judge"]:
             out.append("- none measured")
+        if c["lines"].get("codes"):
+            out.append("- errors: " + ", ".join(f"{k} {n}" for k, n in sorted(c["lines"]["codes"].items())))
+        out.append("")
+    for name, title in (("retried", "Turns the live pipeline asked more than once"),
+                        ("first_try", "Turns it answered on the first try")):
+        out += [f"## {title}", "",
+                "| candidate | ok | silent | errors | distinct from sent | median words | " + " | ".join(
+                    f"AUC {FAMILY_LABELS[f]}" for f in FAMILIES) + " | repeats own | filler after ? |",
+                "|" + "---|" * (8 + len(FAMILIES))]
+        for c in report["candidates"]:
+            sub = c["subsets"][name]
+            s_, d = sub["lines"], sub["detectors"]
+            out.append(f"| {c['name']} | {s_['ok']} | {s_['silent']} | {s_['error']} | "
+                       f"{_pct(s_['distinct'])} | {_num(s_['median_words'])} | "
+                       + " | ".join(_auc(sub["families"][f]) for f in FAMILIES)
+                       + f" | {_pct(d['repeat_own'])} | {_pct(d['filler_after_question'])} |")
         out.append("")
     out += ["## All features, timing included", "",
             "| candidate | " + " | ".join(f"AUC {FAMILY_LABELS[f]}" for f in FAMILIES) + " |",

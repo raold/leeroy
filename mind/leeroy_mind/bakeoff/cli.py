@@ -23,12 +23,15 @@ from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import load_config
 from leeroy_mind.nightly.cli import _data_arg, _exclusive, _identity, _positive, _read_store, _root
 
+from leeroy_mind.gpucontrol import KEY as GPU_PAUSED  # the owner's Free GPU
+
 from . import plan as planning
 from . import results, score, sheet
 from .capture import RETENTION_S
 from .config import CandidateError, load_candidates
+from .generate import trimmed
 
-GPU_PAUSED = "gpu:paused"  # gpucontrol.KEY: the owner's Free GPU
+SOURCES = ("first", "sent")
 WINDOWS_MAX = 60
 EMBED_BATCH = 64
 EMBED_MAX_CHARS = 4000
@@ -82,6 +85,9 @@ def _parser():
     run.add_argument("--out", type=Path, help="default: <data>/scratch/bakeoff-<time>; the same "
                      "folder again goes on with an unfinished run")
     run.add_argument("--seed", default="bakeoff")
+    run.add_argument("--from", dest="source", choices=SOURCES, default="first",
+                     help="which captured request the candidates are asked: the generation's first "
+                     "(default: before any retry hint) or the one whose words were sent")
     run.add_argument("--dry-run", action="store_true",
                      help="the plan and the missing models only: no lock, GPU or write")
     s = subs.add_parser("sheet", help="a blind pick sheet from a finished run")
@@ -173,7 +179,9 @@ def _summary(captured, built) -> list[str]:
     return [f"captured: {len(captured)} turns (" + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items()))
             + ")",
             f"plan: {len(built.turns)} turns (" + ", ".join(f"{f} {n}" for f, n in sorted(families.items()))
-            + f"), {len(built.windows)} judge windows holding {in_windows} of them"]
+            + f"), {len(built.windows)} judge windows holding {in_windows} of them; "
+            f"{sum(t.captured.retried for t in built.turns.values())} asked more than once live, "
+            f"{sum(t.captured.beat for t in built.turns.values())} with a beat live"]
 
 
 async def _dry(root, cfg, candidates, args, make_llm, clock) -> int:
@@ -193,9 +201,19 @@ async def _dry(root, cfg, candidates, args, make_llm, clock) -> int:
     missing = [c.model for c in candidates if not _has(models, c.model)]
     print("models: " + ("all pulled" if not missing else "missing (not pulled): "
                         + ", ".join(dict.fromkeys(missing))))
+    for c in candidates:
+        print(f"candidate {c.name}: " + _think_mode(c))
     print("reflection model (the judge): " + ("pulled" if _has(models, cfg.models.reflection)
                                               else "missing"))
     return 0
+
+
+def _think_mode(c) -> str:
+    if c.think is False:
+        return "think false" + (f", num_ctx {c.num_ctx}" if c.num_ctx else "")
+    mode = "think true" if c.think else "think left out (the model's default)"
+    return (f"{mode}: no stop, num_predict + {c.think_budget}, num_ctx "
+            f"{c.num_ctx or c.context(4096)} for a 4096 request")
 
 
 def _store_plan(res, built, ctx, *, args, candidates):
@@ -214,6 +232,7 @@ def _store_plan(res, built, ctx, *, args, candidates):
         results.put(res, "until", built.until)
         results.put(res, "seed", built.seed)
         results.put(res, "kinds", list(args.kinds))
+        results.put(res, "source", args.source)
     names = results.get(res, "candidates", [])
     for c in candidates:
         if c.name not in names:
@@ -223,14 +242,19 @@ def _store_plan(res, built, ctx, *, args, candidates):
 
 
 def _baselines(res, built, ctx, typist):
-    sent, live = results.results(res, "sent"), results.results(res, "live")
+    """sent: the lines as sent; first and live: the first draft and the reply whose words were
+    sent, cut back as _ask cuts a long Discord message and typed as every candidate's is."""
+    done = {name: results.results(res, name) for name in score.BASELINES}
     for t in built.turns.values():
-        if t.id not in sent:
+        if t.id not in done["sent"]:
             texts = [line.text for line in t.lines]
             results.put_result(res, "sent", t.id, status="ok", lines=texts, text=None,
                                masked=planning.mask_lines(texts, t, pattern=ctx.mask, owners=ctx.owners))
-        if t.id not in live:
-            _typed(res, "live", t, t.captured.reply, typist, ctx)
+        for name, which in (("first", "first"), ("live", "sent")):
+            if t.id not in done[name]:
+                q = t.captured.request(which)
+                text = trimmed(q.reply, words=t.captured.shape.get("words"), done_reason=q.done_reason)
+                _typed(res, name, t, text, typist, ctx)
 
 
 def _typed(res, name, t, text, typist, ctx, **timing):
@@ -261,9 +285,11 @@ async def _unload(admin, model: str) -> None:
         print(f"unload {type(e).__name__}", file=sys.stderr)
 
 
-async def _generate(llm, admin, res, built, candidates, typist, ctx, seed) -> list[str]:
+async def _generate(llm, admin, res, built, candidates, typist, ctx, seed, source,
+                    used: list[str]) -> None:
+    """Every candidate's answers, one model at a time; each model goes into `used` before its
+    first call, so an interrupted run still unloads it."""
     from . import generate
-    used = []
     groups: dict[str, list] = {}
     for c in candidates:
         groups.setdefault(c.model, []).append(c)
@@ -276,7 +302,7 @@ async def _generate(llm, admin, res, built, candidates, typist, ctx, seed) -> li
                 if t.id in done and done[t.id]["status"] != "error":
                     counts[done[t.id]["status"]] += 1
                     continue
-                r = await generate.ask(llm, c, t, seed)
+                r = await generate.ask(llm, c, t, seed, source)
                 timing = dict(thinking_tokens=r["thinking_tokens"], eval_count=r["eval_count"],
                               seconds=r["seconds"])
                 if r["status"] == "error":
@@ -288,7 +314,6 @@ async def _generate(llm, admin, res, built, candidates, typist, ctx, seed) -> li
             print(f"{c.name}: {len(built.turns)} turns, {counts['ok']} ok, {counts['silent']} silent, "
                   f"{counts['error']} errors")
         await _unload(admin, model)
-    return used
 
 
 async def _judge(llm, res, built, names, ctx, cfg) -> int:
@@ -297,12 +322,14 @@ async def _judge(llm, res, built, names, ctx, cfg) -> int:
     calls = 0
     for name in names:
         answers = score.texts(res, name)
-        done = {r["unit"]: r["status"] for r in res.execute(
-            "SELECT unit, status FROM judged WHERE candidate=?", (name,))}
+        done = {r["unit"]: (r["status"], r["digest"]) for r in res.execute(
+            "SELECT unit, status, digest FROM judged WHERE candidate=?", (name,))}
         for w in built.windows:
-            if done.get(w["unit"]) not in (None, "error"):
-                continue
             lines = score.window_lines(built, w, answers)
+            seen = score.digest(lines)
+            status, judged_on = done.get(w["unit"], (None, None))
+            if status not in (None, "error") and judged_on == seen:
+                continue  # judged on these very lines; a window whose turns changed goes again
             if lines is None:
                 scored = {"status": "skipped", "speakers": 0, "correct": 0, "his": 0,
                           "his_correct": 0, "tells": []}
@@ -317,13 +344,13 @@ async def _judge(llm, res, built, names, ctx, cfg) -> int:
                               "his_correct": 0, "tells": []}
             res.execute(
                 "INSERT INTO judged(candidate, unit, family, status, speakers, correct, his, "
-                "his_correct, tells) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(candidate, unit) DO "
-                "UPDATE SET status=excluded.status, speakers=excluded.speakers, "
+                "his_correct, tells, digest) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(candidate, "
+                "unit) DO UPDATE SET status=excluded.status, speakers=excluded.speakers, "
                 "correct=excluded.correct, his=excluded.his, his_correct=excluded.his_correct, "
-                "tells=excluded.tells",
+                "tells=excluded.tells, digest=excluded.digest",
                 (name, w["unit"], w["family"], scored["status"], scored["speakers"],
                  scored["correct"], scored["his"], scored["his_correct"],
-                 json.dumps(scored["tells"], ensure_ascii=False)))
+                 json.dumps(scored["tells"], ensure_ascii=False), seen))
     return calls
 
 
@@ -349,7 +376,8 @@ async def _vectors(llm, cfg, built, names, res, recent) -> dict | None:
     return out
 
 
-def _report(res, built, ctx, *, names, config, missing, judge_ran, judge_note, vectors, recent) -> dict:
+def _report(res, built, ctx, *, names, config, missing, judge_ran, judge_note, vectors, recent,
+            source) -> dict:
     sent = score.texts(res, "sent")
     cands = []
     by_name = {c["name"]: c for c in config}
@@ -358,15 +386,27 @@ def _report(res, built, ctx, *, names, config, missing, judge_ran, judge_note, v
         families = score.stylometry(built, answers, names=ctx.names, by_guid=ctx.by_guid, tz=None,
                                     seed=built.seed)
         judged = score.judge_totals(res, name)
-        c = by_name.get(name, {"name": name, "model": {"sent": "(as sent)", "live": "(captured reply)"}
-                               .get(name, "-"), "think": False, "think_budget": 0,
-                               "prompt_variant": "as_is"})
+        c = by_name.get(name, {"name": name, "model": {
+            "sent": "(as sent)", "first": "(captured first draft)", "live": "(captured sent reply)"}
+            .get(name, "-"), "think": False, "think_budget": 0, "prompt_variant": "as_is",
+            "num_ctx": None})
+        subsets = {}
+        for sub_name in score.SUBSETS:
+            only = score.subset(built, sub_name)
+            mine = {t: v for t, v in answers.items() if t in only}
+            subsets[sub_name] = {
+                "families": score.stylometry(built, answers, names=ctx.names, by_guid=ctx.by_guid,
+                                             tz=None, seed=built.seed, only=only, timing=False),
+                "lines": score.line_stats(res, name, built, sent, only=only),
+                "detectors": score.detectors(built, mine, recent=recent, vectors=vectors)}
         cands.append(dict(c, families=families, judge=judged,
                           detectors=score.detectors(built, answers, recent=recent, vectors=vectors),
                           lines=score.line_stats(res, name, built, sent),
-                          tells=score.tells(families, judged)))
+                          tells=score.tells(families, judged), subsets=subsets))
     fmt = "%Y-%m-%d %H:%M"
-    return {"version": 1, "turns": len(built.turns), "windows": len(built.windows),
+    return {"version": 2, "turns": len(built.turns), "windows": len(built.windows),
+            "retried": len(score.subset(built, "retried")), "source": source,
+            "beat_turns": sum(t.captured.beat for t in built.turns.values()),
             "window_turns": len({t for w in built.windows for t in w["turns"]}),
             "since": built.since, "until": built.until,
             "since_text": datetime.fromtimestamp(built.since).strftime(fmt),
@@ -384,6 +424,10 @@ async def _go(root, store, cfg, candidates, args, out, make_llm, make_admin, clo
         stored = None
         if results.get(res, "plan") is not None:
             stored = {k: results.get(res, k) for k in ("plan", "since", "until", "seed")}
+            source = results.get(res, "source", "first")
+            if source != args.source:
+                print(f"resuming with --from {source}, as this run began")
+            args.source = source
         built, captured = _plan(store, ctx, args, until=clock.now(), stored=stored)
         for line in _summary(captured, built):
             print(line)
@@ -407,9 +451,8 @@ async def _go(root, store, cfg, candidates, args, out, make_llm, make_admin, clo
             ready = [c for c in candidates if c.model not in missing]
             if missing:
                 print("missing (not pulled, skipped): " + ", ".join(missing))
-            loaded = await _make_room(admin, cfg.models.embedding)
-            embedding_loaded = any(_norm(n) == _norm(cfg.models.embedding) for n in loaded)
-            used += await _generate(llm, admin, res, built, ready, typist, ctx, built.seed)
+            await _make_room(admin, cfg.models.embedding)
+            await _generate(llm, admin, res, built, ready, typist, ctx, built.seed, args.source, used)
             names = [*score.BASELINES, *(c.name for c in ready)]
             judge_ran, judge_note = False, ""
             if not built.windows:
@@ -423,11 +466,14 @@ async def _go(root, store, cfg, candidates, args, out, make_llm, make_admin, clo
                 judge_ran = True
                 print(f"judge: {len(built.windows)} windows x {len(names)}, {calls} calls")
             recent = score.recent_own(built)
+            # only an embedding model Ollama still holds now: a large candidate may have evicted it
+            embedding_loaded = any(_norm(n) == _norm(cfg.models.embedding)
+                                   for n in await admin.loaded_models())
             vectors = (await _vectors(llm, cfg, built, names, res, recent)
                        if embedding_loaded else None)
             report = _report(res, built, ctx, names=names, config=[c.describe() for c in ready],
                              missing=missing, judge_ran=judge_ran, judge_note=judge_note,
-                             vectors=vectors, recent=recent)
+                             vectors=vectors, recent=recent, source=args.source)
         finally:
             for model in dict.fromkeys(used):
                 await _unload(admin, model)
@@ -467,8 +513,8 @@ def _sheet(args) -> int:
     conn = results.open_existing(out)
     try:
         have = set(results.candidates(conn))
-        names = ["live", *(n for n in results.get(conn, "candidates", [])
-                           if n not in score.BASELINES and n in have)]
+        names = [*score.BASELINES, *(n for n in results.get(conn, "candidates", [])
+                                     if n not in score.BASELINES and n in have)]
         seed = results.get(conn, "seed", "bakeoff")
         done = sheet.write(conn, out, n=args.n, names=names, seed=seed)
     finally:

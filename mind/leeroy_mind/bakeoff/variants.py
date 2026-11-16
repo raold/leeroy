@@ -1,14 +1,16 @@
 """Prompt variants: named transforms of a captured turn's messages.
 
 - `as_is`: the messages exactly as the live pipeline sent them.
-- `situation`: the system prompt's "How you talk here:" list keeps only the three hard rules (no
-  talk of AI; write only your line; no other people's lines) and drops the built-in soft rules
-  (2009 slang, react to what happened, moody or wrong, no guilt-trip, answer (nothing), and the
-  length rule). Everything else stays: the persona card, the flirting rule (a content
-  invariant), the owner's tuning and nudge lines, the chat, the memories and the turn's own
-  instruction. A bullet it does not recognise as a built-in soft rule (an owner overlay's
-  wording) stays too. It is a stand-in for the design's section 9 prompt, which will also
-  spend the freed tokens on what she is in the middle of; here they are only left unused."""
+- `situation`: bake-off 1's situation variant. The system prompt's "How you talk here:" list
+  keeps the three hard rules (no talk of AI; write only your line; no other people's lines), the
+  rule against invented shared history ("React only to the chat shown...", whose absence bake-off
+  1 blamed for the dense models' invented events) and the (nothing) rule, and drops the built-in
+  soft rules (2009 slang, react to what happened, moody or wrong, no guilt-trip, and the length
+  rule). Everything else stays: the persona card, the flirting rule (a content invariant), the
+  owner's tuning and nudge lines, the chat, the memories and the turn's own instruction. A bullet
+  it does not recognise as a built-in soft rule (an owner overlay's wording) stays too. It is a
+  stand-in for the design's section 9 prompt, which will also spend the freed tokens on what she
+  is in the middle of; here they are only left unused."""
 from leeroy_mind.talk.prompt import COMMS_RULES
 
 RULES_HEAD = "How you talk here:"
@@ -16,7 +18,11 @@ NO_OTHERS = "- Don't narrate actions or write other people's lines."
 
 
 def _is_hard(bullet: str) -> bool:
-    return ("Never mention AI" in bullet or bullet.startswith("- Write only your line"))
+    """A rule the situation variant keeps: the hard three's two whole bullets, the rule against
+    invented history and the (nothing) rule (bake-off 1 kept both)."""
+    return ("Never mention AI" in bullet or bullet.startswith("- Write only your line")
+            or bullet.startswith("- React only to the chat shown")
+            or bullet.startswith("- If you wouldn't say anything"))
 
 
 def _soft_prefixes() -> tuple[str, ...]:

@@ -39,6 +39,17 @@ def kind_of(channel: str) -> str:
 
 
 @dataclass(frozen=True)
+class Request:
+    """One captured model call: what was asked and what came back."""
+    model: str
+    think: bool | None
+    options: dict
+    messages: list
+    reply: str
+    done_reason: str | None
+
+
+@dataclass(frozen=True)
 class Captured:
     id: int
     ts: float
@@ -46,36 +57,68 @@ class Captured:
     guid: int
     channel: str
     turn_kind: str
-    model: str
-    think: bool | None
-    options: dict
-    messages: list
-    reply: str
+    calls: int                       # the model calls the generation made before its line
+    attempt: int                     # which of them was sent (0: the first draft)
+    sent: Request                    # the call whose words were sent
+    first: Request                   # the generation's first call (the sent one when attempt 0)
     shape: dict
+    beat: bool = False               # the live turn had a beat (talk/beat.py; its lines not kept)
+    want: str | None = None          # the beat's want code
+
+    @property
+    def retried(self) -> bool:
+        """The live pipeline asked more than once before this line (a silence asked again, a
+        retry for its tells, a guard's rewrite, an owed fallback)."""
+        return self.calls > 1
+
+    def request(self, which: str) -> Request:
+        return self.first if which == "first" else self.sent
+
+
+_COLUMNS = ("id, ts, refs, guid, channel, kind, calls, attempt, beat, want, model, think, "
+            "options, messages, "
+            "reply, done_reason, first_model, first_think, first_options, first_messages, "
+            "first_reply, first_done_reason, shape")
+
+
+def _flag(value) -> bool | None:
+    return None if value is None else bool(value)
+
+
+def _captured(r) -> Captured | None:
+    try:
+        refs = tuple(x for x in json.loads(r["refs"]) if isinstance(x, str))
+        sent = Request(r["model"], _flag(r["think"]), json.loads(r["options"]),
+                       json.loads(r["messages"]), r["reply"] or "", r["done_reason"])
+        first = sent if r["first_messages"] is None else Request(
+            r["first_model"] or r["model"], _flag(r["first_think"]), json.loads(r["first_options"]),
+            json.loads(r["first_messages"]), r["first_reply"] or "", r["first_done_reason"])
+        shape = json.loads(r["shape"])
+    except (ValueError, TypeError):
+        return None
+    if not all(isinstance(q.options, dict) and isinstance(q.messages, list) for q in (sent, first)):
+        return None
+    if not isinstance(shape, dict):
+        return None
+    return Captured(r["id"], r["ts"], refs, r["guid"], r["channel"], r["kind"], int(r["calls"]),
+                    int(r["attempt"]), sent, first, shape, bool(r["beat"]), r["want"])
 
 
 def read_captured(conn, *, since: float, until: float, ids=None) -> list[Captured]:
     if not available(conn):
         return []
-    sql = ("SELECT id, ts, refs, guid, channel, kind, model, think, options, messages, reply, shape "
-           "FROM bakeoff_turn WHERE ts >= ? AND ts < ?")
-    args: tuple = (since, until)
-    if ids is not None:
-        sql = ("SELECT id, ts, refs, guid, channel, kind, model, think, options, messages, reply, "
-               "shape FROM bakeoff_turn WHERE id IN (SELECT value FROM json_each(?))")
-        args = (json.dumps(sorted(ids)),)
+    if ids is None:
+        rows = conn.execute(f"SELECT {_COLUMNS} FROM bakeoff_turn WHERE ts >= ? AND ts < ? "
+                            "ORDER BY id", (since, until))
+    else:
+        rows = conn.execute(f"SELECT {_COLUMNS} FROM bakeoff_turn WHERE id IN "
+                            "(SELECT value FROM json_each(?)) ORDER BY id", (json.dumps(sorted(ids)),))
+    names = _COLUMNS.split(", ")
     out = []
-    for r in conn.execute(sql + " ORDER BY id", args):
-        try:
-            refs = tuple(x for x in json.loads(r[2]) if isinstance(x, str))
-            options, messages, shape = json.loads(r[8]), json.loads(r[9]), json.loads(r[11])
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(options, dict) or not isinstance(messages, list) or not isinstance(shape, dict):
-            continue
-        out.append(Captured(r[0], r[1], refs, r[3], r[4], r[5], r[6],
-                            None if r[7] is None else bool(r[7]), options, messages, r[10] or "",
-                            shape))
+    for row in rows:
+        c = _captured(dict(zip(names, row)))
+        if c is not None:
+            out.append(c)
     return out
 
 
