@@ -16,7 +16,12 @@ Every line for the game is plain ASCII: emoji and other symbols go, accents and 
 marks are folded. A Discord line (style_lines' `game` off) keeps them, with no byte cut and no
 chat-line cleaning (the Discord store cleans its text); its typing is the same. Abbreviations
 only ever shorten: a map written the wrong way round ("lol" -> "laughing out loud") is ignored. Item links ("[Shadowmourne]") are kept as written and never
-cut or split through."""
+cut or split through.
+
+With [talk] texture on, the typing is a person's rather than a rule's (the "typing texture"
+section below): apostrophes left out and fragments run on as her declared case and punctuation
+suggest, shorthand some of the time, a spelling habit or two, and at most one slip a line."""
+import functools
 import itertools
 import random
 import re
@@ -42,6 +47,11 @@ _LETTERS = re.compile(r"[^\W\d_]+")
 _TYPO_WORD = re.compile(rf"[A-Za-z]{{{TYPO_MIN},}}")
 _LINK = re.compile(r"\[[^\]\n]*\]")
 _TOKEN = re.compile(r"\S*\[[^\]\n]*\]\S*|\S+")  # a word, or a link with what touches it
+# A whole word: neither a letter nor an apostrophe (ASCII, or a Discord line's phone ones) on
+# either side, so "you" is no word inside "you're".
+_APOS = "'’ʼ"
+_WB = rf"(?<![\w{_APOS}])"
+_WE = rf"(?![\w{_APOS}])"
 
 # What NFKD leaves outside ASCII, folded by hand; anything else non-ASCII is dropped.
 _FOLD = str.maketrans({
@@ -134,9 +144,13 @@ def split_emotes(text: str, names: dict[str, int]) -> tuple[str, list[tuple[str,
 @dataclass(frozen=True, slots=True)
 class Styled:
     """One typed line, and the same words before the abbreviations, the typos and the
-    emoticon: what the speaker's own last lines show and repeats are judged on."""
+    emoticon: what the speaker's own last lines show and repeats are judged on. `slip` is a
+    slip of the fingers in `line` worth a "*word" follow-up (texture only), as typed, and `fix`
+    the word she meant; both empty when there is none."""
     line: str
     plain: str
+    slip: str = ""
+    fix: str = ""
 
 
 def to_ascii(text: str) -> str:
@@ -226,18 +240,25 @@ def _keep_case(text: str, words: frozenset[str], before: str) -> str:
     return "".join(out)
 
 
-def _abbreviate(text: str, abbreviations: dict[str, str]) -> str:
-    """The persona's abbreviations on word boundaries, outside links, in any case. Only an
-    entry that shortens applies: one written the wrong way round is ignored."""
+def _shortening(abbreviations: dict[str, str]) -> dict[str, str]:
+    """The persona's entries that shorten, by their casefolded key."""
     table = {}
     for k, v in abbreviations.items():
         key, val = to_ascii(k).strip().casefold(), to_ascii(v).strip()
         if key and val and len(val) <= len(key):
             table[key] = val
+    return table
+
+
+def _abbreviate(text: str, abbreviations: dict[str, str]) -> str:
+    """The persona's abbreviations on word boundaries, outside links, in any case. Only an
+    entry that shortens applies: one written the wrong way round is ignored. A word joined to
+    an apostrophe is no whole word: "you're" never becomes "u're" (repetition audit, 5)."""
+    table = _shortening(abbreviations)
     if not table:
         return text
     keys = sorted(table, key=len, reverse=True)
-    pat = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(k) for k in keys) + r")(?!\w)",
+    pat = re.compile(_WB + "(?:" + "|".join(re.escape(k) for k in keys) + ")" + _WE,
                      re.IGNORECASE)
     return _outside_links(text, lambda seg: pat.sub(
         lambda m: table.get(m.group(0).casefold(), m.group(0)), seg))
@@ -280,6 +301,435 @@ def _typos(text: str, p: float, rng: random.Random, protect: frozenset[str]) -> 
         last = m.end()
     out.append(text[last:])
     return "".join(out)
+
+
+# -- typing texture ([talk] texture) -----------------------------------------------------------
+# How people really type in chat, over the persona's declared typing (dynamics audit F5,
+# repetition audit 5): apostrophes left out, fragments run together, real shorthand some of the
+# time, a spelling habit or two, and in some lines one slip of the fingers, now and then followed
+# by a "*word" (talk/realism.py). A member's habits are fixed (seeded by her name) and drawn
+# around her declared case and punctuation: a lower-case typer with no full stops drops most
+# apostrophes and runs her fragments on; a "proper" typer keeps both. Only the typed line
+# changes, except the joined fragments, which are punctuation and so in `plain` too.
+
+TEXTURE_SEED = "texture-v1"
+PERIOD_TYPERS = 0.12  # of members: keep their full stops whatever their case
+CAREFUL_APOSTROPHES = 0.1  # of members: keep most apostrophes whatever their case
+SHORT_FRAGMENT = 6  # words: a fragment this short runs on most readily
+LONG_JOIN = 0.45  # two longer sentences run together this much less often
+AND_SHARE = 0.15  # of the joins that may take "and", joined by it
+INVENTED_SHARE = 0.35  # a persona's own shorthand that no one types ("tht"): this much of her rate
+SLIP_K = 5.0  # a line's chance of a slip: SLIP_K x typo_rate x the state's typo_mult
+SLIP_CAP = 0.6
+SLIP_FULL = 6  # words: a shorter line has a smaller chance, in proportion
+DISCORD_SLIP = 0.8  # Discord, often on a phone with autocorrect: fewer slips, and other kinds
+FIRST_LETTER = 0.08  # of slips that can, how often the first letter is hit
+FIX_SHARE = (0.12, 0.32)  # of slips worth it, followed by "*word": a casual .. a careful typer
+_CASE_CASUAL = {"lower": 1.0, "mixed": 0.5, "proper": 0.0}
+_PUNCT_CASUAL = {"none": 1.0, "some": 0.5, "full": 0.0}
+
+_CONTRACTIONS = """i'm i've i'll i'd don't doesn't didn't can't couldn't won't wouldn't shouldn't
+isn't aren't wasn't weren't haven't hasn't hadn't ain't it's that's what's there's here's who's
+how's where's let's you're you've you'll you'd they're they've they'll they'd we've he's she's
+he'd y'all c'mon would've should've could've it'll that'll""".split()
+# Never dropped: without the apostrophe each is another word ("were", "well", "hell", "shed").
+KEEP_APOSTROPHE = frozenset({"we're", "we'll", "he'll", "she'll", "we'd", "she'd"})
+
+
+def _apos_pattern(word: str, optional: bool = False) -> str:
+    return re.escape(word).replace("'", f"[{_APOS}]" + ("?" if optional else ""))
+
+
+_CONTRACTION = re.compile(_WB + "(?:" + "|".join(
+    _apos_pattern(c) for c in sorted(_CONTRACTIONS, key=len, reverse=True)) + ")" + _WE,
+    re.IGNORECASE)
+
+# "gonna" only for "going to" before a verb: "going to bed" stays.
+_GONNA = """be do get go have make try need take see say tell kill pull tank heal raid run wipe
+log play eat sleep buy start stop ask call help win lose give put check come leave head grab
+hit miss stay wait sit think look find keep let send show bring cry die""".split()
+# Real chat shorthand: (pattern, shorthand, weight of being one of a casual typer's own).
+SHORTHAND = (
+    ("you", "u", 1.0), (f"your|you[{_APOS}]re|youre", "ur", 1.0), ("right now", "rn", 2.5),
+    (f"i don[{_APOS}]?t know", "idk", 3.0), ("to be honest", "tbh", 2.0),
+    ("not (?:gonna|going to) lie", "ngl", 1.5), ("in my opinion", "imo", 1.0),
+    ("of course", "ofc", 1.0), ("probably", "prob", 2.0), ("definitely", "def", 1.5),
+    ("whatever", "w/e", 0.5), ("because", "bc", 2.0), ("though", "tho", 3.0),
+    (r"going to(?= (?:" + "|".join(_GONNA) + r")\b)", "gonna", 4.0), ("want to", "wanna", 3.5))
+# What tells a persona's own entry for real shorthand from one no one types ("tht", "wt", "nt");
+# a multi-word key shortened to its initials ("damage per second" -> "dps") is real too.
+REAL_SHORTHAND = frozenset("""u ur rn idk tbh ngl imo imho ofc prob probs def w/e bc cuz cos tho
+gonna wanna gotta lol lmao lmfao rofl omg wtf brb afk gg wp gl hf ty thx tyvm np pls plz k kk ok
+y ya yea nvm btw fyi irl jk smh fr ily omw gtg g2g cya ttyl idc ikr iirc tbf dm w/ w/o rly sry
+abt atm asap bday thurs innit brill dps hps tps aoe cd gcd oom dk dh gm rl mt ot cc dkp crit int
+str agi sta spi sp ap arp mp5 lfg lfm lfd pug hc nm rdy ench ooc""".split())
+
+# Spelling habits a member may have, two or three of them, typed some of the time.
+_SPELLING = (
+    ("definitely", "definately"), ("a lot", "alot"), ("weird", "wierd"), ("receive", "recieve"),
+    ("separate", "seperate"), ("believe", "beleive"), ("tomorrow", "tommorow"),
+    ("until", "untill"), ("really", "realy"), ("probably", "probly"),
+    ("especially", "expecially"), ("basically", "basicly"), ("literally", "literaly"),
+    ("finally", "finaly"), ("interesting", "intresting"), ("embarrassing", "embarassing"),
+    ("necessary", "neccessary"), ("immediately", "immediatly"), ("which", "wich"),
+    ("every time", "everytime"), ("no one", "noone"), ("a while", "awhile"),
+    ("apparently", "apparantly"), ("beginning", "begining"), ("disappointed", "dissapointed"),
+    ("calendar", "calender"), ("achievement", "acheivement"), ("argument", "arguement"),
+    ("occasionally", "occasionaly"), ("guarantee", "garantee"), ("tonight", "tonite"),
+    ("whether", "wether"))
+_LOOSE = (("you're", "your"), ("than", "then"), ("lose", "loose"))  # casual typers only
+_FINGERS = (("the", "teh"), ("and", "adn"), ("just", "jsut"), ("what", "waht"), ("that", "taht"),
+            ("with", "wiht"), ("have", "ahve"), ("know", "konw"), ("about", "baout"),
+            ("think", "thnik"))  # casual typers only
+HABIT_RATE = {"spelling": 0.7, "loose": 0.45, "fingers": 0.15}
+
+# A slip's kinds and how often each: at a keyboard, and on a phone (Discord) with autocorrect.
+_KEYS = ("auto", "near", "drop", "swap", "double", "merge", "shift")
+_GAME_KINDS = (0.0, 0.30, 0.22, 0.22, 0.08, 0.14, 0.04)
+_PHONE_KINDS = (0.35, 0.20, 0.10, 0.10, 0.05, 0.15, 0.05)
+_FIXABLE = frozenset({"auto", "near", "drop", "swap"})
+# Autocorrect's wrong real words (Discord).
+_AUTOCORRECT = {
+    "from": ("form",), "form": ("from",), "were": ("where",), "where": ("were",),
+    "than": ("then",), "then": ("than",), "though": ("through", "thought"),
+    "through": ("though",), "quite": ("quiet",), "quiet": ("quite",), "lose": ("loose",),
+    "loose": ("lose",), "its": ("it's",), "well": ("we'll",), "raid": ("rain",),
+    "heal": ("head",), "loot": ("lot",), "tank": ("thank",), "wipe": ("wife",),
+    "gear": ("hear",), "mana": ("mama",), "pull": ("pill",), "boss": ("bass",)}
+# Little words a slip in which nobody stops to correct.
+_SMALL = frozenset("""that this with have from they them then than when what were your just been
+will would could should there their about into some like over also only even very much more
+here well back still""".split())
+_ROWS = ("qwertyuiop", "asdfghjkl", "zxcvbnm")
+
+
+def _keyboard() -> dict[str, tuple[str, str]]:
+    """Each letter's neighbours on a QWERTY keyboard: on its row, and above and below."""
+    out = {}
+    for r, row in enumerate(_ROWS):
+        for i, ch in enumerate(row):
+            side = "".join(row[j] for j in (i - 1, i + 1) if 0 <= j < len(row))
+            diag = "".join(_ROWS[rr][j] for rr, js in ((r - 1, (i, i + 1)), (r + 1, (i - 1, i)))
+                           if 0 <= rr < len(_ROWS) for j in js if 0 <= j < len(_ROWS[rr]))
+            out[ch] = (side, diag)
+    return out
+
+
+_NEAR = _keyboard()
+_DOTTED = frozenset("mr. mrs. ms. dr. st. vs. etc. jr. sr. approx.".split())
+_AND_STARTS = frozenset("i we you he she they it that this there the my our".split())
+_I_FORMS = frozenset({"i", "i'm", "i'll", "i've", "i'd"})
+
+
+@dataclass(frozen=True, slots=True)
+class Texture:
+    """One member's typing habits ([talk] texture), fixed per member (texture_of)."""
+    casual: float  # 0 a careful typer (proper case, full stops) .. 1 lower case, no punctuation
+    apostrophes: float  # how often she leaves out a contraction's apostrophe
+    join: float  # how often two fragments run on ("x. y" -> "x, y", "x y", "x and y")
+    commas: float  # of those, joined with a comma
+    shorthand: float  # how often she uses one of her own real shorthand entries
+    extra: tuple[int, ...] = ()  # SHORTHAND entries she uses beyond her own list
+    extra_rate: float = 0.0
+    habits: tuple[tuple[str, str, float], ...] = ()  # (word, her spelling, how often)
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def casualness(t: Typing) -> float:
+    """0 for proper case and full stops .. 1 for lower case and no end punctuation."""
+    return (_CASE_CASUAL.get(t.case, 0.5) + _PUNCT_CASUAL.get(t.end_punct, 0.5)) / 2
+
+
+def fix_share(t: Typing) -> float:
+    """How often she follows a slip worth it with "*word": a careful typer more often."""
+    lo, hi = FIX_SHARE
+    return hi - (hi - lo) * casualness(t)
+
+
+def texture_of(t: Typing, who: str) -> Texture:
+    """Her habits, the same every time for the same name and declared typing."""
+    return _texture(who, t.case, t.end_punct, t.typo_rate > 0)
+
+
+@functools.lru_cache(maxsize=4096)
+def _texture(who: str, case: str, end_punct: str, typos: bool) -> Texture:
+    rng = random.Random(f"{TEXTURE_SEED}:{who}")
+    casual = (_CASE_CASUAL.get(case, 0.5) + _PUNCT_CASUAL.get(end_punct, 0.5)) / 2
+    period, careful = rng.random() < PERIOD_TYPERS, rng.random() < CAREFUL_APOSTROPHES
+    apostrophes = _clamp(0.03 + 0.85 * casual ** 1.2 + rng.uniform(-.08, .08), 0, .97)
+    join = _clamp(0.85 * casual ** 1.3 + rng.uniform(-.08, .08), 0, .95)
+    commas = _clamp(0.8 - 0.3 * casual + rng.uniform(-.1, .1), .3, .9)
+    shorthand = _clamp(0.55 + 0.35 * casual + rng.uniform(-.08, .08), .3, .95)
+    pool = list(range(len(SHORTHAND)))
+    extra = []
+    for _ in range(2 + round(2 * casual)):
+        pick = rng.choices(pool, weights=[SHORTHAND[i][2] for i in pool])[0]
+        pool.remove(pick)
+        extra.append(pick)
+    extra_rate = _clamp(0.35 * casual + rng.uniform(-.08, .08), 0, .5)
+    kinds = [("spelling", w, s) for w, s in _SPELLING]
+    if casual >= 0.5:
+        kinds += [("loose", w, s) for w, s in _LOOSE] + [("fingers", w, s) for w, s in _FINGERS]
+    habits = []
+    for _ in range(rng.choice((2, 2, 3))):
+        kind, word, spelt = kinds.pop(rng.randrange(len(kinds)))
+        habits.append((word, spelt, HABIT_RATE[kind]))
+    return Texture(
+        casual=casual, apostrophes=apostrophes * (.3 if careful else 1),
+        join=join * (.3 if period else 1), commas=commas, shorthand=shorthand,
+        extra=tuple(sorted(extra)) if casual >= 0.5 else (),
+        extra_rate=extra_rate if casual >= 0.5 else 0.0,
+        habits=tuple(habits) if typos else ())
+
+
+def _words_cf(words) -> frozenset[str]:
+    return frozenset(part.casefold() for w in words for part in w.split())
+
+
+def _sub_each(text: str, pat: re.Pattern, fn) -> str:
+    """pat's matches outside links, each replaced by fn(match), in order."""
+    return _outside_links(text, lambda seg: pat.sub(fn, seg))
+
+
+def _like(found: str, spelt: str) -> str:
+    """`spelt` with `found`'s leading capital."""
+    return spelt[:1].upper() + spelt[1:] if found[:1].isupper() else spelt
+
+
+def _real_entry(key: str, val: str) -> bool:
+    initials = "".join(w[0] for w in key.split())
+    return val.casefold() in REAL_SHORTHAND or (" " in key and val.casefold() == initials)
+
+
+def _shorthand(text: str, t: Typing, tex: Texture, rng: random.Random,
+               protect: frozenset[str]) -> tuple[str, frozenset[str]]:
+    """Her own shortening entries and her real shorthand, each use on its own draw: her real
+    entries at tex.shorthand (a multi-word one nearly always), one no one types at
+    INVENTED_SHARE of that, the extra ones at tex.extra_rate. Also what they write."""
+    own = _shortening(t.abbreviations)
+    entries = []
+    for key, val in own.items():
+        rate = tex.shorthand if _real_entry(key, val) else tex.shorthand * INVENTED_SHARE
+        if " " in key and _real_entry(key, val):
+            rate = max(rate, .9)
+        entries.append((_apos_pattern(key, optional=True), val, rate))
+    vals = {v.casefold() for v in own.values()}
+    for i in tex.extra:
+        pat, val, _ = SHORTHAND[i]
+        if val not in vals and not any(re.fullmatch(pat, k, re.IGNORECASE) for k in own):
+            entries.append((pat, val, tex.extra_rate))
+    if not entries:
+        return text, frozenset()
+    entries.sort(key=lambda e: len(e[0]), reverse=True)
+    pat = re.compile(_WB + "(?:" + "|".join(f"(?P<g{i}>{p})" for i, (p, _, _) in
+                                             enumerate(entries)) + ")" + _WE, re.IGNORECASE)
+
+    def one(m: re.Match) -> str:
+        _, val, rate = entries[int(m.lastgroup[1:])]
+        if m.group(0).casefold() in protect or rng.random() >= rate:
+            return m.group(0)
+        return val
+    return _sub_each(text, pat, one), frozenset(v.casefold() for _, v, _ in entries)
+
+
+def _habits(text: str, tex: Texture, rng: random.Random,
+            protect: frozenset[str]) -> tuple[str, frozenset[str]]:
+    """Her spelling habits, each use on its own draw. Also the spellings."""
+    if not tex.habits:
+        return text, frozenset()
+    pat = re.compile(_WB + "(?:" + "|".join(f"(?P<h{i}>{_apos_pattern(w)})" for i, (w, _, _) in
+                                             enumerate(tex.habits)) + ")" + _WE, re.IGNORECASE)
+
+    def one(m: re.Match) -> str:
+        _, spelt, rate = tex.habits[int(m.lastgroup[1:])]
+        if m.group(0).casefold() in protect or rng.random() >= rate:
+            return m.group(0)
+        return _like(m.group(0), spelt)
+    return _sub_each(text, pat, one), frozenset(s.casefold() for _, s, _ in tex.habits)
+
+
+def _apostrophes(text: str, rate: float, rng: random.Random) -> str:
+    """Contractions without their apostrophe ("dont", "im", "thats"), each use on its own draw;
+    never one that would read as another word (KEEP_APOSTROPHE)."""
+    if rate <= 0:
+        return text
+
+    def one(m: re.Match) -> str:
+        if rng.random() >= rate:
+            return m.group(0)
+        return re.sub(f"[{_APOS}]", "", m.group(0))
+    return _sub_each(text, _CONTRACTION, one)
+
+
+def _full_stop(token: str) -> bool:
+    """A token ending a sentence with one full stop (not "...", a link or "mr.")."""
+    return (len(token) > 1 and token.endswith(".") and not token.endswith("..")
+            and "." not in token[:-1] and "[" not in token and token.casefold() not in _DOTTED)
+
+
+def _soften(token: str, protect: frozenset[str]) -> str:
+    """A sentence's first word in the middle of a run-on: an ordinary word loses its capital;
+    "I", a name, an acronym or shouting keep theirs."""
+    core = token.lstrip("\"'(")
+    bare = _bare(token)
+    letters = _LETTERS.findall(core)
+    if (not core[:1].isupper() or bare in _I_FORMS or bare in protect or not letters
+            or (len(letters[0]) >= 2 and letters[0].isupper())
+            or not (bare in COMMON_WORDS or bare in _FILLER or bare in _AND_STARTS)):
+        return token
+    at = len(token) - len(core)
+    return token[:at] + core[0].lower() + core[1:]
+
+
+def _run_on(text: str, tex: Texture, rng: random.Random, protect: frozenset[str],
+            room: int) -> str:
+    """Some of her full stops between fragments, run on the way chat is typed: "x. y" becomes
+    "x, y", "x y" or "x and y", short fragments most readily; "?" and "!" stay, and so does
+    "...". After "lol" or a mark it is just a space. "and" only between two clauses of three
+    words or more, when the line has a word to spare (room)."""
+    if tex.join <= 0 or ". " not in text:
+        return text
+    toks = _TOKEN.findall(text)
+    ends = [i for i, w in enumerate(toks) if w.rstrip("\"')").endswith((".", "!", "?"))]
+    out, n = list(toks), len(toks)
+    for b in range(n - 1):
+        if not _full_stop(toks[b]):
+            continue
+        prev = max((e for e in ends if e < b), default=-1)
+        nxt = min((e for e in ends if e > b), default=n - 1)
+        left, right = b - prev, nxt - b
+        if rng.random() >= tex.join * (1 if min(left, right) <= SHORT_FRAGMENT else LONG_JOIN):
+            continue
+        head = out[b][:-1]
+        if _bare(head) in _INTERJECTIONS or _EMOTICON.fullmatch(head):
+            pass
+        elif (left >= 3 and right >= 3 and _bare(toks[b + 1]) in _AND_STARTS and n < room
+              and rng.random() < AND_SHARE):
+            head, n = head + " and", n + 1
+        elif rng.random() < tex.commas:
+            head += ","
+        out[b] = head
+        out[b + 1] = _soften(out[b + 1], protect)
+    return " ".join(out)
+
+
+def _misstrike(word: str, kind: str, rng: random.Random) -> str | None:
+    """`word` with one slip of `kind`: a neighbouring key, a letter left out (often the last), a
+    letter doubled or two swapped ("teh", "ponit"); the first letter only now and then."""
+    n = len(word)
+    if kind == "near":
+        i = 0 if rng.random() < FIRST_LETTER else rng.randrange(1, n)
+        side, diag = _NEAR.get(word[i].lower(), ("", ""))
+        keys = side if side and (not diag or rng.random() < .7) else diag
+        if not keys:
+            return None
+        c = rng.choice(keys)
+        return word[:i] + (c.upper() if word[i].isupper() else c) + word[i + 1:]
+    if kind == "drop":
+        r = rng.random()
+        i = n - 1 if r < .3 else 0 if r < .3 + FIRST_LETTER else rng.randrange(1, n)
+        return word[:i] + word[i + 1:]
+    if kind == "double":
+        i = rng.randrange(n)
+        return word[:i] + word[i] + word[i:]
+    i = 0 if rng.random() < .2 else rng.randrange(1, n - 1)  # swap
+    if word[i] == word[i + 1]:
+        return None
+    return word[:i] + word[i + 1] + word[i] + word[i + 2:]
+
+
+def _slip_words(text: str, skip: frozenset[str]) -> list[tuple[int, int, bool]]:
+    """The plain words a slip may hit: (start, end, whether its token is the bare word), outside
+    links, never a word in `skip`, a mark ("xD") or shouting."""
+    links = [m.span() for m in _LINK.finditer(text)]
+    out = []
+    for m in re.finditer(r"\S+", text):
+        if any(a < m.end() and m.start() < b for a, b in links):
+            continue
+        tok = m.group(0)
+        core = tok.lstrip("\"'(").rstrip(".,!?;:\"')")
+        if (not core.isascii() or not core.isalpha() or core.casefold() in skip
+                or _EMOTICON.fullmatch(core) or (len(core) >= SHOUT_MIN and core.isupper())):
+            continue
+        start = m.start() + len(tok) - len(tok.lstrip("\"'("))
+        out.append((start, start + len(core), core == tok))
+    return out
+
+
+def _slip_once(text: str, kind: str, words: list[tuple[int, int, bool]], rng: random.Random,
+               skip: frozenset[str]) -> tuple[str, str, str] | None:
+    if kind in ("merge", "shift"):  # a space left out ("inthe"), or hit a letter early
+        pairs = [(a, b) for a, b in zip(words, words[1:])
+                 if a[2] and b[2] and a[1] + 1 == b[0] and text[a[1]] == " "]
+        if kind == "merge":
+            pairs = [(a, b) for a, b in pairs if a[1] - a[0] <= 5 and b[1] - b[0] <= 5]
+        else:
+            pairs = [(a, b) for a, b in pairs if a[1] - a[0] >= 3]
+        if not pairs:
+            return None
+        a, b = rng.choice(pairs)
+        first, second = text[a[0]:a[1]], text[b[0]:b[1]]
+        new = first + second if kind == "merge" else first[:-1] + " " + first[-1] + second
+        if kind == "merge" and new.casefold() in COMMON_WORDS:
+            return None  # "in"+"to" is "into"
+        return text[:a[0]] + new + text[b[1]:], "", ""
+    if kind == "auto":
+        cands = [w for w in words if text[w[0]:w[1]].casefold() in _AUTOCORRECT]
+    else:
+        cands = [w for w in words if w[1] - w[0] >= 3]
+    if not cands:
+        return None
+    a, b, _ = rng.choices(cands, weights=[w[1] - w[0] for w in cands])[0]
+    word = text[a:b]
+    if kind == "auto":
+        new = _like(word, rng.choice(_AUTOCORRECT[word.casefold()]))
+    else:
+        new = _misstrike(word, kind, rng)
+        if new is None or new.casefold() in COMMON_WORDS or new.casefold() in skip:
+            return None
+    fixable = kind in _FIXABLE and (kind == "auto" or (len(word) >= 4
+                                                        and word.casefold() not in _SMALL))
+    return text[:a] + new + text[b:], new if fixable else "", word if fixable else ""
+
+
+def _slip(text: str, rate: float, rng: random.Random, skip: frozenset[str],
+          phone: bool) -> tuple[str, str, str]:
+    """At most one slip of the fingers in the line, in some lines: SLIP_K x `rate` of the lines
+    at SLIP_FULL words or more (at most SLIP_CAP), fewer in shorter ones. (text, the slip as
+    typed, the word she meant) when it is worth a "*word", else the slip's word and fix are
+    empty."""
+    if rate <= 0:
+        return text, "", ""
+    words = _slip_words(text, skip)
+    if not words or rng.random() >= min(SLIP_CAP, SLIP_K * rate * min(1.0, len(words) / SLIP_FULL)):
+        return text, "", ""
+    weights = _PHONE_KINDS if phone else _GAME_KINDS
+    for _ in range(TYPO_TRIES):
+        got = _slip_once(text, rng.choices(_KEYS, weights=weights)[0], words, rng, skip)
+        if got is not None:
+            return got
+    return text, "", ""
+
+
+def _textured(plain: str, t: Typing, tex: Texture, eff: Effects, rng: random.Random,
+              protected: frozenset[str], *, phone: bool) -> tuple[str, str, str]:
+    """The typed line from its plain words: shorthand, spelling habits, apostrophes, then at
+    most one slip. (typed, slip, fix) as _slip."""
+    protect = _words_cf(protected)
+    typed, short = _shorthand(plain, t, tex, rng, protect)
+    typed, spelt = _habits(typed, tex, rng, protect)
+    typed = _apostrophes(typed, tex.apostrophes, rng)
+    skip = protect | short | spelt | REAL_SHORTHAND | _INTERJECTIONS
+    return _slip(typed, t.typo_rate * eff.typo_mult * (DISCORD_SLIP if phone else 1), rng, skip,
+                 phone)
+
+
+def carries(line: str, slip: str) -> bool:
+    """`slip` is still a whole word of `line`."""
+    return bool(slip) and re.search(_WB + re.escape(slip) + _WE, line) is not None
 
 
 # -- laying the words out on lines -------------------------------------------------------------
@@ -438,7 +888,7 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
                 aliases: tuple[str, ...] = (), force_lines: bool = False,
                 no_emoticon: bool = False, wink_ok: bool = True,
                 game: bool = True, cap: int | None = None,
-                max_chars: int | None = None) -> list[Styled]:
+                max_chars: int | None = None, texture: bool = False) -> list[Styled]:
     """apply_style's lines with their plain words (Styled). `force_lines`: the turn may take
     all of max_lines whatever the persona's split_rate (a whisper to him at the explicit band
     runs to a line or two). `no_emoticon`: no mark is added (a line that carried her romance
@@ -449,7 +899,9 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
     cleaned as a chat line: the Discord store cleans and limits its text. `cap`: a line's
     words instead of line_cap's (a longer Discord message, talk/discord_length.py);
     `max_chars`: a line loses whole words until it has at most that many characters (the
-    Discord store's MAX_TEXT, which would refuse it whole)."""
+    Discord store's MAX_TEXT, which would refuse it whole). `texture` ([talk] texture): her
+    typing habits (texture_of, seeded by `speaker`) instead of every abbreviation every time
+    and typos word by word; a Discord line's slips are a phone's."""
     if kind in RAID_CALLS:
         eff = EFFECTS[Altered.SOBER]
     asc = to_ascii if game else str
@@ -468,10 +920,12 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
     lines = (max(1, max_lines) if kind is TurnKind.BIT or force_lines
              else turn_lines(t, max_lines))
     split = rng.random() < t.split_rate
-    laid = _fit(_TOKEN.findall(body), cap or line_cap(t, eff, length_mult), lines)
+    room = cap or line_cap(t, eff, length_mult)
+    laid = _fit(_TOKEN.findall(body), room, lines)
     if split and lines > 1 and len(laid) == 1:
         laid = _split_one(laid[0], t.words_per_line[0]) or laid
     protected = frozenset(asc(w) for w in protect) | keep
+    tex = texture_of(t, speaker) if texture else None
     out: list[Styled] = []
     for i, units in enumerate(laid):
         ws = [w for clause, _ in units for w in clause]
@@ -480,10 +934,16 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
         if not ws:
             continue
         plain = _end_punct(" ".join(ws).rstrip(",;:"), t.end_punct, drop_some)
+        if tex is not None:
+            plain = _run_on(plain, tex, rng, _words_cf(protected), room)
         if i > 0 and t.case == "proper":
             plain = _case(plain, "proper")
-        typed = _typos(_abbreviate(plain, t.abbreviations), t.typo_rate * eff.typo_mult, rng,
-                       protected)
+        slip = fix = ""
+        if tex is None:
+            typed = _typos(_abbreviate(plain, t.abbreviations), t.typo_rate * eff.typo_mult,
+                           rng, protected)
+        else:
+            typed, slip, fix = _textured(plain, t, tex, eff, rng, protected, phone=not game)
         tail = (f" {emoticon}" if emoticon and i == len(laid) - 1 and not _ends_marked(typed)
                 else "")
         while game and len((typed + tail).encode("utf-8")) > MAX_TEXT_BYTES:
@@ -502,7 +962,9 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
                 plain = _end_punct(" ".join(words[:-1]).rstrip(",;:"), t.end_punct, drop_some)
         line = sanitize_say_text(typed + tail) if game else (typed + tail).strip()
         if line:
-            out.append(Styled(line, plain))
+            if not carries(line, slip):  # cut off with the words the line lost
+                slip = fix = ""
+            out.append(Styled(line, plain, slip, fix))
     return out
 
 
@@ -510,7 +972,7 @@ def apply_style(text: str, t: Typing, eff: Effects, rng: random.Random, *,
                 length_mult: float = 1.0, protect: frozenset[str] = frozenset(),
                 speaker: str = "", kind: TurnKind | None = None,
                 keep_case: frozenset[str] = frozenset(), max_lines: int = 2,
-                aliases: tuple[str, ...] = ()) -> list[str]:
+                aliases: tuple[str, ...] = (), texture: bool = False) -> list[str]:
     """At most turn_lines(t, max_lines) lines, each plain ASCII and through
     sanitize_say_text; [] when nothing is left to say. `protect` (cast and human names) never
     gets a typo. `keep_case` words (the human's real name) keep their spelling through the
@@ -522,4 +984,4 @@ def apply_style(text: str, t: Typing, eff: Effects, rng: random.Random, *,
     loses whole words, never part of one."""
     return [s.line for s in style_lines(
         text, t, eff, rng, length_mult=length_mult, protect=protect, speaker=speaker, kind=kind,
-        keep_case=keep_case, max_lines=max_lines, aliases=aliases)]
+        keep_case=keep_case, max_lines=max_lines, aliases=aliases, texture=texture)]
