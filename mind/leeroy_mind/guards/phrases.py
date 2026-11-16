@@ -4,11 +4,18 @@ phrases: "you absolute menace" five times in 37 minutes, "I'm sitting here" in 8
 
 A draft is flagged when one of its 2-5 word phrases (a word outside STOP, two for a two-word
 phrase; no member's, his or a nickname's name; no capitalised proper noun) is one she already
-used in this conversation (`phrase_conversation`), one she used in 2 or more of her lines in the
-last 24 h (`phrase_day`), or one 3 or more other members used in the last 48 h (`phrase_cast`,
-3+ words). A phrase he or another member used in the current conversation is its topic, not
-her tic. The curated list in `stock_phrases.txt` is rationed on top: once per member in 72 h
-(`stock_member`) and 3 times a day across the cast (`stock_cast`).
+used in 2 or more of her earlier lines in this conversation, or in one when it holds a stock
+entry (`phrase_conversation`), one she used in 2 or more of her lines in the last 24 h
+(`phrase_day`), or one 3 or more other members used in the last 48 h (`phrase_cast`, 3+
+words). The conversation's subject is never her tic (owner's live DM test, 2026-11-16: "in
+greece" and "greek food" in a talk about his villa in Greece): the content words he and other
+members wrote in this conversation in the last 3 h (each speaker's newest 10 lines), folded so
+"greece"/"greek" and "hard"/"harder" are one word (`_subject`, `_same_word`). A phrase whose
+every content word is in the subject is its topic, for every rule here; a stock entry only when
+its content words are his ("thinking about you" said back to his: other members saying it is the
+cast's sameness the stock ration is for). A two-word phrase is no candidate when either word is
+in the subject. The curated list in `stock_phrases.txt` is rationed on top: once per member in
+72 h (`stock_member`) and 3 times a day across the cast (`stock_cast`).
 
 Reads are bounded and read-only; nothing here writes, logs or calls a model. Evidence is her own
 lines in any channel and other members' lines, counted and never quoted: the rewrite hint names
@@ -24,6 +31,8 @@ from leeroy_mind.text import strip_wow_markup
 MIN_WORDS, MAX_WORDS = 2, 5
 CONVERSATION_GAP = 30 * 60          # her lines this close together are one conversation
 CONVERSATION_MAX = 3 * 3600
+CONVERSATION_USES = 2               # her earlier lines in it that make a phrase her tic there
+TOPIC_SECONDS, TOPIC_LINES = 3 * 3600, 10  # the subject: his and others' lines in it, each's newest
 DAY_SECONDS, DAY_USES = 86400, 2    # the third use in a day is flagged
 CAST_SECONDS, CAST_MEMBERS, CAST_WORDS = 48 * 3600, 3, 3
 CAST_CONTENT = 2                    # "in a row" is everyone's; "cry for help" is a tell
@@ -285,6 +294,60 @@ def _conversation(own, key, now):
     return lines, min(edge, now - CONVERSATION_GAP)
 
 
+def _subject(rows, guid, key, now):
+    """The conversation's subject: the content words (outside STOP) of the lines he and other
+    members wrote in it within TOPIC_SECONDS, each speaker's newest TOPIC_LINES; and his alone.
+    `rows` is newest first."""
+    words, his, per = set(), set(), {}
+    for row in rows:
+        if (row['from_guid'] == guid or now - row['ts'] > TOPIC_SECONDS
+                or _key(row['channel'], row['from_guid'], row['to_guid']) != key):
+            continue
+        n = per.get(row['from_guid'], 0)
+        if n >= TOPIC_LINES:
+            continue
+        per[row['from_guid']] = n + 1
+        found = {w for w in _words(strip_wow_markup(row['text'] or '')) if _content(w)}
+        words |= found
+        if row['origin'] == 'human':
+            his |= found
+    return frozenset(words), frozenset(his)
+
+
+def _same_word(a, b):
+    """Two folded words as one for the subject: equal, or (both 4+ letters) sharing a prefix of
+    at least 4 letters and all but 2 letters of the shorter ("greece"/"greek", "hard"/"harder",
+    "thinking"/"think")."""
+    if a == b:
+        return True
+    if len(a) < 4 or len(b) < 4:
+        return False
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n >= max(4, min(len(a), len(b)) - 2)
+
+
+def _in_subject(word, subject):
+    return word in subject or any(_same_word(word, t) for t in subject)
+
+
+def _topic(words, subject):
+    """A phrase is the conversation's topic when every content word in it is in its subject."""
+    content = [w for w in words if _content(w)]
+    return bool(content) and all(_in_subject(w, subject) for w in content)
+
+
+@lru_cache(maxsize=4096)
+def _stock_words(words):
+    """The phrase holds a line of the stock list (any spelling of it)."""
+    return any(len(alt) <= len(words) and any(words[i:i + len(alt)] == alt
+                                              for i in range(len(words) - len(alt) + 1))
+               for _, alts in stock() for _, alt in alts)
+
+
 def _surface(text, toks, spans):
     """Overlapping spans merged, as the draft wrote them. A leading article or conjunction and
     a trailing preposition are trimmed ("the death of me" -> "death of me") while two words and
@@ -323,14 +386,14 @@ def check(reader, draft, now: float) -> Found:
     own = [r for r in rows if r['from_guid'] == draft.guid and r['origin'] == 'mind'][:OWN_LIMIT]
     cast = [r for r in rows if r['from_guid'] != draft.guid and r['origin'] == 'mind']
     hits = {code: [] for code in CODES}
+    key = _key(raw_channel(draft), draft.guid, draft.to_guid)
+    # The conversation's subject is everyone's (owner's live DM test, 2026-11-16: "in greece"
+    # and "greek food" in a talk about his villa in Greece were flagged as her tic): a phrase
+    # whose every content word he or another member used in this conversation is its topic.
+    subject, his = _subject(rows, draft.guid, key, now)
     if phrases:
-        key = _key(raw_channel(draft), draft.guid, draft.to_guid)
-        talk, began = _conversation(own, key, now)
-        said = set().union(*(_seen(r['text'])[1] for r in talk))
-        # The conversation's topic is everyone's: words he or another member here used too are
-        # never her tic ("grilled cheese" in a talk about grilled cheese).
-        topic = set().union(*(_seen(r['text'])[1] for r in rows if r['from_guid'] != draft.guid
-                              and r['ts'] >= began and _key(r['channel'], r['from_guid'], r['to_guid']) == key))
+        talk, _ = _conversation(own, key, now)
+        seen_talk = [_seen(r['text'])[1] for r in talk]
         day = [_seen(r['text'])[1] for r in own if now - r['ts'] <= DAY_SECONDS]
         wanted = {words for words in phrases if len(words) >= CAST_WORDS
                   and sum(map(_content, words)) >= CAST_CONTENT}
@@ -340,16 +403,23 @@ def check(reader, draft, now: float) -> Found:
                 for words in _seen(row['text'])[1] & wanted:
                     others.setdefault(words, set()).add(row['from_guid'])
         for words, spans in phrases.items():
-            if words in said and words not in topic:
+            if _topic(words, subject):
+                continue
+            if len(words) == 2 and any(_in_subject(w, subject) for w in words):
+                continue  # a two-word phrase only of words nobody else here used
+            uses = sum(words in grams for grams in seen_talk)
+            if uses >= CONVERSATION_USES or (uses and _stock_words(words)):
                 hits['phrase_conversation'] += spans
-            if words not in topic and sum(words in grams for grams in day) >= DAY_USES:
+            if sum(words in grams for grams in day) >= DAY_USES:
                 hits['phrase_day'] += spans
-            if words not in topic and len(others.get(words, ())) >= CAST_MEMBERS:
+            if len(others.get(words, ())) >= CAST_MEMBERS:
                 hits['phrase_cast'] += spans
     if stocked:
         mine = [_seen(r['text'])[0] for r in own if now - r['ts'] <= STOCK_MEMBER_SECONDS]
         recent = [_seen(r['text'])[0] for r in (*own, *cast) if now - r['ts'] <= STOCK_CAST_SECONDS]
         for alts, span in stocked:
+            if _topic(tuple(t.norm for t in toks[span[0]:span[1] + 1]), his):
+                continue  # his own words said back ("thinking about you" to his)
             if any(_has(clauses, alts) for clauses in mine):
                 hits['stock_member'].append(span)
             if sum(_has(clauses, alts) for clauses in recent) >= STOCK_CAST_USES:

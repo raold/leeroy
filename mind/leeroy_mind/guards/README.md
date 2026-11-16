@@ -196,7 +196,7 @@ one of its phrases is:
 
 | Code | Rule |
 |---|---|
-| `phrase_conversation` | one she already used in this conversation: her lines in the same room, or her whispers and DM with him (one conversation), each within 30 minutes of the next, at most 3 hours back |
+| `phrase_conversation` | one she already used in 2 or more of her lines in this conversation (in one when it holds a stock entry): her lines in the same room, or her whispers and DM with him (one conversation), each within 30 minutes of the next, at most 3 hours back |
 | `phrase_day` | one she used in 2 or more of her lines in the last 24 hours, any channel (the third use is flagged) |
 | `phrase_cast` | one 3 or more other members used in the last 48 hours; 3+ words with 2 outside STOP |
 | `stock_member` | a line of `stock_phrases.txt` she used in the last 72 hours |
@@ -207,8 +207,16 @@ two-word phrase), no member's, his or an active nickname's name, no boss, raid, 
 battleground or arena name the code knows (`wow.py`, so a lowercase "the lich king" is a
 name too) and no capitalised proper noun. Words are folded first: case, apostrophes, `u`/`ur`, `gonna`, `rn` and the cast's
 other abbreviations, so stored (styled) lines and the plain draft compare. Item placeholders,
-bracketed names, URLs and mentions break a phrase. A phrase he or another member used in
-the current conversation is its topic, never her tic, for all three phrase rules.
+bracketed names, URLs and mentions break a phrase. The conversation's subject is never her
+tic (owner's live DM test, 2026-11-16: a sandbox replay of his DM session had all 6 answers
+rewritten, "in greece" and "greek food" in a talk about his villa in Greece among them): the
+subject is the content words (outside `STOP`) he and other members wrote in this conversation
+in the last 3 hours, each speaker's newest 10 lines, with simple inflections folded (two words
+of 4+ letters sharing a prefix of 4 letters and all but 2 letters of the shorter:
+"greece"/"greek", "hard"/"harder"). A phrase whose every content word is in the subject is its
+topic for all three phrase rules; a two-word phrase is no candidate when either word is; a
+stock entry is skipped only when its content words are his (his "thinking about you" said
+back), since the cast saying it is what the stock ration is for.
 `stock_phrases.txt` holds the curated stock roleplay and AI phrases; its header says how to
 extend it ("^" anchors one to a clause opening: `^at least` is the consolation frame).
 
@@ -252,7 +260,10 @@ sameness, 9 borderline (ordinary "at least", "every single"), 6 false positives 
 nouns only she repeated in one conversation: "grain density", "chicken wrap"). Mean check
 4.7 ms. A false positive costs the one retry; if the retry keeps the phrase (a topic noun
 often is the subject), a non-owed line is then clause-cut or dropped, an owed one goes as
-written. Replay measures flag rate on what was said, not behaviour after rewrites.
+written. Replay measures flag rate on what was said, not behaviour after rewrites. These
+numbers predate the subject rules of 2026-11-16, which only ever flag less; on the sandbox DM
+session the drafts the guard reviewed went from 6 of 6 rewritten to 2 of 6 (both for stock
+phrases the cast keeps using).
 
 To replay (for example after extending the list), open `mind.db` with `?mode=ro` and, for
 each member line of `chat_line` (`origin='mind'`, oldest first), call
