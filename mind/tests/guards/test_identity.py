@@ -190,11 +190,14 @@ def test_a_fresh_draft_answers_when_every_draft_slipped_whole(rig):
         assert _roles(call) == ["system", "user"] and "gentleman" not in str(call["messages"])
 
 
-def test_an_owed_answer_drops_only_when_the_fresh_draft_slips_too(rig):
+def test_an_owed_answer_never_slips_even_when_the_fresh_draft_slips_too(rig):
+    """The slip is never sent. It dropped; since 2026-11-15 his owed answer is the fallback line
+    instead, built from his message (talk/owed.py)."""
     _her(rig)
     rig.script("i'm not some nice gentleman", "i'm a real gentleman")
     sent, meta = speak(rig, turn("whisper"), TurnMeta("owed", **OWED))
-    assert not sent and "guard_identity" in _dropped(rig)
+    assert len(sent) == 1 and "gentleman" not in sent[0].casefold()
+    assert meta.owed_rescued == "guard_identity" and "guard_identity" not in _dropped(rig)
     assert len(rig.chat_calls()) == 3
 
 
