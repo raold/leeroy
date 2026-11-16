@@ -357,3 +357,68 @@ def test_snap_readiness_covers_flagged_seeds_and_start_failure(snaproot, capsys,
     assert all(r["codes"] == [failure] for r in rows)
     assert all(r["nsfw"] == (.95 if failure == "flagged" else None) for r in rows)
     assert not list((snaproot / "scratch" / "selfies-try" / "snaps").glob("*/snap.jpg"))
+
+
+WORDS_REPLY = {"place": "supply cupboard at work", "framing": "mirror_selfie",
+               "wearing": "work_uniform", "moment": "slipped out for a minute", "time": "now",
+               "lighting": "fluorescent", "prop": None}
+ASK = "sneak off and send me one from the supply cupboard"
+
+
+def ask_llm(root, replies):
+    cfg = load_config(root / "mind.toml")
+    return FakeLLM(script=scripted(replies),
+                   models={cfg.models.live, cfg.models.embedding, cfg.models.reflection})
+
+
+def test_try_ask_reads_his_words_and_renders_one_photo_with_her_face_into_scratch(
+        snaproot, capsys, tmp_path, calls):
+    live = (snaproot / "mind.db").read_bytes()
+    llm = ask_llm(snaproot, {"scene_words": [WORDS_REPLY]})
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--ask", ASK, "--guid", "101"],
+                            make_llm=lambda cfg: llm)
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert code == 0 and out["guid"] == 101 and out["rendered"] == 1 and out["flagged"] == 0
+    scene = out.pop("scene")
+    assert scene["source"] == "words" and scene["fallbacks"] == [] and scene["style"] == "plain"
+    assert (scene["framing"], scene["wearing"], scene["lighting"]) == (
+        "mirror_selfie", "work_uniform", "fluorescent")
+    assert scene["time"] in ("morning", "day", "evening", "night")
+    base = snaproot / "scratch" / "selfies-try" / "ask" / "101"
+    assert out["path"] == str(base) and (base / "photo.jpg").is_file()
+    assert (base / "ref.jpg").read_bytes() == files.history(snaproot, 101, 1).read_bytes()
+    stored = json.loads((base / "scene.json").read_text(encoding="utf-8"))
+    assert (stored["setting"], stored["outfit"]) == ("supply cupboard at work",
+                                                     "a hi-vis vest over a work t-shirt")
+    asked = [c for c in llm.calls if "messages" in c]
+    assert len(asked) == 1 and asked[0]["think"] is False
+    assert asked[0]["format"]["title"] == "scene_words" and ASK in asked[0]["messages"][-1]["content"]
+    assert calls == [True] and " identity " in (tmp_path / "log").read_text()
+    assert (snaproot / "mind.db").read_bytes() == live
+    assert not list((snaproot / "selfies" / "101").glob("snaps*"))
+    for secret in ("sneak", "supply", "cupboard", "slipped", "hi-vis"):
+        assert secret not in captured.out + captured.err
+
+
+def test_try_ask_reports_the_enum_path_when_the_words_fail(snaproot, capsys):
+    from selfies.test_scene_choices import PICKS
+    bad = {**WORDS_REPLY, "framing": "drone shot"}
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--ask", ASK, "--guid", "101"],
+                            make_llm=lambda cfg: ask_llm(snaproot, {"scene_words": [bad, bad],
+                                                                    "scene": [PICKS]}))
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["rendered"] == 1 and out["scene"]["source"] == "enum"
+
+
+@pytest.mark.parametrize("argv", [["try", "--ask", ASK], ["try", "--ask", ASK, "--guid", "101", "--snaps"],
+                                  ["try", "--ask", ASK, "--guid", "101", "--varied"]])
+def test_try_ask_needs_one_guid_and_nothing_else(snaproot, capsys, argv):
+    assert cli.selfies_main(["--data-dir", str(snaproot), *argv]) == 2
+    assert "--ask goes with --guid" in capsys.readouterr().err
+
+
+def test_try_ask_refuses_a_member_without_a_chosen_photo(snaproot, capsys):
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--ask", ASK, "--guid", "103"],
+                            make_llm=lambda cfg: ask_llm(snaproot, {}))
+    assert code == 1 and json.loads(capsys.readouterr().out)["refused"] == "no_photo"
