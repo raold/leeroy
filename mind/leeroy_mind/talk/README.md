@@ -266,3 +266,30 @@ instruction at 200 characters a message, and the trim emptied her memories first
   "Auto-reply:") are not his words: never stored, never answered, no handler sees them
   (`pastes.is_addon_whisper`, `app._on_chat`; log `his_addon_whisper_skipped`). "<3", a tag he
   types himself ("<AFK> back in 5", "<Sigh> fine") and his pasted "<Flask>" checks are his.
+
+# The prompt as a situation (human-likeness core, 2026-11-16)
+
+Spec section 9 (bake-off 1: the rule list primed compliance; the variant cut to the hard rules
+scored best on public turns, 1.82 against 1.65). These are prompt functions only: nothing calls
+them until the pipeline wiring reads `[talk] situation` (core plan, Task 8), so every live prompt
+and `tests/tuning/golden_prompts.json` are unchanged.
+
+- **The hard rules** (`prompt.SITUATION_RULES`, `situation_rules`): a real person in 2009 in her
+  WoW guild who never says the year, not an assistant, only her own words (no name in front, no
+  quotes, no one else's lines, no narrated actions), shared history only from her memories, never
+  guilt-tripping him. Same signature, prefix ("In your guild: ...") and suffix (flirt rule,
+  tuning lines, nudges) as `comms_rules`, without `length_rule`, so the system message stays the
+  same on every turn for a speaker (Ollama's prompt cache). Noted as `talk.situation_rules`.
+- **The situation templates** (`prompt.SITUATION_INSTRUCTIONS` for reply_human, continue, open,
+  whisper and flirt, `OPEN_TO_HIM_SITUATION`): no length of their own and no "respond to what they
+  actually said". `render_instruction(..., situation=True)` uses them (a kind without one keeps
+  its game template), noted as `talk.situation_instruction.<kind>`.
+- **The length is the caller's.** `render_instruction(..., length_text=...)` puts the reply's
+  drawn length where the template's own was (`DISCORD_DROPS`, then before `{extra}`), never cut,
+  winning over the Discord length and `long`; on any template, so a game template can take a
+  drawn shape too. A situation template with neither `length_text` nor a Discord length raises
+  `ValueError`.
+- **Right now, last.** `PromptParts.situation` renders "Right now:" after the awareness card,
+  just before the instruction (the want and "It lands" stay in the beat's block after the
+  instruction). The trim treats it as before: never cut. `mood_line(..., where=, state_words=)`:
+  where she is in her day right after the time of day, and her feeling in place of the mood words.
