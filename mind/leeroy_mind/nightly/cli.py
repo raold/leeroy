@@ -353,6 +353,8 @@ async def _run(root, store, cfg, clock, args, make_llm):
             attach_claims(runner, root)
             from leeroy_mind.learn.night import attach as attach_rewards
             attach_rewards(runner, root, store)
+            from leeroy_mind.turing.night import attach as attach_turing
+            attach_turing(runner, root)
             await runner.run(night, ctx.window)
         except BaseException as exc:
             run_finish(store, night, now=clock.now(),

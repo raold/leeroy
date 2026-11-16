@@ -161,6 +161,10 @@ audience, and a group DM is shared only with those who were in it.
   behaviour, memory and secret-keeping, and talk quality (contradiction,
   repetition, non sequiturs, unawareness), always on scratch copies of the
   database and never by sending anything in game.
+- **The Turing judge** (`[turing]`): how easily the members are told apart from
+  the player, with his own lines as the human baseline: a model-free style
+  classifier per channel family and, at night, a blind judge on name-masked
+  conversation windows. See the [Turing guide](mind/leeroy_mind/turing/README.md).
 
 ### Learning
 
@@ -213,7 +217,7 @@ player can play something else, until he resumes or logs into WoW. Its 16 tabs:
 | Training | The training ground's fights, gate, trials and cards, what hurt the members per boss, and the raid playbooks |
 | Dojo | The dojo's builds, baselines and runs, read from its own files |
 | Library | Search of the game library, text first, the mind's semantic search as a fallback |
-| Lab | What the guild is learning: line rewards, variants and lessons (approve, veto, retire), reward weights, and a freeze; thumbs on every member line feed it |
+| Lab | What the guild is learning: line rewards, variants and lessons (approve, veto, retire), reward weights, a freeze, and the Turing judge's trend and tells; thumbs on every member line feed it |
 | Ops | Health, nights, held Realm moves, raids, photos, backups and release drift; optional actions, each previewed and confirmed |
 | Mind | The game server, the mind and the voice service, with start, restart and stop |
 

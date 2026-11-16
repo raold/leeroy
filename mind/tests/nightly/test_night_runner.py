@@ -397,10 +397,10 @@ def test_plan_scales_with_the_window_and_degrades_in_order(h, task5_counters, mo
         plan = run(plan_night(ctx))
     assert plan["budget_s"] == 2 * 2 * 3600
     assert plan["steps"] == [step.name for step in DEGRADE] == [
-        "realm", "scenes", "snaps", "coach", "selfies", "claims", "newcomers", "encounters", "notes", "wow_lines",
-        "extras", "critic", "questions"]
+        "realm", "scenes", "snaps", "turing", "coach", "selfies", "claims", "newcomers", "encounters", "notes",
+        "wow_lines", "extras", "critic", "questions"]
     assert plan["settings"] == {
-        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5,
+        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "turing_windows": 4, "coach_units": 5,
         "selfie_per_night": 10, "claims_per_night": 0, "newcomers_per_night": 0, "encounters_per_night": 20, "notes_per_night": 100, "wow_lines_per_night": 10,
         "stories_per_night": 1, "lexicon_candidates": 0, "profile_per_night": 0, "critic_lines": 0,
         "questions_min_new": 6}
@@ -716,6 +716,7 @@ def test_planning_costs_and_the_budget(h):
     assert PLAN_S == {"think": 90.0, "json": 20.0, "live": 6.0}
     assert estimate({s: 1 for s in UNIT_CALLS}, measured={}) == pytest.approx({
         "coach": 130, "realm": 20, "claims": 20, "newcomers": 110, "signals": 0, "rewards": .02, "talk_coach": 20, "bandit": 0, "learn_cycle": 0,
+        "turing": 20,                                                   # one blind-judge call a window
         "world_personas": 220, "world_photos": 20, "world_selfies": 48,
         "reflect": 150, "reflect_small": 130, "notes": 40, "encounters": 40, "confide": 22, "arc": 30,
         "life": 40, "wowlife": 40, "follow": 40, "lexicon": 20, "profile": 40, "stories": 130,
@@ -780,18 +781,18 @@ def test_a_step_cuts_only_what_the_budget_needs(h, task5_counters, monkeypatch):
     plan = run(plan_night(h.ctx()))
     # The realm, the coach and the photos have no counter in this fixture; their cuts still reach
     # their floors.
-    assert plan["steps"] == ["realm", "scenes", "snaps", "coach", "selfies", "claims", "newcomers", "encounters"] and plan["settings"] == {
-        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5, "selfie_per_night": 10, "claims_per_night": 0, "newcomers_per_night": 0,
+    assert plan["steps"] == ["realm", "scenes", "snaps", "turing", "coach", "selfies", "claims", "newcomers", "encounters"] and plan["settings"] == {
+        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "turing_windows": 4, "coach_units": 5, "selfie_per_night": 10, "claims_per_night": 0, "newcomers_per_night": 0,
         "encounters_per_night": 55}  # 56 is 30 s over
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 582)    # 12,804 s
     plan = run(plan_night(h.ctx()))
-    assert plan["steps"] == ["realm", "scenes", "snaps", "coach", "selfies", "claims", "newcomers", "encounters", "notes", "wow_lines"]  # notes cannot help, and still go to 100
-    assert plan["settings"] == {"realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5, "selfie_per_night": 10, "claims_per_night": 0, "newcomers_per_night": 0, "encounters_per_night": 20,
+    assert plan["steps"] == ["realm", "scenes", "snaps", "turing", "coach", "selfies", "claims", "newcomers", "encounters", "notes", "wow_lines"]  # notes cannot help, and still go to 100
+    assert plan["settings"] == {"realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "turing_windows": 4, "coach_units": 5, "selfie_per_night": 10, "claims_per_night": 0, "newcomers_per_night": 0, "encounters_per_night": 20,
                                 "notes_per_night": 100, "wow_lines_per_night": 20}  # halved once: 400 s of lines fit
     monkeypatch.setitem(budget.COUNTERS, "confide", lambda ctx: 605)
     plan = run(plan_night(h.ctx(window=(end - 2 * 3600, end))))         # 12 scenes, already below the floor
-    assert plan["steps"] == ["realm", "scenes", "snaps", "coach", "selfies", "claims", "newcomers", "notes", "wow_lines"] and plan["settings"] == {
-        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "coach_units": 5, "selfie_per_night": 10, "claims_per_night": 0, "newcomers_per_night": 0, "encounters_per_night": 12, "notes_per_night": 100,
+    assert plan["steps"] == ["realm", "scenes", "snaps", "turing", "coach", "selfies", "claims", "newcomers", "notes", "wow_lines"] and plan["settings"] == {
+        "realm_units": 0, "scenes_per_night": 0, "snaps_per_night": 0, "turing_windows": 4, "coach_units": 5, "selfie_per_night": 10, "claims_per_night": 0, "newcomers_per_night": 0, "encounters_per_night": 12, "notes_per_night": 100,
         "wow_lines_per_night": 10}
 
 

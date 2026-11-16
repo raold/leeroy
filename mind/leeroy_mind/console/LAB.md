@@ -80,3 +80,13 @@ cycle" in the contexts where they were promoted, and lessons show "promoted".
 Validation uses scratch databases, the fake mind/bridge/model browser rehearsal,
 keyboard actions, 390 px layouts and both themes. No live service or model is
 needed to exercise the Lab.
+
+The **Turing** panel reads `turing_night` and `turing_judgement` (`turing/README.md`)
+read-only for the last 14 days: per channel family a trend chart (solid: the style
+classifier's AUC; dotted: the blind judge's accuracy; dashed: 0.50, where the members
+read like him), the latest AUC with its interval, the judge's totals, the style tells in
+words ("contractions with an apostrophe (i'm, don't): him 6%, members 51%"), the tells
+the judge caught by code with up to three of its short phrases (kept only from windows
+on public channels), and the nights. The chart is a clone of the page's own empty
+`<svg>`, so scripts carry no namespace URL. Without the tables, or before the first
+night, it says **Not set up yet**.

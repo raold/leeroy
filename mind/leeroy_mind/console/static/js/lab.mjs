@@ -1,7 +1,7 @@
 import { $, api, clear, el, on, post, refused } from "./core.mjs";
 import { S } from "./state.mjs";
 import { pollTab } from "./tabkit.mjs";
-import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords } from "./labmodel.mjs";
+import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords, turingView, CHART } from "./labmodel.mjs";
 import { BoundedMap } from "./resilience.mjs";
 
 let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null, withWeights=false;
@@ -149,6 +149,37 @@ function weekly(value) {
   });
   if (!saved.length) { empty(d,'No saved states yet.'); } box.appendChild(d);
 }
+// The trend chart is a clone of the page's own empty <svg>, so its parts share its namespace.
+function chart(f) {
+  const svg=$('lab-turing-chart').cloneNode(false), ns=svg.namespaceURI;
+  svg.removeAttribute('id'); svg.setAttribute('aria-hidden','true');
+  const part=(name,attrs) => { const n=document.createElementNS(ns,name);
+    Object.entries(attrs).forEach(([k,v]) => n.setAttribute(k,String(v))); svg.appendChild(n); return n; };
+  const mid=CHART.height/2;
+  part('line',{x1:CHART.pad,x2:CHART.width-CHART.pad,y1:mid,y2:mid,class:'turing-chance'});
+  [['auc','turing-auc'],['judge','turing-judge']].forEach(([key,cls]) => {
+    const pts=f[key];
+    if (pts.length>1) { part('polyline',{points:pts.map(p => p.join(',')).join(' '),class:cls}); }
+    pts.forEach(([x,y]) => part('circle',{cx:x,cy:y,r:2.5,class:cls+' turing-dot'}));
+  });
+  return svg;
+}
+function turing(value) {
+  const box=$('lab-turing'); clear(box); const view=turingView(value);
+  if (!view.available) { empty(box,'Not set up yet. Turn on [turing] enabled in mind.toml; each night then stores a score.'); return; }
+  box.appendChild(el('p','hint','Last '+view.days+' days. AUC 0.50: the members read like you; 1.00: always told apart. '+
+    'The solid line is the style AUC, the dotted one the blind judge’s accuracy; the dashed line is 0.50.'));
+  if (!view.families.length) { empty(box,'No nights stored in the last '+view.days+' days.'); }
+  view.families.forEach(f => {
+    const part=el('div','turing-family'); part.append(el('h4','',f.label),el('p','lab-stat',f.headline),chart(f),el('p','lab-stat',f.verdict));
+    [['Style tells','features','None stand out.'],['What the judge caught','tells','Nothing caught yet.'],['By night','nights','No nights yet.']].forEach(([title,key,none]) => {
+      const d=details(title+' ('+f[key].length+')','turing-'+key+'-'+f.family);
+      f[key].forEach(t => d.appendChild(el('p','lab-stat',t)));
+      if (!f[key].length) { empty(d,none); } part.appendChild(d);
+    });
+    box.appendChild(part);
+  });
+}
 $('lab-weights-form').addEventListener('submit',event => {
   event.preventDefault();
   const values=weightValues(Object.fromEntries(WEIGHTS.map(k => [k,$('lab-weight-'+k).value.trim()==='' ? NaN : Number($('lab-weight-'+k).value)])));
@@ -177,7 +208,7 @@ function render(value) {
   $('lab-freeze').disabled=!!value.config_freeze;
   $('lab-learning-state').textContent=value.config_freeze ? 'Learning is frozen in mind.toml ([learn] freeze). Change it there.' : value.freeze ? 'Learning is frozen.' : value.enabled ? 'Learning is enabled by its config.' : 'Learning is disabled in config. Controls do not enable it.';
   rewards(value.rewards); arms(value.arms); lessons(value.lessons); weights(value.weights);
-  weekly(value);
+  weekly(value); turing(value.turing);
   $('tab-lab').querySelectorAll('details').forEach(d => {
     d.open=open.has(d.dataset.detail || d.id);
     d.querySelectorAll(':scope > button').forEach(b => { b.dataset.labFocus=(d.dataset.detail || d.id)+'-'+b.textContent; });
