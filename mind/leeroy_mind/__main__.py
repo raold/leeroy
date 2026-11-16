@@ -1463,8 +1463,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                                     "book, and extract local DBM facts")
     sub.add_parser("lexicon", help="clean-junk: retire stored slang that is an ordinary word "
                                    "(a dry run unless --go, with the mind stopped)")
-    sub.add_parser("life", help="the members' day plans, where they are now and their reply "
-                                "shapes (read-only)")
+    sub.add_parser("life", help="day, now, intents, shapes: the members' day plans, where they "
+                                "are now, what they want on a turn and their reply shapes "
+                                "(read-only)")
     p_init = sub.add_parser("init", help="create the data dir and a default mind.toml")
     _add_data_dir(p_init)
     p_init.set_defaults(func=cmd_init)

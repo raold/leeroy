@@ -565,6 +565,9 @@ class Composed:
     moves: list[MoveRow] = field(default_factory=list)
     # the memories and chat lines it showed, as the beat may offer them (beat.items_of)
     beat_items: list[str] = field(default_factory=list)
+    # his explicit whisper overlay is after its instruction (romance.whisper_tail): the beat
+    # then offers none of the wants it rules out (beat.wants_for's `tail`)
+    tail: bool = False
 
 
 def _hinted(composed: "Composed", hint: str) -> "Composed":
@@ -1279,7 +1282,7 @@ class Pipeline:
         started, reason, wants, items = self.clock.now(), "", (), []
         try:
             human, their = self.human.called, self.human.forms[2]
-            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0)
+            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0, tail=c.tail)
             options = dict(BEAT.options)
             options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
             items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
@@ -1633,7 +1636,8 @@ class Pipeline:
                         beat_items=beats.items_of(
                             [beats.unframed(x) for x in trimmed.memories],
                             [plain(r.text) for r in recent[:-1]
-                             if r.from_guid != turn.speaker and r.id != turn.trigger_line]))
+                             if r.from_guid != turn.speaker and r.id != turn.trigger_line]),
+                        tail=bool(tail))
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:

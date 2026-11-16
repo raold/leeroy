@@ -21,25 +21,15 @@ Pure: no I/O and no logging. The beat's words are never logged or stored (the pi
 import json
 from dataclasses import dataclass
 
+from leeroy_mind.talk.intent import TAIL_OFF, WANT_WORDS, Intent, want_words
 from leeroy_mind.talk.prompt import ESTIMATE_SLACK
 from leeroy_mind.text import estimate_tokens, truncate_words
 
-# What she wants from her answer (the design's section-2 intents): the words "You want to:" reads
-# for each, and its one-line meaning in the ask and the schema. {human} is what the guild calls him.
-WANTS = {
-    "vent": "get something off your chest",
-    "share": "share something of your own",
-    "ask": "get something from {human}",
-    "tease": "tease {human}",
-    "flirt": "flirt with {human}",
-    "reassure_seek": "hear that things are good between you",
-    "gossip": "talk about someone else",
-    "deflect": "steer away from it",
-    "small_talk": "keep it light",
-    "react": "just react",
-    "boundary": "draw a line",
-    "logistics": "sort out the plan",
-}
+# What she wants from her answer: the one want enum (talk/intent.py, the design's section-2
+# intents) and the words "You want to:" reads for each, keyed here as the beat has always keyed
+# them (by code, {human} for what the guild calls him). MEANING is each one's one-line meaning in
+# the ask and the schema.
+WANTS = {i.value: WANT_WORDS[i].replace("{who}", "{human}") for i in Intent}
 MEANING = {
     "vent": "you need to get something that is bothering you off your chest",
     "share": "you want to tell {human} something of your own: news, a story, your day",
@@ -84,10 +74,14 @@ class Beat:
     use: str | None  # the memory or chat line to bring in, as the prompt showed it
 
 
-def wants_for(can_flirt: bool) -> tuple[str, ...]:
+def wants_for(can_flirt: bool, *, tail: bool = False) -> tuple[str, ...]:
     """The wants on offer: "flirt" only for a member who may flirt with him (romance.flirt_chance;
-    the content invariant: never a man, never a woman whose stance has no flirt)."""
-    return tuple(w for w in WANTS if can_flirt or w != "flirt")
+    the content invariant: never a man, never a woman whose stance has no flirt). `tail`: his
+    explicit whisper overlay is in the line's prompt, so the wants it rules out are not on offer
+    (intent.TAIL_OFF: never vent, gossip, deflect, draw a line, sort out plans or keep it light;
+    PM log 2026-11-16, review-332), whatever [talk] intent says."""
+    return tuple(i.value for i in Intent if (can_flirt or i is not Intent.FLIRT)
+                 and not (tail and i in TAIL_OFF))
 
 
 def items_of(memories: list[str], chat: list[str]) -> list[str]:
@@ -178,10 +172,26 @@ def parse(text: str, wants: tuple[str, ...], items: list[str]) -> tuple[Beat | N
     return Beat(read, lands, want, items[use - 1] if use is not None else None), ""
 
 
-def lines(beat: Beat, human: str) -> str:
-    """What the line's prompt gets after its instruction."""
-    out = [f"You read it as: {beat.read}", f"It lands: {beat.lands}",
-           f"You want to: {WANTS[beat.want].format(human=human)}"]
-    if beat.use is not None:
-        out.append(f"Bring in: {beat.use}")
+def render(*, read: str = "", lands: str = "", want: Intent | None = None, who: str = "",
+           topic: str = "", use: str | None = None) -> str:
+    """The one block after a line's instruction, on any channel: a line for each field given,
+    in this order: "You read it as", "It lands", "You want to" (intent.want_words: the want's
+    words for `who`, then its `topic` in brackets) and "Bring in"; "" when none is given. The
+    beat fills it on his private turns (lines); elsewhere the code-drawn want and the state's
+    "It lands" will fill it (core plan Task 8)."""
+    out = []
+    if read:
+        out.append(f"You read it as: {read}")
+    if lands:
+        out.append(f"It lands: {lands}")
+    if want is not None:
+        out.append(f"You want to: {want_words(want, who, topic)}")
+    if use:
+        out.append(f"Bring in: {use}")
     return "\n".join(out)
+
+
+def lines(beat: Beat, human: str) -> str:
+    """What the line's prompt gets after its instruction (render, from the beat)."""
+    return render(read=beat.read, lands=beat.lands, want=Intent(beat.want), who=human,
+                  use=beat.use)
