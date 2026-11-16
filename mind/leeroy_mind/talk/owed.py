@@ -34,7 +34,8 @@ Three layers, cheapest first:
 
 Deliberate silences are held, never dropped: the watchdog waits and answers just after them,
 logging `owed_held` once per reason: his raid's boss fight and wipe silence (RaidState.allows),
-a /say whose hearers are all dead, a Free GPU pause, his whisper's member being AFK, him being
+a /say whose hearers are all dead, a Free GPU pause, the live model away (the app's silent
+latch: every line is refused then, MindApp._send), his whisper's member being AFK, him being
 offline in game (for a game line), a DM she answers on her own time ([talk] dm_own_time) or a
 group DM's own pacing, a selfie request still being made and his voice note still being
 transcribed.
@@ -296,6 +297,9 @@ async def rescue_text(pipe, turn, meta, composed, why: str, rejected: str, *,
     gate = getattr(pipe.scheduler, "gpu_gate", None)
     if text is None and getattr(gate, "paused", False):
         return rejected, "gpu_paused"
+    watch = getattr(pipe, "owed", None)
+    if text is None and watch is not None and watch.model_away():
+        return rejected, why  # the guild is silent while the model is away (app._send)
     how = "model" if text else "fallback"
     if not text:
         text = fallback_line(his_words(pipe, turn, meta, composed), called=pipe.human.called,
@@ -387,6 +391,11 @@ class OwedWatch:
         gate = getattr(getattr(self.app, "scheduler", None), "gpu_gate", None)
         return bool(getattr(gate, "paused", False))
 
+    def model_away(self) -> bool:
+        """The app's silent latch is off (MindApp.model_ready: Ollama lacks the live model), so
+        every line would be refused `model_away`: a deliberate silence, waited out."""
+        return getattr(self.app, "model_ready", True) is False
+
     def _hold(self, o: Owed, key, reason: str) -> None:
         if o.held != reason:
             o.held = reason
@@ -458,8 +467,8 @@ class OwedWatch:
                 self._give_up(o, "tries")
                 del self._game[key]
                 continue
-            if self._paused():
-                self._hold(o, key, "gpu_paused")
+            if self._paused() or self.model_away():
+                self._hold(o, key, "gpu_paused" if self._paused() else "model_away")
                 continue
             if not eng.world.human_online:
                 self._hold(o, key, "human_offline")
@@ -635,6 +644,8 @@ class OwedWatch:
         """A deliberate wait: a Free GPU pause, her own time for a DM, a group DM's pacing."""
         if self._paused():
             return "gpu_paused"
+        if self.model_away():
+            return "model_away"
         store = self.app.store
         if o.channel.startswith("dm:") and o.to:
             deferred = store.get_meta(f"discord:dm:deferred:{o.to}")

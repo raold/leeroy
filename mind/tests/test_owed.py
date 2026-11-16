@@ -425,3 +425,22 @@ def test_health_names_the_unanswered_count_by_medium(store):
     for i in range(health.OWNER_UNANSWERED_FAIL):
         _his(store, f"line {i}", now - 3000 + i * 200, channel="whisper", to_guid=101)
     assert health._owner_replies(store.conn, now).status == health.FAIL
+
+
+def test_the_model_away_holds_the_rescue_until_it_is_back(store, clock, tmp_path, caplog):
+    """While the app's silent latch is off every line is refused (MindApp._send): the watchdog
+    waits, then answers once the model is back."""
+    caplog.set_level(logging.INFO)
+
+    async def main():
+        r = make_rig(store, clock, tmp_path, script=numbered("back {n}, what did i miss?"))
+        w = _watch(r, model_ready=False)
+        await _tick(r, w, owed.START_GRACE_S)
+        w.note_line(_line(r, "anyone up for a dungeon"), "guild")
+        await _tick(r, w, 120)
+        assert r.sent.says() == []
+        assert any("owed_held" in m and "reason=model_away" in m for m in caplog.messages)
+        w.app.model_ready = True
+        await _tick(r, w, 40)
+        assert [s.channel for s in r.sent.says()] == ["guild"]
+    run(main())

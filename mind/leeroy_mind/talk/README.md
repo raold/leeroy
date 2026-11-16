@@ -236,6 +236,8 @@ full rule); no switch, no migration, no native rebuild.
   15 min (game) or 30 min (Discord) are let go (`owed_given_up reason=too_old`).
 - **Held, then answered just after** (`owed_held reason=`): his raid's boss fight and wipe silence
   (`raid`; `dead` for a /say nobody alive can answer yet), a Free GPU pause (`gpu_paused`), the
+  live model away (`model_away`: the app refuses every line then, so the in-turn fallback line is
+  skipped too and the turn keeps its drop), the
   whispered member AFK (`afk`), him offline for a game line (`human_offline`), a DM she answers on
   her own time (`own_time`), a group DM's pacing (`group_pacing`), a selfie request still being
   made (`photo_request`), his voice note still being transcribed (`voice_note`).
