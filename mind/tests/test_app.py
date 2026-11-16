@@ -625,6 +625,7 @@ def test_hello_keeps_the_last_human_guid_and_login_greets(tmp_path, clock, caplo
             assert app.store.get_meta("guild_id") == "1"
             assert app.store.open_session() is None and app.store.get_meta("human_guid") is None
             assert app.engine.human.guid == HUMAN  # the roster's guild master until named
+            app.engine.greeter_draw = lambda rng: rng.randint(2, 3)  # greeted as before 2026-11-15 (test_orbit.py)
             await h.bridge.push(presence("login"))
             await h.wait(lambda: app.store.open_session() is not None)
             assert app.store.get_meta("human_guid") == str(HUMAN)
@@ -890,6 +891,7 @@ def test_backlog_events_are_recorded_but_never_answered(tmp_path, clock):
             row = h.rows("SELECT origin, thread_id FROM chat_line")[0]
             assert row["origin"] == "human" and row["thread_id"] is not None  # threaded
             assert any("Glory of the Hero" in text for _, text, _ in h.memories())
+            h.app.engine.greeter_draw = lambda rng: rng.randint(2, 3)  # a login some always greet
             await h.bridge.push(presence("login"))  # positive control: live events are
             await h.advance(60)
             assert h.says()

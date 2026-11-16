@@ -126,3 +126,52 @@ def test_talkative_zero_members_never_speak():
     personas[101]=effective(personas[101],MemberTuning({'talkative':0}))
     for n in range(30):
         assert 101 not in draw(personas,states,rng=random.Random(n))
+
+
+def test_the_subject_is_drawn_before_the_seed_so_many_seeds_never_crowd_out_one():
+    """2026-11-15: one officer seed per member and one life seed per beat were 88% of the
+    openers. A kind with 160 seeds is now drawn about as often as its subject weight says."""
+    from collections import Counter
+    from leeroy_mind.server.rhythm import SUBJECT_WEIGHT
+    from leeroy_mind.server.seeds import subject_of
+    many = [Seed(f'officer:{g}','officer',('officer-chat',),'f',officers_only=True) for g in range(160)]
+    many += [Seed(f'life:{g}','life',('irl','general'),'f',(g,)) for g in range(64)]
+    one = [Seed('raid_after:1','raid_after',('logs','loot-and-dkp','general'),'Last raid'),
+           Seed('loot:1','loot',('loot-and-dkp',),'A won B'),
+           Seed('rival:1','rival',('general',),'R was active'),
+           Seed('calendar:1','calendar',('general',),'Meeting')]
+    rng = random.Random(3)
+    drawn = Counter(subject_of(choose_seed_and_channel(many+one, local=datetime(2026,11,12,19),
+                                                       officers_free=3, rng=rng)[0].kind)
+                    for _ in range(4000))
+    weights = {s: SUBJECT_WEIGHT[s] for s in ('officer','life','raid','loot','rival','calendar')}
+    total = sum(weights.values())
+    for subject, weight in weights.items():
+        assert abs(drawn[subject]/4000 - weight/total) < 0.03, (subject, drawn)
+    assert drawn['raid'] > drawn['officer'] and drawn['officer'] < 0.1*4000
+
+
+def test_within_a_subject_the_seed_and_channel_keep_their_own_weights():
+    seeds = [Seed('raid_before:1','raid_before',('raid-planning','general'),'Raid at 20:00'),
+             Seed('reset:1','reset',('raid-planning','general'),'Weekly reset')]
+    rng = random.Random(5)
+    picks = [choose_seed_and_channel(seeds, local=datetime(2026,11,12,19), officers_free=0, rng=rng)
+             for _ in range(2000)]
+    assert {s.kind for s, _ in picks} == {'raid_before','reset'}
+    planning = sum(1 for s, ch in picks if s.kind == 'raid_before' and ch == 'raid-planning')
+    assert planning > sum(1 for s, ch in picks if s.kind == 'raid_before' and ch == 'general')
+
+
+def test_hangouts_still_scale_a_subject():
+    """A channel the members avoid (godmode hangouts) takes its subject's draws down with it."""
+    from types import SimpleNamespace
+    seeds = [Seed('officer:1','officer',('officer-chat',),'f',officers_only=True),
+             Seed('rival:1','rival',('general',),'R')]
+    avoid = {g: SimpleNamespace(channel_weight=lambda ch: 0.05 if ch == 'officer-chat' else 1.0,
+                                channels=True) for g in range(101,104)}
+    rng = random.Random(9)
+    plain = sum(choose_seed_and_channel(seeds, local=datetime(2026,11,12,19), officers_free=3,
+                                        rng=rng)[0].kind == 'officer' for _ in range(2000))
+    avoided = sum(choose_seed_and_channel(seeds, local=datetime(2026,11,12,19), officers_free=3,
+                                          rng=rng, hangouts=avoid)[0].kind == 'officer' for _ in range(2000))
+    assert avoided < plain / 5

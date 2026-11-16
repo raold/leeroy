@@ -8,10 +8,11 @@ sends what they say over the bridge.
   triggers once per event and polls the registered TurnSources (P1d and phase 3);
 - members start conversations with him on two clocks (owner, 2026-11-07: "they only respond,
   never actually initiate"): the WhisperPlanner's whispers (romantic and personal, by whisper)
-  and the budget's openers addressed to him (casual, party when he is grouped with them, else
-  guild), at mind.toml's [talk] whispers_per_hour and openers_per_hour, both scaled with
-  chattiness (whisper_rate) and the member dials, never in a fight, the wipe's silence, its
-  debrief or his login's quiet;
+  and the budget's openers, [talk] openers_to_him of them addressed to him (casual, party when
+  he is grouped with them, else guild) and the rest starting a conversation among the members
+  about the guild's own business (_open_to_guild, 2026-11-15), at mind.toml's [talk]
+  whispers_per_hour and openers_per_hour, both scaled with chattiness (whisper_rate) and the
+  member dials, never in a fight, the wipe's silence, its debrief or his login's quiet;
 - every turn goes through the line pipeline (pipeline.py), which composes the prompt, asks the
   model, filters assistant tells, styles the words as the member types and sends each line.
 
@@ -46,12 +47,12 @@ from leeroy_mind.protocol import Ack, Chat, Command
 from leeroy_mind.storage.rows import ChatLineRow, MemoryRow
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.bits import BitScheduler, birthday_line, is_birthday_bit
-from leeroy_mind.talk.budget import (GAP_REFERENCE_CHATTINESS, BurstBudget, BurstPlan,
-                                     DayPhase, day_phase)
+from leeroy_mind.talk.budget import (GAP_REFERENCE_CHATTINESS, PHASE_MODS, BurstBudget,
+                                     BurstPlan, DayPhase, day_phase)
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.emotes import EmoteReactions
 from leeroy_mind.talk.facts import LibraryFacts
-from leeroy_mind.talk import pastes
+from leeroy_mind.talk import guild_topics, pastes
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.items import ItemLinker
 from leeroy_mind.talk.pastes import PASTE_BURST_S, PASTE_SETTLE_S, PasteBurst, is_addon_row
@@ -104,12 +105,14 @@ RARE_SHARE = 0.02
 # One member's openers to him are at least this far apart (engine._open_to_him).
 TO_HIM_GAP_S = 1200.0
 # What an opener to him brings up, as OPEN_TO_HIM's {topic} (prompt.py), rotated per member and
-# night: something of their own (prompt.open_topics), a question for him, a memory with him
-# and, when they have one, tonight's events.
-TO_HIM_TOPICS = ("tell {them} about {own}", "ask {them} what {they}'re up to tonight",
-                 "ask {them} how {their} day went",
+# night: something of their own (prompt.open_topics), a memory with him and, when they have
+# one, tonight's events. Never an interview question (2026-11-15: "how's your day" and "what are
+# you up to" were asked by five members within two hours).
+TO_HIM_TOPICS = ("tell {them} about {own}",
                  "bring up something you remember doing with {them}, if one of your memories "
-                 "holds it, else ask what {they}'re up to")
+                 "holds it, else tell {them} about {own}")
+# The lines of a conversation an opener to the guild starts (engine._open_to_guild), as a burst.
+GUILD_OPEN_SIZE = (2, 5)
 TO_HIM_TONIGHT = "bring up what happened tonight ({lately})"
 # The guild's next calendar event (Store.next_calendar_event) this soon is a topic too.
 TO_HIM_EVENT = "bring up what's on the guild calendar: {event}"
@@ -188,6 +191,8 @@ class TalkEngine(EmoteReactions):
         self.whispers = WhisperPlanner(rng, per_hour=whisper_rate(cfg),
                                        events=whisper_rate(cfg) > 0)
         self._to_him_at: dict[int, float] = {}  # a member's last opener to him (TO_HIM_GAP_S)
+        self._guild_used: dict[str, set[str]] = {}  # tonight's guild opener topics (_open_to_guild)
+        self._item_names: dict[int, str] | None = None  # item id -> name (_item_name)
         self.human = human_identity(cfg, store, human_guid)
         self.asides = JealousyAsides(rng, jealousy=cfg.romance.jealousy, human=self.human)
         now = clock.now()
@@ -750,7 +755,7 @@ class TalkEngine(EmoteReactions):
         mult = None
         try:
             if plan.to_him:
-                mult = await self._open_to_him()
+                mult = await self._open()
             else:
                 await self._burst(plan)
         finally:
@@ -759,9 +764,74 @@ class TalkEngine(EmoteReactions):
             elif plan.channel_hint is None:  # raid-cadence plans keep the budget's own clock
                 self.budget.burst_done(self.clock.now())
 
+    async def _open(self) -> float | None:
+        """The openers' clock is due (the budget's to_him plan): an opener addressed to him a
+        share of the time ([talk] openers_to_him), else one to the guild about its own business
+        (owner's Turing push, 2026-11-15: a guild mostly talks among itself). The talkative
+        dials' pull on the clock, as either returns it."""
+        if self.rng.random() < self.cfg.talk.openers_to_him:
+            return await self._open_to_him()
+        return await self._open_to_guild()
+
+    async def _open_to_guild(self) -> float | None:
+        """A conversation among the members, begun by an opener about the guild's own business
+        (talk/guild_topics.py: a subject first, then a topic and who raises it; a topic once a
+        night), in guild chat, answered as a social burst is (_burst). It holds the social
+        bursts' clock while it runs and rests it a gap after (BurstBudget.begin), and gives way
+        to a social burst already running. Nobody may speak in his raid's fight, its wipe or its
+        debrief. The talkative dials' pull, or None with nobody."""
+        now, hg = self.clock.now(), self.human.guid
+        if not hg or not self.world.human_online:
+            return None
+        every = [g for g in self._candidates() if self.raid.allows(g, TurnKind.OPEN, now)]
+        if not every:
+            log.info("open_to_guild_skipped: reason=no_candidates")
+            return None
+        mult = sum(dials_of(self.personas.get(g)).mult("talkative") for g in every) / len(every)
+        weights, _ = self._weigh(every, last=None, ctx=self._context(now, opener=True),
+                                 reply=False)
+        local = self.clock.local()
+        topics = guild_topics.gather(self.store.conn, now=now, local=local,
+                                     cast=self.personas.all(), human=hg,
+                                     item_name=self._item_name)
+        night = night_of(local)
+        if night not in self._guild_used:
+            self._guild_used = {night: set()}
+        used = self._guild_used[night]
+        picked = guild_topics.choose(topics, weights, self.personas.all(), self.rng, used)
+        if picked is None:
+            log.info("open_to_guild_skipped: reason=nobody_free candidates=%d", len(every))
+            return mult
+        if self.budget.bursting:  # a social burst began meanwhile: never two at once
+            log.info("open_to_guild_skipped: reason=burst_running")
+            return mult
+        speaker, topic = picked
+        used.add(topic.key)
+        log.info("open_to_guild: guid=%d subject=%s", speaker, topic.subject)
+        plan = BurstPlan(self.rng.randint(*GUILD_OPEN_SIZE),
+                         PHASE_MODS[day_phase(local)].max_speakers, "guild")
+        self.budget.begin(now)  # the social bursts wait for it, then rest a gap
+        try:
+            await self._burst(plan, first=(speaker, topic.topic, f"burst:guild:{topic.subject}"))
+        finally:
+            self.budget.burst_done(self.clock.now())
+        return mult
+
+    def _item_name(self, item: int) -> str | None:
+        """An item's name from the item links' table (talk/items.py), None without it."""
+        if self.items is None:
+            return None
+        if self._item_names is None:
+            try:
+                self._item_names = {ref.id: ref.name for refs in self.items._index().values()
+                                    for ref in refs}
+            except Exception:
+                self._item_names = {}
+        return self._item_names.get(item)
+
     async def _open_to_him(self) -> float | None:
-        """One opener addressed to him (the budget's to_him plan): a member who may speak now,
-        has not opened to him for TO_HIM_GAP_S and is in no whisper with him
+        """One opener addressed to him (a share of the openers' clock, _open): a member who may
+        speak now, has not opened to him for TO_HIM_GAP_S and is in no whisper with him
         (_whisper_threads), drawn as an answer to him is (_weigh with him as the last speaker:
         closeness, the talkative dial, nobody who just spoke), says his name and brings
         something up (_to_him_topic), never carrying romance (TurnMeta.casual). With him in a
@@ -855,33 +925,39 @@ class TalkEngine(EmoteReactions):
                else "tomorrow")
         return f"{' '.join(title.split())} {day} at {when:%H:%M}"
 
-    async def _burst(self, plan: BurstPlan) -> None:
+    async def _burst(self, plan: BurstPlan,
+                     first: tuple[int, str, str] | None = None) -> None:
         """One OPEN, then CONTINUE turns answering the line before: plan.size lines or fewer
-        from plan.max_speakers members or fewer. A dropped or silent turn ends it."""
+        from plan.max_speakers members or fewer. A dropped or silent turn ends it. `first`
+        (speaker, topic, why): who opens and what they bring up (_open_to_guild), never a bit
+        or a flirt in its place; else the opener is drawn."""
         now = self.clock.now()
-        cands = [g for g in self._candidates()
-                 if (plan.channel_hint != "raid" or self.world.in_group(g))
-                 and self.raid.allows(g, TurnKind.OPEN, now)]
-        weights, _ = self._weigh(cands, last=None, ctx=self._context(now, opener=True),
-                                 reply=False)
-        first = pick_speakers(weights, 1, self.rng)
-        if not first:
-            return
-        speaker = first[0]
+        if first is None:
+            cands = [g for g in self._candidates()
+                     if (plan.channel_hint != "raid" or self.world.in_group(g))
+                     and self.raid.allows(g, TurnKind.OPEN, now)]
+            weights, _ = self._weigh(cands, last=None, ctx=self._context(now, opener=True),
+                                     reply=False)
+            drawn = pick_speakers(weights, 1, self.rng)
+            if not drawn:
+                return
+            speaker, topic, why = drawn[0], "", "burst:weighted_draw"
+        else:
+            speaker, topic, why = first
         channel = plan.channel_hint or choose_channel(
             TurnKind.OPEN, speaker=speaker, world=self.world, raid=self.raid, now=now,
             rng=self.rng)
         if channel is None:
             return
         kind, addressee, trigger, delay = TurnKind.OPEN, None, None, OPEN_S
-        why = "burst:weighted_draw"
         lines, speakers = 0, {speaker}
         typed_on = None  # the game channel it began on, for a line that can't be spoken
         while True:
             now = self.clock.now()
             turn, meta = self._social_turn(kind, speaker, channel, addressee=addressee,
                                            trigger=trigger, room=plan.size - lines, now=now,
-                                           delay=self.rng.uniform(*delay), why=why)
+                                           delay=self.rng.uniform(*delay), why=why,
+                                           topic=topic if kind is TurnKind.OPEN else "")
             meta.typed_on = typed_on
             sent = await self._speak(turn, meta)
             typed_on = meta.typed_on
@@ -911,12 +987,17 @@ class TalkEngine(EmoteReactions):
 
     def _social_turn(self, kind: TurnKind, speaker: int, channel: str, *, addressee, trigger,
                      room: int, now: float, delay: float,
-                     why: str = "") -> tuple[Turn, TurnMeta]:
+                     why: str = "", topic: str = "") -> tuple[Turn, TurnMeta]:
         """An OPEN or CONTINUE turn, unless the speaker brings out a bit (one that fits the
-        lines left) or, being a woman who wants him, flirts with the human instead."""
+        lines left) or, being a woman who wants him, flirts with the human instead. An OPEN
+        given its `topic` (a guild opener's) is always that OPEN."""
         p = self.personas.get(speaker)
         meta = TurnMeta(self._new_id(), why=why)
         delay *= self._effects(speaker).delay_mult
+        if topic and kind is TurnKind.OPEN:
+            meta.topic = topic
+            return Turn(kind=kind, speaker=speaker, channel=channel, addressee=addressee,
+                        trigger_line=trigger, max_lines=min(2, room), delay=delay), meta
         whose, bday = self._birthday_tonight(speaker) or ("", 0)
         bit = self.bits.pick(p, context=self._bit_context(now), raid=self.raid.phase(now),
                              mood=self.store.get_state(speaker, lens=True).mood, local=self.clock.local(),

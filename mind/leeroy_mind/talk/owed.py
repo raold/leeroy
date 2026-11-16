@@ -210,11 +210,11 @@ def fallback_lines(pipe, turn, meta, p, *, close: bool, reason: str, composed=No
     [] for any other turn."""
     if not owes_him(pipe, turn, meta):
         return []
+    from dataclasses import replace
     from leeroy_mind.talk.items import defuse
-    from leeroy_mind.talk.style import Styled
     text = fallback_for(pipe, turn, meta, composed)
     lines = pipe._style(turn, p, text, close=close, two_lines=False, romance=meta.romance)
-    lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
+    lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
     if lines:
         meta.owed_rescued = reason
         log.info("owed_rescue_line: guid=%d kind=%s channel=%s reason=%s how=fallback",

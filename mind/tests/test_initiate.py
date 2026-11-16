@@ -56,6 +56,15 @@ def rel(guid, affinity=0.0):
     return Relationship(a=guid, b=HUMAN, affinity=affinity)
 
 
+def to_him_only(r, per_hour: float | None = 6.0):
+    """The openers' clock as these tests were written for it (before 2026-11-15): every opener
+    addressed to him and, unless `per_hour` is None, 6 an hour; test_orbit.py covers the share
+    that now goes to the guild and the new rate."""
+    r.engine.cfg = replace(r.engine.cfg, talk=replace(r.engine.cfg.talk, openers_to_him=1.0))
+    if per_hour is not None:
+        r.engine.budget.set_to_him_rate(per_hour)
+
+
 def tune(p, **dials):
     t = Tuning()
     for dial, value in dials.items():
@@ -67,7 +76,7 @@ def tune(p, **dials):
 
 def test_the_rates_are_talk_keys_with_defaults_and_validation(tmp_path):
     cfg = load_config(tmp_path / "missing.toml")
-    assert (cfg.talk.whispers_per_hour, cfg.talk.openers_per_hour) == (4, 6)
+    assert (cfg.talk.whispers_per_hour, cfg.talk.openers_per_hour) == (4, 2)
     (tmp_path / "ok.toml").write_text("[talk]\nwhispers_per_hour = 2.5\nopeners_per_hour = 0\n",
                                       encoding="utf-8")
     ok = load_config(tmp_path / "ok.toml")
@@ -259,8 +268,11 @@ def test_an_hour_of_his_play_brings_whispers_and_openers_to_him(store, clock, tm
         lines = started(r, t0)
         whispers = [x for x in lines if x[2] == "whisper"]
         to_him = [x for x in lines if x[3] == "burst:to_him"]
+        guild = [u["ts"] for u in r.store.conn.execute(
+            "SELECT ts FROM utterance WHERE dropped IS NULL AND why LIKE 'burst:guild:%'")]
         assert 3 <= len(whispers) <= 6, lines
-        assert 4 <= len(to_him) <= 8, lines
+        # the openers' clock at 2 an hour (2026-11-15), most of them to the guild
+        assert 1 <= len(to_him) + len(guild) <= 4, (lines, guild)
         assert all(ts >= t0 + LOGIN_QUIET_S for ts, *_ in lines)  # never in his login's quiet
         assert all(ch == "guild" for _, _, ch, _ in to_him)  # he isn't grouped: guild
         assert {g for _, g, _, _ in whispers} <= {101, 102, 103, 104}  # Ebbo has no reason
@@ -299,6 +311,7 @@ def test_an_opener_to_him_goes_to_party_when_he_is_grouped_with_them(store, cloc
         cast_for_initiation(store)
         r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
         r.engine.bits.p_fire = 0.0
+        to_him_only(r)
         await r.event(Group(ts=0, leader_guid=HUMAN, raid=False, members=(HUMAN, 102, 103)))
         assert r.engine._to_him_channel(102) == "party"
         assert r.engine._to_him_channel(104) == "guild"  # not in his group
@@ -432,6 +445,7 @@ def test_party_openers_come_from_his_group_mates_in_a_big_guild(store, clock, tm
         r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
         r.engine.bits.p_fire = 0.0
         online_all(r, extra)
+        to_him_only(r)
         mates = (101, 102, 103, 104)
         await r.event(Group(ts=0, leader_guid=HUMAN, raid=False, members=(HUMAN, *mates)))
         await r.session()
@@ -453,6 +467,7 @@ def test_him_chatting_through_the_hour_still_gets_every_reply(store, clock, tmp_
         r = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
         r.engine.bits.p_fire = 0.0
         r.engine.budget = BurstBudget(4, r.engine.rng, gap_s=(1e9, 1e9), to_him_per_hour=60.0)
+        to_him_only(r, None)
         r.engine.whispers.set_rate(60.0)
         await r.session()
         t0 = clock.now()
@@ -722,7 +737,7 @@ def test_a_live_rescale_through_apply_config(store, clock, tmp_path):
         assert r.engine.whispers.next_at - now == pytest.approx(w_left / 2)
         assert r.engine.budget.to_him_next - now == pytest.approx(o_left / 2)
         r.engine.apply_config(replace(cfg, talk=replace(cfg.talk, whispers_per_hour=2,
-                                                        openers_per_hour=3)))
+                                                        openers_per_hour=1)))
         assert r.engine.whispers.next_at - now == pytest.approx(w_left * 2)
         assert r.engine.budget.to_him_next - now == pytest.approx(o_left * 2)
         r.engine.apply_config(replace(cfg, talk=replace(cfg.talk, chattiness=0)))
@@ -773,6 +788,7 @@ def test_an_opener_due_as_he_emotes_at_a_member_waits_out_the_exchange(store, cl
         r.engine.whispers.set_rate(0.0)
         r.engine.whispers.events = False
         r.engine.budget = BurstBudget(4, r.engine.rng, gap_s=(1e9, 1e9), to_him_per_hour=6.0)
+        to_him_only(r, None)
         await r.session()
         await r.engine.tick(clock.now())  # the openers' first gap
         due = r.engine.budget.to_him_next
