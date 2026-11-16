@@ -92,6 +92,7 @@ LINE_SHORT = "One short line, about {words} words."
 LINE_SHORT_DM = ("This is your private Discord DM, not the game: a sentence or two (at most about "
                  "{words} words). No line breaks.")
 LINE_BURST = "Say it as two quick lines, the way you'd double-text."
+LINE_BURST_DISCORD = "Say it as two or three quick lines, the way you'd double-text."  # 2-3 lines
 LINE_QUESTION = "Keep it short and ask {them} something back."
 LINE_LATE = "You're only now seeing this (you were {excuse}): say so in a few words, then answer."
 LINE_LATE_BARE = "You're only now seeing this: say so in a few words, then answer."
@@ -243,7 +244,8 @@ def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
         return ShapeDraw(shape, 0, 0, None)
     if shape is Shape.ONE_WORD:
         return ShapeDraw(shape, rng.randint(1, 3), 1, ONE_WORD_NUM_PREDICT)
-    two = shape is Shape.BURST or (ctx.two_lines and shape in (Shape.SHORT, Shape.QUESTION))
+    two = shape is Shape.BURST or (ctx.two_lines
+                                   and shape in (Shape.SHORT, Shape.QUESTION, Shape.LATE))
     cap = _cap(ctx)
     if cap <= 0:  # the game, or Discord at a setting of 0: her own line, the preset's room
         words = _line_words(ctx, rng)
@@ -286,7 +288,7 @@ def shape_line(draw: ShapeDraw, ctx: ShapeContext, *, forms, excuse: str = "") -
     if shape is Shape.ONE_WORD:
         return LINE_ONE_WORD
     if shape is Shape.BURST:
-        return LINE_BURST
+        return LINE_BURST_DISCORD if discord else LINE_BURST
     if shape is Shape.LATE:
         excuse = " ".join(excuse.split())
         return LINE_LATE.format(excuse=excuse) if excuse else LINE_LATE_BARE
@@ -309,18 +311,22 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 def dm_words_for(his_words: int, typing: Typing, dm_mirror: int, dm_words: int, rng) -> int:
-    """A DM's words: his message's length (mirrored) and her habit (her typing's longest line),
-    as a distribution within the owner's `dm_words` cap, pulled from the cap toward that target
-    by `dm_mirror` (0 returns `dm_words`: today's; 10 follows the target alone). A long message
-    of his (40 words or more) gets the full cap a quarter of the time."""
+    """A DM's words: his message's length (mirrored) leading and her habit (her typing's longest
+    line) tempering it, as a distribution within the owner's `dm_words` cap, pulled from the cap
+    toward that target by `dm_mirror` (0 returns `dm_words`: today's; 10 follows the target
+    alone) and spread by a lognormal factor that grows with the dial (none at 0). A long message
+    of his (40 words or more) gets the full cap a quarter of the time. At mirror 5, with her line
+    (3, 8): his 3 words get a median of about 33, his 28 about 74, his 120 about 141; p90/p10 for
+    one message is about 1.7 (review of #331, replacing the plan's sqrt(mirrored * habit))."""
     if dm_mirror <= 0 or dm_words <= 0:
         return dm_words
     m = min(dm_mirror, 10) / 10
     lo, hi = min(typing.words_per_line), max(typing.words_per_line)
     mirrored = _clamp(max(his_words, 0) * rng.uniform(0.7, 1.8), max(3, lo), dm_words)
     habit = _clamp(hi * rng.uniform(1.0, 3.0), 3, dm_words)
-    target = math.sqrt(mirrored * habit)
-    words = round(dm_words ** (1 - m) * target ** m)
+    target = mirrored ** 0.75 * habit ** 0.25  # his length leads; her habit tempers it
+    words = dm_words ** (1 - m) * target ** m
+    words = round(words * rng.lognormvariate(0.0, 0.35 * m))  # a real spread, none at m = 0
     if his_words >= 40 and rng.random() < 0.25:
         words = dm_words
     return int(_clamp(words, 3, dm_words))

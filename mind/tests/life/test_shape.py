@@ -178,6 +178,14 @@ def test_two_lines_keeps_two_lines():
         assert d.lines == 2 and 6 <= d.words <= 16
 
 
+def test_two_lines_keeps_two_lines_when_late():   # review #331 P2-1
+    ctx = replace(OWED, two_lines=True, late_by=300.0)
+    for i in range(100):
+        d = draw_shape(ctx, random.Random(i))
+        assert d.shape is Shape.LATE and d.lines == 2 and 6 <= d.words <= 16
+    assert draw_shape(replace(ctx, two_lines=False), random.Random(1)).lines == 1
+
+
 def test_dm_mirror_zero_is_todays_dm():
     from leeroy_mind.talk.discord_length import num_predict
     from leeroy_mind.talk.prompt import DISCORD_DM
@@ -192,7 +200,17 @@ def test_dm_mirror_zero_is_todays_dm():
 def test_dm_lengths_follow_the_mirror():
     ctx = replace(OWED, family="dm", his_words=10, dm_mirror=10)
     words = [draw_shape(ctx, random.Random(i)).words for i in range(500)]
-    assert max(words) <= 40 and min(words) >= 3
+    assert max(words) <= 50 and min(words) >= 3
+
+
+def test_dm_mirror_follows_his_length_with_a_spread():   # review #331 ruling
+    def spread(his):
+        w = sorted(dm_words_for(his, T, 5, 200, random.Random(i)) for i in range(2000))
+        return w[200], w[1000], w[1800]
+    short, mid, long = spread(3), spread(28), spread(120)
+    assert 25 <= short[1] <= 42 and 60 <= mid[1] <= 90 and 120 <= long[1] <= 160
+    assert mid[2] / mid[0] >= 1.4  # a distribution for one message, not one length
+    assert dm_words_for(28, T, 0, 200, random.Random(1)) == 200
 
 
 def test_zero_setting_is_one_short_line():
@@ -224,6 +242,10 @@ def test_shape_lines():
         "words). No line breaks.")
     assert shape_line(ShapeDraw(Shape.BURST, 12, 2, None), OWED, forms=him) == (
         "Say it as two quick lines, the way you'd double-text.")
+    assert shape_line(ShapeDraw(Shape.BURST, 45, 3, 96), chan, forms=him) == (
+        "Say it as two or three quick lines, the way you'd double-text.")
+    assert shape_line(ShapeDraw(Shape.BURST, 60, 2, 120), dm, forms=him) == (
+        "Say it as two or three quick lines, the way you'd double-text.")
     assert shape_line(ShapeDraw(Shape.QUESTION, 7, 1, None), OWED, forms=her) == (
         "Keep it short and ask her something back.")
     assert shape_line(ShapeDraw(Shape.LATE, 6, 1, None), OWED, forms=him) == (

@@ -430,20 +430,31 @@ caller's seeded `rng`. **Nothing calls it yet**: the pipeline wiring, `[talk] sh
 - **Forced**: a game or whisper answer 120 s or more after his line (`LATE_SHAPE_S`) is LATE
   ("You're only now seeing this (you were at work): ..."). A DM with `dm_mirror` 0 is today's DM:
   a paragraph of up to `dm_words` in `DISCORD_DM`'s words. The explicit whisper band
-  (`two_lines`) keeps at least two lines.
+  (`two_lines`) keeps at least two lines: its short line, question and late reply are sized as a
+  burst (twice her line's words over 2 lines), late or not.
 - **Words and room** (`ShapeDraw`): a word or two is 1-3 words with `num_predict` 24; in game a
   short line, question or late reply takes her own line's words (`typing.words_per_line`) and a
   burst twice that over 2 lines, with the preset's room; on Discord a short line is 20 words
   (never over `discord_words`), a burst a couple of sentences over 2-3 messages, a paragraph
   `discord_words`, each with `discord_length.num_predict`. Discord at a setting of 0 is sized as
   the game. Left on read and a reaction write nothing.
-- **DM mirroring** (`dm_words_for`, `[talk] dm_mirror` 0-10, default 5, Task 9): a DM's words
-  follow his message's length (x0.7-1.8) and her habit (her longest line x1-3), as a geometric
-  mean, pulled from the owner's `dm_words` cap toward it by the dial (10 follows it alone), with
-  the full cap a quarter of the time when he wrote 40 words or more; always 3 to `dm_words`.
-  `dm_mirror` 0 (or `dm_words` 0) is exactly today's.
+- **DM mirroring** (`dm_words_for`, `[talk] dm_mirror` 0-10, default 5, Task 9). With
+  `m = dm_mirror / 10`:
+  - `mirrored` = his words x U(0.7, 1.8), within [max(3, her shortest line), `dm_words`];
+  - `habit` = her longest line x U(1, 3), within [3, `dm_words`];
+  - `target = mirrored^0.75 * habit^0.25`: his length leads, her habit (her game line, so only a
+    tempering term) pulls toward about 16 words;
+  - `words = dm_words^(1 - m) * target^m * lognormal(0, 0.35 m)`: the dial pulls from the
+    owner's cap toward the target (10 follows it alone) and spreads it;
+  - when he wrote 40 words or more, the full cap a quarter of the time; always 3 to `dm_words`.
+
+  At 5, with her line (3, 8), his 3 words get a median of about 33 (p10-p90 25-42), his 28 about
+  74 (57-96), his 120 about 141 (101-200). At 10: 5, 28 and 99. `dm_mirror` 0 (or `dm_words` 0)
+  is exactly today's, with no draw. (Review of #331: the plan's `sqrt(mirrored * habit)` with no
+  spread gave a 3-word DM about 39 words, and only +/-13% for one message.)
 - **Shape lines** (`shape_line`): the one length line the shape puts in the prompt ("" for left
-  on read and a reaction). Discord paragraphs keep `DISCORD_LENGTH` / `DISCORD_DM`.
+  on read and a reaction). Discord paragraphs keep `DISCORD_LENGTH` / `DISCORD_DM`; a Discord
+  burst (2-3 messages) says "two or three quick lines", a game burst "two quick lines".
 - **Inspect**: `python -m leeroy_mind life --data-dir "$D" shapes --guid N --family dm
   --his-words 28 [--owed] [--kind continue] [--dm-mirror 5] [--samples 1000]` reads her stored
   typing profile (mind.db opened read-only) and `[talk]` from mind.toml, and prints the shapes'
