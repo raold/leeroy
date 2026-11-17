@@ -544,11 +544,16 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if s.style == LUST else SNAP_NEGATIVE)
 
 
+def from_behind(scene: dict) -> bool:
+    """A scene read from his words that shows her from behind."""
+    return is_words(scene) and scene["words"].get("framing") == BEHIND
+
+
 def face_scale(scene: dict, scale: float) -> float:
     """The identity reference's scale from the scene's own (`scale`, render.scene_scale): a photo
     from behind takes it at render.REAR_SCALE (never below the worker's floor), or the adapter
     turns her to the camera."""
     from .render import MIN_SCALE, REAR_SCALE
-    if is_words(scene) and scene["words"].get("framing") == BEHIND:
+    if from_behind(scene):
         return max(MIN_SCALE, round(scale * REAR_SCALE, 2))
     return scale

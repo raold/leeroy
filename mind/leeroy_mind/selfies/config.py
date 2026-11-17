@@ -41,6 +41,11 @@ class SelfieCfg:
     best_of: int = 1
     critic_model: str = "qwen2.5vl:7b"  # pulled by the operator; absent: detectors only
     param_bandit: bool = False
+    # The detailer (the worker's detail.py): after a render, each small face is drawn again at
+    # a higher resolution (crossed eyes), and with detailer_hands each hand too (six fingers;
+    # needs the worker's palm and handpose models fetched). detailer_hands needs detailer.
+    detailer: bool = False
+    detailer_hands: bool = False
 
 
 def _bool(v) -> bool:
@@ -84,6 +89,8 @@ _RULES = {
     "critic_model": (lambda v: type(v) is str and 1 <= len(v) <= 100 and v.strip() == v
                      and v.isprintable(), "an Ollama model name"),
     "param_bandit": (_bool, "true or false"),
+    "detailer": (_bool, "true or false"),
+    "detailer_hands": (_bool, "true or false"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib"}
 _PATHS = {"python", "data"}
@@ -121,6 +128,8 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         values["critic"] = False
         values["best_of"] = 1
         values["param_bandit"] = False
+        values["detailer"] = False
+        values["detailer_hands"] = False
     return SelfieCfg(**values)
 
 
