@@ -885,3 +885,34 @@ through the owner's lens (`Pipeline._met_him`).
 
 Measured read-only on 2026-11-16: 6 of 1,345 stored member lines to him see him in person (each
 on reading an in-person plan or wish); the golden prompts are unchanged.
+
+## Private conversations with him (2026-11-17, the DM self-play audits)
+
+- **So far between you two** (`sofar.py`, `PromptParts.so_far`): in her whisper and Discord DM
+  turns with him the prompt carries a few code-built lines after the Chat: the never-met rule
+  (until her arc has met him), where and how she said she is, what he asked and is still owed,
+  his news (first-person statements with a person, place, time, health, work or plan word; at
+  most 6, the newest wins) and plans. No model call; the conversation's lines hold at most 120
+  estimated tokens; a conversation ends after 3 idle hours; kept in memory and rebuilt from the
+  stored lines after a restart. `SoFar.her_said` gives her own stated place and state.
+- **The DM's Chat** (`discord/talk.py dm_chat`) is sized by his turns: his last 10 messages
+  before the one she answers with hers in between, her older messages shorter, each of hers
+  shown by its closing words, the whole under `DM_CHAT_TOKENS`. Her lines the Chat shows are not
+  repeated under "Your last lines".
+- **One answer covers every unanswered post** (`DiscordTalk.unanswered`, `_coalesce`): the DM
+  instruction lists his posts since her last answer, oldest first; a post that arrives before
+  she composes joins that reply and its own turn is withdrawn (`discord_superseded`). His game
+  logout never cancels a Discord answer (`Pipeline.discord_answer_jobs`).
+- **Never met** (`moves.have_met`, `without_meeting`, `meets_in_memory`): the "in person" tell
+  covers have-met claims and is hard for owed answers (rewrite, then the claim's sentences are
+  cut, `say_owed_cut`); memories that see him in person stay out of the prompt.
+- **Her own message again** (`guards/owncopy.py`): guard code `own_copy` (hard) and the tell
+  "own copy". A draft flagged `claim_conflict` on every review is cut or replaced by a fresh
+  short answer (`guard_claim_conflict_cut|fresh|kept`).
+- **His line** (`hisline.py`): his goodbye is answered with one (no `later` repeat tell) and a
+  question back is never forced on his goodbye or bad news. Fake attachments in brackets are a
+  fatal tell ("attachment"); Discord messages get no game item links.
+- **Length** (`shape.dm_words_for`): his line of 5 words or fewer caps her at about 12 words,
+  6-12 at about 25; the owed rescue draws a shape.
+- **Memories** (`memory/thirdparty.py`): in a private turn with him a memory whose "he" is
+  somebody else names them or stays out.

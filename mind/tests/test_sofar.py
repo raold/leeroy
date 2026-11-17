@@ -83,12 +83,20 @@ def test_the_block_is_bounded_and_drops_his_oldest_news_first():
                  ("h", "did you see the patch notes?"),
                  ("h", "anyway"))
     out = block(lines, forms=HE, skip=10, lead=("A line the caller always wants first.",))
-    assert estimate_tokens("\n".join([sofar.HEAD, *out])) <= sofar.MAX_TOKENS
+    assert estimate_tokens("\n".join(out[1:])) <= sofar.MAX_TOKENS  # the conversation's lines
     assert out[0] == "- A line the caller always wants first."
     assert out[1] == "- You said you're at work until six."
     assert "- He also asked: did you see the patch notes?" in out
     told = [x for x in out if x.startswith("- He told you:")]
-    assert told and "my aunt" in told[-1] and not any("my dad" in x for x in told)
+    assert told and "my aunt" in told[-1]
+    crowd = talk(*[("h", f"my {who} is in town this week and wants to see the new place we got "
+                         "before the weekend is over") for who in
+                   ("dad", "mum", "brother", "sister", "cousin", "aunt")],
+                 ("s", "im at work until six, closing up after the last table leaves tonight"),
+                 *[("h", f"did you ever try the {x} place by the station on the corner?")
+                   for x in "ab"])
+    kept = [x for x in block(crowd, forms=HE) if x.startswith("- He told you:")]
+    assert 0 < len(kept) < 6 and "my aunt" in kept[-1] and not any("my dad" in x for x in kept)
     assert block([], forms=HE) == [] and block([], forms=HE, lead=("x",)) == ["- x"]
     assert block(talk(("h", "lol nice"), ("s", "ikr")), forms=HE) == []
     they = block(talk(("h", "my dog is at the vet today")), forms=("they", "them", "their"))
@@ -174,7 +182,7 @@ def test_a_dm_remembers_his_news_from_many_turns_back(store, clock, tmp_path):
     far = section(prompt, SO_FAR_HEAD)
     assert f"- He told you: {news}" in far  # ...and his news from 11 turns back is still there
     assert "head off soon" not in far  # the message she answers is the instruction's
-    assert estimate_tokens(SO_FAR_HEAD + "\n" + far) <= sofar.MAX_TOKENS
+    assert estimate_tokens("\n".join(far.splitlines()[1:])) <= sofar.MAX_TOKENS
     assert estimate_tokens(chat) <= DM_CHAT_TOKENS + 40
     rig.close()
 

@@ -25,7 +25,8 @@ _PATTERNS = {
               r"|\bdon'?t be late\b|\bpull up\b|\bfind me\b|\bhurry up\b"
               r"|\bto my (place|house|flat|apartment|room|bed)\b"
               r"|\b(you'?re|youre|ur|u r|you are) coming (to me|over|here|home|round)\b"
-              r"|\bcome home\b|\bcoming to me\b",
+              r"|\bcome home\b|\bcoming to me\b"
+              r"|\bcome (do|show|kiss|hold|cuddle) (it|me|that|this)\b",
     "invite_game": r"\b(in|to|at|into|inside)\s+(the\s+|my\s+|our\s+|a\s+)?(dalaran|orgrimmar|org"
                    r"|stormwind|shattrath|shatt|ironforge|undercity|vent|voice|discord|ts3|mumble"
                    r"|dungeon|raid|bg|battleground|arena|queue|group|party|lfg)\b"
@@ -132,7 +133,18 @@ _IN_PERSON = re.compile(
     r"\s+(?:show|turn) up\b"
     r"|\bsit (?:right )?(?:next to|beside|by|with) me\b"
     r"|\bi (?:need|want) (?:you|u) (?:there|here with me)\b"
-    rf"|\bcome (?:to|along to) (?:the|my|our|this) (?:{_EVENTS})\b", re.I)
+    rf"|\bcome (?:to|along to) (?:the|my|our|this) (?:{_EVENTS})\b"
+    # a meal or a date the two are to have, said as a fixture
+    r"|\b(?:we have|we've got|weve got|we got|our) (?:a |that )?(?:dinner|lunch|brunch|drinks"
+    r"|date|date night)\b"
+    r"|\bwhat time (?:is |for |are we doing )?(?:tomorrow |tonight |our |the )?(?:dinner|lunch"
+    r"|brunch|drinks)\b|\bwhat time (?:tomorrow|tonight) (?:for )?(?:dinner|lunch|drinks)\b"
+    r"|\b(?:dinner|lunch|brunch|drinks|a date) with (?:you|u)\b"
+    r"|\btake (?:you|u) to (?:dinner|lunch|brunch)\b"
+    # being on him, said as what she will do (a wish says "would": no claim)
+    r"|\b(?:i'?ll|ill|i will|im going to|i'm going to|im gonna|i'm gonna) (?:sit on|climb on"
+    r"|climb into|curl up on|curl up in|crawl into|fall asleep on|fall asleep in) (?:your|ur)\b",
+    re.I)
 _DENIED = re.compile(r"\b(?:never|not|no|without|cannot|wont|dont|didnt|havent|hasnt|isnt|"
                      r"arent|wasnt|werent|couldnt|wouldnt|shouldnt|aint)\b|\bcant\b(?! wait)")
 
@@ -171,7 +183,16 @@ _HAVE_MET = re.compile(
     rf"|\b(?:like|since|after) (?:last |that )?{_WEEKDAY} night\b"
     rf"|\blike {_WEEKDAY}\W+(?:you know|remember)\b"
     r"|\bremember (?:when|how|that (?:time|night)) (?:we|you|u) (?:kissed|cuddled|hugged|slept"
-    r"|danced|held|met up|woke up)\b", re.I)
+    r"|danced|held|met up|woke up)\b"
+    r"|\b(?:you|u) (?:sent|mailed|posted|shipped|gave|handed|brought) (?:it|them|that|this|one)"
+    r" (?:to|for) me\b"
+    r"|\b(?:you|u) (?:sent|mailed|posted|shipped|gave) me the one\b", re.I)
+# a habit of his hands, said as known: a claim even inside a what-if ("i'd ... while you're
+# doing that thing where you ...")
+_HABIT = re.compile(r"\bthat thing (?:where |when )?(?:you|u) (?:do|did|put|always)\b", re.I)
+_DIGITAL = re.compile(r"\b(?:link|screenshot|pic|pics|picture|photo|selfie|song|playlist|meme"
+                      r"|video|clip|message|msg|dm|whisper|text|email|mail in game|invite|gold"
+                      r"|macro|addon|weakaura|log|logs)\b")
 _WHAT_IF = re.compile(r"\b(?:if|wish|wishing|would|wouldnt|could|imagine|imagining|pretend|dream"
                       r"|dreamt|dreamed|dreaming|one day|someday|some day|cant wait|until|til"
                       r"|when we (?:finally|do|ever)|fantasy|fantasi\w+|picturing|picture)\b")
@@ -185,12 +206,15 @@ def have_met(text: str) -> bool:
     the game or online."""
     t = _fold(text or "")
     for coarse in _COARSE.split(t):
+        if _ONLINE.search(coarse) or _RE["invite_game"].search(coarse):
+            continue
+        if _HABIT.search(coarse):
+            return True
         m = _HAVE_MET.search(coarse)
         if m is None:
             continue
         before = coarse[:m.start()].replace("'", "")
-        if (_DENIED.search(before) or _WHAT_IF.search(before)
-                or _ONLINE.search(coarse) or _RE["invite_game"].search(coarse)):
+        if _DENIED.search(before) or _WHAT_IF.search(before) or _DIGITAL.search(coarse):
             continue
         return True
     return False

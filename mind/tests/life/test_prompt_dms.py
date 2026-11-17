@@ -114,9 +114,12 @@ def test_bad_news_and_goodbye_lexicons():
                  "the vet says its his kidneys", "im really sick today"):
         assert hisline.bad_news(text), text
     for text in ("ok gotta run, talk tomorrow", "night x", "heading to bed", "gn",
-                 "right, off to work. speak later", "i'll head off then"):
+                 "right, off to work. speak later", "i'll head off then",
+                 "ok gotta sleep before the early shift. night you x",
+                 "lol fine. night belra. saturday then"):
         assert hisline.goodbye(text), text
     for text in ("should i go to bed?", "later we should run naxx", "what a night that was",
+                 "rough night at the depot, the forklift died", "free all night, you",
                  "i have to go faster on the pull", ""):
         assert not hisline.goodbye(text), text
 

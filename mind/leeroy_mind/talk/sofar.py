@@ -22,8 +22,9 @@ she has claimed so far in this conversation (the beat).
 A conversation is the newest run of lines with no gap over IDLE_S (3 h) between two lines and
 its last line no older than that (`conversation`). SoFar keeps each member's block in memory,
 keyed by the conversation's newest line, and forgets one idle past IDLE_S; after a restart it
-is built again from the stored lines. Every line is bounded (LINE_WORDS) and the whole block
-(MAX_TOKENS estimated tokens, 4 characters a token): what does not fit is left out, the oldest
+is built again from the stored lines. Every line is bounded (LINE_WORDS) and the conversation's
+lines together (MAX_TOKENS estimated tokens, 4 characters a token; the heading and the caller's
+lead, one standing rule, are not the conversation's): what does not fit is left out, the oldest
 of his news first.
 
 Rule-based: no model call, no I/O beyond the rows handed in, no logging of any text. The
@@ -236,8 +237,8 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
           lead: Sequence[str] = ()) -> list[str]:
     """The section's lines for a conversation (`conversation`'s rows), "- " each: `lead` (lines
     the caller always wants first), where and how she said she is, what he asked and is still
-    owed, his news, the plans; within MAX_TOKENS with HEAD, what is over left out (his oldest
-    news first, then the plans). `forms` are his (they, them, their); `skip` the line this turn
+    owed, his news, the plans; the conversation's lines within MAX_TOKENS, what is over left out
+    (his oldest news first, then the plans). `forms` are his (they, them, their); `skip` the line this turn
     answers. [] when there is nothing to say."""
     they = forms[0].capitalize()
     facts = his_facts(lines, skip=skip)
@@ -252,17 +253,19 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
     later = [f"- {they if his else 'You'} said: {text}"
              for his, text in plans(lines, skip=skip, taken=[i for i, _ in facts])]
 
+    n = len([x for x in lead if x])
+    lead_lines, said = first[:n], first[n:]  # the caller's lead is not the conversation's
+
     def size(items: list[str]) -> int:
-        return estimate_tokens("\n".join([HEAD, *items]))
-    while (news or later) and size([*first, *news, *later]) > MAX_TOKENS:
+        return estimate_tokens("\n".join(items))
+    while (news or later) and size([*said, *news, *later]) > MAX_TOKENS:
         if len(news) > 1 or not later:
             news.pop(0)  # his oldest news goes first
         else:
             later.pop(0)
-    out = [*first, *news, *later]
-    while out and size(out) > MAX_TOKENS:
-        out.pop()
-    return out
+    while said and size([*said, *news, *later]) > MAX_TOKENS:
+        said.pop()
+    return [*lead_lines, *said, *news, *later]
 
 
 class SoFar:

@@ -35,6 +35,7 @@ _GOODBYE_RE = re.compile(
     r"\b(?:(?:gotta|got to|have to|need to|gonna|going to|i'?ll) "
     r"(?:go|head|run|leave|sleep|bounce|crash|get going|get to (?:bed|sleep|work)|log off|dip)"
     r"(?=\s*(?:$|[.,!;]|now\b|soon\b|off\b|out\b|then\b|though\b|sorry\b|babe\b|x+\b|in a\b"
+    r"|before\b"
     r"|to (?:bed|work|sleep|the \w+)\b|for (?:work|the night|now|a bit)\b))"
     r"|heading (?:off|out|to bed|to work|to sleep)|off to (?:bed|work|sleep)|going to bed"
     r"|(?:talk|speak|chat|catch you|see (?:you|ya|u)|c u) (?:later|tonight|tomorrow|soon|then"
@@ -42,6 +43,11 @@ _GOODBYE_RE = re.compile(
     r"|sweet dreams|bye|cya|gn)\b"
     r"|^\s*(?:night|nite|later|laters)(?:\s+(?:x+|then|babe|all|guys|you|u))?\s*[.!]*\s*(?:x+)?$",
     re.IGNORECASE)
+
+
+_SENTENCES = re.compile(r"[.!,;\n]+")
+_NIGHT = re.compile(r"(?:night|nite|gn|goodnight|good night|bye|cya)(?:\s+[\w']+){0,2}\s*$",
+                    re.IGNORECASE)
 
 
 def bad_news(text: str) -> bool:
@@ -57,4 +63,7 @@ def goodbye(text: str) -> bool:
     if not t or is_question(t):
         return False
     from leeroy_mind.talk.select import classify_human_line
-    return classify_human_line(t) == "goodbye" or bool(_GOODBYE_RE.search(t))
+    if classify_human_line(t) == "goodbye" or _GOODBYE_RE.search(t):
+        return True
+    # one of its sentences is a goodnight to her ("ok sleep. night you x. thursday")
+    return any(_NIGHT.match(s.strip()) for s in _SENTENCES.split(t))
