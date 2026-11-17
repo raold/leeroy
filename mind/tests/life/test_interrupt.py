@@ -549,8 +549,10 @@ def test_a_whisper_brb_never_goes_to_him_offline(store, clock, tmp_path, caplog,
 
 
 def test_his_urgent_whisper_brings_her_back(store, clock, tmp_path, caplog, monkeypatch):
-    """His urgent whisper while she is away is answered at once (it says she was away) and ends
-    her away: no back line after it, and his next whisper is answered without that excuse."""
+    """His urgent whisper while she is away is answered at once and ends her away: no back line
+    after it, and neither answer makes the away's excuse ([talk] coherence: an answer within
+    SHORT_WAIT_S of his line is not late, whatever her brb had planned; the hard-case audit's
+    "just getting back to you" 25 s after her own brb)."""
     caplog.set_level(logging.INFO)
     force(monkeypatch, away_s=300.0, back="ok back")
 
@@ -568,7 +570,7 @@ def test_his_urgent_whisper_brings_her_back(store, clock, tmp_path, caplog, monk
         await ticking(r, 40)
         got = whispers(r, 102, t1)
         assert len(got) == 1 and got[0][0] < until - 100
-        assert "(you were away)" in line_calls(r)[-1]["messages"][-1]["content"]
+        assert "you were away" not in line_calls(r)[-1]["messages"][-1]["content"]
         assert r.engine.life.away_until(102) == 0
         assert "life_back: guid=102 said=0" in caplog.text
         t2 = clock.now()

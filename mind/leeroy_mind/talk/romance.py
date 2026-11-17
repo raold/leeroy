@@ -433,12 +433,12 @@ def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: st
     puts it after the turn's instruction; romance_instruction then leaves the frame out
     (`tail_follows`), so it is said once, after his overlay. `realism`: the realism frame
     (distance_text). `lust_only` ([talk] coherence): the overlay is for a woman whose stance is
-    lust and whose arc with him has begun (a stage with depth, STAGE_DEPTH), never one who is
-    only drawn to him (self-play audit, 2026-11-17: a drawn member's lore answer carried it)."""
+    lust, at the band her arc's stage has reached (effective_band, as ever), never one who is
+    only drawn to him and reaches the band by the dial (self-play audit, 2026-11-17: a drawn
+    member's lore answer carried it)."""
     if not explicit_whisper(p, rel, dial=dial, channel=channel):
         return ""
-    if lust_only and not (p.romance.stance == "lust" and STAGE_DEPTH.get(
-            rel.romance_stage if rel is not None else "none", 0) >= 1):
+    if lust_only and p.romance.stance != "lust":
         return ""
     variant = _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng)
     if not variant:

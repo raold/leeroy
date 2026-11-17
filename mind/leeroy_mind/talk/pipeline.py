@@ -4200,7 +4200,7 @@ class Pipeline:
 
     def _lust_only(self) -> dict:
         """whisper_tail's `lust_only` with [talk] coherence and a core switch on: his explicit
-        whisper overlay only for a lust woman whose arc has begun; {} otherwise (as before)."""
+        whisper overlay only for a woman whose stance is lust; {} otherwise (as before)."""
         return {"lust_only": True} if self._coherent() and self._core_on() else {}
 
     def _asked_line(self, turn: Turn, meta: TurnMeta, c: Composed) -> str:

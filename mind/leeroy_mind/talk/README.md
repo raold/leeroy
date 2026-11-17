@@ -951,7 +951,7 @@ told to say she is not sure rather than make up an item, a proc or a number.
 
 **Smaller.** Her attendance counts ("5 benched") show on her awareness card only where the last
 lines are about raids, rosters or the bench. His explicit whisper overlay is appended only for
-a woman whose stance is lust and whose arc has begun (`whisper_tail(lust_only=True)`).
+a woman whose stance is lust, never one only drawn to him (`whisper_tail(lust_only=True)`).
 A game burst the model wrote as two lines keeps its own line break (`_style`: each line laid out
 on its own, where one repacked text ran its clauses together and dropped the rest). Her brb and
 back lines (templates) take no typing slips and no emoticon. An answer sent within 60 s of his

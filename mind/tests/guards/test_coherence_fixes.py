@@ -3,7 +3,7 @@ a member he names carry their pronoun and role, a second wrong pronoun on a rewr
 in code, library item facts are kept to what the speaker's class can use (and she is told to
 say she is not sure when none is left), an owed answer's kept draft loses an echo opener, his
 short line said back as a question is cut, her attendance counts stay out of talk that is not
-about raids, and his explicit whisper overlay is for a lust woman whose arc has begun. Fakes
+about raids, and his explicit whisper overlay is for a lust woman, never one only drawn. Fakes
 only; invented members and lines."""
 from dataclasses import replace
 
@@ -283,7 +283,7 @@ def test_attendance_counts_only_where_the_talk_is_about_raids(store, tmp_path):
 
 # -- his explicit whisper overlay -----------------------------------------------------------------------
 
-def test_the_whisper_overlay_is_for_a_lust_woman_whose_arc_has_begun(store, tmp_path):
+def test_the_whisper_overlay_is_for_a_lust_woman_never_one_only_drawn(store, tmp_path):
     seed_test_cast(store)
     prompts = tmp_path / "prompts"
     prompts.mkdir()
@@ -297,5 +297,5 @@ def test_the_whisper_overlay_is_for_a_lust_woman_whose_arc_has_begun(store, tmp_
         return whisper_tail(p, Relationship(a=102, b=HUMAN, romance_stage=stage), **kw, **more)
     assert tail("drawn", "late_nights")                       # as before: the band reaches it
     assert tail("drawn", "late_nights", lust_only=True) == ""
-    assert tail("lust", "notices", lust_only=True) == ""      # her arc has not begun
     assert tail("lust", "whispers", lust_only=True).startswith("Invented overlay line.")
+    assert tail("lust", "whispers") == tail("lust", "whispers", lust_only=True)
