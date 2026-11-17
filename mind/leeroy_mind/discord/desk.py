@@ -220,7 +220,8 @@ class DiscordDesk:
             return
         try:
             parent = self.app.store.get_meta(LINE_KEY.format(reply_to)) if reply_to else None
-            signals.his_discord(line, reply_line=int(parent) if parent else 0, media=media, voice=voice)
+            signals.his_discord(line, reply_line=int(parent) if parent else -1 if reply_to else 0,
+                                media=media, voice=voice)
         except Exception as e:
             log_event("discord_signal_failed", level=logging.WARNING, error=type(e).__name__)
 

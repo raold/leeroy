@@ -15,6 +15,7 @@ from collections import Counter
 import sqlite3
 
 from leeroy_mind.discord.channels import DM_PREFIX, GROUP_PREFIX, discord_sql
+from leeroy_mind.discord.transport import PAIR_LINE_TURN
 
 from . import discord as D
 from . import store as S
@@ -90,9 +91,13 @@ def plan(conn, *, since, now, owner):
         if _table(conn, "discord_voice") else {}
 
     def addressed(line, to_guid):
+        mid = message_of.get(line)
+        message = messages.get(mid)
+        # As live: a brb/back line and a photo's caption are not answers that wait for him.
+        if mid in media or (message is not None and (message[2] or '').startswith(PAIR_LINE_TURN)):
+            return False
         if to_guid == owner or parents.get(line) in his_lines:
             return True
-        message = messages.get(message_of.get(line))
         if message is None:
             return False
         author, reply_to, turn = message
@@ -110,9 +115,11 @@ def plan(conn, *, since, now, owner):
             events.append((ts, 0, lid, Observation("sent", ts, owner, (lid,), (addressed(lid, to_guid), False, True))))
         elif ts >= since:
             mid = message_of.get(lid)
-            reply = line_of.get((messages.get(mid) or (0, None, None))[1], 0)
+            target = (messages.get(mid) or (0, None, None))[1]
+            reply = line_of.get(target, -1) if target else 0  # a bot's row has no line: nobody
+            # A voice note's words are never read, transcribed or not, as live.
             events.append((ts, 1, lid, Observation(
-                "discord_owner", ts, owner, (lid, reply), (mid in media or mid in voice, voice.get(mid) == 0))))
+                "discord_owner", ts, owner, (lid, reply), (mid in media or mid in voice, mid in voice))))
     reactions = {}
     if _table(conn, "discord_reaction"):
         for message, emoji, ts in conn.execute(

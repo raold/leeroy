@@ -78,13 +78,25 @@ normalisation, not a calibrated satisfaction measure. Friendly/romantic emotes
 add and rude emotes subtract, clipped to [-1,1].
 
 His Discord reactions (`signals/README.md`, "The guild Discord") enter the same components.
-`asked_back`, `laughed`, `affection`, `topic_kept`, `sent_media` and `turns_after` are further
-engagement components at their own value when observed (no baseline; absent ones are not
-zeros), so a reply with a laugh is 0.75 where a bare reply is 0.5. `react_positive` adds to and
-`react_negative` subtracts from the emote component. `objected` is a fixed 0.5 penalty and
-counts as a measured explicit response with vote value zero, like a negative nudge;
-`topic_changed` is a fixed 0.1 penalty, like ignored. A Discord latency is elapsed / 1800 and
-is only ever compared with Discord baselines of its own kind.
+`asked_back`, `laughed`, `affection`, `topic_kept` and `sent_media` are further engagement
+components at their own value when observed (no baseline; absent ones are not zeros), so a
+reply with a laugh is 0.75 where a bare reply is 0.5. `turns_after` enters as 0.5 + value / 2,
+so a further reply or two never scores below none. `react_positive` adds to and
+`react_negative` subtracts from the emote component at half a game emote's size (a lone emoji
+is +0.5 or -0.5, no harsher than his thumbs-down). `objected` is a fixed 0.5 penalty and
+counts as a measured explicit response with vote value zero, like a negative nudge.
+`topic_changed` is stored and carries no weight. A Discord latency is elapsed / 1800 and is
+only ever compared with Discord baselines of its own kind.
+
+**Centred on the reply rate.** He answers about 70% of the lines in his DMs, so a reply alone
+would lift every arm used there alike. A Discord line's engagement is multiplied by
+min(1, 2 x (1 - rate)), where rate is the share of the members' earlier lines in that kind of
+room (his DMs; or channels and group DMs) he replied to over the 14 days before the line, at
+most 2,048 lines, and only once 20 such lines exist. Where he answers half the lines or fewer
+nothing changes; at 70% a bare reply is 0.3 and a reply with a laugh 0.45; where he answers
+everything a reply says nothing. Silence stays zero, never negative; his thumbs, emoji and
+the penalties are not scaled. Parts record `reply_rate`, `reply_rate_n` and `reply_centre`.
+The rate is the guild's for that kind of room, not per member or per bandit context.
 
 The planning budget uses completed reward units' own wall time, separately for
 lexical and embedding screening. It uses the median nightly seconds per unit
@@ -110,7 +122,8 @@ DM/whisper privacy holds; only numeric evidence is pooled, never content.
 The night selects cast lines whose 120-second observation window has closed: changed
 evidence first, then unscored lines he answered or reacted to, then the newest of the rest,
 with a 14-day lookback. A night scores 500 lines until one night has measured what a line costs
-(`reward_timing`), then as many as fit 900 seconds at that cost, at most 4,000; the stage also
+(`reward_timing`, the dearer of the lexical and embedding modes), then as many as fit 900
+seconds at that cost, at most 4,000; the stage also
 stops starting units after 1,800 seconds and leaves the rest pending. (A fixed 500 against
 about 500 new lines a day never drained: the audit of 2026-11-17 found 2,374 left over.) A
 Discord reply or emoji that arrives after a line was scored, a removed emoji, and backfilled

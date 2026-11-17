@@ -84,6 +84,40 @@ def test_replay_finds_the_exchanges_and_writes_numbers_once(store, clock):
     assert 'invented' not in repr(table(store)) + json.dumps(result)
 
 
+def test_replay_matches_live_on_bot_rows_pair_lines_captions_and_voice_notes(store, clock):
+    store.set_meta('human_guid', str(HUMAN))
+    t = clock.now() - 3000
+    # a hand reply to a bot's row (no chat line) credits nobody, though a member line waits
+    mine, _ = message(store, clock, 'general', HUMAN, 'an invented opening post', at=t - 10)
+    _, waiting = message(store, clock, 'general', 101, 'an invented waiting line', reply_to=mine, at=t)
+    with store.transaction():
+        bot = dstore.post_bot(store, channel='general', bot='signups', text='an invented bot row', now=t + 5)
+    message(store, clock, 'general', HUMAN, 'haha noted', reply_to=bot, at=t + 20)
+    # her real answer, then a brb/back line: the real answer takes his reply
+    _, real = message(store, clock, 'dm:102', 102, 'the invented answer itself', at=t + 100)
+    back, pair = message(store, clock, 'dm:102', 102, 'back, sorry', at=t + 110)
+    with store.transaction():
+        store.conn.execute("UPDATE discord_message SET turn='pair_line:' WHERE id=?", (back,))
+    message(store, clock, 'dm:102', HUMAN, 'no worries', at=t + 150)
+    # a photo's caption is not an answer that waits
+    photo, caption = message(store, clock, 'dm:103', 103, 'an invented caption', at=t + 200)
+    with store.transaction():
+        store.conn.execute("INSERT INTO discord_attachment(message,kind,path,width,height,bytes) "
+                           "VALUES (?,'upload','discord/images/invented.jpg',16,16,1)", (photo,))
+    message(store, clock, 'dm:103', HUMAN, 'lol nice', at=t + 230)
+    # his transcribed voice note: replied and media, its words unread
+    _, asked = message(store, clock, 'dm:104', 104, 'an invented question for him', at=t + 300)
+    note, _ = message(store, clock, 'dm:104', HUMAN, 'haha what? thank you', at=t + 330)
+    with store.transaction():
+        store.conn.execute("INSERT INTO discord_voice VALUES (?,'human','discord/voice/invented.wav',900,10,1)", (note,))
+    store.conn.commit()
+    sink, _ = backfill.plan(store.conn, since=clock.now() - 7200, now=clock.now(), owner=HUMAN)
+    kinds = lambda lid: {k for (l, k) in sink.rows if l == lid}
+    assert kinds(waiting) == set() and kinds(pair) == set() and kinds(caption) == set()
+    assert kinds(real) == {'replied', 'reply_latency_s', 'reply_len'}
+    assert kinds(asked) == {'replied', 'reply_latency_s', 'sent_media'}
+
+
 def test_replay_starts_at_since_and_never_reaches_past_the_retention(store, clock):
     seed(store, clock)
     late = backfill.plan(store.conn, since=clock.now() - 3600 + 150, now=clock.now(), owner=HUMAN)[0]
@@ -159,12 +193,13 @@ def test_backfilled_evidence_is_scored_by_the_next_rewards_night(context, store,
     ({'replied': 1}, .5),
     ({'replied': 1, 'laughed': 1}, .75),
     ({'replied': 1, 'asked_back': 1, 'affection': 1, 'topic_kept': 1, 'sent_media': 1}, .9),
-    ({'replied': 1, 'turns_after': .4}, .45),
-    ({'react_positive': 1}, 1.),
-    ({'react_negative': 1}, -1.),
-    ({'replied': 1, 'react_positive': 1}, (.25 * .5 + .15) / .40),
+    ({'replied': 1, 'turns_after': .2}, .55),   # a further reply never scores below none
+    ({'replied': 1, 'turns_after': 1}, .75),
+    ({'react_positive': 1}, .5),                # a lone emoji is half a game emote
+    ({'react_negative': 1}, -.5),
+    ({'replied': 1, 'react_positive': 1}, (.25 * .5 + .15 * .5) / .40),
     ({'replied': 1, 'objected': 1}, .25 * .5 / .65 - .5),
-    ({'replied': 1, 'topic_changed': 1}, .4),
+    ({'replied': 1, 'topic_changed': 1}, .5),   # observed, no weight
     ({'explicit': 1, 'replied': 1, 'objected': 1}, (.4 + .25 * .5) / .65 - .5),
     ({'explicit': -1, 'replied': 1, 'laughed': 1, 'react_positive': 1}, -.4),
 ])
@@ -177,22 +212,61 @@ def test_reward_of_his_discord_reactions(store, clock, channel, values, expected
     assert all(type(v) in (int, float) for v in result.parts.values())
 
 
+@pytest.mark.parametrize('channel,answered,centre', [
+    ('dm:101', 21, .6), ('dm:101', 30, 0.), ('dm:101', 12, 1.), ('discord:general', 1, 1.)])
+def test_a_reply_counts_for_how_rare_a_reply_is_in_that_kind_of_room(store, clock, channel, answered, centre):
+    earlier = [line(store, clock, channel=channel, ts=clock.now() - 9000 + i) for i in range(30)]
+    for lid in earlier[:answered]:
+        signals(store, lid, clock.now() - 8000, replied=1)
+    other = 'discord:general' if channel.startswith('dm:') else 'dm:101'
+    for i in range(30):  # another kind of room never moves this one's rate
+        signals(store, line(store, clock, channel=other, ts=clock.now() - 9000 + i), clock.now() - 8000, replied=1)
+    bare, laugh, silent, thumb = (line(store, clock, channel=channel) for _ in range(4))
+    signals(store, bare, clock.now(), replied=1)
+    signals(store, laugh, clock.now(), replied=1, laughed=1)
+    signals(store, thumb, clock.now(), explicit=1)
+    result = reward(store.conn, bare, now=clock.now())
+    assert result.parts['reply_rate'] == pytest.approx(answered / 30) and result.parts['reply_rate_n'] == 30
+    assert result.parts['reply_centre'] == pytest.approx(centre)
+    # the bare reply's own value against its baseline (1 once earlier replies exist: 0.5)
+    assert result.value == pytest.approx(.5 * centre)
+    laughed = reward(store.conn, laugh, now=clock.now())  # its own rate: the bare reply is before it
+    assert laughed.value == pytest.approx(.75 * laughed.parts['reply_centre'])
+    assert laughed.value >= result.value
+    assert reward(store.conn, silent, now=clock.now()).value == 0  # silence stays zero, never negative
+    assert reward(store.conn, thumb, now=clock.now()).value == 1   # his thumbs are never scaled
+    assert all(type(v) in (int, float) for v in result.parts.values())
+
+
+def test_too_few_earlier_lines_and_game_lines_are_not_centred(store, clock):
+    for i in range(10):
+        signals(store, line(store, clock, channel='dm:101', ts=clock.now() - 900 + i), clock.now() - 800, replied=1)
+    lid = line(store, clock, channel='dm:101')
+    signals(store, lid, clock.now(), replied=1)
+    assert reward(store.conn, lid, now=clock.now()).parts['reply_centre'] == 1
+    for i in range(30):
+        signals(store, line(store, clock, channel='whisper', ts=clock.now() - 900 + i), clock.now() - 800, replied=1)
+    game = line(store, clock, channel='whisper')
+    signals(store, game, clock.now(), replied=1)
+    assert 'reply_centre' not in reward(store.conn, game, now=clock.now()).parts
+
+
 def test_a_removed_emoji_is_changed_evidence(context, store, clock, tmp_path):  # noqa: F811
     enable(tmp_path)
     lid = line(store, clock, channel='dm:101', ts=clock.now() - 300)
-    signals(store, lid, clock.now() - 200, react_positive=1, replied=1)
+    signals(store, lid, clock.now() - 200, react_negative=1, replied=1)
     async def go():
         async with context(learn_enabled=True) as (ctx, _):
             await night.stage_rewards(ctx)
         first = store.conn.execute("SELECT value,revision FROM talk_reward").fetchone()
         with store.transaction():
-            S.drop(store.conn, lid, 'react_positive')
+            S.drop(store.conn, lid, 'react_negative')
         await clock.advance(86400, step=86400)
         async with context(learn_enabled=True, night='2026-10-30') as (ctx, _):
             await night.stage_rewards(ctx)
         return tuple(first), tuple(store.conn.execute("SELECT value,revision FROM talk_reward").fetchone())
     first, second = asyncio.run(go())
-    assert first[0] > second[0] == .5 and second[1] == first[1] + 1
+    assert first[0] < second[0] == .5 and second[1] == first[1] + 1
 
 
 def test_night_limit_grows_with_measured_cost_and_stays_bounded(store, clock, monkeypatch):
@@ -200,10 +274,10 @@ def test_night_limit_grows_with_measured_cost_and_stays_bounded(store, clock, mo
     with store.transaction():
         store.conn.execute("INSERT INTO reward_timing VALUES ('2026-10-28','lexical',400,20.0)")
         store.conn.execute("INSERT INTO reward_timing VALUES ('2026-10-28','embedding',100,30.0)")
-    assert night.night_limit(store.conn) == night.PER_NIGHT * night.BACKLOG_FACTOR  # 0.1 s a unit
+    assert night.night_limit(store.conn) == int(night.BUDGET_S / .3)  # the dearer mode's 0.3 s a unit
     with store.transaction():
-        store.conn.execute("UPDATE reward_timing SET seconds=600 WHERE mode='embedding'")
-    assert night.night_limit(store.conn) == int(night.BUDGET_S / (620 / 500))
+        store.conn.execute("UPDATE reward_timing SET seconds=5 WHERE mode='embedding'")
+    assert night.night_limit(store.conn) == night.PER_NIGHT * night.BACKLOG_FACTOR  # 0.05 s a unit
     with store.transaction():
         store.conn.execute("UPDATE reward_timing SET seconds=60000 WHERE mode='embedding'")
     assert night.night_limit(store.conn) == night.PER_NIGHT

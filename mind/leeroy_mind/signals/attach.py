@@ -20,7 +20,7 @@ NEGATIVE_NUDGE = re.compile(r"\b(?:stop|avoid|less|quit|don't|do not|no more|ton
 class Signals:
     def __init__(self, app, path):
         self.app = app
-        self.capture = Capture(path, app.clock)
+        self.capture = Capture(path, app.clock, getattr(app, 'store', None))
         self.fights = set()
         self.group = None
         self.owner_location = None
@@ -68,7 +68,8 @@ class Signals:
 
     def his_discord(self, line_id, *, reply_line=0, media=False, voice=False):
         """His stored Discord post's chat line (discord.desk), after its commit: ids and flags
-        only. `reply_line` is the chat line of the message he replied to by hand, if any."""
+        only. `reply_line` is the chat line of the message he replied to by hand: 0 when he
+        replied to none, -1 when that message has no chat line (a bot's row), which credits nobody."""
         self.offer('discord_owner', (line_id, reply_line or 0), (bool(media), bool(voice)))
 
     def reacted(self, line_id, *, positive, negative):

@@ -4,6 +4,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 import logging
+import re
 import sqlite3
 
 from leeroy_mind.discord.channels import is_discord
@@ -16,6 +17,7 @@ QUEUE_LIMIT = 512
 PENDING_LIMIT = 512
 COMBAT_MAX_AGE_S = 5.0
 CHAIN_LIMIT = 8  # her earlier answered lines in one conversation that still count his further replies
+MAIN_KINDS = frozenset({'discord_owner', 'reaction'})  # written on the mind's own connection
 BUSY_S = 2.0  # the writer thread may wait out a night stage's write; the send path never waits
 
 
@@ -45,8 +47,13 @@ def scope(row):
 
 
 class Capture:
-    def __init__(self, path, clock):
+    def __init__(self, path, clock, store=None):
         self.path, self.clock = path, clock
+        # The mind's Store. With it, what his Discord actions write goes through the mind's own
+        # connection on the event loop, between its units: a commit from this capture's second
+        # connection while the pipeline holds a read snapshot makes the pipeline's next write
+        # fail at once ("database is locked"), and that write may be an answer he is owed.
+        self.store = store
         self.queue = asyncio.Queue(maxsize=QUEUE_LIMIT)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='talk-signals')
         self.inflight = None
@@ -83,7 +90,28 @@ class Capture:
                 log.warning('signals_queue_full: dropped=%d', self.dropped)
             return False
 
+    def _on_main(self, item):
+        if self.worker_epoch != self.dropped:
+            self._reset()
+            self.worker_epoch = self.dropped
+        if item.epoch != self.worker_epoch:
+            return {'ok': False, 'error': 'Signal capture lost observations.'}
+        try:
+            with self.store.transaction():
+                if not S.available(self.store.conn):
+                    return {'ok': False, 'error': 'Signals are not set up in this database.'}
+                self._expire_discord(item.at)
+                self._apply(self.store.conn, item)
+            return {'ok': True}
+        except Exception as exc:
+            for state in (self.dpending, self.drecent, self.dexchanges, self.chains):
+                state.clear()
+            log.warning('signals_capture_failed: kind=%s error=%s', item.kind, type(exc).__name__)
+            return {'ok': False, 'error': 'Signal capture could not save this observation.'}
+
     async def _work(self, observation):
+        if self.store is not None and observation.kind in MAIN_KINDS:
+            return self._on_main(observation)  # the worker is idle here: run() takes one at a time
         self.inflight = asyncio.get_running_loop().run_in_executor(self.executor, self._process, observation)
         return await asyncio.shield(self.inflight)
 
@@ -199,15 +227,27 @@ class Capture:
             return
         media, voice = item.values
         place = scope(row)
-        answered = self.drecent.get(item.ids[1]) if item.ids[1] else None
-        if answered is not None and (scope(answered) != place or answered['id'] >= row['id']
-                                     or now < answered['ts']):
-            answered = None
-        if answered is None:
+        his = '' if voice else (conn.execute('SELECT text FROM chat_line WHERE id=?', (row['id'],)).fetchone() or ('',))[0]
+        if item.ids[1]:
+            # He replied to one message by hand: that member line or nobody. A bot row, a line
+            # from before a restart or one of another conversation (-1 or an id not held) never
+            # falls back to whoever else is waiting.
+            answered = self.drecent.get(item.ids[1])
+            if answered is None or scope(answered) != place or answered['id'] >= row['id'] or now < answered['ts']:
+                return
+        else:
             candidates = [r for r in self.dpending.values()
                           if 0 <= now - r['ts'] <= D.WINDOW_S and r['id'] < row['id'] and scope(r) == place]
             if not candidates:
                 return
+            if not direct(row['channel']) and len({r['from_guid'] for r in candidates}) > 1:
+                # Several members wait in one room: the one he names, else nobody.
+                words = his.casefold()
+                named = {r['from_guid'] for r in candidates if r['from_name'] and re.search(
+                    r'(?<!\w)' + re.escape(r['from_name'].casefold()) + r'(?!\w)', words)}
+                if len(named) != 1:
+                    return
+                candidates = [r for r in candidates if r['from_guid'] in named]
             answered = max(candidates, key=lambda r: (r['ts'], r['id']))
         lid, guid = answered['id'], answered['from_guid']
         put = self.sink.put
@@ -216,10 +256,9 @@ class Capture:
         if media:
             put(conn, lid, guid, 'sent_media', 1, now)
         if not voice:  # a voice note's line is a placeholder until it is transcribed
-            texts = dict(conn.execute('SELECT id,text FROM chat_line WHERE id IN (?,?)', (row['id'], lid)))
-            his = texts.get(row['id'], '')
+            hers = (conn.execute('SELECT text FROM chat_line WHERE id=?', (lid,)).fetchone() or ('',))[0]
             put(conn, lid, guid, 'reply_len', min(len(his) / S.REPLY_LEN_SCALE, 1), now)
-            for kind, value in D.read(his, texts.get(lid, '')).items():
+            for kind, value in D.read(his, hers).items():
                 put(conn, lid, guid, kind, value, now)
         key = (place, guid)
         previous = self.dexchanges.get(key)
@@ -237,7 +276,8 @@ class Capture:
             while len(store) > PENDING_LIMIT:
                 store.popitem(last=False)
         for other in [k for k, r in self.dpending.items()
-                      if scope(r) == place and (r['ts'], r['id']) <= (answered['ts'], lid)]:
+                      if scope(r) == place and (r['ts'], r['id']) <= (answered['ts'], lid)
+                      and (direct(row['channel']) or r['from_guid'] == guid)]:
             self.dpending.pop(other)
 
     def _expire_discord(self, now):
@@ -248,7 +288,7 @@ class Capture:
 
     @staticmethod
     def _row(conn, line_id):
-        return conn.execute('SELECT id,ts,channel,from_guid,to_guid,map,zone,thread_id,origin '
+        return conn.execute('SELECT id,ts,channel,from_guid,from_name,to_guid,map,zone,thread_id,origin '
                             'FROM chat_line WHERE id=?', (line_id,)).fetchone()
 
     @staticmethod

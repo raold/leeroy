@@ -52,6 +52,15 @@ def test_his_post_reaches_the_signals_after_its_commit_with_ids_and_flags_only(s
     assert 'INVENTEDWORDS' not in repr(app.signals.calls)
 
 
+def test_a_reply_by_hand_to_a_row_without_a_chat_line_names_no_line(store, clock):
+    app = app_with_signals(store, clock)
+    member_message(app, 'general')  # a member line that would otherwise be waiting
+    with store.transaction():
+        bot = dstore.post_bot(store, channel='general', bot='signups', text='an invented bot row', now=clock.now())
+    assert ask(app, action='post', channel='general', text='noted', reply_to=bot)['ok'] is True
+    assert app.signals.calls[-1][2] == dict(reply_line=-1, media=False, voice=False)
+
+
 def test_his_emoji_reach_the_signals_as_they_stand(store, clock):
     app = app_with_signals(store, clock)
     mid, line = member_message(app, 'dm:101')

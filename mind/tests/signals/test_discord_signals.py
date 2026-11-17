@@ -11,7 +11,27 @@ from leeroy_mind.signals import discord as D
 from leeroy_mind.signals import store as S
 from leeroy_mind.signals.attach import Signals
 
-from .test_signals import line, observe, saved, worker
+from contextlib import asynccontextmanager, suppress
+
+from leeroy_mind.signals.capture import Capture
+
+from .test_signals import line, observe, saved
+
+
+@asynccontextmanager
+async def worker(store, clock):
+    """The capture as the mind runs it: his Discord actions are written on the mind's own
+    connection (the Store), everything else on the worker's."""
+    path = store.conn.execute('PRAGMA database_list').fetchone()[2]
+    capture = Capture(path, clock, store)
+    task = asyncio.create_task(capture.run())
+    try:
+        yield capture
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        await capture.close()
 
 DM, GROUP, CHANNEL = 'dm:101', 'gdm:7', 'discord:general'
 PLACES = pytest.mark.parametrize('place', [DM, GROUP, CHANNEL])
@@ -58,6 +78,19 @@ def test_his_next_message_is_a_reply_with_normalised_latency_and_length(store, c
     ('thank you, you are the best', {'affection'}, {'objected', 'laughed'}),
     ('those croissants never stood a chance', {'topic_kept'}, {'asked_back', 'topic_changed'}),
     ('what?', {'objected'}, {'asked_back', 'affection'}),
+    ("that's it?", {'objected'}, {'asked_back'}),
+    ('lol what', {'objected'}, {'asked_back'}),
+    ("wait, that's it? ok", {'objected'}, {'asked_back'}),
+    ('huh', {'objected'}, {'asked_back'}),
+    ('wtf', {'objected'}, {'asked_back'}),
+    ('did you even read what i wrote?', {'objected'}, {'asked_back'}),
+    ('why are you repeating my question back to me', {'objected'}, {'asked_back'}),
+    ("you're not making sense", {'objected'}, {'asked_back'}),
+    ('ew', {'objected'}, {'asked_back'}),
+    ('really?', set(), {'asked_back', 'objected'}),
+    ('the invented bakery burned your croissants again?', {'topic_kept'}, {'asked_back', 'objected'}),
+    ('no', set(), {'asked_back', 'objected', 'laughed', 'affection', 'topic_kept'}),
+    ('k', set(), {'asked_back', 'objected', 'laughed', 'affection', 'topic_kept'}),
     ('that makes no sense', {'objected'}, {'asked_back'}),
     ('you already said that', {'objected'}, {'topic_kept'}),
     ('stop', {'objected'}, {'laughed'}),
@@ -205,6 +238,61 @@ def test_a_reply_by_hand_credits_that_line_even_unaddressed(store, clock):
             await c.flush()
             assert set(kinds(store, older)) == {'replied', 'reply_latency_s', 'reply_len', 'laughed'}
             assert kinds(store, newer) == {}
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize('target', [-1, 987654])
+@PLACES
+def test_a_reply_by_hand_to_a_bot_row_or_an_unknown_line_credits_nobody(store, clock, place, target):
+    async def go():
+        async with worker(store, clock) as c:
+            lid = hers(store, clock, place)
+            observe(c, clock, 'sent', (lid,), (True, False, True))
+            await clock.advance(30, step=3600)
+            observe(c, clock, 'discord_owner', (his(store, clock, place, 'haha thank you'), target), (False, False))
+            await c.flush()
+            assert saved(store) == [] and lid in c.dpending  # she still waits for a real reply
+    asyncio.run(go())
+
+
+def named(store, clock, place, guid, name):
+    chat = Chat(int(clock.now() * 1000), place, guid, name, 0, 'an invented answer to him', 0, 0)
+    return store.insert_chat_line(chat, session_id=None, origin='mind')
+
+
+@pytest.mark.parametrize('place', [GROUP, CHANNEL])
+@pytest.mark.parametrize('text,credited', [
+    ('haha good one', None), ('haha good one brelva', 102), ('Arkon, how long did that take you?', 101),
+    ('arkon and brelva, thank you both', None), ('that was arkonish of you', None)])
+def test_two_members_waiting_in_one_room_credit_the_one_he_names_or_nobody(store, clock, place, text, credited):
+    async def go():
+        async with worker(store, clock) as c:
+            first, second = named(store, clock, place, 101, 'Arkon'), named(store, clock, place, 102, 'Brelva')
+            for lid in (first, second):
+                observe(c, clock, 'sent', (lid,), (True, False, True))
+            await clock.advance(30, step=3600)
+            observe(c, clock, 'discord_owner', (his(store, clock, place, text), 0), (False, False))
+            await c.flush()
+            got = {r[1] for r in saved(store)}
+            assert got == ({credited} if credited else set())
+            assert set(c.dpending) == {first, second} - {{101: first, 102: second}.get(credited)}
+    asyncio.run(go())
+
+
+def test_his_discord_writes_use_the_minds_own_connection_and_never_the_worker(store, clock):
+    async def go():
+        async with worker(store, clock) as c:
+            lid = await exchange(c, store, clock, DM, 'haha')
+            observe(c, clock, 'reaction', (lid,), (True, False))
+            await c.flush()
+            assert c.conn is None or not c.conn.in_transaction
+            # visible on the mind's connection without any second connection having committed
+            assert {'replied', 'laughed', 'react_positive'} <= set(kinds(store, lid))
+        bare = Capture(None, clock, store)
+        assert bare._on_main(type('O', (), dict(kind='reaction', at=clock.now(), owner=HUMAN, ids=(lid,),
+                                                values=(False, False), epoch=0))()) == {'ok': True}
+        bare.executor.shutdown(wait=False)
+        assert 'react_positive' not in kinds(store, lid)
     asyncio.run(go())
 
 

@@ -25,7 +25,11 @@ _OBJECT = re.compile(
     r"\b(?:you (?:already|just) (?:said|told me|asked)(?: me)?(?: that| this)?"
     r"|(?:you )?said that already|you(?:'re| are|re) repeating yourself|stop repeating"
     r"|not what i (?:asked|said|meant)|i didn'?t (?:ask|say) that|that'?s not what i (?:asked|said|meant)"
-    r"|(?:that|this|it) (?:makes|made) no sense|answer (?:the|my) question)\b"
+    r"|(?:that|this|it) (?:makes|made) no sense|answer (?:the|my) question"
+    r"|did (?:you|u) even (?:read|listen|look|see)|(?:why are (?:you|u)|stop|quit) repeating"
+    r"|repeating (?:my|the) (?:question|words)|(?:you'?re|you are|ur) not making (?:any )?sense)\b"
+    r"|^\W*(?:(?:lol|lmao|uh|um|wait|bro|dude)\W+)?(?:what|wut|wat|huh|wtf)\W*$"
+    r"|\b(?:that'?s|is that) (?:it|all)\s*\?|^\W*e+w+\W*$"
     r"|^\W*(?:please |pls |ok |okay )?stop(?: it| that| saying\b.*| doing\b.*| asking\b.*)?\W*$", re.I)
 
 
@@ -40,6 +44,11 @@ def reaction_kind(emoji):
     if plain in NEGATIVE_EMOJI:
         return 'react_negative'
     return None
+
+
+_WORD = re.compile(r"[a-z0-9']+")
+MIN_ASK_WORDS = 4     # a shorter question counts as interest only when it keeps her topic
+ECHO_SHARE = 0.8      # his words found in her line: he is saying her line back, not asking
 
 
 def _question(text):
@@ -61,19 +70,25 @@ def read(his, hers):
     if objected:
         out['objected'] = 1.
     asked = _question(plain)
-    if asked and not objected:  # "what?" is pushback, not interest
+    mine, theirs = content_words(plain, ()), content_words(hers, ())
+    kept = len(mine & theirs) >= MIN_TOPIC_WORDS
+    words, heard = _WORD.findall(plain.casefold()), set(_WORD.findall(hers.casefold()))
+    echo = len(words) >= 3 and sum(w in heard for w in words) / len(words) >= ECHO_SHARE
+    # Interest is a real question of his own: not pushback ("what?"), not her line said back, and
+    # not a curt one off her topic ("that's it?", "really?"). "no" or "k" alone say nothing more.
+    if asked and not objected and not echo and (len(words) >= MIN_ASK_WORDS or kept):
         out['asked_back'] = 1.
     if _LAUGH.search(plain):
         out['laughed'] = 1.
     if not objected and (flirty(plain) or WARM_RE.search(plain) or _HEART.search(plain)):
         out['affection'] = 1.
-    mine, theirs = content_words(plain, ()), content_words(hers, ())
-    if len(mine & theirs) >= MIN_TOPIC_WORDS:
+    if kept:
         out['topic_kept'] = 1.
     elif (asked and not objected and mine and theirs and _question(hers)
           and not {'laughed', 'affection'} & set(out)):
         # She asked him something; he answered none of it and asked about something else. An
         # answer in his own words shares no word with her question either, so only his own
-        # unrelated question counts.
+        # unrelated question counts. Kept as an observation only: it was wrong on all three
+        # live rows, so the reward gives it no weight.
         out['topic_changed'] = 1.
     return out

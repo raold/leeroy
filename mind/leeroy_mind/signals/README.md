@@ -84,17 +84,26 @@ week of DMs produced no observation at all.
   channel and group DM whether or not he is in WoW; a DM counts only when it is his. His WoW
   login, logout, AFK, group and combat never touch Discord's attribution.
 - **His reply.** His next message in that conversation (the same DM, group DM or channel) within
-  30 minutes is his reply to the newest waiting line there; a message he sent as a reply to one
-  message by hand credits that message, addressed or not. `reply_latency_s` is elapsed / 1800
+  30 minutes is his reply to the newest waiting line there. A message he sent as a reply to one
+  message by hand credits that member line, addressed or not, and only it: a reply to a bot's
+  row, to a line from before a restart or past the 512 held, credits nobody. In a channel or
+  group DM where several members wait, his message credits the one it names (her character
+  name as a word), else nobody. A brb/back line (`pair_line`) and a photo's caption never wait:
+  the real answer before them takes his reply. Discord threads are not told apart from their
+  channel. `reply_latency_s` is elapsed / 1800
   for a Discord line (multiply by 1800), `reply_len` as in game. A message of his with no waiting
   line before it (he wrote first, or twice running) is no observation. Discord and game lines
   never answer each other.
 - **What the reply says** (`signals/discord.py`, the lexicons talk already reads him with):
-  `asked_back` (a question that is not pushback), `laughed`, `affection` (thanks, praise, a
-  flirt, a heart), `topic_kept` (a shared content word), `objected` (talk's pushback cues, "you
-  already said that", "not what I asked", a bare "stop"), `topic_changed` (she asked a question
+  `asked_back` (a question of his own: not pushback, not her line said back, and when shorter
+  than four words only if it keeps her topic, so "that's it?" and "really?" are not interest),
+  `laughed`, `affection` (thanks, praise, a flirt, a heart), `topic_kept` (a shared content
+  word), `objected` (talk's pushback cues, "you already said that", "not what I asked", "did
+  you even read", "you're not making sense", "that's it?", a bare "what", "huh", "wtf", "ew" or
+  "stop"); "no" or "k" alone is a reply and nothing more. `topic_changed` (she asked a question
   and he, sharing no content word, asked about something else: an answer in his own words shares
-  none either, so only his own unrelated question counts), `sent_media` (his photo or voice
+  none either, so only his own unrelated question counts; observed only, the reward gives it
+  no weight), `sent_media` (his photo or voice
   note; a voice note's words are not read). These are narrow lexical heuristics with no
   calibrated accuracy.
 - **The talk going on.** `thread_continued` when the same pair exchanged within the 30 minutes
@@ -105,8 +114,14 @@ week of DMs produced no observation at all.
   his emoji as they stand: removing one removes its row.
 - **Silence is nothing.** A Discord line he never answers just stops waiting. `ignored` is never
   recorded for Discord, and his leaving is never read as dislike.
-- **Privacy.** The queue carries line ids and flags. The worker reads the two lines' text only
-  inside the classifier and stores kinds and numbers; logs carry codes and counts. A DM line is
+- **Where it is written.** His Discord actions are written through the mind's own connection,
+  on the event loop between its units, never on the capture's second connection: a commit from
+  a second connection while the pipeline holds a read snapshot makes the pipeline's next write
+  fail at once, and that write can be an answer he is owed. (The Discord answer's own unit also
+  takes the write lock before it reads and retries a busy store once: `Store.write_first`,
+  `discord_store_retry`.) Game observations still use the worker.
+- **Privacy.** The queue carries line ids and flags. The two lines' text is read only inside
+  the classifier, which stores kinds and numbers; logs carry codes and counts. A DM line is
   credited only by his message in that DM.
 
 `python -m leeroy_mind learn backfill-signals --since YYYY-MM-DD [--go]` replays the stored
@@ -117,7 +132,8 @@ needs the mind stopped (it holds `mind.lock`), snapshots first (`mind-pre-backfi
 never migrates, writes only rows the table lacks (each at the time it happened) and leaves a
 numeric receipt (`signals:backfill:<time>`). It never reaches further back than 90 days. Which
 lines were addressed to him is rebuilt from stored facts (a DM to him, a reply to his message, a
-recorded trigger or learning parent that is his line); an emoji he removed is gone.
+recorded trigger or learning parent that is his line); an emoji he removed is gone. As live,
+a voice note's words are never read (transcribed or not), and pair lines and captions never wait.
 
 ## Execution and retention
 

@@ -43,16 +43,18 @@ def ready(store):
 
 
 def night_limit(conn):
-    """How many lines a night scores: PER_NIGHT until a night has measured what one costs (lexical
-    and embedding units together, the last seven nights), then as many as fit BUDGET_S, at most
+    """How many lines a night scores: PER_NIGHT until a night has measured what one costs (the
+    dearer of lexical and embedding units, the last seven nights), then as many as fit BUDGET_S, at most
     BACKLOG_FACTOR times PER_NIGHT. About 500 new lines a day against a fixed 500 never drained."""
     try:
-        seconds, units = conn.execute("SELECT sum(seconds),sum(units) FROM reward_timing").fetchone()
+        cost = conn.execute("SELECT max(s/u) FROM (SELECT sum(seconds) s,sum(units) u FROM reward_timing "
+                            "GROUP BY mode HAVING u>0)").fetchone()[0]
     except sqlite3.OperationalError:
         return PER_NIGHT
-    if not units or seconds is None:
+    if cost is None:
         return PER_NIGHT
-    return max(PER_NIGHT, min(PER_NIGHT * BACKLOG_FACTOR, int(BUDGET_S / max(seconds / units, .001))))
+    # The dearer of the two measured modes: a backlog of embedding units alone must fit too.
+    return max(PER_NIGHT, min(PER_NIGHT * BACKLOG_FACTOR, int(BUDGET_S / max(cost, .001))))
 
 
 def _pending(ctx, *, count=False, open_only=False):

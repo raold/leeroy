@@ -92,6 +92,13 @@ class Store:
         """Whether this Store is inside one of its transaction units."""
         return self._depth > 0
 
+    def write_first(self) -> None:
+        """Take the write lock at the start of an outermost unit, before it reads: a unit that
+        reads first can meet another connection's commit before its own write, and SQLite then
+        refuses that write at once. With the lock held from its first statement, the unit's
+        snapshot is the newest and a writer elsewhere waits its turn (busy_timeout)."""
+        self.conn.execute("UPDATE meta SET value = value WHERE key = ''")
+
     @contextmanager
     def transaction(self):
         """The outermost block commits on a clean exit and rolls back on an exception. An inner
