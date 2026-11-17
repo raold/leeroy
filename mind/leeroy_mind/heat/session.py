@@ -48,6 +48,56 @@ def _morning(local, now: float) -> float:
     return now + (target - local).total_seconds()
 
 
+def _expired(rec: dict, now: float) -> bool:
+    """A Discord-medium override past its idle limit or its morning. One said in game ends only
+    at his logout (SessionBook.end_game)."""
+    return rec["medium"] == "discord" and (
+        now - rec["last"] >= IDLE_S or (rec.get("until") is not None and now >= rec["until"]))
+
+
+def _valid(value: str) -> dict | None:
+    try:
+        rec = json.loads(value)
+        if rec["mode"] in MODES and rec["medium"] in MEDIA:
+            float(rec["at"]), float(rec["last"])
+            return rec
+    except (ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
+def _shown(rows: dict[str, dict], now: float) -> dict:
+    out = {"all": None, "members": {}}
+    for key, rec in rows.items():
+        if _expired(rec, now):
+            continue
+        row = {"mode": rec["mode"], "ends": "logout" if rec["medium"] == "game" else "morning"}
+        if key == ALL:
+            out["all"] = row
+        else:
+            out["members"][key[len(PREFIX):]] = row
+    return out
+
+
+def read(conn, now: float) -> dict:
+    """The overrides in force as stored, read-only (the console's page): everyone's and each
+    member's mode with how it ends. Nothing is written or dropped here, and none of his words
+    are stored at all."""
+    try:
+        found = conn.execute("SELECT key, value FROM meta WHERE key LIKE ?",
+                             (PREFIX + "%",)).fetchall()
+    except Exception:  # a database without the meta table
+        return {"all": None, "members": {}}
+    rows = {k: rec for k, v in found if (rec := _valid(v)) is not None}
+    return _shown(rows, now)
+
+
+def mode_in(view: dict, guid: int) -> str | None:
+    """A member's mode in a view (SessionBook.view, read): hers, else everyone's; clean wins."""
+    modes = {r["mode"] for r in (view["members"].get(str(guid)), view["all"]) if r}
+    return "clean" if "clean" in modes else "open" if "open" in modes else None
+
+
 class SessionBook:
     """The overrides in force, kept in memory and in meta. All of it runs on the mind's loop."""
 
@@ -59,13 +109,9 @@ class SessionBook:
     def _load(self) -> None:
         for key, value in self.store.conn.execute(
                 "SELECT key, value FROM meta WHERE key LIKE ?", (PREFIX + "%",)).fetchall():
-            try:
-                rec = json.loads(value)
-                if rec["mode"] in MODES and rec["medium"] in MEDIA:
-                    float(rec["at"]), float(rec["last"])
-                    self._rows[key] = rec
-            except (ValueError, TypeError, KeyError):
-                continue
+            rec = _valid(value)
+            if rec is not None:
+                self._rows[key] = rec
 
     def _key(self, guid: int | None) -> str:
         return ALL if guid is None else KEY.format(guid=int(guid))
@@ -101,9 +147,7 @@ class SessionBook:
         rec = self._rows.get(key)
         if rec is None:
             return None
-        if rec["medium"] == "discord" and (
-                now - rec["last"] >= IDLE_S
-                or (rec.get("until") is not None and now >= rec["until"])):
+        if _expired(rec, now):
             self._drop(key)
             return None
         return rec
@@ -144,14 +188,6 @@ class SessionBook:
     def view(self, now: float | None = None) -> dict:
         """For the page: everyone's mode and each member's, with how each ends. No words of his."""
         now = self.clock.now() if now is None else now
-        out = {"all": None, "members": {}}
         for key in list(self._rows):
-            rec = self._live(key, now)
-            if rec is None:
-                continue
-            row = {"mode": rec["mode"], "ends": "logout" if rec["medium"] == "game" else "morning"}
-            if key == ALL:
-                out["all"] = row
-            else:
-                out["members"][key[len(PREFIX):]] = row
-        return out
+            self._live(key, now)  # drops the ones that ended
+        return _shown(self._rows, now)

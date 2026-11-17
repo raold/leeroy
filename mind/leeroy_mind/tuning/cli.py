@@ -1,5 +1,8 @@
 """`python -m leeroy_mind tuning --data-dir D status|history|undo N|revert N`: the owner's dials
-from a terminal. status and history read mind.db read-only and never migrate it. undo and revert
+from a terminal. `tuning heat status|explain [--heat N] [--guid N]|overlays` reads the heat dial
+(leeroy_mind.heat) the same read-only way: the value in force, what a value means in the words
+the code itself uses, and the owner's overlay files by name, variant count and size, never their
+text. status and history read mind.db read-only and never migrate it. undo and revert
 are for when the mind is stopped (while it runs, the console asks it to): they hold the
 instance lock throughout, refuse a database older than this code (run `db migrate` first), and
 take a snapshot before writing one change with source "cli". The running mind reads it at its
@@ -33,6 +36,10 @@ def _parser() -> argparse.ArgumentParser:
     n.add_argument("--limit", type=int, default=30)
     e = sub.add_parser("edits", help="godmode edits in force and their history, read-only")
     e.add_argument("--limit", type=int, default=30)
+    ht = sub.add_parser("heat", help="the heat dial: status, explain, overlays (read-only)")
+    ht.add_argument("what", choices=("status", "explain", "overlays"))
+    ht.add_argument("--heat", type=int, default=None, help="explain this value (0-10)")
+    ht.add_argument("--guid", type=int, default=None, help="explain one member's record")
     u = sub.add_parser("undo", help="reverse one change (the mind must be stopped)")
     u.add_argument("change", type=int)
     r = sub.add_parser("revert", help="every value back to right after a change (0: none)")
@@ -111,6 +118,74 @@ def _history(conn, limit: int) -> None:
                   f"{e['from']} -> {e['to']}")
 
 
+def _heat(conn, cfg, root: Path, args) -> int:
+    """`tuning heat ...`, read-only. Words come from leeroy_mind.heat (explain_row, explain), the
+    functions the mind reads; an overlay file is listed by name, variants and tokens only."""
+    from leeroy_mind import heat as H
+    from leeroy_mind.console.tuneview import _cast, _personas
+    from leeroy_mind.heat import overlays, session
+    from leeroy_mind.heat.config import load_heat_config
+    from leeroy_mind.heat.live import resolve_for, world_of
+    config = load_heat_config(root / "mind.toml")
+    if args.what == "overlays":
+        for o in overlays.listing(root):
+            print(f"  {o['file']}: " + (f"{o['variants']} variant{'' if o['variants'] == 1 else 's'}, "
+                                         f"about {o['tokens']} tokens" if o["present"]
+                                         else f"not there; reads {o['reads']}")
+                  + f"  ({o['purpose']})")
+        return 0
+    t = Tuning.load(conn)
+    dial = t.world.get("romance", cfg.romance.dial if cfg is not None else None)
+    if t.heat_world is None and dial is None:
+        print("heat is not set and mind.toml could not be read", file=sys.stderr)
+        return 1
+    world, legacy = world_of(t, 9 if dial is None else dial)
+    if args.what == "status":
+        print(f"[heat] enabled = {str(config.enabled).lower()}, public_cap = "
+              f"{str(config.public_cap).lower()}")
+        print(f"  world heat {world} " + ("(set)" if legacy is None
+                                           else f"(follows the romance dial {legacy})"))
+        names = _names(conn)
+        for target, v in sorted(t.heat_groups.items()):
+            g = t.groups.get(target)
+            print(f"  group {g.name if g else target}: heat {v:+d}")
+        for guid, v in sorted(t.heat_pins.items()):
+            print(f"  {names.get(guid, '?')} ({guid}): heat {v:+d}")
+        shown = session.read(conn, SystemClock().now())
+        if shown["all"]:
+            print(f"  tonight, everyone: {shown['all']['mode']} (ends: {shown['all']['ends']})")
+        for guid, row in sorted(shown["members"].items()):
+            print(f"  tonight, {names.get(int(guid), '?')} ({guid}): {row['mode']} "
+                  f"(ends: {row['ends']})")
+        if not config.enabled:
+            print("  heat is off: the romance dial is in force, exactly as before")
+        return 0
+    if args.guid is None:
+        value = world if args.heat is None else args.heat
+        if not 0 <= value <= 10:
+            print("heat runs 0-10", file=sys.stderr)
+            return 1
+        print(f"heat {value}: {H.explain_row(value)}")
+        return 0
+    cast, personas = _cast(conn), _personas(conn)
+    if args.guid not in personas or args.guid not in cast:
+        print("no such cast member with a persona", file=sys.stderr)
+        return 1
+    p = personas[args.guid][0]
+    if args.heat is not None:
+        t = t.with_value("world", "", "heat", max(0, min(10, args.heat)))
+    r = resolve_for(t.apply(p, cast.get(args.guid)), t, 9 if dial is None else dial, config,
+                    session=session.mode_in(session.read(conn, SystemClock().now()), args.guid),
+                    cast_member=cast.get(args.guid))
+    words = H.explain(r)
+    print(f"{cast[args.guid].name} ({args.guid}): {words['title']}")
+    for line in words["lines"]:
+        print(f"  {line}")
+    for cap in words["caps"]:
+        print(f"  capped: {cap}")
+    return 0
+
+
 def _write(root: Path, args) -> int:
     from leeroy_mind.app import AlreadyRunning, acquire_instance_lock, instance_lock_held
     from leeroy_mind.personas.io import load_persona
@@ -180,6 +255,8 @@ def tuning_main(argv=None) -> int:
             print("this mind.db has no tuning tables yet (run `db migrate` with the mind "
                   "stopped)")
             return 0
+        if args.action == "heat":
+            return _heat(conn, cfg, root, args)
         if args.action == "status":
             _status(conn, cfg)
         elif args.action == "edits":

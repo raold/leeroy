@@ -1252,7 +1252,7 @@ class Pipeline:
         return c.messages, c.memory_ids
 
     async def preview_line(self, turn: Turn, persona: Persona, *, trigger: str, seed: int,
-                           dial: int | None = None) -> tuple[str, str | None]:
+                           dial: int | None = None, heat_tuning=None) -> tuple[str, str | None]:
         """The console's tuning preview: the line `persona` (a candidate effective persona)
         would say for `turn`, answering his line `trigger` (text, never a stored line), through
         the live prompt and the model with the tells, repairs and retries a line gets, styled
@@ -1267,7 +1267,7 @@ class Pipeline:
                           from_name=self.human.character_name, to_guid=turn.to_guid,
                           text=trigger, map=0, zone=0, session_id=None, thread_id=None,
                           origin="human") if trigger else None
-        meta = TurnMeta(turn_id="preview", seed=seed)
+        meta = TurnMeta(turn_id="preview", seed=seed, heat_tuning=heat_tuning)
         c = await self._compose(turn, meta, live=False, persona=persona,
                                 window=[row] if row is not None else [],
                                 trigger_text=trigger or None, dial=dial)

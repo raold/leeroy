@@ -7,6 +7,7 @@ import { memberOutreachModel } from "./outreachmodel.mjs";
 import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { godmodePanel, renderStrings } from "./godmode.mjs";
+import { heatCard, heatPanel, heatPreview } from "./heat.mjs";
 import { looksEditor, looksUndoButton } from "./looks.mjs";
 import { SHAPES, bustText, canUndoLooks, shapeText, styleRows } from "./looksmodel.mjs";
 import { historyEdits } from "./godmodemodel.mjs";
@@ -431,6 +432,7 @@ function showPreview(what, r) {
   if (r.ok !== true) { box.appendChild(el("p", "why bad", str(r.error) || "refused")); return; }
   arr(r.world).forEach(function (x) { box.appendChild(el("p", "pv", numberText(x))); });
   if (r.note) { box.appendChild(el("p", "why", str(r.note))); }
+  if (r.dial === "heat") { heatPreview(box, r); }
   arr(r.subjects).forEach(function (s) {
     var d = el("div", "pv");
     d.appendChild(el("h4", "", str(s.name) || "#" + s.guid));
@@ -522,6 +524,7 @@ function renderTuning() {
                      clear: "Back to mind.toml", clearable: d.override !== null && d.override !== undefined,
                      moves: str(d.moves) + " (" + str(d.when) + ")", off: v.available ? "" : "unavailable" });
   });
+  heatPanel($("t-heat"), obj(TUNE).heat, live, tuneWhy(), tuneAsk);
   var groups = $("t-groups");
   var restoreGroupFocus = nudgeFocus(groups);
   clear(groups);
@@ -621,6 +624,7 @@ function renderDials(guid) {
                    moves: str(d.moves) + " (from " + str(d.when) + ")", off: x.applies ? "" : str(x.note) });
   });
   setText("p-dialsum", mine ? plural(mine, "value") + " of your own" : "nothing of your own set");
+  heatCard(box, obj(TUNE).heat, guid, str(m.name), tuneLive(), tuneWhy(), tuneAsk);
   nudgePanel(box, v, "member", String(guid), tuneLive(), tuneWhy(), tuneAsk);
   godmodePanel(box, v, guid, tuneLive(), tuneWhy(), tuneAsk, obj(TUNE).godmode === true, obj(v.names));
   restoreFocus();

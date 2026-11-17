@@ -1474,9 +1474,24 @@ class ConsoleApp:
             log.warning("console_tuning_unread: error=%s", type(e).__name__)
             return json_response(503, {"ok": False, "error": f"mind.db could not be read "
                                                              f"({type(e).__name__})"})
+        heat = await asyncio.to_thread(self._heat_view, files)
         return json_response(200, {"view": view, "mind": await self._tune_status(),
                                    "control": self.controls.describe(),
-                                   "godmode": self.godmode_enabled})
+                                   "godmode": self.godmode_enabled, "heat": heat})
+
+    def _heat_view(self, files: dict | None) -> dict | None:
+        """The Heat panel (heatview.heat_view), or None when mind.db cannot be read for it: the
+        rest of the Tuning page still shows."""
+        from . import heatview
+        from ..heat.config import load_heat_config
+        try:
+            return feed.read(self.s.data_dir / "mind.db", heatview.heat_view,
+                             config=load_heat_config(self.s.data_dir / "mind.toml"),
+                             data_dir=self.s.data_dir,
+                             romance_file=(files or {}).get("romance"), now=self._clock())
+        except Exception as e:
+            log.warning("console_heat_unread: error=%s", type(e).__name__)
+            return None
 
     async def _api_tune(self, req: Request):
         try:

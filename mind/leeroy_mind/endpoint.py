@@ -115,7 +115,9 @@ OPS = ("status", "stop", "raid", "tune", "selfie", "say", "bank", "board", "disc
        "ops", "claim_check", "feedback", "kit", "learn", "gpu", "decision", "string", "raidlead",
        "looks")
 RAID_ACTIONS = ("call", "form", "summon", "start", "stop", "end")
-TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge", "edit")
+TUNE_ACTIONS = ("status", "set", "undo", "revert", "group", "retire", "preview", "nudge", "edit",
+                "heat")
+HEAT_SESSIONS = ("clean", "open", "clear")
 TUNE_SHAPES = {
     "status": {"action"},
     "set": {"action", "scope", "target", "dial", "value", "previewed"},
@@ -524,6 +526,13 @@ def tune_args(args) -> dict:
             return edit_args(args)
         except ValueError as exc:
             raise BadRequest(str(exc)) from None
+    if action == "heat":  # the session override: {session: clean|open|clear[, guid]}
+        if set(args) - {"action", "session", "guid"} or args.get("session") not in HEAT_SESSIONS:
+            raise BadRequest("tune heat: session is clean, open or clear, with an optional guid")
+        guid = args.get("guid")
+        if guid is not None and not _count(guid, 1):
+            raise BadRequest("tune heat: guid is a member's guid")
+        return {"action": "heat", "session": args["session"], "guid": guid}
     shape = TUNE_SHAPES[action]
     if set(args) != shape:
         if action == "status":

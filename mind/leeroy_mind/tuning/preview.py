@@ -28,7 +28,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 
 from . import changes as C
 from . import groups as G
-from .dials import MEMBER_DIALS, PARTY_SUBSTANCES, WORLD_DIALS, applies
+from .dials import HEAT, MEMBER_DIALS, PARTY_SUBSTANCES, WORLD_DIALS, applies
 from .effective import dials_of
 
 log = logging.getLogger("leeroy_mind.tuning")
@@ -74,6 +74,7 @@ SCENARIO = {
     "theorycraft": "what do you reckon about gear and stats for my spec?",
     "lore": "anyone know the story behind this place?",
     "romance": "hey you",
+    HEAT: "hey you",
 }
 
 
@@ -93,7 +94,7 @@ def _subjects(app, pic: C.Picture, tuning, scope: str, target: str, dial: str) -
                    or G.matches(grp.where, pic.personas[g], pic.cast.get(g))]
     if dial in MEMBER_DIALS:
         members = [g for g in members if applies(dial, pic.personas[g])]
-    if dial == "romance":  # the world's romance dial reads in a woman's words to him
+    if dial in ("romance", HEAT):  # the romance dial and heat read in a woman's words to him
         members = [g for g in members if pic.personas[g].identity.player_gender == "female"
                    and pic.personas[g].romance.stance in ("fond", "drawn", "lust")]
     rng = random.Random(f"preview:{scope}:{target}:{dial}")
@@ -242,7 +243,7 @@ async def admission(app) -> str | None:
 
 def _turn(app, dial: str, p, guid: int) -> Turn:
     hg = app.human_guid
-    if dial == "romance":
+    if dial in ("romance", HEAT):
         return Turn(kind=TurnKind.REPLY_HUMAN, speaker=guid, channel="whisper", to_guid=hg,
                     addressee=hg, priority=Priority.BACKGROUND,
                     deadline=app.clock.now() + LINE_DEADLINE_S)
@@ -258,12 +259,14 @@ def _turn(app, dial: str, p, guid: int) -> Turn:
     return turn
 
 
-async def _line(app, dial: str, p, guid: int, seed: int, romance: int | None) -> dict:
+async def _line(app, dial: str, p, guid: int, seed: int, romance: int | None,
+                heat=None) -> dict:
     turn = _turn(app, dial, p, guid)
     trigger = "" if turn.kind is TurnKind.OPEN else SCENARIO.get(dial, SCENARIO["humour"])
     try:
-        text, why = await app.engine.preview_line(turn, p, trigger=trigger, seed=seed,
-                                                  dial=romance)
+        text, why = await app.engine.preview_line(
+            turn, p, trigger=trigger, seed=seed, dial=romance,
+            **({} if heat is None else {"heat_tuning": heat}))
     except ValueError:
         return {"text": "", "note": REFUSE["tells"]}
     if why in ("expired", "llm_error"):
@@ -275,7 +278,8 @@ async def _line(app, dial: str, p, guid: int, seed: int, romance: int | None) ->
     return {"text": text, "note": ""}
 
 
-async def _lines(app, dial: str, subjects, before, after, romance=(None, None)) -> dict | str:
+async def _lines(app, dial: str, subjects, before, after, romance=(None, None),
+                 heat=(None, None)) -> dict | str:
     why = await admission(app)
     if why is not None:
         return why
@@ -286,14 +290,58 @@ async def _lines(app, dial: str, subjects, before, after, romance=(None, None)) 
         for g in subjects:
             seed = random.Random(f"preview-seed:{g}:{dial}:{app.personas.tuning.version}"
                                  ).randrange(1, 1 << 31)
-            b = await _line(app, dial, before(g), g, seed, romance[0])
-            a = await _line(app, dial, after(g), g, seed, romance[1])
+            b = await _line(app, dial, before(g), g, seed, romance[0], heat[0])
+            a = await _line(app, dial, after(g), g, seed, romance[1], heat[1])
             out.append({"guid": g, "name": before(g).character_name, "before": b, "after": a})
         return {"lines": out}
     finally:
         await arbiter.release_live(LEASE)
         if first and arbiter.holders:  # a login meanwhile skipped the hand-over: do it now
             asyncio.ensure_future(arbiter.hand_over())
+
+
+async def _heat_preview(app, pic, current, candidate, scope, target, out) -> dict:
+    """Heat's preview: what the value means in words (heat.explain_row, the function the code
+    reads), what changes, the photo lists the new value allows (text, no render), and one
+    private line before and after for up to SUBJECTS women it reaches, through the same path as
+    the romance dial's. Never stored or logged."""
+    from leeroy_mind import heat as H
+    from leeroy_mind.heat import photos as heat_photos
+    from leeroy_mind.heat.live import world_of
+    live = app.heat
+    file_dial = live._file_dial()
+    b, a = world_of(current, file_dial)[0], world_of(candidate, file_dial)[0]
+    subjects = _subjects(app, pic, current, scope, target, HEAT)
+    if scope == "world":
+        out["heat"] = {"before": b, "after": a, "explain": H.explain_row(a),
+                       "changes": H.what_changes(b, a),
+                       "photos": heat_photos.listing(H.resolve(a, H.Member(
+                           stance="lust", lust_style=True)).photo)}
+        out["world"] = [{"what": "heat", "before": b, "after": a, "unit": ""}]
+    members = []
+    for g in subjects:
+        p = pic.personas[g]
+        rb = live.resolve(current.apply(p, pic.cast.get(g)), tuning=current, lead=False)
+        ra = live.resolve(candidate.apply(p, pic.cast.get(g)), tuning=candidate, lead=False)
+        members.append({"guid": g, "name": p.character_name, "before": H.explain(rb),
+                        "after": H.explain(ra), "photos": heat_photos.listing(ra.photo)})
+    out["members"] = members
+    if not subjects:
+        out["note"] = REFUSE["nobody"]
+        log_event("tune_previewed", dial=HEAT, kind="numbers")
+        return out
+    lines = await _lines(app, HEAT, subjects,
+                         lambda g: current.apply(pic.personas[g], pic.cast.get(g)),
+                         lambda g: candidate.apply(pic.personas[g], pic.cast.get(g)),
+                         heat=(current, candidate))
+    if isinstance(lines, str):
+        out["note"] = REFUSE[lines]
+        log_event("tune_previewed", dial=HEAT, kind="refused", reason=lines)
+        return out
+    out["kind"] = "lines"
+    out["subjects"] = lines["lines"]
+    log_event("tune_previewed", dial=HEAT, kind="lines", subjects=len(lines["lines"]))
+    return out
 
 
 # -- the op -------------------------------------------------------------------------------------
@@ -310,6 +358,8 @@ async def preview(app, args: dict) -> dict:
     reach = service.reach(scope, target, dial, pic)
     out = {"ok": True, "scope": scope, "target": target, "dial": dial, "value": value,
            "reach": reach, "kind": "numbers", "subjects": [], "world": []}
+    if dial == HEAT:
+        return await _heat_preview(app, pic, current, candidate, scope, target, out)
     if scope == "world":
         d = WORLD_DIALS[dial]
         file_value = getattr(getattr(app.file_cfg, d.section), d.key)

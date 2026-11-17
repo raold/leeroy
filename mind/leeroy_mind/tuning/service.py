@@ -16,7 +16,10 @@ from leeroy_mind.personas.io import load_tuning
 
 from . import changes as C
 from . import groups as G
-from .dials import MEMBER_DIALS, WORLD_DIALS, applies
+from .dials import HEAT, MEMBER_DIALS, WORLD_DIALS, applies
+
+HEAT_OFF = ("Heat is off: set [heat] enabled = true in mind.toml and restart the mind. Until "
+            "then the romance dial is in force.")
 
 log = logging.getLogger("leeroy_mind.tuning")
 
@@ -42,11 +45,15 @@ class TuningService:
             return 1
         members = [(p, pic.cast.get(g)) for g, p in pic.personas.items()
                    if g != pic.human and g in pic.cast]
+        if dial == HEAT:  # heat reaches the women; a group's offset the women in it
+            members = [(p, m) for p, m in members if p.identity.player_gender == "female"]
         if scope == "world":
             return len(members)
         group = self.app.personas.tuning.groups.get(target)
         if group is None:
             return 0
+        if dial == HEAT:
+            return sum(1 for p, m in members if group.builtin or G.matches(group.where, p, m))
         return sum(1 for p, m in members if (group.builtin or G.matches(group.where, p, m))
                    and applies(dial, p))
 
@@ -61,6 +68,10 @@ class TuningService:
                 return self._edit(args)
             if action == "status":
                 return self.status()
+            if action == "heat":
+                return self._heat(args)
+            if args.get("dial") == HEAT and getattr(self.app, "heat", None) is None:
+                return {"ok": False, "code": "off", "error": HEAT_OFF}
             if action == "preview":
                 from .preview import preview
                 return await preview(self.app, args)
@@ -135,9 +146,37 @@ class TuningService:
 
     def status(self) -> dict:
         t = self.app.personas.tuning
-        return {"ok": True, "version": t.version, "pinned_members": len(t.pins),
-                "world": dict(t.world), "dials": list(MEMBER_DIALS),
-                "world_dials": list(WORLD_DIALS)}
+        out = {"ok": True, "version": t.version, "pinned_members": len(t.pins),
+               "world": dict(t.world), "dials": list(MEMBER_DIALS),
+               "world_dials": list(WORLD_DIALS)}
+        live = getattr(self.app, "heat", None)
+        if live is not None:  # [heat] on: the value in force and the evening's overrides
+            from leeroy_mind.heat.live import world_of
+            out["heat"] = {"enabled": True, "public_cap": live.config.public_cap,
+                           "world": world_of(t, live._file_dial())[0],
+                           "set": t.heat_world is not None, "sessions": live.sessions.view()}
+        return out
+
+    def _heat(self, args: dict) -> dict:
+        """The session override from the console: "clean" or "open" for everyone or one member,
+        or "clear". Never her stance: a member heat does not reach is refused in words."""
+        live = getattr(self.app, "heat", None)
+        if live is None:
+            return {"ok": False, "code": "off", "error": HEAT_OFF}
+        guid, code = args.get("guid"), args["session"]
+        if guid is not None and code != "clear":
+            p = self.app.personas.get(guid)
+            if (p is None or p.identity.player_gender != "female"
+                    or p.romance.stance not in ("fond", "drawn", "lust")):
+                return {"ok": False, "error": "Heat does not reach that member (men stay "
+                        "friends, and a woman with stance none stays out of it)."}
+        out = live.set_all(code, guid=guid)
+        who = "that member" if guid is not None else "everyone"
+        out["message"] = ("Back to the dial." if code == "clear" else
+                          f"{'Clean' if code == 'clean' else 'No limits'} for {who}, until "
+                          f"{'you log out' if live._in_game() else 'the morning or six quiet hours'}.")
+        log_event("tune_written", action="heat_" + code, change=0, rows=0)
+        return out
 
     def _write(self, action: str, args: dict) -> dict:
         app, now, reach = self.app, self.app.clock.now(), 0
@@ -190,7 +229,7 @@ class TuningService:
         t = load_tuning(app.store, app.clock.now())
         app.personas.set_tuning(t)
         app.store.reload_edits()  # godmode feelings and moods (tuning.edits)
-        if dict(t.world) != dict(before.world):
+        if dict(t.world) != dict(before.world) or t.heat_world != before.heat_world:
             from .world import merge
             app.cfg = merge(getattr(app, "file_cfg", app.cfg), t)
             app.engine.apply_config(app.cfg)
