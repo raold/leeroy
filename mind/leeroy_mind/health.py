@@ -1301,18 +1301,30 @@ def _owner_replies(conn, now: float) -> Check:
 def _own_time_due(conn, human: int, now: float, availability: int):
     """When her own time answers his DM or group DM post (discord.owntime.due_at, at
     `availability`, never urgent or insisting: the latest she would) plus OWNER_LATE_MARGIN_S;
-    a group DM by its slowest member. Personas are read once each; a member without one, or a
-    read that fails, answers at once."""
+    a group DM by its slowest member. A post made while she had stepped away mid-conversation
+    (meta life:away:<guid>, LifeService._mark: numbers only) is due no sooner than she was back
+    plus the longest she takes to find it (life.interrupt.BACK_FIND_S). Personas are read once
+    each; a member without one, or a read that fails, answers at once."""
     from .clock import SystemClock, local_at
     from .discord import owntime
     from .discord.channels import is_group
     from .groups.store import readers
     from .life import config as life_config
+    from .life.interrupt import BACK_FIND_S
+    from .life.service import AWAY_KEY, parse_away
     from .personas.io import load_persona
     from .storage.store import Store
     store = Store(conn, clock=SystemClock())
     personas: dict[int, object] = {}
+    aways: dict[int, tuple[float, float] | None] = {}
     local_now = local_at(now)
+
+    def away(guid: int):
+        if guid not in aways:
+            row = conn.execute("SELECT value FROM meta WHERE key = ?",
+                               (AWAY_KEY.format(guid=guid),)).fetchone()
+            aways[guid] = parse_away(row[0]) if row is not None else None
+        return aways[guid]
 
     def persona(guid: int):
         if guid not in personas:
@@ -1339,6 +1351,10 @@ def _own_time_due(conn, human: int, now: float, availability: int):
             times = []
         finally:
             life_config.pin(*pinned)
+        for g in members:  # she stepped away when he wrote: she finds it once she is back
+            a = away(g)
+            if a is not None and a[0] <= ts < a[1]:
+                times.append(a[1] + BACK_FIND_S[1])
         return max(times, default=ts) + OWNER_LATE_MARGIN_S
     return due
 

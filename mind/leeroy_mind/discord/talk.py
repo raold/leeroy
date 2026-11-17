@@ -44,8 +44,11 @@ from leeroy_mind.arc.live import away_now
 from leeroy_mind.discord import layout, owntime
 from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord, is_group
 from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presence_of
-from leeroy_mind.discord.transport import DiscordTarget, channel_id
+from leeroy_mind.discord.transport import PAIR_LINE_SQL, DiscordTarget, channel_id
 from leeroy_mind.life import config as life_config
+from leeroy_mind.life.interrupt import BACK_FIND_S
+from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
+from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.realm.config import RealmConfig
 from leeroy_mind.storage.rows import ChatLineRow
@@ -151,7 +154,8 @@ class DiscordTalk:
         self._timer: asyncio.Task | None = None
         self._handbacks: set[asyncio.Task] = set()
         self._owed_at = -float("inf")
-        self._due: dict[int, tuple[float, bool]] = {}  # his DM post id -> (when, urgent)
+        # his DM post id -> (when, urgent, insisting: his third post in a row)
+        self._due: dict[int, tuple[float, bool, bool]] = {}
         self._owes: tuple[float, frozenset[int]] = (-float("inf"), frozenset())
         self._queued: dict[int, tuple[float, int]] = {}  # his DM post -> (last queued, tries)
         engine = getattr(app, "engine", None)
@@ -231,9 +235,13 @@ class DiscordTalk:
         return peer, row[3]
 
     def _due_of(self, guid: int, message_id: int, post_ts: float) -> float:
-        """When she answers his DM post (owntime.due_at), cached by post id."""
+        """When she answers his DM post (owntime.due_at, cached by post id), and while she has
+        stepped away (life/interrupt.py) no sooner than she is back (_back_at)."""
         if message_id in self._due:
-            return self._due[message_id][0]
+            due, urgent, insist = self._due[message_id]
+            # urgent words or his third post in a row reach her wherever she is, as in game
+            return (due if urgent or insist
+                    else max(due, self._back_at(guid, message_id, post_ts)))
         app, conn, hg = self.app, self.app.store.conn, self.app.human_guid
         channel = f"dm:{guid}"
         # her last line to him in either medium: this DM, or a whisper (one conversation)
@@ -256,10 +264,21 @@ class DiscordTalk:
             talking=(hers is not None and post_ts - hers <= owntime.TALKING_S)
             or owntime.with_him(getattr(app, "world", None), guid),
             insist=len(his) >= owntime.INSIST)
-        self._due[message_id] = (due, urgent)
+        self._due[message_id] = (due, urgent, len(his) >= owntime.INSIST)
         while len(self._due) > 256:
             del self._due[next(iter(self._due))]
-        return due
+        return self._due_of(guid, message_id, post_ts)
+
+    def _back_at(self, guid: int, message_id: int, post_ts: float) -> float:
+        """His post came while she had stepped away mid-conversation (LifeService.last_away,
+        [life] availability above 0): when she is back plus 30-120 s to find it, from
+        seeded("back", the away's night, her, its minute, his post); else 0."""
+        life = getattr(getattr(self.app, "engine", None), "life", None)
+        away = life.last_away(guid) if life is not None else None
+        if away is None or not away.since <= post_ts < away.until:
+            return 0.0
+        rng = seeded("back", away.night, guid, away.minute, message_id)
+        return away.until + rng.uniform(*BACK_FIND_S)
 
     def _later(self, message_id: int) -> bool:
         """With dm_own_time, whether his DM post waits for her (tick answers it then)."""
@@ -322,10 +341,11 @@ class DiscordTalk:
             if done is not None and done.isdigit() and int(done) >= mid:
                 continue
             # her answer to this post or a later one of his; her answer to an earlier post that
-            # lands after this one (still typing when he wrote) is no answer to it
+            # lands after this one (still typing when he wrote) is no answer to it, nor is her
+            # pair line (her brb or back, life/interrupt.py)
             if conn.execute("SELECT 1 FROM discord_message WHERE channel = ? AND id > ? "
-                            "AND origin = 'mind' AND (reply_to IS NULL OR reply_to >= ?) LIMIT 1",
-                            (channel, mid, mid)).fetchone():
+                            "AND origin = 'mind' AND (reply_to IS NULL OR reply_to >= ?) "
+                            f"AND {PAIR_LINE_SQL} LIMIT 1", (channel, mid, mid)).fetchone():
                 conn.execute("DELETE FROM meta WHERE key = ?", (DEFERRED_KEY.format(guid=guid),))
                 self._queued.pop(mid, None)
                 continue
@@ -488,16 +508,29 @@ class DiscordTalk:
         local = app.clock.local()
         items = []
         from leeroy_mind.talk.select import classify_human_line
-        for g in chosen:
+        # a member who stepped away mid-conversation (life/interrupt.py): in a channel or a group
+        # DM an available member is the one he is owed; she answers only when he named her, and
+        # then when she is back (her DM keeps its own time: _later)
+        life = getattr(app.engine, "life", None) if peer is None else None
+        stepped = life.is_away if life is not None else (lambda g: False)
+        now = app.clock.now()
+        for g in sorted(chosen, key=stepped):
             p = app.personas.get(g)
+            named = g in group_named if is_group(channel) else how == "named"
+            if stepped(g) and items and not named:
+                log.info("discord_answer_skipped: message=%d guid=%d reason=stepped_away",
+                         message_id, g)
+                continue
             turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=g, channel=place,
                         to_guid=hg if peer is not None else 0, addressee=hg, trigger_line=None,
                         priority=Priority.REPLY_HUMAN,
                         delay=answer_delay(self._presence(g, p, local).state, self.rng))
+            if stepped(g):
+                turn.delay = max(turn.delay, self._back_at(g, message_id, now) - now)
             turn.instruction = self.instruction(g, place, message_id, thread) or ""
             meta = TurnMeta(app.engine._new_id(), answers_human=True, why=WHY,
                             discord=DiscordTarget(reply_to=message_id, thread=thread),
-                            discord_named=g in group_named if is_group(channel) else how == "named",
+                            discord_named=named,
                             first_question_answer=not items and classify_human_line(text) == "question_all",
                             recall_query=self.recall_query(message_id) or "",
                             his_words=len(text.split()))
@@ -530,6 +563,7 @@ class DiscordTalk:
         app = self.app
         world, hg = app.world, app.human_guid
         away = away_now(app.store, app.clock.now())
+        life = getattr(getattr(app, "engine", None), "life", None)
         local = app.clock.local()
         weights: dict[int, float] = {}
         online: set[int] = set()
@@ -541,7 +575,8 @@ class DiscordTalk:
             if p is None:
                 continue
             state = self._presence(g, p, local).state
-            if state not in ANSWERING:
+            # one who stepped away mid-conversation (life/interrupt.py) only when nobody else is
+            if state not in ANSWERING or (life is not None and life.is_away(g)):
                 others.append((g, p))
                 continue
             w = warmth(p, app.store.get_relationship(g, hg, lens=True)) * self._fit(ch, g, p)
@@ -683,10 +718,12 @@ class DiscordTalk:
         return p.character_name if p is not None else "someone"
 
     def instruction(self, speaker: int, place: str, message: int,
-                    thread: int | None) -> str | None:
+                    thread: int | None, *, away: str = "") -> str | None:
         """The answer turn's instruction for `speaker` on `place` (a turn channel), answering
         his message `message`; None once it is gone or deleted. A speaker outside the channel's
-        audience sees none of its messages."""
+        audience sees none of its messages. `away`: her answer waited out a time she stepped
+        away (Pipeline._waited_away): "note", its late note says she was away; "shape", there is
+        none (the LATE shape says so: one excuse in the prompt)."""
         app, store = self.app, self.app.store
         cid = channel_id(place)
         reads = speaker in app.world.audience(place, from_guid=speaker, to_guid=app.human_guid)
@@ -712,9 +749,10 @@ class DiscordTalk:
         late = ""
         if (layout.dm_peer(cid) is not None or is_group(cid)) and self.own_time():
             p = app.personas.get(speaker)
-            if p is not None:
+            if p is not None and away != "shape":
                 late = owntime.late_note(p, post_ts=row[2], now=app.clock.now(),
-                                         local_now=app.clock.local(), forms=app.engine.human.forms)
+                                         local_now=app.clock.local(), forms=app.engine.human.forms,
+                                         why=AWAY_EXCUSE if away else "")
         answer = f"Answer {their} message: "
         # a DM's instruction holds no history: his message may take the room it leaves
         his_chars = (max(HIS_CHARS, INSTRUCTION_CHARS - len(purpose) - len(late) - len(answer) - 8)
@@ -790,7 +828,13 @@ class DiscordTalk:
         if (meta.why != WHY or target is None or target.reply_to is None
                 or not is_discord(turn.channel)):
             return previous
-        fresh = self.instruction(turn.speaker, turn.channel, target.reply_to, target.thread)
+        engine = self.app.engine
+        away = ""
+        waited = getattr(engine, "_waited_away", None)
+        if waited is not None and waited(turn, meta, self.app.clock.now()):
+            away = "shape" if engine._shapes(turn, meta) else "note"
+        fresh = self.instruction(turn.speaker, turn.channel, target.reply_to, target.thread,
+                                 away=away)
         query = self.recall_query(target.reply_to)
         if fresh is None or query is None:
             raise TurnWithdrawn(GONE)

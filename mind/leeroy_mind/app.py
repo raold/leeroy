@@ -1320,7 +1320,7 @@ class MindApp:
             except Exception:
                 log.exception("owed_tick_failed")
             try:
-                self.engine.life.tick(now)  # her feeling right now ([life] state)
+                self.engine.life.tick(now)  # her feeling ([life] state), her coming back (a brb)
             except Exception:
                 log.exception("life_tick_failed")
             if now - last_embed >= EMBED_EVERY_S:

@@ -57,6 +57,8 @@ class GuardStores:
     facts: object | None = field(default=None, repr=False)
     clock: object | None = None
     cross_medium: bool = False
+    # His names as the guild calls him (nickname, character name): a "he" beside one may be him.
+    his_names: tuple[str, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -83,3 +85,9 @@ class Verdict:
     # Common stock entries an answer owed to him leaned on (phrases.Found.pending): no rewrite,
     # a hint on her next turn; the list's own words, never logged.
     pending: tuple[str, ...] = field(default=(), repr=False)
+    # The message she answers when her opening says it back (`echo_opener`), for opener.cut on
+    # an owed answer's second draft; never logged.
+    echo_of: str = field(default='', repr=False)
+    # `member_misgender`: (member's name, the pronoun as written, "she/her" or "he/him") for the
+    # rewrite hint (pronouns.hint); never logged.
+    pronouns: tuple[tuple[str, str, str], ...] = field(default=(), repr=False)

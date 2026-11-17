@@ -61,12 +61,14 @@ from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, 
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
 from leeroy_mind.life.day import Block, has_kids
+from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
 from leeroy_mind.life.presence import away_words, where_text
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.recall import Recall, whisper_ok
+from leeroy_mind.nightly.life import met_him
 from leeroy_mind.nightly.settings import night_bounds
 from leeroy_mind.personas.card import card_race_class, render_prompt_card
 from leeroy_mind.personas.facts import pronoun_of
@@ -93,6 +95,7 @@ from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowe
                                      ordered, topic_for)
 from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
 from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hint, strip as strip_phrases
+from leeroy_mind.guards.opener import cut as cut_opener
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -210,9 +213,19 @@ GAME_NAME_HINT = ("Name only bosses and battlegrounds that really exist and that
 # A Discord message that names its own speaker talks about her as someone else ("mejith being
 # a corporate strategist now", posted by that member, 2026-11-15 audit): asked again once.
 SELF_NAME_HINT = 'You are {name}: talk about yourself in the first person, never by your own name.'
+# Seeing him in person when they have never met (filters "in person": moves.in_person, the
+# evening DM audit, 2026-11-16: a date planned at an event of hers). Soft: a retry
+# that still has it is kept, and an answer owed to him never falls back for it.
+IN_PERSON_HINT = ("You two have never met and live far apart: don't plan to see {them} in person "
+                  "or have {them} turn up anywhere; you talk online.")
+# Cataclysm or later named in a 2009 guild (filters "era": library.wikitext.names_later).
+ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
-                     "phrase: resting"})
+                     "phrase: resting", "in person", "era"})
+# Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
+# cooldown's and an opener that says his line back.
+CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
@@ -450,6 +463,9 @@ class TurnMeta:
     # ack) runs once the acked line is stored.
     before_transport: Callable[[], bool] | None = None
     on_recorded: Callable[[int, Ack], None] | None = None
+    # a line of hers in her whisper or DM with him that answers nothing (her brb and her back,
+    # life/interrupt.py): read by no one else, so the guild's pace never holds it back (_blocked)
+    pair_line: bool = False
     # the console's tuning preview (Pipeline.preview_line): the Ollama seed both of its
     # requests carry, so before and after differ by the dial and not the sampler
     seed: int | None = None
@@ -642,6 +658,15 @@ class Composed:
     # the turn answers his line and it asks her something (asking.asks): the beat's answering
     # wants lead (beat.wants_for's `asking`)
     asking: bool = False
+
+
+def _far_memories(memories: list) -> list:
+    """`memories` without her intentions that see him in person (memory.diversity.intends and
+    talk.moves.in_person: "going to the gig to see if his jokes work in person"), for a
+    member whose arc has not met him. Only what her prompt shows: the stored memory stays."""
+    from leeroy_mind.memory.diversity import intends
+    from leeroy_mind.talk.moves import in_person
+    return [m for m in memories if not (intends(m) and in_person(m.text))]
 
 
 def _pending_of(verdicts) -> tuple[str, ...]:
@@ -917,6 +942,12 @@ class Pipeline:
         died = self._dead.get(guid)
         return died is not None and now - died < DEAD_FORGET_S
 
+    def _stepped_away(self, guid: int) -> bool:
+        """She stepped away mid-conversation and is not back yet (LifeService.is_away; never at
+        [life] availability 0)."""
+        life = getattr(self, "life", None)
+        return life is not None and life.is_away(guid)
+
     def _away_now(self) -> frozenset[int]:
         """The members away (arc.live.away_now), read at most once every AWAY_CACHE_S."""
         now = self.clock.now()
@@ -926,15 +957,18 @@ class Pipeline:
             self._away_cache = now, away
         return away
 
-    def _candidates(self, audience=None, *, exclude=(), hearable=True) -> list[int]:
+    def _candidates(self, audience=None, *, exclude=(), hearable=True,
+                    stepped_away: bool = False) -> list[int]:
         """Online cast members with a persona who are not AFK or away (_away_now), in
         `audience` when given, and with voice on, unless `hearable` is off, only those he can
-        hear where they sit."""
+        hear where they sit. A member who stepped away mid-conversation (_stepped_away) only
+        with `stepped_away`: the members who may answer a line of his (her answer waits)."""
         w = self.world
         pool = w.online if audience is None else w.online & set(audience)
         away = self._away_now()
         out = [g for g in sorted(pool) if g not in w.afk and g not in exclude
-               and g not in away and self.personas.get(g) is not None]
+               and g not in away and self.personas.get(g) is not None
+               and (stepped_away or not self._stepped_away(g))]
         if hearable and self.comms is not None:
             out = [g for g in out if self._comms_says("hearable", True, g)]
         return out
@@ -1309,6 +1343,12 @@ class Pipeline:
         return (p is not None and is_private(turn.channel) and turn.to_guid == self.human.guid
                 and self._arc_view(turn, p, self.clock.now()).summons_ok)
 
+    def _met_him(self, guid: int) -> bool:
+        """Her romance arc has met him in person (nightly.life.met_him, #325's FAR_AWAY_MET
+        state, read through the owner's lens as talk reads it); False without him."""
+        hg = self.human.guid
+        return bool(hg) and met_him(self.store, guid, hg, lens=True)
+
     def _arc_view(self, turn: Turn, p: Persona, now: float,
                   rng: random.Random | None = None) -> ArcView:
         """Her arc as this turn may show it (arc.live.arc_view: its private part only in a
@@ -1656,27 +1696,62 @@ class Pipeline:
         sets meta.two_lines), a Discord burst is split by realism (meta.burst). An answer he is
         owed is never left on read, a reaction or a word or two (talk.shape's rows; Review Focus
         4): a draw of one leaves the turn on today's length. A reaction with no message to react
-        to is a word or two. Logs `talk_shape: guid= kind= shape= words= owed=` (codes only); a
-        failure is logged by its class and leaves the turn as it would be without it."""
+        to is a word or two. An answer to him that waited out a time she stepped away
+        (_waited_away, [life] availability above 0) is LATE, game or DM. Logs
+        `talk_shape: guid= kind= shape= words= owed=` (codes only); a failure is logged by its
+        class and leaves the turn as it would be without it."""
         turn.shape, meta.shape_ctx = None, None
         if meta.shape_saved is not None:  # spoken again (held, without its photo): as before
             turn.max_lines, meta.burst = meta.shape_saved
             meta.shape_saved = None
-        talk = getattr(self.cfg, "talk", None)
-        if (getattr(talk, "shape", False) is not True or voiced or meta.single_line
-                or not self._want_eligible(turn, meta)):
+        if not self._shapes(turn, meta, voiced=voiced):
             return
         try:
-            self._shape(turn, meta, p, now, talk)
+            self._shape(turn, meta, p, now, self.cfg.talk)
         except Exception as e:  # her shape is colour: nothing in it may cost him an answer
             turn.shape, meta.shape_ctx = None, None
             log.warning("talk_shape_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
 
+    def _shapes(self, turn: Turn, meta: TurnMeta, *, voiced: bool = False) -> bool:
+        """[talk] shape draws this turn a shape (_draw_shape): a typed turn that gets a want,
+        outside a conversation that owns its line count, and a DM only with [talk] dm_mirror
+        above 0 (at 0 a DM is today's, as full as she likes)."""
+        talk = getattr(self.cfg, "talk", None)
+        if (getattr(talk, "shape", False) is not True or voiced or meta.single_line
+                or not self._want_eligible(turn, meta)):
+            return False
+        return not (_family(turn.channel) == "dm" and talk.dm_mirror <= 0)
+
+    def _waited_away(self, turn: Turn, meta: TurnMeta, now: float) -> bool:
+        """Her answer to him waited out a time she stepped away (life/interrupt.py: her brb in
+        their whisper or her DM): she was away at some time between his line (the one it answers;
+        his DM post) and now (LifeService.away_between). Its excuse is "away" (the LATE shape
+        with [talk] shape on, else in her DM the own-time late note), the one excuse in its
+        prompt: never on a carried DM, whose instruction (CARRY_TEXT) is its excuse."""
+        life = getattr(self, "life", None)
+        hg = self.human.guid
+        if life is None or life.availability <= 0 or not hg or meta.why == "reply:carried":
+            return False
+        start = 0.0
+        if is_discord(turn.channel):
+            if not self._answers_his_dm(turn, meta) or meta.discord is None:
+                return False
+            if meta.discord.reply_to:
+                row = self.store.conn.execute("SELECT ts FROM discord_message WHERE id = ?",
+                                              (meta.discord.reply_to,)).fetchone()
+                start = row[0] if row is not None else 0.0
+        else:
+            if not (meta.answers_human and self._aimed_at_him(turn)):
+                return False
+            start = meta.heard_at
+            if not start and turn.trigger_line:
+                rows = self.store.chat_lines([turn.trigger_line])
+                start = rows[0].ts if rows else 0.0
+        return bool(start) and life.away_between(turn.speaker, start, now)
+
     def _shape(self, turn: Turn, meta: TurnMeta, p: Persona, now: float, talk) -> None:
         family = _family(turn.channel)
         mirror = talk.dm_mirror
-        if family == "dm" and mirror <= 0:
-            return
         hg = self.human.guid
         owed = owes_him(self, turn, meta)
         # his message's words (a carried DM's: his whisper, _his_line), for a DM's mirror
@@ -1693,7 +1768,8 @@ class Pipeline:
             attention=lp.attention if lp is not None else None, state=meta.state,
             late_by=max(0.0, late_by), his_words=his_words, discord_words=talk.discord_words,
             dm_words=talk.dm_words, dm_mirror=mirror,
-            realism=self.realism.eligible(self, turn, meta), two_lines=two)
+            realism=self.realism.eligible(self, turn, meta), two_lines=two,
+            away=self._waited_away(turn, meta, now))
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
                                         else 0) or 0
@@ -1759,9 +1835,11 @@ class Pipeline:
         (requirement 7). LATE says where she was when he wrote (meta.life_presence, her game
         presence then: life.presence.away_words), in the present while she is still there as
         "Right now" says, never against a "Right now" at her PC playing, and "these" when he
-        wrote more than once (a coalesced whisper's answer, review-336). A failure is logged
-        `talk_shape_failed` by its class and the turn goes on without a shape (review of #343,
-        P3-2)."""
+        wrote more than once (a coalesced whisper's answer, review-336). An answer that waited
+        out a time she stepped away (_waited_away, ShapeContext.away) says only that she was
+        away: one excuse, never her day's beside it (review of #343, Task 10 note 1). A failure
+        is logged `talk_shape_failed` by its class and the turn goes on without a shape (review
+        of #343, P3-2)."""
         try:
             return self._shape_words_line(turn, meta, situation=situation, forms=forms)
         except Exception as e:  # her shape is colour: nothing in it may cost him an answer
@@ -1774,7 +1852,10 @@ class Pipeline:
         if not isinstance(draw, ShapeDraw) or not isinstance(ctx, ShapeContext):
             return ""
         excuse, still, several = "", False, False
-        if draw.shape is Shape.LATE:
+        if draw.shape is Shape.LATE and ctx.away:  # she stepped away: that is her one excuse
+            excuse = AWAY_EXCUSE
+            several = self._several(turn, meta)
+        elif draw.shape is Shape.LATE:
             lp = meta.life_presence if self._life_on() else None
             playing = self.world.human_online and self.world.in_group(turn.speaker)
             if lp is not None and not playing:
@@ -2125,6 +2206,9 @@ class Pipeline:
                 people.append(g)
         attitude = p.romance.stance if p.identity.player_gender == "female" else ""
         realism = self.cfg.romance.realism  # [romance] realism: his card's note, stale memories
+        # they live far apart (#325's FAR_AWAY): until her arc has met him, his card's note and
+        # her intentions that see him in person stay out of her prompt (_far_memories)
+        apart = bool(hg) and not self._met_him(turn.speaker)
         pronouns = self._pronoun_tags(turn, people, recent)
         cards = [relationship_card(names.get(g, "someone"),
                                    self.store.get_relationship(turn.speaker, g, lens=True),
@@ -2135,7 +2219,7 @@ class Pipeline:
                                    speaker=p.identity.player_gender,
                                    friendship_only=is_group(turn.channel),
                                    pronoun=pronouns.get(("card", g), ""),
-                                   realism=realism and g == hg)
+                                   realism=realism and g == hg, far=apart and g == hg)
                  for g in people]
 
         trigger = his = ""  # his: the line of his the turn answers, on any channel ("" none)
@@ -2169,6 +2253,8 @@ class Pipeline:
             pinned = self.recall._shareable(self.store.get_memories([meta.lore_memory]),
                 turn.speaker, turn.channel, turn.to_guid, **bond_options)
             memories = [*pinned, *memories][:5]
+        if apart:
+            memories = _far_memories(memories)
 
         state = self.store.get_state(turn.speaker, lens=True)
         altered = self._altered_of(turn.speaker)
@@ -2520,17 +2606,20 @@ class Pipeline:
                      to_guid: int = 0,
                      still_valid: Callable[[], bool] | None = None,
                      before_transport: Callable[[], bool] | None = None,
-                     on_recorded: Callable[[int, Ack], None] | None = None) -> bool:
+                     on_recorded: Callable[[int, Ack], None] | None = None,
+                     pair_line: bool = False) -> bool:
         """The template path (P1d): guards, raid rules and the member's typing apply, the text
         is used as given and no model is asked. True when a line really went out, to the game
         or to the voice service: one left in a room he is not in did not. A sender's
-        before_transport barrier makes the turn one typed line, sent unstyled (TurnMeta)."""
+        before_transport barrier makes the turn one typed line, sent unstyled (TurnMeta).
+        `pair_line`: a line in her whisper or DM with him that answers nothing (TurnMeta)."""
         turn = Turn(kind=TurnKind(kind), speaker=guid, channel=channel, to_guid=to_guid,
                     template=text)
         if before_transport is not None:
             turn.max_lines = 1
         meta = TurnMeta(self._new_id(), why="say_as", still_valid=still_valid,
-                        before_transport=before_transport, on_recorded=on_recorded)
+                        before_transport=before_transport, on_recorded=on_recorded,
+                        pair_line=pair_line)
         said = await self._speak(turn, meta)
         return bool(said) and not (self.comms is not None and self._comms_says(
             "unheard", False, turn.channel, meta))
@@ -2772,7 +2861,11 @@ class Pipeline:
             turn.channel, turn.to_guid, turn.addressee = typed(turn, meta)  # it never got there
             if self._summons_typed_to_him(turn, text):
                 return self._drop(turn, meta, "summons", memory_ids, text=text)
-        if meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
+        if meta.before_transport is not None and meta.pair_line and text.strip() and not only:
+            # her brb or back (life/interrupt.py): one line in her own typing; its barrier only
+            # decides whether it goes
+            lines = self._style(turn, p, text, close=close)[:1] or [Styled(text, text)]
+        elif meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
             lines = [] if only or not text.strip() else [Styled(text, text)]
         else:
             lines = [] if only else self._style(turn, p, text, close=close,
@@ -2946,7 +3039,7 @@ class Pipeline:
                     return drop("guard_react")
                 if verdict.action == "drop" and not owed:
                     return drop("guard_drop")
-                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(PHRASE_CODES)
+                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(CUT_CODES)
                                                 for v in verdicts):
                     return await self._without_phrases(turn, meta, p, lines, verdicts, owed,
                                                        close=close, spoken=spoken)
@@ -2968,7 +3061,8 @@ class Pipeline:
                     retry = replace(composed, messages=[*composed.messages,
                         {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
                         {"role": "user", "content": rewrite_hint(
-                            verdict.codes, tuple(x for v in verdicts for x in v.phrases))}])
+                            verdict.codes, tuple(x for v in verdicts for x in v.phrases),
+                            tuple(x for v in verdicts for x in v.pronouns))}])
                 text, why = await self._generate(turn, meta, retry, spoken=spoken, max_attempts=1)
                 if why:
                     if owed:
@@ -3057,11 +3151,24 @@ class Pipeline:
         send what survives, checked once more, else drop the line. An answer owed to him only
         loses a closing epithet (`epithet_only`: a clause cut can reverse what she said, review
         326), is never dropped for a phrase alone and never dropped `expired` here, its retry
-        being in hand (#325): it goes as it was written."""
+        being in hand (#325): it goes as it was written.
+
+        A retry whose opening still says his line back (`echo_opener`) loses those clauses
+        (guards/opener.cut) when what is left stands alone; an owed answer whose cut leaves too
+        little, or whose recheck still finds more than a phrase, goes as it was written, and
+        one that keeps only its phrases goes without the echo (its phrases as written, as
+        before)."""
         named = tuple(dict.fromkeys(x for v in verdicts for x in v.phrases))
+        echoed = next((v.echo_of for v in verdicts if v.echo_of), "")
         joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
-        text = (strip_phrases(joined.join(s.plain for s in lines), named, epithet_only=owed)
-                if named else None)
+        text = joined.join(s.plain for s in lines)
+        if echoed:
+            text = cut_opener(text, echoed)
+        if text is not None and named:
+            cut = strip_phrases(text, named, epithet_only=owed)
+            text = cut if cut is not None or not (owed and echoed) else text
+        elif not echoed:
+            text = None
         if text is not None:
             kept = ([Styled(text, text)] if spoken else
                     self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
@@ -3073,7 +3180,8 @@ class Pipeline:
                     return self._drop(turn, meta, "scope_changed")
                 if not owed and self.scheduler.expired(self._deadline(turn, meta)):
                     return self._drop(turn, meta, "expired")
-            if kept and all(v.action == "send" for v in checked):
+            if kept and all(v.action == "send" or owed and echoed and v.codes
+                            and set(v.codes) <= set(PHRASE_CODES) for v in checked):
                 meta.phrase_pending = _pending_of(checked)
                 return kept
         meta.guard_codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
@@ -3081,7 +3189,8 @@ class Pipeline:
             meta.guard_verdict = "rewrite"
             return lines
         meta.guard_verdict = "drop"
-        return self._drop(turn, meta, "guard_phrase_refused", meta.memory_ids)
+        return self._drop(turn, meta, "guard_phrase_refused" if named else "guard_rewrite_refused",
+                          meta.memory_ids)
 
     async def _guard_react(self, turn, meta, reaction, allowed=None) -> bool:
         """Her reaction instead of a line: True once it is posted (a Discord reaction added, a
@@ -3282,6 +3391,11 @@ class Pipeline:
             return "afk"
         if g in self._away_now():
             return "away"
+        if self._stepped_away(g) and not (turn.template is not None or meta.answers_human
+                                          or owes_him(self, turn, meta)):
+            # she stepped away mid-conversation (life/interrupt.py): nothing of hers he could see
+            # but her answers to him, which wait for her (life/README.md)
+            return "stepped_away"
         if turn.channel in SPOKEN_CHANNELS and self._is_dead(g, now):
             return "dead"
         if turn.channel == "whisper" and not w.human_online and (
@@ -3312,7 +3426,7 @@ class Pipeline:
         # never hold it back; nor do they hold back the one answer he is owed for a line of his
         # (owed_answer, talk/owed.py)
         unread = (meta.whisper_reply or (meta.initiates and turn.channel == "whisper")
-                  or self._answers_his_dm(turn, meta) or meta.owed_answer
+                  or self._answers_his_dm(turn, meta) or meta.owed_answer or meta.pair_line
                   or (turn.channel == "whisper" and turn.to_guid == self.human.guid
                       and turn.kind in REPLY_KINDS))
         if not guards.allow(g, turn.kind, now, continuation=not first,
@@ -3489,6 +3603,8 @@ class Pipeline:
         moves = [(r.clause, r.main) for r in c.moves]
         hg = self.human.guid
         summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        # ...and whether seeing him in person may: only once her arc has met him (_met_him)
+        far = summons_ok is False and not self._met_him(turn.speaker)
         emoji = is_discord(turn.channel)  # Discord keeps emoji as text: no tell, no repair
 
         def quiet(t: str) -> bool:  # an emoji-only line is a Discord message (ruling R9)
@@ -3540,7 +3656,7 @@ class Pipeline:
                                    support=c.support, people=list(self._protect(turn.channel)),
                                    window=c.window, held=c.held, tonight=meta.again_tonight,
                                    recent_moves=moves, summons_ok=summons_ok,
-                                   keep_emoji=emoji)
+                                   keep_emoji=emoji, far=far)
                 if len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
@@ -3792,12 +3908,16 @@ class Pipeline:
             hints.append(MOVE_HINT.format(move=MOVE_PHRASES[move].format(**forms)))
         if "summons" in reasons:
             hints.append(SUMMONS_HINT.format(**forms))
+        if "in person" in reasons:
+            hints.append(IN_PERSON_HINT.format(**forms))
         if "sample" in reasons:
             hints.append(SAMPLE_HINT)
         if "history" in reasons:
             hints.append(HISTORY_HINT)
         if "slang" in reasons:
             hints.append(SLANG_HINT)
+        if "era" in reasons:
+            hints.append(ERA_HINT)
         if "game name" in reasons:
             hints.append(GAME_NAME_HINT)
         if "self name" in reasons:

@@ -472,7 +472,8 @@ class LiveReview:
                             embedding=embedding,anchor_embedding=anchor_embedding)
             verdict = await self.read(lambda conn:review(GuardStores(conn,self.config_for(meta),self.claims_enabled,
                 history if is_discord(turn.channel) else (),cached if not is_discord(turn.channel) else {},
-                None if is_discord(turn.channel) else self.facts,e.clock, cross_medium=observed.server),draft))
+                None if is_discord(turn.channel) else self.facts,e.clock, cross_medium=observed.server,
+                his_names=tuple(n for n in (e.human.nickname, e.human.character_name) if n)),draft))
             meta.guard_codes = verdict.codes
             if verdict.action != "send" or meta.guard_verdict != "failed_open":
                 meta.guard_verdict = "rewrite" if verdict.action == "send" and meta.guard_rewritten else verdict.action

@@ -150,6 +150,9 @@ class ShapeContext:
     dm_mirror: int  # [talk] dm_mirror, 0-10
     realism: bool  # [talk] realism: Discord bursts need it
     two_lines: bool  # the explicit whisper band: at least two lines
+    # her answer to him waited out a time she stepped away (life/interrupt.py, core plan Task
+    # 10): LATE, in game or her DM, its excuse "away" (Pipeline._waited_away)
+    away: bool = False
 
 
 @dataclass(frozen=True)
@@ -300,9 +303,10 @@ def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
 
 def draw_shape(ctx: ShapeContext, rng) -> ShapeDraw:
     """The reply's shape, words, lines and num_predict for `ctx`, drawn with `rng`. A game or
-    whisper answer LATE_SHAPE_S after his line is LATE (not drawn); a DM with `dm_mirror` 0 is
-    today's DM (a paragraph of up to `dm_words`, not drawn)."""
-    if ctx.family in GAME_FAMILIES and ctx.late_by >= LATE_SHAPE_S:
+    whisper answer LATE_SHAPE_S after his line is LATE (not drawn), as is an answer that waited
+    out a time she stepped away (`ctx.away`, a DM's too); a DM with `dm_mirror` 0 is today's DM
+    (a paragraph of up to `dm_words`, not drawn)."""
+    if ctx.away or (ctx.family in GAME_FAMILIES and ctx.late_by >= LATE_SHAPE_S):
         return _sized(Shape.LATE, ctx, rng)
     if ctx.family == "dm" and ctx.dm_words > 0 and ctx.dm_mirror <= 0:
         return ShapeDraw(Shape.PARAGRAPH, ctx.dm_words, 1, num_predict(ctx.dm_words))
@@ -347,7 +351,9 @@ def shape_template(draw: ShapeDraw, ctx: ShapeContext, *, excuse: bool = False,
             tmpl = tmpl.replace("seeing this", "seeing these")
         if ctx.two_lines:
             tmpl = tmpl.removesuffix(".") + " in a line or two" + more + "."
-        return tmpl
+        if dm:  # a late DM (ctx.away) keeps its DM wording and length first
+            return (_dm_long() if draw.words > FEW_WORDS else LINE_SHORT_DM) + " " + tmpl
+        return medium + tmpl
     if shape is Shape.QUESTION:
         if dm and draw.words > FEW_WORDS:
             return _dm_long() + " " + LINE_QUESTION_DM_LONG
