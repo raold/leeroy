@@ -483,3 +483,29 @@ def test_a_mans_friendly_note_on_him_passes(h):
         ctx = h.ctx({"notes": [{"label": "friend", "notes": notes, "evidence": [1]}], "judge": [yes]})
         run(rewrite_notes(ctx, g, 1))
         assert (h.store.get_relationship(g, 1).label, h.store.get_relationship(g, 1).notes) == ("friend", notes)
+
+
+# -- beyond the plan: no note of everyday-word slang (owner's live DM test, 2026-11-16) ----------
+
+@pytest.mark.parametrize("a,b", [(101, 102), (102, 1)])            # toward a member, toward him
+def test_notes_never_carry_a_sentence_of_everyday_word_slang(h, a, b):
+    h.mem(a, "We ran the glider race at the docks.", actors=(b,))
+    junk = "I picked up 'maybe' and 'there' from them."
+    ctx = h.ctx({"notes": [{"label": "friend", "notes": f"{junk} We race gliders together.",
+                            "evidence": [1]}], "judge": [yes]})
+    run(rewrite_notes(ctx, a, b))
+    assert h.store.get_relationship(a, b).notes == "We race gliders together."
+
+
+def test_an_everyday_slang_copy_is_never_a_notes_memory_nor_a_pin(h):
+    kept = h.mem(101, "Belra taught me to fish at the pier.", actors=(102,), importance=3)
+    copy = h.mem(101, "Picked up 'maybe' from Belra.", actors=(102,), importance=9, key="slang:maybe",
+                 t=h.T + 60)
+    real = h.mem(101, "Picked up 'zugzug' from Belra.", actors=(102,), importance=8, key="slang:zugzug",
+                 t=h.T + 30)
+    ctx = h.ctx({"notes": [{"label": "friend", "notes": "Belra taught me to fish.", "evidence": [1]}],
+                 "judge": [yes]})
+    run(rewrite_notes(ctx, 101, 102))
+    _, user = notes_call(ctx)
+    assert "'maybe'" not in user and "'zugzug'" in user and "fish at the pier" in user
+    assert list(h.store.get_relationship(101, 102).pinned) == [real, kept] and copy

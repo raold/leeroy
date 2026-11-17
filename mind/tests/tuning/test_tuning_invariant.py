@@ -5,7 +5,17 @@ by scenario.py with the code from before tuning touched talk.
 The beat before an answer to his whisper or DM ([talk] think_private, talk/beat.py, 2026-11-16)
 adds a request and three or four lines after such an answer's instruction: golden_prompts.json
 records the scenario with it off, and golden_beat.json (scenario.record_beat) holds those
-answers' requests with it on. No other turn's prompt changes."""
+answers' requests with it on. No other turn's prompt changes.
+
+Both were re-recorded on 2026-11-16 for DM quality (owner's live DM test), no tuning involved:
+golden_prompts.json because the "Lately you've..." hint names content words only (the scenario's
+"brought up the line N times" named a chat word, so those hints are gone) and an answer to his
+question that nobody answered yet reads "Answer his question first, plainly, then whatever
+else." (the first answer to his "anyone know what gear a tank should chase first?"; his
+pushback "what are you talking about?" keeps its own "Answer him plainly"); golden_beat.json
+because `use` is described as only for an item that bears directly on his last line, and can
+only be null when nothing is offered. golden_romance.json ([romance] realism) moved the same way
+as golden_prompts.json (26 hints gone, 1 answer first). No other wording moved."""
 import pytest
 
 from conftest import seed_test_cast

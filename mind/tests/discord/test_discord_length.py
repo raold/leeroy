@@ -173,7 +173,7 @@ VARIANTS = [{}, {"long": True}, {"to_him": True}, {"quiet": False}]
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_every_discord_turn_kind_has_the_new_wording_and_no_short_line(channel, kind, variant):
     text = render(kind, channel=channel, discord_words=90, **variant)
-    wording = (DISCORD_DM.format(words=90) if channel.startswith("dm:")
+    wording = (DISCORD_DM.format(words=90, they="they") if channel.startswith("dm:")
                else DISCORD_LENGTH.format(where="Discord chat", words=90))
     assert wording in text
     assert "at most about 90 words" in text and "One paragraph, no line breaks." in text
@@ -185,7 +185,10 @@ def test_the_wording_follows_the_setting_and_the_place():
     dm = render(TurnKind.REPLY_HUMAN, channel="dm:102", discord_words=150)
     channel = render(TurnKind.REPLY_HUMAN, channel="discord:raid-planning", discord_words=150)
     assert "at most about 150 words" in dm and "private Discord DM" in dm
-    assert "write as fully as you feel" in dm and "single quick sentence" not in dm
+    # as much or as little as the moment needs (owner's live DM test, 2026-11-16)
+    assert "as much or as little as the moment needs" in dm and "write as fully" not in dm
+    assert "a quick line when they asked something quick" in dm
+    assert "single quick sentence" not in dm
     assert "Discord chat" in channel and "private Discord DM" not in channel
 
 
@@ -199,8 +202,8 @@ def test_a_channel_band_reads_its_own_wording_and_a_dm_never_changes():
     assert render(TurnKind.CONTINUE, channel="gdm:7", discord_words=20) == quick
     for words in (20, 45, 90, 200):
         assert discord_template("dm:102", words) == DISCORD_DM
-        assert DISCORD_DM.format(words=words) in render(TurnKind.REPLY_HUMAN, channel="dm:102",
-                                                        discord_words=words)
+        assert DISCORD_DM.format(words=words, they="they") in render(
+            TurnKind.REPLY_HUMAN, channel="dm:102", discord_words=words)
     assert discord_template("guild", 90) == "" and discord_template("discord:general", 0) == ""
 
 
@@ -250,7 +253,7 @@ def test_the_wording_ends_the_template_before_what_she_answers_lately_and_her_ta
     before: what she answers stays last."""
     text = render_instruction(TurnKind.REPLY_HUMAN, addressee="Zan", lead="LEAD", extra="EXTRA",
                               after="AFTER", tail="TAIL", channel="dm:102", discord_words=90)
-    wording = DISCORD_DM.format(words=90)
+    wording = DISCORD_DM.format(words=90, they="they")
     assert text.startswith("LEAD Answer Zan's last line.")
     assert text.index("if it really fits.") < text.index(wording) < text.index("EXTRA")
     assert text.index("EXTRA") < text.index("AFTER") < text.index("TAIL")
@@ -259,7 +262,7 @@ def test_the_wording_ends_the_template_before_what_she_answers_lately_and_her_ta
 
 def test_a_long_extra_is_capped_but_the_wording_never_is():
     text = render(TurnKind.REPLY_HUMAN, extra="word " * 2000, channel="dm:102", discord_words=90)
-    assert DISCORD_DM.format(words=90) in text
+    assert DISCORD_DM.format(words=90, they="they") in text
 
 
 # -- room for the reply --------------------------------------------------------------------------
@@ -380,7 +383,7 @@ def test_the_discord_wording_is_in_her_instruction_the_last_thing_she_reads(stor
     turn.instruction = "You are in a private message with Zan\nAnswer his message: you around"
     assert rig.speak_turn(turn, seconds=150)
     user = rig.last_user()
-    wording = DISCORD_DM.format(words=200)
+    wording = DISCORD_DM.format(words=200, they="he")  # his pronouns: the DM is with him
     instruction = user.split("\n\n")[-1]
     assert instruction.endswith(f"{wording} You are in a private message with Zan Answer his "
                                 "message: you around")

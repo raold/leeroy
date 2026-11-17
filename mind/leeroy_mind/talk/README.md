@@ -135,9 +135,11 @@ opens a DM, riffs on General or answers late on her own time. It is read with th
 Since the second round (owner, 2026-11-13: channels a mix, "DMs max expressive"):
 
 - **His DMs** take `[talk] dm_words` (0-200, default **200**; invalid is the default, logged once,
-  `talk_dm_words_invalid`) and their own wording (`prompt.DISCORD_DM`): write as fully as you
-  feel, say everything you want to say in your own voice, a whole paragraph when there is
-  something to say. A config without `dm_words` falls back to `discord_words`.
+  `talk_dm_words_invalid`) and their own wording (`prompt.DISCORD_DM`): as much or as little as
+  the moment needs, a quick line when he asked something quick, more when she has something to
+  say (since 2026-11-16; "write as fully as you feel" made every answer a paragraph, his quick
+  questions included). `{they}` is his pronoun. A config without `dm_words` falls back to
+  `discord_words`.
 - **Channels and group DMs** (`gdm:<id>`, a chat, not a pair) draw a length band once per turn
   (`Turn.discord_draw`, from the pipeline's own `_length_rng`, so compose never draws from
   `self.rng`): 55% a quick message of a few words or one sentence (at most 20 words,
@@ -365,11 +367,28 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
   gossip, deflect, small_talk, react, boundary, logistics, each with a one-line meaning in the
   ask and in the schema's description, `beat.MEANING`; "ask" is wanting something from him,
   not asking a question; `flirt` only for a member `romance.flirt_chance` lets flirt with him)
-  and `use` (the number of one offered item, or null). Offered: the memories the prompt showed,
-  then the others' earlier chat lines in it, newest first (never hers, never the line she
-  answers), as plain text (no age, speaker or bullet), at most 6, each cut to 120 characters
-  (`beat.items_of`); the last give way when the request would not fit `num_ctx`
-  (`beat.fitting`). `use` 0 counts as null (Orion writes it for nothing to bring in).
+  and `use` (the number of one offered item, only if it bears directly on his last line, else
+  null; `type: null` in the schema when nothing is offered). Offered: the memories the prompt
+  showed, then the others' earlier chat lines in it, newest first (never hers, never the line
+  she answers), as plain text (no age, speaker or bullet), at most 6, each cut to 120 characters
+  (`beat.keyed_items`, each keyed `m<id>`/`c<id>`); the last give way when the request would not
+  fit `num_ctx` (`beat.fitting`). `use` 0 counts as null (Orion writes it for nothing to bring in).
+- **Bring-in rules** (owner's live DM test, 2026-11-16: every beat set `use`, 6 of 7 wanted
+  `flirt`, she raised the same subjects reply after reply; `beat.py`, so they hold wherever a
+  beat runs, any channel and any member): the items that fit are shuffled by the turn's own
+  seeded draw (`beat.shuffled`, `life.seed.seeded("beat_items", night, guid, minute, turn)`), so
+  position carries no bias; an item brought in during the conversation (her last 10 turns there
+  within 24 h) is not offered again; at most one Bring in per 3 of her turns there (nothing is
+  offered for the 2 turns after one) (`beat.offerable`). The conversation's ledger is meta
+  `beat:used:<guid>:<conversation>` (`beat.conversation`: `whisper:<to_guid>`, `dm:<guid>`, the
+  channel; JSON `[{"at": ts, "use": "m<id>"|"c<id>"|null}]`, ids only), written when her turn is
+  said (`Pipeline._spend` -> `_record_beat`), her ledgers older than 24 h deleted then.
+- **His questions** (`talk/asking.py`): when the line she answers is his and asks her something
+  (a question: ends with `?`, or opens with a question word or an auxiliary and its subject; a
+  request: please, or a verb such as tell, send, show, pick), the wants that answer him lead the
+  list (`intent.ASKING_FIRST`: react, logistics, boundary, tease, share, each only where allowed;
+  `beat.wants_for(..., asking=True)`, `intent.allowed`) and flirt reads "for when he is flirting
+  with you, not for answering a question" (`beat.ASKED_MEANING`).
 - **Bake-off, 2026-11-16** (47 real turns, blind-judged 0-3): plain Orion 1.62, Orion with the
   beat 1.60, the beat with trimmed rules 1.62 and the most good lines (72%); Orion's own
   thinking 1.34 with 21% empty. With only the wants' names Orion chose "ask" on 34 of 47, hence
@@ -392,10 +411,11 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
 - **Privacy**: the beat's words never reach a log, a store or a receipt; `think_beat: guid=
   want= use=0|1 ms=` only. Its time counts in the turn's `llm_s`.
 - **Room** (estimates at 4 characters a token, real counts up to 25% over, 64 tokens of chat
-  template): the beat's ask is 286 tokens with nothing offered and 484 with six items, its lines
-  at most 118. His DM at `DM_BUDGET` 2600 with think_budget 240 keeps 4 items: (2600 + 1 + 422)
-  x 1.25 + 64 + 240 = 4083; at 320, 2 items: 4085. The DM's line: (2600 + 118) x 1.25 + 64 + 344
-  = 3806. A whisper at 1800 keeps all 6: 3160 (3240 at 320); its line 2542. All under `num_ctx`
+  template): the beat's ask is 287 tokens with nothing offered and 492 with six items (303 with
+  nothing offered when he asks, flirt's longer meaning), its lines at most 118. His DM at
+  `DM_BUDGET` 2600 with think_budget 240 keeps 4 items: (2600 + 1 + 430) x 1.25 + 64 + 240 =
+  4093 (3 when he asks); at 320, 2 items: 4096. The DM's line: (2600 + 118) x 1.25 + 64 + 344
+  = 3806. A whisper at 1800 keeps all 6: 3171 (3251 at 320); its line 2542. All under `num_ctx`
   4096, so no prompt budget changes.
 - **Learning**: a line asked for after a beat has recipe `model_id` `<model>+beat` and `beat`
   in its parameters (`learn/recipe.py` `called_model`; only then, so with the switch off a
@@ -409,6 +429,26 @@ fired inside it. So an answer to his whisper or DM gets a short structured beat 
   read at mind start; a login's reload of mind.toml does not change them. Rollback:
   `think_private = false` and restart the mind. Older code logs both keys as unknown and ignores
   them, so they need not be removed before rolling back.
+
+# His questions answered first, and the Lately line (2026-11-16)
+
+The owner's live DM test (2026-11-16: "not answering the questions, repeating back what I said"):
+the Lately line ("Tonight you've already ... brought up the actually twice: do something else
+this time.") named stopwords as topics and its "do something else" overrode his direct
+question. Since then, on every channel and for every member:
+
+- **Topics** (`moves.topic_word`): the Lately line names a topic only when it is a content word:
+  never a chat word (`talk.words.COMMON_WORDS`, `everyday.CHAT_WORDS`), a pronoun, a number, a
+  stance adverb ("actually", "honestly", an "-ly" of an everyday word) or a word under four
+  letters. The full everyday dictionary is not used: it holds every ordinary noun, so no topic
+  would be left. Stored `talk_move` rows keep their topics; the line filters when it reads.
+- **Question first** (`asking.is_question`, `moves.question_first`): an answer to his line
+  (whisper, DM, guild, party, raid, voice, Discord channel or group DM) that asks her something
+  reads "Answer his question first, plainly, then whatever else." at the instruction's end; with
+  a Lately line it reads "Answer his question first, plainly, then whatever else; tonight you've
+  already ..." without "do something else". Not when another member already answered his line
+  (the turn then says to add what they didn't), nor on an answer to his pushback (its own
+  instruction says to answer him plainly). `his` follows his pronouns.
 
 # Wants (`talk/intent.py`, 2026-11-16)
 

@@ -76,10 +76,19 @@ detector and hand landmarker, OpenCV Zoo's ONNX exports, Apache-2.0, about 4 MB 
 reports hands `unavailable`. The `mediapipe` package was not used: it would install
 `opencv-contrib-python` beside the pinned `opencv-python-headless`. The landmarker always draws
 five fingers, so these are measurements, not verdicts: against the labelled snap-anatomy sheet
-of 2026-11-16 they caught none of its subtle defects (the mind's vision judge is the main check);
-they are there for the gross ones, a second face or a third hand. `pytest -m engines
-tests/test_critic_sheet.py` with `LEEROY_CRITIC_SHEET` pointing at that sheet prints their
-precision and recall.
+of 2026-11-16 they caught none of its subtle defects; they are there for the gross ones, a
+second face or a third hand. `pytest -m engines tests/test_critic_sheet.py` with
+`LEEROY_CRITIC_SHEET` pointing at that sheet prints their precision and recall.
+**The mind's vision judge is a placeholder; the identity cosine is the useful signal.** On the same
+sheet (9 defective images: merged fingers around a mug, a shoe without a leg, a stray forearm, one
+drifting eye) no judge tried reached a usable call, on the CPU (2026-11-16; the GPU was the live
+mind's): `qwen2.5vl:7b` (the default) flagged 0 of 9 and graded all 72 images 3, with the counting
+prompt too (1 of 9); `gemma3:27b` flagged 0 of 9 on the schema and 1 of 9 counting, and only its
+grade carried signal (overall 2 or less: 6 of 9 defects, but also 5 of 9 clean images, so about
+35 false flags across the sheet's 63 clean ones); `mistral-small3.2:24b` flagged 0 of 9 and graded
+everything 3. The cosine to her reference separates her from the other members (her own min 0.73,
+mean 0.83; others max 0.74, mean 0.46), so best-of-N ranks seeds mostly by her likeness. Swap
+`[selfies] critic_model` when a better local vision model arrives; measure it on the sheet first.
 `worker --embed-only` loads only the already fetched IP-Adapter image encoder,
 with local files only. It uses the CPU if the VRAM floor is unavailable, and
 falls back to the CPU after a GPU allocation failure. An `embed` request has

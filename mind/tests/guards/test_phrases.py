@@ -107,7 +107,9 @@ def test_another_conversation_or_an_old_one_needs_the_daily_count(store, channel
     ('dm:101', 1, 101, dict(channel='dm', room='101', to_guid=1)),  # his DM to her
     ('guild', 102, 0, dict(channel='guild'))])                       # another member here
 def test_a_phrase_someone_else_in_the_conversation_used_is_its_topic(store, channel, who, to, mine):
-    put(store, 'grilled cheese with sharp cheddar wins', channel=channel, to=1 if to else 0, ts=NOW - 900)
+    # twice: one earlier use in the conversation is no tic (owner's live DM test, 2026-11-16)
+    put(store, 'grilled cheese with sharp cheddar wins', channel=channel, to=1 if to else 0, ts=NOW - 1200)
+    put(store, 'nothing beats grilled cheese', channel=channel, to=1 if to else 0, ts=NOW - 900)
     d = draft('grilled cheese forever', **mine)
     assert 'phrase_conversation' in found(store, d).codes
     put(store, 'grilled cheese is the only answer', guid=who, channel=channel, to=to, ts=NOW - 600)
@@ -385,3 +387,123 @@ def test_another_problem_on_the_retry_keeps_the_old_rule(rig, monkeypatch):
     rig.script(MENACE, 'fine, the raid waits for nobody. you absolute menace')
     sent, meta = speak(rig, turn())
     assert not sent and rig.utterances()[-1]['dropped'] == 'guard_rewrite_refused'
+
+
+# -- the conversation's subject (owner's live DM test, 2026-11-16) -------------------------------
+# A sandbox replay of his DM session had every answer rewritten, four of them for the place and
+# plans he was writing about, said back. Each rule on a guild line, his whisper and his DM alike.
+
+ROOMS = [('guild', 0, 0, dict(channel='guild')),
+         ('whisper', 1, 101, dict(channel='whisper', to_guid=1)),
+         ('dm:101', 1, 101, dict(channel='dm', room='101', to_guid=1))]
+
+
+def _his(store, text, channel, his_to, ts):
+    put(store, text, guid=1, channel=channel, to=his_to, ts=ts)
+
+
+def _hers(store, text, channel, her_to, ts):
+    put(store, text, channel=channel, to=her_to, ts=ts)
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+def test_a_phrase_of_his_subject_is_never_her_tic(store, channel, her_to, his_to, mine):
+    _his(store, 'we rented a cabin by a norway fjord', channel, his_to, NOW - 3000)
+    for ago in (1500, 900):
+        _hers(store, 'that norwegian fjord cabin sounds unreal', channel, her_to, NOW - ago)
+    # every content word his ("norwegian" folds to his "norway"): the topic, not her tic
+    assert found(store, draft('the norwegian fjord cabin again', **mine)).codes == ()
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+def test_a_two_word_phrase_needs_words_nobody_else_used(store, channel, her_to, his_to, mine):
+    _his(store, 'the cabin is tiny but the view', channel, his_to, NOW - 3000)
+    for ago in (1500, 900):
+        _hers(store, 'cozy cabin vibes honestly, cozy cabin', channel, her_to, NOW - ago)
+    # "cabin" is his: "cozy cabin" is no candidate, though "cozy" is only hers
+    assert found(store, draft('cozy cabin forever', **mine)).codes == ()
+    for ago in (1400, 800):
+        _hers(store, 'sleepy kitten energy today', channel, her_to, NOW - ago)
+    assert 'phrase_conversation' in found(store, draft('sleepy kitten again', **mine)).codes
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+def test_one_earlier_use_is_no_conversation_tic_unless_stock(store, channel, her_to, his_to, mine):
+    _hers(store, 'that marble staircase was wild', channel, her_to, NOW - 900)
+    assert 'phrase_conversation' not in found(store, draft('the marble staircase again', **mine)).codes
+    _hers(store, 'okay the marble staircase though', channel, her_to, NOW - 600)
+    assert 'phrase_conversation' in found(store, draft('the marble staircase again', **mine)).codes
+    _hers(store, 'you are such an absolute menace', channel, her_to, NOW - 300)  # stock: once is enough
+    assert 'phrase_conversation' in found(store, draft('my absolute menace', **mine)).codes
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+def test_his_own_stock_words_said_back_are_no_stock_tic(store, channel, her_to, his_to, mine):
+    for guid in (102, 103, 104):  # the cast's sameness: still rationed
+        put(store, 'just staring at the ceiling', guid=guid, ts=NOW - 3600, channel='party')
+    assert 'stock_cast' in found(store, draft('staring at the menu', **mine)).codes
+    _his(store, 'been staring at the sea all day', channel, his_to, NOW - 300)
+    assert 'stock_cast' not in found(store, draft('staring at the menu', **mine)).codes
+
+
+def test_the_subject_folds_simple_inflections():
+    assert phrases._same_word('norway', 'norwegian') and phrases._same_word('fast', 'faster')
+    assert phrases._same_word('thinking', 'think') and not phrases._same_word('food', 'fool')
+    assert not phrases._same_word('run', 'running')  # under four letters: only itself
+    assert phrases._topic(('in', 'norwegian', 'waffles'), frozenset({'norway', 'waffle'}))
+    assert not phrases._topic(('norwegian', 'salmon'), frozenset({'norway'}))
+
+
+# -- slop and common stock entries (controller ruling, 2026-11-16) -------------------------------
+# A "!" line is slop: over its ration it is a rewrite on every turn. Any other line is common: a
+# rewrite only on a turn not owed to him; on an owed answer it is no code, only `pending`, named
+# on her next turn. Each on a guild line, his whisper and his DM, owed and not.
+
+def test_the_list_marks_its_slop():
+    names = phrases.slop()
+    assert {'menace', 'you absolute tease', 'proper mental', 'chaos gremlin', 'the audacity',
+            'i cant even', 'living for this', 'shivers down'} <= names
+    assert not {'sitting here', 'every single', 'at least', 'staring at', 'i swear'} & names
+    assert dict(phrases.stock())['proper mental'] == ((True, ('proper', 'mental')),)
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+@pytest.mark.parametrize('owed', [False, True])
+def test_a_common_entry_waits_for_her_next_turn_only_when_owed(store, channel, her_to, his_to,
+                                                               mine, owed):
+    _hers(store, 'just sitting here with tea', 'party', 0, NOW - 7200)  # hers, in 72 h
+    result = found(store, draft('sitting here waiting for the raid', real_answer_due=owed, **mine))
+    if owed:
+        assert result.codes == () and result.pending == ('sitting here',)
+    else:
+        assert 'stock_member' in result.codes and result.pending == ()
+
+
+@pytest.mark.parametrize('channel,her_to,his_to,mine', ROOMS)
+@pytest.mark.parametrize('owed', [False, True])
+def test_slop_is_a_rewrite_owed_or_not(store, channel, her_to, his_to, mine, owed):
+    _hers(store, 'that boss is a menace', 'party', 0, NOW - 7200)
+    result = found(store, draft('you menace, eight it is', real_answer_due=owed, **mine))
+    assert 'stock_member' in result.codes and result.pending == ()
+
+
+@pytest.mark.parametrize('owed', [False, True])
+def test_the_casts_common_phrase_waits_too_on_his_answer(store, owed):
+    for guid in (102, 103, 104):
+        put(store, 'im sitting here bored', guid=guid, ts=NOW - 3600, channel='party')
+    result = found(store, draft('im sitting here with soup', channel='whisper', to_guid=1,
+                                real_answer_due=owed))
+    if owed:
+        assert result.codes == () and result.pending == ('sitting here',)
+    else:
+        assert {'phrase_cast', 'stock_cast'} <= set(result.codes)
+
+
+def test_a_draft_with_both_waits_on_the_common_and_rewrites_the_slop(store):
+    _hers(store, 'just sitting here', 'party', 0, NOW - 7200)
+    _hers(store, 'what a menace', 'party', 0, NOW - 7000)
+    result = found(store, draft('sitting here, you menace', channel='whisper', to_guid=1,
+                                real_answer_due=True))
+    assert result.codes == ('stock_member',) and result.pending == ('sitting here',)
+    assert 'menace' in ' '.join(result.phrases)
+

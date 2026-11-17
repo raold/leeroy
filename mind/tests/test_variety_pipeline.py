@@ -81,9 +81,10 @@ def test_each_move_class_puts_the_lately_line_in_the_next_prompt(rig, move):
     assert _moves(rig.store) == [(102, HUMAN, "whisper", HUMAN, move)]
     rig.whisper_from_him(102, "what's up")
     rig.run()
-    user = rig.last_user()
-    assert f"Tonight you've already {MOVE_PHRASES[move].format(**HE)}" in user
-    assert LINES[move] not in user.split("Tonight you've already")[1]  # moves, never her words
+    user = rig.last_user().casefold()
+    # his "what's up" asks her something: answered first, the Lately line after it (2026-11-16)
+    assert f"then whatever else; tonight you've already {MOVE_PHRASES[move].format(**HE)}" in user
+    assert LINES[move] not in user.split("tonight you've already")[1]  # moves, never her words
 
 
 def test_a_repeated_summons_in_his_whisper_is_never_said(rig):
@@ -191,7 +192,7 @@ def test_a_move_repeated_in_new_words_is_asked_again(rig):
     rig.run()
     assert len(rig.chat_calls()) == 3
     user = rig.last_user()
-    assert "Tonight you've already teased him" in user
+    assert "tonight you've already teased him" in user.casefold()  # his "oh yeah?" asks
     assert user.endswith(MOVE_HINT.format(move=MOVE_PHRASES["tease"].format(**HE)))
     assert user.endswith("You just teased him: say something new instead.")
     assert [s.text for s in rig.sent.says()][-1] == "fair enough"
@@ -253,7 +254,7 @@ def test_moves_survive_a_restart(store, clock, tmp_path):
         again.script("fair enough")
         again.whisper_from_him(102, "you still there?")
         again.run()
-        assert "Tonight you've already made a joke" in again.last_user()
+        assert "tonight you've already made a joke" in again.last_user().casefold()
     finally:
         again.close()
 
@@ -355,7 +356,7 @@ def test_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
     overlay = _overlays_at_cap(tmp_path)
     try:
         user, longest, tokens = _worst_whisper(r, clock, caplog)
-        assert "Tonight you've already" in user
+        assert "tonight you've already" in user.casefold()  # after his question's answer-first
         assert f"{SCENE_HEAD} {'; '.join(longest)}." in user
         assert user.count("live far apart") == 1
         assert tokens <= LIVE_BUDGET
@@ -378,7 +379,7 @@ def test_a_hot_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_tr
     _overlays_at_cap(tmp_path)
     try:
         user, _, _ = _worst_whisper(r, clock, caplog)
-        assert "Tonight you've already" in user
+        assert "tonight you've already" in user.casefold()  # after his question's answer-first
         assert any(v.format(name="Zan", **HE) in user for v in STAGE_PASSAGES["banter"])
         assert "last-resort trim" not in caplog.text
     finally:
@@ -409,7 +410,7 @@ def test_an_arc_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_t
         plan = ("You two have talked about a quiet weekend somewhere neutral, but nothing is "
                 "settled.")
         rival = rival_text(RIVAL_12, ("he", "him", "his")).format(**fill)
-        assert "Tonight you've already" in user
+        assert "tonight you've already" in user.casefold()  # after his question's answer-first
         assert plan in user and rival in user
         assert STAGE_PASSAGES[stage][0].format(**fill) in user
         placed = estimate_tokens(plan) + estimate_tokens(rival)

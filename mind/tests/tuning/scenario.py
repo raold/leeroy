@@ -22,6 +22,10 @@ golden, golden_beat.json (record_beat): two answers to his whispers with the bea
 request as sent (the beat's prompt, format and options, and each line's prompt with the beat's
 lines after its instruction).
 
+Re-recorded on 2026-11-16 for DM quality (test_tuning_invariant.py says what moved): the hint's
+topics are content words only and his unanswered questions are answered first; the beat's `use`
+bears directly on his last line or is null. The draws and the lines sent are unchanged.
+
 The core golden, golden_core.json (record(..., core=True); human-likeness core plan Task 8), runs
 the same script with [life] availability 6, [life] state, [talk] intent and [talk] situation on and
 the beat off, so every block after an instruction is the code's (the drawn want and the state's
@@ -52,12 +56,16 @@ from pathlib import Path
 
 from conftest import HUMAN, TEST_CAST
 from engine_rig import engine_clock, make_rig, numbered, save_member
+from leeroy_mind.discord import store as dstore
+from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.protocol import Login, LootWon
 from leeroy_mind.talk.romance import flirt_chance, attitude_text
 from leeroy_mind.talk.select import SpeakerContext, speaker_weight
 from leeroy_mind.talk.budget import DayPhase
 from leeroy_mind.talk.states import roll_session_state
 from leeroy_mind.talk import beat
+from leeroy_mind.talk.pipeline import TurnMeta
+from leeroy_mind.talk.turns import Turn, TurnKind
 
 GOLDEN = Path(__file__).with_name("golden_prompts.json")
 BEAT_GOLDEN = Path(__file__).with_name("golden_beat.json")
@@ -111,6 +119,19 @@ async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = Fa
         await r.advance(280, step=4)
         await r.human(f"lol {'nice' if n % 2 else 'true'}")
     await r.advance(60, step=2)
+    if core:  # his Discord DM to 102, answered through the whole pipeline (the shape's DM lines)
+        mid = dstore.post(store, channel="dm:102", author=HUMAN, origin="human",
+                          text="how did the dungeon run go after i left", now=r.clock.now())
+        turn = Turn(TurnKind.REPLY_HUMAN, 102, "dm:102", to_guid=HUMAN, addressee=HUMAN)
+        meta = TurnMeta(r.engine._new_id(), answers_human=True, why="discord:reply",
+                        discord=DiscordTarget(reply_to=mid, thread=None))
+        task = asyncio.create_task(r.engine._speak(turn, meta))
+        for _ in range(200):
+            if task.done():
+                break
+            await r.advance(1)
+            await asyncio.sleep(0.002)
+        task.result()
     await r.engine.end_session()
     ctx = SpeakerContext(now=clock.now(), topic={"gear", "tank"}, opener=True,
                          phase=DayPhase.EVENING)

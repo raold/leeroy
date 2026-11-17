@@ -450,7 +450,7 @@ def test_every_situation_turn_has_a_length(channel, words):
         if kind not in SITUATION_INSTRUCTIONS:
             assert given == ""
             continue
-        on_discord = discord_length(channel, words)
+        on_discord = discord_length(channel, words, HE[0])  # a DM names his pronoun
         assert bool(given) is not bool(on_discord)
         text = render_instruction(kind, addressee="Zan", topic="TOPIC", forms=HE,
                                   channel=channel, discord_words=words, length_text=given,

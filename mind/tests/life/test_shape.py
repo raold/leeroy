@@ -194,7 +194,7 @@ def test_dm_mirror_zero_is_todays_dm():
         for i in range(50):
             d = draw_shape(ctx, random.Random(i))
             assert (d.shape, d.words, d.lines, d.num_predict) == (Shape.PARAGRAPH, 200, 1, num_predict(200))
-            assert shape_line(d, ctx, forms=("he", "him", "his")) == DISCORD_DM.format(words=200)
+            assert shape_line(d, ctx, forms=("he", "him", "his")) == DISCORD_DM.format(words=200, they="he")
 
 
 def test_dm_lengths_follow_the_mirror():
@@ -257,14 +257,14 @@ def test_shape_lines():
         "the way you'd double-text: short sentences, about 40 words in all, no line breaks.")
     # a DM of more than FEW_WORDS (50) reads in today's DM wording (review of #343, P2-1)
     assert shape_line(ShapeDraw(Shape.BURST, 60, 2, 120), dm, forms=him) == (
-        DISCORD_DM.format(words=60) + " Keep the sentences short, the way you'd double-text.")
+        DISCORD_DM.format(words=60, they="he") + " Keep the sentences short, the way you'd double-text.")
     assert shape_line(ShapeDraw(Shape.QUESTION, 7, 1, None), OWED, forms=her) == (
         "Keep it short and ask her something back.")
     assert shape_line(ShapeDraw(Shape.QUESTION, 44, 1, 95), dm, forms=him) == (
         "This is your private Discord DM, not the game. Keep it to about 44 words and ask him "
         "something back. No line breaks.")
     assert shape_line(ShapeDraw(Shape.QUESTION, 64, 1, 127), dm, forms=him) == (
-        DISCORD_DM.format(words=64) + " Ask him something back.")
+        DISCORD_DM.format(words=64, they="he") + " Ask him something back.")
     assert shape_line(ShapeDraw(Shape.SHORT, 20, 1, 80), chan, forms=him) == (
         "This is Discord chat, not the game. One short line, about 20 words.")
     assert shape_line(ShapeDraw(Shape.ONE_WORD, 2, 1, 24), chan, forms=him) == (
@@ -394,10 +394,10 @@ def test_a_long_dm_shape_reads_in_the_dm_wording_and_the_labs_piece():   # revie
         line = shape_line(ShapeDraw(shape, 80, 2 if shape is Shape.BURST else 1, 152), dm,
                           forms=him)
         assert "a sentence or two" not in line
-        assert line.startswith(DISCORD_DM.format(words=80))
+        assert line.startswith(DISCORD_DM.format(words=80, they="he"))
     assert "a sentence or two (at most about 50 words)" in shape_line(
         ShapeDraw(Shape.SHORT, 50, 1, 104), dm, forms=him)
-    variant = DISCORD_DM.replace("write as fully as you feel", "take your time and say it all")
+    variant = DISCORD_DM.replace("Write as much or as little as the moment needs", "take your time and say it all")
     rendered = set()
     with pieces.using({"discord_dm": variant}, rendered):
         line = shape_line(ShapeDraw(Shape.SHORT, 80, 1, 152), dm, forms=him)
