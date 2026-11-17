@@ -226,8 +226,9 @@ def _her(store) -> None:
 def test_her_whisper_answer_with_and_without_the_switch(store, clock, tmp_path, on):
     _her(store)
     t = int(clock.now())
+    # he is its actor: a "he" that names nobody stays out of a private prompt with him
     _add(store, "Sort the bank tabs tonight so he sees them.", owner=102, kind="plan",
-         t_event=t - 3 * DAY, t_created=t, t_accessed=t)
+         actors=(HUMAN,), t_event=t - 3 * DAY, t_created=t, t_accessed=t)
     r = make_rig(store, clock, tmp_path, romance_realism=on)
     try:
         r.script("ha fair")

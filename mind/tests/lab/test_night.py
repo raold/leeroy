@@ -25,7 +25,7 @@ def answer(model, messages):
         return json.dumps({"read": "he says hi", "lands": "warm", "want": "share", "use": None})
     if f"{WIN} respond to what" in last:
         return "yes, tonight works for me"
-    return "ha maybe, depends on the day"
+    return "ha maybe, we will see"  # under six words: the same line again is no copy
 
 
 def reflection(model, messages):
