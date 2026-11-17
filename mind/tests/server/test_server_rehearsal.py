@@ -89,9 +89,18 @@ class FakeArbiter(GpuArbiter):
         await super().release_live(holder)
 
 
+# The DM opener's own instruction (server/dms.py): its requests get words of their own.
+OPENER = 'Start a private Discord message to him'
+OPENER_WORDS = ('teacup lighthouse marigold saddle thimble walnut heron velvet quill juniper hazel '
+    'tulip parsnip violin mitten compass satchel ferry paddle chimney trellis pumpkin saucer '
+    'ladder sparrow tinsel barrel cottage pepper muffin lemon cedar fiddle hammock pillow marble '
+    'biscuit candle dune glacier puffin quilt radish spindle thistle').split()
+
+
 class VariedLLM(FakeLLM):
     def __init__(self):
         self.words = random.Random(741)
+        self.openers = 0
         super().__init__(self.answer)
 
     async def chat(self, model, messages, **kwargs):
@@ -102,6 +111,13 @@ class VariedLLM(FakeLLM):
         return await super().chat(model,messages,**kwargs)
 
     def answer(self, model, messages):
+        if any(OPENER in str(m.get('content','')) for m in messages):
+            # An opener draws on no shared word: the phrase cooldown refuses a draft that is not
+            # owed to him when it repeats her phrases of the day, and which of the 26 words below
+            # a draft gets depends on the order of every concurrent call before it.
+            start = 9*self.openers % len(OPENER_WORDS)
+            self.openers += 1
+            return ' '.join((OPENER_WORDS*2)[start:start+9])
         # No fixed prefix: lexical repeats remain enabled, as do semantic checks.
         words = 'harbor bakery lantern copper gravel basket windows footpath meadow kettle garden shore wool bridge acorn cobble amber orchard sail button porch willow plum canvas pebble ribbon'.split()
         return ' '.join(self.words.sample(words, 9))
@@ -185,6 +201,11 @@ def test_whole_server_day(tmp_path, monkeypatch):
             return verdict
         monkeypatch.setattr(app.engine.live_review,'check',measured_check)
         app.server.engine.rng = MeanGapRandom(19)
+        # The DM openers' clock as well, else the day's opener slots are whatever the app seed's
+        # split stream draws. At the mean the gap drawn at 08:00 lands in his play, the one drawn
+        # at his logout past midnight (where the new day draws again) and midnight's in the quiet
+        # window: the day's one slot is 08:00 on day two.
+        app.server.dms.rng = MeanGapRandom(23)
         # Game autonomous chatter has separate pace tests; keep this rehearsal's
         # bridge output attributable to the explicit turns under observation.
         async def no_game_bursts(now):
@@ -316,7 +337,7 @@ def test_whole_server_day(tmp_path, monkeypatch):
             result['nights'] = nights
             result['starts'] = starts
             result['counts'] = {day:counts(app.store,day) for day in ('2026-11-12','2026-11-13')}
-            assert sum(c['dms'] for c in result['counts'].values()) > 0
+            assert llm.openers and sum(c['dms'] for c in result['counts'].values()) > 0
             rows = app.store.conn.execute('SELECT channel,author,ts,reply_to FROM discord_message WHERE origin="mind"').fetchall()
             result['messages'] = len(rows)
             result['guards'] = guard_rates(verdicts)
