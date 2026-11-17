@@ -1246,9 +1246,14 @@ def cmd_voices(args) -> int:
         if args.clear:
             plans = plan_clear(store, guids=guids)
         else:
-            human_guid = _human_guid(store, None)
+            try:
+                human_guid = _human_guid(store, None)
+            except SystemExit:  # no stored human and no guild master on the roster
+                human_guid = 0
+                print("the guild master is not known here: the real-name and romance screens "
+                      "are skipped")
             plans = plan(store, folder, guids=guids,
-                         human=human_identity(cfg, store, human_guid))
+                         human=human_identity(cfg, store, human_guid) if human_guid else None)
         missing = sorted((guids or set()) - {h.guid for h in plans})
         done = {"import": 0, "unchanged": 0, "clear": 0, "refused": 0}
         for h in plans:
