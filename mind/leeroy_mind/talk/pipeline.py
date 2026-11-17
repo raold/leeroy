@@ -1652,7 +1652,7 @@ class Pipeline:
         return (getattr(talk, "intent", False) is True or getattr(talk, "situation", False) is True
                 or getattr(life, "state", None) is not None)
 
-    def _want_eligible(self, turn: Turn, meta: TurnMeta) -> bool:
+    def _want_eligible(self, turn: Turn, meta: TurnMeta, *, rescue: bool = False) -> bool:
         """A turn that gets a want and "It lands" (intent.INTENT_KINDS, the model's own line):
         never a template's, his pushback's answer, a photo's or selfie request's, an outreach
         item's, the owner's string, his lore or game question with its facts, the watchdog's
@@ -1661,7 +1661,8 @@ class Pipeline:
         return (turn.kind in INTENT_KINDS and turn.template is None and not meta.pushback
                 and meta.photo is None and meta.photo_request is None
                 and meta.outreach_item is None and meta.godmode_intent is None
-                and not meta.lore and not meta.facts_line and not meta.owed_rescue
+                and not meta.lore and not meta.facts_line
+                and (rescue or not meta.owed_rescue)
                 and not meta.elsewhere and meta.why != "hotmic"
                 and not self._server_turn(turn, meta))
 
@@ -1814,8 +1815,10 @@ class Pipeline:
         outside a conversation that owns its line count, and a DM only with [talk] dm_mirror
         above 0 (at 0 a DM is today's, as full as she likes)."""
         talk = getattr(self.cfg, "talk", None)
+        # the watchdog's rescue gets no want, but a shape like any answer (self-play audit,
+        # 2026-11-17: a rescue with no shape ran to 139 words)
         if (getattr(talk, "shape", False) is not True or voiced or meta.single_line
-                or not self._want_eligible(turn, meta)):
+                or not self._want_eligible(turn, meta, rescue=True)):
             return False
         return not (_family(turn.channel) == "dm" and talk.dm_mirror <= 0)
 
@@ -1879,7 +1882,8 @@ class Pipeline:
             dm_words=talk.dm_words, dm_mirror=mirror,
             realism=self.realism.eligible(self, turn, meta), two_lines=two,
             away=self._waited_away(turn, meta, now),
-            waited=self._waited_own_time(turn, meta, now))
+            waited=self._waited_own_time(turn, meta, now),
+            his_asks=asks(self._his_line(turn, meta)))
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
                                         else 0) or 0
