@@ -66,7 +66,7 @@ def test_her_brb_takes_no_slip_and_no_emoticon(store, clock, tmp_path):
         try:
             p = member(r, emoticons=["<3"], emoticon_rate=1.0)
             brb = [s.line for s in r.engine._style(whisper(template="brb boss"), p, "brb boss",
-                                                   close=False)]
+                                                   close=False, plain=True)]
             assert (brb == ["brb boss"]) is coherence
             assert any("<3" in x for x in brb) is not coherence
             # her own line still carries her mark

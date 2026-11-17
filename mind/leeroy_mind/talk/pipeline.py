@@ -3095,7 +3095,7 @@ class Pipeline:
         if meta.before_transport is not None and meta.pair_line and text.strip() and not only:
             # her brb or back (life/interrupt.py): one line in her own typing; its barrier only
             # decides whether it goes
-            lines = self._style(turn, p, text, close=close)[:1] or [Styled(text, text)]
+            lines = self._style(turn, p, text, close=close, plain=True)[:1] or [Styled(text, text)]
         elif meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
             lines = [] if only or not text.strip() else [Styled(text, text)]
         else:
@@ -4354,7 +4354,7 @@ class Pipeline:
 
     def _style(self, turn: Turn, p: Persona, text: str, *, close: bool,
                two_lines: bool = False, romance: bool = False,
-               realism: bool = False, room: int = 0) -> list[Styled]:
+               realism: bool = False, room: int = 0, plain: bool = False) -> list[Styled]:
         """The member's typing over the words: at most turn.max_lines lines (style_lines). A
         bit of several lines keeps the lines the model wrote, one each; any other turn is
         styled as one text. A member of his inner circle keeps his real name capitalised
@@ -4363,7 +4363,8 @@ class Pipeline:
         most the store's MAX_TEXT. A longer Discord message ([talk] discord_words) is one
         paragraph of up to LONG_SLACK times its words, whatever her game line. `room`: the words
         a kept draft holds (TurnMeta.keep_words, talk/length.py) or a content answer's shape
-        asks for, which her lines then have room for: the length rule already chose the cut."""
+        asks for, which her lines then have room for: the length rule already chose the cut.
+        `plain` ([talk] coherence): her brb or back line, typed without slips or an emoticon."""
         discord = is_discord(turn.channel)
         words = self._discord_words(turn)
         phase = day_phase(self.clock.local())
@@ -4378,7 +4379,7 @@ class Pipeline:
             # on its own: repacked as one text its clauses ran together and the rest was dropped
             # (hard-case audit, 2026-11-17)
             pieces = own_lines[:turn.max_lines]
-        plain = coherent and turn.template is not None  # her brb and back: no slips, no marks
+        plain = plain and coherent  # her brb and back: no slips, no marks
         out: list[Styled] = []
         typing = p.typing
         most = 1 if words else turn.max_lines

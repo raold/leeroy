@@ -106,8 +106,9 @@ def _cut(units, room: int, his: str) -> str:
         if _n(head) > room:
             break
         last = head[-1][0]
-        if _bare(last[-1]) in _DANGLING or (len(last) <= 3 and _bare(last[0]) in _CONJUNCTIONS):
-            continue  # never ends on "but only" or "the"
+        if units[k - 1][1] != SENT and (_bare(last[-1]) in _DANGLING or (
+                len(last) <= 3 and _bare(last[0]) in _CONJUNCTIONS)):
+            continue  # never ends on "but only" or "the" (a sentence's own end is whole)
         if carries([w for ws, _ in head for w in ws], his):
             longest = _join(head)
             if units[k - 1][1] == SENT:
