@@ -1,26 +1,33 @@
 """Validate the bounded switchboard snapshot without re-reading a local config file."""
 from dataclasses import fields
 import io
+import math
 import re
 from types import SimpleNamespace
 
 
 def valid_table(name, table, raw):
+    """True: the table is valid. False: it is not, so its loader turns it off (or refuses it).
+    None: no rule here for this table, so the console cannot say (shown as unknown, never as
+    invalid)."""
     if type(table) is not dict:
         return False
     simple = {'claims':{'enabled'},'signals':{'enabled'},'fingerprint':{'enabled'},
               'callbacks':{'enabled'},'looks':{'diversity'},'personas':{'auto_newcomers'},
               'playstyle':{'enabled'},'photos':{'enabled','send','requests','scene_from_words'},
               'raidlead':{'enabled','briefs'},
-              'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'}}
+              'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'},
+              'outreach':{'enabled'},'godmode':{'enabled'},'tuning':{'nudge_memories'}}
     if name in simple:
         return not set(table)-simple[name] and all(type(v) is bool for v in table.values())
-    if name in ('talk','romance','selfies','control'):
-        if name in ('talk','romance'):
+    if name in ('talk','romance','life','selfies','control','voice'):
+        if name in ('talk','romance','life'):
             from leeroy_mind.config import _RULES
             rules = _RULES[name]
         elif name == 'selfies':
             from leeroy_mind.selfies.config import _RULES as rules
+        elif name == 'voice':
+            from leeroy_mind.voice.config import _RULES as rules
         else:
             from leeroy_mind.endpoint import _RULES as rules
         return all(k not in rules or rules[k][0](v) for k,v in table.items())
@@ -82,4 +89,34 @@ def valid_table(name, table, raw):
             return True
         except (ValueError,TypeError):
             return False
-    return False
+    if name == 'decisions':
+        from leeroy_mind.decisions.config import RANGES, DecisionsConfig
+        return (not set(table)-{f.name for f in fields(DecisionsConfig)} and all(
+            type(v) is bool if k == 'enabled' else type(v) is int and RANGES[k][0] <= v <= RANGES[k][1]
+            for k,v in table.items()))
+    if name == 'culture':
+        from leeroy_mind.culture.config import CultureConfig
+        return (not set(table)-{f.name for f in fields(CultureConfig)} and all(
+            type(v) is int and 0 <= v <= 14 if k == 'memes_per_week' else type(v) is bool
+            for k,v in table.items()))
+    if name == 'groups':
+        ranges = {'max_open':(1,12),'member_starts_per_week':(0,3)}
+        return (not set(table)-{'enabled',*ranges} and all(
+            type(v) is bool if k == 'enabled' else type(v) is int and ranges[k][0] <= v <= ranges[k][1]
+            for k,v in table.items()))
+    if name == 'voice_notes':
+        ranges = {'per_member_day':(0,10),'guild_day':(0,50),'max_words':(5,60)}
+        def valid(k,v):
+            if k == 'enabled':
+                return type(v) is bool
+            if k == 'share':
+                return type(v) in (int,float) and math.isfinite(v) and 0 <= v <= .5
+            return type(v) is int and ranges[k][0] <= v <= ranges[k][1]
+        return not set(table)-{'enabled','share',*ranges} and all(valid(k,v) for k,v in table.items())
+    if name == 'turing':
+        from leeroy_mind.turing.config import DAYS_MAX, WINDOWS_MAX
+        ranges = {'windows':(0,WINDOWS_MAX),'days':(1,DAYS_MAX)}
+        return (not set(table)-{'enabled',*ranges} and all(
+            type(v) is bool if k == 'enabled' else type(v) is int and ranges[k][0] <= v <= ranges[k][1]
+            for k,v in table.items()))
+    return None

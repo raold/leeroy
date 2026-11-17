@@ -23,6 +23,14 @@ export function badge(value) {
   const fails = count(c.fails), held = count(c.held_members);
   return { fails, held, show: (fails || 0) > 0 || (held || 0) > 0, text: (fails === null ? "?" : fails) + " FAIL · " + (held === null ? "?" : held) + " held" };
 }
+// "invalid" is a table its loader refuses (so the feature is off); "unknown" is a table the
+// console has no rule for, which says nothing about the feature.
+export function switchState(r) {
+  if (r.state === 'invalid') { return 'invalid, so off'; }
+  if (r.state === 'unknown') { return 'unknown: the console cannot check this table'; }
+  if (r.state === 'number') { return typeof r.value === 'number' ? String(r.value) : 'unknown'; }
+  return r.state === 'on' ? 'on' : 'off';
+}
 export function lines(name, value) {
   const p = obj(value), out = [];
   if (panelWords(p)) { return [panelWords(p)]; }
@@ -83,7 +91,7 @@ export function lines(name, value) {
     arr(p.tasks).forEach(t => out.push(str(t.name) + " · " + (t.installed ? str(t.state) + " · last " + at(t.last_run) + " · result " + n(t.result) : "Not set up yet: task is not installed.")));
   } else if (name === 'switches') {
     if (p.gpu?.paused) { out.push(pausedWords(p.gpu,at)); }
-    arr(p.rows).forEach(r => out.push(str(r.label)+' · '+(r.state==='invalid' ? 'invalid, so off' : r.state==='on' ? 'on' : 'off')
+    arr(p.rows).forEach(r => out.push(str(r.label)+' · '+switchState(r)
       +(r.needs ? ' · needs '+str(r.needs) : '')+(arr(r.unmet).length ? ' · unmet: '+r.unmet.join(', ') : '')
       +(r.blocklist ? ' · blocklist '+str(r.blocklist) : '')+(r.restart ? ' · config changed since the mind started; restart to apply' : '')));
   }
