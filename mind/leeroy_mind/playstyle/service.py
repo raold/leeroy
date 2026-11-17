@@ -1,9 +1,11 @@
 """Bounded event-triggered style requests and retained cleanup receipts; native is authoritative."""
 import asyncio
 import json
+import logging
 import re
 import tomllib
 import uuid
+from collections import Counter
 
 from leeroy_mind.guild.ports import JobWaiter
 from leeroy_mind.guild.protocol import BotDo, register
@@ -74,6 +76,25 @@ class PlayStyles:
         self.jobs = JobWaiter(capacity=4)
         self.wake = asyncio.Event()
         self.stopping = False
+        self.tally = Counter()  # (restore, reason) of the commands since the last summary
+
+    def present(self):
+        """He is in game. A style is only added then: it changes how his bots fight beside
+        him, and for nobody else. Restoration never waits for him."""
+        return bool(getattr(self.app.world,'human_online',False))
+
+    def flush(self):
+        """One line for the pass just worked off (a hello's reconciliation, his login, a
+        group): counts by outcome, never a line a member."""
+        if not self.tally:
+            return
+        tally,self.tally = self.tally,Counter()
+        ok = lambda restore: tally.get((restore,'ok'),0)
+        other = sorted((('restore:' if restore else 'apply:')+reason,n)
+                       for (restore,reason),n in tally.items() if reason!='ok')
+        log('playstyle_pass',commands=sum(tally.values()),applied=ok(False),restored=ok(True),
+            other=','.join(f'{k}={n}' for k,n in other) or '-',owner=int(self.present()),
+            owned=len(self.owned or ()))
 
     def save(self):
         with self.app.store.transaction():
@@ -91,7 +112,8 @@ class PlayStyles:
     def safe(self,guid):
         member = self.app.world.members.get(guid)
         group = self.app.world.group
-        return (self.on and self.owned is not None and self.supported and self.connected and not self.stopping
+        return (self.on and self.present() and self.owned is not None and self.supported
+                and self.connected and not self.stopping
                 and not self.app.stopping and member is not None and member.level>=CAST_MIN_LEVEL
                 and guid in self.app.world.online and member.map not in INSTANCE_MAPS
                 and not any(guid in who for who in self.fights.values())
@@ -131,6 +153,9 @@ class PlayStyles:
             if not self.on and self.owned:
                 for guid in sorted(self.owned): self.queue(guid,True)
             if not ev.human: self.queue(ev.guid)
+            else:
+                # he is here now: the members a hello or a cast found while he was away
+                for guid in sorted(self.seen): self.queue(guid)
         elif isinstance(ev,Cast):
             online = {member.guid for member in ev.members if member.online}
             for guid in sorted(online-self.seen): self.queue(guid)
@@ -160,7 +185,8 @@ class PlayStyles:
         try:
             ack = await self.app.bridge.send(BotDo(ident,tuple(guids),'restore' if restore else 'playstyle',param), preserve_id=True)
             if not ack.ok:
-                log('playstyle_refused',count=len(guids),restore=int(restore),error=_code(ack.error))
+                self.tally[restore,'refused:'+_code(ack.error)] += len(guids)
+                log('playstyle_refused',level=logging.DEBUG,count=len(guids),restore=int(restore),error=_code(ack.error))
                 return False # keep prior/unknown ownership, even when this attempt was refused
             job = await self.jobs.wait(ident,5)
             reason = _outcome(job,guids)
@@ -168,10 +194,12 @@ class PlayStyles:
             if good and restore:
                 self.owned.difference_update(guids)
                 self.save()
-            log('playstyle_result',count=len(guids),restore=int(restore),ok=int(good),reason=reason)
+            self.tally[restore,reason] += len(guids)
+            log('playstyle_result',level=logging.DEBUG,count=len(guids),restore=int(restore),ok=int(good),reason=reason)
             return good
         except Exception as exc:
-            log('playstyle_transport',count=len(guids),error=type(exc).__name__)
+            self.tally[restore,'transport:'+type(exc).__name__] += len(guids)
+            log('playstyle_transport',level=logging.DEBUG,count=len(guids),error=type(exc).__name__)
             return False
         finally:
             self.jobs.close()
@@ -186,9 +214,10 @@ class PlayStyles:
                 if restore:
                     if await self.command([guid],True) and self.safe(guid):
                         self.queue(guid)
-                else:
+                elif self.present():
                     await self.command([guid],False)
                 await asyncio.sleep(0) # bounded work and cancellation between members
+            self.flush()
 
     async def close(self):
         self.stopping = True
@@ -202,6 +231,7 @@ class PlayStyles:
                         await self.command(guids[start:start+40],True)
             except TimeoutError:
                 log('playstyle_cleanup_pending',count=len(self.owned))
+            self.flush()
 
 
 def attach(app):
