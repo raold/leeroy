@@ -99,12 +99,13 @@ citing memory used to stay as wide as it was, and one level was all recall check
   as the memory's evidence implies, where a cited memory counts with its own effective scope,
   to a fixed point over `memory:` refs (cycles included; scopes only rise, so it ends).
   `Store` hands out every `MemoryRow` with it (recall, the night's provenance walk, outreach's
-  sources), `derive_scope` reads cited memories with it (the writer, culture's and the
+  sources, the lesson walk's `Visibility._effective`), `derive_scope` reads cited memories with it (the writer, culture's and the
   lexicon's source checks, growth, supersede), and the readers that take rows from SQL use
-  `privacy.gated` (the lesson walk, the callback selector), `effective_scopes` (the ledger walk,
+  `privacy.gated` (the callback selector), `effective_scopes` (the ledger walk,
   the notes' evidence) or `open_sql`.
 - **It is stored, never trusted when missing.** `memory.derived_scope`, `derived_with` and
-  `derived_at` keep the last check. Triggers (migration `scope_evidence`) keep `memory_cite`,
+  `derived_at` keep the last check (what the evidence implies now, derived afresh each time;
+  the stored scope is the one that never widens). Triggers (migration `scope_evidence`) keep `memory_cite`,
   the index of each memory's `chat:` and `memory:` refs, and clear `derived_at` on every memory
   resting, at any depth, on one whose scope or evidence changed, in that change's own
   transaction. A row without `derived_at` is derived by the reader (at most
@@ -128,5 +129,11 @@ citing memory used to stay as wide as it was, and one level was all recall check
   night raises a stored scope again when it next checks that memory. Never text.
 - The migration's data step checks every stored memory once and writes the derived columns
   only; it changes no stored scope (run `memory rescope --go` for that, with its receipt).
+- **What it does not follow.** `memory:` refs and the lines a memory cites, nothing else: a
+  public line counts as public evidence even when the prompt that produced it carried a
+  private memory (ruling B2: what was said on a public channel is public; the lesson walk
+  opens those carried memories for a note's own source lines only), and `encounter:`,
+  `beat:` and the night's other refs carry no scope here (the stages that write from them
+  ask for one).
 - A scope only ever gets stricter on this path. A status change (archive, supersede, reject,
   the owner's erase) changes no scope: a memory of any status passes its scope on, as before.

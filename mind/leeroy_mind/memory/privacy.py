@@ -255,7 +255,9 @@ def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
         if not nxt:
             break
         mids = set().union(*nxt.values())
-        evidence = {r[0]: json.loads(r[1]) for r in conn.execute(
+        # a cited memory's evidence that does not parse cites nothing here (the store checks
+        # every memory it writes through this walk; one bad old row must not stop a write)
+        evidence = {r[0]: _refs_of(r[1]) for r in conn.execute(
             "SELECT id, evidence FROM memory WHERE id IN (SELECT value FROM json_each(?))",
             (json.dumps(sorted(mids)),))}
         frontier = {}

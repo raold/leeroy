@@ -221,7 +221,9 @@ async def stage_scopes(ctx) -> None:
 
 def attach(runner) -> None:
     """Always on: the stage costs one pass over the recent and unchecked memories."""
-    runner.add_stage(STAGE, stage_scopes, after=AFTER, model=None)
+    names = [s.name for s in getattr(runner, "stages", ())]
+    after = AFTER if AFTER in names or not names else names[-1]  # a cut-down pipeline: last
+    runner.add_stage(STAGE, stage_scopes, after=after, model=None)
 
 
 # -- memory rescope ----------------------------------------------------------------------------
