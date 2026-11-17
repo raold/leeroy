@@ -125,8 +125,9 @@ def test_snapshot_seeds_keep_private_sources_out_and_library_read_only(store, mo
 
 def test_runtime_query_budget_interrupts_a_runaway_source(store,monkeypatch):
     app,_,_=app_for(store)
-    moments=iter([0.,3.])
-    monkeypatch.setattr(runtime,'time',SimpleNamespace(thread_time=lambda:next(moments,3.)))
+    ticks=iter(range(0,10**9,100))  # every look at the worker's clock is past the last budget
+    monkeypatch.setattr(runtime,'time',SimpleNamespace(thread_time=lambda:float(next(ticks))))
+    monkeypatch.setattr(runtime,'RETRY_WAIT_S',(0,))
     def slow(*args,**kwargs):
         kwargs['conn'].execute('WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000) SELECT sum(x) FROM n').fetchone()
     monkeypatch.setattr(runtime,'state_of',slow)
@@ -145,3 +146,80 @@ def test_snapshot_away_and_ties_are_observed_from_the_database(store):
     assert result.away==frozenset({101})
     assert result.ties[101,102]=='rival' and result.ties[102,101]=='crush'
     assert result.ties[103,104]==result.ties[104,103]=='feud'
+
+
+def locked():
+    error=sqlite3.OperationalError('database is locked')
+    error.sqlite_errorname='SQLITE_BUSY'
+    return error
+
+
+def test_a_read_that_met_another_connection_is_asked_again(store,monkeypatch,caplog):
+    app,personas,_=app_for(store)
+    real_connect,opened=runtime.connect,[]
+    def connect(path):
+        opened.append(path)
+        if len(opened)<3:
+            raise locked()
+        return real_connect(path)
+    monkeypatch.setattr(runtime,'connect',connect)
+    monkeypatch.setattr(runtime,'RETRY_WAIT_S',(0,))
+    with caplog.at_level('INFO'):
+        result=asyncio.run(runtime.snapshot(app,app.clock.now()))
+    assert set(result.personas)==set(personas) and len(opened)==3
+    assert [r.getMessage() for r in caplog.records if 'server_read' in r.getMessage()]==[
+        'server_read_retry code=busy attempt=1 seeds=0','server_read_retry code=busy attempt=2 seeds=0']
+
+
+def test_a_read_that_keeps_failing_names_its_class_and_never_the_message(store,monkeypatch,caplog):
+    app,_,_=app_for(store)
+    opened=[]
+    def connect(path):
+        opened.append(path)
+        raise locked()
+    monkeypatch.setattr(runtime,'connect',connect)
+    monkeypatch.setattr(runtime,'RETRY_WAIT_S',(0,))
+    with caplog.at_level('INFO'), pytest.raises(sqlite3.OperationalError):
+        asyncio.run(runtime.snapshot(app,app.clock.now()))
+    assert len(opened)==len(runtime.READ_CPU_S)
+    assert caplog.records[-1].getMessage()=='server_read_failed code=busy attempts=3 seeds=0'
+    assert not any('database is locked' in r.getMessage() for r in caplog.records)
+
+
+def test_a_fault_a_retry_would_repeat_is_not_retried(store,monkeypatch):
+    app,_,_=app_for(store)
+    opened=[]
+    def connect(path):
+        opened.append(path)
+        raise sqlite3.OperationalError('no such table: secret_table')
+    monkeypatch.setattr(runtime,'connect',connect)
+    with pytest.raises(sqlite3.OperationalError):
+        asyncio.run(runtime.snapshot(app,app.clock.now()))
+    assert len(opened)==1
+
+
+def test_a_retry_gets_a_larger_budget(store,monkeypatch):
+    app,_,_=app_for(store)
+    real_state=runtime.state_of
+    clock=iter(range(0,10**9,3))  # 3 CPU seconds pass between two looks at the worker's clock
+    monkeypatch.setattr(runtime,'time',SimpleNamespace(thread_time=lambda:float(next(clock))))
+    monkeypatch.setattr(runtime,'RETRY_WAIT_S',(0,))
+    def slow(*args,**kwargs):
+        kwargs['conn'].execute('WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<3000) SELECT sum(x) FROM n').fetchone()
+        return real_state(*args,**kwargs)
+    monkeypatch.setattr(runtime,'state_of',slow)
+    monkeypatch.setattr(runtime,'READ_CPU_S',(2.0,1e12))
+    result=asyncio.run(runtime.snapshot(app,app.clock.now()))  # interrupted at 2 s, then given room
+    assert result.states
+
+
+def test_the_relationship_read_takes_two_columns_of_every_pair_and_his_rows_whole(store):
+    app,_,_=app_for(store)
+    with store.transaction():
+        store.conn.execute("INSERT INTO relationship(a,b,affinity,trust,notes,romance_stage) VALUES "
+                           "(101,102,70,5,'PRIVATE PAIR NOTES','none'),(102,1,10,44,'PRIVATE','banter')")
+    result=asyncio.run(runtime.snapshot(app,app.clock.now()))
+    assert result.ties[101,102]=='friend' and result.ties[102,1]=='crush'
+    assert result.relationships[102].trust==44 and result.relationships[102].notes==''
+    assert result.relationships[101].affinity==0
+    assert 'notes' not in runtime._TIE_SQL and '*' not in runtime._TIE_SQL+runtime._HIS_SQL
