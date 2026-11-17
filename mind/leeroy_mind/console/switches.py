@@ -58,6 +58,8 @@ SWITCHES = (
     ('selfies','variety','Photo style variety','selfies.enabled'),
     ('selfies','varied_sets','Varied selfie sets','selfies.enabled'),
     ('selfies','identity_sets','Her face in every new set','selfies.enabled; identity adapter fetched'),
+    ('selfies','detailer','Photo detailer: faces','selfies.enabled'),
+    ('selfies','detailer_hands','Photo detailer: hands','selfies.detailer; palm and handpose models fetched'),
     ('selfies','critic','Photo critic','selfies.enabled; critic_model pulled by the operator'),
     ('selfies','param_bandit','Photo parameter bandit','selfies.critic'),
     ('personas','auto_newcomers','Newcomer personas',''),
