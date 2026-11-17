@@ -28,8 +28,27 @@ or counts Discord activity as game activity.
 
 Member photos (`[photos] send`) keep their rate. A DM opener is offered her photo
 first, exactly as with outreach off; when a photo goes out on it, the opener's
-item is not attached and stays open for a later turn. An answer to his DM carries
-no item and keeps its photo offer as before.
+item is not attached and stays open for a later turn.
+
+### Folded into her answers (2026-11-17)
+
+With him on Discord only, the whisper and game-opener clocks never ran and the DM-opener
+ration is 3 a day: 719 items were made and 7 told. Two changes, no new turn and no new clock:
+
+- **Answers.** When he whispers or DMs her and the beat runs (`[talk] think_private`), her
+  top ready item (never a nudge) leads what the beat may bring in, keyed `o<id>` beside her
+  memories, under the beat's own rules: one bring-in per three of her turns in a
+  conversation, never the same key twice, and only if it bears on his line. When the beat
+  brings nothing in on her **first** answer of a conversation (no turn of hers there in 24
+  hours), his line asks nothing and her want is share, small talk, react, flirt, tease or
+  reassurance, a seeded draw of chattiness / 8 (half at 4, none at 0) brings the item in.
+  The stored answer writes the `told` receipt (`outreach_told ... how=answer`) in a
+  transaction of its own right after the line: a refusal (ended, raised by him, source gone)
+  costs nothing, and a crash between the two leaves the item open. The answer she owes him
+  does not block it; a photo on the answer does (the photo is the news). Without the beat,
+  answers carry no item.
+- **Openers.** While any candidate has an item ready, the day's DM openers go to those
+  members (the planner's weights among them); with none ready, to anyone as before.
 
 The console shows counts by kind and state under **Means to tell you**, and a
 ready count on Tonight. It deliberately omits the things members intend to say.
