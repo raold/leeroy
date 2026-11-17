@@ -42,6 +42,7 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.storage.store import Store
 from leeroy_mind.text import has_meta
 
+from . import wardrobe
 from .prompt import lust_named, lust_phrase, names_re
 from .store import queue_restyled
 from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
@@ -217,10 +218,30 @@ def _digest(photo: ProfilePhoto) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def _record(store: Store, guid: int, style: str, photo: ProfilePhoto) -> None:
-    """Which rules chose `photo` for `guid`: the style and the kind's digest, never its text."""
-    store.set_meta(STYLE_KEY.format(guid=guid),
-                   json.dumps({"style": style, "kind": _digest(photo)}, sort_keys=True))
+def _record(store: Store, guid: int, style: str, photo: ProfilePhoto,
+            chosen_for: Persona | None = None) -> None:
+    """Which rules chose `photo` for `guid`: the style and the kind's digest, never its text,
+    and, for a kind chosen with a wardrobe or palette set (`chosen_for`, the persona it was
+    chosen for), their digest (wardrobe.digest), so a later change of them shows."""
+    rec = {"style": style, "kind": _digest(photo)}
+    worn = wardrobe.digest(chosen_for)
+    if worn is not None:
+        rec["wardrobe"] = worn
+    store.set_meta(STYLE_KEY.format(guid=guid), json.dumps(rec, sort_keys=True))
+
+
+def wardrobe_pending(store: Store, p: Persona | None) -> bool:
+    """The pass chose p's photo kind as it is now, with another wardrobe or palette than she
+    has now (the owner set or changed them in the Looks panel since): the pass chooses it once
+    more, and her queued sets wait for that (render._held). Never a kind set by hand."""
+    if p is None or p.appearance is None or chosen_style(store, p) is None:
+        return False
+    raw = store.get_meta(STYLE_KEY.format(guid=p.guid))
+    try:
+        recorded = json.loads(raw).get("wardrobe") if raw else None
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return recorded != wardrobe.digest(p)
 
 
 def _pass_ran(store: Store, guid: int) -> bool:
@@ -260,6 +281,8 @@ def needs_rechoice(store: Store, p: Persona | None) -> bool:
     chosen = chosen_style(store, p)
     if chosen == LUST and style_of(p) == LUST and lust_named(p):
         return True  # renamed since: her name filter would drop the joined phrase
+    if chosen is not None and wardrobe_pending(store, p):
+        return True  # her wardrobe or palette changed since the pass chose it
     return chosen is not None and chosen != style_of(p)
 
 
@@ -433,6 +456,9 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
     system = (system_prompt(LUST_PROMPT, KIND_PROMPT_LUST, ctx.settings.data_dir, **fields)
               if lust else system_prompt(STAGE, KIND_PROMPT, ctx.settings.data_dir, **fields))
     ask = KIND_ASK.format(name=name)
+    if not lust:
+        ask += wardrobe.ask_hint(p)  # what they tend to wear; nothing with no wardrobe set
+    lust_schema = wardrobe.lust_schema(p, LUST_SCHEMA, swim_only_settings=SWIM_ONLY_SETTINGS)
     if variety:
         from . import photo_extra, style_variety
         all_personas = _personas(ctx)
@@ -447,7 +473,7 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
     for again in (False, True):
         try:
             data = await ctx.reasoner.json(system, ask + (LUST_ASK_AGAIN if again else ""),
-                                           LUST_SCHEMA if lust else KIND_SCHEMA, temperature=0.7)
+                                           lust_schema if lust else KIND_SCHEMA, temperature=0.7)
         except ReflectionError as e:
             if e.fatal:
                 raise
@@ -483,7 +509,8 @@ def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | 
         save_persona(store, replace(stored, photo=photo), source="generated",
                      ts=ctx.clock.now(), race=race, class_name=class_name)
         chose = style_of(stored) if style is None else style
-        _record(store, guid, chose, load_persona(store, guid).photo)  # the kind as stored
+        saved = load_persona(store, guid)
+        _record(store, guid, chose, saved.photo, chosen_for=saved)  # the kind as stored
         if variety:
             from . import photo_extra
             saved = load_persona(store,guid)

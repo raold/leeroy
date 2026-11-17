@@ -19,7 +19,7 @@ from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSI
                    compose_lust, screen_lust)
 from .prompt import (_COVERED, _COVERED_LUST, _FRAMINGS, GLUTES_FRAMINGS, body_phrases,
                      fit_required, glutes_words,
-                     _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
+                     _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED, style_phrases,
                      NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
@@ -403,7 +403,10 @@ def scene_json(s: Scene) -> dict:
 
 def scene_schema(p: Persona | None) -> dict:
     """The reply schema for p's scene: only enum choices, under the member's style."""
-    return SCENE_SCHEMA_LUST if style_of(p) == LUST else SCENE_SCHEMA
+    from . import wardrobe  # her wardrobe and palette narrow the outfits and colours offered
+    if style_of(p) == LUST:
+        return wardrobe.lust_schema(p, SCENE_SCHEMA_LUST)
+    return wardrobe.scene_schema(p, SCENE_SCHEMA, OUTFITS)
 
 
 def scene_system(p: Persona | None, data_dir: Path, *, human: HumanIdentity, name: str,
@@ -535,6 +538,7 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # optional, after who she is
         out.append((glutes_words(p), 2))
     add(s.expression, 3, True)
+    out += style_phrases(p)  # the owner's makeup and jewellery, the first to give way
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)

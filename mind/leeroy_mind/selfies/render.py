@@ -19,10 +19,11 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import files
 from .config import SelfieCfg
-from .kind import chosen_style
+from .kind import chosen_style, wardrobe_pending
 from .style import LUST, PLAIN
 from .slot import SetRefused, TRIES, render_slot
 from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, build_varied_prompt, renderable
+from .wardrobe import WARDROBE_HELD
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
 from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
 
@@ -265,7 +266,10 @@ def _stored(ctx: "NightContext", guid: int) -> Persona | None:
 def _held(ctx: "NightContext", p: Persona | None) -> str | None:
     """renderable() under the style that chose p's kind (a lust kind waits while she lacks the
     lust style)."""
-    return renderable(p, chosen_style(ctx.store, p) if p is not None else PLAIN)
+    why = renderable(p, chosen_style(ctx.store, p) if p is not None else PLAIN)
+    if why is None and wardrobe_pending(ctx.store, p):
+        return WARDROBE_HELD  # the photo pass chooses her kind again for her wardrobe first
+    return why
 
 
 def _without_persona(ctx: "NightContext") -> int:
@@ -583,6 +587,9 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
             if why in HELD:  # her kind's text is never rendered plainly, nor without its phrase
                 log("selfies_set_held", night=ctx.night, guid=guid, set=set_no,
                     reason="restyle" if why == LUST_HELD else "name")
+            elif why == WARDROBE_HELD:
+                log("selfies_set_held", night=ctx.night, guid=guid, set=set_no,
+                    reason="wardrobe")
             if ctx.skip(policy.stage, unit):
                 tally["skipped"] += 1
             continue

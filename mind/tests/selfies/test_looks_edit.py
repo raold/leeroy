@@ -31,7 +31,7 @@ from .fakes import OWNER, PHOTO, mind_app, ready, renderable_cast
 from .test_selfie_prompt import LUST_PHOTO
 
 KEY = "K" * 43
-KEEP = "with her new figure; pick one as her photo to keep it."
+KEEP = "with her new looks; pick one as her photo to keep it."
 ON = "[selfies]\nenabled = true\n"
 
 
@@ -288,7 +288,7 @@ def test_undo_through_the_service_queues_a_set_and_refuses_other_ledger_rows(sto
     assert run(LooksService(app).handle({"action": "undo", "ledger": made["ledger"]}))["ok"] is False
     note = ledger_add(store, guid=102, kind="note_added", text="likes boats", evidence=[], now=1.0)
     assert run(LooksService(app).handle({"action": "undo", "ledger": note})) == {
-        "ok": False, "error": f"Ledger #{note} is not a weight or figure change."}
+        "ok": False, "error": f"Ledger #{note} is not a looks change."}
 
 
 # -- the endpoint -------------------------------------------------------------------------------
@@ -370,7 +370,7 @@ def test_a_looks_edit_set_holds_her_cover_face_lightly_until_he_picks_from_it(h,
     app = _service_on(h, IDENT)
     reply = run(LooksService(app).handle(looks(guid=101, weight_kg=96, bust="very_large")))
     assert reply["set"] == 2 and reply["message"].endswith(
-        "A new varied set renders tonight with her new figure; pick one as her photo to keep it.")
+        "A new varied set renders tonight with her new looks; pick one as her photo to keep it.")
     assert h.store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=101, set_no=2)) == "1"
     plan = varied.plan_of(h.store.conn, 101, 2)
     assert {x.view for x in plan} & set(kind.BACK_VIEWS) and {x.view for x in plan} - set(kind.BACK_VIEWS)
@@ -404,7 +404,7 @@ def test_a_set_already_queued_is_marked_too(store, clock, tmp_path):
     assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=2)) is None
     reply = run(LooksService(app).handle(looks()))
     assert reply["set"] == 2 and reply["message"].endswith(
-        "A set is already queued: it renders tonight with her new figure; pick one as her "
+        "A set is already queued: it renders tonight with her new looks; pick one as her "
         "photo to keep it.")
     assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=2)) == "1"
     assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) is None
@@ -453,7 +453,7 @@ def test_an_edit_while_her_set_renders_says_so_and_a_set_with_her_new_figure_fol
     files.staging_dir(tmp_path, 102, 2).mkdir(parents=True)  # the night is rendering set 2
     reply = run(LooksService(app).handle(looks()))
     assert reply["set"] == 2 and reply["message"].endswith(
-        "Her set is rendering now from her previous looks; a set with her new figure follows "
+        "Her set is rendering now from her previous looks; a set with her new looks follows "
         "it. Pick one as her photo to keep it.")
     # marked even while it renders (controller, round 4): if that render fails or is cancelled,
     # the set renders again from the new looks and must take the light face then
