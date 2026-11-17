@@ -10,6 +10,7 @@ exercise bike always garbled). The keys are unchanged; LEGACY_ACTIVITIES and LEG
 the rows composed before.
 """
 from .kind import LUST_SETTINGS
+from .wardrobe import SCENE_MORE
 from collections.abc import Mapping
 
 RECIPE = 1  # persisted with composed text; older pending prose is held, never grandfathered
@@ -91,6 +92,8 @@ EXPRESSIONS = {"smile": "a relaxed smile", "grin": "a cheerful grin",
 OUTFITS = {"casual": "a cotton shirt and trousers",
            "warm": "a jumper and trousers", "outdoors": "a jacket over a t-shirt and trousers",
            "exercise": "a loose tee and full-length leggings"}
+# with the outfits only a wardrobe offers (wardrobe.scene_outfits): never in the base schema
+ALL_OUTFITS = {**OUTFITS, **SCENE_MORE}
 # Nothing is held: a prop rests beside the subject
 PROPS = {"none": "", "mug": "a plain mug on the table", "book": "a closed book on the table",
          "notebook": "a notebook on the table", "leash": "the dog looking up at the camera",
@@ -190,7 +193,7 @@ def compose_choices(data: dict) -> dict:
         activity += ", " + prop
     out = {k: v for k, v in data.items() if k != "prop"}
     if "colour" not in data:
-        out.update(setting=PLACES[data["setting"]], outfit=OUTFITS[data["outfit"]],
+        out.update(setting=PLACES[data["setting"]], outfit=ALL_OUTFITS[data["outfit"]],
                    expression=EXPRESSIONS[data["expression"]])
     out.update(activity=activity, shows=f"{activity}, {out['setting']}.", recipe=RECIPE)
     return out

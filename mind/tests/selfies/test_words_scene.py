@@ -302,14 +302,17 @@ def test_wearing_place_and_framing_are_required_and_the_rest_keep_their_prioriti
     p = woman(age=30)
     spec = W.build_words_prompt(p, _scene(p))
     required = [t for t, pr in spec.phrases if pr == 0]
-    assert required[0] == "selfie, close arm's-length shot"  # no mirror, no phone (safe.py)
+    assert required[0] == "mirror selfie"  # the mirror he asked for stays (safe.py)
+    held = W.build_words_prompt(p, _scene(p, framing="handheld_selfie"))
+    assert held.phrases[0] == ("selfie, close arm's-length shot", 0)  # no phone
     assert f"wearing {HIVIS}" in required and "supply cupboard at work" in required
     assert ("slipped out for a minute", 1) in spec.phrases
     assert ("with paper coffee cup", 2) in spec.phrases
     assert ("harsh fluorescent light", 2) in spec.phrases and ("early morning", 3) in spec.phrases
     assert ("looking at the camera", 3) in spec.phrases
     assert ("recent smartphone photo, natural skin texture, unretouched", 1) in spec.phrases
-    assert spec.negative == SNAP_NEGATIVE
+    from leeroy_mind.selfies.scene import SNAP_NEGATIVE_MIRROR
+    assert spec.negative == SNAP_NEGATIVE_MIRROR and held.negative == SNAP_NEGATIVE
 
 
 def test_from_behind_turns_away_and_takes_the_face_lightly():

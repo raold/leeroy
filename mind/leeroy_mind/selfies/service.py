@@ -185,10 +185,21 @@ class SelfieService:
             app.store, self.cfg, p, guid, human=app.human_guid, now=app.clock.now(),
             day=app.clock.local().date().isoformat(), data_dir=app.data_dir)
         their = "her" if p.identity.player_gender == "female" else "his"
-        keep = f"with {their} new figure; pick one as {their} photo to keep it."
+        keep = f"with {their} new looks; pick one as {their} photo to keep it."
         if state == "rendering":
             return set_no, (f"{their.capitalize()} set is rendering now from {their} previous "
-                            f"looks; a set with {their} new figure follows it. Pick one as "
+                            f"looks; a set with {their} new looks follows it. Pick one as "
+                            f"{their} photo to keep it.")
+        from .kind import wardrobe_pending
+        if why is None and not varied and state == "queued":
+            from .varied import plan_of
+            with app.store.transaction():
+                varied = plan_of(app.store.conn, guid, set_no) is not None
+        if why is None and not varied and wardrobe_pending(app.store, p):
+            # the photo pass chooses the kind again for the wardrobe first (render._held)
+            queued = "A set is already queued" if state == "queued" else "A new set is queued"
+            return set_no, (f"{queued}; it renders once tonight's photo pass has chosen "
+                            f"{their} photo kind again for {their} wardrobe. Pick one as "
                             f"{their} photo to keep it.")
         if state == "queued":
             return set_no, f"A set is already queued: it renders tonight {keep}"

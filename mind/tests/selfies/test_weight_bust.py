@@ -371,7 +371,9 @@ def test_the_longest_lust_prompt_fits_and_never_cuts_her_body_hair_or_skin(build
                 assert not over_fit(spec), (framing, kind_, kg)
                 _never_cut(spec, p)
                 assert f"wearing {ph.outfit}, {ph.setting}" in _texts(spec, 0)
-                for text in (_KINDS[kind_], _FRAMINGS[framing]):
+                # a lust kind's mirror selfie renders as a selfie (safe.kind_of)
+                for text in (_KINDS["selfie" if kind_ == "mirror_selfie" else kind_],
+                             _FRAMINGS[framing]):
                     forms = {text, SHORT.get(text, text)}
                     assert forms & set(_texts(spec, 0)) or forms & set(_texts(spec, 1))
                 kept, dropped = fit(spec.phrases, estimate, 75)

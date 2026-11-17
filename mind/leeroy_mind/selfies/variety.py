@@ -21,7 +21,7 @@ def choose_photo(p, *, seed, ident, names):
         return None  # the existing plain night pass writes the personal kind
     rng = random.Random(f"variety-photo:{p.guid}:{seed}")
     for _ in range(128):
-        data = dict(kind=rng.choice(("selfie","mirror_selfie","snapshot")),
+        data = dict(kind=rng.choice(("selfie","snapshot")),
             framing=rng.choice(("upper_body","three_quarter")), setting=rng.choice(kind.LUST_SETTINGS),
             outfit=rng.choice(tuple(kind.LUST_OUTFITS)), colour=rng.choice(kind.LUST_COLOURS),
             expression=rng.choice(kind.LUST_EXPRESSIONS))

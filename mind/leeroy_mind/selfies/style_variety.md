@@ -187,7 +187,7 @@ medium to very large, showed no change. So the set an edit queues, or the set al
 is marked (meta `selfies:set-looks-edit:<guid>:<set_no>`) and `render._set_faces` gives every
 slot of it, front views included, her cover's face at the worker's floor `MIN_SCALE` (0.3): still
 recognisably her, clearly fuller. The console says "A new set renders tonight with her new
-figure; pick one as her photo to keep it": once he picks a cover from that set, later sets hold
+looks; pick one as her photo to keep it": once he picks a cover from that set, later sets hold
 that fuller cover at `identity_scale` as before.
 
 **Glutes, waist and hips** (owner, 2026-11-15: "the same adjustment for glutes, waist and
@@ -399,6 +399,114 @@ her full body in the tall portrait: #316's body phrases (her build and size, req
 1216 pull the camera back. Untested fixes: a `three_quarter` crop hint in the framing phrase, or
 an 896 x 1152 portrait.
 
+## Hair, wardrobe, makeup and accessories (owner, 2026-11-17)
+
+The Looks panel has three groups, **Body** (weight, and for women bust, glutes, waist, hips),
+**Hair** and **Style**, for women and men. Every new value is an owner-only `Appearance` field
+(`schema.OWNER_STYLE`; no model is asked for one, `enrich.ENRICH_SCHEMA` leaves them out), unset by
+default; unset leaves the stored JSON, `looks_hash` and every prompt exactly as they were. One
+Save sends everything through the same `looks` op (each new argument optional: one left out stays
+as stored) and makes one persona version, one `looks` ledger row with its Undo, and one queued set
+marked `selfies:set-looks-edit:<guid>:<set>` (face scale 0.3), as #316. No migration.
+
+| field | values | in the prompt |
+|---|---|---|
+| `owner_hair_colour` | black, dark_brown, brown, light_brown, auburn, red, copper, strawberry_blonde, dark_blonde, blonde, platinum, grey, silver, pastel_pink, blue, purple | said in place of the looks' own hair colour text |
+| `owner_hair_length` | buzzed, short, chin, shoulder, long, very_long | in place of the looks' own length (a shaved head stays one until a length is set) |
+| `owner_hair_style` | straight, wavy, curly, coily, ponytail, high_bun, messy_bun, braid, braids, bob, pixie, bangs, half_up, slicked_back, shaved_sides; a man also crew_cut, fade, quiff | in place of the looks' own style text |
+| `wardrobe` | up to 4 of casual, sporty, smart, edgy, boho, glam, cosy, workwear, vintage, outdoorsy, minimalist, swim | none: a bias on the outfits picked (below) |
+| `palette` | up to 3 of the 12 lust colours | none: the colours picked |
+| `makeup` (women) | none, natural, defined, glam | "no makeup", "natural makeup", "defined makeup", "glam makeup" |
+| `jewellery` | none, minimal, statement | "delicate necklace" / "statement jewellery" (a man: "chain necklace" / "chunky jewellery"); none adds a negative |
+| `glasses` | never, always | never leaves out the face details that name glasses and adds a negative; always says her own glasses detail first, or "glasses" when the looks name none |
+| `tattoos` | none, small, sleeve | "small tattoo" / "tattoo sleeve", said in place of the clauses that name a tattoo; none leaves them out and adds a negative |
+| `piercings` | none, ears, nose, lip | "pierced ears" / "nose piercing" / "lip piercing", the same way |
+
+**Hair overrides, it never rewrites.** The stored free text (`hair_colour`, `hair_length`,
+`hair_style`) is untouched; `prompt.hair_words` says each owner value in its place. Hair's length
+and colour stay required in every profile, varied and situational prompt and the style still gives
+way first (`hair_skin_short`), so the 75-token fit holds: the enum words are shorter than long free
+text was (tests/selfies/test_looks_style.py, the longest combination on every build, kind and
+framing). The words were counted on RealVisXL's tokenizers on 2026-11-17 (`tokens.WORD_TOKENS`).
+No value or word is one of the age guard's (no pigtails, no bunches); the lust style still reads
+the stored free text (`style.looks_age_coded`), so overriding an age-coded stored style does not
+bring her back into the lust style.
+
+**Accessories keep what is there.** Other face details (a beard, a scar, freckles) are always
+kept; `prompt.face_details` only touches the clause of a detail that names glasses, a tattoo or a
+piercing, and only when the owner set that field ("a faded tattoo and a scar on the chin" keeps
+the scar).
+
+**Accessories get room first** (review of #358: at priority 3 and 2 the worker's fit dropped them
+in almost every prompt). What the owner set is said in one or two tokens each
+(`prompt.accessory_phrases`) at priority 1, right after her hair and skin, in the order glasses,
+tattoo, piercing, makeup, jewellery, so the worker's fit offers them room before every other
+optional phrase. `fit_required` takes their size as a `reserve`: the required set shortens for it
+(the kind and framing's short forms, her hair's style, her skin's modifiers, her size's last
+terms), then the kind of photo (a profile, a situation) or a varied front or side view's framing
+moves to priority 2. Her body, hair length and colour, skin tone, a profile's framing and a
+varied pose never make way. With nothing set the steps are exactly what they were. Checked with
+the worker's own `fit` on RealVisXL's tokenizers (tests/selfies/test_looks_style.py): a voluptuous
+woman of 88 kg with a large bust keeps her glasses and tattoo in every profile, her lust profile,
+every varied front and side look and a situational photo; a curvy woman keeps all five. Known
+limits, which the Looks panel states: a varied **back view** yields nothing for them, so on a full
+figure they may not show there, and with a full figure and the longest outfit or activity the last
+of them may not fit (glasses, the first, do).
+
+**Negatives.** Each "never"/"none" is its own one-word negative phrase at priority 3
+(`style_negative`: glasses, tattoo, piercing, jewellery), added only where the worker's fit has
+room for it beside the fixed negatives, which keep every place: two words on the plain negative,
+three on the lust one, none on a varied set's (it fills the window; there only the face-detail
+removal applies). A word with no room is left out by the mind, never sent to be dropped.
+Situational photos' negatives are unchanged.
+
+**Shaved heads.** Looks that say a shaved head have no colour or style worth saying, so over them
+only the owner's values count: the mind refuses a colour or style without a length, and a length
+without a colour.
+
+**Wardrobe and palette bias the kind, not the looks** (`selfies/wardrobe.py`). They put no word
+in a prompt.
+- *Photo-kind pass.* A lust woman's schema keeps its shape with shorter enums: the lust outfits
+  her tags name (`LUST_TAGS`, every one from the existing vetted lists) and her palette's colours.
+  A narrowed outfit list also narrows what the pairings would refuse, so at least half of the
+  picks left are valid for every tag subset (`wardrobe.MIN_SHARE`; the full lists stand at 76%):
+  only swimwear left gives the water settings, upper body and no headshot; swimwear among other
+  outfits loses the hot tub and keeps as many swimsuits as the share allows; no swimwear loses the
+  hot tub. Everyone else's free-text ask gains one sentence of fixed words (`ask_hint`); the reply
+  meets the same screens. A kind the pass chose is chosen once more when the wardrobe or palette
+  changes (the kind's record keeps the digest of the wardrobe the pass read; restyle, variety and
+  world photos record the stored one), and her queued ordinary sets wait for that
+  (`selfies_set_held reason=wardrobe`; the Looks panel says so). **One refused re-choice ends the
+  wait**: her kind stays, the record takes the wardrobe as attempted, `selfies_wardrobe_released
+  guid= reason=refused` is logged and her sets render with the kind she has. A kind set by hand
+  is never chosen again.
+- *Varied sets.* Still one look of each category; within a category the outfits her tags name
+  come first, and the colours are her palette's. A varied set reads no photo kind, so it never
+  waits for the kind's re-choice.
+- *Situational scenes.* The lust scene's enums as above. A plain scene offers the outfits her
+  tags name, with seven clothed outfits added for the tags the old four did not cover
+  (`SCENE_MORE`, offered only to a member whose wardrobe names them) and the gym's own always.
+- *Swim* counts only for a woman who has the lust style now (the panel offers it only to her and
+  the mind refuses it for anyone else),
+  and only through the existing pairings: swimwear at the water.
+Photo requests (`words_scene.py`) take the hair and accessories, not the wardrobe.
+
+**Rollback hazard.** Older code refuses a persona whose looks carry any of these fields (unknown
+`Appearance` key: the member's persona does not load). Before rolling back, with the mind stopped:
+
+```bash
+python -m leeroy_mind personas --data-dir "$D" looks --clear-style          # the plan: who, which fields
+python -m leeroy_mind personas --data-dir "$D" looks --clear-style --go     # snapshot, then clear them all
+python -m leeroy_mind personas --data-dir "$D" looks --clear-style --guid 1385,1895 --go   # only these
+```
+
+Each cleared member gets an owner persona version and a `looks` ledger row (`personas undo <id>`
+puts the values back after rolling forward again); weight and figure stay. Undo by hand works
+too, newest row first (an older row is refused once a later edit moved the same looks). A member
+is clear when her stored persona's `appearance` has none of the keys `owner_hair_*`, `wardrobe`,
+`palette`, `makeup`, `glasses`, `jewellery`, `tattoos`, `piercings`; a second `--clear-style`
+plan then lists nobody.
+
 ## Compositions the photo audit designed out (2026-11-17)
 
 A visual audit of about 1,290 rendered photos (145 covers, 55 situational photos, the newest two
@@ -410,30 +518,74 @@ Headshots were clean (1%); defects grew with how much body shows (waist-up 12%, 
 
 | trigger (defective share in the audit) | what changed |
 |---|---|
-| mirror selfies and the hallway mirror (25-31%, half a wrong or second reflection) | a selfie is said as `selfie, close arm's-length shot` whatever its kind; the lust style and scenes are no longer offered a mirror selfie; the mirror setting is retired and a stored one renders as `her hallway at home`; `mirror` joins the negatives |
-| a phone held in view (doubled, oversized, back to the camera) | no kind or framing names a phone; `phone` joins the negatives |
+| mirror selfies of the lust profile kinds (27% of 64, half a wrong or second reflection; plain head-and-shoulders mirror selfies 3% of 92) | the lust style is no longer offered a mirror selfie or the hallway-mirror setting; a stored lust one renders as a selfie in `her hallway at home`. A plain mirror selfie stays one, and so does one he asks for in his words (`scene_from_words`): there the negative names neither the mirror nor the phone, and the caption still says "a mirror selfie" |
+| a phone held in view (doubled, oversized, back to the camera) | a selfie is said `selfie, close arm's-length shot` (short form `selfie`), a timer photo `photo taken on a timer`; `mirror, phone` required in the negative wherever no mirror is rendered |
 | the car's front seat (the subject cloned as a passenger), the concert crowd (a frame full of faces) | retired; stored ones render as a quiet street beside her parked car and a festival field |
 | "bike shorts" at the gym (38%: a garbled bicycle every time) | the outfit says gym shorts; the exercise-bike activity is "resting after a workout" |
-| a hand on the hip plus another arm action (every third hand had one), hands on rails, glasses, mugs, pens, sticks | a three-quarter or full-length photo requires one standing pose (`standing, arms at her sides`, or hands behind her back from the front; it yields to priority 1 before the framing does when the required set is over 75 tokens); a waist-up one asks for `arms down, hands out of frame` at priority 1; props rest on the table and activities are said as what is there, not what the hands do |
-| seated and splayed swimwear poses (merged legs and feet) | every pose stands |
-| busy places (2 or more people in frame: 17%, and most of the severity 3) | `another person, duplicate person` required in the negative; a garden party is a summer garden, a dance floor an empty one, a wine bar a quiet one; `alone, no one else in frame` is added at priority 3 for bars, clubs, streets and parties (on the live cast it rarely fits the 75 tokens) |
-| garbled signs and equipment lettering | `text` is required in the body negative |
-| men rendered shirtless, bare shoulders with no top | the outfit sat at priority 2 and never reached the worker's 75 tokens (0 of 12 waist-up prompts kept it, 7 of 42 men's); it is now required as `wearing ...`, a top and for a waist-up or wider photo a bottom, a man always a shirt (`safe.complete`); an outfit too long for the window gives way to default garments, never to her body, hair or skin (`prompt.fit_clothed`); free text naming swimwear or underwear is never required |
-| one strap, fused sleeves, a top with no bottom | every list outfit names a top and a bottom or a one-piece with its length; the one-shoulder top is a wrap top; `bottomless, shirtless` join the body negative |
+| a hand on the hip plus another arm action, hands on rails, glasses, mugs, pens, sticks | a three-quarter or full-length photo requires one of 3-4 simple poses per view, drawn by seed (`safe.POSES`: standing or walking, arms at her sides, hands behind her back or clasped in front; none on a hip, none seated); a waist-up snapshot asks for `arms down, hands out of frame` (a selfie does not: an arm holds the camera); props rest on the table and activities are said as what is there, not what the hands do |
+| seated and splayed swimwear poses (merged legs and feet) | no pose sits or lies |
+| busy places (2 or more people in frame: 17%, and most of the severity 3) | `another person, duplicate person` required in the body negative; a garden party is a summer garden, a dance floor an empty one; `alone, no one else in frame` at priority 3 |
+| garbled signs and equipment lettering | `text, logo` among the first optional words of the body negative |
+| men rendered shirtless, bare shoulders with no top | the outfit sat at priority 2 and never reached the worker's 75 tokens (0 of 12 waist-up prompts kept it, 7 of 42 men's); it is now required as `wearing ...` wherever shoulders show (a close-up of the face keeps it optional), a top and for a waist-up or wider photo a bottom, a man always a shirt (`safe.complete`: the default top goes first, "a plain t-shirt, a rain jacket and jeans"); an outfit too long for the window, or one that leaves the accessories no room, gives way to default garments (`prompt.fit_clothed`); free text naming swimwear or underwear is never required |
+| one strap, fused sleeves, a top with no bottom | every list outfit (the wardrobe's scene outfits too) names a top and a bottom or a one-piece with its length; the one-shoulder top is a wrap top; `bottomless, shirtless` required in the body negative |
+
+**One fit order** (`prompt.fit_clothed`, with #358's `reserve` and `give`). Required: who she is,
+her body and size, her hair's length and colour, her skin tone, what she wears, the framing and
+a body shot's pose. Then what the owner set her to wear (the first optional phrases, with room
+reserved). Then her hair's style, eye colour and the other details. To make room, in order: the
+short forms and her hair's style, skin's modifiers and size's last terms; for the accessories'
+reserve the kind of photo, then the pose, move behind them; for the worker's limit the kind, the
+pose and the framing yield.
+
+Measured on the live cast with the real tokenizers and the worker's fit (read-only):
+
+| prompt (live cast, as stored) | n | too long | `wearing` kept | pose kept | hair style kept | eye colour kept |
+|---|---|---|---|---|---|---|
+| lust profile, three-quarter | 62 | 0 | 62 | 59 | 3 | 43 |
+| lust profile, waist-up | 29 | 0 | 29 | n/a (selfies) | 22 | 25 |
+| plain profile | 86 | 0 | 86 | 10 of 12 waist-up | 85 | 76 |
+| varied, the two back views | 182 | 0 | 182 | 167 | 14 | 72 |
+| request selfies from his words | 354 | 0 | 354 | n/a | 337 | 309 |
+
+With every accessory set on every member (the stress case), all of them keep their room in: lust
+three-quarter profiles 31 of 62 (main 34), varied back views 51 of 182 (main 66), request selfies
+289 of 354 (82%; main 86%), plain profiles 86 of 86. The gap to main is the outfit and setting
+words: with the old words in place of the new ones the same code gives 34 and 59. A dress's
+length and a jacket's top and bottom cost one to three required tokens, which is the clothed
+rule's price. The pose always makes way for the accessories (it is kept in none of those).
 
 **The body negative.** A photo that shows the body (waist-up or wider; every situational one)
-takes `prompt.body_negative`: the earlier anatomy line without its eye words (no eye defect at
-severity 2 or more in 1,288 photos), with `extra hands`, `another person, duplicate person,
-mirror, phone, text` and `bottomless, shirtless` required. Its required set counts 67 tokens
-(plain), 69 (lust) and 75 (a varied set's, with the thong line) on the real tokenizers.
+takes `prompt.body_negative`. Required: the covered line, minors, likeness, the anatomy line
+without its eye words (no eye defect at severity 2 or more in 1,288 photos) and with `extra
+hands`, `another person, duplicate person`, `bottomless, shirtless`, and `mirror, phone` unless
+a mirror is rendered (a varied set: `mirror` alone). Required sets: 61 tokens (plain), 67 (lust),
+71 (varied). Then the optional words in the order the fit offers them room
+(`safe.BODY_OPTIONAL`), and the owner's "never" words ahead of them (`prompt.negative_for`: all
+four have room in every body negative).
 
-**`[selfies] body_shot_share`** (0-1, default 0.5; read at the mind's start) is the share of
-photos framed to show the body. In a varied set that share of the four candidates is full-length
-or three-quarter, the views from behind first (her hands are out of sight there), then the front,
-then the side view (16% defective, most of the third hands and feet); the others are waist-up.
-A lust profile kind is three-quarter for that share of members, else waist-up. A situational
-photo keeps a waist-up or wider framing for that share, else head and shoulders (29% of the
-waist-up ones were defective, none of the closer ones). 1.0 is the behaviour before the audit.
+| negative | optional words kept | dropped |
+|---|---|---|
+| plain body, situational | `plastic skin`, `airbrushed, doll`, `text, logo` | `deformed face, bad hands`; `3d render, anime, cgi`; `second face, crowd, group of people`; `vintage, retro, film grain, sepia, old photo`; `illustration, watermark` |
+| lust body, lust situational | `plastic skin`, `airbrushed, doll` | the above and `text, logo` |
+| varied | `plastic skin` | the above and `airbrushed, doll` |
+
+The old profile negative kept `plastic skin, airbrushed, doll, deformed face, extra fingers, bad
+hands` and the vintage line. `bad hands` and `extra fingers` are covered by the required anatomy
+line (`malformed hands`, `extra fingers`, `fused fingers`). `deformed face`, the render styles
+and the vintage line are what a body shot loses: compare on the GPU (same seeds, old negative
+against the new) before trusting it.
+
+**`[selfies] body_shot_share`** (0-1, default 1.0; read at the mind's start): the share of a
+varied set's four candidates that show her figure (below 1.0 the views from behind keep theirs
+first, then the front, then the side; the rest are waist-up) and of the lust profile kinds that
+are three-quarter (else waist-up). 1.0, four body views, is the owner's ask (#307) and what the
+labels support: waist-up was no safer than three-quarter (12% against 11%). Front and side
+candidates are three-quarter rather than full-length (planned three-quarter 6% defective,
+full-length 12%).
+
+**`[selfies] snap_body_share`** (0-1, default 0.5): the share of situational photos that keep a
+waist-up or wider framing; the rest are head and shoulders (29% of the waist-up ones were
+defective, none of the closer ones).
 
 **`selfies audit --labels DIR`** reads an audit's label files (JSON lines: guid, path, severity,
 same_person_as_cover) and prints, as guids, set numbers and photo ids, the covers in force and
@@ -442,10 +594,5 @@ first) those stocked photos end `flagged` (rows only, no file is deleted) and a 
 queued for each member with a defective cover. A cover is never changed: the owner picks.
 
 Not verified on the GPU: every wording here was chosen from the audit's numbers and the token
-counts, not from new renders. Check the first night's sets and snaps.
-
-Measured on the live cast's stored personas with the real tokenizers and the worker's fit
-(read-only, 2026-11-17): no prompt of any kind is over the window; all 86 plain profile prompts
-keep `wearing ...` (before: 26 of 86 kept their outfit, 0 of 12 waist-up ones); 61 of 62
-three-quarter lust kinds keep the standing pose; a default varied set keeps it in 174 of 182 body
-shots; all 177 guild tiles keep their top.
+counts, not from new renders. The labels carry no pose, so the poses avoid what failed rather
+than repeat what worked. Check the first night's sets and snaps.

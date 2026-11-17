@@ -28,7 +28,7 @@ import shutil
 import sqlite3
 import sys
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from leeroy_mind.app import AlreadyRunning
@@ -87,6 +87,11 @@ def _parser():
     sub.add_argument("--ask", metavar="TEXT",
                      help="with --guid: one photo she would send for these words of his, read "
                      "as [photos] scene_from_words reads them, into scratch/selfies-try/ask/")
+    sub.add_argument("--detailer", action="store_true",
+                     help="draw each small face again after the render ([selfies] detailer), "
+                     "whatever mind.toml says")
+    sub.add_argument("--detailer-hands", action="store_true",
+                     help="with the faces, each hand too ([selfies] detailer_hands)")
     sub = subs.add_parser("restyle", help="plan or save varied photo choices (mind stopped)")
     sub.add_argument("--lust-only", action="store_true")
     sub.add_argument("--include-owner", action="store_true", help="also replace hand-set photo choices")
@@ -358,10 +363,14 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                                 if args.varied else build_prompt(
                                     p, kind_style=chosen_style(store, p),
                                     light=photo_extra.light_for(store, p)))
+                        rear = None
+                        if args.varied:
+                            from .kind import BACK_VIEWS
+                            rear = tuple(x.view in BACK_VIEWS for x in plans[guid])
                         await render_candidates(
                             worker, spec, folder, night=night,
                             guid=guid, set_no=1, cfg=scfg, make_room=ctx.arbiter.make_room,
-                            leases=lambda: ctx.arbiter.holders)
+                            leases=lambda: ctx.arbiter.holders, rear=rear)
                         tally.sets += 1
                     except WorkerError as e:
                         print(f"guid {guid}: worker {e.reason}", file=sys.stderr)
@@ -400,7 +409,7 @@ async def _guild_grid(ctx, r, worker, members, out_root, results, diagnostic) ->
             got, _, _ = await r.image(snap_id=0, guid=guid, idx=1, spec=build_tile_prompt(p), ref=ref,
                           framing=p.photo.framing, out=tile,
                           thumb=tile.with_name("tile.thumb.jpg"), thumb_size=128,
-                          shape="square", rid=f"g{n}")
+                          shape="square", rid=f"g{n}", detail=False)
             made.append(tile)
             made_guids.append(guid)
             _snap_result(results, guid, "rendered", nsfw=got.nsfw, kind="tile")
@@ -530,7 +539,8 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
     from .render import scene_scale
     from .slot import render_slot
     from .store import face_pick
-    from .worker import Identity, RenderRequest
+    from .words_scene import from_behind
+    from .worker import Identity, RenderRequest, detail_for
     from .words_scene import build_words_prompt, face_scale, is_words
     night = _default_night(clock)
     guid = args.guid
@@ -587,7 +597,8 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
             return RenderRequest(spec.phrases, spec.negative, seed_for(0, guid, attempt),
                                  scfg.steps, scfg.guidance, SIZE, (folder / "photo.jpg").absolute(),
                                  (folder / "photo.thumb.jpg").absolute(), THUMB_PX, scfg.nsfw_max,
-                                 identity=identity, shape="portrait")
+                                 identity=identity, shape="portrait",
+                                 detail=detail_for(scfg, rear=from_behind(scene)))
         try:
             await ctx.arbiter.make_room()
             await start_worker(worker.worker, ctx.arbiter.make_room)
@@ -722,7 +733,8 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
                            else _read_store(root / "mind.db", clock))
                 with context as store:
                     _print(run(store,_identity(cfg,store),clock,lust_only=args.lust_only,
-                               go=args.go,include_owner=args.include_owner))
+                               go=args.go,include_owner=args.include_owner,
+                               share=load_selfie_config(root / "mind.toml").body_shot_share))
             return 0
         if args.action == "variety":
             from .variety import run
@@ -755,6 +767,9 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             return 2
         cfg = load_config(root / "mind.toml")
         scfg = load_selfie_config(root / "mind.toml")
+        if args.detailer or args.detailer_hands:
+            scfg = replace(scfg, detailer=True,
+                           detailer_hands=scfg.detailer_hands or args.detailer_hands)
         with _exclusive(root, gpu=True):
             with _working_store(root, clock, live=False, label="selfies-try") as (store, _):
                 run = _try_ask if args.ask is not None else _try_snaps if args.snaps else _try

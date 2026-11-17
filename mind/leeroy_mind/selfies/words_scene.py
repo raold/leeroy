@@ -64,10 +64,11 @@ from leeroy_mind.personas.screens import has_word
 from leeroy_mind.talk.everyday import is_everyday
 
 from .kind import LUST_COLOURS, VARIED_LOOKS, VARIED_OUTFITS, _enum, outfit_phrase
-from .prompt import (_PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, fit_required,
-                     glutes_words, hair_skin, identity_first, names_re, phrase_adder,
+from .prompt import (negative_for, _PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, fit_required,
+                     accessory_phrases, glutes_words, hair_skin, identity_first, names_re, phrase_adder,
+                     reserve,
                      subject_phrase)
-from .scene import (_NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
+from .scene import (snap_negative, _NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
                     SNAP_NEGATIVE_LUST, _text_codes, _young_number, limb_detail, scene_from,
                     scene_renderable)
 from .safe import KIND_WORDS, POSE_WAIST_UP, alone, wearing
@@ -121,10 +122,11 @@ NOW_ANY = "going about an ordinary day"
 
 # The prompt's framing (priority 0, never yielded: the fit shortens only the back view, to
 # "from behind", as a varied set's pose), what `shows` says of it, and the stored kind.
-# Since the photo audit (safe.py) a selfie names no mirror and no phone (half of the mirror
-# selfies had a wrong or second reflection; a phone in view came doubled or oversized): both
-# selfies render as the arm's-length shot, the timer photo without its phone, and the negatives
-# name the mirror and the phone. What `shows` says of it is unchanged.
+# Since the photo audit (safe.py) a handheld selfie and a timer photo name no phone (a phone in
+# view came doubled or oversized) and their negative names the mirror and the phone. A mirror
+# selfie he asks for stays one (the owner's GPU-checked bathroom mirror selfie; the mirror
+# defects were the lust profile kinds'), with a negative that names neither. The selfie's long
+# form takes its short one when the required set is too long (prompt.POSE_SHORT).
 FRAMING_WORDS = {"mirror_selfie": KIND_WORDS["mirror_selfie"],
                  "handheld_selfie": KIND_WORDS["selfie"],
                  "timer": "photo taken on a timer",
@@ -530,16 +532,19 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     out += body
     # clothed by construction: a top and a bottom (safe.complete; her words at the computer may
     # name only one), swimwear as its list says it
-    worn = (f"wearing {outfit}" if w["wearing"] == "swimwear" else
-            wearing(outfit, gender=p.identity.player_gender, framing="upper_body"))
-    out += [(worn, 0), (setting, 0)]
+    clothes = (f"wearing {outfit}" if w["wearing"] == "swimwear" else
+               wearing(outfit, gender=p.identity.player_gender, framing="upper_body"))
+    out += [(clothes, 0), (setting, 0)]
     if w["wearing"] == "swimwear":
         out.append((SWIM_FRAMING, 0))
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
-    if w["framing"] != BEHIND and not w.get("prop"):
-        add(POSE_WAIST_UP, 1)  # nothing in her hands: they stay out of the picture
+    if w["framing"] == "timer" and not w.get("prop"):
+        add(POSE_WAIST_UP, 1)  # nothing in her hands (a selfie's arm holds the camera)
     add(alone(setting), 3)
     add(s.activity, 1, True)
+    worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
+    room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
+    out += worn
     if w["framing"] != BEHIND:
         add("looking at the camera", 3)
     # none of her face details about her hands, arms, legs or feet (scene.limb_detail)
@@ -554,8 +559,15 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
         out.append(plain_build)
     daylight = w["lighting"] == "daylight"
     add(_PHONE_TAIL if daylight else _PHONE_TAIL.replace("natural light, ", ""), 1)
-    out = fit_required(out, p, [], name_re, pose=pose)
-    return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if s.style == LUST else SNAP_NEGATIVE)
+    out = fit_required(out, p, [], name_re, pose=pose, reserve=room)
+    # his explicit ask for a mirror selfie keeps its mirror: the negative does not name it
+    return PromptSpec(tuple(out), negative_for(p, snap_negative(
+        s.style == LUST, w["framing"] == "mirror_selfie")))
+
+
+def from_behind(scene: dict) -> bool:
+    """A scene read from his words that shows her from behind."""
+    return is_words(scene) and scene["words"].get("framing") == BEHIND
 
 
 def face_scale(scene: dict, scale: float) -> float:
@@ -563,6 +575,6 @@ def face_scale(scene: dict, scale: float) -> float:
     from behind takes it at render.REAR_SCALE (never below the worker's floor), or the adapter
     turns her to the camera."""
     from .render import MIN_SCALE, REAR_SCALE
-    if is_words(scene) and scene["words"].get("framing") == BEHIND:
+    if from_behind(scene):
         return max(MIN_SCALE, round(scale * REAR_SCALE, 2))
     return scale

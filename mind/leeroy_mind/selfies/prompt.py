@@ -27,8 +27,9 @@ import re
 from dataclasses import dataclass
 
 from ..personas.schema import MIN_AGE, Persona
-from .safe import (BODY_ALONE, BODY_ANATOMY, BODY_GARMENT, HEAD_FRAMINGS, KIND_SHORT, KIND_WORDS,
-                   alone, outfit_words, pose, pose_priority, setting_words, wearing)
+from .safe import (BODY_ALONE, BODY_ANATOMY, BODY_GARMENT, BODY_NO_MIRROR, BODY_OPTIONAL,
+                   HEAD_FRAMINGS, KIND_SHORT, KIND_WORDS, alone, kind_of, outfit_words, pose,
+                   pose_priority, setting_words, wearing)
 from .style import LUST, PLAIN, suggestive
 
 LUST_HELD = "lust kind awaits a re-choice"
@@ -48,40 +49,43 @@ _COVERED = "nsfw, nude, cleavage, lingerie, swimwear"
 _COVERED_LUST = "nsfw, nude, topless, lingerie, underwear, see-through, sheer"
 LUST_NEGATIVE: tuple[tuple[str, int], ...] = tuple(
     (_COVERED_LUST, pr) if text == _COVERED else (text, pr) for text, pr in NEGATIVE)
-# A profile photo framed head and shoulders or closer: NEGATIVE with the audit's three words
-# required (men rendered without a shirt, a phone or a mirror in a selfie). A guild tile keeps
-# NEGATIVE as it was (scene.TILE_NEGATIVE: its own one-face line fills the window).
-_HEAD_LINE = ("shirtless, mirror, phone", 0)
-HEAD_NEGATIVE: tuple[tuple[str, int], ...] = NEGATIVE[:4] + (_HEAD_LINE,) + NEGATIVE[4:]
-HEAD_NEGATIVE_LUST: tuple[tuple[str, int], ...] = (LUST_NEGATIVE[:4] + (_HEAD_LINE,)
-                                                   + LUST_NEGATIVE[4:])
+# A profile photo framed head and shoulders or closer: NEGATIVE with the audit's words required
+# (men rendered without a shirt; a phone or a mirror in a selfie, left out for a mirror selfie).
+# A guild tile keeps NEGATIVE as it was (scene.TILE_NEGATIVE: its one-face line fills the window).
+def _head(base, mirror: bool = False):
+    line = ("shirtless" if mirror else "shirtless, mirror, phone", 0)
+    return base[:4] + (line,) + base[4:]
 
 
-def body_negative(covered: str, *required: str, lust: bool = False,
-                  optional: tuple[tuple[str, int], ...] = ()) -> tuple[tuple[str, int], ...]:
-    """The negative of a photo that shows the body (waist-up or wider; every situational one):
-    what stays covered (`covered`), minors, likeness, the anatomy line, another or a second
-    person with the mirror and the phone, the missing garments and `required`, all at priority
-    0; the style words keep their first ones there and the rest moves down (the lust style's
-    longer covered line takes "3d render" down too), where the worker's 75-token fit drops what
-    does not fit. test_safe_compositions measures the required sets on the real tokenizers."""
-    return (("cartoon, painting" if lust else "cartoon, painting, 3d render", 0),
+HEAD_NEGATIVE: tuple[tuple[str, int], ...] = _head(NEGATIVE)
+HEAD_NEGATIVE_MIRROR: tuple[tuple[str, int], ...] = _head(NEGATIVE, mirror=True)
+HEAD_NEGATIVE_LUST: tuple[tuple[str, int], ...] = _head(LUST_NEGATIVE)
+
+
+def body_negative(covered: str, *required: str, lust: bool = False, mirror: bool = False,
+                  no_mirror: str = BODY_NO_MIRROR, optional: tuple[tuple[str, int], ...] = ()) -> tuple[tuple[str, int], ...]:
+    """The negative of a photo that shows the body (waist-up or wider; every situational one).
+    Required: what stays covered (`covered`), minors, likeness, the anatomy line, another or a
+    second person, the missing garments, the mirror and the phone unless a mirror is rendered
+    (`mirror`; `no_mirror` says them), and `required`. Then safe.BODY_OPTIONAL in its order (the realism words first)
+    and `optional`: the worker's 75-token fit keeps what fits and drops the rest
+    (test_safe_compositions pins both on the real tokenizers). The owner's "never" words go in
+    ahead of the optional ones (negative_for)."""
+    return (("cartoon, painting", 0),
             (covered, 0),
             ("child, teenager", 0),
             ("celebrity, famous person", 0),
             (BODY_ANATOMY, 0),
             (BODY_ALONE, 0),
             (BODY_GARMENT, 0),
+            *(() if mirror else ((no_mirror, 0),)),
             *((text, 0) for text in required),
-            ("logo, watermark", 1),
-            ("plastic skin, airbrushed, doll", 1),
-            ("second face, crowd, group of people", 1),
-            ("vintage, retro, film grain, sepia, old photo", 1),
-            ("3d render, anime, illustration, cgi" if lust else "anime, illustration, cgi", 2),
+            *BODY_OPTIONAL,
             *optional)
 
 
 BODY_NEGATIVE = body_negative(_COVERED)
+BODY_NEGATIVE_MIRROR = body_negative(_COVERED, mirror=True)
 BODY_NEGATIVE_LUST = body_negative(_COVERED_LUST, lust=True)
 
 _KINDS = KIND_WORDS  # a selfie names no phone and no mirror (safe.py)
@@ -97,7 +101,49 @@ SHORT = {**KIND_SHORT,
          "three-quarter shot from mid-thigh up, waist and hips in frame":
              "three-quarter shot, waist and hips in frame"}
 _LENGTHS = {"short": "short", "chin": "chin-length", "shoulder": "shoulder-length",
-            "long": "long", "very_long": "very long"}
+            "long": "long", "very_long": "very long", "buzzed": "buzzed"}
+# The owner's hair (Looks panel, 2026-11-17; schema owner_hair_*): each value set is said in
+# place of the looks' own free text for it, which stays as stored. Plain hairdressing words,
+# none of the age guard's (style.AGE_RE: no pigtails, no bunches).
+HAIR_COLOUR_WORDS = {
+    "black": "black", "dark_brown": "dark brown", "brown": "brown", "light_brown": "light brown",
+    "auburn": "auburn", "red": "red", "copper": "copper",
+    "strawberry_blonde": "strawberry blonde", "dark_blonde": "dark blonde", "blonde": "blonde",
+    "platinum": "platinum blonde", "grey": "grey", "silver": "silver",
+    "pastel_pink": "pastel pink", "blue": "blue", "purple": "purple"}
+HAIR_STYLE_WORDS = {
+    "straight": "straight", "wavy": "wavy", "curly": "curly", "coily": "coily",
+    "ponytail": "in a ponytail", "high_bun": "in a high bun", "messy_bun": "in a messy bun",
+    "braid": "in a single braid", "braids": "in braids", "bob": "bob cut", "pixie": "pixie cut",
+    "bangs": "with bangs", "half_up": "half-up style", "slicked_back": "slicked back",
+    "shaved_sides": "shaved sides", "crew_cut": "crew cut", "fade": "fade haircut",
+    "quiff": "styled in a quiff"}
+# Makeup, jewellery, glasses, tattoos and piercings as the owner set them (schema makeup,
+# jewellery, glasses, tattoos, piercings), in the shortest words that say them (one or two
+# tokens each, counted on the worker's tokenizers): accessory_phrases, at ACCESSORY priority
+# right after her hair and skin, so the worker's fit offers them room before every other
+# optional phrase, and fit_required makes that room by shortening (its `reserve`). "never" and
+# "none" leave out the face details that name one (face_details) and name it in the negative
+# where that has room (style_negative).
+MAKEUP_WORDS = {"none": "no makeup", "natural": "natural makeup", "defined": "defined makeup",
+                "glam": "glam makeup"}
+JEWELLERY_WORDS = {"none": ("", ""), "minimal": ("delicate necklace", "chain necklace"),
+                   "statement": ("statement jewellery", "chunky jewellery")}  # a woman's, a man's
+GLASSES_WORDS = "glasses"
+TATTOO_WORDS = {"none": "", "small": "small tattoo", "sleeve": "tattoo sleeve"}
+PIERCING_WORDS = {"none": "", "ears": "pierced ears", "nose": "nose piercing",
+                  "lip": "lip piercing"}
+ACCESSORY = 1  # their priority: the first optional phrases the worker's fit offers room
+_GLASSES = re.compile(r"\b(glasses|spectacles|specs)\b", re.IGNORECASE)
+_TATTOO = re.compile(r"\b(tattoo\w*|inked)\b", re.IGNORECASE)
+_PIERCING = re.compile(r"\b(pierc\w*|(?:nose|lip|eyebrow) (?:ring|stud)s?|septum)\b",
+                       re.IGNORECASE)
+# a face detail's clauses ("a faded tattoo and a scar on the chin"): only the clause that names
+# the thing goes, the rest of the detail stays
+_CLAUSES = re.compile(r"\s*(?:,|;|&|\band\b)\s*", re.IGNORECASE)
+# one word each, a phrase apiece, so one never takes another down with it (style_negative)
+STYLE_NEGATIVE = {"glasses": "glasses", "tattoos": "tattoo", "piercings": "piercing",
+                  "jewellery": "jewellery"}
 _HEADSHOT_TAIL = "recent photo, natural skin texture, unretouched"
 _PHONE_TAIL = "recent smartphone photo, natural light, natural skin texture, unretouched"
 
@@ -188,7 +234,7 @@ GLUTES_FRAMINGS = ("three_quarter", "full_body")
 GLUTES_VIEWS = ("behind", "rear_three_quarter")  # kind.BACK_VIEWS: required
 GLUTES_SIDE = ("side",)  # her face shows: right after who she is, at priority 2
 # The pose's short form, fit_required's very last step: still a view from behind
-POSE_SHORT = {"from behind, looking over her shoulder": "from behind"}
+POSE_SHORT = {"from behind, looking over her shoulder": "from behind", **KIND_SHORT}
 # The weight said as a body size (owner 2026-11-15: curvy and voluptuous members rendered slim),
 # by the body-mass index of weight_kg and height_cm: (below this BMI, a woman's words, a man's).
 # The ordinary band says nothing, so the build alone stands there, as before. The heavier bands
@@ -293,11 +339,13 @@ def body_phrases(p: Persona) -> tuple[list[tuple[str, int]], tuple[str, int] | N
 
 
 FIT_MAX = 75  # the worker's limit on the required phrases (selfie/leeroy_selfie/fit.py)
+GIVEN = object()  # fit_required: a phrase that makes way for what the owner set her to wear
 
 
 def fit_required(out: list[tuple[str, int]], p: Persona, yields: list[str],
                  name_re: re.Pattern | None = None, last: tuple[str, ...] = (),
-                 pose: str | None = None) -> list[tuple[str, int]]:
+                 pose: str | None = None, reserve: int = 0,
+                 give: tuple[str, ...] = ()) -> list[tuple[str, int]]:
     """`out` made to fit the worker (controller ruling, 2026-11-15, measured on the GPU): while
     the required (priority-0) set counts more than FIT_MAX by the mind's own count
     (tokens.estimate, never below the real one), one step at a time: the phrases of `yields`
@@ -309,43 +357,67 @@ def fit_required(out: list[tuple[str, int]], p: Persona, yields: list[str],
     still from behind). Her body (the build and a set bust whole, at least two terms of the
     size), who she is, her hair's length and colour, her skin tone, a varied set's pose and an
     outfit with its setting never go: a prompt still too long after all that is left as it is
-    (over_fit names it) for the worker to refuse."""
+    (over_fit names it) for the worker to refuse.
+
+    `reserve`: tokens the required set leaves free for optional phrases that must still show
+    (what the owner set her to wear, accessory_phrases): the shortening steps, and only those,
+    also run while the required set counts more than FIT_MAX less `reserve`; then the phrases
+    of `give` (a profile's or a situation's kind of photo; a varied front or side view's framing)
+    move to priority 2, behind what the reserve is for. Nothing else is yielded for it. With no
+    reserve the steps are exactly what they were."""
     from .tokens import joined
     out = list(out)
-    steps = [(t, SHORT[t]) for t in yields if t in SHORT]
-    steps += hair_skin_short(p, name_re)
-    steps += [x for x in zip(body_words(p), body_words(p, short=True)) if x[0] != x[1]]
+    shorten = [(t, SHORT[t]) for t in yields if t in SHORT]
+    shorten += hair_skin_short(p, name_re)
+    shorten += [x for x in zip(body_words(p), body_words(p, short=True)) if x[0] != x[1]]
+    steps = list(shorten)
     steps += [(SHORT.get(t, t), None) for t in yields] + [(t, None) for t in yields]
     steps += [(t, None) for t in last if t]
     steps += [(pose, POSE_SHORT[pose])] if pose in POSE_SHORT else []
-    for old, new in steps:
-        if joined(t for t, pr in out if pr == 0) <= FIT_MAX:
-            break
-        if old == new or (old, 0) not in out:
-            continue
-        at = out.index((old, 0))
-        out[at] = (new, 0) if new is not None else (old, 1)
+    given = [(x, GIVEN) for t in give for x in dict.fromkeys((SHORT.get(t, t), t))]
+    for limit, todo in ((FIT_MAX - reserve, shorten + given if reserve else []), (FIT_MAX, steps)):
+        for old, new in todo:
+            if joined(t for t, pr in out if pr == 0) <= limit:
+                break
+            if old == new or (old, 0) not in out:
+                continue
+            at = out.index((old, 0))
+            out[at] = (old, 2) if new is GIVEN else (new, 0) if new is not None else (old, 1)
     return out
 
 
 def fit_clothed(out: list[tuple[str, int]], p: Persona, yields: list[str],
-                name_re: re.Pattern | None, worn: str, framing: str) -> list[tuple[str, int]]:
-    """fit_required for a plain prompt whose clothing phrase `worn` (safe.wearing, free text of
-    up to safe.WEAR_MAX_WORDS words) is required: when the required set still counts more than
-    FIT_MAX after every step, the outfit gives way to the default garments (a few tokens), and
-    if even those do not fit the clothing moves to priority 1, the first phrase the worker's fit
-    keeps. Her body, hair and skin are never traded for it, and no long outfit makes the worker
-    refuse the photo."""
+                name_re: re.Pattern | None, clothes: str | None, framing: str, *,
+                reserve: int = 0, give: tuple[str, ...] = ()) -> list[tuple[str, int]]:
+    """fit_required (with its `reserve` and `give`) for a prompt whose clothing phrase `clothes`
+    (safe.wearing: free text of up to safe.WEAR_MAX_WORDS words; None for a list outfit, which
+    is fitted as it is) is required: when the required set still counts more than FIT_MAX after
+    every step, the outfit gives way to the default garments (a few tokens), and if even those
+    do not fit the clothing moves to priority 1, the first phrase the worker's fit keeps. Her
+    body, hair and skin are never traded for it, and no long outfit makes the worker refuse the
+    photo.
+
+    The one fit order of a profile, varied or situational prompt (2026-11-17): required, and
+    kept in this order of importance, who she is, her body and size, her hair's length and
+    colour, her skin tone, what she wears, then the framing and a body shot's pose; then what
+    the owner set her to wear (accessory_phrases, the first optional phrases, with room
+    reserved); then her hair's style, her eye colour and the other details. To make the room:
+    the short forms and her hair's style, skin's modifiers and size's last terms go first
+    (fit_required); then, for the accessories' reserve, the kind of photo and the pose move
+    behind them (`give`); then, only for the worker's limit, the kind, the pose and the framing
+    yield in that order (`yields`)."""
     from .tokens import joined
-    fitted = fit_required(out, p, yields, name_re)
-    if (worn, 0) not in out:
+    fitted = fit_required(out, p, yields, name_re, reserve=reserve, give=give)
+    if clothes is None or (clothes, 0) not in out:
         return fitted
-    at = out.index((worn, 0))
+    at = out.index((clothes, 0))
     default = wearing("", gender=p.identity.player_gender, framing=framing)
-    for phrase, priority in ((default, 0), (default, 1)):
-        if joined(t for t, pr in fitted if pr == 0) <= FIT_MAX:
-            break
-        fitted = fit_required(out[:at] + [(phrase, priority)] + out[at + 1:], p, yields, name_re)
+    # the default garments also when her own outfit leaves the accessories no room (reserve)
+    for phrase, priority, limit in ((default, 0, FIT_MAX - reserve), (default, 1, FIT_MAX)):
+        if joined(t for t, pr in fitted if pr == 0) <= limit:
+            continue
+        fitted = fit_required(out[:at] + [(phrase, priority)] + out[at + 1:], p, yields, name_re,
+                              reserve=reserve, give=give)
     return fitted
 
 
@@ -375,15 +447,35 @@ def subject_phrase(p: Persona) -> tuple[str, int]:
     return _clean(f"{ident.age}-year-old {adult}{nation} {sex}"), 0
 
 
+def hair_words(p: Persona) -> tuple[str, str] | None:
+    """Her hair as the prompt says it: (its length and colour, its style or ""), each from the
+    owner's value when one is set (HAIR_COLOUR_WORDS, HAIR_STYLE_WORDS, the owner's length),
+    else from the looks' own text; None for a shaved head (the looks' length, with no owner
+    length over it). Looks that say a shaved head have no colour or style of their own worth
+    saying ("closely shaved"), so over them only the owner's values count: his length with his
+    colour and style (looks_edit refuses a colour or style without a length there, and a length
+    without a colour)."""
+    a = p.appearance
+    length = a.owner_hair_length or a.hair_length
+    if length == "shaved":
+        return None
+    shaved = a.hair_length == "shaved"
+    colour = (HAIR_COLOUR_WORDS[a.owner_hair_colour] if a.owner_hair_colour
+              else "" if shaved else _clean(a.hair_colour))
+    style = (HAIR_STYLE_WORDS[a.owner_hair_style] if a.owner_hair_style
+             else "" if shaved else _clean(a.hair_style))
+    return _clean(f"{_LENGTHS[length]} {colour} hair"), style
+
+
 def hair_skin(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
-    """Hair and skin from the looks, at priority 1."""
+    """Hair (hair_words) and skin from the looks, at priority 1."""
     a, out = p.appearance, []
     add = phrase_adder(out, name_re)
-    if a.hair_length == "shaved":
+    words = hair_words(p)
+    if words is None:
         add("shaved head", 1)
     else:
-        hair = f"{_LENGTHS[a.hair_length]} {_clean(a.hair_colour)} hair"
-        style = _clean(a.hair_style)
+        hair, style = words
         add(f"{hair}, {style}" if style else hair, 1, True)
     if _clean(a.skin_tone):
         add(f"{_clean(a.skin_tone)} skin", 1, True)
@@ -397,9 +489,9 @@ def hair_skin_short(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, s
     pair."""
     a, pairs = p.appearance, []
     kept = {t for t, _ in hair_skin(p, name_re)}
-    if a.hair_length != "shaved":
-        hair = f"{_LENGTHS[a.hair_length]} {_clean(a.hair_colour)} hair"
-        style = _clean(a.hair_style)
+    words = hair_words(p)
+    if words is not None:
+        hair, style = words
         if style and f"{hair}, {style}" in kept:
             pairs.append((f"{hair}, {style}", hair))
     tone = _clean(a.skin_tone)
@@ -429,9 +521,112 @@ def eyes_face(p: Persona, name_re: re.Pattern | None) -> list[tuple[str, int]]:
     add = phrase_adder(out, name_re)
     if _clean(a.eye_colour):
         add(f"{_clean(a.eye_colour)} eyes", 2, True)
-    for detail in a.face:
+    for detail in face_details(p):
         add(detail, 2, True)
     return out
+
+
+def _without(detail: str, named: re.Pattern) -> str:
+    """`detail` without its clauses that `named` matches ("freckles and a nose ring" ->
+    "freckles"); "" when nothing is left."""
+    kept = [c for c in _CLAUSES.split(detail) if c.strip() and not named.search(c)]
+    if len(kept) == len([c for c in _CLAUSES.split(detail) if c.strip()]):
+        return detail
+    return " and ".join(kept)
+
+
+def face_details(p: Persona) -> list[str]:
+    """Her face details as the looks give them, less what the owner's glasses, tattoos and
+    piercings stand in for: "never" or "none" leaves out the clauses that name one, a tattoo or
+    piercing value is said in their place (accessory_phrases), and with glasses "always" the
+    details that name glasses move to accessory_phrases, where the fit offers them room first.
+    Everything else in a detail stays (a scar beside a tattoo, freckles beside a nose ring).
+    Unset, the details as stored."""
+    a = p.appearance
+    details = list(a.face)
+    for value, named in ((a.glasses, _GLASSES), (a.tattoos, _TATTOO), (a.piercings, _PIERCING)):
+        if value is None:
+            continue
+        if named is _GLASSES and value == "always":
+            details = [d for d in details if not named.search(d)]
+        else:
+            details = [d for d in (_without(d, named) for d in details) if d]
+    return details
+
+
+def accessory_phrases(p: Persona, name_re: re.Pattern | None = None) -> list[tuple[str, int]]:
+    """What the owner set for her to wear, at ACCESSORY priority, in this order: glasses
+    ("always": the looks' own detail that names them, else "glasses"), her tattoo, her
+    piercing, her makeup (a woman's) and her jewellery. None when nothing is set."""
+    a, out = p.appearance, []
+    add = phrase_adder(out, name_re)
+    woman = p.identity.player_gender == "female"
+    if a.glasses == "always":
+        own = [d for d in a.face if _GLASSES.search(d)]
+        for d in own or [GLASSES_WORDS]:
+            add(d, ACCESSORY, bool(own))
+    if a.tattoos is not None:
+        add(TATTOO_WORDS[a.tattoos], ACCESSORY)
+    if a.piercings is not None:
+        add(PIERCING_WORDS[a.piercings], ACCESSORY)
+    if a.makeup is not None and woman:
+        add(MAKEUP_WORDS[a.makeup], ACCESSORY)
+    if a.jewellery is not None:
+        add(JEWELLERY_WORDS[a.jewellery][0 if woman else 1], ACCESSORY)
+    return out
+
+
+def reserve(phrases) -> int:
+    """The room `phrases` (optional ones the fit must still keep) take beside the required set,
+    by the mind's count: their tokens and the commas that join them, the one before them too."""
+    from .tokens import joined
+    texts = [t for t, _ in phrases]
+    return joined(texts) + 1 if texts else 0
+
+
+def _kept(phrases, limit: int = 75) -> list[int]:
+    """The indices the worker's fit keeps of `phrases` (selfie/leeroy_selfie/fit.py, by the
+    mind's count): every priority-0 one, then by priority and position while they fit."""
+    from .tokens import joined
+    keep = {i for i, (_, pr) in enumerate(phrases) if pr == 0}
+    for priority in sorted({pr for _, pr in phrases if pr > 0}):
+        for i, (_, pr) in enumerate(phrases):
+            if pr == priority and joined(phrases[j][0] for j in sorted(keep | {i})) <= limit:
+                keep.add(i)
+    return sorted(keep)
+
+
+def style_negative(p: Persona, base: tuple[tuple[str, int], ...]) -> tuple[tuple[str, int], ...]:
+    """What the owner's "never" and "none" keep out, each a one-word negative phrase of its own
+    at priority 3, only where it has room beside what the worker's fit keeps of `base` (the
+    prompt's fixed negatives): a word with no room is left out here, never sent to be dropped,
+    and none displaces a fixed negative. Glasses first, then tattoos, piercings, jewellery."""
+    from .tokens import joined
+    a = p.appearance
+    wanted = [STYLE_NEGATIVE[name] for name, off in (
+        ("glasses", a.glasses == "never"), ("tattoos", a.tattoos == "none"),
+        ("piercings", a.piercings == "none"), ("jewellery", a.jewellery == "none")) if off]
+    texts = [base[i][0] for i in _kept(base)]
+    out = []
+    for word in wanted:
+        if joined(texts + out + [word]) <= FIT_MAX:
+            out.append(word)
+    return tuple((w, 3) for w in out)
+
+
+def negative_for(p: Persona, base: tuple[tuple[str, int], ...]) -> tuple[tuple[str, int], ...]:
+    """`base` with what the owner's "never" and "none" keep out. A body negative's required set
+    leaves little room, so there the words go in at priority 1 ahead of its optional phrases
+    (each one token: at worst the last optional phrase the fit kept makes way); any other
+    negative takes them where they have room, as before (style_negative)."""
+    if (BODY_ANATOMY, 0) not in base:
+        return base + style_negative(p, base)
+    a = p.appearance
+    words = [STYLE_NEGATIVE[name] for name, off in (
+        ("glasses", a.glasses == "never"), ("tattoos", a.tattoos == "none"),
+        ("piercings", a.piercings == "none"), ("jewellery", a.jewellery == "none")) if off]
+    first = next((i for i, (_, pr) in enumerate(base) if pr > 0), len(base))
+    return base[:first] + tuple((w, 1) for w in words) + base[first:]
 
 
 # Face details that tell her apart, which the fit offers room first among her details, after her
@@ -474,8 +669,9 @@ VARIED_VIEW_WORDS = {"behind": "from behind, looking over her shoulder",
                      "front": "front view"}
 VARIED_FRAMING_WORDS = {"full_body": "full-body shot", "three_quarter": "three-quarter shot",
                         "upper_body": "waist-up shot"}
-VARIED_NEGATIVE: tuple[tuple[str, int], ...] = body_negative(_COVERED_LUST, "thong, g-string",
-                                                             lust=True)
+# a varied candidate is a snapshot (no phone to keep out): "mirror" alone, for the gym's
+VARIED_NEGATIVE: tuple[tuple[str, int], ...] = body_negative(
+    _COVERED_LUST, "thong, g-string", lust=True, no_mirror="mirror")
 
 
 def varied_parts(look, outfit: str) -> dict[str, str]:
@@ -517,8 +713,10 @@ def build_varied_prompt(p: Persona, look) -> PromptSpec:
     if glutes and look.view in GLUTES_VIEWS:  # required from behind
         out.append((glutes, 0))
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # her hair and skin, required
+    acc = accessory_phrases(p, name_re)  # what the owner set: first among the optional
+    out += acc
     add(parts["wearing"], 0, True)
-    add(parts["pose"], pose_priority(look.framing))  # standing, hands simple (safe.POSES)
+    add(parts["pose"], pose_priority(look.framing))  # hands simple (safe.POSES)
     add(parts["expression"], 1, True)
     # from the side her glutes are said only where the framing shows them (not waist-up)
     side = (glutes, 2) if (glutes and look.view in GLUTES_SIDE
@@ -531,11 +729,13 @@ def build_varied_prompt(p: Persona, look) -> PromptSpec:
     # the pose is never yielded (controller ruling, 2026-11-15, after the GPU: a back view
     # without its pose phrase renders from the front): the framing yields, then her glutes,
     # and only then, for a look that could not fit at all, the pose takes its short form
-    # her standing pose (safe.POSES) is required while it fits and is the first to yield, to
-    # the head of priority 1; the framing after it
-    out = fit_required(out, p, [parts["pose"], parts["framing"]], name_re, last=(glutes,),
-                       pose=parts["view"])
-    return PromptSpec(tuple(out), VARIED_NEGATIVE)
+    # the pose (safe.POSES) is required while it fits; it makes way for what the owner set her
+    # to wear (give) and is the first to yield for the worker's limit, the framing after it
+    stand = parts["pose"] if pose_priority(look.framing) == 0 else ""
+    gives = tuple(t for t in (stand, "" if look.view in GLUTES_VIEWS else parts["framing"]) if t)
+    out = fit_required(out, p, [t for t in (stand, parts["framing"]) if t], name_re,
+                       last=(glutes,), pose=parts["view"], reserve=reserve(acc), give=gives)
+    return PromptSpec(tuple(out), negative_for(p, VARIED_NEGATIVE))
 
 
 def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> PromptSpec:
@@ -558,7 +758,9 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
     body_shot = ph.framing not in HEAD_FRAMINGS
     # a photo that shows the body says its kind in its short form from the start: the tokens go
     # to what she wears and how she stands (safe.py); its framing shortens only when it must
-    kind_words, framing_words = _KINDS[ph.kind], _FRAMINGS[ph.framing]
+    shown = kind_of(ph.kind, lust)  # a lust kind's mirror selfie renders as a selfie
+    mirror = shown == "mirror_selfie"
+    kind_words, framing_words = _KINDS[shown], _FRAMINGS[ph.framing]
     if body_shot:
         kind_words = SHORT.get(kind_words, kind_words)
     add(kind_words, 0)
@@ -571,6 +773,9 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
     body, plain_build = body_phrases(p)
     out += body
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
+    acc = accessory_phrases(p, name_re)  # what the owner set: first among the optional
+    out += acc
+    clothes = None
     out += identity_first(p, eyes_face(p, name_re))  # before the camera line (review of #316)
     if ph.kind != "snapshot":
         add("looking at the camera", 2)
@@ -587,13 +792,13 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
         outfit = _clean(ph.outfit)
         if name_re is not None and name_re.search(outfit):
             outfit = ""
-        worn = wearing(outfit, gender=p.identity.player_gender, framing=ph.framing)
-        add(worn, 0)
+        clothes = wearing(outfit, gender=p.identity.player_gender, framing=ph.framing)
+        # required wherever shoulders show; a close-up of the face keeps it where it was
+        add(clothes, 2 if ph.framing == "face" else 0)
         add(ph.setting, 2, True)
-    if body_shot:
-        add(pose("front", ph.framing, p.guid,
-                 pos="her" if p.identity.player_gender == "female" else "his"),
-            pose_priority(ph.framing))
+    stand = pose("front", ph.framing, p.guid, kind=shown,
+                 pos="her" if p.identity.player_gender == "female" else "his")
+    add(stand, pose_priority(ph.framing))
     if glutes_words(p) and ph.framing in GLUTES_FRAMINGS:  # optional, after who she is
         out.append((glutes_words(p), 2))
     add(ph.expression, 3, True)
@@ -605,12 +810,16 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
         add(light, 9, True)  # first to go; never displaces identity, outfit or setting
     # the kind and framing, her hair's style, her skin's modifiers and her size's third and
     # fourth terms shorten first; then the kind and the framing yield (fit_required)
-    stand = pose("front", ph.framing, p.guid,
-                 pos="her" if p.identity.player_gender == "female" else "his")
-    # the kind yields first, then a body shot's standing pose, then the framing
-    yields = [kind_words, stand, framing_words] if body_shot else [kind_words, framing_words]
-    out = (fit_required(out, p, yields, name_re) if lust
-           else fit_clothed(out, p, yields, name_re, worn, ph.framing))
+    # the one fit order (fit_clothed): the kind, then a body shot's pose, make way for what the
+    # owner set her to wear; for the worker's limit the kind, the pose and the framing yield
+    held = stand if pose_priority(ph.framing) == 0 else ""
+    out = fit_clothed(out, p, [t for t in (kind_words, held, framing_words) if t], name_re,
+                      clothes, ph.framing, reserve=reserve(acc),
+                      give=tuple(t for t in (kind_words, held) if t))
     if body_shot:  # hands, arms and a waist in frame: the anatomy and garment lines required
-        return PromptSpec(tuple(out), BODY_NEGATIVE_LUST if lust else BODY_NEGATIVE)
-    return PromptSpec(tuple(out), HEAD_NEGATIVE_LUST if lust else HEAD_NEGATIVE)
+        negative = (BODY_NEGATIVE_LUST if lust else BODY_NEGATIVE_MIRROR if mirror
+                    else BODY_NEGATIVE)
+    else:
+        negative = (HEAD_NEGATIVE_LUST if lust else HEAD_NEGATIVE_MIRROR if mirror
+                    else HEAD_NEGATIVE)
+    return PromptSpec(tuple(out), negative_for(p, negative))

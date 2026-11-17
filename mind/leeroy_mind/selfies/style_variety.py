@@ -6,9 +6,9 @@ import re
 
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.personas.screens import has_word, names_real_name
-from . import kind
+from . import kind, wardrobe
 from .photo_extra import choose_light
-from .safe import BODY_SHOT_SHARE
+from .safe import BODY_SHOT_SHARE, lust_framing
 from .style import LUST, style_of
 
 # Explicit date-night subset of the already screened outfits; no swim/gym/workwear.
@@ -87,10 +87,16 @@ def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
     if style_of(p) != LUST:
         return None
     settings, outfits = DATE_SETTINGS, DATE_OUTFITS
+    # her wardrobe's dressed outfits (never swim or gym wear here) and her palette, when set
+    dressed = [o for o in kind.LUST_OUTFITS if o not in kind.SWIM_OUTFITS | kind.GYM_OUTFITS]
+    worn = wardrobe.outfits(p, dressed)
+    if len(worn) < len(dressed):
+        outfits = worn
     expressions, frames = kind.LUST_EXPRESSIONS, FRAMINGS[:2]
     options = []
     for oi,outfit in enumerate(outfits):
-        for ci,colour in enumerate(kind.LUST_COLOURS):
+        for colour in wardrobe.colours(p, kind.LUST_COLOURS):
+            ci = kind.LUST_COLOURS.index(colour)
             phrase = kind.LUST_OUTFITS[outfit].format(colour=colour)
             phrase = ("an " if phrase[0].lower() in "aeiou" else "a ") + phrase
             if counts.pairs[key(phrase)] < PAIR_CAP:
@@ -103,8 +109,7 @@ def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
     kinds = sorted(KINDS,key=lambda x:(counts.kinds[x],rng.random()))
     # three-quarter for `share` of the cast's lust kinds ([selfies] body_shot_share), else
     # waist-up: whichever keeps the cast nearest that share
-    wide, close = counts.framings[frames[0]], counts.framings[frames[1]]
-    frames = [frames[0] if wide < share * (wide + close + 1) else frames[1]]
+    frames = [lust_framing(counts.framings[frames[0]], counts.framings[frames[1]], share)]
     # Name collisions are removed before products, bounding work even for hostile names.
     forbidden = tuple(names) + (p.character_name,p.identity.real_name)
     def clear(s):

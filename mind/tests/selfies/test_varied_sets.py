@@ -17,7 +17,9 @@ from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.selfies import cli, files, kind, varied
 from leeroy_mind.selfies.config import SelfieCfg, load_selfie_config
-from leeroy_mind.selfies.safe import setting_words
+from leeroy_mind.selfies.safe import POSES, setting_words
+
+safe_poses = {t for poses in POSES.values() for t in poses}
 from leeroy_mind.selfies.prompt import (BODY_NEGATIVE_LUST, BUILD_WORDS, LUST_NEGATIVE,
                                         VARIED_FRAMING_WORDS,
                                         VARIED_NEGATIVE, VARIED_VIEW_WORDS, build_prompt,
@@ -86,16 +88,13 @@ def test_a_set_has_four_outfits_and_four_poses_and_no_formal_dress(h, seed):
     for x in looks:
         assert not varied.screen(p, x)
         assert x.framing in kind.VARIED_FRAMINGS
-        # [selfies] body_shot_share's default: the views from behind show her figure, the
-        # front and side views are waist-up (safe.py, the photo audit)
-        if x.view not in kind.BACK_VIEWS:
-            assert x.framing == "upper_body"
-        else:
-            assert x.framing in kind.VARIED_BODY_FRAMINGS
-    for x in varied.compose(p, seed, 1.0):  # the share before the audit: every figure shows
+        # all four show her figure ([selfies] body_shot_share, 1.0); the front and side views
+        # are three-quarter since the photo audit (6% defective against full-length's 12%)
         assert x.framing in kind.VARIED_BODY_FRAMINGS
         if x.view not in kind.BACK_VIEWS:
-            assert x.framing == "full_body"
+            assert x.framing == "three_quarter"
+    for x in varied.compose(p, seed, 0.5):  # half: the back views keep theirs, the rest waist-up
+        assert (x.framing == "upper_body") == (x.view not in kind.BACK_VIEWS)
 
 
 def test_seeds_vary_the_poses_so_swimwear_is_shot_from_behind_too(h):
@@ -103,11 +102,11 @@ def test_seeds_vary_the_poses_so_swimwear_is_shot_from_behind_too(h):
     views = {varied.compose(p, str(n))[0].view for n in range(60)}
     assert views == set(kind.VARIED_VIEWS)
     framings = {x.framing for n in range(60) for x in varied.compose(p, str(n))}
-    assert framings == set(kind.VARIED_FRAMINGS)
+    assert framings == set(kind.VARIED_BODY_FRAMINGS)
     assert {x.framing for n in range(60) for x in varied.compose(p, str(n))
             if x.category == "swim" and x.view in kind.BACK_VIEWS} == {"full_body"}
-    assert {x.framing for n in range(60) for x in varied.compose(p, str(n), 1.0)
-            if x.category == "swim"} == {"full_body"}
+    assert {x.framing for n in range(60) for x in varied.compose(p, str(n))
+            if x.category == "swim" and x.view not in kind.BACK_VIEWS} == {"three_quarter"}
 
 
 def test_no_look_shares_her_name(h):
@@ -326,7 +325,8 @@ def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
     # its modifiers, as the rulings allow, before the pose would yield
     for text in ("honey blonde with highlights", "olive skin"):
         assert text in kept
-    assert ("standing, arms at her sides", 1) in spec.phrases  # yielded, before the framing
+    # her pose (safe.POSES) yielded, before the framing would
+    assert any(t in safe_poses and pr == 1 for t, pr in spec.phrases)
     assert "f" * 40 in dropped
 
 
@@ -711,7 +711,7 @@ def test_a_refused_set_recomposes_its_flagged_slot_once_then_drops_its_plan(h, t
     assert varied.plan_of(h.store.conn, 101, 1) == looks  # once: counted
     _night(h, tmp_path, ON, nights[1], FAKE_SELFIE_FLAG_SEEDS=flag)
     again = varied.plan_of(h.store.conn, 101, 1)
-    assert again[1].view == "front" and again[1].framing == "upper_body"  # the default share
+    assert again[1].view == "front" and again[1].framing == "three_quarter"
     assert again[1].category == looks[1].category
     assert again[:1] + again[2:] == looks[:1] + looks[2:]
     with caplog.at_level(logging.INFO):

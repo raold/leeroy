@@ -43,8 +43,12 @@ def test_caps_spread_determinism_and_screens(h,lust,seed):
     assert len({x.codes["colour"] for x in chosen.values()}) == 5
     assert len({x.codes["outfit"] for x in chosen.values()}) == (5 if lust else 4)
     assert set(x.photo.kind for x in chosen.values()) == set(sv.KINDS)
-    frames = Counter(x.photo.framing for x in chosen.values())
-    assert len(frames) == (2 if lust else 4) and max(frames.values())-min(frames.values()) <= 1
+    # [selfies] body_shot_share, 1.0 by default: every lust kind is three-quarter; at 0.5 the
+    # cast splits evenly between three-quarter and waist-up
+    assert {x.photo.framing for x in chosen.values()} == {"three_quarter"}
+    half = sv.assign(people,people,seed=seed,ident=IDENT,share=0.5)[0]
+    frames = Counter(x.photo.framing for x in half.values())
+    assert len(frames) == 2 and max(frames.values())-min(frames.values()) <= 1
     for g,choice in chosen.items():
         assert sv._safe(people[g],choice.photo,None if not lust else dict(
             kind=choice.photo.kind,framing=choice.photo.framing,setting=choice.photo.setting,

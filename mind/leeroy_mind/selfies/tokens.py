@@ -91,10 +91,27 @@ WORD_TOKENS = {
     "storeroom": 2, "supply": 1, "tee": 1, "timer": 1, "tired": 1, "toilet": 1, "toilets": 1,
     "train": 1, "truck": 1, "tunic": 1, "under": 1, "upstairs": 1, "van": 1, "vest": 1, "vis": 1,
     "ward": 1, "warehouse": 1, "washroom": 2, "whites": 1, "window": 1, "work": 1, "yard": 1,
+    # the owner's hair, makeup and accessories (prompt.HAIR_COLOUR_WORDS, HAIR_STYLE_WORDS,
+    # MAKEUP_WORDS, JEWELLERY_WORDS, TATTOO_WORDS, PIERCING_WORDS, STYLE_NEGATIVE) and the
+    # wardrobe's scene outfits (wardrobe.SCENE_MORE), measured 2026-11-17
+    "arm": 1, "bold": 1, "button": 1, "buzzed": 2, "chain": 1, "chunky": 1, "collared": 2,
+    "crew": 1, "defined": 1, "delicate": 1, "dressy": 2, "earrings": 1, "eye": 1, "fade": 1,
+    "glamorous": 1, "glasses": 1, "haircut": 1, "jewellery": 1, "joggers": 2, "linen": 1,
+    "lipstick": 1, "makeup": 1, "necklace": 1, "no": 1, "nose": 1, "pastel": 1, "piercing": 1,
+    "piercings": 2, "plain": 1, "quiff": 2, "rings": 1, "single": 1, "sleeve": 1,
+    "statement": 1, "style": 1, "styled": 1, "tailored": 1, "tattoo": 1, "tattoos": 1,
+    "track": 1, "glam": 1, "pierced": 1,
+    # the fixed negatives' words (prompt.NEGATIVE, LUST_NEGATIVE, VARIED_NEGATIVE), so the mind
+    # can tell what room they leave (prompt.style_negative), measured 2026-11-17
+    "airbrushed": 2, "anime": 1, "bad": 1, "cartoon": 1, "celebrity": 1, "cgi": 1, "child": 1,
+    "cleavage": 1, "d": 1, "deformed": 2, "doll": 1, "extra": 1, "famous": 1, "film": 1,
+    "fingers": 1, "g": 1, "grain": 1, "hands": 1, "illustration": 1, "lingerie": 1, "logo": 1,
+    "nsfw": 1, "nude": 1, "painting": 1, "person": 1, "plastic": 1, "render": 1, "retro": 1,
+    "see": 1, "sepia": 2, "sheer": 1, "swimwear": 1, "teenager": 1, "text": 1, "thong": 1,
+    "through": 1, "topless": 1, "underwear": 1, "vintage": 1, "watermark": 2,
     # the audit's poses, settings and garments (safe.py), measured 2026-11-17
-    "air": 1, "alone": 1, "arm": 1, "beside": 1, "bookshop": 1, "crew": 1, "else": 1,
-    "festival": 1, "field": 1, "hands": 1, "knee": 1, "no": 1, "open": 1, "standing": 1,
-    "sunny": 1,
+    "air": 1, "alone": 1, "beside": 1, "bookshop": 1, "else": 1, "festival": 1, "field": 1,
+    "knee": 1, "open": 1, "standing": 1, "sunny": 1,
 }
 
 

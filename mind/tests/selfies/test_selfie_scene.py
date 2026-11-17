@@ -78,19 +78,20 @@ def test_the_screen_refuses_looks_changes_minors_era_explicit_and_likeness(field
 
 def test_the_scene_prompt_keeps_the_face_and_puts_the_scene_first():
     spec = build_scene_prompt(woman(age=34, region="UK"), Scene(**{**SCENE, "kind": "selfie", "when": "late"}))
-    # a selfie names no phone; a waist-up scene keeps her hands out of it (safe.py)
+    # a selfie names no phone (safe.py); an arm holds the camera, so no hands-down pose
     assert spec.phrases[:3] == (("selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0))
-    assert spec.phrases[3] == ("arms down, hands out of frame", 1)
-    assert spec.phrases[4] == (SCENE["activity"], 1) and spec.phrases[-1] == ("recent smartphone photo, natural skin texture, unretouched", 1)
+    assert not any("arms down" in t for t, _ in spec.phrases)
+    snapshot = build_scene_prompt(woman(), Scene(**SCENE))
+    assert ("arms down, hands out of frame", 1) in snapshot.phrases  # a friend took it
+    assert spec.phrases[3] == (SCENE["activity"], 1) and spec.phrases[-1] == ("recent smartphone photo, natural skin texture, unretouched", 1)
     assert ("at night, lit by a lamp or a screen", 2) in spec.phrases and spec.negative == SNAP_NEGATIVE
 
 
 def test_the_scene_prompt_runs_in_the_briefs_order():
     spec = build_scene_prompt(woman(), Scene(**{**SCENE, "kind": "mirror_selfie", "when": "morning"}))
     assert spec.phrases == (
-        # a mirror selfie is a selfie, her hands stay out of the frame (safe.py, 2026-11-17)
-        ("selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0),
-        ("arms down, hands out of frame", 1),
+        # a plain mirror selfie stays one (safe.py, 2026-11-17)
+        ("mirror selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0),
         (SCENE["activity"], 1), (SCENE["setting"], 1),
         # hair and skin required, never traded for body words (controller ruling, 2026-11-15)
         ("shoulder-length dark brown hair, tucked behind one ear", 0), ("light olive skin", 0),
@@ -195,7 +196,9 @@ def test_the_schema_template_and_ask_are_the_briefs():
                            "expression", "when", "audience", "prop"]
     assert set(SCENE_SCHEMA["required"]) == set(props)
     assert props["photo"] == {"type": "boolean"}
-    assert props["kind"]["enum"] == ["selfie", "snapshot"]  # never a mirror selfie (safe.py)
+    assert props["kind"]["enum"] == ["selfie", "mirror_selfie", "snapshot"]
+    # the lust style is not offered a mirror selfie (safe.py)
+    assert SCENE_SCHEMA_LUST["properties"]["kind"]["enum"] == ["selfie", "snapshot"]
     assert props["framing"]["enum"] == ["face", "head_and_shoulders", "upper_body", "three_quarter"]
     assert props["audience"]["enum"] == ["him", "anyone"]
     assert all("enum" in props[f] for f in ("setting", "activity", "outfit", "expression", "prop"))
@@ -257,11 +260,14 @@ def test_build_prompt_is_unchanged():
     shaved = man(appearance=replace(APPEARANCE, hair_length="shaved", skin_tone=""),
                  photo={**PHOTO, "kind": "mirror_selfie"})
     assert build_prompt(shaved).phrases == (
-        ("selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British man", 0),
-        ("shaved head", 0), *details, look, ("average build", 1), *kind_, phone)
+        ("mirror selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British man", 0),
+        ("shaved head", 0), *details, look, ("average build", 1),
+        (worn + " and trousers", 0), place, squint, phone)  # an arm holds the camera: no pose
     assert build_prompt(woman(photo={**PHOTO, "kind": "headshot", "framing": "face"})).phrases == (
         ("professional headshot", 0), ("close-up of the face", 0), subject, *face, *details, look,
-        ("average build", 1), *close, ("recent photo, natural skin texture, unretouched", 1))
+        # a close-up of the face: what she wears stays optional, where it was
+        ("average build", 1), (worn, 2), place, squint,
+        ("recent photo, natural skin texture, unretouched", 1))
     assert build_prompt(lusty(photo=LUST_PHOTO), kind_style=LUST).phrases == (
         ("candid photo", 0), ("waist-up shot, upper body", 0), subject, *face,
         *rest, ("wearing a red string bikini, the beach at sunset", 0), hands,
@@ -292,8 +298,9 @@ def test_a_lust_womans_scene_schema_allows_only_the_enum_values():
     assert list(props) == ["photo", "kind", "framing", "setting", "activity", "outfit", "colour",
                            "expression", "when", "audience", "prop"]
     assert set(SCENE_SCHEMA_LUST["required"]) == set(props)
-    for f in ("photo", "kind", "framing", "activity", "when", "audience", "prop"):
+    for f in ("photo", "framing", "activity", "when", "audience", "prop"):
         assert props[f] == SCENE_SCHEMA["properties"][f], f        # the same as everyone's
+    assert props["kind"]["enum"] == ["selfie", "snapshot"]  # no mirror selfie for her (safe.py)
     assert props["setting"]["enum"] == list(SCENE_LUST_SETTINGS)
     assert props["outfit"]["enum"] == list(LUST_OUTFITS)
     assert props["colour"]["enum"] == list(LUST_COLOURS)
@@ -415,8 +422,7 @@ def test_the_lust_prompt_joins_outfit_and_setting_at_priority_0():
     p = lusty()
     hot = build_scene_prompt(p, scene_from(LUST_SCENE))
     joined = ("wearing a low-cut midi emerald cocktail dress, a rooftop bar at night", 0)
-    assert hot.phrases[:6] == (("selfie", 0), ("waist-up shot, upper body", 0), subject_phrase(p),
-                               ("arms down, hands out of frame", 1),
+    assert hot.phrases[:5] == (("selfie", 0), ("waist-up shot, upper body", 0), subject_phrase(p),
                                (LUST_SCENE["activity"], 1), joined)
     flat = Scene(**{k: v for k, v in scene_json(scene_from(LUST_SCENE)).items() if k != "style"})
     plain = build_scene_prompt(p, flat)                      # the same scene, written plainly

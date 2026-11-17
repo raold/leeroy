@@ -265,7 +265,8 @@ def test_a_back_view_keeps_its_pose_with_every_shape_largest_and_25_kg_more():
         assert (view, 0) in spec.phrases or (POSE_SHORT.get(view), 0) in spec.phrases, look
         seen += 1
     assert seen > 100
-    assert POSE_SHORT == {"from behind, looking over her shoulder": "from behind"}
+    assert POSE_SHORT == {"from behind, looking over her shoulder": "from behind",
+                          "selfie, close arm's-length shot": "selfie"}
 
 
 @pytest.mark.parametrize("over", [dict(glutes="very_large"), LARGEST])

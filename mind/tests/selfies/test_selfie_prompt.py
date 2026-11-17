@@ -60,8 +60,10 @@ def test_a_headshot_has_no_phone_look_and_a_snapshot_does_not_look_at_the_camera
     assert head.phrases[-1] == ("recent photo, natural skin texture, unretouched", 1)
     assert ("looking at the camera", 2) in head.phrases
     assert ("looking at the camera", 2) not in build_prompt(woman()).phrases
-    # a waist-up photo says its kind in its short form, and a mirror selfie is a selfie
-    assert build_prompt(woman(photo={**PHOTO, "kind": "mirror_selfie"})).phrases[0] == ("selfie", 0)
+    # a waist-up photo says its kind in its short form; a plain mirror selfie stays one
+    assert build_prompt(woman(photo={**PHOTO, "kind": "mirror_selfie"})).phrases[0] == (
+        "mirror selfie", 0)
+    assert build_prompt(woman(photo={**PHOTO, "kind": "selfie"})).phrases[0] == ("selfie", 0)
     assert build_prompt(woman()).phrases[0] == ("candid photo", 0)
     close = build_prompt(woman(photo={**PHOTO, "framing": "head_and_shoulders"}))
     assert close.phrases[0] == ("candid photo taken by a friend", 0)
@@ -180,11 +182,11 @@ def test_the_lust_prompt_puts_outfit_and_setting_in_one_phrase_at_priority_0():
     joined = ("wearing a red string bikini, the beach at sunset", 0)
     assert joined in hot.phrases and joined not in plain.phrases
     # rendered plainly, swimwear is never required: the default garments stand in (safe.wearing)
-    assert ("wearing a crew-neck top and trousers", 0) in plain.phrases
+    assert ("wearing a plain top and trousers", 0) in plain.phrases
     assert ("the beach at sunset", 2) in plain.phrases
     assert not any("bikini" in t for t, _ in plain.phrases)
     assert not any(t in ("a red string bikini", "the beach at sunset") for t, _ in hot.phrases)
-    rest = [x for x in plain.phrases if x not in (("wearing a crew-neck top and trousers", 0),
+    rest = [x for x in plain.phrases if x not in (("wearing a plain top and trousers", 0),
                                                   ("the beach at sunset", 2))]
     assert [x for x in hot.phrases if x != joined] == rest
     assert hot.negative == BODY_NEGATIVE_LUST and plain.negative == BODY_NEGATIVE

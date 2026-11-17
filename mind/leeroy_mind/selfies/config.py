@@ -37,17 +37,23 @@ class SelfieCfg:
     # never sent. best_of renders that many seeds of a situational or request photo and sends
     # the best (needs critic; 1 = one seed, as before). param_bandit lets the critic and his
     # picks choose identity scale and steps (params.py; needs critic).
-    # How much body shows (safe.py, the photo audit of 2026-11-17: headshots 1% defective,
-    # three-quarter 11%, full-length 21%): the share of photos framed to show the body. In a
-    # varied set, that share of its four candidates is full-length or three-quarter (the views
-    # from behind first) and the rest waist-up; a lust profile kind is three-quarter for that
-    # share of members, else waist-up; a situational photo keeps a waist-up or wider framing
-    # for that share, else head and shoulders. 1.0 is the behaviour before the audit.
-    body_shot_share: float = 0.5
+    # How much body shows (safe.py, the photo audit of 2026-11-17). body_shot_share: the share
+    # of a varied set's four candidates that are three-quarter or full-length (the views from
+    # behind first; the rest waist-up) and of the lust profile kinds that are three-quarter
+    # (else waist-up); 1.0, four body views, is the owner's ask and what the labels support.
+    # snap_body_share: the share of situational photos that keep a waist-up or wider framing,
+    # the rest head and shoulders (29% of the waist-up ones defective, none of the closer ones).
+    body_shot_share: float = 1.0
+    snap_body_share: float = 0.5
     critic: bool = False
     best_of: int = 1
     critic_model: str = "qwen2.5vl:7b"  # pulled by the operator; absent: detectors only
     param_bandit: bool = False
+    # The detailer (the worker's detail.py): after a render, each small face is drawn again at
+    # a higher resolution (crossed eyes), and with detailer_hands each hand too (six fingers;
+    # needs the worker's palm and handpose models fetched). detailer_hands needs detailer.
+    detailer: bool = False
+    detailer_hands: bool = False
 
 
 def _bool(v) -> bool:
@@ -87,14 +93,17 @@ _RULES = {
     "varied_sets": (_bool, "true or false"),
     "identity_sets": (_bool, "true or false"),
     "body_shot_share": (_num(0, 1), "a number 0-1"),
+    "snap_body_share": (_num(0, 1), "a number 0-1"),
     "critic": (_bool, "true or false"),
     "best_of": (_int(1, 4), "an integer 1-4"),
     "critic_model": (lambda v: type(v) is str and 1 <= len(v) <= 100 and v.strip() == v
                      and v.isprintable(), "an Ollama model name"),
     "param_bandit": (_bool, "true or false"),
+    "detailer": (_bool, "true or false"),
+    "detailer_hands": (_bool, "true or false"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib",
-           "body_shot_share"}
+           "body_shot_share", "snap_body_share"}
 _PATHS = {"python", "data"}
 
 
@@ -130,6 +139,8 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         values["critic"] = False
         values["best_of"] = 1
         values["param_bandit"] = False
+        values["detailer"] = False
+        values["detailer_hands"] = False
     return SelfieCfg(**values)
 
 

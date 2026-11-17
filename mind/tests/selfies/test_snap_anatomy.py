@@ -33,16 +33,17 @@ def test_the_snap_negatives_require_the_anatomy_line():
     # since the photo audit (2026-11-17, safe.py): no eye words, a third hand, a duplicate
     # person, the mirror, the phone, text and the missing garments required
     assert SNAP_NEGATIVE == (
-        ("cartoon, painting, 3d render", 0), (NEGATIVE[1][0], 0), ("child, teenager", 0),
+        ("cartoon, painting", 0), (NEGATIVE[1][0], 0), ("child, teenager", 0),
         ("celebrity, famous person", 0), (SNAP_ANATOMY, 0),
-        ("another person, duplicate person, mirror, phone, text", 0),
-        ("bottomless, shirtless", 0), ("logo, watermark", 1),
-        ("plastic skin, airbrushed, doll", 1), ("second face, crowd, group of people", 1),
-        ("vintage, retro, film grain, sepia, old photo", 1),
-        ("anime, illustration, cgi", 2), ("face on screen, webcam, video call, portrait on wall", 2))
-    assert SNAP_NEGATIVE_LUST == (
-        ("cartoon, painting", 0), (LUST_NEGATIVE[1][0], 0), *SNAP_NEGATIVE[2:11],
-        ("3d render, anime, illustration, cgi", 2), *SNAP_NEGATIVE[12:])
+        ("another person, duplicate person", 0), ("bottomless, shirtless", 0),
+        ("mirror, phone", 0),
+        # optional, in the order the fit offers them room: the realism words first
+        ("plastic skin", 1), ("airbrushed, doll", 1), ("text, logo", 1),
+        ("deformed face, bad hands", 1), ("3d render, anime, cgi", 1),
+        ("second face, crowd, group of people", 2),
+        ("vintage, retro, film grain, sepia, old photo", 2), ("illustration, watermark", 2),
+        ("face on screen, webcam, video call, portrait on wall", 2))
+    assert SNAP_NEGATIVE_LUST == (SNAP_NEGATIVE[0], (LUST_NEGATIVE[1][0], 0), *SNAP_NEGATIVE[2:])
     assert NEGATIVE[1][0] == "nsfw, nude, cleavage, lingerie, swimwear"
     assert LUST_NEGATIVE[1][0] == "nsfw, nude, topless, lingerie, underwear, see-through, sheer"
     for word in ("extra arms", "extra legs", "extra hands", "fused fingers", "extra fingers",

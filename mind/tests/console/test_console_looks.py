@@ -74,6 +74,13 @@ def test_a_looks_change_needs_the_key_the_origin_and_json_and_goes_to_the_mind(c
 @pytest.mark.parametrize("body", [
     {"action": "write"}, {**SET, "weight_kg": 39}, {**SET, "weight_kg": 181},
     {**SET, "glutes": "huge"}, {**SET, "waist": 2}, {**SET, "thighs": "large"},
+    {**SET, "owner_hair_colour": "green"}, {**SET, "owner_hair_style": "pigtails"},
+    {**SET, "owner_hair_length": "shaved"}, {**SET, "wardrobe": "casual"},
+    {**SET, "wardrobe": ["casual", "casual"]}, {**SET, "wardrobe": ["tweed"]},
+    {**SET, "wardrobe": ["casual", "sporty", "smart", "edgy", "boho"]},
+    {**SET, "palette": ["black", "red", "navy", "gold"]}, {**SET, "palette": None},
+    {**SET, "makeup": "heavy"}, {**SET, "glasses": True}, {**SET, "jewellery": "lots"},
+    {**SET, "tattoos": "face"}, {**SET, "piercings": "navel"}, {**SET, "hair_colour": "black"},
     {**SET, "weight_kg": "88"}, {**SET, "bust": "huge"}, {**SET, "extra": 1},
     {"action": "set", "guid": 101, "weight_kg": 88}, {**SET, "guid": "101"},
     {"action": "undo", "ledger": 0}, {"action": "undo", "ledger": True}, ["set"], {}])
@@ -145,11 +152,28 @@ def test_the_member_detail_carries_the_forms_limits(cast, data):
     async def go():
         async with served(make_app(data)) as app:
             j = (await http(app, "GET", "/api/persona?guid=101")).json()
-            assert j["looks_limits"] == {"weight_kg": [40, 180],
-                                         "busts": ["small", "medium", "large", "very_large"],
-                                         "glutes": ["small", "medium", "large", "very_large"],
-                                         "waists": ["very_narrow", "narrow", "average", "wide"],
-                                         "hips": ["narrow", "average", "wide", "very_wide"]}
+            limits = j["looks_limits"]
+            assert {k: limits[k] for k in ("weight_kg", "busts", "glutes", "waists", "hips")} == {
+                "weight_kg": [40, 180], "busts": ["small", "medium", "large", "very_large"],
+                "glutes": ["small", "medium", "large", "very_large"],
+                "waists": ["very_narrow", "narrow", "average", "wide"],
+                "hips": ["narrow", "average", "wide", "very_wide"]}
+            # his hair, wardrobe, makeup and accessories: the schema's own values
+            from leeroy_mind.personas import schema
+            assert limits["hair_colours"] == list(schema.HAIR_COLOURS) and len(limits["hair_colours"]) == 16
+            assert limits["hair_lengths"] == ["buzzed", "short", "chin", "shoulder", "long", "very_long"]
+            assert limits["hair_styles"] == list(schema.HAIR_STYLES)
+            assert limits["men_hair_styles"] == ["crew_cut", "fade", "quiff"]
+            assert limits["wardrobes"] == list(schema.WARDROBES) and len(limits["wardrobes"]) == 12
+            assert limits["palette"] == list(schema.PALETTE) and len(limits["palette"]) == 12
+            assert limits["makeups"] == ["none", "natural", "defined", "glam"]
+            assert limits["glasses"] == ["never", "always"]
+            assert limits["jewellery"] == ["none", "minimal", "statement"]
+            assert limits["tattoos"] == ["none", "small", "sleeve"]
+            assert limits["piercings"] == ["none", "ears", "nose", "lip"]
+            assert j["card"]["lust_style"] is False  # the swim tag is offered only with it
+            assert "owner_hair_colour" not in j["card"]["appearance"]  # unset: not in the card
+            assert "wardrobe" not in j["card"]["appearance"]
             assert j["card"]["appearance"]["weight_kg"] == 64
     run(go())
 
@@ -163,3 +187,34 @@ def test_the_page_has_the_looks_editor_and_listens_for_looks_events():
     assert "looks: 1" in source  # main.mjs passes the event on
     assert "renders tonight" not in resources.files("leeroy_mind.console").joinpath(
         "static", "js", "looks.mjs").read_text("utf-8")  # the mind's own words say it
+
+
+def test_one_request_carries_the_hair_wardrobe_and_accessories_to_the_mind(cast, data):
+    body = {**SET, "owner_hair_colour": "dark_blonde", "owner_hair_length": "long",
+            "owner_hair_style": None, "wardrobe": ["casual", "sporty"], "palette": [],
+            "makeup": "natural", "glasses": "never", "jewellery": None, "tattoos": "small",
+            "piercings": "ears"}
+    link = FakeLink({"ok": True, "guid": 101, "ledger": 5, "set": 2, "message": "Saved."})
+
+    async def go():
+        async with served(make_app(data, mind=running(data), link=link)) as app:
+            r = await http(app, "POST", "/api/looks", body=body, origin=True)
+            assert r.status == 200
+            assert link.calls[-1][1:3] == ("looks", body)
+    run(go())
+
+
+def test_the_editor_groups_body_hair_and_style_and_says_what_a_save_does():
+    files = resources.files("leeroy_mind.console").joinpath("static")
+    looks = files.joinpath("js", "looks.mjs").read_text("utf-8")
+    model = files.joinpath("js", "looksmodel.mjs").read_text("utf-8")
+    css = files.joinpath("console.css").read_text("utf-8")
+    assert 'GROUPS = ["Body", "Hair", "Style"]' in model
+    assert "SAVE_WORDS" in looks  # the line under the form, when the mind has said nothing yet
+    assert "one new persona version" in model and "one new set of 4 photos" in model
+    assert "photo booth" in model and "pick one of them" in model
+    assert "may not show in back views" in model  # where what he set cannot fit
+    assert looks.count('post("/api/looks"') == 1  # one save, one request
+    assert ".looks-group" in css and ".looks-set" in css and "minmax(min(100%, 11rem), 1fr)" in css
+    for word in ("pigtail", "bunches"):  # never an age-guard word among the options
+        assert word not in model and word not in looks

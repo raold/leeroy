@@ -7,11 +7,11 @@ front), framed full-length or three-quarter so her figure shows. Swimwear from b
 full-length.
 
 Since the photo audit (2026-11-17, safe.py) `[selfies] body_shot_share` says how many of the
-four show her whole figure (safe.body_slots: two at the default 0.5): the views from behind
-first (her hands are out of sight there: 8-11% defective), then the front view, then the side
-view (16% and most of the third hands and feet); the others are framed waist-up. At 1.0 all
-four are full-length or three-quarter, as before. Every candidate stands in one simple pose
-(safe.POSES), and the lists say their outfits and settings as safe.py rewrote them.
+four show her figure (safe.body_slots; all four at the default 1.0, the owner's ask): below
+1.0 the views from behind keep theirs first, then the front view, then the side view, and the
+others are framed waist-up. Front and side views are three-quarter rather than full-length (6%
+defective against 12%). Every candidate takes one of a few simple poses (safe.POSES), and the
+lists say their outfits and settings as safe.py rewrote them.
 
 Off by default: `[selfies] varied_sets = true` (read at the mind's start, as the rest of the
 table). With it off nothing is queued, and a set queued while it was on renders as an ordinary
@@ -48,7 +48,7 @@ from leeroy_mind.personas.io import load_persona
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import CAST_MIN_LEVEL
 
-from . import kind
+from . import kind, wardrobe
 from .prompt import renderable
 from .safe import BODY_SHOT_SHARE, body_slots
 from .store import FACE_VIEWS, VARIED_SET_KEY, queue_more
@@ -106,13 +106,14 @@ _BODY_ORDER = ("behind", "rear_three_quarter", "front", "side")  # who shows her
 
 
 def _framing(rng: random.Random, category: str, view: str, body: bool = True) -> str:
-    """A body shot: front and side are full-length; so is swimwear from behind; other back
+    """A body shot: swimwear from behind is full-length (kind.SWIM_BACK); front and side are
+    three-quarter (the audit: planned three-quarter 6% defective, full-length 12%); other back
     views either. Any other candidate is framed waist-up."""
     if not body:
         return "upper_body"
-    if view in kind.BACK_VIEWS and category != "swim":
-        return rng.choice(kind.VARIED_BODY_FRAMINGS)
-    return "full_body"
+    if view in kind.BACK_VIEWS:
+        return "full_body" if category == "swim" else rng.choice(kind.VARIED_BODY_FRAMINGS)
+    return "three_quarter"
 
 
 def _assign(rng: random.Random, share: float) -> list[tuple[str, str, bool]]:
@@ -144,6 +145,7 @@ def _pick(p: Persona, rng: random.Random, category: str, view: str, framing: str
     dressed = any(_DRESS.search(x.outfit) for x in others)
     options = [(o, s) for o in outfits for s in settings if not (dressed and _DRESS.search(o))]
     rng.shuffle(options)
+    options = wardrobe.ordered(p, options, outfit=lambda x: x[0])  # her wardrobe's first
     used_c = {x.colour for x in others}
     used_e = {x.expression for x in others}
     free_c = [c for c in colours if c not in used_c] or colours
@@ -166,6 +168,7 @@ def compose(p: Persona, seed: str, share: float = BODY_SHOT_SHARE) -> tuple[Look
     slots = _assign(rng, share)
     colours = list(kind.LUST_COLOURS)
     rng.shuffle(colours)
+    colours = wardrobe.colours(p, colours)  # her palette's, when she has one
     expressions = list(kind.LUST_EXPRESSIONS)
     rng.shuffle(expressions)
     looks: list[Look] = []
@@ -180,16 +183,17 @@ def compose(p: Persona, seed: str, share: float = BODY_SHOT_SHARE) -> tuple[Look
 
 def recompose_slot(p: Persona, looks, idx: int, seed: str,
                    share: float = BODY_SHOT_SHARE) -> Look | None:
-    """Slot `idx`'s look composed again as a front view of the same category (full-length when
+    """Slot `idx`'s look composed again as a front view of the same category (three-quarter when
     `share` gives the front view a body shot, else waist-up), kept apart from the other slots'
     colours and expressions where it can be; None when none is safe."""
     rng = random.Random(f"selfie-varied-front:{seed}")
     colours = list(kind.LUST_COLOURS)
     rng.shuffle(colours)
+    colours = wardrobe.colours(p, colours)
     expressions = list(kind.LUST_EXPRESSIONS)
     rng.shuffle(expressions)
     others = [x for i, x in enumerate(looks) if i != idx and x is not None]
-    framing = "full_body" if body_slots(share) > len(kind.BACK_VIEWS) else "upper_body"
+    framing = "three_quarter" if body_slots(share) > len(kind.BACK_VIEWS) else "upper_body"
     return _pick(p, rng, looks[idx].category, "front", framing, colours, expressions, others)
 
 

@@ -185,7 +185,7 @@ async def run_weekly(ctx, week, *, use_llm=True):
             try:
                 panel = interview_eval.interview_panel(ctx)
                 counts = await interview_eval.interview(ctx.store, ctx.asker, week, panel, ident=ctx.ident)
-                sections["interview"] = ({"status": "partial" if counts["pending"] else "complete"}
+                sections["interview"] = ({"status": "partial" if counts["pending"] - counts["excused"] else "complete"}
                     if counts["expected"] else _skipped("no_eligible_items")) | counts
             except Exception as error:
                 expected = ctx.store.conn.execute("SELECT count(*) FROM eval_answer WHERE week=? AND kind='interview'", (week,)).fetchone()[0]

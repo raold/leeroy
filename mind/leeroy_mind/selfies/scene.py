@@ -20,10 +20,12 @@ from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSI
 from .prompt import (_COVERED, _COVERED_LUST, _FRAMINGS, GLUTES_FRAMINGS, body_negative,
                      body_phrases, fit_clothed, fit_required, glutes_words,
                      _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
+                     accessory_phrases, negative_for, reserve,
                      NEGATIVE, SHORT, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
-from .safe import BODY_ANATOMY, HEAD_FRAMINGS, alone, pose, pose_priority, wearing
+from .safe import (BODY_ANATOMY, HEAD_FRAMINGS, alone, kind_of, pose, pose_priority,
+                   wearing)
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
 from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGATIVE,
                             OUTFITS, PLAIN_PLACES, PROPS, SCENE_LUST_SETTINGS, TILE_DESK,
@@ -32,7 +34,8 @@ from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGA
 SCENE_NAME = "scene"             # its overlay: prompts/nightly_scene.txt
 SCENE_LUST_NAME = "scene_lust"   # its overlay: prompts/nightly_scene_lust.txt
 
-KINDS = ("selfie", "snapshot")  # never a mirror selfie (safe.py); a stored one is a selfie
+KINDS = ("selfie", "mirror_selfie", "snapshot")
+LUST_KINDS = ("selfie", "snapshot")  # the lust style: never a mirror selfie (safe.py)
 FRAMINGS = ("face", "head_and_shoulders", "upper_body", "three_quarter")
 WHENS = ("morning", "day", "evening", "late", "any")
 AUDIENCES = ("him", "anyone")
@@ -46,7 +49,7 @@ SCENE_SCHEMA = schema(SCENE_NAME, {
 
 # Reuse profile choices except the crowd, bathing and hallway-mirror settings.
 SCENE_SCHEMA_LUST = schema(SCENE_LUST_NAME, {
-    **_COMMON, "setting": _enum(SCENE_LUST_SETTINGS), "activity": _enum(ACTIVITIES),
+    **{**_COMMON, "kind": _enum(LUST_KINDS)}, "setting": _enum(SCENE_LUST_SETTINGS), "activity": _enum(ACTIVITIES),
     "outfit": _enum(LUST_OUTFITS), "colour": _enum(LUST_COLOURS),
     "expression": _enum(LUST_EXPRESSIONS), **_TAIL})
 
@@ -91,17 +94,27 @@ ABOUT = {"life": "Tonight in their life away from the game: {beat}",
 SNAP_ANATOMY = BODY_ANATOMY
 
 
-def _snap_negative(covered: str, style: str) -> tuple[tuple[str, int], ...]:
+def _snap_negative(covered: str, style: str, mirror: bool = False
+                   ) -> tuple[tuple[str, int], ...]:
     """A situational photo's negative (prompt.body_negative): what stays covered (`covered`, the
     profile negative's line for `style`), minors, likeness, SNAP_ANATOMY, another or a second
-    person, the mirror, the phone and the missing garments required; the lust style's longer
-    covered line takes "3d render" down to priority 2 to fit."""
-    return body_negative(covered, lust=style == LUST, optional=(
+    person and the missing garments required, the mirror and the phone too unless the photo is
+    a mirror selfie (`mirror`); then the realism words and the rest where they fit."""
+    return body_negative(covered, lust=style == LUST, mirror=mirror, optional=(
         ("face on screen, webcam, video call, portrait on wall", 2),))
 
 
 SNAP_NEGATIVE = _snap_negative(_COVERED, PLAIN)
 SNAP_NEGATIVE_LUST = _snap_negative(_COVERED_LUST, LUST)
+# a mirror selfie (a plain scene's, or one he asked for in his words): the mirror may show
+SNAP_NEGATIVE_MIRROR = _snap_negative(_COVERED, PLAIN, mirror=True)
+SNAP_NEGATIVE_LUST_MIRROR = _snap_negative(_COVERED_LUST, LUST, mirror=True)
+
+
+def snap_negative(lust: bool, mirror: bool) -> tuple[tuple[str, int], ...]:
+    if mirror:
+        return SNAP_NEGATIVE_LUST_MIRROR if lust else SNAP_NEGATIVE_MIRROR
+    return SNAP_NEGATIVE_LUST if lust else SNAP_NEGATIVE
 # A guild photo's tile keeps the old negative: a square head-and-shoulders at a desk with a
 # monitor in frame, where "face on screen" must stay required.
 TILE_NEGATIVE = NEGATIVE + (("another person, crowd, group of people", 0),
@@ -395,7 +408,10 @@ def scene_json(s: Scene) -> dict:
 
 def scene_schema(p: Persona | None) -> dict:
     """The reply schema for p's scene: only enum choices, under the member's style."""
-    return SCENE_SCHEMA_LUST if style_of(p) == LUST else SCENE_SCHEMA
+    from . import wardrobe  # her wardrobe and palette narrow the outfits and colours offered
+    if style_of(p) == LUST:
+        return wardrobe.lust_schema(p, SCENE_SCHEMA_LUST)
+    return wardrobe.scene_schema(p, SCENE_SCHEMA, OUTFITS)
 
 
 def scene_system(p: Persona | None, data_dir: Path, *, human: HumanIdentity, name: str,
@@ -506,7 +522,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     name_re = names_re(p)
     out: list[tuple[str, int]] = []
     add = phrase_adder(out, name_re)
-    kind_words, framing_words = _KINDS[s.kind], _FRAMINGS[s.framing]
+    shown = kind_of(s.kind, lust)  # a lust scene's mirror selfie renders as a selfie
+    kind_words, framing_words = _KINDS[shown], _FRAMINGS[s.framing]
     if s.framing not in HEAD_FRAMINGS:  # the short form: the tokens go to her clothes and pose
         kind_words = SHORT.get(kind_words, kind_words)
     add(kind_words, 0)
@@ -514,20 +531,33 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     add(*subject_phrase(p))
     body, plain_build = body_phrases(p)  # her body right after who she is, required
     out += body
-    add(pose("front", s.framing, pos="her" if p.identity.player_gender == "female" else "his"),
-        pose_priority(s.framing))
+    stand = pose("front", s.framing, f"{p.guid}:{s.activity}", kind=shown,
+                 pos="her" if p.identity.player_gender == "female" else "his")
+    if pose_priority(s.framing) == 0:  # a body shot's pose is required
+        add(stand, 0)
     add(s.activity, 1, True)
     if lust:  # one phrase: the fit keeps both or neither; scene_renderable checked the names
         add(lust_phrase(s), 0, True)
     else:
         add(s.setting, 1, True)
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
+    clothes = None
     if not lust:  # clothed by construction: required, a top and a bottom (the audit: at
         outfit = _clean(s.outfit)  # priority 2 the outfit was dropped from 14 of 55 prompts)
         if name_re is not None and name_re.search(outfit):
             outfit = ""
-        worn = wearing(outfit, gender=p.identity.player_gender, framing=s.framing)
-        add(worn, 0)
+        clothes = wearing(outfit, gender=p.identity.player_gender, framing=s.framing)
+        if s.framing != "face":  # required wherever shoulders show
+            add(clothes, 0)
+    # what the owner set her to wear, after the activity and setting among the optional
+    # phrases; the required set shortens to leave room for all of them (fit_required's reserve)
+    acc = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]
+    room = reserve([x for x in out if x[1] == 1] + acc) if acc else 0
+    out += acc
+    if pose_priority(s.framing):  # a waist-up photo's: after what the owner set her to wear
+        add(stand, 1)
+    if clothes and s.framing == "face":  # a close-up of the face: where it was, optional
+        add(clothes, 2)
     add(alone(s.setting), 3)
     if s.kind != "snapshot":
         add("looking at the camera", 3)
@@ -541,11 +571,11 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)
-    stand = pose("front", s.framing, pos="her" if p.identity.player_gender == "female" else "his")
-    yields = [kind_words, stand, framing_words]
-    out = (fit_required(out, p, yields, name_re) if lust
-           else fit_clothed(out, p, yields, name_re, worn, s.framing))
-    return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if lust else SNAP_NEGATIVE)
+    held = stand if pose_priority(s.framing) == 0 else ""
+    out = fit_clothed(out, p, [t for t in (kind_words, held, framing_words) if t], name_re,
+                      clothes, s.framing, reserve=room,
+                      give=tuple(t for t in (kind_words, held) if t))
+    return PromptSpec(tuple(out), negative_for(p, snap_negative(lust, shown == "mirror_selfie")))
 
 
 def build_tile_prompt(p: Persona) -> PromptSpec:
@@ -573,6 +603,7 @@ def build_tile_prompt(p: Persona) -> PromptSpec:
     add(wearing(at_pc, gender=p.identity.player_gender, framing="head_and_shoulders"), 1)
     for text, _ in eyes_face(p, name_re):
         out.append((text, 0 if text == eye else 1))
+    out += accessory_phrases(p, name_re)
     add(GAME_MONITOR, 0)
     add(TILE_DESK, 1)
     add("looking at the screen, smiling", 3)

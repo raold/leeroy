@@ -107,6 +107,16 @@ text.
   "Not set up yet".
 - `python -m leeroy_mind turing run [--days 14] [--json] --data-dir D`: part A now, on mind.db
   opened read-only. No model, nothing written. Safe while the mind runs.
+- `python -m leeroy_mind turing texture [--until YYYY-MM-DD] [--days 90] [--json] --data-dir D`
+  (`texture.py`): the typing texture (`talk/style.py`, `[talk] texture`) replayed on the stored
+  game and private lines. Members' lines are typed again with the current `style.Calibration`
+  (their own abbreviations put back into words first); his are left alone. Per family it prints
+  the AUC over the words alone and each mechanical feature's rate (apostrophes, commas, fragment
+  chains, last full stops, shorthand), his beside the members' as stored and as typed again, on
+  all days and on two halves split by day (fit on one, confirm on the other), and how the habits
+  spread over the members. `--until` is the day the texture went on (2026-11-15 on the live
+  install): a line already typed with it would get it twice. It cannot replay case, or how the
+  model's drafts change once textured lines are its chat history. Read only, numbers only.
 - The console's Lab tab, panel **Turing**: per family a trend chart (solid: style AUC; dotted:
   the judge's balanced accuracy; dashed: 0.50, chance for both), the latest headline, the style
   tells, what the judge caught and the nights.
@@ -122,6 +132,10 @@ text.
   to 0.05 (one standard deviation) around 0.50, and the difference between two measurements of
   separate windows spreads more. **A change under about 0.10 between two nights or windows is
   within noise.**
+- The window is `days` long (14), so a change to how members type shows only as fast as new
+  lines replace old ones in a family: after the typing texture went on (2026-11-15) the next
+  night's game and private windows held about 1% textured member lines, because he had not
+  played since. Compare windows that lie wholly after a change, or replay it (`turing texture`).
 - Latency and bursts are partly properties of the talk pipeline's timing, not the model's
   writing; they are real tells all the same, since a human reader sees them.
 - The judge is the same reflection model every night and sees a small sample; read its accuracy
