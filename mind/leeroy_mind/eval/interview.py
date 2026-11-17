@@ -2,11 +2,15 @@
 import asyncio
 import hashlib
 import json
+import logging
 import random
+from collections import Counter
 
 from leeroy_mind.eval.persona import _card, _vectors
 from leeroy_mind.nightly.critic import _members, _provenance, _safe
+from leeroy_mind.logs import log
 from leeroy_mind.nightly.llm import ReflectionError
+from leeroy_mind.storage.provenance import ProvenanceError
 from leeroy_mind.storage.rows import cosine
 
 QUESTIONS = (
@@ -22,6 +26,48 @@ QUESTIONS = (
     ("people", "What's something you've changed your mind about lately?"),
 )
 ANSWER_MAX = 4000
+# Failures that are about one member's stored data, so the same answer fails again every night:
+# such a member is left out of the week (named in the report) instead of keeping it incomplete.
+# Anything else (the model, a timeout, a persona edited mid-run) may pass on a later night.
+MEMBER_CODES = frozenset({"ineligible", "provenance", "foreign_memory", "prompt_budget", "row_changed"})
+EXCLUDED_SHARE = 4  # at most a quarter of the panel: a fault that hits everyone is not excused
+
+
+class InterviewRefused(ValueError):
+    """An interview answer that cannot be taken; `code` is a fixed word, never private text."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def failure_code(error):
+    """A fixed word for a failed answer: the receipt and the log carry it, never the message."""
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code.isidentifier() and len(code) <= 32:
+        return code
+    if isinstance(error, ProvenanceError):
+        return "provenance"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, ReflectionError):
+        return "reflection"
+    if type(error).__name__ in ("LLMError", "GpuPaused"):
+        return "model"
+    return "invalid" if isinstance(error, (ValueError, TypeError)) else "error"
+
+
+def excluded_key(week):
+    return f"eval:interview-excluded:{week}"
+
+
+def excluded(store, week):
+    """The members this week's interview left out for a fault in their own stored data."""
+    try:
+        values = json.loads(store.get_meta(excluded_key(week)) or "[]")
+    except ValueError:
+        return frozenset()
+    return frozenset(g for g in values if type(g) is int) if isinstance(values, list) else frozenset()
 
 
 def interview_panel(ctx):
@@ -93,6 +139,7 @@ async def interview(store, asker, week, members, *, ident=None):
                     "VALUES (?,'interview',?,?,?,?,?,'[]')",
                     (week, guid, f"q{n}", kind, _safe(question, ident), ""))
     asked = failed = skipped = 0
+    codes, errors = {}, {}
     for guid in panel:
         for n, (_, question) in enumerate(QUESTIONS):
             qkey = f"q{n}"
@@ -102,18 +149,18 @@ async def interview(store, asker, week, members, *, ident=None):
                 continue
             try:
                 if not _matches(before, guid, n) or _complete(before):
-                    raise ValueError("Interview row differs from the frozen question or accepted answer contract")
+                    raise InterviewRefused("row_changed", "Interview row differs from the frozen question or accepted answer contract")
                 card = _card(store, guid)
                 if card is None:
-                    raise ValueError("Interview member is no longer eligible")
+                    raise InterviewRefused("ineligible", "Interview member is no longer eligible")
                 copied = getattr(asker, "store", store)
                 if _card(copied, guid) != card:
-                    raise ValueError("Interview scratch persona is stale")
+                    raise InterviewRefused("stale_persona", "Interview scratch persona is stale")
                 result = await asker.ask(guid, question)
                 text = _safe(result.text, ident)
                 ids = _memory_ids(result.memory_ids)
                 if not text or len(text) > ANSWER_MAX:
-                    raise ValueError("Invalid interview answer length")
+                    raise InterviewRefused("answer_length", "Invalid interview answer length")
                 refs = [f"memory:{i}" for i in ids]
                 source = _provenance(copied, refs)
                 with store.transaction():
@@ -123,10 +170,10 @@ async def interview(store, asker, week, members, *, ident=None):
                         continue
                     if (fresh is None or tuple(fresh) != tuple(before) or _card(store, guid) != card
                             or _provenance(store, refs) != source):
-                        raise ValueError("Interview sources changed during the answer")
+                        raise InterviewRefused("sources_changed", "Interview sources changed during the answer")
                     memories = store.get_memories(ids)
                     if len(memories) != len(ids) or any(m.owner not in (0, guid) for m in memories):
-                        raise ValueError("Interview recalled another member's memory")
+                        raise InterviewRefused("foreign_memory", "Interview recalled another member's memory")
                     store.conn.execute("UPDATE eval_answer SET answer=?,memory_ids=? WHERE id=?",
                                        (text, json.dumps(ids), fresh["id"]))
                 asked += 1
@@ -136,13 +183,36 @@ async def interview(store, asker, week, members, *, ident=None):
                 if error.fatal:
                     raise
                 failed += 1
-            except Exception:
-                failed += 1  # no private text/error payload enters the receipt
-    answered = sum(_accepted(_row(store, week, guid, f"q{n}"), guid, n, ident)
-                   for guid in panel for n in range(len(QUESTIONS)))
-    return {"expected": len(panel) * len(QUESTIONS), "answered": answered,
-            "pending": len(panel) * len(QUESTIONS) - answered,
-            "asked": asked, "failed": failed, "skipped": skipped}
+                codes.setdefault(guid, Counter())[failure_code(error)] += 1
+                errors.setdefault(guid, Counter())[type(error).__name__] += 1
+            except Exception as error:
+                # No private text or error payload enters the receipt or the log: a fixed
+                # code and the exception's class only.
+                failed += 1
+                codes.setdefault(guid, Counter())[failure_code(error)] += 1
+                errors.setdefault(guid, Counter())[type(error).__name__] += 1
+    missing = {guid: sum(not _accepted(_row(store, week, guid, f"q{n}"), guid, n, ident)
+                         for n in range(len(QUESTIONS))) for guid in panel}
+    pending = sum(missing.values())
+    # A member is left out only when every failure of theirs is about their own stored data,
+    # and only while such members are few: then one bad persona cannot fail the week.
+    out = sorted(guid for guid, found in codes.items() if missing[guid] and set(found) <= MEMBER_CODES)
+    if len(out) * EXCLUDED_SHARE > len(panel):
+        out = []
+    with store.transaction():
+        store.set_meta(excluded_key(week), json.dumps(out))
+    for guid, found in sorted(codes.items()):
+        log("eval_interview_failed", level=logging.WARNING, week=week, guid=guid,
+            codes=dict(sorted(found.items())), errors=dict(sorted(errors[guid].items())),
+            pending=missing[guid], excluded=guid in out)
+    total = Counter()
+    for found in codes.values():
+        total.update(found)
+    return {"expected": len(panel) * len(QUESTIONS), "answered": len(panel) * len(QUESTIONS) - pending,
+            "pending": pending, "asked": asked, "failed": failed, "skipped": skipped,
+            "excused": sum(missing[guid] for guid in out), "excluded": out,
+            "failed_codes": dict(sorted(total.items())),
+            "failed_members": {str(guid): dict(sorted(found.items())) for guid, found in sorted(codes.items())}}
 
 
 def _answers(store, week):
@@ -165,14 +235,18 @@ def _answers(store, week):
 
 async def stability(ctx, week, prev_week):
     current, previous = _answers(ctx.store, week), _answers(ctx.store, prev_week)
-    signature = hashlib.sha256(json.dumps([list(current.values()), list(previous.values())], sort_keys=True).encode()).hexdigest()
+    signature = hashlib.sha256(json.dumps([list(current.values()), list(previous.values()),
+        sorted(excluded(ctx.store, week)), sorted(excluded(ctx.store, prev_week))], sort_keys=True).encode()).hexdigest()
     key = f"eval:stability:{week}:{prev_week}"
     cached = ctx.store.get_meta(key)
     if cached is not None:
         saved = json.loads(cached)
         if saved["signature"] == signature:
             return saved["metrics"]
-    paired = sorted(current.keys() & previous.keys())
+    # A member either week's interview left out (a fault in their own stored data) is measured
+    # by neither week: their partial answers do not count for or against the week.
+    out = excluded(ctx.store, week) | excluded(ctx.store, prev_week)
+    paired = sorted(pair for pair in current.keys() & previous.keys() if pair[0] not in out)
     values = {}
     if paired:
         texts = [_safe(row["answer"], ctx.ident) for pair in paired for row in (current[pair], previous[pair])]
@@ -181,18 +255,20 @@ async def stability(ctx, week, prev_week):
                   for i, pair in enumerate(paired)}
     traits = [v for pair, v in values.items() if current[pair]["category"] == "trait"]
     people = [v for pair, v in values.items() if current[pair]["category"] == "people"]
-    people_answers = [r for r in current.values() if r["category"] == "people"]
+    here = excluded(ctx.store, week)
+    people_answers = [r for r in current.values() if r["category"] == "people" and r["guid"] not in here]
     panel = json.loads(ctx.store.get_meta(f"eval:interview-plan:{week}") or "null")
-    expected = len(panel) * 5 if panel is not None else len({g for g, _ in current}) * 5
+    expected = len(set(panel if panel is not None else (g for g, _ in current)) - here) * 5
     prior_panel = json.loads(ctx.store.get_meta(f"eval:interview-plan:{prev_week}") or "null")
     shared = (set(panel if panel is not None else (g for g, _ in current))
-              & set(prior_panel if prior_panel is not None else (g for g, _ in previous)))
+              & set(prior_panel if prior_panel is not None else (g for g, _ in previous))) - out
     metrics = {"trait_similarity": sum(traits) / len(traits) if traits else None,
         "people_changed": sum(v < 0.8 for v in people) / len(people) if people else None,
         "people_grounded": sum(bool(_memory_ids(r["memory_ids"])) for r in people_answers) / len(people_answers) if people_answers else None,
         "trait_pairs": len(traits), "people_pairs": len(people), "people_answers": len(people_answers),
         "expected_trait_answers": expected, "expected_people_answers": expected,
-        "expected_trait_pairs": len(shared) * 5, "expected_people_pairs": len(shared) * 5}
+        "expected_trait_pairs": len(shared) * 5, "expected_people_pairs": len(shared) * 5,
+        "excluded_members": sorted(out)}
     with ctx.store.transaction():
         if _answers(ctx.store, week) != current or _answers(ctx.store, prev_week) != previous:
             raise ValueError("Interview answers changed during stability embedding")

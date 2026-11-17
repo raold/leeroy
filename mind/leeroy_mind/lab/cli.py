@@ -1,4 +1,4 @@
-"""`python -m leeroy_mind lab report|run`.
+"""`python -m leeroy_mind lab report|run|variants|add-variant`.
 
 - `report [--night N] [--runs K] [--json]`: the stored runs, read only (mode=ro, no migration).
 - `run --dry-run`: tonight's plan as the night would make it (the piece, the pairs, the arms and
@@ -7,6 +7,12 @@
   in a sandbox child under <data dir>/scratch/lab, grading and promotion, stored as a `cli` run.
   It swaps the reflection and live models as the night does; `--grade-model live` grades and
   proposes on the live model instead and swaps nothing (for a run beside a live mind on a copy).
+  `--piece P` names the piece instead of the round-robin.
+- `variants`: the hand-written variants in <data dir>/lab/variants (lab/authored.py), each
+  waiting, tried or refused with its code; read only.
+- `add-variant --piece P --file F [--name N]`: screens a hand-written variant and copies it into
+  that folder, where the next night (or `lab run`) tries it before the model's own. It writes
+  that one file and nothing else, so it works beside a running mind.
 """
 import argparse
 import asyncio
@@ -21,7 +27,9 @@ from pathlib import Path
 
 from leeroy_mind.config import default_data_dir
 
-from . import battery, propose, report as reporting, store
+from leeroy_mind.talk import pieces
+
+from . import authored, battery, propose, report as reporting, store
 from .config import load
 
 
@@ -43,8 +51,17 @@ def _parser():
     run.add_argument("--minutes", type=int)
     run.add_argument("--scripts", help="comma-separated script ids (default: the whole battery)")
     run.add_argument("--members", help="comma-separated member guids (default: the sample)")
+    run.add_argument("--piece", choices=pieces.NAMES,
+                     help="the piece to vary (default: the round-robin's)")
     run.add_argument("--json", action="store_true")
     run.add_argument("--data-dir", default=argparse.SUPPRESS)
+    v = sub.add_parser("variants", help="the hand-written variants waiting, tried or refused")
+    v.add_argument("--data-dir", default=argparse.SUPPRESS)
+    a = sub.add_parser("add-variant", help="screen a hand-written variant and queue it for the lab")
+    a.add_argument("--piece", required=True, choices=pieces.NAMES)
+    a.add_argument("--file", required=True, help="a text file holding the variant, one paragraph")
+    a.add_argument("--name", help="the name it is kept under (default: the file's name)")
+    a.add_argument("--data-dir", default=argparse.SUPPRESS)
     return p
 
 
@@ -124,18 +141,118 @@ def _members(conn, args) -> dict[int, str]:
     return out
 
 
+def _read_only(root: Path):
+    return sqlite3.connect(f"{(root / 'mind.db').resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
+
+
+def _known_names(conn, root: Path):
+    """The cast's, the personas' and his names as the night's screen reads them, from a
+    read-only connection; None when they cannot be read (the night screens again)."""
+    try:
+        from leeroy_mind.turing import judge
+        from leeroy_mind.turing.corpus import name_pattern, names_by_guid, persona_names
+        row = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
+        human = int(row[0]) if row and str(row[0]).isdigit() else 0
+        his = [r[0] for r in conn.execute("SELECT value FROM meta WHERE key='human_name'") if r[0]]
+        try:
+            import tomllib
+            table = tomllib.loads((root / "mind.toml").read_bytes().decode("utf-8-sig")).get("human", {})
+            his += [table[k] for k in ("nickname", "real_name") if isinstance(table.get(k), str)]
+        except (OSError, UnicodeError, ValueError, AttributeError):
+            pass
+        owners = judge.name_owners(names_by_guid(conn, human=human, his=his), human=human,
+                                   his_names=his, aliases=persona_names(conn))
+        return name_pattern(owners, min_len=3)
+    except Exception:
+        return None
+
+
+def _earlier(conn, piece: str) -> list[str]:
+    return store.earlier_texts(conn, piece) if store.available(conn) else []
+
+
+def _variants(root: Path) -> int:
+    conn = _read_only(root)
+    try:
+        names_rx = _known_names(conn, root)
+        shown = 0
+        for piece in pieces.NAMES:
+            found = authored.read(root, piece)
+            if not found:
+                continue
+            earlier = _earlier(conn, piece)
+            tried = {propose._norm(t) for t in earlier}
+            ready = {v["name"] for v in authored.waiting(root, piece, earlier=earlier,
+                                                         names_rx=names_rx)[0]}
+            print(f"{piece}:")
+            for name, text in found:
+                if name in ready:
+                    state = "waiting"
+                elif propose._norm(text) in tried:
+                    state = "tried"
+                else:
+                    code = propose.screen(piece, text, names_rx=names_rx, authored=True)
+                    state = f"refused ({code})" if code else "same as an earlier file"
+                print(f"  {name}: {state}, {len(text)} characters")
+                shown += 1
+    finally:
+        conn.close()
+    from .night import skipped_pieces
+    never = sorted(skipped_pieces(root))
+    if not shown:
+        print(f"lab variants: none in {authored.folder(root)}")
+    if never:
+        print("not picked with this mind.toml (never rendered, or an overlay file of that name): "
+              + ", ".join(never))
+    return 0
+
+
+def _add_variant(root: Path, args) -> int:
+    source = Path(args.file)
+    try:
+        raw = source.read_bytes()
+        if len(raw) > authored.MAX_BYTES:
+            raise authored.AuthoredError("the file is too large for one variant")
+        text = raw.decode("utf-8-sig")
+    except (OSError, UnicodeError) as e:
+        print(f"lab add-variant: cannot read the file ({type(e).__name__})", file=sys.stderr)
+        return 2
+    except authored.AuthoredError as e:
+        print(f"lab add-variant: {e}", file=sys.stderr)
+        return 2
+    conn = _read_only(root)
+    try:
+        path = authored.add(root, args.piece, args.name or source.stem, text,
+                            earlier=_earlier(conn, args.piece), names_rx=_known_names(conn, root))
+    except authored.AuthoredError as e:
+        print(f"lab add-variant: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+    from .night import skipped_pieces
+    print(f"lab add-variant: {path} is waiting for the next lab night of {args.piece}")
+    if args.piece in skipped_pieces(root):
+        print(f"  note: {args.piece} is not rendered with this mind.toml (or has an overlay file), "
+              "so the night will not pick it; `lab run --piece` still can")
+    return 0
+
+
 def _dry_run(root: Path, args, cfg) -> int:
-    from .night import _live_overlay_pieces
-    conn = sqlite3.connect(f"{(root / 'mind.db').resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
+    from .night import skipped_pieces
+    conn = _read_only(root)
     try:
         history = store.pieces_history(conn) if store.available(conn) else []
         members = _members(conn, args)
         names = dict(conn.execute("SELECT guid, name FROM cast_member"))
+        prefer = authored.pieces_waiting(root, lambda n: _earlier(conn, n),
+                                         names_rx=_known_names(conn, root))
     finally:
         conn.close()
     night = datetime.now().strftime("%Y-%m-%d")
-    piece = propose.pick_piece(history, skip=_live_overlay_pieces(root))
+    piece = args.piece or propose.pick_piece(history, skip=skipped_pieces(root), prefer=prefer)
     pairs = battery.plan(_scripts(args), members, f"lab|{night}", cfg.pairs)
+    if piece in prefer:
+        print(f"lab run (dry run): hand-written variants are waiting for {piece}")
     print(f"lab run (dry run): piece {piece or 'none'}, {len(pairs)} pairs over "
           f"{len({p['guid'] for p in pairs})} members, arms: control + up to {cfg.variants} "
           f"variants, judge {cfg.judge} pairs an arm, budget {cfg.minutes} min, grading on the "
@@ -176,7 +293,8 @@ async def _run(root: Path, args, cfg, *, make_llm, make_child) -> int:
                 scripts = {s.id for s in _scripts(args)} if args.scripts else None
                 members = ({int(g) for g in args.members.split(",") if g.strip()}
                            if args.members else None)
-                stages = (lab_night.make_propose(cfg, source="cli", scripts=scripts, members=members),
+                stages = (lab_night.make_propose(cfg, source="cli", scripts=scripts, members=members,
+                                                 piece=args.piece),
                           lab_night.make_battery(cfg, source="cli", make_child=make_child),
                           lab_night.make_grade(cfg, source="cli"))
                 models = (ctx.reasoner.model, mind_cfg.models.live, ctx.reasoner.model)
@@ -221,6 +339,12 @@ def lab_main(argv=None, *, make_llm=None, make_child=None) -> int:
             return 1
         print(json.dumps(data, sort_keys=True) if args.json else reporting.render(data))
         return 0
+    if args.action in ("variants", "add-variant"):
+        try:
+            return _variants(root) if args.action == "variants" else _add_variant(root, args)
+        except sqlite3.Error as e:
+            print(f"lab {args.action} failed: {type(e).__name__}", file=sys.stderr)
+            return 1
     try:
         cfg = _cfg(root, args)
         if args.dry_run:

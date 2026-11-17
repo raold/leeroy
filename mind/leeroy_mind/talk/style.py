@@ -325,13 +325,43 @@ def _typos(text: str, p: float, rng: random.Random, protect: frozenset[str]) -> 
 # repetition audit 5): apostrophes left out, fragments run together, real shorthand some of the
 # time, a spelling habit or two, and in some lines one slip of the fingers, now and then followed
 # by a "*word" (talk/realism.py). A member's habits are fixed (seeded by her name) and drawn
-# around her declared case and punctuation: a lower-case typer with no full stops drops most
-# apostrophes and runs her fragments on; a "proper" typer keeps both. Only the typed line
-# changes, except the joined fragments, which are punctuation and so in `plain` too.
+# around her declared case and punctuation: a lower-case typer with no full stops drops nearly
+# every apostrophe and runs her fragments on; a "proper" typer keeps both. A line's last full
+# stop is a habit too (Texture.stops): most who declare full stops leave it off most of the
+# time. Only the typed line changes, except the joined fragments and that last full stop, which
+# are punctuation and so in `plain` too.
 
 TEXTURE_SEED = "texture-v1"
-PERIOD_TYPERS = 0.12  # of members: keep their full stops whatever their case
-CAREFUL_APOSTROPHES = 0.1  # of members: keep most apostrophes whatever their case
+
+
+@dataclass(frozen=True, slots=True)
+class Calibration:
+    """The numbers a member's habits are drawn from (texture_of). Fitted on 2026-11-17 to the one
+    human sample there is, the owner's own typed lines, with the Turing stage's features and its
+    stylometric AUC (turing/README.md, "Calibrating the texture"): the cast's average sits near
+    his rates while members differ. Most leave out most apostrophes and their last full stop; a
+    minority keep them (careful_apostrophes, and whoever declares proper case and full stops);
+    "u" for "you" is a habit of a few (texters), not of everyone whose persona lists it."""
+    period_typers: float = 0.12  # of members: keep their full stops whatever their case
+    period_typers_full: float = 0.35  # the same, of those whose persona declares full stops
+    careful_apostrophes: float = 0.12  # of members: keep most apostrophes whatever their case
+    careful_keep: float = 0.3  # a careful typer's share of the rate she would have had
+    apos_base: float = 0.12  # apostrophes left out: base + span x casual ** pow
+    apos_span: float = 0.85
+    apos_pow: float = 0.5
+    join_span: float = 0.85  # fragments run on: span x casual ** pow
+    join_pow: float = 1.3
+    comma_base: float = 0.8  # of those, joined with a comma: base - slope x casual
+    comma_slope: float = 0.3
+    texters: float = 0.15  # of members: type their own one-word shorthand ("u", "rly") as a habit
+    light_shorthand: float = 0.08  # the others: this share of that rate
+    light_extra: float = 0.25  # and this share of the extra shorthand's
+    stops_full: float = 0.15  # a line's last full stop typed: she declares them, no period typer
+    stops_some: float = 0.1  # she declares some
+    stops_typer: tuple[float, float] = (0.7, 1.0)  # a period typer who declares full stops
+
+
+CAL = Calibration()
 SHORT_FRAGMENT = 6  # words: a fragment this short runs on most readily
 LONG_JOIN = 0.45  # two longer sentences run together this much less often
 AND_SHARE = 0.15  # of the joins that may take "and", joined by it
@@ -449,6 +479,7 @@ class Texture:
     extra: tuple[int, ...] = ()  # SHORTHAND entries she uses beyond her own list
     extra_rate: float = 0.0
     habits: tuple[tuple[str, str, float], ...] = ()  # (word, her spelling, how often)
+    stops: float = 0.5  # how often she types a line's last full stop, when she declares any
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -472,13 +503,15 @@ def texture_of(t: Typing, who: str) -> Texture:
 
 
 @functools.lru_cache(maxsize=4096)
-def _texture(who: str, case: str, end_punct: str, typos: bool) -> Texture:
+def _texture(who: str, case: str, end_punct: str, typos: bool, cal: Calibration = CAL) -> Texture:
     rng = random.Random(f"{TEXTURE_SEED}:{who}")
     casual = (_CASE_CASUAL.get(case, 0.5) + _PUNCT_CASUAL.get(end_punct, 0.5)) / 2
-    period, careful = rng.random() < PERIOD_TYPERS, rng.random() < CAREFUL_APOSTROPHES
-    apostrophes = _clamp(0.03 + 0.85 * casual ** 1.2 + rng.uniform(-.08, .08), 0, .97)
-    join = _clamp(0.85 * casual ** 1.3 + rng.uniform(-.08, .08), 0, .95)
-    commas = _clamp(0.8 - 0.3 * casual + rng.uniform(-.1, .1), .3, .9)
+    period = rng.random() < (cal.period_typers_full if end_punct == "full" else cal.period_typers)
+    careful = rng.random() < cal.careful_apostrophes
+    apostrophes = _clamp(cal.apos_base + cal.apos_span * casual ** cal.apos_pow
+                         + rng.uniform(-.08, .08), 0, .97)
+    join = _clamp(cal.join_span * casual ** cal.join_pow + rng.uniform(-.08, .08), 0, .95)
+    commas = _clamp(cal.comma_base - cal.comma_slope * casual + rng.uniform(-.1, .1), .3, .9)
     shorthand = _clamp(0.55 + 0.35 * casual + rng.uniform(-.08, .08), .3, .95)
     pool = list(range(len(SHORTHAND)))
     extra = []
@@ -494,12 +527,21 @@ def _texture(who: str, case: str, end_punct: str, typos: bool) -> Texture:
     for _ in range(rng.choice((2, 2, 3))):
         kind, word, spelt = kinds.pop(rng.randrange(len(kinds)))
         habits.append((word, spelt, HABIT_RATE[kind]))
+    # drawn last, so the habits above are the ones the member has always had
+    texter, u = rng.random() < cal.texters, rng.random()
+    if end_punct == "full":
+        lo, hi = cal.stops_typer
+        stops = lo + (hi - lo) * u if period else cal.stops_full * (0.5 + u)
+    else:
+        stops = SOME_DROP_P if period else cal.stops_some * (0.5 + u)
     return Texture(
-        casual=casual, apostrophes=apostrophes * (.3 if careful else 1),
-        join=join * (.3 if period else 1), commas=commas, shorthand=shorthand,
+        casual=casual, apostrophes=apostrophes * (cal.careful_keep if careful else 1),
+        join=join * (.3 if period else 1), commas=commas,
+        shorthand=shorthand * (1 if texter else cal.light_shorthand),
         extra=tuple(sorted(extra)) if casual >= 0.5 else (),
-        extra_rate=extra_rate if casual >= 0.5 else 0.0,
-        habits=tuple(habits) if typos else ())
+        extra_rate=(extra_rate if casual >= 0.5 else 0.0) * (1 if texter else cal.light_extra),
+        habits=tuple(habits) if typos else (),
+        stops=_clamp(stops, 0, 1) if end_punct in ("full", "some") else 0.0)
 
 
 def _words_cf(words) -> frozenset[str]:
@@ -550,8 +592,9 @@ def _real_entry(key: str, val: str) -> bool:
 def _shorthand(text: str, t: Typing, tex: Texture, rng: random.Random,
                protect: frozenset[str]) -> tuple[str, frozenset[str]]:
     """Her own shortening entries and her real shorthand, each use on its own draw: her real
-    entries at tex.shorthand (a multi-word one nearly always), one no one types at
-    INVENTED_SHARE of that, the extra ones at tex.extra_rate. Also what they write."""
+    entries at tex.shorthand (most uses for a texter, few for anyone else: Calibration.texters;
+    a multi-word one, "brb", nearly always for all), one no one types at INVENTED_SHARE of that,
+    the extra ones at tex.extra_rate. Also what they write."""
     own = _shortening(t.abbreviations)
     entries = []
     for key, val in own.items():
@@ -965,7 +1008,13 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
         return []
     keep = frozenset(asc(w) for w in keep_case)
     body = _keep_case(_case(body, t.case), keep, body)
-    drop_some = t.end_punct == "some" and rng.random() < SOME_DROP_P
+    tex = texture_of(t, speaker) if texture else None
+    punct = t.end_punct
+    if tex is not None and punct in ("full", "some"):
+        # her last full stop is a habit of hers, not a rule: typed as declared, or left off
+        punct, drop_some = (punct if rng.random() < tex.stops else "none"), False
+    else:
+        drop_some = punct == "some" and rng.random() < SOME_DROP_P
     # only marks are added (a stored word among them is a word: schema.is_mark)
     emoticons = [e for e in (asc(x).strip() for x in t.emoticons) if e and is_mark(e)
                  and (wink_ok or not _WINKY.fullmatch(e))]
@@ -980,7 +1029,6 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
     if split and lines > 1 and len(laid) == 1:
         laid = _split_one(laid[0], t.words_per_line[0]) or laid
     protected = frozenset(asc(w) for w in protect) | keep
-    tex = texture_of(t, speaker) if texture else None
     out: list[Styled] = []
     for i, units in enumerate(laid):
         ws = [w for clause, _ in units for w in clause]
@@ -988,7 +1036,7 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
             ws.pop()  # a dangling "," or "-"
         if not ws:
             continue
-        plain = _end_punct(" ".join(ws).rstrip(",;:"), t.end_punct, drop_some)
+        plain = _end_punct(" ".join(ws).rstrip(",;:"), punct, drop_some)
         if tex is not None:
             plain = _run_on(plain, tex, rng, _words_cf(protected), room)
         if i > 0 and t.case == "proper":
@@ -1005,16 +1053,16 @@ def style_lines(text: str, t: Typing, eff: Effects, rng: random.Random, *,
             tokens = _TOKEN.findall(typed)
             if len(tokens) <= 1:
                 break
-            typed = _end_punct(" ".join(tokens[:-1]).rstrip(",;:"), t.end_punct, drop_some)
+            typed = _end_punct(" ".join(tokens[:-1]).rstrip(",;:"), punct, drop_some)
         while max_chars is not None and len((typed + tail).strip()) > max_chars:
             tokens = _TOKEN.findall(typed)
             if len(tokens) <= 1:
                 break
-            typed = _end_punct(" ".join(tokens[:-1]).rstrip(",;:"), t.end_punct, drop_some)
+            typed = _end_punct(" ".join(tokens[:-1]).rstrip(",;:"), punct, drop_some)
             # the plain text loses the same tail, so what is stored is what was sent
             words = plain.split()
             if len(words) > 1:
-                plain = _end_punct(" ".join(words[:-1]).rstrip(",;:"), t.end_punct, drop_some)
+                plain = _end_punct(" ".join(words[:-1]).rstrip(",;:"), punct, drop_some)
         line = sanitize_say_text(typed + tail) if game else (typed + tail).strip()
         if line:
             if not carries(line, slip):  # cut off with the words the line lost

@@ -3,9 +3,12 @@ start, after `turing` (or `forget` without it). Three stages so the runner swaps
 
 - `lab_propose` (reflection model): unit `plan` creates the night's lab_run: tonight's piece
   (round-robin, propose.pick_piece; a piece whose `lab_<piece>.txt` overlay name the live
-  prompts dir has is passed over, never read), the seeded battery plan of (script, member,
-  channel) pairs. Unit `propose`: one call for up to `[lab] variants` variants of the piece, each
-  screened (propose.screen) and stored as a prompt_variant row.
+  prompts dir has is passed over, never read, and so is one this mind's settings never render,
+  pieces.unrendered; a piece with a hand-written variant waiting goes first, lab/authored.py),
+  the seeded battery plan of (script, member, channel) pairs. Unit `propose`: the piece's
+  waiting hand-written variants first, then one call for the slots left of `[lab] variants`,
+  and one more with what was wrong when the screen (propose.screen) refused some; each kept
+  variant is stored as a prompt_variant row.
 - `lab` (live model): unit `snapshot` copies the guild into scratch/lab (child.take); then one
   unit per arm, the control first: the battery in the sandbox child, its transcripts to
   scratch/lab/runs/<run>/<arm>.json (private, never backed up, only the newest run's kept), its
@@ -30,7 +33,7 @@ from leeroy_mind.logs import log
 from leeroy_mind.nightly.llm import ReflectionError
 from leeroy_mind.talk import pieces
 
-from . import battery, child, grade, promote, propose, store
+from . import authored, battery, child, grade, promote, propose, store
 from .config import load
 
 STAGE_PROPOSE, STAGE_BATTERY, STAGE_GRADE = "lab_propose", "lab", "lab_grade"
@@ -121,6 +124,21 @@ def _live_overlay_pieces(data_dir: Path) -> set[str]:
     return {n for n in pieces.NAMES if (folder / f"{pieces.overlay_name(n)}.txt").exists()}
 
 
+def _unrendered(data_dir: Path) -> set[str]:
+    """Pieces this data dir's settings never render (pieces.unrendered); none when its
+    mind.toml does not load."""
+    from leeroy_mind.config import load_config
+    try:
+        cfg = load_config(Path(data_dir) / "mind.toml")
+        return set(pieces.unrendered(situation=cfg.talk.situation, realism=cfg.romance.realism))
+    except Exception:
+        return set()
+
+
+def skipped_pieces(data_dir: Path) -> set[str]:
+    return _live_overlay_pieces(data_dir) | _unrendered(data_dir)
+
+
 def _held(ctx) -> str | None:
     if getattr(ctx.arbiter, "paused", False):
         return "gpu_paused"
@@ -145,8 +163,10 @@ def _both(*writes):
 # -- propose ------------------------------------------------------------------------------------
 
 def make_propose(cfg, *, source: str = "night", scripts: set[str] | None = None,
-                 members: set[int] | None = None):
-    """`scripts` and `members` narrow the battery (`lab run --scripts/--members`)."""
+                 members: set[int] | None = None, piece: str | None = None):
+    """`scripts` and `members` narrow the battery (`lab run --scripts/--members`); `piece`
+    names the piece instead of the round-robin (`lab run --piece`)."""
+    forced = piece
     async def stage_lab_propose(ctx) -> None:
         if not ctx.done(STAGE_PROPOSE, "plan"):
             reason = _held(ctx)
@@ -158,7 +178,11 @@ def make_propose(cfg, *, source: str = "night", scripts: set[str] | None = None,
                     log("lab_not_set_up", night=ctx.night)
                     return
                 history = store.pieces_history(ctx.store.conn)
-            piece = propose.pick_piece(history, skip=_live_overlay_pieces(ctx.settings.data_dir))
+                prefer = authored.pieces_waiting(
+                    ctx.settings.data_dir, lambda n: store.earlier_texts(ctx.store.conn, n),
+                    names_rx=_names_rx(ctx))
+            piece = forced or propose.pick_piece(history, prefer=prefer,
+                                                 skip=skipped_pieces(ctx.settings.data_dir))
             seed = f"lab|{ctx.night}"
             try:
                 found = [s for s in battery.load() if scripts is None or s.id in scripts]
@@ -184,7 +208,7 @@ def make_propose(cfg, *, source: str = "night", scripts: set[str] | None = None,
             if not ctx.commit(STAGE_PROPOSE, "plan", write):
                 return
             log("lab_plan", night=ctx.night, piece=piece or "none", pairs=len(pairs),
-                members=len({p["guid"] for p in pairs}))
+                members=len({p["guid"] for p in pairs}), authored=int(piece in prefer))
         run = _run(ctx, source)
         if run is None or run["status"] != "running" or ctx.done(STAGE_PROPOSE, "propose"):
             return
@@ -197,26 +221,52 @@ def make_propose(cfg, *, source: str = "night", scripts: set[str] | None = None,
             feedback = store.feedback(ctx.store.conn, piece)
             earlier = store.earlier_texts(ctx.store.conn, piece)
             names_rx = _names_rx(ctx)
-        try:
-            reply = await ctx.reasoner.json(propose.SYSTEM,
-                                            propose.prompt(piece, k=cfg.variants, feedback=feedback),
-                                            propose.response_schema(cfg.variants),
+        # the hand-written variants waiting for this piece go first (lab/authored.py)
+        kept, refused = authored.waiting(ctx.settings.data_dir, piece, earlier=earlier,
+                                         names_rx=names_rx)
+        kept = kept[:cfg.variants]
+        written = len(kept)
+        left = cfg.variants - written
+        asks = 0
+
+        async def ask(question: str, k: int) -> list:
+            reply = await ctx.reasoner.json(propose.SYSTEM, question, propose.response_schema(k),
                                             temperature=PROPOSE_TEMPERATURE)
+            more, codes = propose.judge(piece, reply, k=k, names_rx=names_rx,
+                                        earlier=[*earlier, *(v["text"] for v in kept)])
+            kept.extend(more)
+            refused.extend(c for c in codes if c is not None)
+            return [reply, codes, len(more)]
+        try:
+            if left > 0:
+                first = propose.prompt(piece, k=left, feedback=feedback)
+                reply, codes, got = await ask(first, left)
+                asks = 1
+                # the screen refused some and slots are left: once more, with what was wrong
+                faults = [c for c in codes if c not in (None, "extra")]
+                if got < left and faults and budget.left() > 0:
+                    asks = 2
+                    await ask(propose.retry_prompt(piece, first, reply, codes, k=left - got),
+                              left - got)
         except ReflectionError as err:
             if err.fatal:
                 raise
-            ctx.fail(STAGE_PROPOSE, "propose", ReflectionError("lab_propose_failed"))
-            return
-        kept, refused = propose.accept(piece, reply, k=cfg.variants, names_rx=names_rx,
-                                       earlier=earlier)
+            if not kept:
+                ctx.fail(STAGE_PROPOSE, "propose", ReflectionError("lab_propose_failed", fatal=False))
+                return
+            refused.append("llm")
 
         def write(s):
             for v in kept:
-                store.add_variant(s.conn, run["id"], piece, v["text"], v["diff"], ctx.clock.now())
+                vid = store.add_variant(s.conn, run["id"], piece, v["text"], v["diff"],
+                                        ctx.clock.now())
+                if "name" in v:
+                    s.set_meta(f"{authored.META_PREFIX}{vid}", v["name"])
             _spend(ctx, run["id"], budget)(s)
         if ctx.commit(STAGE_PROPOSE, "propose", write):
             log("lab_proposed", night=ctx.night, run=run["id"], piece=piece, kept=len(kept),
-                refused=len(refused), codes=",".join(sorted(set(refused))) or "-")
+                authored=written, asks=asks, refused=len(refused),
+                codes=",".join(sorted(set(refused))) or "-")
     return stage_lab_propose
 
 
