@@ -164,13 +164,16 @@ def test_glutes_are_required_from_behind_after_who_she_is_from_the_side_last_fro
         if look.view in GLUTES_VIEWS:
             assert ("large round glutes", 0) in spec.phrases, look
             assert texts.index("large round glutes") == texts.index(build_words(p)) + 1
+        elif look.view in GLUTES_SIDE and look.framing == "upper_body":
+            assert "large round glutes" not in texts, look  # waist-up: not in the frame
         elif look.view in GLUTES_SIDE:
             assert ("large round glutes", 2) in spec.phrases, look
             assert texts.index("large round glutes") == texts.index("thin glasses") + 1
             assert texts.index("hazel eyes") < texts.index("thin glasses")
             assert texts.index("large round glutes") < texts.index("a tired half-smile")
         else:
-            assert spec.phrases[-1] == ("large round glutes", 2), look
+            # the last phrase of priority 2 ("alone", priority 3, may follow at a busy place)
+            assert [x for x in spec.phrases if x[1] <= 2][-1] == ("large round glutes", 2), look
             for detail in ("hazel eyes", "thin glasses"):
                 assert texts.index(detail) < texts.index("large round glutes")
 
@@ -244,7 +247,8 @@ def test_every_varied_look_keeps_its_pose_with_her_largest_shapes(build, kg, loo
         if look.view not in GLUTES_VIEWS:
             assert "very large round glutes" not in required, look  # never required elsewhere
     if build == "voluptuous" and kg >= 88 and looks:
-        assert len(over) <= 2 and max(over) <= 76
+        # the same look in each of its framings (the waist-up one since 2026-11-17)
+        assert len(over) <= 3 and max(over) <= 76
     else:
         assert over == []
 

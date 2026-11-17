@@ -11,7 +11,8 @@ import pytest
 
 from conftest import make_persona
 from leeroy_mind.personas.schema import Appearance, ProfilePhoto
-from leeroy_mind.selfies.prompt import (LUST_HELD, LUST_NEGATIVE, NEGATIVE, PromptSpec,
+from leeroy_mind.selfies.prompt import (BODY_NEGATIVE, BODY_NEGATIVE_LUST, HEAD_NEGATIVE,
+                                        LUST_HELD, LUST_NEGATIVE, NEGATIVE, PromptSpec,
                                         BUILD_WORDS, build_prompt, renderable)
 from leeroy_mind.selfies.style import LUST, PLAIN, suggestive
 from leeroy_mind.selfies.tokens import estimate
@@ -42,7 +43,9 @@ def man(**over):
 
 def test_the_prompt_opens_with_kind_framing_and_subject_and_ends_with_the_phone_look():
     spec = build_prompt(woman(age=34, region="UK", photo={**PHOTO, "kind": "selfie", "framing": "head_and_shoulders"}))
-    assert spec.phrases[:3] == (("phone selfie", 0), ("head and shoulders", 0), ("34-year-old British woman", 0))
+    # a selfie names no phone and no mirror (safe.py, the photo audit)
+    assert spec.phrases[:3] == (("selfie, close arm's-length shot", 0), ("head and shoulders", 0),
+                                ("34-year-old British woman", 0))
     assert spec.phrases[-1] == ("recent smartphone photo, natural light, natural skin texture, unretouched", 1)
 
 
@@ -57,8 +60,11 @@ def test_a_headshot_has_no_phone_look_and_a_snapshot_does_not_look_at_the_camera
     assert head.phrases[-1] == ("recent photo, natural skin texture, unretouched", 1)
     assert ("looking at the camera", 2) in head.phrases
     assert ("looking at the camera", 2) not in build_prompt(woman()).phrases
-    assert build_prompt(woman(photo={**PHOTO, "kind": "mirror_selfie"})).phrases[0] == ("mirror selfie", 0)
-    assert build_prompt(woman()).phrases[0] == ("candid photo taken by a friend", 0)
+    # a waist-up photo says its kind in its short form, and a mirror selfie is a selfie
+    assert build_prompt(woman(photo={**PHOTO, "kind": "mirror_selfie"})).phrases[0] == ("selfie", 0)
+    assert build_prompt(woman()).phrases[0] == ("candid photo", 0)
+    close = build_prompt(woman(photo={**PHOTO, "framing": "head_and_shoulders"}))
+    assert close.phrases[0] == ("candid photo taken by a friend", 0)
 
 
 def test_hair_skin_eyes_and_face_details_come_from_the_looks():
@@ -69,7 +75,8 @@ def test_hair_skin_eyes_and_face_details_come_from_the_looks():
     assert ("hazel eyes", 2) in ph
     assert ("freckles", 2) in ph and ("thin glasses", 2) in ph
     assert ("average build", 1) in ph
-    assert ("orange rain bib over a grey hoodie", 2) in ph
+    # what she wears is required, a top and a bottom (safe.complete)
+    assert ("wearing orange rain bib over a grey hoodie and trousers", 0) in ph
     assert ("on the deck of a small boat", 2) in ph
     assert ("squinting into the wind", 3) in ph
     shaved = build_prompt(man(appearance=replace(APPEARANCE, hair_length="shaved"))).phrases
@@ -90,7 +97,13 @@ def test_no_name_reaches_a_prompt():
 
 def test_the_negative_prompt_keeps_minors_nudity_likeness_and_period_looks_out():
     neg = dict(build_prompt(woman()).negative)
-    assert neg == dict(NEGATIVE)
+    assert neg == dict(BODY_NEGATIVE)  # a waist-up photo: the body negative (safe.py)
+    close = build_prompt(woman(photo={**PHOTO, "framing": "head_and_shoulders"}))
+    assert close.negative == HEAD_NEGATIVE and set(NEGATIVE) < set(HEAD_NEGATIVE)
+    for negative in (NEGATIVE, HEAD_NEGATIVE, BODY_NEGATIVE):
+        required = " ".join(t for t, pr in negative if pr == 0)
+        for word in ("child, teenager", "nsfw", "nude", "celebrity", "cartoon"):
+            assert word in required
     zero = " ".join(t for t, pr in NEGATIVE if pr == 0)
     for word in ("child, teenager", "nsfw", "nude", "celebrity", "cartoon"):
         assert word in zero
@@ -110,8 +123,16 @@ TODAY_NEGATIVE = (
 
 
 def test_a_lust_womans_negative_drops_only_cleavage_and_swimwear():
-    neg = build_prompt(woman(stance="lust"), kind_style=LUST).negative
-    assert neg == LUST_NEGATIVE
+    body = build_prompt(woman(stance="lust"), kind_style=LUST).negative
+    assert body == BODY_NEGATIVE_LUST and LUST_NEGATIVE[1] in body  # waist-up: the body negative
+    for neg in (body, LUST_NEGATIVE):
+        words = [w.strip() for t, _ in neg for w in t.split(",")]
+        assert "cleavage" not in words and "swimwear" not in words
+        zero = [w.strip() for t, pr in neg if pr == 0 for w in t.split(",")]
+        for word in ("nsfw", "nude", "lingerie", "child", "teenager", "topless", "underwear",
+                     "see-through", "sheer", "celebrity", "cartoon"):
+            assert word in zero, word
+    neg = LUST_NEGATIVE
     words = [w.strip() for t, _ in neg for w in t.split(",")]
     assert "cleavage" not in words and "swimwear" not in words
     zero = [w.strip() for t, pr in neg if pr == 0 for w in t.split(",")]
@@ -143,8 +164,10 @@ def test_everyone_else_keeps_todays_negative(p, chosen):
         return
     assert NEGATIVE == TODAY_NEGATIVE
     spec = build_prompt(person, kind_style=chosen)
-    assert spec.negative == TODAY_NEGATIVE
-    assert (person.photo.outfit, 2) in spec.phrases and (person.photo.setting, 2) in spec.phrases
+    assert spec.negative == BODY_NEGATIVE  # a waist-up photo; its covered line is today's
+    assert TODAY_NEGATIVE[1] in spec.negative
+    assert (f"wearing {person.photo.outfit} and trousers", 0) in spec.phrases
+    assert (person.photo.setting, 2) in spec.phrases
 
 
 LUST_PHOTO = ProfilePhoto("snapshot", "upper_body", "the beach at sunset", "a red string bikini",
@@ -156,12 +179,15 @@ def test_the_lust_prompt_puts_outfit_and_setting_in_one_phrase_at_priority_0():
     hot = build_prompt(woman(stance="lust", photo=LUST_PHOTO), kind_style=LUST)
     joined = ("wearing a red string bikini, the beach at sunset", 0)
     assert joined in hot.phrases and joined not in plain.phrases
-    assert ("a red string bikini", 2) in plain.phrases and ("the beach at sunset", 2) in plain.phrases
+    # rendered plainly, swimwear is never required: the default garments stand in (safe.wearing)
+    assert ("wearing a crew-neck top and trousers", 0) in plain.phrases
+    assert ("the beach at sunset", 2) in plain.phrases
+    assert not any("bikini" in t for t, _ in plain.phrases)
     assert not any(t in ("a red string bikini", "the beach at sunset") for t, _ in hot.phrases)
-    rest = [x for x in plain.phrases if x not in (("a red string bikini", 2),
+    rest = [x for x in plain.phrases if x not in (("wearing a crew-neck top and trousers", 0),
                                                   ("the beach at sunset", 2))]
     assert [x for x in hot.phrases if x != joined] == rest
-    assert hot.negative == LUST_NEGATIVE and plain.negative == NEGATIVE
+    assert hot.negative == BODY_NEGATIVE_LUST and plain.negative == BODY_NEGATIVE
     assert build_prompt(woman(stance="lust", photo=LUST_PHOTO)).phrases == plain.phrases
 
 
@@ -268,7 +294,8 @@ def test_a_lust_kind_is_never_rendered_when_her_looks_code_young(looks):
     assert renderable(young, LUST) == LUST_HELD
     with pytest.raises(ValueError, match="re-choice"):
         build_prompt(young, kind_style=LUST)             # its text is never rendered plainly
-    assert renderable(young) is None and build_prompt(young).negative == NEGATIVE
+    assert renderable(young) is None and build_prompt(young).negative == BODY_NEGATIVE
+    assert not any("bikini" in t for t, _ in build_prompt(young).phrases)
 
 
 def test_a_lust_kind_is_never_rendered_once_she_left_lust():
@@ -283,7 +310,7 @@ def test_a_lust_kind_is_never_rendered_once_she_left_lust():
 def test_the_lust_prompt_stays_when_her_looks_are_adult():
     hot = woman(stance="lust", photo=LUST_PHOTO)
     assert renderable(hot, LUST) is None
-    assert build_prompt(hot, kind_style=LUST).negative == LUST_NEGATIVE
+    assert build_prompt(hot, kind_style=LUST).negative == BODY_NEGATIVE_LUST
 
 
 def test_every_chosen_build_is_said_as_a_figure_at_priority_zero():

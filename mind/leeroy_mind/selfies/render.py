@@ -626,7 +626,8 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
                 if varied:
                     from . import varied as plans
                     plans.refused(ctx.store, p, guid, set_no, getattr(e, "slot", None),
-                                  night=ctx.night)
+                                  night=ctx.night,
+                                  share=getattr(cfg, "body_shot_share", plans.BODY_SHOT_SHARE))
             else:
                 tally["failed"] += 1
             state["contended"] = contended

@@ -398,3 +398,48 @@ and a "hands visible" positive phrase did no better.
 her full body in the tall portrait: #316's body phrases (her build and size, required) plus 832 x
 1216 pull the camera back. Untested fixes: a `three_quarter` crop hint in the framing phrase, or
 an 896 x 1152 portrait.
+
+## Compositions the photo audit designed out (2026-11-17)
+
+A visual audit of about 1,290 rendered photos (145 covers, 55 situational photos, the newest two
+sets of every member) tied each defect to the composition behind it. 8% were defective (severity
+2 or more), 1% badly (a third hand, an extra arm, the subject rendered twice, three feet).
+Headshots were clean (1%); defects grew with how much body shows (waist-up 12%, three-quarter
+11%, full-length 21%) and with what the hands touch (no hand in view 2%, one or more 12%).
+`safe.py` holds what changed; the keys the model picks and the stored kinds and plans did not.
+
+| trigger (defective share in the audit) | what changed |
+|---|---|
+| mirror selfies and the hallway mirror (25-31%, half a wrong or second reflection) | a selfie is said as `selfie, close arm's-length shot` whatever its kind; the lust style and scenes are no longer offered a mirror selfie; the mirror setting is retired and a stored one renders as `her hallway at home`; `mirror` joins the negatives |
+| a phone held in view (doubled, oversized, back to the camera) | no kind or framing names a phone; `phone` joins the negatives |
+| the car's front seat (the subject cloned as a passenger), the concert crowd (25 faces) | retired; stored ones render as a quiet street beside her parked car and a festival field |
+| "bike shorts" at the gym (38%: a garbled bicycle every time) | the outfit says gym shorts; the exercise-bike activity is "resting after a workout" |
+| a hand on the hip plus another arm action (every third hand had one), hands on rails, glasses, mugs, pens, sticks | a three-quarter or full-length photo requires one standing pose (`standing, arms at her sides`, or hands behind her back from the front); a waist-up one asks for `arms down, hands out of frame`; props rest on the table and activities are said as what is there, not what the hands do |
+| seated and splayed swimwear poses (merged legs and feet) | every pose stands |
+| busy places (2 or more people in frame: 17%, and most of the severity 3) | `alone, no one else in frame` at bars, clubs, streets, parties; `another person, duplicate person` required in the negative; a garden party is a summer garden, a dance floor an empty one |
+| garbled signs and equipment lettering | `text` is required in the body negative |
+| men rendered shirtless, bare shoulders with no top | the outfit sat at priority 2 and never reached the worker's 75 tokens (0 of 12 waist-up prompts kept it, 7 of 42 men's); it is now required as `wearing ...`, a top and for a waist-up or wider photo a bottom, a man always a shirt (`safe.complete`) |
+| one strap, fused sleeves, a top with no bottom | every list outfit names a top and a bottom or a one-piece with its length; the one-shoulder top is a wrap top; `bottomless, shirtless` join the body negative |
+
+**The body negative.** A photo that shows the body (waist-up or wider; every situational one)
+takes `prompt.body_negative`: the earlier anatomy line without its eye words (no eye defect at
+severity 2 or more in 1,288 photos), with `extra hands`, `another person, duplicate person,
+mirror, phone, text` and `bottomless, shirtless` required. Its required set counts 67 tokens
+(plain), 69 (lust) and 75 (a varied set's, with the thong line) on the real tokenizers.
+
+**`[selfies] body_shot_share`** (0-1, default 0.5; read at the mind's start) is the share of
+photos framed to show the body. In a varied set that share of the four candidates is full-length
+or three-quarter, the views from behind first (her hands are out of sight there), then the front,
+then the side view (16% defective, most of the third hands and feet); the others are waist-up.
+A lust profile kind is three-quarter for that share of members, else waist-up. A situational
+photo keeps a waist-up or wider framing for that share, else head and shoulders (29% of the
+waist-up ones were defective, none of the closer ones). 1.0 is the behaviour before the audit.
+
+**`selfies audit --labels DIR`** reads an audit's label files (JSON lines: guid, path, severity,
+same_person_as_cover) and prints, as guids, set numbers and photo ids, the covers in force and
+the stocked situational photos they mark defective. With `--go` (the mind stopped; a snapshot
+first) those stocked photos end `flagged` (rows only, no file is deleted) and a fresh set is
+queued for each member with a defective cover. A cover is never changed: the owner picks.
+
+Not verified on the GPU: every wording here was chosen from the audit's numbers and the token
+counts, not from new renders. Check the first night's sets and snaps.

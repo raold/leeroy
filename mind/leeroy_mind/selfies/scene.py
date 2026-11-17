@@ -17,12 +17,13 @@ from leeroy_mind.text import has_meta
 from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSIONS,
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
-from .prompt import (_COVERED, _COVERED_LUST, _FRAMINGS, GLUTES_FRAMINGS, body_phrases,
-                     fit_required, glutes_words,
+from .prompt import (_COVERED, _COVERED_LUST, _FRAMINGS, GLUTES_FRAMINGS, body_negative,
+                     body_phrases, fit_required, glutes_words,
                      _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
-                     NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
+                     NEGATIVE, SHORT, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
+from .safe import BODY_ANATOMY, HEAD_FRAMINGS, alone, pose, pose_priority, wearing
 from .style import AGE_RE, LUST, PLAIN, STYLES, SUGGESTIVE_MIN_AGE, style_of, suggestive
 from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGATIVE,
                             OUTFITS, PLAIN_PLACES, PROPS, SCENE_LUST_SETTINGS, TILE_DESK,
@@ -31,7 +32,7 @@ from .scene_choices import (ACTIVITIES, EXPRESSIONS, GAME_MONITOR, ONE_FACE_NEGA
 SCENE_NAME = "scene"             # its overlay: prompts/nightly_scene.txt
 SCENE_LUST_NAME = "scene_lust"   # its overlay: prompts/nightly_scene_lust.txt
 
-KINDS = ("selfie", "mirror_selfie", "snapshot")
+KINDS = ("selfie", "snapshot")  # never a mirror selfie (safe.py); a stored one is a selfie
 FRAMINGS = ("face", "head_and_shoulders", "upper_body", "three_quarter")
 WHENS = ("morning", "day", "evening", "late", "any")
 AUDIENCES = ("him", "anyone")
@@ -83,29 +84,20 @@ ABOUT = {"life": "Tonight in their life away from the game: {beat}",
 # To make room, the style list and the one-face guard keep only their first words at 0 and the
 # rest moves to 1 and 2 (in practice dropped: the required set counts 72 and 74 tokens).
 # test_snap_negatives_fit_with_the_anatomy_line measures it on the real tokenizers.
-SNAP_ANATOMY = ("extra limbs, extra legs, extra arms, fused fingers, missing fingers, "
-                "extra fingers, malformed hands, deformed feet, cross-eyed, lazy eye, "
-                "asymmetric eyes, mutated, disfigured")
+# Since the photo audit (2026-11-17: no eye defect at severity 2 or more in 1,288 photos, none at
+# all in 55 situational ones) the line's eye words give their 10 tokens to a third hand, a
+# duplicate person, the mirror, the phone and the missing garments (safe.BODY_ANATOMY,
+# prompt.body_negative): the same negative as a profile body shot's.
+SNAP_ANATOMY = BODY_ANATOMY
 
 
 def _snap_negative(covered: str, style: str) -> tuple[tuple[str, int], ...]:
-    """A situational photo's negative: what stays covered (`covered`, the profile negative's
-    line for `style`), minors, likeness, SNAP_ANATOMY and another person required; the lust
-    style's longer covered line takes "3d render" down to priority 2 to fit."""
-    lust = style == LUST
-    return (("cartoon, painting" if lust else "cartoon, painting, 3d render", 0),
-            (covered, 0),
-            ("child, teenager", 0),
-            ("celebrity, famous person", 0),
-            (SNAP_ANATOMY, 0),
-            ("another person", 0),
-            ("second face, duplicate person", 1),
-            ("plastic skin, airbrushed, doll", 1),
-            ("crowd, group of people", 1),
-            ("vintage, retro, film grain, sepia, old photo", 1),
-            ("3d render, anime, illustration, cgi" if lust else "anime, illustration, cgi", 2),
-            ("face on screen, webcam, video call, portrait on wall", 2),
-            ("watermark, text, logo", 2))
+    """A situational photo's negative (prompt.body_negative): what stays covered (`covered`, the
+    profile negative's line for `style`), minors, likeness, SNAP_ANATOMY, another or a second
+    person, the mirror, the phone and the missing garments required; the lust style's longer
+    covered line takes "3d render" down to priority 2 to fit."""
+    return body_negative(covered, lust=style == LUST, optional=(
+        ("face on screen, webcam, video call, portrait on wall", 2),))
 
 
 SNAP_NEGATIVE = _snap_negative(_COVERED, PLAIN)
@@ -497,9 +489,10 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
 def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     """The prompt for scene s with p's face, in this order: kind, framing, subject (0), her body
     (0: her size, then the build with her bust, prompt.body_phrases), the activity (1), the
-    setting (1), hair and skin (0), looking at the camera (3, not a snapshot), eyes and face
-    details (2; none about her hands, arms, legs or feet, limb_detail), the outfit (2), the
-    light of its time of day (2), the expression (3), a plain
+    setting (1), hair and skin (0), what she wears (0: `wearing` the outfit, a top and a bottom,
+    safe.complete), a pose that keeps her hands simple (1, safe.pose), looking at the camera (3,
+    not a snapshot), eyes and face details (2; none about her hands, arms, legs or feet,
+    limb_detail), the light of its time of day (2), the expression (3), a plain
     average build (1) and the phone look (1, without natural light late at night). A lust
     scene's outfit and setting go in as one priority-0 phrase where the setting stands, with
     SNAP_NEGATIVE_LUST. If the required set would not fit, the kind, framing, hair style, skin
@@ -513,23 +506,32 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     name_re = names_re(p)
     out: list[tuple[str, int]] = []
     add = phrase_adder(out, name_re)
-    add(_KINDS[s.kind], 0)
-    add(_FRAMINGS[s.framing], 0)
+    kind_words, framing_words = _KINDS[s.kind], _FRAMINGS[s.framing]
+    if s.framing not in HEAD_FRAMINGS:  # the short form: the tokens go to her clothes and pose
+        kind_words = SHORT.get(kind_words, kind_words)
+    add(kind_words, 0)
+    add(framing_words, 0)
     add(*subject_phrase(p))
     body, plain_build = body_phrases(p)  # her body right after who she is, required
     out += body
+    add(pose("front", s.framing, pos="her" if p.identity.player_gender == "female" else "his"),
+        pose_priority(s.framing))
     add(s.activity, 1, True)
     if lust:  # one phrase: the fit keeps both or neither; scene_renderable checked the names
         add(lust_phrase(s), 0, True)
     else:
         add(s.setting, 1, True)
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
+    if not lust:  # clothed by construction: required, a top and a bottom (the audit: at
+        outfit = _clean(s.outfit)  # priority 2 the outfit was dropped from 14 of 55 prompts)
+        if name_re is not None and name_re.search(outfit):
+            outfit = ""
+        add(wearing(outfit, gender=p.identity.player_gender, framing=s.framing), 0)
+    add(alone(s.setting), 3)
     if s.kind != "snapshot":
         add("looking at the camera", 3)
     details = [d for d in eyes_face(p, name_re) if not limb_detail(d[0])]
     out += identity_first(p, details)  # eye colour, glasses, stubble first
-    if not lust:
-        add(s.outfit, 2, True)
     if _LIGHT[s.when]:
         add(_LIGHT[s.when], 2)
     if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # optional, after who she is
@@ -538,7 +540,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)
-    out = fit_required(out, p, [_KINDS[s.kind], _FRAMINGS[s.framing]], name_re)
+    stand = pose("front", s.framing, pos="her" if p.identity.player_gender == "female" else "his")
+    out = fit_required(out, p, [kind_words, stand, framing_words], name_re)
     return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if lust else SNAP_NEGATIVE)
 
 
@@ -558,12 +561,17 @@ def build_tile_prompt(p: Persona) -> PromptSpec:
     # face details go at 1 and 2 as in the profile prompt, so long looks cannot overflow it.
     eye = f"{_clean(p.appearance.eye_colour)} eyes"
     out += [(text, 0) for text, _ in hair_skin(p, name_re)]
+    at_pc = _clean(p.appearance.at_the_pc or "")
+    if _text_codes("outfit", at_pc, ident=_NOBODY, names=[]) or (
+            name_re is not None and name_re.search(at_pc)):
+        at_pc = ""  # the scene screen's free-text checks (R22): the default top instead
+    # a top with a neckline, the first phrase the fit keeps after the required ones (the audit:
+    # bare shoulders with no top in view)
+    add(wearing(at_pc, gender=p.identity.player_gender, framing="head_and_shoulders"), 1)
     for text, _ in eyes_face(p, name_re):
         out.append((text, 0 if text == eye else 1))
     add(GAME_MONITOR, 0)
     add(TILE_DESK, 1)
-    if not _text_codes("outfit", p.appearance.at_the_pc or "", ident=_NOBODY, names=[]):
-        add(p.appearance.at_the_pc, 2, True)  # the scene screen's free-text checks (R22)
     add("looking at the screen, smiling", 3)
     add(_HEADSHOT_TAIL, 1)
     return PromptSpec(tuple(out), TILE_NEGATIVE)

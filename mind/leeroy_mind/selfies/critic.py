@@ -317,12 +317,13 @@ async def unload(admin, model: str) -> None:
 def scene_codes(scene) -> tuple[str, str, str]:
     """(framing, outfit, prop) codes of a composed Scene: the enum keys of the plain lists, 'lust'
     for a lust outfit, 'none' for no prop."""
-    from .scene_choices import OUTFITS, PROPS
+    from .scene_choices import LEGACY_OUTFITS, OUTFITS, prop_key
     from .style import LUST
-    outfit = next((k for k, v in OUTFITS.items() if v == scene.outfit), None)
+    said = list(OUTFITS.items()) + list(LEGACY_OUTFITS.items())
+    outfit = next((k for k, v in said if v == scene.outfit), None)
     if outfit is None:
         outfit = "lust" if getattr(scene, "style", None) == LUST else "other"
-    prop = next((k for k, v in PROPS.items() if v and scene.activity.endswith(", " + v)), "none")
+    prop = prop_key(scene.activity)
     return scene.framing, outfit, prop
 
 

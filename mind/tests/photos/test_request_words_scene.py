@@ -24,7 +24,7 @@ REPLY = {"place": "supply cupboard at work", "framing": "mirror_selfie", "wearin
          "moment": "slipped out for a minute", "time": "now", "lighting": "fluorescent",
          "prop": None}
 ASK = "sneak off from work and send me a selfie from the supply cupboard"
-HIVIS = "a hi-vis vest over a work t-shirt"  # the test cast's job: warehouse supervisor
+HIVIS = "a hi-vis vest over a work t-shirt and work trousers"  # the test cast's job: warehouse supervisor
 TOOK = "You just took this photo of yourself for him: "
 
 
@@ -66,7 +66,8 @@ def test_offline_request_renders_his_scene_with_her_face_and_she_knows_it(tmp_pa
             assert (photo.scene["setting"], photo.scene["outfit"]) == ("supply cupboard at work", HIVIS)
             assert len(rendered) == 1
             req = rendered[0]
-            for phrase in ("mirror selfie", f"wearing {HIVIS}", "supply cupboard at work"):
+            for phrase in ("selfie, close arm's-length shot", f"wearing {HIVIS}",
+                           "supply cupboard at work"):
                 assert (phrase, 0) in req.phrases
             # her face: the reference is her chosen photo, at the identity scale
             assert req.identity.ref == files.history(app.data_dir, 101, photo.pick).absolute()

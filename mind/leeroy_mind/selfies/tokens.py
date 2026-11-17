@@ -91,6 +91,10 @@ WORD_TOKENS = {
     "storeroom": 2, "supply": 1, "tee": 1, "timer": 1, "tired": 1, "toilet": 1, "toilets": 1,
     "train": 1, "truck": 1, "tunic": 1, "under": 1, "upstairs": 1, "van": 1, "vest": 1, "vis": 1,
     "ward": 1, "warehouse": 1, "washroom": 2, "whites": 1, "window": 1, "work": 1, "yard": 1,
+    # the audit's poses, settings and garments (safe.py), measured 2026-11-17
+    "air": 1, "alone": 1, "arm": 1, "beside": 1, "bookshop": 1, "crew": 1, "else": 1,
+    "festival": 1, "field": 1, "hands": 1, "knee": 1, "no": 1, "open": 1, "standing": 1,
+    "sunny": 1,
 }
 
 

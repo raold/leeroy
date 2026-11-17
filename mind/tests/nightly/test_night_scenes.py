@@ -261,7 +261,9 @@ def test_off_list_scene_is_asked_once_more_then_declined_or_composed(h, recovers
     result, codes = run(ask_scene(ctx, 101, about="an ordinary day"))
     assert ctx.reasoner.calls == 2
     if recovers:
-        assert result.activity == "walking a dog on a leash, holding a dog leash" and codes == []
+        # nothing is held since the photo audit (scene_choices.PROPS)
+        assert result.activity == ("out on a walk with a dog alongside, a dog sitting alongside")
+        assert codes == []
     else:
         assert result is None and codes == ["model"]
 

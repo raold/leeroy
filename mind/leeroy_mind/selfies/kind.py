@@ -43,6 +43,8 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.text import has_meta
 
 from .prompt import lust_named, lust_phrase, names_re
+from .safe import (BODY_SHOT_SHARE, NEW_SETTINGS, OUTFIT_WORDS, RETIRED_SETTINGS,
+                   settle_framing)
 from .store import queue_restyled
 from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
 
@@ -112,19 +114,39 @@ def _choice(template: str) -> str:
     return template.replace("{colour} ", "")
 
 
+def _article(phrase: str) -> str:
+    return f"{'an' if phrase[0].lower() in 'aeiou' else 'a'} {phrase}"
+
+
+def _templates(templates) -> dict[str, str]:
+    """choice -> how its colour goes in: the words the audit asked for (safe.OUTFIT_WORDS: a
+    dress with its length, a jacket with its top and bottom, no bike shorts, no one-shoulder
+    top), else the template itself. The choice (the key) never changes."""
+    return {_choice(t): OUTFIT_WORDS.get(_choice(t), t) for t in templates}
+
+
 # the outfit the model picks -> how its colour goes in
-LUST_OUTFITS: dict[str, str] = {_choice(t): t for t in _DRESSED + _SWIM + _GYM}
+LUST_OUTFITS: dict[str, str] = _templates(_DRESSED + _SWIM + _GYM)
 SWIM_OUTFITS = frozenset(_choice(t) for t in _SWIM)
 GYM_OUTFITS = frozenset(_choice(t) for t in _GYM)
 WATER_SETTINGS = ("the beach at sunset", "a hotel pool deck", "a lakeside dock",
                   "a hot tub on a wooden deck", "the deck of a sailing boat", "a beach bar")
 GYM_SETTINGS = ("the gym",)
 SWIM_ONLY_SETTINGS = ("a hot tub on a wooden deck",)  # nothing but swimwear there
+# The mirror, the car's front seat and the concert crowd are retired (safe.RETIRED_SETTINGS: a
+# wrong reflection, a cloned passenger, a crowd of faces); three plain places take their slots.
+# A stored kind that names a retired one keeps its text and renders as safe.SETTING_WORDS says.
 LUST_SETTINGS = WATER_SETTINGS + GYM_SETTINGS + (
     "a rooftop bar at night", "a city street at night", "a cafe terrace", "a park in summer",
-    "a hotel balcony at dusk", "a nightclub", "her living room couch",
-    "the mirror in her hallway", "the front seat of her car", "a concert crowd", "a wine bar",
-    "a dance floor", "a garden party", "a ski lodge terrace")
+    "a hotel balcony at dusk", "a nightclub", "her living room couch", *NEW_SETTINGS,
+    "a wine bar", "a dance floor", "a garden party", "a ski lodge terrace")
+assert not set(RETIRED_SETTINGS) & set(LUST_SETTINGS)
+# The lust style's photo kinds: never a mirror selfie (25% defective in the audit, half of them
+# a second or wrong reflection); a stored one renders as a selfie (safe.KIND_WORDS).
+LUST_KINDS = ("selfie", "snapshot", "headshot")
+# Its framings: waist-up or three-quarter, as every lust kind chosen so far (the outfit lists
+# name no neckline for a closer photo).
+LUST_FRAMINGS = ("upper_body", "three_quarter")
 LUST_EXPRESSIONS = ("a playful smile", "a sultry look", "a confident smirk", "a teasing grin",
                     "an over-the-shoulder glance", "a wink", "biting her lip", "laughing")
 PAIRINGS = ("photo.outfit: swimwear away from the water",
@@ -145,7 +167,11 @@ _CASUAL_MORE = ("fitted {colour} t-shirt and high-waisted jeans", "flowy {colour
 # No string bikini in a varied set: its swimwear is shot full-length, and from behind
 VARIED_OUTFITS: dict[str, str] = {
     **{k: v for k, v in LUST_OUTFITS.items() if k != "string bikini"},
-    **{_choice(t): t for t in _GYM_MORE + _CASUAL_MORE}}
+    **_templates(_GYM_MORE + _CASUAL_MORE)}
+# choice -> its template before safe.OUTFIT_WORDS, to read a stored kind's outfit (safe.outfit_words)
+OLD_TEMPLATES = {_choice(t): t for t in _DRESSED + _SWIM + _GYM + _GYM_MORE + _CASUAL_MORE
+                 if _choice(t) in OUTFIT_WORDS}
+assert set(OLD_TEMPLATES) == set(OUTFIT_WORDS)
 VARIED_GYM_OUTFITS = GYM_OUTFITS | frozenset(_choice(t) for t in _GYM_MORE)
 VARIED_LOOKS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {  # category: outfits, settings
     "swim": (tuple(_choice(t) for t in _SWIM if _choice(t) in VARIED_OUTFITS),
@@ -165,7 +191,8 @@ CATEGORIES = tuple(VARIED_LOOKS)
 # The pose each candidate is photographed in, and how much of her is in frame: her figure shows
 VARIED_VIEWS = ("behind", "rear_three_quarter", "side", "front")
 BACK_VIEWS = ("behind", "rear_three_quarter")
-VARIED_FRAMINGS = ("full_body", "three_quarter")
+VARIED_FRAMINGS = ("full_body", "three_quarter", "upper_body")
+VARIED_BODY_FRAMINGS = ("full_body", "three_quarter")  # her figure shows (safe.body_slots)
 VIEW_OUTSIDE = "photo.view: a pose only in a varied set"
 SWIM_BACK = "photo.framing: swimwear from behind only full-length"
 # a composed part that holds her character or real name (a colour or a season can be one): the
@@ -178,7 +205,7 @@ def _enum(values) -> dict:
 
 
 LUST_SCHEMA = schema(LUST_PROMPT, {
-    "kind": _PROPS["kind"], "framing": _PROPS["framing"], "setting": _enum(LUST_SETTINGS),
+    "kind": _enum(LUST_KINDS), "framing": _enum(LUST_FRAMINGS), "setting": _enum(LUST_SETTINGS),
     "outfit": _enum(LUST_OUTFITS), "colour": _enum(LUST_COLOURS),
     "expression": _enum(LUST_EXPRESSIONS)})
 
@@ -328,9 +355,7 @@ def _photo_problems(p: Persona, data: dict) -> list[str]:
 
 def outfit_phrase(choice: str, colour: str, outfits: dict[str, str] = LUST_OUTFITS) -> str:
     """The outfit `choice` with its colour put in and an article in front."""
-    phrase = outfits[choice].format(colour=colour)
-    article = "an" if phrase[0].lower() in "aeiou" else "a"
-    return f"{article} {phrase}"
+    return _article(outfits[choice].format(colour=colour))
 
 
 def compose_lust(data: dict) -> ProfilePhoto:
@@ -359,6 +384,8 @@ def screen_lust(p: Persona, data: dict, *, varied: bool = False) -> list[str]:
              ("colour", LUST_COLOURS), ("expression", LUST_EXPRESSIONS))
     if varied:
         lists += (("framing", VARIED_FRAMINGS), ("view", VARIED_VIEWS))
+    elif data.get("kind") not in LUST_KINDS:  # never a mirror selfie; its framing is the
+        return ["photo.kind: not on its list"]  # caller's (a scene may be closer)
     problems = [f"photo.{field}: not on its list" for field, values in lists
                 if data.get(field) not in values]
     if not varied and data.get("view") is not None:
@@ -418,7 +445,8 @@ def _refused(ctx: "NightContext", guid: int, problems: list[str]) -> tuple[None,
     return None, shown
 
 
-async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[ProfilePhoto | None, list[str]]:
+async def kind_one(ctx: "NightContext", guid: int, *, variety=False,
+                   share: float = BODY_SHOT_SHARE) -> tuple[ProfilePhoto | None, list[str]]:
     """One JSON call (no think pass) on the stored persona, under the rules of its style: the
     photo kind and no problems, or (None, problems). The plain style writes a free-text kind
     (KIND_SCHEMA, screen_kind); the lust style picks from lists (LUST_SCHEMA, screen_lust) and
@@ -439,7 +467,8 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
         members = [ctx.name(g) for g in ctx.members(include_away=True)] + [
             member.identity.real_name for member in all_personas.values()]
         if lust:
-            picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,names=members)
+            picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,
+                                               names=members,share=share)
             return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
         ask += photo_extra.common(ctx.store,ctx.clock.now(),persona=p,ident=ctx.ident,names=members)
         ask += (" Prefer a coherent crop: headshots near the face, mirror selfies showing the upper body, "
@@ -458,6 +487,10 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
             if problems:
                 return _refused(ctx, guid, problems)
             return ProfilePhoto(**data), []
+        if data.get("outfit") not in SWIM_OUTFITS:  # swimwear is framed waist-up anyway
+            # three-quarter for `share` of the members, else waist-up ([selfies] body_shot_share)
+            data = {**data, "framing": settle_framing(data.get("framing"), share,
+                                                      f"{guid}:{ctx.night}")}
         problems = screen_lust(p, data)
         if not problems:
             return compose_lust(data), []
@@ -517,7 +550,8 @@ def _personas(ctx):
 def make_stage(cfg):
     """Capture startup configuration; per-member work never opens mind.toml."""
     async def photo(ctx):
-        await stage_photo(ctx, variety=cfg.variety)
+        await stage_photo(ctx, variety=cfg.variety,
+                          share=getattr(cfg, "body_shot_share", BODY_SHOT_SHARE))
     return photo
 
 
@@ -533,7 +567,8 @@ def _todo(ctx: "NightContext") -> list[int]:
     return picks[:ctx.settings.photo_per_night]
 
 
-async def stage_photo(ctx: "NightContext", *, variety=False) -> None:
+async def stage_photo(ctx: "NightContext", *, variety=False,
+                      share: float = BODY_SHOT_SHARE) -> None:
     """Stage "photo", units str(guid): each member with looks and no photo kind, or whose kind
     the pass chose under other rules than her style now (needs_rechoice), at most
     photo_per_night. A refused reply's unit is done with nothing written. Kinds from before the
@@ -549,7 +584,7 @@ async def stage_photo(ctx: "NightContext", *, variety=False) -> None:
         nonlocal done, refused, rechosen
         guid = int(unit)
         p = ctx.base(guid)
-        photo, _ = await kind_one(ctx, guid, variety=variety)
+        photo, _ = await kind_one(ctx, guid, variety=variety, share=share)
         if photo is None:
             refused += 1
             ctx.skip(STAGE, unit)

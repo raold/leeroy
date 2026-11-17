@@ -6,6 +6,13 @@ side (from behind looking over her shoulder, a three-quarter rear view, in profi
 front), framed full-length or three-quarter so her figure shows. Swimwear from behind is always
 full-length.
 
+Since the photo audit (2026-11-17, safe.py) `[selfies] body_shot_share` says how many of the
+four show her whole figure (safe.body_slots: two at the default 0.5): the views from behind
+first (her hands are out of sight there: 8-11% defective), then the front view, then the side
+view (16% and most of the third hands and feet); the others are framed waist-up. At 1.0 all
+four are full-length or three-quarter, as before. Every candidate stands in one simple pose
+(safe.POSES), and the lists say their outfits and settings as safe.py rewrote them.
+
 Off by default: `[selfies] varied_sets = true` (read at the mind's start, as the rest of the
 table). With it off nothing is queued, and a set queued while it was on renders as an ordinary
 set of her own photo kind.
@@ -43,6 +50,7 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import kind
 from .prompt import renderable
+from .safe import BODY_SHOT_SHARE, body_slots
 from .store import FACE_VIEWS, VARIED_SET_KEY, queue_more
 from .style import PLAIN, suggestive
 
@@ -94,11 +102,38 @@ def screen(p: Persona, look: Look) -> list[str]:
     return kind.screen_lust(p, look.data(), varied=True)
 
 
-def _framing(rng: random.Random, category: str, view: str) -> str:
-    """Front and side are full-length; so is swimwear from behind. Other back views: either."""
+_BODY_ORDER = ("behind", "rear_three_quarter", "front", "side")  # who shows her figure first
+
+
+def _framing(rng: random.Random, category: str, view: str, body: bool = True) -> str:
+    """A body shot: front and side are full-length; so is swimwear from behind; other back
+    views either. Any other candidate is framed waist-up."""
+    if not body:
+        return "upper_body"
     if view in kind.BACK_VIEWS and category != "swim":
-        return rng.choice(kind.VARIED_FRAMINGS)
+        return rng.choice(kind.VARIED_BODY_FRAMINGS)
     return "full_body"
+
+
+def _assign(rng: random.Random, share: float) -> list[tuple[str, str, bool]]:
+    """(category, view, body shot) for the four candidates: the views shuffled over the
+    categories, the body shots given by _BODY_ORDER (swimwear seen from behind first: it is only
+    ever full-length), body_slots(share) of them. With none left for swimwear seen from behind,
+    it trades views with a category seen from the front or the side."""
+    views = list(kind.VARIED_VIEWS)
+    rng.shuffle(views)
+    pairs = dict(zip(kind.CATEGORIES, views))
+    n = body_slots(share, len(pairs))
+
+    def body_views() -> set[str]:
+        order = sorted(_BODY_ORDER, key=lambda v: (
+            not (v in kind.BACK_VIEWS and pairs.get("swim") == v), _BODY_ORDER.index(v)))
+        return set(order[:n])
+    if pairs["swim"] in kind.BACK_VIEWS and pairs["swim"] not in body_views():
+        other = next(c for c in kind.CATEGORIES if pairs[c] not in kind.BACK_VIEWS)
+        pairs["swim"], pairs[other] = pairs[other], pairs["swim"]
+    chosen = body_views()
+    return [(c, v, v in chosen) for c, v in pairs.items()]
 
 
 def _pick(p: Persona, rng: random.Random, category: str, view: str, framing: str,
@@ -122,21 +157,20 @@ def _pick(p: Persona, rng: random.Random, category: str, view: str, framing: str
     return None
 
 
-def compose(p: Persona, seed: str) -> tuple[Look, ...] | None:
+def compose(p: Persona, seed: str, share: float = BODY_SHOT_SHARE) -> tuple[Look, ...] | None:
     """Four looks for `p`, one of each category in kind.CATEGORIES order, each with its own
     view, colour and expression and at most one dress among them, every one passing screen();
-    None when a category has no safe look left (her names can clash with every choice).
-    Deterministic in `seed`."""
+    `share` of them show her whole figure (_assign), the others waist-up. None when a category
+    has no safe look left (her names can clash with every choice). Deterministic in `seed`."""
     rng = random.Random(f"selfie-varied:{seed}")
-    views = list(kind.VARIED_VIEWS)
-    rng.shuffle(views)
+    slots = _assign(rng, share)
     colours = list(kind.LUST_COLOURS)
     rng.shuffle(colours)
     expressions = list(kind.LUST_EXPRESSIONS)
     rng.shuffle(expressions)
     looks: list[Look] = []
-    for category, view in zip(kind.CATEGORIES, views):
-        found = _pick(p, rng, category, view, _framing(rng, category, view), colours,
+    for category, view, body in slots:
+        found = _pick(p, rng, category, view, _framing(rng, category, view, body), colours,
                       expressions, looks)
         if found is None:
             return None
@@ -144,17 +178,19 @@ def compose(p: Persona, seed: str) -> tuple[Look, ...] | None:
     return tuple(looks)
 
 
-def recompose_slot(p: Persona, looks, idx: int, seed: str) -> Look | None:
-    """Slot `idx`'s look composed again as a full-length front view of the same category, kept
-    apart from the other slots' colours and expressions where it can be; None when none is
-    safe."""
+def recompose_slot(p: Persona, looks, idx: int, seed: str,
+                   share: float = BODY_SHOT_SHARE) -> Look | None:
+    """Slot `idx`'s look composed again as a front view of the same category (full-length when
+    `share` gives the front view a body shot, else waist-up), kept apart from the other slots'
+    colours and expressions where it can be; None when none is safe."""
     rng = random.Random(f"selfie-varied-front:{seed}")
     colours = list(kind.LUST_COLOURS)
     rng.shuffle(colours)
     expressions = list(kind.LUST_EXPRESSIONS)
     rng.shuffle(expressions)
     others = [x for i, x in enumerate(looks) if i != idx and x is not None]
-    return _pick(p, rng, looks[idx].category, "front", "full_body", colours, expressions, others)
+    framing = "full_body" if body_slots(share) > len(kind.BACK_VIEWS) else "upper_body"
+    return _pick(p, rng, looks[idx].category, "front", framing, colours, expressions, others)
 
 
 def _valid(x) -> bool:
@@ -225,7 +261,7 @@ def looks_for(store, p: Persona | None, guid: int,
 
 
 def refused(store, p: Persona, guid: int, set_no: int, slot: int | None, *,
-            night: str) -> str:
+            night: str, share: float = BODY_SHOT_SHARE) -> str:
     """A varied set the NSFW gate refused (`slot` flagged its seeds): counted; on the
     REFUSED_NIGHTS-th refusal that slot is composed again once as a front view; refused once
     more, the plan is dropped. What was done: counted, recomposed or dropped."""
@@ -246,7 +282,7 @@ def refused(store, p: Persona, guid: int, set_no: int, slot: int | None, *,
             return "dropped"
         done = "counted"
         if n >= REFUSED_NIGHTS and slot is not None and 0 <= slot < 4 and looks[slot] is not None:
-            front = recompose_slot(p, looks, slot, f"{guid}:{set_no}:{night}")
+            front = recompose_slot(p, looks, slot, f"{guid}:{set_no}:{night}", share)
             if front is None:
                 drop_plan(store, guid, set_no)
                 log("selfies_varied_dropped", night=night, guid=guid, set=set_no,
@@ -315,7 +351,7 @@ def _waiting(conn, guid: int) -> int:
 
 
 def queue(store, *, human: int, now: float, day: str, go: bool, stance: str = "lust",
-          guids=None, daily: bool = True) -> dict:
+          guids=None, daily: bool = True, share: float = BODY_SHOT_SHARE) -> dict:
     """Plan (go False, read-only) or queue (go True, one transaction) a varied set for every
     cast member of `stance`'s style (only "lust": style.suggestive), or only those of `guids`,
     who has none queued, none queued today (`day`, the local date; not asked with `daily` False:
@@ -346,7 +382,8 @@ def queue(store, *, human: int, now: float, day: str, go: bool, stance: str = "l
             report["members"] += 1
             why = _skip(conn, store, p, day, daily)
             set_no = _next_set(conn, guid)
-            looks = None if why else compose(p, f"{guid}:{set_no}:{versions.get(guid)}")
+            looks = None if why else compose(p, f"{guid}:{set_no}:{versions.get(guid)}",
+                                             share)
             if why is None and looks is None:
                 why = "no_safe_look"
             if why:

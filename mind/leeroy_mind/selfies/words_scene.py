@@ -70,6 +70,7 @@ from .prompt import (_PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, f
 from .scene import (_NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
                     SNAP_NEGATIVE_LUST, _text_codes, _young_number, limb_detail, scene_from,
                     scene_renderable)
+from .safe import KIND_WORDS, POSE_WAIST_UP, alone, wearing
 from .scene_choices import OUTFITS, PLACES, PLAIN_PLACES
 from .style import AGE_RE, LUST, style_of
 
@@ -120,8 +121,13 @@ NOW_ANY = "going about an ordinary day"
 
 # The prompt's framing (priority 0, never yielded: the fit shortens only the back view, to
 # "from behind", as a varied set's pose), what `shows` says of it, and the stored kind.
-FRAMING_WORDS = {"mirror_selfie": "mirror selfie", "handheld_selfie": "phone selfie",
-                 "timer": "timer photo, phone propped up",
+# Since the photo audit (safe.py) a selfie names no mirror and no phone (half of the mirror
+# selfies had a wrong or second reflection; a phone in view came doubled or oversized): both
+# selfies render as the arm's-length shot, the timer photo without its phone, and the negatives
+# name the mirror and the phone. What `shows` says of it is unchanged.
+FRAMING_WORDS = {"mirror_selfie": KIND_WORDS["mirror_selfie"],
+                 "handheld_selfie": KIND_WORDS["selfie"],
+                 "timer": "photo taken on a timer",
                  BEHIND: "from behind, looking over {pos} shoulder"}
 FRAMING_SHOWS = {"mirror_selfie": "a mirror selfie", "handheld_selfie": "a selfie",
                  "timer": "a photo on the phone's timer",
@@ -140,18 +146,19 @@ SWIM_FRAMING = "waist-up shot"  # swimwear only framed upper body, as the lust p
 UNIFORMS = (
     (re.compile(r"\b(?:nurs\w*|midwi\w*|paramedic\w*|hospital|clinic\w*|doctor|surgeon|dent\w*|"
                 r"carers?|care (?:home|assistant|worker)|vets?|veterinar\w*|pharmac\w*|"
-                r"physio\w*)\b", re.I), "medical scrubs"),
-    (re.compile(r"\b(?:chef|cook|kitchen|bakery|baker|catering)\b", re.I), "chef's whites"),
+                r"physio\w*)\b", re.I), "a medical scrubs top and scrubs trousers"),
+    (re.compile(r"\b(?:chef|cook|kitchen|bakery|baker|catering)\b", re.I),
+     "a white chef's shirt and checked trousers"),
     (re.compile(r"\b(?:barista|caf[eé]|coffee|waitress|waiter|bartender|barmaid|pub|restaurant|"
-                r"diner)\b", re.I), "a black work apron over a black t-shirt"),
+                r"diner)\b", re.I), "a black work apron over a black t-shirt and jeans"),
     (re.compile(r"\b(?:warehouse|forklift|construction|builder|electrician|plumber|mechanic|"
                 r"factory|labou?rer|delivery|courier|logistics|depot)\b", re.I),
-     "a hi-vis vest over a work t-shirt"),
+     "a hi-vis vest over a work t-shirt and work trousers"),
     (re.compile(r"\b(?:retail|shop|store|supermarket|cashier|checkout)\b", re.I),
-     "a work polo shirt"),
+     "a work polo shirt and trousers"),
     (re.compile(r"\b(?:hairdresser|stylist|salon|barber|beautician)\b", re.I),
-     "a black salon tunic"))
-OFFICE_WEAR = "smart office clothes"
+     "a black salon tunic and black trousers"))
+OFFICE_WEAR = "a smart office shirt and trousers"
 PLAIN_WEAR = {"gym": OUTFITS["exercise"], "casual": OUTFITS["casual"],
               "going_out": OUTFITS["outdoors"], "pyjamas": OUTFITS["warm"]}
 LUST_WEAR = {"gym": ("sports top and leggings",), "casual": VARIED_LOOKS["casual"][0],
@@ -521,10 +528,17 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     add(*subject_phrase(p))
     body, plain_build = body_phrases(p)
     out += body
-    out += [(f"wearing {outfit}", 0), (setting, 0)]
+    # clothed by construction: a top and a bottom (safe.complete; her words at the computer may
+    # name only one), swimwear as its list says it
+    worn = (f"wearing {outfit}" if w["wearing"] == "swimwear" else
+            wearing(outfit, gender=p.identity.player_gender, framing="upper_body"))
+    out += [(worn, 0), (setting, 0)]
     if w["wearing"] == "swimwear":
         out.append((SWIM_FRAMING, 0))
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
+    if w["framing"] != BEHIND and not w.get("prop"):
+        add(POSE_WAIST_UP, 1)  # nothing in her hands: they stay out of the picture
+    add(alone(setting), 3)
     add(s.activity, 1, True)
     if w["framing"] != BEHIND:
         add("looking at the camera", 3)

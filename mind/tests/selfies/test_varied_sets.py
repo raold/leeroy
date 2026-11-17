@@ -17,7 +17,9 @@ from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.selfies import cli, files, kind, varied
 from leeroy_mind.selfies.config import SelfieCfg, load_selfie_config
-from leeroy_mind.selfies.prompt import (BUILD_WORDS, LUST_NEGATIVE, VARIED_FRAMING_WORDS,
+from leeroy_mind.selfies.safe import setting_words
+from leeroy_mind.selfies.prompt import (BODY_NEGATIVE_LUST, BUILD_WORDS, LUST_NEGATIVE,
+                                        VARIED_FRAMING_WORDS,
                                         VARIED_NEGATIVE, VARIED_VIEW_WORDS, build_prompt,
                                         build_varied_prompt, subject_phrase, varied_parts)
 from leeroy_mind.selfies.scene import ref_crop
@@ -84,6 +86,14 @@ def test_a_set_has_four_outfits_and_four_poses_and_no_formal_dress(h, seed):
     for x in looks:
         assert not varied.screen(p, x)
         assert x.framing in kind.VARIED_FRAMINGS
+        # [selfies] body_shot_share's default: the views from behind show her figure, the
+        # front and side views are waist-up (safe.py, the photo audit)
+        if x.view not in kind.BACK_VIEWS:
+            assert x.framing == "upper_body"
+        else:
+            assert x.framing in kind.VARIED_BODY_FRAMINGS
+    for x in varied.compose(p, seed, 1.0):  # the share before the audit: every figure shows
+        assert x.framing in kind.VARIED_BODY_FRAMINGS
         if x.view not in kind.BACK_VIEWS:
             assert x.framing == "full_body"
 
@@ -95,6 +105,8 @@ def test_seeds_vary_the_poses_so_swimwear_is_shot_from_behind_too(h):
     framings = {x.framing for n in range(60) for x in varied.compose(p, str(n))}
     assert framings == set(kind.VARIED_FRAMINGS)
     assert {x.framing for n in range(60) for x in varied.compose(p, str(n))
+            if x.category == "swim" and x.view in kind.BACK_VIEWS} == {"full_body"}
+    assert {x.framing for n in range(60) for x in varied.compose(p, str(n), 1.0)
             if x.category == "swim"} == {"full_body"}
 
 
@@ -184,7 +196,8 @@ def test_swimwear_full_length_and_from_behind_only_in_a_varied_set(h):
     ({"outfit": "tank top and denim shorts", "setting": "a hot tub on a wooden deck"},
      kind.PAIRINGS[2]),                                                  # the hot tub: swim only
     ({"kind": "headshot"}, kind.PAIRINGS[4]),
-    ({"framing": "upper_body"}, "photo.framing: not on its list"),
+    ({"framing": "upper_body"}, kind.SWIM_BACK),  # waist-up is a varied framing, not from behind
+    ({"framing": "face"}, "photo.framing: not on its list"),
     ({"view": "lying down"}, "photo.view: not on its list"),
     ({"outfit": "string bikini underwear"}, "photo.outfit: not on its list"),
     ({"outfit": "string bikini"}, "photo.outfit: not on its list"),
@@ -309,8 +322,11 @@ def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
         assert text in kept and text not in dropped
     # her build, whole, and her hair and skin, which are never traded for it (2026-11-15)
     assert BUILD_WORDS["voluptuous"] in kept  # never shortened (controller, 2026-11-15)
-    for text in ("honey blonde with highlights", "warm golden olive skin"):
+    # her standing pose is required too (safe.POSES), so her skin keeps its tone word and drops
+    # its modifiers, as the rulings allow, before the pose would yield
+    for text in ("honey blonde with highlights", "olive skin"):
         assert text in kept
+    assert ("standing, arms at her sides", 1) in spec.phrases  # yielded, before the framing
     assert "f" * 40 in dropped
 
 
@@ -352,8 +368,9 @@ def test_a_varied_prompt_puts_pose_first_and_keeps_every_negative(h):
         "leeroy_mind.selfies.prompt").origin).read_text(encoding="utf-8")
     assert spec.phrases[1] == (VARIED_FRAMING_WORDS[look.framing], 0)
     assert (BUILD_WORDS[APPEARANCE.build], 0) in spec.phrases  # the figure, always required here
-    assert (f"wearing {look.phrase}, {look.setting}", 0) in spec.phrases
-    assert set(LUST_NEGATIVE) < set(VARIED_NEGATIVE)
+    assert (f"wearing {look.phrase}, {setting_words(look.setting)}", 0) in spec.phrases
+    required = {w.strip() for t, pr in VARIED_NEGATIVE if pr == 0 for w in t.split(",")}
+    assert {w.strip() for w in LUST_NEGATIVE[1][0].split(",")} < required  # what stays covered
     zero = " ".join(t for t, pr in spec.negative if pr == 0)
     for word in ("nsfw", "nude", "topless", "lingerie", "underwear", "see-through", "sheer",
                  "child", "teenager", "celebrity", "thong"):
@@ -361,7 +378,7 @@ def test_a_varied_prompt_puts_pose_first_and_keeps_every_negative(h):
     for text, _ in spec.phrases:
         assert "arkon" not in text.lower()
     assert set(varied_parts(look, look.phrase)) == {"view", "framing", "setting", "outfit",
-                                                     "expression", "wearing"}
+                                                     "expression", "wearing", "pose", "alone"}
 
 
 @pytest.mark.parametrize("over", [{"stance": "fond"}, {"age": 24},
@@ -381,7 +398,9 @@ def test_no_varied_prompt_without_the_lust_style(h, over):
 def test_the_ordinary_prompt_is_untouched(h):
     p = lust(h)
     assert build_prompt(p, kind_style=LUST) == build_prompt(p, kind_style=LUST)
-    assert build_prompt(p, kind_style=LUST).negative == LUST_NEGATIVE
+    # a waist-up kind: the body negative (safe.py), the lust style's covered line in it
+    assert build_prompt(p, kind_style=LUST).negative == BODY_NEGATIVE_LUST
+    assert LUST_NEGATIVE[1] in BODY_NEGATIVE_LUST
     assert not any(t in VARIED_VIEW_WORDS.values() for t, _ in build_prompt(p, kind_style=LUST).phrases)
 
 
@@ -544,7 +563,7 @@ def test_the_night_renders_each_candidate_in_its_own_look(h, tmp_path):
     assert len(prompts) == 4 and len(set(prompts)) == 4
     for prompt, look in zip(prompts, looks):
         assert prompt.startswith(VARIED_VIEW_WORDS[look.view])
-        assert f"wearing {look.phrase}, {look.setting}" in prompt
+        assert f"wearing {look.phrase}, {setting_words(look.setting)}" in prompt
     assert lust_set(h.store.conn, 101, 1) and varied.plan_of(h.store.conn, 101, 1) == looks
     for i in range(4):
         assert files.candidate(h.settings.data_dir, 101, 1, i).is_file()
@@ -647,9 +666,9 @@ def test_the_face_reference_is_never_a_back_view(h, tmp_path):
     assert ref == files.history(h.settings.data_dir, 101, ordinary).absolute()
     assert framing == p.photo.framing
     facing = pick(h.store, 101, 1, front, source="console", now=h.T)
-    assert face_pick(h.store.conn, 101, facing) == (facing, "full_body")
+    assert face_pick(h.store.conn, 101, facing) == (facing, looks[front].framing)
     back_again = undo(h.store, facing, source="console", now=h.T)  # the back view is cover again
-    assert face_pick(h.store.conn, 101, back_again) == (facing, "full_body")  # newest face
+    assert face_pick(h.store.conn, 101, back_again) == (facing, looks[front].framing)  # newest
 
 
 def test_a_situation_waits_while_her_only_covers_are_from_behind(h, tmp_path):
@@ -692,7 +711,7 @@ def test_a_refused_set_recomposes_its_flagged_slot_once_then_drops_its_plan(h, t
     assert varied.plan_of(h.store.conn, 101, 1) == looks  # once: counted
     _night(h, tmp_path, ON, nights[1], FAKE_SELFIE_FLAG_SEEDS=flag)
     again = varied.plan_of(h.store.conn, 101, 1)
-    assert again[1].view == "front" and again[1].framing == "full_body"
+    assert again[1].view == "front" and again[1].framing == "upper_body"  # the default share
     assert again[1].category == looks[1].category
     assert again[:1] + again[2:] == looks[:1] + looks[2:]
     with caplog.at_level(logging.INFO):
