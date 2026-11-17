@@ -1203,7 +1203,7 @@ def cmd_fix_typing(args) -> int:
         _close_fix_store(store, lock)
 
 
-def cmd_voices(args) -> int:
+def cmd_persona_voices(args) -> int:
     """`personas voices`: voice sheets (`<guid>.json` in --dir; personas/voices.py) checked and,
     with --go, saved as each member's persona `speech` field: an owner persona version with a
     "voice" ledger row (`personas undo <id>` takes one back). `--clear` takes sheets off again.
@@ -1759,7 +1759,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                               "rolling back to code without them")
     p_voice.add_argument("--data-dir", default=argparse.SUPPRESS,
                          help="the mind's data folder (as personas --data-dir)")
-    p_voice.set_defaults(func=cmd_voices)
+    p_voice.set_defaults(func=cmd_persona_voices)
     p_clean = psub.add_parser("clean-contamination",
                               help="retire (never delete) the claims, disclosures, memories and "
                                    "coach lessons built from members' echoes of his words, from "
