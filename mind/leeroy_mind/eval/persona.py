@@ -1,9 +1,11 @@
 """Resumable, owner-only persona measurements with explicit sampling coverage."""
 import json
+import logging
 import math
 from collections import defaultdict
 from itertools import combinations
 
+from leeroy_mind.logs import log
 from leeroy_mind.nightly.critic import _line, _members, _safe, sample_lines
 from leeroy_mind.nightly.growth import rollback_week
 from leeroy_mind.nightly.llm import check_schema, schema, system_prompt
@@ -115,7 +117,12 @@ async def consistency(ctx, bounds, rng, week, *, lines=100):
         ids, guids = [i for _, i in selected], [g for g, _ in selected]
         state = _current(ctx, ids, guids, bounds)
         if state is None:
-            return  # unavailable input is not a score or a completed batch
+            # Unavailable input is not a score or a completed batch. Say which lines cannot
+            # be read (ids only), or a week that never completes gives no reason.
+            lost = [i for g, i in selected if _current(ctx, [i], [g], bounds) is None]
+            log("eval_consistency_unavailable", level=logging.WARNING, week=week, batch=n,
+                lines=len(selected), unavailable=len(lost), utterances=lost[:10])
+            return
         before, rows, cards = state
         system = system_prompt("consistency", "Score each numbered line against its speaker's card: "
             "5 is exactly them; 1 is something they would never say. Score every index once.\n{cards}",
