@@ -18,6 +18,7 @@ def test_report_on_a_new_database_and_the_dry_run_write_nothing(tmp_path, capsys
     assert lab_main(["--data-dir", str(live), "run", "--dry-run", "--pairs", "5"]) == 0
     out = capsys.readouterr().out
     assert "piece reply_human, 5 pairs" in out and "Nothing was started or written." in out
+    assert "grader rubric, promoting a winner" in out   # the rig's table; the defaults only measure
     assert out.count("  pair ") == 5
     assert lab_main(["--data-dir", str(live), "run", "--dry-run", "--scripts", "flirt-1,meet-1",
                      "--members", "102", "--pairs", "2"]) == 0

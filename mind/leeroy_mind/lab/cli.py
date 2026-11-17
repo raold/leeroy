@@ -249,7 +249,10 @@ def _dry_run(root: Path, args, cfg) -> int:
     print(f"lab run (dry run): piece {piece or 'none'}, {len(pairs)} pairs over "
           f"{len({p['guid'] for p in pairs})} members, arms: control + up to {cfg.variants} "
           f"variants, judge {cfg.judge} pairs an arm, budget {cfg.minutes} min, grading on the "
-          f"{args.grade_model} model. Nothing was started or written.")
+          f"{args.grade_model} model, grader {cfg.grader}"
+          + (" (the judge's scores on the live model)" if cfg.grader == "tells" else "")
+          + (", promoting a winner" if cfg.promote else ", measure only (nothing is proposed)")
+          + ". Nothing was started or written.")
     for p in pairs:
         print(f"  pair {p['pair']}: {p['script']} ({p['kind']}) with {names.get(p['guid'], '?')} "
               f"#{p['guid']} by {p['channel']}")
