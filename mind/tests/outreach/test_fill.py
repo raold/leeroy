@@ -264,7 +264,10 @@ def test_his_loot_witnesses_come_from_a_bounded_index_range(h, age, filled):
         h.store.conn.execute("UPDATE game_event SET session_id=? WHERE id IN (?,?)", (sid, group, eid))
     query, = group_lookups(h, 101, eid)
     plan = " ".join(row[3] for row in h.store.conn.execute("EXPLAIN QUERY PLAN " + query))
-    assert "game_event_ts (ts>? AND ts<?)" in plan and "TEMP B-TREE" not in plan and "MULTI-INDEX" not in plan
+    # a ts range of one index (the session's own, since migration 0056), never a scan or a sort
+    assert ("game_event_session (session_id=? AND ts>? AND ts<?)" in plan
+            or "game_event_ts (ts>? AND ts<?)" in plan)
+    assert "TEMP B-TREE" not in plan and "MULTI-INDEX" not in plan
     fill(h)
     assert [i.ref for i in items.open_items(h.store, 101)] == ([f"his_day:{eid}"] if filled else [])
 
