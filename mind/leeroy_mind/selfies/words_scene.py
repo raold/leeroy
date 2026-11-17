@@ -65,7 +65,8 @@ from leeroy_mind.talk.everyday import is_everyday
 
 from .kind import LUST_COLOURS, VARIED_LOOKS, VARIED_OUTFITS, _enum, outfit_phrase
 from .prompt import (_PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, fit_required,
-                     glutes_words, hair_skin, identity_first, names_re, phrase_adder,
+                     accessory_phrases, glutes_words, hair_skin, identity_first, names_re, phrase_adder,
+                     reserve,
                      subject_phrase)
 from .scene import (_NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
                     SNAP_NEGATIVE_LUST, _text_codes, _young_number, limb_detail, scene_from,
@@ -526,6 +527,9 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
         out.append((SWIM_FRAMING, 0))
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
     add(s.activity, 1, True)
+    worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
+    room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
+    out += worn
     if w["framing"] != BEHIND:
         add("looking at the camera", 3)
     # none of her face details about her hands, arms, legs or feet (scene.limb_detail)
@@ -540,7 +544,7 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
         out.append(plain_build)
     daylight = w["lighting"] == "daylight"
     add(_PHONE_TAIL if daylight else _PHONE_TAIL.replace("natural light, ", ""), 1)
-    out = fit_required(out, p, [], name_re, pose=pose)
+    out = fit_required(out, p, [], name_re, pose=pose, reserve=room)
     return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if s.style == LUST else SNAP_NEGATIVE)
 
 
