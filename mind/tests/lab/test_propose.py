@@ -123,6 +123,10 @@ def test_the_first_live_night_s_proposals_are_refused_for_the_lost_phrase():
     assert "braces do not parse" in propose.problem("reply_human", "a } b", "placeholders")
     assert "keep it within 102-202" in propose.problem("reply_human", "x" * 40, "length")
     assert propose.problem("reply_human", lost, "extra") is None
+    # the 27B's other habit: a pronoun placeholder with 's ("he's intent")
+    possessive = variant(old="what {they} actually said", new="{they}'s actual point")
+    assert propose.screen("reply_human", possessive) == "placeholders"
+    assert 'reads "he\'s"' in propose.problem("reply_human", possessive, "placeholders")
     first = propose.prompt("reply_human", k=2, feedback={})
     again = propose.retry_prompt("reply_human", first, reply, codes, k=2)
     assert again.startswith(first) and "Your earlier variants were refused by the code:" in again

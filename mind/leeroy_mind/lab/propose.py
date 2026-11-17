@@ -35,13 +35,16 @@ AUTHORED_EXTRA = 120   # a hand-written variant: at most half as long again, or 
 # What each placeholder stands for, for the proposer (it keeps them only when it knows them).
 FIELD_WORDS = {
     "addressee": "the name of the person she answers (a noun: \"Answer {addressee}'s last line\")",
-    "they": "that person's subject pronoun, he, she or they (\"what {they} said\")",
+    "they": ("that person's subject pronoun, he, she or they (\"what {they} said\"; never "
+             "\"{they}'s\", which reads \"he's\")"),
     "them": "that person's object pronoun, him, her or them",
     "their": "that person's possessive, his, her or their",
     "extra": "more of this turn's own instructions, filled in at the end; keep it last",
     "words": "a number of words",
     "name": "the owner's name, as the guild calls him",
 }
+# A pronoun placeholder made possessive by hand: "{they}'s intent" renders as "he's intent"
+PRONOUN_S = re.compile(r"\{(?:they|them)\}['\u2019]s\b")
 IDEA_CHARS = 120
 OVERASK = 2  # candidates asked per variant kept: some always drop a placeholder or run long
 # Words that would break a hard rule of the comms rules (never talk of AI, write only your line).
@@ -193,6 +196,9 @@ def problem(name: str, text, code: str) -> str | None:
             parts.append("it lost " + ", ".join(f"{{{f}}}" for f in sorted(want - got)))
         if got - want:
             parts.append("it adds " + ", ".join(f"{{{f}}}" for f in sorted(got - want)))
+        if not parts and PRONOUN_S.search(text):
+            return ("{they} and {them} are pronouns, so \"{they}'s\" reads \"he's\": put it "
+                    "another way")
         return " and ".join(parts) or "its placeholders differ"
     if code == "kept":
         lost = [k for k in pieces.piece(name).keep if not isinstance(text, str) or k not in text]
@@ -239,7 +245,8 @@ def _new_hits(rx, variant: str, original: str) -> bool:
 def screen(name: str, text, *, names_rx=None, seen: set[str] = frozenset(),
            authored: bool = False) -> str | None:
     """None when `text` may be tried as a variant of piece `name`, else the refusal code:
-    placeholders (its {placeholders} are not exactly the built-in wording's), kept (a kept
+    placeholders (its {placeholders} are not exactly the built-in wording's, or a pronoun one
+    is made possessive: "{they}'s" renders as "he's"), kept (a kept
     phrase is not there verbatim), shape (not one paragraph of text, a `|`, over MAX_CHARS),
     length (outside length_band), names (a known name the built-in wording does not have),
     explicit (an explicit or manipulative word it adds), meta (talk of AI, bots or prompts),
@@ -249,7 +256,8 @@ def screen(name: str, text, *, names_rx=None, seen: set[str] = frozenset(),
         return "shape"
     text = " ".join(unicodedata.normalize("NFKC", text).split())
     original = pieces.builtin(name)
-    if pieces.fields(text) != pieces.fields(original):
+    if pieces.fields(text) != pieces.fields(original) or (
+            PRONOUN_S.search(text) and not PRONOUN_S.search(original)):
         return "placeholders"
     if not all(k in text for k in pieces.piece(name).keep):
         return "kept"

@@ -42,7 +42,7 @@ Three stages after `turing` (after `forget` without it), so the runner swaps the
    change); never persona text, his lines or the owner's overlays. The prompt ends with a
    checklist of the exact placeholders and kept phrases. Each passes `propose.screen` or is
    dropped with a code: `placeholders` (its {placeholders} must be exactly the built-in
-   wording's), `kept` (a kept phrase such as "in one short line" or "(nothing)" is not there
+   wording's, and a pronoun one is never made possessive by hand: "{they}'s" reads "he's"), `kept` (a kept phrase such as "in one short line" or "(nothing)" is not there
    verbatim), `shape` (not one paragraph of text, a `|`, over 1200 characters), `length` (more
    than 20% longer or 40% shorter than the built-in wording, or 30 characters either way for a
    short piece), `names` (a cast, persona or his name the built-in wording lacks, or `@`),
