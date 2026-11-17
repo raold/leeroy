@@ -177,6 +177,10 @@ async def doctor(root: Path, *, make_llm=None, ollama_conf: Path | None = None
     except ConfigError as e:
         cfg = None
         out.append((False, f"mind.toml: {e}"))
+    from . import features
+    # an optional table a reader refuses never stops the start: its feature is off instead
+    out += [(False, f"mind.toml: {features.words(row)} (the mind starts without it)")
+            for row in features.check_file(root / "mind.toml")]
     out += _doctor_db(root, latest_version(), cfg)
     out.append(_doctor_library(root, cfg))
     out += _doctor_overlays(root)

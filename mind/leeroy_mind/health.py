@@ -485,8 +485,25 @@ def _mind_log(p: Probes, data: Path, run: MindRun | None, now: float,
     return out
 
 
+def _features(data: Path, seen: dict) -> Check:
+    """Features a bad optional mind.toml table (or a failed attach) turned off: the running
+    mind's own list from `status`, else what the file would turn off at the next start."""
+    from . import features
+    rows = seen.get("reply", {}).get("disabled_features")
+    running = isinstance(rows, list)
+    if not running:
+        rows = features.check_file(data / "mind.toml")
+    rows = [r for r in rows if isinstance(r, dict) and {"feature", "table", "key", "reason"} <= set(r)]
+    if not rows:
+        return Check("features", OK, "features: no optional table refused"
+                                     + ("" if running else " (read from mind.toml)"))
+    said = "; ".join(features.words(r) for r in rows[:8])
+    return Check("features", FAIL, f"features: {said}"
+                 + ("" if running else " (at the next start)"))
+
+
 def _endpoint(p: Probes, data: Path, run: MindRun | None, now: float, cfg: HealthCfg,
-              forbidden: frozenset[int]) -> Check:
+              forbidden: frozenset[int], seen: dict | None = None) -> Check:
     from .console.mindlink import LinkError, MindLink
     if run is None:
         return Check("endpoint", NOTE, "control endpoint: not checked, the mind is not running")
@@ -511,6 +528,8 @@ def _endpoint(p: Probes, data: Path, run: MindRun | None, now: float, cfg: Healt
     if reply.get("ok") is not True:
         return Check("endpoint", FAIL, "control endpoint: status refused "
                                        f"({str(reply.get('error') or 'no reason')[:80]})")
+    if seen is not None:
+        seen["reply"] = reply
     if "bridge_connected" not in reply:
         return Check("endpoint", OK, "control endpoint: status answered; this mind does not "
                                      "report its bridge, cast or schema yet")
@@ -1419,7 +1438,9 @@ def run_checks(root: Path, data_dir: Path, *, probes: Probes | None = None) -> l
         mind, run = Check("mind", FAIL, f"mind: the check itself failed ({type(e).__name__})"), None
     out.append(mind)
     out.append(_guarded("mind-log", _mind_log, p, data, run, now, hcfg))
-    out.append(_guarded("endpoint", _endpoint, p, data, run, now, hcfg, forbidden))
+    seen: dict = {}
+    out.append(_guarded("endpoint", _endpoint, p, data, run, now, hcfg, forbidden, seen))
+    out.append(_guarded("features", _features, data, seen))
     out.append(_guarded("console", _console, p))
     out.append(_guarded("voice", _voice, p, data))
     out.append(_guarded("ollama", _ollama, p, cfg, forbidden))

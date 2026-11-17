@@ -249,7 +249,7 @@ def test_a_healthy_install_is_all_ok_with_its_notes(rig):
     checks = rig.run()
     assert {n: c.status for n, c in checks.items()} == {
         "authserver": OK, "worldserver": OK, "server-log": OK, "realm-lists": OK, "mind": OK,
-        "mind-log": OK, "mind-critical": OK, "endpoint": OK, "console": OK, "voice": OK,
+        "mind-log": OK, "mind-critical": OK, "endpoint": OK, "features": OK, "console": OK, "voice": OK,
         "ollama": OK, "ollama-models": NOTE, "telemetry": OK, "training-gate": OK, "realm-holds": OK,
         "unvoiced": OK,
         "offline-raid": OK, "guild-raids": OK, "night-failures": NOTE,
@@ -273,11 +273,11 @@ def test_the_command_prints_one_line_each_or_json_and_exits_by_the_fails(rig, ca
     argv = ["--root", str(rig.root), "--data-dir", str(rig.data)]
     assert health.main(argv, probes=rig.probes()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 30 and lines[0].startswith("ok   authserver.exe running")
+    assert len(lines) == 31 and lines[0].startswith("ok   authserver.exe running")
     assert all(line[:5] in ("ok   ", "note ") for line in lines)
     assert health.main(argv + ["--json"], probes=rig.probes()) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and len(out["checks"]) == 30
+    assert out["ok"] is True and len(out["checks"]) == 31
     assert out["checks"][0] == {"name": "authserver", "status": "ok",
                                 "text": out["checks"][0]["text"]}
     rig.servers = [s for s in rig.servers if s.image != "authserver.exe"]
@@ -1447,3 +1447,21 @@ def test_regear_line_shows_progress_and_fails_after_two_days():
     with closing(_regear_db((245, _regear_state("done", NOW - 9 * 86400, done=(101, 102), gave_up=(103,))))) as conn:
         check = health._regear(conn, NOW)
         assert check.status == OK and "done, 2 of 3 members, 1 gave up" in check.text
+
+
+def test_a_feature_a_bad_optional_table_turned_off_fails(rig):
+    rig.endpoint.reply = dict(rig.endpoint.reply, disabled_features=[
+        {"feature": "guild", "table": "guild", "key": "regear_to", "reason": "invalid_config"},
+        {"feature": "claims", "table": "claims", "key": "", "reason": "attach_failed", "code": "RuntimeError"}])
+    checks = rig.run()
+    assert checks["features"].status == FAIL
+    assert checks["features"].text == ("features: guild is off: invalid [guild] regear_to in mind.toml; "
+                                       "claims is off: its attach failed (RuntimeError)")
+
+
+def test_a_mind_that_does_not_report_features_is_checked_from_its_file(rig):
+    assert rig.run()["features"].text == "features: no optional table refused (read from mind.toml)"
+    (rig.data / "mind.toml").write_text("[training]\nenabled = 3\n", encoding="utf-8")
+    check = rig.run()["features"]
+    assert check.status == FAIL
+    assert check.text == "features: training is off: invalid [training] enabled in mind.toml (at the next start)"

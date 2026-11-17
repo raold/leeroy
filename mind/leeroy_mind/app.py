@@ -46,6 +46,7 @@ from leeroy_mind.discord.talk import DiscordTalk
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.clock import Clock, SystemClock
 from leeroy_mind.config import ConfigError, MindConfig, load_config
+from leeroy_mind import features
 from leeroy_mind.endpoint import attach_control
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.ingress import RowReceipt, WireOrigin, chat_row_binding, game_row_binding
@@ -459,14 +460,22 @@ class MindApp:
         # Extensions attach below, one line each: P1c's self.nightly = attach(self), then
         # P1d's self.guild = install(self).
         self.nightly = attach_nightly(self)
-        self.persona_settings = attach_personas(self)
+        # Every optional feature attaches through `ext` (features.guard): one that refuses its
+        # mind.toml table, or breaks, is off with one WARNING naming the table and key, and the
+        # mind still starts. `disabled_features` is what status, health and doctor show.
+        self.disabled_features: dict = {}
+        def ext(feature, attach, off=None):
+            return features.guard(self.disabled_features, feature, attach, off)
+        from .personas.config import PersonasCfg
+        self.persona_settings = ext("personas", lambda: attach_personas(self), PersonasCfg)
         from .fingerprint.night import attach as attach_fingerprint
-        attach_fingerprint(self.night_runner, self.data_dir)
-        self.voice = attach_voice(self)
-        self.guild = install_guild(self)
-        self.training = attach_training(self)
-        self.selfies = attach_selfies(self)  # profile photos: the control endpoint's selfie op
-        self.claims = attach_claims(self)
+        ext("fingerprint", lambda: attach_fingerprint(self.night_runner, self.data_dir))
+        self.voice = ext("voice", lambda: attach_voice(self))
+        self.guild = ext("guild", lambda: install_guild(self))
+        self.training = ext("training", lambda: attach_training(self))
+        # profile photos: the control endpoint's selfie op
+        self.selfies = ext("selfies", lambda: attach_selfies(self))
+        self.claims = ext("claims", lambda: attach_claims(self))
         self.tuning = TuningService(self)  # the owner's dials: the control endpoint's tune op
         self.speech = OwnerSpeech(self)  # his own lines from the console: the say op
         self.board = BoardDesk(self)  # his Board replies from the console: the board op
@@ -475,49 +484,56 @@ class MindApp:
         self.discord_talk = DiscordTalk(self)
         # every message of his answered: the watchdog behind the answers (talk/owed.py)
         self.owed = self.engine.owed = OwedWatch(self)
-        self.signals = attach_signals(self)
-        from .learn.config import load_learn_config
+        self.signals = ext("signals", lambda: attach_signals(self))
+        from .learn.config import LearnCfg, load_learn_config
         from .learn.night import attach as attach_rewards, ready as learn_ready
-        self.engine.learn_settings = load_learn_config(self.data_dir / "mind.toml")
+        self.engine.learn_settings = ext("learn", lambda: load_learn_config(self.data_dir / "mind.toml"),
+                                         LearnCfg)
         self.engine.learn_enabled = self.engine.learn_settings.enabled and learn_ready(self.store)
         self.engine.learn_capture_preferences = self.engine.learn_enabled and self.engine.learn_settings.capture_preferences
         from .lab.config import load as load_lab
         # [lab] overlays (a sandbox's copied mind.toml only): the lab's prompt pieces by name
-        self.engine.lab_overlays = (self.data_dir if load_lab(self.data_dir / "mind.toml").overlays
-                                    else None)
-        attach_rewards(self.night_runner, self.data_dir, self.store)
-        self.control = attach_control(self)
+        self.engine.lab_overlays = (self.data_dir if ext(
+            "lab", lambda: load_lab(self.data_dir / "mind.toml").overlays, False) else None)
+        if "learn" not in self.disabled_features:
+            ext("learn", lambda: attach_rewards(self.night_runner, self.data_dir, self.store))
+        self.control = ext("control", lambda: attach_control(self))
         from .playstyle.service import attach as attach_playstyle
-        self.playstyle = attach_playstyle(self)
+        self.playstyle = ext("playstyle", lambda: attach_playstyle(self))
         from .world.attach import attach_world
-        self.world_people = attach_world(self)
+        self.world_people = ext("world", lambda: attach_world(self))
         from .banter.service import attach as attach_banter
-        self.banter = attach_banter(self)
+        self.banter = ext("banter", lambda: attach_banter(self))
         from .gpucontrol import GpuControl
         self.gpu = GpuControl(self)
-        self.realm = attach_realm(self)
+        self.realm = ext("realm", lambda: attach_realm(self))
         from .server.attach import attach_server
-        self.server = attach_server(self)  # Last; disabled adds no handlers or tasks.
+        self.server = ext("server", lambda: attach_server(self))  # Last; disabled adds no handlers or tasks.
         from .photos.attach import attach_photos
-        self.photos = attach_photos(self)
+        self.photos = ext("photos", lambda: attach_photos(self))
         from .outreach.attach import attach as attach_outreach
-        self.outreach = attach_outreach(self)
+        self.outreach = ext("outreach", lambda: attach_outreach(self))
         from .decisions.attach import attach_decisions
-        self.decisions = attach_decisions(self)  # after the server: decisions need it
+        # after the server: decisions need it
+        self.decisions = ext("decisions", lambda: attach_decisions(self))
         from .godmode.attach import attach as attach_godmode
-        self.godmode = attach_godmode(self)  # [godmode]: off adds nothing
+        self.godmode = ext("godmode", lambda: attach_godmode(self))  # [godmode]: off adds nothing
         from .raidlead.service import attach as attach_raidlead
-        self.raidlead = attach_raidlead(self)  # None while [raidlead] is off
+        self.raidlead = ext("raidlead", lambda: attach_raidlead(self))  # None while [raidlead] is off
         from .raidplay.respond import attach as attach_mechanics
-        self.mechanics = attach_mechanics(self)  # [raidplay] respond: off adds nothing
+        # [raidplay] respond: off adds nothing
+        self.mechanics = ext("raidplay", lambda: attach_mechanics(self))
         from .drama.couples import attach as attach_drama
-        self.drama = attach_drama(self)  # [drama] member_romance: off adds no stage
+        self.drama = ext("drama", lambda: attach_drama(self))  # [drama] member_romance: off adds no stage
         from .turing.night import attach as attach_turing
-        attach_turing(self.night_runner, self.data_dir)  # [turing]: off adds no stage
+        # [turing]: off adds no stage
+        ext("turing", lambda: attach_turing(self.night_runner, self.data_dir))
         from .lab.night import attach as attach_lab
-        attach_lab(self.night_runner, self.data_dir)  # [lab]: off adds no stage
+        if "lab" not in self.disabled_features:
+            ext("lab", lambda: attach_lab(self.night_runner, self.data_dir))  # [lab]: off adds no stage
         from .bakeoff.capture import attach as attach_bakeoff
-        attach_bakeoff(self)  # [bakeoff] capture: off captures nothing, still prunes old rows
+        # [bakeoff] capture: off captures nothing, still prunes old rows
+        ext("bakeoff", lambda: attach_bakeoff(self))
         for name in ("boss", "loot_won"):  # [life] state: her feeling; off moves nothing
             self.register_event_handler(name, self.engine.life.on_event)
 
