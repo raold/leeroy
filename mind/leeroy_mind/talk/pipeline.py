@@ -2039,7 +2039,6 @@ class Pipeline:
         """He wrote again while her answer waited: a coalesced whisper's answer answers his
         newest line (talk.engine._life_waiting), later than the one she first heard."""
         if is_discord(turn.channel) and meta.discord is not None and meta.discord.reply_to:
-            talk = getattr(getattr(self, "server_app", None), "discord_talk", None)
             row = self.store.conn.execute(
                 "SELECT count(*) FROM discord_message WHERE channel = ? AND origin = 'human' "
                 "AND deleted IS NULL AND id <= ? AND id > (SELECT coalesce(max(id), 0) FROM "
