@@ -50,7 +50,8 @@ def attach(app):
                 models=replace(candidate.models, embedding=startup.models.embedding))
             updated = replace(load_settings(candidate, app.data_dir, culture=app.culture_config),
                               learn_enabled=settings.learn_enabled, quiet=settings.quiet,
-                              member_romance=settings.member_romance)
+                              member_romance=settings.member_romance,
+                              drama_threads=settings.drama_threads)
             # The server lease's clock is a startup choice. Keep both owners on
             # that clock until restart, even when runtime dials are reloaded.
         except ConfigError:
