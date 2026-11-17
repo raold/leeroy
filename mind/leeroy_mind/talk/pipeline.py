@@ -131,7 +131,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
-from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup
+from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup, truncate_words
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
@@ -315,6 +315,9 @@ LEFT_ON_READ = "left_on_read"
 REACTED = "reacted"
 REACT_SKIPPED = "react_skipped"  # a reaction shape whose reaction could not be posted
 SHAPE_YIELDS = frozenset({"length", "questions", "followup"})
+# The wants that leave room for news of her own on her first answer in a conversation
+# (_outreach_first): never while she vents, steers away, draws a line, asks or sorts a plan
+FIRST_SHARE_WANTS = frozenset({"share", "small_talk", "react", "flirt", "tease", "reassure_seek"})
 ONE_WORD_WORDS = 3
 STILL_THERE = frozenset({Block.WORK, Block.COMMUTE, Block.GYM, Block.OUT, Block.HOME_DUTY})
 DEAD_FORGET_S = 900.0  # a death with no resurrect event this old is forgotten
@@ -449,6 +452,9 @@ class TurnMeta:
     photo_request_part: str = 'initial'
     borrow_credit: object | None = None
     outreach_item: int | None = None
+    # an item of her list her answer to him brings in (the beat's "Bring in", key "o<id>"):
+    # told with the stored line (Outreach.brought); never an opener's bound item
+    outreach_brought: int | None = None
     # initiates: the turn starts a conversation with him unprompted (whisper:<trigger>,
     # burst:to_him): its silence is asked again once (SILENT_START_HINT), and a chain never
     # stops it, since its own clock paces it. casual: an opener to him in party or guild,
@@ -2074,6 +2080,10 @@ class Pipeline:
                      round(elapsed * 1000))
             return ""
         meta.beat_use = next((k for k, x in order if x == found.use), None) if found.use else None
+        if found.use is None and (mine := self._outreach_first(turn, meta, c, found.want, started)):
+            meta.beat_use, found = mine[0], replace(found, use=mine[1])
+        meta.outreach_brought = (int(meta.beat_use[1:]) if meta.beat_use
+                                 and meta.beat_use[:1] == "o" and meta.beat_use[1:].isdecimal() else None)
         if ctx is None:
             log.info("think_beat: guid=%d want=%s use=%d ms=%d", turn.speaker, found.want,
                      found.use is not None, round(elapsed * 1000))
@@ -2103,7 +2113,49 @@ class Pipeline:
             entries = beats.ledger(self.store.get_meta(meta.beat_conversation), now)
         except sqlite3.Error:
             entries = []
-        return beats.offerable(list(zip(keys, c.beat_items)), entries)
+        offered = beats.offerable(list(zip(keys, c.beat_items)), entries)
+        # something she means to tell him leads what she may bring in, under the same ledger
+        # rules: it survives a tight context first (beat.fitting drops from the end)
+        return beats.offerable(self._outreach_offer(turn, meta, c), entries) + offered
+
+    def _outreach_offer(self, turn: Turn, meta: TurnMeta, c: "Composed") -> list[tuple[str, str]]:
+        """Her top ready outreach item for this answer as the beat keys it, [] with outreach off,
+        on an opener carrying its own item, under his explicit overlay (c.tail: nothing is
+        brought into an explicit scene), or with none ready. Never costs the line."""
+        outreach = getattr(self, "outreach", None)
+        if (outreach is None or c.tail or meta.outreach_item is not None
+                or meta.photo is not None):
+            return []
+        try:
+            mine = outreach.offer(turn)
+        except Exception as e:
+            log.warning("outreach_offer_failed: guid=%d error=%s", turn.speaker, type(e).__name__)
+            return []
+        return [] if mine is None else [(mine[0], truncate_words(" ".join(mine[1].split()),
+                                                                beats.ITEM_CHARS))]
+
+    def _outreach_first(self, turn: Turn, meta: TurnMeta, c: "Composed", want: str,
+                        now: float) -> tuple[str, str] | None:
+        """The beat found nothing that bears on his line: on her first answer in this conversation
+        (an empty ledger: no turn of hers there within beat.LEDGER_TTL), when his line asks her
+        nothing and her want leaves room for news of her own, she may bring in one thing she
+        means to tell him, by Outreach.first_share's rationed draw (seeded per turn)."""
+        outreach = getattr(self, "outreach", None)
+        if (outreach is None or c.asking or c.tail or want not in FIRST_SHARE_WANTS
+                or meta.outreach_item is not None or meta.photo is not None):
+            return None  # c.tail: his explicit overlay keeps flirt and tease, never her news
+        try:
+            if beats.ledger(self.store.get_meta(meta.beat_conversation), now):
+                return None
+            from leeroy_mind.life.seed import seeded
+            mine = outreach.first_share(turn, seeded(
+                "outreach_first", night_of(self.clock.local()), turn.speaker, int(now // 60),
+                zlib.crc32(str(meta.turn_id).encode())))
+        except Exception as e:
+            log.warning("outreach_offer_failed: guid=%d error=%s", turn.speaker, type(e).__name__)
+            return None
+        return None if mine is None else (mine[0], truncate_words(" ".join(mine[1].split()),
+                                                                  beats.ITEM_CHARS))
 
     def _pending_phrases(self, guid: int, now: float) -> tuple[str, ...]:
         """Her common stock phrases waiting to be named on her next turn, within
@@ -4373,6 +4425,8 @@ class Pipeline:
                 meta.photo.on_sent(line_id, discord_id)
         if meta.outreach_item is not None:
             self.outreach.record(turn, meta, line_id, now)
+        elif meta.outreach_brought is not None and getattr(self, "outreach", None) is not None:
+            self.outreach.brought(turn, meta, line_id, now)
         def finished():
             self._after_record(turn, meta, p, text, memory_ids, line_id=line_id, chat=chat,
                 now=now, discord=discord, heard=heard, sid=sid, zone=zone, map_id=map_id,
