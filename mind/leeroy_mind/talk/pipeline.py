@@ -93,7 +93,8 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
                                      ordered, topic_for)
-from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
+from leeroy_mind.guards.owncopy import LINES as OWN_COPY_LINES, asked_again, copies_any
+from leeroy_mind.guards.review import HARD_CODES, WHOLE_CODES, fresh_hint, rewrite_hint
 from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hint, strip as strip_phrases
 from leeroy_mind.guards.opener import cut as cut_opener
 from leeroy_mind.talk.facts import LibraryFacts
@@ -123,8 +124,10 @@ from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, 
 from leeroy_mind.talk.states import (EFFECTS, RAID_CALLS, Altered, Effects, effects_for,
                                      substance_of)
 from leeroy_mind.talk.seasons import day_line
+from leeroy_mind.talk.hisline import bad_news, goodbye
 from leeroy_mind.talk import sofar
 from leeroy_mind.talk.shape import (DISCORD_FAMILIES, GAME_FAMILIES, ONE_WORD_NUM_PREDICT, Shape,
+                                    resized,
                                     ShapeContext, ShapeDraw, draw_shape, shape_line,
                                     shape_template)
 from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_words,
@@ -179,6 +182,9 @@ ECHO_HIM_HINT = ("Don't say {their} line back: the same answer in your own words
                  "what your memories say.")
 COPY_HINT = "Don't copy a line from the chat: say your own thing."
 REPEAT_HINT = "Don't repeat what you said before."
+# Her own previous message sent again (filters "own copy": guards/owncopy.py)
+OWN_COPY_HINT = ("You already sent that: don't say your last message again. Say something new "
+                 "that answers what {they} just said.")
 LONG_HINT = "Shorter: {lo}-{hi} words, the way you type."
 ONE_WORD_HINT = "Shorter: just a word or two."  # a word-or-two shape's ([talk] shape)
 DISCORD_LONG_HINT = "Shorter: at most about {words} words."
@@ -230,7 +236,7 @@ NEVER_MET = ("You and {name} have only ever talked online, in the game and on Di
 ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
-                     "phrase: resting", "in person", "era"})
+                     "phrase: resting", "in person", "era", "own copy"})
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
@@ -238,7 +244,8 @@ CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
 SO_FAR_WINDOW_S = 12 * 3600.0  # the stored lines talk/sofar.py reads a conversation from
-DROP_ON_RETRY = frozenset({"history", "summons", "in person", "game name", "self name"})
+DROP_ON_RETRY = frozenset({"history", "summons", "in person", "game name", "self name",
+                           "own copy"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 MEETING_TELLS = frozenset({"summons", "in person"})
 LONG_SLACK = 1.25
@@ -248,7 +255,8 @@ LONG_SLACK = 1.25
 OWED_FALLBACK_HINT = ("Answer what {human} just said in one or two short sentences, in your own "
                       "voice.")
 OWED_HARD_TELLS = frozenset({"meta", "member flirt", "echo", "summons", "in person", "dialogue",
-                             "list", "action", "sample"})
+                             "list", "action", "sample", "own copy"})
+CLAIM_CONFLICT = frozenset({"claim_conflict"})
 # An owed answer whose only hard problem is asking him over or having met him loses those
 # sentences (moves.without_meeting) and goes when this many words are left
 MEETING_CUT_WORDS = 3
@@ -258,6 +266,7 @@ OWED_REFUSED = {
     "member flirt": "keep it to {human}: no flirting with anyone else",
     "echo": "don't say {their} words back",
     "summons": "don't ask {them} over, you two only talk online",
+    "own copy": "don't send your last message again, say something new",
     "in person": ("you two have never met: nothing in person, no visits, nothing of {their} at "
                   "yours, nothing sent"),
     "dialogue": "write only your own words, no one else's lines",
@@ -298,6 +307,8 @@ FOLLOW_SOURCES = frozenset({"chat", "extract", "game"})
 FEELINGS = "Let how you feel about {them} show, if a memory fits."
 REAL_NAME_GAP_S = 600.0  # guild-wide: one inner-circle member is offered his real name at a time
 MAX_EMOTES = 2  # the emote commands a line may carry out
+CLAIM_SENTENCES = 8  # an owed answer's sentences reviewed one by one for a claim conflict
+_SENTENCES = re.compile(r"(?<=[.!?])\s+")
 SHORT_ANSWER_WORDS = 3  # an owed answer cut short of the sentences that slipped, at least
 ANSWERED_LINES = 256  # his lines whose answers are kept
 # A common stock phrase an answer owed to him leaned on is no rewrite then: it is named on her
@@ -1375,6 +1386,31 @@ class Pipeline:
                 if whisper_ok(channel, turn.speaker, to, speaker=turn.speaker,
                               turn_channel=turn.channel, to_guid=turn.to_guid)]
 
+    def _own_unshown(self, turn: Turn, recent: list[ChatLineRow]) -> list[str]:
+        """_own_lines for the prompt's "Your last lines", without her turns the Chat already
+        shows in a private turn with him (her whisper or Discord DM to him): her newest lines on
+        this channel, one for each run of her messages in the chat. Shown twice, her last
+        message read as the thing to say (self-play audit, 2026-11-17: after a brb she sent it
+        again). The repeat checks still read all of them (_own_lines)."""
+        hg = self.human.guid
+        own = [(channel, text) for channel, to, text in self._own_of(turn.speaker)
+               if whisper_ok(channel, turn.speaker, to, speaker=turn.speaker,
+                             turn_channel=turn.channel, to_guid=turn.to_guid)]
+        if not hg or turn.to_guid != hg or not is_private(turn.channel):
+            return [text for _, text in own]
+        runs, last = 0, None
+        for r in recent:
+            mine = r.from_guid == turn.speaker
+            runs += mine and last is not True
+            last = mine
+        out = []
+        for channel, text in reversed(own):
+            if runs and channel == turn.channel:
+                runs -= 1
+                continue
+            out.append(text)
+        return out[::-1]
+
     def _counterpart(self, turn: Turn) -> int:
         """Whom the turn is with: the one a whisper goes to, else the member or him it is
         addressed to; 0 for a turn to nobody in particular."""
@@ -1850,6 +1886,12 @@ class Pipeline:
         rng = seeded("shape", night_of(local), turn.speaker, local.hour * 60 + local.minute,
                      trigger)
         draw = draw_shape(ctx, rng)
+        if draw.shape is Shape.QUESTION and hg and turn.addressee == hg:
+            line = self._his_line(turn, meta)
+            if goodbye(line) or bad_news(line):
+                # he is leaving, or it is his bad news: she answers it, she is not told to ask
+                # him something back (a short line; she may still ask of her own accord)
+                draw = resized(Shape.SHORT, ctx, rng)
         if draw.shape is Shape.REACTION and not self._reacts_to(turn, meta):
             draw = ShapeDraw(Shape.ONE_WORD, rng.randint(1, 3), 1, ONE_WORD_NUM_PREDICT)
         if owed and draw.shape in (Shape.LEAVE, Shape.REACTION, Shape.ONE_WORD):
@@ -2439,6 +2481,12 @@ class Pipeline:
         # what she already did with this person lately ("Tonight you've already..."): after
         # the instruction's extra, never cut
         recent_moves = self._recent_moves(turn)
+        if to_human and his and goodbye(his):
+            # he is going: "talk later" is the answer, however often she said it tonight (the
+            # audit's right goodbye was rewritten for the `later` move tell)
+            recent_moves = [replace(r, moves=r.moves - {"later"},
+                                    main="" if r.main == "later" else r.main)
+                            for r in recent_moves]
         after = moves_line(recent_moves,
                            night_start=night_bounds(night_of(local), local.tzinfo)[0],
                            forms=self._forms_of(self._counterpart(turn)))
@@ -2510,7 +2558,9 @@ class Pipeline:
                   for r in recent],
             # her own long lines (a Discord message) as their opening words; the repeat check
             # reads them whole (_generate)
-            own_recent=[replay(x) for x in self._own_lines(turn)], instruction=instruction,
+            own_recent=[replay(x) for x in (self._own_lines(turn) if preview else
+                                            self._own_unshown(turn, recent))],
+            instruction=instruction,
             elsewhere=[chat_line_text(replace(r, text=replay(r.text)) if r.from_guid == turn.speaker
                                       else r, names, now=now, photo=pair_notes.get(r.id,''))
                        for r in pair],
@@ -3079,12 +3129,14 @@ class Pipeline:
         best = None
         slipped = []  # every candidate whose only hard problem was speaking as the other sex
         hard_seen = set()  # the hard problems met, for an owed answer's fresh draft
+        conflicted = []  # per reviewed candidate: it contradicted something she is known to hold
         def keep(candidate,verdicts):
             nonlocal best
             hard = {c for v in verdicts for c in v.codes} & HARD_CODES
+            conflicted.append(any('claim_conflict' in v.codes for v in verdicts))
             if hard:
                 hard_seen.update(hard)
-                if 'echo_parent' not in hard:
+                if not hard & WHOLE_CODES:
                     slipped.append(list(candidate))
                 return  # his own words said back, or her as a man, are never the answer he is owed
             severity = {"send":0,"react":1,"rewrite":2,"drop":3}
@@ -3104,6 +3156,14 @@ class Pipeline:
                     return short
                 meta.guard_verdict = "drop"
                 return drop("guard_identity" if slipped else "guard_echo")
+            if 'claim_conflict' in best[3] and conflicted and all(conflicted):
+                # every draft contradicted what she is known to hold (self-play audit,
+                # 2026-11-17: flagged on all three reviews and sent anyway): never as it is
+                clean = await self._claim_free(turn, meta, p, best[1], composed, close=close,
+                                               spoken=spoken)
+                if clean is not None:
+                    return clean
+                log.info("guard_claim_conflict_kept: guid=%d kind=%s", turn.speaker, turn.kind)
             meta.guard_verdict = best[2]
             meta.guard_codes = best[3]
             if ' '.join(' '.join(s.plain for s in best[1]).split()) == ' '.join(meta.preference_original.split()):
@@ -3200,7 +3260,40 @@ class Pipeline:
             return None
         return await self._reviewed_once(turn, meta, p, text, close=close, spoken=spoken)
 
-    async def _fresh_answer(self, turn, meta, p, composed, codes, *, close, spoken=False):
+    async def _claim_free(self, turn, meta, p, candidate, composed, *, close, spoken=False):
+        """An owed answer whose every draft contradicted a claim she holds (`claim_conflict`):
+        its sentences that do not, when CLAIM_SENTENCES or fewer and SHORT_ANSWER_WORDS words or
+        more are left and they pass a review of their own; else one fresh short generation told
+        what was wrong, taken only without the conflict. None when neither stands (the caller
+        then sends her least-bad draft: his message is never left unanswered); a drop's [] when
+        the turn's scope changed meanwhile."""
+        sentences = [s for line in candidate for s in _SENTENCES.split(line.plain.strip())
+                     if s.strip()]
+        if 2 <= len(sentences) <= CLAIM_SENTENCES:
+            kept = []
+            for sentence in sentences:
+                verdict = await self.live_review.check(turn, meta, sentence)
+                if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
+                    return self._drop(turn, meta, "scope_changed")
+                if 'claim_conflict' not in verdict.codes:
+                    kept.append(sentence.strip())
+            text = " ".join(kept)
+            if len(kept) < len(sentences) and len(text.split()) >= SHORT_ANSWER_WORDS:
+                lines = await self._reviewed_once(turn, meta, p, text, close=close,
+                                                  spoken=spoken, refuse=CLAIM_CONFLICT)
+                if lines is not None:
+                    if lines:
+                        log.info("guard_claim_conflict_cut: guid=%d kind=%s", turn.speaker,
+                                 turn.kind)
+                    return lines
+        lines = await self._fresh_answer(turn, meta, p, composed, CLAIM_CONFLICT, close=close,
+                                         spoken=spoken, refuse=CLAIM_CONFLICT)
+        if lines:
+            log.info("guard_claim_conflict_fresh: guid=%d kind=%s", turn.speaker, turn.kind)
+        return lines
+
+    async def _fresh_answer(self, turn, meta, p, composed, codes, *, close, spoken=False,
+                            refuse=frozenset()):
         """An owed answer's last try before it would drop (owner, 2026-11-15: every message from
         him gets a reply): one fresh generation from the composed prompt, the failed drafts left
         out and what was wrong said at the end of its instruction (review.fresh_hint), reviewed
@@ -3219,11 +3312,14 @@ class Pipeline:
                                      close=close, offered=meta.offered_real_name)
         if command_only(text):
             return None
-        return await self._reviewed_once(turn, meta, p, text, close=close, spoken=spoken)
+        return await self._reviewed_once(turn, meta, p, text, close=close, spoken=spoken,
+                                         refuse=refuse)
 
-    async def _reviewed_once(self, turn, meta, p, text, *, close, spoken=False):
+    async def _reviewed_once(self, turn, meta, p, text, *, close, spoken=False,
+                             refuse=frozenset()):
         """`text` styled as the turn's lines and reviewed once: the lines when nothing hard
-        (HARD_CODES) is left, else None; a drop's [] when the turn's scope changed meanwhile."""
+        (HARD_CODES) nor any code of `refuse` is left, else None; a drop's [] when the turn's
+        scope changed meanwhile."""
         lines = ([Styled(text, text)] if spoken else
                  self._style(turn, p, text, close=close, two_lines=meta.two_lines,
                              romance=meta.romance))
@@ -3235,7 +3331,7 @@ class Pipeline:
             verdict = await self.live_review.check(turn, meta, line.plain)
             if not _scope_valid(meta) or not self.live_review.valid(turn, meta):
                 return self._drop(turn, meta, "scope_changed")
-            if set(verdict.codes) & HARD_CODES:
+            if set(verdict.codes) & (HARD_CODES | refuse):
                 return None
             codes.extend(verdict.codes)
             verdicts.append(verdict)
@@ -3761,6 +3857,8 @@ class Pipeline:
                     tells.append(Tell("member flirt", True))
                 if self._invents_game_name(text):
                     tells.append(Tell("game name", False, True))
+                if self._copies_own(turn, meta, text):
+                    tells.append(Tell("own copy", False, True))
                 # never on an answer to him, which a second miss must not drop
                 if (is_discord(turn.channel) and not meta.answers_human
                         and not self.live_review.owed(turn, meta) and self._self_named(text, name)):
@@ -3842,6 +3940,8 @@ class Pipeline:
         refused = list(dict.fromkeys(t.reason for t in tells if t.reason in OWED_HARD_TELLS))
         if self._flirts_at_a_member(turn, text):
             refused.append("member flirt")
+        if self._copies_own(turn, meta, text):
+            refused.append("own copy")
         if refused:
             return None, refused
         text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
@@ -3912,6 +4012,17 @@ class Pipeline:
                                                          them=them, their=their)
                                   for r in refused))
         return None
+
+    def _copies_own(self, turn: Turn, meta: TurnMeta, text: str) -> bool:
+        """`text` is a near-copy of one of her last messages to the person this turn is with
+        (guards/owncopy.py; her lines this turn may see, the words before styling), unless his
+        line asked her to say it again. Self-play audit, 2026-11-17: back from a brb she sent
+        her previous message again; a "near repeat" was only a soft tell, which a retry keeps."""
+        if not self._counterpart(turn) or turn.template is not None:
+            return False
+        if asked_again(self._his_line(turn, meta)):
+            return False
+        return copies_any(text, self._own_lines(turn)[-OWN_COPY_LINES:])
 
     def _answers_his_whisper(self, turn: Turn) -> bool:
         """The turn answers a line of his in a whisper to him: its silence is asked again once
@@ -4011,6 +4122,8 @@ class Pipeline:
             hints.append(ECHO_HIM_HINT.format(their=self.human.forms[2]) if his else ECHO_HINT)
         if "copy" in reasons:
             hints.append(COPY_HINT)
+        if "own copy" in reasons:
+            hints.append(OWN_COPY_HINT.format(**forms))
         if reasons & {"repeat", "near repeat"} or "clause" in repeated:
             hints.append(REPEAT_HINT)
         for move in sorted(repeated - {"clause"}):

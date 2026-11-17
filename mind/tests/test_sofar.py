@@ -180,8 +180,12 @@ def test_a_dm_remembers_his_news_from_many_turns_back(store, clock, tmp_path):
 
 
 def test_older_messages_of_hers_are_shorter_in_the_dm_chat(store, clock, tmp_path):
-    rig = rig_for(store, clock, tmp_path,
-                  script=lambda model, messages: " ".join(f"w{i}" for i in range(60)))
+    said = iter(range(100))
+
+    def reply(model, messages):  # sixty words, different ones each time
+        n = next(said)
+        return " ".join(f"w{i}" if i < 30 else f"x{n}y{i}" for i in range(60))
+    rig = rig_for(store, clock, tmp_path, script=reply)
     talk = talk_for(rig)
     for i in range(6):
         mid = his_dm(rig, f"question number {i} for you")

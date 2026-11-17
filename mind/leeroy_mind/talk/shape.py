@@ -304,6 +304,12 @@ def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
     return ShapeDraw(shape, words, 1, num_predict(words))
 
 
+def resized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
+    """`shape` sized for `ctx` with `rng`, in place of a drawn one (Pipeline._shape: a question
+    back is never forced on his goodbye or his bad news)."""
+    return _sized(shape, ctx, rng)
+
+
 def draw_shape(ctx: ShapeContext, rng) -> ShapeDraw:
     """The reply's shape, words, lines and num_predict for `ctx`, drawn with `rng`. A game or
     whisper answer LATE_SHAPE_S after his line is LATE (not drawn), as is an answer that waited

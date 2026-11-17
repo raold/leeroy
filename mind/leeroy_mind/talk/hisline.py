@@ -53,7 +53,8 @@ def goodbye(text: str) -> bool:
     """His line says he is going (talk.select's goodbye, or _GOODBYE_RE); never a question
     ("should i go to bed?")."""
     t = (text or "").translate(_APOSTROPHES).strip()
-    if not t or t.endswith("?"):
+    from leeroy_mind.talk.asking import is_question
+    if not t or is_question(t):
         return False
     from leeroy_mind.talk.select import classify_human_line
     return classify_human_line(t) == "goodbye" or bool(_GOODBYE_RE.search(t))
