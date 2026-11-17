@@ -229,7 +229,7 @@ def test_draws_are_deterministic():
 
 
 def test_shape_lines():
-    from leeroy_mind.talk.prompt import DISCORD_LENGTH
+    from leeroy_mind.talk.prompt import DISCORD_DM, DISCORD_LENGTH
     from leeroy_mind.talk.shape import ShapeDraw
     him = ("he", "him", "his")
     her = ("she", "her", "her")
@@ -252,14 +252,19 @@ def test_shape_lines():
         "you'd double-text: short sentences, about 45 words in all, no line breaks.")
     assert shape_line(ShapeDraw(Shape.BURST, 45, 3, 96), chan, forms=him).startswith(
         "This is Discord chat, not the game, so more than your usual one line. Say it as two")
-    assert shape_line(ShapeDraw(Shape.BURST, 60, 2, 120), dm, forms=him) == (
+    assert shape_line(ShapeDraw(Shape.BURST, 40, 2, 88), dm, forms=him) == (
         "This is your private Discord DM, not the game. Say it as two or three quick messages, "
-        "the way you'd double-text: short sentences, about 60 words in all, no line breaks.")
+        "the way you'd double-text: short sentences, about 40 words in all, no line breaks.")
+    # a DM of more than FEW_WORDS (50) reads in today's DM wording (review of #343, P2-1)
+    assert shape_line(ShapeDraw(Shape.BURST, 60, 2, 120), dm, forms=him) == (
+        DISCORD_DM.format(words=60) + " Keep the sentences short, the way you'd double-text.")
     assert shape_line(ShapeDraw(Shape.QUESTION, 7, 1, None), OWED, forms=her) == (
         "Keep it short and ask her something back.")
-    assert shape_line(ShapeDraw(Shape.QUESTION, 64, 1, 127), dm, forms=him) == (
-        "This is your private Discord DM, not the game. Keep it to about 64 words and ask him "
+    assert shape_line(ShapeDraw(Shape.QUESTION, 44, 1, 95), dm, forms=him) == (
+        "This is your private Discord DM, not the game. Keep it to about 44 words and ask him "
         "something back. No line breaks.")
+    assert shape_line(ShapeDraw(Shape.QUESTION, 64, 1, 127), dm, forms=him) == (
+        DISCORD_DM.format(words=64) + " Ask him something back.")
     assert shape_line(ShapeDraw(Shape.SHORT, 20, 1, 80), chan, forms=him) == (
         "This is Discord chat, not the game. One short line, about 20 words.")
     assert shape_line(ShapeDraw(Shape.ONE_WORD, 2, 1, 24), chan, forms=him) == (
@@ -353,3 +358,47 @@ def test_the_real_intents_states_and_attention_move_their_shapes():   # review #
     w = weights(replace(chan, state=tired))
     assert w[Shape.ONE_WORD] == base[Shape.ONE_WORD] * 1.5 and w[Shape.LEAVE] == (
         base[Shape.LEAVE] * 1.5)
+
+
+T_TERSE = replace(T, words_per_line=(1, 4))
+
+
+def test_a_terse_typist_is_never_asked_for_one_or_two_words():   # review of #343, P1
+    """Where a word or two is never her shape (an answer he is owed, a whisper, her own start) a
+    short line holds at least 3 words; elsewhere a draw under 3 reads as a word or two, never
+    "about 1 words"."""
+    from leeroy_mind.talk.shape import MIN_LINE_WORDS
+    him = ("he", "him", "his")
+    for ctx in (replace(OWED, typing=T_TERSE), replace(OWED, family="game", typing=T_TERSE),
+                replace(OWED, owed=False, kind=TurnKind.WHISPER, typing=T_TERSE),
+                replace(OWED, owed=False, family="game", kind=TurnKind.OPEN, typing=T_TERSE)):
+        for i in range(400):
+            d = draw_shape(ctx, random.Random(i))
+            assert d.words >= MIN_LINE_WORDS, (ctx.kind, d)
+            line = shape_line(d, ctx, forms=him)
+            assert "about 1 " not in line and "about 2 " not in line
+    later = replace(OWED, owed=False, family="game", kind=TurnKind.CONTINUE, typing=T_TERSE)
+    shorts = [d for d in (draw_shape(later, random.Random(i)) for i in range(400))
+              if d.shape is Shape.SHORT and d.words < MIN_LINE_WORDS]
+    assert shorts and all(shape_line(d, later, forms=him) == "Just a word or two this time."
+                          for d in shorts)
+
+
+def test_a_long_dm_shape_reads_in_the_dm_wording_and_the_labs_piece():   # review of #343, P2-1
+    from leeroy_mind.talk import pieces
+    from leeroy_mind.talk.prompt import DISCORD_DM
+    from leeroy_mind.talk.shape import ShapeDraw
+    dm = replace(OWED, family="dm")
+    him = ("he", "him", "his")
+    for shape in (Shape.SHORT, Shape.QUESTION, Shape.BURST):
+        line = shape_line(ShapeDraw(shape, 80, 2 if shape is Shape.BURST else 1, 152), dm,
+                          forms=him)
+        assert "a sentence or two" not in line
+        assert line.startswith(DISCORD_DM.format(words=80))
+    assert "a sentence or two (at most about 50 words)" in shape_line(
+        ShapeDraw(Shape.SHORT, 50, 1, 104), dm, forms=him)
+    variant = DISCORD_DM.replace("write as fully as you feel", "take your time and say it all")
+    rendered = set()
+    with pieces.using({"discord_dm": variant}, rendered):
+        line = shape_line(ShapeDraw(Shape.SHORT, 80, 1, 152), dm, forms=him)
+    assert "take your time and say it all" in line and "discord_dm" in rendered

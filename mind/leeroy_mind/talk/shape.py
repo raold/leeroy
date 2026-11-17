@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
-from leeroy_mind.talk.discord_length import CHANNEL_BANDS, band, burst_draw, num_predict
+from leeroy_mind.talk.discord_length import (CHANNEL_BANDS, FEW_WORDS, band, burst_draw,
+                                             num_predict)
 from leeroy_mind.talk.prompt import (DISCORD_DM, DISCORD_LENGTH, DISCORD_WHERE, MORE_LINES,
                                      USUAL_LINE)
 from leeroy_mind.talk.turns import TurnKind
@@ -41,6 +42,11 @@ if TYPE_CHECKING:
 LATE_SHAPE_S = 120.0  # a game answer this late since his line is LATE, not drawn
 ONE_WORD_NUM_PREDICT = 24
 DISCORD_SHORT_WORDS = CHANNEL_BANDS[1][1]  # a quick line on Discord (20 words)
+# A short line, a question or a late reply where a word or two is never her shape (an answer
+# he is owed, a whisper or DM, her own start: every row without ONE_WORD) holds at least this
+# many words, so a terse typist is never asked for "about 1 words" (review of #343, P1); a
+# shorter draw elsewhere is worded as a word or two (shape_template)
+MIN_LINE_WORDS = 3
 
 Family = Literal["game", "whisper", "discord", "dm", "group"]
 GAME_FAMILIES = frozenset({"game", "whisper"})
@@ -118,6 +124,9 @@ DISCORD_MEDIUM = {"dm": "This is your private Discord DM, not the game.",
 # 7): MORE_LINES' own words, and a Discord burst's.
 USUAL = ", more than your usual one line"
 DISCORD_MEDIUM_MORE = "This is Discord chat, not the game, so more than your usual one line."
+# A DM question or burst of more than FEW_WORDS words: today's DM wording, then this
+LINE_QUESTION_DM_LONG = "Ask {them} something back."
+LINE_BURST_DM_LONG = "Keep the sentences short, the way you'd double-text."
 # Still where she was when he wrote (the "Right now" line says so in the present tense): her
 # late answer says so in the present too (review-340: a "was at the gym" under "You're at the
 # gym." reads wrong). Asleep, free time and her own game are over once she answers.
@@ -272,6 +281,8 @@ def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
     cap = _cap(ctx)
     if cap <= 0:  # the game, or Discord at a setting of 0: her own line, the preset's room
         words = _line_words(ctx, rng)
+        if _row_for(ctx)[Shape.ONE_WORD] <= 0:  # never a word or two here (review of #343, P1)
+            words = max(words, MIN_LINE_WORDS)
         return ShapeDraw(shape, 2 * words, 2, None) if two else ShapeDraw(shape, words, 1, None)
     dm = ctx.family == "dm"
     if two:
@@ -304,9 +315,11 @@ def shape_template(draw: ShapeDraw, ctx: ShapeContext, *, excuse: bool = False,
     (nothing is generated), else a template with `{words}`, `{them}` and `{excuse}` (LATE, when
     `excuse`) left to fill (shape_line). The pipeline notes it as `talk.shape.<shape>`, so a
     recipe tells shapes apart and not their word counts. A Discord shape says its medium first
-    (DISCORD_MEDIUM); a Discord paragraph keeps DISCORD_LENGTH's wording (DISCORD_DM's in a
-    DM). `usual`: the system message states her one line ([talk] situation off), so a shape of
-    more lines says it is more than that (USUAL); without it no such words are left. `still`:
+    (DISCORD_MEDIUM); a Discord paragraph keeps DISCORD_LENGTH's wording, and a DM of more than
+    FEW_WORDS words DISCORD_DM's (the lab's `discord_dm` piece), as channels word their bands. A
+    short line under MIN_LINE_WORDS reads as a word or two. `usual`: the system message states
+    her one line ([talk] situation off), so a shape of more lines says it is more than that
+    (USUAL); without it no such words are left. `still`:
     she is still where she was (LATE_NOW, else LATE_THEN); `several`: he wrote more than once
     while she was away ("these")."""
     shape = draw.shape
@@ -321,6 +334,8 @@ def shape_template(draw: ShapeDraw, ctx: ShapeContext, *, excuse: bool = False,
     if shape is Shape.BURST:
         if not discord:
             return LINE_BURST.replace("two quick lines", "two quick lines" + more)
+        if dm and draw.words > FEW_WORDS:
+            return _dm_long() + " " + LINE_BURST_DM_LONG
         if usual and not dm:
             medium = DISCORD_MEDIUM_MORE + " "
         return medium + LINE_BURST_DISCORD
@@ -334,21 +349,32 @@ def shape_template(draw: ShapeDraw, ctx: ShapeContext, *, excuse: bool = False,
             tmpl = tmpl.removesuffix(".") + " in a line or two" + more + "."
         return tmpl
     if shape is Shape.QUESTION:
+        if dm and draw.words > FEW_WORDS:
+            return _dm_long() + " " + LINE_QUESTION_DM_LONG
         if discord:
             return medium + LINE_QUESTION_DISCORD
         return (LINE_TWO_LINES_QUESTION.replace(USUAL, more) if ctx.two_lines
                 else LINE_QUESTION)
     if shape is Shape.PARAGRAPH and discord:
         if dm:
-            from leeroy_mind.talk.pieces import text
-            return text("discord_dm", DISCORD_DM)
+            return _dm_long()
         tmpl = DISCORD_LENGTH.replace("{where}", DISCORD_WHERE["channel"])
         return tmpl if usual else tmpl.replace(USUAL_LINE, "")
     if ctx.two_lines:
         return LINE_TWO_LINES.replace(USUAL, more)
     if dm:
-        return LINE_SHORT_DM
+        return _dm_long() if draw.words > FEW_WORDS else LINE_SHORT_DM
+    if draw.words < MIN_LINE_WORDS:  # never "about 1 words" (review of #343, P1)
+        return medium + LINE_ONE_WORD
     return medium + LINE_SHORT
+
+
+def _dm_long() -> str:
+    """A DM of more than FEW_WORDS words in today's DM wording (DISCORD_DM, through the lab's
+    `discord_dm` piece): "a sentence or two" would anchor a mirrored 70 or 140 words to two
+    sentences (review of #343, P2-1)."""
+    from leeroy_mind.talk.pieces import text
+    return text("discord_dm", DISCORD_DM)
 
 
 def shape_line(draw: ShapeDraw, ctx: ShapeContext, *, forms, excuse: str = "",
@@ -359,7 +385,8 @@ def shape_line(draw: ShapeDraw, ctx: ShapeContext, *, forms, excuse: str = "",
     excuse = " ".join(excuse.split())
     tmpl = shape_template(draw, ctx, excuse=bool(excuse), still=still, several=several,
                           usual=usual)
-    return tmpl.format(words=draw.words, them=forms[1], excuse=excuse) if tmpl else ""
+    return (tmpl.format(words=draw.words, they=forms[0], them=forms[1], excuse=excuse)
+            if tmpl else "")
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:

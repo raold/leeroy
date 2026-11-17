@@ -26,6 +26,7 @@ from leeroy_mind.life.state import State, words as state_words
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.protocol import Chat
 from leeroy_mind.storage.rows import ChatLineRow
+from leeroy_mind.server.reacting import PALETTE
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk import beat as beats
 from leeroy_mind.talk import pipeline as pipeline_mod
@@ -279,7 +280,7 @@ def test_discord_reaction_shape_posts_an_emoji_without_a_model_call(store, clock
         assert speak(r, turn, meta) == []
         assert r.chat_calls() == []
         (got,) = dstore.reactions(r.store.conn, [mid])[mid]
-        assert got["members"] == [103] and got["emoji"] in ("👍", "😄", "😂", "🎉", "❤️", "🫡")
+        assert got["members"] == [103] and got["emoji"] in PALETTE["joke"]  # a laugh
         row = r.utterances()[-1]
         assert row["dropped"] == "reacted"
         assert r.store.conn.execute("SELECT guard_verdict FROM utterance ORDER BY id DESC"
@@ -303,11 +304,10 @@ def test_one_word_shape_does_not_loop_retries(store, clock, tmp_path, monkeypatc
         q = said(r, "who forgot the water again")
         speak(r, *guild_answer(r, q))
         calls = line_calls(r)
-        assert 1 <= len(calls) <= 2
+        assert len(calls) == 2  # the "long" tell asked once more, then no more
         assert all(c["options"]["num_predict"] == 24 for c in calls)
         assert LINE_ONE_WORD in last_user(calls[0])
-        if len(calls) == 2:
-            assert last_user(calls[1]).endswith(pipeline_mod.ONE_WORD_HINT)
+        assert last_user(calls[1]).endswith(pipeline_mod.ONE_WORD_HINT)
         r.run(120)
         assert len(line_calls(r)) == len(calls)  # nothing asked later either
     finally:
@@ -600,3 +600,113 @@ def test_a_shape_says_how_much_she_says_not_her_chatty_mood():
     assert state_words(st, to_him=False, forms=he, talkative=False) == ""
     low = replace(st, social=-0.6, energy=-0.6)
     assert state_words(low, to_him=False, forms=he, talkative=False) == "You're tired today."
+
+
+# -- review of #343 ---------------------------------------------------------------------------------
+
+def test_a_reaction_follows_the_server_reactors_ties_and_palette(store, clock, tmp_path,
+                                                                  monkeypatch):
+    """P2-2: a complaint gets its own palette's emoji, never a forced thumbs-up; a feud never
+    reacts and a rival only rolls its eyes at drama 7 or more: else the message is left on
+    read, with no reaction and no model call."""
+    from leeroy_mind.server import state as server_state
+    from leeroy_mind.tuning import effective
+    force(monkeypatch, ShapeDraw(Shape.REACTION, 0, 0, None))
+    r = rig_of(store, clock, tmp_path, shape=True)
+    try:
+        turn, meta, mid = channel_turn(r, "my car broke down again, so annoyed")
+        speak(r, turn, meta)
+        (got,) = dstore.reactions(r.store.conn, [mid])[mid]
+        assert got["emoji"] in PALETTE["complaint"]
+        real = effective.dials_of
+        for guid, tie, drama, outcome in ((104, "feud", 5, "left_on_read"),
+                                          (105, "rival", 5, "left_on_read"),
+                                          (101, "rival", 8, "reacted")):
+            r.run(120, step=60)
+            monkeypatch.setattr(server_state, "tie_kind", lambda conn, a, b, t=tie: t)
+
+            def dials(p, d=drama):
+                out = real(p)
+                return type("D", (), {"level": lambda self, name: d if name == "drama"
+                                      else out.level(name)})()
+            monkeypatch.setattr(effective, "dials_of", dials)
+            turn, meta, mid = channel_turn(r, "finally downed the last boss lol", guid=guid)
+            assert speak(r, turn, meta) == []
+            assert r.utterances()[-1]["dropped"] == outcome
+            given = dstore.reactions(r.store.conn, [mid]).get(mid, [])
+            assert [x["emoji"] for x in given] == (["\U0001F644"] if outcome == "reacted" else [])
+        assert r.chat_calls() == []
+    finally:
+        r.close()
+
+
+def test_a_reaction_that_cannot_be_posted_is_not_recorded_as_one(store, clock, tmp_path,
+                                                                   monkeypatch):
+    """P3-3: `reacted` only once the reaction is posted."""
+    force(monkeypatch, ShapeDraw(Shape.REACTION, 0, 0, None))
+    r = rig_of(store, clock, tmp_path, shape=True)
+    try:
+        async def refused(turn, meta, reaction, allowed=None):
+            return False
+        monkeypatch.setattr(r.engine, "_guard_react", refused)
+        turn, meta, mid = channel_turn(r, "finally downed the last boss lol")
+        assert speak(r, turn, meta) == []
+        row = r.store.conn.execute("SELECT dropped, guard_verdict FROM utterance ORDER BY id "
+                                   "DESC").fetchone()
+        assert tuple(row) == ("react_skipped", "not_run")
+    finally:
+        r.close()
+
+
+def test_a_failed_shape_line_keeps_the_turn_on_todays_length(store, clock, tmp_path, monkeypatch,
+                                                             caplog):
+    """P3-2: the shape's words are built inside the draw's containment: a failure is logged by
+    its class and the answer goes on with today's length."""
+    caplog.set_level(logging.WARNING)
+    force(monkeypatch, ShapeDraw(Shape.SHORT, 6, 1, None))
+    r = rig_of(store, clock, tmp_path, shape=True, situation=True)
+    try:
+        def broken(*a, **kw):
+            raise KeyError("they")
+        monkeypatch.setattr(pipeline_mod, "shape_line", broken)
+        r.script("yeah the tram key is with me")
+        q = said(r, "who has the key to the tram depot tonight?")
+        turn, meta = guild_answer(r, q, guid=102, owed=True)
+        assert speak(r, turn, meta)
+        user = last_user(line_calls(r)[-1])
+        assert length_rule(r.engine.personas.get(102).typing) in user
+        assert turn.shape is None
+        assert any(m == "talk_shape_failed: guid=102 reason=KeyError" for m in caplog.messages)
+    finally:
+        r.close()
+
+
+def test_a_turn_spoken_again_starts_from_what_it_was(store, clock, tmp_path, monkeypatch):
+    """P3-5: what a draw changed (her lines, a Discord burst) is put back before the next draw."""
+    r = rig_of(store, clock, tmp_path, shape=True)
+    try:
+        cfg = r.engine.cfg
+        r.engine.cfg = replace(cfg, talk=replace(cfg.talk, realism=True))
+        force(monkeypatch, ShapeDraw(Shape.BURST, 40, 3, num_predict(40)))
+        turn, meta, _ = channel_turn(r, "what are we running tomorrow night", owed=True)
+        assert drawn(r, turn, meta).shape is Shape.BURST and meta.burst
+        force(monkeypatch, ShapeDraw(Shape.SHORT, 20, 1, num_predict(20)))
+        assert drawn(r, turn, meta).shape is Shape.SHORT and not meta.burst
+        q = said(r, "who pulled the extra pack")
+        turn, meta = guild_answer(r, q, guid=102, owed=True)
+        turn.max_lines = 1
+        force(monkeypatch, ShapeDraw(Shape.BURST, 16, 2, None))
+        drawn(r, turn, meta)
+        assert turn.max_lines == 2
+        force(monkeypatch, ShapeDraw(Shape.SHORT, 6, 1, None))
+        drawn(r, turn, meta)
+        assert turn.max_lines == 1
+    finally:
+        r.close()
+
+
+def test_a_burst_never_sits_beside_a_bit_short():   # P3-7
+    st = State(valence=0.0, energy=0.0, stress=0.5, social=-0.3, toward_him=0.0)
+    he = ("he", "him", "his")
+    assert "a bit short" in state_words(st, to_him=False, forms=he)
+    assert "a bit short" not in state_words(st, to_him=False, forms=he, curt=False)

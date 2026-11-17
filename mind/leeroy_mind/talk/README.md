@@ -683,16 +683,21 @@ Tuning). With shape off every prompt, room and send is as before (`golden_prompt
   whisper, his first line's time: Task 7), his words (`TurnMeta.his_words`, set by the engine and
   `discord.talk`; else read from the line it answers, a carried DM's from his whisper: review-336),
   the explicit whisper band as `two_lines`, realism's eligibility for Discord bursts. Log
-  `talk_shape: guid= kind= shape= words= owed=0|1` (codes only); a failure logs
-  `talk_shape_failed: guid= reason=<class>` and leaves the turn on today's length.
+  `talk_shape: guid= kind= shape= words= owed=0|1` (codes only); a failure, in the draw or in
+  building its line, logs `talk_shape_failed: guid= reason=<class>` and leaves the turn on
+  today's length. What a draw changed (`turn.max_lines`, `meta.burst`) is put back before the
+  next draw when the same turn is spoken again (`meta.shape_saved`: a held answer, the answer
+  without its photo).
 - **Left on read**: dropped `left_on_read` before any prompt or model call. Never an answer he
   is owed (the shape's rows; should a draw ever give him one of the small shapes, the turn keeps
   today's length instead).
 - **Reaction** (a Discord or group channel turn replying to a message): her emoji on it with no
-  model call (`server.reacting.pick_emoji` by its words and her tie to its author, seeded
-  `("react", ...)`, kept within the guards' reactions by `_guard_react` as a filler reaction
-  is), `guard_verdict` "react", the turn dropped `reacted`. With nothing to react to it is a word
-  or two.
+  model call, as the 24/7 server's reactor picks one (`server.reacting.pick_emoji` by its words
+  and her tie to its author, seeded `("react", ...)`, from its whole palette: `_guard_react`
+  takes it as given, so a complaint gets 😬/🫂/😢, never a forced 👍). As that reactor, a feud
+  never reacts and a rival only 🙄 at her drama dial 7 or more: else the message is left on read.
+  Posted: `guard_verdict` "react", the turn dropped `reacted`; not posted (blocked, refused):
+  dropped `react_skipped`. With nothing to react to it is a word or two (review of #343, P2-2).
 - **Lengths**: the shape's line is the instruction's `length_text` (it wins over the Discord
   length and `long`), noted as `talk.shape.<shape>` for the learn recipe. A Discord shape's words
   are `_discord_words` (so its wording, `preset_for` room, the "long" tell, the owed answer's
@@ -700,14 +705,21 @@ Tuning). With shape off every prompt, room and send is as before (`golden_prompt
   shape's `num_predict` caps the preset's (a word or two: 24); its "long" tell keeps her own
   line's cap on each of its lines, and a word or two holds 3 words, told "Shorter: just a word
   or two." once (the retry loop's two attempts; Review Focus 4). The beat keeps its own
-  `think_budget`.
+  `think_budget`. Where a word or two is never her shape (an answer he is owed, a whisper or
+  DM, her own start) a short line, question or late reply holds at least 3 words
+  (`MIN_LINE_WORDS`); elsewhere a short draw under 3 reads "Just a word or two this time.",
+  never "about 1 words" (review of #343, P1). A DM of more than 50 words (`FEW_WORDS`) reads in
+  today's DM wording, `DISCORD_DM` through the lab's `discord_dm` piece (its question adds "Ask
+  him something back.", its burst "Keep the sentences short, the way you'd double-text."); at
+  or under 50, "a sentence or two (at most about N words)" (review of #343, P2-1).
 - **Bursts**: a game shape of two lines (a burst, the explicit band's) sets `meta.two_lines`
   (her typing styles it as two lines) and `turn.max_lines` at least 2; a Discord burst sets
   `meta.burst`, which realism splits at its sentence ends (`[talk] realism`).
 - **Yields**: a drawn shape takes over the learned `length`, `questions` and `followup` arms
   (`learn.apply.yield_families`: their lines leave the style, `length`'s `num_predict` goes, the
   recipe credits their controls; PM log ruling 3), and her state line leaves out how chatty she
-  feels ("chatty", "not feeling chatty": the shape says how much she says; PM log D22).
+  feels ("chatty", "not feeling chatty": the shape says how much she says; PM log D22) and,
+  beside a burst or a paragraph, "a bit short".
 
 # Romance realism (`[romance] realism`, 2026-11-16)
 
