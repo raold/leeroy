@@ -17,7 +17,8 @@ from leeroy_mind.console.personaview import member_view
 from leeroy_mind.endpoint import BadRequest, ControlCfg, ControlEndpoint, looks_args, parse_request
 from leeroy_mind.nightly.growth import undo
 from leeroy_mind.personas.io import PersonaCache, load_persona, save_persona
-from leeroy_mind.personas.looks_edit import RECEIPT, LooksError, LooksService, set_looks
+from leeroy_mind.personas.looks_edit import (RECEIPT, STYLE, LooksError, LooksService,
+                                             set_looks)
 from leeroy_mind.selfies import files, kind, varied
 from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.prompt import build_prompt
@@ -134,7 +135,8 @@ def test_a_change_is_an_owner_version_with_a_ledger_row_and_a_receipt(store, clo
     assert now["source"] == "owner" and now["version"] == was["version"] + 1 == made.version
     assert _ledger(store, 102) == [{"id": made.ledger, "kind": "looks", "ref": None,
                                     "text": "weight 64 -> 88 kg, bust the build's own -> large"}]
-    shapes = {"glutes": None, "waist": None, "hips": None}
+    shapes = {"glutes": None, "waist": None, "hips": None,  # and his hair and style, unset
+              **{k: [] if k in ("wardrobe", "palette") else None for k in STYLE}}
     assert json.loads(store.get_meta(RECEIPT.format(ledger=made.ledger))) == {
         "before": {"weight_kg": 64, "bust": None, **shapes},
         "after": {"weight_kg": 88, "bust": "large", **shapes},
@@ -179,11 +181,12 @@ def test_undo_restores_both_values_and_the_source_and_is_recorded(store, clock, 
     with store.transaction():
         view = member_view(store.conn, 102, now=7000.0)
     assert [r["undone"] for r in view["ledger"] if r["kind"] == "looks"] == [True]
-    assert view["looks_limits"] == {"weight_kg": [40, 180],
-                                    "busts": ["small", "medium", "large", "very_large"],
-                                    "glutes": ["small", "medium", "large", "very_large"],
-                                    "waists": ["very_narrow", "narrow", "average", "wide"],
-                                    "hips": ["narrow", "average", "wide", "very_wide"]}
+    assert {k: view["looks_limits"][k] for k in ("weight_kg", "busts", "glutes", "waists",
+                                                 "hips")} == {
+        "weight_kg": [40, 180], "busts": ["small", "medium", "large", "very_large"],
+        "glutes": ["small", "medium", "large", "very_large"],
+        "waists": ["very_narrow", "narrow", "average", "wide"],
+        "hips": ["narrow", "average", "wide", "very_wide"]}
     assert "bust" not in view["card"]["appearance"]  # stored as before the field existed
 
 

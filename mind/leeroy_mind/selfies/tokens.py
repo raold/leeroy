@@ -91,6 +91,16 @@ WORD_TOKENS = {
     "storeroom": 2, "supply": 1, "tee": 1, "timer": 1, "tired": 1, "toilet": 1, "toilets": 1,
     "train": 1, "truck": 1, "tunic": 1, "under": 1, "upstairs": 1, "van": 1, "vest": 1, "vis": 1,
     "ward": 1, "warehouse": 1, "washroom": 2, "whites": 1, "window": 1, "work": 1, "yard": 1,
+    # the owner's hair, makeup and accessories (prompt.HAIR_COLOUR_WORDS, HAIR_STYLE_WORDS,
+    # MAKEUP_WORDS, JEWELLERY_WORDS, TATTOO_WORDS, PIERCING_WORDS, STYLE_NEGATIVE) and the
+    # wardrobe's scene outfits (wardrobe.SCENE_MORE), measured 2026-11-17
+    "arm": 1, "bold": 1, "button": 1, "buzzed": 2, "chain": 1, "chunky": 1, "collared": 2,
+    "crew": 1, "defined": 1, "delicate": 1, "dressy": 2, "earrings": 1, "eye": 1, "fade": 1,
+    "glamorous": 1, "glasses": 1, "haircut": 1, "jewellery": 1, "joggers": 2, "linen": 1,
+    "lipstick": 1, "makeup": 1, "necklace": 1, "no": 1, "nose": 1, "pastel": 1, "piercing": 1,
+    "piercings": 2, "plain": 1, "quiff": 2, "rings": 1, "single": 1, "sleeve": 1,
+    "statement": 1, "style": 1, "styled": 1, "tailored": 1, "tattoo": 1, "tattoos": 1,
+    "track": 1,
 }
 
 
