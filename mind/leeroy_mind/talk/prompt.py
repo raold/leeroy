@@ -130,8 +130,17 @@ def replay(text: str, words: int = REPLAY_WORDS) -> str:
     return text if len(parts) <= words else " ".join(parts[:words]) + "..."
 
 
+def replay_tail(text: str, words: int = REPLAY_WORDS) -> str:
+    """A long line of hers as a DM's chat shows it: "..." and its last `words` words (what she
+    ended on, which his next message answers), whole when it is no longer than that."""
+    parts = text.split()
+    return text if len(parts) <= words else "... " + " ".join(parts[-words:])
+
+
 ELSEWHERE_HEAD = "Earlier between you two, elsewhere (you remember it; it is not the line you answer):"
-SO_FAR_HEAD = "So far between you two (keep to it, never contradict it):"
+SO_FAR_HEAD = ("So far between you two (keep to it, never contradict it; if he asks about "
+               "something he told you that is not here or in the chat, say you don't remember, "
+               "never guess):")
 STYLE_HEAD = "Your recent style notes (observations, not rules; use only what fits this moment):"
 STYLE_CAP_TOKENS = 220  # input observations only; output length belongs to the channel preset
 

@@ -52,7 +52,8 @@ from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
 from leeroy_mind.config import MindConfig
-from leeroy_mind.discord.channels import is_private, same_medium, is_group
+from leeroy_mind.discord.channels import channel_id, is_private, same_medium, is_group
+from leeroy_mind.discord.transport import PAIR_LINE_SQL
 from leeroy_mind.discord.presence import local_time
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
@@ -237,7 +238,7 @@ NEVER_MET = ("You and {name} have only ever talked online, in the game and on Di
 ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
-                     "phrase: resting", "in person", "era", "own copy"})
+                     "phrase: resting", "in person", "era", "own copy", "attachment"})
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
@@ -256,7 +257,15 @@ LONG_SLACK = 1.25
 OWED_FALLBACK_HINT = ("Answer what {human} just said in one or two short sentences, in your own "
                       "voice.")
 OWED_HARD_TELLS = frozenset({"meta", "member flirt", "echo", "summons", "in person", "dialogue",
-                             "list", "action", "sample", "own copy"})
+                             "list", "action", "sample", "own copy", "attachment"})
+# A bracketed attachment typed as words (filters "attachment")
+ATTACHMENT_HINT = ("You can't send a photo, a file or a voice message from here: write only "
+                   "what you'd type, with no bracketed attachment or stage direction.")
+# His message asks for a photo or a file and this turn has none to send
+NO_PHOTO_NOW = ("You have no photo or file to send right now: if {they} asked for one, say so "
+                "in your own words, and never write a bracketed attachment.")
+_PHOTO_ASK = re.compile(r"\b(?:pic|pics|picture|photo|selfie|send (?:me|it|one|that)|show me"
+                        r"|screenshot|portrait|drawing|sketch|file)\b", re.IGNORECASE)
 CLAIM_CONFLICT = frozenset({"claim_conflict"})
 # An owed answer whose only hard problem is asking him over or having met him loses those
 # sentences (moves.without_meeting) and goes when this many words are left
@@ -268,6 +277,7 @@ OWED_REFUSED = {
     "echo": "don't say {their} words back",
     "summons": "don't ask {them} over, you two only talk online",
     "own copy": "don't send your last message again, say something new",
+    "attachment": "no bracketed attachment or stage direction, you can't send a photo or a file",
     "in person": ("you two have never met: nothing in person, no visits, nothing of {their} at "
                   "yours, nothing sent"),
     "dialogue": "write only your own words, no one else's lines",
@@ -1257,6 +1267,18 @@ class Pipeline:
                 del self._current[task]  # not pending any more, even before it unwinds
                 self._phases.pop(task, None)
 
+    def discord_answer_jobs(self) -> set:
+        """The jobs whose every turn still to come is an answer to him on Discord (his DM, a
+        group DM, a channel post): they do not need him in the game."""
+        hg, out = self.human.guid, set()
+        for task in self._tasks:
+            turns = [*([self._current[task]] if task in self._current else []),
+                     *self._behind.get(task, [])]
+            if turns and all(is_discord(t.channel) and t.kind in REPLY_KINDS
+                             and t.addressee == hg for t in turns):
+                out.add(task)
+        return out
+
     async def _cancel_all(self, keep=frozenset()) -> None:
         """Cancel every job but `keep` (the answers his logout carried to Discord), then wait
         for the lines already handed to the bridge (bounded by its ack timeout) so they are
@@ -1978,6 +2000,7 @@ class Pipeline:
             several = self._several(turn, meta)
         elif draw.shape is Shape.LATE and ctx.waited:  # her own time: where she was then
             excuse, still = self._own_time_excuse(turn, meta)
+            several = self._several(turn, meta)
         elif draw.shape is Shape.LATE:
             lp = meta.life_presence if self._life_on() else None
             playing = self.world.human_online and self.world.in_group(turn.speaker)
@@ -2015,6 +2038,16 @@ class Pipeline:
     def _several(self, turn: Turn, meta: TurnMeta) -> bool:
         """He wrote again while her answer waited: a coalesced whisper's answer answers his
         newest line (talk.engine._life_waiting), later than the one she first heard."""
+        if is_discord(turn.channel) and meta.discord is not None and meta.discord.reply_to:
+            talk = getattr(getattr(self, "server_app", None), "discord_talk", None)
+            row = self.store.conn.execute(
+                "SELECT count(*) FROM discord_message WHERE channel = ? AND origin = 'human' "
+                "AND deleted IS NULL AND id <= ? AND id > (SELECT coalesce(max(id), 0) FROM "
+                "discord_message WHERE channel = ? AND origin = 'mind' AND deleted IS NULL "
+                f"AND id < ? AND {PAIR_LINE_SQL})",
+                (channel_id(turn.channel), meta.discord.reply_to, channel_id(turn.channel),
+                 meta.discord.reply_to)).fetchone()
+            return row[0] > 1
         if not turn.trigger_line or not meta.heard_at:
             return False
         rows = self.store.chat_lines([turn.trigger_line])
@@ -2953,6 +2986,9 @@ class Pipeline:
                             log.warning("instruction_hook_failed")
                     if meta.photo is not None:
                         turn.instruction += '\n' + meta.photo.instruction
+                    elif (discord and meta.photo_request is None and self._private_to_him(turn)
+                          and _PHOTO_ASK.search(self._his_line(turn, meta))):
+                        turn.instruction += '\n' + NO_PHOTO_NOW.format(they=self.human.forms[0])
                     self._draw_situation(turn, meta, p, now)
                     self._draw_shape(turn, meta, p, now, voiced=voiced)
                     if turn.shape is not None and turn.shape.shape is Shape.LEAVE:
@@ -4136,6 +4172,8 @@ class Pipeline:
             hints.append(COPY_HINT)
         if "own copy" in reasons:
             hints.append(OWN_COPY_HINT.format(**forms))
+        if "attachment" in reasons:
+            hints.append(ATTACHMENT_HINT)
         if reasons & {"repeat", "near repeat"} or "clause" in repeated:
             hints.append(REPEAT_HINT)
         for move in sorted(repeated - {"clause"}):
@@ -4223,8 +4261,8 @@ class Pipeline:
         its exact words, which are only defused, as every line is: no {{ reaches the bridge but
         the placeholders _wire_items makes."""
         items = getattr(self, "items", None)
-        if items is None or meta.before_transport is not None:
-            return defuse(text)
+        if items is None or meta.before_transport is not None or is_discord(turn.channel):
+            return defuse(text)  # no game item links in a Discord message (ordinary words)
         return items.canonical(text, self._link_level(turn.speaker))
 
     def _wire_items(self, turn: Turn, meta: TurnMeta, text: str) -> str:

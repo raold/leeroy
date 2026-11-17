@@ -37,7 +37,8 @@ from dataclasses import dataclass
 from leeroy_mind.talk.asking import is_question
 from leeroy_mind.text import estimate_tokens
 
-HEAD = "So far between you two (keep to it, never contradict it):"
+HEAD = ("So far between you two (keep to it, never contradict it; if he asks about something "
+        "he told you that is not here or in the chat, say you don't remember, never guess):")
 IDLE_S = 3 * 3600.0
 MAX_TOKENS = 120
 FACTS = 6

@@ -931,8 +931,9 @@ def test_an_urgent_dm_cuts_through_her_away(store, tmp_path, monkeypatch):
 
 def test_a_dm_post_still_owed_keeps_her(store, tmp_path, caplog, monkeypatch):
     """Review-353 P1-1: his second post's answer was lost (never handed over) when her answer
-    to his first lands. She does not step away from the post she still owes, and the owed
-    watch rescues and answers it."""
+    to his first landed. Since 2026-11-17 (self-play audit 3) a post of his that arrives before
+    she composes is answered by the same reply: one answer, built with both posts, replying to
+    the newest, and nothing is left for the owed watch to rescue."""
     caplog.set_level(logging.INFO)
     calls = force(monkeypatch, away_s=600.0)
     rig = _dm_rig(store, tmp_path)
@@ -945,12 +946,16 @@ def test_a_dm_post_still_owed_keeps_her(store, tmp_path, caplog, monkeypatch):
     hand(rig, talk, first)
     second = post(rig, "dm:101", "did you get a new one yet")
     _run(rig, talk, 90, watch=watch)
-    assert len(answers(rig, "dm:101", first)) == 1
-    assert calls == [] and "brb boss" not in [m["text"] for m in _hers(rig)]
-    assert rig.engine.life.away_until(101) == 0
+    assert answers(rig, "dm:101", first) == [] and len(answers(rig, "dm:101", second)) == 1
+    user = line_calls(rig)[0]["messages"][-1]["content"]
+    assert "wrote 2 messages you have not answered yet" in user
+    assert "1. the kettle finally died this morning" in user
+    assert "2. did you get a new one yet" in user
+    assert "discord_dm_coalesced: guid=101" in caplog.text
+    hand(rig, talk, second)  # the desk hands it over late: already answered, no second reply
     _run(rig, talk, 900, watch=watch)
     assert len(answers(rig, "dm:101", second)) == 1
-    assert "owed_rescue: medium=discord" in caplog.text
+    assert "owed_rescue: medium=discord" not in caplog.text
     rig.close()
 
 

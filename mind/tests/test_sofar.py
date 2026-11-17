@@ -191,9 +191,9 @@ def test_older_messages_of_hers_are_shorter_in_the_dm_chat(store, clock, tmp_pat
         mid = his_dm(rig, f"question number {i} for you")
         answer(rig, talk, mid)
     chat = section(rig.prompts()[-1], "Chat:").splitlines()
-    hers = [x for x in chat if "w0" in x]
-    assert f"w{DM_OLD_WORDS - 1}..." in hers[0] and f"w{DM_OLD_WORDS} " not in hers[0]
-    assert "w29..." in hers[-1]  # her recent ones keep their opening 30 words
+    hers = [x for x in chat if "y59" in x]  # each shows the words she ended on
+    assert len(hers[0].split("... ")[1].split()) == DM_OLD_WORDS
+    assert len(hers[-1].split("... ")[1].split()) == 30  # her recent ones keep 30 words
     rig.close()
 
 
