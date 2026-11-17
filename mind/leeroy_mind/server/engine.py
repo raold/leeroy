@@ -13,6 +13,7 @@ from leeroy_mind.discord.talk import answer_delay, GONE
 from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.llm.scheduler import Priority
+from leeroy_mind.storage.db import TRANSIENT_CODES, error_code
 from leeroy_mind.talk.budget import _HOLD
 from leeroy_mind.talk.discord_length import burst_draw, opener_draw
 from leeroy_mind.talk.guards import Guards
@@ -24,6 +25,9 @@ from .state import pulled_into_play
 
 log = logging.getLogger(__name__)
 TICK_S = 5.0
+# A conversation whose read of the server failed (after the read's own retries) waits a tick and
+# asks again this many times before it ends `error`: one bad read is not the end of a thread.
+READ_RETRIES = 3
 DAY_KEY = records.DAY_KEY
 DRY_TURNS = 2
 TIES = {'friend':2., 'crush':2., 'fond':1.5, 'neutral':1., 'rival':.6, 'feud':0.}
@@ -96,7 +100,7 @@ class ServerEngine:
             try:
                 await self.tick(self.app.clock.now())
             except Exception as error:
-                log.warning('server_tick_failed code=%s', type(error).__name__)
+                log.warning('server_tick_failed code=%s', error_code(error))
             await self.app.clock.sleep(TICK_S)
 
     async def tick(self, now):
@@ -125,8 +129,15 @@ class ServerEngine:
             if rate <= 0:
                 return
             # Reserve the next opportunity before the read yields; no catch-up burst on a slow source.
+            reserved = self.next_start
             self.next_start = now + rhythm.next_gap(rate, self.rng)
-            observed = await runtime.snapshot(self.app, now, include_seeds=True)
+            try:
+                observed = await runtime.snapshot(self.app, now, include_seeds=True)
+            except Exception:
+                # The start was not taken: the next tick asks again instead of waiting out a gap
+                # drawn for a conversation that never began.
+                self.next_start = reserved
+                raise
             if self._blocked(self.app.clock.now()):
                 return
             busy = {c.channel for c in self._live.values()}
@@ -358,6 +369,25 @@ class ServerEngine:
         kind = 'close' if conversation.seed.kind in ('loot_close', 'his_loot') else 'joke'
         conversation.teased = self.app.store.get_meta(f'culture:server-{kind}:{conversation.id}') is not None
 
+    async def _observe(self, conversation):
+        """The server as it is now, for this conversation's next turn. A read that failed for
+        another connection or its time budget is asked again a tick later, the turn kept; None
+        when the conversation was stopped meanwhile."""
+        for attempt in range(READ_RETRIES + 1):
+            try:
+                return await runtime.snapshot(self.app, self.app.clock.now())
+            except Exception as error:
+                code = error_code(error)
+                if code not in TRANSIENT_CODES or attempt == READ_RETRIES:
+                    raise
+                log.info('server_conversation_read_retry id=%s code=%s attempt=%d',
+                         conversation.id, code, attempt + 1)
+            await self.app.clock.sleep(TICK_S)
+            reason = self._blocked(self.app.clock.now())
+            if reason or conversation.reason:
+                conversation.reason = conversation.reason or reason
+                return None
+
     async def _conversation(self, conversation):
         app, last, dry = self.app, None, 0
         guards = ConversationGuards(conversation.maximum, self.rng)
@@ -367,7 +397,9 @@ class ServerEngine:
                 if reason or conversation.reason:
                     conversation.reason = conversation.reason or reason
                     break
-                observed = await runtime.snapshot(app, app.clock.now())
+                observed = await self._observe(conversation)
+                if observed is None:
+                    break
                 eligible = [g for g in conversation.cast if g != last and g in observed.personas
                     and g not in observed.in_play and g not in observed.away
                     and observed.states[g].presence.state in ('online','idle')
@@ -536,7 +568,7 @@ class ServerEngine:
             raise
         except Exception as error:
             conversation.reason = 'error'
-            log.warning('server_conversation_failed id=%s code=%s', conversation.id, type(error).__name__)
+            log.warning('server_conversation_failed id=%s code=%s', conversation.id, error_code(error))
         finally:
             self._finished(conversation)
 
@@ -549,7 +581,7 @@ class ServerEngine:
         try:
             records.ended(self.app.store, value)
         except Exception as error:
-            log.warning('server_receipt_failed id=%s code=%s', conversation.id, type(error).__name__)
+            log.warning('server_receipt_failed id=%s code=%s', conversation.id, error_code(error))
         log.info('server_conversation_ended id=%s messages=%d reason=%s',
                  conversation.id, len(conversation.messages), value['reason'])
 

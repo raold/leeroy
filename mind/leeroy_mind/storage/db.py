@@ -24,6 +24,37 @@ class EmbeddingMismatch(RuntimeError):
     pass
 
 
+# SQLite's own error name to a code that is safe to log: never the message, which can quote a
+# table, a column or a value.
+_ERROR_CODES = (("SQLITE_INTERRUPT", "interrupted"), ("SQLITE_BUSY_SNAPSHOT", "busy_snapshot"),
+                ("SQLITE_BUSY", "busy"), ("SQLITE_LOCKED", "locked"), ("SQLITE_READONLY", "readonly"),
+                ("SQLITE_CANTOPEN", "cantopen"), ("SQLITE_IOERR", "io"), ("SQLITE_FULL", "full"),
+                ("SQLITE_CORRUPT", "corrupt"), ("SQLITE_NOTADB", "corrupt"), ("SQLITE_SCHEMA", "schema"),
+                ("SQLITE_PROTOCOL", "protocol"), ("SQLITE_NOMEM", "nomem"))
+# A read or write that met another connection or its own time budget: the same work can succeed
+# when asked again. Everything else is a fault a retry would only repeat.
+TRANSIENT_CODES = frozenset({"interrupted", "busy", "busy_snapshot", "locked", "protocol"})
+
+
+def error_code(error: BaseException) -> str:
+    """A fixed code for what failed: SQLite's error class for a database error (`interrupted`,
+    `busy`, `busy_snapshot`, `locked`, `readonly`, `io`, `full`, ..., else `other`), the exception's
+    type name for anything else. Never the message."""
+    if not isinstance(error, sqlite3.Error):
+        return type(error).__name__
+    name = getattr(error, "sqlite_errorname", None) or ""
+    for prefix, code in _ERROR_CODES:
+        if name.startswith(prefix):
+            return code
+    if not name:  # raised by the sqlite3 module itself, or by an older Python
+        text = str(error)
+        for needle, code in (("interrupted", "interrupted"), ("database is locked", "busy"),
+                             ("is locked", "locked"), ("readonly", "readonly")):
+            if needle in text:
+                return code
+    return "other"
+
+
 def open_db(path: Path) -> sqlite3.Connection:
     """Open mind.db: WAL, FK on, sqlite-vec loaded, migrated. The connection has
     autocommit=False, so a transaction is always open; commit through Store.transaction()."""

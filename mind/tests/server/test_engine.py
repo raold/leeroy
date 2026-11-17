@@ -476,3 +476,72 @@ def test_photo_seed_is_spent_only_when_its_photo_was_offered(app,monkeypatch,off
     assert len(app.turns) == 1 and app.turns[0][1].photo_seed == 7
     assert json.loads(app.store.get_meta('server:recent'))[-1]['reason'] == 'opener_dropped'
     assert (fresh(app.store.conn,[seed],now=app.clock.now()) == []) == offered
+
+
+def busy_read():
+    import sqlite3
+    error=sqlite3.OperationalError('database is locked')
+    error.sqlite_errorname='SQLITE_BUSY'
+    return error
+
+
+def test_a_tick_whose_read_failed_keeps_its_start_for_the_next_tick(app,monkeypatch):
+    e=app.server.engine
+    good,calls=runtime.snapshot,[]
+    async def snapshot(*args,**kwargs):
+        calls.append(kwargs)
+        if len(calls)==1:
+            raise busy_read()
+        return await good(*args,**kwargs)
+    monkeypatch.setattr(runtime,'snapshot',snapshot)
+    async def go():
+        now=app.clock.now()
+        due=e.next_start
+        with pytest.raises(Exception):
+            await e.tick(now)
+        assert e.next_start==due and not e.live()   # not pushed out by a gap for a start that never began
+        await e.tick(now)
+        assert len(e.live())==1
+        await finished(e)
+    run(go())
+    assert app.store.conn.execute('SELECT count(*) FROM discord_message').fetchone()[0]==5
+
+
+def test_a_conversation_keeps_its_turn_when_one_read_fails(app,monkeypatch,caplog):
+    monkeypatch.setattr(se,'TICK_S',0)
+    good,calls=runtime.snapshot,[]
+    async def snapshot(*args,**kwargs):
+        calls.append(kwargs)
+        if len(calls) in (3,4):   # the conversation's second turn, twice
+            raise busy_read()
+        return await good(*args,**kwargs)
+    monkeypatch.setattr(runtime,'snapshot',snapshot)
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    with caplog.at_level('INFO'):
+        run(go())
+    assert app.store.conn.execute('SELECT count(*) FROM discord_message').fetchone()[0]==5
+    assert json.loads(app.store.get_meta('server:recent'))[-1]['reason']=='length'
+    assert sum('server_conversation_read_retry' in r.getMessage() and 'code=busy' in r.getMessage()
+               for r in caplog.records)==2
+
+
+def test_a_conversation_whose_reads_keep_failing_ends_with_the_error_class(app,monkeypatch,caplog):
+    monkeypatch.setattr(se,'TICK_S',0)
+    good,calls=runtime.snapshot,[]
+    async def snapshot(*args,**kwargs):
+        calls.append(kwargs)
+        if len(calls)>2:
+            raise busy_read()
+        return await good(*args,**kwargs)
+    monkeypatch.setattr(runtime,'snapshot',snapshot)
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    with caplog.at_level('INFO'):
+        run(go())
+    assert json.loads(app.store.get_meta('server:recent'))[-1]['reason']=='error'
+    assert any('server_conversation_failed' in r.getMessage() and r.getMessage().endswith('code=busy')
+               for r in caplog.records)
+    assert len(calls)==2+se.READ_RETRIES+1

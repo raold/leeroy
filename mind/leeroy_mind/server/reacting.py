@@ -16,6 +16,7 @@ from collections import OrderedDict
 from leeroy_mind.discord import layout, store as discord_store
 from leeroy_mind.discord.channels import channel_id
 from leeroy_mind.discord.presence import RNG_SEED, local_time, presence_of
+from leeroy_mind.storage.db import TRANSIENT_CODES, error_code
 from leeroy_mind.talk.moves import classify, main_move
 from leeroy_mind.tuning.effective import dials_of
 
@@ -139,7 +140,7 @@ class Reactor:
     def _done(self, task):
         self._tasks.discard(task)
         if not task.cancelled() and task.exception() is not None:
-            log.warning('server_reaction_failed code=%s',type(task.exception()).__name__)
+            log.warning('server_reaction_failed code=%s',error_code(task.exception()))
 
     def after_post(self, message_id: int, *, author: int, channel: str, text: str, his: bool) -> None:
         if not self._ready() or message_id in self._seen:
@@ -224,19 +225,28 @@ class Reactor:
         tie = snap.ties.get((guid,author),'neutral')
         if tie=='feud' or (tie=='rival' and (emoji!='🙄' or dials_of(snap.personas[guid]).level('drama')<7)):
             return
-        try:
-            with self.app.store.transaction():
-                row = self.app.store.conn.execute('SELECT author,channel,deleted FROM discord_message WHERE id=?',(mid,)).fetchone()
-                if row is None or row[0]!=author or row[1]!=channel or row[2] is not None:
-                    log.info('server_reaction_skipped message=%d code=deleted',mid)
-                    return
-                if discord_store.react(self.app.store,mid,member=guid,emoji=emoji,now=now):
-                    try:
-                        increment(self.app.store,snap.local.date().isoformat(),reactions=1)
-                    except BadDayCounter:
-                        pass  # the malformed server budget must not remove a reaction
-        except discord_store.DiscordRefused as error:
-            log.info('server_reaction_skipped message=%d code=%s',mid,error.code)
+        for attempt in (1, 2):
+            try:
+                with self.app.store.transaction():
+                    row = self.app.store.conn.execute('SELECT author,channel,deleted FROM discord_message WHERE id=?',(mid,)).fetchone()
+                    if row is None or row[0]!=author or row[1]!=channel or row[2] is not None:
+                        log.info('server_reaction_skipped message=%d code=deleted',mid)
+                        return
+                    if discord_store.react(self.app.store,mid,member=guid,emoji=emoji,now=now):
+                        try:
+                            increment(self.app.store,snap.local.date().isoformat(),reactions=1)
+                        except BadDayCounter:
+                            pass  # the malformed server budget must not remove a reaction
+            except discord_store.DiscordRefused as error:
+                log.info('server_reaction_skipped message=%d code=%s',mid,error.code)
+            except sqlite3.OperationalError as error:
+                # The unit reads before it writes, so another connection's commit between the
+                # two refuses the write at once (busy_snapshot). Rolled back whole: ask again once.
+                if attempt == 2 or error_code(error) not in TRANSIENT_CODES:
+                    raise
+                log.info('server_reaction_retry message=%d code=%s',mid,error_code(error))
+                continue
+            return
 
     def intent_react(self, intent, *, settle):
         """A react intent (godmode): her reaction with his emoji, after her presence's own delay,
