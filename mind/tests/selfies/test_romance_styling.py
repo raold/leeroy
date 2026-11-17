@@ -65,7 +65,77 @@ def test_entire_wardrobe_passes_existing_screens_in_every_colour(pool):
             assert not _text_codes("outfit", text, ident=IDENT, names=[]), text
             assert len(text.split()) <= 12
     all_choices = [t for values in CLOTHED_OUTFITS.values() for t in values]
-    assert len(set(all_choices)) == len(all_choices) == 80
+    assert len(set(all_choices)) == len(all_choices) == 128
+
+
+def test_all_expressions_and_head_tilts_pass_the_original_screens():
+    for choices in EXPRESSIONS.values():
+        for text in choices:
+            assert not _text_codes("expression", text, ident=IDENT, names=[]), text
+
+
+def test_styling_uses_the_owner_palette_and_preserves_a_selected_wardrobe():
+    p = woman(age=30, stance="drawn")
+    p = replace(p, appearance=replace(p.appearance, palette=("plum",)))
+    assert all("plum" in styled(p, seed=i).outfit for i in range(30))
+    p = replace(p, appearance=replace(p.appearance, wardrobe=("sporty",)))
+    s = original()
+    result = styled(p, s)
+    assert result.outfit == s.outfit and result.romance_style == "playful"
+
+
+def test_words_uses_her_wardrobe_before_styling_and_retains_the_work_uniform(app):
+    enable(app)
+    p = load_persona(app.store, 101)
+    save(app, replace(p, appearance=replace(p.appearance, wardrobe=("smart",))))
+    s = words(app, {"wearing": "casual"})
+    assert s["outfit"] == "a button-up shirt and tailored trousers"
+    assert s["romance_style"] == "playful"
+    assert "romance_style" not in words(app, {"wearing": "work_uniform"})
+
+
+@pytest.mark.parametrize("framing", ["handheld_selfie", "mirror_selfie", "timer"])
+def test_private_swimwear_allows_three_cameras_and_keeps_waist_up(app, framing):
+    enable(app, stance="lust", dial=10)
+    s = words(app, {"place": "pool deck", "wearing": "swimwear", "framing": framing,
+                    "moment": "relaxing", "prop": None, "lighting": "daylight"})
+    assert s["words"]["wearing"] == "swimwear" and s["style"] == "lust"
+    spec = W.build_words_prompt(load_persona(app.store, 101), s)
+    assert (W.SWIM_FRAMING, 0) in spec.phrases
+    assert spec.negative == SNAP_NEGATIVE_LUST
+    assert "fitted outfits, date-night clothes" in app.llm.calls[-1][1][0]["content"]
+
+
+@pytest.mark.parametrize("place,framing", [
+    ("kitchen at home", "timer"), ("pool deck", W.BEHIND), ("bedroom by the pool", "timer")])
+def test_swimwear_keeps_location_and_rear_view_limits(app, place, framing):
+    enable(app, stance="lust", dial=10)
+    s = words(app, {"place": place, "wearing": "swimwear", "framing": framing})
+    assert s["words"]["wearing"] != "swimwear"
+
+
+def test_disabled_style_keeps_the_old_prompt_and_swimwear_camera_rule(app):
+    enable(app, stance="lust", dial=10)
+    app.selfies.cfg = replace(app.selfies.cfg, romance_styling=False)
+    s = words(app, {"place": "pool deck", "wearing": "swimwear", "framing": "timer"})
+    assert s["words"]["wearing"] == "casual"
+    assert "nothing revealing or sexual" in app.llm.calls[-1][1][0]["content"]
+
+
+@pytest.mark.parametrize("audience,age", [("anyone", 30), ("him", 24)])
+def test_words_prompt_stays_plain_for_public_or_ineligible_member(app, audience, age):
+    enable(app)
+    save(app, woman(age=age, stance="drawn"))
+    if age < 25:
+        # The request age gate refuses before making any model call.
+        from leeroy_mind.selfies.request_scene import RequestSceneError
+        with pytest.raises(RequestSceneError):
+            words(app, audience=audience)
+        assert not app.llm.calls
+    else:
+        s = words(app, {"wearing": "casual"}, audience=audience)
+        assert "romance_style" not in s
+        assert "nothing revealing or sexual" in app.llm.calls[-1][1][0]["content"]
 
 
 @pytest.mark.parametrize("stance,stage,dial,tone", [

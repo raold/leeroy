@@ -113,6 +113,16 @@ class Fake:
                 "seconds": 0.1}
 
 
+@pytest.mark.parametrize("score", [0.19996, 0.2, 0.20001])
+def test_caption_keeps_the_score_precision_used_by_delivery(tmp_path, score):
+    Image = pytest.importorskip("PIL.Image")
+    Image.new("RGB", (512, 512)).save(tmp_path / "base.jpg", format="JPEG")
+    answer = json.loads(json.dumps(Scored(score).caption(parse(line(tmp_path)))))
+    assert answer["nsfw"] == score
+    assert answer["flagged"] is (score >= 0.2)
+    assert (tmp_path / "meme.jpg").exists() is (score < 0.2)
+
+
 def test_the_worker_answers_a_caption_and_goes_on_after_a_failure(tmp_path):
     fake, out = Fake(), io.BytesIO()
     data = line(tmp_path, id="a", top="BOOM") + b"\n" + line(tmp_path, id="b") + b"\n"

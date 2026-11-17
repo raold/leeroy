@@ -142,7 +142,9 @@ class Renderer:
             jpeg.write(image, req.out, 92)
             jpeg.write(image.resize(jpeg.thumb_size(width, height, req.thumb_size),
                                     Image.LANCZOS), req.thumb, 85)
-        return {"flagged": flagged, "nsfw": round(nsfw, 4), "prompt": prompt,
+        # The mind compares this score with the same cutoff again, including at delivery.
+        # Rounding .19996 to .2 here would reject an image this worker correctly accepted.
+        return {"flagged": flagged, "nsfw": nsfw, "prompt": prompt,
                 "dropped": list(dropped), "tokens": self._count(prompt),
                 "seconds": round(time.perf_counter() - started, 2),
                 "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
@@ -311,7 +313,7 @@ class Renderer:
         if not flagged:
             jpeg.write(img, req.out_path, 92)
         width, height = img.size
-        return {"flagged": flagged, "nsfw": round(nsfw, 4), "width": width, "height": height,
+        return {"flagged": flagged, "nsfw": nsfw, "width": width, "height": height,
                 "lines": len(boxes), "seconds": round(time.perf_counter() - started, 2)}
 
     def grid(self, req: Grid) -> dict:

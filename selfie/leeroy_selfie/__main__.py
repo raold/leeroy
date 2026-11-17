@@ -184,7 +184,7 @@ def cmd_detail(args) -> int:
     nsfw_in = renderer.score(image)
     if nsfw_in >= args.nsfw_max:  # as a render: a flagged image gets no pass
         print(json.dumps({"detail_code": "nsfw_base", "flagged": True,
-                          "nsfw_in": round(nsfw_in, 4)}))
+                          "nsfw_in": nsfw_in}))
         return 1
     image, fields = renderer.detail_pass(
         image, opts, seed=args.seed, steps=args.steps, cfg=args.cfg, face_prompt=args.prompt,
@@ -194,8 +194,8 @@ def cmd_detail(args) -> int:
     if not flagged:
         out.parent.mkdir(parents=True, exist_ok=True)
         jpeg.write(image, str(out), 95)
-    print(json.dumps({**fields, "flagged": flagged, "nsfw": round(nsfw, 4),
-                      "nsfw_in": round(nsfw_in, 4),
+    print(json.dumps({**fields, "flagged": flagged, "nsfw": nsfw,
+                      "nsfw_in": nsfw_in,
                       "load_s": round(load_s, 1),
                       "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
                       "seed": args.seed, "identity": identity is not None}))

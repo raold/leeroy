@@ -16,7 +16,7 @@ from . import files
 from .kind import looks_line
 from .prompt import over_fit, renderable
 from .ration import SEND_MIN_AGE
-from .romance_styling import enum_category, restyle
+from .romance_styling import enum_category, level, restyle
 from .scene import (Scene, scene_from, scene_json, scene_renderable, scene_schema, scene_system,
                     screen_scene)
 from .scene_choices import compose_choices, pairing_codes
@@ -163,6 +163,10 @@ async def choose_words_scene(app, guid: int, words: str, audience: str, *, reque
     from . import words_scene as W
     p, member, ident, names, audience = _subject(app, guid, audience)
     hour = app.clock.local().hour if hour is None else hour
+    private_style = (app.selfies.cfg.romance_styling and audience == "him"
+        and level(app.personas.get(guid),
+                  app.store.get_relationship(guid, ident.guid, lens=True),
+                  app.cfg.romance.dial) is not None)
 
     def validate(data):
         try:
@@ -175,7 +179,7 @@ async def choose_words_scene(app, guid: int, words: str, audience: str, *, reque
     system = W.system(app.data_dir, human=ident, name=member.name,
         card=render_prompt_card(p, race=RACES.get(member.race, ""),
                                 class_name=CLASSES.get(member.class_, "")),
-        facts=_facts(p), looks=looks_line(p.appearance), block=block)
+        facts=_facts(p), looks=looks_line(p.appearance), block=block, private_style=private_style)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": W.ask(words)}]
 
     async def job(llm):
@@ -200,7 +204,8 @@ async def choose_words_scene(app, guid: int, words: str, audience: str, *, reque
     screened = W.screen_reply(p, data, ident=ident, names=names)
     codes = list(screened.fallbacks)
     place, where = (screened.place, "words") if screened.place else W.fallback_place(p, words)
-    w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request)
+    w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request,
+                  private_style=private_style)
 
     def composed(w):
         scene = W.scene_of(p, w, audience=audience)
@@ -215,7 +220,8 @@ async def choose_words_scene(app, guid: int, words: str, audience: str, *, reque
                                        and over_fit(W.build_words_prompt(p, scene))):
         place, where = W.fallback_place(p, words)
         codes.append("place:prompt_fit")
-        w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request)
+        w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request,
+                      private_style=private_style)
         scene = composed(w)
     if scene_renderable(p, scene_from(scene)) is not None:
         return await everyday("unrenderable")

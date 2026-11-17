@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import types
 from pathlib import Path
@@ -61,12 +62,17 @@ def test_the_thumbnail_is_a_lanczos_square_of_the_requested_size(tmp_path, monke
     assert thumbs[0].saved == [(str(tmp_path / "t.jpg.tmp"), "JPEG", 85)]
 
 
-@pytest.mark.parametrize("score,flagged", [(0.19, False), (0.2, True), (0.5, True)])
+@pytest.mark.parametrize("score,flagged", [
+    (0.19, False), (0.19996, False), (0.2, True), (0.20001, True), (0.5, True)])
 def test_flagged_at_or_over_the_threshold_writes_neither_file(tmp_path, monkeypatch,
                                                               score, flagged):
     stub_pil(monkeypatch)
     answer = make_renderer(make_torch(nsfw=score)).render(request(tmp_path, nsfw_max=0.2))
     assert answer["flagged"] is flagged
+    # Rechecking the wire score must agree with the worker's decision at the boundary.
+    wire = json.loads(json.dumps(answer))
+    assert wire["nsfw"] == score
+    assert (wire["nsfw"] >= 0.2) is flagged
     assert (tmp_path / "o.jpg").exists() is (not flagged)
     assert (tmp_path / "t.jpg").exists() is (not flagged)
 
