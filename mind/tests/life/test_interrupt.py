@@ -12,24 +12,33 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import HUMAN, seed_test_cast
-from discord.test_discord_talk import answers, post, rig_for, talk_for
+from discord.test_discord_talk import answers, member_post, post, rig_for, talk_for
 from discord.test_own_time import at, hand, life as set_life
 from engine_rig import engine_clock, make_rig, numbered, save_member
+from leeroy_mind.banter.config import BanterConfig
+from leeroy_mind.banter.service import Banter
+from leeroy_mind.discord import layout
+from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.store import messages
 from leeroy_mind.discord.talk import DEFERRED_KEY, OWED_TICK_S
+from leeroy_mind.discord.transport import PAIR_LINE_TURN
+from leeroy_mind.health import OWNER_LATE_MARGIN_S, _own_time_due
 from leeroy_mind.life import interrupt
 from leeroy_mind.life.day import Block, DayEvent
-from leeroy_mind.life.interrupt import (BACK_LINES, DM_CAP_S, LINES, Away, Interruption,
-                                        draw_back, draw_interruption)
+from leeroy_mind.life.interrupt import (BACK_FIND_S, BACK_LINES, DM_CAP_S, LINES, OWN_BOSS_WORK,
+                                        TRANSIT_COMMUTE, Away, Interruption, draw_back,
+                                        draw_interruption)
 from leeroy_mind.life.presence import Attention, LifePresence, Where, game_cap_s
 from leeroy_mind.life.seed import seeded
-from leeroy_mind.life.service import NON_OWED_MAX_S, LifeService
+from leeroy_mind.life.service import (AWAY_KEY, AWAY_WEIGHT, NON_OWED_MAX_S, LifeService,
+                                      parse_away)
 from leeroy_mind.life.state import State
 from leeroy_mind.protocol import Chat
-from leeroy_mind.talk.owed import OwedWatch
+from leeroy_mind.talk.owed import Owed, OwedWatch, count_unanswered
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.shape import Shape, ShapeDraw
+from leeroy_mind.talk.style import Styled
 from leeroy_mind.talk.turns import Turn, TurnKind
 
 
@@ -55,7 +64,7 @@ def force(monkeypatch, *, reason="work", away_s=300.0, line="brb boss", back="")
     `back` is what she says when she is back to a quiet conversation. The calls' caps."""
     calls = []
 
-    def draw(lp, state, availability, rng, *, cap_s=DM_CAP_S):
+    def draw(lp, state, availability, rng, *, cap_s=DM_CAP_S, **_):
         calls.append(cap_s)
         return Interruption(reason, min(away_s, cap_s), line) if len(calls) == 1 else None
     monkeypatch.setattr(interrupt, "draw_interruption", draw)
@@ -97,6 +106,20 @@ def whispers(r, guid, since):
 
 def line_calls(r):
     return [c for c in r.chat_calls() if c["format"] is None]
+
+
+def put_away(r, guid=102, seconds=300.0, channel="whisper", *, since=None):
+    """Her away, set as _step_away sets it (a test's shortcut past the draw)."""
+    now = r.clock.now() if since is None else since
+    a = Away(since=now, until=now + seconds, channel=channel, reason="work", night="n",
+             minute=0)
+    r.engine.life._away[guid] = a
+    return a
+
+
+def persona(**rl):
+    return SimpleNamespace(real_life=SimpleNamespace(**{"job": "", "rhythm": "", "life_thread": "",
+                                                        "household": "", **rl}))
 
 
 # -- the draw ------------------------------------------------------------------------------------
@@ -148,7 +171,7 @@ def test_draw_by_block_stress_and_availability():
     commute = [h for h in (draw_interruption(_lp(Block.COMMUTE), None, 6,
                                              seeded("interrupt", "n", 7, 4, i))
                            for i in range(5_000)) if h is not None]
-    assert {h.line for h in commute} == {"gotta drive, brb"}
+    assert {h.line for h in commute} == set(LINES["commute"])
     longest = max(h.away_s for h in commute)
     assert longest > 900 and longest <= DM_CAP_S
 
@@ -157,6 +180,41 @@ def test_back_is_said_half_the_time():
     lines = [draw_back(seeded("back", "n", 3, 1, i)) for i in range(4_000)]
     assert 0.45 <= sum(1 for x in lines if x) / 4_000 <= 0.55
     assert {x for x in lines if x} == set(BACK_LINES)
+
+
+def test_her_lines_fit_her():
+    """Review-353 P3-2: her own boss never says "brb boss", one with no car never has to drive,
+    and every block has at least three lines."""
+    for reason in ("work", "kids", "home", "commute"):
+        assert len(set(LINES[reason])) >= 3
+    assert len(set(LINES["door"] + LINES["phone"] + LINES["food"])) >= 3
+    assert len(set(OWN_BOSS_WORK)) >= 3 and len(set(TRANSIT_COMMUTE)) >= 3
+    assert "brb boss" not in OWN_BOSS_WORK and not any("driv" in x for x in TRANSIT_COMMUTE)
+    boss = {draw_interruption(_lp(Block.WORK), None, 10, seeded("interrupt", "n", 7, 5, i),
+                              boss=True) for i in range(5_000)} - {None}
+    assert {h.line for h in boss} == set(OWN_BOSS_WORK) and {h.reason for h in boss} == {"work"}
+    bus = {draw_interruption(_lp(Block.COMMUTE), None, 10, seeded("interrupt", "n", 7, 6, i),
+                             car=False) for i in range(3_000)} - {None}
+    assert {h.line for h in bus} == set(TRANSIT_COMMUTE)
+    assert interrupt.own_boss(persona(job="runs her own little bakery"))
+    assert interrupt.own_boss(persona(job="self-employed illustrator"))
+    assert not interrupt.own_boss(persona(job="ward nurse", rhythm="runs to the gym after shifts"))
+    assert not interrupt.own_boss(SimpleNamespace())
+    assert not interrupt.drives(persona(rhythm="takes the bus into town for work"))
+    assert not interrupt.drives(persona(household="small flat by the metro"))
+    assert interrupt.drives(persona(job="trains rescue dogs")) and interrupt.drives(persona())
+
+
+def test_a_draw_past_its_cap_lands_under_it():
+    """Review-353 P3-1: an away drawn past its cap is drawn again under it (40-100% of the cap),
+    so whisper aways do not pile up at exactly the cap."""
+    cap = 0.9 * game_cap_s(6)
+    got = [h.away_s for h in (draw_interruption(_lp(Block.COMMUTE), None, 6,
+                                                seeded("interrupt", "n", 9, 1, i), cap_s=cap)
+                              for i in range(20_000)) if h is not None]
+    assert len(got) > 1000 and max(got) <= cap and min(got) > 0
+    assert sum(1 for x in got if x >= cap - 1.0) / len(got) < 0.02
+    assert sum(1 for x in got if x < 0.7 * cap) / len(got) > 0.3
 
 
 # -- in game -------------------------------------------------------------------------------------
@@ -334,7 +392,7 @@ def test_only_her_line_to_him_in_a_live_whisper_or_dm(store, clock, tmp_path, mo
     nor while an answer of hers to him is on its way."""
     calls = []
 
-    def draw(lp, state, availability, rng, *, cap_s=DM_CAP_S):
+    def draw(lp, state, availability, rng, *, cap_s=DM_CAP_S, **_):
         calls.append(cap_s)
         return None
     monkeypatch.setattr(interrupt, "draw_interruption", draw)
@@ -350,7 +408,10 @@ def test_only_her_line_to_him_in_a_live_whisper_or_dm(store, clock, tmp_path, mo
                    trigger_line=w.id)
     assert after(whisper, answers_human=True, whisper_reply=True) == 1
     from leeroy_mind.discord import store as dstore
-    dstore.post(store, channel="dm:102", author=HUMAN, origin="human", text="hey", now=clock.now())
+    mid = dstore.post(store, channel="dm:102", author=HUMAN, origin="human", text="hey",
+                      now=clock.now())
+    dstore.post(store, channel="dm:102", author=102, origin="mind", text="hey back",
+                reply_to=mid, now=clock.now())  # her answer to it, as after_line follows one
     dm = Turn(TurnKind.REPLY_HUMAN, 102, "dm:102", to_guid=HUMAN, addressee=HUMAN)
     assert after(dm, answers_human=True) == 2
     assert after(Turn(TurnKind.REPLY_HUMAN, 102, "guild", addressee=HUMAN),
@@ -406,7 +467,7 @@ def test_availability_zero_draws_nothing(store, clock, tmp_path, monkeypatch):
 def test_at_most_once_per_member_per_half_hour(store, clock, tmp_path, monkeypatch):
     seen = []
 
-    def draw(lp, state, availability, rng, *, cap_s=DM_CAP_S):
+    def draw(lp, state, availability, rng, *, cap_s=DM_CAP_S, **_):
         seen.append(1)
         return Interruption("door", 60.0, "brb door") if len(seen) == 1 else None
     monkeypatch.setattr(interrupt, "draw_interruption", draw)
@@ -572,6 +633,170 @@ def test_she_stays_while_an_answer_to_him_is_on_its_way(store, clock, tmp_path):
     r.close()
 
 
+def test_nothing_of_hers_goes_out_while_she_is_away(store, clock, tmp_path):
+    """Review-353 P2-1: while she is away nothing of hers he can see goes out but her answers
+    to him: no guild line, no banter cast, no opener pool; a line of his still finds her among
+    those who may answer it (her answer waits), and someone else is likelier to take it."""
+    r = rig(store, clock, tmp_path)
+    e = r.engine
+    weight = e.life.weight(102)
+    assert 102 in e._candidates()
+    put_away(r, 102)
+    assert e._stepped_away(102) and not e._stepped_away(103)
+    assert 102 not in e._candidates() and 102 in e._candidates(stepped_away=True)
+    row = said(r, "anyone up for a run later", channel="guild", to_guid=0)
+    assert 102 in e._reply_candidates(row, "guild", clock.now())[1]
+    assert e.life.weight(102) == pytest.approx(weight * AWAY_WEIGHT)
+    assert r.speak_turn(Turn(TurnKind.CONTINUE, 102, "guild")) == []
+    assert "stepped_away" in [u["dropped"] for u in r.utterances()]
+    app = SimpleNamespace(engine=e, world=r.world, personas=e.personas, store=store,
+                          clock=r.clock, rng=random.Random(4), human_guid=HUMAN, arbiter=None,
+                          is_backlog=lambda ev: False)
+    banter = Banter(app, BanterConfig(True, 2))
+    assert banter.candidates("guild") and 102 not in banter.candidates("guild")
+    assert 102 not in banter.candidates("discord:general")
+    r.close()
+
+
+def test_the_answer_he_is_owed_goes_to_one_who_is_there(store, clock, tmp_path):
+    """Review-353 P3-3: of the members planned for his guild line, one who stepped away is never
+    the one he is owed while another is there."""
+    from leeroy_mind.talk.select import ReplyTurn
+    r = rig(store, clock, tmp_path)
+    put_away(r, 102, seconds=600.0)
+    row = said(r, "anyone up for a run later", channel="guild", to_guid=0)
+    planned = [ReplyTurn(102, "a", TurnKind.REPLY_HUMAN, "guild", "guild"),
+               ReplyTurn(103, "b", TurnKind.REPLY_HUMAN, "guild", "guild")]
+    out = r.engine._life_delays(row, planned, whisper=False, called=[], push=None)
+    by = {rt.speaker: d for rt, d, _ in out}
+    assert by[103] <= game_cap_s(6)  # the owed one
+    assert 102 not in by or by[102] >= 600.0 - 1  # hers waits for her, or she missed it
+    r.close()
+
+
+def test_she_stays_and_says_no_back_in_a_quiet(store, clock, tmp_path, monkeypatch):
+    """Review-353 P2-2 and P3-4: no brb and no back line in a boss fight of his group, while he
+    is AFK or in his login's quiet, nor a back line while an answer of hers to him is on its
+    way anywhere (it says she was away: one excuse)."""
+    r = rig(store, clock, tmp_path)
+    e, life, t = r.engine, r.engine.life, clock.now()
+    a = Away(since=t - 100.0, until=t - 1.0, channel="dm:102", reason="door", night="n",
+             minute=0, back="back")
+    assert life._stays(e, 102, HUMAN, t) == "" and not life._back_held(e, 102, a)
+    monkeypatch.setattr(e, "_in_boss_fight", lambda now: True)
+    assert life._stays(e, 102, HUMAN, t) == "boss" and life._back_held(e, 102, a)
+    monkeypatch.setattr(e, "_in_boss_fight", lambda now: False)
+    r.world.human_afk = True
+    assert life._stays(e, 102, HUMAN, t) == "afk" and life._back_held(e, 102, a)
+    r.world.human_afk = False
+    monkeypatch.setattr(e, "_login_quiet", lambda now: True)
+    assert life._stays(e, 102, HUMAN, t) == "login" and life._back_held(e, 102, a)
+    monkeypatch.setattr(e, "_login_quiet", lambda now: False)
+
+    async def queued():
+        turn = Turn(TurnKind.REPLY_HUMAN, 102, "guild", addressee=HUMAN, delay=60.0)
+        task = e._queue([(turn, TurnMeta(e._new_id(), answers_human=True))])
+        await asyncio.sleep(0)
+        held = life._back_held(e, 102, a)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return held
+    assert r.sync(queued())
+    assert not life._back_held(e, 102, a)
+    r.close()
+
+
+def test_a_failed_spawn_never_leaves_her_stepping(store, clock, tmp_path, monkeypatch):
+    """Review-353 P3-7: a brb that could not be spawned leaves her free to draw again."""
+    force(monkeypatch)
+    r = rig(store, clock, tmp_path)
+    w = said(r, "you around tonight?")
+    turn = Turn(TurnKind.REPLY_HUMAN, 102, "whisper", to_guid=HUMAN, addressee=HUMAN,
+                trigger_line=w.id)
+
+    def broken(coro):
+        coro.close()
+        raise RuntimeError("no loop")
+    monkeypatch.setattr(r.engine, "_spawn", broken)
+    r.engine.life.after_line(r.engine, turn, TurnMeta("t1", answers_human=True,
+                                                      whisper_reply=True))
+    assert 102 not in r.engine.life._stepping and r.engine.life.away_until(102) == 0
+    r.close()
+
+
+def test_no_excuse_for_a_line_just_before_she_was_back(store, clock, tmp_path):
+    """Review-353 P3-5: his line written in her away's last 20 s has no lateness to excuse."""
+    r = rig(store, clock, tmp_path)
+    life, now = r.engine.life, clock.now()
+    put_away(r, 102, seconds=400.0, since=now - 300.0)  # back at now + 100
+    assert life.away_between(102, now, now + 200.0)  # 100 s before she is back
+    assert not life.away_between(102, now + 85.0, now + 200.0)  # 15 s before
+    assert not life.away_between(102, now + 150.0, now + 200.0)  # after
+    r.close()
+
+
+def test_her_brb_is_typed_her_way(store, clock, tmp_path, monkeypatch):
+    """Review-353 P3-2: her brb goes through her own typing (Pipeline._style), one line."""
+    force(monkeypatch, away_s=200.0)
+
+    async def main():
+        r = rig(store, clock, tmp_path, script=numbered("sure {n}, sounds good"))
+        real = r.engine._style
+
+        def style(turn, p, text, **kw):
+            if turn.template == "brb boss":
+                return [Styled("BRB boss", text), Styled("never sent", text)]
+            return real(turn, p, text, **kw)
+        monkeypatch.setattr(r.engine, "_style", style)
+        await r.session()
+        t0 = clock.now()
+        await r.human("want to run something later?", channel="whisper", to_guid=102)
+        await ticking(r, 60)
+        texts = [s.text for _, s in whispers(r, 102, t0)]
+        assert texts[-1] == "BRB boss" and "never sent" not in texts
+        assert r.engine.life.away_until(102) > clock.now()
+        r.close()
+    asyncio.run(main())
+
+
+def test_a_mind_stop_during_her_away_keeps_his_whisper_owed(store, clock, tmp_path, caplog,
+                                                            monkeypatch):
+    """Review-353 P3-8: the mind stops while her answer to his whisper waits out her away. The
+    owed watch keeps it for the next start, which has no away (in memory only), answers it, and
+    draws no interruption for that rescue."""
+    import json
+    from leeroy_mind.talk.owed import PERSIST_KEY
+    caplog.set_level(logging.INFO)
+    calls = force(monkeypatch, away_s=300.0)
+
+    async def main():
+        r = rig(store, clock, tmp_path, script=numbered("yeah {n}, the vendor was shut"))
+        watch_of(r)
+        await r.session()
+        await ticking(r, 70)
+        await r.human("you around tonight?", channel="whisper", to_guid=102)
+        await ticking(r, 60)
+        assert r.engine.life.away_until(102) > clock.now() + 200
+        line = await r.human("so what happened with the vendor", channel="whisper", to_guid=102)
+        await ticking(r, 10)
+        r.engine.stopping = True  # MindApp._shutdown, him online
+        await r.engine.end_session()
+        assert json.loads(store.get_meta(PERSIST_KEY)) == [{"line": line.id, "guid": 102,
+                                                            "dm": 0}]
+        r2 = make_rig(store, clock, tmp_path, script=numbered("sorry {n}, got pulled away"),
+                      availability=6)
+        w2 = watch_of(r2)
+        assert r2.engine.life.away_until(102) == 0
+        t1 = clock.now()
+        for _ in range(80):
+            await r2.advance(1)
+            r2.engine.life.tick(r2.clock.now())
+            w2.tick(r2.clock.now())
+        assert len(whispers(r2, 102, t1)) == 1 and ("whisper", 102) not in w2._game
+        assert len(calls) == 1  # the rescue drew nothing
+    asyncio.run(main())
+
+
 def test_answer_delay_waits_out_her_away(store, clock, tmp_path):
     r = rig(store, clock, tmp_path)
     life = r.engine.life
@@ -632,6 +857,8 @@ def test_dm_away_moves_the_deferral(store, tmp_path, caplog, monkeypatch):
     _run(rig, talk, 90, watch=watch)
     assert len(answers(rig, "dm:101", first)) == 1
     assert _hers(rig)[-1]["text"] == "brb boss" and _hers(rig)[-1]["reply_to"] is None
+    assert store.conn.execute("SELECT turn FROM discord_message WHERE id = ?",
+                              (_hers(rig)[-1]["id"],)).fetchone()[0].startswith(PAIR_LINE_TURN)
     assert calls == [DM_CAP_S]
     until = rig.engine.life.away_until(101)
     assert until == pytest.approx(_hers(rig)[-1]["ts"] + 600.0, abs=2.0)
@@ -689,6 +916,100 @@ def test_an_urgent_dm_cuts_through_her_away(store, tmp_path, monkeypatch):
     hand(rig, talk, urgent)
     _run(rig, talk, 90)
     assert len(answers(rig, "dm:101", urgent)) == 1
+    rig.close()
+
+
+def test_a_dm_post_still_owed_keeps_her(store, tmp_path, caplog, monkeypatch):
+    """Review-353 P1-1: his second post's answer was lost (never handed over) when her answer
+    to his first lands. She does not step away from the post she still owes, and the owed
+    watch rescues and answers it."""
+    caplog.set_level(logging.INFO)
+    calls = force(monkeypatch, away_s=600.0)
+    rig = _dm_rig(store, tmp_path)
+    talk = talk_for(rig)
+    watch = OwedWatch(SimpleNamespace(store=rig.store, clock=rig.clock, engine=rig.engine,
+                                      world=rig.world, scheduler=rig.engine.scheduler,
+                                      discord_talk=talk))
+    rig.engine.owed = watch
+    first = post(rig, "dm:101", "the kettle finally died this morning")
+    hand(rig, talk, first)
+    second = post(rig, "dm:101", "did you get a new one yet")
+    _run(rig, talk, 90, watch=watch)
+    assert len(answers(rig, "dm:101", first)) == 1
+    assert calls == [] and "brb boss" not in [m["text"] for m in _hers(rig)]
+    assert rig.engine.life.away_until(101) == 0
+    _run(rig, talk, 900, watch=watch)
+    assert len(answers(rig, "dm:101", second)) == 1
+    assert "owed_rescue: medium=discord" in caplog.text
+    rig.close()
+
+
+def test_a_pair_line_answers_nothing(store, tmp_path):
+    """Review-353 P1-1: her brb or back in her DM (a pair line) never counts as an answer to his
+    post, for the owed watch, health's count or her own time; her real answer does."""
+    rig = _dm_rig(store, tmp_path)
+    talk = talk_for(rig)
+    watch = OwedWatch(SimpleNamespace(store=rig.store, clock=rig.clock, engine=rig.engine,
+                                      world=rig.world, scheduler=rig.engine.scheduler,
+                                      discord_talk=talk))
+    t0 = rig.clock.now()
+    mid = post(rig, "dm:101", "the kettle finally died this morning")
+    store.set_meta(DEFERRED_KEY.format(guid=101), str(mid))
+    rig.run(10)
+    dstore.post(store, channel="dm:101", author=101, origin="mind", text="brb boss",
+                turn=PAIR_LINE_TURN + "t9.1", now=rig.clock.now())
+    owed = Owed("discord", "dm:101", 101, [mid], t0, t0)
+    assert watch._discord_answered(owed) == []
+    assert [g for g, _, _ in talk._owed()] == [101]
+    rig.run(400)
+    assert count_unanswered(store.conn, HUMAN, 0, rig.clock.now()).unanswered == {"discord_dm": 1}
+    member_post(rig, 101, "dm:101", "ah no, which one was it")
+    assert watch._discord_answered(owed) == [mid]
+    rig.close()
+
+
+def test_a_channel_post_goes_to_one_who_is_there_or_waits_for_her(store, tmp_path):
+    """Review-353 P2-1: his post in a channel goes to a member who is there; one he answers by
+    replying to her waits until she is back."""
+    rig = _dm_rig(store, tmp_path)
+    talk = talk_for(rig)
+    now = rig.clock.now()
+    put_away(rig, 101, seconds=600.0, channel="dm:101")
+    picked = set()
+    for i in range(30):
+        mid = post(rig, "general", f"anyone free for a quick run, take {i}")
+        picked |= {t.speaker for t, _ in talk.plan(mid)}
+    assert picked and 101 not in picked
+    hers = member_post(rig, 101, "general", "the cart wheel came off again")
+    mid = post(rig, "general", "how did that even happen", reply_to=hers)
+    items = talk.plan(mid)
+    assert [t.speaker for t, _ in items] == [101]
+    assert items[0][0].delay >= 600.0 + BACK_FIND_S[0] - 1.0
+    assert items[0][1].owed_answer and items[0][1].discord_named
+    assert layout.channel("general") is not None and now == rig.clock.now()
+    rig.close()
+
+
+def test_health_reads_her_away(store, tmp_path, monkeypatch):
+    """Review-353 P2-3: her away is in meta life:away:<guid> (numbers only), so health's bound
+    for his DM post made during it is her return plus the time she takes to find it; keys of
+    aways long over are dropped."""
+    force(monkeypatch, away_s=900.0)
+    rig = _dm_rig(store, tmp_path)
+    talk = talk_for(rig)
+    store.set_meta(AWAY_KEY.format(guid=105), "1000,1100")  # an away of long ago
+    first = post(rig, "dm:101", "the kettle finally died this morning")
+    hand(rig, talk, first)
+    _run(rig, talk, 90)
+    a = rig.engine.life.last_away(101)
+    assert a is not None and a.until > rig.clock.now()
+    assert parse_away(store.get_meta(AWAY_KEY.format(guid=101))) == (round(a.since),
+                                                                      round(a.until))
+    assert store.get_meta(AWAY_KEY.format(guid=105)) is None
+    second = post(rig, "dm:101", "did you get a new one yet")
+    due = _own_time_due(store.conn, HUMAN, rig.clock.now(), 6)
+    assert due("dm:101", second, rig.clock.now()) >= (round(a.until) + BACK_FIND_S[1]
+                                                      + OWNER_LATE_MARGIN_S)
     rig.close()
 
 

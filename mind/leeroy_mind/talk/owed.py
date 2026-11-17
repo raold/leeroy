@@ -531,7 +531,7 @@ class OwedWatch:
         whisper = o.medium == "whisper"
         audience, cands = eng._reply_candidates(row, o.reply_to, now)
         if not cands:
-            heard = [g for g in eng._candidates(audience, hearable=False)]
+            heard = [g for g in eng._candidates(audience, hearable=False, stepped_away=True)]
             if whisper:
                 if row.to_guid in w.afk:
                     return "afk"
@@ -657,17 +657,31 @@ class OwedWatch:
         o.ids, o.rescues, o.rescued_at, o.held = left, 0, -float("inf"), ""
         o.tried.clear()
 
+    def open_for(self, guid: int) -> bool:
+        """Whether a stretch of his to `guid` is still owed: his whisper to her, or his post in
+        her DM, with nothing of hers since that answers it (read only; LifeService._owes_him:
+        she neither steps away from it nor says she is back, review-353 P1-1)."""
+        o = self._game.get(("whisper", guid))
+        if o is not None and o.rows:
+            at = self._answered_at(o)
+            if at is None or any(r.ts > at for r in o.rows):
+                return True
+        o = self._discord.get(f"dm:{guid}#0")
+        return bool(o is not None and o.ids and set(o.ids) - set(self._discord_answered(o)))
+
     def _discord_answered(self, o: Owed) -> list[int]:
         """His posts in the stretch a member has answered since: in a DM or a group DM a later
         message of the member's (hers in a DM) that replies to that post or a later one, or to
-        nothing; in a channel an answer replying to that post or a later one."""
+        nothing, never her pair line (her brb or back: it answers nothing); in a channel an
+        answer replying to that post or a later one."""
+        from leeroy_mind.discord.transport import PAIR_LINE_SQL
         conn = self.app.store.conn
         if o.channel.startswith(("dm:", "gdm:")):
             who, args = ("", (o.channel, o.ids[0])) if not o.to else (
                 " AND author = ?", (o.channel, o.to, o.ids[0]))
             row = conn.execute("SELECT max(coalesce(reply_to, id - 1)) FROM discord_message "
-                               f"WHERE channel = ? AND origin = 'mind'{who} AND id > ?",
-                               args).fetchone()
+                               f"WHERE channel = ? AND origin = 'mind'{who} AND id > ? "
+                               f"AND {PAIR_LINE_SQL}", args).fetchone()
         else:
             marks = ",".join("?" * len(o.ids))
             row = conn.execute(f"SELECT max(reply_to) FROM discord_message WHERE origin = 'mind' "
@@ -884,11 +898,14 @@ def _game_reply(conn, key, human, ids, after: float, until: float, *,
 
 def _discord_reply(conn, channel, ids, after: float, until: float) -> bool:
     if channel.startswith(("dm:", "gdm:")):
+        from leeroy_mind.discord.transport import PAIR_LINE_SQL
         peer = _dm_peer(channel)
         who, args = ("", (channel, after, until)) if not peer else (
             " AND author = ?", (channel, peer, after, until))
+        # her pair line (her brb or back, life/interrupt.py) answers nothing
         return conn.execute(f"SELECT 1 FROM discord_message WHERE channel = ? AND origin = 'mind'"
-                            f"{who} AND ts > ? AND ts <= ? LIMIT 1", args).fetchone() is not None
+                            f"{who} AND ts > ? AND ts <= ? AND {PAIR_LINE_SQL} LIMIT 1",
+                            args).fetchone() is not None
     marks = ",".join("?" * len(ids))
     return conn.execute(f"SELECT 1 FROM discord_message WHERE origin = 'mind' AND reply_to IN ({marks}) "
                         "AND ts > ? AND ts <= ? LIMIT 1", (*ids, after, until)).fetchone() is not None

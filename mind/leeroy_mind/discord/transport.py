@@ -11,6 +11,11 @@ from . import layout
 from . import store as dstore
 from .channels import CHANNEL_PREFIX, DM_PREFIX, channel_id, is_discord, is_group
 
+# the stored turn of a pair line (TurnMeta.pair_line: her brb and back in her DM, life/interrupt.py)
+# starts with this: it answers nothing, so no answered check counts it (PAIR_LINE_SQL)
+PAIR_LINE_TURN = "pair_line:"
+PAIR_LINE_SQL = "(turn IS NULL OR substr(turn, 1, 10) != 'pair_line:')"
+
 __all__ = ("CHANNEL_PREFIX", "DM_PREFIX", "LINES", "DiscordTarget", "channel_id", "is_discord",
            "store_line")
 
@@ -64,5 +69,7 @@ def store_line(store, turn, meta, text: str, now: float, *, audience) -> int:
     return dstore.post(store, channel=cid, author=turn.speaker, origin="mind", text=text,
                        reply_to=target.reply_to if target is not None and not meta.said else None,
                        thread=target.thread if target is not None else None,
-                       turn=("realism_correction:" if getattr(meta,"realism_correction",False) else "")+meta.turn_id, now=now,
+                       turn=("realism_correction:" if getattr(meta,"realism_correction",False)
+                             else PAIR_LINE_TURN if getattr(meta, "pair_line", False)
+                             else "")+meta.turn_id, now=now,
                        attachment=attachment)

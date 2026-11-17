@@ -921,6 +921,12 @@ class Pipeline:
         died = self._dead.get(guid)
         return died is not None and now - died < DEAD_FORGET_S
 
+    def _stepped_away(self, guid: int) -> bool:
+        """She stepped away mid-conversation and is not back yet (LifeService.is_away; never at
+        [life] availability 0)."""
+        life = getattr(self, "life", None)
+        return life is not None and life.is_away(guid)
+
     def _away_now(self) -> frozenset[int]:
         """The members away (arc.live.away_now), read at most once every AWAY_CACHE_S."""
         now = self.clock.now()
@@ -930,15 +936,18 @@ class Pipeline:
             self._away_cache = now, away
         return away
 
-    def _candidates(self, audience=None, *, exclude=(), hearable=True) -> list[int]:
+    def _candidates(self, audience=None, *, exclude=(), hearable=True,
+                    stepped_away: bool = False) -> list[int]:
         """Online cast members with a persona who are not AFK or away (_away_now), in
         `audience` when given, and with voice on, unless `hearable` is off, only those he can
-        hear where they sit."""
+        hear where they sit. A member who stepped away mid-conversation (_stepped_away) only
+        with `stepped_away`: the members who may answer a line of his (her answer waits)."""
         w = self.world
         pool = w.online if audience is None else w.online & set(audience)
         away = self._away_now()
         out = [g for g in sorted(pool) if g not in w.afk and g not in exclude
-               and g not in away and self.personas.get(g) is not None]
+               and g not in away and self.personas.get(g) is not None
+               and (stepped_away or not self._stepped_away(g))]
         if hearable and self.comms is not None:
             out = [g for g in out if self._comms_says("hearable", True, g)]
         return out
@@ -2820,7 +2829,11 @@ class Pipeline:
             turn.channel, turn.to_guid, turn.addressee = typed(turn, meta)  # it never got there
             if self._summons_typed_to_him(turn, text):
                 return self._drop(turn, meta, "summons", memory_ids, text=text)
-        if meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
+        if meta.before_transport is not None and meta.pair_line and text.strip() and not only:
+            # her brb or back (life/interrupt.py): one line in her own typing; its barrier only
+            # decides whether it goes
+            lines = self._style(turn, p, text, close=close)[:1] or [Styled(text, text)]
+        elif meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
             lines = [] if only or not text.strip() else [Styled(text, text)]
         else:
             lines = [] if only else self._style(turn, p, text, close=close,
@@ -3330,6 +3343,11 @@ class Pipeline:
             return "afk"
         if g in self._away_now():
             return "away"
+        if self._stepped_away(g) and not (turn.template is not None or meta.answers_human
+                                          or owes_him(self, turn, meta)):
+            # she stepped away mid-conversation (life/interrupt.py): nothing of hers he could see
+            # but her answers to him, which wait for her (life/README.md)
+            return "stepped_away"
         if turn.channel in SPOKEN_CHANNELS and self._is_dead(g, now):
             return "dead"
         if turn.channel == "whisper" and not w.human_online and (

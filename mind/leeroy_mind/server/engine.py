@@ -271,7 +271,9 @@ class ServerEngine:
             if row is None or row[1] is not None or row[0] != conversation.channel:
                 conversation.reason = 'deleted_parent'
                 return False
-        if speaker in pulled_into_play(self.app) or speaker in self.app.engine._away_now():
+        stepped = getattr(self.app.engine, "_stepped_away", None)
+        if (speaker in pulled_into_play(self.app) or speaker in self.app.engine._away_now()
+                or (stepped is not None and stepped(speaker))):  # her brb (life/interrupt.py)
             return False
         if any(t.speaker == speaker and t is not conversation.in_flight_turn
                for t in self.app.engine.planned_turns()):

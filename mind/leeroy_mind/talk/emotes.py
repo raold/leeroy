@@ -305,8 +305,14 @@ class EmoteReactions(Reactions):
                 if not replying and wants_line(emote, self.rng) else None)
         log.info("emote_planned: emote=%s guid=%d back=%s line=%s", emote, guid, back,
                  line.channel if line else "replying" if replying else "-")
-        self._spawn(self._emote_back(guid, back, self.human.guid,
-                                     self.rng.uniform(*EMOTE_BACK_S), line, event_id))
+        delay = self.rng.uniform(*EMOTE_BACK_S)
+        life = getattr(self, "life", None)
+        if life is not None and life.is_away(guid):
+            # she stepped away mid-conversation (life/interrupt.py): her emote back waits for her,
+            # as her answers to him do, at most game_cap_s
+            from leeroy_mind.life.presence import game_cap_s
+            delay = max(delay, min(life.away_until(guid) - now, game_cap_s(life.availability)))
+        self._spawn(self._emote_back(guid, back, self.human.guid, delay, line, event_id))
 
     def _join_emote(self, emote: str, now: float) -> None:
         """His social emote at nobody: 0-2 members in his group, or else in his zone, join in;

@@ -160,14 +160,14 @@ class Banter:
     def candidates(self,channel):
         app,e = self.app,self.app.engine
         if not is_discord(channel):
-            return e._candidates()
+            return e._candidates()  # never one who stepped away mid-conversation (life/interrupt.py)
         # No online-body or AFK checks in Discord. Use its own presence and audience.
         people = e.world.audience(channel,from_guid=0,to_guid=0)
         result = []
         away = e._away_now()
         for g in sorted(people):
             p = app.personas.get(g)
-            if p is None or g in away:
+            if p is None or g in away or getattr(e, "_stepped_away", lambda g: False)(g):
                 continue
             member = app.world.members.get(g)
             presence = presence_of(p,local=local_time(app.clock.local(),p.identity.region),

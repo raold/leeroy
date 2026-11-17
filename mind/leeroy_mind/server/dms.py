@@ -93,6 +93,9 @@ class DmOpeners:
     def _can_open(self, guid, now, day, meta):
         if now<self._human_until.get(guid,0):
             return False
+        stepped = getattr(getattr(self.app, "engine", None), "_stepped_away", None)
+        if stepped is not None and stepped(guid):
+            return False  # she stepped away mid-conversation (life/interrupt.py)
         outreach = getattr(self.app, 'outreach', None)
         if outreach is not None and not outreach.eligible(guid):
             return False

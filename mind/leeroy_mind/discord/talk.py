@@ -44,8 +44,9 @@ from leeroy_mind.arc.live import away_now
 from leeroy_mind.discord import layout, owntime
 from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord, is_group
 from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presence_of
-from leeroy_mind.discord.transport import DiscordTarget, channel_id
+from leeroy_mind.discord.transport import PAIR_LINE_SQL, DiscordTarget, channel_id
 from leeroy_mind.life import config as life_config
+from leeroy_mind.life.interrupt import BACK_FIND_S
 from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.scheduler import Priority
@@ -91,9 +92,6 @@ DEFERRED_KEY = "discord:dm:deferred:{guid}"
 # and after TRIES that came to nothing (a drop, a silence) the post is let go
 RETRY_S = 600.0
 TRIES = 2
-# his DM post while she has stepped away mid-conversation (life/interrupt.py): she finds it this
-# long after she is back (_back_at)
-BACK_FIND_S = (30.0, 120.0)
 QUERY_LINES = 2  # his thread's last lines that go into recall's query with his post
 # what the instruction may hold: the compose cuts its extra at EXTRA_CAP_TOKENS (4 characters
 # a token), less room for anything else it adds
@@ -343,10 +341,11 @@ class DiscordTalk:
             if done is not None and done.isdigit() and int(done) >= mid:
                 continue
             # her answer to this post or a later one of his; her answer to an earlier post that
-            # lands after this one (still typing when he wrote) is no answer to it
+            # lands after this one (still typing when he wrote) is no answer to it, nor is her
+            # pair line (her brb or back, life/interrupt.py)
             if conn.execute("SELECT 1 FROM discord_message WHERE channel = ? AND id > ? "
-                            "AND origin = 'mind' AND (reply_to IS NULL OR reply_to >= ?) LIMIT 1",
-                            (channel, mid, mid)).fetchone():
+                            "AND origin = 'mind' AND (reply_to IS NULL OR reply_to >= ?) "
+                            f"AND {PAIR_LINE_SQL} LIMIT 1", (channel, mid, mid)).fetchone():
                 conn.execute("DELETE FROM meta WHERE key = ?", (DEFERRED_KEY.format(guid=guid),))
                 self._queued.pop(mid, None)
                 continue
@@ -509,16 +508,29 @@ class DiscordTalk:
         local = app.clock.local()
         items = []
         from leeroy_mind.talk.select import classify_human_line
-        for g in chosen:
+        # a member who stepped away mid-conversation (life/interrupt.py): in a channel or a group
+        # DM an available member is the one he is owed; she answers only when he named her, and
+        # then when she is back (her DM keeps its own time: _later)
+        life = getattr(app.engine, "life", None) if peer is None else None
+        stepped = life.is_away if life is not None else (lambda g: False)
+        now = app.clock.now()
+        for g in sorted(chosen, key=stepped):
             p = app.personas.get(g)
+            named = g in group_named if is_group(channel) else how == "named"
+            if stepped(g) and items and not named:
+                log.info("discord_answer_skipped: message=%d guid=%d reason=stepped_away",
+                         message_id, g)
+                continue
             turn = Turn(kind=TurnKind.REPLY_HUMAN, speaker=g, channel=place,
                         to_guid=hg if peer is not None else 0, addressee=hg, trigger_line=None,
                         priority=Priority.REPLY_HUMAN,
                         delay=answer_delay(self._presence(g, p, local).state, self.rng))
+            if stepped(g):
+                turn.delay = max(turn.delay, self._back_at(g, message_id, now) - now)
             turn.instruction = self.instruction(g, place, message_id, thread) or ""
             meta = TurnMeta(app.engine._new_id(), answers_human=True, why=WHY,
                             discord=DiscordTarget(reply_to=message_id, thread=thread),
-                            discord_named=g in group_named if is_group(channel) else how == "named",
+                            discord_named=named,
                             first_question_answer=not items and classify_human_line(text) == "question_all",
                             recall_query=self.recall_query(message_id) or "",
                             his_words=len(text.split()))
@@ -551,6 +563,7 @@ class DiscordTalk:
         app = self.app
         world, hg = app.world, app.human_guid
         away = away_now(app.store, app.clock.now())
+        life = getattr(getattr(app, "engine", None), "life", None)
         local = app.clock.local()
         weights: dict[int, float] = {}
         online: set[int] = set()
@@ -562,7 +575,8 @@ class DiscordTalk:
             if p is None:
                 continue
             state = self._presence(g, p, local).state
-            if state not in ANSWERING:
+            # one who stepped away mid-conversation (life/interrupt.py) only when nobody else is
+            if state not in ANSWERING or (life is not None and life.is_away(g)):
                 others.append((g, p))
                 continue
             w = warmth(p, app.store.get_relationship(g, hg, lens=True)) * self._fit(ch, g, p)

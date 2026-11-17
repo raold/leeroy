@@ -29,7 +29,10 @@ on she is away until `away_until`. Her answers to him wait: in game `answer_dela
 what is left of it (an answer he is owed at most game_cap_s), in her DM DiscordTalk._due_of defers
 his post until she is back; and once back to a conversation he left quiet, `tick` has her say so
 half the time ("back"). A line of hers to him in that conversation before then (his urgent words
-or goodbye hurried it) ends her away. Aways live in memory only: a restart forgets them."""
+or goodbye hurried it) ends her away. While she is away nothing of hers he could see goes out but
+her answers to him (`is_away`: Pipeline._blocked `stepped_away`, the speaker pools, Discord's
+channel answers). Aways live in memory only: a restart forgets them (meta life:away:<guid> is
+written for health's owner-replies alone)."""
 from __future__ import annotations
 
 import logging
@@ -64,6 +67,16 @@ CARRY_WHY = "reply:carried"
 # whisper, his DM post) is this fresh, and at most once per member this often
 INTERRUPT_FRESH_S = 300.0
 INTERRUPT_GAP_S = 1800.0
+# while she is away (after_line) she is this much less likely to be the one who answers him in
+# game (weight): another member takes a line of his she would otherwise have answered
+AWAY_WEIGHT = 0.1
+# a DM post of his this fresh that no answer of hers replies to yet keeps her (_dm_unanswered)
+OPEN_POST_S = 86400.0
+# meta life:away:<guid> = "<since>,<until>" (unix seconds, numbers only): her newest away, for
+# health's owner-replies bound; the mind never reads it back (a restart forgets every away) and
+# drops a key AWAY_KEEP_S after its away ended (health looks back a day)
+AWAY_KEY = "life:away:{guid}"
+AWAY_KEEP_S = 86400.0
 
 
 class LifeService:
@@ -151,6 +164,8 @@ class LifeService:
         if lp is None:
             return 1.0
         w = attention_weight(lp.attention, self._availability)
+        if self.is_away(guid):  # she stepped away (after_line): someone else answers first
+            w *= AWAY_WEIGHT
         st = self.state_of(guid)
         return w * (1 + 0.5 * st.social) if st is not None else w
 
@@ -249,18 +264,27 @@ class LifeService:
         a = self._away.get(guid)
         return a.until if a is not None and a.until > self.clock.now() else 0.0
 
+    def is_away(self, guid: int) -> bool:
+        """She stepped away and is not back yet (after_line): nothing of hers he can see goes
+        out but her answers to him, which wait (Pipeline._blocked `stepped_away`); always False
+        at availability 0."""
+        return self.away_until(guid) > 0
+
     def last_away(self, guid: int) -> Away | None:
         """Her last time away (after_line), kept after it ends until the next (its night and
         minute seed what follows it); None for none, and always at availability 0."""
         return self._away.get(guid) if self._availability > 0 else None
 
     def away_between(self, guid: int, start: float, end: float) -> bool:
-        """She was away at some time between `start` (his line) and `end` (her answer): her
-        late answer says she was away (Pipeline._waited_away). False at availability 0."""
+        """She was away at some time between `start` (his line) and `end` (her answer), and he
+        wrote it at least interrupt.EXCUSE_MIN_S before she was back (else there is no lateness
+        to excuse): her late answer says she was away (Pipeline._waited_away). False at
+        availability 0."""
         if self._availability <= 0:
             return False
         a = self._away.get(guid)
-        return a is not None and a.since < end and start < a.until
+        return (a is not None and a.since < end
+                and start < a.until - interrupt.EXCUSE_MIN_S)
 
     def after_line(self, pipe, turn, meta) -> None:
         """A line of hers was said (the talk's _after_sent). After her line to him in their
@@ -271,8 +295,9 @@ class LifeService:
         her own game's while she plays in his group), at most once per INTERRUPT_GAP_S. Never
         after a template's line (her own brb and back), the watchdog's rescue or a carried DM.
         Her line goes out 2-6 s later (_step_away). A line of hers to him there while she is
-        away (a hurried or capped answer) ends her away (_came_back). Nothing at availability
-        0; a failure is logged (`life_interrupt_failed`), never raised."""
+        away, or an answer he is owed anywhere (a hurried or capped answer), ends her away
+        (_came_back). Nothing at availability 0; a failure is logged (`life_interrupt_failed`),
+        never raised."""
         if self._availability <= 0:
             return
         try:
@@ -281,20 +306,22 @@ class LifeService:
             log_event("life_interrupt_failed", level=logging.WARNING, reason=type(exc).__name__)
 
     def _after_line(self, pipe, turn, meta) -> None:
+        from leeroy_mind.talk.owed import owes_him
         hg, g = pipe.human.guid, turn.speaker
-        if not hg or g == hg:
-            return
+        if not hg or g == hg or turn.template is not None:
+            return  # nobody to step away from, or her own brb and back
         if turn.channel == "whisper" and turn.to_guid == hg:
             medium = "game"
         elif turn.channel == f"dm:{g}":
             medium = "discord"
         else:
-            return  # a channel, a group DM, a voice room: never mid-conversation with him alone
-        if turn.template is not None:
-            return  # her own brb and back
+            medium = ""  # a channel, a group DM, a voice room: never alone with him
         now = self.clock.now()
         if self.away_until(g) > 0:
-            self._came_back(g, now)
+            if medium or owes_him(pipe, turn, meta):
+                self._came_back(g, now)
+            return
+        if not medium:
             return
         if meta.owed_rescue or meta.why == CARRY_WHY or meta.elsewhere:
             return
@@ -303,13 +330,14 @@ class LifeService:
         last = self._interrupted.get(g)
         if last is not None and now - last < INTERRUPT_GAP_S:
             return
-        if self._raid_quiet(pipe, now):
+        if self._quiet(pipe, now):
             return
         his = self._his_last(g, hg, now - INTERRUPT_FRESH_S)
         if his is None or now - his >= INTERRUPT_FRESH_S or self._owes_him(pipe, turn, g, hg):
             return
         lp = self.presence(g, medium=medium, in_his_group=self._in_group(g))
-        if lp is None:
+        p = self.personas.get(g)
+        if lp is None or p is None:
             return
         if getattr(self.world, "human_online", False) and self._in_group(g):
             lp = replace(lp, block=Block.GAMING)  # at her PC playing with him (PM log D15)
@@ -319,14 +347,19 @@ class LifeService:
         cap = (interrupt.WHISPER_CAP_SHARE * game_cap_s(self._availability) if medium == "game"
                else interrupt.DM_CAP_S)
         it = interrupt.draw_interruption(lp, self.state_of(g), self._availability, rng,
-                                         cap_s=cap)
+                                         cap_s=cap, boss=interrupt.own_boss(p),
+                                         car=interrupt.drives(p))
         if it is None:
             return
         delay = rng.uniform(*interrupt.DELAY_S)
         away = Away(since=0.0, until=0.0, channel=turn.channel, reason=it.reason, night=night,
                     minute=minute, back=interrupt.draw_back(rng))
         self._stepping.add(g)
-        pipe._spawn(self._step_away(pipe, g, it, away, delay, now))
+        try:
+            pipe._spawn(self._step_away(pipe, g, it, away, delay, now))
+        except BaseException:
+            self._stepping.discard(g)  # never stuck: her next line may draw again
+            raise
 
     def _came_back(self, guid: int, now: float) -> None:
         """A line of hers to him in their whisper or her DM while she is away (his urgent words,
@@ -337,30 +370,47 @@ class LifeService:
         if a is None or a.done:
             return
         a.until, a.done = now, True
+        self._mark(guid, a)
         log.info("life_back: guid=%d said=0", guid)
+
+    def _mark(self, guid: int, a: Away) -> None:
+        """Meta life:away:<guid> = her away's since and until (numbers only, overwritten by her
+        next), for health's owner-replies; keys of aways over for AWAY_KEEP_S are dropped. A
+        failed write is logged (`life_meta_failed`), never raised: the away holds either way."""
+        try:
+            self.store.set_meta(AWAY_KEY.format(guid=guid), f"{a.since:.0f},{a.until:.0f}")
+            stale = []
+            for key, value in self.store.conn.execute(
+                    "SELECT key, value FROM meta WHERE key GLOB 'life:away:*'").fetchall():
+                until = parse_away(value)
+                if until is None or until[1] < self.clock.now() - AWAY_KEEP_S:
+                    stale.append(key)
+            for key in stale:
+                self.store.conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+        except sqlite3.Error as e:
+            log.warning("life_meta_failed reason=%s", type(e).__name__)
 
     def _stays(self, pipe, guid: int, hg: int, said_at: float) -> str:
         """Why she does not step away after all, as her brb is about to go out ("" for none):
         [life] availability went to 0 (`off`), he wrote to her since her line (`his_line`: she
         saw it, she stays and answers it; a brb after his line would read as her answer to it),
-        an answer of hers to him is on its way (`answering`), or his raid's fight, wipe silence
-        or debrief began (`raid`)."""
+        an answer of hers to him is on its way or still owed (`answering`, _owes_him), or a
+        quiet began (_quiet: `raid`, `boss`, `afk`, `login`)."""
         if self._availability <= 0:
             return "off"
         if self._wrote_since(guid, hg, said_at):
             return "his_line"
         if self._owes_him(pipe, None, guid, hg):
             return "answering"
-        if self._raid_quiet(pipe, self.clock.now()):
-            return "raid"
-        return ""
+        return self._quiet(pipe, self.clock.now())
 
     async def _step_away(self, pipe, guid: int, it: Interruption, away: Away, delay: float,
                          said_at: float) -> None:
         """Her line (it.line) `delay` after hers, through Pipeline.say_as (a pair line: the
         guild's pace never holds it back), as a whisper in game or her DM message. Its barrier,
         just before it goes out, withholds it when she stays after all (_stays: she is not away,
-        `life_interrupt_dropped: guid= reason=off|his_line|answering|raid`) and, in a whisper,
+        `life_interrupt_dropped: guid= reason=off|his_line|answering|raid|boss|afk|login`)
+        and, in a whisper,
         once he has left the game (never a whisper to an offline player). Otherwise she is away
         from then for it.away_s, said or not: refused by the guards, or not sent to an offline
         player, she is still away without a line (core plan Task 10), and so says no back line
@@ -373,6 +423,7 @@ class LifeService:
         def go(now: float) -> None:
             away.since, away.until = now, now + it.away_s
             self._away[guid] = away
+            self._mark(guid, away)
 
         def barrier() -> bool:
             nonlocal why
@@ -415,36 +466,50 @@ class LifeService:
             a.done = True
             pipe = self.engine
             hg = pipe.human.guid if pipe is not None else 0
-            if (not a.back or not hg or self._availability <= 0
-                    or self._wrote_since(guid, hg, a.since)
-                    or (a.channel == "whisper"
-                        and not getattr(self.world, "human_online", False))):
+            if (not a.back or not hg or self._availability <= 0 or self._back_held(pipe, guid, a)):
                 log.info("life_back: guid=%d said=0", guid)
                 continue
             pipe._spawn(self._say_back(pipe, guid, a))
 
+    def _back_held(self, pipe, guid: int, a: Away) -> bool:
+        """Her back line is not said: he wrote to her since her brb, an answer of hers to him is
+        on its way or owed anywhere (it says she was away: one excuse, review-353 P3-4), a quiet
+        (_quiet), or, in a whisper, he has left the game."""
+        hg = pipe.human.guid
+        return bool(self._wrote_since(guid, hg, a.since) or self._owes_him(pipe, None, guid, hg)
+                    or self._quiet(pipe, self.clock.now())
+                    or (a.channel == "whisper"
+                        and not getattr(self.world, "human_online", False)))
+
     async def _say_back(self, pipe, guid: int, a: Away) -> None:
-        """Her back line, as her brb went (a pair line), withheld if he writes first, his
-        raid's fight began or (a whisper) he has left the game."""
+        """Her back line, as her brb went (a pair line), withheld when _back_held says so just
+        before it goes out."""
         from leeroy_mind.talk.turns import TurnKind
         hg = pipe.human.guid
-
-        def barrier() -> bool:
-            return not (self._wrote_since(guid, hg, a.since)
-                        or self._raid_quiet(pipe, self.clock.now())
-                        or (a.channel == "whisper"
-                            and not getattr(self.world, "human_online", False)))
         kind = TurnKind.WHISPER if a.channel == "whisper" else TurnKind.REPLY_HUMAN
         said = await pipe.say_as(guid, a.channel, a.back, kind=kind, to_guid=hg, pair_line=True,
-                                 before_transport=barrier)
+                                 before_transport=lambda: not self._back_held(pipe, guid, a))
         log.info("life_back: guid=%d said=%d", guid, int(bool(said)))
 
-    def _raid_quiet(self, pipe, now: float) -> bool:
-        """His raid's fight, wipe silence or debrief: nobody steps away or comes back aloud."""
+    def _quiet(self, pipe, now: float) -> str:
+        """Why nobody steps away or comes back aloud now ("" for no reason), as nothing starts a
+        conversation with him then (Reactions._initiation_held, _login_quiet): his raid's fight,
+        wipe silence or debrief (`raid`), a boss fight of his group (`boss`), his AFK (`afk`),
+        the quiet after his login (`login`)."""
         from leeroy_mind.talk.raid import RaidPhase
         raid = getattr(pipe, "raid", None)
-        return raid is not None and raid.phase(now) in (
-            RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WIPE_DEBRIEF)
+        if raid is not None and raid.phase(now) in (
+                RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WIPE_DEBRIEF):
+            return "raid"
+        boss = getattr(pipe, "_in_boss_fight", None)
+        if boss is not None and boss(now):
+            return "boss"
+        if getattr(getattr(pipe, "world", None), "human_afk", False):
+            return "afk"
+        login = getattr(pipe, "_login_quiet", None)
+        if login is not None and login(now):
+            return "login"
+        return ""
 
     def _his_last(self, guid: int, hg: int, since: float) -> float | None:
         """The time of his last line to her at `since` or later: his whisper, or his post in
@@ -474,7 +539,10 @@ class LifeService:
 
     def _owes_him(self, pipe, turn, guid: int, hg: int) -> bool:
         """An answer of hers to him is still on its way (a turn of the engine's other than
-        `turn`), or his DM post waits for her own time: she does not step away from it."""
+        `turn`) or still owed: his DM post waits for her own time, a fresh DM post of his has no
+        answer of hers replying to it (_dm_unanswered: its answer was dropped and waits for the
+        owed watch's rescue, review-353 P1-1), or the owed watch holds a stretch of his to her
+        (OwedWatch.open_for). She does not step away from it, nor say she is back."""
         from leeroy_mind.discord.talk import DEFERRED_KEY
         from leeroy_mind.talk.pipeline import REPLY_KINDS
         for t in pipe.planned_turns():
@@ -483,7 +551,29 @@ class LifeService:
                 continue
             if t.to_guid == hg or t.addressee == hg or t.channel == f"dm:{guid}":
                 return True
-        return self.store.get_meta(DEFERRED_KEY.format(guid=guid)) is not None
+        if self.store.get_meta(DEFERRED_KEY.format(guid=guid)) is not None:
+            return True
+        if self._dm_unanswered(guid, hg):
+            return True
+        open_for = getattr(getattr(pipe, "owed", None), "open_for", None)
+        return bool(open_for is not None and open_for(guid))
+
+    def _dm_unanswered(self, guid: int, hg: int) -> bool:
+        """His newest live post in her DM, of the last OPEN_POST_S, is newer than every post of
+        his her messages there reply to: his last post has no answer yet. Reads only the pair's
+        rows."""
+        conn = self.store.conn
+        channel = f"dm:{guid}"
+        his = conn.execute(
+            "SELECT max(id) FROM discord_message WHERE channel = ? AND origin = 'human' "
+            "AND author = ? AND deleted IS NULL AND ts >= ?",
+            (channel, hg, self.clock.now() - OPEN_POST_S)).fetchone()[0]
+        if his is None:
+            return False
+        hers = conn.execute(
+            "SELECT max(reply_to) FROM discord_message WHERE channel = ? AND origin = 'mind' "
+            "AND author = ?", (channel, guid)).fetchone()[0]
+        return hers is None or his > hers
 
     def tick(self, now: float) -> None:
         if self._away:
@@ -510,6 +600,17 @@ class LifeService:
                 self.state.loot_lost(guid)
             except Exception as exc:
                 _failed("loot_lost", exc)
+
+
+def parse_away(value) -> tuple[float, float] | None:
+    """(since, until) from a meta life:away:<guid> value; None for anything else."""
+    try:
+        since, until = (float(x) for x in str(value).split(","))
+    except (TypeError, ValueError):
+        return None
+    if not (since <= until) or since != since:
+        return None
+    return since, until
 
 
 def _failed(op: str, exc: Exception) -> None:

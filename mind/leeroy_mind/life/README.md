@@ -272,64 +272,95 @@ whisper or her Discord DM her day can call her away mid-conversation (spec secti
 - **When it is drawn** (`LifeService.after_line`, from the talk's `_after_sent`, so only after a
   line was said: a turn left on read, reacted to or dropped draws nothing): her line to him in
   `whisper` or `dm:<her guid>` (never a channel, a group DM, officer chat or a voice room), his
-  last line to her (his whisper, or his post in her DM: one conversation) under 300 s old, no
-  answer of hers to him still on its way and no DM post of his waiting for her own time, outside
-  his raid's fight, wipe silence and debrief, never after a template's line (her own brb and
-  back), the owed watch's rescue or a carried DM, at most once per member per 1800 s
-  (`INTERRUPT_GAP_S`, counted from an interruption that happened).
+  last line to her (his whisper, or his post in her DM: one conversation) under 300 s old, never
+  after a template's line (her own brb and back), the owed watch's rescue or a carried DM, at
+  most once per member per 1800 s (`INTERRUPT_GAP_S`, counted from an interruption that
+  happened). Never while she owes him an answer (`_owes_him`): one of hers to him still on its
+  way, a DM post of his waiting for her own time, a DM post of his of the last day that no
+  message of hers replies to yet (its answer was dropped and waits for the owed watch's rescue),
+  or a stretch of his the owed watch still holds for her (`OwedWatch.open_for`). Never in a quiet
+  (`_quiet`, as nothing starts a conversation with him then): his raid's fight, wipe silence or
+  debrief, a boss fight of his group, his AFK, the quiet after his login.
 - **The draw** (`draw_interruption`, seeded `("interrupt", night, her, minute, her line id)`):
   her block as her presence on that medium says it (her own game's while she plays in his WoW
   group: PM log D15). `p = BASE[block] * availability / 6 * (1 + max(0, stress))`:
 
   | Block | BASE | Median away at 6 | Reason, her line |
   |---|---|---|---|
-  | work | .06 | 600 s | `work`: "brb boss", "sec, work", "gotta do a work thing brb" |
-  | home duty | .06 | 480 s | `kids` (kids at home): "brb kid's up", "sec, kids", "brb the kids"; else `home`: "brb", "sec" |
-  | commute | .08 | 900 s | `commute`: "gotta drive, brb" |
+  | work | .06 | 600 s | `work`: "brb boss", "sec, work", "gotta do a work thing brb"; her own boss: "sec, client", "sec, work", "gotta do a work thing brb" |
+  | home duty | .06 | 480 s | `kids` (kids at home): "brb kid's up", "sec, kids", "brb the kids"; else `home`: "brb", "sec", "one sec, brb" |
+  | commute | .08 | 900 s | `commute`: "gotta drive, brb", "driving, brb", "sec, driving"; with no car: "brb my stop", "sec, getting off", "gotta get off here brb" |
   | free time | .015 | 300 s | `door` "brb door", `phone` "sec, phone", `food` "brb food" (one drawn) |
   | gaming | .01 | 240 s | as free time |
   | asleep, gym, out | 0 | - | - |
 
-  The away is lognormal (sigma 0.5) around the median times availability / 6, at most 0.9 x
-  `game_cap_s` in a whisper (345.6 s at 6) and 2700 s in her DM. The same stream draws her line's
-  delay (2-6 s) and what she says when she is back (`draw_back`: one of "back", "back, sorry", "ok
-  back" half the time, else nothing).
+  Her own boss (`own_boss`: her job or days say self-employed, freelance, she owns or runs her
+  own business) and no car (`drives` false: her days say she takes the bus, the metro or the
+  train, cycles or walks to work, or does not drive) are read from her persona's day facts.
+  The away is lognormal (sigma 0.5) around the median times availability / 6, under 0.9 x
+  `game_cap_s` in a whisper (345.6 s at 6) and 2700 s in her DM: a length drawn past the cap is
+  drawn again at 40-100% of it (`UNDER_CAP`), so aways do not pile up at exactly the cap. The
+  same stream draws her line's delay (2-6 s) and what she says when she is back (`draw_back`:
+  one of "back", "back, sorry", "ok back" half the time, else nothing).
 - **Her line** (`_step_away`) goes out through `Pipeline.say_as` as a whisper (game) or her DM
   message (`REPLY_HUMAN`), a pair line (`TurnMeta.pair_line`: read by no one else, so the guild's
-  pace never holds it back), one typed line sent as written. Its barrier, just before it goes out,
-  withholds it when she stays after all: he wrote to her since her line (she saw it: she stays and
-  answers him; a brb after his line would read as her answer to it, and the owed watch and her own
-  time would take it for one), an answer of hers to him is on its way, his raid's fight began, or
-  availability went to 0 (`life_interrupt_dropped: guid= reason=his_line|answering|raid|off`; she
-  is not away). Otherwise she is away from then, said or not: refused by the guards, or a whisper
-  not sent because he has left the game (never a whisper to an offline player), she is still away
-  without a line, and so says no back line after it either (`life_interrupt: guid= reason= away_s=
-  said=0|1`; codes only, never her line).
-- **While she is away** her answers to him wait. In game `LifeService.answer_delay` is at least
-  what is left of it (an answer he is owed still at most `game_cap_s`; any other drawn past
-  `NON_OWED_MAX_S` is missed, as before), through the turn's delay with its wake: his goodbye, his
-  urgent words and his third line still hurry it, his next whisper still joins it, and his logout
-  still carries it to her DM (`CARRY_TEXT` is then its one excuse). In her DM his post is deferred
-  (`DiscordTalk._due_of`): no sooner than she is back plus 30-120 s (`seeded("back", the away's
-  night, her, its minute, his post)`; meta `discord:dm:deferred:<guid>`, the owed watch holding it
-  `own_time`), unless it has urgent words or is his third post in a row, which reach her wherever
-  she is, as in game. A line of hers to him in that whisper or DM before her away ends (a hurried
-  answer, or an owed whisper answer at `game_cap_s` while an away from her DM runs longer) ends
-  it: she is back, says no back line, and his next line is answered at her usual pace without the
-  away's excuse (`life_back: guid= said=0`).
+  pace never holds it back), one line in her own typing (`Pipeline._style`: her texture and
+  habits, as her other lines). Its barrier, just before it goes out, withholds it when she stays
+  after all (`_stays`): he wrote to her since her line (she saw it: she stays and answers him; a
+  brb after his line would read as her answer to it), she owes him an answer (`_owes_him`), a
+  quiet began, or availability went to 0 (`life_interrupt_dropped: guid=
+  reason=his_line|answering|raid|boss|afk|login|off`; she is not away). Otherwise she is away
+  from then, said or not: refused by the guards, or a whisper not sent because he has left the
+  game (never a whisper to an offline player), she is still away without a line, and so says no
+  back line after it either (`life_interrupt: guid= reason= away_s= said=0|1`; codes only, never
+  her line).
+- **Her brb and back answer nothing.** In her DM a pair line is stored with its turn starting
+  `pair_line:` (`discord.transport.PAIR_LINE_TURN`), and every answered check leaves it out: the
+  owed watch (`_discord_answered`), health's count (`count_unanswered`) and her own time
+  (`DiscordTalk._owed`). A whisper brb or back always follows her answer and never a line of his
+  she has not answered (the barrier), so the whisper checks need no mark.
+- **While she is away** nothing of hers he could see goes out but her answers to him
+  (`Pipeline._blocked` drops the rest `stepped_away`): no guild or party chatter, no opener, no
+  banter, no server conversation or DM opener (each also leaves her out of its pool:
+  `Pipeline._candidates`, `Banter.candidates`, the server engine's `_valid`, `DmOpeners._can_open`).
+  Her answers to him wait:
+  - In game `LifeService.answer_delay` is at least what is left of it (an answer he is owed still
+    at most `game_cap_s`; any other drawn past `NON_OWED_MAX_S` is missed, as before), through the
+    turn's delay with its wake: his goodbye, his urgent words and his third line still hurry it,
+    his next whisper still joins it, and his logout still carries it to her DM (`CARRY_TEXT` is
+    then its one excuse). Of the members planned for a line of his, one who is away is never the
+    one he is owed while another is there (`_life_delays`), and she is a tenth as likely to be
+    picked to answer (`weight`, `AWAY_WEIGHT`). Her emote back at his emote waits for her too, at
+    most `game_cap_s`.
+  - In her DM his post is deferred (`DiscordTalk._due_of`): no sooner than she is back plus
+    30-120 s (`BACK_FIND_S`, `seeded("back", the away's night, her, its minute, his post)`; meta
+    `discord:dm:deferred:<guid>`, the owed watch holding it `own_time`), unless it has urgent words
+    or is his third post in a row, which reach her wherever she is, as in game.
+  - In a Discord channel or a group DM his post goes to a member who is there
+    (`DiscordTalk._draw` takes her only when nobody else is); when he named her or replied to her
+    she answers when she is back plus 30-120 s, and a second answer from her is left out
+    (`discord_answer_skipped: message= guid= reason=stepped_away`).
+  - A line of hers to him in that whisper or DM, or an answer he is owed anywhere, before her away
+    ends (a hurried answer, or an owed answer at `game_cap_s` while an away from her DM runs
+    longer) ends it: she is back, says no back line, and his next line is answered at her usual
+    pace without the away's excuse (`life_back: guid= said=0`).
 - **Her late answer says so once.** With `[talk] shape` on, an answer to him that waited out her
-  away (`Pipeline._waited_away`: she was away between his line and her answer; never a carried
-  DM) is LATE, in game or her DM, its excuse "away": "You're only now seeing this (you were away):
-  say so in a few words, then answer." (a DM keeps its DM wording and length first), and her
-  day's own excuse is left out. In her DM the own-time late note is then left out too; without a
-  shape (shape off, `dm_mirror` 0, a photo's turn) the late note says "while you were away" (from
-  10 minutes late, as before).
+  away (`Pipeline._waited_away`: he wrote while she was away, at least 20 s before she was back,
+  `EXCUSE_MIN_S`; never a carried DM) is LATE, in game or her DM, its excuse "away": "You're only
+  now seeing this (you were away): say so in a few words, then answer." (a DM keeps its DM
+  wording and length first), and her day's own excuse is left out. In her DM the own-time late
+  note is then left out too; without a shape (shape off, `dm_mirror` 0, a photo's turn) the late
+  note says "while you were away" (from 10 minutes late, as before).
 - **Coming back** (`LifeService.tick`, every second from the app's ticker): once an away has
   ended, to a conversation he left quiet since her brb she says her drawn back line the same way
-  (a whisper only while he is in game; withheld if he writes first), else nothing. Logged
-  `life_back: guid= said=0|1`.
-- **Health** cannot see an away (in memory only): a DM of his she answers late because she
-  stepped away can count in `owner-replies` as unanswered in time (at most a few a day at 6).
+  (a whisper only while he is in game), else nothing. Withheld (`_back_held`) if he writes first,
+  she owes him an answer anywhere (its excuse says she was away: one excuse), or a quiet began.
+  Logged `life_back: guid= said=0|1`.
+- **Health.** Each away is also in meta `life:away:<guid>` = `<since>,<until>` (unix seconds,
+  numbers only, overwritten by her next; `LifeService._mark`; dropped a day after it ended). The
+  mind never reads it back (a restart forgets every away); health's `owner-replies` bound for his
+  DM or group-DM post made during an away is no sooner than her return plus 120 s, plus its
+  margin. A channel answer that waited for her named return can still count as late there.
 
 ## Her feeling right now (`life/state.py`, `life/statebook.py`)
 
