@@ -80,3 +80,6 @@ class Verdict:
     reaction: str | None = None
     # The phrase cooldown's words, quoted from the draft itself for the rewrite hint; never logged.
     phrases: tuple[str, ...] = field(default=(), repr=False)
+    # Common stock entries an answer owed to him leaned on (phrases.Found.pending): no rewrite,
+    # a hint on her next turn; the list's own words, never logged.
+    pending: tuple[str, ...] = field(default=(), repr=False)

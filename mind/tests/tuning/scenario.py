@@ -22,6 +22,10 @@ golden, golden_beat.json (record_beat): two answers to his whispers with the bea
 request as sent (the beat's prompt, format and options, and each line's prompt with the beat's
 lines after its instruction).
 
+Re-recorded on 2026-11-16 for DM quality (test_tuning_invariant.py says what moved): the hint's
+topics are content words only and his unanswered questions are answered first; the beat's `use`
+bears directly on his last line or is null. The draws and the lines sent are unchanged.
+
 The core golden, golden_core.json (record(..., core=True); human-likeness core plan Task 8), runs
 the same script with [life] availability 6, [life] state, [talk] intent and [talk] situation on and
 the beat off, so every block after an instruction is the code's (the drawn want and the state's

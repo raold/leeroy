@@ -194,7 +194,7 @@ def test_dm_mirror_zero_is_todays_dm():
         for i in range(50):
             d = draw_shape(ctx, random.Random(i))
             assert (d.shape, d.words, d.lines, d.num_predict) == (Shape.PARAGRAPH, 200, 1, num_predict(200))
-            assert shape_line(d, ctx, forms=("he", "him", "his")) == DISCORD_DM.format(words=200)
+            assert shape_line(d, ctx, forms=("he", "him", "his")) == DISCORD_DM.format(words=200, they="he")
 
 
 def test_dm_lengths_follow_the_mirror():

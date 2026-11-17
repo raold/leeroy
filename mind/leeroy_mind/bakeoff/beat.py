@@ -14,6 +14,7 @@ answers, never), plain, as beat.items_of takes them. The beat's words are used o
 line's request: never stored, never logged; the result keeps its want code or why it was
 skipped."""
 import asyncio
+import random
 import re
 
 from leeroy_mind.llm.client import LLMError
@@ -62,11 +63,13 @@ async def ask(llm, model: str, messages: list[dict], *, human: str, their: str, 
                             num_ctx=options["num_ctx"], their=their)
     if offered is None:
         return None, "room"
+    # in the turn's own order, as live (beat.shuffled), drawn from the candidate's seed
+    offered = beats.shuffled(offered, random.Random(f"beat_items:{seed}"))
     asked = with_lines(messages, beats.instruction(human, wants, offered, their))
     try:
         r = await llm.chat(model, asked, options=options, think=False,
-                           format=beats.schema(wants, human, their), keep_alive=keep_alive,
-                           timeout=timeout)
+                           format=beats.schema(wants, human, their, offered=bool(offered)),
+                           keep_alive=keep_alive, timeout=timeout)
     except (LLMError, asyncio.TimeoutError) as e:
         from .generate import error_code
         return None, error_code(e)

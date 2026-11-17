@@ -16,6 +16,18 @@ Bake-off, 2026-11-16 (47 real turns, blind-judged): with only the names of the w
 a long `lands` at num_predict 160, so `[talk] think_budget` is 240 and the ask says how short
 `read` and `lands` are.
 
+The owner's live DM test, 2026-11-16 (7 answers, every beat `use` set, 6 of 7 `flirt`): she
+raised the same subjects reply after reply and flirted past his questions. So, wherever a beat
+runs (any channel, any member), what it may bring in follows four rules: the items are shuffled
+per turn with a seeded draw (`shuffled`), so their order carries no bias; an item already brought
+in during this conversation (`conversation`: a whisper's pair, a DM, a channel) in her last
+LEDGER_TURNS turns there within LEDGER_TTL is not offered again; at most one Bring in per
+BRING_IN_EVERY of her turns there (`offerable`); and `use` is null unless the item bears directly
+on his last line (USE_DESCRIPTION, USE_ITEMS). The conversation's ledger holds ids only ("m<id>"
+for a memory, "c<id>" for a chat line) and is stored by the pipeline in meta
+`beat:used:<guid>:<conversation>`. When his line asks her something (asking.asks) the wants
+that answer him lead (intent.ordered) and flirt reads as for when he is flirting (`asking`).
+
 Core plan Task 8 widens it (`[talk] intent`, `[life] state`): the pipeline may give the ask the
 wants the turn allows (intent.allowed) and the want code drew as a `lean`, and leave `lands` out
 (`ask_lands` False) when her state says how his line lands; `render` is then the one block after
@@ -25,9 +37,10 @@ here reads exactly as before.
 Pure: no I/O and no logging. The beat's words are never logged or stored (the pipeline logs the
 `want` code, whether `use` was set and the time)."""
 import json
+import random
 from dataclasses import dataclass
 
-from leeroy_mind.talk.intent import TAIL_OFF, WANT_WORDS, Intent, want_words
+from leeroy_mind.talk.intent import TAIL_OFF, WANT_WORDS, Intent, ordered, want_words
 from leeroy_mind.talk.prompt import ESTIMATE_SLACK
 from leeroy_mind.text import estimate_tokens, truncate_words
 
@@ -51,6 +64,9 @@ MEANING = {
     "boundary": "you want to say no, or draw a line",
     "logistics": "you want to sort out a plan: when, where, who, what to bring",
 }
+# flirt's meaning when his line asks her something (asking.asks): answering comes first
+ASKED_MEANING = {"flirt": "you want to flirt with {human}, for when {human} is flirting with "
+                          "you, not for answering a question"}
 READ_CHARS = 200  # "You read it as": one sentence
 LANDS_CHARS = 60  # "It lands": a few words
 ITEM_CHARS = 120  # each memory or chat line offered, and "Bring in"
@@ -63,7 +79,9 @@ MARK = "Before you answer, take a moment for yourself."
 READ_DESCRIPTION = "What {human} is actually saying or asking, in one short sentence."
 LANDS_DESCRIPTION = "How it lands on you right now, in a few words, not a sentence."
 WANT_DESCRIPTION = "What you want from your answer, the one that fits best."
-USE_DESCRIPTION = "The number of one offered memory or line worth bringing in, or null."
+USE_DESCRIPTION = ("The number of one offered memory or line, only if it bears directly on "
+                   "{human}'s last line; otherwise null, as for most answers.")
+USE_NONE_DESCRIPTION = "null: nothing is offered to bring in this time."
 INSTRUCTION = (
     MARK + " Don't write your answer yet: reply with only a JSON object."
     '\n"read": ' + READ_DESCRIPTION +
@@ -74,8 +92,14 @@ LANDS_ASK = '\n"lands": ' + LANDS_DESCRIPTION  # what ask_lands False takes out 
 # The want the code drew, named as the lean (`lean`): its own sentence after the want clause
 # (prompt text carries no semicolon: filters.py repairs one as a tell)
 LEAN = " You lean toward {lean} ({words})."
-USE_ITEMS = "the number of one of these worth bringing in, or null:\n{items}"
+USE_ITEMS = ("the number of one of these, only if it bears directly on {human}'s last line, else "
+             "null:\n{items}")
 USE_NONE = "null."
+# What a beat may bring in, per conversation (module docstring)
+BRING_IN_EVERY = 3  # at most one Bring in per this many of her turns in a conversation
+LEDGER_TURNS = 10  # her last turns a conversation's ledger keeps
+LEDGER_TTL = 24 * 3600.0  # an entry older than this is forgotten
+LEDGER_KEY = "beat:used:{guid}:{conversation}"
 
 
 @dataclass(frozen=True)
@@ -86,23 +110,83 @@ class Beat:
     use: str | None  # the memory or chat line to bring in, as the prompt showed it
 
 
-def wants_for(can_flirt: bool, *, tail: bool = False) -> tuple[str, ...]:
+def wants_for(can_flirt: bool, *, tail: bool = False, asking: bool = False) -> tuple[str, ...]:
     """The wants on offer: "flirt" only for a member who may flirt with him (romance.flirt_chance;
     the content invariant: never a man, never a woman whose stance has no flirt). `tail`: his
     explicit whisper overlay is in the line's prompt, so the wants it rules out are not on offer
     (intent.TAIL_OFF: never vent, gossip, deflect, draw a line, sort out plans or keep it light;
-    PM log 2026-11-16, review-332), whatever [talk] intent says."""
-    return tuple(i.value for i in Intent if (can_flirt or i is not Intent.FLIRT)
-                 and not (tail and i in TAIL_OFF))
+    PM log 2026-11-16, review-332), whatever [talk] intent says. `asking`: his line asks her
+    something (asking.asks), so the wants that answer him lead (intent.ordered)."""
+    return tuple(i.value for i in ordered(
+        (i for i in Intent if (can_flirt or i is not Intent.FLIRT) and not (tail and i in TAIL_OFF)),
+        asking))
+
+
+def keyed_items(memories: list[tuple[str, str]],
+                chat: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """What `use` may point at, as (key, plain text) pairs (no age, speaker or bullet, so "Bring
+    in" never reads as a chat line to copy): `memories` (the memories the prompt showed, keyed
+    "m<id>"), then `chat` (the others' earlier lines in its chat window, oldest first, keyed
+    "c<id>"; never hers, nor the line she answers) newest first, at most MAX_ITEMS, each cut to
+    ITEM_CHARS."""
+    out = [*memories, *reversed(chat)]
+    return [(k, truncate_words(" ".join(x.split()), ITEM_CHARS)) for k, x in out
+            if x.strip()][:MAX_ITEMS]
 
 
 def items_of(memories: list[str], chat: list[str]) -> list[str]:
-    """What `use` may point at, as plain text (no age, speaker or bullet, so "Bring in" never
-    reads as a chat line to copy): `memories` (the memories the prompt showed), then `chat` (the
-    others' earlier lines in its chat window, oldest first; never hers, nor the line she answers)
-    newest first, at most MAX_ITEMS, each cut to ITEM_CHARS."""
-    out = [*memories, *reversed(chat)]
-    return [truncate_words(" ".join(x.split()), ITEM_CHARS) for x in out if x.strip()][:MAX_ITEMS]
+    """keyed_items' texts, for text read back without ids (the bake-off's captured requests)."""
+    return [x for _, x in keyed_items([("", m) for m in memories], [("", c) for c in chat])]
+
+
+def conversation(channel: str, to_guid: int | None) -> str:
+    """The conversation a beat's turn belongs to, for its ledger: a whisper's pair (her side is
+    the key's guid), else the channel ("dm:<guid>", "guild", "gdm:<id>", "voice:<room>")."""
+    return f"whisper:{to_guid or 0}" if channel == "whisper" else channel
+
+
+def ledger_key(guid: int, channel: str, to_guid: int | None) -> str:
+    return LEDGER_KEY.format(guid=guid, conversation=conversation(channel, to_guid))
+
+
+def ledger(raw: str | None, now: float) -> list[dict]:
+    """A conversation's ledger as stored (JSON, oldest first: {"at": ts, "use": key or null} for
+    each of her turns there), without entries older than LEDGER_TTL, the last LEDGER_TURNS. An
+    unreadable one reads as empty."""
+    try:
+        rows = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    kept = [{"at": float(r["at"]), "use": r.get("use") if isinstance(r.get("use"), str) else None}
+            for r in rows if isinstance(r, dict) and isinstance(r.get("at"), (int, float))
+            and not isinstance(r.get("at"), bool) and 0 <= now - float(r["at"]) <= LEDGER_TTL]
+    return kept[-LEDGER_TURNS:]
+
+
+def offerable(items: list[tuple[str, str]], entries: list[dict]) -> list[tuple[str, str]]:
+    """The items a beat may offer this turn: none while one of her last BRING_IN_EVERY - 1 turns
+    in this conversation brought something in, else every item none of `entries` brought in."""
+    if any(e["use"] for e in entries[-(BRING_IN_EVERY - 1):]):
+        return []
+    used = {e["use"] for e in entries if e["use"]}
+    return [(k, x) for k, x in items if not k or k not in used]
+
+
+def shuffled(items: list, rng: random.Random) -> list:
+    """`items` in the turn's own order (a seeded draw: life.seed.seeded), so the first is no
+    likelier to be brought in than the last."""
+    out = list(items)
+    rng.shuffle(out)
+    return out
+
+
+def recorded(entries: list[dict], now: float, use: str | None) -> str:
+    """The ledger after one more turn of hers (`use`: the key she brought in, or None), as
+    stored: JSON, ids and times only, the last LEDGER_TURNS."""
+    return json.dumps([*entries, {"at": now, "use": use}][-LEDGER_TURNS:],
+                      separators=(",", ":"))
 
 
 def unframed(memory: str) -> str:
@@ -111,34 +195,40 @@ def unframed(memory: str) -> str:
     return memory.split(": ", 1)[1] if memory.startswith("- ") and ": " in memory else memory
 
 
-def _meanings(human: str, wants: tuple[str, ...], their: str) -> list[str]:
-    return [f"{w}: {MEANING[w].format(human=human, their=their)}" for w in wants]
+def _meanings(human: str, wants: tuple[str, ...], their: str, asking: bool = False) -> list[str]:
+    meaning = {**MEANING, **ASKED_MEANING} if asking else MEANING
+    return [f"{w}: {meaning[w].format(human=human, their=their)}" for w in wants]
 
 
 def schema(wants: tuple[str, ...], human: str, their: str = "their", *,
-           ask_lands: bool = True) -> dict:
+           ask_lands: bool = True, offered: bool = True, asking: bool = False) -> dict:
     """The beat's JSON schema for Ollama's `format`, each field described as the ask describes it.
     `their`: his possessive form (HumanIdentity.forms). Without `ask_lands` there is no `lands`
-    (her state says how his line lands: core plan Task 8)."""
+    (her state says how his line lands: core plan Task 8). `offered` False: nothing is offered
+    to bring in, so `use` can only be null (a number there would cost the whole beat).
+    `asking`: his line asks her something (ASKED_MEANING)."""
     properties = {
         "read": {"type": "string", "description": READ_DESCRIPTION.format(human=human)},
         "lands": {"type": "string", "description": LANDS_DESCRIPTION},
         "want": {"type": "string", "enum": list(wants),
                  "description": " ".join([WANT_DESCRIPTION, *(
-                     m + "." for m in _meanings(human, wants, their))])},
-        "use": {"type": ["integer", "null"], "description": USE_DESCRIPTION}}
+                     m + "." for m in _meanings(human, wants, their, asking))])},
+        "use": ({"type": ["integer", "null"], "description": USE_DESCRIPTION.format(human=human)}
+                if offered else {"type": "null", "description": USE_NONE_DESCRIPTION})}
     if not ask_lands:
         del properties["lands"]
     return {"type": "object", "properties": properties, "required": list(properties)}
 
 
 def instruction(human: str, wants: tuple[str, ...], items: list[str], their: str = "their", *,
-                lean: Intent | None = None, ask_lands: bool = True) -> str:
+                lean: Intent | None = None, ask_lands: bool = True, asking: bool = False) -> str:
     """The beat call's own last words, after the turn's prompt; never in the line's prompt.
     `lean`: the want the code drew for the turn, named after the want clause (LEAN), so the
-    model leans toward it but still chooses; `ask_lands` False leaves "lands" out."""
-    listed = "\n".join(f"- {m}" for m in _meanings(human, wants, their))
-    use = (USE_ITEMS.format(items="\n".join(f"{i}. {x}" for i, x in enumerate(items, 1)))
+    model leans toward it but still chooses; `ask_lands` False leaves "lands" out; `asking`:
+    his line asks her something (ASKED_MEANING)."""
+    listed = "\n".join(f"- {m}" for m in _meanings(human, wants, their, asking))
+    use = (USE_ITEMS.format(human=human,
+                            items="\n".join(f"{i}. {x}" for i, x in enumerate(items, 1)))
            if items else USE_NONE)
     from leeroy_mind.talk.pieces import text as piece_text  # the lab's variant of the ask
     ask = piece_text("beat_ask", MARK)
@@ -155,7 +245,7 @@ def instruction(human: str, wants: tuple[str, ...], items: list[str], their: str
 
 def fitting(prompt_tokens: int, human: str, wants: tuple[str, ...], items: list[str], *,
             predict: int, num_ctx: int, their: str = "their", lean: Intent | None = None,
-            ask_lands: bool = True) -> list[str] | None:
+            ask_lands: bool = True, asking: bool = False) -> list[str] | None:
     """The offered items the beat's request can carry inside num_ctx, its prompt (the turn's,
     `prompt_tokens` estimated, plus the instruction) counted ESTIMATE_SLACK over the estimate:
     the last items go first (the oldest chat lines, then the least relevant memories). None when
@@ -163,7 +253,7 @@ def fitting(prompt_tokens: int, human: str, wants: tuple[str, ...], items: list[
     items = list(items)
     while True:
         asked = prompt_tokens + 1 + estimate_tokens(instruction(
-            human, wants, items, their, lean=lean, ask_lands=ask_lands))
+            human, wants, items, their, lean=lean, ask_lands=ask_lands, asking=asking))
         if asked * ESTIMATE_SLACK + TEMPLATE_TOKENS + predict <= num_ctx:
             return items
         if not items:

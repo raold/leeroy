@@ -112,6 +112,64 @@ def is_summon(text: str) -> bool:
     return "summon" in classify(text)
 
 
+# What the "Lately you've..." hint may name as a topic (owner's live DM test, 2026-11-16: "brought
+# up the actually twice", "brought up the three twice"): a content word, never a chat word
+# (talk.words.COMMON_WORDS, everyday.CHAT_WORDS), a pronoun, a number, a stance adverb or a word
+# under four letters, nor a form of a stopword ("telling", "thinking"). Stored rows keep their
+# topics; the hint filters them when it reads them.
+PRONOUNS = frozenset(
+    "something anything nothing everything someone anyone everyone noone somebody anybody "
+    "everybody nobody myself yourself himself herself itself ourselves yourselves themselves "
+    "yours mine theirs ours hers whatever whoever whichever whomever these those this that "
+    "they them their there here where".split())
+NUMBERS = frozenset(
+    "zero four five seven eight nine eleven twelve thirteen fourteen fifteen sixteen seventeen "
+    "eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand "
+    "million first second third fourth fifth sixth seventh eighth ninth tenth twice once half "
+    "dozen three".split())
+ADVERBS = frozenset(
+    "actually really honestly literally basically seriously totally definitely probably maybe "
+    "perhaps just still even already always never ever again almost quite pretty kinda sorta "
+    "anyway anyways though also very truly surely simply clearly obviously especially finally "
+    "usually exactly absolutely completely entirely apparently hopefully certainly genuinely "
+    "lowkey highkey super mostly nearly barely hardly sometimes often somehow somewhere "
+    "anywhere everywhere nowhere tonight today tomorrow yesterday later soon right okay".split())
+# the commonest verbs, whose forms ("saying", "talking") name no subject either
+VERBS = frozenset("say tell talk ask look see seem try let keep give take put call mean".split())
+
+
+def topic_word(word: str) -> bool:
+    """Whether `word` is a content word the hint may name as a topic (the rule above)."""
+    from .everyday import CHAT_WORDS, is_everyday
+    from .words import COMMON_WORDS
+    w = _fold(word or "")
+    if len(w) < 4 or not w.isalpha():
+        return False
+    if (w in COMMON_WORDS or w in CHAT_WORDS or w in PRONOUNS or w in NUMBERS or w in ADVERBS
+            or w in VERBS):
+        return False
+    if w in _STOP:
+        return False
+    # a form of a stopword ("telling", "thinking", "wanted", "getting", "making")
+    if any(b in _STOP or b in CHAT_WORDS or b in VERBS for b in _bases(w)):
+        return False
+    # an adverb of an everyday adjective: "honestly", "literally", "seriously", "totally"
+    return not (len(w) >= 7 and w.endswith("ly") and is_everyday(w[:-2]))
+
+
+def _bases(w: str) -> set[str]:
+    """The words `w` may inflect: -ing, -ed, -s and -es off, a doubled consonant halved, an e
+    put back ("getting" -> "get", "making" -> "make", "liked" -> "like")."""
+    out = set()
+    for end in ("ing", "ed", "es", "s"):
+        if w.endswith(end) and len(w) - len(end) >= 2:
+            stem = w[:-len(end)]
+            out |= {stem, stem + "e"}
+            if len(stem) >= 3 and stem[-1] == stem[-2]:
+                out.add(stem[:-1])
+    return out
+
+
 def topics(text: str, *, names: Collection[str] = ()) -> tuple[str, ...]:
     """Up to three content words (4+ letters, not stopwords, game words or names), lower-case,
     once each, in order of appearance."""
@@ -155,7 +213,8 @@ def moves_line(rows: "Sequence[MoveRow]", *, night_start: float,
                forms: tuple[str, str, str]) -> str:
     """The "Lately you've..." line from her last turns to one person (oldest first): the newest
     row's main move and any move seen in 2+ rows (at most two, by count, ties newest first), and
-    one topic seen in 2+ rows. It names moves, never her words. "" when there is nothing."""
+    one topic seen in 2+ rows, a content word only (topic_word). It names moves, never her words.
+    "" when there is nothing."""
     if not rows:
         return ""
     they, them, their = forms
@@ -168,7 +227,8 @@ def moves_line(rows: "Sequence[MoveRow]", *, night_start: float,
                 count[m] = count.get(m, 0) + 1
                 newest[m] = i
         for t in set(r.topics):
-            tcount[t] = tcount.get(t, 0) + 1
+            if topic_word(t):
+                tcount[t] = tcount.get(t, 0) + 1
     last = rows[-1].main
     names = [m for m in count if m == last or count[m] >= 2]
     names.sort(key=lambda m: (-count[m], -newest[m]))
@@ -189,3 +249,19 @@ def moves_line(rows: "Sequence[MoveRow]", *, night_start: float,
         if items and len(build(items)) <= MOVES_LINE_CHARS:
             return build(items)
     return build(parts[:1]) if parts else ""
+
+
+DO_ELSE = ": do something else this time."
+
+
+def question_first(line: str, their: str) -> str:
+    """The instruction's tail on an answer to his question (asking.is_question; owner's live DM
+    test, 2026-11-16: the hint's "do something else" overrode a direct question): "Answer his
+    question first, plainly, then whatever else." alone, or with the moves_line `line` after it
+    as what she already did, its "do something else" gone. `their` is his possessive."""
+    from .asking import QUESTION_FIRST
+    first = QUESTION_FIRST.format(their=their)
+    if not line:
+        return first + "."
+    rest = line[:-len(DO_ELSE)] if line.endswith(DO_ELSE) else line.rstrip(".")
+    return f"{first}; {rest[:1].lower()}{rest[1:]}."
