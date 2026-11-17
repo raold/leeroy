@@ -3,7 +3,7 @@ import json
 from types import SimpleNamespace
 
 from leeroy_mind.discord.channels import is_discord, is_private, is_officer_channel, is_local_channel, channel_id
-from leeroy_mind.memory.privacy import derive_scope, restricted_channels, OFFICERS
+from leeroy_mind.memory.privacy import derive_scope, gated, restricted_channels, OFFICERS
 from leeroy_mind.memory.recall import scope_ok, hidden_ok, whisper_ok, OWNER_REF
 from leeroy_mind.storage.provenance import paired
 
@@ -134,8 +134,10 @@ class Visibility:
         if row is None:
             return False
         if kind == 'memory':
+            # its effective scope: never wider than its evidence, at any depth (privacy.resolve)
+            row = gated(self.conn, row, self.__dict__.setdefault('_scopes', {}))
             if (row['scope'] != 'open' and row['owner'] != self.guid or
-                    not scope_ok(SimpleNamespace(**dict(row)), turn_channel=self.channel, to_guid=self.to_guid)):
+                    not scope_ok(SimpleNamespace(**row), turn_channel=self.channel, to_guid=self.to_guid)):
                 return False
             try:
                 children = json.loads(row['evidence'])

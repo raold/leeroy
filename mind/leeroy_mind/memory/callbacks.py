@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from leeroy_mind.discord.channels import is_private, is_officer_channel, is_discord, channel_id
 from leeroy_mind.memory.recall import scope_ok, whisper_ok, hidden_ok
-from leeroy_mind.memory.privacy import restricted_channels
+from leeroy_mind.memory.privacy import gated, restricted_channels
 from leeroy_mind.storage.rows import cosine, unpack_vec
 
 DAY = 86400
@@ -159,6 +159,8 @@ class _Privacy:
         if rows:
             row = rows[0]
             if kind == "memory":
+                # the effective scope, never wider than its evidence (privacy.resolve)
+                row = gated(self.conn, row, self.__dict__.setdefault('_scopes', {}))
                 refs = _json(row["evidence"])
                 hidden = restricted_channels(self.conn, {0: refs}).get(0, ()) if isinstance(refs, list) else ()
                 ok = (row["t_created"] <= self.now and self.memory_scope(row)

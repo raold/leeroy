@@ -190,7 +190,8 @@ def _life(conn, c):
             'SELECT b.id,t.guid,b.text FROM life_beat b JOIN life_thread t ON t.id=b.thread_id '
             'WHERE b.night=(SELECT max(night) FROM life_beat WHERE ts<=?) '
             'AND b.ts BETWEEN ? AND ? AND NOT EXISTS (SELECT 1 FROM memory m WHERE m.owner=t.guid '
-            "AND m.source='offscreen' AND (m.scope!='open' OR m.status!='active') AND EXISTS "
+            "AND m.source='offscreen' AND (m.scope!='open' OR m.status!='active' "
+            "OR COALESCE(m.derived_scope,'open')!='open') AND EXISTS "
             "(SELECT 1 FROM json_each(m.evidence) e WHERE e.value='beat:'||b.id)) "
             'ORDER BY b.id DESC LIMIT 64', (c.now, c.now-FRESH_DEFAULT_S, c.now)):
         if guid in c.cast:
