@@ -380,7 +380,13 @@ with no evidence fails closed, a scoped one stays with its pair). Its evidence i
 one level: cited lines must be the turn's to hear (private, officer, restricted and
 deleted checks; not the reader-list checks, since she was told), night-made refs
 (`joke:`, `beat:`, `encounter:`, `arc:`) claim nobody, and a memory beneath is gated and
-not opened. Below that the stored scopes stand. Before this the walk was unbounded:
+not opened. A memory's scope at every gate is its **effective** one (`_effective`): the
+stricter of what is stored and what `privacy._derive` gives from its evidence, with each
+memory it cites, at any depth through `memory:` refs, read the same way (a fixed point, so
+a cycle settles at its strictest member; past 4,096 memories a turn it fails closed).
+Stored scopes are not always as strict as their evidence (review-365: 281 open memories
+cite a non-open one, 434 reach a private line through memory refs), so the horizon never
+rests on a stored scope alone. Before the horizon the walk was unbounded:
 on live data one note reached 100-1,200 nodes over 12 levels (lines she never read,
 night refs, the 512-node cap), so no lesson passed on any turn and `talk_recipe` never
 recorded one. A cycle within the horizon still fails closed.

@@ -4,12 +4,15 @@ from types import SimpleNamespace
 
 from leeroy_mind.discord.channels import is_discord, is_private, is_officer_channel, is_local_channel, channel_id
 from leeroy_mind.groups.audience import GroupSource
-from leeroy_mind.memory.privacy import derive_scope, restricted_channels, OFFICERS, GROUP
+from leeroy_mind.memory.privacy import (derive_scope, restricted_channels, stricter, OFFICERS, GROUP,
+    _derive as derive_rows, _lines as privacy_lines, _secret_threads as secret_threads,
+    _Memory as privacy_memory)
 from leeroy_mind.memory.recall import scope_ok, hidden_ok, whisper_ok, OWNER_REF
 from leeroy_mind.storage.provenance import paired
 
 PREFIX = 'learn:lesson:evidence:'
 MAX_REFS = 512
+SCOPE_NODES = 4096  # memories one turn's effective-scope reads may touch; past it fails closed
 
 
 def evidence(conn, line_ids, *, cache=None):
@@ -95,7 +98,7 @@ class Visibility:
         # Game recordings contain cast only; the owner is never a missing cast reader.
         self.readers, self.officer = frozenset(readers) - {human_guid}, officer
         self.all_readers = tuple(readers)
-        self.cache, self.visited = {}, set()
+        self.cache, self.visited, self.scopes = {}, set(), {}
 
     def visible(self, refs):
         return bool(refs) and len(refs) <= MAX_REFS and all(self.walk(r) for r in refs)
@@ -131,16 +134,88 @@ class Visibility:
             pending.extend((child, False) for child in reversed(children))
         return self.cache.get(root, False)
 
+    def _effective(self, ident):
+        """A memory's scope as its evidence makes it: the stricter of what is stored and what
+        derives from its evidence, with every memory it cites, at any depth, read the same way.
+        Stored scopes are not always as strict as their evidence (live, 2026-11-17: 281 open
+        memories cite a non-open one, 434 reach a private line through memory refs), so a gate
+        that stops at a memory must not take its stored scope alone. Only memory refs are
+        followed, never the lines' own recalled memories. None: unknown, cyclic or past the
+        node budget, which no caller may read as open."""
+        done = self.scopes
+        if ident in done:
+            return done[ident]
+        rows, order, todo, seen = {}, [], [ident], set()
+        while todo:
+            current = todo.pop()
+            if current in seen or current in done:
+                continue
+            seen.add(current)
+            if len(seen) + len(done) > SCOPE_NODES:
+                done[ident] = None
+                return None
+            row = self.conn.execute('SELECT id,owner,scope,scope_with,evidence FROM memory WHERE id=?',
+                                    (current,)).fetchone()
+            try:
+                refs = json.loads(row['evidence']) if row is not None else None
+            except (ValueError, TypeError):
+                refs = None
+            if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+                rows[current] = None
+                continue
+            rows[current] = (row, refs)
+            order.append(current)
+            todo.extend(int(r[7:]) for r in refs if r.startswith('memory:') and r[7:].isdecimal())
+        # Scopes only ever tighten, so passes over the found rows reach a fixed point; a
+        # cycle settles at the strictest scope anything on it derives.
+        current = {i: (None if rows[i] is None else (rows[i][0]['scope'], rows[i][0]['scope_with']))
+                   for i in rows}
+        chats = {i: [int(r[5:]) for r in rows[i][1] if r.startswith('chat:') and r[5:].isdecimal()]
+                 for i in order}
+        lines = privacy_lines(self.conn, {c for ids in chats.values() for c in ids})
+        secret = secret_threads(self.conn, lines)
+        for _ in range(len(order) + 1):
+            changed = False
+            for i in order:
+                row, refs = rows[i]
+                cited, broken = {}, False
+                for r in refs:
+                    if r.startswith('memory:') and r[7:].isdecimal():
+                        other = current.get(int(r[7:]), done.get(int(r[7:])))
+                        if other is None:
+                            broken = True
+                            break
+                        child = rows.get(int(r[7:]))
+                        owner = child[0]['owner'] if child else self.conn.execute(
+                            'SELECT owner FROM memory WHERE id=?', (int(r[7:]),)).fetchone()[0]
+                        cited[int(r[7:])] = privacy_memory(owner, other[0], other[1])
+                if broken:
+                    new = None
+                else:
+                    derived = derive_rows(row['owner'], refs, [], lines, secret, cited)
+                    new = None if current[i] is None else stricter(current[i], (derived.scope, derived.scope_with))
+                if new != current[i]:
+                    current[i], changed = new, True
+            if not changed:
+                break
+        done.update(current)
+        return done.get(ident)
+
     def _recallable(self, row):
-        """Recall._shareable for one memory row on this turn, over plain SELECTs. Its evidence
-        list when it may come up here, else False; malformed or missing evidence fails closed."""
-        if row['scope'] != 'open' and row['owner'] != self.guid:
+        """Recall._shareable for one memory row on this turn, over plain SELECTs, on its
+        effective scope (_effective), never the stored one alone. Its evidence list when it
+        may come up here, else False; malformed or missing evidence fails closed."""
+        scope = self._effective(row['id'])
+        if scope is None:
             return False
-        if not scope_ok(SimpleNamespace(**dict(row)), turn_channel=self.channel, to_guid=self.to_guid):
+        if scope[0] != 'open' and row['owner'] != self.guid:
+            return False
+        if not scope_ok(SimpleNamespace(**(dict(row) | dict(scope=scope[0], scope_with=scope[1]))),
+                        turn_channel=self.channel, to_guid=self.to_guid):
             return False
         if (row['key'] or '').startswith('bond:') and row['owner'] != self.guid:
             return False
-        if row['scope_with'] == OFFICERS and not self.officer:
+        if scope[1] == OFFICERS and not self.officer:
             return False
         try:
             refs = json.loads(row['evidence'])
@@ -148,10 +223,10 @@ class Visibility:
             return False
         if not (isinstance(refs, list) and len(refs) <= MAX_REFS and all(isinstance(r, str) for r in refs)):
             return False
-        if not refs and row['scope'] == 'open':
+        if not refs and scope[0] == 'open':
             return False  # absent provenance is no public proof; a scoped one stays with its pair
         hidden = restricted_channels(self.conn, {0: refs}).get(0, ())
-        if row['scope_with'] == GROUP and not any(isinstance(c, GroupSource) for c in hidden):
+        if scope[1] == GROUP and not any(isinstance(c, GroupSource) for c in hidden):
             return False
         if hidden and not hidden_ok(hidden, self.channel, speaker=self.guid, to_guid=self.to_guid,
                                     readers=self.all_readers):

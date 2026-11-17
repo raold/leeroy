@@ -763,3 +763,84 @@ def test_a_callback_reaches_her_dm_while_he_is_in_discord_and_not_in_the_game(ri
     assert rig.store.conn.execute('SELECT memory_id FROM callback_use').fetchone()[0]==mid
     apply.release(rig.engine,meta)
     assert compose(rig,'dm:101')[1].recipe_snapshot.callback_id is None   # her hour's one, and 14 days' rest
+
+
+# -- review-365 P1: a stored scope can be wider than its evidence; the gate reads the evidence ----
+
+def memory(rig, evidence, *, owner=101, scope='open', scope_with=0):
+    mid = rig.store.conn.execute("INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,importance,"
+        "valence,source,evidence,actors,scope,scope_with) VALUES (?,'reflection','Fixture',"
+        "0,0,0,5,0,'reflection',?,'[101]',?,?)", (owner, json.dumps(evidence), scope, scope_with)).lastrowid
+    rig.store.conn.commit()
+    return mid
+
+
+def carried(rig, mid, channel='guild', guid=101):
+    """A lesson of 101 from a line of hers on `channel` whose prompt carried memory `mid`."""
+    turn = Turn(TurnKind.REPLY_HUMAN, guid, channel, to_guid=0)
+    line = rig.engine._record(turn, TurnMeta(f'carried-{mid}'), rig.engine.personas.get(guid),
+                              f'A bland generated fixture {mid}.', [mid])
+    return lesson(rig, line, text=f'He keeps replies brief and clear, case {mid}.')
+
+
+def reaches(rig, ident, channel):
+    return ident in compose(rig, channel)[1].recipe_snapshot.lesson_ids
+
+
+def test_a_secrecy_dm_two_levels_under_a_misscoped_open_memory_refuses_the_note(rig, monkeypatch):
+    select(monkeypatch)
+    told = source(rig, 'whisper', text="Please don't tell anyone about this fixture.")
+    secret = memory(rig, [f'chat:{told}'], scope='secret', scope_with=1)
+    wrong = memory(rig, [f'memory:{secret}'])                 # stored open over a secret
+    ident = carried(rig, memory(rig, [f'memory:{wrong}']))
+    assert not reaches(rig, ident, 'guild') and not reaches(rig, ident, 'party')
+    assert not reaches(rig, ident, 'discord:general')
+
+
+def test_another_members_private_memory_two_down_refuses_the_note(rig, monkeypatch):
+    select(monkeypatch)
+    theirs = memory(rig, [f"chat:{source(rig, 'whisper', guid=102)}"], owner=102, scope='private', scope_with=1)
+    wrong = memory(rig, [f'memory:{theirs}'], owner=102)      # 102's open memory over her private one
+    ident = carried(rig, memory(rig, [f'memory:{wrong}']))
+    assert not reaches(rig, ident, 'guild') and not reaches(rig, ident, 'party')
+    assert not audience.visible(rig.store.conn, [f'memory:{wrong}'], guid=103, channel='guild', to_guid=0)
+    # and by the other route: a public line of 102's whose prompt carried the mis-scoped memory
+    turn = Turn(TurnKind.REPLY_HUMAN, 102, 'guild', to_guid=0)
+    line = rig.engine._record(turn, TurnMeta('theirs'), rig.engine.personas.get(102),
+                              'Another bland generated fixture.', [wrong])
+    ident = carried(rig, memory(rig, [f'chat:{line}']))
+    assert not reaches(rig, ident, 'guild') and not reaches(rig, ident, 'party')
+
+
+def test_an_open_memory_mixing_a_secrecy_whisper_with_a_public_line_refuses_the_note(rig, monkeypatch):
+    select(monkeypatch)
+    told = source(rig, 'whisper', text="Please don't tell anyone about this fixture.")
+    mixed = memory(rig, [f'chat:{told}', f'chat:{source(rig)}'])
+    ident = carried(rig, memory(rig, [f'memory:{mixed}']))
+    assert not reaches(rig, ident, 'guild')
+    direct = carried(rig, mixed)                               # and one level up
+    assert not reaches(rig, direct, 'guild')
+
+
+def test_her_own_private_memory_two_down_keeps_the_note_to_their_dm(rig, monkeypatch):
+    select(monkeypatch)
+    private = memory(rig, [f"chat:{source(rig, 'whisper')}"], scope='private', scope_with=1)
+    wrong = memory(rig, [f'memory:{private}'])
+    line = source(rig, 'dm:101')
+    ident = lesson(rig, line, scope='whisper')
+    with rig.store.transaction():
+        audience.retain(rig.store.conn, ident, [f'memory:{memory(rig, [f"memory:{wrong}"])}'])
+    assert reaches(rig, ident, 'dm:101') and reaches(rig, ident, 'whisper')
+    assert not reaches(rig, ident, 'guild')
+
+
+def test_effective_scope_settles_on_cycles_and_fails_closed_past_its_budget(rig, monkeypatch):
+    conn = rig.store.conn
+    a = memory(rig, ['event:1'])
+    b = memory(rig, [f'memory:{a}', f"memory:{memory(rig, [], scope='private', scope_with=1)}"])
+    conn.execute('UPDATE memory SET evidence=? WHERE id=?', (json.dumps([f'memory:{b}']), a))
+    gate = audience.Visibility(conn, guid=101, channel='guild', to_guid=0)
+    assert gate._effective(a) == ('private', 1) == gate._effective(b)
+    ref, _ = chain(conn, 30)
+    monkeypatch.setattr(audience, 'SCOPE_NODES', 8)
+    assert not audience.visible(conn, [ref], guid=101, channel='guild', to_guid=0)
