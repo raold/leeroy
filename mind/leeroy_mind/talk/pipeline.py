@@ -62,8 +62,8 @@ from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
 from leeroy_mind.life.day import Block, has_kids
 from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
-from leeroy_mind.life.presence import (away_words, playing_text, settled_where, stated_where,
-                                       where_text)
+from leeroy_mind.life.presence import (AWAY_NOTE_S, away_note, away_words, playing_text,
+                                       settled_where, stated_where, where_text)
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
@@ -108,6 +108,7 @@ from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line
 from leeroy_mind.talk.owed import (HIS_TALK_WAIT_S, KEEP_WHISPERS, RESCUABLE as OWED_RESCUABLE,
                                    answers_in_flight, extend_owed_deadline, his_talk_after,
                                    owes_him, rescue_text)
+from leeroy_mind.talk.prompt import unanswered_text
 from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_line_text,
                                      comms_rules, facts_head, knows_real_name, mood_line,
                                      quest_help, real_name_line, redact_for, relationship_card,
@@ -566,6 +567,9 @@ class TurnMeta:
     # [talk] coherence (talk/position.py, Pipeline._position): what she has said so far in this
     # conversation and a rule of hers his line touches, the lines after the beat's block
     position: str = field(default="", repr=False)
+    # his whispers a waiting answer covers, oldest first, once a later one joined it
+    # (talk.engine._life_waiting); empty for an answer to one line
+    coalesced: list = field(default_factory=list, repr=False)
 
 
 class _ScopeChanged(SchedulerError):
@@ -1585,10 +1589,47 @@ class Pipeline:
                 and not meta.elsewhere and meta.why != "hotmic"
                 and not self._server_turn(turn, meta))
 
+    def _his_waiting(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        """[talk] coherence: his lines this answer covers when more than one waits for it,
+        oldest first; [] for an answer to one line. In game, the whispers that joined her waiting
+        answer (TurnMeta.coalesced, talk.engine._life_waiting); in his DM, his posts since her
+        last message there (meta.discord_chat) with the one she answers. A waiting or late
+        answer used to answer only the newest (self-play audit, 2026-11-17: a question, then
+        "?", got an apology and no answer)."""
+        hg = self.human.guid
+        if not hg or not self._coherent():
+            return []
+        if len(meta.coalesced) > 1:
+            rows = [r for r in self.store.chat_lines(list(meta.coalesced))
+                    if r.from_guid == hg and self._may_carry(turn, r)]
+            rows.sort(key=lambda r: r.id)
+            return [r.text for r in rows] if len(rows) > 1 else []
+        if meta.discord_chat is not None and self._answers_his_dm(turn, meta):
+            tail = []
+            for r in reversed(meta.discord_chat):
+                if r.from_guid != hg:
+                    break
+                tail.append(r)
+            tail.reverse()
+            found = self._his_message(meta)
+            mid = meta.discord.reply_to if meta.discord is not None else None
+            texts = [r.text for r in tail if r.id != mid]
+            if found is not None:
+                texts.append(found[0])
+            return texts if len(texts) > 1 else []
+        return []
+
     def _his_line(self, turn: Turn, meta: TurnMeta) -> str:
         """The line of his this turn answers, "" when it answers none: its trigger line when it is
         his (and hers to see), his Discord post it replies to, or his whisper a carried DM answer
-        answers (its recall query). Read only to weigh it; never shown from here."""
+        answers (its recall query); of several waiting lines (_his_waiting) his first question,
+        so the turn is weighed as an answer to it. Read only to weigh it; never shown from here."""
+        waiting = self._his_waiting(turn, meta)
+        if waiting:
+            return next((t for t in waiting if is_question(t)), waiting[-1])
+        return self._his_one_line(turn, meta)
+
+    def _his_one_line(self, turn: Turn, meta: TurnMeta) -> str:
         hg = self.human.guid
         if not hg:
             return ""
@@ -1965,8 +2006,24 @@ class Pipeline:
         except Exception as e:  # her situation is colour: nothing in it may cost him an answer
             log.warning("talk_where_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
             return text
-        return settled_where(text, stated, lp, playing=playing and not is_discord(turn.channel),
+        text = settled_where(text, stated, lp, playing=playing and not is_discord(turn.channel),
                              them=them)
+        return " ".join(x for x in (text, self._away_note(turn)) if x)
+
+    def _away_note(self, turn: Turn) -> str:
+        """Why she stepped away a little while ago in this conversation (her brb's reason,
+        life/interrupt.py), for AWAY_NOTE_S after she is back: "" otherwise."""
+        life, hg = getattr(self, "life", None), self.human.guid
+        if life is None or not hg or turn.template is not None:
+            return ""
+        a = life.last_away(turn.speaker)
+        now = self.clock.now()
+        with_him = (turn.channel == "whisper" and turn.to_guid == hg) or turn.channel.startswith(
+            DM_PREFIX)
+        if (a is None or not with_him or a.channel != turn.channel or a.since <= 0
+                or a.since > now or now - a.until > AWAY_NOTE_S):
+            return ""
+        return away_note(a.reason, self.human.forms[1])
 
     def _in_his_raid(self) -> bool:
         group = self.world.group
@@ -2360,6 +2417,13 @@ class Pipeline:
         to_human = bool(hg) and turn.addressee == hg
         if to_human and not his and not preview:
             his = self._his_line(turn, meta)  # his Discord post, DM or carried whisper
+        # several lines of his wait for this answer: each is answered, his question first
+        waiting = self._his_waiting(turn, meta) if to_human and not preview else []
+        unanswered = ""
+        if waiting:
+            asked = next((t for t in waiting if is_question(t)), "")
+            his = asked or his
+            unanswered = unanswered_text(waiting, human)
         them = human.forms[1] if to_human else "them"
         greet = turn.kind is TurnKind.GREET
         # the greetings of his login a later greeter sees, as who said hi and never the words
@@ -2469,8 +2533,8 @@ class Pipeline:
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
-            extra=" ".join(x for x in (turn.instruction, follow, seen, story, lore, quest,
-                                       *ends) if x),
+            extra=" ".join(x for x in (turn.instruction, unanswered, follow, seen, story, lore,
+                                       quest, *ends) if x),
             forms=forms, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN,
             channel=turn.channel, discord_words=words, length_text=length_text,
@@ -2496,7 +2560,8 @@ class Pipeline:
                 chat_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in recent])
         parts = PromptParts(
             # [talk] coherence, a core switch on: the opinions his line touches lead her card
-            card=self._card(p, his if live and self._coherent() and self._core_on() else ""),
+            card=(self._card(p, his) if his and live and self._coherent() and self._core_on()
+                  else self._card(p)),
             samples=samples,
             rules=rules_of(human, p, data_dir=self.data_dir, now=now,
                            channel=turn.channel, recipient=turn.to_guid,
@@ -2584,7 +2649,10 @@ class Pipeline:
         return Composed(messages,
                         list(dict.fromkeys([m.id for m in memories[:len(trimmed.memories)]] +
                              ([callback.memory_id] if callback else []))), p, close,
-                        [trigger] if trigger else [], [r.text for r in earlier], samples,
+                        # the line it answers; of several waiting lines his question first
+                        (list(dict.fromkeys([his, *waiting])) if waiting
+                         else [trigger] if trigger else []),
+                        [r.text for r in earlier], samples,
                         # a DM's copy check reads his earlier messages there (her own are the
                         # repeat check's): the audit's answer that sent his message back
                         support, [r.text for r in recent

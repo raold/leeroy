@@ -244,6 +244,23 @@ def settled_where(text: str, stated: str, lp: LifePresence, *, playing: bool, th
     return STILL[stated].format(them=them)
 
 
+# Her brb's reason, carried into her next prompts in that conversation (asked who was at the
+# door, she said "nobody": the reason was a code her prompt never saw). By interrupt.LINES' codes.
+AWAY_NOTE = "A few minutes ago you told {them} you had to step away: {why}. You're back now."
+AWAY_WHY = {"work": "something came up at work", "kids": "the kids needed you",
+            "home": "something needed you at home", "commute": "you were on the move",
+            "door": "someone was at the door", "phone": "your phone rang",
+            "food": "you went to get something to eat"}
+AWAY_NOTE_S = 1800.0  # how long after she is back the note stays
+
+
+def away_note(reason: str, them: str) -> str:
+    """The "Right now" sentence that says why she stepped away ("" for a reason it has no
+    words for)."""
+    why = AWAY_WHY.get(reason)
+    return AWAY_NOTE.format(them=them, why=why) if why else ""
+
+
 def away_words(lp: LifePresence, medium: str) -> str:
     """Where she is, in words for her prompt and catch-up lines."""
     if lp.block is Block.HOME_DUTY:
