@@ -266,12 +266,27 @@ class NightScheduler:
             run_finish(self.store, night, now=self.clock.now(), status="failed", error=repr(e))
             log("nightly_failed", level=logging.WARNING, night=night, attempt=attempt,
                 error=repr(e))
+            await self._night_over(night)
             return
         if _cancelling():  # it swallowed its cancel, so units may be left: not done
             log("nightly_cancel_swallowed", level=logging.WARNING, night=night, attempt=attempt)
             raise asyncio.CancelledError
         self._mark(night, "done")
         log("nightly_done", night=night, attempt=attempt)
+        await self._night_over(night)
+
+    async def _night_over(self, night: str) -> None:
+        """The run is over (done or failed; a cancelled one hands the GPU over itself): the
+        reflection model does not stay loaded behind it."""
+        try:
+            gone = await self.arbiter.night_over()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log("nightly_unload_failed", level=logging.WARNING, night=night, error=type(e).__name__)
+            return
+        if gone:
+            log("nightly_reflection_unloaded", night=night, models=len(gone))
 
     @staticmethod
     def _run_done(task: asyncio.Task) -> None:

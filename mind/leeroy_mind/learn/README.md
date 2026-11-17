@@ -336,7 +336,12 @@ quotas; successful first fragments record use atomically, even if learning froze
 after composition. That delivery accounting preserves the 14-day reuse rest.
 Those quotas still
 require an active recorded owner-play session, so unattended server conversations
-do not receive callbacks while the owner is offline.
+do not receive callbacks while the owner is offline. One exception (2026-11-17): on a
+Discord turn, his own Discord post within the last hour counts as him being there, and
+the quota window is that hour (`memory/callbacks.py` `_discord_floor`). Until then
+`callback_use` held no row: he had talked to members only through Discord DMs, with no
+game session, for four days. The shared-actor rule still holds (he must be a reader of
+the turn), so in practice this is her DM with him.
 
 Lesson provenance uses `learn:lesson:evidence:<lesson-id>` in meta, with
 `version: 1`, bounded `refs` (`chat:<id>`, `memory:<id>`, non-chat `event:<id>`
@@ -366,6 +371,25 @@ message-to-line receipts. The receipt-index migration adds a partial value index
 receipts, avoiding a scan of accumulated Discord history. Each turn shares a
 512-node provenance memo across lessons and typing; the coach memoizes source
 expansion within a night. Nested generated lines expand their recalled memories.
+
+The walk has a horizon (2026-11-17). A note's own sources, its lines and the memories
+her generated lines carried, pass the strict per-line gates above. A memory is admitted
+as recall admits it (`Recall._shareable`: its stored scope, own or open, the restricted
+lines it rests on at any depth, the pair rule, no missing cited line; an open memory
+with no evidence fails closed, a scoped one stays with its pair). Its evidence is opened
+one level: cited lines must be the turn's to hear (private, officer, restricted and
+deleted checks; not the reader-list checks, since she was told), night-made refs
+(`joke:`, `beat:`, `encounter:`, `arc:`) claim nobody, and a memory beneath is gated and
+not opened. A memory's scope at every gate is its **effective** one (`_effective`): the
+stricter of what is stored and what `privacy._derive` gives from its evidence, with each
+memory it cites, at any depth through `memory:` refs, read the same way (a fixed point, so
+a cycle settles at its strictest member; past 4,096 memories a turn it fails closed).
+Stored scopes are not always as strict as their evidence (review-365: 281 open memories
+cite a non-open one, 434 reach a private line through memory refs), so the horizon never
+rests on a stored scope alone. Before the horizon the walk was unbounded:
+on live data one note reached 100-1,200 nodes over 12 levels (lines she never read,
+night refs, the 512-node cap), so no lesson passed on any turn and `talk_recipe` never
+recorded one. A cycle within the horizon still fails closed.
 The regression benchmark uses 20,000 receipts and 300 candidate typing lines,
 with a 250 ms smoke-test ceiling; this is a test guard, not a production timeout.
 

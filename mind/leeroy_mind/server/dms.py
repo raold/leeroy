@@ -180,13 +180,18 @@ class DmOpeners:
             if g!=snap.human and g not in snap.in_play and g not in snap.away and g not in busy
             and self._human_generation.get(g,0)==generations.get(g,0)
             and snap.states[g].presence.state in {'online','idle'} and self._can_open(g,now,day,snap.meta)}
+        outreach = getattr(self.app, 'outreach', None)
+        if outreach is not None:
+            # An opener is for someone with something to tell him, while anyone has: the ration
+            # (dms_per_day) is the only way an item reaches him from a member he is not writing.
+            ready = {g:v for g,v in candidates.items() if outreach.has_ready(g,'dm')}
+            candidates = ready or candidates
         from leeroy_mind.heat import live as heat_live
         guid = self._planner.start(now,candidates,lift=romance_lift(self.app.engine.cfg.romance.dial),
                                    starts=heat_live.starts_of())
         if guid is None:
             return
         p = snap.personas[guid]
-        outreach = getattr(self.app, 'outreach', None)
         item = outreach.select(guid, 'dm') if outreach is not None else None
         own = [s for s in snap.seeds if s.kind in {'life','plan'} and guid in s.about and not s.officers_only]
         if outreach is not None:
