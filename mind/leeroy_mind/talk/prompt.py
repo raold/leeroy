@@ -117,6 +117,10 @@ class PromptParts:
     # The situation mode: "Right now:" goes after the awareness card, just before the
     # instruction, so her situation is what she reads last (never cut, as before)
     situation: bool = False
+    # What this private conversation with him has established (talk/sofar.py: his news, what
+    # she said of where she is, open questions and plans), a few short code-built lines under
+    # SO_FAR_HEAD after the chat; at most sofar.MAX_TOKENS, so the trim never cuts it
+    so_far: list[str] = field(default_factory=list)
 
 
 def replay(text: str, words: int = REPLAY_WORDS) -> str:
@@ -127,6 +131,7 @@ def replay(text: str, words: int = REPLAY_WORDS) -> str:
 
 
 ELSEWHERE_HEAD = "Earlier between you two, elsewhere (you remember it; it is not the line you answer):"
+SO_FAR_HEAD = "So far between you two (keep to it, never contradict it):"
 STYLE_HEAD = "Your recent style notes (observations, not rules; use only what fits this moment):"
 STYLE_CAP_TOKENS = 220  # input observations only; output length belongs to the channel preset
 
@@ -848,6 +853,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         _section(STYLE_HEAD, p.style),
         _section(ELSEWHERE_HEAD, p.elsewhere),
         _section("Chat:", p.chat),
+        _section(SO_FAR_HEAD, p.so_far),
         _section(p.facts_head or facts_head("them"), p.facts),
         _section("Your last lines (don't make the same move again):", p.own_recent),
         p.awareness.strip(),
@@ -871,6 +877,7 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
         ("mood", _section("Right now:", [p.mood])),
         ("style", _section(STYLE_HEAD, p.style)),
         ("elsewhere", _section(ELSEWHERE_HEAD, p.elsewhere)), ("chat", _section("Chat:", p.chat)),
+        ("so_far", _section(SO_FAR_HEAD, p.so_far)),
         ("facts", _section(p.facts_head or facts_head("them"), p.facts)),
         ("own_recent", _section("Your last lines (don't make the same move again):", p.own_recent)),
         ("awareness", p.awareness.strip()), ("instruction", p.instruction.strip()))}
@@ -890,11 +897,11 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     his line the reply answers (pinned) is never cut nor shortened: it is the floor, even
     when later answers came after it. The speaker's own line his pushback is about (kept, fix
     wave G6) is never cut nor shortened either, and the last resort keeps it with the floor.
-    The system message, the untrimmed sections, mood, real-name line, facts and instruction
-    are never cut (the mood in either place: PromptParts.situation). Memories stay a prefix of
+    The system message, the untrimmed sections, mood, real-name line, facts, the conversation's
+    "so far" lines (bounded where they are built) and instruction are never cut (the mood in either place: PromptParts.situation). Memories stay a prefix of
     the input, so len(result.memories) says which recalled memories were used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
-                elsewhere=list(p.elsewhere), style=list(p.style),
+                elsewhere=list(p.elsewhere), style=list(p.style), so_far=list(p.so_far),
                 own_recent=list(p.own_recent), untrimmed=list(p.untrimmed))
     pin = p.pinned if p.facts and p.pinned is not None and 0 <= p.pinned < len(p.chat) else None
     kept = p.kept if p.kept is not None and 0 <= p.kept < len(p.chat) else None
@@ -983,6 +990,7 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
                    memories=[r(x) for x in parts.memories], mood=r(parts.mood),
                    chat=[r(x) for x in parts.chat], own_recent=[r(x) for x in parts.own_recent],
                    elsewhere=[r(x) for x in parts.elsewhere],
+                   so_far=[r(x) for x in parts.so_far],
                    style=[r(x) for x in parts.style],
                    untrimmed=[r(x) for x in parts.untrimmed],
                    instruction=r(parts.instruction), awareness=(parts.awareness.redacted(r)

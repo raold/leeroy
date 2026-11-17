@@ -122,6 +122,7 @@ from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, 
 from leeroy_mind.talk.states import (EFFECTS, RAID_CALLS, Altered, Effects, effects_for,
                                      substance_of)
 from leeroy_mind.talk.seasons import day_line
+from leeroy_mind.talk import sofar
 from leeroy_mind.talk.shape import (DISCORD_FAMILIES, GAME_FAMILIES, ONE_WORD_NUM_PREDICT, Shape,
                                     ShapeContext, ShapeDraw, draw_shape, shape_line,
                                     shape_template)
@@ -229,6 +230,7 @@ CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
+SO_FAR_WINDOW_S = 12 * 3600.0  # the stored lines talk/sofar.py reads a conversation from
 DROP_ON_RETRY = frozenset({"history", "summons", "game name", "self name"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 LONG_SLACK = 1.25
@@ -776,6 +778,8 @@ class Pipeline:
         self.live_admission: Callable[[], Awaitable[None]] | None = None
         self._instruction_hooks: list[Callable[[Turn, TurnMeta, str], str]] = []
         self._session_id: int | None = None
+        # what each private conversation with him has established so far (talk/sofar.py)
+        self.so_far = sofar.SoFar(self._so_far_read)
         self._altered: dict[int, Altered] = {}  # tonight's state per member
         self._dead: dict[int, float] = {}  # guid -> when they died
         # jobs and sending; a turn id is unique across runs of the mind (_new_id)
@@ -1301,6 +1305,38 @@ class Pipeline:
                 and whisper_ok(r.channel, r.from_guid, r.to_guid, speaker=turn.speaker,
                                turn_channel=turn.channel, to_guid=turn.to_guid)
                 and (turn.kind is not TurnKind.OPEN or r.from_guid != hg)]
+
+    def _so_far_read(self, guid: int) -> list[sofar.Line]:
+        """The stored lines between her and him of the last SO_FAR_WINDOW_S, both media (their
+        whispers and her Discord DM are one conversation), oldest first, for talk/sofar.py. A
+        post he deleted is left out, as the DM's own context leaves it (Store.pair_lines)."""
+        hg, since = self.human.guid, self.clock.now() - SO_FAR_WINDOW_S
+        rows = [r for discord in (True, False)
+                for r in self.store.pair_lines(guid, hg, since=since, limit=sofar.MAX_LINES,
+                                               discord=discord)]
+        rows.sort(key=lambda r: (r.ts, r.id))
+        return [sofar.Line(r.id, r.ts, r.from_guid == hg, strip_wow_markup(r.text))
+                for r in rows if r.from_guid in (guid, hg)]
+
+    def _so_far(self, turn: Turn, meta: TurnMeta, now: float, *, lead=()) -> list[str]:
+        """The "So far between you two" lines of a private turn with him (her whisper or
+        Discord DM to him; talk/sofar.py), without the line this turn answers, which the chat
+        and the instruction carry; [] anywhere else. A failed read is logged by its class and
+        the prompt goes without them."""
+        hg = self.human.guid
+        if (not hg or turn.speaker == hg or turn.to_guid != hg
+                or not is_private(turn.channel)):
+            return []
+        try:
+            skip = turn.trigger_line or 0
+            if not skip and meta.discord is not None and meta.discord.reply_to:
+                raw = self.store.get_meta(f"discord:line:{meta.discord.reply_to}")
+                skip = int(raw) if isinstance(raw, str) and raw.isdecimal() else 0
+            return self.so_far.lines(turn.speaker, now, forms=self.human.forms, skip=skip,
+                                     lead=lead)
+        except Exception as e:
+            log.warning("so_far_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
+            return [f"- {x}" for x in lead if x]
 
     def _own_of(self, guid: int) -> deque[tuple[str, int, str]]:
         """The member's own lines; the first time this run asks, the last ones she said before
@@ -2458,7 +2494,8 @@ class Pipeline:
                        for r in pair],
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
-            pinned=pinned if facts else None, kept=kept, situation=situation)
+            pinned=pinned if facts else None, kept=kept, situation=situation,
+            so_far=[] if preview else self._so_far(turn, meta, now))
         if live and getattr(self, 'learn_enabled', False):
             from leeroy_mind.learn.apply import prepare, yield_families
             meta.learning = await prepare(self, turn, meta, p, now=now)

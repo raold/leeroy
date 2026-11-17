@@ -53,7 +53,7 @@ from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.realm.config import RealmConfig
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.talk.pipeline import TurnMeta, TurnWithdrawn
-from leeroy_mind.talk.prompt import EXTRA_CAP_TOKENS, replay
+from leeroy_mind.talk.prompt import EXTRA_CAP_TOKENS, REPLAY_WORDS, replay
 from leeroy_mind.talk.romance import FOND_SHARE, WHISPER_AFFINITY_SCALE, WHISPER_WEIGHT
 from leeroy_mind.talk.select import pick_speakers
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -103,6 +103,17 @@ LINE_CHARS = 200
 # instruction keeps only where she is and his message, up to what INSTRUCTION_CHARS leaves.
 DM_LINES = CONTEXT_LINES
 DM_HIS_CHARS = 600
+# The DM's Chat is sized by his turns, not by lines (self-play audit, 2026-11-17: 12 lines with
+# each message of her bursts a line held 4-6 of his turns, and his news from six turns back was
+# gone): his last DM_HIS_TURNS messages before the one she answers, with hers in between. Hers
+# after his DM_RECENT_TURNS-th last message keep their opening REPLAY_WORDS words, older ones
+# DM_OLD_WORDS; the whole is kept under DM_CHAT_TOKENS (estimated), the oldest rows going first,
+# so it stays within the DM's prompt budget (prompt.DM_BUDGET).
+DM_HIS_TURNS = 10
+DM_RECENT_TURNS = 3
+DM_OLD_WORDS = 14
+DM_ROWS_MAX = 80
+DM_CHAT_TOKENS = 1100
 _MENTION = re.compile(r"(?<!\w)@(\w+)")
 
 
@@ -685,36 +696,47 @@ class DiscordTalk:
     def dm_chat(self, conn, channel: str, thread: int | None, *,
                 exclude: int = 0) -> tuple[ChatLineRow, ...]:
         """A DM's history for its answer's Chat section (the pipeline shows it as the chat she
-        answers in, TurnMeta.discord_chat): the DM's last DM_LINES messages but `exclude` (the
+        answers in, TurnMeta.discord_chat): from his DM_HIS_TURNS-th last message on (see
+        DM_HIS_TURNS: sized by his turns, hers in between), but `exclude` (the
         post she answers, which the instruction carries and the pipeline adds as the Chat's last
         line: Pipeline._his_dm_row), oldest first, deleted messages and
         typo corrections left out, as context_lines reads them. His each up to DM_HIS_CHARS,
         hers as their opening words (prompt.replay: she remembers what she said, not every
-        word of it), each with its photo note. Rows keyed by Discord message ids."""
+        word of it; fewer words for the older ones), each with its photo note, the whole under
+        DM_CHAT_TOKENS. Rows keyed by Discord message ids."""
         peer, hg = layout.dm_peer(channel), self.app.human_guid
         if peer is None or not hg:
             return ()
+        live = ("channel = ? AND thread IS ? AND deleted IS NULL AND id != ? "
+                "AND (turn IS NULL OR substr(turn,1,19)!='realism_correction:')")
+        his = [r[0] for r in conn.execute(
+            f"SELECT id FROM discord_message WHERE {live} AND author = ? AND origin = 'human' "
+            "ORDER BY id DESC LIMIT ?", (channel, thread, exclude, hg, DM_HIS_TURNS)).fetchall()]
+        first = his[-1] if his else 0
+        recent = his[min(DM_RECENT_TURNS, len(his)) - 1] if his else 0
         rows = conn.execute(
-            "SELECT author, text, id, ts FROM discord_message WHERE channel = ? AND thread IS ? "
-            "AND deleted IS NULL AND id != ? "
-            "AND (turn IS NULL OR substr(turn,1,19)!='realism_correction:') ORDER BY id DESC LIMIT ?",
-            (channel, thread, exclude, DM_LINES)).fetchall()
+            f"SELECT author, text, id, ts FROM discord_message WHERE {live} AND id >= ? "
+            "ORDER BY id DESC LIMIT ?", (channel, thread, exclude, first, DM_ROWS_MAX)).fetchall()
         from leeroy_mind.photos.notes import by_messages
         photos = by_messages(conn, [r[2] for r in rows],
             uploads=getattr(self.app.engine, 'photos_enabled', False),
             members=getattr(self.app.engine, 'photos_send', False),
             memes=getattr(self.app.engine, 'culture_memes', False))
-        out = []
-        for author, text, mid, ts in reversed(rows):
-            his = author == hg
-            words = _clip(fold(text), DM_HIS_CHARS) if his else replay(fold(text))
+        out, room = [], DM_CHAT_TOKENS * 4
+        for author, text, mid, ts in rows:  # newest first: the oldest go when the room is used
+            mine = author == hg
+            words = (_clip(fold(text), DM_HIS_CHARS) if mine else
+                     replay(fold(text), REPLAY_WORDS if mid >= recent else DM_OLD_WORDS))
             if mid in photos:
                 words += ' ' + photos[mid]
+            room -= len(words) + 12  # its name and age in the prompt
+            if room < 0 and out:
+                break
             out.append(ChatLineRow(id=mid, ts=ts, channel=channel, from_guid=author,
-                                   from_name=self._name(author), to_guid=peer if his else hg,
+                                   from_name=self._name(author), to_guid=peer if mine else hg,
                                    text=words, map=0, zone=0, session_id=None, thread_id=None,
-                                   origin="human" if his else "mind"))
-        return tuple(out)
+                                   origin="human" if mine else "mind"))
+        return tuple(reversed(out))
 
     def _name(self, g: int) -> str:
         app = self.app
