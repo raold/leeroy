@@ -8,7 +8,11 @@ selfie worker's process tree has exited (its VRAM is free). A model Ollama does 
 skipped with one log line (critic_judge_absent); a GPU pause, a failed or malformed answer
 skips that photo (critic_judge_skipped code=), never retried in a loop. The photos go to the
 model as the message's images; the answer is parsed into codes and booleans and nothing else is
-kept: no text the model writes is logged or stored, nor a path, nor an image byte."""
+kept: no text the model writes is logged or stored, nor a path, nor an image byte.
+
+A placeholder for now (2026-11-16, selfie/README.md): on the labelled snap-anatomy sheet neither
+this default nor gemma3:27b or mistral-small3.2:24b caught the subtle defects, so the identity
+cosine is what best-of-N mostly ranks by. The schema and the wiring stay for a better model."""
 import base64
 import json
 import logging

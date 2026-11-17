@@ -69,7 +69,7 @@ MIN_BIT_GAP_DAYS = 7.0
 MIN_YEARS_PLAYED = 3
 CAST_SUMMARY_TOKEN_CAP = 900
 OVERLAY_TOKEN_CAP = 1200
-TAKEN_LIST_TOKEN_CAP = 300
+TAKEN_LIST_TOKEN_CAP = 1200  # ~440 names; with the schema, rules and a long profile the record call stays under half of the 8192 num_ctx
 RENAME_CANDIDATES = 8
 RENAME_SCHEMA = {
     "type": "object",
@@ -603,19 +603,33 @@ async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str]
     candidate does. `taken`: the first names the prompt lists (the owner's is never among them).
     STRUCTURE rather than EXTRACT: the same settings with the persona model's num_ctx, since
     another num_ctx makes Ollama reload that model."""
-    messages = [{"role": "system", "content": rules},
-                {"role": "user", "content": _rename_prompt(p, taken)}]
-    for name in await chat_json(llm, model, messages, RENAME_SCHEMA, STRUCTURE, _candidate_names):
-        if is_taken(name):
-            continue
-        try:
-            renamed, left = _with_real_name(p, name, ctx)
-        except ValueError:
-            continue
-        if left and private_logs:
-            log.info("renamed %s: the old first name is still in %d field%s, in another case",
-                     p.character_name, left, "" if left == 1 else "s")
-        return renamed
+    taken = list(taken)
+    hidden = name_keys(ctx.human.real_name) if ctx.human.real_name else set()
+    for attempt in range(2):
+        messages = [{"role": "system", "content": rules},
+                    {"role": "user", "content": _rename_prompt(p, taken)}]
+        rejected: list[str] = []
+        for name in await chat_json(llm, model, messages, RENAME_SCHEMA, STRUCTURE,
+                                    _candidate_names):
+            if is_taken(name):
+                first = name.split()[0]
+                if name_keys(first).isdisjoint(hidden):
+                    rejected.append(first)
+                continue
+            try:
+                renamed, left = _with_real_name(p, name, ctx)
+            except ValueError:
+                continue
+            if left and private_logs:
+                log.info("renamed %s: the old first name is still in %d field%s, in another "
+                         "case", p.character_name, left, "" if left == 1 else "s")
+            return renamed
+        # every candidate collided or failed: once more, the collided first names added to the
+        # list (the printed list is cut by tokens, so the model may not have seen them)
+        if not rejected:
+            break
+        seen = {t.casefold() for t in taken}
+        taken += [r for r in dict.fromkeys(rejected) if r.casefold() not in seen]
     return None
 
 
