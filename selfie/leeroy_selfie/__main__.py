@@ -142,6 +142,10 @@ def cmd_detail(args) -> int:
         return _fail("detail", ValueError(f"a denoise is not in {lo}-{hi}"))
     if args.size not in SIZES:
         return _fail("detail", ValueError("--size is not 768, 896 or 1024"))
+    if not (0.3 <= args.scale <= 0.9 and 10 <= args.steps <= 60 and 1.0 <= args.cfg <= 12.0
+            and 0 <= args.seed < 2**32):
+        return _fail("detail", ValueError("--scale is 0.3-0.9, --steps 10-60, --cfg 1-12, "
+                                          "--seed 0 to 4294967295"))
     if args.ref is not None and not Path(args.ref).is_file():
         return _fail("detail", ValueError("--ref is not a file"))
     try:

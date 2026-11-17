@@ -18,6 +18,7 @@ FACE_PAD = 2.0  # the crop's side over the face box's longer side: the face, hai
 HAND_PAD = 3.0  # over the palm box's longer side: the fingers, whichever way they point
 MIN_FACE_PX = 32  # a face box smaller than this is a background face or a false find
 MIN_HAND_PX = 24
+MIN_HAND_SCORE = 0.6  # the palm detector's own floor is 0.5: a doubtful palm is left alone
 MAX_FACE_FRAC = 0.35  # of the frame's shorter side: a headshot's face has its pixels already
 MAX_HAND_FRAC = 0.25
 MAX_FACES = 2
@@ -140,10 +141,11 @@ def plan(image, detectors, opts: Detail) -> tuple[list, list, int, str]:
         try:
             if detectors is None or detectors.palm is None:
                 raise LookupError("palm")
-            hands, n = select(palm_boxes(detectors.palms(bgr)), width, height, pad=HAND_PAD,
-                              min_px=MIN_HAND_PX, max_frac=MAX_HAND_FRAC, most=MAX_HANDS,
-                              size=opts.size)
-            skipped += n
+            palms = palm_boxes(detectors.palms(bgr))
+            sure = [p for p in palms if p[4] >= MIN_HAND_SCORE]
+            hands, n = select(sure, width, height, pad=HAND_PAD, min_px=MIN_HAND_PX,
+                              max_frac=MAX_HAND_FRAC, most=MAX_HANDS, size=opts.size)
+            skipped += n + len(palms) - len(sure)
         except Exception:
             missing.append("hands")
     code = ("" if not missing else "detectors_unavailable" if len(missing) == 2

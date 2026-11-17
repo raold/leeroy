@@ -104,7 +104,7 @@ mask feathered over an eighth of the crop. Hands go first and faces last. A face
 `a natural hand, five fingers`. On an identity worker the largest face keeps the request's
 reference at its scale, so the face stays hers; every other crop carries the blank reference at
 scale 0. Passed over: a face box under 32 px or over 35% of the frame's shorter side (a headshot
-has its pixels already), a palm box under 24 px or over 25%, and a crop that would not be
+has its pixels already), a palm box under 24 px or over 25% or scored under 0.6, and a crop that would not be
 enlarged. The mind leaves `detail_faces` off for a photo from behind. The NSFW check reads the
 image after the pass. The answer then also carries `detail_faces` and `detail_hands` (how many
 were drawn again), `detail_skipped`, `detail_ms` and `detail_code`: empty, or

@@ -201,6 +201,13 @@ def test_a_missing_detector_is_a_code_and_never_an_error(det, opts, code):
     assert out is image and fields["detail_code"] == code
 
 
+def test_a_doubtful_palm_is_left_alone():
+    det = Detectors(palms=[palm(400, 800, 60, score=0.55), palm(200, 900, 60, score=0.7)])
+    seen = []
+    _, fields = detail.run(portrait(), det, Detail(False, True), painter(seen))
+    assert len(seen) == 1 and (fields["detail_hands"], fields["detail_skipped"]) == (1, 1)
+
+
 def test_a_missing_hand_detector_still_lets_the_faces_pass():
     det = Detectors(faces=[(380, 200, 90, 120)], palm=None)
     _, fields = detail.run(portrait(), det, Detail(True, True), painter([]))
@@ -458,10 +465,11 @@ def test_the_detail_cli_refuses_bad_arguments_before_any_model(tmp_path, capsys)
     assert main(["detail", "--in", str(src), "--out", out, "--no-faces"]) == 1
     assert main(["detail", "--in", str(src), "--out", out, "--denoise", "0.9"]) == 1
     assert main(["detail", "--in", str(src), "--out", out, "--size", "512"]) == 1
+    assert main(["detail", "--in", str(src), "--out", out, "--steps", "5"]) == 1
     assert main(["detail", "--in", str(src), "--out", out, "--ref", str(tmp_path / "no.jpg")]) == 1
     assert main(["detail", "--in", str(tmp_path / "gone.jpg"), "--out", out]) == 1
     assert "torch" not in sys.modules and not (tmp_path / "out.jpg").exists()
-    assert capsys.readouterr().err.count("detail:") == 6
+    assert capsys.readouterr().err.count("detail:") == 7
 
 
 def test_the_detail_cli_boxes_runs_on_the_cpu_and_writes_nothing(tmp_path, capsys):
