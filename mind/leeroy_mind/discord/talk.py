@@ -172,9 +172,9 @@ class DiscordTalk:
         self._due: dict[int, tuple[float, bool, bool]] = {}
         self._owes: tuple[float, frozenset[int]] = (-float("inf"), frozenset())
         self._queued: dict[int, tuple[float, int]] = {}  # his DM post -> (last queued, tries)
-        # a DM channel -> (his post an answer is being built for, that answer's turn id, when):
+        # a DM channel -> (his post an answer is being built for, that answer's turn, when):
         # his posts that arrive while she composes are answered by one reply (_coalesce)
-        self._building: dict[str, tuple[int, str, float]] = {}
+        self._building: dict[str, tuple[int, Turn, float]] = {}
         engine = getattr(app, "engine", None)
         if engine is not None:
             engine.add_instruction_hook(self._instruction_hook)
@@ -933,8 +933,9 @@ class DiscordTalk:
         reply: the turn now answers his newest live post (its instruction lists every post
         still unanswered, `unanswered`), and the newer post's own turn, when it comes to
         compose, finds this one building its answer or already answered and is withdrawn
-        (TurnWithdrawn, SUPERSEDED). A building record older than BUILDING_S is forgotten: its
-        turn was dropped, and the owed watch holds his post."""
+        (TurnWithdrawn, SUPERSEDED). A building record whose turn has ended, or older than
+        BUILDING_S, is forgotten: a dropped answer never holds off its retry or the owed
+        watch's rescue."""
         conn, hg, now = self.app.store.conn, self.app.human_guid, self.app.clock.now()
         with self.app.store.transaction():
             newest = conn.execute(
@@ -946,17 +947,18 @@ class DiscordTalk:
                 f"AND deleted IS NULL AND reply_to >= ? AND {PAIR_LINE_SQL} LIMIT 1",
                 (cid, target.reply_to)).fetchone()
         building = self._building.get(cid)
-        if building is not None and now - building[2] > BUILDING_S:
-            building = None
-        if building is not None and building[1] != meta.turn_id and building[0] >= target.reply_to:
+        if building is not None and (now - building[2] > BUILDING_S or not any(
+                t is building[1] for t in self.app.engine.planned_turns())):
+            building = None  # that turn ended (sent or dropped): nothing is being built
+        if building is not None and building[1] is not turn and building[0] >= target.reply_to:
             raise TurnWithdrawn(SUPERSEDED)  # another turn's reply is being built with this post
-        if answered and (building is None or building[1] != meta.turn_id):
+        if answered and (building is None or building[1] is not turn):
             raise TurnWithdrawn(SUPERSEDED)  # her reply to this post or a later one is out
         if newest > target.reply_to:
             log.info("discord_dm_coalesced: guid=%d message=%d newest=%d", turn.speaker,
                      target.reply_to, newest)
             target = meta.discord = DiscordTarget(reply_to=newest, thread=target.thread)
-        self._building[cid] = (target.reply_to, meta.turn_id, now)
+        self._building[cid] = (target.reply_to, turn, now)
         return target
 
     # -- the lease -------------------------------------------------------------------------
