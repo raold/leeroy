@@ -129,10 +129,13 @@ def age_words(seconds: float) -> str:
     return "an hour" if hours <= 1 else f"{hours} hours"
 
 
-def late_note(p, *, post_ts: float, now: float, local_now: datetime, forms) -> str:
-    """The instruction's note for an answer LATE_S or more after his post; "" sooner."""
+def late_note(p, *, post_ts: float, now: float, local_now: datetime, forms,
+              why: str = "") -> str:
+    """The instruction's note for an answer LATE_S or more after his post; "" sooner. `why`
+    says where she was in place of her presence then ("away": she stepped away mid-conversation,
+    life/interrupt.py)."""
     if now - post_ts < LATE_S:
         return ""
-    why = away_words(p, shifted(local_now, post_ts - now))
+    why = why or away_words(p, shifted(local_now, post_ts - now))
     return (f"{forms[0].capitalize()} wrote this {age_words(now - post_ts)} ago while you were "
             f"{why}; you are only now seeing it, so answer as someone catching up would.")

@@ -6,12 +6,14 @@ the human-likeness design ("Her day: presence and availability").
 
 **`[life] availability`** (0-10, code default 0: always present, today's behaviour; the release
 sets 6, the design point) moves Discord presence and the replies on her own time (below,
-"Presence on Discord") and who answers him in game and how soon (below, "In game: who answers and
-how soon"). **`[life] state`**
+"Presence on Discord"), who answers him in game and how soon (below, "In game: who answers and
+how soon") and her stepping away mid-conversation (below, "Interruptions and coming back").
+**`[life] state`**
 (default false; the release sets true) records each member's feeling through the day (below, "Her
 feeling right now"); nothing reads it in a prompt yet. There is no migration and no native change.
 
-The day, presence and state models (`day.py`, `presence.py`, `state.py`) are pure: no clock, no
+The day, presence, state and interruption models (`day.py`, `presence.py`, `state.py`,
+`interrupt.py`) are pure: no clock, no
 database, no model, no log (`statebook.py` keeps the state in meta). The same persona and date
 always give the same plan. Plans are immutable and cached (`PLAN_CACHE`, 1024: two a member, today's
 and yesterday's for a late evening), keyed by the schedule facts (guid, job, rhythm, household,
@@ -260,6 +262,68 @@ today's numbers from its own generator):
   P3-E).
 
 Unverified without a live model: how her late answers read (the late excuse is Task 9's shape).
+
+## Interruptions and coming back (`life/interrupt.py`, core plan Task 10)
+
+With availability above 0 (no draw at 0, so nothing moves), after a line of hers to him in their
+whisper or her Discord DM her day can call her away mid-conversation (spec section 1: "brb",
+"kid's up", "boss walking by"). In memory only: a mind restart forgets every away.
+
+- **When it is drawn** (`LifeService.after_line`, from the talk's `_after_sent`, so only after a
+  line was said: a turn left on read, reacted to or dropped draws nothing): her line to him in
+  `whisper` or `dm:<her guid>` (never a channel, a group DM, officer chat or a voice room), his
+  last line to her (his whisper, or his post in her DM: one conversation) under 300 s old, no
+  answer of hers to him still on its way and no DM post of his waiting for her own time, outside
+  his raid's fight, wipe silence and debrief, never after a template's line (her own brb and
+  back), the owed watch's rescue or a carried DM, at most once per member per 1800 s
+  (`INTERRUPT_GAP_S`, counted from an interruption that happened).
+- **The draw** (`draw_interruption`, seeded `("interrupt", night, her, minute, her line id)`):
+  her block as her presence on that medium says it (her own game's while she plays in his WoW
+  group: PM log D15). `p = BASE[block] * availability / 6 * (1 + max(0, stress))`:
+
+  | Block | BASE | Median away at 6 | Reason, her line |
+  |---|---|---|---|
+  | work | .06 | 600 s | `work`: "brb boss", "sec, work", "gotta do a work thing brb" |
+  | home duty | .06 | 480 s | `kids` (kids at home): "brb kid's up", "sec, kids", "brb the kids"; else `home`: "brb", "sec" |
+  | commute | .08 | 900 s | `commute`: "gotta drive, brb" |
+  | free time | .015 | 300 s | `door` "brb door", `phone` "sec, phone", `food` "brb food" (one drawn) |
+  | gaming | .01 | 240 s | as free time |
+  | asleep, gym, out | 0 | - | - |
+
+  The away is lognormal (sigma 0.5) around the median times availability / 6, at most 0.9 x
+  `game_cap_s` in a whisper (345.6 s at 6) and 2700 s in her DM. The same stream draws her line's
+  delay (2-6 s) and what she says when she is back (`draw_back`: one of "back", "back, sorry", "ok
+  back" half the time, else nothing).
+- **Her line** (`_step_away`) goes out through `Pipeline.say_as` as a whisper (game) or her DM
+  message (`REPLY_HUMAN`), a pair line (`TurnMeta.pair_line`: read by no one else, so the guild's
+  pace never holds it back), one typed line sent as written. Its barrier, just before it goes out,
+  withholds it when he wrote to her since her line (she saw it: she stays and answers him; a brb
+  after his line would read as her answer to it, and the owed watch and her own time would take
+  it for one) or his raid's fight began. Withheld or refused, she is not away
+  (`life_interrupt_dropped: guid= reason=his_line|raid|refused`). Said, she is away from then
+  (`life_interrupt: guid= reason= away_s=`; codes only, never her line).
+- **While she is away** her answers to him wait. In game `LifeService.answer_delay` is at least
+  what is left of it (an answer he is owed still at most `game_cap_s`; any other drawn past
+  `NON_OWED_MAX_S` is missed, as before), through the turn's delay with its wake: his goodbye, his
+  urgent words and his third line still hurry it, his next whisper still joins it, and his logout
+  still carries it to her DM (`CARRY_TEXT` is then its one excuse). In her DM his post is deferred
+  (`DiscordTalk._due_of`): no sooner than she is back plus 30-120 s (`seeded("back", the away's
+  night, her, its minute, his post)`; meta `discord:dm:deferred:<guid>`, the owed watch holding it
+  `own_time`), unless it has urgent words or is his third post in a row, which reach her wherever
+  she is, as in game.
+- **Her late answer says so once.** With `[talk] shape` on, an answer to him that waited out her
+  away (`Pipeline._waited_away`: she was away between his line and her answer; never a carried
+  DM) is LATE, in game or her DM, its excuse "away": "You're only now seeing this (you were away):
+  say so in a few words, then answer." (a DM keeps its DM wording and length first), and her
+  day's own excuse is left out. In her DM the own-time late note is then left out too; without a
+  shape (shape off, `dm_mirror` 0, a photo's turn) the late note says "while you were away" (from
+  10 minutes late, as before).
+- **Coming back** (`LifeService.tick`, every second from the app's ticker): once an away has
+  ended, to a conversation he left quiet since her brb she says her drawn back line the same way
+  (a whisper only while he is in game; withheld if he writes first), else nothing. Logged
+  `life_back: guid= said=0|1`.
+- **Health** cannot see an away (in memory only): a DM of his she answers late because she
+  stepped away can count in `owner-replies` as unanswered in time (at most a few a day at 6).
 
 ## Her feeling right now (`life/state.py`, `life/statebook.py`)
 

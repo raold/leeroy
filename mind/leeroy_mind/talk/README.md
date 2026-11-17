@@ -698,7 +698,10 @@ caller's seeded `rng`; the pipeline draws it with `[talk] shape` on (below, "In 
   two quick lines, more than your usual one line, ..."; review of #333 requirement 7); with
   situation on no "usual one line" is left to point at nothing. A late reply says where she was
   ("(you were asleep)"), in the present while she is still there as "Right now" says ("(you're
-  at work)"; review-340), and "these" when he wrote more than once.
+  at work)"; review-340), and "these" when he wrote more than once. An answer to him that
+  waited out a time she stepped away mid-conversation (`life/interrupt.py`, core plan Task 10)
+  is LATE in game or her DM and says only "(you were away)"; a DM's LATE keeps its DM wording
+  and length first, and its own-time late note is left out (life/README.md, "Interruptions").
 - **Inspect**: `python -m leeroy_mind life --data-dir "$D" shapes --guid N --family dm
   --his-words 28 [--owed] [--kind continue] [--dm-mirror 5] [--samples 1000]` reads her stored
   typing profile (mind.db opened read-only) and `[talk]` from mind.toml, and prints the shapes'

@@ -61,6 +61,7 @@ from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, 
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
 from leeroy_mind.life.day import Block, has_kids
+from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
 from leeroy_mind.life.presence import away_words, where_text
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
@@ -450,6 +451,9 @@ class TurnMeta:
     # ack) runs once the acked line is stored.
     before_transport: Callable[[], bool] | None = None
     on_recorded: Callable[[int, Ack], None] | None = None
+    # a line of hers in her whisper or DM with him that answers nothing (her brb and her back,
+    # life/interrupt.py): read by no one else, so the guild's pace never holds it back (_blocked)
+    pair_line: bool = False
     # the console's tuning preview (Pipeline.preview_line): the Ollama seed both of its
     # requests carry, so before and after differ by the dial and not the sampler
     seed: int | None = None
@@ -1656,27 +1660,62 @@ class Pipeline:
         sets meta.two_lines), a Discord burst is split by realism (meta.burst). An answer he is
         owed is never left on read, a reaction or a word or two (talk.shape's rows; Review Focus
         4): a draw of one leaves the turn on today's length. A reaction with no message to react
-        to is a word or two. Logs `talk_shape: guid= kind= shape= words= owed=` (codes only); a
-        failure is logged by its class and leaves the turn as it would be without it."""
+        to is a word or two. An answer to him that waited out a time she stepped away
+        (_waited_away, [life] availability above 0) is LATE, game or DM. Logs
+        `talk_shape: guid= kind= shape= words= owed=` (codes only); a failure is logged by its
+        class and leaves the turn as it would be without it."""
         turn.shape, meta.shape_ctx = None, None
         if meta.shape_saved is not None:  # spoken again (held, without its photo): as before
             turn.max_lines, meta.burst = meta.shape_saved
             meta.shape_saved = None
-        talk = getattr(self.cfg, "talk", None)
-        if (getattr(talk, "shape", False) is not True or voiced or meta.single_line
-                or not self._want_eligible(turn, meta)):
+        if not self._shapes(turn, meta, voiced=voiced):
             return
         try:
-            self._shape(turn, meta, p, now, talk)
+            self._shape(turn, meta, p, now, self.cfg.talk)
         except Exception as e:  # her shape is colour: nothing in it may cost him an answer
             turn.shape, meta.shape_ctx = None, None
             log.warning("talk_shape_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
 
+    def _shapes(self, turn: Turn, meta: TurnMeta, *, voiced: bool = False) -> bool:
+        """[talk] shape draws this turn a shape (_draw_shape): a typed turn that gets a want,
+        outside a conversation that owns its line count, and a DM only with [talk] dm_mirror
+        above 0 (at 0 a DM is today's, as full as she likes)."""
+        talk = getattr(self.cfg, "talk", None)
+        if (getattr(talk, "shape", False) is not True or voiced or meta.single_line
+                or not self._want_eligible(turn, meta)):
+            return False
+        return not (_family(turn.channel) == "dm" and talk.dm_mirror <= 0)
+
+    def _waited_away(self, turn: Turn, meta: TurnMeta, now: float) -> bool:
+        """Her answer to him waited out a time she stepped away (life/interrupt.py: her brb in
+        their whisper or her DM): she was away at some time between his line (the one it answers;
+        his DM post) and now (LifeService.away_between). Its excuse is "away" (the LATE shape
+        with [talk] shape on, else in her DM the own-time late note), the one excuse in its
+        prompt: never on a carried DM, whose instruction (CARRY_TEXT) is its excuse."""
+        life = getattr(self, "life", None)
+        hg = self.human.guid
+        if life is None or life.availability <= 0 or not hg or meta.why == "reply:carried":
+            return False
+        start = 0.0
+        if is_discord(turn.channel):
+            if not self._answers_his_dm(turn, meta) or meta.discord is None:
+                return False
+            if meta.discord.reply_to:
+                row = self.store.conn.execute("SELECT ts FROM discord_message WHERE id = ?",
+                                              (meta.discord.reply_to,)).fetchone()
+                start = row[0] if row is not None else 0.0
+        else:
+            if not (meta.answers_human and self._aimed_at_him(turn)):
+                return False
+            start = meta.heard_at
+            if not start and turn.trigger_line:
+                rows = self.store.chat_lines([turn.trigger_line])
+                start = rows[0].ts if rows else 0.0
+        return bool(start) and life.away_between(turn.speaker, start, now)
+
     def _shape(self, turn: Turn, meta: TurnMeta, p: Persona, now: float, talk) -> None:
         family = _family(turn.channel)
         mirror = talk.dm_mirror
-        if family == "dm" and mirror <= 0:
-            return
         hg = self.human.guid
         owed = owes_him(self, turn, meta)
         # his message's words (a carried DM's: his whisper, _his_line), for a DM's mirror
@@ -1693,7 +1732,8 @@ class Pipeline:
             attention=lp.attention if lp is not None else None, state=meta.state,
             late_by=max(0.0, late_by), his_words=his_words, discord_words=talk.discord_words,
             dm_words=talk.dm_words, dm_mirror=mirror,
-            realism=self.realism.eligible(self, turn, meta), two_lines=two)
+            realism=self.realism.eligible(self, turn, meta), two_lines=two,
+            away=self._waited_away(turn, meta, now))
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
                                         else 0) or 0
@@ -1759,9 +1799,11 @@ class Pipeline:
         (requirement 7). LATE says where she was when he wrote (meta.life_presence, her game
         presence then: life.presence.away_words), in the present while she is still there as
         "Right now" says, never against a "Right now" at her PC playing, and "these" when he
-        wrote more than once (a coalesced whisper's answer, review-336). A failure is logged
-        `talk_shape_failed` by its class and the turn goes on without a shape (review of #343,
-        P3-2)."""
+        wrote more than once (a coalesced whisper's answer, review-336). An answer that waited
+        out a time she stepped away (_waited_away, ShapeContext.away) says only that she was
+        away: one excuse, never her day's beside it (review of #343, Task 10 note 1). A failure
+        is logged `talk_shape_failed` by its class and the turn goes on without a shape (review
+        of #343, P3-2)."""
         try:
             return self._shape_words_line(turn, meta, situation=situation, forms=forms)
         except Exception as e:  # her shape is colour: nothing in it may cost him an answer
@@ -1774,7 +1816,10 @@ class Pipeline:
         if not isinstance(draw, ShapeDraw) or not isinstance(ctx, ShapeContext):
             return ""
         excuse, still, several = "", False, False
-        if draw.shape is Shape.LATE:
+        if draw.shape is Shape.LATE and ctx.away:  # she stepped away: that is her one excuse
+            excuse = AWAY_EXCUSE
+            several = self._several(turn, meta)
+        elif draw.shape is Shape.LATE:
             lp = meta.life_presence if self._life_on() else None
             playing = self.world.human_online and self.world.in_group(turn.speaker)
             if lp is not None and not playing:
@@ -2520,17 +2565,20 @@ class Pipeline:
                      to_guid: int = 0,
                      still_valid: Callable[[], bool] | None = None,
                      before_transport: Callable[[], bool] | None = None,
-                     on_recorded: Callable[[int, Ack], None] | None = None) -> bool:
+                     on_recorded: Callable[[int, Ack], None] | None = None,
+                     pair_line: bool = False) -> bool:
         """The template path (P1d): guards, raid rules and the member's typing apply, the text
         is used as given and no model is asked. True when a line really went out, to the game
         or to the voice service: one left in a room he is not in did not. A sender's
-        before_transport barrier makes the turn one typed line, sent unstyled (TurnMeta)."""
+        before_transport barrier makes the turn one typed line, sent unstyled (TurnMeta).
+        `pair_line`: a line in her whisper or DM with him that answers nothing (TurnMeta)."""
         turn = Turn(kind=TurnKind(kind), speaker=guid, channel=channel, to_guid=to_guid,
                     template=text)
         if before_transport is not None:
             turn.max_lines = 1
         meta = TurnMeta(self._new_id(), why="say_as", still_valid=still_valid,
-                        before_transport=before_transport, on_recorded=on_recorded)
+                        before_transport=before_transport, on_recorded=on_recorded,
+                        pair_line=pair_line)
         said = await self._speak(turn, meta)
         return bool(said) and not (self.comms is not None and self._comms_says(
             "unheard", False, turn.channel, meta))
@@ -3312,7 +3360,7 @@ class Pipeline:
         # never hold it back; nor do they hold back the one answer he is owed for a line of his
         # (owed_answer, talk/owed.py)
         unread = (meta.whisper_reply or (meta.initiates and turn.channel == "whisper")
-                  or self._answers_his_dm(turn, meta) or meta.owed_answer
+                  or self._answers_his_dm(turn, meta) or meta.owed_answer or meta.pair_line
                   or (turn.channel == "whisper" and turn.to_guid == self.human.guid
                       and turn.kind in REPLY_KINDS))
         if not guards.allow(g, turn.kind, now, continuation=not first,

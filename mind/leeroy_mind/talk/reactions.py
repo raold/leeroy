@@ -721,6 +721,15 @@ class Reactions(Pipeline):
             self.bits.record(turn.speaker, turn.bit, self.clock.now(), self._session_id)
 
     def _after_sent(self, turn: Turn, meta: TurnMeta, p: Persona, said: str = "") -> None:
+        """The follow-ups of a said line: the asides (_asides_after), then her day, which may
+        call her away after her line to him in their whisper or her DM ([life] availability
+        above 0: LifeService.after_line, core plan Task 10)."""
+        self._asides_after(turn, meta, p, said)
+        life = getattr(self, "life", None)
+        if life is not None:
+            life.after_line(self, turn, meta)
+
+    def _asides_after(self, turn: Turn, meta: TurnMeta, p: Persona, said: str = "") -> None:
         """The men's asides and a rival's flirt follow any public line that carried her
         romance text and names him ("evening zan, miss me?", "gz on zan's new axe"), judged by
         what was sent (rehearsal 2, judge C 6-8: only FLIRT turns counted, and a flirt that
