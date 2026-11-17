@@ -307,7 +307,8 @@ def test_one_word_shape_does_not_loop_retries(store, clock, tmp_path, monkeypatc
         assert len(calls) == 2  # the "long" tell asked once more, then no more
         assert all(c["options"]["num_predict"] == 24 for c in calls)
         assert LINE_ONE_WORD in last_user(calls[0])
-        assert last_user(calls[1]).endswith(pipeline_mod.ONE_WORD_HINT)
+        # her own draft, said shorter ([talk] coherence), never a fresh start
+        assert "Say the same thing shorter, in at most about 3 words" in last_user(calls[1])
         r.run(120)
         assert len(line_calls(r)) == len(calls)  # nothing asked later either
     finally:
