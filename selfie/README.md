@@ -89,6 +89,37 @@ grade carried signal (overall 2 or less: 6 of 9 defects, but also 5 of 9 clean i
 everything 3. The cosine to her reference separates her from the other members (her own min 0.73,
 mean 0.83; others max 0.74, mean 0.46), so best-of-N ranks seeds mostly by her likeness. Swap
 `[selfies] critic_model` when a better local vision model arrives; measure it on the sheet first.
+The detailer (`detail.py`, the mind's `[selfies] detailer` and `detailer_hands`; both off by
+default): SDXL draws a small face or hand with too few pixels (crossed eyes, six fingers), so a
+render request may ask for a second pass over its image with `detail_faces` and `detail_hands`
+(booleans), and optionally `detail_face_denoise` (default 0.35) and `detail_hand_denoise` (0.45),
+each 0.1-0.7, and `detail_size` (768, 896 or 1024, default 1024). Without a true flag there is no
+pass and the render and its answer are what they were. With one, each face YuNet finds (at most
+2, the largest first) and each palm the palm detector finds (at most 2, the surest first) is cut
+out as a padded square (2 times the face box, 3 times the palm box, shifted to stay in the
+frame), enlarged to `detail_size`, drawn again by SDXL img2img at its denoise with the image's
+steps, CFG and negative and a seed derived from the image's, shrunk and pasted back through a
+mask feathered over an eighth of the crop. Hands go first and faces last. A face's prompt is
+`detailed face, natural eyes` and then the render's own phrases as far as they fit; a hand's is
+`a natural hand, five fingers`. On an identity worker the largest face keeps the request's
+reference at its scale, so the face stays hers; every other crop carries the blank reference at
+scale 0. Passed over: a face box under 32 px or over 35% of the frame's shorter side (a headshot
+has its pixels already), a palm box under 24 px or over 25%, and a crop that would not be
+enlarged. The mind leaves `detail_faces` off for a photo from behind. The NSFW check reads the
+image after the pass. The answer then also carries `detail_faces` and `detail_hands` (how many
+were drawn again), `detail_skipped`, `detail_ms` and `detail_code`: empty, or
+`faces_unavailable`, `hands_unavailable`, `detectors_unavailable` (a detector not fetched: the
+faces need `yunet`, the hands `palm` and `handpose`; the other kind still runs), `oom` (CUDA out
+of memory in a crop: the cache is freed, the pass ends, what was pasted stays) or `error`. The
+pass never fails a render. It loads nothing: the img2img pipeline is built at the first pass from
+the loaded pipeline's own components, and it works at 1024 x 1024 at most, the latents of a square
+render, so its peak is a render's (`peak_gib` covers the pass). Each crop costs about a third of
+a render's steps. `python -m leeroy_selfie detail --in FILE --out FILE [--no-faces] [--hands]
+[--denoise X] [--hand-denoise X] [--size N] [--ref FILE --scale S] [--seed N] [--steps N]
+[--cfg X] [--prompt TEXT] [--hand-prompt TEXT] [--negative TEXT]` applies the pass to an existing
+JPEG without the mind (it needs the GPU; `--ref` loads the identity adapter) and prints one JSON
+line; `--boxes` only finds and prints the crops on the CPU and writes nothing. `smoke --detail`
+renders the smoke image with both passes.
 `worker --embed-only` loads only the already fetched IP-Adapter image encoder,
 with local files only. It uses the CPU if the VRAM floor is unavailable, and
 falls back to the CPU after a GPU allocation failure. An `embed` request has

@@ -49,7 +49,7 @@ from .slot import SetRefused, render_slot
 from .snaps import SnapRow, expire, looks_hash, mark_rendered, planned
 from .stage import CONTENDED, RoomFailed, _unleased, seed_for, start_worker
 from .store import current, face_pick
-from .worker import Identity, RenderRequest, SelfieWorker, WorkerError, to_the_end
+from .worker import Identity, RenderRequest, SelfieWorker, WorkerError, detail_for, to_the_end
 
 if TYPE_CHECKING:
     from leeroy_mind.nightly.runner import NightContext
@@ -281,11 +281,14 @@ class SnapRenderer:
 
     async def image(self, *, snap_id: int, guid: int, idx: int, spec, ref: Path, framing: str,
                     out: Path, thumb: Path, thumb_size: int, shape: str, rid: str,
-                    scale: float | None = None, steps: int | None = None):
+                    scale: float | None = None, steps: int | None = None,
+                    detail: bool = True):
         """(the answer, its seed, the attempts used). SetRefused after TRIES flagged seeds;
         WorkerError("unwritten") for an answer whose two files are not both there. `framing` is
         the reference's (its crop); `scale` the face's (render.scene_scale for a situation),
-        identity_scale when None (a guild tile); `steps` cfg.steps when None."""
+        identity_scale when None (a guild tile); `steps` cfg.steps when None. `detail` False
+        keeps [selfies] detailer off this image (a guild tile: a head and shoulders shrunk to
+        512 px in the grid)."""
         ctx, cfg = self.ctx, self.cfg
         identity = Identity(ref, ref_crop(framing), cfg.identity_scale if scale is None else scale)
         steps = cfg.steps if steps is None else steps
@@ -295,7 +298,8 @@ class SnapRenderer:
             return RenderRequest(spec.phrases, spec.negative,
                                  seed_for(ctx.night, guid, snap_id, idx, attempt), steps,
                                  cfg.guidance, SIZE, out, thumb, thumb_size, cfg.nsfw_max,
-                                 identity=identity, shape=shape)
+                                 identity=identity, shape=shape,
+                                 detail=detail_for(cfg) if detail else None)
         got, attempts = await render_slot(self.worker, request,
                                           rid=lambda attempt: f"{rid}:{attempt}",
                                           make_room=lambda: self._room(snap_id))
@@ -483,7 +487,7 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
                 snap_id=row.id, guid=guid, idx=i, spec=build_tile_prompt(p),
                 ref=ref, framing=framing, out=tile,
                 thumb=part / f"t{i}.thumb.jpg", thumb_size=_TILE_THUMB_PX, shape="square",
-                rid=f"g{row.id}:{i}")
+                rid=f"g{row.id}:{i}", detail=False)
         except SetRefused:
             refused = True
             continue

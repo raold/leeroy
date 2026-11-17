@@ -24,7 +24,7 @@ from .style import LUST, PLAIN
 from .slot import SetRefused, TRIES, render_slot
 from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, build_varied_prompt, renderable
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
-from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
+from .worker import Identity, RenderRequest, SelfieWorker, WorkerError, detail_for
 
 # [selfies] identity_sets (owner, 2026-11-14): a profile set of a member with a chosen photo
 # carries that photo's face (store.face_pick: never a back view), cut by its framing (the worker
@@ -164,7 +164,8 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
                             fallback: PromptSpec | None = None,
                             dropped: set[int] | None = None,
                             identity: tuple[Identity | None, ...] | None = None,
-                            measure: SetMeasure | None = None) -> list[Candidate]:
+                            measure: SetMeasure | None = None,
+                            rear: tuple[bool, ...] | None = None) -> list[Candidate]:
     """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each: every slot
     from `spec`, or slot i from spec[i] when it is a tuple of four (a varied set). A slot whose
     prompt the worker finds too long ("prompt_too_long") renders from `fallback` instead when
@@ -174,7 +175,8 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
     make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot, an
     image answered as written whose two files are not both there ("unwritten") or any other
     worker failure, and LiveLeaseHeld. `identity` gives slot i its face reference (None: none).
-    `measure` ([selfies] critic) chooses each slot's parameters and measures each candidate."""
+    `measure` ([selfies] critic) chooses each slot's parameters and measures each candidate.
+    `rear` says which slots show her from behind: [selfies] detailer leaves their faces alone."""
     out_dir = Path(out_dir).absolute()
     specs = (spec,) * SET_SIZE if isinstance(spec, PromptSpec) else tuple(spec)
     if len(specs) != SET_SIZE:
@@ -182,12 +184,15 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
     faces = tuple(identity) if identity is not None else (None,) * SET_SIZE
     if len(faces) != SET_SIZE:
         raise ValueError("a set has four face references")
+    behind = tuple(rear) if rear is not None else (False,) * SET_SIZE
+    if len(behind) != SET_SIZE:
+        raise ValueError("a set has four views")
     made = []
     for idx in range(SET_SIZE):
         try:
             made.append(await _slot(worker, specs[idx], out_dir, idx, night=night, guid=guid,
                                     set_no=set_no, cfg=cfg, make_room=make_room, leases=leases,
-                                    identity=faces[idx], measure=measure))
+                                    identity=faces[idx], measure=measure, rear=behind[idx]))
         except WorkerError as e:
             if e.reason != "prompt_too_long" or fallback is None or specs[idx] is fallback:
                 raise
@@ -223,7 +228,8 @@ async def _room(make_room: Callable[[], Awaitable[None]], *, night: str, guid: i
 async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str, guid: int,
                 set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
                 leases: Callable[[], frozenset[str]] | None, tag: str = "",
-                identity: Identity | None = None, measure: SetMeasure | None = None) -> Candidate:
+                identity: Identity | None = None, measure: SetMeasure | None = None,
+                rear: bool = False) -> Candidate:
     out, thumb = out_dir / f"c{idx}.jpg", out_dir / f"c{idx}.thumb.jpg"
     steps, arm = cfg.steps, False
     if measure is not None:
@@ -233,7 +239,8 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
         _unleased(leases)
         return RenderRequest(spec.phrases, spec.negative,
                              seed_for(night, guid, set_no, idx, attempt), steps, cfg.guidance,
-                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max, identity=identity)
+                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max, identity=identity,
+                             detail=detail_for(cfg, rear=rear))
 
     async def room() -> None:
         await _room(make_room, night=night, guid=guid, set_no=set_no, idx=idx)
@@ -502,11 +509,19 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     measure = _set_measure(ctx, cfg, p, guid, set_no, varied is not None)
     if measure is not None and measured is not None:
         measured.append(measure)
+    rear = None
+    if varied is not None and getattr(cfg, "detailer", False):
+        from . import varied as varied_mod
+        from .kind import BACK_VIEWS
+        with ctx.store.transaction():
+            plan = varied_mod.plan_of(ctx.store.conn, guid, set_no)
+        if plan and len(plan) == SET_SIZE:
+            rear = tuple(x is not None and x.view in BACK_VIEWS for x in plan)
     made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders,
                                    fallback=None if varied is None else ordinary, dropped=dropped,
-                                   identity=faces, measure=measure)
+                                   identity=faces, measure=measure, rear=rear)
     files.publish_set(data, guid, set_no)
     return made
 
