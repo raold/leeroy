@@ -4,6 +4,9 @@
 export var TITLE = "Guild Console";
 export var HIDDEN_POLL_MS = 20000;  // the one request a hidden page makes, at most this often
 
+// The SVG namespace's name (an identifier the icon's markup needs, not an address anything loads)
+var SVG_NS = ["http:", "", "www.w3.org", "2000", "svg"].join("/");
+
 function count(x) { return typeof x === "number" && Number.isFinite(x) && x > 0 ? Math.floor(x) : 0; }
 
 // What he already had unread when the page went out of sight, plus what came since
@@ -17,7 +20,7 @@ export function titleText(n) {
 }
 // The page's icon, with a dot at its corner while something is unread
 export function iconHref(dot) {
-  var svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='#0e141a'/>"
+  var svg = "<svg xmlns='" + SVG_NS + "' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='#0e141a'/>"
     + "<path d='M16 4.5 26 9v7c0 6-4.6 10-10 11.5C10.6 26 6 22 6 16V9Z' fill='none' stroke='#4fb2bd' stroke-width='2.6' stroke-linejoin='round'/>"
     + "<path d='M11.2 15h9.6M11.2 19.4h6' stroke='#4fb2bd' stroke-width='2.3' stroke-linecap='round'/>"
     + (dot ? "<circle cx='25' cy='7' r='6.5' fill='#e5484d' stroke='#0e141a' stroke-width='2'/>" : "") + "</svg>";

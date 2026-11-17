@@ -161,6 +161,13 @@ def test_waiting_never_carries_message_text(store,tmp_path,clock):
     (tmp_path/'mind.toml').write_text('[server]\nenabled = true\n[decisions]\nenabled = true\n',encoding='utf-8')
     view = tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
     assert view['sections']['waiting']['polls']==1  # open, not past closing, not voted by him
+    # Lab proposals waiting for his decision: proposed arms and unexpired proposed lessons
+    assert view['sections']['waiting']['lab']==0
+    store.conn.execute("INSERT INTO learn_arm VALUES ('tease.9.v1','tease','{}',1,'proposed','coach',?)",(now,))
+    store.conn.execute("INSERT INTO talk_lesson(guid,scope,text,status,expires,origin_night) VALUES (101,'guild','PRIVATE LESSON','proposed',?,'n')",(now+60,))
+    store.conn.execute("INSERT INTO talk_lesson(guid,scope,text,status,expires,origin_night) VALUES (101,'any','PRIVATE OLD LESSON','proposed',?,'n')",(now-60,))
+    view = tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
+    assert view['sections']['waiting']['lab']==2
     assert 'PRIVATE' not in json.dumps(view)
 
 

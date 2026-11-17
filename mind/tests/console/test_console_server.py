@@ -42,7 +42,8 @@ def test_every_request_needs_the_console_host(data):
         async with served(make_app(data)) as app:
             for host in ("localhost:%d" % app.s.port, "evil.example", "127.0.0.1:1"):
                 r = await http(app, "GET", "/api/state", host=host)
-                assert r.status == 403 and b"served at" in r.body
+                assert r.status == 403 and r.body == b"Forbidden: this is not the console's address.\n"
+                assert str(app.s.port).encode() not in r.body and b"127.0.0.1" not in r.body
             r = await http(app, "GET", "/api/state",
                            headers={"Host": f"127.0.0.1:{app.s.port}"})  # a second Host
             assert r.status == 403
@@ -243,6 +244,22 @@ def test_a_down_mind_is_never_shown_as_not_in_game(data, store):
             assert st["game"] == {"state": "unknown", "reason": "the mind is not running",
                                   "since": None}
             assert st["voice"] == {"enabled": False, "service": False, "link": None}
+    run(go())
+
+
+def test_no_control_gates_every_voice_change(data):
+    async def go():
+        from leeroy_mind.console.control import Controls
+        sent = []
+        async with served(make_app(data, mind=running(data), controls=Controls(enabled=False))) as app:
+            async def send(msg):
+                sent.append(msg)
+            app.relay.send = send
+            for body in ({"type": "join", "channel": "raid"}, {"type": "mute", "guid": 101, "on": True},
+                         {"type": "volume", "guid": 101, "db": 3}, {"type": "self", "mute": True}):
+                r = await http(app, "POST", "/api/voice", origin=True, body=body)
+                assert r.status == 403 and "--no-control" in r.json()["error"], body
+            assert sent == []
     run(go())
 
 
@@ -473,10 +490,12 @@ def test_numbers_are_ascii_digits_of_a_bounded_length(data):
                 assert reply.startswith(b"HTTP/1.1 400 ") and b"bad Content-Length" in reply, \
                     value[:8]
             for value in ("%C2%B2", "%D9%A1", "9" * 19, "1" * 5000, "-1", ""):
-                r = await http(app, "GET", f"/api/feed?after={value}")
+                r = await http(app, "GET", f"/api/feed/history?view=guild&before={value}")
                 assert r.status == 400, value[:8]
-            r = await http(app, "GET", f"/api/feed?after={'9' * 18}")
-            assert r.status == 200 and r.json() == {"lines": []}
+            r = await http(app, "GET", f"/api/feed/history?view=guild&before={'9' * 18}")
+            assert r.status == 200 and r.json()["lines"] == []
+            # the whole-feed read no page ever asked for is gone
+            assert (await http(app, "GET", "/api/feed?after=0")).status == 404
     run(go())
     assert httpd.digits("0", 1) == 0 and httpd.digits("12", 1) is None
     assert httpd.digits(chr(0x661), 5) is None and httpd.digits("", 5) is None
