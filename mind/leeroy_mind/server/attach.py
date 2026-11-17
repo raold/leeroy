@@ -1,5 +1,6 @@
 """Attach last, without starting tasks or touching the GPU."""
 from dataclasses import dataclass
+import random
 import logging
 
 from .config import ServerConfig, load_server_config
@@ -29,9 +30,12 @@ def attach_server(app) -> ServerExt | None:
     from .engine import ServerEngine
     from .reacting import Reactor
     from .dms import DmOpeners
-    engine = ServerEngine(app, config, app.rng)
-    reactions = Reactor(app, config, app.rng)
-    dms = DmOpeners(app, config, app.rng)
+    # one stream each, split off the app's here at attach: their ticks and reactions run when the
+    # loop schedules them, and drawing from the app's own stream would move every draw the talk
+    # pipeline makes after them (which line gets a typo) with the timing of the run
+    engine = ServerEngine(app, config, random.Random(app.rng.getrandbits(64)))
+    reactions = Reactor(app, config, random.Random(app.rng.getrandbits(64)))
+    dms = DmOpeners(app, config, random.Random(app.rng.getrandbits(64)))
     async def play_tick():
         while True:
             try:

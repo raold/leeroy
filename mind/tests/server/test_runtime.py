@@ -126,7 +126,7 @@ def test_snapshot_seeds_keep_private_sources_out_and_library_read_only(store, mo
 def test_runtime_query_budget_interrupts_a_runaway_source(store,monkeypatch):
     app,_,_=app_for(store)
     moments=iter([0.,3.])
-    monkeypatch.setattr(runtime,'time',SimpleNamespace(monotonic=lambda:next(moments,3.)))
+    monkeypatch.setattr(runtime,'time',SimpleNamespace(thread_time=lambda:next(moments,3.)))
     def slow(*args,**kwargs):
         kwargs['conn'].execute('WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000) SELECT sum(x) FROM n').fetchone()
     monkeypatch.setattr(runtime,'state_of',slow)
