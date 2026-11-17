@@ -248,7 +248,8 @@ def _detail_log(fields: dict) -> str:
         return ""
     error = f" detail_error={fields['detail_error']}" if fields.get("detail_error") else ""
     return (f" detail_faces={fields.get('detail_faces')} detail_hands={fields.get('detail_hands')}"
-            f" detail_skipped={fields.get('detail_skipped')} detail_ms={fields.get('detail_ms')}"
+            f" detail_skipped={fields.get('detail_skipped')}"
+            f" detail_reverted={fields.get('detail_reverted')} detail_ms={fields.get('detail_ms')}"
             f" detail_code={fields.get('detail_code') or 'ok'}{error}")
 
 

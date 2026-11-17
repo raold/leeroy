@@ -132,6 +132,7 @@ def cmd_detail(args) -> int:
     line of counts, codes and timings. --boxes only finds and prints the crops, on the CPU."""
     from . import critic, jpeg
     from .detail import DENOISE_RANGE, SIZES, Detail, plan
+    from .protocol import DETAIL_FACE_MAX_RANGE, DETAIL_IDENTITY_MARGIN_RANGE
     src, out = Path(args.src).resolve(), Path(args.out).resolve()
     lo, hi = DENOISE_RANGE
     if not args.faces and not args.hands:
@@ -146,18 +147,26 @@ def cmd_detail(args) -> int:
             and 0 <= args.seed < 2**32):
         return _fail("detail", ValueError("--scale is 0.3-0.9, --steps 10-60, --cfg 1-12, "
                                           "--seed 0 to 4294967295"))
+    if not (DETAIL_FACE_MAX_RANGE[0] <= args.face_max <= DETAIL_FACE_MAX_RANGE[1]
+            and DETAIL_IDENTITY_MARGIN_RANGE[0] <= args.identity_margin
+            <= DETAIL_IDENTITY_MARGIN_RANGE[1]):
+        return _fail("detail", ValueError("--face-max is 0.05-0.5, --identity-margin 0-1"))
     if args.ref is not None and not Path(args.ref).is_file():
         return _fail("detail", ValueError("--ref is not a file"))
     try:
         image = jpeg.open_rgb(str(src))
     except Exception as e:  # Pillow's errors share no narrower base
         return _fail("detail", ValueError(f"--in is not a readable JPEG ({type(e).__name__})"))
-    opts = Detail(args.faces, args.hands, args.denoise, args.hand_denoise, args.size)
+    opts = Detail(args.faces, args.hands, args.denoise, args.hand_denoise, args.size,
+                  args.face_max, args.identity_margin)
     root = Path(args.data) if args.data else data_dir()
     if args.boxes:
         faces, hands, skipped, code = plan(image, critic.load_detectors(root), opts)
-        print(json.dumps({"width": image.size[0], "height": image.size[1], "faces": faces,
-                          "hands": hands, "skipped": skipped, "code": code}))
+        print(json.dumps({"width": image.size[0], "height": image.size[1],
+                          "faces": [list(c) for _, c in faces],
+                          "face_ranks": [r for r, _ in faces],
+                          "hands": [list(c) for _, c in hands], "skipped": skipped,
+                          "code": code}))
         return 0
     from . import render
     from .protocol import Identity
@@ -172,6 +181,11 @@ def cmd_detail(args) -> int:
                 if args.ref is not None else None)
     torch = renderer.torch
     torch.cuda.reset_peak_memory_stats()
+    nsfw_in = renderer.score(image)
+    if nsfw_in >= args.nsfw_max:  # as a render: a flagged image gets no pass
+        print(json.dumps({"detail_code": "nsfw_base", "flagged": True,
+                          "nsfw_in": round(nsfw_in, 4)}))
+        return 1
     image, fields = renderer.detail_pass(
         image, opts, seed=args.seed, steps=args.steps, cfg=args.cfg, face_prompt=args.prompt,
         hand_prompt=args.hand_prompt, negative=args.negative, identity=identity)
@@ -181,6 +195,7 @@ def cmd_detail(args) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         jpeg.write(image, str(out), 95)
     print(json.dumps({**fields, "flagged": flagged, "nsfw": round(nsfw, 4),
+                      "nsfw_in": round(nsfw_in, 4),
                       "load_s": round(load_s, 1),
                       "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
                       "seed": args.seed, "identity": identity is not None}))
@@ -231,7 +246,13 @@ def main(argv: list[str] | None = None) -> int:
     p_detail.add_argument("--hands", action="store_true",
                           help="draw the hands again (needs fetch-models --only palm,handpose)")
     p_detail.add_argument("--denoise", type=float, default=0.35, help="the faces' (0.35)")
-    p_detail.add_argument("--hand-denoise", type=float, default=0.45, help="the hands' (0.45)")
+    p_detail.add_argument("--hand-denoise", type=float, default=0.40, help="the hands' (0.40)")
+    p_detail.add_argument("--face-max", type=float, default=0.18,
+                          help="a face box over this share of the frame's shorter side is "
+                               "left alone (0.18)")
+    p_detail.add_argument("--identity-margin", type=float, default=0.03,
+                          help="with --ref: her face stays as it was when its cosine to the "
+                               "reference falls by more than this in the pass (0.03)")
     p_detail.add_argument("--size", type=int, default=1024, help="the pass's square (1024)")
     p_detail.add_argument("--ref", metavar="FILE",
                           help="her reference .jpg: loads the identity adapter, and the largest "

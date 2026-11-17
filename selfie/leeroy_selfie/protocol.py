@@ -16,9 +16,14 @@ IDENTITY_KEYS = frozenset({"ref", "crop", "scale"})
 # The detailer (detail.py), all optional: without detail_faces or detail_hands true there is no
 # pass and the render is what it was before the detailer existed.
 DETAIL_KEYS = frozenset({"detail_faces", "detail_hands", "detail_face_denoise",
-                         "detail_hand_denoise", "detail_size"})
+                         "detail_hand_denoise", "detail_size", "detail_face_max",
+                         "detail_identity_margin"})
 DETAIL_FACE_DENOISE = 0.35
-DETAIL_HAND_DENOISE = 0.45
+DETAIL_HAND_DENOISE = 0.40
+DETAIL_FACE_MAX = 0.18  # a face box over this share of the frame's shorter side has its pixels
+DETAIL_FACE_MAX_RANGE = (0.05, 0.5)
+DETAIL_IDENTITY_MARGIN = 0.03  # how far her face's cosine to her reference may fall in the pass
+DETAIL_IDENTITY_MARGIN_RANGE = (0.0, 1.0)
 DETAIL_DENOISE_RANGE = (0.1, 0.7)
 DETAIL_SIZE = 1024
 DETAIL_SIZES = (768, 896, 1024)
@@ -48,6 +53,8 @@ class Detail:
     face_denoise: float = DETAIL_FACE_DENOISE
     hand_denoise: float = DETAIL_HAND_DENOISE
     size: int = DETAIL_SIZE
+    face_max: float = DETAIL_FACE_MAX
+    identity_margin: float = DETAIL_IDENTITY_MARGIN
 
 
 @dataclass(frozen=True)
@@ -210,7 +217,11 @@ def _detail(d: dict) -> Detail | None:
     size = d.get("detail_size", DETAIL_SIZE)
     if type(size) is not int or size not in DETAIL_SIZES:
         raise ValueError("detail_size is not 768, 896 or 1024")
-    return Detail(faces, hands, face, hand, size) if faces or hands else None
+    face_max = (_num(d, "detail_face_max", *DETAIL_FACE_MAX_RANGE) if "detail_face_max" in d
+                else DETAIL_FACE_MAX)
+    margin = (_num(d, "detail_identity_margin", *DETAIL_IDENTITY_MARGIN_RANGE)
+              if "detail_identity_margin" in d else DETAIL_IDENTITY_MARGIN)
+    return Detail(faces, hands, face, hand, size, face_max, margin) if faces or hands else None
 
 
 def _grid(d: dict, rid: str) -> Grid:
