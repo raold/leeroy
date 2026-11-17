@@ -23,8 +23,10 @@ photos a visual audit had labelled by hand, against its severity 2 or more:
 - an odd hand shape (fewer than four distinct fingers): precision 0.21. It ranks, never rejects.
 - the identity cosine: "not the person of her cover" had a median of 0.66 against 0.84 for
   "yes"; no threshold reaches precision 0.8 (the best, below 0.6, 0.23 at recall 0.18). It
-  ranks, never rejects. The score (0-1) ranks the clean ones: the judge's overall grade, the identity
-cosine and the hands' shapes; a judge that says she is not the woman of the reference halves it.
+  ranks, never rejects.
+
+The score (0-1) ranks the clean ones: the judge's overall grade, the identity cosine and the
+hands' shapes; a judge that says she is not the woman of the reference halves it.
 
 Rows hold numbers and codes; `file` and `ref` are paths under mind-data built from integers.
 Logs carry ids, counts and codes, never a path, a prompt or a word of the judge's."""
