@@ -77,6 +77,25 @@ export function playerState({ seconds = 0, duration = 0, playing = false, loadin
     elapsed:noteTime(at), total:noteTime(total), disabled:loading, error };
 }
 
+// Why a recording failed, in the console's own words: the browser's exception text is never
+// shown (it is terse, untranslated and differs by browser). Our own messages (Error objects made
+// here, marked `ours`) are said as written.
+var RECORD_ERRORS = {
+  NotAllowedError: 'Microphone permission was refused. Allow it in your browser to record a note.',
+  SecurityError: 'This page may not use the microphone. Open the console at its own address and allow the microphone.',
+  NotFoundError: 'No microphone is available.',
+  OverconstrainedError: 'No microphone is available.',
+  NotReadableError: 'The microphone is in use by another program, or could not be started.',
+  AbortError: 'The microphone stopped before the note was recorded. Try again.',
+  NotSupportedError: 'This browser cannot record a voice note.',
+  EncodingError: 'The recording could not be read. Try again.',
+};
+export function ours(message) { var e = new Error(message); e.ours = true; return e; }
+export function recordingError(error) {
+  if (error && error.ours === true && typeof error.message === 'string' && error.message) { return error.message; }
+  return RECORD_ERRORS[error && error.name] || 'The voice note could not be recorded.';
+}
+
 export class VoiceRecorder {
   constructor({ capture, makeRecorder, decode, changed = () => {}, now = () => performance.now(),
     every = (fn, ms) => setInterval(fn, ms), clear = id => clearInterval(id) }) {
@@ -99,8 +118,7 @@ export class VoiceRecorder {
   fail(error, generation) {
     if (generation !== this.generation) { return; }
     this.cancel();
-    this.error = error?.name === 'NotAllowedError' ? 'Microphone permission was refused. Allow it in your browser to record a note.' :
-      error?.name === 'NotFoundError' ? 'No microphone is available.' : error?.message || 'The voice note could not be recorded.';
+    this.error = recordingError(error);
     this.notify();
   }
   async start() {
@@ -117,17 +135,17 @@ export class VoiceRecorder {
       recorder.ondataavailable = event => {
         if (generation !== this.generation || !event.data.size) { return; }
         captured += event.data.size;
-        if (captured > 32 * 1024 * 1024) { this.fail(new Error('The recording is too large. Try a shorter note.'), generation); }
+        if (captured > 32 * 1024 * 1024) { this.fail(ours('The recording is too large. Try a shorter note.'), generation); }
         else { chunks.push(event.data); }
       };
-      recorder.onerror = event => this.fail(event.error || new Error('Recording stopped unexpectedly.'), generation);
+      recorder.onerror = event => this.fail(event.error || ours('Recording stopped unexpectedly.'), generation);
       recorder.onstop = async () => {
         if (generation !== this.generation) { return; }
         this.untick(); this.tracks(); this.phase = 'encoding'; this.notify();
         try {
           const blob = await this.decode(new Blob(chunks, { type:recorder.mimeType }));
           if (generation !== this.generation) { return; }
-          if (!blob || blob.size > NOTE_BYTES) { throw new Error('The voice note is too large. Try a shorter recording.'); }
+          if (!blob || blob.size > NOTE_BYTES) { throw ours('The voice note is too large. Try a shorter recording.'); }
           this.blob = blob; this.phase = 'preview'; this.notify();
         } catch (error) { this.fail(error, generation); }
       };

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from console.rig import KEY
+
 from .test_accessibility import AXE
 from .test_tabs import open_console, visit
 
@@ -174,5 +176,321 @@ def test_dial_preview_shows_under_its_dial(rehearsal, width, height, theme):
             assert await page.locator(".pv-inline").count() == 1
             await panel.get_by_role("button", name="Close preview", exact=True).click()
             assert await page.locator(".pv-inline").count() == 0
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+MEASURE = """() => {
+  const top = s => { const e = document.querySelector(s); return e && e.getClientRects().length ? Math.round(e.getBoundingClientRect().top) : null; };
+  const bottom = s => { const e = document.querySelector(s); return e && e.getClientRects().length ? Math.round(e.getBoundingClientRect().bottom) : null; };
+  const header = document.querySelector('header.top').getBoundingClientRect();
+  return {header: Math.round(header.height), strip: Math.round(document.querySelector('.top-inner').getBoundingClientRect().height),
+          tabs: Math.round(document.querySelector('.tabs').getBoundingClientRect().height),
+          feed_top: top('#feed'), reply_bottom: bottom('#composer'), send_bottom: bottom('#say-send'),
+          left_visible: !!document.querySelector('#comms-left').getClientRects().length,
+          page_width: document.documentElement.scrollWidth, width: innerWidth, height: innerHeight};
+}"""
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+@pytest.mark.parametrize("width,height", SIZES)
+def test_comms_first_screen_is_the_feed_and_the_reply_box(rehearsal, width, height, theme):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(width=width, height=height, theme=theme) as r:
+            page = r.page
+            await open_console(r)
+            await expect(page.locator("#feed")).to_contain_text("Rehearsal supplies are ready.")
+            await page.wait_for_function("() => getComputedStyle(document.querySelector('.comms')).getPropertyValue('--comms-h') !== ''")
+            m = await page.evaluate(MEASURE)
+            print("measure", width, height, theme, m)
+            # the feed and the reply box are on the first screen, nothing scrolled
+            assert m["feed_top"] is not None and m["feed_top"] < height * 0.5, m
+            assert m["reply_bottom"] is not None and m["reply_bottom"] <= height, m
+            assert m["send_bottom"] <= height, m
+            assert m["page_width"] <= m["width"] + 1, m
+            await expect(page.locator("#say-text")).to_be_in_viewport(ratio=1)
+            await shot(r, "comms", width, theme)
+            if width > 900:
+                assert m["left_visible"], m
+                await expect(page.locator("#c-drawer")).to_be_hidden()
+            else:
+                # one status line, and only the tab bar stays when the page scrolls
+                assert m["strip"] <= 60, m
+                assert m["header"] <= 120, m
+                assert not m["left_visible"], m
+                await page.evaluate("window.scrollTo(0, 400)")
+                stuck = await page.evaluate("""() => { const h = document.querySelector('header.top').getBoundingClientRect(),
+                    t = document.querySelector('.tabs').getBoundingClientRect(); return {shown: Math.round(h.bottom), tabs_top: Math.round(t.top), tabs: Math.round(t.height)}; }""")
+                assert abs(stuck["tabs_top"]) <= 1 and stuck["shown"] <= stuck["tabs"] + 2, stuck
+                await page.evaluate("window.scrollTo(0, 0)")
+                # the tab bar scrolls sideways on one line instead of wrapping
+                tabs = await page.evaluate("""() => { const t = document.querySelector('.tabs'); return [t.scrollWidth > t.clientWidth,
+                    new Set([...t.children].map(b => Math.round(b.getBoundingClientRect().top))).size]; }""")
+                assert tabs == [True, 1], tabs
+                # the channel list is a drawer
+                drawer = page.locator("#c-drawer")
+                await drawer.click()
+                await expect(page.locator("#comms-left")).to_be_visible()
+                await expect(drawer).to_have_attribute("aria-expanded", "true")
+                await shot(r, "drawer", width, theme)
+                assert not await serious(page)
+                await page.keyboard.press("Escape")
+                await expect(page.locator("#comms-left")).to_be_hidden()
+                await expect(drawer).to_be_focused()
+                await drawer.click()
+                await page.locator('#comms-left [data-view="officer"]').click()
+                await expect(page.locator("#comms-left")).to_be_hidden()
+                await expect(page.locator("#feed-title")).to_have_text("# officer")
+            assert not await serious(page)
+            # a Discord channel keeps its own reply box in sight too
+            if width <= 900:
+                await page.locator("#c-drawer").click()
+            await page.locator('#dc-channels [data-view^="d:"]').first.click()
+            await expect(page.locator("#dc-composer")).to_be_visible()
+            await expect(page.locator("#dc-send")).to_be_in_viewport(ratio=1)
+            assert not await serious(page)
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_unread_shows_in_the_title_and_icon_while_hidden(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        from conftest import HUMAN
+        async with rehearsal() as r:
+            page = r.page
+            await open_console(r)
+            await expect(page.locator("#feed")).to_contain_text("Rehearsal supplies are ready.")
+            assert await page.title() == "Guild Console"
+            requests = []
+            page.on("request", lambda q: requests.append(q.url))
+            # out of sight: the stream closes, and the one light read counts what comes
+            await page.evaluate("""() => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
+                Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});
+                document.dispatchEvent(new Event('visibilitychange')); }""")
+            await r.bridge.push({"type": "chat", "channel": "whisper", "from_guid": 102, "from_name": "Belra",
+                                 "to_guid": HUMAN, "text": "Are you coming tonight?", "map": 0, "zone": 1519})
+            await page.wait_for_function("() => document.title === '(1) Guild Console'", timeout=45000)
+            assert "circle" in await page.evaluate("decodeURIComponent(document.querySelector('link[rel=icon]').href)")
+            hidden = [u.split("/api/")[1].split("?")[0] for u in requests if "/api/" in u]
+            assert set(hidden) <= {"unread"}, hidden
+            # back in sight: cleared, and the in-page badges say it
+            await page.evaluate("""() => { delete document.hidden; delete document.visibilityState;
+                document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('focus')); }""")
+            await page.bring_to_front()
+            await page.wait_for_function("() => document.title === 'Guild Console'")
+            assert "circle" not in await page.evaluate("decodeURIComponent(document.querySelector('link[rel=icon]').href)")
+            await expect(page.locator("#notify")).to_have_attribute("aria-pressed", "false")
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+@pytest.mark.parametrize("width,height", SIZES)
+def test_comms_list_is_his_conversations_first(rehearsal, width, height, theme):
+    async def run():
+        import time
+        from playwright.async_api import expect
+        from conftest import HUMAN
+        from leeroy_mind.discord import store as discord
+        from .test_tabs import choose
+        async with rehearsal(width=width, height=height, theme=theme) as r:
+            page = r.page
+            await open_console(r)
+            await expect(page.locator("#feed")).to_contain_text("Rehearsal supplies are ready.")
+            narrow = width <= 900
+
+            async def show_list():
+                if narrow and not await page.locator("#comms-left").is_visible():
+                    await page.locator("#c-drawer").click()
+            await show_list()
+            # nobody has written yet: no DM row, and the list says how to find a member
+            await expect(page.locator("#conv-more")).to_contain_text("more members have no messages yet")
+            assert await page.locator('#dc-dms [data-view^="dm:"]').count() == 0
+            # the voice rooms are folded away until asked for
+            assert not await page.locator("#rooms-fold").evaluate("e => e.open")
+            await expect(page.locator("#tree")).to_be_hidden()
+            # a DM, then a whisper: both listed, the newest unread first
+            discord.post(r.app.store, channel="dm:102", author=102, origin="mind", text="Tea after the raid?", now=time.time())
+            r.app.store.conn.commit()
+            await page.evaluate("async () => (await import('/static/js/core.mjs')).emit('discord', {})")
+            await expect(page.locator('#dc-dms [data-view="dm:102"]')).to_be_visible()
+            await r.bridge.push({"type": "chat", "channel": "whisper", "from_guid": 103, "from_name": "Coros",
+                                 "to_guid": HUMAN, "text": "Got a minute?", "map": 0, "zone": 1519})
+            await expect(page.locator('#dc-dms [data-view="w:103"]')).to_be_visible()
+            order = await page.locator("#dc-dms [data-view]").evaluate_all("xs => xs.map(x => x.dataset.view)")
+            assert order[:2] == ["w:103", "dm:102"], order
+            await expect(page.locator('#dc-dms [data-view="dm:102"] .badge')).to_have_text("1")
+            await expect(page.locator('#dc-dms [data-view="w:103"]')).to_have_attribute("aria-label", "Coros, WoW whispers, 1 unread")
+            await shot(r, "list", width, theme)
+            assert not await serious(page)
+            # read the whisper: the unread DM leads
+            await page.locator('#dc-dms [data-view="w:103"]').click()
+            await expect(page.locator("#feed-title")).to_have_text("Coros")
+            await show_list()
+            order = await page.locator("#dc-dms [data-view]").evaluate_all("xs => xs.map(x => x.dataset.view)")
+            assert order[:2] == ["dm:102", "w:103"], order
+            # a member with no messages is found by name; Enter opens the first match
+            await page.locator("#conv-find").fill("fen")
+            await expect(page.locator("#dc-dms [data-view]")).to_have_count(1)
+            await expect(page.locator('#dc-dms [data-view="dm:106"]')).to_contain_text("Fennel")
+            await page.locator("#conv-find").press("Enter")
+            await expect(page.locator("#dc-to")).to_contain_text("Fennel")
+            if narrow:
+                await expect(page.locator("#comms-left")).to_be_hidden()
+            # "/" is the reply box, Ctrl+K the filter (the drawer opens for it in a small window)
+            await page.evaluate("document.activeElement.blur()")
+            await page.keyboard.press("/")
+            await expect(page.locator("#dc-text")).to_be_focused()
+            assert await page.locator("#dc-text").input_value() == ""
+            await page.keyboard.press("Control+k")
+            await expect(page.locator("#conv-find")).to_be_focused()
+            await page.locator("#conv-find").fill("")
+            await page.locator('#comms-left [data-view="guild"]').click()
+            await page.evaluate("document.activeElement.blur()")
+            await page.keyboard.press("/")
+            await expect(page.locator("#say-text")).to_be_focused()
+            # typing a slash in a message is a slash
+            await page.keyboard.type("a/b")
+            assert await page.locator("#say-text").input_value() == "a/b"
+            await page.locator("#say-text").fill("")
+            # the page's first Tab stop skips to the reply box
+            assert await page.evaluate("document.querySelector('a[href], button, input, select, textarea, [tabindex]').id") == "skip-reply"
+            await expect(page.locator("#skip-reply")).not_to_be_in_viewport()
+            await page.evaluate("window.scrollTo(0, 0)")
+            await page.locator("#skip-reply").focus()
+            await expect(page.locator("#skip-reply")).to_be_in_viewport()
+            await page.keyboard.press("Enter")
+            await expect(page.locator("#say-text")).to_be_focused()
+            # the fold opens on request and is remembered
+            await show_list()
+            await page.locator("#rooms-fold > summary").click()
+            assert await page.locator("#rooms-fold").evaluate("e => e.open")
+            assert await page.evaluate("localStorage.getItem('guild-console-rooms')") == '"open"'
+            assert not await serious(page)
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+@pytest.mark.parametrize("width,height", SIZES)
+def test_lab_shows_what_needs_his_decision(rehearsal, width, height, theme):
+    async def run():
+        from playwright.async_api import expect
+        from .test_flows import submit
+        from .test_lab import seed_lab
+        async with rehearsal(width=width, height=height, theme=theme, learning=True) as r:
+            page = r.page
+            ids = seed_lab(r)
+            await open_console(r)
+            # the Lab tab's badge counts them before the tab is opened
+            await expect(page.locator("#t-lab .badge")).to_have_text("2", timeout=15000)
+            await visit(page, "tonight")
+            await expect(page.locator("#tonight-cards")).to_contain_text("Lab proposals to decide: 2")
+            await visit(page, "lab")
+            pending = page.locator("#lab-pending")
+            await expect(page.locator("#lab-pending-title")).to_have_text("Needs your decision (2)")
+            await expect(pending).to_contain_text("Arm " + ids["arm"])
+            await expect(pending).to_contain_text("Lesson for Arkon · guild: She keeps replies brief.")
+            top = await box(page, ".lab-pending")
+            assert top["top"] < height, top    # on the first screen
+            # the folded panels say what is inside
+            await expect(page.locator('[data-detail="family-length"] > summary')).to_contain_text("1 proposed")
+            await expect(page.locator("#lab-rated")).to_have_text("You rated 0 lines this week.")
+            await shot(r, "lab", width, theme)
+            assert not await serious(page)
+            row = pending.locator(".lab-pending-row").filter(has_text="Lesson for Arkon")
+            await row.get_by_role("button", name="Approve", exact=True).click()
+            await submit(r, page.locator("#lab-confirm-save"), "/api/learn")
+            await expect(page.locator("#lab-pending-title")).to_have_text("Needs your decision (1)")
+            await expect(page.locator("#t-lab .badge")).to_have_text("1")
+            assert r.app.store.conn.execute("SELECT status FROM talk_lesson WHERE id=?", (ids["lesson"],)).fetchone()[0] == "active"
+            row = pending.locator(".lab-pending-row").filter(has_text="Arm " + ids["arm"])
+            await row.get_by_role("button", name="Reject", exact=True).click()
+            await submit(r, page.locator("#lab-confirm-save"), "/api/learn")
+            await expect(pending).to_contain_text("Nothing is waiting for you.")
+            await expect(page.locator("#t-lab .badge")).to_have_count(0)
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_the_page_loads_compressed_and_reloads_from_cache(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal() as r:
+            page = r.page
+            seen = []
+
+            async def note(response):
+                path = response.url[len(r.url):].split("?")[0]
+                if path == "/" or path.startswith("/static/"):
+                    headers = await response.all_headers()
+                    seen.append((path, response.status, headers.get("content-encoding", ""),
+                                 int(headers.get("content-length", "0")), headers.get("cache-control", ""), headers.get("etag", "")))
+            page.on("response", note)
+            await open_console(r)
+            await expect(page.locator("#feed")).to_contain_text("Rehearsal supplies are ready.")
+            await page.wait_for_timeout(500)
+            first = list(seen)
+            assert first and all(status == 200 for _, status, *_ in first), [f for f in first if f[1] != 200]
+            assert all(cache == "no-cache" and etag for *_, cache, etag in first)
+            text_files = [f for f in first if not f[0].endswith(".woff2")]
+            assert all(enc == "gzip" for path, _, enc, size, *_ in text_files if size > 1024), \
+                [f for f in text_files if f[2] != "gzip"]
+            wire = sum(size for _, _, _, size, *_ in first)
+            print("load", {"requests": len(first), "wire_bytes": wire})
+            assert wire < 450_000, wire
+            # a reload revalidates: nothing is sent again
+            seen.clear()
+            await page.goto(r.url + "/#key=" + KEY)
+            await page.reload()
+            await expect(page.locator("#s-lost")).to_be_visible()   # a reload loses the key, as before
+            await page.wait_for_timeout(500)
+            again = [f for f in seen]
+            # (Chromium reports the revalidated document itself as a 200 with nothing sent)
+            assert again and all(status == 304 or (path == "/" and size == 0) for path, status, _, size, *_ in again),                 [f for f in again if f[1] != 304][:5]
+            print("reload", {"requests": len(again), "wire_bytes": sum(f[3] for f in again)})
+            # the page still runs only its own files under its CSP
+            assert not [e for e in r.errors if "Content Security Policy" in e], r.errors
+    asyncio.run(run())
+
+
+def test_thumbs_show_on_hover_and_focus_on_every_member_line(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        from .test_flows import submit
+        from .test_lab import seed_lab
+        from .test_tabs import choose
+        async with rehearsal(learning=True) as r:
+            page = r.page
+            ids = seed_lab(r)
+            await open_console(r)
+            views = [("guild", ids["guild"]), ("w:101", ids["whisper"]), ("voice", ids["voice"]),
+                     ("d:general", ids["discord"]["general"][0]), ("dm:101", ids["discord"]["dm:101"][0])]
+            for view, lid in views:
+                await page.evaluate("async view => (await import('/static/js/comms/feedview.mjs')).openView(view)", view)
+                thumbs = page.locator(f'[data-feedback="{lid}"]')
+                await expect(thumbs).to_have_count(1)
+                row = thumbs.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' msg ')][1]")
+                await page.mouse.move(2, 2)
+                await expect(thumbs).to_have_css("opacity", "0")          # out of the way until asked for
+                await row.hover()
+                await expect(thumbs).to_have_css("opacity", "1")          # no extra click
+                await expect(thumbs.get_by_role("button", name="Thumbs up", exact=False)).to_be_in_viewport()
+                await page.mouse.move(2, 2)
+                await thumbs.get_by_role("button", name="Thumbs up", exact=False).focus()
+                await expect(thumbs).to_have_css("opacity", "1")          # the keyboard gets them too
+                await page.evaluate("document.activeElement.blur()")
+            # one click rates, and a rated line keeps its thumbs in sight
+            await page.evaluate("async () => (await import('/static/js/comms/feedview.mjs')).openView('guild')")
+            thumbs = page.locator(f'[data-feedback="{ids["guild"]}"]')
+            await submit(r, thumbs.get_by_role("button", name="Thumbs up", exact=False), "/api/feedback")
+            await page.mouse.move(2, 2)
+            await page.evaluate("document.activeElement.blur()")
+            await expect(thumbs).to_have_css("opacity", "1")
+            await visit(page, "lab")
+            await expect(page.locator("#lab-rated")).to_have_text("You rated 1 line this week.")
+            assert not await serious(page)
             assert not r.errors, r.errors
     asyncio.run(run())

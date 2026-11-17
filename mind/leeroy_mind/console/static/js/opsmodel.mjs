@@ -1,5 +1,6 @@
 // Pure, deliberately content-free words for the Ops payload. No generic JSON renderer.
 import { pausedWords } from "./gpumodel.mjs";
+import { isoMinute } from "./dates.mjs";
 export const PANELS = [
   ["health", "Health"], ["night", "Night"], ["realm", "Realm holds"], ["raids", "Raids"],
   ["selfies", "Selfies and snaps"], ["backups", "Backups"], ["drift", "Release drift"], ["schedules", "Scheduled tasks"], ["switches", "Feature switchboard"]
@@ -9,7 +10,7 @@ const arr = x => Array.isArray(x) ? x : [];
 const str = x => typeof x === "string" ? x : "unknown";
 const n = x => typeof x === "number" && Number.isFinite(x) ? String(x) : "unknown";
 export function at(x) {
-  return typeof x === "number" && Number.isFinite(x) ? new Date(x * 1000).toLocaleString() : "not recorded";
+  return typeof x === "number" && Number.isFinite(x) ? isoMinute(x) : "not recorded";
 }
 export function panelWords(value) {
   const p = obj(value);

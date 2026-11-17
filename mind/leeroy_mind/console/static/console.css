@@ -168,7 +168,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .panel-show { display: none; }
 html[data-comms-panel="hidden"] .panel-show { display: block; }
 #here-title, #dc-members > h3:first-child { padding-right: 110px; }  /* clear of the button */
-html[data-comms-panel="hidden"] .feedpanel > #feed-title, html[data-comms-panel="hidden"] .feedpanel > #feed-hint { padding-right: 120px; }
+html[data-comms-panel="hidden"] .feedpanel .feed-head, html[data-comms-panel="hidden"] .feedpanel > #feed-hint { padding-right: 120px; }
 html[data-comms-panel="hidden"] .comms > .panel.right { display: none; }
 @media (min-width: 1101px) { html[data-comms-panel="hidden"] .comms { grid-template-columns: 260px minmax(0, 1fr); } }
 @media (min-width: 721px) and (max-width: 1100px) { html[data-comms-panel="hidden"] .comms { grid-template-rows: minmax(420px, 70vh); } }
@@ -250,7 +250,7 @@ button.twist:hover { color: var(--ink); background: var(--surface-2); }
 .room-faces { display: flex; flex-wrap: wrap; gap: 3px; padding: 2px 8px 4px 24px; }
 .av.more { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line);
   font: 600 9px/1 var(--f-mono); }
-#whispers .none, .faces .none { padding: 2px 8px; font-size: 13px; color: var(--ink-3); margin: 0; }
+#dc-dms .none, #conv-more, .faces .none { padding: 2px 8px; font-size: 13px; color: var(--ink-3); margin: 0; }
 .ctl { flex: none; display: grid; gap: 8px; margin-top: 8px; padding: 10px 6px 0; border-top: 1px solid var(--line); }
 .ctl .now { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
 #c-room { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -336,7 +336,7 @@ div.who { display: flex; align-items: center; gap: 8px; }
 .facebtn { display: inline-flex; flex: none; padding: 0; border: 0; border-radius: 50%; background: none;
   cursor: pointer; line-height: 0; }
 span.facebtn { cursor: inherit; }
-#whispers span.facebtn, .member[data-card] { cursor: pointer; }
+#dc-dms span.facebtn, .member[data-card] { cursor: pointer; }
 .msg > .facebtn { align-self: start; }
 
 #toasts { position: absolute; top: 100%; right: 14px; margin-top: 8px; z-index: 10; width: 300px; display: flex;
@@ -581,15 +581,6 @@ td > div.who { color: var(--ink); font-weight: 600; }
 
 @media (max-width: 480px) {
   .mindtab .kpi .v { font-size: 24px; }
-  .strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 8px 12px; }
-  .strip .stat { min-width: 0; }
-  .strip .stat .v { max-width: 100%; font-size: 12px; overflow: visible; }
-  .strip .stat .t { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
-  .strip .mode { grid-column: span 2; justify-self: start; white-space: normal; }
-  .strip .theme { grid-column: 3; grid-row: 1; }
-  .strip .theme.photos { grid-row: 2; }
-  .strip .theme.gpu { grid-row: 3; min-height: 44px; white-space: normal; }
-  .strip .ptt { grid-column: span 2; }
   .mindtab .formrow label:has(select) { flex: 1 1 100%; justify-content: space-between; }
   .mindtab .formrow select { min-width: 44px; max-width: calc(100% - 4em); }
 }
@@ -651,11 +642,11 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .dc-online::before { background: var(--ok); }
 .dc-idle::before { background: var(--warn); }
 .dc-dnd::before { background: var(--bad); }
-.dc-class-warrior .who { color: #9a784d; }.dc-class-paladin .who { color: #c45c91; }
-.dc-class-hunter .who { color: #4d8745; }.dc-class-rogue .who { color: #8c771f; }
-.dc-class-priest .who { color: var(--ink); }.dc-class-death-knight .who { color: #c23f59; }
-.dc-class-shaman .who { color: #387acb; }.dc-class-mage .who { color: #287e96; }
-.dc-class-warlock .who { color: #8264bc; }.dc-class-druid .who { color: #bc6926; }
+.dc-class-warrior .who { color: #7d6038; }.dc-class-paladin .who { color: #a8457a; }
+.dc-class-hunter .who { color: #3c7035; }.dc-class-rogue .who { color: #6d5c12; }
+.dc-class-priest .who { color: var(--ink); }.dc-class-death-knight .who { color: #b3354e; }
+.dc-class-shaman .who { color: #2c68b3; }.dc-class-mage .who { color: #226f85; }
+.dc-class-warlock .who { color: #6f50ad; }.dc-class-druid .who { color: #9a5316; }
 :root[data-theme="dark"] .dc-class-warrior .who { color: #c9a67c; }
 :root[data-theme="dark"] .dc-class-paladin .who { color: #ed9dca; }
 :root[data-theme="dark"] .dc-class-hunter .who { color: #a5cf86; }
@@ -835,3 +826,107 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .dc-emoji { width: 20px; height: 20px; vertical-align: -5px; }
 .dc-reaction .dc-emoji { width: 16px; height: 16px; vertical-align: -3px; }
 .dc-bot-tag { font: 600 10px/1 var(--f-mono); color: var(--accent-ink); background: var(--accent); border-radius: 3px; padding: 2px 4px; margin-left: 6px; }
+
+/* Small windows. Up to 1100 px wide the Comms feed's row is as tall as the window has left
+   (--comms-h, comms/layout.mjs), so the reply box is in sight without scrolling. */
+.feed-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.feed-head h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.drawer-open, .drawer-close, .drawer-backdrop { display: none; }
+@media (max-width: 1100px) {
+  .comms { grid-template-rows: var(--comms-h, minmax(420px, 70vh)) auto; }
+  /* one status line and one line of tabs (each scrolls sideways), so the panels keep the height */
+  .top-inner { padding: 6px 12px; gap: 4px 12px; }
+  .brand { margin-right: 0; flex: none; }
+  .brand .sub { display: none; }
+  .strip { flex: 1 1 0; min-width: 0; width: auto; display: flex; flex-wrap: nowrap; align-items: center; gap: 14px;
+    overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+  .strip > * { flex: none; }
+  .strip .stat .v { max-width: none; overflow: visible; }
+  .strip .theme { white-space: nowrap; }
+  .tabs { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+  .tabs button { flex: none; white-space: nowrap; }
+}
+@media (min-width: 721px) and (max-width: 1100px) {
+  html[data-comms-panel="hidden"] .comms { grid-template-rows: var(--comms-h, minmax(420px, 70vh)); }
+}
+/* Under 900 px the page itself scrolls: the status strip is one line that goes with it, and the
+   header sticks its own height above the window's top so that only the tab bar stays. Comms is
+   the feed and its reply box; the channel list is a drawer. */
+@media (max-width: 900px) {
+  html, body { height: auto; min-height: 100%; }
+  body { display: block; }
+  main { display: block; overflow: visible; }
+  .top { top: calc(-1 * var(--strip-h, 0px)); }
+  .top-inner { padding: 4px 12px; gap: 4px 10px; }
+  .brand { margin-right: 0; flex: none; }
+  .brand > div { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .strip { gap: 12px; }
+  .strip .stat .k { display: none; }
+  .strip .stat .v { font-size: 12.5px; }
+  #comms-kpis, #feed-hint { display: none; }
+  .comms { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--comms-h, 70vh) auto; padding: 8px 8px 12px; gap: 10px; }
+  .comms > .panel { max-height: none; }
+  .comms > .panel.right { display: block; }
+  html[data-comms-panel="hidden"] .comms > .panel.right { display: none; }
+  .comms > .panel.left { display: none; position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(88vw, 340px);
+    max-height: none; border-radius: 0; border-width: 0 1px 0 0; box-shadow: 0 0 40px rgb(0 0 0 / 0.45); }
+  html[data-comms-drawer="open"] .comms > .panel.left { display: flex; }
+  html[data-comms-drawer="open"] .drawer-backdrop { display: block; position: fixed; inset: 0; z-index: 39;
+    background: rgb(0 0 0 / 0.5); }
+  .drawer-open { display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 44px; }
+  .drawer-close { display: block; flex: none; align-self: end; min-height: 44px; margin: 0 4px 6px; }
+  .feedpanel { padding: 10px 10px 8px; }
+  .feedpanel .panel-toggle { top: 10px; right: 10px; min-height: 44px; }
+  .feed-head { padding-right: 112px; min-height: 44px; }
+  #composer .say input { font-size: 16px; min-height: 44px; }
+  #composer .say .btn { min-height: 44px; }
+}
+
+/* the Lab: what waits for his decision, first */
+.lab-pending { padding: 16px; margin-bottom: 16px; }
+.lab-pending h4 { margin: 14px 0 4px; }
+.lab-pending-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.lab-pending-row:first-child { border-top: 0; }
+.lab-pending-row p { margin: 0; flex: 1 1 18em; min-width: 0; overflow-wrap: anywhere; }
+
+/* Comms' left list: one list of conversations with a filter, the voice rooms folded */
+#conv-find { display: block; width: calc(100% - 16px); margin: 4px 8px 6px; padding: 6px 10px; font-size: 14px;
+  color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+#conv-find:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+#conv-find::placeholder { color: var(--ink-3); opacity: 1; }
+#dc-dms .ch { min-height: 36px; }
+.ch .kind { flex: none; font: 600 10px/1 var(--f-body); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.ch .kind + .badge, .ch .kind + .dots { margin-left: auto; }
+.ch .nm + .kind { margin-left: 2px; }
+#conv-more { margin: 2px 0 6px; font-size: 12px; }
+.left-fold > summary { cursor: pointer; padding: 6px 8px; border-radius: 8px; list-style-position: inside; }
+.left-fold > summary:hover { background: var(--surface-2); }
+.left-fold > summary .muted { text-transform: none; letter-spacing: 0; font-weight: 500; }
+/* the page's first Tab stop: in sight only while it has the focus */
+.skip { position: absolute; left: 8px; top: -80px; z-index: 60; }
+.skip:focus, .skip:focus-visible { top: 8px; }
+@media (max-width: 900px) {
+  #conv-find { font-size: 16px; min-height: 44px; }
+  #dc-dms .ch, .left-fold > summary { min-height: 44px; }
+}
+
+/* Thumbs: with a mouse they wait in the line's corner and show when the line is pointed at or
+   holds the focus (and stay once a line is rated); on a touch screen they are always under the
+   line, one tap. The reasons (before or after a thumb) open as a small panel under them. */
+@media (hover: hover) and (pointer: fine) {
+  .msg { position: relative; }
+  .line-feedback { position: absolute; top: 4px; right: 4px; margin: 0; gap: 4px; padding: 2px; border-radius: 8px;
+    background: var(--surface); opacity: 0; flex-wrap: nowrap; }
+  .msg:hover .line-feedback, .msg:focus-within .line-feedback, .line-feedback:has([aria-pressed="true"]),
+  .line-feedback:has(.feedback-reasons[open]), .line-feedback:has(.feedback-status:not(:empty)) { opacity: 1; }
+  .line-feedback > button { min-height: 0; padding: 2px 7px; font-size: 13px; line-height: 1.4; }
+  .line-feedback .feedback-reasons { position: relative; }
+  .line-feedback .feedback-reasons summary { padding: 2px 6px; white-space: nowrap; min-height: 0; }
+  .line-feedback .feedback-reasons[open] { flex-basis: auto; }
+  .line-feedback .feedback-chips { position: absolute; right: 0; top: 100%; z-index: 6; width: max-content; max-width: 300px;
+    padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.25); }
+  .line-feedback .feedback-status { position: absolute; right: 0; top: 100%; flex-basis: auto; white-space: nowrap;
+    padding: 2px 6px; background: var(--surface); border-radius: 6px; }
+  .line-feedback:has(.feedback-reasons[open]) .feedback-status { display: none; }
+}

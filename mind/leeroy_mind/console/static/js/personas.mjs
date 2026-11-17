@@ -31,8 +31,10 @@ var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", not
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0;
 // The member page replaces the list (wall or table, selfies, tuning). lastPick and listScroll
 // are where he was in the list, so Back puts him there again.
-var lastPick = 0, listScroll = 0;
-function scroller() { return document.querySelector("main"); }
+var lastPick = 0, listScroll = [0, 0];
+// The panels scroll in <main>; under 900 px the page itself does (console.css)
+function scrollNow() { return [document.querySelector("main").scrollTop, window.scrollY]; }
+function scrollTo(at) { document.querySelector("main").scrollTop = at[0]; window.scrollTo(0, at[1]); }
 function worldMode() { return $("p-world-filter").checked; }
 $("p-world-filter").addEventListener("change", function () {
   pickSeq += 1;
@@ -402,14 +404,14 @@ function choose(guid) {
     $("p-list").hidden = false;
     mark(lastPick);
     if (was) {
-      scroller().scrollTop = listScroll;
+      scrollTo(listScroll);
       var back = view === "table" ? $("p-roster").querySelector('tr[data-guid="' + was + '"]')
                                   : $("p-wall").querySelector('.tile-detail[data-guid="' + was + '"]');
       if (back && S.tab === "personas") { back.focus({ preventScroll: true }); }
     }
     return;
   }
-  if (!was) { listScroll = scroller().scrollTop; }
+  if (!was) { listScroll = scrollNow(); }
   lastPick = guid;
   mark(guid);
   if (was !== guid) {
@@ -427,8 +429,7 @@ function choose(guid) {
   $("p-detail").hidden = false;
   renderActions();
   if (!was) {
-    scroller().scrollTop = 0;
-    window.scrollTo(0, 0);
+    scrollTo([0, 0]);
     if (S.tab === "personas") { $("p-name").focus({ preventScroll: true }); }
   }
   if (TUNE) { renderDials(guid); }
@@ -655,6 +656,7 @@ function renderTuning() {
     if (!g.builtin) {
       var rt = el("button", "", "Retire");
       rt.type = "button"; rt.disabled = !live;
+      if (!live) { rt.title = "Retire is off: " + (tuneWhy() || "the mind is not running") + "."; }
       rt.addEventListener("click", function () { tuneAsk({ action: "retire", id: Number(g.target) }, "retire " + g.name); });
       head.appendChild(document.createTextNode(" "));
       head.appendChild(rt);
@@ -703,6 +705,7 @@ function renderTuning() {
       .forEach(function (b) {
         var btn = el("button", "", b[0]);
         btn.type = "button"; btn.disabled = !live;
+        if (!live) { btn.title = b[0] + " is off: " + (tuneWhy() || "the mind is not running") + "."; }
         btn.addEventListener("click", function () { tuneAsk(b[1], b[2]); });
         acts.appendChild(btn);
       });

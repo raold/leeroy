@@ -2,6 +2,7 @@ import { $, api, clear, el, refused } from "./core.mjs";
 import { pollTab, renderKpis } from "./tabkit.mjs";
 import { PANELS, at, badge, lines, panelWords } from "./opsmodel.mjs";
 import { actionButton, refreshActions } from "./opsactions.mjs";
+import { setBadge as setTabBadge } from "./tabs.mjs";
 
 // The tab badge shows only when something needs a look (a health FAIL or a held member).
 function setBadge(value) {
@@ -61,7 +62,7 @@ function pollBadge() {
   api("/api/ops/badge", { poll: true }).then(r => {
     if (refused(r) || r.status !== 200) { return null; }
     return r.json();
-  }).then(j => { if (j) { setBadge(j); } })
+  }).then(j => { if (j) { setBadge(j); setTabBadge("lab", typeof j.lab === "number" ? j.lab : 0); } })
     .catch(() => { /* no connection: the strip says it */ })
     .then(() => { badgeBusy = false; });
 }

@@ -5,7 +5,7 @@ import { photoButton } from "../gallery.mjs";
 import { openMember } from "../personas.mjs";
 import { showTab } from "../tabs.mjs";
 import { cardText } from "../words.mjs";
-import { FEED, openView } from "./feedview.mjs";
+import { FEED, focusReply, openView } from "./feedview.mjs";
 import { renderRooms } from "./leftview.mjs";
 import { roomMates } from "./tree.mjs";
 import { DISCORD } from "./discordstate.mjs";
@@ -144,11 +144,6 @@ function setMute(guid, muted) {
   renderVoiceControls();
   renderRooms();  // the tree strikes a muted member through
 }
-// The reply box (#composer, composer.mjs): its line while it takes one, else the box itself
-function focusComposer() {
-  var box = $("composer"), f = box.querySelector("input:not(:disabled)");
-  (f || box).focus();
-}
 
 $("mcard-vol").addEventListener("input", function () { $("mcard-db").textContent = fmtDb(Number(this.value)); });
 $("mcard-vol").addEventListener("change", function () { if (CARD.guid) { setVolume(CARD.guid, Number(this.value)); } });
@@ -162,7 +157,7 @@ $("mcard-mute").addEventListener("click", function () { if (CARD.guid) { setMute
 $("mcard-whisper").addEventListener("click", function () {
   if (!CARD.guid) { return; }
   openView(FEED.openThread(CARD.guid, CARD.name));
-  focusComposer();
+  focusReply();
 });
 $("mcard-profile").addEventListener("click", function () { if (CARD.guid) { openMember(CARD.guid); } });
 $("mcard-dm").addEventListener("click", function () {
@@ -196,7 +191,7 @@ on("discord-view", function () {
 on("open-whisper", function (d) {
   showTab("comms");
   openView(FEED.openThread(d.guid, str(d.name) || "#" + d.guid));
-  focusComposer();
+  focusReply();
 });
 on("discord-view", function () {
   $("mcard-dm").disabled = !DISCORD.dms.some(function (d) { return d.guid === CARD.guid; });

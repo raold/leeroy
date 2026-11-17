@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/static/console.css">
 </head>
 <body>
+<button id="skip-reply" type="button" class="skip">Skip to the reply box</button>
 <header class="top">
 <div class="top-inner">
   <div class="brand">
@@ -59,7 +60,11 @@
       <p id="lab-learning-state">Reading learning state…</p>
       <button id="lab-freeze" type="button" data-lab-action="true" aria-pressed="false" disabled>Freeze learning</button>
       <p id="lab-why" class="hint"></p><p id="lab-result" role="status" aria-live="polite"></p>
+      <p id="lab-rated" class="hint"></p>
     </div>
+    <section class="panel lab-pending" aria-labelledby="lab-pending-title">
+      <h3 id="lab-pending-title">Needs your decision</h3><div id="lab-pending"><p class="note">Reading…</p></div>
+    </section>
     <div class="lab-grid">
       <section class="panel"><h3>Rewards</h3><div id="lab-rewards"></div></section>
       <section class="panel"><h3>Arms</h3><div id="lab-arms"></div></section>
@@ -97,18 +102,24 @@
     <div id="comms-banner" class="banner" hidden></div>
     <div id="comms-kpis" class="kpis" aria-label="Tonight"></div>
     <div class="comms">
-      <aside class="panel left" aria-label="Channels, voice rooms and whispers">
+      <div id="c-backdrop" class="drawer-backdrop"></div>
+      <aside id="comms-left" class="panel left" aria-label="Channels, voice rooms and whispers">
+        <button id="c-drawer-close" type="button" class="drawer-close">Close channels</button>
         <div id="left" class="list">
-          <div class="sec" role="heading" aria-level="2">Guild Discord</div>
-          <div id="dc-channels"></div>
-          <div class="sec" role="heading" aria-level="2">Direct messages</div>
+          <div class="sec" role="heading" aria-level="2">Conversations</div>
+          <input id="conv-find" type="search" placeholder="Find a member" aria-label="Find a member"
+                 autocomplete="off" title="Find a member (Ctrl+K)">
           <div id="dc-dms"></div>
+          <p id="conv-more" class="none" hidden></p>
+          <div id="dc-groups"></div>
           <div class="sec" role="heading" aria-level="2">From WoW</div>
           <div id="channels"></div>
-          <div class="sec" role="heading" aria-level="2">Voice rooms</div>
-          <div id="tree"></div>
-          <div class="sec" role="heading" aria-level="2">Whispers</div>
-          <div id="whispers"></div>
+          <div class="sec" role="heading" aria-level="2">Guild Discord</div>
+          <div id="dc-channels"></div>
+          <details id="rooms-fold" class="left-fold">
+            <summary class="sec"><span>Voice rooms</span> <span id="rooms-now" class="muted"></span></summary>
+            <div id="tree"></div>
+          </details>
         </div>
         <div class="ctl" role="group" aria-label="Your voice">
           <div class="now"><span id="c-ptt" class="ptt"><i class="lamp"></i><span>push-to-talk</span></span>
@@ -123,7 +134,8 @@
         </div>
       </aside>
       <section class="panel feedpanel" aria-labelledby="feed-title">
-        <h3 id="feed-title"># guild</h3>
+        <div class="feed-head"><button id="c-drawer" type="button" class="drawer-open" aria-controls="comms-left"
+                aria-expanded="false">Channels</button><h3 id="feed-title"># guild</h3></div>
         <button id="c-panel-show" type="button" class="panel-toggle panel-show" aria-controls="comms-right"
                 aria-expanded="false">Show panel</button>
         <p id="feed-hint" class="hint"></p>
