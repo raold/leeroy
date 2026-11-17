@@ -36,10 +36,12 @@ async def snapshot(app, now, *, include_seeds=False):
     decisions_on = getattr(app, 'decisions', None) is not None
     intents_on = getattr(app, 'godmode', None) is not None
     def read():
-        deadline = time.monotonic() + 2
+        # the worker's own CPU seconds, not the wall clock: a loaded machine that does not schedule
+        # the thread for 2 s is not a runaway query, and interrupting it dropped a whole server tick
+        deadline = time.thread_time() + 2
         worker_store = Store(connect(path), clock=app.clock)
         with closing(worker_store.conn) as conn, worker_store.transaction():
-            conn.set_progress_handler(lambda: time.monotonic() >= deadline, 1000)
+            conn.set_progress_handler(lambda: time.thread_time() >= deadline, 1000)
             if library.is_file():
                 try:
                     conn.execute('ATTACH DATABASE ? AS library', (library.resolve().as_uri() + '?mode=ro',))
