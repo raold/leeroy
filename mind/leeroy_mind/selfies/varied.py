@@ -199,7 +199,9 @@ def recompose_slot(p: Persona, looks, idx: int, seed: str) -> Look | None:
     expressions = list(kind.LUST_EXPRESSIONS)
     rng.shuffle(expressions)
     others = [x for i, x in enumerate(looks) if i != idx and x is not None]
-    return _pick(p, rng, looks[idx].category, "front", "full_body", colours, expressions, others)
+    from leeroy_mind.heat import live as heat_live  # [heat]: inside her photo tier, as compose
+    return _pick(p, rng, looks[idx].category, "front", "full_body", colours, expressions, others,
+                 heat_live.photo_tier(p))
 
 
 def _valid(x) -> bool:
