@@ -7,9 +7,10 @@ unknown keys mean the defaults with the lab off; nothing private reaches a diagn
 - pairs: the battery's (script, member) pairs a night, each run once per arm (2-60, default 12).
 - judge: pairs per arm the blind judge reads (0-60, default 6; never more than pairs).
 - variants: prompt variants proposed a night (0-5, default 3; 0 only measures).
-- grader: what grades her answers: "tells" (lab/judge.py, the judge measured against a strong
-  grader, on the live model) or "rubric" (lab/grade.py's 0-3 rubric on the reflection model,
-  which did not agree with that grader at all). Default "tells".
+- grader: what grades her answers: "rubric" (lab/grade.py's 0-3 rubric on the reflection model;
+  it does not agree with a strong grader at all) or "tells" (lab/judge.py, on the live model:
+  it agrees better, but not yet well enough to be the default; lab/README.md, "The judge").
+  Default "rubric".
 - promote: a variant that wins becomes an arm of the learn bandit (lab/promote.py). Default
   false: the lab measures and reports, and proposes nothing to the weekly gate, until its judge
   agrees with a strong grader (lab/README.md, "The judge").
@@ -21,7 +22,7 @@ from pathlib import Path
 
 KEYS = frozenset({"enabled", "minutes", "pairs", "judge", "variants", "overlays", "grader",
                   "promote"})
-GRADERS = ("tells", "rubric")
+GRADERS = ("rubric", "tells")
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class LabCfg:
     judge: int = 6
     variants: int = 3
     overlays: bool = False
-    grader: str = "tells"
+    grader: str = "rubric"
     promote: bool = False
 
 

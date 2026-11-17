@@ -144,6 +144,7 @@ export function conversationView(value) {
       +(Number.isFinite(r.human) ? ' · judge called her human '+pct(r.human) : '');
     const variants=(Array.isArray(r.variants) ? r.variants : []).filter(record).map(v =>
       'Variant '+v.id+': '+(OUTCOMES[v.outcome] || v.outcome || 'waiting')+(Number.isFinite(v.delta) ? ' ('+(v.delta>=0 ? '+' : '')+v.delta.toFixed(2)+')' : '')
+      +(record(v.prefer) && Number.isFinite(v.prefer.share) ? ' · preferred to the control’s answer '+pct(v.prefer.share)+' of '+(v.prefer.n|0)+' lines' : '')
       +(v.arm ? ' · arm '+v.arm+(v.arm_status ? ' ('+v.arm_status+')' : '') : '')
       +(typeof v.diff==='string' && v.diff ? ' · '+v.diff : ''));
     return {headline, kinds, flags, variants};

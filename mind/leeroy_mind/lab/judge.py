@@ -516,3 +516,41 @@ async def score(reasoner, his: str, reply: str, *, mode: str = LAB_MODE, context
     model = model if model is not None else weights()["modes"][mode]
     return {"score": round(combine(found, model), 4), "inputs": found,
             "calls": reasoner.calls - before}
+
+
+async def score_lines(reasoner, lines, *, mode: str = LAB_MODE, seed: int = 0) -> dict:
+    """The judge on a window of chat lines (turing.corpus.Line, as the turing judge and the
+    bake-off read them; anything with `.human`, `.speaker` and `.text` in time order): every
+    run of one member's lines that follows a line of his is one reply to it, read with the
+    lines before as its context and that member's earlier lines in the window as her own.
+    {"mean": the replies' mean 1-5 or None, "replies": n, "calls": n, "scores": [...]}: an
+    optional scorer for `turing` and `bakeoff`; numbers only."""
+    scores, calls = [], 0
+    context: list[tuple[str, str]] = []
+    own: dict[int, list[str]] = {}
+    his = None
+    i = 0
+    lines = list(lines)
+    while i < len(lines):
+        line = lines[i]
+        if line.human:
+            his = line.text
+            context.append(("him", line.text))
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and not lines[j].human and lines[j].speaker == line.speaker:
+            j += 1
+        reply = "\n".join(x.text for x in lines[i:j])
+        if his is not None and reply.strip():
+            got = await score(reasoner, his, reply, mode=mode, context=tuple(context[:-1]),
+                              earlier=tuple(own.get(line.speaker, ())),
+                              seed=seed_of(seed, len(scores)))
+            scores.append(got["score"])
+            calls += got["calls"]
+            his = None  # the next member's lines answer her, not him
+        own.setdefault(line.speaker, []).append(reply)
+        context.append(("her", reply))
+        i = j
+    return {"mean": round(sum(scores) / len(scores), 4) if scores else None,
+            "replies": len(scores), "calls": calls, "scores": scores}

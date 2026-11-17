@@ -142,3 +142,51 @@ def test_prompt_families_are_valid_frozen_and_never_in_the_plain_controls():
         p = Path(d) / "mind.toml"
         p.write_bytes(b'[learn]\nenabled = true\nfrozen_families = ["prompt.reply_human"]\n')
         assert load_learn_config(p).frozen_families == ("prompt.reply_human",)
+
+
+def test_the_judges_score_is_compared_with_its_own_margin():
+    control = {k: dict(v, score=3.0) for k, v in rows([1] * 10).items()}
+    ahead = {k: dict(v, score=3.0 + promote.THRESHOLDS["score"]) for k, v in rows([1] * 10).items()}
+    sheet = promote.compare(control, ahead, key="score")
+    assert sheet["outcome"] == "won" and sheet["grade"] == "score"
+    assert sheet["delta"] == pytest.approx(promote.THRESHOLDS["score"])
+    near = {k: dict(v, score=3.05) for k, v in rows([1] * 10).items()}
+    assert promote.compare(control, near, key="score")["outcome"] == "lost"
+    # the rubric column is not read for it, and a row without a score is not graded
+    assert promote.compare(control, rows([3] * 10), key="score")["outcome"] == "too_few"
+    assert promote.compare(rows([1] * 10), rows([3] * 10))["grade"] == "rubric"
+
+
+def test_measure_only_records_the_winner_and_proposes_nothing(tmp_path):
+    conn = open_db(tmp_path / "mind.db")
+    try:
+        rid, a, b, c = seed(conn)
+        result = promote.promote(conn, rid, settings=LearnCfg(), now=2000.0, allow=False)
+        conn.commit()
+        assert result["promoted"] is None
+        assert result["outcomes"] == {a: "measure_only", b: "beaten", c: "lost"}
+        found = {v["id"]: v for v in store.variants(conn, rid)}
+        assert found[a]["status"] == "retired" and found[a]["arm_id"] is None
+        assert json.loads(found[a]["scores"])["delta"] == pytest.approx(1.0)   # the sheet is kept
+        assert not arms.read(conn)   # no arm, no control row: the weekly gate sees nothing
+    finally:
+        conn.close()
+
+
+def test_the_summary_and_the_proposers_feedback_read_the_judges_score(tmp_path):
+    conn = open_db(tmp_path / "mind.db")
+    try:
+        rid, a, b, c = seed(conn)
+        assert store.has_score(conn)
+        store.set_score(conn, rid, "control", 1, [(3.2, 4), (2.8, 4)])
+        summary = store.arm_summary(store.scores(conn, rid)["control"])
+        assert summary["scored"] == 2 and summary["score"] == pytest.approx(3.0)
+        assert summary["score_calls"] == 8 and summary["kinds"] == {"flirt": 3.0}
+        assert summary["graded"] == 10 and summary["rubric"] == 1.0   # the rubric's own columns stay
+        feedback = store.feedback(conn, "reply_human")
+        assert feedback["control"]["scale"] == "1-5" and feedback["control"]["rubric"] == pytest.approx(3.0)
+        from leeroy_mind.lab import propose
+        text = propose.prompt("reply_human", k=2, feedback=feedback)
+        assert "1-5, 5 reads as a real person texting" in text and "most common grades" not in text
+    finally:
+        conn.close()

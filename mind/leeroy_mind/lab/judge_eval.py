@@ -12,9 +12,12 @@ rubric, in chunks of RUBRIC_TURNS replies with the conversation's card when it h
 lab graded a battery pair). `refit` makes new weights from the train and dev parts (never the
 test part): numbers only.
 
-Every call is at temperature 0, so the seed only breaks exact ties in the model's sampling; the
-same seed is used for every reply."""
+Every judge call is at temperature 0, so the seed only breaks exact ties in the model's
+sampling; the same seed is used for every reply. The rubric is asked the way the lab asks it
+(unseeded, temperature 0.2), so its numbers move from run to run."""
 import asyncio
+
+from leeroy_mind.nightly.llm import ReflectionError
 
 from . import gold, grade, judge
 
@@ -43,13 +46,14 @@ async def judge_items(reasoner, items: list, design: str, *, seed: int = 0,
     async def chunk(rows: list) -> None:
         async with slots:
             turns = [{"his": i.his, "reply": i.reply} for i in rows]
-            try:
-                reply = await judge.ask(reasoner, grade.SYSTEM,
-                                        grade.rubric_prompt(rows[0].card[:CARD_CHARS], turns),
-                                        grade.rubric_schema(len(turns)),
-                                        seed=seed, predict=64 * len(turns))
+            try:  # asked as the lab's grade stage asks it (Reasoner.json: unseeded, 0.2)
+                reply = await reasoner.json(grade.SYSTEM,
+                                            grade.rubric_prompt(rows[0].card[:CARD_CHARS], turns),
+                                            grade.rubric_schema(len(turns)))
                 grades = grade.rubric_parse(reply, len(turns))
-            except judge.JudgeError:
+            except ReflectionError as err:
+                if err.fatal:
+                    raise
                 grades = None
             for i, item in enumerate(rows):
                 out[item.key] = None if grades is None else float(grades[i][0])

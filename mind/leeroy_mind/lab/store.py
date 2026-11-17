@@ -103,6 +103,13 @@ def set_score(conn, run_id: int, arm: str, pair: int, marks: list[tuple[float, i
                      "AND turn=?", (score, calls, run_id, arm, pair, turn))
 
 
+def set_prefer(conn, run_id: int, arm: str, pair: int, shares: list[float | None]) -> None:
+    """A variant's answers against the control's to the same lines (judge.prefer's share)."""
+    for turn, share in enumerate(shares, 1):
+        conn.execute("UPDATE lab_score SET prefer=? WHERE run=? AND arm=? AND pair=? AND turn=?",
+                     (share, run_id, arm, pair, turn))
+
+
 def has_score(conn) -> bool:
     """Whether this mind.db has the judge's columns (migration *_lab_judge.sql); a reader of an
     older database sees every score as None."""
@@ -117,12 +124,13 @@ def set_judged(conn, run_id: int, arm: str, pair: int, her: int, him: int | None
 def scores(conn, run_id: int) -> dict[str, dict[tuple[int, int], dict]]:
     cols = ("arm", "pair", "turn", "guid", "kind", "channel", "answered", "applied", "rules",
             "words", "his_words", "rubric", "rubric_code", "judged_human", "his_judged_human")
-    extra = ("score", "score_calls") if has_score(conn) else ()
+    extra = ("score", "score_calls", "prefer") if has_score(conn) else ()
     out: dict[str, dict] = {}
     for r in conn.execute(f"SELECT {', '.join(cols + extra)} FROM lab_score WHERE run=?", (run_id,)):
         row = dict(zip(cols + extra, r))
         row.setdefault("score", None)
         row.setdefault("score_calls", None)
+        row.setdefault("prefer", None)
         row["rules"] = json.loads(row["rules"])
         out.setdefault(row["arm"], {})[(row["pair"], row["turn"])] = row
     return out

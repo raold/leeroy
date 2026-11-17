@@ -16,7 +16,9 @@ start, after `turing` (or `forget` without it). Three stages so the runner swaps
   the next night (`lab_waiting`).
 - `lab_score` (live model, only with `[lab] grader = "tells"`): one unit per arm and pair, the
   lab judge's 1-5 score of each of her answers (lab/judge.py: model-free features and yes/no
-  tells, the same seed for the same pair and turn in every arm); then the marker unit `scored`.
+  tells, the same seed for the same pair and turn in every arm), and one per variant and pair:
+  its answers against the control's to the same lines, asked both ways round (judge.prefer);
+  then the marker unit `scored`.
   Like the battery it never runs while a live lease is held or the GPU is paused.
 - `lab_grade` (reflection model): with `grader = "rubric"` one rubric unit per arm and pair;
   one blind-judge unit for the first `[lab] judge` pairs of each arm; then `finish`: the
@@ -494,17 +496,28 @@ def make_score(cfg, *, source: str = "night"):
         budget = Budget(cfg, run["spent"], ctx.clock)
         transcripts = {a: {t["pair"]: t for t in _load(data_dir, run["id"], a)} for a in arms}
         units = [f"score:{a}:{p}" for a in arms for p in sorted(transcripts[a])]
+        # each variant's answers against the control's to the same lines
+        units += [f"prefer:{a}:{p}" for a in arms if a != "control"
+                  for p in sorted(transcripts[a]) if p in transcripts.get("control", {})]
         reasoner = live_reasoner(ctx)
         before = (reasoner.calls, reasoner.seconds)
         base = _seed(run["seed"])
 
         async def one(unit: str) -> None:
-            _, arm, pair = unit.split(":")
-            marks = await _score(reasoner, transcripts[arm][int(pair)], base)
+            kind, arm, pair = unit.split(":")
+            if kind == "prefer":
+                shares = await _prefer(reasoner, transcripts[arm][int(pair)],
+                                       transcripts["control"][int(pair)], base)
 
-            def write(s):
-                store.set_score(s.conn, run["id"], arm, int(pair), marks)
-                store.set_spent(s.conn, run["id"], budget.used())
+                def write(s):
+                    store.set_prefer(s.conn, run["id"], arm, int(pair), shares)
+                    store.set_spent(s.conn, run["id"], budget.used())
+            else:
+                marks = await _score(reasoner, transcripts[arm][int(pair)], base)
+
+                def write(s):
+                    store.set_score(s.conn, run["id"], arm, int(pair), marks)
+                    store.set_spent(s.conn, run["id"], budget.used())
             ctx.commit(STAGE_SCORE, unit, write)
 
         left = budget.left()
@@ -541,6 +554,26 @@ async def _score(reasoner, t: dict, base: int) -> list[tuple[float, int]]:
         if turn["reply"]:
             context.append(("her", turn["reply"]))
             earlier.append(turn["reply"])
+    return out
+
+
+async def _prefer(reasoner, variant: dict, control: dict, base: int) -> list[float | None]:
+    """For each turn of a pair, the variant's answer's share against the control's answer to
+    the same line (judge.prefer: asked both ways round, 2 calls), each read with its own arm's
+    turns before; None where either arm said nothing or the lines differ."""
+    out, ctx_v, ctx_c = [], [], []
+    for n, (v, c) in enumerate(zip(variant["turns"], control["turns"]), 1):
+        if v["reply"] and c["reply"] and v["his"] == c["his"]:
+            out.append(await judge.prefer(reasoner, (v["his"], v["reply"], tuple(ctx_v)),
+                                          (c["his"], c["reply"], tuple(ctx_c)),
+                                          seed=judge.seed_of(base, variant["pair"], n, "prefer")))
+        else:
+            out.append(None)
+        for ctx, turn in ((ctx_v, v), (ctx_c, c)):
+            ctx.append(("him", turn["his"]))
+            if turn["reply"]:
+                ctx.append(("her", turn["reply"]))
+    out += [None] * (len(variant["turns"]) - len(out))
     return out
 
 

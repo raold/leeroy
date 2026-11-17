@@ -1,6 +1,7 @@
 """The lab with the judge (`grader = "tells"`): the live-model score stage, the comparison on the
-judge's 1-5 score, and measure-only mode (`promote = false`, the default): a variant ahead of
-the control is recorded and nothing reaches the learn bandit. Invented cast, FakeLLMs."""
+judge's 1-5 score, and measure-only mode (`promote = false`, the default, with either grader):
+a variant ahead of the control is recorded and nothing reaches the learn bandit. Invented cast,
+FakeLLMs."""
 import asyncio
 import json
 
@@ -15,8 +16,10 @@ from leeroy_mind.talk.beat import MARK
 WIN, LOSE = "Plainly", "Truly"
 SCRIPTS = {"flirt-3", "smalltalk-3", "meet-3", "pushback-3"}
 GOOD, PLAIN = "yes, tonight works for me", "ha maybe, depends on the day"
-MEASURE = LIVE_TOML.replace('grader = "rubric"\npromote = true\n', "")
-PROMOTE = LIVE_TOML.replace('grader = "rubric"\n', "")
+MEASURE = LIVE_TOML.replace('grader = "rubric"\npromote = true\n', 'grader = "tells"\n')
+PROMOTE = LIVE_TOML.replace('grader = "rubric"\n', 'grader = "tells"\n')
+DEFAULTS = LIVE_TOML.replace('grader = "rubric"\npromote = true\n', "")
+assert MEASURE != LIVE_TOML and PROMOTE != LIVE_TOML and DEFAULTS != LIVE_TOML
 
 
 def answer(model, messages):
@@ -33,11 +36,19 @@ def scripted(seen):
         system = messages[0]["content"]
         if title is None:   # the judge sends its schema as the format only
             title = {judge.TELL_SYSTEM: "lab_tell", judge.WIDE_SYSTEM: "lab_tell",
-                     judge.GRADE_SYSTEM: "lab_grade"}.get(system)
+                     judge.GRADE_SYSTEM: "lab_grade", judge.PAIR_SYSTEM: "lab_pair"}.get(system)
+        if title == "lab_pair":   # the good answer reads more like a person, wherever it is shown
+            a, b = text.split("Exchange B")
+            return json.dumps({"better": "same" if (GOOD in a) == (GOOD in b) else ("A" if GOOD in a else "B")})
         seen.append((model, title))
         if title == "lab_variants":
             return json.dumps({"variants": [{"text": variant_text(WIN), "idea": "plainer"},
                                             {"text": variant_text(LOSE), "idea": "truer"}]})
+        if title == "lab_rubric":
+            rows = [x for x in text.splitlines() if x.startswith("her (reply ")]
+            return json.dumps({"grades": [
+                {"reply": i, "score": 3 if GOOD in x else 1, "code": "passes" if GOOD in x else "generic"}
+                for i, x in enumerate(rows, 1)]})
         if title == "lab_grade":
             return json.dumps({"problem": "none", "grade": 2 if PLAIN in text.rsplit("her reply", 1)[1] else 5})
         if title == "lab_tell":
@@ -86,7 +97,23 @@ def run_night(live, tmp_path, *, hold_before_score=False):
     return out
 
 
-def test_the_default_night_scores_with_the_judge_and_only_measures(tmp_path):
+def test_the_default_night_grades_with_the_rubric_and_only_measures(tmp_path):
+    live = make_live(tmp_path, DEFAULTS)
+    cfg = load(live / "mind.toml")
+    assert cfg.grader == "rubric" and cfg.promote is False
+    got = run_night(live, tmp_path)
+    assert not got["failures"], got["failures"]
+    assert got["wanted"] == (False, True)   # no score stage for the rubric
+    win, lose = got["variants"]
+    assert (win["status"], win["outcome"], win["arm_id"]) == ("retired", "measure_only", None)
+    assert json.loads(win["scores"])["grade"] == "rubric"
+    assert not any(a.startswith("lab.") or a.startswith("prompt.") for a in got["registry"])
+    assert not {"lab_tell", "lab_grade"} & {t for _, t in got["seen"]}
+    assert "measure only" in got["shown"] and "grader rubric" in got["shown"]
+    assert got["panel"]["runs"][0]["promote"] is False
+
+
+def test_a_judge_night_scores_on_the_live_model_and_only_measures(tmp_path):
     live = make_live(tmp_path, MEASURE)
     cfg = load(live / "mind.toml")
     assert cfg.grader == "tells" and cfg.promote is False
@@ -111,6 +138,15 @@ def test_the_default_night_scores_with_the_judge_and_only_measures(tmp_path):
     assert all(winner[k] > control[k] for k in control)
     # the judge ran on the live model at the live num_ctx, think off, temperature 0, seeded;
     # the same pair and turn has the same seed in every arm
+    # each variant's answers were also compared with the control's to the same lines, both ways
+    assert all(r["prefer"] is None for r in got["scores"]["control"].values())
+    assert {r["prefer"] for r in got["scores"][f"v{win['id']}"].values()} == {1.0}
+    assert {r["prefer"] for r in got["scores"][f"v{lose['id']}"].values()} == {0.5}
+    assert sheet["prefer"] == {"n": 8, "share": 1.0}
+    assert json.loads(lose["scores"])["prefer"] == {"n": 8, "share": 0.5}
+    assert "preferred to the control's answer 100% over 8 lines" in got["shown"]
+    pairs = [c for c in got["calls"] if (c.get("format") or {}).get("title") == "lab_pair"]
+    assert len(pairs) == 2 * 2 * 8 and all(c["options"]["temperature"] == 0.0 for c in pairs)
     tells = [c for c in got["calls"] if (c.get("format") or {}).get("title") in ("lab_tell", "lab_grade")]
     assert tells and all(c["model"] == got["settings"].live_model for c in tells)
     assert all(c["think"] is False and c["options"]["temperature"] == 0.0
@@ -148,8 +184,9 @@ def test_a_held_lease_makes_the_scoring_and_the_grading_wait(tmp_path):
     live = make_live(tmp_path, MEASURE)
     got = run_night(live, tmp_path, hold_before_score=True)
     assert got["run"]["status"] == "running"
-    assert not {"lab_tell", "lab_grade"} & {t for _, t in got["seen"]}
-    assert all(r["score"] is None for arm in got["scores"].values() for r in arm.values())
+    assert not {"lab_tell", "lab_grade", "lab_pair"} & {t for _, t in got["seen"]}
+    assert all(r["score"] is None and r["prefer"] is None
+               for arm in got["scores"].values() for r in arm.values())
     assert all(v["status"] == "proposed" for v in got["variants"])
 
 

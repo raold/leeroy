@@ -83,8 +83,10 @@ test('a lab night reads as a headline, kinds, flags and variants in words',() =>
 test('a measure-only night shows the judge score, says so and words a leading variant as indicative',() => {
   const view=conversationView({available:true,tried:1,promoted:0,runs:[{night:'2026-11-18',status:'done',reason:null,
     piece:'discord_dm',pairs:12,spent:900,grader:'tells',promote:false,score:3.41,scored:20,rubric:null,graded:0,human:null,
-    kinds:{flirt:3.5},flags:{},variants:[{id:4,outcome:'measure_only',delta:0.26,arm:null,arm_status:null,diff:''}]}]});
+    kinds:{flirt:3.5},flags:{},variants:[{id:4,outcome:'measure_only',delta:0.26,arm:null,arm_status:null,diff:'',prefer:{n:16,share:0.625}},
+      {id:5,outcome:'lost',delta:-0.1,prefer:'x'}]}]});
   assert.equal(view.runs[0].headline,'2026-11-18 · discord_dm · done · control 3.41 of 5 over 20 answers · measure only');
-  assert.deepEqual(view.runs[0].variants,['Variant 4: ahead of the control (indicative; not proposed) (+0.26)']);
+  assert.deepEqual(view.runs[0].variants,['Variant 4: ahead of the control (indicative; not proposed) (+0.26) · preferred to the control’s answer 63% of 16 lines',
+    'Variant 5: lost (-0.10)']);
   assert.match(view.note,/^Measure only: /); assert.match(view.note,/indicative/);
 });

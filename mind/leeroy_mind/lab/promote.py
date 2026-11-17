@@ -15,7 +15,12 @@ frozen family promotes nothing (outcome `frozen`).
 The grade compared is the run's grader's (`key`): "rubric" (lab/grade.py's 0-3) or "score"
 (lab/judge.py's 1-5), each with its own margin (THRESHOLDS). With `allow` false ([lab] promote,
 the default) nothing becomes an arm: the variant that would have is retired `measure_only` with
-its scoresheet, so the lab records and reports and the weekly gate never sees it."""
+its scoresheet, so the lab records and reports and the weekly gate never sees it.
+
+With the tells grader the sheet also carries `prefer`: over the lines both arms answered, how
+often the judge, shown the variant's answer and the control's to the same line both ways round,
+took the variant's as reading more like a real person (0.5: no preference). It is recorded and
+reported; the outcome is decided on the mean grade alone."""
 import json
 import math
 from statistics import mean
@@ -26,7 +31,9 @@ from leeroy_mind.learn.control import effective
 from . import rules, store
 
 THRESHOLD = 0.15
-THRESHOLDS = {"rubric": THRESHOLD, "score": 0.2}   # of a 0-3 and of a 1-5 scale
+# of the 0-3 rubric, and of the judge's score: its shipped weights are shrunk, so it runs about
+# 2.2-3.5 and 0.1 is half a grade of its structured grade over every answer
+THRESHOLDS = {"rubric": THRESHOLD, "score": 0.1}
 MIN_GRADED = 8
 REGRESS_MIN, REGRESS_SHARE = 2, 0.10
 
@@ -48,6 +55,9 @@ def compare(control: dict, variant: dict, *, key: str = "rubric") -> dict:
         v_mean = mean(variant[k][key] for k in graded)
         sheet.update(control=round(c_mean, 4), variant=round(v_mean, 4),
                      delta=round(v_mean - c_mean, 4))
+    shares = [variant[k]["prefer"] for k in keys if variant[k].get("prefer") is not None]
+    if shares:  # the variant's answer against the control's to the same line (judge.prefer)
+        sheet["prefer"] = {"n": len(shares), "share": round(mean(shares), 4)}
     judged = [k for k in keys if control[k]["judged_human"] is not None
               and variant[k]["judged_human"] is not None]
     pairs = {k[0]: k for k in judged}

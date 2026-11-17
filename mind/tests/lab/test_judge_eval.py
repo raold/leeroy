@@ -78,7 +78,9 @@ def test_a_judge_that_sees_the_defect_agrees_and_the_flat_rubric_does_not(tmp_pa
     assert rubric["calls_per_reply"] == 0.5
     assert data["designs"]["features"]["calls_per_reply"] == 0
     assert data["designs"]["pairwise"]["calls_per_reply"] == judge.CALLS["pairwise"]
-    assert all(c["think"] is False and c["options"]["temperature"] == 0.0 for c in llm.calls)
+    asked = [c for c in llm.calls if c["format"]["title"] != "lab_rubric"]
+    assert asked and all(c["think"] is False and c["options"]["temperature"] == 0.0 for c in asked)
+    assert len(llm.calls) - len(asked) == 8   # the rubric: one call for two replies
     text = judge_eval.render(data)
     assert SECRET not in text and SECRET not in json.dumps(data)
     assert "rho" in text and "arm agree" in text and "tells" in text

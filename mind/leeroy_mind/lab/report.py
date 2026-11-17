@@ -44,6 +44,7 @@ def report(conn, *, night: str | None = None, runs: int = 7) -> dict:
             variants.append({"id": v["id"], "status": v["status"], "outcome": v["outcome"],
                              "authored": written.get(v["id"]),
                              "delta": sheet.get("delta"), "graded": sheet.get("graded"),
+                             "prefer": sheet.get("prefer"),
                              "applied": sheet.get("applied"), "regressed": sheet.get("regressed", []),
                              "arm": v["arm_id"], "arm_status": _arm_status(conn, v["arm_id"]),
                              "diff": v["diff"][:DIFF_CHARS]})
@@ -92,6 +93,8 @@ def render(data: dict) -> str:
             lines.append(f"  variant {v['id']}"
                          + (f" (hand-written: {v['authored']})" if v.get("authored") else "")
                          + f": {v['outcome'] or v['status']}, change {_f(v['delta'])}"
+                         + (f", preferred to the control's answer {round(100 * v['prefer']['share'])}% "
+                            f"over {v['prefer']['n']} lines" if v.get("prefer") else "")
                          + (f", regressed {','.join(v['regressed'])}" if v["regressed"] else "")
                          + (f", arm {v['arm']} ({v['arm_status']})" if v["arm"] else ""))
             lines.append(f"    {v['diff']}")
@@ -117,7 +120,7 @@ def panel(conn, *, nights: int = 14) -> dict:
                      "human": control.get("human"), "kinds": control.get("kinds", {}),
                      "flags": control.get("flag_rates", {}),
                      "variants": [{k: v[k] for k in ("id", "outcome", "delta", "arm", "arm_status",
-                                                     "diff")} for v in r["variants"]]})
+                                                     "diff", "prefer")} for v in r["variants"]]})
     tried = sum(len(r["variants"]) for r in runs)
     promoted = sum(1 for r in runs for v in r["variants"] if v["outcome"] == "won")
     return {"available": True, "runs": runs, "tried": tried, "promoted": promoted}

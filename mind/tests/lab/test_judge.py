@@ -254,3 +254,29 @@ def test_a_seed_is_stable_and_depends_on_its_parts():
     assert judge.seed_of(1, "tell", "echo") != judge.seed_of(1, "tell", "adds")
     assert judge.seed_of(1, 2, 3) != judge.seed_of(2, 2, 3)
     assert 0 <= judge.seed_of(9, "x") < 2 ** 31
+
+
+def test_a_window_of_lines_is_scored_reply_by_reply_for_turing_and_the_bakeoff():
+    from leeroy_mind.turing.corpus import Line
+
+    def line(n, speaker, human, text):
+        return Line(f"c:{n}", float(n), "private", "w", "whisper", speaker, human, text)
+    window = [line(1, 1, True, "you up?"), line(2, 7, False, "yeah"), line(3, 7, False, "whats up"),
+              line(4, 8, False, "an aside from someone else"),
+              line(5, 1, True, "raid tonight?"), line(6, 7, False, "sure, 8?")]
+    seen = []
+
+    def script(model, messages):
+        seen.append(messages[-1]["content"])
+        return tell_script()(model, messages)
+    r, _ = reasoner(script)
+    got = run(judge.score_lines(r, window, seed=2))
+    # two replies to him (her two lines are one reply); the aside answers nobody of his
+    assert got["replies"] == 2 and got["calls"] == 2 * judge.CALLS["tells"]
+    assert got["mean"] == pytest.approx(sum(got["scores"]) / 2) and 1.0 <= got["mean"] <= 5.0
+    grades = [s for s in seen if "Question: " not in s]
+    assert "her reply (3 words): yeah whats up" in grades[0] and "an aside" not in grades[0]
+    assert "Her earlier messages:\n- yeah whats up" in grades[1]
+    assert "her: an aside from someone else" in grades[1]
+    assert run(judge.score_lines(r, [line(1, 7, False, "nobody asked")])) == {
+        "mean": None, "replies": 0, "calls": 0, "scores": []}

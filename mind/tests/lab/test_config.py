@@ -12,11 +12,21 @@ def test_defaults_and_values(tmp_path):
     p.write_bytes(b"[lab]\nenabled = true\nminutes = 20\npairs = 4\njudge = 9\nvariants = 0\n")
     assert load(p) == LabCfg(True, 20, 4, 4, 0, False)  # judge never more than pairs
     load_config(p)  # the core loader knows the table
+    # the lab only measures until told otherwise, and grades with the rubric until the judge
+    # agrees with a strong grader
+    assert LabCfg().grader == "rubric" and LabCfg().promote is False
+    p.write_bytes(b'[lab]\nenabled = true\ngrader = "tells"\npromote = true\n')
+    assert load(p) == LabCfg(enabled=True, grader="tells", promote=True)
+    p.write_bytes(b'[lab]\nenabled = true\ngrader = "rubric"\n')
+    assert load(p) == LabCfg(enabled=True)
 
 
 @pytest.mark.parametrize("table", [
     {"enabled": "yes"}, {"minutes": 4}, {"minutes": 181}, {"pairs": 1}, {"variants": 6},
-    {"judge": -1}, {"enabled": True, "surprise": 1}, {"overlays": 1}, "x"])
+    {"judge": -1}, {"enabled": True, "surprise": 1}, {"overlays": 1}, "x",
+    {"enabled": True, "grader": "vibes"}, {"enabled": True, "grader": 3},
+    {"enabled": True, "grader": ["tells"]}, {"enabled": True, "promote": 1},
+    {"enabled": True, "promote": "yes"}])
 def test_anything_odd_reads_as_off(table):
     assert parse(table) == LabCfg()
 
