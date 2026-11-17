@@ -272,6 +272,19 @@ def _held(ctx: "NightContext", p: Persona | None) -> str | None:
     return why
 
 
+def _set_held(ctx: "NightContext", p: Persona | None, guid: int, set_no: int) -> str | None:
+    """_held for one queued set: a set with a varied plan composes its own looks (from her
+    wardrobe already) and never reads her photo kind, so it does not wait for the kind's
+    re-choice (review of #358). _sets checks again that the plan still renders as varied."""
+    why = _held(ctx, p)
+    if why == WARDROBE_HELD:
+        from . import varied
+        with ctx.store.transaction():
+            if varied.plan_of(ctx.store.conn, guid, set_no) is not None:
+                return None
+    return why
+
+
 def _without_persona(ctx: "NightContext") -> int:
     """Roster members of the cast's level with no stored persona, so not in ctx.members."""
     stored = ctx.store.persona_versions()
@@ -331,7 +344,8 @@ def todo(ctx: "NightContext", policy: RenderPolicy = NIGHT) -> list[str]:
         return []
     units = [f"{s.guid}:{s.set_no}" for s in queued_sets(ctx.store)
              if allows(ctx,s.guid) and (policy.requested_before is None or (
-                 s.requested <= policy.requested_before and _held(ctx, _stored(ctx, s.guid)) is None))]
+                 s.requested <= policy.requested_before
+                 and _set_held(ctx, _stored(ctx, s.guid), s.guid, s.set_no) is None))]
     return [u for u in units if not ctx.done(policy.stage, u)][:room]
 
 
@@ -583,6 +597,10 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         p = _stored(ctx, guid)
         built_from = _version(ctx, guid)  # read with p (no await between): what p is
         why = _held(ctx, p)
+        if why == WARDROBE_HELD and getattr(cfg, "varied_sets", False):
+            from . import varied as varied_mod
+            if varied_mod.looks_for(ctx.store, p, guid, set_no) is not None:
+                why = None  # a varied set renders its own looks, not her kind
         if why is not None:
             if why in HELD:  # her kind's text is never rendered plainly, nor without its phrase
                 log("selfies_set_held", night=ctx.night, guid=guid, set=set_no,

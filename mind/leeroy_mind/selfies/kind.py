@@ -223,16 +223,42 @@ def _digest(photo: ProfilePhoto) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def _record(store: Store, guid: int, style: str, photo: ProfilePhoto,
-            chosen_for: Persona | None = None) -> None:
+_STORED = object()  # _record: the wardrobe and palette of the persona as stored now
+
+
+def _record(store: Store, guid: int, style: str, photo: ProfilePhoto, worn=_STORED) -> None:
     """Which rules chose `photo` for `guid`: the style and the kind's digest, never its text,
-    and, for a kind chosen with a wardrobe or palette set (`chosen_for`, the persona it was
-    chosen for), their digest (wardrobe.digest), so a later change of them shows."""
+    and the digest of the wardrobe and palette it was chosen with (wardrobe.digest; left out
+    with neither set), so a later change of them shows. `worn` is that digest: the photo pass
+    gives the one of the persona it read (an edit while its model call ran is then still
+    pending); every other writer (restyle, variety, world photos) records the stored one."""
     rec = {"style": style, "kind": _digest(photo)}
-    worn = wardrobe.digest(chosen_for)
+    if worn is _STORED:
+        try:
+            worn = wardrobe.digest(load_persona(store, guid))
+        except ValueError:  # unreadable: nothing to say of her wardrobe
+            worn = None
     if worn is not None:
         rec["wardrobe"] = worn
     store.set_meta(STYLE_KEY.format(guid=guid), json.dumps(rec, sort_keys=True))
+
+
+def release_wardrobe(store: Store, p: Persona, *, night: str, reason: str) -> bool:
+    """The re-choice for p's wardrobe was refused: her kind stays as it is and its record takes
+    the wardrobe's digest as attempted, so she is not asked again for this wardrobe and her
+    queued sets render with the kind she has (review of #358: the hold had no way out when
+    every reply was refused, as for a member named after her only palette colour). True when
+    it released one."""
+    if not wardrobe_pending(store, p):
+        return False
+    rec = json.loads(store.get_meta(STYLE_KEY.format(guid=p.guid)))
+    worn = wardrobe.digest(p)
+    rec.pop("wardrobe", None)
+    if worn is not None:
+        rec["wardrobe"] = worn
+    store.set_meta(STYLE_KEY.format(guid=p.guid), json.dumps(rec, sort_keys=True))
+    log("selfies_wardrobe_released", night=night, guid=p.guid, reason=reason)
+    return True
 
 
 def wardrobe_pending(store: Store, p: Persona | None) -> bool:
@@ -463,7 +489,7 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
     ask = KIND_ASK.format(name=name)
     if not lust:
         ask += wardrobe.ask_hint(p)  # what they tend to wear; nothing with no wardrobe set
-    lust_schema = wardrobe.lust_schema(p, LUST_SCHEMA, swim_only_settings=SWIM_ONLY_SETTINGS)
+    lust_schema = wardrobe.lust_schema(p, LUST_SCHEMA)
     if variety:
         from . import photo_extra, style_variety
         all_personas = _personas(ctx)
@@ -499,7 +525,8 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
 
 
 def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | None = None,
-           replacing: ProfilePhoto | None = None, variety=False) -> Callable[[Store], None]:
+           replacing: ProfilePhoto | None = None, variety=False,
+           worn=_STORED) -> Callable[[Store], None]:
     """Save `photo` and its record (`style`, by default the stored persona's) while the stored
     kind is still `replacing`, the one the pass read (None: a first kind). A kind chosen again
     into the lust style also queues a fresh set for her (queue_restyled), so new candidates come
@@ -514,8 +541,8 @@ def _saver(ctx: "NightContext", guid: int, photo: ProfilePhoto, *, style: str | 
         save_persona(store, replace(stored, photo=photo), source="generated",
                      ts=ctx.clock.now(), race=race, class_name=class_name)
         chose = style_of(stored) if style is None else style
-        saved = load_persona(store, guid)
-        _record(store, guid, chose, saved.photo, chosen_for=saved)  # the kind as stored
+        # the kind as stored, with the wardrobe the pass read (`worn`), not the one stored now
+        _record(store, guid, chose, load_persona(store, guid).photo, worn=worn)
         if variety:
             from . import photo_extra
             saved = load_persona(store,guid)
@@ -585,8 +612,11 @@ async def stage_photo(ctx: "NightContext", *, variety=False) -> None:
         if photo is None:
             refused += 1
             ctx.skip(STAGE, unit)
+            if p.photo is not None:  # one refusal ends a wardrobe's re-choice: her kind stays
+                release_wardrobe(ctx.store, p, night=ctx.night, reason="refused")
         elif ctx.commit(STAGE, unit, _saver(ctx, guid, photo, style=style_of(p),
-                                            replacing=p.photo, variety=variety)):
+                                            replacing=p.photo, variety=variety,
+                                            worn=wardrobe.digest(p))):
             ctx.personas.invalidate(guid)
             done += 1
             if p.photo is not None and chosen_style(ctx.store, ctx.base(guid)) == style_of(p):

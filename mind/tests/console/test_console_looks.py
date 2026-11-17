@@ -171,6 +171,7 @@ def test_the_member_detail_carries_the_forms_limits(cast, data):
             assert limits["jewellery"] == ["none", "minimal", "statement"]
             assert limits["tattoos"] == ["none", "small", "sleeve"]
             assert limits["piercings"] == ["none", "ears", "nose", "lip"]
+            assert j["card"]["lust_style"] is False  # the swim tag is offered only with it
             assert "owner_hair_colour" not in j["card"]["appearance"]  # unset: not in the card
             assert "wardrobe" not in j["card"]["appearance"]
             assert j["card"]["appearance"]["weight_kg"] == 64
@@ -209,8 +210,10 @@ def test_the_editor_groups_body_hair_and_style_and_says_what_a_save_does():
     model = files.joinpath("js", "looksmodel.mjs").read_text("utf-8")
     css = files.joinpath("console.css").read_text("utf-8")
     assert 'GROUPS = ["Body", "Hair", "Style"]' in model
-    assert "one new persona version" in looks and "one new set of 4 photos" in looks
-    assert "photo booth" in looks and "pick one of them" in looks
+    assert "SAVE_WORDS" in looks  # the line under the form, when the mind has said nothing yet
+    assert "one new persona version" in model and "one new set of 4 photos" in model
+    assert "photo booth" in model and "pick one of them" in model
+    assert "may not show in back views" in model  # where what he set cannot fit
     assert looks.count('post("/api/looks"') == 1  # one save, one request
     assert ".looks-group" in css and ".looks-set" in css and "minmax(min(100%, 11rem), 1fr)" in css
     for word in ("pigtail", "bunches"):  # never an age-guard word among the options

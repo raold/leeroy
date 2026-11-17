@@ -5,8 +5,11 @@ JSON, its hash and every prompt are what they were. Wardrobe and palette bias th
 the looks words. Everything stays inside the worker's 75-token fit and the age, explicit and
 wear screens. Every person here is invented; no model, GPU or real worker."""
 import hashlib
+import importlib.util
 import json
 from dataclasses import replace
+from itertools import combinations
+from pathlib import Path
 
 import pytest
 
@@ -19,19 +22,22 @@ from leeroy_mind.personas.schema import (GLASSES, HAIR_COLOURS, HAIR_LENGTHS, HA
                                          persona_to_dict, validate_persona)
 from leeroy_mind.selfies import kind, scene, scene_choices, style_variety, varied, wardrobe
 from leeroy_mind.selfies.kind import ERA_RE, EXPLICIT_RE, WEAR_RE
-from leeroy_mind.selfies.prompt import (_LENGTHS, FIT_MAX, GLASSES_WORDS, HAIR_COLOUR_WORDS,
+from leeroy_mind.selfies.prompt import (_LENGTHS, ACCESSORY, FIT_MAX, GLASSES_WORDS,
+                                        HAIR_COLOUR_WORDS,
                                         HAIR_STYLE_WORDS, JEWELLERY_WORDS, LUST_NEGATIVE,
                                         MAKEUP_WORDS, NEGATIVE, PIERCING_WORDS, STYLE_NEGATIVE,
                                         TATTOO_WORDS, VARIED_NEGATIVE, body_words, build_prompt,
                                         build_varied_prompt, face_details, hair_skin,
-                                        hair_skin_short, hair_words, over_fit, style_negative,
-                                        style_phrases, subject_phrase)
+                                        hair_skin_short, hair_words, over_fit, style_negative, accessory_phrases,
+                                        subject_phrase)
 from leeroy_mind.selfies.snaps import looks_hash
 from leeroy_mind.selfies.style import AGE_RE, LUST, suggestive
 from leeroy_mind.selfies.tokens import estimate, joined
 from nightly.test_night_enrich import APPEARANCE, LOOKS
 from selfies import clip_bpe
 from selfies.test_body_shape import LARGEST, LONG_LOOKS, _looks
+
+_FIT = Path(__file__).resolve().parents[3] / "selfie" / "leeroy_selfie" / "fit.py"
 
 PHOTO = ProfilePhoto("snapshot", "three_quarter", "a quiet cafe", "a grey hoodie",
                      "a small smile")
@@ -213,7 +219,7 @@ def test_unset_the_prompt_is_what_the_looks_say():
     p = woman()
     assert hair_words(p) == ("shoulder-length dark brown hair", "tucked behind one ear")
     assert face_details(p) == list(APPEARANCE.face)
-    assert style_phrases(p) == [] and style_negative(p) == ()
+    assert accessory_phrases(p) == [] and style_negative(p, NEGATIVE) == ()
     assert build_prompt(p).negative == NEGATIVE
 
 
@@ -235,8 +241,13 @@ def test_a_set_hair_value_is_said_in_place_of_the_looks_own():
     assert hair_skin(bald, None)[0] == ("shaved head", 1)
     assert hair_skin(replace(bald, appearance=replace(bald.appearance, owner_hair_colour="red")),
                      None)[0] == ("shaved head", 1)
-    grown = replace(bald, appearance=replace(bald.appearance, owner_hair_length="short"))
-    assert hair_skin(grown, None)[0][0].startswith("short dark brown hair")
+    # over looks that say a shaved head only his own values count: no "closely shaved" style,
+    # no stored colour (review of #358)
+    stubble = man(hair_length="shaved", hair_colour="", hair_style="closely shaved",
+                  owner_hair_length="long", owner_hair_colour="black")
+    assert hair_skin(stubble, None)[0] == ("long black hair", 1)
+    styled = replace(stubble, appearance=replace(stubble.appearance, owner_hair_style="ponytail"))
+    assert hair_skin(styled, None)[0] == ("long black hair, in a ponytail", 1)
 
 
 def test_the_profile_prompt_golden_with_hair_makeup_and_accessories():
@@ -245,10 +256,11 @@ def test_the_profile_prompt_golden_with_hair_makeup_and_accessories():
     assert spec.phrases == (
         ("phone selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0),
         ("very long strawberry blonde hair, in a messy bun", 0), ("light olive skin", 0),
-        ("hazel eyes", 2), ("thin glasses", 2), ("tattoo sleeve on one arm", 2), ("nose piercing", 2),
-        ("freckles", 2), ("looking at the camera", 2), ("average build", 1),
+        # what he set, first among the optional phrases; her own glasses detail moves up here
+        ("thin glasses", 1), ("tattoo sleeve", 1), ("nose piercing", 1), ("glam makeup", 1),
+        ("statement jewellery", 1),
+        ("hazel eyes", 2), ("freckles", 2), ("looking at the camera", 2), ("average build", 1),
         ("a grey hoodie", 2), ("a quiet cafe", 2), ("a small smile", 3),
-        ("glamorous makeup, bold lipstick", 3), ("statement earrings and necklace", 3),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
     assert spec.negative == NEGATIVE  # nothing set to "never" or "none"
     assert spec.phrases[:3] == build_prompt(replace(woman(), photo=p.photo)).phrases[:3]
@@ -266,41 +278,207 @@ def test_the_profile_prompt_golden_for_a_man_who_set_none():
         ("hazel eyes", 2), ("a short beard", 2), ("average build", 1), ("a grey hoodie", 2),
         ("a quiet cafe", 2), ("a small smile", 3),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
-    assert spec.negative == NEGATIVE + (("glasses, tattoos, piercings, jewellery, necklace, "
-                                         "earrings", 3),)
+    # one word each, a phrase apiece, only as many as the fixed negatives leave room for
+    assert spec.negative == NEGATIVE + (("glasses", 3), ("tattoo", 3))
     assert spec.negative[:len(NEGATIVE)] == NEGATIVE  # the fixed negatives keep their places
 
 
 def test_identity_details_already_there_are_kept():
     face = ("round wire glasses", "a short beard", "a scar on the chin", "a small anchor tattoo")
     p = man(face=face, glasses="always", jewellery="minimal")
-    assert face_details(p) == list(face)  # he has glasses already: nothing added, nothing lost
-    assert face_details(man(face=face[1:], glasses="always")) == [*face[1:], "wearing glasses"]
-    assert face_details(man(face=face, tattoos="sleeve")) == [
-        "round wire glasses", "a short beard", "a scar on the chin", "tattoo sleeve on one arm"]
-    assert face_details(man(face=face, piercings="lip")) == [*face, "lip piercing"]
-    assert style_phrases(p) == [("thin chain necklace", 3)]  # a man's words, no makeup
-    assert style_phrases(woman(makeup="none", jewellery="none")) == [("no makeup", 3)]
-    assert style_negative(woman(jewellery="none")) == (("jewellery, necklace, earrings", 3),)
+    # his own glasses detail is said first among the optional phrases, nothing added or lost
+    assert accessory_phrases(p) == [("round wire glasses", ACCESSORY), ("chain necklace", ACCESSORY)]
+    assert face_details(p) == list(face[1:])
+    assert accessory_phrases(man(face=face[1:], glasses="always")) == [("glasses", ACCESSORY)]
+    sleeve = man(face=face, tattoos="sleeve")
+    assert face_details(sleeve) == ["round wire glasses", "a short beard", "a scar on the chin"]
+    assert accessory_phrases(sleeve) == [("tattoo sleeve", ACCESSORY)]
+    assert face_details(man(face=face, piercings="lip")) == list(face)
+    assert accessory_phrases(woman(makeup="none", jewellery="none")) == [("no makeup", ACCESSORY)]
+    assert accessory_phrases(man(makeup=None, jewellery="statement")) == [
+        ("chunky jewellery", ACCESSORY)]
+    assert GLASSES_WORDS == "glasses"
 
 
-def test_makeup_and_jewellery_reach_the_varied_and_situational_prompts_at_low_priority():
-    from leeroy_mind.selfies.scene import Scene, build_scene_prompt
+def test_only_the_clause_that_names_it_goes_from_a_combined_detail():
+    """Review of #358: a scar beside a tattoo and freckles beside a nose ring are kept."""
+    face = ("a faded tattoo and a scar on the chin", "freckles and a nose ring",
+            "glasses, a dimple", "a pierced eyebrow")
+    assert face_details(man(face=face, tattoos="none")) == [
+        "a scar on the chin", "freckles and a nose ring", "glasses, a dimple", "a pierced eyebrow"]
+    assert face_details(man(face=face, piercings="none")) == [
+        "a faded tattoo and a scar on the chin", "freckles", "glasses, a dimple"]
+    assert face_details(man(face=face, glasses="never")) == [
+        "a faded tattoo and a scar on the chin", "freckles and a nose ring", "a dimple",
+        "a pierced eyebrow"]
+    small = man(face=face, tattoos="small", piercings="ears")
+    assert face_details(small) == ["a scar on the chin", "freckles", "glasses, a dimple"]
+    assert accessory_phrases(small) == [("small tattoo", ACCESSORY), ("pierced ears", ACCESSORY)]
+    assert face_details(man(face=face)) == list(face)  # unset: as stored
+
+
+def test_what_he_set_reaches_the_varied_situational_and_tile_prompts():
+    from leeroy_mind.selfies.scene import Scene, build_scene_prompt, build_tile_prompt
     from selfies.test_selfie_scene import SCENE
     p = woman(build="curvy", makeup="natural", jewellery="minimal", tattoos="none")
+    worn = [("natural makeup", ACCESSORY), ("delicate necklace", ACCESSORY)]
     look = next(_looks(views=("front",)))
     spec = build_varied_prompt(p, look)
-    assert ("natural makeup", 3) in spec.phrases and ("delicate necklace", 3) in spec.phrases
-    assert spec.negative == VARIED_NEGATIVE + (("tattoos", 3),)
+    assert all(x in spec.phrases for x in worn)
     snap = build_scene_prompt(p, Scene(**SCENE))
-    assert ("natural makeup", 3) in snap.phrases and ("delicate necklace", 3) in snap.phrases
     plain = build_scene_prompt(woman(build="curvy"), Scene(**SCENE))
-    assert [x for x in snap.phrases if x not in plain.phrases] == [
-        ("natural makeup", 3), ("delicate necklace", 3)]
+    assert all(x in snap.phrases for x in worn)
     assert snap.negative == plain.negative  # a situational photo's negatives are unchanged
+    assert all(x in build_tile_prompt(p).phrases for x in worn)
+    # a limb word never reaches a situational photo (scene.limb_detail): none of these has one
+    from leeroy_mind.selfies.scene import limb_detail
+    assert not any(limb_detail(w) for w in [*TATTOO_WORDS.values(), *PIERCING_WORDS.values(),
+                                            *MAKEUP_WORDS.values(), GLASSES_WORDS]
+                   + [w for pair in JEWELLERY_WORDS.values() for w in pair])
+
+
+# -- the negatives: a word apiece, only where there is room -------------------------------------
+
+def test_each_never_or_none_is_its_own_one_word_negative_where_it_fits():
+    """Review of #358: one joined phrase was always dropped and took glasses down with it. The
+    fixed negatives keep every place; a word is added only where the worker's fit has room for
+    it beside them, glasses first, and is otherwise left out here (never sent to be dropped)."""
+    off = dict(glasses="never", tattoos="none", piercings="none", jewellery="none")
+    assert set(STYLE_NEGATIVE.values()) == {"glasses", "tattoo", "piercing", "jewellery"}
+    p = woman(build="curvy", **off)
+    assert style_negative(p, NEGATIVE) == (("glasses", 3), ("tattoo", 3))
+    assert style_negative(woman(jewellery="none", glasses="never"), NEGATIVE) == (
+        ("glasses", 3), ("jewellery", 3))  # jewellery no longer costs him the glasses
+    assert style_negative(woman(jewellery="none"), NEGATIVE) == (("jewellery", 3),)
+    for base, room in ((NEGATIVE, 2), (LUST_NEGATIVE, 3), (VARIED_NEGATIVE, 0)):
+        got = style_negative(p, base)
+        assert [w for w, _ in got] == ["glasses", "tattoo", "piercing", "jewellery"][:room]
+        dropped = fit(base + got)[1]
+        assert not any(w in dropped for w, _ in got), base  # what is sent is kept
+        assert fit(base)[1] == dropped  # and it costs the fixed negatives nothing
+    # a varied set's fixed negatives fill the window: nothing is added there, said here plainly
+    assert style_negative(p, VARIED_NEGATIVE) == ()
+    look = next(_looks(views=("front",)))
+    assert build_varied_prompt(p, look).negative == VARIED_NEGATIVE
+    assert not any("glasses" in t for t, _ in build_varied_prompt(
+        replace(p, appearance=replace(p.appearance, face=("thin glasses",))), look).phrases)
 
 
 # -- the fit ------------------------------------------------------------------------------------
+
+def fit(phrases, count=None):
+    """The selfie worker's own fit (selfie/leeroy_selfie/fit.py, loaded from its file: the mind
+    never imports the worker) over `phrases`, counted on RealVisXL's tokenizers when their
+    files are on this machine, else by the mind's count, which is never below it."""
+    spec = importlib.util.spec_from_file_location("leeroy_selfie_fit", _FIT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if count is None:
+        count = clip_bpe.count if clip_bpe.tokenizers() is not None else estimate
+    return mod.fit(phrases, count)
+
+
+# The worker counts on RealVisXL's tokenizers; the mind's count is only an upper bound for free
+# text (an activity, a place), so what the worker keeps is checked where the tokenizer files are
+# (as the token table is). Without them the ordering and the reserve are still checked below.
+_TOKENIZERS = pytest.mark.skipif(clip_bpe.tokenizers() is None,
+                                 reason="RealVisXL tokenizer files are not on this machine")
+WORN = dict(glasses="always", tattoos="small")  # the review's heaviest realistic member
+
+
+def heavy(**more):
+    return woman(build="voluptuous", weight_kg=88, bust="large", **WORN, **more)
+
+
+def _lost(spec, p):
+    dropped = fit(spec.phrases)[1]
+    return [t for t, _ in accessory_phrases(p) if t in dropped]
+
+
+@_TOKENIZERS
+def test_the_workers_fit_keeps_what_he_set_on_the_heaviest_realistic_member():
+    """Review of #358: makeup, jewellery, glasses and tattoos were dropped by the worker's fit
+    in almost every prompt. Now they are the first optional phrases and the required set
+    shortens (and the kind of photo, or a varied front or side view's framing, makes way) to
+    leave them room: a voluptuous woman of 88 kg with a large bust keeps her glasses and her
+    tattoo in every profile, in her lust profile, in every varied look from the front or the
+    side, and in a situational photo. What cannot fit is pinned below."""
+    from leeroy_mind.selfies.scene import Scene, build_scene_prompt
+    from selfies.test_selfie_scene import SCENE
+    p = heavy()
+    assert [t for t, _ in accessory_phrases(p)] == ["thin glasses", "small tattoo"]
+    lust_kind = ProfilePhoto("mirror_selfie", "upper_body", "the mirror in her hallway",
+                             "a fitted little black dress", "a playful smile")
+    for framing in ("face", "head_and_shoulders", "upper_body", "three_quarter"):
+        for kind_ in ("selfie", "mirror_selfie", "headshot", "snapshot"):
+            plain = replace(p, photo=replace(PHOTO, kind=kind_, framing=framing))
+            assert _lost(build_prompt(plain), plain) == [], (kind_, framing)
+            lusty = replace(p, photo=replace(lust_kind, kind=kind_, framing=framing))
+            assert _lost(build_prompt(lusty, kind_style=LUST), lusty) == [], (kind_, framing)
+    for look in _looks(views=("front", "side")):
+        assert _lost(build_varied_prompt(p, look), p) == [], look
+    for framing in ("face", "head_and_shoulders", "upper_body"):
+        snap = build_scene_prompt(p, Scene(**{**SCENE, "framing": framing}))
+        assert _lost(snap, p) == [], framing
+    # a three-quarter situation with a long activity and place keeps her glasses, the first
+    wide = build_scene_prompt(p, Scene(**{**SCENE, "framing": "three_quarter"}))
+    assert "thin glasses" not in _lost(wide, p)
+
+
+@_TOKENIZERS
+def test_everything_set_shows_on_a_typical_member_and_makeup_is_no_longer_always_dropped():
+    from leeroy_mind.selfies.scene import Scene, build_scene_prompt
+    from selfies.test_selfie_scene import SCENE
+    every = dict(glasses="always", tattoos="small", piercings="nose", makeup="glam",
+                 jewellery="statement")
+    p = woman(build="curvy", **every)
+    assert len(accessory_phrases(p)) == 5
+    for framing in ("face", "head_and_shoulders", "upper_body", "three_quarter"):
+        for kind_ in ("selfie", "headshot", "snapshot"):
+            q = replace(p, photo=replace(PHOTO, kind=kind_, framing=framing))
+            assert _lost(build_prompt(q), q) == [], (kind_, framing)
+    for look in _looks(views=("front", "side")):
+        assert _lost(build_varied_prompt(p, look), p) == [], look
+    for framing in ("face", "upper_body"):
+        assert _lost(build_scene_prompt(p, Scene(**{**SCENE, "framing": framing})), p) == []
+    him = man(glasses="always", tattoos="sleeve", jewellery="minimal", piercings="ears")
+    for framing in ("face", "upper_body", "three_quarter"):
+        q = replace(him, photo=replace(PHOTO, framing=framing))
+        assert _lost(build_prompt(q), q) == []
+        assert _lost(build_scene_prompt(him, Scene(**{**SCENE, "framing": framing})), him) == []
+
+
+@_TOKENIZERS
+def test_back_views_may_not_show_them_and_the_panel_says_so():
+    """A varied back view keeps its pose, framing and glutes before anything he set her to wear
+    (the pose is never yielded: a back view without it renders from the front), so on a full
+    figure they may not fit there. The Looks panel says so."""
+    p = heavy()
+    back = [look for look in _looks(views=("behind", "rear_three_quarter"))]
+    lost = [look for look in back if _lost(build_varied_prompt(p, look), p)]
+    assert lost
+    for look in back:  # and nothing is yielded for them there
+        spec = build_varied_prompt(p, look)
+        plain = build_varied_prompt(woman(build="voluptuous", weight_kg=88, bust="large"), look)
+        assert [x for x in spec.phrases if x[1] == 0 and "shot" in x[0]] == [
+            x for x in plain.phrases if x[1] == 0 and "shot" in x[0]]
+    model = (Path(__file__).resolve().parents[2] / "leeroy_mind" / "console" / "static" / "js"
+             / "looksmodel.mjs").read_text("utf-8")
+    assert "may not show in back views" in model
+
+
+def test_the_reserve_shortens_and_gives_way_only_when_something_is_set():
+    """With nothing set the steps are what they were; with something set the required set
+    shortens first, then the kind of photo makes way, and her body, hair length and colour,
+    skin tone and framing stay required."""
+    p = heavy(skin_tone=LONG_LOOKS["skin_tone"], hair_style=LONG_LOOKS["hair_style"])
+    bare = woman(build="voluptuous", weight_kg=88, bust="large", skin_tone=LONG_LOOKS["skin_tone"],
+                 hair_style=LONG_LOOKS["hair_style"], face=("freckles",))
+    photo = replace(PHOTO, kind="snapshot", framing="three_quarter")
+    a, b = build_prompt(replace(p, photo=photo)), build_prompt(replace(bare, photo=photo))
+    assert joined(_texts(a, 0)) < joined(_texts(b, 0)) <= FIT_MAX
+    _required_kept(a, p)
+    assert any("three-quarter shot" in t for t in _texts(a, 0))  # the framing never makes way
 
 def _longest_hair() -> dict:
     """The owner's hair that counts most by the mind's own count."""
@@ -324,7 +502,7 @@ def _required_kept(spec, p):
     pairs = dict(hair_skin_short(p, None))
     for text, _ in hair_skin(p, None):
         assert text in required or pairs.get(text) in required, text
-    assert not any(t in required for t, _ in style_phrases(p))  # style words are never required
+    assert not any(t in required for t, _ in accessory_phrases(p))  # never required themselves
 
 
 @pytest.mark.parametrize("build", ["slim", "average", "curvy", "voluptuous", "heavy"])
@@ -385,10 +563,6 @@ def test_the_style_gives_way_before_the_length_and_colour():
     assert not over_fit(spec) and (hair in required or f"{hair}, {style}" in required)
 
 
-_TOKENIZERS = pytest.mark.skipif(clip_bpe.tokenizers() is None,
-                                 reason="RealVisXL tokenizer files are not on this machine")
-
-
 @_TOKENIZERS
 def test_the_new_words_count_what_the_real_tokenizers_count():
     for text in [*HAIR_COLOUR_WORDS.values(), *HAIR_STYLE_WORDS.values(), *_LENGTHS.values(),
@@ -424,7 +598,7 @@ def test_unset_every_list_and_schema_is_the_same_object():
 
 def test_the_lust_schema_offers_her_wardrobes_outfits_and_her_palette():
     p = woman(wardrobe=("edgy",), palette=("black", "burgundy"))
-    got = wardrobe.lust_schema(p, kind.LUST_SCHEMA, swim_only_settings=kind.SWIM_ONLY_SETTINGS)
+    got = wardrobe.lust_schema(p, kind.LUST_SCHEMA)
     props = got["properties"]
     assert props["outfit"]["enum"] == [
         "one-shoulder top and leather trousers", "cut-out dress", "leather jacket over a crop top",
@@ -437,11 +611,67 @@ def test_the_lust_schema_offers_her_wardrobes_outfits_and_her_palette():
         data = {"kind": "selfie", "framing": "upper_body", "setting": "a wine bar",
                 "outfit": outfit, "colour": "black", "expression": "a wink"}
         assert kind.screen_lust(p, data) == []
-    swim = wardrobe.lust_schema(woman(wardrobe=("swim", "glam")), kind.LUST_SCHEMA,
-                                swim_only_settings=kind.SWIM_ONLY_SETTINGS)["properties"]
-    assert set(kind.SWIM_OUTFITS) <= set(swim["outfit"]["enum"])
-    assert "a hot tub on a wooden deck" in swim["setting"]["enum"]
-    assert swim["colour"]["enum"] == list(kind.LUST_COLOURS)  # no palette: every colour
+    only = wardrobe.lust_schema(woman(palette=("gold",)), kind.LUST_SCHEMA)["properties"]
+    assert only["colour"]["enum"] == ["gold"]  # a palette alone narrows nothing else
+    assert {k: v for k, v in only.items() if k != "colour"} == {
+        k: v for k, v in kind.LUST_SCHEMA["properties"].items() if k != "colour"}
+
+
+def test_a_swim_only_wardrobe_offers_only_what_the_pairings_allow():
+    """Review of #358: five swimsuits against every setting, framing and kind left 5% of the
+    picks valid. Only swimwear left: the water settings, framed upper body, no headshot."""
+    props = wardrobe.lust_schema(woman(wardrobe=("swim",)), kind.LUST_SCHEMA)["properties"]
+    assert set(props["outfit"]["enum"]) == set(kind.SWIM_OUTFITS)
+    assert props["setting"]["enum"] == list(kind.WATER_SETTINGS)
+    assert props["framing"]["enum"] == ["upper_body"]
+    assert "headshot" not in props["kind"]["enum"] and len(props["kind"]["enum"]) == 3
+    p = woman(wardrobe=("swim",))
+    for k in props["kind"]["enum"]:  # every pick left passes the lust screen
+        for place in props["setting"]["enum"]:
+            for outfit in props["outfit"]["enum"]:
+                data = {"kind": k, "framing": "upper_body", "setting": place, "outfit": outfit,
+                        "colour": "teal", "expression": "a wink"}
+                assert kind.screen_lust(p, data) == [], data
+    mixed = wardrobe.lust_schema(woman(wardrobe=("swim", "sporty")), kind.LUST_SCHEMA)["properties"]
+    assert len(set(mixed["outfit"]["enum"]) & set(kind.SWIM_OUTFITS)) == 1  # one, by her guid
+    assert "a hot tub on a wooden deck" not in mixed["setting"]["enum"]
+    glam = wardrobe.lust_schema(woman(wardrobe=("swim", "glam")), kind.LUST_SCHEMA)["properties"]
+    assert set(kind.SWIM_OUTFITS) <= set(glam["outfit"]["enum"])  # room for every swimsuit
+
+
+def test_pairing_ok_is_the_lust_screens_pairings():
+    p, props = woman(), kind.LUST_SCHEMA["properties"]
+    for k in props["kind"]["enum"]:
+        for f in props["framing"]["enum"]:
+            for place in kind.LUST_SETTINGS:
+                for outfit in kind.LUST_OUTFITS:
+                    data = {"kind": k, "framing": f, "setting": place, "outfit": outfit,
+                            "colour": "teal", "expression": "a wink"}
+                    refused = set(kind.screen_lust(p, data)) & set(kind.PAIRINGS)
+                    assert wardrobe.pairing_ok(k, f, place, outfit) == (not refused), data
+
+
+def test_every_wardrobe_keeps_at_least_half_of_its_picks_valid():
+    """Every subset of up to four tags (793), with and without a palette: no empty list, and at
+    least half of the kind, framing, setting and outfit picks left pass the pairings (the
+    unnarrowed lists stand at 76%)."""
+    base = kind.LUST_SCHEMA["properties"]
+    assert wardrobe.valid_share(base["kind"]["enum"], base["framing"]["enum"],
+                                base["setting"]["enum"], base["outfit"]["enum"]) > 0.75
+    seen = 0
+    for n in range(1, 5):
+        for tags in combinations(WARDROBES, n):
+            for guid in (101, 102, 105):
+                p = replace(woman(wardrobe=tags), guid=guid)
+                props = wardrobe.lust_schema(p, kind.LUST_SCHEMA)["properties"]
+                lists = [props[k]["enum"] for k in ("kind", "framing", "setting", "outfit")]
+                assert all(lists), tags
+                assert wardrobe.valid_share(*lists) >= wardrobe.MIN_SHARE, tags
+                assert set(props["outfit"]["enum"]) <= {o for t in tags for o in wardrobe.LUST_TAGS[t]}
+            snap = wardrobe.lust_schema(woman(wardrobe=tags), scene.SCENE_SCHEMA_LUST)["properties"]
+            assert snap["outfit"]["enum"] and snap["setting"]["enum"] and snap["framing"]["enum"]
+            seen += 1
+    assert seen == 793
 
 
 def test_swim_counts_only_for_the_lust_style():
@@ -450,6 +680,7 @@ def test_swim_counts_only_for_the_lust_style():
     assert not suggestive(fond) and wardrobe.tags(fond) == ("casual",)
     assert wardrobe.tags(woman(wardrobe=("swim", "casual"))) == ("swim", "casual")
     assert wardrobe.tags(man(wardrobe=("swim",))) == ()
+    assert "tests/selfies/test_looks_style.py" in wardrobe.__doc__  # where these tests are
     assert "swim" not in wardrobe.ask_hint(fond) and "bikini" not in wardrobe.ask_hint(fond)
     assert not set(wardrobe.outfits(fond, kind.LUST_OUTFITS)) & set(kind.SWIM_OUTFITS)
 

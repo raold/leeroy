@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BUST_UNSET, GROUPS, SETS, SHAPES, STYLE, bustText, canUndoLooks, looksArgs, looksForm,
-         looksReply, looksUndoArgs, optionText, shapeText, styleRows } from "../../../leeroy_mind/console/static/js/looksmodel.mjs";
+         looksReply, looksUndoArgs, optionText, SAVE_WORDS, shapeText, styleRows } from "../../../leeroy_mind/console/static/js/looksmodel.mjs";
 
 const LIMITS = { weight_kg: [40, 180], busts: ["small", "medium", "large", "very_large"],
                  glutes: ["small", "medium", "large", "very_large"],
@@ -100,7 +100,13 @@ test("hair, makeup and accessories are selects in three groups; a man's styles a
   assert.equal(f.style.owner_hair_colour.value, "pastel_pink");
   assert.deepEqual(f.style.owner_hair_style.options, ["wavy", "bangs"]);  // no crew cut for her
   assert.deepEqual(f.style.makeup.options, FULL.makeups);
-  assert.deepEqual(f.sets.wardrobe, { values: ["edgy", "glam"], options: FULL.wardrobes, max: 4 });
+  // swim is offered only to a woman who has the lust style now, or who has it set already
+  const noSwim = FULL.wardrobes.filter(v => v !== "swim");
+  assert.deepEqual(f.sets.wardrobe, { values: ["edgy", "glam"], options: noSwim, max: 4 });
+  assert.deepEqual(looksForm({ ...styled, lust_style: true }, FULL).sets.wardrobe.options, FULL.wardrobes);
+  const had = { ...styled, appearance: { ...styled.appearance, wardrobe: ["swim"] } };
+  assert.deepEqual(looksForm(had, FULL).sets.wardrobe.options, FULL.wardrobes);
+  assert.deepEqual(looksForm({ ...him, lust_style: false }, FULL).sets.wardrobe.options, noSwim);
   assert.deepEqual(f.sets.palette, { values: ["black"], options: FULL.palette, max: 3 });
   const m = looksForm(him, FULL);
   assert.deepEqual(m.style.owner_hair_style.options, FULL.hair_styles);
@@ -142,7 +148,9 @@ test("the options and the list's rows are said in words", () => {
   assert.equal(optionText("glam"), "glam / going out");
   assert.equal(optionText("workwear"), "workwear (their job)");
   assert.equal(optionText("bangs"), "bangs / fringe");
-  assert.match(optionText("swim"), /lust style only/);
+  assert.equal(optionText("swim"), "swim / beach");
+  assert.match(SAVE_WORDS, /one new persona version/);
+  assert.match(SAVE_WORDS, /may not show in back views/);
   assert.deepEqual(styleRows({ weight_kg: 60 }), []);
   assert.deepEqual(styleRows({ owner_hair_colour: "pastel_pink", glasses: "always", wardrobe: ["edgy", "cosy"],
                                palette: ["cobalt blue"] }),

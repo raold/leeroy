@@ -30,8 +30,14 @@ export const SETS = [
   { name: "palette", label: "Palette", key: "palette", max: 3 },
 ];
 export const GROUPS = ["Body", "Hair", "Style"];
+export const LUST_ONLY = "swim";
+// What a save does, and where what he set may not show (the photo prompt has 75 tokens).
+export const SAVE_WORDS = "One save makes one new persona version (undo it in the ledger) and queues one new set of 4 photos, "
+  + "for tonight or the photo booth; pick one of them as their photo to keep the new looks. "
+  + "Glasses, tattoos, piercings, makeup and jewellery are said before every other optional word, in that order; "
+  + "with a full figure and a long outfit the last of them may not fit, and they may not show in back views.";
 const OPTION_WORDS = { edgy: "edgy / alt", glam: "glam / going out", workwear: "workwear (their job)",
-                       swim: "swim / beach (lust style only)", bangs: "bangs / fringe" };
+                       swim: "swim / beach", bangs: "bangs / fringe" };
 
 // An option's words: "dark brown", "edgy / alt", "bangs / fringe".
 export function optionText(value) {
@@ -63,8 +69,11 @@ export function looksForm(card, limits) {
     style[st.name] = { value: typeof a[st.name] === "string" ? a[st.name] : "", options };
   });
   SETS.forEach(st => {
-    sets[st.name] = { values: Array.isArray(a[st.name]) ? a[st.name].map(String) : [],
-                      options: Array.isArray(l[st.key]) ? l[st.key] : [], max: st.max };
+    const values = Array.isArray(a[st.name]) ? a[st.name].map(String) : [];
+    let options = Array.isArray(l[st.key]) ? l[st.key] : [];
+    // swim is the lust style's: offered only to a woman who has it now (or who has it set)
+    if (st.name === "wardrobe" && c.lust_style !== true) options = options.filter(v => v !== LUST_ONLY || values.includes(v));
+    sets[st.name] = { values, options, max: st.max };
   });
   return { weight: a.weight_kg, bust: typeof a.bust === "string" ? a.bust : "", min: w[0], max: w[1],
            busts, bustable: woman, shapes, style, sets };

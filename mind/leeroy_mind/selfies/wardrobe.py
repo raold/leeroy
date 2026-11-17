@@ -15,7 +15,7 @@ the outfits the photos pick and never replace a list or add a looks word:
   outfit more for each tag the old four did not cover: SCENE_MORE).
 
 Every outfit named here is one of the existing vetted lists', and each new string is clothed and
-passes the explicit, wear and age screens (tests/selfies/test_wardrobe.py reads every one). The
+passes the explicit, wear and age screens (tests/selfies/test_looks_style.py reads every one). The
 swim tag counts only for a woman who has the lust style now, where the pairing rules allow
 swimwear (at the water). With no wardrobe and no palette every function here answers what the
 code did before: the same lists, the same schema object, no words."""
@@ -121,23 +121,70 @@ def colours(p: Persona | None, pool) -> list[str]:
     return [c for c in pool if c in chosen] or pool
 
 
-def lust_schema(p: Persona | None, base: dict, *, swim_only_settings=()) -> dict:
+def pairing_ok(kind_: str, framing: str, setting: str, outfit: str) -> bool:
+    """The lust pairings (kind.PAIRINGS, as kind.screen_lust applies them to a profile kind):
+    swimwear at the water, framed upper body, never a headshot; gym wear at the gym; only
+    swimwear in the hot tub."""
+    from . import kind
+    swim = outfit in kind.SWIM_OUTFITS
+    if swim:
+        return (setting in kind.WATER_SETTINGS and framing == "upper_body"
+                and kind_ != "headshot")
+    if setting in kind.SWIM_ONLY_SETTINGS:
+        return False
+    return outfit not in kind.GYM_OUTFITS or setting in kind.GYM_SETTINGS
+
+
+def valid_share(kinds, framings, settings, wear) -> float:
+    """The share of the picks (a kind, a framing, a setting and an outfit of those lists) that
+    the pairings allow."""
+    picks = [(k, f, s, o) for k in kinds for f in framings for s in settings for o in wear]
+    return sum(pairing_ok(*x) for x in picks) / len(picks) if picks else 0.0
+
+
+MIN_SHARE = 0.5  # of a narrowed schema's picks the pairings must allow
+
+
+def lust_schema(p: Persona | None, base: dict) -> dict:
     """`base` (kind.LUST_SCHEMA, scene.SCENE_SCHEMA_LUST) with its outfit enum narrowed to her
-    wardrobe and its colour enum to her palette; `base` itself with neither set. With no
-    swimwear left among the outfits, the settings that take only swimwear (the hot tub) go
-    too, so no pick is left that the pairings must refuse."""
+    wardrobe and its colour enum to her palette; `base` itself with neither set. A narrowed
+    outfit list also narrows what the pairings would refuse for it (review of #358: a
+    swim-only wardrobe left 5% of the picks valid, and each miss is a refused night), so at
+    least MIN_SHARE of the picks left pass them:
+    - only swimwear left: the settings at the water, framed upper body, no headshot;
+    - swimwear among other outfits: the hot tub (swimwear only) goes, and swimsuits stay only
+      while the share holds, the first of them chosen by her guid so members differ;
+    - no swimwear left: the hot tub goes."""
+    from . import kind
     props = base["properties"]
     wear = list(outfits(p, props["outfit"]["enum"]))
     tint = colours(p, props["colour"]["enum"])
-    if wear == props["outfit"]["enum"] and tint == props["colour"]["enum"]:
-        return base
+    if wear == props["outfit"]["enum"]:
+        if tint == props["colour"]["enum"]:
+            return base
+        return {**base, "properties": {**props, "colour": {**props["colour"], "enum": tint}}}
+    kinds, framings = props["kind"]["enum"], props["framing"]["enum"]
     places = props["setting"]["enum"]
-    if not set(wear) & set(LUST_TAGS["swim"]):
-        places = [s for s in places if s not in swim_only_settings]
+    swim = [o for o in wear if o in kind.SWIM_OUTFITS]
+    other = [o for o in wear if o not in kind.SWIM_OUTFITS]
+    if swim and not other:
+        places = [s for s in places if s in kind.WATER_SETTINGS]
+        framings = [f for f in framings if f == "upper_body"]
+        kinds = [k for k in kinds if k != "headshot"]
+    else:
+        places = [s for s in places if s not in kind.SWIM_ONLY_SETTINGS]
+        turn = (p.guid if p is not None else 0) % max(1, len(swim))
+        kept = list(other)
+        for o in swim[turn:] + swim[:turn]:
+            if valid_share(kinds, framings, places, kept + [o]) >= MIN_SHARE:
+                kept.append(o)
+        wear = [o for o in wear if o in kept]
     return {**base, "properties": {
         **props, "outfit": {**props["outfit"], "enum": wear},
         "colour": {**props["colour"], "enum": tint},
-        "setting": {**props["setting"], "enum": places}}}
+        "setting": {**props["setting"], "enum": places},
+        "framing": {**props["framing"], "enum": framings},
+        "kind": {**props["kind"], "enum": kinds}}}
 
 
 def scene_outfits(p: Persona | None, base) -> tuple[str, ...]:

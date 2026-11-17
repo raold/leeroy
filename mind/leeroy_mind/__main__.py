@@ -1260,6 +1260,65 @@ def cmd_homes(args) -> int:
         _close_fix_store(store, lock)
 
 
+def cmd_looks(args) -> int:
+    """`personas looks --clear-style [--guid N,...]`: takes the owner's hair, wardrobe, makeup
+    and accessories (the Looks panel's Hair and Style groups) off the named members, or off
+    every member who has any, before rolling back to code that does not know those fields. A
+    read-only plan unless --go, which saves each as an owner persona version with a "looks"
+    ledger row (`personas undo <id>` takes one back). Weight and figure are left as they are."""
+    from .personas.io import load_persona
+    from .personas.looks_edit import clear_style, style_set
+    if not args.clear_style:
+        print("personas looks: say what to do (--clear-style)", file=sys.stderr)
+        return 2
+    try:
+        wanted = None if args.guid is None else sorted({int(g) for g in args.guid.split(",")})
+    except ValueError:
+        print("personas looks: --guid is a comma list of member guids", file=sys.stderr)
+        return 2
+    root = _root(args)
+    args.dry_run = not args.go
+    opened = _fix_store(args, root, "pre-looks-clear")
+    if isinstance(opened, int):
+        return opened
+    store, lock = opened
+    try:
+        stored = store.persona_versions()  # the cast's, never a world persona
+        bad, done = [], 0
+        for g in sorted(stored) if wanted is None else wanted:
+            if g not in stored:
+                bad.append(g)
+                print(f"{g:>7}  no stored persona")
+                continue
+            try:
+                p = load_persona(store, g)
+            except ValueError as e:  # PersonaError and JSON errors alike
+                bad.append(g)
+                print(f"{g:>7}  cannot read persona: {_ascii(str(e))[:200]}")
+                continue
+            fields = style_set(p.appearance) if p is not None else []
+            if not fields:
+                if wanted is not None:
+                    print(f"{g:>7}  nothing set")
+                continue
+            print(f"{g:>7}  {_ascii(p.character_name):<12}  {', '.join(fields)}")
+            if args.go:
+                try:
+                    clear_style(store, g, now=store.clock.now())
+                except ValueError as e:
+                    bad.append(g)
+                    print(f"         cannot save: {_ascii(str(e))[:200]}")
+                    continue
+            done += 1
+        verb = "would" if args.dry_run else "did"
+        print(f"{verb} take the hair, wardrobe, makeup and accessories off {done} members")
+        if args.dry_run:
+            print("nothing was written")
+        return 1 if bad else 0
+    finally:
+        _close_fix_store(store, lock)
+
+
 def cmd_clean_contamination(args) -> int:
     """`personas clean-contamination` (personas/contamination.py): a read-only plan of what
     members' echoes, persona contradictions and gender slips left in their stored state, by
@@ -1649,6 +1708,23 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_home.add_argument("--data-dir", default=argparse.SUPPRESS,
                         help="the mind's data folder (as personas --data-dir)")
     p_home.set_defaults(func=cmd_homes)
+    p_looks = psub.add_parser("looks",
+                              help="the owner's looks edits in bulk: --clear-style takes the "
+                                   "Looks panel's hair, wardrobe, makeup and accessories off "
+                                   "again (before rolling back to code without them); a "
+                                   "read-only plan unless --go")
+    p_looks.add_argument("--clear-style", action="store_true",
+                         help="take every hair, wardrobe, palette, makeup, glasses, jewellery, "
+                              "tattoo and piercing value off (weight and figure stay)")
+    p_looks.add_argument("--guid", default=None,
+                         help="only these members, a comma list of guids (default: every "
+                              "member who has one set)")
+    p_looks.add_argument("--go", action="store_true",
+                         help="save them as owner persona versions with ledger rows (the mind "
+                              "stopped; mind.db is snapshot first)")
+    p_looks.add_argument("--data-dir", default=argparse.SUPPRESS,
+                         help="the mind's data folder (as personas --data-dir)")
+    p_looks.set_defaults(func=cmd_looks)
     p_clean = psub.add_parser("clean-contamination",
                               help="retire (never delete) the claims, disclosures, memories and "
                                    "coach lessons built from members' echoes of his words, from "

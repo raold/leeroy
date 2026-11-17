@@ -100,7 +100,15 @@ WORD_TOKENS = {
     "lipstick": 1, "makeup": 1, "necklace": 1, "no": 1, "nose": 1, "pastel": 1, "piercing": 1,
     "piercings": 2, "plain": 1, "quiff": 2, "rings": 1, "single": 1, "sleeve": 1,
     "statement": 1, "style": 1, "styled": 1, "tailored": 1, "tattoo": 1, "tattoos": 1,
-    "track": 1,
+    "track": 1, "glam": 1, "pierced": 1,
+    # the fixed negatives' words (prompt.NEGATIVE, LUST_NEGATIVE, VARIED_NEGATIVE), so the mind
+    # can tell what room they leave (prompt.style_negative), measured 2026-11-17
+    "airbrushed": 2, "anime": 1, "bad": 1, "cartoon": 1, "celebrity": 1, "cgi": 1, "child": 1,
+    "cleavage": 1, "d": 1, "deformed": 2, "doll": 1, "extra": 1, "famous": 1, "film": 1,
+    "fingers": 1, "g": 1, "grain": 1, "hands": 1, "illustration": 1, "lingerie": 1, "logo": 1,
+    "nsfw": 1, "nude": 1, "painting": 1, "person": 1, "plastic": 1, "render": 1, "retro": 1,
+    "see": 1, "sepia": 2, "sheer": 1, "swimwear": 1, "teenager": 1, "text": 1, "thong": 1,
+    "through": 1, "topless": 1, "underwear": 1, "vintage": 1, "watermark": 2,
 }
 
 

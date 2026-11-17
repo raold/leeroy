@@ -190,10 +190,13 @@ class SelfieService:
                             f"looks; a set with {their} new looks follows it. Pick one as "
                             f"{their} photo to keep it.")
         from .kind import wardrobe_pending
-        if why is None and wardrobe_pending(app.store, p):
+        if why is None and not varied and state == "queued":
+            from .varied import plan_of
+            with app.store.transaction():
+                varied = plan_of(app.store.conn, guid, set_no) is not None
+        if why is None and not varied and wardrobe_pending(app.store, p):
             # the photo pass chooses the kind again for the wardrobe first (render._held)
-            queued = "A set is already queued" if state == "queued" else (
-                "A new varied set is queued" if varied else "A new set is queued")
+            queued = "A set is already queued" if state == "queued" else "A new set is queued"
             return set_no, (f"{queued}; it renders once tonight's photo pass has chosen "
                             f"{their} photo kind again for {their} wardrobe. Pick one as "
                             f"{their} photo to keep it.")

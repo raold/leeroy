@@ -4,7 +4,7 @@
 // one ledger row (its Undo is in the ledger below) and one queued set of profile photos. Drafts
 // stay in this page's memory.
 import { clear, el, emit, obj, post, str } from "./core.mjs";
-import { BUST_UNSET, BUST_WORDS, GROUPS, SETS, SHAPES, STYLE, looksArgs, looksForm, looksReply,
+import { BUST_UNSET, BUST_WORDS, GROUPS, SAVE_WORDS, SETS, SHAPES, STYLE, looksArgs, looksForm, looksReply,
          looksUndoArgs, optionText } from "./looksmodel.mjs";
 
 const drafts = new Map();
@@ -119,8 +119,7 @@ export function looksEditor(box, j, guid, live, why, done) {
   const status = el("p", "why"); status.setAttribute("role", "status");
   const last = said.get(guid);
   status.textContent = last ? last.words
-    : "One save makes one new persona version (undo it in the ledger) and queues one new set of 4 photos, "
-      + "for tonight or the photo booth; pick one of them as their photo to keep the new looks.";
+    : SAVE_WORDS;
   if (last && !last.ok) status.classList.add("bad");
   const acts = el("div", "acts");
   const save = el("button", "", "Save looks");

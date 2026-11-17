@@ -44,6 +44,7 @@ from leeroy_mind.personas.schema import (BUSTS, GLASSES, GLUTES, HAIR_COLOURS, H
                                          PALETTE, PIERCINGS, TATTOOS, WAISTS, WARDROBES,
                                          persona_from_dict, persona_to_dict)
 from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
+from leeroy_mind.selfies.style import suggestive
 
 from .feed import guild_mood, human_guid
 from .raidview import people
@@ -305,6 +306,9 @@ def _card(p, status: str | None = None) -> dict:
     return {"identity": {**{k: d["identity"][k] for k in ("age", "player_gender", "region")},
                          "home": p.identity.home},
             "status": status,
+            # she has the lust style now (selfies.style.suggestive): the Looks panel offers the
+            # swim wardrobe tag only then
+            "lust_style": suggestive(p),
             "big_five": d["big_five"], "attachment": d["attachment"], "humour": d["humour"],
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},

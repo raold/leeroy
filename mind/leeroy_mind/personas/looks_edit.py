@@ -184,6 +184,14 @@ def set_looks(store, guid: int, *, weight_kg: int, bust: str | None, now: float,
                     raise LooksError(f"{_NAMED[name]} for women only.")
         if stored.identity.player_gender != "male" and after["owner_hair_style"] in MEN_HAIR_STYLES:
             raise LooksError("That hair style is a man's: pick another.")
+        if stored.appearance.hair_length == "shaved":  # the looks say a shaved head
+            if after["owner_hair_length"] is None and (after["owner_hair_colour"]
+                                                       or after["owner_hair_style"]):
+                raise LooksError("The looks say a shaved head: set a hair length too, or the "
+                                 "colour and style would not show.")
+            if after["owner_hair_length"] is not None and after["owner_hair_colour"] is None:
+                raise LooksError("The looks say a shaved head: set a hair colour with the "
+                                 "length.")
         if "swim" in after["wardrobe"] and "swim" not in before["wardrobe"]:
             from leeroy_mind.selfies.style import suggestive
             if not suggestive(stored):
@@ -204,6 +212,23 @@ def set_looks(store, guid: int, *, weight_kg: int, bust: str | None, now: float,
             {"before": before, "after": after, "source": source, "version": version,
              "protection": protection}, sort_keys=True))
     return LooksChange(ledger, version, before, after)
+
+
+def style_set(a: Appearance | None) -> list[str]:
+    """The names of the hair, wardrobe, makeup and accessory fields (STYLE) that are set."""
+    return [] if a is None else [k for k in STYLE if getattr(a, k) not in (None, ())]
+
+
+def clear_style(store, guid: int, *, now: float) -> LooksChange | None:
+    """Every STYLE field of hers taken off again (`personas looks --clear-style`, before
+    rolling back to code that does not know them): an ordinary looks edit, with its ledger row
+    and Undo, her weight and shapes as they are; None when none was set."""
+    p = load_persona(store, guid)
+    if p is None or not style_set(p.appearance):
+        return None
+    a = p.appearance
+    return set_looks(store, guid, weight_kg=a.weight_kg, bust=a.bust, now=now,
+                     **{k: [] if k in OWNER_SETS else None for k in STYLE})
 
 
 def restore(store, row, *, now: float) -> bool:
