@@ -359,3 +359,85 @@ def test_the_stage_is_off_unless_asked_and_off_for_a_bad_table(tmp_path):
     path.write_text("[prune]\nenabled = true\n", encoding="utf-8")
     stage.attach(runner, tmp_path)
     assert added == [("prune", {"after": "eval", "model": None})]
+
+
+# -- review round 1 ------------------------------------------------------------------------------
+
+def test_every_evidence_column_exists_in_the_migrated_schema(store):
+    """A misspelt column is skipped as an older database's would be, and protects nothing."""
+    missing = [(t, c) for t, c in prune.EVIDENCE_COLUMNS if not prune._has(store.conn, t, c)]
+    assert missing == []
+    assert len(set(prune.EVIDENCE_COLUMNS)) == len(prune.EVIDENCE_COLUMNS)
+
+
+@pytest.mark.parametrize("shape", ['["event:{id}"]', '["event:{id}:kind:wipe_first_death"]',
+                                   "banter:used:event:{id}", "event:{id}"])
+def test_a_reference_with_a_prefix_or_a_tag_still_protects_its_event(store, shape):
+    with store.transaction():
+        cited = event(store, "death", 90, {"map": 0})
+        other = event(store, "death", 90, {"map": 0})
+        store.conn.execute("INSERT INTO meta(key,value) VALUES ('test:cite',?)", (shape.format(id=cited),))
+    prune.apply(store.conn, NOW)
+    assert [r[0] for r in store.conn.execute("SELECT id FROM game_event")] == [cited] and other != cited
+
+
+def test_a_jokes_origin_event_is_never_pruned(store):
+    """culture/origins.py re-reads a joke's origin rows by id and retires the joke for good when
+    one is gone: a death outside the kept maps that a lexicon row stands on stays."""
+    with store.transaction():
+        first = event(store, "death", 90, {"map": 575})
+        second = event(store, "death", 90, {"map": 575})
+        loose = event(store, "death", 90, {"map": 575})
+        store.conn.execute(
+            "INSERT INTO lexicon(kind,term,origin_ref,origin_refs,originator,born,last_used) "
+            "VALUES ('joke','test kettle',?,?,101,?,?)",
+            (f"event:{first}:kind:wipe_first_death", json.dumps([f"event:{second}"]), NOW, NOW))
+    prune.apply(store.conn, NOW)
+    left = {r[0] for r in store.conn.execute("SELECT id FROM game_event")}
+    assert left == {first, second} and loose not in left
+
+
+def test_no_scratch_copy_goes_while_a_trial_holds_its_lock(tmp_path):
+    from leeroy_mind import app
+    scratch = tmp_path / "scratch"
+    old = aged(scratch / "mind-eval-old.db", 30)
+    orphan = aged(scratch / "mind-eval-gone.db-wal", 30)
+    lock_dir = scratch / "locks" / "eval"
+    lock_dir.mkdir(parents=True)
+    with app.acquire_instance_lock(lock_dir):
+        assert prune.trial_running(tmp_path)
+        assert prune.plan_files(tmp_path, NOW) == []
+        prune.prune_files(tmp_path, NOW)
+        assert old.exists() and orphan.exists()
+    assert not prune.trial_running(tmp_path)
+    prune.prune_files(tmp_path, NOW)
+    assert not old.exists() and not orphan.exists() and lock_dir.is_dir()
+
+
+def test_a_resumed_night_goes_on_within_the_same_allowance(store, clock):
+    from pathlib import Path
+    from leeroy_mind.nightly import prune as stage
+    data_dir = Path(store.conn.execute("PRAGMA database_list").fetchone()["file"]).parent
+    now = clock.now()
+    with store.transaction():
+        for _ in range(40):
+            store.conn.execute("INSERT INTO game_event(ts,type,guid,payload) VALUES (?,?,?,?)",
+                               (now - 3 * DAY, "pvp_flag", 101, "{}"))
+        # the night before stopped after 12 rows of an allowance of 15; an older night's note
+        store.set_meta(stage.SPENT + "2026-10-28", json.dumps({"events:pvp_flag": 12}))
+        store.set_meta(stage.SPENT + "2026-10-20", json.dumps({"events:pvp_flag": 15}))
+    night(store, clock, data_dir, stage.PruneCfg(True, 15))          # night "2026-10-28", resumed
+    assert rows(store, "game_event") == 37
+    assert json.loads(store.get_meta(stage.SPENT + "2026-10-28")) == {"events:pvp_flag": 15}
+    assert store.get_meta(stage.SPENT + "2026-10-20") is None
+    night(store, clock, data_dir, stage.PruneCfg(True, 15))          # again: nothing left tonight
+    assert rows(store, "game_event") == 37
+
+
+def test_vacuum_is_skipped_on_a_volume_without_room(root, capsys, monkeypatch):
+    from collections import namedtuple
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(prune_cli.shutil, "disk_usage", lambda path: usage(10, 9, 1))
+    assert prune_cli.run(root, go=True, vacuum=True) == 1
+    out = capsys.readouterr().out
+    assert "vacuum skipped" in out and count(root) == 0

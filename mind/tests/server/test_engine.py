@@ -545,3 +545,49 @@ def test_a_conversation_whose_reads_keep_failing_ends_with_the_error_class(app,m
     assert any('server_conversation_failed' in r.getMessage() and r.getMessage().endswith('code=busy')
                for r in caplog.records)
     assert len(calls)==2+se.READ_RETRIES+1
+
+
+def test_a_tick_that_keeps_failing_backs_off_and_is_said_once_then_hourly(app, monkeypatch, caplog):
+    assert [se.tick_wait(n) for n in (0, 1, 2, 3, 7, 8, 40)] == [5, 10, 20, 40, 600, 600, 600]
+    e = app.server.engine
+    waits, codes = [], iter(['busy'] * 4 + ['interrupted'] * 2 + ['ok'])
+    async def tick(now):
+        code = next(codes, 'stop')
+        if code == 'stop':
+            e._closed = True
+        elif code != 'ok':
+            error = __import__('sqlite3').OperationalError('database is locked')
+            error.sqlite_errorname = 'SQLITE_BUSY' if code == 'busy' else 'SQLITE_INTERRUPT'
+            raise error
+    async def sleep(seconds):
+        waits.append(seconds)
+    monkeypatch.setattr(e, 'tick', tick)
+    monkeypatch.setattr(app.clock, 'sleep', sleep)
+    with caplog.at_level('INFO'):
+        run(e.run())
+    e._closed = False
+    assert waits == [10, 20, 40, 80, 160, 320, 5, 5]
+    lines = [r.getMessage() for r in caplog.records if 'server_tick' in r.getMessage()]
+    assert lines == ['server_tick_failed code=busy failures=1 unreported=0',
+                     'server_tick_failed code=interrupted failures=5 unreported=3',
+                     'server_tick_recovered code=interrupted failures=6']
+
+
+def test_a_fault_that_stays_is_counted_once_an_hour(app, monkeypatch, caplog):
+    e = app.server.engine
+    clock = [0.0]
+    async def tick(now):
+        if clock[0] > 3 * 3600:
+            e._closed = True
+        raise ValueError('a fault quoting something private')
+    async def sleep(seconds):
+        clock[0] += seconds
+    monkeypatch.setattr(e, 'tick', tick)
+    monkeypatch.setattr(app.clock, 'sleep', sleep)
+    monkeypatch.setattr(app.clock, 'now', lambda: clock[0])
+    with caplog.at_level('WARNING'):
+        run(e.run())
+    e._closed = False
+    lines = [r.getMessage() for r in caplog.records if 'server_tick_failed' in r.getMessage()]
+    assert 3 <= len(lines) <= 5 and lines[0] == 'server_tick_failed code=ValueError failures=1 unreported=0'
+    assert all('private' not in line for line in lines) and 'unreported=10' in lines[1] and 'unreported=5' in lines[2]

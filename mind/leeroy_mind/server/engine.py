@@ -28,6 +28,13 @@ TICK_S = 5.0
 # A conversation whose read of the server failed (after the read's own retries) waits a tick and
 # asks again this many times before it ends `error`: one bad read is not the end of a thread.
 READ_RETRIES = 3
+FAIL_WAIT_MAX_S = 600.0   # a tick that keeps failing waits 5, 10, 20, ... s, at most this
+FAIL_REPORT_S = 3600.0
+
+
+def tick_wait(failures: int) -> float:
+    """Seconds to the next tick after `failures` failed ticks in a row."""
+    return min(FAIL_WAIT_MAX_S, TICK_S * 2 ** min(failures, 16)) if failures else TICK_S
 DAY_KEY = records.DAY_KEY
 DRY_TURNS = 2
 TIES = {'friend':2., 'crush':2., 'fond':1.5, 'neutral':1., 'rival':.6, 'feud':0.}
@@ -96,12 +103,25 @@ class ServerEngine:
         return None
 
     async def run(self):
+        failures, code, since, silent = 0, None, 0.0, 0
         while not self._closed:
             try:
                 await self.tick(self.app.clock.now())
+                if failures:
+                    log.info('server_tick_recovered code=%s failures=%d', code, failures)
+                failures, code, silent = 0, None, 0
             except Exception as error:
-                log.warning('server_tick_failed code=%s', error_code(error))
-            await self.app.clock.sleep(TICK_S)
+                # A fault that stays (a corrupt page, a read that always runs out of budget)
+                # is asked again ever more rarely, and said once: at the first failure, at a
+                # change of its class, then as an hourly count.
+                failures += 1
+                now, new = self.app.clock.now(), error_code(error)
+                if new != code or now - since >= FAIL_REPORT_S:
+                    log.warning('server_tick_failed code=%s failures=%d unreported=%d', new, failures, silent)
+                    code, since, silent = new, now, 0
+                else:
+                    silent += 1
+            await self.app.clock.sleep(tick_wait(failures))
 
     async def tick(self, now):
         async with self._tick_lock:

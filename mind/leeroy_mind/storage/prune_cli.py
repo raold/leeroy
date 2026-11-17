@@ -1,5 +1,6 @@
 """`db prune`: a dry run that counts (the default), or `--go` with the mind stopped and a
 snapshot first. See storage/prune.py for the rules."""
+import shutil
 import sqlite3
 import time
 from contextlib import nullcontext
@@ -55,6 +56,11 @@ def run(root, *, go=False, vacuum=False, as_of=None) -> int:
             _show(prune.prune_files(root, now), "files")
             if vacuum:
                 before = path.stat().st_size
+                free = shutil.disk_usage(path.parent).free
+                if free < before * 1.2:  # VACUUM writes a whole second copy before it swaps
+                    print(f"vacuum skipped: it needs about {before * 1.2 / 1048576:.0f} MB free on "
+                          f"the volume, {free / 1048576:.0f} MB are; the rows are removed")
+                    return 1
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
                 conn.execute("VACUUM")
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()

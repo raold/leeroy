@@ -2,7 +2,7 @@
 
 `[prune] enabled = true` in mind.toml (read once at the mind's start; missing, invalid or an
 unknown key means off) adds the stage `prune` after `eval`. Each night it removes at most
-`rows_per_night` rows per rule, in transactions of 500 rows with the loop free between them, and
+`rows_per_night` rows per rule (a resumed night goes on within the same allowance), in transactions of 500 rows with the loop free between them, and
 the files `prune_files` names. What it finds is read on a worker's read-only connection. A
 backlog (the first nights, or a rule that just came of age) is worked off over several nights;
 `db prune --go` with the mind stopped takes all of it at once.
@@ -10,6 +10,7 @@ backlog (the first nights, or a rule that just came of age) is worked off over s
 The file shrinks only when it is rebuilt (`db prune --go --vacuum`): until then the freed pages
 are reused by new rows, so the file stops growing."""
 import asyncio
+import json
 import logging
 import sqlite3
 import tomllib
@@ -22,6 +23,7 @@ from leeroy_mind.storage import prune
 from leeroy_mind.storage.db import error_code
 
 STAGE = "prune"
+SPENT = "prune:night:"   # meta: {rule: rows removed} of the night in the key; the last night's only
 AFTER = "eval"
 ROWS_MAX = 200_000
 
@@ -46,6 +48,16 @@ def load(path: Path) -> PruneCfg:
     return PruneCfg(enabled, rows)
 
 
+def _spent(raw) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {k: v for k, v in value.items() if isinstance(k, str) and type(v) is int and v >= 0}
+
+
 def _read(path: Path, now: float) -> prune.Work | None:
     with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)) as conn:
         if not prune.indexed(conn):
@@ -67,10 +79,20 @@ def make_stage(cfg: PruneCfg):
                 log("prune_skipped", level=logging.WARNING, night=ctx.night, reason="not_migrated")
             else:
                 done = []
-                for rule, write in prune.steps(work, now, limit=cfg.rows_per_night):
+                # What this night already removed, kept with each batch: a night stopped
+                # between batches (his login) and resumed goes on within the same allowance.
+                key = SPENT + ctx.night
+                with ctx.store.transaction():
+                    ctx.store.conn.execute("DELETE FROM meta WHERE key >= ? AND key < ? AND key <> ?",
+                                           (SPENT, SPENT + "\uffff", key))
+                    spent = _spent(ctx.store.get_meta(key))
+                left = lambda rule: cfg.rows_per_night - spent.get(rule, 0)
+                for rule, write in prune.steps(work, now, limit=left):
                     try:
                         with ctx.store.transaction():
                             rows, size = write(ctx.store.conn)
+                            spent[rule] = spent.get(rule, 0) + rows
+                            ctx.store.set_meta(key, json.dumps(spent, sort_keys=True))
                         done.append((rule, rows, size))
                     except sqlite3.IntegrityError:
                         pass  # something began to stand on a row of the batch: it stays

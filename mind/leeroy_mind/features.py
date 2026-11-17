@@ -60,6 +60,20 @@ def guard(disabled: dict, feature: str, attach, off=None):
         return off() if callable(off) else off
 
 
+_LINE = re.compile(r"^feature_off feature=([a-z_]+) table=\[([a-z_]+)\] key=(\S+) "
+                   r"reason=(invalid_config|attach_failed)(?: code=([A-Za-z_][A-Za-z0-9_]*))?$")
+
+
+def from_log(message: str) -> dict | None:
+    """The `report` row a start's `feature_off` line stands for; None for any other line."""
+    found = _LINE.match(message) if isinstance(message, str) else None
+    if found is None:
+        return None
+    feature, table, key, reason, code = found.groups()
+    row = {"feature": feature, "table": table, "key": "" if key == "-" else key, "reason": reason}
+    return {**row, "code": code} if code else row
+
+
 def report(disabled: dict) -> list[dict]:
     """The disabled features as plain rows (feature, table, key, reason[, code]), by feature."""
     return [{"feature": feature, **disabled[feature]} for feature in sorted(disabled)]

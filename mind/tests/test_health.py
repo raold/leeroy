@@ -1465,3 +1465,21 @@ def test_a_mind_that_does_not_report_features_is_checked_from_its_file(rig):
     check = rig.run()["features"]
     assert check.status == FAIL
     assert check.text == "features: training is off: invalid [training] enabled in mind.toml (at the next start)"
+
+
+def test_a_mind_that_does_not_answer_is_checked_from_what_its_start_logged(rig):
+    from leeroy_mind import features
+    assert features.from_log("feature_off feature=claims table=[claims] key=- reason=attach_failed "
+                             "code=RuntimeError") == {"feature": "claims", "table": "claims", "key": "",
+                                                      "reason": "attach_failed", "code": "RuntimeError"}
+    assert features.from_log("feature_off feature=x table=[x] key=y reason=other") is None
+    rig.endpoint.reply = {"ok": True, "v": 1}           # an older mind: no disabled_features
+    with open(rig.data / "logs" / "mind.log", "a", encoding="utf-8") as out:
+        for msg in ("feature_off feature=claims table=[claims] key=- reason=attach_failed code=RuntimeError",
+                    "feature_off feature=guild table=[dkp] key=decay_hour reason=invalid_config"):
+            out.write(json.dumps({"ts": datetime.fromtimestamp(MIND_START + 1).astimezone().isoformat(),
+                                  "level": "WARNING", "event": "log", "msg": msg}) + "\n")
+    check = rig.run()["features"]
+    assert check.status == FAIL
+    assert check.text == ("features: claims is off: its attach failed (RuntimeError); "
+                          "guild is off: invalid [dkp] decay_hour in mind.toml (from mind.log)")

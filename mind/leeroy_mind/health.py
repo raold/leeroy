@@ -485,21 +485,49 @@ def _mind_log(p: Probes, data: Path, run: MindRun | None, now: float,
     return out
 
 
-def _features(data: Path, seen: dict) -> Check:
+def _feature_lines(p: Probes, logs: Path, since: float) -> list[dict]:
+    """What the running mind's start logged as off (`feature_off`), newest per feature."""
+    from . import features
+    found = {}
+    for path in _log_files(logs, since):
+        try:
+            with p.open_log(path) as fh:
+                data = fh.read()
+        except OSError:
+            continue
+        for line in data.splitlines():
+            if b"feature_off" not in line:
+                continue
+            try:
+                r = json.loads(line)
+                at = datetime.fromisoformat(r["ts"]).timestamp()
+            except (ValueError, TypeError, KeyError, RecursionError):
+                continue
+            row = features.from_log(r.get("msg")) if isinstance(r, dict) and at >= since else None
+            if row is not None:
+                found[row["feature"]] = row
+    return [found[k] for k in sorted(found)]
+
+
+def _features(p: Probes, data: Path, run: MindRun | None, seen: dict) -> Check:
     """Features a bad optional mind.toml table (or a failed attach) turned off: the running
-    mind's own list from `status`, else what the file would turn off at the next start."""
+    mind's own list from `status`; when it does not answer, what its start logged (a failed
+    attach is only there); with no mind, what the file would turn off at the next start."""
     from . import features
     rows = seen.get("reply", {}).get("disabled_features")
-    running = isinstance(rows, list)
-    if not running:
-        rows = features.check_file(data / "mind.toml")
+    source = "" if isinstance(rows, list) else None
+    if source is None and run is not None:
+        rows, source = _feature_lines(p, data / "logs", run.started - 1), " (from mind.log)"
+        if not rows:
+            rows, source = features.check_file(data / "mind.toml"), " (at the next start)"
+    elif source is None:
+        rows, source = features.check_file(data / "mind.toml"), " (at the next start)"
     rows = [r for r in rows if isinstance(r, dict) and {"feature", "table", "key", "reason"} <= set(r)]
     if not rows:
         return Check("features", OK, "features: no optional table refused"
-                                     + ("" if running else " (read from mind.toml)"))
+                                     + (" (read from mind.toml)" if source else ""))
     said = "; ".join(features.words(r) for r in rows[:8])
-    return Check("features", FAIL, f"features: {said}"
-                 + ("" if running else " (at the next start)"))
+    return Check("features", FAIL, f"features: {said}{source}")
 
 
 def _endpoint(p: Probes, data: Path, run: MindRun | None, now: float, cfg: HealthCfg,
@@ -1440,7 +1468,7 @@ def run_checks(root: Path, data_dir: Path, *, probes: Probes | None = None) -> l
     out.append(_guarded("mind-log", _mind_log, p, data, run, now, hcfg))
     seen: dict = {}
     out.append(_guarded("endpoint", _endpoint, p, data, run, now, hcfg, forbidden, seen))
-    out.append(_guarded("features", _features, data, seen))
+    out.append(_guarded("features", _features, p, data, run, seen))
     out.append(_guarded("console", _console, p))
     out.append(_guarded("voice", _voice, p, data))
     out.append(_guarded("ollama", _ollama, p, cfg, forbidden))

@@ -49,10 +49,16 @@ BATCH = 500
 EVIDENCE_COLUMNS = (("memory", "evidence"), ("knows", "root"), ("thinks_knows", "root"),
                     ("rel_delta", "evidence"), ("emotion", "evidence"), ("story", "evidence"),
                     ("persona_state", "self_notes"), ("persona_ledger", "evidence"),
-                    ("attraction_act", "ref"), ("chronicle", "evidence"), ("encounter", "evidence"),
-                    ("outreach_item", "ref"), ("lexicon", "origin"), ("meta", "key"),
+                    ("attraction_act", "ref"), ("chronicle", "evidence"), ("encounter", "ref"),
+                    ("outreach_item", "ref"), ("lexicon", "origin_ref"), ("lexicon", "origin_refs"),
+                    ("fact", "root"), ("rumor", "root"), ("feud", "evidence"),
+                    ("jealousy", "evidence"), ("disclosure", "ref"), ("volition", "ref"),
+                    ("layer_open", "ref"), ("review_queue", "evidence"), ("meta", "key"),
                     ("meta", "value"), ("realm_post", "thread"))
-_EVENT_REF = re.compile(r"(?<![A-Za-z0-9_:])event:([0-9]{1,18})(?![0-9a-f])")
+# Every one of them must exist in the migrated schema (tests/test_prune.py): a misspelt column
+# is skipped by _cited as an older database's would be, and protects nothing.
+# A reference may follow a prefix ("banter:used:event:7") and carry a tag ("event:7:kind:wipe").
+_EVENT_REF = re.compile(r"(?<![A-Za-z0-9_])event:([0-9]{1,18})(?![0-9a-f])")
 _FACT_REF = re.compile(r"(?<![A-Za-z0-9_])fact:([0-9]{1,18})(?![0-9a-f])")
 # meta receipts: (name, key prefix, what its id is, the table and time column that date it)
 META_FAMILIES = (
@@ -177,7 +183,7 @@ def fact_candidates(conn, now: float) -> list[tuple[int, int]]:
         if r[0] not in keep]
 
 
-def _delete_facts(conn, ids: list[int], cited: set[int]) -> int:
+def _delete_facts(conn, ids: list[int], cited: set[int], others=None) -> int:
     """One batch, in the caller's transaction: the facts, what knows them, their origins, and
     each source (with its event row) that nothing else stands on."""
     marks = ",".join("?" * len(ids))
@@ -186,7 +192,7 @@ def _delete_facts(conn, ids: list[int], cited: set[int]) -> int:
     conn.execute(f"DELETE FROM realm_knows WHERE fact IN ({marks})", ids)
     conn.execute(f"DELETE FROM realm_fact_origin WHERE fact IN ({marks})", ids)
     gone = conn.execute(f"DELETE FROM realm_fact WHERE id IN ({marks})", ids).rowcount
-    others = _referrers(conn, "realm_source")
+    others = _referrers(conn, "realm_source") if others is None else others
     for source in sources:
         if any(conn.execute(f'SELECT 1 FROM "{t}" WHERE "{c}"=? LIMIT 1', (source,)).fetchone()
                for t, c in others):
@@ -279,30 +285,37 @@ def gather(conn, now: float) -> Work:
                 review_candidates(conn, now))
 
 
-def steps(work: Work, now: float, *, limit: int | None = None):
-    """(rule, write) for each batch of at most BATCH rows, at most `limit` rows per rule: the
-    caller runs each `write(conn)` in a transaction of its own; it returns (rows, bytes). The
-    facts go first: a source that goes frees its event row for the events rule."""
-    def cut(ids):
-        return _chunks(ids[:limit] if limit is not None else ids)
+def steps(work: Work, now: float, *, limit=None):
+    """(rule, write) for each batch of at most BATCH rows, at most `limit` rows per rule (an
+    integer, or a function of the rule's name; None: all): the caller runs each `write(conn)`
+    in a transaction of its own; it returns (rows, bytes). The facts go first: a source that
+    goes frees its event row for the events rule."""
+    def cut(ids, rule):
+        cap = limit(rule) if callable(limit) else limit
+        return _chunks(ids[:max(0, cap)] if cap is not None else ids)
 
     sizes = dict(work.facts)
-    for chunk in cut([i for i, _ in work.facts]):
-        yield "realm_facts", lambda conn, c=chunk, z=sizes: (
-            _delete_facts(conn, c, work.cited_events), sum(z[i] for i in c))
+    others = []  # the tables that stand on a source, read once (not once a batch)
+
+    def facts(conn, c, z):
+        if not others:
+            others.append(_referrers(conn, "realm_source"))
+        return _delete_facts(conn, c, work.cited_events, others[0]), sum(z[i] for i in c)
+    for chunk in cut([i for i, _ in work.facts], "realm_facts"):
+        yield "realm_facts", lambda conn, c=chunk, z=sizes: facts(conn, c, z)
     for kind, rows in work.events.items():
         sizes = dict(rows)
-        for chunk in cut([i for i, _ in rows]):
+        for chunk in cut([i for i, _ in rows], f"events:{kind}"):
             yield f"events:{kind}", lambda conn, c=chunk, z=sizes, k=kind: (conn.execute(
                 f"DELETE FROM game_event WHERE type=? AND id IN ({','.join('?' * len(c))})",
                 (k, *c)).rowcount, sum(z[i] for i in c))
     for name, rows in work.meta.items():
         sizes = dict(rows)
-        for chunk in cut([k for k, _ in rows]):
+        for chunk in cut([k for k, _ in rows], f"meta:{name}"):
             yield f"meta:{name}", lambda conn, c=chunk, z=sizes: (conn.execute(
                 f"DELETE FROM meta WHERE key IN ({','.join('?' * len(c))})", c).rowcount,
                 sum(z[k] for k in c))
-    for chunk in cut(work.review):
+    for chunk in cut(work.review, "review"):
         yield "review", lambda conn, c=chunk: (conn.execute(
             f"UPDATE review_queue SET resolved=? WHERE resolved IS NULL AND id IN "
             f"({','.join('?' * len(c))})", (now, *c)).rowcount, 0)
@@ -366,10 +379,29 @@ def _tree_size(path: Path) -> int:
     return total
 
 
+def trial_running(data_dir: Path) -> bool:
+    """Whether a trial holds one of scratch/locks/<label> (nightly/cli.py `_working_store`: a
+    trial runs beside the live service on a `scratch/mind-<label>-*.db` copy under that lock).
+    While one does, no scratch copy is removed: where an open file can be unlinked, removing
+    its database would lose the trial's committed units."""
+    locks = Path(data_dir) / "scratch" / "locks"
+    if not locks.is_dir():
+        return False
+    from leeroy_mind.app import instance_lock_held
+    for label in locks.iterdir():
+        try:
+            if label.is_dir() and instance_lock_held(label):
+                return True
+        except OSError:
+            return True  # a lock that cannot be probed counts as held
+    return False
+
+
 def file_candidates(data_dir: Path, now: float) -> list[tuple[str, Path, int]]:
     """(rule, path, bytes): a snapshot's sidecar whose database is gone; scratch's database copies
-    past SCRATCH_DB_DAYS, or the oldest while they exceed SCRATCH_CAP together; a lab copy older
-    than LAB_COPY_DAYS. Never a photo, a lock, a report or anything else in scratch."""
+    past SCRATCH_DB_DAYS, or the oldest while they exceed SCRATCH_CAP together (none while a
+    trial holds its lock); a lab copy older than LAB_COPY_DAYS. Never a photo, a lock, a report
+    or anything else in scratch."""
     data_dir = Path(data_dir)
     out = []
     snapshots = data_dir / "snapshots"
@@ -382,7 +414,8 @@ def file_candidates(data_dir: Path, now: float) -> list[tuple[str, Path, int]]:
     scratch = data_dir / "scratch"
     if scratch.is_dir() and _plain(scratch):
         copies = []
-        for p in scratch.iterdir():
+        idle = not trial_running(data_dir)
+        for p in scratch.iterdir() if idle else ():
             if SCRATCH_DB.match(p.name) and p.is_file() and _plain(p):
                 size = p.stat().st_size + sum(
                     s.stat().st_size for x in SIDECARS if (s := scratch / (p.name + x)).is_file())
@@ -393,7 +426,7 @@ def file_candidates(data_dir: Path, now: float) -> list[tuple[str, Path, int]]:
             if mtime < now - SCRATCH_DB_DAYS * DAY_S or total > SCRATCH_CAP:
                 out.append(("scratch-db", p, size))
                 total -= size
-        for p in scratch.iterdir():  # a sidecar whose copy is gone
+        for p in scratch.iterdir() if idle else ():  # a sidecar whose copy is gone
             for suffix in SIDECARS:
                 if (p.name.endswith(".db" + suffix) and SCRATCH_DB.match(p.name[:-len(suffix)])
                         and p.is_file() and _plain(p) and not (scratch / p.name[:-len(suffix)]).exists()):
