@@ -2,7 +2,9 @@
 wrote it (feuds, jealousy, romances, breakups, how members feel about the owner, live rumours,
 the guild mood). A table an older mind.db lacks is named in `missing` and reads as empty.
 A member romance (drama.couples) is a pair with a `stage` on the member ladder; a breakup says
-who left whom for him."""
+who left whom for him. `threads` is the romantic-threads recorder's report (drama.report):
+counts, guids and codes of what would have pulled members together, labelled as not in effect."""
+from leeroy_mind.drama.report import threads_report
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.storage.rows import ROMANCE_STAGES
 
@@ -10,7 +12,9 @@ from . import views
 from .feed import guild_mood, human_guid
 
 SOCIAL_TABLES = ("relationship", "attraction_state", "feud", "jealousy", "rumor", "rumor_state",
-                 "knows", "guild_mood", "pad_mood", "breakup")
+                 "knows", "guild_mood", "pad_mood", "breakup", "pull_event", "pull_shadow",
+                 "pull_night")
+THREAD_NIGHTS = 14
 ROMANCE_ORDER = ROMANCE_STAGES  # the stored ladder, furthest last
 JEALOUSY_MAX = 30
 RUMOURS_MAX = 20
@@ -103,4 +107,4 @@ def social_view(conn, *, now: float) -> dict:
     return {"human": human, "names": {str(g): n for g, n in views.names(conn).items()},
             "missing": missing, "mood": guild_mood(conn), "octants": octants, "you": you,
             "feuds": feuds, "jealousy": jealousy, "romances": romances, "breakups": breakups,
-            "rumours": rumours}
+            "rumours": rumours, "threads": threads_report(conn, nights=THREAD_NIGHTS)}
