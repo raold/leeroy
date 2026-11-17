@@ -498,7 +498,10 @@ class TalkEngine(EmoteReactions):
         seen = [(rt, self.life.presence(rt.speaker, medium="game",
                                         in_his_group=self.world.in_group(rt.speaker)))
                 for rt in planned]
-        seen.sort(key=lambda x: -(x[1].attention if x[1] is not None else Attention.FULL))
+        # the most attentive first; one who stepped away mid-conversation last (review-353
+        # P3-3: the answer he is owed goes to her only when nobody else is there)
+        seen.sort(key=lambda x: (self.life.is_away(x[0].speaker),
+                                 -(x[1].attention if x[1] is not None else Attention.FULL)))
         out = []
         for i, (rt, lp) in enumerate(seen):
             owed = (i == 0 or whisper or rt.speaker in called
@@ -561,7 +564,7 @@ class TalkEngine(EmoteReactions):
         whisper = reply_to == "whisper"
         audience = {row.to_guid} if whisper else self.world.audience(
             reply_to, from_guid=self.human.guid, to_guid=row.to_guid, zone=row.zone)
-        cands = [g for g in self._candidates(audience, hearable=False)
+        cands = [g for g in self._candidates(audience, hearable=False, stepped_away=True)
                  if self.raid.allows(g, TurnKind.REPLY_HUMAN, now)
                  and not (reply_to == "say" and self._is_dead(g, now))]
         return audience, cands
