@@ -77,6 +77,15 @@ neutral 0.5. Missing observations are not zero samples. This is a provisional
 normalisation, not a calibrated satisfaction measure. Friendly/romantic emotes
 add and rude emotes subtract, clipped to [-1,1].
 
+His Discord reactions (`signals/README.md`, "The guild Discord") enter the same components.
+`asked_back`, `laughed`, `affection`, `topic_kept`, `sent_media` and `turns_after` are further
+engagement components at their own value when observed (no baseline; absent ones are not
+zeros), so a reply with a laugh is 0.75 where a bare reply is 0.5. `react_positive` adds to and
+`react_negative` subtracts from the emote component. `objected` is a fixed 0.5 penalty and
+counts as a measured explicit response with vote value zero, like a negative nudge;
+`topic_changed` is a fixed 0.1 penalty, like ignored. A Discord latency is elapsed / 1800 and
+is only ever compared with Discord baselines of its own kind.
+
 The planning budget uses completed reward units' own wall time, separately for
 lexical and embedding screening. It uses the median nightly seconds per unit
 over the last seven nights, beginning after the first measured night. Until then,
@@ -98,8 +107,14 @@ Discord and DMs have separate baseline/report kinds, through the shared channel
 helpers. They supply no game baseline, screening, session or activity. Existing
 DM/whisper privacy holds; only numeric evidence is pooled, never content.
 
-The night selects at most 500 cast lines whose 120-second observation window has
-closed: changed evidence first, then newest unscored lines with a 14-day lookback. A saved selection survives resumes. Later
+The night selects cast lines whose 120-second observation window has closed: changed
+evidence first, then unscored lines he answered or reacted to, then the newest of the rest,
+with a 14-day lookback. A night scores 500 lines until one night has measured what a line costs
+(`reward_timing`), then as many as fit 900 seconds at that cost, at most 4,000; the stage also
+stops starting units after 1,800 seconds and leaves the rest pending. (A fixed 500 against
+about 500 new lines a day never drained: the audit of 2026-11-17 found 2,374 left over.) A
+Discord reply or emoji that arrives after a line was scored, a removed emoji, and backfilled
+observations are changed evidence: the line is rescored with a new revision. A saved selection survives resumes. Later
 signals or a changed owner vote revisit an existing score even outside that
 initial lookback, bounded to the 120-day signal retention; each update and its
 revision receipt commit together. Counts logged without content are scored this
