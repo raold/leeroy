@@ -622,3 +622,43 @@ def test_an_offline_raid_preempts_a_running_night_and_it_resumes_after_without_g
         await sched.tick(); await sched.wait_idle()             # no grace: he never came back
         assert started == [started[0]] * 2 and run_get(h.store, h.night).status == "done"
     run(go())
+
+
+# -- the night's end ------------------------------------------------------------------------------
+
+def test_a_night_that_ends_unloads_the_reflection_model_and_nothing_else(h, caplog):
+    async def go():
+        sched, started, admin = make_sched(h, loaded=[h.EMB, h.REFL, "another:model"])
+        await sched.on_event(h.hello(0)); h.clock.advance(11 * 60)
+        await sched.tick(); await sched.wait_idle()
+        assert len(started) == 1 and admin.calls == [("unload", h.REFL)]
+        assert admin.loaded == [h.EMB, "another:model"]
+    with caplog.at_level(logging.INFO):
+        run(go())
+    assert "nightly_reflection_unloaded" in caplog.text
+
+
+def test_a_night_that_fails_unloads_it_too_and_an_unreachable_ollama_never_fails_the_night(h, caplog):
+    async def go():
+        sched, started, admin = make_sched(h, fail=ReflectionError("a stage broke", fatal=True),
+                                            loaded=[h.REFL, h.EMB])
+        await sched.on_event(h.hello(0)); h.clock.advance(11 * 60)
+        await sched.tick(); await sched.wait_idle()
+        assert admin.calls == [("unload", h.REFL)]
+        assert run_get(h.store, started[0][0]).status == "failed"
+        down = NightScheduler(h.store, h.settings, GpuArbiter(DownAdmin([]), h.settings), noop_night,
+                              clock=h.clock)
+        await down._run("2026-10-30", (0.0, 1.0), 1)      # ends without raising
+    with caplog.at_level(logging.WARNING):
+        run(go())
+    assert "nightly_unload_failed" in caplog.text
+
+
+def test_the_live_model_and_a_shared_name_stay_at_the_nights_end(h):
+    async def go():
+        admin = FakeAdmin([h.LIVE, h.EMB])
+        assert await GpuArbiter(admin, h.settings).night_over() == [] and admin.calls == []
+        same = replace(h.settings, reflection_model=h.settings.live_model)
+        admin = FakeAdmin([h.LIVE, h.EMB])
+        assert await GpuArbiter(admin, same).night_over() == [] and admin.calls == []
+    run(go())
