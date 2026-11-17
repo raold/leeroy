@@ -7,12 +7,19 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Literal
 
+from . import detail as detail_mod
+from .detail import Detail
+
 MAX_LINE = 65536
 MAX_PHRASES = 64
 MAX_PHRASE_CHARS = 500
 RENDER_KEYS = frozenset({"id", "op", "phrases", "negative", "seed", "steps", "cfg", "size",
                          "out", "thumb", "thumb_size", "nsfw_max"})
 IDENTITY_KEYS = frozenset({"ref", "crop", "scale"})
+# The detailer (detail.py), all optional: without detail_faces or detail_hands true there is no
+# pass and the render is what it was before the detailer existed.
+DETAIL_KEYS = frozenset({"detail_faces", "detail_hands", "detail_face_denoise",
+                         "detail_hand_denoise", "detail_size"})
 GRID_KEYS = frozenset({"id", "op", "tiles", "tile", "gutter", "out", "thumb", "thumb_size"})
 CAPTION_KEYS = frozenset({"id", "op", "base_path", "top", "bottom", "out_path", "nsfw_max"})
 CRITIC_KEYS = frozenset({"id", "op", "path"})  # and optionally ref with crop, both or neither
@@ -54,6 +61,7 @@ class Render:
     nsfw_max: float
     identity: Identity | None = None
     shape: Literal["square", "portrait"] = "square"
+    detail: Detail | None = None  # the detailer's pass over the rendered image (detail.py)
 
 
 @dataclass(frozen=True)
@@ -173,6 +181,26 @@ def _identity(v) -> Identity:
     return Identity(_jpg(v, "ref"), (l, t, r, b), _num(v, "scale", 0.3, 0.9))
 
 
+def _bool(d: dict, key: str) -> bool:
+    v = d.get(key, False)
+    if type(v) is not bool:
+        raise ValueError(f"{key} is not true or false")
+    return v
+
+
+def _detail(d: dict) -> Detail | None:
+    """The detailer's request, or None without detail_faces or detail_hands true. Every key
+    given is checked, asked for or not."""
+    faces, hands = _bool(d, "detail_faces"), _bool(d, "detail_hands")
+    lo, hi = detail_mod.DENOISE_RANGE
+    face = _num(d, "detail_face_denoise", lo, hi) if "detail_face_denoise" in d else detail_mod.FACE_DENOISE
+    hand = _num(d, "detail_hand_denoise", lo, hi) if "detail_hand_denoise" in d else detail_mod.HAND_DENOISE
+    size = d.get("detail_size", detail_mod.SIZE)
+    if type(size) is not int or size not in detail_mod.SIZES:
+        raise ValueError("detail_size is not 768, 896 or 1024")
+    return Detail(faces, hands, face, hand, size) if faces or hands else None
+
+
 def _grid(d: dict, rid: str) -> Grid:
     if set(d) != GRID_KEYS:
         raise ValueError("grid keys are not exactly " + ", ".join(sorted(GRID_KEYS)))
@@ -247,9 +275,9 @@ def parse(line: bytes) -> Render | Grid | Caption | Critic | Embed | Quit | Retr
     if d.get("op") != "render":
         raise ValueError("unknown op")
     extra = set(d) - RENDER_KEYS
-    if not RENDER_KEYS <= set(d) or extra - {"identity", "shape"}:
+    if not RENDER_KEYS <= set(d) or extra - {"identity", "shape"} - DETAIL_KEYS:
         raise ValueError("render keys are not " + ", ".join(sorted(RENDER_KEYS)) +
-                         " and optionally identity, shape")
+                         " and optionally identity, shape, " + ", ".join(sorted(DETAIL_KEYS)))
     size = _int(d, "size", 768, 1024)
     if size not in (768, 896, 1024):
         raise ValueError("size is not 768, 896 or 1024")
@@ -263,4 +291,4 @@ def parse(line: bytes) -> Render | Grid | Caption | Critic | Embed | Quit | Retr
                   _int(d, "seed", 0, 4294967295), _int(d, "steps", 10, 60),
                   _num(d, "cfg", 1.0, 12.0), size, _jpg(d, "out"), _jpg(d, "thumb"),
                   _int(d, "thumb_size", 128, 1024), _num(d, "nsfw_max", 0.01, 0.9),
-                  identity, shape)
+                  identity, shape, _detail(d))

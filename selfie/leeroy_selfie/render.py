@@ -8,7 +8,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from . import caption, critic, face, grid, jpeg, models, similarity
+from . import caption, critic, detail, face, grid, jpeg, models, similarity
 from .fit import fit
 from .protocol import PORTRAIT_SIZE, Caption, Critic, Grid, Identity, Render, RenderFailed
 
@@ -64,7 +64,8 @@ class Renderer:
         self._refs: OrderedDict = OrderedDict()  # (ref, st_mtime_ns, crop, cfg) -> embeds
         self._blanks: dict = {}  # cfg -> the embeds a render without a reference carries
         self.data = data
-        self._detectors = None  # critic.Detectors, loaded at the first critic request
+        self._detectors = None  # critic.Detectors, loaded at the first critic or detail request
+        self._i2i = None  # the img2img pipeline over the same components, at the first detail
 
     def _count(self, text: str) -> int:
         return max(len(tok(text, add_special_tokens=False).input_ids)
@@ -78,7 +79,9 @@ class Renderer:
 
     def render(self, req: Render) -> dict:
         """One image, a square of the requested `size` (768, 896 or 1024) or PORTRAIT for shape
-        "portrait", saved as is to `out`, and a thumbnail with its long side `thumb_size` to
+        "portrait", after the detailer's pass when the request asks for one (detail.py: its
+        fields detail_faces, detail_hands, detail_skipped, detail_ms and detail_code are in the
+        answer then, and the NSFW score is the final image's), saved as is to `out`, and a thumbnail with its long side `thumb_size` to
         `thumb`; neither when the NSFW score reaches nsfw_max. A render with an identity is
         conditioned on the face in its reference crop, at its scale; one without, on an
         identity pipeline, carries a blank reference at scale 0, which adds nothing. RenderFailed:
@@ -108,6 +111,13 @@ class Renderer:
                               **adapter_kw).images[0]
         except torch.cuda.OutOfMemoryError as e:
             raise RenderFailed("oom") from e
+        detailed = {}
+        if req.detail is not None:
+            lead = ((detail.FACE_LEAD, 0), *((t, min(9, p + 1)) for t, p in req.phrases))
+            image, detailed = self.detail_pass(
+                image, req.detail, seed=req.seed, steps=req.steps, cfg=req.cfg,
+                face_prompt=fit(lead, self._count, limit)[0], hand_prompt=detail.HAND_LEAD,
+                negative=negative, identity=req.identity)
         nsfw = self.score(image)
         flagged = nsfw >= req.nsfw_max
         if not flagged:
@@ -119,7 +129,72 @@ class Renderer:
                 "dropped": list(dropped), "tokens": self._count(prompt),
                 "seconds": round(time.perf_counter() - started, 2),
                 "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                "width": width, "height": height}
+                "width": width, "height": height, **detailed}
+
+    def detail_pass(self, image, opts: detail.Detail, *, seed: int, steps: int, cfg: float,
+                    face_prompt: str, hand_prompt: str, negative: str,
+                    identity: Identity | None = None) -> tuple[object, dict]:
+        """(the image after the detailer's pass, its detail_ fields): detail.run with this
+        renderer's detectors and refiner. It never raises for the pass: a missing detector, CUDA
+        out of memory or any error is a detail_code and the image as far as it got."""
+        try:
+            if self._detectors is None:
+                self._detectors = critic.load_detectors(self.data)
+        except Exception:
+            self._detectors = None
+        return detail.run(image, self._detectors, opts, self.refiner(
+            opts, seed=seed, steps=steps, cfg=cfg, face_prompt=face_prompt,
+            hand_prompt=hand_prompt, negative=negative, identity=identity))
+
+    def refiner(self, opts: detail.Detail, *, seed: int, steps: int, cfg: float,
+                face_prompt: str, hand_prompt: str, negative: str,
+                identity: Identity | None = None):
+        """detail.run's refine: one crop drawn again by img2img at its kind's strength, with the
+        crop's own seed (detail.seed_for). On an identity pipeline the largest face keeps her
+        reference at its scale, so the face stays hers; every other crop carries the blank
+        reference at scale 0. CUDA out of memory frees what it can and ends the pass
+        (detail.Skip("oom")): the pass works at `size` x `size` (at most 1024), the latents of a
+        square render, on the weights already loaded, so it needs no more VRAM than a render."""
+        torch = self.torch
+
+        def refine(kind: str, index: int, crop):
+            adapter_kw = {}
+            if self.identity:
+                if kind == "face" and index == 0 and identity is not None:
+                    adapter_kw["ip_adapter_image_embeds"] = self._embeds(identity, cfg > 1)
+                    self.pipe.set_ip_adapter_scale(identity.scale)
+                else:
+                    adapter_kw["ip_adapter_image_embeds"] = self._blank(cfg > 1)
+                    self.pipe.set_ip_adapter_scale(0.0)
+            generator = torch.Generator("cuda").manual_seed(detail.seed_for(seed, kind, index))
+            try:
+                return self._img2img()(
+                    prompt=hand_prompt if kind == "hand" else face_prompt,
+                    negative_prompt=negative, image=crop,
+                    strength=opts.hand_denoise if kind == "hand" else opts.face_denoise,
+                    num_inference_steps=steps, guidance_scale=cfg, generator=generator,
+                    **adapter_kw).images[0]
+            except torch.cuda.OutOfMemoryError as e:
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                raise detail.Skip("oom") from e
+        return refine
+
+    def _img2img(self):
+        """SDXL img2img over the loaded pipeline's own components (the same objects: no weight
+        is loaded, copied or cast), made at the first detail request."""
+        if self._i2i is None:
+            from diffusers import StableDiffusionXLImg2ImgPipeline
+            pipe = self.pipe
+            self._i2i = StableDiffusionXLImg2ImgPipeline(
+                **pipe.components,
+                force_zeros_for_empty_prompt=getattr(pipe.config, "force_zeros_for_empty_prompt",
+                                                     True),
+                add_watermarker=getattr(pipe, "watermark", None) is not None)
+            self._i2i.set_progress_bar_config(disable=True)
+        return self._i2i
 
     def _embeds(self, identity: Identity, cfg: bool):
         """The adapter's embeds of the reference's crop, computed once per file version, crop

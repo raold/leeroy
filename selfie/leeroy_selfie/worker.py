@@ -242,6 +242,16 @@ def _retry_asked(lines: queue.Queue, out: BinaryIO) -> bool:
         _send(out, {"id": req.id, "ok": False, "error": "bad_request"})
 
 
+def _detail_log(fields: dict) -> str:
+    """The detailer's part of a render's log line: counts, its time and its code."""
+    if "detail_code" not in fields:
+        return ""
+    error = f" detail_error={fields['detail_error']}" if fields.get("detail_error") else ""
+    return (f" detail_faces={fields.get('detail_faces')} detail_hands={fields.get('detail_hands')}"
+            f" detail_skipped={fields.get('detail_skipped')} detail_ms={fields.get('detail_ms')}"
+            f" detail_code={fields.get('detail_code') or 'ok'}{error}")
+
+
 def _answer(renderer: Renderer, req: Render) -> dict:
     try:
         fields = renderer.render(req)
@@ -253,7 +263,9 @@ def _answer(renderer: Renderer, req: Render) -> dict:
         error = type(e).__name__
     else:
         _log(f"{req.id} ok flagged={fields.get('flagged')} nsfw={fields.get('nsfw')} "
-             f"tokens={fields.get('tokens')} seconds={fields.get('seconds')}")
+             f"tokens={fields.get('tokens')} seconds={fields.get('seconds')}"
+             + _detail_log(fields))
+        fields.pop("detail_error", None)  # an exception's class name: the log's, not the mind's
         return {"id": req.id, "ok": True, "error": "", **fields}
     _log(f"{req.id} failed {error}")
     return {"id": req.id, "ok": False, "error": error}
