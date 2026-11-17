@@ -4,6 +4,9 @@
 
 export const VOICE_NONE = "none yet: `personas voices` imports one";
 export const SAMPLE_ORDER = ["answer", "tease", "tired", "flirt", "warm", "annoyed"];
+// Her stance is written for a household: after a household change it stays out of her prompts
+// until a sheet is imported again (the view's stance_current).
+export const STANCE_STALE = "stance (not shown: her household changed since it was written)";
 
 function obj(x) { return x && typeof x === "object" && !Array.isArray(x) ? x : {}; }
 function strs(x) { return Array.isArray(x) ? x.filter(s => typeof s === "string" && s.trim()) : []; }
@@ -18,7 +21,7 @@ export function voiceRows(card) {
   const rows = [["register", str(s.register)], ["shape", str(s.shape)],
                 ["says", strs(s.says).join(", ")], ["never says", strs(s.never).join(", ")],
                 ["brings up", strs(s.brings_up).join("; ")], ["with him", str(s.with_him)],
-                ["stance", str(s.stance)]];
+                [c.stance_current === false ? STANCE_STALE : "stance", str(s.stance)]];
   SAMPLE_ORDER.forEach(k => { if (str(samples[k])) rows.push(["sample: " + k, str(samples[k])]); });
   return rows.filter(r => r[1] !== "");
 }

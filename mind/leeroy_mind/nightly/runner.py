@@ -56,7 +56,7 @@ from leeroy_mind.nightly.settings import NightlySettings
 from leeroy_mind.nightly.store import (NightRun, active_away, add_foreign_loads, commit_unit,
                                        refund_resume, run_get, set_run_error, stage_record,
                                        step_done)
-from leeroy_mind.personas.card import card_race_class, render_prompt_card
+from leeroy_mind.personas.card import card_race_class, render_night_card, render_prompt_card
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.personas.screens import redact_real_name
@@ -311,10 +311,12 @@ class NightContext:
         """The card live talk shows (Pipeline._card, PR28): rendered from the persona, with race
         and class from the roster, or from the stored card for a member the roster lacks, and
         the member's tuning lines after it when the owner has turned a wording dial far
-        (tuning.lines.tuned_card)."""
+        (tuning.lines.tuned_card). A member with a voice sheet gets its public part in the
+        place of the trait sentences (card.render_night_card), so what the night writes for
+        her is in her voice."""
         def build() -> str:
             p = self.persona(guid)
-            return tuned_card(render_prompt_card(p, **self._kind(guid)), p)
+            return tuned_card(render_night_card(p, **self._kind(guid)), p)
         return self._cached(("card", guid), build)
 
     def base_card(self, guid: int) -> str:

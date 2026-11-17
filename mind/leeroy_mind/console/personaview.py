@@ -44,6 +44,7 @@ from leeroy_mind.personas.schema import (BUSTS, GLASSES, GLUTES, HAIR_COLOURS, H
                                          HAIR_STYLES, HIPS, JEWELLERY, MAKEUPS, MEN_HAIR_STYLES,
                                          PALETTE, PIERCINGS, TATTOOS, WAISTS, WARDROBES,
                                          persona_from_dict, persona_to_dict)
+from leeroy_mind.personas.speech import stance_current
 from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
 from leeroy_mind.selfies.style import suggestive
 
@@ -316,6 +317,8 @@ def _card(p, status: str | None = None) -> dict:
             "appearance": d["appearance"], "photo": d.get("photo"),
             # her voice sheet (personas.voices), whole: it is the owner's console
             "speech": d.get("speech"),
+            # her stance is shown to her only while her household is the one it was written for
+            "stance_current": stance_current(p),
             "life": {k: d["real_life"][k] for k in BIO_LIFE},
             "likes": list(d["likes"]), "dislikes": list(d["dislikes"]), "values": list(d["values"]),
             "habits": [{"substance": h["substance"], "when": h["when"]} for h in d["habits"]]}

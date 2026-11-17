@@ -52,7 +52,7 @@ def test_no_model_is_asked_for_a_sheet():
     ({"shape": "y" * 121}, "speech.shape: must be at most 120 characters"),
     ({"says": ["a", "b", "c"]}, "speech.says: must have at least 4 items"),
     ({"says": [f"w{i}" for i in range(9)]}, "speech.says: must have at most 8 items"),
-    ({"says": ["noted", "fair enough", "on paper", "z" * 31]},
+    ({"says": ["noted", "sound as", "on my tally", "z" * 31]},
      "speech.says[3]: must be at most 30 characters"),
     ({"brings_up": ["b" * 91]}, "speech.brings_up[0]: must be at most 90 characters"),
     ({"never": ["a", "b", "c", "d", "e"]}, "speech.never: must have at most 4 items"),
@@ -68,7 +68,7 @@ def test_no_model_is_asked_for_a_sheet():
     ({"samples": {"answer": "ok", "flirt": "come here"}},
      "speech.samples.flirt: men stay friends; use warm"),
     ({"never": ["Noted"]}, "speech.never[0]: is also among the words she says"),
-    ({"says": ["noted", "Noted", "on paper", "right then"]}, "speech.says: the same word twice"),
+    ({"says": ["noted", "Noted", "on my tally", "well so"]}, "speech.says: the same word twice"),
     ({"register": "dry\nexact"}, "speech.register: one line of plain text (no line breaks, no |)"),
     ({"with_him": "teases |cffff0000him|r"},
      "speech.with_him: one line of plain text (no line breaks, no |)"),
@@ -95,7 +95,7 @@ def test_the_block_has_a_hard_token_cap():
         block = sp.voice_block(s, "Zan", to_him=to_him, private=private)
         assert estimate_tokens(block) <= sp.BLOCK_TOKENS
         assert block.startswith("Your voice: plain, clipped, a bit gruff; ")
-        assert ("With Zan: teases him about his sums." in block) is to_him
+        assert ("With Zan: ribs him over his sums." in block) is to_him
     keep, size = sp.fitted(s)
     assert keep < (8, 4, 4) and keep[0] >= 4 and keep[2] >= 1 and size <= sp.BLOCK_TOKENS
     assert sp.fitted(s, to_him=False, private=False)[0] >= keep  # a public turn has more room
@@ -130,23 +130,23 @@ def test_a_sheet_of_the_wrong_shape_is_a_persona_error():
 
 def test_the_block_on_a_public_turn_has_neither_with_him_nor_stance():
     s = sheet()
-    block = sp.voice_block(s, "Zan", samples=["depends. what did the log say"])
+    block = sp.voice_block(s, "Zan", samples=["depends. which boss was it"])
     assert block.splitlines() == [
         "Your voice: plain, clipped, a bit gruff; short flat statements, three to seven words.",
-        "You say, only now and then: noted, fair enough, on paper, right then. "
+        "You say, only now and then: noted, sound as, on my tally, well so. "
         "Never: awesome, lol.",
         "Unasked, you bring up: the allotment; night shifts at the depot.",
         sp.SAMPLES_HEAD,
-        "- depends. what did the log say"]
+        "- depends. which boss was it"]
     assert "not lines to reuse" in sp.SAMPLES_HEAD
 
 
 def test_with_him_only_on_his_turns_and_stance_only_where_only_he_reads():
     s = sheet()
     his = sp.voice_block(s, "Zan", to_him=True)
-    assert "With Zan: teases him about his sums." in his and "no hurry" not in his
+    assert "With Zan: ribs him over his sums." in his and "content with it" not in his
     private = sp.voice_block(s, "Zan", to_him=True, private=True)
-    assert "With Zan: teases him about his sums. single and in no hurry about it." in private
+    assert "With Zan: ribs him over his sums. solo and content with it." in private
     assert "With Zan" not in sp.voice_block(s, "Zan", private=True)  # never without to_him
     assert sp.SAMPLES_HEAD not in private  # no samples, no heading
 
@@ -199,7 +199,7 @@ def test_the_second_sample_rotates_on_its_own_seeded_stream():
 
 def test_a_sample_she_already_sent_is_never_shown_again():
     s = sheet()
-    sent = ["Noted. Not doing that twice!", "and then: depends, what did the log say?"]
+    sent = ["Noted. Not doing that twice!", "and then: depends, which boss was it?"]
     for seed in range(30):
         shown = sp.pick_samples(s, "boundary", random.Random(seed), sent=sent)
         assert s.samples["annoyed"] not in shown and s.samples["answer"] not in shown
@@ -216,8 +216,8 @@ def test_one_sample_when_asked_for_one():
 
 @pytest.mark.parametrize("shape,found", [
     ("short flat statements, three to seven words", (3, 7)), ("fragments of 3-8 words", (3, 8)),
-    ("Three or Four words, rarely more", (3, 4)), ("ten to 4 words", (4, 10)),
-    ("runs two thoughts together and trails off", None), ("", None),
+    ("Three or Five words, rarely more", (3, 5)), ("ten to 4 words", (4, 10)),
+    ("runs two thoughts together, then stops short", None), ("", None),
     ("about 99 to 100 words", None)])
 def test_the_line_length_a_shape_names(shape, found):
     assert sp.word_range(shape) == found
@@ -230,7 +230,7 @@ def test_the_line_length_a_shape_names(shape, found):
     ({"samples": {**GRUFF["samples"], "tired": "lol. brain is soup"}}, "never_in_sample"),
     ({"brings_up": ["the allotment", "her rizz"]}, "later_era"),
     ({"stance": "single since 2019"}, "later_era"),
-    ({"says": ["noted", "fair enough", "on paper", "you absolute menace"]}, "says_slop"),
+    ({"says": ["noted", "sound as", "on my tally", "you absolute menace"]}, "says_slop"),
 ])
 def test_what_the_import_screen_refuses_by_code(change, code):
     assert sp.screen(member(**change), characters=["Arkon", "Belra", "Coros"]) == [code]
@@ -238,7 +238,7 @@ def test_what_the_import_screen_refuses_by_code(change, code):
 
 def test_a_clean_sheet_passes_the_screen_and_her_own_name_is_no_member():
     assert sp.screen(member(), characters=["Arkon", "Belra"]) == []
-    own = member(samples={**GRUFF["samples"], "warm": "arkon reporting in. right then"})
+    own = member(samples={**GRUFF["samples"], "warm": "arkon reporting in. well so"})
     assert sp.screen(own, characters=["Arkon", "Belra"]) == []
     assert sp.screen(make_persona(101, "Arkon")) == []
 

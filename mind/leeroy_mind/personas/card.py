@@ -162,7 +162,7 @@ def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = 
     behaviours = [_sentence(ext.behaviour)]
     if name != "extraversion":
         behaviours.append(_sentence(far.behaviour))
-    shown, temper = temper, " ".join(b for b in behaviours if b)
+    with_traits, temper = temper, " ".join(b for b in behaviours if b)
 
     opinions = "Opinions: " + " | ".join(_one_line(o) for o in p.opinions[:2])
     nevers = "Never: " + "; ".join(_one_line(n) for n in p.nevers[:2])
@@ -177,7 +177,7 @@ def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = 
         # with the trait sentences and the mind line, then those two are left out: the sheet
         # takes their place and nothing else comes back into the room they leave
         return "\n".join(s for k, s in sections.items()
-                         if s and (shown or k not in ("temper", "mind")))
+                         if s and (with_traits or k not in ("temper", "mind")))
 
     for drop in (None, "opinions", "view", "mind"):
         if drop:
@@ -206,6 +206,22 @@ def render_prompt_card(p: Persona, *, race: str, class_name: str, voice: bool = 
         return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET,
                        about=True, temper=False)
     return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET, about=True)
+
+
+def render_night_card(p: Persona, *, race: str, class_name: str) -> str:
+    """The card the night's readers get (the critic, the weekly evaluation, and the scenes,
+    beats, letters and posts written from NightContext.card): the prompt card, and for a member
+    with a voice sheet the card live talk shows (no trait sentences, no attachment or humour
+    line) followed by the sheet's public part (personas.speech.public_block: her register,
+    shape, words, never-words and topics; never how she is with him nor her stance, which only
+    a private turn of his reads). So a member is judged against, and written in, the voice she
+    talks in. Without a sheet it is render_prompt_card, word for word."""
+    card = render_prompt_card(p, race=race, class_name=class_name, voice=True)
+    speech = getattr(p, "speech", None)
+    if speech is None:
+        return card
+    from .speech import public_block
+    return card + "\n" + public_block(speech)
 
 
 # The identity line's "You play Name, a/an KIND (ROLE)." with the role the last parentheses,

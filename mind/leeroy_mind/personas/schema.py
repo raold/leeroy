@@ -275,6 +275,11 @@ class Speech:
     stance: str = _f(max_len=140)          # what her household means for it; whispers and DMs
     # one line per kind (SAMPLE_KINDS; flirt or warm, never both): how she sounds, never reused
     samples: dict[str, str] = _f(max_items=5, max_len=220)
+    # The household her stance was written for (her real_life.household then; personas.voices
+    # stamps it at import). Her stance is shown only while her household still reads the same
+    # (speech.stance_current): the night can end a marriage and the owner can edit a
+    # household, and a stance must never contradict the card. None: not stamped, never shown.
+    household: str | None = _f(max_len=120, default=None)
 
 
 DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
@@ -485,7 +490,10 @@ def speech_from_dict(d) -> Speech:
 
 
 def speech_to_dict(s: Speech) -> dict:
-    return _dump(s)
+    d = _dump(s)
+    if s.household is None:
+        del d["household"]  # a sheet without the stamp, as a file has it
+    return d
 
 
 # -- emoticons are marks, chat words are words ----------------------------------------------
@@ -573,6 +581,8 @@ def persona_to_dict(p: Persona) -> dict:
         del d["identity"]["home"]  # and an identity without a home state
     if p.speech is None:
         del d["speech"]  # and a persona without a voice sheet
+    else:
+        d["speech"] = speech_to_dict(p.speech)
     return d
 
 

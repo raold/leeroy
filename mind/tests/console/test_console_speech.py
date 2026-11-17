@@ -41,7 +41,8 @@ def test_the_member_detail_carries_her_sheet_and_its_ledger_row(cast, data):
                      now=NOW)["card"]["speech"] is None
     ledger = voices.set_voice(cast, 101, sheet(), now=NOW - 60)
     view = feed.read(data / "mind.db", personaview.member_view, 101, now=NOW)
-    assert view["card"]["speech"] == GRUFF
+    assert view["card"]["speech"] == {**GRUFF, "household": "lives with a flatmate"}
+    assert view["card"]["stance_current"] is True
     assert [(r["id"], r["kind"], r["text"], r["undone"]) for r in view["ledger"]] == [
         (ledger, "voice", "voice sheet set", False)]
     # the ledger row's words never hold the sheet's
@@ -51,7 +52,7 @@ def test_the_member_detail_carries_her_sheet_and_its_ledger_row(cast, data):
 def test_the_roster_never_carries_a_sheet(cast, data):
     voices.set_voice(cast, 101, sheet(), now=NOW - 60)
     text = json.dumps(feed.read(data / "mind.db", personaview.roster_view, now=NOW))
-    for private in ("a bit gruff", "fair enough", "the allotment", "no hurry",
+    for private in ("a bit gruff", "sound as", "the allotment", "content with it",
                     "brain is soup"):
         assert private not in text
 
@@ -77,7 +78,7 @@ def test_the_looks_ops_undo_takes_a_voice_row_and_queues_no_photo(cast, clock):
     app = SimpleNamespace(store=cast, clock=clock, personas=PersonaCache(cast), human_guid=1,
                           selfies=SimpleNamespace(queue_for_looks=lambda g: queued.append(g)))
     ledger = voices.set_voice(cast, 101, sheet(), now=NOW - 60)
-    assert app.personas.base(101).speech == sheet()  # cached: the undo must drop it
+    assert app.personas.base(101).speech is not None  # cached: the undo must drop it
     back = run(LooksService(app).handle({"action": "undo", "ledger": ledger}))
     assert back == {"ok": True, "guid": 101, "ledger": ledger, "set": None, "message": "Undone."}
     assert load_persona(cast, 101).speech is None and app.personas.base(101).speech is None

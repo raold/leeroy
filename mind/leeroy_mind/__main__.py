@@ -1220,7 +1220,8 @@ def cmd_persona_voices(args) -> int:
     from .human import human_identity
     from .personas.schema import PersonaError
     from .personas.speech import BLOCK_TOKENS
-    from .personas.voices import REFUSALS, plan, plan_clear, set_voice
+    from collections import Counter
+    from .personas.voices import REFUSALS, SKIPS, plan, plan_clear, set_voice
     root = _root(args)
     if args.go and args.dry_run:
         print("personas voices: --dry-run or --go, not both", file=sys.stderr)
@@ -1262,7 +1263,8 @@ def cmd_persona_voices(args) -> int:
             plans = plan(store, folder, guids=guids,
                          human=human_identity(cfg, store, human_guid) if human_guid else None)
         missing = sorted((guids or set()) - {h.guid for h in plans})
-        done = {"import": 0, "unchanged": 0, "clear": 0, "refused": 0}
+        done = {"import": 0, "unchanged": 0, "clear": 0, "refused": 0, "skipped": 0}
+        by_code, restamped = Counter(), 0
         for h in plans:
             size = f"block {h.tokens}/{BLOCK_TOKENS} tokens, {h.samples} samples" if h.tokens else ""
             said, outcome = h.outcome, h.outcome
@@ -1279,10 +1281,16 @@ def cmd_persona_voices(args) -> int:
                 said = "would import" if outcome == "import" else "would clear"
             elif outcome == "refused":
                 said = "refused: " + ", ".join(h.codes)
+            elif outcome == "skipped":
+                said = "skipped: " + ", ".join(h.codes)
             done[outcome] += 1
+            by_code.update(h.codes)
+            if h.restamps and outcome == "import":
+                restamped += 1
+                said += " (the same sheet: her household changed, this re-sets her stance)"
             print(f"{h.guid:>7}  {_ascii(h.name):<12}  {said}" + (f"  [{size}]" if size else ""))
             for code in h.codes:
-                print(f"         {code}: {REFUSALS.get(code, code)}")
+                print(f"         {code}: {REFUSALS.get(code) or SKIPS.get(code, code)}")
             for line in h.details:
                 print(f"         {_ascii(line)[:200]}")
         for g in missing:
@@ -1293,7 +1301,12 @@ def cmd_persona_voices(args) -> int:
                   + (f"; {done['refused']} refused" if done["refused"] else ""))
         else:
             print(f"{verb} import {done['import']} voice sheets; {done['unchanged']} unchanged; "
-                  f"{done['refused']} refused")
+                  f"{done['refused']} refused; {done['skipped']} skipped (not in the cast)")
+            if by_code:
+                print("by code: " + ", ".join(f"{code} {n}" for code, n in sorted(by_code.items())))
+            if restamped:
+                print(f"{restamped} of the imports only re-set a stance for a changed household: "
+                      "read those stances first")
         if args.dry_run:
             print("nothing was written")
         return 1 if done["refused"] or (missing and not args.clear) else 0
@@ -1828,6 +1841,10 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_voice.add_argument("--go", action="store_true",
                          help="save them as owner persona versions with ledger rows (the mind "
                               "stopped; mind.db is snapshot first)")
+    p_voice.add_argument("--only-cast", action="store_true", default=True,
+                         help="the default, and the only mode: a sheet for a persona outside "
+                              "the cast (a world persona) is skipped and counted, never a "
+                              "refusal")
     p_voice.add_argument("--clear", action="store_true",
                          help="take the sheet off (every member with one, or --guid's), before "
                               "rolling back to code without them")

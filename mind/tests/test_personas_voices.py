@@ -21,6 +21,12 @@ from leeroy_mind.storage.store import Store
 from sheets import GRUFF, BRIGHT, sheet
 
 CAST = ((201, "Arkon"), (202, "Belra"), (203, "Coros"))
+HOME = "lives with a flatmate"  # the test cast's household: what an import stamps the sheet with
+
+
+def at_home(data=GRUFF, **over):
+    """The sheet as an import stores it: stamped with her household."""
+    return sheet(data, household=HOME, **over)
 HUMAN = HumanIdentity(1, "Testmage", "Zan", "Quentin", True, "he")
 
 
@@ -107,7 +113,7 @@ def test_the_plan_names_each_files_outcome_and_sizes_and_skips_files_that_are_no
     plans = voices.plan(store, tmp_path)
     assert [(h.guid, h.name, h.outcome, h.codes, h.samples) for h in plans] == [
         (201, "Arkon", "import", (), 5), (202, "Belra", "import", (), 5)]
-    assert all(0 < h.tokens <= 120 for h in plans) and plans[0].speech == sheet()
+    assert all(0 < h.tokens <= 120 for h in plans) and plans[0].speech == at_home()
     assert "noted" not in repr(plans[0])  # a plan's repr never holds her words
     assert [h.guid for h in voices.plan(store, tmp_path, guids={202})] == [202]
     voices.set_voice(store, 201, sheet(), now=2000.0)
@@ -129,7 +135,7 @@ def test_the_plan_names_each_files_outcome_and_sizes_and_skips_files_that_are_no
                                                      "tired": "awesome. brain is soup"}}},
      ("never_in_sample",)),
     ({"guid": 201, "speech": {**GRUFF, "stance": "single since 2019"}}, ("later_era",)),
-    ({"guid": 201, "speech": {**GRUFF, "says": ["noted", "fair enough", "on paper",
+    ({"guid": 201, "speech": {**GRUFF, "says": ["noted", "sound as", "on my tally",
                                                  "you absolute menace"]}}, ("says_slop",)),
 ])
 def test_what_a_sheet_is_refused_for_by_code(store, tmp_path, body, codes):
@@ -160,12 +166,12 @@ def test_set_voice_saves_an_owner_version_with_a_ledger_row_and_undo_takes_it_ba
     _members(store)
     before = store.get_persona_json(201)
     ledger = voices.set_voice(store, 201, sheet(), now=2000.0)
-    assert load_persona(store, 201).speech == sheet()
+    assert load_persona(store, 201).speech == at_home()
     assert store.persona_versions()[201] == 2 and _source(store) == "owner"
     assert _ledger(store) == [{"id": ledger, "kind": "voice", "text": "voice sheet set",
                                "ref": None}]
     receipt = json.loads(store.get_meta(voices.RECEIPT.format(ledger=ledger)))
-    assert receipt == {"after": speech_to_dict(sheet()), "before": None, "source": "generated",
+    assert receipt == {"after": speech_to_dict(at_home()), "before": None, "source": "generated",
                        "version": 2}
     assert voices.set_voice(store, 201, sheet(), now=2001.0) is None  # nothing to do
     assert undo(store, ledger, now=3000.0)
@@ -186,12 +192,12 @@ def load_persona_json(js):
 def test_a_replaced_sheet_undoes_to_the_one_before_and_a_later_change_wins(store):
     _members(store)
     first = voices.set_voice(store, 201, sheet(), now=2000.0)
-    other = sheet(register="soft-spoken and careful")
+    other = at_home(register="soft-spoken and careful")
     second = voices.set_voice(store, 201, other, now=2100.0)
     assert _ledger(store)[-1]["text"] == "voice sheet replaced"
     assert not undo(store, first, now=3000.0)          # the second change moved it: undo that first
     assert load_persona(store, 201).speech == other
-    assert undo(store, second, now=3001.0) and load_persona(store, 201).speech == sheet()
+    assert undo(store, second, now=3001.0) and load_persona(store, 201).speech == at_home()
     assert undo(store, first, now=3002.0) and load_persona(store, 201).speech is None
 
 
@@ -284,7 +290,8 @@ def test_cli_go_saves_after_a_snapshot_then_undo_and_clear(tmp_path, capsys):
     _no_text(out)
     assert len(list((d / "snapshots").glob("mind-pre-voices-*.db"))) == 1
     got = _sheets(d)
-    assert got[201] == GRUFF and got[202] == BRIGHT and got[203] is None
+    assert got[201] == {**GRUFF, "household": HOME} and got[203] is None
+    assert got[202] == {**BRIGHT, "household": HOME}
     # again: nothing changes
     assert main(["personas", "--data-dir", str(d), "voices", "--dir", str(folder), "--go",
                  "--guid", "201,202"]) == 0
@@ -292,7 +299,7 @@ def test_cli_go_saves_after_a_snapshot_then_undo_and_clear(tmp_path, capsys):
     # `personas undo <ledger id>` restores the prior version
     assert main(["personas", "--data-dir", str(d), "undo", "1"]) == 0
     capsys.readouterr()
-    assert _sheets(d)[201] is None and _sheets(d)[202] == BRIGHT
+    assert _sheets(d)[201] is None and _sheets(d)[202] == {**BRIGHT, "household": HOME}
     # --clear takes the rest off: the rollback step before older code
     assert main(["personas", "--data-dir", str(d), "voices", "--clear"]) == 0
     assert "would take the voice sheet off 1 members" in capsys.readouterr().out
@@ -340,7 +347,7 @@ def test_an_export_carries_the_sheet_and_an_import_of_it_changes_nothing(store, 
     _members(store)
     voices.set_voice(store, 201, sheet(), now=2000.0)
     (path,) = export_personas(store, tmp_path / "out", guids=[201])
-    assert json.loads(path.read_text(encoding="utf-8"))["speech"] == GRUFF
+    assert json.loads(path.read_text(encoding="utf-8"))["speech"] == {**GRUFF, "household": HOME}
     report = import_personas(store, tmp_path / "out", ts=3000.0, human=HUMAN)
     assert (report.imported, report.unchanged, report.errors) == ([], [201], {})
 

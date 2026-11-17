@@ -6,9 +6,16 @@ personas/speech.py says what a prompt makes of it).
   "sentence_shape", "says", "never_says", "unprompted", "with_him", "relationship_stance"},
   "samples": {kind: line}}; its other keys, such as the humour and typing notes, the texture
   seed and the rendered block, are not read) or the schema's own ({"guid", "speech": {...}}).
-- plan: each file as a Plan with its outcome: "import", "unchanged" or "refused" with codes
-  (REFUSALS), and the sizes a dry run prints: the block's estimated tokens and how many samples.
-  A plan never holds a sheet's text in anything it prints.
+- plan: each file as a Plan with its outcome: "import", "unchanged", "refused" with codes
+  (REFUSALS) or "skipped" (SKIPS: a sheet for a persona outside the cast, such as a world
+  persona, is passed over and is no refusal), and the sizes a dry run prints: the block's
+  estimated tokens and how many samples. A plan never holds a sheet's text in anything it
+  prints.
+- Every saved sheet is stamped with the household her persona has then (stamped): her stance is
+  shown only while her household still reads the same (speech.stance_current), so the night's
+  arc or an owner edit that changes her household takes the stance out of her prompts until a
+  sheet is imported again (a plan says when an import only re-sets that stamp: `restamps`).
+- changed_at: when her sheet last changed, the night's new baseline for drift.
 - set_voice: one transaction. Her stored persona read again, saved with the sheet as a new
   persona version, source "owner", with a persona ledger row of kind "voice" and a private
   receipt (meta RECEIPT: the sheet before and after, and the source before), as personas.homes
@@ -45,8 +52,13 @@ REFUSALS = {
     "later_era": "slang or a year from after 2009",
     "member_name": "a sample line names a guild member",
     "never_in_sample": "a sample line uses a word she never uses",
-    "says_slop": "one of her words is stock slop the guards rewrite on every turn",
+    "says_slop": ("one of her words holds or sits inside a stock slop entry, which the guards "
+                  "rewrite on every turn"),
+    "never_in_typing": "her own abbreviations or typing habits produce a word she never uses",
+    "shape_over_typing": "her shape names more words than her typing's longest line",
 }
+# A file passed over without a refusal, by code (never an error exit)
+SKIPS = {"not_cast": "a persona outside the cast (a world persona): sheets are for the cast"}
 # the lab's field names onto the schema's
 _LAB = {"register": "register", "sentence_shape": "shape", "says": "says", "never_says": "never",
         "unprompted": "brings_up", "with_him": "with_him", "relationship_stance": "stance"}
@@ -62,12 +74,15 @@ class SheetError(ValueError):
 class Plan:
     guid: int
     name: str = ""
-    outcome: str = "refused"          # import, unchanged, clear or refused
+    outcome: str = "refused"          # import, unchanged, clear, skipped or refused
     codes: tuple[str, ...] = ()
     details: tuple[str, ...] = ()     # the schema's messages: paths and limits, never values
     tokens: int = 0                   # the rendered block's estimated tokens
     samples: int = 0
     speech: Speech | None = field(default=None, repr=False, compare=False)
+    # her stored sheet is this one but stamped for another household: importing re-sets her
+    # stance for the household she has now
+    restamps: bool = False
 
 
 def read_sheet(path: Path) -> tuple[int | None, str | None, Speech]:
@@ -129,6 +144,10 @@ def plan(store, folder: Path, *, guids=None, human=None) -> list[Plan]:
     cast = store.cast()
     characters = [m.name for g, m in cast.items() if human is None or g != human.guid]
     stored = store.persona_versions()  # the cast's, never a world persona
+    try:
+        everyone = set(store.persona_versions(tier=None))
+    except Exception:  # a schema from before the tiers: everyone stored is the cast
+        everyone = set(stored)
     out = []
     for path in sorted((f for f in Path(folder).glob("*.json") if f.stem.isdigit()),
                        key=lambda f: int(f.stem)):
@@ -148,19 +167,31 @@ def plan(store, folder: Path, *, guids=None, human=None) -> list[Plan]:
         except ValueError:
             p = None
         if p is None:
-            out.append(Plan(guid, codes=("no_persona",)))
+            if guid in everyone:  # a world persona: passed over, never a refusal
+                out.append(Plan(guid, outcome="skipped", codes=("not_cast",)))
+            else:
+                out.append(Plan(guid, codes=("no_persona",)))
             continue
         if name is not None and name != p.character_name:
             out.append(Plan(guid, p.character_name, codes=("name_mismatch",)))
             continue
+        speech = stamped(speech, p)
         codes, details = _checked(p, speech, human=human, characters=characters)
         sizes = dict(tokens=block_tokens(speech), samples=len(speech.samples))
         if codes:
             out.append(Plan(guid, p.character_name, codes=codes, details=details, **sizes))
         else:
+            restamps = (p.speech is not None and p.speech != speech
+                        and replace(p.speech, household=speech.household) == speech)
             out.append(Plan(guid, p.character_name, "unchanged" if p.speech == speech
-                            else "import", speech=speech, **sizes))
+                            else "import", speech=speech, restamps=restamps, **sizes))
     return out
+
+
+def stamped(speech: Speech, p) -> Speech:
+    """The sheet stamped with the household her persona has now: her stance is written for it
+    (speech.stance_current)."""
+    return replace(speech, household=" ".join(p.real_life.household.split()))
 
 
 def plan_clear(store, *, guids=None) -> list[Plan]:
@@ -177,6 +208,21 @@ def plan_clear(store, *, guids=None) -> list[Plan]:
             out.append(Plan(guid, p.character_name, "clear", tokens=block_tokens(p.speech),
                             samples=len(p.speech.samples)))
     return out
+
+
+def changed_at(store, guid: int) -> float | None:
+    """When her voice sheet last changed: the newest `voice` ledger row of hers, or undo of
+    one. None when it never did (or on a schema without the ledger). The night's drift checks
+    take it as her new baseline (nightly.critic, eval.persona.drift_check)."""
+    import sqlite3
+    try:
+        row = store.conn.execute(
+            "SELECT max(ts) FROM persona_ledger WHERE guid=? AND (kind=? OR (kind='undo' AND "
+            "ref IN (SELECT id FROM persona_ledger WHERE guid=? AND kind=?)))",
+            (guid, KIND, guid, KIND)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row is not None and row[0] is not None else None
 
 
 def describe(before: Speech | None, after: Speech | None) -> str:
@@ -222,6 +268,8 @@ def set_voice(store, guid: int, speech: Speech | None, *, now: float) -> int | N
         if stored is None:
             raise LookupError(f"guid {guid} has no stored persona")
         before = stored.speech
+        if speech is not None:
+            speech = stamped(speech, stored)  # her stance is for the household she has now
         if before == speech:
             return None
         source = store.conn.execute("SELECT source FROM persona_core WHERE guid=?",

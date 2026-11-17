@@ -24,7 +24,9 @@ list's own words, named on her next turn (talk/pipeline.py `_phrase_pending`).
 A member with a voice sheet (Persona.speech) keeps her own words: a phrase that is one of her
 `says` is never her tic for the conversation, day or per-member stock rules, and is rationed
 instead (guards/voice.py: about one in three of her lines in a conversation; above that it is
-named as `phrase_conversation`). The cast rules still count it.
+named as `phrase_conversation`). The cast rules still count it. A slop entry ("!" lines) is
+never anyone's own word: a say-word inside one exempts nothing, and such a sheet is refused at
+import (`says_slop`).
 
 Reads are bounded and read-only; nothing here writes, logs or calls a model. Evidence is her own
 lines in any channel and other members' lines, counted and never quoted: the rewrite hint names
@@ -447,7 +449,8 @@ def check(reader, draft, now: float, sheet=None) -> Found:
                 continue  # a two-word phrase only of words nobody else here used
             held = _stock_in(words)
             uses = sum(words in grams for grams in seen_talk)
-            own_word = says and voice.hers(words, sheet)  # rationed above, never cooled
+            # rationed above, never cooled; a slop entry is nobody's own word
+            own_word = says and voice.hers(words, sheet) and not set(held) & sloppy
             flagged = [code for code, met in (
                 ('phrase_conversation', not own_word and (uses >= CONVERSATION_USES
                                                           or bool(uses and held))),
@@ -465,7 +468,7 @@ def check(reader, draft, now: float, sheet=None) -> Found:
         for name, alts, span in stocked:
             if _topic(tuple(t.norm for t in toks[span[0]:span[1] + 1]), his):
                 continue  # his own words said back ("thinking about you" to his)
-            own_word = says and voice.hers(
+            own_word = says and name not in sloppy and voice.hers(
                 tuple(t.norm for t in toks[span[0]:span[1] + 1]), sheet)
             flagged = [code for code, met in (
                 ('stock_member', not own_word and any(_has(clauses, alts) for clauses in mine)),

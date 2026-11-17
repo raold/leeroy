@@ -22,7 +22,14 @@ lines (talk/prompt.py PromptParts.voice; personas/card.py leaves those out for h
   shape, `with_him` and `stance` are never trimmed, so they must leave room).
 - screen: what an import refuses beyond the persona screens (personas.io._screen: his real
   name, romance aimed at a member), each as a code: a later era's slang or year, a guild
-  member's name in a sample, a never-word inside a sample, stock slop among her words.
+  member's name in a sample, a never-word inside a sample, stock slop among her words, a
+  never-word her own typing produces, a shape longer than her typing's lines.
+- stance_current: her stance is shown only while her household is the one the sheet was
+  stamped with at import; public_block: the part of the sheet the night's readers get.
+- The samples a turn shows are also the pipeline's `Composed.samples`: a line that copies one
+  word for word (3 words or more) is the existing fatal `sample` tell in generation, as it was
+  for the generator's samples, and is regenerated. The guards' `voice_sample_copy` is the soft
+  code for all five samples, shown or not.
 - word_range: the line length her sentence shape names ("clipped, three to seven words"), for
   talk/shape.py's word draw.
 
@@ -114,6 +121,23 @@ def voice_block(speech: Speech, human: str, *, to_him: bool = False, private: bo
     body = truncate_words(_body(speech, human, to_him, private, keep), BLOCK_TOKENS * 4)
     shown = [x for x in (_one(s) for s in samples) if x]
     return "\n".join([body, *([SAMPLES_HEAD] + ["- " + s for s in shown] if shown else [])])
+
+
+def stance_current(p: Persona) -> bool:
+    """Her stance may be shown: it was written for the household her card has now (the sheet's
+    `household` stamp equals her real_life.household, spacing aside). After a household change
+    (the night's arc, an owner edit) it is stale and stays out of every prompt until a sheet is
+    imported again."""
+    s = p.speech
+    return (s is not None and s.household is not None
+            and _one(s.household).casefold() == _one(p.real_life.household).casefold())
+
+
+def public_block(speech: Speech) -> str:
+    """The sheet's public part, as the night's readers get it (card.render_night_card): her
+    register, shape, words, never-words and topics, as a turn that is not his shows them. Never
+    `with_him`, `stance` or a sample."""
+    return voice_block(speech, "", to_him=False, private=False)
 
 
 def block_tokens(speech: Speech) -> int:
@@ -220,15 +244,33 @@ def _has_run(words: list[str], entry: list[str]) -> bool:
     return bool(n) and any(words[i:i + n] == entry for i in range(len(words) - n + 1))
 
 
+def typed_by_her(p: Persona) -> set[str]:
+    """The words her own typing can put into a line after the guards have read it: the short
+    forms of her abbreviations that shorten (talk.style._shortening) and, from her typing
+    texture (talk.style.texture_of, by her character name), the shorthand she uses beyond her
+    own list and her habitual spellings. Lower case."""
+    from leeroy_mind.talk.style import SHORTHAND, _shortening, texture_of
+    texture = texture_of(p.typing, p.character_name)
+    words = {v for v in _shortening(p.typing.abbreviations).values()}
+    words |= {SHORTHAND[i][1] for i in texture.extra if 0 <= i < len(SHORTHAND)}
+    words |= {habit[1] for habit in texture.habits}
+    return {" ".join(w.casefold().split()) for w in words if w.strip()}
+
+
 def screen(p: Persona, *, characters=()) -> list[str]:
     """Codes for what a voice import refuses beyond the schema and the persona screens (never
     the text): `assistant_text` (reads like an assistant), `later_era` (slang or a year after
     2009), `member_name` (a guild member's name in a sample line: a sample is shown on any
     turn, whoever it is to), `never_in_sample` (a never-word inside one of her own samples),
-    `says_slop` (one of her words is on the stock list's slop lines, a rewrite on every
-    turn)."""
-    from leeroy_mind.guards import phrases
+    `says_slop` (one of her words holds, or sits inside, an entry of the stock list's slop
+    lines: the guards rewrite those on every turn and never count one as her own word; the
+    test is the guards' own, guards.voice.hers), `never_in_typing` (a never-word her own
+    abbreviations or typing texture produce after the guards have passed the line:
+    typed_by_her), `shape_over_typing` (her sentence shape names more words than her typing's
+    longest line, which the styler would cut)."""
+    from leeroy_mind.guards import phrases, voice
     from leeroy_mind.nightly.lexicon import era_ok
+    from .schema import speech_to_dict
     from .screens import has_word
     s, codes = p.speech, []
     if s is None:
@@ -244,15 +286,26 @@ def screen(p: Persona, *, characters=()) -> list[str]:
     samples = [normalize_words(t).split() for t in s.samples.values()]
     if any(_has_run(words, normalize_words(n).split()) for n in s.never for words in samples):
         codes.append("never_in_sample")
-    slop = phrases.slop()
-    for entry in s.says:
-        words = phrases._words(entry)
-        if any(name in slop and phrases._has((words,), alts) for name, alts in phrases.stock()):
+    sheet, slop = voice.sheet_of({"speech": speech_to_dict(s)}), phrases.slop()
+    said = [phrases._words(entry) for entry in s.says]
+    for name, alts in phrases.stock():
+        if name not in slop:
+            continue
+        # her word inside the entry (the guards' own test), or the entry inside her word
+        if any(voice.hers(alt, sheet) or any(phrases._has((words,), ((anchored, alt),))
+                                             for words in said) for anchored, alt in alts):
             codes.append("says_slop")
             break
+    made = typed_by_her(p)
+    if any(" ".join(n.casefold().split()) in made for n in s.never):
+        codes.append("never_in_typing")
+    named = word_range(s.shape)
+    if named is not None and named[1] > max(p.typing.words_per_line):
+        codes.append("shape_over_typing")
     return codes
 
 
 __all__ = ["BLOCK_TOKENS", "MAX_SAMPLES", "RECIPE_TAG", "SAMPLES_HEAD", "SAMPLE_TOKENS", "TRIMS",
-           "VOICE_HEAD", "WANT_SAMPLE", "block_tokens", "fitted", "pick_samples", "screen",
+           "VOICE_HEAD", "WANT_SAMPLE", "block_tokens", "fitted", "pick_samples", "public_block", "screen",
+           "stance_current", "typed_by_her",
            "speech_errors", "strings", "voice_block", "word_range"]

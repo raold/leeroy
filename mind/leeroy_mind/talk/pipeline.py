@@ -920,7 +920,8 @@ class Pipeline:
     def _voice(self, turn: Turn, meta: TurnMeta, p: Persona, *, live: bool) -> tuple[list[str], str]:
         """Her voice sheet for this turn (personas/speech.py; ([], "") without one): the sample
         lines it shows and the block that goes just before the instruction. How she is with him
-        only on a turn that is his, her stance only where only he reads; one or two samples,
+        only on a turn that is his, her stance only where only he reads and only while her
+        household is still the one it was written for; one or two samples,
         the first by the turn's want (the draw's; on an answer that gets a beat, its lean), the
         second from a seeded stream of its own (voice, night, her, the minute, his line or
         post: never the engine's rng), and never a sample she already sent. A live turn's
@@ -928,7 +929,8 @@ class Pipeline:
         speech = getattr(p, "speech", None)
         if speech is None:
             return [], ""
-        from leeroy_mind.personas.speech import RECIPE_TAG, pick_samples, voice_block
+        from leeroy_mind.personas.speech import (RECIPE_TAG, pick_samples, stance_current,
+                                                 voice_block)
         to_him = self._aimed_at_him(turn) or self._private_to_him(turn)
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
@@ -943,8 +945,10 @@ class Pipeline:
                 voice_used(meta, RECIPE_TAG)
             except Exception:
                 log.warning("learn_recipe_describe_failed")
+        # her stance only while her household is the one it was written for (stance_current)
         return shown, voice_block(speech, self.human.called, to_him=to_him,
-                                  private=self._private_to_him(turn), samples=shown)
+                                  private=self._private_to_him(turn) and stance_current(p),
+                                  samples=shown)
 
     def _pronoun_tags(self, turn: Turn, people: list[int], recent) -> dict:
         """Each member shown other than the speaker and him, tagged once with their persona's

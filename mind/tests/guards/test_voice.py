@@ -18,7 +18,7 @@ from sheets import GRUFF, give
 from .test_live import rig, speak, turn  # noqa: F401  (the rig fixture)
 
 NOW = datetime(2026, 10, 29, 23, tzinfo=timezone.utc).timestamp()
-MARKS = {**GRUFF, "says": ["noted", "top marks", "fair enough", "right then"]}
+MARKS = {**GRUFF, "says": ["noted", "top marks", "sound as", "well so"]}
 SHEET = voice.sheet_of({"speech": MARKS})
 
 
@@ -49,10 +49,10 @@ def cast(store):
 # -- the sheet as the guards read it -------------------------------------------------------------
 
 def test_the_sheet_of_a_stored_persona():
-    assert SHEET.says == (('noted',), ('top', 'marks'), ('fair', 'enough'), ('right', 'then'))
+    assert SHEET.says == (('noted',), ('top', 'marks'), ('sound', 'as'), ('well', 'so'))
     assert SHEET.never == (('awesome', ('awesome',), False), ('lol', ('lol',), False))
     assert SHEET.rationed == SHEET.says
-    assert ('depends', 'what', 'did', 'the', 'log', 'say') in SHEET.samples
+    assert ('depends', 'which', 'boss', 'was', 'it') in SHEET.samples
     for stored in (None, {}, {'speech': None}, {'speech': 'dry'}, {'speech': {'says': 'noted'}},
                    ['speech']):
         assert voice.sheet_of(stored) == voice.NONE
@@ -81,7 +81,7 @@ def test_her_own_phrase_is_free_of_the_day_and_the_per_member_stock_rules(store)
     assert found(store, d).codes == ()
     stock = voice.sheet_of({'speech': {**MARKS, 'says': ['sitting here', 'noted']}})
     put(store, 'sitting here with the dog', channel='guild', ts=NOW - 86400 * 2)
-    again = draft('sitting here waiting on the tank')
+    again = draft('sitting here until the tank shows')
     assert 'stock_member' in found(store, again, None).codes
     assert found(store, again, stock).codes == ()
 
@@ -115,20 +115,20 @@ def test_a_word_over_its_ration_is_named_as_her_conversation_tic(store):
 
 def test_the_ration_counts_only_this_conversation_and_her_last_lines(store):
     for n in range(4):  # another conversation: the guild's
-        put(store, f'right then, pull {n}', channel='guild', ts=NOW - 900 + n * 60)
-    assert found(store, draft('right then, you first', channel='whisper', to_guid=1)).codes == ()
+        put(store, f'well so, pull {n}', channel='guild', ts=NOW - 900 + n * 60)
+    assert found(store, draft('well so, you first', channel='whisper', to_guid=1)).codes == ()
     for n in range(2):  # twice long ago in this one, then nine lines without it
-        put(store, f'right then, attempt {n}', channel='whisper', to=1, ts=NOW - 1700 + n)
+        put(store, f'well so, attempt {n}', channel='whisper', to=1, ts=NOW - 1700 + n)
     for n in range(9):
         put(store, f'plain line number {n} here', channel='whisper', to=1, ts=NOW - 1500 + n * 100)
-    assert found(store, draft('right then, you first', channel='whisper', to_guid=1)).codes == ()
+    assert found(store, draft('well so, you first', channel='whisper', to_guid=1)).codes == ()
 
 
 def test_a_tic_cannot_take_over_a_conversation(store):
     """The pilot saw one phrase in 6 of 10 replies: with the ration at most 4 of 10 pass."""
     passed = 0
     for n in range(10):
-        text = f'fair enough, point {n} taken'
+        text = f'sound as, point {n} taken'
         d = draft(text, channel='whisper', to_guid=1, now=NOW + n * 60)
         if not found(store, d).codes:
             passed += 1
@@ -154,17 +154,17 @@ def test_a_never_word_is_a_soft_rewrite_that_names_it(cast):
     assert verdict.never == ('awesome', 'lol') and 'awesome' not in repr(verdict)
     hint = rewrite_hint(verdict.codes, verdict.phrases, verdict.pronouns, verdict.never)
     assert HINTS['voice_never'] in hint and hint.endswith("You never say 'awesome' or 'lol'.")
-    assert review(stores, draft('that pull was fine, loll')).action == 'send'  # whole words only
+    assert review(stores, draft('that pull went okay, loll')).action == 'send'  # whole words only
     assert review(stores, draft('that pull was awesome', guid=102)).action == 'send'  # no sheet
 
 
 def test_a_never_mark_without_words_is_matched_as_written():
-    marks = voice.sheet_of({'speech': {**GRUFF, 'never': ['!!', 'no way']}})
+    marks = voice.sheet_of({'speech': {**GRUFF, 'never': ['!!', 'nuh uh']}})
     assert voice.never_used('what!! really', marks) == ('!!',)
-    assert voice.never_used('there is No Way that works', marks) == ('no way',)
-    assert voice.never_used('no. way too early', marks) == ('no way',)  # words, whatever between
+    assert voice.never_used('there is Nuh Uh that works', marks) == ('nuh uh',)
+    assert voice.never_used('nuh. uh too early', marks) == ('nuh uh',)  # words, whatever between
     assert voice.never_used('what! really', marks) == () and voice.never_used('x', voice.NONE) == ()
-    assert voice.hint(('!!', 'no way')) == "You never say '!!' or 'no way'." and voice.hint(()) == ''
+    assert voice.hint(('!!', 'nuh uh')) == "You never say '!!' or 'nuh uh'." and voice.hint(()) == ''
 
 
 def test_a_typing_shortcut_is_never_the_word_it_stands_for(store):
@@ -189,10 +189,10 @@ def test_a_typing_shortcut_is_never_the_word_it_stands_for(store):
 
 def test_a_sample_copied_word_for_word_is_a_soft_rewrite(cast):
     stores = GuardStores(cast.conn, GuardsCfg(enabled=True))
-    verdict = review(stores, draft('Depends... what did the log say? i was afk'))
+    verdict = review(stores, draft('Depends... which boss was it? i was afk'))
     assert verdict.action == 'rewrite' and verdict.codes == ('voice_sample_copy',)
     assert HINTS['voice_sample_copy'] in rewrite_hint(verdict.codes)
-    assert review(stores, draft('depends what the log said, i was afk')).action == 'send'
+    assert review(stores, draft('depends on the boss, i was afk')).action == 'send'
 
 
 def test_a_short_sample_is_a_copy_only_as_the_whole_line():

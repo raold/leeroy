@@ -25,7 +25,7 @@ from leeroy_mind.text import estimate_tokens
 from sheets import GRUFF, BRIGHT, give, sheet
 
 BLOCK = sp.voice_block(sheet(), "Zan", to_him=True, private=True,
-                       samples=["depends. what did the log say"])
+                       samples=["depends. which boss was it"])
 
 
 def parts(**over):
@@ -101,8 +101,8 @@ def test_a_member_with_a_sheet_reads_it_by_the_instruction(rig):
     voice = "Your voice: plain, clipped, a bit gruff; short flat statements, three to seven words."
     assert voice in user and voice not in system
     tail = user[user.index(voice):]
-    assert "With Zan: teases him about his sums." in tail       # the turn is his
-    assert "no hurry" not in tail                               # but the guild reads it too
+    assert "With Zan: ribs him over his sums." in tail       # the turn is his
+    assert "content with it" not in tail                               # but the guild reads it too
     assert sp.SAMPLES_HEAD in tail and tail.count("\n- ") in (1, 2)
     assert tail.rstrip().splitlines()[-1].startswith("Answer Zan's last line")
     # in place of the trait sentences, the canned mind line and the generator's samples
