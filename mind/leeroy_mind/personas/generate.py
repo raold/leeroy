@@ -364,7 +364,12 @@ def _printable_first_names(taken, human: HumanIdentity,
     return out
 
 
-def _record_prompt(slot, character, profile, human, taken) -> str:
+def _full_names_line(full) -> str:
+    return ("\n\nThese full names are already taken; a first name from them is fine with a "
+            "different surname: " + ", ".join(full) + ".") if full else ""
+
+
+def _record_prompt(slot, character, profile, human, taken, full=()) -> str:
     out = (
         f"{_slot_text(slot, character, human)}\n\n--- profile ---\n{profile}\n--- end ---\n\n"
         "Turn the profile into the record: personality scores with a behaviour each, typing "
@@ -377,10 +382,10 @@ def _record_prompt(slot, character, profile, human, taken) -> str:
     if taken:
         out += ("\n\nThese first names are already taken, so choose a real name with a "
                 "different first name: " + ", ".join(taken) + ".")
-    return out
+    return out + _full_names_line(full)
 
 
-def _rename_prompt(p: Persona, taken) -> str:
+def _rename_prompt(p: Persona, taken, full=()) -> str:
     who = p.identity
     out = (f"Player: {who.player_gender}, aged {who.age}, from the {who.region}\n"
            f"Job: {p.real_life.job}\nHome: {p.real_life.household}\n\n"
@@ -390,7 +395,7 @@ def _rename_prompt(p: Persona, taken) -> str:
     if taken:
         out += ("\n\nThese first names are already taken, so every suggestion needs a different "
                 "first name: " + ", ".join(taken) + ".")
-    return out
+    return out + _full_names_line(full)
 
 
 _TITLES = frozenset({"dr", "mr", "mrs", "ms", "miss", "mx", "sir", "lady", "lord", "dame",
@@ -597,23 +602,30 @@ def _with_real_name(p: Persona, new: str, ctx: _Ctx) -> tuple[Persona, int]:
 
 
 async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str], bool],
-                  ctx: _Ctx, *, private_logs: bool = True) -> Persona | None:
+                  ctx: _Ctx, *, private_logs: bool = True, full=(),
+                  first_taken: Callable[[str], bool] | None = None) -> Persona | None:
     """One cheap call (no thinking, low temperature) for candidate real names; p takes the
     first that is not taken and leaves the record passing the screens and limits. None when no
     candidate does. `taken`: the first names the prompt lists (the owner's is never among them).
     STRUCTURE rather than EXTRACT: the same settings with the persona model's num_ctx, since
     another num_ctx makes Ollama reload that model."""
-    taken = list(taken)
+    taken, full = list(taken), list(full)
     hidden = name_keys(ctx.human.real_name) if ctx.human.real_name else set()
+    first_taken = first_taken or is_taken
     for attempt in range(2):
+        shown_full = len(full)
         messages = [{"role": "system", "content": rules},
-                    {"role": "user", "content": _rename_prompt(p, taken)}]
+                    {"role": "user", "content": _rename_prompt(p, taken, full)}]
         rejected: list[str] = []
         for name in await chat_json(llm, model, messages, RENAME_SCHEMA, STRUCTURE,
                                     _candidate_names):
             if is_taken(name):
                 first = name.split()[0]
-                if name_keys(first).isdisjoint(hidden):
+                if not first_taken(name):
+                    # only the whole name is someone's: the first name stays free
+                    if name not in full and not touches_real_name(name, ctx.human):
+                        full.append(name)
+                elif name_keys(first).isdisjoint(hidden):
                     rejected.append(first)
                 continue
             try:
@@ -626,7 +638,7 @@ async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str]
             return renamed
         # every candidate collided or failed: once more, the collided first names added to the
         # list (the printed list is cut by tokens, so the model may not have seen them)
-        if not rejected:
+        if not rejected and len(full) == shown_full:
             break
         seen = {t.casefold() for t in taken}
         taken += [r for r in dict.fromkeys(rejected) if r.casefold() not in seen]
@@ -637,12 +649,16 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
                            cast_summary: str, rules: str, *, human: HumanIdentity | None = None,
                            taken_names: frozenset[str] = frozenset(),
                            member_names: frozenset[str] = frozenset(),
-                           notes: GenNotes | None = None, private_logs: bool = True) -> Persona:
+                           notes: GenNotes | None = None, private_logs: bool = True,
+                           full_names: frozenset[str] = frozenset()) -> Persona:
     """taken_names: every name a real name must not repeat (character names, real names, the
-    owner's names), compared by full name and by first name. member_names: the character
-    names a relationship may point at. A record that still collides after one informed retry
-    is renamed (one call for candidate names, the first free one that passes the screens);
-    NameCollision only when no candidate does."""
+    owner's names), compared by full name and by first name. full_names: names a real name must
+    not repeat as a whole, whose first names stay free (the world's personas: the first names a
+    model reaches for run out long before the realm's players do); the screens watch them as
+    they watch taken_names. member_names: the character names a relationship may point at. A
+    record that still collides after one informed retry is renamed (one call for candidate
+    names, the first free one that passes the screens); NameCollision only when no candidate
+    does."""
     if slot.age_band[0] < GEN_MIN_AGE:
         raise ValueError(f"age band {slot.age_band} includes someone under {GEN_MIN_AGE}")
     human = human or HumanIdentity(0, "", "", "", False)
@@ -651,9 +667,10 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
                                    _profile_prompt(slot, character, cast_summary, human),
                                    character.name if private_logs else f"guid={character.guid}")
     known = frozenset(taken_names)
+    whole = frozenset(full_names) - known
     aliases = human_aliases(human)
     watched = set(member_names)
-    for n in known:
+    for n in known | whole:
         watched.add(n)
         watched.update(n.split()[:1])  # the first name as written: the screen is case-sensitive
     ctx = _Ctx(human, frozenset(member_names) - {character.name},
@@ -663,8 +680,17 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
     for n in known:
         taken_keys |= name_keys(n)
 
-    def is_taken(name: str) -> bool:
+    whole_keys = {" ".join(n.split()).casefold() for n in whole}
+
+    def first_taken(name: str) -> bool:
         return bool(name_keys(name) & taken_keys)
+
+    def is_taken(name: str) -> bool:
+        return first_taken(name) or " ".join(name.split()).casefold() in whole_keys
+
+    def whole_hit(name: str) -> tuple[str, ...]:
+        """The name itself, to show the model, when only the whole name is someone's."""
+        return (name,) if not first_taken(name) and not touches_real_name(name, human) else ()
 
     p = await _structured(llm, model, rules,
                           _record_prompt(slot, character, profile, human, ()),
@@ -676,14 +702,16 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
     first_names = _printable_first_names(known, human, member_names)
     # LLMError and a screen failure on the retry surface as themselves.
     again = await _structured(llm, model, rules,
-                              _record_prompt(slot, character, profile, human, first_names),
+                              _record_prompt(slot, character, profile, human, first_names,
+                                             whole_hit(p.identity.real_name)),
                               slot, character, ctx)
     notes.dropped = list(ctx.dropped)
     old = again.identity.real_name
     if not is_taken(old):
         return again
     renamed = await _rename(llm, model, rules, again, first_names, is_taken, ctx,
-                            private_logs=private_logs)
+                            private_logs=private_logs, first_taken=first_taken,
+                            full=tuple(dict.fromkeys(whole_hit(p.identity.real_name) + whole_hit(old))))
     if renamed is None:
         if private_logs:
             log.warning("name collision for %s: %s; no rename candidate fit", character.name,

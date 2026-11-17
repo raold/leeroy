@@ -87,10 +87,10 @@ def test_texture_is_seeded_and_fixed_per_member():
 
 # -- apostrophes ---------------------------------------------------------------------------------
 
-def _drop_share(t):
+def _drop_share(t, names=NAMES):
     kept = dropped = 0
     text = "i'm sure it's fine, don't worry. that's what i've said, can't hurt"
-    for who in NAMES:
+    for who in names:
         for seed in range(5):
             k, d = contractions(typed(text, t, seed, who))
             kept, dropped = kept + k, dropped + d
@@ -98,11 +98,19 @@ def _drop_share(t):
 
 
 def test_apostrophes_follow_the_declared_style():
-    """A lower-case typer with no full stops mostly drops them; a "proper" one keeps them."""
+    """A lower-case typer with no full stops drops nearly all of them (the measured human rate:
+    about 85 in 100); a "proper" one keeps most."""
     casual = _drop_share(T())
     careful = _drop_share(T(case="proper", end_punct="full"))
     middle = _drop_share(T(case="mixed", end_punct="some"))
-    assert casual > 0.6 and careful < 0.12 and careful < middle < casual
+    assert casual > 0.8 and careful < 0.25 and careful < middle < casual
+
+
+def test_a_minority_of_casual_typers_keep_their_apostrophes():
+    """The cast's average is near the human rate, but members differ: a few keep most."""
+    shares = sorted(_drop_share(T(), [who]) for who in NAMES)
+    assert shares[len(shares) // 2] > 0.9
+    assert 1 <= sum(s < 0.5 for s in shares) <= len(shares) // 4
 
 
 def test_words_that_would_read_as_other_words_keep_their_apostrophe():
@@ -195,12 +203,58 @@ def test_her_own_entries_apply_per_use_and_invented_ones_more_rarely():
             words = re.findall(r"\w+", line)
             u, you = u + words.count("u"), you + words.count("you")
             tht, that = tht + words.count("tht"), that + words.count("that")
-    assert 0.5 < u / (u + you) < 0.99  # not every time
-    assert 0.05 < tht / (tht + that) < u / (u + you)  # declared, so used, but rarely
+    assert 0.03 < u / (u + you) < 0.5  # a habit of a few, not a rule for all who list it
+    assert 0 < tht / (tht + that) < u / (u + you)  # declared, so used, but rarely
     # "going to" is "gonna" only before a verb
     for who in NAMES:
         for seed in range(3):
             assert "gonna bed" not in typed("i'm going to bed, going to be late", T(), seed, who)
+
+
+def test_one_word_shorthand_is_a_few_members_habit():
+    """ "u" for "you": most of a texter's uses, hardly any of the others'; a phrase everyone
+    shortens ("brb") stays shorthand for all."""
+    t = T(abbreviations={"you": "u", "be right back": "brb"})
+    shares, brb = [], 0
+    for who in NAMES:
+        u = you = 0
+        for seed in range(8):
+            line = typed("you know you said you would, be right back", t, seed, who)
+            words = re.findall(r"\w+", line)
+            u, you, brb = u + words.count("u"), you + words.count("you"), brb + ("brb" in words)
+        shares.append(u / (u + you))
+    heavy = sum(s > 0.5 for s in shares)
+    assert 2 <= heavy <= len(NAMES) // 3
+    assert sum(s < 0.2 for s in shares) >= len(NAMES) // 2
+    assert brb > 0.85 * len(NAMES) * 8
+
+
+# -- the last full stop ---------------------------------------------------------------------------
+
+def _stops(t, who):
+    return sum(typed("we wiped again. see you tomorrow.", t, seed, who).endswith(".")
+               for seed in range(20)) / 20
+
+
+def test_a_lines_last_full_stop_is_a_habit_of_some():
+    """Declared full stops: a period typer types nearly all of them, the others few; nobody who
+    declares none types one."""
+    full = sorted(_stops(T(case="proper", end_punct="full"), who) for who in NAMES)
+    assert sum(s >= 0.6 for s in full) >= 5 and sum(s <= 0.3 for s in full) >= 20
+    assert 0.2 < sum(full) / len(full) < 0.65
+    some = [_stops(T(end_punct="some"), who) for who in NAMES]
+    assert 0 < sum(some) / len(some) < 0.3
+    assert not any(_stops(T(), who) for who in NAMES[:20])
+    # without texture the declared rule is the rule
+    assert apply_style("we wiped again", T(case="proper", end_punct="full"), SOBER,
+                       random.Random(1)) == ["We wiped again."]
+    # the stored words end as the typed line does
+    for who in NAMES[:20]:
+        for seed in range(4):
+            for s in style_lines("we wiped again. see you tomorrow.",
+                                 T(case="proper", end_punct="full"), SOBER, random.Random(seed),
+                                 speaker=who, texture=True):
+                assert s.plain.endswith(".") == s.line.endswith(".")
 
 
 # -- slips ---------------------------------------------------------------------------------------
