@@ -54,7 +54,7 @@ ROLLBACK_REASON = "drift rollback"
 # What core_text leaves out: not who the member is (lines, bits, the secret, the interview and
 # typing), and what the night's other passes keep (looks and disclosure layers, Task 7).
 NOT_CORE = ("sample_lines", "bits", "secret", "mock_interview", "typing", "appearance",
-            "disclosures")
+            "disclosures", "speech")
 NOT_CORE_ROMANCE = ("drawn_to", "turned_off_by")  # her tastes (Task 7's carry, row 56)
 
 CORE_SCHEMA = schema("core_judge", {
