@@ -53,6 +53,46 @@ def test_his_news_is_kept_and_the_newest_statement_on_a_subject_wins():
     assert len(sofar.his_facts(long)[0][1].split()) == sofar.LINE_WORDS
 
 
+def test_only_news_about_himself_is_kept_and_the_least_important_goes_first():
+    """Review of #368, P2-6: flirts, bare declarations and lines with only a time or a plan
+    word are not news; "ill" is "I'll"; when the block is full his health and his people stay
+    and places go."""
+    no = ["i want you so bad tonight", "ill be on at eight", "im gonna get you tomorrow",
+          "i miss you", "my god that was good", "we should run naxx on friday",
+          "thinking about you in bed all morning honestly", "i love my new mount so much"]
+    assert sofar.his_facts(talk(*[("h", x) for x in no])) == []
+    yes = ["been ill all week with this flu", "my sister had her baby on sunday",
+           "got the job, i start at the new office monday"]
+    assert [t for _, t in sofar.his_facts(talk(*[("h", x) for x in yes]))] == yes
+    many = talk(("h", "stuck at the airport for another two hours"),
+                ("h", "the gym near me closed for good"),
+                ("h", "my hotel lost the booking again"),
+                ("h", "the station was shut so i walked"),
+                ("h", "my dad is having surgery on friday"),
+                ("h", "i have an interview at the bank tomorrow"),
+                ("h", "my brother moved in with us"),
+                ("h", "the pub quiz is back on thursdays for me"))
+    kept = [t for _, t in sofar.his_facts(many)]
+    assert len(kept) == sofar.FACTS
+    assert "my dad is having surgery on friday" in kept and "my brother moved in with us" in kept
+    assert "stuck at the airport for another two hours" not in kept  # the oldest place went
+
+
+def test_her_claims_come_from_the_coherence_extractor_when_it_is_there(monkeypatch):
+    """talk.position.claims_so_far (the coherence lane) is the reader of what she has said of
+    herself when that module exists; without it, her place and state."""
+    import sys
+    import types
+    lines = talk(("s", "im at the studio till ten and i start at six tomorrow"), ("h", "ok"))
+    monkeypatch.setitem(sys.modules, "leeroy_mind.talk.position", None)  # not there
+    assert block(lines, forms=HE)[0].startswith("- You said you're at the studio")
+    fake = types.ModuleType("leeroy_mind.talk.position")
+    fake.claims_so_far = lambda hers, limit=3: [f"claim of {len(hers)} lines"]
+    monkeypatch.setitem(sys.modules, "leeroy_mind.talk.position", fake)
+    assert block(lines, forms=HE) == ["- You said: claim of 1 lines."]
+    assert sofar.her_said(lines) == ["claim of 1 lines"]
+
+
 def test_her_place_state_open_questions_and_plans():
     lines = talk(("s", "im at the studio till ten, the producer is in a mood"),
                  ("h", "what are you wearing?"),
@@ -104,7 +144,7 @@ def test_the_block_is_bounded_and_drops_his_oldest_news_first():
 
 
 def test_a_conversation_ends_after_three_idle_hours():
-    lines = talk(("h", "my flat flooded last night"), ("s", "what"),
+    lines = talk(("h", "my sister is in town this week"), ("s", "what"),
                  ("h", "my landlord is useless"), start=0.0, step=60.0)
     late = [*lines, Line(9, 120.0 + IDLE_S + 1, True, "my shift was fine")]
     assert [x.id for x in conversation(late, late[-1].ts + 5)] == [9]
@@ -123,7 +163,8 @@ def test_a_conversation_ends_after_three_idle_hours():
     assert kept.lines(7, late[-1].ts + IDLE_S + 60, forms=HE) == [] and 7 not in kept._kept
     again = SoFar(lambda guid: lines)  # a restart: built again from the stored lines
     assert again.lines(7, 200.0, forms=HE) == [
-        "- He told you: my flat flooded last night", "- He told you: my landlord is useless"]
+        "- He told you: my sister is in town this week",
+        "- He told you: my landlord is useless"]
     assert again.her_said(7, 200.0) == []
 
 
@@ -230,3 +271,21 @@ def test_a_whisper_carries_so_far_too_and_a_restart_rebuilds_it(store, clock, tm
         assert "my sister is moving to the coast" in section(rig.prompts()[-1], SO_FAR_HEAD)
         rig.close()
     asyncio.run(main())
+
+
+def test_an_over_budget_dm_lets_its_oldest_chat_rows_go_before_style_and_memories():
+    """Review of #368 (budget): chat older than his sixth-last turn goes first; her style
+    notes, the awareness card and her memories are not cut for it."""
+    chat = [f"{'Zan' if i % 2 == 0 else 'Belra'}: line {i} " + "word " * 25 for i in range(24)]
+    parts = PromptParts(card="card", samples=[], rules="rules", rel_cards=["Zan: close"],
+                        memories=[f"- memory {i} " + "word " * 20 for i in range(5)],
+                        mood="fine", chat=chat, own_recent=[], instruction="Answer.",
+                        style=["a style note " + "word " * 10], old_chat=12)
+    whole = sum(estimate_tokens(m["content"]) for m in render_messages(parts))
+    cut = trim_to_budget(parts, budget=whole - 150)
+    assert len(cut.chat) < 24 and cut.chat[-12:] == chat[-12:]  # his last six turns whole
+    assert cut.memories == parts.memories and cut.style == parts.style
+    none = trim_to_budget(parts, budget=whole + 10)
+    assert none.chat == chat
+    plain = trim_to_budget(PromptParts(**{**parts.__dict__, "old_chat": 0}), budget=whole - 150)
+    assert plain.style == []  # as before without old rows to give: the style note goes first

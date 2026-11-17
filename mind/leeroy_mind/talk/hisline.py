@@ -21,11 +21,15 @@ BAD_NEWS_RE = re.compile(
     r"\b(?:died|is dying|passed)|lost (?:my|our) (?:dad|father|mum|mom|mother|brother|sister"
     r"|son|daughter|wife|husband|partner|friend|grandma|grandpa|gran|nan|uncle|aunt|dog|cat|job)"
     r"|miscarr\w+|at the vet|to the vet|the vet (?:said|says|thinks)"
-    r"|(?:got |been |was |were |getting |being )?(?:fired|laid off|let go|sacked)|made redundant"
-    r"|lost (?:my|the) job|broke up|breaking up|dumped me|left me|divorc\w+"
+    r"|(?:got|been|was|were|getting|being) (?:fired|laid off|let go|sacked)|made redundant"
+    r"|lost (?:my|the) job|broke up|breaking up|dumped me|left me(?! on read)|divorc\w+"
     r"|(?:rough|bad|awful|terrible|shit|shitty|horrible|hard|worst) (?:day|night|week|shift|time)"
-    r"|chewed me out|yelled at me|screamed at me|in tears|crying|cried|scared|terrified|worried sick"
-    r"|(?:really |so |pretty |very )?(?:sick|ill|unwell)(?! of)|in (?:a lot of |so much )?pain"
+    r"|chewed me out|yelled at me|screamed at me|in tears|(?:i'?m|im|been|was) crying"
+    r"|(?:i'?m|im|was) (?:so |really )?scared|terrified|worried sick"
+    # "ill" alone is "I'll" as he types it, "sick" praise: only a form that says somebody is ill
+    r"|(?:i'?m|im|i am|is|was|been|being|feel|feeling|felt|got|getting|fell|fallen|still)"
+    r" (?:really |so |pretty |very |quite |a bit )?(?:sick|ill|unwell)(?! of| lol| af)\b"
+    r"|in (?:a lot of |so much )?pain"
     r"|car accident|an accident|car crash|crashed (?:my|the|his|her) car|broke (?:my|his|her) (?:arm|leg|wrist|ankle|hip|back|neck)"
     r"|not doing (?:well|good|great)|(?:isn'?t|is not|not) going to make it|bad news)\b",
     re.IGNORECASE)

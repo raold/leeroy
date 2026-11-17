@@ -561,7 +561,11 @@ class DiscordTalk:
                         priority=Priority.REPLY_HUMAN,
                         delay=answer_delay(self._presence(g, p, local).state, self.rng))
             if stepped(g):
-                turn.delay = max(turn.delay, self._back_at(g, message_id, now) - now)
+                wait = self._back_at(g, message_id, now) - now
+                cap = owntime.cap_for("idle")
+                if named and cap > 0 and is_group(channel):
+                    wait = min(wait, cap)  # a group DM line that names her: as her own DM
+                turn.delay = max(turn.delay, wait)
             turn.instruction = self.instruction(g, place, message_id, thread) or ""
             meta = TurnMeta(app.engine._new_id(), answers_human=True, why=WHY,
                             discord=DiscordTarget(reply_to=message_id, thread=thread),

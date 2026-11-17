@@ -6,9 +6,11 @@ From the lines of one conversation between a member and him (their whispers and 
 are one conversation: memory/AUDIENCES.md), `block` builds a few short lines for the prompt's
 "So far between you two" section (PromptParts.so_far):
 
-- his news: lines of his that state something about himself, a first-person statement with a
-  person, place, time, health, work or plan word (`his_facts`: at most FACTS, the newest wins,
-  and a later statement on the same subject replaces the earlier one);
+- his news: lines of his that state something about himself, a first-person statement of four
+  words or more about his health, a person, his work or a place (`his_facts`; never a question,
+  a flirt or an explicit line, and a time or plan word alone is not news): at most FACTS, a
+  later statement on the same subject replaces the earlier one, and when there are too many the
+  least important go first (health and people outrank work, work outranks places);
 - what he asked and she has not answered yet, other than the message this turn answers
   (`open_questions`: he wrote several messages in a row and the instruction quotes the last);
 - where she said she is and what state she said she is in, from her own lines (`her_place`,
@@ -56,21 +58,27 @@ _PEOPLE = (r"dad|father|mum|mom|mother|brother|sister|wife|husband|girlfriend|bo
            r"|ex|son|daughter|kids?|baby|boss|manager|coworker|colleague|friend|mate|buddy"
            r"|roommate|flatmate|landlord|neighbou?r|grandma|grandpa|gran|nan|uncle|aunt|cousin"
            r"|dog|cat|puppy|kitten|vet|doctor|dentist")
-_PLACES = (r"hospital|work|office|home|house|flat|apartment|gym|airport|school|uni|college"
-           r"|shop|store|pub|bar|garage|station|hotel|beach|town|city|church|clinic|site")
+_PLACES = (r"office|gym|airport|school|uni|college|pub|garage|station|hotel|beach|church"
+           r"|clinic|motorway|train|flight|plane")
 _TIMES = (r"today|tonight|tomorrow|yesterday|this (?:morning|afternoon|evening|weekend|week)"
           r"|last (?:night|week|weekend)|next (?:week|weekend|month)|monday|tuesday|wednesday"
           r"|thursday|friday|saturday|sunday|at \d{1,2}(?::\d\d)?\s?(?:am|pm)?")
-_HEALTH = (r"sick|ill|flu|cold|covid|fever|headache|migraine|hurt|injured|surgery|operation"
-           r"|heart|tired|exhausted|hungover|sleep|slept|insomnia|pain|broke my|sprained"
-           r"|appointment|test results?|scan|diagnos\w+")
+# "ill" alone is "I'll" as he types it and "sick" is praise: only forms that say someone is
+# unwell (talk.hisline has the same rule for his bad news)
+_HEALTH = (r"(?:i'm|im|i am|is|was|been|feeling|felt|got|getting|still) (?:really |so |a bit )?"
+           r"(?:sick|ill|unwell)|flu|covid|fever|headache|migraine|injured|surgery|operation"
+           r"|hungover|insomnia|in pain|broke my|sprained|hospital|appointment|test results?"
+           r"|scan|diagnos\w+|the vet|funeral")
 _WORK = (r"job|shift|overtime|meeting|deadline|interview|promotion|raise|fired|laid off|quit"
          r"|client|project|exam|class|lecture|day off|holiday|vacation|payday")
 _PLAN = (r"going to|gonna|have to|gotta|got to|need to|heading|flying|driving|leaving|moving"
          r"|visiting|planning|booked|will be|i'll be|ill be|about to|supposed to|might")
 _SUBJECT = re.compile(
-    rf"\b(?:(?P<person>{_PEOPLE})|(?P<place>{_PLACES})|(?P<health>{_HEALTH})"
-    rf"|(?P<work>{_WORK})|(?P<time>{_TIMES})|(?P<plan>{_PLAN}))\b", re.IGNORECASE)
+    rf"\b(?:(?P<health>{_HEALTH})|(?P<person>{_PEOPLE})|(?P<work>{_WORK})"
+    rf"|(?P<place>{_PLACES})|(?P<time>{_TIMES})|(?P<plan>{_PLAN}))\b", re.IGNORECASE)
+# what a fact is worth when the block is full: his health and his people first, then his work,
+# then where and when; a time or a plan word alone is no news (it needs one of the others)
+_WORTH = {"health": 3, "person": 3, "work": 2, "place": 1}
 # a plan between the two: a time and a word for doing something together or next
 _WHEN = re.compile(rf"\b(?:{_TIMES}|later|after (?:work|raid|dinner|this))\b", re.IGNORECASE)
 _TOGETHER = re.compile(
@@ -134,34 +142,50 @@ def _sentences(text: str) -> list[str]:
     return [s.strip(" /") for s in _SENTENCE.split(_clean(text)) if s.strip(" /")]
 
 
-def his_facts(lines: Sequence[Line], *, skip: int = 0) -> list[tuple[int, str]]:
-    """(line id, clipped sentence) for each thing he said about himself, oldest first: a
-    sentence of his that is no question, speaks in the first person and names a person, place,
-    time, health, work or plan word. A later one on the same subject (the same word) replaces
-    the earlier; at most FACTS, the newest. `skip`: the line this turn answers (the instruction
-    carries it)."""
-    found: dict[str, tuple[int, str]] = {}
+def _news(lines: Sequence[Line], skip: int) -> list[tuple[int, str, int]]:
+    """(line id, clipped sentence, worth) for each thing he said about himself, oldest first
+    (his_facts)."""
+    from leeroy_mind.talk.romance import _HIS_HEAT_RE, his_moves
+
+    def his_heat(sentence: str) -> bool:
+        # desire in his own words or a declaration; a pet name alone hides no news ("babe my
+        # dad is in hospital", "my sister had her baby")
+        return bool(_HIS_HEAT_RE.search(sentence) or his_moves(sentence) & {"declare"})
+    found: dict[str, tuple[int, str, int]] = {}
     for line in lines:
         if not line.his or line.id == skip:
             continue
         for sentence in _sentences(line.text):
-            if is_question(sentence) or not _FIRST_PERSON.search(sentence):
-                continue
-            m = _SUBJECT.search(sentence)
-            if m is None or len(sentence.split()) < 3:
-                continue
-            key = (m.lastgroup or "") + ":" + m.group(0).casefold()
+            if (is_question(sentence) or len(sentence.split()) < 4
+                    or not _FIRST_PERSON.search(sentence) or his_heat(sentence)):
+                continue  # a question, a bare declaration, not about himself, or a flirt
+            kinds = {m.lastgroup: m.group(0).casefold() for m in _SUBJECT.finditer(sentence)}
+            worth = max((_WORTH.get(k, 0) for k in kinds), default=0)
+            if not worth:
+                continue  # only a time or a plan word: "im gonna get you tonight" is no news
+            kind = max(kinds, key=lambda k: _WORTH.get(k, 0))
+            key = f"{kind}:{kinds[kind]}"
             found.pop(key, None)  # the newer statement moves to the end
-            found[key] = (line.id, _clip(sentence))
+            found[key] = (line.id, _clip(sentence), worth)
     seen, out = set(), []
-    for item in list(found.values())[::-1]:  # newest first; one sentence once
-        if item[1] in seen:
-            continue
-        seen.add(item[1])
-        out.append(item)
-        if len(out) == FACTS:
-            break
-    return out[::-1]
+    for item in found.values():  # one sentence once
+        if item[1] not in seen:
+            seen.add(item[1])
+            out.append(item)
+    while len(out) > FACTS:  # the least worth goes first, the oldest of those
+        out.remove(min(out, key=lambda x: x[2]))
+    return out
+
+
+def his_facts(lines: Sequence[Line], *, skip: int = 0) -> list[tuple[int, str]]:
+    """(line id, clipped sentence) for each thing he said about himself, oldest first: a
+    sentence of his of four words or more that is no question and no flirt (desire in his own
+    words or a declaration, as romance.his_heat reads them: explicit lines are not news), speaks in the first person and names his
+    health, a person, his work or a place; a time or a plan word alone is not enough. A later
+    one on the same subject (the same word) replaces the earlier; at most FACTS, the least
+    worth going first (health and people, then work, then places), the oldest of those. `skip`:
+    the line this turn answers (the instruction carries it)."""
+    return [(i, text) for i, text, _ in _news(lines, skip)]
 
 
 def open_questions(lines: Sequence[Line], *, skip: int = 0) -> list[str]:
@@ -210,9 +234,10 @@ def her_state(lines: Sequence[Line]) -> str:
 
 
 def her_said(lines: Sequence[Line]) -> list[str]:
-    """What she has claimed about herself so far in this conversation (her place, her state),
-    as plain strings; for a caller that wants her own claims (the beat)."""
-    return [x for x in (her_place(lines), her_state(lines)) if x]
+    """What she has claimed about herself so far in this conversation, as plain strings
+    (talk.position.claims_so_far when that module is there, else her place and state); for a
+    caller that wants her own claims."""
+    return _her_claims(lines) or [x for x in (her_place(lines), her_state(lines)) if x]
 
 
 def plans(lines: Sequence[Line], *, skip: int = 0, taken: Sequence[int] = ()) -> list[tuple[bool, str]]:
@@ -241,31 +266,49 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
     (his oldest news first, then the plans). `forms` are his (they, them, their); `skip` the line this turn
     answers. [] when there is nothing to say."""
     they = forms[0].capitalize()
-    facts = his_facts(lines, skip=skip)
-    place, state = her_place(lines), her_state(lines)
-    first = [f"- {x}" for x in lead if x]
-    if place:
-        first.append(f"- You said you're {place}.")
-    if state:
-        first.append(f"- You said: {state}.")
-    first += [f"- {they} also asked: {q}" for q in open_questions(lines, skip=skip)]
-    news = [f"- {they} told you: {text}" for _, text in facts]
-    later = [f"- {they if his else 'You'} said: {text}"
-             for his, text in plans(lines, skip=skip, taken=[i for i, _ in facts])]
-
+    facts = _news(lines, skip)
     n = len([x for x in lead if x])
+    first = [f"- {x}" for x in lead if x]
+    claims = _her_claims(lines)
+    if claims:
+        first += [f"- You said: {c}." for c in claims]
+    else:
+        place, state = her_place(lines), her_state(lines)
+        if place:
+            first.append(f"- You said you're {place}.")
+        if state:
+            first.append(f"- You said: {state}.")
+    asked = [f"- {they} also asked: {q}" for q in open_questions(lines, skip=skip)]
+    later = [f"- {they if his else 'You'} said: {text}"
+             for his, text in plans(lines, skip=skip, taken=[i for i, _, _ in facts])]
     lead_lines, said = first[:n], first[n:]  # the caller's lead is not the conversation's
 
-    def size(items: list[str]) -> int:
-        return estimate_tokens("\n".join(items))
-    while (news or later) and size([*said, *news, *later]) > MAX_TOKENS:
-        if len(news) > 1 or not later:
-            news.pop(0)  # his oldest news goes first
-        else:
-            later.pop(0)
-    while said and size([*said, *news, *later]) > MAX_TOKENS:
+    def size(news) -> int:
+        return estimate_tokens("\n".join([*said, *asked, *(f"- {they} told you: {t}"
+                                                           for _, t, _ in news), *later]))
+    # what is over goes by worth: his least important news first (the oldest of it), then the
+    # plans, then what she said; what he asked and is still owed goes last
+    while facts and size(facts) > MAX_TOKENS:
+        facts.remove(min(facts, key=lambda x: x[2]))
+    while later and size(facts) > MAX_TOKENS:
+        later.pop(0)
+    while said and size(facts) > MAX_TOKENS:
         said.pop()
-    return [*lead_lines, *said, *news, *later]
+    while asked and size(facts) > MAX_TOKENS:
+        asked.pop(0)
+    return [*lead_lines, *said, *asked, *(f"- {they} told you: {t}" for _, t, _ in facts),
+            *later]
+
+
+def _her_claims(lines: Sequence[Line]) -> list[str]:
+    """What she has claimed about herself so far, by the coherence lane's extractor when that
+    module is there (talk.position.claims_so_far: numbers and self-statements, the better
+    reader); [] without it, and block falls back to her_place and her_state."""
+    try:
+        from leeroy_mind.talk.position import claims_so_far
+    except ImportError:
+        return []
+    return list(claims_so_far([x.text for x in lines if not x.his]))
 
 
 class SoFar:

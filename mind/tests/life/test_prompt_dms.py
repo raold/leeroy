@@ -111,8 +111,14 @@ def test_bad_news_and_goodbye_lexicons():
                  "that raid was a crash course", "lost my keys again", "the server crashed"):
         assert not hisline.bad_news(text), text
     for text in ("my nan passed on sunday", "was in a car accident last week",
-                 "the vet says its his kidneys", "im really sick today"):
+                 "the vet says its his kidneys", "im really sick today", "been ill all week",
+                 "she is ill again", "feeling ill honestly", "got laid off on friday"):
         assert hisline.bad_news(text), text
+    # "ill" is "I'll" as he types it (review of #368, P2-7: 12 of 500 of his lines, all false)
+    for text in ("ill be on at eight", "ok ill bring flasks", "ill do it later", "that was sick lol",
+                 "crying laughing at that", "you left me on read", "just let go of it",
+                 "sick of the queue times"):
+        assert not hisline.bad_news(text), text
     for text in ("ok gotta run, talk tomorrow", "night x", "heading to bed", "gn",
                  "right, off to work. speak later", "i'll head off then",
                  "ok gotta sleep before the early shift. night you x",

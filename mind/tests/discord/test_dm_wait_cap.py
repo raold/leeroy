@@ -147,3 +147,37 @@ def test_health_bound_follows_the_cap(store, tmp_path):
     capped(rig, cap=0)
     assert _own_time_due(store.conn, 1, rig.clock.now(), 6)("dm:101", mid, ts) > ts + 3600
     assert life_config.dm_wait_cap() == 0  # health puts the mind's pin back
+
+
+def test_health_keeps_her_own_time_for_a_group_line_that_names_nobody(store, tmp_path):
+    """Review of #368, P2-2: the cap is for the members a group DM line names; an unnamed
+    member keeps her own time, and health's bound must too (no false owner-replies miss)."""
+    import json
+    from leeroy_mind.health import OWNER_LATE_MARGIN_S, _own_time_due
+    rig = rig_for(store, at(2026, 11, 18, 3), tmp_path)  # asleep
+    capped(rig)
+    store.conn.execute("INSERT INTO discord_message (channel, author, origin, text, ts) "
+                       "VALUES ('gdm:1', 1, 'human', 'anyone about', ?)", (rig.clock.now(),))
+    mid = store.conn.execute("SELECT max(id) FROM discord_message").fetchone()[0]
+    ts = rig.clock.now()
+    import leeroy_mind.health as health
+    members = {"gdm:1": [101, 102]}
+    real = health.__dict__.get("readers")
+    due = None
+    try:
+        from leeroy_mind.groups import store as gstore
+        orig = gstore.readers
+        gstore.readers = lambda conn, channel, include_closed=False: [1, *members[channel]]
+        store.set_meta(f"groups:owed:{mid}", json.dumps({
+            "101": {"due": ts, "urgent": False, "named": True},
+            "102": {"due": ts, "urgent": False, "named": False}}))
+        due = _own_time_due(store.conn, 1, rig.clock.now(), 6)("gdm:1", mid, ts)
+        assert due > ts + 3600  # 102 was not named: her morning, not the cap
+        store.set_meta(f"groups:owed:{mid}", json.dumps({
+            "101": {"due": ts, "urgent": False, "named": True},
+            "102": {"due": ts, "urgent": False, "named": True}}))
+        named = _own_time_due(store.conn, 1, rig.clock.now(), 6)("gdm:1", mid, ts)
+        assert named <= ts + 150 + OWNER_LATE_MARGIN_S
+    finally:
+        gstore.readers = orig
+    rig.close()

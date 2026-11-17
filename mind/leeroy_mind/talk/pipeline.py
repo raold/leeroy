@@ -227,13 +227,14 @@ SELF_NAME_HINT = 'You are {name}: talk about yourself in the first person, never
 # evening DM audit, 2026-11-16: a date planned at an event of hers). Soft: a retry
 # that still has it is kept, and an answer owed to him never falls back for it.
 IN_PERSON_HINT = ("You two have never met and live far apart: don't plan to see {them} in person "
-                  "or have {them} turn up anywhere, and never say you have met, been together "
-                  "or have anything of {their}; you talk online.")
+                  "or have {them} turn up anywhere, and never say you have met in person, been "
+                  "together or have {their} things; you talk online.")
 # The plain rule, in every private prompt of a member whose arc has not met him (the "So far
 # between you two" block's first line; self-play audit, 2026-11-17: nothing in the prompt said
 # they had never met, and nine replies said they had). {they}/{them}/{their} are his forms.
 NEVER_MET = ("You and {name} have only ever talked online, in the game and on Discord: you have "
-             "never met in person, never touched, and never sent or given each other anything.")
+             "never met in person and never touched, and nothing has passed between you outside "
+             "the game.")
 # Cataclysm or later named in a 2009 guild (filters "era": library.wikitext.names_later).
 ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
@@ -245,6 +246,7 @@ CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
+DM_KEEP_TURNS = 6  # of his last messages, a DM's chat keeps whole when the prompt is over budget
 SO_FAR_WINDOW_S = 12 * 3600.0  # the stored lines talk/sofar.py reads a conversation from
 DROP_ON_RETRY = frozenset({"history", "summons", "in person", "game name", "self name",
                            "own copy"})
@@ -707,19 +709,20 @@ class Composed:
 
 def _far_memories(memories: list, hg: int = 0, names=()) -> list:
     """`memories` without the ones that see him in person, for a member whose arc has not met
-    him (talk.moves.meets_in_memory): any memory that plans to see him, says they have met or
-    has his things ("going to the gig to see if his jokes work in person", "still wearing his
-    hoodie"), and her intentions (memory.diversity.intends) about him (he is an actor, or it
-    names him by `names`) with a meal, a date or a visit in them ("pin him down on dinner
-    tomorrow": the night's intention became a dinner date in her DM, self-play audit
-    2026-11-17). Only what her prompt shows: the stored memory stays."""
+    him: her intentions that see someone in person (#354: "going to the gig to see if his jokes
+    work in person"), and memories about him (he is an actor, or it names him by `names`:
+    talk.moves.meets_in_memory) that put him in person or hold his clothes, or, for an
+    intention, plan a meal, a date or a visit ("pin him down on dinner tomorrow": the night's
+    intention became a dinner date in her DM, self-play audit 2026-11-17). A memory that is not
+    about him is her own life and stays. Only what her prompt shows: the stored memory stays."""
     from leeroy_mind.memory.diversity import intends
     from leeroy_mind.talk.moves import in_person, meets_in_memory
 
     def far(m) -> bool:
+        if intends(m) and in_person(m.text):  # #354: her intention to see him in person
+            return True
         about = bool(hg) and hg in (getattr(m, "actors", ()) or ())
-        return in_person(m.text) or meets_in_memory(m.text, names, about_him=about,
-                                                    plans=intends(m))
+        return meets_in_memory(m.text, names, about_him=about, plans=intends(m))
     return [m for m in memories if not far(m)]
 
 
@@ -1413,6 +1416,12 @@ class Pipeline:
         return [text for channel, to, text in self._own_of(turn.speaker)
                 if whisper_ok(channel, turn.speaker, to, speaker=turn.speaker,
                               turn_channel=turn.channel, to_guid=turn.to_guid)]
+
+    def _old_chat(self, recent: list[ChatLineRow]) -> int:
+        """How many leading rows of a DM's chat are older than his DM_KEEP_TURNS-th last message
+        there (the one she answers counts): the rows an over-budget prompt lets go first."""
+        his = [i for i, r in enumerate(recent) if r.from_guid == self.human.guid]
+        return his[-DM_KEEP_TURNS] if len(his) > DM_KEEP_TURNS else 0
 
     def _own_unshown(self, turn: Turn, recent: list[ChatLineRow]) -> list[str]:
         """_own_lines for the prompt's "Your last lines", without her turns the Chat already
@@ -2430,10 +2439,10 @@ class Pipeline:
         if (not preview and hg and turn.to_guid == hg and turn.speaker != hg
                 and is_private(turn.channel)):
             # he is the only "he" in a private prompt with him: a memory whose "he" is someone
-            # else names them or stays out (memory/thirdparty.py)
+            # else, on positive evidence, names them (memory/thirdparty.py); none is left out
             memories = third_party(memories, owner=turn.speaker, hg=hg, forms=human.forms,
                                    his_names=[*self._his_names(), human.real_name],
-                                   names=self._names())
+                                   names=self._names(), persona=p)
 
         state = self.store.get_state(turn.speaker, lens=True)
         altered = self._altered_of(turn.speaker)
@@ -2610,7 +2619,8 @@ class Pipeline:
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept, situation=situation,
             so_far=[] if preview else self._so_far(
-                turn, meta, now, lead=(NEVER_MET.format(name=human.called),) if apart else ()))
+                turn, meta, now, lead=(NEVER_MET.format(name=human.called),) if apart else ()),
+            old_chat=self._old_chat(recent) if dm_rows else 0)
         if live and getattr(self, 'learn_enabled', False):
             from leeroy_mind.learn.apply import prepare, yield_families
             meta.learning = await prepare(self, turn, meta, p, now=now)

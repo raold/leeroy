@@ -30,22 +30,38 @@ def clock():
 
 MET = [
     "still wearing your jumper, it smells like you",
-    "like saturday night. you know",
     "remember when we kissed outside the station",
     "you left your scarf at mine",
-    "you posted me that mug with the note, remember",
-    "last time you were here you fixed the shelf",
-    "when we met you were so nervous",
+    "last time you were at my place you fixed the shelf",
+    "when we met up you were so nervous",
     "i slept in your shirt again",
-    "that night you stayed was the best sleep ive had",
-    "i sent you the scarf last week",
+    "you stayed at mine and it was the best sleep ive had",
+    "that night we cuddled on the sofa",
 ]
+# never a claim: wishes, denials, and everything the game really gives them (review of #368,
+# P2-5): they did meet in the game, they raid at night, members mail him letters and gifts,
+# and her own household has its dinners
 NOT_MET = [
     "we've never met, you know that",
     "if you were here id make you tea",
     "one day when we meet ill hold you to that",
     "i wish i was wearing your jumper right now",
     "when we met in the guild you were a hunter",
+    "when we first met you were a warrior",
+    "when we met in icc you wiped us twice",
+    "since we met ive healed better",
+    "last time you were here we wiped on the third boss",
+    "last night we stayed up way too late talking",
+    "when we went for the achievement you carried",
+    "you came over to my bank alt",
+    "like friday night raid",
+    "like tuesday night when we wiped",
+    "that thing you do with your voice on vent",
+    "we have dinner in an hour so brb",
+    "our dinner is getting cold",
+    "you gave me the ring from the vault",
+    "i sent you a card in the mail",
+    "you sent me that book rec",
     "you sent me that screenshot of the boss",
     "you sent me 50g for repairs",
     "remember when we wiped on that trash pull",
@@ -67,8 +83,9 @@ def test_have_met_claims_and_what_ifs():
 def test_summons_widened():
     for line in ("youre coming to me, end of", "come home to me", "ur coming over tonight"):
         assert is_summon(line), line
-    assert not is_summon("are you coming to the raid")
-    assert not is_summon("i came home late from work")
+    for line in ("are you coming to the raid", "i came home late from work", "come home safe",
+                 "come home soon from work", "come show me your new mount"):
+        assert not is_summon(line), line
 
 
 def test_the_tell_is_hard_for_owed_answers_too():
@@ -97,18 +114,24 @@ def test_memories_that_see_him_in_person_stay_out_of_her_prompt():
     keep = [mem("I want to ask Testmage about the new raid schedule", "plan", (1,)),
             mem("Cooking dinner for the kids tomorrow, need to shop", "plan"),
             mem("He said the patch broke his addons", actors=(1,)),
-            mem("We wiped twice on the last boss and Testmage laughed it off", "event", (1,))]
+            mem("We wiped twice on the last boss and Testmage laughed it off", "event", (1,)),
+            # her own life, not his (review of #368, P2-4)
+            mem("I found her keys under the sofa again", "event"),
+            mem("His coat was soaked when he came in from school", "event"),
+            mem("Dinner with my brother on saturday, book the table", "plan"),
+            mem("I bought the ring from the vendor in Dalaran", "event", (1,)),
+            mem("Testmage had dinner with his family before the raid", "event", (1,))]
     drop = [mem("Pin Testmage down on a time for dinner tomorrow, no vague answers", "plan", (1,)),
             mem("I need to work out when he is free for dinner", "plan", (1,)),
             mem("Going to the gig to see if his jokes work in person", "plan"),
-            mem("I am still wearing his hoodie and it smells like him"),
-            mem("I should post Tomasz a card for his birthday", "plan"),
-            mem("That night we kissed outside the station changed everything")]
+            mem("I am still wearing his hoodie and it smells like him", actors=(1,)),
+            mem("Tomasz and I should meet in person this summer", "plan")]
     assert _far_memories([*keep, *drop], 1, names) == keep
-    assert meets_in_memory("take him out for coffee this weekend")
+    assert meets_in_memory("take him out for coffee this weekend", about_him=True)
+    assert not meets_in_memory("take him out for coffee this weekend")  # nobody says it is him
     assert meets_in_memory("lunch plans", names, about_him=True)
     assert not meets_in_memory("lunch plans", names)
-    assert not meets_in_memory("dinner after the raid with him in the guild hall")
+    assert not meets_in_memory("dinner after the raid with him", about_him=True)
 
 
 def test_her_dm_prompt_says_they_have_never_met_until_her_arc_has(store, clock, tmp_path):
@@ -119,7 +142,7 @@ def test_her_dm_prompt_says_they_have_never_met_until_her_arc_has(store, clock, 
     far = section(rig.prompts()[-1], SO_FAR_HEAD)
     line = NEVER_MET.format(name=rig.engine.human.called)
     assert far.splitlines()[0] == "- " + line
-    assert "never met in person" in line and "never sent or given each other anything" in line
+    assert "never met in person" in line and "outside the game" in line  # the game's mail is real
     rig.engine._met_him = lambda guid: True  # her arc has met him (#325's met state)
     mid = his_dm(rig, "ok and after that")
     answer(rig, talk, mid)
@@ -175,7 +198,7 @@ def test_a_whisper_answer_never_claims_they_met_either(store, clock, tmp_path, c
         await rig.session()
         await rig.advance(120)  # the greetings of his login are said
         before = len(rig.prompts())
-        rig.script("long day. when we met you were so nervous. how was yours",
+        rig.script("long day. when we met up you were so nervous. how was yours",
                    "long one. you left your scarf at mine. tell me about yours")
         await rig.human("how was your day then", channel="whisper", to_guid=102)
         await rig.advance(90)

@@ -24,9 +24,8 @@ _PATTERNS = {
               r"|\bwaiting (for (you|u)|all day)\b|\bdoor'?s open\b|\byour move\b"
               r"|\bdon'?t be late\b|\bpull up\b|\bfind me\b|\bhurry up\b"
               r"|\bto my (place|house|flat|apartment|room|bed)\b"
-              r"|\b(you'?re|youre|ur|u r|you are) coming (to me|over|here|home|round)\b"
-              r"|\bcome home\b|\bcoming to me\b"
-              r"|\bcome (do|show|kiss|hold|cuddle) (it|me|that|this)\b",
+              r"|\b(you'?re|youre|ur|u r|you are) coming (to me|over|round)\b"
+              r"|\bcome home to me\b|\bcoming to me\b",
     "invite_game": r"\b(in|to|at|into|inside)\s+(the\s+|my\s+|our\s+|a\s+)?(dalaran|orgrimmar|org"
                    r"|stormwind|shattrath|shatt|ironforge|undercity|vent|voice|discord|ts3|mumble"
                    r"|dungeon|raid|bg|battleground|arena|queue|group|party|lfg)\b"
@@ -134,11 +133,7 @@ _IN_PERSON = re.compile(
     r"|\bsit (?:right )?(?:next to|beside|by|with) me\b"
     r"|\bi (?:need|want) (?:you|u) (?:there|here with me)\b"
     rf"|\bcome (?:to|along to) (?:the|my|our|this) (?:{_EVENTS})\b"
-    # a meal or a date the two are to have, said as a fixture
-    r"|\b(?:we have|we've got|weve got|we got|our) (?:a |that )?(?:dinner|lunch|brunch|drinks"
-    r"|date|date night)\b"
-    r"|\bwhat time (?:is |for |are we doing )?(?:tomorrow |tonight |our |the )?(?:dinner|lunch"
-    r"|brunch|drinks)\b|\bwhat time (?:tomorrow|tonight) (?:for )?(?:dinner|lunch|drinks)\b"
+    # a meal or a date with him (her own household's dinner is no claim)
     r"|\b(?:dinner|lunch|brunch|drinks|a date) with (?:you|u)\b"
     r"|\btake (?:you|u) to (?:dinner|lunch|brunch)\b"
     # being on him, said as what she will do (a wish says "would": no claim)
@@ -149,72 +144,66 @@ _DENIED = re.compile(r"\b(?:never|not|no|without|cannot|wont|dont|didnt|havent|h
                      r"arent|wasnt|werent|couldnt|wouldnt|shouldnt|aint)\b|\bcant\b(?! wait)")
 
 
-# Having met already, past the plans above (self-play audit, 2026-11-17: nine DM replies of
-# members who have never met him said they had: wearing his hoodie, a story of how he posted it,
-# "like tuesday", "when you were here"). A claim of fact in her line to him: a time they were
-# together, his things at hers, something physical sent or left. Not a wish or a what-if ("if
-# you were here", "one day when we meet"), a denial ("we've never met"), nor meeting in the
-# game or online ("when we met in the guild").
+# Having met already, past the plans above (self-play audit, 2026-11-17: DM replies of members
+# who have never met him said they had: wearing his hoodie, "when you were at mine"). A narrow
+# backstop: the prompt's never-met line is the main defence (review of #368: on 1,513 stored
+# private lines wider patterns added no hit and several false ones). Only what cannot be the
+# game: a physical act together said as past, him at her place, his clothes at hers. Not a wish
+# or a what-if ("if you were here"), a denial ("we've never met"), nor anything in a clause about
+# the game or online: they did meet in the game ("when we first met you were a warrior"), they
+# raid at night ("like friday night raid"), and members do send him letters, gifts and items in
+# game.
 _WEEKDAY = r"(?:mon|tues|wednes|thurs|fri|satur|sun)day"
-_THINGS = (r"hoodie|shirt|t-?shirt|tee|jumper|sweater|jacket|coat|scarf|hat|socks|boxers"
-           r"|toothbrush|pillow|blanket|keys?|watch|necklace|ring|bracelet|lighter|cologne")
-_PARCEL = (rf"{_THINGS}|flowers|chocolates|letter|card|postcard|parcel|package|box|present"
-           r"|book|mug|teddy|perfume|care package")
-_TOGETHER = (r"met|kissed|cuddled|hugged|slept|danced|held hands|hooked up|made out|had dinner"
-             r"|had lunch|had coffee|went out|went for|stayed|came|visited|spent|were together"
-             r"|woke up|fell asleep|left")
+_THINGS = (r"hoodie|shirt|t-?shirt|tee|jumper|sweater|jacket|coat|scarf|socks|boxers"
+           r"|toothbrush|pillow|cologne")
+_PHYSICAL = (r"kissed|cuddled|hugged|slept together|held hands|hooked up|made out"
+             r"|woke up (?:next to|beside|with)|fell asleep (?:on|next to|beside|with)")
+_AT_HERS = r"at mine|at my (?:place|flat|house|apartment)|in my (?:bed|flat|house|room|kitchen)"
 _HAVE_MET = re.compile(
-    rf"\bwhen we (?:first )?(?:{_TOGETHER})\b|\bsince we (?:{_TOGETHER})\b"
-    rf"|\b(?:last|the|that|this) (?:time|night|day|morning|weekend|evening) (?:we|you|u) "
-    rf"(?:{_TOGETHER})\b"
-    r"|\b(?:last time|when|while) (?:you|u) (?:were|was) (?:here|over|round|at mine|at my|in my)\b"
-    r"|\b(?:you|u) (?:came|stayed|slept|crashed) (?:over|round|here|at mine|at my)\b"
-    rf"|\b(?:wearing|still have|still got|kept|stole|borrowed|sleeping in|sleep in|in) "
+    rf"\b(?:when|since|after|the (?:night|time|day|morning|weekend)|last (?:time|night|weekend)"
+    rf"|that (?:night|time|day|morning|weekend)) (?:we|you and i) (?:first )?(?:{_PHYSICAL})\b"
+    rf"|\bremember (?:when|how|that (?:time|night)) (?:we|you and i) (?:{_PHYSICAL})\b"
+    r"|\bwhen we (?:met up|met in person|met irl)\b"
+    rf"|\b(?:last time|when|while) (?:you|u) (?:were|was) (?:over |round )?(?:{_AT_HERS})\b"
+    rf"|\b(?:you|u) (?:came|stayed|slept|crashed) (?:over|round) (?:{_AT_HERS})\b"
+    rf"|\b(?:you|u) (?:stayed|slept|crashed) (?:{_AT_HERS})\b"
+    rf"|\b(?:wearing|still have|still got|kept|stole|borrowed|sleeping in|sleep in|slept in) "
     rf"(?:that |one of |this )?(?:your|ur) (?:{_THINGS})s?\b"
-    rf"|\b(?:your|ur) (?:{_THINGS})s?\b[^.!?]{{0,40}}\b(?:smells?|is (?:still )?(?:here|on my|in my)"
-    r"|you left|at mine|at my place)\b"
-    r"|\b(?:it|that|this|they) (?:still )?smells? (?:like|of) (?:you|u)\b"
-    r"|\b(?:you|u) left (?:your|ur|it|them|that|this)\b[^.!?]{0,30}\b(?:here|at mine|at my|in my"
-    r"|on my)\b"
-    rf"|\b(?:you|u) (?:sent|mailed|posted|shipped|gave|bought|left|brought) me "
-    rf"(?:the |a |an |that |your |ur |one of your |some |those |these )?(?:{_PARCEL})\b"
-    rf"|\bi (?:sent|mailed|posted|shipped|gave|brought) (?:you|u) "
-    rf"(?:the |a |an |that |my |one of my |some )?(?:{_PARCEL})\b"
-    rf"|\b(?:like|since|after) (?:last |that )?{_WEEKDAY} night\b"
-    rf"|\blike {_WEEKDAY}\W+(?:you know|remember)\b"
-    r"|\bremember (?:when|how|that (?:time|night)) (?:we|you|u) (?:kissed|cuddled|hugged|slept"
-    r"|danced|held|met up|woke up)\b"
-    r"|\b(?:you|u) (?:sent|mailed|posted|shipped|gave|handed|brought) (?:it|them|that|this|one)"
-    r" (?:to|for) me\b"
-    r"|\b(?:you|u) (?:sent|mailed|posted|shipped|gave) me the one\b", re.I)
-# a habit of his hands, said as known: a claim even inside a what-if ("i'd ... while you're
-# doing that thing where you ...")
-_HABIT = re.compile(r"\bthat thing (?:where |when )?(?:you|u) (?:do|did|put|always)\b", re.I)
+    rf"|\b(?:your|ur) (?:{_THINGS})s?\b[^.!?]{{0,40}}\b(?:smells? (?:like|of) (?:you|u)"
+    rf"|you left|{_AT_HERS})\b"
+    rf"|\b(?:you|u) left (?:your|ur) (?:{_THINGS})s?\b"
+    rf"|\b(?:you|u) (?:sent|mailed|posted|gave|left) me (?:your|ur|one of your) (?:{_THINGS})s?\b",
+    re.I)
 _DIGITAL = re.compile(r"\b(?:link|screenshot|pic|pics|picture|photo|selfie|song|playlist|meme"
-                      r"|video|clip|message|msg|dm|whisper|text|email|mail in game|invite|gold"
-                      r"|macro|addon|weakaura|log|logs)\b")
+                      r"|video|clip|message|msg|dm|whisper|text|email|invite|gold"
+                      r"|macro|addon|weakaura|log|logs|transmog|tabard|tier|set)\b")
 _WHAT_IF = re.compile(r"\b(?:if|wish|wishing|would|wouldnt|could|imagine|imagining|pretend|dream"
                       r"|dreamt|dreamed|dreaming|one day|someday|some day|cant wait|until|til"
-                      r"|when we (?:finally|do|ever)|fantasy|fantasi\w+|picturing|picture)\b")
+                      r"|when we (?:finally|do|ever)|fantasy|fantasi\w+|picturing|picture|id"
+                      r"|youd|wed)\b")
 _ONLINE = re.compile(r"\b(?:online|in game|in-game|ingame|on discord|on here|in (?:the )?guild"
-                     r"|in wow|in (?:a |the )?(?:raid|bg|dungeon|group|party))\b")
+                     r"|in wow|on vent|in vent|on voice|in voice|icc|naxx|toc|uld|voa|os|eoe"
+                     r"|wg|wintergrasp|heroic|heroics|alt|alts|bank|mail|mailbox|ah|auction)\b")
+
+
+def _in_game(clause: str) -> bool:
+    """`clause` (folded) is about the game or online: an online word, a place or activity of
+    the game, or any game word (a boss, a raid, a wipe, the guild)."""
+    return bool(_ONLINE.search(clause) or _RE["invite_game"].search(clause)
+                or GAME_WORDS.intersection(_WORD.findall(clause)))
 
 
 def have_met(text: str) -> bool:
-    """A clause of `text` says the two have been together or handed each other something
-    (_HAVE_MET), not as a wish or a what-if, not denied before it in its clause, and not about
-    the game or online."""
+    """A clause of `text` says the two have been together in the flesh or that she has his
+    clothes (_HAVE_MET): not as a wish or a what-if, not denied before it in its clause, and
+    never in a clause about the game or online."""
     t = _fold(text or "")
     for coarse in _COARSE.split(t):
-        if _ONLINE.search(coarse) or _RE["invite_game"].search(coarse):
-            continue
-        if _HABIT.search(coarse):
-            return True
         m = _HAVE_MET.search(coarse)
-        if m is None:
+        if m is None or _in_game(coarse) or _DIGITAL.search(coarse):
             continue
         before = coarse[:m.start()].replace("'", "")
-        if _DENIED.search(before) or _WHAT_IF.search(before) or _DIGITAL.search(coarse):
+        if _DENIED.search(before) or _WHAT_IF.search(before):
             continue
         return True
     return False
@@ -250,39 +239,36 @@ def without_meeting(text: str) -> str:
     return "\n".join(lines)
 
 
-# A plan to be with him in person, as a memory of hers words it (third person, his name or
-# "him"): a meal, a date, a visit, a trip to him; and his things at hers. For a member whose
-# arc has not met him these never reach her prompt (Pipeline._far_memories): the night wrote
-# "demand a time for dinner tomorrow" and her DM held him to a dinner date.
+# A memory of hers that puts him in person or holds his things, as she words it (third person,
+# his name or "him"), for a member whose arc has not met him (Pipeline._far_memories): the
+# night wrote "pin him down on dinner tomorrow" and her DM held him to a dinner date. Only a
+# memory about him counts (he is one of its actors, or it names him): her mother's keys, her
+# daughter's coat and dinner with her brother are her own life (review of #368, P2-4).
 _MEAL = (r"dinner|lunch|brunch|breakfast|coffee|drinks|a drink|date night|a date|movie night"
          r"|picnic|sleepover|visit|visiting|road trip|flight|train to|drive (?:over|down|up)")
 _MEAL_RE = re.compile(rf"\b(?:{_MEAL})\b", re.I)
-_MEMORY_MEET = re.compile(
-    rf"\b(?:{_MEAL})\b[^.!?]{{0,60}}\bwith (?:him|her|them)\b"
-    rf"|\b(?:with (?:him|her|them)|take (?:him|her|them) (?:out|to)|meet (?:him|her|them)"
-    rf"|see (?:him|her|them))\b[^.!?]{{0,40}}\b(?:{_MEAL})\b"
-    rf"|\b(?:his|her|their) (?:{_THINGS})s?\b"
-    r"|\b(?:mail|post|ship|send) (?:him|her|them) (?:a |an |the |my |some )?"
-    rf"(?:{_PARCEL})\b", re.I)
+_HIS_THINGS = re.compile(rf"\b(?:his|her|their) (?:{_THINGS})s?\b", re.I)
 
 
 def meets_in_memory(text: str, names: Collection[str] = (), *, about_him: bool = False,
                     plans: bool = True) -> bool:
-    """A memory's text sees the two in person: in_person's clauses, a meal, date or visit with
-    him, his things, or a parcel to him (_MEMORY_MEET; `names`, his names, read as "him"); and,
-    in an intention (`plans`) about him (`about_him`, or one that names him), any meal, date or
-    visit. Never a clause about the game or online."""
+    """A memory's text puts him in person or holds his things: only in a memory about him
+    (`about_him`, or one that names him by `names`, read as "him"): in_person's clauses, his
+    clothes at hers, or, in an intention (`plans`), a meal, a date or a visit. Never a clause
+    about the game or online. False for any memory that is not about him."""
     t = _fold(text or "")
     for name in sorted({_fold(n) for n in names if n}, key=len, reverse=True):
         t, n = re.subn(rf"\b{re.escape(name)}'s\b", "his", t)
         t, k = re.subn(rf"\b{re.escape(name)}\b", "him", t)
         about_him = about_him or bool(n or k)
+    if not about_him:
+        return False
     if in_person(t):
         return True
     for coarse in _COARSE.split(t):
-        if _ONLINE.search(coarse):
+        if _in_game(coarse):
             continue
-        if _MEMORY_MEET.search(coarse) or (about_him and plans and _MEAL_RE.search(coarse)):
+        if _HIS_THINGS.search(coarse) or (plans and _MEAL_RE.search(coarse)):
             return True
     return False
 

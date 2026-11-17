@@ -1336,8 +1336,22 @@ def _own_time_due(conn, human: int, now: float, availability: int):
         return personas[guid]
 
     def due(channel: str, message: int, ts: float) -> float:
+        named: dict[int, bool] | None = None  # None: her own DM, always capped
         if is_group(channel):
             members = [g for g in readers(conn, channel, include_closed=True) if g != human]
+            # a group DM line is capped only for the members it names (groups.service: the
+            # receipt holds `named` while she is owed); anyone else keeps her own time, so
+            # the bound must too, or a late unnamed answer reads as a miss
+            named = {}
+            row = conn.execute("SELECT value FROM meta WHERE key = ?",
+                               (f"groups:owed:{message}",)).fetchone()
+            try:
+                held = json.loads(row[0]) if row is not None else {}
+            except (TypeError, ValueError):
+                held = {}
+            if isinstance(held, dict):
+                named = {int(g): isinstance(d, dict) and d.get("named") is True
+                         for g, d in held.items() if str(g).isdecimal()}
         else:
             peer = channel[3:]
             members = [int(peer)] if peer.isdecimal() else []
@@ -1348,7 +1362,8 @@ def _own_time_due(conn, human: int, now: float, availability: int):
         try:
             times = [owntime.due_at(p, post_ts=ts, now=now, local_now=local_now,
                                     message_id=message, urgent=False, talking=False,
-                                    insist=False)
+                                    insist=False,
+                                    capped=named is None or named.get(g, False))
                      for g in members if (p := persona(g)) is not None]
         except Exception:
             times = []
@@ -1359,9 +1374,10 @@ def _own_time_due(conn, human: int, now: float, availability: int):
             a = away(g)
             if a is not None and a[0] <= ts < a[1]:
                 back = a[1] + BACK_FIND_S[1]
-                # ...and no later than the cap after his post (DiscordTalk._due_of), a group
-                # DM's too: the bound is a ceiling
-                times.append(min(back, ts + cap * owntime.ASLEEP_CAP) if cap > 0 else back)
+                # ...and no later than the cap after his post (DiscordTalk._due_of), for her
+                # own DM and a group line that names her
+                capped = cap > 0 and (named is None or named.get(g, False))
+                times.append(min(back, ts + cap * owntime.ASLEEP_CAP) if capped else back)
         return max(times, default=ts) + OWNER_LATE_MARGIN_S
     return due
 

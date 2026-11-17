@@ -121,6 +121,11 @@ class PromptParts:
     # she said of where she is, open questions and plans), a few short code-built lines under
     # SO_FAR_HEAD after the chat; at most sofar.MAX_TOKENS, so the trim never cuts it
     so_far: list[str] = field(default_factory=list)
+    # A DM's chat: how many of its leading rows are older than his DM_KEEP_TURNS-th last message.
+    # When the prompt is over its budget these go first, before her style notes, awareness and
+    # memories (review of #368: in the longest conversations those gave way to chat from ten
+    # turns back; the so-far block carries his older news)
+    old_chat: int = 0
 
 
 def replay(text: str, words: int = REPLAY_WORDS) -> str:
@@ -893,7 +898,8 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
 
 
 def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
-    """A copy that fits the budget. Learned style goes first, then the awareness card is
+    """A copy that fits the budget. A DM's chat rows older than his last few turns go first
+    (old_chat), then learned style, then the awareness card is
     re-rendered into the remaining room, but never below its claims (CLAIMS_PART, kept whole).
     Then, in order: the other medium's lines, memories down to 3 (the least relevant go), chat
     down to 5 (the oldest go), relationship cards down to 1 (the addressee's stays), own lines
@@ -918,6 +924,20 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
 
     def over() -> bool:
         return _tokens(render_messages(t)) > budget
+
+    # A long DM's oldest chat rows go before anything else (PromptParts.old_chat).
+    old = max(0, min(p.old_chat, len(t.chat) - MIN_CHAT))
+    while old > 0 and over():
+        i = next((j for j in range(old) if j not in (pin, kept)), None)
+        if i is None:
+            break
+        t.chat.pop(i)
+        old -= 1
+        if pin is not None and i < pin:
+            pin -= 1
+        if kept is not None and i < kept:
+            kept -= 1
+    t.old_chat = old
 
     # Learned style is expendable before evidence, including the other-medium
     # timeline. Drop whole notes so attribution remains a prefix, never half a fact.
