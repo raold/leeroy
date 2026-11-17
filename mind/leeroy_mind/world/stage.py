@@ -154,8 +154,14 @@ def make_stage(cast_config):
                 slot=replace(slot,romance_stance="none",jealousy_mode=None,
                              guild_role="social" if rows[guid]["level"]<80 else slot.guild_role)
                 names={r["name"] for r in rows.values()} | {m.name for m in ctx.store.cast().values()}
-                taken=names | {p.identity.real_name for p in existing} | {
+                # A real name here must differ, whole and by first name, from the owner's names,
+                # the cast's character names and this character's own. Every other persona's
+                # real name and the other world characters block it only as a whole name: the
+                # realm has more players than a model has first names for one age and region,
+                # so first names unique across every persona refused a third of each night.
+                taken={m.name for m in ctx.store.cast().values()} | {rows[guid]["name"]} | {
                     n for n in (ctx.ident.real_name,ctx.ident.nickname,ctx.ident.character_name) if n}
+                whole=(names | {p.identity.real_name for p in existing}) - taken
                 rules=generation_rules(ctx.settings.data_dir) + (
                     f"\nWorld character scope: level {rows[guid]['level']}, outside the owner's guild. "
                     "Keep this level explicit; an experienced player can be levelling an alt. "
@@ -163,7 +169,7 @@ def make_stage(cast_config):
                     "No romantic interest in the owner; no membership in the owner's guild.")
                 p=await generate_persona(ctx.reasoner,ctx.settings.reflection_model,slot,member(rows[guid]),
                     cast_summary(existing,human=ctx.ident),rules,human=ctx.ident,taken_names=frozenset(taken),
-                    member_names=frozenset(names),private_logs=False)
+                    member_names=frozenset(names),private_logs=False,full_names=frozenset(whole))
                 p=replace(p,real_life=replace(p.real_life,birthday=draw_birthday(
                     (q.real_life.birthday for q in existing),ctx.rng(STAGE,guid,"birthday"))))
                 p=await looks(ctx,p,rows,existing,tuple(names))
