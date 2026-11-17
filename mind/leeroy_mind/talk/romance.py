@@ -1055,12 +1055,12 @@ class WhisperPlanner:
         return self.refusal(now) is None
 
     def _pool(self, now: float, candidates: dict[int, tuple[Persona, Relationship]],
-              lift: float) -> dict[int, float]:
+              lift: float, starts=None) -> dict[int, float]:
         pool = {}
         for g, (p, r) in sorted(candidates.items()):
             if now - self._last.get(g, -math.inf) < WHISPER_GAP_S:
                 continue
-            w = whisper_weight(p, r, lift=lift)
+            w = whisper_weight(p, r, lift=lift if starts is None else lift * starts(p))
             if w > 0:
                 pool[g] = w
         return pool
@@ -1072,18 +1072,21 @@ class WhisperPlanner:
         return g
 
     def start(self, now: float, candidates: dict[int, tuple[Persona, Relationship]], *,
-              lift: float = 1.0) -> int | None:
+              lift: float = 1.0, starts=None) -> int | None:
         """The due whisper's whisperer (no WHISPER_P roll), drawn by whisper_weight over
         `candidates` (who could whisper now, with their relationship to him); `lift` is
         romance_lift of the world's dial. The member dials' pull on the rate is read from the
         same candidates and the next gap drawn. None when nobody may whisper now, or the hour
-        or the last whisper leaves no room: the slot passes."""
-        live = sum(whisper_weight(p, r, lift=lift) for p, r in candidates.values())
+        or the last whisper leaves no room: the slot passes. `starts` ([heat] on): each
+        member's own multiplier on that lift (heat's "she starts it"), a function of her
+        persona; None: the lift as it is."""
+        live = sum(whisper_weight(p, r, lift=lift if starts is None else lift * starts(p))
+                   for p, r in candidates.values())
         written = sum(whisper_weight(p, r, neutral=True) for p, r in candidates.values())
         if written > 0:
             self._mult = min(RATE_MULT_MAX, live / written)
         self._reschedule(now)
-        pool = self._pool(now, candidates, lift)
+        pool = self._pool(now, candidates, lift, starts)
         if not pool or not self._room(now):
             return None
         return self._drawn(now, pool)

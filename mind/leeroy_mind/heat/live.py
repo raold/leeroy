@@ -44,6 +44,34 @@ def photo_tier(p) -> int:
     return P4 if _LIVE is None else _LIVE.photo_tier(p)
 
 
+def sends(p, scene, look=None) -> bool:
+    """Whether a stored photo may be sent or offered at her photo tier now: its scene (or a
+    varied set's look) is within the tier. Always True with heat off. A photo above the tier is
+    only passed over: nothing is expired, hidden, deleted or rendered again, and raising the
+    heat makes it eligible again."""
+    if _LIVE is None:
+        return True
+    from . import photos
+    tier = _LIVE.photo_tier(p)
+    return (photos.look_tier(look) if look is not None else photos.scene_tier(scene)) <= tier
+
+
+def offers_of(p) -> float:
+    """Heat's multiplier on the chance a turn to him offers a `him` photo; 1.0 with heat off."""
+    return 1.0 if _LIVE is None else _LIVE.offers(p)
+
+
+def starts_of():
+    """For the whisper clocks: a function of a member's persona giving heat's multiplier on the
+    romantic share of her starts, or None with heat off (the clocks as they were)."""
+    return None if _LIVE is None else _LIVE.starts
+
+
+def never_starts(p) -> bool:
+    """Heat says she never starts it (heat 0): her own starts are casual. False with heat off."""
+    return _LIVE is not None and _LIVE.never_starts(p)
+
+
 # -- pure, shared with the console ----------------------------------------------------------------
 
 def member_of(p, tuning=None, cast_member=None) -> Member:
@@ -132,6 +160,21 @@ class HeatLive:
         if p is None:
             return P4
         return self.resolve(p, lead=False).photo
+
+    def starts(self, p) -> float:
+        """Her multiplier on the romantic share of the whisper and opener clocks."""
+        return self.resolve(p, lead=False).starts
+
+    def never_starts(self, p) -> bool:
+        """Heat says she never starts it (heat 0): her own starts are casual."""
+        if p is None:
+            return False
+        r = self.resolve(p, lead=False)
+        return r.applies and r.starts <= 0
+
+    def offers(self, p) -> float:
+        """Her multiplier on the chance a turn to him offers a `him` photo."""
+        return 1.0 if p is None else self.resolve(p, lead=False).offers
 
     # his lead ----------------------------------------------------------------------------------
 

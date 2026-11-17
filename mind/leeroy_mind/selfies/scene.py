@@ -406,7 +406,11 @@ def scene_schema(p: Persona | None) -> dict:
     """The reply schema for p's scene: only enum choices, under the member's style."""
     from . import wardrobe  # her wardrobe and palette narrow the outfits and colours offered
     if style_of(p) == LUST:
-        return wardrobe.lust_schema(p, SCENE_SCHEMA_LUST)
+        # [heat]: her photo tier selects among the vetted lists; SCENE_SCHEMA_LUST itself at P4
+        from leeroy_mind.heat import live as heat_live
+        from leeroy_mind.heat import photos as heat_photos
+        return wardrobe.lust_schema(p, heat_photos.narrow_schema(
+            SCENE_SCHEMA_LUST, heat_live.photo_tier(p)))
     return wardrobe.scene_schema(p, SCENE_SCHEMA, OUTFITS)
 
 

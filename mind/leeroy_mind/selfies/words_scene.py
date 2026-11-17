@@ -158,6 +158,7 @@ PLAIN_WEAR = {"gym": OUTFITS["exercise"], "casual": OUTFITS["casual"],
 LUST_WEAR = {"gym": ("sports top and leggings",), "casual": VARIED_LOOKS["casual"][0],
              "going_out": VARIED_LOOKS["going_out"][0], "swimwear": VARIED_LOOKS["swim"][0],
              "pyjamas": ("off-the-shoulder sweater dress",)}
+HEAT_WEAR = {"gym": "gym", "swimwear": "swim", "going_out": "going_out"}  # code -> category
 AS_NOW = {Block.WORK: "work_uniform", Block.GYM: "gym", Block.OUT: "going_out",
           Block.ASLEEP: "pyjamas"}
 WATER_RE = re.compile(r"\b(?:beach|seaside|shore|sea|ocean|pool|poolside|lake|lakeside|dock|"
@@ -400,10 +401,20 @@ def _wear_ok(p: Persona, phrase: str, *, vetted: bool) -> bool:
             and (vetted or not _text_codes("outfit", phrase, ident=_NOBODY, names=[])))
 
 
+def _heat_tier(p: Persona) -> int:
+    """[heat]: her photo tier (heat/photos.py); the lists as they are (P4) with heat off."""
+    from leeroy_mind.heat import live as heat_live
+    return heat_live.photo_tier(p)
+
+
 def _listed(code: str, p: Persona, seed) -> str:
     if style_of(p) != LUST:
         return PLAIN_WEAR[code]
-    choice = _draw(LUST_WEAR[code], seed, f"outfit:{code}")
+    from leeroy_mind.heat import photos as heat_photos
+    tier = _heat_tier(p)
+    pool = heat_photos.outfits(LUST_WEAR[code], tier) or heat_photos.outfits(
+        LUST_WEAR["casual"], tier)  # her tier has none of that kind: a casual one it allows
+    choice = _draw(pool, seed, f"outfit:{code}")
     return outfit_phrase(choice, _draw(LUST_COLOURS, seed, "colour"), VARIED_OUTFITS)
 
 
@@ -429,6 +440,10 @@ def resolve_wearing(code: str, p: Persona, *, place: str, framing: str, block: B
         code, fallback = "casual", "wearing:swimwear_pairing"
     if lust and code in ("gym", "swimwear") and INDOOR_RE.search(place):
         code, fallback = "casual", "wearing:indoor_pairing"
+    if lust and code in HEAT_WEAR:  # [heat]: swimwear only at P4, gym wear from P3 (never off)
+        from leeroy_mind.heat import photos as heat_photos
+        if _heat_tier(p) < heat_photos.CATEGORY_TIER[HEAT_WEAR[code]]:
+            code, fallback = "casual", "wearing:heat"
     phrase = _listed(code, p, seed)
     if not _wear_ok(p, phrase, vetted=True):
         code, fallback, phrase = "casual", "wearing:screen", PLAIN_WEAR["casual"]

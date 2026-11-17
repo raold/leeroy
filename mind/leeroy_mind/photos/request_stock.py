@@ -66,8 +66,10 @@ def _safe_snap(app, request, photo, *, now, member):
             from leeroy_mind.selfies.request_scene import request_names
             if names_in(photo.scene, request_names(app, request.guid)):
                 return False
+        from leeroy_mind.heat import live as heat_live
         return (scene.audience == request.audience and scene_renderable(p, scene) is None
-                and (request.audience != 'anyone' or scene.style == PLAIN))
+                and (request.audience != 'anyone' or scene.style == PLAIN)
+                and heat_live.sends(p, photo.scene))  # [heat]: within her photo tier now
     except (KeyError, ValueError, TypeError):
         return False
 
@@ -191,10 +193,12 @@ def _candidates(app, request, *, now, member):
             check_jpeg(thumb)
         except ImageRefused:
             continue
-        scene = _gallery_scene(p, request.audience, was_lust,
-                               _varied_look(app.store.conn, request.guid, row['set_no'],
-                                            row['idx']))
+        look = _varied_look(app.store.conn, request.guid, row['set_no'], row['idx'])
+        scene = _gallery_scene(p, request.audience, was_lust, look)
         if scene_renderable(p, scene_from(scene)) is not None:
+            continue
+        from leeroy_mind.heat import live as heat_live
+        if not heat_live.sends(p, scene, look):  # [heat]: a ready-made photo above her tier
             continue
         yield (f"gallery:{request.guid}:{row['set_no']}:{row['idx']}", image, thumb,
                scene, row['seed'], row['tries'], row['nsfw'], row['prompt'])

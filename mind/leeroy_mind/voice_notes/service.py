@@ -110,6 +110,10 @@ class VoiceNotes:
         arbiter=getattr(app,'arbiter',None)
         if arbiter is not None and not arbiter.holders:
             return False
+        # [heat]: a line worded above the tier a voice note may speak is typed, never dropped
+        hr=getattr(meta,'heat',None)
+        if hr is not None and not hr.speaks(getattr(meta,'heat_band',None)):
+            return False
         # an item: a game link or placeholder, or Discord's [Item Name] (talk.items), stays text
         if not 3<=len(text.split())<=cfg.max_words or not re.search(r'\w',text) or re.search(r'\|[Hh]|\[item|<item|\[[^\]\n]+\]',text,re.I):
             return False

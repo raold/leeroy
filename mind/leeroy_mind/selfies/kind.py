@@ -489,7 +489,12 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
     ask = KIND_ASK.format(name=name)
     if not lust:
         ask += wardrobe.ask_hint(p)  # what they tend to wear; nothing with no wardrobe set
-    lust_schema = wardrobe.lust_schema(p, LUST_SCHEMA)
+    # [heat]: her photo tier selects among the vetted lists (heat/photos.py); at P4, and with
+    # heat off, the schema is LUST_SCHEMA itself. Her style (the age rules) was decided above.
+    from leeroy_mind.heat import live as heat_live
+    from leeroy_mind.heat import photos as heat_photos
+    tier = heat_live.photo_tier(p)
+    lust_schema = wardrobe.lust_schema(p, heat_photos.narrow_schema(LUST_SCHEMA, tier))
     if variety:
         from . import photo_extra, style_variety
         all_personas = _personas(ctx)
@@ -516,6 +521,8 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False) -> tuple[Pr
                 return _refused(ctx, guid, problems)
             return ProfilePhoto(**data), []
         problems = screen_lust(p, data)
+        if not problems and not heat_photos.picks_ok(data, tier):
+            return _refused(ctx, guid, ["photo.outfit: above the heat tier"])
         if not problems:
             return compose_lust(data), []
         if again or not set(problems) <= set(PAIRINGS) | set(NAME_CLASHES):

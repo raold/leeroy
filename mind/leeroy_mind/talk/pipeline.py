@@ -221,9 +221,14 @@ IN_PERSON_HINT = ("You two have never met and live far apart: don't plan to see 
                   "or have {them} turn up anywhere; you talk online.")
 # Cataclysm or later named in a 2009 guild (filters "era": library.wikitext.names_later).
 ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
+# [heat] public_cap (heat/guard.py): a line to him others can read with a plainly explicit word.
+# Fatal: asked again once with this, never sent; an owed answer's fallback is screened for it too.
+from leeroy_mind.heat.guard import HINT as HEAT_PUBLIC_HINT  # noqa: E402
+from leeroy_mind.heat.guard import OWED as _HEAT_OWED  # noqa: E402
+from leeroy_mind.heat.guard import TELL as HEAT_PUBLIC  # noqa: E402
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
-                     "phrase: resting", "in person", "era"})
+                     "phrase: resting", "in person", "era", HEAT_PUBLIC})
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
@@ -251,6 +256,7 @@ OWED_REFUSED = {
     "action": "no *actions*, only what you'd type",
     "sample": "don't copy your example lines",
     "silent": "say something back, not (nothing)",
+    HEAT_PUBLIC: _HEAT_OWED,
 }
 OWED_RETRY_HINT = "Not like that: {reasons}. " + OWED_FALLBACK_HINT
 # The second and third answers to his line see the ones before them (prompts I8), and so do
@@ -3725,6 +3731,8 @@ class Pipeline:
                     tells.append(Tell("member flirt", True))
                 if self._invents_game_name(text):
                     tells.append(Tell("game name", False, True))
+                if self._heat_public(turn, meta, text):  # [heat] public_cap: never sent
+                    tells.append(Tell(HEAT_PUBLIC, True))
                 # never on an answer to him, which a second miss must not drop
                 if (is_discord(turn.channel) and not meta.answers_human
                         and not self.live_review.owed(turn, meta) and self._self_named(text, name)):
@@ -3796,10 +3804,23 @@ class Pipeline:
         refused = list(dict.fromkeys(t.reason for t in tells if t.reason in OWED_HARD_TELLS))
         if self._flirts_at_a_member(turn, text):
             refused.append("member flirt")
+        if self._heat_public(turn, meta, text):
+            refused.append(HEAT_PUBLIC)
         if refused:
             return None, refused
         text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
         return (None, ["silent"]) if quiet(text) else (text, [])
+
+    def _heat_public(self, turn: Turn, meta: TurnMeta, text: str) -> bool:
+        """[heat] public_cap: a line of hers to him on a channel other people read holds a
+        plainly explicit word (heat.guard). Never with the cap off, on a private channel, or
+        on a turn heat does not reach."""
+        live, hr = self.heat, meta.heat
+        if (live is None or not live.config.public_cap or hr is None or not hr.applies
+                or is_private(turn.channel)):
+            return False
+        from leeroy_mind.heat.guard import public_hit
+        return public_hit(text, self.data_dir)
 
     def owed_late_draft(self, turn: Turn, meta: TurnMeta, c: Composed, raw: str) -> str | None:
         """A draft that arrived after its deadline (owed.rescue_text): the hard screens
@@ -3982,6 +4003,8 @@ class Pipeline:
             hints.append(ERA_HINT)
         if "game name" in reasons:
             hints.append(GAME_NAME_HINT)
+        if HEAT_PUBLIC in reasons:
+            hints.append(HEAT_PUBLIC_HINT)
         if "self name" in reasons:
             hints.append(SELF_NAME_HINT.format(name=p.character_name))
         if ("long" in reasons and turn is not None and isinstance(turn.shape, ShapeDraw)
