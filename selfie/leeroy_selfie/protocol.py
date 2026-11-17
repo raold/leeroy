@@ -13,6 +13,20 @@ MAX_PHRASE_CHARS = 500
 RENDER_KEYS = frozenset({"id", "op", "phrases", "negative", "seed", "steps", "cfg", "size",
                          "out", "thumb", "thumb_size", "nsfw_max"})
 IDENTITY_KEYS = frozenset({"ref", "crop", "scale"})
+# The detailer (detail.py), all optional: without detail_faces or detail_hands true there is no
+# pass and the render is what it was before the detailer existed.
+DETAIL_KEYS = frozenset({"detail_faces", "detail_hands", "detail_face_denoise",
+                         "detail_hand_denoise", "detail_size", "detail_face_max",
+                         "detail_identity_margin"})
+DETAIL_FACE_DENOISE = 0.35
+DETAIL_HAND_DENOISE = 0.40
+DETAIL_FACE_MAX = 0.18  # a face box over this share of the frame's shorter side has its pixels
+DETAIL_FACE_MAX_RANGE = (0.05, 0.5)
+DETAIL_IDENTITY_MARGIN = 0.03  # how far her face's cosine to her reference may fall in the pass
+DETAIL_IDENTITY_MARGIN_RANGE = (0.0, 1.0)
+DETAIL_DENOISE_RANGE = (0.1, 0.7)
+DETAIL_SIZE = 1024
+DETAIL_SIZES = (768, 896, 1024)
 GRID_KEYS = frozenset({"id", "op", "tiles", "tile", "gutter", "out", "thumb", "thumb_size"})
 CAPTION_KEYS = frozenset({"id", "op", "base_path", "top", "bottom", "out_path", "nsfw_max"})
 CRITIC_KEYS = frozenset({"id", "op", "path"})  # and optionally ref with crop, both or neither
@@ -29,6 +43,18 @@ PORTRAIT_SIZE = (832, 1216)  # width, height of shape "portrait" (needs size 102
 
 class RenderFailed(Exception):
     """A render that failed with a protocol error name (oom, ...) as its message."""
+
+
+@dataclass(frozen=True)
+class Detail:
+    """What a render request asks of the detailer (detail.py)."""
+    faces: bool = True
+    hands: bool = False
+    face_denoise: float = DETAIL_FACE_DENOISE
+    hand_denoise: float = DETAIL_HAND_DENOISE
+    size: int = DETAIL_SIZE
+    face_max: float = DETAIL_FACE_MAX
+    identity_margin: float = DETAIL_IDENTITY_MARGIN
 
 
 @dataclass(frozen=True)
@@ -54,6 +80,7 @@ class Render:
     nsfw_max: float
     identity: Identity | None = None
     shape: Literal["square", "portrait"] = "square"
+    detail: Detail | None = None  # the detailer's pass over the rendered image (detail.py)
 
 
 @dataclass(frozen=True)
@@ -173,6 +200,30 @@ def _identity(v) -> Identity:
     return Identity(_jpg(v, "ref"), (l, t, r, b), _num(v, "scale", 0.3, 0.9))
 
 
+def _bool(d: dict, key: str) -> bool:
+    v = d.get(key, False)
+    if type(v) is not bool:
+        raise ValueError(f"{key} is not true or false")
+    return v
+
+
+def _detail(d: dict) -> Detail | None:
+    """The detailer's request, or None without detail_faces or detail_hands true. Every key
+    given is checked, asked for or not."""
+    faces, hands = _bool(d, "detail_faces"), _bool(d, "detail_hands")
+    lo, hi = DETAIL_DENOISE_RANGE
+    face = _num(d, "detail_face_denoise", lo, hi) if "detail_face_denoise" in d else DETAIL_FACE_DENOISE
+    hand = _num(d, "detail_hand_denoise", lo, hi) if "detail_hand_denoise" in d else DETAIL_HAND_DENOISE
+    size = d.get("detail_size", DETAIL_SIZE)
+    if type(size) is not int or size not in DETAIL_SIZES:
+        raise ValueError("detail_size is not 768, 896 or 1024")
+    face_max = (_num(d, "detail_face_max", *DETAIL_FACE_MAX_RANGE) if "detail_face_max" in d
+                else DETAIL_FACE_MAX)
+    margin = (_num(d, "detail_identity_margin", *DETAIL_IDENTITY_MARGIN_RANGE)
+              if "detail_identity_margin" in d else DETAIL_IDENTITY_MARGIN)
+    return Detail(faces, hands, face, hand, size, face_max, margin) if faces or hands else None
+
+
 def _grid(d: dict, rid: str) -> Grid:
     if set(d) != GRID_KEYS:
         raise ValueError("grid keys are not exactly " + ", ".join(sorted(GRID_KEYS)))
@@ -247,9 +298,9 @@ def parse(line: bytes) -> Render | Grid | Caption | Critic | Embed | Quit | Retr
     if d.get("op") != "render":
         raise ValueError("unknown op")
     extra = set(d) - RENDER_KEYS
-    if not RENDER_KEYS <= set(d) or extra - {"identity", "shape"}:
+    if not RENDER_KEYS <= set(d) or extra - {"identity", "shape"} - DETAIL_KEYS:
         raise ValueError("render keys are not " + ", ".join(sorted(RENDER_KEYS)) +
-                         " and optionally identity, shape")
+                         " and optionally identity, shape, " + ", ".join(sorted(DETAIL_KEYS)))
     size = _int(d, "size", 768, 1024)
     if size not in (768, 896, 1024):
         raise ValueError("size is not 768, 896 or 1024")
@@ -263,4 +314,4 @@ def parse(line: bytes) -> Render | Grid | Caption | Critic | Embed | Quit | Retr
                   _int(d, "seed", 0, 4294967295), _int(d, "steps", 10, 60),
                   _num(d, "cfg", 1.0, 12.0), size, _jpg(d, "out"), _jpg(d, "thumb"),
                   _int(d, "thumb_size", 128, 1024), _num(d, "nsfw_max", 0.01, 0.9),
-                  identity, shape)
+                  identity, shape, _detail(d))

@@ -4,6 +4,7 @@ Pairings describe coherent activities and props, not a substitute for the scene 
 Lust outfits/colours/expressions still come from kind.py and meet screen_lust unchanged.
 """
 from .kind import LUST_SETTINGS
+from .wardrobe import SCENE_MORE
 from collections.abc import Mapping
 
 RECIPE = 1  # persisted with composed text; older pending prose is held, never grandfathered
@@ -67,6 +68,8 @@ EXPRESSIONS = {"smile": "a relaxed smile", "grin": "a cheerful grin",
 OUTFITS = {"casual": "a cotton shirt and trousers",
            "warm": "a jumper and trousers", "outdoors": "a jacket and trousers",
            "exercise": "a loose tee and full-length leggings"}
+# with the outfits only a wardrobe offers (wardrobe.scene_outfits): never in the base schema
+ALL_OUTFITS = {**OUTFITS, **SCENE_MORE}
 PROPS = {"none": "", "mug": "holding a plain mug", "book": "holding a book",
          "notebook": "holding a notebook", "leash": "holding a dog leash",
          "plant": "beside a potted plant"}
@@ -147,7 +150,7 @@ def compose_choices(data: dict) -> dict:
         activity += ", " + prop
     out = {k: v for k, v in data.items() if k != "prop"}
     if "colour" not in data:
-        out.update(setting=PLACES[data["setting"]], outfit=OUTFITS[data["outfit"]],
+        out.update(setting=PLACES[data["setting"]], outfit=ALL_OUTFITS[data["outfit"]],
                    expression=EXPRESSIONS[data["expression"]])
     out.update(activity=activity, shows=f"{activity}, {out['setting']}.", recipe=RECIPE)
     return out

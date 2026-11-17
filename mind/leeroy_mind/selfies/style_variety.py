@@ -6,7 +6,7 @@ import re
 
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.personas.screens import has_word, names_real_name
-from . import kind
+from . import kind, wardrobe
 from .photo_extra import choose_light
 from .style import LUST, style_of
 
@@ -86,10 +86,16 @@ def _choose(p, counts, cap, rng, *, seed, ident, names):
     if style_of(p) != LUST:
         return None
     settings, outfits = DATE_SETTINGS, DATE_OUTFITS
+    # her wardrobe's dressed outfits (never swim or gym wear here) and her palette, when set
+    dressed = [o for o in kind.LUST_OUTFITS if o not in kind.SWIM_OUTFITS | kind.GYM_OUTFITS]
+    worn = wardrobe.outfits(p, dressed)
+    if len(worn) < len(dressed):
+        outfits = worn
     expressions, frames = kind.LUST_EXPRESSIONS, FRAMINGS[:2]
     options = []
     for oi,outfit in enumerate(outfits):
-        for ci,colour in enumerate(kind.LUST_COLOURS):
+        for colour in wardrobe.colours(p, kind.LUST_COLOURS):
+            ci = kind.LUST_COLOURS.index(colour)
             phrase = kind.LUST_OUTFITS[outfit].format(colour=colour)
             phrase = ("an " if phrase[0].lower() in "aeiou" else "a ") + phrase
             if counts.pairs[key(phrase)] < PAIR_CAP:

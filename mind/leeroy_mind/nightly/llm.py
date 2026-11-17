@@ -273,12 +273,14 @@ class Reasoner:
         async with self._slots:
             return await self._chat(model, messages, **kw)
 
-    async def think(self, system: str, user: str) -> str:
+    async def think(self, system: str, user: str, *, num_predict: int | None = None) -> str:
         """The reasoning pass: the model's thinking, a newline, then its answer. A reply that
         ran out of num_predict is logged by its counts alone (nightly_think_cut); what it
-        thought is still the notes."""
+        thought is still the notes. A caller whose prompt runs denser than prose (JSON,
+        numbers) gives its own `num_predict`, counted with its own token measure."""
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        options = THINK_OPTIONS | {"num_predict": think_predict(system, user)}
+        options = THINK_OPTIONS | {"num_predict": think_predict(system, user)
+                                   if num_predict is None else num_predict}
         async with self._slots:
             try:
                 r = await self._chat(self.model, messages, options=options,

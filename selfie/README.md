@@ -89,6 +89,52 @@ grade carried signal (overall 2 or less: 6 of 9 defects, but also 5 of 9 clean i
 everything 3. The cosine to her reference separates her from the other members (her own min 0.73,
 mean 0.83; others max 0.74, mean 0.46), so best-of-N ranks seeds mostly by her likeness. Swap
 `[selfies] critic_model` when a better local vision model arrives; measure it on the sheet first.
+The detailer (`detail.py`, the mind's `[selfies] detailer` and `detailer_hands`; both off by
+default): SDXL draws a small face or hand with too few pixels (crossed eyes, six fingers), so a
+render request may ask for a second pass over its image with `detail_faces` and `detail_hands`
+(booleans), and optionally `detail_face_denoise` (default 0.35) and `detail_hand_denoise` (0.40),
+each 0.1-0.7, `detail_size` (768, 896 or 1024, default 1024), `detail_face_max` (0.05-0.5,
+default 0.18) and `detail_identity_margin` (0-1, default 0.03). Without a true flag there is no
+pass and the render and its answer are what they were. With one, each face YuNet finds (at most
+2, the largest first) and each palm the palm detector finds (at most 2, the surest first, scored
+0.6 or more) is cut out as a padded square (2 times the face box; 2.5 times the palm box and at
+most 45% of the frame's shorter side; shifted to stay in the frame), enlarged to `detail_size`,
+drawn again by SDXL img2img at its denoise with the image's steps, CFG and negative and a seed
+derived from the image's, shrunk and pasted back through a mask feathered over an eighth of the
+crop. Hands go first and faces last. A face's prompt is `detailed face, natural eyes` and then
+the render's own phrases as far as they fit; a hand's is `a natural hand, five fingers` and then
+the render's phrases that say what she is wearing, so the pass does not redraw her clothes.
+Passed over: a face box under 48 px or over `detail_face_max` of the frame's shorter side (it has
+its pixels already), a palm box under 24 px or over 25%, and a crop that would not be enlarged.
+The mind leaves `detail_faces` off for a photo from behind.
+Her reference: on an identity worker only the largest face found (rank 0) keeps the request's
+reference at its scale; every other crop carries the blank reference at scale 0, and when her
+own face is passed over no smaller face takes her reference. That face is also held to her
+likeness: the image encoder's cosine between the crop and her reference's face crop is read
+before and after, and when it falls by more than `detail_identity_margin` the crop stays as it
+was (`detail_reverted` counts these).
+The NSFW check reads the image before and after the pass. A render that scores `nsfw_max` or
+more gets no pass and is flagged as ever (`detail_code` `nsfw_base`); an image the pass made
+that scores `nsfw_max` or more is never written, and the render as it was is written instead
+(`nsfw_reverted`, counts 0, the render's own score): the pass never flags a clean render and
+never clears a flagged one.
+The answer then also carries `detail_faces` and `detail_hands` (how many were drawn again),
+`detail_skipped`, `detail_reverted`, `detail_ms` and `detail_code`: empty, `nsfw_base`,
+`nsfw_reverted`, `faces_unavailable`, `hands_unavailable`, `detectors_unavailable` (a detector
+not fetched: the faces need `yunet`, the hands `palm` and `handpose`; the other kind still runs),
+`oom` (CUDA out of memory in a crop: the cache is freed, the pass ends, what was pasted stays) or
+`error`. The pass never fails a render. It loads nothing: the img2img pipeline is built at the
+first pass from the loaded pipeline's own components, and it works at 1024 x 1024 at most, the
+latents of a 1024 square render (`peak_gib` covers the pass; a 768 set's peak rises to a 1024
+render's). Each crop costs about a third of a render's steps, about 2 s.
+`python -m leeroy_selfie detail --in FILE --out FILE [--no-faces] [--hands] [--denoise X]
+[--hand-denoise X] [--size N] [--face-max F] [--ref FILE --scale S --identity-margin M]
+[--seed N] [--steps N] [--cfg X] [--prompt TEXT] [--hand-prompt TEXT] [--negative TEXT]` applies
+the pass to one of the worker's own JPEGs without the mind (it needs the GPU; `--ref` loads the
+identity adapter) and prints one JSON line with the fields above, `nsfw_in`, `nsfw` and
+`peak_gib`; an input the gate flags gets no pass. `--boxes` only finds and prints the crops (and
+the faces' ranks) on the CPU and writes nothing. `smoke --detail` renders the smoke image with
+both passes.
 `worker --embed-only` loads only the already fetched IP-Adapter image encoder,
 with local files only. It uses the CPU if the VRAM floor is unavailable, and
 falls back to the CPU after a GPU allocation failure. An `embed` request has

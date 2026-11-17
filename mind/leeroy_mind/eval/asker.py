@@ -37,6 +37,14 @@ class AskResult:
     memory_ids: list[int]
 
 
+class ScratchRefused(ValueError):
+    """The scratch copy cannot ask this question; `code` is a fixed word for logs and reports."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 class LiveAsker(Protocol):
     ident: HumanIdentity
 
@@ -117,7 +125,7 @@ class ScratchAsker:
         member = self.store.cast().get(guid)
         if (type(guid) is not int or guid == self.ident.guid or member is None
                 or member.level < CAST_MIN_LEVEL or self.engine.personas.get(guid) is None):
-            raise ValueError("scratch question requires an eligible cast member")
+            raise ScratchRefused("ineligible", "scratch question requires an eligible cast member")
         task = asyncio.create_task(self._ask(guid, question), name="scratch-eval-question")
         self._requests.add(task)
         try:
@@ -141,13 +149,13 @@ class ScratchAsker:
                 if self._closing:
                     raise asyncio.CancelledError
                 if sum(estimate_tokens(m["content"]) for m in messages) > LIVE_BUDGET:
-                    raise ValueError("scratch prompt exceeds the live budget")
+                    raise ScratchRefused("prompt_budget", "scratch prompt exceeds the live budget")
                 answer = await self.llm.chat(self.cfg.models.live, messages,
                                              options=dict(LIVE.options), think=False)
                 if self._closing:
                     raise asyncio.CancelledError
                 if not isinstance(answer.text, str) or not answer.text.strip():
-                    raise ValueError("scratch question returned no answer")
+                    raise ScratchRefused("empty_answer", "scratch question returned no answer")
                 return AskResult(answer.text, list(ids))
 
     async def _finish_close(self, requests):

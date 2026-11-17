@@ -33,6 +33,9 @@ _FACT = re.compile(r"rule:fact:([0-9]+)")
 # The owner's authored history: "owner:<moment>", the moment as memories seed takes it. Only his
 # own seeded memories may cite one (MemoryWriter), and recall treats it as public.
 _OWNER = re.compile(r"owner:[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
+# What the guild noticed about her arc: "arc:<guid>:<stage>:<night>", the root of the shared
+# `noticed` fact the arc night writes (arc.night.noticed). It has no table of its own.
+_ARC = re.compile(r"arc:[0-9]+:[a-z_]+:[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _TABLES = {"chat": "chat_line", "event": "game_event", "session": "session",
            "story": "story", "chronicle": "chronicle", "encounter": "encounter",
            "beat": "life_beat", "life": "life_thread", "away": "away", "feud": "feud",
@@ -78,6 +81,11 @@ def _node(store, ref):
     elif match and match.group(1) in _TABLES:
         kind, ident = match.group(1), int(match.group(2))
         row = store.conn.execute(f"SELECT * FROM {_TABLES[kind]} WHERE id=?", (ident,)).fetchone()
+    elif _ARC.fullmatch(ref):
+        # A leaf: the noticed fact is its whole record, so an arc root without one is incomplete.
+        facts = store.conn.execute("SELECT * FROM fact WHERE root=? AND kind='noticed' ORDER BY id",
+                                   (ref,)).fetchall()
+        row, children = (tuple(tuple(f) for f in facts) or None), ()
     elif ref.startswith("rule:") or _OWNER.fullmatch(ref):
         # Deterministic rule roots and his authored history have no backing table; their
         # confidential fact flags do.

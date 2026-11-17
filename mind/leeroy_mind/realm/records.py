@@ -98,6 +98,13 @@ def _tuple(record, name, maximum):
     return value
 
 
+# The qualified cast a source is judged against: every guild member at 80+ with a persona. The
+# bound is [realm] member_cap's own ceiling, not 128: the guild passed 128 on 2026-11-07 and from
+# then on every source was refused whole (no world fact for ten days), for a list that is only
+# ever read. The stored qualification's byte limits still bound what a row can hold.
+QUALIFIED_CAST_MAX = 1000
+
+
 def _ids(record, name, maximum=128, upper=_U32):
     value = _tuple(record, name, maximum)
     for item in value:
@@ -198,7 +205,7 @@ class QualificationSnapshot:
         _seconds(self.captured_at, "captured_at")
         if type(self.human_confirmed) is not bool:
             raise ValueError("invalid human_confirmed")
-        _ids(self, "cast"); _ids(self, "rival_guilds")
+        _ids(self, "cast", QUALIFIED_CAST_MAX); _ids(self, "rival_guilds")
         actors = _tuple(self, "actors", 128)
         if any(type(actor) is not ActorQualification for actor in actors):
             raise ValueError("invalid actors")
