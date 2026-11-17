@@ -72,6 +72,11 @@ _BUSINESS = (r"business|shop|salon|bakery|studio|store|cafe|caf\u00e9|bar|compan
 _OWN_BOSS = re.compile(
     r"\b(?:self[- ]employed|freelanc\w*|business owner|owner of|founder|proprietor|entrepreneur"
     r"|sole trader|contractor|(?:her|his|their) own boss|own boss"
+    # a trade with private clients: nobody walks by her desk
+    r"|(?:private|(?:her|his|their) own|own) (?:clients|customers|practice|round)"
+    r"|works? for (?:her|him|them)self|mobile (?:hairdresser|barber|mechanic|groomer|beautician"
+    r"|massage therapist|nail technician)|personal trainer|private tutor|childminder"
+    r"|dog (?:walker|groomer)"
     rf"|(?:own(?:s|ed)?|runs?|running) (?:a|an|her|his|their) (?:own )?(?:\w+ ){{0,2}}"
     rf"(?:{_BUSINESS}))\b")
 # her days say she takes the bus, the metro or the train, cycles or walks, or does not drive

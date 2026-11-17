@@ -159,6 +159,18 @@ the callers keep today's behaviour):
   when she is not in one of them now. `NO_PHOTO` is asleep and commute: a requested photo
   (`[photos] scene_from_words`, photos/README.md) waits for that time.
 
+### One "right now" per conversation (`[talk] coherence`)
+
+With `[talk] coherence` on (default) the "Right now" line agrees with the conversation
+(`stated_where`, `settled_where`, `playing_text`, `away_note`; `talk/README.md` "Conversations
+that hold together"): where she said she is in the last 30 minutes holds whatever block her plan
+has moved to ("You're still at work, as you told him a little while ago."); joining his group
+after saying so reads "You told him a little while ago you were at work: you've just got in from
+work and logged on."; a member in his group while he plays reads "You're at your PC, playing:
+you're in <his name>'s raid with him right now, in Naxxramas." (the instance by her map, when it
+is a raid or a 5-man); and for 30 minutes after she is back from a brb the line adds why she
+stepped away ("someone was at the door").
+
 ## Settings (`[life]`, `life/config.py`, `life/service.py`)
 
 ```toml

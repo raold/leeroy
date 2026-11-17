@@ -885,3 +885,77 @@ through the owner's lens (`Pipeline._met_him`).
 
 Measured read-only on 2026-11-16: 6 of 1,345 stored member lines to him see him in person (each
 on reading an in-person plan or wish); the golden prompts are unchanged.
+
+## Conversations that hold together (`[talk] coherence`, 2026-11-17)
+
+`[talk] coherence` (a boolean, default **true**; anything else is off; read on every turn, no
+restart) holds the fixes the 2026-11-17 self-play audits asked for (100 graded whisper turns, 67
+explicit DM turns, 197 hard-case turns). With it off every rule below is exactly as before. The
+rules that change a prompt also need a core switch on (`[talk] intent`, `[talk] situation` or
+`[life] availability`/`state`), so `tests/tuning/golden_prompts.json` is untouched; the core
+golden (`golden_core.json`) was re-recorded.
+
+**A draft that is only too long is kept** (`talk/length.py`, `Pipeline._generate_serial`). The
+"long" tell used to ask for a fresh generation at her line's length ("Shorter: 2-8 words"),
+which lost correct answers. Now `fit_answer` cuts the draft in code to its leading whole clauses
+within 1.25 times the turn's words, ending at a sentence end when that keeps two thirds of what
+fits and never on a dangling word, as long as the cut still carries the answer (more than
+filler; on a who/what/when/where/why/how/which or "explain" question a word of her own, a number
+or a plain "no idea"). With no such cut a reply within twice the turn's words is sent as
+written. Only past that is the model asked again, with her own draft: `You wrote: "..." Say the
+same thing shorter, in at most about N words. Keep the answer in it.` The styling leaves a kept
+draft whole (`TurnMeta.keep_words`, `_style`'s `room`). A content question from him gives a
+game SHORT, QUESTION or LATE shape at least `shape.CONTENT_WORDS` (12) words. Log: `say_length:
+guid= kind= attempt= action=cut|kept|retry words= limit=`.
+
+**Her position holds** (`talk/position.py`, `talk/intent.py`, `personas/card.py`). On his direct
+question or his pushback (`position.disagrees`) her want is never `reassure_seek`, `vent`,
+`gossip` or `ask` (`intent.ANSWER_OFF`); on his bad news (`position.bad_news`) never `tease` or
+`flirt`; under his explicit overlay never `reassure_seek`, and the beat brings nothing in. While
+his question or disagreement is open her want is the one she had (`position.Hold`, kept per
+conversation in the pipeline: 10 minutes, a new subject or his "fair enough" lets it go); the
+draw then draws nothing and the beat is offered only that want. After the turn's block (and
+before the beat's own ask) come her position's lines: `So far in this conversation you've said:
+"..."; "...". Stay consistent with that: don't contradict yourself, and if you change your mind,
+say that you do.` (`position.claims_so_far`: at most 3 of her own sentences from the last 30
+minutes of this conversation, those with a number first, then what she said of herself) and,
+when his line touches an opinion on her card that reads as a rule ("never", "not optional",
+"the law"), `You hold this as a rule: "..." You never argue against it.` The opinion his line
+touches leads the two her card shows and is the last card section dropped for the budget.
+
+**One "right now"** (`life/presence.py`, `Pipeline._where_line`; `life/README.md` has the job
+shapes). Where she said she is in the last 30 minutes of the conversation (`stated_where`: at
+work, in bed, out, home) holds: the situation line says she is still there, and in his group it
+says she has just logged on from there, then that she is at her PC in his group or raid with him
+and in which instance. Her brb's reason stays in "Right now" for 30 minutes after she is back
+(`presence.away_note`).
+
+**Every waiting line is answered** (`talk/engine.py` `_life_waiting`, `Pipeline._his_waiting`,
+`prompt.unanswered_text`). A whisper that joins her waiting answer is added to
+`TurnMeta.coalesced`; the answer's prompt quotes each unanswered line and says to answer every
+one, his question first, and the turn is weighed (want, shape, length, "answer his question
+first") as an answer to that question. A DM answer does the same for his posts since her last
+message. His leaving words (`select.is_leaving`: "ok im out", "gotta run") hurry an answer still
+waiting, also behind her brb, as a goodbye does; they plan no goodnights.
+
+**Who is who, and what she can know** (`Pipeline._pronoun_tags`, `_named_cards`,
+`guards/pronouns.py`, `talk/gearfit.py`). Every member's chat line carries their pronoun, and a
+member his line names gets a roster line under "People here" (`Name (she): plays Holy Paladin
+(healer, officer)`). A second `member_misgender` on a rewrite is swapped in code
+(`pronouns.fix`; log `guard_pronoun_fixed`), and the draft an owed answer falls back to is
+mended the same way and loses an echo opener before it goes (`_fixed_in_code`; log
+`guard_fixed_in_code`). His short line said back as a question ("brb? ...") is cut from her
+opening (`opener.without_question_echo`). The library's item facts are kept to what the
+speaker's class can use and to item level 200 and up at the level cap; with none left she is
+told to say she is not sure rather than make up an item, a proc or a number.
+
+**Smaller.** Her attendance counts ("5 benched") show on her awareness card only where the last
+lines are about raids, rosters or the bench. His explicit whisper overlay is appended only for
+a woman whose stance is lust and whose arc has begun (`whisper_tail(lust_only=True)`).
+A game burst the model wrote as two lines keeps its own line break (`_style`: each line laid out
+on its own, where one repacked text ran its clauses together and dropped the rest). Her brb and
+back lines (templates) take no typing slips and no emoticon. An answer sent within 60 s of his
+line makes no late excuse, whatever her brb had planned (`_waited_away`, `SHORT_WAIT_S`). Her
+brb's reason follows where she said she is in the conversation (`LifeService._where_she_said`:
+at home or in bed never "brb boss"), and `interrupt.own_boss` reads a trade with private clients
+(a mobile hairdresser, a personal trainer, "works for herself") as her own boss.
