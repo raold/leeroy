@@ -50,7 +50,8 @@ def cast(store):
 
 def test_the_sheet_of_a_stored_persona():
     assert SHEET.says == (('noted',), ('gold', 'star'), ('fair', 'enough'), ('right', 'then'))
-    assert SHEET.never == (('awesome', ('awesome',)), ('lol', ('lol',)))
+    assert SHEET.never == (('awesome', ('awesome',), False), ('lol', ('lol',), False))
+    assert SHEET.rationed == SHEET.says
     assert ('depends', 'what', 'did', 'the', 'log', 'say') in SHEET.samples
     for stored in (None, {}, {'speech': None}, {'speech': 'dry'}, {'speech': {'says': 'noted'}},
                    ['speech']):
@@ -164,6 +165,24 @@ def test_a_never_mark_without_words_is_matched_as_written():
     assert voice.never_used('no. way too early', marks) == ('no way',)  # words, whatever between
     assert voice.never_used('what! really', marks) == () and voice.never_used('x', voice.NONE) == ()
     assert voice.hint(('!!', 'no way')) == "You never say '!!' or 'no way'." and voice.hint(()) == ''
+
+
+def test_a_typing_shortcut_is_never_the_word_it_stands_for(store):
+    """The cooldown folds "u" to "you" and "tbh" to "to be honest"; her sheet's own shortcuts
+    must not make every "you" a never-word or a tic."""
+    short = voice.sheet_of({'speech': {**LEDGER, 'never': ['u', 'ur', 'gonna'],
+                                       'says': ['u', 'tbh', 'rn', 'noted']}})
+    assert voice.never_used('are you sure your tank is going to pull', short) == ()
+    assert voice.never_used('r u sure, ur tank is gonna pull', short) == ('u', 'ur', 'gonna')
+    # "u" stands for one function word: no tic; "tbh" and "rn" fold to a run that is one
+    assert short.rationed == (('to', 'be', 'honest'), ('right', 'now'), ('noted',))
+    for n in range(4):
+        put(store, f'you there? attempt {n}, to be honest', channel='whisper', to=1,
+            ts=NOW - 900 + n * 60)
+    result = found(store, draft('you coming or not, to be honest', channel='whisper', to_guid=1),
+                   short)
+    assert result.codes == ('phrase_conversation',) and result.phrases == ('to be honest',)
+    assert found(store, draft('you coming or not', channel='whisper', to_guid=1), short).codes == ()
 
 
 # -- a sample line said again ---------------------------------------------------------------------

@@ -12,6 +12,13 @@ then goes by the owed rules (talk/pipeline.py: the best soft-only draft is kept)
   never fewer than SAY_FREE uses, counted over her last SAY_WINDOW lines there. Above it the
   cooldown names it as `phrase_conversation`, so a tic cannot take over.
 
+Typing shortcuts (2026-11-17): the cooldown folds the cast's shortcuts back before it matches
+("u" is "you", "tbh" is "to be honest": phrases.FOLD), and the draft the guards read is her
+line before her typing is applied. So a never-word that is itself a shortcut ("u", "ur") is
+matched only as typed, never as the word it stands for (a sheet that says she never types "u"
+must not flag every "you"); and one of her own words that is a shortcut for a single function
+word is no tic to ration.
+
 Nothing here reads a database, logs or calls a model."""
 from dataclasses import dataclass, field
 from math import ceil
@@ -31,8 +38,11 @@ CODES = ("voice_never", "voice_sample_copy")
 @dataclass(frozen=True)
 class Sheet:
     says: tuple[tuple[str, ...], ...] = field(default=(), repr=False)   # folded words
-    never: tuple[tuple[str, tuple[str, ...]], ...] = field(default=(), repr=False)  # as written, folded
+    # (as written, its words, typed): typed words are matched unfolded (a shortcut such as "u")
+    never: tuple[tuple[str, tuple[str, ...], bool], ...] = field(default=(), repr=False)
     samples: tuple[tuple[str, ...], ...] = field(default=(), repr=False)
+    # her words the ration counts: `says` less a shortcut for one function word
+    rationed: tuple[tuple[str, ...], ...] = field(default=(), repr=False)
 
 
 NONE = Sheet()
@@ -50,10 +60,21 @@ def sheet_of(stored) -> Sheet:
         return NONE
     samples = speech.get("samples")
     lines = [x for x in samples.values() if isinstance(x, str)] if isinstance(samples, dict) else []
+    says = [(phrases._words(x), typed(x)) for x in _strs(speech.get("says"))]
     return Sheet(
-        tuple(w for w in (phrases._words(x) for x in _strs(speech.get("says"))) if w),
-        tuple((" ".join(x.split()), phrases._words(x)) for x in _strs(speech.get("never"))),
-        tuple(w for w in (phrases._words(strip_wow_markup(x)) for x in lines) if w))
+        tuple(w for w, _ in says if w),
+        tuple((" ".join(x.split()), typed(x), True) if typed(x) != phrases._words(x)
+              else (" ".join(x.split()), phrases._words(x), False)
+              for x in _strs(speech.get("never"))),
+        tuple(w for w in (phrases._words(strip_wow_markup(x)) for x in lines) if w),
+        tuple(w for w, raw in says if w and not (w != raw and len(w) == 1
+                                                 and not phrases._content(w[0]))))
+
+
+def typed(text: str) -> tuple[str, ...]:
+    """The words of `text` as typed: lower case, apostrophes dropped, no shortcut folded."""
+    return tuple(m.group(0).casefold().replace("\u2019", "'").replace("'", "")
+                 for m in phrases._WORD.finditer(text or ""))
 
 
 def _run(words, entry) -> bool:
@@ -67,9 +88,10 @@ def never_used(text: str, sheet: Sheet) -> tuple[str, ...]:
     if not sheet.never:
         return ()
     plain = strip_wow_markup(text or "")
-    words, folded = phrases._words(plain), plain.casefold()
-    return tuple(name for name, entry in sheet.never
-                 if (_run(words, entry) if entry else name.casefold() in folded))[:MAX_NAMED]
+    words, raw, folded = phrases._words(plain), typed(plain), plain.casefold()
+    return tuple(name for name, entry, as_typed in sheet.never
+                 if (_run(raw if as_typed else words, entry) if entry
+                     else name.casefold() in folded))[:MAX_NAMED]
 
 
 def copies_sample(text: str, sheet: Sheet) -> bool:
@@ -105,19 +127,19 @@ def over_ration(uses: int, lines: int) -> bool:
 def any_said(toks, sheet: Sheet) -> bool:
     """One of her own words is in the draft (phrases.tokens of it)."""
     norms = [t.norm for t in toks]
-    return any(_run(norms, entry) for entry in sheet.says)
+    return any(_run(norms, entry) for entry in sheet.rationed)
 
 
 def rationed(toks, talk_words, sheet: Sheet) -> list[tuple[int, int]]:
     """The spans (first, last token index) of her own words in the draft that are over their
     ration. `toks`: phrases.tokens of the draft; `talk_words`: the folded words of each of her
     earlier lines in this conversation, newest first."""
-    if not sheet.says:
+    if not sheet.rationed:
         return []
     window = talk_words[:SAY_WINDOW]
     norms = [t.norm for t in toks]
     spans = []
-    for entry in sheet.says:
+    for entry in sheet.rationed:
         n = len(entry)
         at = next((i for i in range(len(norms) - n + 1) if tuple(norms[i:i + n]) == entry), None)
         if at is None:
