@@ -402,3 +402,20 @@ def test_a_long_dm_shape_reads_in_the_dm_wording_and_the_labs_piece():   # revie
     with pieces.using({"discord_dm": variant}, rendered):
         line = shape_line(ShapeDraw(Shape.SHORT, 80, 1, 152), dm, forms=him)
     assert "take your time and say it all" in line and "discord_dm" in rendered
+
+
+def test_the_two_line_band_never_asks_a_terse_typist_for_two_words():   # re-review of #343
+    """The explicit band's short line, question and late reply are sized twice her line: from
+    the 3-word floor, whatever the row (a non-owed game answer or CONTINUE included)."""
+    from leeroy_mind.talk.shape import MIN_LINE_WORDS
+    him = ("he", "him", "his")
+    for kind in (TurnKind.REPLY_HUMAN, TurnKind.CONTINUE):
+        ctx = replace(OWED, owed=False, family="game", kind=kind, typing=T_TERSE,
+                      two_lines=True)
+        for late in (0.0, 300.0):
+            for i in range(400):
+                d = draw_shape(replace(ctx, late_by=late), random.Random(i))
+                if d.shape in (Shape.SHORT, Shape.QUESTION, Shape.LATE):
+                    assert d.lines == 2 and d.words >= 2 * MIN_LINE_WORDS, d
+                line = shape_line(d, ctx, forms=him)
+                assert "about 1 " not in line and "about 2 " not in line

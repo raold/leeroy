@@ -281,8 +281,8 @@ def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
     cap = _cap(ctx)
     if cap <= 0:  # the game, or Discord at a setting of 0: her own line, the preset's room
         words = _line_words(ctx, rng)
-        if _row_for(ctx)[Shape.ONE_WORD] <= 0:  # never a word or two here (review of #343, P1)
-            words = max(words, MIN_LINE_WORDS)
+        if _row_for(ctx)[Shape.ONE_WORD] <= 0 or (two and shape is not Shape.BURST):
+            words = max(words, MIN_LINE_WORDS)  # never a word or two here (review of #343, P1)
         return ShapeDraw(shape, 2 * words, 2, None) if two else ShapeDraw(shape, words, 1, None)
     dm = ctx.family == "dm"
     if two:
