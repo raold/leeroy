@@ -29,6 +29,7 @@ from leeroy_mind.protocol import Chat
 from leeroy_mind.talk.owed import OwedWatch
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.raid import RaidPhase
+from leeroy_mind.talk.shape import Shape, ShapeDraw
 from leeroy_mind.talk.turns import Turn, TurnKind
 
 
@@ -426,6 +427,149 @@ def test_at_most_once_per_member_per_half_hour(store, clock, tmp_path, monkeypat
         assert len(seen) == 2
         r.close()
     asyncio.run(main())
+
+
+def test_a_refused_brb_still_steps_her_away(store, clock, tmp_path, caplog, monkeypatch):
+    """The guards refuse her brb: she is still away, without a line (core plan Task 10), and so
+    says no back line when she is back to a conversation he left quiet."""
+    caplog.set_level(logging.INFO)
+    force(monkeypatch, away_s=200.0, back="back, sorry")
+
+    async def main():
+        r = rig(store, clock, tmp_path, script=numbered("sure {n}, sounds good"))
+        real = r.engine.say_as
+
+        async def refused(guid, channel, text, **kw):
+            if text == "brb boss":
+                return False
+            return await real(guid, channel, text, **kw)
+        r.engine.say_as = refused
+        await r.session()
+        t0 = clock.now()
+        await r.human("want to run something later?", channel="whisper", to_guid=102)
+        await ticking(r, 60)
+        until = r.engine.life.away_until(102)
+        assert until > clock.now()
+        assert len(whispers(r, 102, t0)) == 1  # her answer, and no brb
+        assert "life_interrupt: guid=102 reason=work away_s=200 said=0" in caplog.text
+        await ticking(r, until - clock.now() + 30)
+        assert len(whispers(r, 102, t0)) == 1 and r.engine.life.away_until(102) == 0
+        assert "life_back: guid=102 said=0" in caplog.text
+        r.close()
+    asyncio.run(main())
+
+
+def test_a_whisper_brb_never_goes_to_him_offline(store, clock, tmp_path, caplog, monkeypatch):
+    """He leaves the game in the seconds before her brb: no whisper goes to an offline player,
+    and she is still away (said=0), with no back line."""
+    caplog.set_level(logging.INFO)
+    force(monkeypatch, away_s=200.0, back="back")
+
+    async def main():
+        r = rig(store, clock, tmp_path, script=numbered("sure {n}, sounds good"))
+        await r.session()
+        t0 = clock.now()
+        await r.human("want to run something later?", channel="whisper", to_guid=102)
+        for _ in range(60):
+            await r.advance(1)
+            if whispers(r, 102, t0):
+                break
+        assert len(whispers(r, 102, t0)) == 1 and 102 in r.engine.life._stepping
+        r.world.human_online = False
+        await ticking(r, 30)
+        assert [s for t, s in r.sent.timed_says() if t >= t0 and s.channel == "whisper"
+                and s.text in ("brb boss", "back")] == []
+        assert r.engine.life.away_until(102) > clock.now()
+        assert "life_interrupt: guid=102 reason=work away_s=200 said=0" in caplog.text
+        await ticking(r, 200)
+        assert len(whispers(r, 102, t0)) == 1
+        r.close()
+    asyncio.run(main())
+
+
+def test_his_urgent_whisper_brings_her_back(store, clock, tmp_path, caplog, monkeypatch):
+    """His urgent whisper while she is away is answered at once (it says she was away) and ends
+    her away: no back line after it, and his next whisper is answered without that excuse."""
+    caplog.set_level(logging.INFO)
+    force(monkeypatch, away_s=300.0, back="ok back")
+
+    async def main():
+        r = rig(store, clock, tmp_path, script=numbered("yeah {n}, the vendor was shut"),
+                shape=True)
+        await r.session()
+        await r.human("you around tonight?", channel="whisper", to_guid=102)
+        await ticking(r, 60)
+        until = r.engine.life.away_until(102)
+        assert until > clock.now() + 200
+        t1 = clock.now()
+        await r.human("are you there? need help with something", channel="whisper",
+                      to_guid=102)
+        await ticking(r, 40)
+        got = whispers(r, 102, t1)
+        assert len(got) == 1 and got[0][0] < until - 100
+        assert "(you were away)" in line_calls(r)[-1]["messages"][-1]["content"]
+        assert r.engine.life.away_until(102) == 0
+        assert "life_back: guid=102 said=0" in caplog.text
+        t2 = clock.now()
+        await r.human("thanks, all sorted", channel="whisper", to_guid=102)
+        await ticking(r, game_cap_s(6) + 60)
+        texts = [s.text for _, s in whispers(r, 102, t2)]
+        assert len(texts) == 1 and "ok back" not in texts
+        assert "you were away" not in line_calls(r)[-1]["messages"][-1]["content"]
+        r.close()
+    asyncio.run(main())
+
+
+def test_a_turn_left_on_read_draws_no_interruption(store, clock, tmp_path, monkeypatch):
+    """A turn left on read is dropped before any interruption is drawn for it (review of #343,
+    Task 10 note 2): only a line she said draws one."""
+    calls = force(monkeypatch)
+
+    async def main():
+        r = rig(store, clock, tmp_path, script=numbered("sure {n}, sounds good"), shape=True)
+
+        def leave(turn, meta, p, now, *, voiced=False):
+            turn.shape = ShapeDraw(Shape.LEAVE, 0, 0, None)
+        monkeypatch.setattr(r.engine, "_draw_shape", leave)
+        await r.session()
+        t0 = clock.now()
+        await r.human("want to run something later?", channel="whisper", to_guid=102)
+        await ticking(r, 60)
+        assert whispers(r, 102, t0) == [] and calls == []
+        assert "left_on_read" in [u["dropped"] for u in r.utterances()]
+        assert r.engine.life.away_until(102) == 0
+        r.close()
+    asyncio.run(main())
+
+
+def test_she_stays_while_an_answer_to_him_is_on_its_way(store, clock, tmp_path):
+    """The brb's barrier (LifeService._stays): an answer of hers to him on its way keeps her
+    (her own brb or back, a template, answers nothing), as do his line since hers and his
+    raid's fight."""
+    r = rig(store, clock, tmp_path)
+    life, t = r.engine.life, clock.now()
+    assert life._stays(r.engine, 102, HUMAN, t) == ""
+
+    async def queued(turn):
+        task = r.engine._queue([(turn, TurnMeta(r.engine._new_id(), answers_human=True))])
+        await asyncio.sleep(0)
+        why = life._stays(r.engine, 102, HUMAN, t)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return why
+    brb = Turn(TurnKind.REPLY_HUMAN, 102, "dm:102", to_guid=HUMAN, addressee=HUMAN,
+               template="brb", delay=60.0)
+    reply = Turn(TurnKind.REPLY_HUMAN, 102, "whisper", to_guid=HUMAN, addressee=HUMAN,
+                 delay=60.0)
+    assert r.sync(queued(brb)) == ""
+    assert r.sync(queued(reply)) == "answering"
+    real_phase = r.raid.phase
+    r.raid.phase = lambda now: RaidPhase.COMBAT
+    assert life._stays(r.engine, 102, HUMAN, t) == "raid"
+    r.raid.phase = real_phase
+    said(r, "still on for later?")
+    assert life._stays(r.engine, 102, HUMAN, t) == "his_line"
+    r.close()
 
 
 def test_answer_delay_waits_out_her_away(store, clock, tmp_path):

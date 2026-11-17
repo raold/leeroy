@@ -28,7 +28,8 @@ him in their whisper or her DM ("brb boss", 2-6 s later, through Pipeline.say_as
 on she is away until `away_until`. Her answers to him wait: in game `answer_delay` is at least
 what is left of it (an answer he is owed at most game_cap_s), in her DM DiscordTalk._due_of defers
 his post until she is back; and once back to a conversation he left quiet, `tick` has her say so
-half the time ("back"). Aways live in memory only: a restart forgets them."""
+half the time ("back"). A line of hers to him in that conversation before then (his urgent words
+or goodbye hurried it) ends her away. Aways live in memory only: a restart forgets them."""
 from __future__ import annotations
 
 import logging
@@ -269,8 +270,9 @@ class LifeService:
         (interrupt, night, her, the minute, her line); her block as her presence on that medium,
         her own game's while she plays in his group), at most once per INTERRUPT_GAP_S. Never
         after a template's line (her own brb and back), the watchdog's rescue or a carried DM.
-        Her line goes out 2-6 s later (_step_away). Nothing at availability 0; a failure is
-        logged (`life_interrupt_failed`), never raised."""
+        Her line goes out 2-6 s later (_step_away). A line of hers to him there while she is
+        away (a hurried or capped answer) ends her away (_came_back). Nothing at availability
+        0; a failure is logged (`life_interrupt_failed`), never raised."""
         if self._availability <= 0:
             return
         try:
@@ -288,11 +290,15 @@ class LifeService:
             medium = "discord"
         else:
             return  # a channel, a group DM, a voice room: never mid-conversation with him alone
-        if (turn.template is not None or meta.owed_rescue or meta.why == CARRY_WHY
-                or meta.elsewhere):
-            return
+        if turn.template is not None:
+            return  # her own brb and back
         now = self.clock.now()
-        if g in self._stepping or self.away_until(g) > 0:
+        if self.away_until(g) > 0:
+            self._came_back(g, now)
+            return
+        if meta.owed_rescue or meta.why == CARRY_WHY or meta.elsewhere:
+            return
+        if g in self._stepping:
             return
         last = self._interrupted.get(g)
         if last is not None and now - last < INTERRUPT_GAP_S:
@@ -322,30 +328,61 @@ class LifeService:
         self._stepping.add(g)
         pipe._spawn(self._step_away(pipe, g, it, away, delay, now))
 
+    def _came_back(self, guid: int, now: float) -> None:
+        """A line of hers to him in their whisper or her DM while she is away (his urgent words,
+        his goodbye or his third line hurried it, or an owed answer's cap came before her away's
+        end): she is back from that line, with no back line (`life_back: guid= said=0`), and his
+        next line is answered at her usual pace, without the away's excuse."""
+        a = self._away.get(guid)
+        if a is None or a.done:
+            return
+        a.until, a.done = now, True
+        log.info("life_back: guid=%d said=0", guid)
+
+    def _stays(self, pipe, guid: int, hg: int, said_at: float) -> str:
+        """Why she does not step away after all, as her brb is about to go out ("" for none):
+        [life] availability went to 0 (`off`), he wrote to her since her line (`his_line`: she
+        saw it, she stays and answers it; a brb after his line would read as her answer to it),
+        an answer of hers to him is on its way (`answering`), or his raid's fight, wipe silence
+        or debrief began (`raid`)."""
+        if self._availability <= 0:
+            return "off"
+        if self._wrote_since(guid, hg, said_at):
+            return "his_line"
+        if self._owes_him(pipe, None, guid, hg):
+            return "answering"
+        if self._raid_quiet(pipe, self.clock.now()):
+            return "raid"
+        return ""
+
     async def _step_away(self, pipe, guid: int, it: Interruption, away: Away, delay: float,
                          said_at: float) -> None:
         """Her line (it.line) `delay` after hers, through Pipeline.say_as (a pair line: the
         guild's pace never holds it back), as a whisper in game or her DM message. Its barrier,
-        just before it goes out, withholds it when he wrote to her since her line (she saw it:
-        she stays and answers it, and a brb after his line would read as her answer to it) or
-        his raid's fight began; else she is away from then for it.away_s. Withheld or refused,
-        she is not away (`life_interrupt_dropped reason=his_line|raid|refused`); said, logged
-        `life_interrupt: guid= reason= away_s=` (codes, never her line)."""
+        just before it goes out, withholds it when she stays after all (_stays: she is not away,
+        `life_interrupt_dropped: guid= reason=off|his_line|answering|raid`) and, in a whisper,
+        once he has left the game (never a whisper to an offline player). Otherwise she is away
+        from then for it.away_s, said or not: refused by the guards, or not sent to an offline
+        player, she is still away without a line (core plan Task 10), and so says no back line
+        either. Logged `life_interrupt: guid= reason= away_s= said=0|1` (codes, never her
+        line)."""
         from leeroy_mind.talk.turns import TurnKind
         hg = pipe.human.guid
-        why = "refused"
+        why = ""
+
+        def go(now: float) -> None:
+            away.since, away.until = now, now + it.away_s
+            self._away[guid] = away
 
         def barrier() -> bool:
             nonlocal why
-            if self._wrote_since(guid, hg, said_at):
-                why = "his_line"
+            why = self._stays(pipe, guid, hg, said_at)
+            if why:
                 return False
-            now = self.clock.now()
-            if self._raid_quiet(pipe, now):
-                why = "raid"
+            if away.channel == "whisper" and not getattr(self.world, "human_online", False):
+                why = "offline"
                 return False
-            away.since, away.until = now, now + it.away_s
-            self._away[guid] = away
+            go(self.clock.now())
             return True
         said = False
         try:
@@ -356,12 +393,17 @@ class LifeService:
         finally:
             self._stepping.discard(guid)
         if not said:
-            if self._away.get(guid) is away:
-                del self._away[guid]
-            log.info("life_interrupt_dropped: guid=%d reason=%s", guid, why)
-            return
+            if not why and self._away.get(guid) is not away:
+                why = self._stays(pipe, guid, hg, said_at)  # refused before its barrier
+            if why not in ("", "offline"):
+                log.info("life_interrupt_dropped: guid=%d reason=%s", guid, why)
+                return
+            if self._away.get(guid) is not away:
+                go(self.clock.now())
+            away.back = ""  # he never saw her brb: no "back" either
         self._interrupted[guid] = away.since
-        log.info("life_interrupt: guid=%d reason=%s away_s=%d", guid, it.reason, int(it.away_s))
+        log.info("life_interrupt: guid=%d reason=%s away_s=%d said=%d", guid, it.reason,
+                 int(it.away_s), int(bool(said)))
 
     def _returns(self, now: float) -> None:
         """Each away that has ended: she is back. To a conversation he left quiet since her brb
@@ -382,14 +424,19 @@ class LifeService:
             pipe._spawn(self._say_back(pipe, guid, a))
 
     async def _say_back(self, pipe, guid: int, a: Away) -> None:
-        """Her back line, as her brb went (a pair line), withheld if he writes first."""
+        """Her back line, as her brb went (a pair line), withheld if he writes first, his
+        raid's fight began or (a whisper) he has left the game."""
         from leeroy_mind.talk.turns import TurnKind
         hg = pipe.human.guid
+
+        def barrier() -> bool:
+            return not (self._wrote_since(guid, hg, a.since)
+                        or self._raid_quiet(pipe, self.clock.now())
+                        or (a.channel == "whisper"
+                            and not getattr(self.world, "human_online", False)))
         kind = TurnKind.WHISPER if a.channel == "whisper" else TurnKind.REPLY_HUMAN
-        said = await pipe.say_as(
-            guid, a.channel, a.back, kind=kind, to_guid=hg, pair_line=True,
-            before_transport=lambda: not (self._wrote_since(guid, hg, a.since)
-                                          or self._raid_quiet(pipe, self.clock.now())))
+        said = await pipe.say_as(guid, a.channel, a.back, kind=kind, to_guid=hg, pair_line=True,
+                                 before_transport=barrier)
         log.info("life_back: guid=%d said=%d", guid, int(bool(said)))
 
     def _raid_quiet(self, pipe, now: float) -> bool:
@@ -431,7 +478,8 @@ class LifeService:
         from leeroy_mind.discord.talk import DEFERRED_KEY
         from leeroy_mind.talk.pipeline import REPLY_KINDS
         for t in pipe.planned_turns():
-            if t is turn or t.speaker != guid or t.kind not in REPLY_KINDS:
+            if (t is turn or t.speaker != guid or t.kind not in REPLY_KINDS
+                    or t.template is not None):  # her own brb and back answer nothing
                 continue
             if t.to_guid == hg or t.addressee == hg or t.channel == f"dm:{guid}":
                 return True

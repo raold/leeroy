@@ -297,11 +297,14 @@ whisper or her Discord DM her day can call her away mid-conversation (spec secti
 - **Her line** (`_step_away`) goes out through `Pipeline.say_as` as a whisper (game) or her DM
   message (`REPLY_HUMAN`), a pair line (`TurnMeta.pair_line`: read by no one else, so the guild's
   pace never holds it back), one typed line sent as written. Its barrier, just before it goes out,
-  withholds it when he wrote to her since her line (she saw it: she stays and answers him; a brb
-  after his line would read as her answer to it, and the owed watch and her own time would take
-  it for one) or his raid's fight began. Withheld or refused, she is not away
-  (`life_interrupt_dropped: guid= reason=his_line|raid|refused`). Said, she is away from then
-  (`life_interrupt: guid= reason= away_s=`; codes only, never her line).
+  withholds it when she stays after all: he wrote to her since her line (she saw it: she stays and
+  answers him; a brb after his line would read as her answer to it, and the owed watch and her own
+  time would take it for one), an answer of hers to him is on its way, his raid's fight began, or
+  availability went to 0 (`life_interrupt_dropped: guid= reason=his_line|answering|raid|off`; she
+  is not away). Otherwise she is away from then, said or not: refused by the guards, or a whisper
+  not sent because he has left the game (never a whisper to an offline player), she is still away
+  without a line, and so says no back line after it either (`life_interrupt: guid= reason= away_s=
+  said=0|1`; codes only, never her line).
 - **While she is away** her answers to him wait. In game `LifeService.answer_delay` is at least
   what is left of it (an answer he is owed still at most `game_cap_s`; any other drawn past
   `NON_OWED_MAX_S` is missed, as before), through the turn's delay with its wake: his goodbye, his
@@ -310,7 +313,10 @@ whisper or her Discord DM her day can call her away mid-conversation (spec secti
   (`DiscordTalk._due_of`): no sooner than she is back plus 30-120 s (`seeded("back", the away's
   night, her, its minute, his post)`; meta `discord:dm:deferred:<guid>`, the owed watch holding it
   `own_time`), unless it has urgent words or is his third post in a row, which reach her wherever
-  she is, as in game.
+  she is, as in game. A line of hers to him in that whisper or DM before her away ends (a hurried
+  answer, or an owed whisper answer at `game_cap_s` while an away from her DM runs longer) ends
+  it: she is back, says no back line, and his next line is answered at her usual pace without the
+  away's excuse (`life_back: guid= said=0`).
 - **Her late answer says so once.** With `[talk] shape` on, an answer to him that waited out her
   away (`Pipeline._waited_away`: she was away between his line and her answer; never a carried
   DM) is LATE, in game or her DM, its excuse "away": "You're only now seeing this (you were away):
