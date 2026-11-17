@@ -896,8 +896,9 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     when later answers came after it. The speaker's own line his pushback is about (kept, fix
     wave G6) is never cut nor shortened either, and the last resort keeps it with the floor.
     The system message, the untrimmed sections, mood, real-name line, facts, her voice block
-    and instruction are never cut (the mood in either place: PromptParts.situation). Memories stay a prefix of
-    the input, so len(result.memories) says which recalled memories were used."""
+    and instruction are never cut (the mood in either place: PromptParts.situation). Memories
+    stay a prefix of the input, so len(result.memories) says which recalled memories were
+    used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
                 elsewhere=list(p.elsewhere), style=list(p.style),
                 own_recent=list(p.own_recent), untrimmed=list(p.untrimmed))

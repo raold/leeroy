@@ -319,6 +319,32 @@ all 2,074, each on reading his line said back). `member_misgender`: both graded 
 of 145 other graded lines; 12 of about 5,450 stored member lines, 11 of them a real
 misgendering (officer attendance threads), 1 ambiguous.
 
+## Her voice sheet (2026-11-17)
+
+A member with a voice sheet (`Persona.speech`, `personas/speech.py`; imported by `personas
+voices`) is held to it by three string checks on her stored sheet (`voice.py`). No switch (they
+need `[guards] enabled`); a member without a sheet is reviewed exactly as before.
+
+- Her own words (`says`) are **rationed, not cooled**. A phrase that is one of her words (it
+  holds one whole and nothing else of content, or is a run inside one) is never
+  `phrase_conversation`, `phrase_day` or `stock_member`. Instead each of her words, a single
+  word included, may be in about one in three of her lines in a conversation: the draft is
+  flagged when it would be use number `uses + 1` among her last 9 lines there and that is more
+  than 2 and more than `ceil((lines + 1) / 3)` (a third use needs seven lines, a fourth ten).
+  Over the ration it is named as `phrase_conversation`, so the existing hint ("Don't say
+  '...' again") and strip apply. `phrase_cast` and `stock_cast` still count her word.
+- `voice_never`: the draft uses a word of her `never` list (whole words, any case; an entry with
+  no word in it, such as "!!", as written). Soft: one rewrite, the hint names the words
+  (`Verdict.never`, repr-hidden: "You never say 'x'."). The list is enforced whether or not the
+  turn's block showed it (a private turn's block may leave never-words out for room).
+- `voice_sample_copy`: the draft holds one of her five sample lines word for word (as a run of
+  words when the sample has 4 or more, else as the whole line). Soft: one rewrite. The samples a
+  turn's prompt showed are also the pipeline's own "sample copied" tell, as before.
+
+Neither code is in `HARD_CODES`, `DROP_CODES` or the pipeline's `CUT_CODES`: a bystander line
+that still has one after its rewrite is dropped `guard_rewrite_refused`, and an answer owed to
+him is never dropped for it (the best draft is kept, as for every soft code).
+
 ## Live adapter
 
 `[guards] enabled = true` admits review independently of `[talk] aware = true`.

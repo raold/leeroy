@@ -331,3 +331,23 @@ def test_cli_refuses_to_write_while_the_mind_runs(tmp_path, capsys):
                      "--go"]) == 1
         assert "mind service is running" in capsys.readouterr().out
     assert _sheets(d) == {201: None, 202: None, 203: None}
+
+
+# -- the rest of the persona's readers ---------------------------------------------------------------
+
+def test_an_export_carries_the_sheet_and_an_import_of_it_changes_nothing(store, tmp_path):
+    from leeroy_mind.personas.io import export_personas, import_personas
+    _members(store)
+    voices.set_voice(store, 201, sheet(), now=2000.0)
+    (path,) = export_personas(store, tmp_path / "out", guids=[201])
+    assert json.loads(path.read_text(encoding="utf-8"))["speech"] == LEDGER
+    report = import_personas(store, tmp_path / "out", ts=3000.0, human=HUMAN)
+    assert (report.imported, report.unchanged, report.errors) == ([], [201], {})
+
+
+def test_the_nights_core_judge_reads_no_sheet(store):
+    from leeroy_mind.nightly.growth import core_text
+    _members(store)
+    plain = core_text(load_persona(store, 201))
+    voices.set_voice(store, 201, sheet(), now=2000.0)
+    assert core_text(load_persona(store, 201)) == plain

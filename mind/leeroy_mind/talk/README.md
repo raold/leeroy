@@ -866,3 +866,93 @@ through the owner's lens (`Pipeline._met_him`).
 
 Measured read-only on 2026-11-16: 6 of 1,345 stored member lines to him see him in person (each
 on reading an in-person plan or wish); the golden prompts are unchanged.
+
+# Voice sheets (`Persona.speech`, 2026-11-17)
+
+Members sounded alike because nothing of how a member talks reached a prompt: `speech_habits`,
+likes and values are read by no prompt code, the card carried two generic trait sentences and
+one of a few canned attachment and humour lines, and most of a prompt is text the whole cast
+shares. A voice sheet is an optional persona field (`personas/schema.py` `Speech`): `register`,
+`shape` (her sentence shape), `says` (4-8 words or phrases), `never` (up to 4), `brings_up` (1-4
+things from her own life), `with_him`, `stance`, and `samples` (one line each for `answer`,
+`tease`, `tired`, `flirt` or `warm`, `annoyed`). No model writes it; no switch. **A member
+without a sheet is stored, hashed and prompted byte for byte as before** (the four goldens in
+`tests/tuning`); `tests/tuning/golden_voice.json` holds the scenario with two invented sheets.
+
+For a member with a sheet (`personas/speech.py`, `Pipeline._voice`):
+
+- The block is the last section before her instruction in both prompt modes (after "Right now:"
+  in the situation mode) and is never cut by the trim, which counts it:
+
+  ```
+  Your voice: <register>; <shape>.
+  You say, only now and then: <says>. Never: <never>.
+  Unasked, you bring up: <brings_up>.
+  With <him>: <with_him>. <stance>.
+  How you sound, not lines to reuse (never copy one; say new things this way):
+  - <sample>
+  - <sample>
+  ```
+
+- It is **in place of**, not on top of: her card loses the two trait sentences and the
+  attachment and humour lines (`render_prompt_card(..., voice=True)`; the card's other sections
+  are chosen as they would be with them, so nothing else comes back into the room), and her
+  system message loses "How you type" and its five generator samples. What a turn adds is at
+  most 120 estimated tokens of block, the samples' heading (22) and two samples of at most 55
+  each; what it takes out measured about 175 on the live cast's captured prompts (trait
+  sentences and mind line about 100, samples about 73). So the net is at most about +80, and
+  near zero for a sheet with samples of ordinary length. Not yet measured on live turns.
+- `with_him` shows only on a turn that is his; `stance` only where only he reads (a whisper to
+  him, his DM). A guild, party, raid, channel or group-DM turn has neither.
+- The block without its samples never passes 120 estimated tokens (`BLOCK_TOKENS`). A sheet too
+  long for a turn loses, in order (`TRIMS`): its fourth topic, its seventh and eighth words, its
+  never-words beyond two, its third topic, the rest of its never-words, then words and a topic
+  down to four and one. Her register, shape, `with_him` and `stance` are never trimmed (a sheet
+  whose four leave no room is refused at import). On the 177 sheets written so far a public
+  turn is trimmed by at most a topic and a word, and a private turn of his, which also carries
+  `with_him` and `stance`, mostly keeps 6 words and 2 or 3 topics (10 of them no never-words).
+- One or two samples a turn: the first by the turn's want (`WANT_SAMPLE`: vent, deflect ->
+  tired; tease, gossip -> tease; flirt, reassure_seek -> flirt, or warm for a sheet without it;
+  boundary -> annoyed; everything else, and a turn with no want -> answer), the second a draw
+  among the rest from a seeded stream of its own (`seeded("voice", night, guid, minute,
+  trigger)`, never the engine's rng). On an answer that gets a beat the want is the draw's lean
+  (the beat chooses after the prompt is composed). A flirt sample is shown only on his turns; a
+  sample she already sent word for word is never shown again.
+- Her sentence shape may name a line length ("fragments, two to six words": `word_range`). It
+  moves only the word draw of her own line and her habit in a DM's mirror (`ShapeContext.
+  voice_words`): never a shape's odds, `MIN_LINE_WORDS`, the DM cap or the number of draws.
+- A live line whose prompt carried a sheet has `voice.sheet-1` in its recipe's template id
+  (`learn.recipe.voice_used`), so `learn report` and the Turing report can split with and
+  without.
+- The guards ration her own words and hold her to her never list and samples
+  (`guards/README.md` "Her voice sheet").
+
+Importing (`personas/voices.py`), mind stopped for `--go`, which snapshots first
+(`mind-pre-voices-*.db`):
+
+```bash
+python -m leeroy_mind personas --data-dir "$D" voices --dir DIR [--guid N,...]        # dry run
+python -m leeroy_mind personas --data-dir "$D" voices --dir DIR [--guid N,...] --go
+python -m leeroy_mind personas --data-dir "$D" undo <ledger id>                       # one back
+python -m leeroy_mind personas --data-dir "$D" voices --clear [--guid N,...] [--go]   # take off
+```
+
+`DIR` holds one `<guid>.json` per member, in the sheet lab's shape (`voice.register`,
+`sentence_shape`, `says`, `never_says`, `unprompted`, `with_him`, `relationship_stance`, and
+top-level `samples`; its other keys are not read) or the schema's (`{"guid", "speech": {...}}`).
+Files whose name is no number are passed over. Each member is `imported`, `unchanged` or
+`refused` with codes (`voices.REFUSALS`: `unreadable`, `not_json`, `bad_shape`, `guid_mismatch`,
+`name_mismatch`, `no_persona`, `invalid`, `real_name`, `member_romance`, `assistant_text`,
+`later_era`, `member_name`, `never_in_sample`, `says_slop`); one refused sheet does not stop the
+others, and the exit code is 1 when any was refused. The output has outcomes, the block's
+estimated tokens, sample counts, codes and the schema's own messages (paths and limits), never
+a sheet's text. Each import is an owner persona version with a `voice` row in the persona ledger
+(migration `voice_ledger`) and a private receipt (meta `personas:voice-undo:<ledger>`), so
+`personas undo` and the console's Undo (Personas, member detail, Ledger) take it back while it
+is still what the step left; `--clear` gives a member back the source she had before her first
+sheet. The console's member detail lists the sheet read-only under "Voice".
+
+**Rollback hazard:** older code refuses a persona with an unknown `speech` field (the member
+goes silent as `persona_unreadable`). Run `personas voices --clear --go` before rolling the code
+back, as with `home` and `bust`. `personas import` also carries a sheet in an exported file, but
+writes no ledger row: use `voices` for sheets.

@@ -407,7 +407,8 @@ def check(reader, draft, now: float, sheet=None) -> Found:
     toks, phrases = candidates(text, names(reader))
     stocked = _stock_spans(toks)
     says = sheet is not None and bool(sheet.says)
-    if not phrases and not stocked and not says:
+    said = says and voice.any_said(toks, sheet)  # one of her own words is in the draft
+    if not phrases and not stocked and not said:
         return Found()
     cutoff = draft.line_id if draft.line_id is not None else 2**63 - 1
     rows = reader.rows('phrases_unavailable', 'SELECT from_guid,ts,channel,to_guid,origin,text FROM chat_line '
@@ -425,8 +426,8 @@ def check(reader, draft, now: float, sheet=None) -> Found:
     # was writing about, said back, was flagged as her tic): a phrase whose every content word
     # he or another member used in this conversation is its topic.
     subject, his = _subject(rows, draft.guid, key, now)
-    talk = _conversation(own, key, now)[0] if phrases or says else []
-    if says:  # her own words, over their ration in this conversation (voice.over_ration)
+    talk = _conversation(own, key, now)[0] if phrases or said else []
+    if said:  # her own words, over their ration in this conversation (voice.over_ration)
         hits['phrase_conversation'] += voice.rationed(
             toks, [_words(strip_wow_markup(r['text'] or '')) for r in talk], sheet)
     if phrases:

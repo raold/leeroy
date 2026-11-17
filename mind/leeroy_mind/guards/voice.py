@@ -102,6 +102,12 @@ def over_ration(uses: int, lines: int) -> bool:
     return uses + 1 > max(SAY_FREE, ceil((lines + 1) / SAY_SHARE))
 
 
+def any_said(toks, sheet: Sheet) -> bool:
+    """One of her own words is in the draft (phrases.tokens of it)."""
+    norms = [t.norm for t in toks]
+    return any(_run(norms, entry) for entry in sheet.says)
+
+
 def rationed(toks, talk_words, sheet: Sheet) -> list[tuple[int, int]]:
     """The spans (first, last token index) of her own words in the draft that are over their
     ration. `toks`: phrases.tokens of the draft; `talk_words`: the folded words of each of her

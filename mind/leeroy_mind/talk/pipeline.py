@@ -2498,8 +2498,9 @@ class Pipeline:
         # question's words nor another answer make a span she adds to them true (rehearsal
         # 2's "has been raging for 2 years"; fix round 2, re-review NB4)
         rl = p.real_life
-        support = [*trimmed.memories, *trimmed.rel_cards, parts.card, parts.voice, rl.job, rl.rhythm,
+        support = [*trimmed.memories, *trimmed.rel_cards, parts.card, rl.job, rl.rhythm,
                    rl.household, rl.money, rl.sleep, rl.life_thread,
+                   *([parts.voice] if parts.voice else []),  # what her sheet says of her life
                    *(r.text for r in recent
                      if (not turn.trigger_line or r.id < turn.trigger_line) and r.id != answered),
                    *(r.text for r in pair),
