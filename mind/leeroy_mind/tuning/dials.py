@@ -96,6 +96,9 @@ WORLD_DIALS: dict[str, WorldDial] = {d.name: d for d in (
               "how many photos members send to your DMs and post in the guild's photo channels"),
     WorldDial("availability", "availability", 0, 10, "life", "availability", "at once",
               "how often members are away, busy or slow to answer (0: always there)"),
+    WorldDial("dm_mirror", "DM length follows yours", 0, 10, "talk", "dm_mirror", "at once",
+              "with reply shapes on: how closely a member's DM length follows yours (0: as full as "
+              "she likes)"),
 )}
 
 

@@ -450,6 +450,7 @@ class TalkEngine(EmoteReactions):
                         else delay * self._effects(rt.speaker).delay_mult)
             meta = TurnMeta(rt.turn_id, answers_human=True, whisper_reply=whisper,
                             why=f"reply:{how}", facts_line=facts, lore=said_lore,
+                            his_words=len(row.text.split()),
                             lore_memory=pin, first_question_answer=(rt.kind is TurnKind.REPLY_HUMAN
                                 and not any(t.kind is TurnKind.REPLY_HUMAN for t,_ in items)
                                 and classify_human_line(row.text) == "question_all"))

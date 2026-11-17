@@ -2,8 +2,12 @@
 count turns, not lines."""
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from leeroy_mind.llm.scheduler import Priority
+
+if TYPE_CHECKING:  # talk.shape imports this module
+    from leeroy_mind.talk.shape import ShapeDraw
 
 
 class TurnKind(StrEnum):
@@ -40,3 +44,6 @@ class Turn:
     delay: float = 0.0
     template: str | None = None
     discord_draw: float | None = None  # a channel message's length band, drawn once (discord_length.band)
+    # its reply shape ([talk] shape, talk/shape.py ShapeDraw), drawn as she starts composing
+    # (Pipeline._draw_shape); None: today's length
+    shape: "ShapeDraw | None" = None

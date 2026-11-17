@@ -81,6 +81,8 @@ def test_the_tuning_view_shows_dials_groups_values_and_history_without_writing(c
             assert world["selfies"]["file"] == 3 and world["selfies"]["value"] == 3
             assert (world["availability"]["file"], world["availability"]["value"],
                     world["availability"]["lo"], world["availability"]["hi"]) == (0, 0, 0, 10)
+            assert (world["dm_mirror"]["file"], world["dm_mirror"]["value"],
+                    world["dm_mirror"]["lo"], world["dm_mirror"]["hi"]) == (5, 5, 0, 10)
             groups = {g["target"]: g for g in v["groups"]}
             assert groups["everyone"]["builtin"] and groups["everyone"]["members"] == 5
             assert groups["1"]["name"] == "women" and groups["1"]["members"] == 1

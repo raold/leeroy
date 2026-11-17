@@ -178,7 +178,8 @@ def tone(text: str) -> Literal["warm", "harsh", "plain"]:
     return "plain"
 
 
-def _parts(state: State, to_him: bool, them: str) -> list[str]:
+def _parts(state: State, to_him: bool, them: str, talkative: bool = True,
+           curt: bool = True) -> list[str]:
     parts = []
     if to_him and state.toward_him >= 0.3:
         parts.append(f"happy with {them} right now")
@@ -186,7 +187,7 @@ def _parts(state: State, to_him: bool, them: str) -> list[str]:
         parts.append(f"a bit annoyed with {them} right now")
     if state.energy <= -0.4:
         parts.append("tired")
-    if state.stress >= 0.3 and state.social <= -0.2:
+    if curt and state.stress >= 0.3 and state.social <= -0.2:
         parts.append("a bit short")
     if state.stress >= 0.4:
         parts.append("stressed")
@@ -198,18 +199,22 @@ def _parts(state: State, to_him: bool, them: str) -> list[str]:
         parts.append("in a bad mood")
     elif state.valence <= -0.15:
         parts.append("a bit off")
-    if state.social <= -0.4:
+    if talkative and state.social <= -0.4:
         parts.append("not feeling chatty")
-    elif state.social >= 0.4:
+    elif talkative and state.social >= 0.4:
         parts.append("chatty")
     return parts[:3]
 
 
-def words(state: State, *, to_him: bool, forms: tuple[str, str, str]) -> str:
+def words(state: State, *, to_him: bool, forms: tuple[str, str, str],
+          talkative: bool = True, curt: bool = True) -> str:
     """Her state as one short line for her prompt ("You're tired and a bit short today."), at
     most three parts; "" when nothing stands out. Her feeling about him (forms: his subject,
-    object and possessive pronouns) shows only when `to_him`: never on another member's turn."""
-    parts = _parts(state, to_him, forms[1])
+    object and possessive pronouns) shows only when `to_him`: never on another member's turn.
+    Without `talkative` it leaves out how chatty she feels: the turn's reply shape says how
+    much she says ([talk] shape; review-340, PM log D22); without `curt` it leaves out "a bit
+    short", which a burst or a paragraph would contradict (review of #343, P3-7)."""
+    parts = _parts(state, to_him, forms[1], talkative, curt)
     if not parts:
         return ""
     joined = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]

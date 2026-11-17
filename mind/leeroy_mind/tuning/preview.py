@@ -37,6 +37,21 @@ LEASE = "tuning_preview"
 LINE_DEADLINE_S = 15.0  # each request's deadline at background priority
 SUBJECTS = 3  # a group or world change is previewed on up to this many members it reaches
 GAP_S = (240.0, 720.0)  # talk.budget.BurstBudget's default social gap at the reference
+MIRROR_EXAMPLES = (5, 40)  # his DM's words the dm_mirror preview answers
+MIRROR_SAMPLES = 400
+
+
+def dm_median(dial: int, his: int, dm_words: int = 200) -> int:
+    """The median words of a member's DM answer to his `his`-word DM at `dm_mirror` `dial`
+    (talk.shape.dm_words_for, seeded draws, with a member typing 3-12 words a line; [talk]
+    dm_words at its default). At 0 it is dm_words: as full as she likes."""
+    import statistics
+    from leeroy_mind.personas.schema import Typing
+    from leeroy_mind.talk.shape import dm_words_for
+    t = Typing(case="lower", end_punct="none", emoticons=(), emoticon_rate=0.0, abbreviations={},
+               typo_rate=0.0, words_per_line=(3, 12), split_rate=0.1, chars_per_sec=5.0)
+    return round(statistics.median(dm_words_for(his, t, dial, dm_words, random.Random(i))
+                                   for i in range(MIRROR_SAMPLES)))
 
 REFUSE = {
     "stopped": "The mind isn't running, so it can't preview or change dials. Start it from the "
@@ -183,6 +198,10 @@ def _world_numbers(dial: str, before: int, after: int) -> list[dict]:
             return round((lo + hi) / 2 / 60, 1)
         return [{"what": "minutes before a member at work sees your DM, on average",
                  "before": glance(before), "after": glance(after), "unit": "min"}]
+    if dial == "dm_mirror":
+        return [{"what": f"words in a member's DM answer to your {his}-word DM, the median",
+                 "before": dm_median(before, his), "after": dm_median(after, his), "unit": ""}
+                for his in MIRROR_EXAMPLES]
     if dial == "jealousy":
         return [{"what": "envy asides an hour, at most", "before": round(2 * before / 5),
                  "after": round(2 * after / 5), "unit": ""},

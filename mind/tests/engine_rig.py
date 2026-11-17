@@ -273,7 +273,8 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
              dial: int = ROMANCE_DIAL, items=None,
              greeters: tuple[int, int] | None = None, beat: bool = False,
              availability: int = 0, life_state: bool = False, intent: bool = False,
-             situation: bool = False, romance_realism: bool = False) -> Rig:
+             situation: bool = False, romance_realism: bool = False, shape: bool = False,
+             dm_mirror: int = 5) -> Rig:
     """A fresh engine over `store` (the test cast is seeded if the store has no personas).
     The FakeLLM answers `reply` unless a `script` is given; `send` replaces the recording
     send; `library` (a FakeLibrary) gives the engine the library's facts; `dial` is the
@@ -288,7 +289,9 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     today's (tests/life/test_game_presence.py covers them). `intent` and `situation`: [talk]
     intent and situation (core plan Task 8), off unless a test asks (tests/life/test_compose_life.py
     and the core golden, golden_core.json, cover them). `romance_realism`: [romance] realism
-    (talk/romance.py REALISM_LEAD), off unless a test asks (tests/test_romance_realism.py)."""
+    (talk/romance.py REALISM_LEAD), off unless a test asks (tests/test_romance_realism.py).
+    `shape` and `dm_mirror`: [talk] shape and dm_mirror (core plan Task 9), off and 5 unless a
+    test asks (tests/life/test_shape_pipeline.py and the core golden cover them)."""
     if not store.persona_versions():
         seed_test_cast(store)
     store.upsert_cast([Member(guid=HUMAN, name=HUMAN_NAME, race=1, class_=8, gender=0, level=80,
@@ -298,7 +301,8 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     (prompts / "romance_explicit.txt").write_text(OVERLAY + "\n", encoding="utf-8")
     base = load_config(data_dir / "absent.toml")
     cfg = replace(base, talk=TalkCfg(chattiness, base.talk.raid_rule, think_private=beat,
-                                       intent=intent, situation=situation),
+                                       intent=intent, situation=situation, shape=shape,
+                                       dm_mirror=dm_mirror),
                   romance=RomanceCfg(dial, jealousy, realism=romance_realism),
                   human=HumanCfg(NICK, real_name, "he"),
                   life=replace(base.life, availability=availability, state=life_state))

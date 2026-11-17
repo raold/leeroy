@@ -189,6 +189,7 @@ def test_the_answer_turns_are_replies_to_him(store, clock, tmp_path):
     dm = post(rig, "dm:103", "hey you")
     [(turn, meta)] = talk.plan(dm)
     assert (turn.channel, turn.to_guid, turn.addressee) == ("dm:103", HUMAN, HUMAN)
+    assert meta.his_words == 2  # his post's words: a DM's mirrored length ([talk] shape)
     rig.close()
 
 

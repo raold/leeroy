@@ -33,7 +33,11 @@ the beat off, so every block after an instruction is the code's (the drawn want 
 members read as 20:00 GMT, the week UK and US clocks differ; the script ends near 20:36): every
 member is at her PC playing then (her gaming block, full attention in game; early shifts, asleep
 from 21:15), so nobody is away by schedule and each answer comes after her attention's seeded
-latency draw.
+latency draw. Re-recorded with [talk] shape on as well (core plan Task 9): each eligible answer's
+length is its drawn shape's line ("One short line, about 5 words.", "Keep it short and ask him
+something back.", the evening whisper's "Say it in a line or two, about 16 words.") in place of
+her usual line; every answer in the script is still said (none drew a shape that leaves it on
+read or only reacts), so the sent lines are as before.
 
 [romance] realism (talk/romance.py REALISM_LEAD, 2026-11-16) is off in all of these;
 golden_romance.json (record_romance) holds the plain scenario with it on: her romance text with
@@ -52,12 +56,16 @@ from pathlib import Path
 
 from conftest import HUMAN, TEST_CAST
 from engine_rig import engine_clock, make_rig, numbered, save_member
+from leeroy_mind.discord import store as dstore
+from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.protocol import Login, LootWon
 from leeroy_mind.talk.romance import flirt_chance, attitude_text
 from leeroy_mind.talk.select import SpeakerContext, speaker_weight
 from leeroy_mind.talk.budget import DayPhase
 from leeroy_mind.talk.states import roll_session_state
 from leeroy_mind.talk import beat
+from leeroy_mind.talk.pipeline import TurnMeta
+from leeroy_mind.talk.turns import Turn, TurnKind
 
 GOLDEN = Path(__file__).with_name("golden_prompts.json")
 BEAT_GOLDEN = Path(__file__).with_name("golden_beat.json")
@@ -83,7 +91,7 @@ def cast(store) -> None:
 async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = False) -> dict:
     r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7,
                  availability=6 if core else 0, life_state=core, intent=core, situation=core,
-                 romance_realism=realism)
+                 shape=core, romance_realism=realism)
     # the initiation clocks came later and have their own tests (test_initiate.py): off here,
     # so the scenario's draws stay the ones the golden recorded
     r.engine.whispers.set_rate(0.0)
@@ -111,6 +119,19 @@ async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = Fa
         await r.advance(280, step=4)
         await r.human(f"lol {'nice' if n % 2 else 'true'}")
     await r.advance(60, step=2)
+    if core:  # his Discord DM to 102, answered through the whole pipeline (the shape's DM lines)
+        mid = dstore.post(store, channel="dm:102", author=HUMAN, origin="human",
+                          text="how did the dungeon run go after i left", now=r.clock.now())
+        turn = Turn(TurnKind.REPLY_HUMAN, 102, "dm:102", to_guid=HUMAN, addressee=HUMAN)
+        meta = TurnMeta(r.engine._new_id(), answers_human=True, why="discord:reply",
+                        discord=DiscordTarget(reply_to=mid, thread=None))
+        task = asyncio.create_task(r.engine._speak(turn, meta))
+        for _ in range(200):
+            if task.done():
+                break
+            await r.advance(1)
+            await asyncio.sleep(0.002)
+        task.result()
     await r.engine.end_session()
     ctx = SpeakerContext(now=clock.now(), topic={"gear", "tank"}, opener=True,
                          phase=DayPhase.EVENING)

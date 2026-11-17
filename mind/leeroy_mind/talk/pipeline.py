@@ -60,8 +60,8 @@ from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
-from leeroy_mind.life.day import has_kids
-from leeroy_mind.life.presence import where_text
+from leeroy_mind.life.day import Block, has_kids
+from leeroy_mind.life.presence import away_words, where_text
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
@@ -119,6 +119,9 @@ from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, 
 from leeroy_mind.talk.states import (EFFECTS, RAID_CALLS, Altered, Effects, effects_for,
                                      substance_of)
 from leeroy_mind.talk.seasons import day_line
+from leeroy_mind.talk.shape import (DISCORD_FAMILIES, GAME_FAMILIES, ONE_WORD_NUM_PREDICT, Shape,
+                                    ShapeContext, ShapeDraw, draw_shape, shape_line,
+                                    shape_template)
 from leeroy_mind.talk.style import (ROMANCE_EMOTES, Styled, command_only, emote_words,
                                     line_cap, split_emotes, style_lines, turn_lines)
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -172,6 +175,7 @@ ECHO_HIM_HINT = ("Don't say {their} line back: the same answer in your own words
 COPY_HINT = "Don't copy a line from the chat: say your own thing."
 REPEAT_HINT = "Don't repeat what you said before."
 LONG_HINT = "Shorter: {lo}-{hi} words, the way you type."
+ONE_WORD_HINT = "Shorter: just a word or two."  # a word-or-two shape's ([talk] shape)
 DISCORD_LONG_HINT = "Shorter: at most about {words} words."
 SAMPLE_HINT = "Say it your own way: the examples only show how you type."
 FRIENDS_HINT = "Keep it friendly: you only ever flirt with {human}."
@@ -289,6 +293,17 @@ ROMANCE_LATE_BONUS = 0.15
 ROMANCE_COOL_S = 300.0
 OWN_LINES = 5
 WANTS_KEPT = 256  # her last want per conversation (_draw_situation's `last`), the latest kept
+# [talk] shape (core plan Task 9, Pipeline._draw_shape): the drop reasons of a turn left on read
+# and of one that only reacts; the learned arm families a drawn shape takes over (credited to
+# their control, PM log ruling 3); the words a word or two holds (the "long" tell's in game, on
+# Discord the few-words band's); the blocks she is still in when her late answer comes, so it
+# says where she is in the present, as "Right now" does
+LEFT_ON_READ = "left_on_read"
+REACTED = "reacted"
+REACT_SKIPPED = "react_skipped"  # a reaction shape whose reaction could not be posted
+SHAPE_YIELDS = frozenset({"length", "questions", "followup"})
+ONE_WORD_WORDS = 3
+STILL_THERE = frozenset({Block.WORK, Block.COMMUTE, Block.GYM, Block.OUT, Block.HOME_DUTY})
 DEAD_FORGET_S = 900.0  # a death with no resurrect event this old is forgotten
 ECHO_WAIT_S = 30.0  # an echo this late still confirms a line whose ack timed out
 SPOKEN_CHANNELS = frozenset({"say", "yell"})
@@ -519,6 +534,13 @@ class TurnMeta:
     state: object | None = None
     lands: str = ""
     intent_ctx: object | None = field(default=None, repr=False)
+    # core plan Task 9 ([talk] shape, Pipeline._draw_shape): his_words, the words of the line or
+    # post of his it answers (talk.engine, discord.talk; 0: read from the line it answers), for
+    # a DM's mirrored length; shape_ctx, the ShapeContext its Turn.shape was drawn from
+    his_words: int = 0
+    shape_ctx: object | None = field(default=None, repr=False)
+    # what a draw changed (turn.max_lines, meta.burst), put back before the next draw
+    shape_saved: tuple[int, bool] | None = None
 
 
 class _ScopeChanged(SchedulerError):
@@ -684,6 +706,14 @@ def _with_hint(messages: list[dict], hint: str) -> list[dict]:
     out = [dict(m) for m in messages]
     out[-1]["content"] = f"{out[-1]['content']}\n{hint}"
     return out
+
+
+def _family(channel: str) -> str:
+    """A turn's channel family, as talk.intent and talk.shape read it: group (a group DM), dm,
+    discord (a channel), whisper or game."""
+    return ("group" if is_group(channel) else "dm" if channel.startswith(DM_PREFIX)
+            else "discord" if is_discord(channel) else "whisper" if channel == "whisper"
+            else "game")
 
 
 class Pipeline:
@@ -1535,9 +1565,7 @@ class Pipeline:
         review-332, review-340): a woman who may not flirt with him there draws none, so the
         beat is never leant toward a want it does not offer."""
         hg, channel = self.human.guid, turn.channel
-        family = ("group" if is_group(channel) else "dm" if channel.startswith(DM_PREFIX)
-                  else "discord" if is_discord(channel) else "whisper" if channel == "whisper"
-                  else "game")
+        family = _family(channel)
         lp = meta.life_presence
         rel = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
         dial = self.cfg.romance.dial
@@ -1612,6 +1640,172 @@ class Pipeline:
         meta.intent, meta.want_source = want.value, "draw"
         log.info("talk_want: guid=%d kind=%s want=%s source=draw owed=%d", turn.speaker,
                  turn.kind.value, want.value, ctx.owed)
+
+    # -- her reply's shape (human-likeness core, plan Task 9) ----------------------------------
+
+    def _draw_shape(self, turn: Turn, meta: TurnMeta, p: Persona, now: float, *,
+                    voiced: bool = False) -> None:
+        """Her reply's shape ([talk] shape, talk/shape.py), drawn after her want and state
+        (_draw_situation) as she starts composing, on a turn that gets a want (_want_eligible:
+        the five kinds the shape table names, so every other kind keeps today's length) and is
+        typed: never a voiced line, nor a line of a conversation that owns its line count
+        (meta.single_line: banter, the 24/7 server's), nor a DM with [talk] dm_mirror 0 (today's
+        DM, as full as she likes). One draw seeded by (shape, night, her, the minute, his line or
+        post), a stream of its own: never the engine's rng nor the want's. Sets turn.shape and
+        meta.shape_ctx; a game shape of two lines takes two (turn.max_lines; _compose_prompt
+        sets meta.two_lines), a Discord burst is split by realism (meta.burst). An answer he is
+        owed is never left on read, a reaction or a word or two (talk.shape's rows; Review Focus
+        4): a draw of one leaves the turn on today's length. A reaction with no message to react
+        to is a word or two. Logs `talk_shape: guid= kind= shape= words= owed=` (codes only); a
+        failure is logged by its class and leaves the turn as it would be without it."""
+        turn.shape, meta.shape_ctx = None, None
+        if meta.shape_saved is not None:  # spoken again (held, without its photo): as before
+            turn.max_lines, meta.burst = meta.shape_saved
+            meta.shape_saved = None
+        talk = getattr(self.cfg, "talk", None)
+        if (getattr(talk, "shape", False) is not True or voiced or meta.single_line
+                or not self._want_eligible(turn, meta)):
+            return
+        try:
+            self._shape(turn, meta, p, now, talk)
+        except Exception as e:  # her shape is colour: nothing in it may cost him an answer
+            turn.shape, meta.shape_ctx = None, None
+            log.warning("talk_shape_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
+
+    def _shape(self, turn: Turn, meta: TurnMeta, p: Persona, now: float, talk) -> None:
+        family = _family(turn.channel)
+        mirror = talk.dm_mirror
+        if family == "dm" and mirror <= 0:
+            return
+        hg = self.human.guid
+        owed = owes_him(self, turn, meta)
+        # his message's words (a carried DM's: his whisper, _his_line), for a DM's mirror
+        his_words = meta.his_words or len(self._his_line(turn, meta).split())
+        late_by = now - meta.heard_at if family in GAME_FAMILIES and meta.heard_at else 0.0
+        rel = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
+        # the explicit whisper band (as _compose_prompt reads it): at least two lines
+        two = bool(hg and turn.addressee == hg and turn.max_lines > 1 and explicit_whisper(
+            p, rel, dial=self.cfg.romance.dial, channel=turn.channel))
+        lp = meta.life_presence
+        ctx = ShapeContext(
+            family=family, kind=turn.kind, owed=owed,
+            intent=Intent(meta.intent) if meta.intent else None, typing=p.typing,
+            attention=lp.attention if lp is not None else None, state=meta.state,
+            late_by=max(0.0, late_by), his_words=his_words, discord_words=talk.discord_words,
+            dm_words=talk.dm_words, dm_mirror=mirror,
+            realism=self.realism.eligible(self, turn, meta), two_lines=two)
+        local = self.clock.local()
+        trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
+                                        else 0) or 0
+        rng = seeded("shape", night_of(local), turn.speaker, local.hour * 60 + local.minute,
+                     trigger)
+        draw = draw_shape(ctx, rng)
+        if draw.shape is Shape.REACTION and not self._reacts_to(turn, meta):
+            draw = ShapeDraw(Shape.ONE_WORD, rng.randint(1, 3), 1, ONE_WORD_NUM_PREDICT)
+        if owed and draw.shape in (Shape.LEAVE, Shape.REACTION, Shape.ONE_WORD):
+            return  # never drawn for him (talk/shape.py ROWS); today's length if it ever were
+        turn.shape, meta.shape_ctx = draw, ctx
+        meta.shape_saved = (turn.max_lines, meta.burst)
+        if draw.shape is Shape.BURST and family in DISCORD_FAMILIES:
+            meta.burst = True
+        elif family in GAME_FAMILIES and draw.lines >= 2:
+            turn.max_lines = max(2, turn.max_lines)
+        log.info("talk_shape: guid=%d kind=%s shape=%s words=%d owed=%d", turn.speaker,
+                 turn.kind.value, draw.shape.value, draw.words, owed)
+
+    def _reacts_to(self, turn: Turn, meta: TurnMeta) -> bool:
+        """A reaction has a message to go on: a Discord or group channel turn that replies to
+        one (meta.discord.reply_to)."""
+        return (is_discord(turn.channel) and meta.discord is not None
+                and bool(meta.discord.reply_to))
+
+    async def _shape_react(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        """A REACTION shape: her emoji on the message she would answer, with no model call, as
+        the 24/7 server's reactor picks one (server.reacting.pick_emoji by its words and her tie
+        to its author, seeded by (react, night, her, the minute, the message), from its palette:
+        no 👍 on a complaint). As that reactor, a feud never reacts and a rival only 🙄 at her
+        drama dial 7 or more: else the message is left on read (review of #343, P2-2). Recorded
+        with guard_verdict "react" and the row dropped `reacted` once the reaction is posted;
+        one _guard_react could not post is dropped `react_skipped`."""
+        from leeroy_mind.guards.review import FILLER, REACTIONS
+        from leeroy_mind.server.reacting import PALETTE, pick_emoji
+        from leeroy_mind.server.state import tie_kind
+        from leeroy_mind.tuning.effective import dials_of
+        target = meta.discord.reply_to
+        row = self.store.conn.execute(
+            "SELECT author, text FROM discord_message WHERE id = ? AND deleted IS NULL",
+            (target,)).fetchone()
+        author, text = (row[0], row[1]) if row is not None else (0, "")
+        local = self.clock.local()
+        rng = seeded("react", night_of(local), turn.speaker, local.hour * 60 + local.minute,
+                     target)
+        tie = tie_kind(self.store.conn, turn.speaker, author) if author else "neutral"
+        p = self.personas.get(turn.speaker)
+        emoji = pick_emoji(text or "", tie, rng)
+        if emoji is None or (tie == "rival" and (p is None or dials_of(p).level("drama") < 7)):
+            return self._drop(turn, meta, LEFT_ON_READ)  # as the server's reactor: no reaction
+        self._phase(turn, None)  # nobody is typing a reaction
+        allowed = {*REACTIONS, *(v[1] for v in FILLER.values()),
+                   *(e for emojis in PALETTE.values() for e in emojis)}
+        if not await self._guard_react(turn, meta, emoji, allowed):
+            return self._drop(turn, meta, REACT_SKIPPED)
+        meta.guard_verdict = "react"
+        return self._drop(turn, meta, REACTED)
+
+    def _shape_text(self, turn: Turn, meta: TurnMeta, *, situation: bool, forms) -> str:
+        """The length line of the turn's shape (talk.shape.shape_line; "" without one), noted as
+        talk.shape.<shape> for the recipe (review of #333, requirement 8). [talk] situation off:
+        a shape of more lines says it is more than her usual one, which comms_rules states
+        (requirement 7). LATE says where she was when he wrote (meta.life_presence, her game
+        presence then: life.presence.away_words), in the present while she is still there as
+        "Right now" says, never against a "Right now" at her PC playing, and "these" when he
+        wrote more than once (a coalesced whisper's answer, review-336). A failure is logged
+        `talk_shape_failed` by its class and the turn goes on without a shape (review of #343,
+        P3-2)."""
+        try:
+            return self._shape_words_line(turn, meta, situation=situation, forms=forms)
+        except Exception as e:  # her shape is colour: nothing in it may cost him an answer
+            turn.shape, meta.shape_ctx = None, None
+            log.warning("talk_shape_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
+            return ""
+
+    def _shape_words_line(self, turn: Turn, meta: TurnMeta, *, situation: bool, forms) -> str:
+        draw, ctx = turn.shape, meta.shape_ctx
+        if not isinstance(draw, ShapeDraw) or not isinstance(ctx, ShapeContext):
+            return ""
+        excuse, still, several = "", False, False
+        if draw.shape is Shape.LATE:
+            lp = meta.life_presence if self._life_on() else None
+            playing = self.world.human_online and self.world.in_group(turn.speaker)
+            if lp is not None and not playing:
+                excuse = away_words(lp, "game")
+                still = lp.block in STILL_THERE and bool(self._where_line(turn, meta))
+            several = self._several(turn, meta)
+        usual = not situation
+        from leeroy_mind.prompts import note_template
+        note_template("talk.shape." + draw.shape.value,
+                      shape_template(draw, ctx, excuse=bool(excuse), still=still,
+                                     several=several, usual=usual))
+        return shape_line(draw, ctx, forms=forms, excuse=excuse, still=still, several=several,
+                          usual=usual)
+
+    def _several(self, turn: Turn, meta: TurnMeta) -> bool:
+        """He wrote again while her answer waited: a coalesced whisper's answer answers his
+        newest line (talk.engine._life_waiting), later than the one she first heard."""
+        if not turn.trigger_line or not meta.heard_at:
+            return False
+        rows = self.store.chat_lines([turn.trigger_line])
+        return bool(rows) and rows[0].ts > meta.heard_at
+
+    def _shape_words(self, turn: Turn, *, discord: bool) -> int:
+        """The words the turn's shape holds (0 without one): a word or two's ONE_WORD_WORDS in
+        game and the few-words band on Discord, else the draw's."""
+        draw = turn.shape
+        if not isinstance(draw, ShapeDraw) or draw.shape in (Shape.LEAVE, Shape.REACTION):
+            return 0
+        if draw.shape is Shape.ONE_WORD:
+            return SHORT_WORDS if discord else ONE_WORD_WORDS
+        return draw.words
 
     def _where_line(self, turn: Turn, meta: TurnMeta) -> str:
         """Where she is, as "Right now" says it ([life] availability above 0, her presence on
@@ -2032,7 +2226,19 @@ class Pipeline:
         if romance:  # a line or two, unless the turn holds one (her answer to his pushback)
             two = turn.max_lines > 1 and explicit_whisper(p, rel_h, dial=dial,
                                                           channel=turn.channel)
-        meta.two_lines = two
+        # her reply's shape ([talk] shape, _draw_shape; never in a preview): its length line
+        # (_shape_text; on a failure the turn goes on without a shape, today's length), and a
+        # game shape of two lines (a burst, the explicit band's) takes both, whatever her split
+        # rate
+        situation = getattr(self.cfg.talk, "situation", False) is True
+        forms = human.forms if to_human else THEY_FORMS
+        shaped = turn.shape if live and isinstance(turn.shape, ShapeDraw) else None
+        shape_text = (self._shape_text(turn, meta, situation=situation, forms=forms)
+                      if shaped is not None else "")
+        if not isinstance(turn.shape, ShapeDraw):
+            shaped = None
+        meta.two_lines = two or bool(shaped is not None and shaped.lines >= 2
+                                     and not self._discord_words(turn))
         real = ""
         if (close and not preview and self._human_in_talk(turn, recent)
                 and self._real_name_hold is None
@@ -2069,26 +2275,34 @@ class Pipeline:
                 meta.phrase_hint = named
                 after = " ".join(x for x in (after, phrase_hint(named)) if x)
         # [talk] situation (core plan Task 8): the hard rules, Right now by the instruction, and
-        # every situation template's length from here (situation_length)
-        situation = getattr(self.cfg.talk, "situation", False) is True
+        # every situation template's length from here (situation_length); [talk] shape (core
+        # plan Task 9): the drawn shape's length line in the place of every other length
+        # (render_instruction's length_text wins over the Discord one and `long`)
         words = self._discord_words(turn)
+        length_text = shape_text
+        if not length_text and situation:
+            length_text = situation_length(turn.kind, channel=turn.channel, words=words,
+                                           typing=p.typing, two_lines=two)
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
             extra=" ".join(x for x in (turn.instruction, follow, seen, story, lore, quest,
                                        *ends) if x),
-            forms=human.forms if to_human else THEY_FORMS, after=after, tail=tail, long=two,
+            forms=forms, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN,
-            channel=turn.channel, discord_words=words,
-            length_text=situation_length(turn.kind, channel=turn.channel, words=words,
-                                         typing=p.typing, two_lines=two) if situation else "",
+            channel=turn.channel, discord_words=words, length_text=length_text,
             situation=situation, typing=p.typing)
         # her day ([life] availability above 0: her own clock and where she is; never in a raid
         # call) and her feeling ([life] state; how she feels about him only on a turn of his)
         today, where = day_line(local, p.identity.region), self._where_line(turn, meta)
         if self._life_on() and meta.life_presence is not None:
             today = day_line(local_time(local, p.identity.region), p.identity.region)
-        feels = (life_state.words(meta.state, to_him=self._aimed_at_him(turn), forms=human.forms)
+        # with a shape drawn, how chatty she feels is the shape's to say (review-340, D22), and
+        # "a bit short" never sits beside a burst or a paragraph (review of #343, P3-7)
+        feels = (life_state.words(meta.state, to_him=self._aimed_at_him(turn), forms=human.forms,
+                                  talkative=shaped is None,
+                                  curt=shaped is None or shaped.shape not in (Shape.BURST,
+                                                                             Shape.PARAGRAPH))
                  if meta.state is not None else "")
         rules_of = situation_rules if situation else comms_rules
         chat_notes, pair_notes = {}, {}
@@ -2127,6 +2341,9 @@ class Pipeline:
             meta.learning = await prepare(self, turn, meta, p, now=now)
             if meta.learning is not None and meta.intent:
                 yield_families(meta.learning, {"tease"})  # her want says whether she teases
+            if meta.learning is not None and shaped is not None:
+                # her shape says how long, whether she asks back and whether she adds a thought
+                yield_families(meta.learning, SHAPE_YIELDS)
             if meta.learning is not None:
                 parts.style = [entry[2] for entry in meta.learning.entries]
         if self.cfg.talk.aware or meta.review_required:
@@ -2489,6 +2706,11 @@ class Pipeline:
                     if meta.photo is not None:
                         turn.instruction += '\n' + meta.photo.instruction
                     self._draw_situation(turn, meta, p, now)
+                    self._draw_shape(turn, meta, p, now, voiced=voiced)
+                    if turn.shape is not None and turn.shape.shape is Shape.LEAVE:
+                        return self._drop(turn, meta, LEFT_ON_READ)  # read, not answered
+                    if turn.shape is not None and turn.shape.shape is Shape.REACTION:
+                        return await self._shape_react(turn, meta)
                     c = await self._compose(turn, meta, live=True)
             except ValueError as e:  # a turn the instruction can't be written for
                 log.warning("talk_bad_turn: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
@@ -2861,26 +3083,32 @@ class Pipeline:
         meta.guard_verdict = "drop"
         return self._drop(turn, meta, "guard_phrase_refused", meta.memory_ids)
 
-    async def _guard_react(self, turn, meta, reaction):
+    async def _guard_react(self, turn, meta, reaction, allowed=None) -> bool:
+        """Her reaction instead of a line: True once it is posted (a Discord reaction added, a
+        game emote acked). On Discord the emoji is kept within `allowed` (the guards' reactions
+        and filler emojis when None), else a 👍; the reply shape passes the server reactor's
+        code-chosen palette as well (review of #343, P2-2)."""
         self._release_photo(meta, 'reaction')
         # A private game whisper has no private emote transport. It stays silent.
         if turn.channel == "whisper" or meta.elsewhere or meta.why == "hotmic":
-            return
+            return False
         async with self._timed_send_lock(meta):
             if (not _scope_valid(meta) or not self.live_review.valid(turn, meta)
                     or self._blocked(turn, meta, self.clock.now(), first=True)):
-                return
+                return False
             if is_discord(turn.channel):
                 from leeroy_mind.discord.store import react
                 from leeroy_mind.guards.review import FILLER, REACTIONS
                 target = meta.discord.reply_to if meta.discord else None
                 if target is None:
-                    return
+                    return False
+                if allowed is None:
+                    allowed = {*REACTIONS, *(v[1] for v in FILLER.values())}
                 try:
                     server = getattr(getattr(self, 'server_app', None), 'server', None)
                     with self.store.transaction() if server is not None else nullcontext():
                         added = react(self.store, target, member=turn.speaker,
-                              emoji=reaction if reaction in {*REACTIONS, *(v[1] for v in FILLER.values())}
+                              emoji=reaction if reaction in allowed
                               else "👍", now=self.clock.now())
                         if server is not None and added:
                             from leeroy_mind.server.records import BadDayCounter, increment
@@ -2889,17 +3117,20 @@ class Pipeline:
                             except BadDayCounter:
                                 pass  # a broken server budget never takes his reaction away
                 except DiscordRefused:
-                    return
+                    return False
+                if not added:
+                    return False
             else:
                 try:
                     ack = await self.send(Emote(id="", guid=turn.speaker,
                         emote="laugh" if reaction == "😄" else "nod", target_guid=meta.emote_target))
                 except BridgeError:
-                    return
+                    return False
                 if not ack.ok:
-                    return
+                    return False
             (meta.guards or self.guards).record(meta.turn_id, turn.speaker, self.clock.now(),
                                                turn.kind, initiated=meta.initiates)
+            return True
 
     async def _realistic_sleep(self, turn: Turn, seconds: float) -> None:
         """Refresh the dots during long waits without extending the planned duration."""
@@ -3147,6 +3378,10 @@ class Pipeline:
                 if expired:
                     raise Expired(turn.deadline)
                 options = dict(preset.options)
+                shape = turn.shape
+                if (not words and isinstance(shape, ShapeDraw) and shape.num_predict is not None):
+                    # a game reply shape's room ([talk] shape: a word or two's) caps the preset's
+                    options['num_predict'] = min(options.get('num_predict', 80), shape.num_predict)
                 if (not is_discord(turn.channel) and meta is not None and meta.learning is not None
                         and meta.learning.num_predict is not None):
                     options['num_predict'] = min(options.get('num_predict', 80), meta.learning.num_predict, 80)
@@ -3567,7 +3802,10 @@ class Pipeline:
             hints.append(GAME_NAME_HINT)
         if "self name" in reasons:
             hints.append(SELF_NAME_HINT.format(name=p.character_name))
-        if "long" in reasons and words:
+        if ("long" in reasons and turn is not None and isinstance(turn.shape, ShapeDraw)
+                and turn.shape.shape is Shape.ONE_WORD):
+            hints.append(ONE_WORD_HINT)
+        elif "long" in reasons and words:
             hints.append(DISCORD_LONG_HINT.format(words=words))
         elif "long" in reasons:
             lo, hi = p.typing.words_per_line
@@ -3578,10 +3816,14 @@ class Pipeline:
         """The words a longer Discord message of this turn's holds (talk/discord_length.py): a DM
         with him its [talk] dm_words, another Discord channel its discord_words cut to the band
         the turn drew once (so its wording, room, typing and trim agree); 0 for a game turn,
-        which never reads it, or with the setting at 0."""
+        which never reads it, or with the setting at 0. A turn with a reply shape ([talk] shape,
+        Turn.shape) holds its shape's words (_shape_words), so its wording, room, the "long" tell,
+        fit_words and its typing follow the shape."""
         if not is_discord(turn.channel):
             return 0
         words = words_for(getattr(self.cfg, "talk", None), turn.channel)
+        if words and (shaped := self._shape_words(turn, discord=True)):
+            return shaped
         if not words or is_private(turn.channel):
             return words
         if turn.discord_draw is None:
@@ -3602,11 +3844,17 @@ class Pipeline:
 
     def _word_budget(self, turn: Turn, p: Persona, two_lines: bool = False) -> int:
         """How many words this turn's lines hold for the speaker now: a longer Discord
-        message's discord_words, whatever her game line."""
+        message's discord_words, whatever her game line. A game reply shape ([talk] shape) holds
+        her line's cap on each of its lines, and a word or two ONE_WORD_WORDS: the shape's line
+        steers her length, and the "long" tell only catches a line past her habit, so a short
+        shape is not asked again for a line she would type (Review Focus 4)."""
         if words := self._discord_words(turn):
             return words
         cap = line_cap(p.typing, effects_for(self._altered_of(turn.speaker), turn.kind),
                        PHASE_MODS[day_phase(self.clock.local())].length_mult)
+        if self._shape_words(turn, discord=False):
+            draw = turn.shape
+            return ONE_WORD_WORDS if draw.shape is Shape.ONE_WORD else cap * max(1, draw.lines)
         lines = (turn.max_lines if turn.kind is TurnKind.BIT or two_lines
                  else turn_lines(p.typing, turn.max_lines))
         return cap * max(1, lines)
