@@ -124,6 +124,7 @@ from leeroy_mind.talk.select import (OPEN_THREAD_S, SpeakerContext, has_reason, 
 from leeroy_mind.talk.states import (EFFECTS, RAID_CALLS, Altered, Effects, effects_for,
                                      substance_of)
 from leeroy_mind.talk.seasons import day_line
+from leeroy_mind.memory.thirdparty import for_him as third_party
 from leeroy_mind.talk.hisline import bad_news, goodbye
 from leeroy_mind.talk import sofar
 from leeroy_mind.talk.shape import (DISCORD_FAMILIES, GAME_FAMILIES, ONE_WORD_NUM_PREDICT, Shape,
@@ -2395,7 +2396,14 @@ class Pipeline:
                 turn.speaker, turn.channel, turn.to_guid, **bond_options)
             memories = [*pinned, *memories][:5]
         if apart:
-            memories = _far_memories(memories, hg, self._his_names())
+            memories = _far_memories(memories, hg, [*self._his_names(), human.real_name])
+        if (not preview and hg and turn.to_guid == hg and turn.speaker != hg
+                and is_private(turn.channel)):
+            # he is the only "he" in a private prompt with him: a memory whose "he" is someone
+            # else names them or stays out (memory/thirdparty.py)
+            memories = third_party(memories, owner=turn.speaker, hg=hg, forms=human.forms,
+                                   his_names=[*self._his_names(), human.real_name],
+                                   names=self._names())
 
         state = self.store.get_state(turn.speaker, lens=True)
         altered = self._altered_of(turn.speaker)
