@@ -381,6 +381,8 @@ class MindApp:
         # mind.toml as read, and what runs: it with the owner's world dials stored in mind.db
         # (tuning.world), which never write mind.toml
         self.file_cfg = cfg
+        from .heat.live import attach as attach_heat
+        self.heat = attach_heat(self)  # [heat] enabled: off attaches nothing (today's paths)
         self.cfg = cfg = merge_world(cfg, self.personas.tuning)
         stored = self.store.get_meta("human_guid")
         self._human_named = bool(type(stored) is str and len(stored) <= 10
@@ -417,6 +419,7 @@ class MindApp:
             clock=self.clock, rng=self.rng, send=self._send, human_guid=self._human,
             on_line_sent=self._on_line_sent, facts=self.facts,
             items=ItemLinker.for_library(self.library, self.clock.now))
+        self.engine.heat = self.heat
         self.bridge = BridgeClient(cfg.bridge.host, cfg.bridge.port, self.handle,
                                    clock=self.clock, on_connection=self._on_connection)
         self._row_delivery: _RowDelivery | None = None
@@ -986,6 +989,8 @@ class MindApp:
             self.engine.items.native = NATIVE_FEATURE in ev.features
         log_event("bridge_hello", server=ev.server, version=ev.version,
                   human_online=bool(ev.human_guid), features=",".join(ev.features) or "-")
+        if self.heat is not None:
+            self.heat.on_hello(bool(ev.human_guid))
         if ev.human_guid:
             if self._session_id is None:
                 left = self.store.open_session()  # a crash or restart left it open
@@ -1591,6 +1596,8 @@ class MindApp:
         await self._step("bridge", self.bridge.close())
         await _cancel_wait([self._loops.get("bridge")])
         await _cancel_wait(list(self._offline_tasks))  # any begun after step 1 took its list
+        from .heat.live import detach as detach_heat
+        detach_heat(self.heat)
         self._closed = True
         self.running = False
         try:

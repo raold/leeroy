@@ -295,6 +295,8 @@ class TalkEngine(EmoteReactions):
         whispers still owed is kept in meta for the next start (OwedWatch.persist). `stopping`
         None reads TalkEngine.stopping, which the app sets as its shutdown begins."""
         stopping = self.stopping if stopping is None else stopping
+        if self.heat is not None and not stopping:
+            self.heat.on_logout()  # a session override said in game ends with his session
         carried = set()
         if stopping:
             if (owed := getattr(self, "owed", None)) is not None and self.life.availability > 0:
@@ -331,6 +333,8 @@ class TalkEngine(EmoteReactions):
             row.channel if row.channel.startswith("voice:") else None)  # a line he spoke
         if reply_to is None:
             return
+        if self.heat is not None and row.channel == "whisper" and row.to_guid:
+            self.heat.his_line(row.to_guid, row.text)  # "keep it clean tonight" (heat.session)
         if row.channel in COMMAND_CHANNELS and looks_like_bot_command(row.text):
             return
         now = self.clock.now()
@@ -1153,6 +1157,8 @@ class TalkEngine(EmoteReactions):
                         max_lines=bit.lines, delay=delay), meta
         hg = self.human.guid
         chance = flirt_chance(p, self._effects(speaker).candour)
+        if self.heat is not None and chance > 0:  # [heat]: how often she starts it
+            chance *= self.heat.resolve(p, channel=channel, lead=False).starts
         if hg and chance > 0 and self.world.human_online and not self.world.human_idle(
                 now, HUMAN_ACTIVE_S) and self.rng.random() < chance:
             return Turn(kind=TurnKind.FLIRT, speaker=speaker, channel=channel, addressee=hg,

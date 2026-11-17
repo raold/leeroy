@@ -115,6 +115,7 @@ class IntentContext:
     # her forward / flirty dial (tuning), as romance.forward gives it: 0-2, 1 as written. It
     # scales flirt, which only a turn to him can draw (review-332)
     forward: float = 1.0
+    reassure: bool = True  # [heat]: at heat 0 she seeks no reassurance about the two of them
 
 
 def _row(vent=0.0, share=0.0, ask=0.0, tease=0.0, flirt=0.0, reassure_seek=0.0, gossip=0.0,
@@ -203,7 +204,7 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
     attitude = ctx.female and ctx.to_him and ctx.stance in STANCE_FLIRT
     w[Intent.FLIRT] *= STANCE_FLIRT[ctx.stance] if attitude else 0.0
     w[Intent.FLIRT] *= max(0.0, ctx.forward)  # her forward dial: at 0 she draws no flirt
-    if not attitude:
+    if not attitude or not ctx.reassure:
         w[Intent.REASSURE_SEEK] = 0.0
     elif ctx.attachment == "anxious":
         w[Intent.REASSURE_SEEK] *= 2

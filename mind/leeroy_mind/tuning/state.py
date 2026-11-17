@@ -15,7 +15,7 @@ from typing import Mapping
 from . import edits as E
 from . import groups as G
 from . import nudges as N
-from .dials import MEMBER_DIALS, WORLD_DIALS, applies, base_value, bounds
+from .dials import HEAT, MEMBER_DIALS, WORLD_DIALS, applies, base_value, bounds
 from .effective import NEUTRAL, MemberTuning, effective
 
 TABLES = ("tuning_group", "tuning_change", "tuning_row", "tuning_value")
@@ -41,6 +41,11 @@ class Tuning:
     human: int = 0
     nudges: tuple[N.Nudge, ...] = ()
     edits: tuple[dict, ...] = ()  # godmode persona overlays in force (tuning.edits.load)
+    # heat (leeroy_mind.heat): the world value (None: it follows [romance] dial), each group's
+    # offset by target and each member's pinned offset. Never folded into a persona.
+    heat_world: int | None = None
+    heat_groups: Mapping[str, int] = field(default_factory=lambda: _frozen({}))
+    heat_pins: Mapping[int, int] = field(default_factory=lambda: _frozen({}))
 
     @property
     def empty(self) -> bool:
@@ -48,7 +53,8 @@ class Tuning:
 
     @property
     def needs_cast(self) -> bool:
-        targets = set(self.offsets) | {n.target for n in self.nudges if n.target_kind == "group"}
+        targets = (set(self.offsets) | set(self.heat_groups)
+                   | {n.target for n in self.nudges if n.target_kind == "group"})
         return any(G.uses_cast(self.groups[t].where) for t in targets if t in self.groups)
 
     # -- reading -------------------------------------------------------------------------------
@@ -72,10 +78,18 @@ class Tuning:
                 continue  # a row this code cannot read never matches anyone
             groups[str(r[0])] = G.Group(str(r[0]), r[1], where, created=float(r[3]))
         world, offsets, pins, versions = {}, {}, {}, {}
+        heat_world, heat_groups, heat_pins = None, {}, {}
         for scope, target, dial, value, version in conn.execute(
                 "SELECT scope,target,dial,value,persona_version FROM tuning_value "
                 "ORDER BY scope,target,dial"):
-            if scope == "world" and dial in WORLD_DIALS:
+            if dial == HEAT:
+                if scope == "world":
+                    heat_world = value
+                elif scope == "group" and target in groups:
+                    heat_groups[target] = value
+                elif scope == "member" and target.isdigit():
+                    heat_pins[int(target)] = value
+            elif scope == "world" and dial in WORLD_DIALS:
                 world[dial] = value
             elif scope == "group" and dial in MEMBER_DIALS and target in groups:
                 offsets.setdefault(target, {})[dial] = value
@@ -87,7 +101,19 @@ class Tuning:
                    offsets=_frozen({t: _frozen(d) for t, d in offsets.items()}),
                    pins=_frozen({g: _frozen(d) for g, d in pins.items()}),
                    pin_versions=_frozen(versions), human=human, nudges=N.load(conn, time.time() if now is None else now),
-                   edits=E.load(conn, time.time() if now is None else now))
+                   edits=E.load(conn, time.time() if now is None else now),
+                   heat_world=heat_world, heat_groups=_frozen(heat_groups),
+                   heat_pins=_frozen(heat_pins))
+
+    # -- heat ----------------------------------------------------------------------------------
+
+    def heat_of(self, p, member=None) -> tuple[int | None, int]:
+        """(the offset pinned for this member or None, the sum of their groups' offsets); (None,
+        0) for the owner's own character and no persona."""
+        if p is None or p.guid == self.human:
+            return None, 0
+        groups = sum(self.heat_groups.get(t, 0) for t in self.groups_of(p, member))             if self.heat_groups else 0
+        return self.heat_pins.get(p.guid), groups
 
     # -- folding -------------------------------------------------------------------------------
 
@@ -138,6 +164,14 @@ class Tuning:
 
     def with_value(self, scope: str, target: str, dial: str, value: int | None) -> "Tuning":
         """This tuning with one value set (None: cleared), not stored."""
+        if dial == HEAT:
+            if scope == "world":
+                return replace(self, heat_world=value)
+            rows = dict(self.heat_groups if scope == "group" else self.heat_pins)
+            key = target if scope == "group" else int(target)
+            rows.pop(key, None) if value is None else rows.__setitem__(key, value)
+            return replace(self, **{"heat_groups" if scope == "group" else "heat_pins":
+                                    _frozen(rows)})
         if scope == "world":
             world = dict(self.world)
             world.pop(dial, None) if value is None else world.__setitem__(dial, value)
@@ -154,6 +188,11 @@ class Tuning:
         return replace(self, pins=_frozen({g: _frozen(d) for g, d in pins.items() if d}))
 
     def value_of(self, scope: str, target: str, dial: str) -> int | None:
+        if dial == HEAT:
+            if scope == "world":
+                return self.heat_world
+            return (self.heat_groups.get(target) if scope == "group"
+                    else self.heat_pins.get(int(target)))
         if scope == "world":
             return self.world.get(dial)
         if scope == "group":

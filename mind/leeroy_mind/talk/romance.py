@@ -413,28 +413,66 @@ def effective_band(stance: str, stage: str, dial: int) -> Band | None:
     return BANDS[min(BANDS.index(band(dial)), reach + STAGE_DEPTH.get(stage, 0))]
 
 
-def explicit_whisper(p: Persona, rel: Relationship | None, *, dial: int, channel: str) -> bool:
+# With [heat] on (leeroy_mind.heat) the wording has one tier more: frank, between suggestive and
+# explicit. Her own place on the ladder is still her attitude's reach plus her stage's depth (a
+# reach of 3 is the top, explicit); the heat's tier is the ceiling over it.
+HEAT_BANDS = ("warm", "flirty", "suggestive", "frank", "explicit")
+
+
+def heat_band(stance: str, stage: str, hr) -> str | None:
+    """effective_band under heat: `hr` is the member's heat.Resolved for this turn. None for
+    stance "none" and at the tier "none" (heat 0: no romance wording at all). At heat 9 it is
+    effective_band at dial 9, and at every tier but frank it is effective_band at the tier's
+    own dial."""
+    reach = ATTITUDE_REACH.get(stance)
+    if reach is None or hr.tier not in HEAT_BANDS:
+        return None
+    if stance == "drawn" and hr.dial >= NO_BRAKES_DIAL:
+        reach += 1
+    pos = min(len(BANDS) - 1, reach + STAGE_DEPTH.get(stage, 0))
+    pos = len(HEAT_BANDS) - 1 if pos == len(BANDS) - 1 else pos
+    return HEAT_BANDS[min(pos, HEAT_BANDS.index(hr.tier))]
+
+
+def turn_band(p: Persona, rel: Relationship | None, dial: int, hr=None) -> str | None:
+    """How far her wording goes on this turn: effective_band at her dial, or under heat (`hr`,
+    which then stands in for every dial) heat_band."""
+    stage = rel.romance_stage if rel is not None else "none"
+    if hr is not None:
+        return heat_band(p.romance.stance, stage, hr)
+    return effective_band(p.romance.stance, stage, dial_for(p, dial))
+
+
+def explicit_whisper(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
+                     hr=None) -> bool:
     """Her romance in a whisper to him is at the explicit band: the whisper overlay is read,
-    and her reply may run to a line or two. `dial` is the owner's; her own replaces it."""
+    and her reply may run to a line or two. `dial` is the owner's; her own replaces it; `hr`
+    (heat) replaces both."""
     if channel != "whisper" or not _is_woman(p):
         return False
-    stage = rel.romance_stage if rel is not None else "none"
-    return effective_band(p.romance.stance, stage, dial_for(p, dial)) == "explicit"
+    return turn_band(p, rel, dial, hr) == "explicit"
 
 
 def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
                  data_dir: Path, forms: tuple[str, str, str],
-                 rng: random.Random | None = None, realism: bool = False) -> str:
+                 rng: random.Random | None = None, realism: bool = False, hr=None) -> str:
     """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt; one of
     its variants, the first without `rng`), capped like the band overlays, then the stage's
     distance frame filled with his `forms` (HumanIdentity.forms), for a whisper to him at the
     explicit band; "" otherwise or when there is no overlay (the band as before). The pipeline
     puts it after the turn's instruction; romance_instruction then leaves the frame out
     (`tail_follows`), so it is said once, after his overlay. `realism`: the realism frame
-    (distance_text)."""
-    if not explicit_whisper(p, rel, dial=dial, channel=channel):
+    (distance_text). Under heat (`hr`) the tier's own tail is read (heat.overlays.tail_variants:
+    the explicit tier's as before, the frank tier's heat/frank_whisper.txt)."""
+    if hr is not None:
+        if channel != "whisper" or not _is_woman(p):
+            return ""
+        from leeroy_mind.heat import overlays
+        variant = _pick(overlays.tail_variants(turn_band(p, rel, dial, hr) or "", data_dir), rng)
+    elif not explicit_whisper(p, rel, dial=dial, channel=channel):
         return ""
-    variant = _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng)
+    else:
+        variant = _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng)
     if not variant:
         return ""
     they, them, their = forms
@@ -444,16 +482,19 @@ def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: st
 
 
 def dm_explicit(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
-                data_dir: Path) -> bool:
+                data_dir: Path, hr=None) -> bool:
     """A Discord DM with him at the explicit band, with the owner's romance_explicit overlay to
     read there: his explicit overlay in a DM, as whisper_tail's is in a whisper (PM log D13,
     the review-340 S1 ruling: the brakes intent.TAIL_OFF lists are off under either). `dial` is
     the owner's; her own replaces it."""
     if not is_private(channel) or channel == "whisper" or not _is_woman(p):
         return False
-    stage = rel.romance_stage if rel is not None else "none"
-    return (effective_band(p.romance.stance, stage, dial_for(p, dial)) == "explicit"
-            and bool(overlay_variants("romance_explicit", data_dir)))
+    if turn_band(p, rel, dial, hr) != "explicit":
+        return False
+    if hr is not None:
+        from leeroy_mind.heat import overlays
+        return overlays.has_explicit(data_dir)
+    return bool(overlay_variants("romance_explicit", data_dir))
 
 
 def passage_key(stage: str) -> str:
@@ -599,9 +640,11 @@ def _band_text(b: Band, data_dir: Path, rng: random.Random | None = None) -> str
     return BUILTIN_ROMANCE["explicit"]
 
 
-def attitude_text(p: Persona) -> str:
+def attitude_text(p: Persona, full: bool | None = None) -> str:
     """Her attitude's line, as forward as her extraversion: lust bold from 7 (or at her own
-    dial 10), quiet to 3, open between; drawn bold from 6."""
+    dial 10), quiet to 3, open between; drawn bold from 6. `full`: under heat, whether her heat
+    is the top one (it stands in for her own dial 10)."""
+    full = own_dial(p) == FULL_DIAL if full is None else full
     variants = ATTITUDE_TEXT[p.romance.stance]
     ext = p.big_five.extraversion.score
     level = dials_of(p).values.get("forward")
@@ -609,7 +652,7 @@ def attitude_text(p: Persona) -> str:
             level >= FORWARD_BOLD or level <= FORWARD_QUIET):
         return variants["bold" if level >= FORWARD_BOLD else "quiet"]
     if p.romance.stance == "lust":
-        key = ("bold" if ext >= 7 or own_dial(p) == FULL_DIAL
+        key = ("bold" if ext >= 7 or full
                else "quiet" if ext <= 3 else "open")
     elif p.romance.stance == "drawn":
         key = "bold" if ext >= 6 else "quiet"
@@ -653,7 +696,7 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
                         tail_follows: bool = False, scene: Sequence[str] = (),
                         arc_lines: Sequence[str] = (), rival: str = "",
                         cooling: bool = False, realism: bool = False,
-                        heat: bool = False) -> str | None:
+                        heat: bool = False, hr=None) -> str | None:
     """The romance text for a turn by `p` (rel is p's relationship to the human), or None
     when p is a man, has no attitude toward him or is not talking to him. The human is named
     by human.called with his pronouns from human.forms; his real name never appears here. A
@@ -673,18 +716,27 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
     `realism` ([romance] realism): the stage's passage and her heat only when `heat` (his line
     turns it up: his_heat), no scene notes and no rival line, the distance frame without what it
     told her to bring, and REALISM_LEAD in place of SPECIFIC, last. Her attitude, her way, the
-    band's wording, her arc's lines, cooling, the frame, the audience and the hour stay."""
+    band's wording, her arc's lines, cooling, the frame, the audience and the hour stay.
+
+    `hr` ([heat] on): her heat.Resolved for this turn. It stands in for every dial: the wording
+    is its tier's (heat_band; the owner's words through heat.overlays, by the channel), and at
+    the tier "none" there is no romance text at all (None)."""
     stance = p.romance.stance
     if not addressee_is_human or stance not in ATTITUDE_REACH or not _is_woman(p):
         return None
-    dial = dial_for(p, dial)
     stage = rel.romance_stage if rel is not None else "none"
+    tier = None
+    if hr is not None:
+        tier = heat_band(stance, stage, hr)
+        if tier is None:
+            return None
+    dial = dial_for(p, dial) if hr is None else hr.dial
     they, them, their = human.forms
     fill = dict(name=human.called, they=they, them=them, their=their)
     private = is_private(channel)
     warm = heat or not realism
     parts = [
-        attitude_text(p),
+        attitude_text(p, None if hr is None else hr.heat >= FULL_DIAL),
         style_text(p),
         stage_text(stance, stage, rng, private=private) if warm else "",
         heat_text(stance, stage, rel, rng) if warm else "",
@@ -703,6 +755,13 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
                  else _slots(scene, arc_lines, rival, cooling, fill, human, rng))
         head = " ".join(x for x in (head, *slots) if x)
     tail = " ".join(x.format(**fill) for x in rest if x)
+    if hr is not None:
+        from leeroy_mind.heat import live as heat_live
+        from leeroy_mind.heat import overlays
+        hl = heat_live.current()
+        wording = overlays.band_text(tier, data_dir, rng, private=private,
+                                     public_cap=hl is not None and hl.config.public_cap)
+        return f"{head} {wording} {tail}"
     return f"{head} {_band_text(effective_band(stance, stage, dial), data_dir, rng)} {tail}"
 
 

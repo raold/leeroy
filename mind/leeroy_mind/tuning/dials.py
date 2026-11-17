@@ -17,6 +17,16 @@ LEVEL_NEUTRAL = 5
 LEVEL_LO, LEVEL_HI = 0, 10
 SCORE_LO, SCORE_HI = 1, 10
 OFFSET_LO, OFFSET_HI = -10, 10
+# Heat (leeroy_mind.heat): one world value 0-10 and, for a woman or a group, an offset. It is kept
+# apart from MEMBER_DIALS and WORLD_DIALS: it is not a persona dial (nothing is folded into the
+# effective persona) and has no key in mind.toml (unset, it follows [romance] dial).
+HEAT = "heat"
+HEAT_LO, HEAT_HI = 0, 10
+HEAT_OFFSET_LO, HEAT_OFFSET_HI = -5, 5
+HEAT_WHEN = "the next turn; photos from the next one composed or sent"
+HEAT_MOVES = ("how far the women's romance toward you goes, in text, voice notes and photos: "
+              "the wording's ceiling, how readily she follows or starts it, what a voice note "
+              "may speak and which outfits her photos are composed from")
 WORDING_STEP = 2  # a value this far from neutral (or from the persona's score) adds a tuning line
 
 # The habits "party" means (owner, 2026-11-04: drinking and smoking nights), never coffee.
