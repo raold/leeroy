@@ -55,6 +55,10 @@ _OBJECT_BEFORE = frozenset('''with for to at about from on of ask asked tell tol
 whisper check invite inv kick bench flag remind give gave and or'''.split())
 
 
+# Before a name followed by a pronoun: she is told about, not spoken to ("tell belra he ...")
+_TOLD_BEFORE = frozenset('tell told ask asked remind reminded warn warned'.split())
+
+
 def calls_someone(text: str) -> bool:
     """Whether `text` calls anyone "he" or "she" at all: the cheap test before the roster."""
     plain = strip_wow_markup(text or '')
@@ -77,6 +81,8 @@ def _spoken_to(text: str, m) -> bool:
         return not before or before[-1] not in _OBJECT_BEFORE
     following = re.match(r"\s*([\w'’]+)", rest)
     word = following.group(1).casefold().replace('’', "'") if following else ''
+    if word in _SUBJECT_AFTER and before and before[-1] in _TOLD_BEFORE:
+        return False  # "tell belra he needs to ...": said about her, not to her
     return word in _SUBJECT_AFTER or (not before and word in _START_CUES)
 
 
@@ -137,6 +143,52 @@ def misgendered(text: str, his_line: str, roster: dict, *, his_names=(),
     before = [(where, entry) for where, entry in named if where <= at + wrong.start()]
     _, entry = max(before, key=lambda x: x[0]) if in_draft and before else named[0]
     return ((entry[0], wrong.group(0), '/'.join(FORMS[gender])),)
+
+
+_SWAP = {
+    'female': {'he': 'she', 'him': 'her', 'his': 'her', 'himself': 'herself', 'hes': 'shes',
+               "he's": "she's", "he'd": "she'd", "he'll": "she'll"},
+    'male': {'she': 'he', 'hers': 'his', 'herself': 'himself', 'shes': 'hes', "she's": "he's",
+             "she'd": "he'd", "she'll": "he'll"},
+}
+_OTHER = {
+    'female': re.compile(r"\b(?:he['’](?:s|d|ll)|himself|hes|he|him|his)\b", re.I),
+    'male': re.compile(r"\b(?:she['’](?:s|d|ll)|herself|shes|she|hers|her)\b", re.I),
+}
+# "her" before one of these (or ending a clause) is whom, not whose: "him"; else "his"
+_OBJECT_NEXT = frozenset("""to for with at about from on in and or but so if when because cuz then
+too either anyway though tho now later again yet already today tonight tomorrow a an the this that
+is was will would can could should did does do has had not up out off back down over away
+alone lol haha""".split())
+
+
+def _cased(new: str, old: str) -> str:
+    return new.capitalize() if old[:1].isupper() else new
+
+
+def fix(text: str, found) -> str:
+    """`text` with the wrong pronouns of `found` (misgendered's result) swapped for the
+    member's own, from the member's name on (the whole text when only his line names them):
+    "he" and "he's" become "she" and "she's", "him" and "his" "her"; the other way "her" is
+    "him" before a clause's end or a little word, else "his". The words around stay as written.
+    A second miss on a rewrite is fixed this way, never sent (self-play audit, 2026-11-17: the
+    guard flagged it, the rewrite still said "he", and it went out)."""
+    out = text
+    for name, _, right in dict.fromkeys(found):
+        gender = 'female' if right.startswith('she') else 'male'
+        m = re.search(r'(?<!\w)' + re.escape(name) + r'(?!\w)', out, re.I)
+        start = m.start() if m else 0
+
+        def swap(match, gender=gender):
+            word = match.group(0)
+            key = word.casefold().replace('’', "'")
+            if gender == 'male' and key == 'her':
+                rest = re.match(r"\s*([\w'’]+)?", out[start + match.end():])
+                nxt = (rest.group(1) or '').casefold() if rest else ''
+                return _cased('him' if not nxt or nxt in _OBJECT_NEXT else 'his', word)
+            return _cased(_SWAP[gender].get(key, word), word)
+        out = out[:start] + _OTHER[gender].sub(swap, out[start:])
+    return out
 
 
 def hint(found) -> str:

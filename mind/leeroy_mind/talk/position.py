@@ -31,8 +31,8 @@ from leeroy_mind.talk.select import pushback_kind
 
 HOLD_S = 600.0  # a held want lets go this long after her last answer on it
 CLAIM_WINDOW_S = 1800.0  # her lines this old are no longer "so far in this conversation"
-MAX_CLAIMS = 4
-CLAIM_WORDS = 14
+MAX_CLAIMS = 3
+CLAIM_WORDS = 12
 SAID = ("So far in this conversation you've said: {claims}. Stay consistent with that: don't "
         "contradict yourself, and if you change your mind, say that you do.")
 VIEW = 'You hold this as a rule: "{opinion}" You never argue against it.'
@@ -62,7 +62,12 @@ _SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
 _NUMBER = re.compile(r"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
                      r"twenty|thirty|forty|fifty|hundred|thousand|half|twice|double)\b",
                      re.IGNORECASE)
-_SELF = re.compile(r"\b(?:i|im|i'm|ive|i've|my|me|we|we're|our)\b", re.IGNORECASE)
+# what she says of herself that she could later contradict: where she is, what she has, did,
+# will or never does ("im at work", "i have two cats", "i never pug"); not every "i" or "my"
+_SELF = re.compile(r"\b(?:i'?m|i am|i was|i have|i'?ve|i had|i got|i will|i'?ll|i won'?t|"
+                   r"i never|i always|i did|i didn'?t|i can'?t|i don'?t|i went|i work|"
+                   r"i play|i live|i need|my \w+ (?:is|was|are|were|has|starts?|ends?))\b",
+                   re.IGNORECASE)
 _STRONG = re.compile(
     r"\b(?:never|always|not optional|isn'?t optional|non-?negotiable|the law|is law|no "
     r"exceptions?|period|must|hill to die on|refuse|won'?t|will not|hate|can'?t stand|"
@@ -121,9 +126,9 @@ def _sentences(line: str) -> list[str]:
 def claims_so_far(lines: Sequence[str], limit: int = MAX_CLAIMS) -> list[str]:
     """What she has said so far, from her own `lines` in this conversation (oldest first): at
     most `limit` short claims in the order she made them, each a sentence of hers cut to
-    CLAIM_WORDS words. Only a sentence with a number in it or one about herself ("i", "my",
-    "we") is a claim, numbers first, the newest winning a tie; questions, banter and sentences
-    under three words are none. Any "so far in this conversation" block can read the same helper."""
+    CLAIM_WORDS words. Only a sentence with a number in it or one that says something of
+    herself ("im at work", "i have", "i never", "my shift starts") is a claim, numbers first,
+    the newest winning a tie; questions, banter and sentences under three words are none. Any "so far in this conversation" block can read the same helper."""
     found: list[tuple[int, int, str]] = []
     seen: set[str] = set()
     for sentence in (s for line in lines for s in _sentences(line)):

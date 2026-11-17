@@ -75,7 +75,7 @@ def test_her_claims_are_her_numbers_and_what_she_said_of_herself():
         "i have 7 wins against him and 9 losses", "he is down by 2", "im at work till six"]
     # numbers first, the newest winning a tie, in the order she said them
     many = [f"i did pull number {i}" for i in range(6)]
-    assert position.claims_so_far(many) == many[2:]
+    assert position.claims_so_far(many) == many[3:]
     assert position.claims_so_far(many, limit=1) == many[-1:]
     assert position.claims_so_far([]) == [] and position.said_line([]) == ""
     assert '"im at work till six"' in position.said_line(["im at work till six"])

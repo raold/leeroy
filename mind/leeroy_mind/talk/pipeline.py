@@ -98,8 +98,10 @@ from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowe
                                      ordered, topic_for)
 from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
 from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hint, strip as strip_phrases
-from leeroy_mind.guards.opener import cut as cut_opener
+from leeroy_mind.guards.opener import cut as cut_opener, without_question_echo
+from leeroy_mind.guards.pronouns import fix as fix_pronouns
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk.gearfit import for_speaker as facts_for_speaker
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
@@ -230,6 +232,9 @@ _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "s
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
+# ...and with [talk] coherence a second draft's wrong pronoun for a member, swapped in code
+# (guards/pronouns.fix) instead of sent
+FIX_CODES = frozenset({"member_misgender"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
@@ -309,6 +314,12 @@ DRAWN_TALKED_TO_SHARE = 0.75
 ROMANCE_LATE_BONUS = 0.15
 ROMANCE_COOL_S = 300.0
 OWN_LINES = 5
+SHORT_WAIT_S = 60.0  # an answer this soon after his line is not late, whatever her brb planned
+WAITING_S = 7200.0  # his DM posts older than this are no longer waiting for this answer
+NAMED_CARDS = 3  # roster lines for members his line names (Pipeline._named_cards)
+# his game question found no fact she can use: she says so, never an invented proc or item
+UNSURE = ("You have no facts at hand for this: if you aren't sure, say you aren't sure. Never "
+          "make up an item, a proc or a number.")
 WANTS_KEPT = 256  # her last want per conversation (_draw_situation's `last`), the latest kept
 # [talk] shape (core plan Task 9, Pipeline._draw_shape): the drop reasons of a turn left on read
 # and of one that only reacts; the learned arm families a drawn shape takes over (credited to
@@ -939,6 +950,43 @@ class Pipeline:
         for g, line in newest.items():
             if g not in people and (t := of(g)):
                 out[("line", line)] = t
+        if self._coherent() and self._core_on():
+            # every line of a member carries their pronoun, not only the newest of one without
+            # a card (self-play audit, 2026-11-17: "Maald (she): ..." beside "Maald: ..." and
+            # she was "he" in five answers)
+            for r in recent:
+                if (r.id in self._greet_lines and greet and r.from_guid != turn.speaker):
+                    continue
+                if t := of(r.from_guid):
+                    out[("line", r.id)] = t
+        return out
+
+    def _named_cards(self, turn: Turn, his: str, people: list[int], names: dict) -> list[str]:
+        """A roster line for each member his line names who has no card under "People here"
+        (at most NAMED_CARDS): name, pronoun, what they play and their role, so nobody is
+        called by the wrong sex or given the wrong job ("Ronaval tanks")."""
+        hg = self.human.guid
+        if not his or not (self._coherent() and self._core_on()):
+            return []
+        folded = his.casefold()
+        out = []
+        for g, name in names.items():
+            if g in (hg, turn.speaker) or g in people or len(name) < 3:
+                continue
+            if not re.search(r"(?<!\w)" + re.escape(name.casefold()) + r"(?!\w)", folded):
+                continue
+            p = self.personas.get(g)
+            m = self.world.members.get(g)
+            if p is None:
+                continue
+            klass = CLASSES.get(m.class_, "") if m is not None else ""
+            plays = " ".join(x for x in (" ".join(p.play.main_spec.split()), klass) if x)
+            role = ", ".join(x for x in (p.play.raid_role, p.play.guild_role) if x)
+            tag = pronoun_of(p)
+            out.append(f"{name}{f' ({tag})' if tag else ''}: plays {plays or 'in the guild'}"
+                       f" ({role})")
+            if len(out) >= NAMED_CARDS:
+                break
         return out
 
     def _altered_of(self, guid: int) -> Altered:
@@ -1605,9 +1653,9 @@ class Pipeline:
             rows.sort(key=lambda r: r.id)
             return [r.text for r in rows] if len(rows) > 1 else []
         if meta.discord_chat is not None and self._answers_his_dm(turn, meta):
-            tail = []
+            tail, since = [], self.clock.now() - WAITING_S
             for r in reversed(meta.discord_chat):
-                if r.from_guid != hg:
+                if r.from_guid != hg or r.ts < since:
                     break
                 tail.append(r)
             tail.reverse()
@@ -1669,7 +1717,7 @@ class Pipeline:
         dial = self.cfg.romance.dial
         tail = bool(hg and turn.to_guid == hg and (
             whisper_tail(p, rel, dial=dial, channel=channel, data_dir=self.data_dir,
-                         forms=self.human.forms)
+                         forms=self.human.forms, **self._lust_only())
             or dm_explicit(p, rel, dial=dial, channel=channel, data_dir=self.data_dir)))
         fwd = forward(p)
         if self._private_to_him(turn) and flirt_chance(p, 1.0) <= 0:
@@ -1839,6 +1887,8 @@ class Pipeline:
             if not start and turn.trigger_line:
                 rows = self.store.chat_lines([turn.trigger_line])
                 start = rows[0].ts if rows else 0.0
+        if start and self._coherent() and now - start < SHORT_WAIT_S:
+            return False  # hurried back at once (his urgent words): nothing to excuse
         return bool(start) and life.away_between(turn.speaker, start, now)
 
     def _shape(self, turn: Turn, meta: TurnMeta, p: Persona, now: float, talk) -> None:
@@ -2424,6 +2474,8 @@ class Pipeline:
             asked = next((t for t in waiting if is_question(t)), "")
             his = asked or his
             unanswered = unanswered_text(waiting, human)
+        if not preview and to_human:
+            cards += self._named_cards(turn, his, people, names)
         them = human.forms[1] if to_human else "them"
         greet = turn.kind is TurnKind.GREET
         # the greetings of his login a later greeter sees, as who said hi and never the words
@@ -2460,7 +2512,8 @@ class Pipeline:
         # distance frame, which her romance text then leaves out, so it is said once
         tail_text = (whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
                                   data_dir=self.data_dir, forms=human.forms, rng=draws("tail"),
-                                  **({"realism": True} if realism else {}))
+                                  **({"realism": True} if realism else {}),
+                                  **({} if preview else self._lust_only()))
                      if hg and turn.to_guid == hg else "")
         romance = self._romance(turn, meta, p, rel_h, phase, now, draws("roll"), trigger, dial,
                                 tail_follows=bool(tail_text), vary=draws("vary"))
@@ -2498,6 +2551,17 @@ class Pipeline:
         # the facts go to the first answer only: a second recited the same table (rehearsal 2)
         facts = (await self.facts.for_line(meta.facts_line)
                  if meta.facts_line and self.facts is not None and not earlier else [])
+        unsure = ""
+        if meta.facts_line and not earlier and live and self._coherent() and self._core_on():
+            # the lookup is shared by every replier: an item her class cannot use, or one far
+            # under her level, is no fact for her (talk/gearfit.py); with none left she is told
+            # to say she is not sure
+            m = self.world.members.get(turn.speaker)
+            facts = facts_for_speaker(facts, CLASSES.get(m.class_, "") if m is not None else "",
+                                      level=m.level if m is not None and m.level > 0
+                                      else CAST_MIN_LEVEL)
+            if not facts:
+                unsure = UNSURE
         pinned = next((i for i, r in enumerate(recent) if r.id == turn.trigger_line), None)
         kept = next((i for i, r in enumerate(recent) if r.id == meta.pushback_line), None
                     ) if meta.pushback_line else None
@@ -2534,7 +2598,7 @@ class Pipeline:
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
             extra=" ".join(x for x in (turn.instruction, unanswered, follow, seen, story, lore,
-                                       quest, *ends) if x),
+                                       quest, unsure, *ends) if x),
             forms=forms, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN,
             channel=turn.channel, discord_words=words, length_text=length_text,
@@ -3162,7 +3226,8 @@ class Pipeline:
             worst = max(verdicts,key=lambda v:severity[v.action])
             rank = (severity[worst.action],sum(len(v.codes) for v in verdicts))
             if best is None or rank<best[0]:
-                best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)))
+                best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)),
+                        list(verdicts))
         async def fallback():
             if best is None:
                 # Owner, 2026-11-15: every message from him gets a reply. The longest clean part
@@ -3179,7 +3244,10 @@ class Pipeline:
             meta.guard_codes = best[3]
             if ' '.join(' '.join(s.plain for s in best[1]).split()) == ' '.join(meta.preference_original.split()):
                 meta.preference_original = ''
-            return best[1]
+            # the draft kept for an owed answer still has what the guard named: an opener that
+            # says his line back is cut, a member's wrong pronoun swapped, before it is sent
+            return self._fixed_in_code(turn, meta, p, best[1], best[4], close=close,
+                                       spoken=spoken)
         def drop(code):
             return self._drop(turn,meta,code,meta.memory_ids)
         for attempt in range(2):
@@ -3207,7 +3275,8 @@ class Pipeline:
                     return drop("guard_react")
                 if verdict.action == "drop" and not owed:
                     return drop("guard_drop")
-                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(CUT_CODES)
+                cuts = CUT_CODES | FIX_CODES if self._coherent() else CUT_CODES
+                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(cuts)
                                                 for v in verdicts):
                     return await self._without_phrases(turn, meta, p, lines, verdicts, owed,
                                                        close=close, spoken=spoken)
@@ -3329,15 +3398,22 @@ class Pipeline:
         before)."""
         named = tuple(dict.fromkeys(x for v in verdicts for x in v.phrases))
         echoed = next((v.echo_of for v in verdicts if v.echo_of), "")
+        wrong = (tuple(x for v in verdicts for x in v.pronouns) if self._coherent() else ())
         joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
         text = joined.join(s.plain for s in lines)
+        if wrong:  # the rewrite still calls a member by the wrong pronoun: swapped in code
+            text = fix_pronouns(text, wrong)
+            log.info("guard_pronoun_fixed: guid=%d kind=%s n=%d", turn.speaker, turn.kind,
+                     len(wrong))
         if echoed:
-            text = cut_opener(text, echoed)
+            cut = cut_opener(text, echoed)
+            text = cut if cut is not None or not wrong else text  # the swap is kept either way
         if text is not None and named:
             cut = strip_phrases(text, named, epithet_only=owed)
             text = cut if cut is not None or not (owed and echoed) else text
-        elif not echoed:
+        elif not echoed and not wrong:
             text = None
+        kept = []
         if text is not None:
             kept = ([Styled(text, text)] if spoken else
                     self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance,
@@ -3357,10 +3433,41 @@ class Pipeline:
         meta.guard_codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
         if owed:
             meta.guard_verdict = "rewrite"
-            return lines
+            # as it was written, but never with the wrong pronoun the code already swapped
+            return kept if wrong and text is not None and kept else lines
         meta.guard_verdict = "drop"
         return self._drop(turn, meta, "guard_phrase_refused" if named else "guard_rewrite_refused",
                           meta.memory_ids)
+
+    def _fixed_in_code(self, turn, meta, p, lines, verdicts, *, close, spoken):
+        """[talk] coherence: the draft an owed answer falls back to (its best candidate, soft
+        codes only), with what code can mend mended first: an opener that says his line back
+        loses those clauses (guards/opener.cut, when what is left stands alone) and a member's
+        wrong pronoun is swapped (guards/pronouns.fix). The self-play audit's `echo_opener`
+        turn sent its first draft unchanged this way. Unchanged with the switch off, when
+        nothing applies or when the mended text styles to nothing."""
+        if not self._coherent() or not lines:
+            return lines
+        echoed = next((v.echo_of for v in verdicts if v.echo_of), "")
+        wrong = tuple(x for v in verdicts for x in v.pronouns)
+        if not echoed and not wrong:
+            return lines
+        joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
+        text = joined.join(s.plain for s in lines)
+        mended = fix_pronouns(text, wrong) if wrong else text
+        if echoed:
+            mended = cut_opener(mended, echoed) or mended
+        if mended == text:
+            return lines
+        kept = ([Styled(mended, mended)] if spoken else
+                self._style(turn, p, mended, close=close, two_lines=meta.two_lines,
+                            romance=meta.romance, room=self._room(turn, meta)))
+        kept = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in kept]
+        if not kept:
+            return lines
+        log.info("guard_fixed_in_code: guid=%d kind=%s echo=%d pronouns=%d", turn.speaker,
+                 turn.kind, bool(echoed), len(wrong))
+        return kept
 
     async def _guard_react(self, turn, meta, reaction, allowed=None) -> bool:
         """Her reaction instead of a line: True once it is posted (a Discord reaction added, a
@@ -3825,6 +3932,8 @@ class Pipeline:
                 silent = quiet(text)  # a line that was only a command at him included
             if not silent and fit and len(text.split()) > fit:
                 text = fit_words(text, fit)
+            if not silent and keeps and asked_line:
+                text = without_question_echo(text, asked_line)
             length, draft = "", text
             if not silent and keeps:
                 budget = self._word_budget(turn, p, meta.two_lines)
@@ -4089,6 +4198,11 @@ class Pipeline:
         shaped = draw.words if isinstance(draw, ShapeDraw) and draw.content else 0
         return max(meta.keep_words, shaped)
 
+    def _lust_only(self) -> dict:
+        """whisper_tail's `lust_only` with [talk] coherence and a core switch on: his explicit
+        whisper overlay only for a lust woman whose arc has begun; {} otherwise (as before)."""
+        return {"lust_only": True} if self._coherent() and self._core_on() else {}
+
     def _asked_line(self, turn: Turn, meta: TurnMeta, c: Composed) -> str:
         """The line this turn answers, for the length rule's "carries the answer": the line it
         was composed to answer, else his line (a DM post, a carried whisper); "" for none."""
@@ -4256,6 +4370,15 @@ class Pipeline:
         keep = self._real_name_spelling() if close else frozenset()
         pieces = ([x for x in text.split("\n") if x.strip()]
                   if turn.kind is TurnKind.BIT and turn.max_lines > 1 and not words else [text])
+        coherent = self._coherent()
+        own_lines = [x for x in text.split("\n") if x.strip()]
+        if (coherent and len(pieces) == 1 and two_lines and not words and turn.max_lines > 1
+                and len(own_lines) > 1):
+            # a game burst the model wrote as two lines keeps its own break, each line laid out
+            # on its own: repacked as one text its clauses ran together and the rest was dropped
+            # (hard-case audit, 2026-11-17)
+            pieces = own_lines[:turn.max_lines]
+        plain = coherent and turn.template is not None  # her brb and back: no slips, no marks
         out: list[Styled] = []
         typing = p.typing
         most = 1 if words else turn.max_lines
@@ -4273,13 +4396,13 @@ class Pipeline:
                                speaker=p.character_name, kind=turn.kind, keep_case=keep,
                                max_lines=most if len(pieces) == 1 else 1,
                                aliases=aliases(p), force_lines=two_lines and not words,
-                               no_emoticon=romance or turn.kind in NO_MARK_KINDS,
+                               no_emoticon=romance or turn.kind in NO_MARK_KINDS or plain,
                                wink_ok=not (self._to_member(turn) or names_any(
                                    piece, [m.name for g, m in self._members_for(turn.channel).items()
                                            if g != self.human.guid])), game=not discord,
                                cap=cap,
                                max_chars=DISCORD_MAX_TEXT if discord else None,
-                               texture=self.cfg.talk.texture)
+                               texture=self.cfg.talk.texture and not plain)
         out = out[:max(1, most)]
         if discord and out:
             slipped = next((s for s in reversed(out) if s.slip), Styled("", ""))
