@@ -2,7 +2,7 @@
 name here is invented; the owner's file stays in his private folder."""
 import json
 import sqlite3
-from datetime import date
+from datetime import date, datetime, time
 from pathlib import Path
 
 import pytest
@@ -100,14 +100,18 @@ def test_a_rerun_changes_nothing_and_an_edit_updates_in_place(tmp_path, capsys):
     assert after["owner:J1:102"]["t_event"] == first["owner:J1:102"]["t_event"]  # same anchor
 
 
-def test_the_dry_run_writes_nothing_and_prints_no_text(tmp_path, capsys):
+def test_the_dry_run_writes_nothing_and_prints_no_text(tmp_path, capsys, monkeypatch):
+    # Seeded at local noon: an age counted in days of 86400 s ends an hour off its calendar day
+    # across a daylight-saving change, so from 23:00 in winter a summer date read one day late.
+    noon = datetime.combine(date.today(), time(12)).timestamp()
+    monkeypatch.setattr(SystemClock, "now", lambda self: noon)
     root = data_dir(tmp_path)
     before = (root / "mind.db").read_bytes()
     assert seed(root, seed_file(tmp_path, [DATED, UNDATED, SUFFIXED]), "--dry-run") == 0
     out = capsys.readouterr().out
     assert owner_memories(root) == {} and not (root / "snapshots").exists()
     assert (root / "mind.db").read_bytes() == before
-    today = date.today()
+    today = date.fromtimestamp(noon)
     ago = (date(2009, 12, 31) - date(2007, 6, 1)).days
     assert f"    101 Arkon: 1 memory, {date.fromordinal(today.toordinal() - ago)}" in out
     assert f"    102 Belra: 1 memory, {today} .. {today}" in out
