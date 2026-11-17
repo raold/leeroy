@@ -23,8 +23,9 @@ from leeroy_mind.personas.facts import (Facts, conflicts as persona_conflicts, f
 from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.moves import topics
 
-from . import phrases
+from . import phrases, pronouns
 from .identity import CODES as SLIP_CODES, code_for as slip_code, slips
+from .opener import echo_opener
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
 
 OWN_LINES = 128
@@ -54,6 +55,9 @@ _ASKING = re.compile(r'^(?:can|could|would|will|do|does|did|are|is|am|was|were|h
                      r'should|what|how|when|where|why|who|which|whats|hows|wanna)\b')
 HINTS = {
     'echo_parent': 'it repeats the message you are answering back instead of answering it',
+    'echo_opener': ('it opens by saying back the message you are answering, its words repeated, '
+                    'quoted or restated; answer it without saying it back'),
+    'member_misgender': 'it calls a guild member by the wrong pronoun',
     'nothing_new': 'it only repeats what was already said',
     'own_repeat_same_channel': 'it repeats one of your own recent lines',
     'own_repeat_cross_channel': 'it repeats one of your own recent lines',
@@ -133,11 +137,12 @@ def echoes(text: str, parent: str) -> bool:
             and where[opening - 1] != where[0])
 
 
-def rewrite_hint(codes, named=()) -> str:
+def rewrite_hint(codes, named=(), misgendered=()) -> str:
     """The screened retry's instruction in words; a code without words is named as it is.
-    `named` are the phrase cooldown's words from the draft itself (Verdict.phrases)."""
+    `named` are the phrase cooldown's words from the draft itself (Verdict.phrases);
+    `misgendered` the member and pronouns of `member_misgender` (Verdict.pronouns)."""
     reasons = list(dict.fromkeys(HINTS.get(code, code) for code in codes))
-    said = phrases.hint(named)
+    said = ' '.join(x for x in (phrases.hint(named), pronouns.hint(misgendered)) if x)
     if not reasons:
         return 'Rewrite your reply once.' + (' ' + said if said else '')
     hint = 'Rewrite your reply once in your own words. Your draft has a problem: ' + '; '.join(reasons)
@@ -461,6 +466,31 @@ def _claim_hits(reader, stores, draft, now, officer):
     return [hit for hit in found if hit.claim_id in visible]
 
 
+def _misgendered(reader, stores, draft, parent):
+    """pronouns.misgendered for the draft, with the roster (character names and the players'
+    genders, the speaker left out; guild members without a persona as other people) read only
+    when it calls someone "he" or "she". His line it answers names whom a pronoun may mean."""
+    if not pronouns.calls_someone(draft.text):
+        return ()
+    from leeroy_mind.talk.words import COMMON_WORDS
+    roster = {}
+    for row in reader.rows('roster_unavailable', "SELECT guid,json_extract(json,'$.character_name') "
+            "AS name,json_extract(json,'$.identity.player_gender') AS gender FROM persona_core "
+            'WHERE json_valid(json) LIMIT 2000'):
+        name = row['name']
+        if row['guid'] != draft.guid and isinstance(name, str) and row['gender'] in pronouns.FORMS:
+            key = name.casefold()
+            roster[key] = (name, row['gender'], key in COMMON_WORDS or bool(everyday_reason(key)))
+    others = frozenset(row['name'].casefold() for row in reader.rows('roster_unavailable',
+        'SELECT name FROM cast_member LIMIT 2000') if isinstance(row['name'], str)
+        and row['name'].casefold() not in roster)
+    his = [*stores.his_names, *(row['value'] for row in reader.rows('roster_unavailable',
+           "SELECT value FROM meta WHERE key='human_name'") if isinstance(row['value'], str))]
+    his_line = (parent.text if parent is not None and parent.guid != draft.guid
+                and parent.origin == 'human' else '')
+    return pronouns.misgendered(draft.text, his_line, roster, his_names=his, others=others)
+
+
 def review(stores: GuardStores, draft: Draft) -> Verdict:
     if not stores.config.enabled:
         return Verdict('send')
@@ -558,6 +588,9 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     # Her own persona (personas.facts), read with her role above.
     if slips(draft.text, facts.gender):
         rewrite.append(slip_code(facts.gender))
+    misgendered = _misgendered(reader, stores, draft, parent)
+    if misgendered:
+        rewrite.append('member_misgender')
     hits = _claim_hits(reader, stores, draft, now, officer)
     wrong = persona_conflicts(draft.text, facts)
     if wrong or any(persona_conflicts(hit.claim_text, facts, claim=True) for hit in hits):
@@ -593,8 +626,12 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         scores.extend((Score('parent_relevance', round(parent_score,6)), Score('thread_relevance', round(thread_score,6))))
         if parent_score < cfg.parent_cosine and thread_score < cfg.thread_cosine:
             rewrite.append('low_parent_and_thread_relevance')
+    echo_of = ''
     if parent and parent.guid != draft.guid and echoes(draft.text, parent.text):
         drop.append('echo_parent')
+    elif parent and parent.guid != draft.guid and echo_opener(draft.text, parent.text):
+        rewrite.append('echo_opener')  # his line said back as her opener (guards/opener.py)
+        echo_of = parent.text
     if not filler and not filler_post and _pairs(draft.text, draft.embedding,
                                                  [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
@@ -609,4 +646,4 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     reaction = '👍' if parent and parent.text.rstrip().endswith('?') else '😄' if set(words(draft.text)) & {'lol','haha','hehe'} else '👍'
     return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)),
                    (server_reaction or reaction) if action == 'react' else None, cooled.phrases,
-                   cooled.pending)
+                   cooled.pending, echo_of if 'echo_opener' in codes else '', misgendered)
