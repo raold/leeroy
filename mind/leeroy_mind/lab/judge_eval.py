@@ -6,9 +6,14 @@ against the gold 1-5 with a bootstrap interval, by length band and per gold defe
 agreement on which of two resampled arms is better, and the calls and model seconds per reply.
 It writes nothing and never prints, logs or stores a word of the gold.
 
-The judges: "features", "tells", "fewshot", "pairwise" (lab/judge.py with the shipped weights)
-and "rubric" (lab/grade.py's old 0-3 rubric, in chunks of RUBRIC_TURNS replies with the
-conversation's card when it has one, as the lab graded a battery pair)."""
+The judges: lab/judge.py's modes with the shipped weights ("features", "checklist", "fewshot",
+"pairwise", and "tells", the combination the lab uses) and "rubric" (lab/grade.py's old 0-3
+rubric, in chunks of RUBRIC_TURNS replies with the conversation's card when it has one, as the
+lab graded a battery pair). `refit` makes new weights from the train and dev parts (never the
+test part): numbers only.
+
+Every call is at temperature 0, so the seed only breaks exact ties in the model's sampling; the
+same seed is used for every reply."""
 import asyncio
 
 from . import gold, grade, judge
@@ -30,8 +35,7 @@ async def judge_items(reasoner, items: list, design: str, *, seed: int = 0,
             try:
                 got = await judge.score(reasoner, item.his, item.reply, mode=design,
                                         context=item.context, earlier=item.earlier,
-                                        rewritten=item.rewritten,
-                                        seed=judge.seed_of(seed, item.conv, item.index))
+                                        rewritten=item.rewritten, seed=seed)
                 out[item.key] = got["score"]
             except judge.JudgeError:
                 out[item.key] = None
@@ -43,8 +47,7 @@ async def judge_items(reasoner, items: list, design: str, *, seed: int = 0,
                 reply = await judge.ask(reasoner, grade.SYSTEM,
                                         grade.rubric_prompt(rows[0].card[:CARD_CHARS], turns),
                                         grade.rubric_schema(len(turns)),
-                                        seed=judge.seed_of(seed, rows[0].conv, rows[0].index),
-                                        predict=64 * len(turns))
+                                        seed=seed, predict=64 * len(turns))
                 grades = grade.rubric_parse(reply, len(turns))
             except judge.JudgeError:
                 grades = None
@@ -108,6 +111,32 @@ async def evaluate(reasoner, directory, *, designs=DESIGNS, part: str = "test", 
         scores = await judge_items(reasoner, items, design, seed=seed, parallel=parallel)
         out["designs"][design] = table(items, scores, calls=reasoner.calls - before[0],
                                        seconds=reasoner.seconds - before[1])
+    return out
+
+
+async def refit(reasoner, directory, *, seed: int = 0, parallel: int = 2,
+                ridge: float = judge.RIDGE) -> dict:
+    """New weights for every mode from the gold's train and dev parts: the shape of
+    `judge_weights.json` with the next version (numbers only). The pairwise mode has nothing to
+    fit: its score is the anchors' own."""
+    parts = gold.split(gold.load(directory))
+    items = parts["train"] + parts["dev"]
+    targets = [float(i.score) for i in items]
+    slots = asyncio.Semaphore(max(1, parallel))
+    out = {"version": judge.weights()["version"] + 1, "fit_on": len(items), "ridge": ridge,
+           "modes": {}}
+    for mode in judge.MODES:
+        if mode == "pairwise":
+            out["modes"][mode] = {"bias": 0.0, "weights": {"anchors": 1.0}}
+            continue
+
+        async def one(item, mode=mode):
+            async with slots:
+                return await judge.inputs(reasoner, item.his, item.reply, mode=mode,
+                                          context=item.context, earlier=item.earlier,
+                                          rewritten=item.rewritten, seed=seed)
+        rows = await asyncio.gather(*(one(i) for i in items))
+        out["modes"][mode] = judge.fit(list(rows), targets, list(judge.inputs_of(mode)), ridge=ridge)
     return out
 
 
