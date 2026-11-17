@@ -266,7 +266,7 @@ SAMPLE_KINDS = ("answer", "tease", "tired", "flirt", "warm", "annoyed")
 
 @dataclass(frozen=True)
 class Speech:
-    register: str = _f(max_len=60)                                   # "dry, exact, ledger-minded"
+    register: str = _f(max_len=60)                                   # "plain, clipped, a bit gruff"
     shape: str = _f(max_len=120)                                     # her sentence shape
     says: tuple[str, ...] = _f(min_items=4, max_items=8, max_len=30)  # her words, now and then
     never: tuple[str, ...] = _f(max_items=4, max_len=30)             # words she never uses

@@ -171,9 +171,9 @@ def voiced_cast(store) -> None:
 
     from leeroy_mind.personas.io import load_persona, save_persona
     from leeroy_mind.wow import CLASSES, RACES
-    from sheets import LEDGER, STAGE, sheet
+    from sheets import BRIGHT, GRUFF, sheet
     cast(store)
-    for guid, data in zip(VOICED, (STAGE, LEDGER)):
+    for guid, data in zip(VOICED, (BRIGHT, GRUFF)):
         _, race, cls = TEST_CAST[guid]
         save_persona(store, replace(load_persona(store, guid), speech=sheet(data)), source="seed",
                      ts=1000.0, race=RACES[race], class_name=CLASSES[cls])

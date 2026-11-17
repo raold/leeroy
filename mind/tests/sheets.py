@@ -6,9 +6,9 @@ from leeroy_mind.personas.io import save_persona
 from leeroy_mind.personas.schema import speech_from_dict
 from leeroy_mind.wow import CLASSES, RACES
 
-LEDGER = {
-    "register": "dry, exact, ledger-minded",
-    "shape": "short flat statements, two to six words",
+GRUFF = {
+    "register": "plain, clipped, a bit gruff",
+    "shape": "short flat statements, three to seven words",
     "says": ["noted", "fair enough", "on paper", "right then"],
     "never": ["awesome", "lol"],
     "brings_up": ["the allotment", "night shifts at the depot"],
@@ -20,27 +20,27 @@ LEDGER = {
                 "warm": "glad you logged on. right then",
                 "annoyed": "noted. not doing that twice"},
 }
-STAGE = {
-    "register": "theatrical, arch, a little grand",
-    "shape": "one long swooping sentence with an aside in it",
-    "says": ["darling", "in the wings", "curtain up", "honestly now", "exit stage left"],
+BRIGHT = {
+    "register": "bubbly, scattered, quick to laugh",
+    "shape": "runs two thoughts together and trails off",
+    "says": ["ooh", "hang on", "bless", "right so", "tell you what"],
     "never": ["whatever", "k"],
-    "brings_up": ["the amateur panto", "the cat who hates the hoover", "the bus home"],
-    "with_him": "flirts as if it were a dare and waits to see",
-    "stance": "married, and makes a bit of it",
-    "samples": {"answer": "well now, that depends who is asking and how nicely",
-                "tease": "oh you pulled that on purpose, admit it to the whole room",
-                "tired": "i have been on my feet since six and the kettle knows it",
-                "flirt": "say that again slower, i want to enjoy it properly",
-                "annoyed": "no. absolutely not. curtain down on that idea"},
+    "brings_up": ["her sister's bakery", "the dog that eats socks", "the night bus"],
+    "with_him": "flirts by teasing, then changes the subject",
+    "stance": "seeing nobody, and cheerful about it",
+    "samples": {"answer": "ooh hang on, that depends who wants to know",
+                "tease": "you did that on purpose, tell you what, i saw it",
+                "tired": "been up since six, bless, my eyes are closing",
+                "flirt": "say that again, i liked how it sounded",
+                "annoyed": "no. right so, we are not doing that again"},
 }
 
 
-def sheet(data=LEDGER, **over):
+def sheet(data=GRUFF, **over):
     return speech_from_dict({**data, **over})
 
 
-def give(store, guid: int, data=LEDGER, **persona):
+def give(store, guid: int, data=GRUFF, **persona):
     """Store the test-cast member `guid` with a voice sheet (and persona fields changed, as
     engine_rig.save_member takes them)."""
     name, race, cls = TEST_CAST[guid]

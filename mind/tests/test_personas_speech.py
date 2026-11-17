@@ -17,10 +17,10 @@ from leeroy_mind.personas.schema import (PersonaError, persona_from_dict, person
                                          validate_persona)
 from leeroy_mind.talk.intent import Intent
 from leeroy_mind.text import estimate_tokens
-from sheets import LEDGER, STAGE, sheet
+from sheets import GRUFF, BRIGHT, sheet
 
 
-def member(data=LEDGER, gender="male", **over):
+def member(data=GRUFF, gender="male", **over):
     return replace(make_persona(101, "Arkon", player_gender=gender), speech=sheet(data, **over))
 
 
@@ -37,9 +37,9 @@ def test_a_persona_without_a_sheet_is_stored_exactly_as_before():
 def test_a_sheet_round_trips_and_validates():
     p = member()
     d = persona_to_dict(p)
-    assert d["speech"] == speech_to_dict(p.speech) == {**LEDGER}
+    assert d["speech"] == speech_to_dict(p.speech) == {**GRUFF}
     assert persona_from_dict(json.loads(json.dumps(d))) == p
-    assert validate_persona(p) == [] and validate_persona(member(STAGE, "female")) == []
+    assert validate_persona(p) == [] and validate_persona(member(BRIGHT, "female")) == []
 
 
 def test_no_model_is_asked_for_a_sheet():
@@ -58,7 +58,7 @@ def test_no_model_is_asked_for_a_sheet():
     ({"never": ["a", "b", "c", "d", "e"]}, "speech.never: must have at most 4 items"),
     ({"brings_up": []}, "speech.brings_up: must have at least 1 items"),
     ({"brings_up": ["a", "b", "c", "d", "e"]}, "speech.brings_up: must have at most 4 items"),
-    ({"samples": {**LEDGER["samples"], "answer": "w " * 111}},
+    ({"samples": {**GRUFF["samples"], "answer": "w " * 111}},
      "speech.samples.answer: must be at most 220 characters"),
     ({"samples": {"tease": "you first"}}, "speech.samples: needs an answer sample"),
     ({"samples": {"answer": "ok", "sulky": "hmph"}},
@@ -94,7 +94,7 @@ def test_the_block_has_a_hard_token_cap():
     for to_him, private in ((False, False), (True, False), (True, True)):
         block = sp.voice_block(s, "Zan", to_him=to_him, private=private)
         assert estimate_tokens(block) <= sp.BLOCK_TOKENS
-        assert block.startswith("Your voice: dry, exact, ledger-minded; ")
+        assert block.startswith("Your voice: plain, clipped, a bit gruff; ")
         assert ("With Zan: teases him about his sums." in block) is to_him
     keep, size = sp.fitted(s)
     assert keep < (8, 4, 4) and keep[0] >= 4 and keep[2] >= 1 and size <= sp.BLOCK_TOKENS
@@ -102,7 +102,7 @@ def test_the_block_has_a_hard_token_cap():
     core = member(register="r" * 60, shape="s" * 120, with_him="w" * 120, stance="t" * 140)
     assert any(e.startswith("speech: the block is ") and "at most 120" in e
                for e in validate_persona(core))
-    for data, gender in ((LEDGER, "male"), (STAGE, "female")):
+    for data, gender in ((GRUFF, "male"), (BRIGHT, "female")):
         s = member(data, gender).speech
         assert sp.fitted(s)[0] == (len(s.says), len(s.never), len(s.brings_up))  # nothing cut
         assert sp.block_tokens(s) == estimate_tokens(
@@ -117,11 +117,11 @@ def test_the_trim_order_gives_up_the_fourth_topic_then_words_then_never_words():
 
 def test_a_sheet_of_the_wrong_shape_is_a_persona_error():
     with pytest.raises(PersonaError, match="speech.says: must be a list"):
-        speech_from_dict({**LEDGER, "says": "noted"})
+        speech_from_dict({**GRUFF, "says": "noted"})
     with pytest.raises(PersonaError, match="speech.humour: unknown field"):
-        speech_from_dict({**LEDGER, "humour": "dry"})
+        speech_from_dict({**GRUFF, "humour": "dry"})
     with pytest.raises(PersonaError, match="speech.register: missing"):
-        speech_from_dict({k: v for k, v in LEDGER.items() if k != "register"})
+        speech_from_dict({k: v for k, v in GRUFF.items() if k != "register"})
     with pytest.raises(PersonaError, match="speech: must be an object"):
         speech_from_dict(["noted"])
 
@@ -132,7 +132,7 @@ def test_the_block_on_a_public_turn_has_neither_with_him_nor_stance():
     s = sheet()
     block = sp.voice_block(s, "Zan", samples=["depends. what did the log say"])
     assert block.splitlines() == [
-        "Your voice: dry, exact, ledger-minded; short flat statements, two to six words.",
+        "Your voice: plain, clipped, a bit gruff; short flat statements, three to seven words.",
         "You say, only now and then: noted, fair enough, on paper, right then. "
         "Never: awesome, lol.",
         "Unasked, you bring up: the allotment; night shifts at the depot.",
@@ -173,7 +173,7 @@ def test_the_first_sample_is_the_wants(want, kind):
 
 
 def test_flirt_reads_as_warm_for_a_sheet_without_it_and_is_only_shown_to_him():
-    plain, her = sheet(), sheet(STAGE)
+    plain, her = sheet(), sheet(BRIGHT)
     assert sp.pick_samples(plain, "flirt", random.Random(1))[0] == plain.samples["warm"]
     assert sp.pick_samples(plain, "reassure_seek", random.Random(1))[0] == plain.samples["warm"]
     assert sp.pick_samples(her, "flirt", random.Random(1), to_him=True)[0] == her.samples["flirt"]
@@ -209,15 +209,15 @@ def test_a_sample_she_already_sent_is_never_shown_again():
 
 
 def test_one_sample_when_asked_for_one():
-    assert sp.pick_samples(sheet(), "vent", random.Random(1), n=1) == [LEDGER["samples"]["tired"]]
+    assert sp.pick_samples(sheet(), "vent", random.Random(1), n=1) == [GRUFF["samples"]["tired"]]
 
 
 # -- her line length -------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("shape,found", [
-    ("short flat statements, two to six words", (2, 6)), ("fragments of 3-8 words", (3, 8)),
+    ("short flat statements, three to seven words", (3, 7)), ("fragments of 3-8 words", (3, 8)),
     ("Three or Four words, rarely more", (3, 4)), ("ten to 4 words", (4, 10)),
-    ("one long swooping sentence with an aside in it", None), ("", None),
+    ("runs two thoughts together and trails off", None), ("", None),
     ("about 99 to 100 words", None)])
 def test_the_line_length_a_shape_names(shape, found):
     assert sp.word_range(shape) == found
@@ -226,8 +226,8 @@ def test_the_line_length_a_shape_names(shape, found):
 # -- the import's own screen -----------------------------------------------------------------------
 
 @pytest.mark.parametrize("change,code", [
-    ({"samples": {**LEDGER["samples"], "tease": "ask Belra, she pulled early"}}, "member_name"),
-    ({"samples": {**LEDGER["samples"], "tired": "lol. brain is soup"}}, "never_in_sample"),
+    ({"samples": {**GRUFF["samples"], "tease": "ask Belra, she pulled early"}}, "member_name"),
+    ({"samples": {**GRUFF["samples"], "tired": "lol. brain is soup"}}, "never_in_sample"),
     ({"brings_up": ["the allotment", "her rizz"]}, "later_era"),
     ({"stance": "single since 2019"}, "later_era"),
     ({"says": ["noted", "fair enough", "on paper", "you absolute menace"]}, "says_slop"),
@@ -238,7 +238,7 @@ def test_what_the_import_screen_refuses_by_code(change, code):
 
 def test_a_clean_sheet_passes_the_screen_and_her_own_name_is_no_member():
     assert sp.screen(member(), characters=["Arkon", "Belra"]) == []
-    own = member(samples={**LEDGER["samples"], "warm": "arkon reporting in. right then"})
+    own = member(samples={**GRUFF["samples"], "warm": "arkon reporting in. right then"})
     assert sp.screen(own, characters=["Arkon", "Belra"]) == []
     assert sp.screen(make_persona(101, "Arkon")) == []
 

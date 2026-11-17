@@ -154,7 +154,7 @@ class ShapeContext:
     # 10): LATE, in game or her DM, its excuse "away" (Pipeline._waited_away)
     away: bool = False
     # the line length her voice sheet's sentence shape names (personas.speech.word_range:
-    # "fragments, two to six words"); None without one. It only moves the word draw of her own
+    # "clipped, three to seven words"); None without one. It only moves the word draw of her own
     # line and her habit in a DM's mirror: never the shape's odds, MIN_LINE_WORDS or the caps
     voice_words: tuple[int, int] | None = None
 

@@ -13,13 +13,13 @@ from leeroy_mind.guards import phrases, voice
 from leeroy_mind.guards.review import HARD_CODES, HINTS, Reader, rewrite_hint
 from leeroy_mind.talk import awareness as live
 from leeroy_mind.talk.pipeline import CUT_CODES, TurnMeta
-from sheets import LEDGER, give
+from sheets import GRUFF, give
 
 from .test_live import rig, speak, turn  # noqa: F401  (the rig fixture)
 
 NOW = datetime(2026, 10, 29, 23, tzinfo=timezone.utc).timestamp()
-GOLD = {**LEDGER, "says": ["noted", "gold star", "fair enough", "right then"]}
-SHEET = voice.sheet_of({"speech": GOLD})
+MARKS = {**GRUFF, "says": ["noted", "top marks", "fair enough", "right then"]}
+SHEET = voice.sheet_of({"speech": MARKS})
 
 
 def put(store, text, *, guid=101, channel='guild', to=0, ts=NOW - 60):
@@ -42,14 +42,14 @@ def found(store, d, sheet=SHEET):
 @pytest.fixture
 def cast(store):
     seed_test_cast(store)
-    give(store, 101, GOLD)
+    give(store, 101, MARKS)
     return store
 
 
 # -- the sheet as the guards read it -------------------------------------------------------------
 
 def test_the_sheet_of_a_stored_persona():
-    assert SHEET.says == (('noted',), ('gold', 'star'), ('fair', 'enough'), ('right', 'then'))
+    assert SHEET.says == (('noted',), ('top', 'marks'), ('fair', 'enough'), ('right', 'then'))
     assert SHEET.never == (('awesome', ('awesome',), False), ('lol', ('lol',), False))
     assert SHEET.rationed == SHEET.says
     assert ('depends', 'what', 'did', 'the', 'log', 'say') in SHEET.samples
@@ -63,8 +63,8 @@ def test_the_sheet_of_a_stored_persona():
 
 def test_her_own_phrase_is_not_cooled_where_anyone_elses_would_be(store):
     for n in range(2):
-        put(store, f'gold star, that makes {n}', channel='whisper', to=1, ts=NOW - 600 + n)
-    d = draft('gold star for you, we go at eight', channel='whisper', to_guid=1)
+        put(store, f'top marks, that makes {n}', channel='whisper', to=1, ts=NOW - 600 + n)
+    d = draft('top marks for you, we go at eight', channel='whisper', to_guid=1)
     assert 'phrase_conversation' in found(store, d, None).codes       # no sheet: her tic
     assert found(store, d).codes == ('phrase_conversation',)          # hers, a third in three lines
     for n in range(4):
@@ -75,11 +75,11 @@ def test_her_own_phrase_is_not_cooled_where_anyone_elses_would_be(store):
 
 def test_her_own_phrase_is_free_of_the_day_and_the_per_member_stock_rules(store):
     for n in range(3):  # three lines today in other conversations
-        put(store, f'gold star it works {n}', channel='guild', ts=NOW - 7200 - n * 2000)
-    d = draft('gold star we are fine tonight', channel='whisper', to_guid=1)
+        put(store, f'top marks it works {n}', channel='guild', ts=NOW - 7200 - n * 2000)
+    d = draft('top marks we are fine tonight', channel='whisper', to_guid=1)
     assert 'phrase_day' in found(store, d, None).codes
     assert found(store, d).codes == ()
-    stock = voice.sheet_of({'speech': {**GOLD, 'says': ['sitting here', 'noted']}})
+    stock = voice.sheet_of({'speech': {**MARKS, 'says': ['sitting here', 'noted']}})
     put(store, 'sitting here with the dog', channel='guild', ts=NOW - 86400 * 2)
     again = draft('sitting here waiting on the tank')
     assert 'stock_member' in found(store, again, None).codes
@@ -88,8 +88,8 @@ def test_her_own_phrase_is_free_of_the_day_and_the_per_member_stock_rules(store)
 
 def test_the_cast_rules_still_count_her_word(store):
     for guid in (102, 103, 104):
-        put(store, 'gold star then lads', guid=guid, channel='discord:general', ts=NOW - 3600)
-    result = found(store, draft('gold star then lads, eight it is'))
+        put(store, 'top marks then lads', guid=guid, channel='discord:general', ts=NOW - 3600)
+    result = found(store, draft('top marks then lads, eight it is'))
     assert 'phrase_cast' in result.codes
 
 
@@ -139,9 +139,9 @@ def test_a_tic_cannot_take_over_a_conversation(store):
 
 
 def test_a_phrase_is_hers_only_when_her_word_carries_it():
-    assert voice.hers(('gold', 'star'), SHEET) and voice.hers(('gold', 'star', 'then'), SHEET)
-    assert voice.hers(('a', 'gold', 'star', 'it', 'is'), SHEET) and voice.hers(('star',), SHEET)
-    assert not voice.hers(('gold', 'star', 'mate'), SHEET)        # another content word
+    assert voice.hers(('top', 'marks'), SHEET) and voice.hers(('top', 'marks', 'then'), SHEET)
+    assert voice.hers(('a', 'top', 'marks', 'it', 'is'), SHEET) and voice.hers(('marks',), SHEET)
+    assert not voice.hers(('top', 'marks', 'mate'), SHEET)        # another content word
     assert not voice.hers(('absolute', 'menace'), SHEET) and not voice.hers((), voice.NONE)
 
 
@@ -159,7 +159,7 @@ def test_a_never_word_is_a_soft_rewrite_that_names_it(cast):
 
 
 def test_a_never_mark_without_words_is_matched_as_written():
-    marks = voice.sheet_of({'speech': {**LEDGER, 'never': ['!!', 'no way']}})
+    marks = voice.sheet_of({'speech': {**GRUFF, 'never': ['!!', 'no way']}})
     assert voice.never_used('what!! really', marks) == ('!!',)
     assert voice.never_used('there is No Way that works', marks) == ('no way',)
     assert voice.never_used('no. way too early', marks) == ('no way',)  # words, whatever between
@@ -170,7 +170,7 @@ def test_a_never_mark_without_words_is_matched_as_written():
 def test_a_typing_shortcut_is_never_the_word_it_stands_for(store):
     """The cooldown folds "u" to "you" and "tbh" to "to be honest"; her sheet's own shortcuts
     must not make every "you" a never-word or a tic."""
-    short = voice.sheet_of({'speech': {**LEDGER, 'never': ['u', 'ur', 'gonna'],
+    short = voice.sheet_of({'speech': {**GRUFF, 'never': ['u', 'ur', 'gonna'],
                                        'says': ['u', 'tbh', 'rn', 'noted']}})
     assert voice.never_used('are you sure your tank is going to pull', short) == ()
     assert voice.never_used('r u sure, ur tank is gonna pull', short) == ('u', 'ur', 'gonna')
@@ -196,7 +196,7 @@ def test_a_sample_copied_word_for_word_is_a_soft_rewrite(cast):
 
 
 def test_a_short_sample_is_a_copy_only_as_the_whole_line():
-    short = voice.sheet_of({'speech': {**LEDGER, 'samples': {'answer': 'not today'}}})
+    short = voice.sheet_of({'speech': {**GRUFF, 'samples': {'answer': 'not today'}}})
     assert voice.copies_sample('Not today.', short)
     assert not voice.copies_sample('not today, maybe friday', short)
     assert not voice.copies_sample('anything', voice.NONE)
@@ -217,15 +217,15 @@ def test_switching_the_phrase_cooldown_off_keeps_the_voice_checks(cast):
 def test_review_passes_her_sheet_to_the_cooldown(cast):
     for guid in (101, 102):
         for n in range(2):
-            put(cast, f'gold star, that makes {n}', guid=guid, channel='whisper', to=1,
+            put(cast, f'top marks, that makes {n}', guid=guid, channel='whisper', to=1,
                 ts=NOW - 600 + n)
         for n in range(4):
             put(cast, f'plain line number {n} here', guid=guid, channel='whisper', to=1,
                 ts=NOW - 500 + n)
     stores = GuardStores(cast.conn, GuardsCfg(enabled=True))
-    mine = review(stores, draft('gold star for you, we go at eight', channel='whisper', to_guid=1))
+    mine = review(stores, draft('top marks for you, we go at eight', channel='whisper', to_guid=1))
     assert mine.codes == () and mine.action == 'send'
-    other = review(stores, draft('gold star for you, we go at eight', guid=102, channel='whisper',
+    other = review(stores, draft('top marks for you, we go at eight', guid=102, channel='whisper',
                                  to_guid=1))  # 102 has no sheet: the cooldown as before
     assert other.codes == ('phrase_conversation', 'phrase_day')
 

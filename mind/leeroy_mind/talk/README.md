@@ -937,7 +937,7 @@ For a member with a sheet (`personas/speech.py`, `Pipeline._voice`):
   trigger)`, never the engine's rng). On an answer that gets a beat the want is the draw's lean
   (the beat chooses after the prompt is composed). A flirt sample is shown only on his turns; a
   sample she already sent word for word is never shown again.
-- Her sentence shape may name a line length ("fragments, two to six words": `word_range`). It
+- Her sentence shape may name a line length ("clipped, three to seven words": `word_range`). It
   moves only the word draw of her own line and her habit in a DM's mirror (`ShapeContext.
   voice_words`): never a shape's odds, `MIN_LINE_WORDS`, the DM cap or the number of draws.
 - A live line whose prompt carried a sheet has `voice.sheet-1` in its recipe's template id

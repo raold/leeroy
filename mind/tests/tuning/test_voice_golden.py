@@ -15,7 +15,7 @@ from leeroy_mind.talk.prompt import SAMPLES_HEAD
 from tuning.scenario import (VOICED, engine_clock, golden, golden_core, golden_voice,
                              record_voice)
 
-VOICES = ("Your voice: theatrical, arch, a little grand;", "Your voice: dry, exact, ledger-minded;")
+VOICES = ("Your voice: bubbly, scattered, quick to laugh;", "Your voice: plain, clipped, a bit gruff;")
 
 
 @pytest.fixture

@@ -22,7 +22,7 @@ from leeroy_mind.talk.shape import (MIN_LINE_WORDS, Shape, ShapeContext, dm_word
                                     draw_shape)
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.text import estimate_tokens
-from sheets import LEDGER, STAGE, give, sheet
+from sheets import GRUFF, BRIGHT, give, sheet
 
 BLOCK = sp.voice_block(sheet(), "Zan", to_him=True, private=True,
                        samples=["depends. what did the log say"])
@@ -79,7 +79,7 @@ def test_his_real_name_is_redacted_in_the_block_too():
 def rig(store, tmp_path):
     r = make_rig(store, engine_clock(), tmp_path, reply="the ferry leaves at seven")
     give(store, 101)                                   # a man with a sheet
-    give(store, 102, STAGE, player_gender="female", stance="drawn", style="bold")
+    give(store, 102, BRIGHT, player_gender="female", stance="drawn", style="bold")
     r.engine.personas.invalidate()
     r.world.apply(Group(0, 1, True, (1, 101, 102, 103)), r.clock.now())
     yield r
@@ -98,7 +98,7 @@ def composed(rig, t):
 
 def test_a_member_with_a_sheet_reads_it_by_the_instruction(rig):
     system, user = composed(rig, turn(101))
-    voice = "Your voice: dry, exact, ledger-minded; short flat statements, two to six words."
+    voice = "Your voice: plain, clipped, a bit gruff; short flat statements, three to seven words."
     assert voice in user and voice not in system
     tail = user[user.index(voice):]
     assert "With Zan: teases him about his sums." in tail       # the turn is his
@@ -122,17 +122,17 @@ def test_a_member_without_one_keeps_her_card_and_samples(rig):
     ("whisper", True, True), ("dm:102", True, True), ("discord:general", True, False)])
 def test_stance_only_where_only_he_reads(rig, channel, with_him, stance):
     _, user = composed(rig, turn(102, channel))
-    assert ("With Zan: flirts as if it were a dare and waits to see." in user) is with_him
-    assert ("married, and makes a bit of it" in user) is stance
+    assert ("With Zan: flirts by teasing, then changes the subject." in user) is with_him
+    assert ("seeing nobody, and cheerful about it" in user) is stance
 
 
 def test_a_turn_that_is_not_his_shows_neither_and_never_the_flirt_sample(rig):
     for kind, addressee in ((TurnKind.CONTINUE, 101), (TurnKind.OPEN, 0)):
         t = Turn(kind, 102, "guild", addressee=addressee)
         _, user = composed(rig, t)
-        assert "Your voice: theatrical, arch, a little grand" in user
-        assert "With Zan" not in user and "married" not in user
-        assert STAGE["samples"]["flirt"] not in user
+        assert "Your voice: bubbly, scattered, quick to laugh" in user
+        assert "With Zan" not in user and "seeing nobody" not in user
+        assert BRIGHT["samples"]["flirt"] not in user
 
 
 def test_the_samples_follow_the_turns_want_and_rotate_by_the_minute(rig):
@@ -146,18 +146,18 @@ def test_the_samples_follow_the_turns_want_and_rotate_by_the_minute(rig):
         c = rig.sync(e._compose(turn(102, "whisper"), meta, live=False))
         return c.samples
     first = shown("tease")
-    assert first[0] == STAGE["samples"]["tease"] and len(first) == 2
+    assert first[0] == BRIGHT["samples"]["tease"] and len(first) == 2
     assert shown("tease") == first                       # the same turn, the same samples
-    assert shown("flirt")[0] == STAGE["samples"]["flirt"]
-    assert shown("boundary")[0] == STAGE["samples"]["annoyed"]
-    assert shown("")[0] == STAGE["samples"]["answer"]
+    assert shown("flirt")[0] == BRIGHT["samples"]["flirt"]
+    assert shown("boundary")[0] == BRIGHT["samples"]["annoyed"]
+    assert shown("")[0] == BRIGHT["samples"]["answer"]
     seconds = {shown("tease", 1)[1] for _ in range(12)}
     assert len(seconds) >= 2                             # not the same second sample every turn
 
 
 def test_a_sample_she_already_sent_leaves_the_prompt(rig):
     e = rig.engine
-    said = LEDGER["samples"]["answer"]
+    said = GRUFF["samples"]["answer"]
     e._own_of(101).append(("guild", 0, said))
     for minute in range(6):
         rig.sync(rig.advance(60, step=60))
@@ -169,7 +169,7 @@ def test_a_sample_she_already_sent_leaves_the_prompt(rig):
 def test_the_shown_samples_are_the_ones_the_copy_screen_reads(rig):
     c = rig.sync(rig.engine._compose(turn(101), TurnMeta(turn_id=""), live=False))
     assert c.samples and all("- " + s in c.messages[1]["content"] for s in c.samples)
-    assert set(c.samples) <= set(LEDGER["samples"].values())
+    assert set(c.samples) <= set(GRUFF["samples"].values())
 
 
 def test_the_sheet_costs_at_most_about_eighty_tokens_net(rig, store):
@@ -190,7 +190,7 @@ def test_the_sheet_costs_at_most_about_eighty_tokens_net(rig, store):
     for label in ("with", "without"):
         if label == "with":
             give(store, 101, **sized)
-            give(store, 102, STAGE, player_gender="female", stance="drawn", style="bold", **sized)
+            give(store, 102, BRIGHT, player_gender="female", stance="drawn", style="bold", **sized)
         else:
             save_member(store, 101, **sized)
             save_member(store, 102, player_gender="female", stance="drawn", style="bold", **sized)

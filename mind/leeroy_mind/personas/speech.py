@@ -23,7 +23,7 @@ lines (talk/prompt.py PromptParts.voice; personas/card.py leaves those out for h
 - screen: what an import refuses beyond the persona screens (personas.io._screen: his real
   name, romance aimed at a member), each as a code: a later era's slang or year, a guild
   member's name in a sample, a never-word inside a sample, stock slop among her words.
-- word_range: the line length her sentence shape names ("fragments, two to six words"), for
+- word_range: the line length her sentence shape names ("clipped, three to seven words"), for
   talk/shape.py's word draw.
 
 Pure: no clock, no I/O, no logging. The seeded draw is the caller's own stream."""
@@ -155,7 +155,7 @@ def pick_samples(speech: Speech, want: str, rng, *, to_him: bool = False, sent=(
 
 
 def word_range(shape: str) -> tuple[int, int] | None:
-    """The line length a sentence shape names ("two to six words", "3-8 words"), as (low,
+    """The line length a sentence shape names ("three to seven words", "3-8 words"), as (low,
     high) within 1 to 60; None when it names none."""
     m = _RANGE.search(shape or "")
     if not m:

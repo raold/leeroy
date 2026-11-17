@@ -4,14 +4,14 @@ import { SAMPLE_ORDER, VOICE_NONE, canUndoVoice, voiceRows }
   from "../../../leeroy_mind/console/static/js/voicemodel.mjs";
 
 // an invented sheet
-const speech = { register: "dry, exact", shape: "short flat statements",
+const speech = { register: "plain, clipped", shape: "short flat statements",
                  says: ["noted", "fair enough"], never: ["awesome"], brings_up: ["the allotment", "night shifts"],
                  with_him: "teases him about his sums", stance: "single and in no hurry",
                  samples: { annoyed: "noted. not twice", answer: "depends. what did the log say", warm: "glad you logged on" } };
 
 test("the panel lists her whole sheet, samples in a fixed order", () => {
   assert.deepEqual(voiceRows({ speech }), [
-    ["register", "dry, exact"], ["shape", "short flat statements"], ["says", "noted, fair enough"],
+    ["register", "plain, clipped"], ["shape", "short flat statements"], ["says", "noted, fair enough"],
     ["never says", "awesome"], ["brings up", "the allotment; night shifts"],
     ["with him", "teases him about his sums"], ["stance", "single and in no hurry"],
     ["sample: answer", "depends. what did the log say"], ["sample: warm", "glad you logged on"],

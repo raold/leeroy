@@ -18,13 +18,13 @@ from leeroy_mind.personas.io import canonical_json, load_persona, save_persona
 from leeroy_mind.personas.schema import PersonaError, speech_to_dict
 from leeroy_mind.protocol import Member
 from leeroy_mind.storage.store import Store
-from sheets import LEDGER, STAGE, sheet
+from sheets import GRUFF, BRIGHT, sheet
 
 CAST = ((201, "Arkon"), (202, "Belra"), (203, "Coros"))
 HUMAN = HumanIdentity(1, "Testmage", "Zan", "Quentin", True, "he")
 
 
-def lab_file(guid, data=LEDGER, **top):
+def lab_file(guid, data=GRUFF, **top):
     """A sheet in the sheet lab's shape, with the keys the import does not read."""
     return {"guid": guid, "character_name": dict(CAST).get(guid, "Nobody"),
             "fixed_facts": {"age": 30},
@@ -69,7 +69,7 @@ def _source(store, guid=201):
 
 def test_a_file_in_the_labs_shape_or_the_schemas_reads_as_the_same_sheet(tmp_path):
     lab = write(tmp_path, 201, lab_file(201))
-    own = write(tmp_path, 202, {"guid": 202, "speech": LEDGER})
+    own = write(tmp_path, 202, {"guid": 202, "speech": GRUFF})
     assert voices.read_sheet(lab) == (201, "Arkon", sheet())
     assert voices.read_sheet(own) == (202, None, sheet())
     bom = write(tmp_path, 203, "﻿" + json.dumps(lab_file(203)))
@@ -79,8 +79,8 @@ def test_a_file_in_the_labs_shape_or_the_schemas_reads_as_the_same_sheet(tmp_pat
 @pytest.mark.parametrize("body,code", [
     ("{not json", "not_json"), ("[1, 2]", "bad_shape"), ({"guid": 201}, "bad_shape"),
     ({"guid": 201, "voice": "dry"}, "bad_shape"),
-    ({"guid": 201, "speech": {**LEDGER, "humour": "dry"}}, "bad_shape"),
-    ({"guid": 201, "speech": {**LEDGER, "says": "noted"}}, "bad_shape"),
+    ({"guid": 201, "speech": {**GRUFF, "humour": "dry"}}, "bad_shape"),
+    ({"guid": 201, "speech": {**GRUFF, "says": "noted"}}, "bad_shape"),
     ({"guid": 201, "voice": {"register": "dry"}, "samples": {}}, "bad_shape"),
     ("x" * (voices.MAX_FILE_BYTES + 1), "unreadable"),
 ])
@@ -102,7 +102,7 @@ def test_a_missing_file_is_unreadable(tmp_path):
 def test_the_plan_names_each_files_outcome_and_sizes_and_skips_files_that_are_no_sheets(store, tmp_path):
     _members(store)
     write(tmp_path, 201, lab_file(201))
-    write(tmp_path, 202, lab_file(202, STAGE))
+    write(tmp_path, 202, lab_file(202, BRIGHT))
     write(tmp_path, 0, {"plan": "the cast"}, name="cast_plan.json")
     plans = voices.plan(store, tmp_path)
     assert [(h.guid, h.name, h.outcome, h.codes, h.samples) for h in plans] == [
@@ -117,19 +117,19 @@ def test_the_plan_names_each_files_outcome_and_sizes_and_skips_files_that_are_no
 @pytest.mark.parametrize("body,codes", [
     (lab_file(999), ("guid_mismatch",)),
     (lab_file(201, character_name="Someone"), ("name_mismatch",)),
-    ({"guid": 201, "speech": {**LEDGER, "says": ["a", "b", "c"]}}, ("invalid",)),
-    ({"guid": 201, "speech": {**LEDGER, "samples": {"tease": "you first"}}}, ("invalid",)),
-    ({"guid": 201, "speech": {**LEDGER, "samples": {**LEDGER["samples"], "flirt": "come here"}}},
+    ({"guid": 201, "speech": {**GRUFF, "says": ["a", "b", "c"]}}, ("invalid",)),
+    ({"guid": 201, "speech": {**GRUFF, "samples": {"tease": "you first"}}}, ("invalid",)),
+    ({"guid": 201, "speech": {**GRUFF, "samples": {**GRUFF["samples"], "flirt": "come here"}}},
      ("invalid",)),  # a man, and flirt beside warm
-    ({"guid": 201, "speech": {**LEDGER, "brings_up": ["her crush on Belra"]}}, ("member_romance",)),
-    ({"guid": 201, "speech": {**LEDGER, "samples": {**LEDGER["samples"],
+    ({"guid": 201, "speech": {**GRUFF, "brings_up": ["her crush on Belra"]}}, ("member_romance",)),
+    ({"guid": 201, "speech": {**GRUFF, "samples": {**GRUFF["samples"],
                                                      "tease": "ask Coros, he pulled early"}}},
      ("member_name",)),
-    ({"guid": 201, "speech": {**LEDGER, "samples": {**LEDGER["samples"],
+    ({"guid": 201, "speech": {**GRUFF, "samples": {**GRUFF["samples"],
                                                      "tired": "awesome. brain is soup"}}},
      ("never_in_sample",)),
-    ({"guid": 201, "speech": {**LEDGER, "stance": "single since 2019"}}, ("later_era",)),
-    ({"guid": 201, "speech": {**LEDGER, "says": ["noted", "fair enough", "on paper",
+    ({"guid": 201, "speech": {**GRUFF, "stance": "single since 2019"}}, ("later_era",)),
+    ({"guid": 201, "speech": {**GRUFF, "says": ["noted", "fair enough", "on paper",
                                                  "you absolute menace"]}}, ("says_slop",)),
 ])
 def test_what_a_sheet_is_refused_for_by_code(store, tmp_path, body, codes):
@@ -148,7 +148,7 @@ def test_a_sheet_for_nobody_in_the_cast_or_with_his_real_name_is_refused(store, 
     assert voices.plan(store, tmp_path)[0].codes == ("no_persona",)
     write(tmp_path, 1, lab_file(1))  # he has no persona: never a sheet for him
     assert voices.plan(store, tmp_path, guids={1})[0].codes == ("no_persona",)
-    write(tmp_path, 201, {"guid": 201, "speech": {**LEDGER, "with_him": "calls him Quentin"}})
+    write(tmp_path, 201, {"guid": 201, "speech": {**GRUFF, "with_him": "calls him Quentin"}})
     plans = {h.guid: h for h in voices.plan(store, tmp_path, human=HUMAN)}
     assert plans[201].codes == ("real_name",)
     assert "Quentin" not in " ".join(plans[201].details)
@@ -186,7 +186,7 @@ def load_persona_json(js):
 def test_a_replaced_sheet_undoes_to_the_one_before_and_a_later_change_wins(store):
     _members(store)
     first = voices.set_voice(store, 201, sheet(), now=2000.0)
-    other = sheet(register="blunt shop-floor banter")
+    other = sheet(register="soft-spoken and careful")
     second = voices.set_voice(store, 201, other, now=2100.0)
     assert _ledger(store)[-1]["text"] == "voice sheet replaced"
     assert not undo(store, first, now=3000.0)          # the second change moved it: undo that first
@@ -198,13 +198,13 @@ def test_a_replaced_sheet_undoes_to_the_one_before_and_a_later_change_wins(store
 def test_clearing_gives_back_the_source_she_had_before_her_first_sheet(store):
     _members(store)
     voices.set_voice(store, 201, sheet(), now=2000.0)
-    voices.set_voice(store, 201, sheet(register="blunt shop-floor banter"), now=2100.0)
+    voices.set_voice(store, 201, sheet(register="soft-spoken and careful"), now=2100.0)
     cleared = voices.set_voice(store, 201, None, now=2200.0)
     assert load_persona(store, 201).speech is None and _source(store) == "generated"
     assert _ledger(store)[-1] == {"id": cleared, "kind": "voice", "text": "voice sheet removed",
                                   "ref": None}
     assert undo(store, cleared, now=3000.0)
-    assert load_persona(store, 201).speech.register == "blunt shop-floor banter"
+    assert load_persona(store, 201).speech.register == "soft-spoken and careful"
 
 
 def test_the_schema_refuses_a_bad_sheet_at_the_write_too(store):
@@ -247,13 +247,13 @@ def _sheets(d):
 def _folder(tmp_path):
     folder = tmp_path / "sheets"
     write(folder, 201, lab_file(201))
-    write(folder, 202, lab_file(202, STAGE))
-    write(folder, 203, {"guid": 203, "speech": {**LEDGER, "stance": "single since 2019"}})
+    write(folder, 202, lab_file(202, BRIGHT))
+    write(folder, 203, {"guid": 203, "speech": {**GRUFF, "stance": "single since 2019"}})
     return folder
 
 
 def _no_text(out):
-    for data in (LEDGER, STAGE):
+    for data in (GRUFF, BRIGHT):
         for value in (data["register"], data["shape"], data["with_him"], data["stance"],
                       *data["says"], *data["brings_up"], *data["samples"].values()):
             assert value not in out
@@ -284,7 +284,7 @@ def test_cli_go_saves_after_a_snapshot_then_undo_and_clear(tmp_path, capsys):
     _no_text(out)
     assert len(list((d / "snapshots").glob("mind-pre-voices-*.db"))) == 1
     got = _sheets(d)
-    assert got[201] == LEDGER and got[202] == STAGE and got[203] is None
+    assert got[201] == GRUFF and got[202] == BRIGHT and got[203] is None
     # again: nothing changes
     assert main(["personas", "--data-dir", str(d), "voices", "--dir", str(folder), "--go",
                  "--guid", "201,202"]) == 0
@@ -292,7 +292,7 @@ def test_cli_go_saves_after_a_snapshot_then_undo_and_clear(tmp_path, capsys):
     # `personas undo <ledger id>` restores the prior version
     assert main(["personas", "--data-dir", str(d), "undo", "1"]) == 0
     capsys.readouterr()
-    assert _sheets(d)[201] is None and _sheets(d)[202] == STAGE
+    assert _sheets(d)[201] is None and _sheets(d)[202] == BRIGHT
     # --clear takes the rest off: the rollback step before older code
     assert main(["personas", "--data-dir", str(d), "voices", "--clear"]) == 0
     assert "would take the voice sheet off 1 members" in capsys.readouterr().out
@@ -340,7 +340,7 @@ def test_an_export_carries_the_sheet_and_an_import_of_it_changes_nothing(store, 
     _members(store)
     voices.set_voice(store, 201, sheet(), now=2000.0)
     (path,) = export_personas(store, tmp_path / "out", guids=[201])
-    assert json.loads(path.read_text(encoding="utf-8"))["speech"] == LEDGER
+    assert json.loads(path.read_text(encoding="utf-8"))["speech"] == GRUFF
     report = import_personas(store, tmp_path / "out", ts=3000.0, human=HUMAN)
     assert (report.imported, report.unchanged, report.errors) == ([], [201], {})
 

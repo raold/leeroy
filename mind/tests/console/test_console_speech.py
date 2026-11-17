@@ -17,7 +17,7 @@ from leeroy_mind.personas import voices
 from leeroy_mind.personas.io import PersonaCache, load_persona
 from leeroy_mind.personas.looks_edit import LooksService
 from leeroy_mind.protocol import Member
-from sheets import LEDGER, sheet
+from sheets import GRUFF, sheet
 
 NOW = 1_793_304_000.0
 
@@ -41,7 +41,7 @@ def test_the_member_detail_carries_her_sheet_and_its_ledger_row(cast, data):
                      now=NOW)["card"]["speech"] is None
     ledger = voices.set_voice(cast, 101, sheet(), now=NOW - 60)
     view = feed.read(data / "mind.db", personaview.member_view, 101, now=NOW)
-    assert view["card"]["speech"] == LEDGER
+    assert view["card"]["speech"] == GRUFF
     assert [(r["id"], r["kind"], r["text"], r["undone"]) for r in view["ledger"]] == [
         (ledger, "voice", "voice sheet set", False)]
     # the ledger row's words never hold the sheet's
@@ -51,7 +51,7 @@ def test_the_member_detail_carries_her_sheet_and_its_ledger_row(cast, data):
 def test_the_roster_never_carries_a_sheet(cast, data):
     voices.set_voice(cast, 101, sheet(), now=NOW - 60)
     text = json.dumps(feed.read(data / "mind.db", personaview.roster_view, now=NOW))
-    for private in ("ledger-minded", "fair enough", "the allotment", "no hurry",
+    for private in ("a bit gruff", "fair enough", "the allotment", "no hurry",
                     "brain is soup"):
         assert private not in text
 
