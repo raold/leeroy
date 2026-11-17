@@ -8,7 +8,7 @@ import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { godmodePanel, renderStrings } from "./godmode.mjs";
 import { looksEditor, looksUndoButton } from "./looks.mjs";
-import { SHAPES, bustText, canUndoLooks, shapeText } from "./looksmodel.mjs";
+import { SHAPES, bustText, canUndoLooks, shapeText, styleRows } from "./looksmodel.mjs";
 import { canUndoVoice, voiceRows } from "./voicemodel.mjs";
 import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
@@ -27,7 +27,7 @@ var BY = { seed: "the seeding", owner: "you (an import, a personas command or th
            night: "the night's looks pass", photo: "the night's photo-kind pass", stance: "a stance move",
            undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
-                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "weight and figure",
+                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "looks edit",
                      home: "home state", voice: "voice sheet", undo: "undo" };
 var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
 function worldMode() { return $("p-world-filter").checked; }
@@ -300,6 +300,7 @@ function renderMember(j) {
                         ...(c.identity && c.identity.player_gender === "female"
                           ? [["bust", bustText(a.bust)], ...SHAPES.map(function (sh) { return [sh.name, shapeText(sh.name, a[sh.name])]; })] : []),
                         ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],
+                        ...styleRows(a),
                         ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc],
                         ["photo kind", c.photo ? photoKindText(c.photo) : "none yet: the night's photo-kind pass gives one"]]
                      : [["looks", c ? "none yet: the night's looks pass gives them" : "-"]]);

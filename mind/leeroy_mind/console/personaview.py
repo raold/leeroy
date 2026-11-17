@@ -40,9 +40,12 @@ from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's 
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
 from leeroy_mind.personas.looks_edit import WEIGHT_MAX, WEIGHT_MIN
-from leeroy_mind.personas.schema import (BUSTS, GLUTES, HIPS, WAISTS, persona_from_dict,
-                                         persona_to_dict)
+from leeroy_mind.personas.schema import (BUSTS, GLASSES, GLUTES, HAIR_COLOURS, HAIR_LENGTHS,
+                                         HAIR_STYLES, HIPS, JEWELLERY, MAKEUPS, MEN_HAIR_STYLES,
+                                         PALETTE, PIERCINGS, TATTOOS, WAISTS, WARDROBES,
+                                         persona_from_dict, persona_to_dict)
 from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
+from leeroy_mind.selfies.style import suggestive
 
 from .feed import guild_mood, human_guid
 from .raidview import people
@@ -54,7 +57,13 @@ LEDGER = 25         # ledger rows in a member's detail
 LOOKS_S = 60.0      # a looks pass saves its persona this soon after its unit's time, at most
 # what his weight and bust edit accepts (personas.looks_edit, the looks op): the Looks panel's form
 LOOKS_LIMITS = {"weight_kg": [WEIGHT_MIN, WEIGHT_MAX], "busts": list(BUSTS),
-                "glutes": list(GLUTES), "waists": list(WAISTS), "hips": list(HIPS)}
+                "glutes": list(GLUTES), "waists": list(WAISTS), "hips": list(HIPS),
+                # his hair, wardrobe, makeup and accessories (owner, 2026-11-17), women's and men's
+                "hair_colours": list(HAIR_COLOURS), "hair_lengths": list(HAIR_LENGTHS),
+                "hair_styles": list(HAIR_STYLES), "men_hair_styles": list(MEN_HAIR_STYLES),
+                "wardrobes": list(WARDROBES), "palette": list(PALETTE), "makeups": list(MAKEUPS),
+                "glasses": list(GLASSES), "jewellery": list(JEWELLERY), "tattoos": list(TATTOOS),
+                "piercings": list(PIERCINGS)}
 TABLES = ("cast_member", "persona_core", "pad_mood", "guild_mood", "relationship", "memory",
           "persona_ledger", "trait_state")
 _SCORED = ("affinity != 0 OR trust != 0 OR respect != 0 OR attraction != 0 "
@@ -298,6 +307,9 @@ def _card(p, status: str | None = None) -> dict:
     return {"identity": {**{k: d["identity"][k] for k in ("age", "player_gender", "region")},
                          "home": p.identity.home},
             "status": status,
+            # she has the lust style now (selfies.style.suggestive): the Looks panel offers the
+            # swim wardrobe tag only then
+            "lust_style": suggestive(p),
             "big_five": d["big_five"], "attachment": d["attachment"], "humour": d["humour"],
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},

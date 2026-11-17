@@ -20,6 +20,7 @@ from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSI
 from .prompt import (_COVERED, _COVERED_LUST, _FRAMINGS, GLUTES_FRAMINGS, body_phrases,
                      fit_required, glutes_words,
                      _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
+                     accessory_phrases, reserve,
                      NEGATIVE, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
                      lust_phrase, names_re, phrase_adder, renderable, subject_phrase)
@@ -403,7 +404,10 @@ def scene_json(s: Scene) -> dict:
 
 def scene_schema(p: Persona | None) -> dict:
     """The reply schema for p's scene: only enum choices, under the member's style."""
-    return SCENE_SCHEMA_LUST if style_of(p) == LUST else SCENE_SCHEMA
+    from . import wardrobe  # her wardrobe and palette narrow the outfits and colours offered
+    if style_of(p) == LUST:
+        return wardrobe.lust_schema(p, SCENE_SCHEMA_LUST)
+    return wardrobe.scene_schema(p, SCENE_SCHEMA, OUTFITS)
 
 
 def scene_system(p: Persona | None, data_dir: Path, *, human: HumanIdentity, name: str,
@@ -524,6 +528,11 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     else:
         add(s.setting, 1, True)
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
+    # what the owner set her to wear, after the activity and setting among the optional
+    # phrases; the required set shortens to leave room for all of them (fit_required's reserve)
+    worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]
+    room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
+    out += worn
     if s.kind != "snapshot":
         add("looking at the camera", 3)
     details = [d for d in eyes_face(p, name_re) if not limb_detail(d[0])]
@@ -538,7 +547,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)
-    out = fit_required(out, p, [_KINDS[s.kind], _FRAMINGS[s.framing]], name_re)
+    out = fit_required(out, p, [_KINDS[s.kind], _FRAMINGS[s.framing]], name_re, reserve=room,
+                       give=(_KINDS[s.kind],))
     return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if lust else SNAP_NEGATIVE)
 
 
@@ -560,6 +570,7 @@ def build_tile_prompt(p: Persona) -> PromptSpec:
     out += [(text, 0) for text, _ in hair_skin(p, name_re)]
     for text, _ in eyes_face(p, name_re):
         out.append((text, 0 if text == eye else 1))
+    out += accessory_phrases(p, name_re)
     add(GAME_MONITOR, 0)
     add(TILE_DESK, 1)
     if not _text_codes("outfit", p.appearance.at_the_pc or "", ident=_NOBODY, names=[]):
