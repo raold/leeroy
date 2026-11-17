@@ -336,7 +336,12 @@ quotas; successful first fragments record use atomically, even if learning froze
 after composition. That delivery accounting preserves the 14-day reuse rest.
 Those quotas still
 require an active recorded owner-play session, so unattended server conversations
-do not receive callbacks while the owner is offline.
+do not receive callbacks while the owner is offline. One exception (2026-11-17): on a
+Discord turn, his own Discord post within the last hour counts as him being there, and
+the quota window is that hour (`memory/callbacks.py` `_discord_floor`). Until then
+`callback_use` held no row: he had talked to members only through Discord DMs, with no
+game session, for four days. The shared-actor rule still holds (he must be a reader of
+the turn), so in practice this is her DM with him.
 
 Lesson provenance uses `learn:lesson:evidence:<lesson-id>` in meta, with
 `version: 1`, bounded `refs` (`chat:<id>`, `memory:<id>`, non-chat `event:<id>`

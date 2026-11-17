@@ -738,3 +738,28 @@ def test_provenance_at_twenty_thousand_discord_receipts_is_indexed_and_bounded(r
     # 512 distinct nodes maximum and indexed receipts: no linear history scan.
     # Generous wall-clock ceiling tolerates shared CI hosts; report the actual median.
     assert median(times)<.25
+
+
+def test_a_callback_reaches_her_dm_while_he_is_in_discord_and_not_in_the_game(rig,monkeypatch):
+    """Live, 2026-11-17: callback_use held 0 rows; the quota window needed a game session and
+    he had talked only through Discord DMs since 2026-11-13."""
+    select(monkeypatch,callback='callback.1.v1')
+    rig.engine._learn_features=(True,False)
+    rig.store.set_meta('human_guid','1')  # app.py records this on the bridge hello
+    mid=callback_memory(rig,channel='whisper')
+    assert compose(rig,'dm:101')[1].recipe_snapshot.callback_id is None   # nobody there
+    source(rig,'guild',guid=1)                                             # game chat is no Discord post
+    assert compose(rig,'dm:101')[1].recipe_snapshot.callback_id is None
+    rig.store.insert_chat_line(Chat(0,'dm:101',1,'Invented',101,'A fixture post.',0,0),
+        ts=rig.clock.now()-7200,session_id=None,origin='human')
+    assert compose(rig,'dm:101')[1].recipe_snapshot.callback_id is None   # two hours ago
+    rig.store.insert_chat_line(Chat(0,'dm:101',1,'Invented',101,'A fixture post.',0,0),
+        ts=rig.clock.now()-60,session_id=None,origin='human')
+    assert compose(rig,'whisper')[1].recipe_snapshot.callback_id is None  # a game turn needs play
+    turn,meta,c=compose(rig,'dm:101')
+    assert meta.recipe_snapshot.callback_id==mid
+    assert 'Something you might bring up if it fits:' in c.messages[-1]['content']
+    rig.engine._record(turn,meta,c.persona,'A pleasant memory of that kite.',c.memory_ids)
+    assert rig.store.conn.execute('SELECT memory_id FROM callback_use').fetchone()[0]==mid
+    apply.release(rig.engine,meta)
+    assert compose(rig,'dm:101')[1].recipe_snapshot.callback_id is None   # her hour's one, and 14 days' rest
