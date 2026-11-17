@@ -68,6 +68,7 @@ from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
 from leeroy_mind.llm.scheduler import Expired, LLMScheduler, Priority, SchedulerError
 from leeroy_mind.memory.recall import Recall, whisper_ok
+from leeroy_mind.nightly.life import met_him
 from leeroy_mind.nightly.settings import night_bounds
 from leeroy_mind.personas.card import card_race_class, render_prompt_card
 from leeroy_mind.personas.facts import pronoun_of
@@ -94,6 +95,7 @@ from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowe
                                      ordered, topic_for)
 from leeroy_mind.guards.review import HARD_CODES, fresh_hint, rewrite_hint
 from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hint, strip as strip_phrases
+from leeroy_mind.guards.opener import cut as cut_opener
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -211,9 +213,19 @@ GAME_NAME_HINT = ("Name only bosses and battlegrounds that really exist and that
 # A Discord message that names its own speaker talks about her as someone else ("mejith being
 # a corporate strategist now", posted by that member, 2026-11-15 audit): asked again once.
 SELF_NAME_HINT = 'You are {name}: talk about yourself in the first person, never by your own name.'
+# Seeing him in person when they have never met (filters "in person": moves.in_person, the
+# evening DM audit, 2026-11-16: a date planned at an event of hers). Soft: a retry
+# that still has it is kept, and an answer owed to him never falls back for it.
+IN_PERSON_HINT = ("You two have never met and live far apart: don't plan to see {them} in person "
+                  "or have {them} turn up anywhere; you talk online.")
+# Cataclysm or later named in a 2009 guild (filters "era": library.wikitext.names_later).
+ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
-                     "phrase: resting"})
+                     "phrase: resting", "in person", "era"})
+# Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
+# cooldown's and an opener that says his line back.
+CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
@@ -646,6 +658,15 @@ class Composed:
     # the turn answers his line and it asks her something (asking.asks): the beat's answering
     # wants lead (beat.wants_for's `asking`)
     asking: bool = False
+
+
+def _far_memories(memories: list) -> list:
+    """`memories` without her intentions that see him in person (memory.diversity.intends and
+    talk.moves.in_person: "going to the gig to see if his jokes work in person"), for a
+    member whose arc has not met him. Only what her prompt shows: the stored memory stays."""
+    from leeroy_mind.memory.diversity import intends
+    from leeroy_mind.talk.moves import in_person
+    return [m for m in memories if not (intends(m) and in_person(m.text))]
 
 
 def _pending_of(verdicts) -> tuple[str, ...]:
@@ -1321,6 +1342,12 @@ class Pipeline:
         p = self.personas.get(turn.speaker)
         return (p is not None and is_private(turn.channel) and turn.to_guid == self.human.guid
                 and self._arc_view(turn, p, self.clock.now()).summons_ok)
+
+    def _met_him(self, guid: int) -> bool:
+        """Her romance arc has met him in person (nightly.life.met_him, #325's FAR_AWAY_MET
+        state, read through the owner's lens as talk reads it); False without him."""
+        hg = self.human.guid
+        return bool(hg) and met_him(self.store, guid, hg, lens=True)
 
     def _arc_view(self, turn: Turn, p: Persona, now: float,
                   rng: random.Random | None = None) -> ArcView:
@@ -2179,6 +2206,9 @@ class Pipeline:
                 people.append(g)
         attitude = p.romance.stance if p.identity.player_gender == "female" else ""
         realism = self.cfg.romance.realism  # [romance] realism: his card's note, stale memories
+        # they live far apart (#325's FAR_AWAY): until her arc has met him, his card's note and
+        # her intentions that see him in person stay out of her prompt (_far_memories)
+        apart = bool(hg) and not self._met_him(turn.speaker)
         pronouns = self._pronoun_tags(turn, people, recent)
         cards = [relationship_card(names.get(g, "someone"),
                                    self.store.get_relationship(turn.speaker, g, lens=True),
@@ -2189,7 +2219,7 @@ class Pipeline:
                                    speaker=p.identity.player_gender,
                                    friendship_only=is_group(turn.channel),
                                    pronoun=pronouns.get(("card", g), ""),
-                                   realism=realism and g == hg)
+                                   realism=realism and g == hg, far=apart and g == hg)
                  for g in people]
 
         trigger = his = ""  # his: the line of his the turn answers, on any channel ("" none)
@@ -2223,6 +2253,8 @@ class Pipeline:
             pinned = self.recall._shareable(self.store.get_memories([meta.lore_memory]),
                 turn.speaker, turn.channel, turn.to_guid, **bond_options)
             memories = [*pinned, *memories][:5]
+        if apart:
+            memories = _far_memories(memories)
 
         state = self.store.get_state(turn.speaker, lens=True)
         altered = self._altered_of(turn.speaker)
@@ -3007,7 +3039,7 @@ class Pipeline:
                     return drop("guard_react")
                 if verdict.action == "drop" and not owed:
                     return drop("guard_drop")
-                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(PHRASE_CODES)
+                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(CUT_CODES)
                                                 for v in verdicts):
                     return await self._without_phrases(turn, meta, p, lines, verdicts, owed,
                                                        close=close, spoken=spoken)
@@ -3029,7 +3061,8 @@ class Pipeline:
                     retry = replace(composed, messages=[*composed.messages,
                         {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
                         {"role": "user", "content": rewrite_hint(
-                            verdict.codes, tuple(x for v in verdicts for x in v.phrases))}])
+                            verdict.codes, tuple(x for v in verdicts for x in v.phrases),
+                            tuple(x for v in verdicts for x in v.pronouns))}])
                 text, why = await self._generate(turn, meta, retry, spoken=spoken, max_attempts=1)
                 if why:
                     if owed:
@@ -3118,11 +3151,24 @@ class Pipeline:
         send what survives, checked once more, else drop the line. An answer owed to him only
         loses a closing epithet (`epithet_only`: a clause cut can reverse what she said, review
         326), is never dropped for a phrase alone and never dropped `expired` here, its retry
-        being in hand (#325): it goes as it was written."""
+        being in hand (#325): it goes as it was written.
+
+        A retry whose opening still says his line back (`echo_opener`) loses those clauses
+        (guards/opener.cut) when what is left stands alone; an owed answer whose cut leaves too
+        little, or whose recheck still finds more than a phrase, goes as it was written, and
+        one that keeps only its phrases goes without the echo (its phrases as written, as
+        before)."""
         named = tuple(dict.fromkeys(x for v in verdicts for x in v.phrases))
+        echoed = next((v.echo_of for v in verdicts if v.echo_of), "")
         joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
-        text = (strip_phrases(joined.join(s.plain for s in lines), named, epithet_only=owed)
-                if named else None)
+        text = joined.join(s.plain for s in lines)
+        if echoed:
+            text = cut_opener(text, echoed)
+        if text is not None and named:
+            cut = strip_phrases(text, named, epithet_only=owed)
+            text = cut if cut is not None or not (owed and echoed) else text
+        elif not echoed:
+            text = None
         if text is not None:
             kept = ([Styled(text, text)] if spoken else
                     self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
@@ -3134,7 +3180,8 @@ class Pipeline:
                     return self._drop(turn, meta, "scope_changed")
                 if not owed and self.scheduler.expired(self._deadline(turn, meta)):
                     return self._drop(turn, meta, "expired")
-            if kept and all(v.action == "send" for v in checked):
+            if kept and all(v.action == "send" or owed and echoed and v.codes
+                            and set(v.codes) <= set(PHRASE_CODES) for v in checked):
                 meta.phrase_pending = _pending_of(checked)
                 return kept
         meta.guard_codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
@@ -3142,7 +3189,8 @@ class Pipeline:
             meta.guard_verdict = "rewrite"
             return lines
         meta.guard_verdict = "drop"
-        return self._drop(turn, meta, "guard_phrase_refused", meta.memory_ids)
+        return self._drop(turn, meta, "guard_phrase_refused" if named else "guard_rewrite_refused",
+                          meta.memory_ids)
 
     async def _guard_react(self, turn, meta, reaction, allowed=None) -> bool:
         """Her reaction instead of a line: True once it is posted (a Discord reaction added, a
@@ -3555,6 +3603,8 @@ class Pipeline:
         moves = [(r.clause, r.main) for r in c.moves]
         hg = self.human.guid
         summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        # ...and whether seeing him in person may: only once her arc has met him (_met_him)
+        far = summons_ok is False and not self._met_him(turn.speaker)
         emoji = is_discord(turn.channel)  # Discord keeps emoji as text: no tell, no repair
 
         def quiet(t: str) -> bool:  # an emoji-only line is a Discord message (ruling R9)
@@ -3606,7 +3656,7 @@ class Pipeline:
                                    support=c.support, people=list(self._protect(turn.channel)),
                                    window=c.window, held=c.held, tonight=meta.again_tonight,
                                    recent_moves=moves, summons_ok=summons_ok,
-                                   keep_emoji=emoji)
+                                   keep_emoji=emoji, far=far)
                 if len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
@@ -3858,12 +3908,16 @@ class Pipeline:
             hints.append(MOVE_HINT.format(move=MOVE_PHRASES[move].format(**forms)))
         if "summons" in reasons:
             hints.append(SUMMONS_HINT.format(**forms))
+        if "in person" in reasons:
+            hints.append(IN_PERSON_HINT.format(**forms))
         if "sample" in reasons:
             hints.append(SAMPLE_HINT)
         if "history" in reasons:
             hints.append(HISTORY_HINT)
         if "slang" in reasons:
             hints.append(SLANG_HINT)
+        if "era" in reasons:
+            hints.append(ERA_HINT)
         if "game name" in reasons:
             hints.append(GAME_NAME_HINT)
         if "self name" in reasons:

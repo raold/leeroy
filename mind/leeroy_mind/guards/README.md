@@ -288,6 +288,37 @@ own evidence. Leave out template lines (`utterance.why` `say_as`) and short `gz`
 Rollback: remove `phrase_cooldown` from `[guards]` before running older code, which reads
 an unknown key as an invalid table and turns all guards off.
 
+## His line said back as her opener, and a member's wrong pronoun (2026-11-16)
+
+The evening DM audit (38 graded answers to his whispers and DMs after #347) found echoes in 10
+and none was a copy `echo_parent` holds: his short line said back as her first words, quoted
+back, or what he said he did restated to him as "you ...?". Two soft codes, no switch, on every
+channel (they need `[guards] enabled`):
+
+- `echo_opener` (`opener.py`): her opening (first 40 words) repeats a run of one of his clauses
+  holding all its content words (two words at least; never one with i/you/we, a greeting, or
+  one she gives back with "too"; his question said back as a statement is its answer), quotes
+  his words, or restates what he said he did ("you" + his act word; when he asked her
+  something, only as her first words), or reports what he asks ("you're asking to ...").
+  The retry is told "answer it without saying it back". A second draft that still opens on it
+  goes to the phrase cooldown's strip (`talk.pipeline._without_phrases`, `CUT_CODES`):
+  `opener.cut` takes the echoing clauses out when 3+ words stand alone; an answer owed to him
+  that cannot be cut goes as written (never dropped), a bystander line is dropped
+  `guard_rewrite_refused`. `Verdict.echo_of` carries his line for the cut (repr-hidden).
+- `member_misgender` (`pronouns.py`): her draft names guild members of one gender by character
+  name (else his line she answers does) and calls them only "he"/"she" of the other sex after
+  the name. Quiet for a name she speaks to, someone called "he"/"she" before the name, both
+  genders named, a guild member without a persona (`cast_member`), his names (meta
+  `human_name`, `GuardStores.his_names`), a game name, a person or pet word. The hint names
+  the member and the pronouns only (`Verdict.pronouns`, repr-hidden).
+
+Measured offline (read-only, counts): on the 10 graded echoes 8 caught (the misses: an echo
+deep in a run-on, one of an earlier message), 0 of 28 clean answers flagged; pre-#347 run 5 of
+11, 0 of 27; 2 of 200 random stored answers to his lines flagged, both his line said back (18 of
+all 2,074, each on reading his line said back). `member_misgender`: both graded cases caught, 0
+of 145 other graded lines; 12 of about 5,450 stored member lines, 11 of them a real
+misgendering (officer attendance threads), 1 ambiguous.
+
 ## Live adapter
 
 `[guards] enabled = true` admits review independently of `[talk] aware = true`.

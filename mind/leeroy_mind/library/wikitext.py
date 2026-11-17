@@ -312,6 +312,17 @@ def is_later_era(text: str) -> bool:
             or _ASIDE.search(text) is not None)
 
 
+_LATER_NAMED = re.compile(rf"\b(?:{_EXPANSIONS}|{_LATER_NAMES})\b")
+
+
+def names_later(text: str) -> bool:
+    """True when a chat line names a later expansion or a place, person or faction of Cataclysm
+    on, as written, capitalised ("the Molten Front", "Three Hammers"): the era filter's names
+    alone, never its prose rules (a "retail" job, a "mastery" of something, a year). The live
+    guild's member lines had none of these on 2026-11-16 (talk.filters "era")."""
+    return _LATER_NAMED.search(text or "") is not None
+
+
 def is_later_heading(heading: str) -> bool:
     h = heading.strip()
     return _LATER_HEADING.search(h) is not None or is_later_era(h)

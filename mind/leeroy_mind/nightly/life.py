@@ -81,11 +81,12 @@ def _names_re(names) -> re.Pattern | None:
     return re.compile(r"(?<!\w)(?:" + "|".join(alts) + r")(?!\w)", re.I) if alts else None
 
 
-def met_him(store, guid: int, human: int) -> bool:
+def met_him(store, guid: int, human: int, *, lens: bool = False) -> bool:
     """Her romance arc has met him in person: stage weekend or after toward him, or a meetup
-    the arc wrote (arc_meetup). False when it cannot be read."""
+    the arc wrote (arc_meetup). False when it cannot be read. `lens`: read the row as talk does,
+    with the owner's edits (talk.pipeline._far_apart)."""
     try:
-        rel = store.get_relationship(guid, human) if human else None
+        rel = store.get_relationship(guid, human, lens=lens) if human else None
         if rel is not None and rel.romance_stage in MET_STAGES:
             return True
         return store.conn.execute("SELECT 1 FROM arc_meetup WHERE guid = ? LIMIT 1",
