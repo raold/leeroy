@@ -96,3 +96,7 @@ processes one receipt at a time; switching the feature off leaves the retained r
 untouched.
 
 Logs contain IDs, sizes, durations and reason codes, never transcript text or names.
+
+With `[heat] enabled` a voice note speaks only up to the tier the heat allows (frank at most at
+heat 9, the explicit tier at 10 or on a no-limits evening); a line above it is typed, never
+dropped. With it off there is no such rule. See `mind/leeroy_mind/heat/README.md`.
