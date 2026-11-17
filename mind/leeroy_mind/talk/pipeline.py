@@ -1480,8 +1480,11 @@ class Pipeline:
             return meta.heat
         preview = meta.turn_id == "preview"
         now = self.clock.now()
-        if words and not preview and self._private_to_him(turn) and not is_group(turn.channel):
-            live.heard(p.guid, words, now)
+        if not preview and self._private_to_him(turn) and not is_group(turn.channel):
+            # whichever reader asks first (the shape's draw gives no words): his line it answers
+            words = words or self._his_line(turn, meta)
+            if words:
+                live.heard(p.guid, words, now)
         meta.heat = live.resolve(
             p, channel=turn.channel, late=day_phase(self.clock.local()) in _LATE,
             tuning=meta.heat_tuning, lead=not preview, now=now,
