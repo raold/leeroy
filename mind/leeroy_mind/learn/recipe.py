@@ -72,6 +72,26 @@ def recall_used(meta, version):
                                        template_version=digest)
 
 
+VOICE_PREFIX = "voice."  # a line whose prompt carried her voice sheet (personas/speech.py)
+
+
+def voice_used(meta, version):
+    """A line whose prompt carried the speaker's voice sheet (Persona.speech; `version` is
+    personas.speech.RECIPE_TAG): its template id gains `voice.<version>` and its template
+    version is hashed again with it, as recall_used does, so `learn report` and the Turing
+    report can split lines with and without a sheet; the bandit's context does not change. For
+    a member without a sheet it is never called and the recipe is as before."""
+    snapshot = getattr(meta, "recipe_snapshot", None)
+    if isinstance(snapshot, Snapshot):
+        tag = VOICE_PREFIX + version
+        if tag in snapshot.template_id.split("+"):
+            return  # a recomposed turn (a guard's retry) is tagged once
+        digest = sha256(json.dumps([snapshot.template_version, tag],
+                                   separators=(",", ":")).encode("ascii")).hexdigest()[:16]
+        meta.recipe_snapshot = replace(snapshot, template_id="+".join(sorted({snapshot.template_id, tag})),
+                                       template_version=digest)
+
+
 BEAT_SUFFIX = "+beat"  # a line asked for after a beat ([talk] think_private, talk/beat.py)
 
 
