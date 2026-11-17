@@ -595,6 +595,11 @@ class TurnMeta:
     # her answer to his DM (or a group DM line) waited for her own time (discord.talk's tick):
     # from owntime.LATE_OWN_S on she says where she was (the LATE shape, or the late note)
     own_time: bool = False
+    # his DM posts this answer is built with (DiscordTalk._coalesce: every post no stored
+    # answer covers), written with her message (discord/covered.py); covers_ask: one of them
+    # asks her for something (the short-line cap's `asks`)
+    covers: tuple[int, ...] = ()
+    covers_ask: bool = False
     # what a draw changed (turn.max_lines, meta.burst), put back before the next draw
     shape_saved: tuple[int, bool] | None = None
 
@@ -1906,7 +1911,7 @@ class Pipeline:
             realism=self.realism.eligible(self, turn, meta), two_lines=two,
             away=self._waited_away(turn, meta, now),
             waited=self._waited_own_time(turn, meta, now),
-            his_asks=asks(self._his_line(turn, meta)))
+            his_asks=meta.covers_ask or asks(self._his_line(turn, meta)))
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
                                         else 0) or 0
@@ -2039,14 +2044,7 @@ class Pipeline:
         """He wrote again while her answer waited: a coalesced whisper's answer answers his
         newest line (talk.engine._life_waiting), later than the one she first heard."""
         if is_discord(turn.channel) and meta.discord is not None and meta.discord.reply_to:
-            row = self.store.conn.execute(
-                "SELECT count(*) FROM discord_message WHERE channel = ? AND origin = 'human' "
-                "AND deleted IS NULL AND id <= ? AND id > (SELECT coalesce(max(id), 0) FROM "
-                "discord_message WHERE channel = ? AND origin = 'mind' AND deleted IS NULL "
-                f"AND id < ? AND {PAIR_LINE_SQL})",
-                (channel_id(turn.channel), meta.discord.reply_to, channel_id(turn.channel),
-                 meta.discord.reply_to)).fetchone()
-            return row[0] > 1
+            return len(meta.covers) > 1  # one reply to several posts of his (_coalesce)
         if not turn.trigger_line or not meta.heard_at:
             return False
         rows = self.store.chat_lines([turn.trigger_line])

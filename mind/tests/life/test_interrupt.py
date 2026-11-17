@@ -978,7 +978,8 @@ def test_a_pair_line_answers_nothing(store, tmp_path):
     assert [g for g, _, _ in talk._owed()] == [101]
     rig.run(400)
     assert count_unanswered(store.conn, HUMAN, 0, rig.clock.now()).unanswered == {"discord_dm": 1}
-    member_post(rig, 101, "dm:101", "ah no, which one was it")
+    dstore.post(store, channel="dm:101", author=101, origin="mind", reply_to=mid,
+                text="ah no, which one was it", now=rig.clock.now())  # her answer to it
     assert watch._discord_answered(owed) == [mid]
     rig.close()
 

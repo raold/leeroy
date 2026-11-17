@@ -41,7 +41,7 @@ import random
 import re
 
 from leeroy_mind.arc.live import away_now
-from leeroy_mind.discord import layout, owntime
+from leeroy_mind.discord import covered, layout, owntime
 from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord, is_group
 from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presence_of
 from leeroy_mind.discord.transport import PAIR_LINE_SQL, DiscordTarget, channel_id
@@ -110,7 +110,9 @@ DM_HIS_CHARS = 600
 # after his DM_RECENT_TURNS-th last message keep their opening REPLAY_WORDS words, older ones
 # DM_OLD_WORDS; the whole is kept under DM_CHAT_TOKENS (estimated), the oldest rows going first,
 # so it stays within the DM's prompt budget (prompt.DM_BUDGET).
-UNANSWERED_POSTS = 6  # his posts one answer of hers covers, the newest
+UNANSWERED_POSTS = 6  # his posts one answer of hers quotes, the newest
+COVER_POSTS = 30  # ...and covers at most (older ones are let go, logged)
+UNANSWERED_SCAN = 60  # of his newest posts read for the ones still unanswered
 SUPERSEDED = "discord_superseded"  # the drop reason of an answer another turn's reply covers
 DM_HIS_TURNS = 10
 DM_RECENT_TURNS = 3
@@ -172,9 +174,9 @@ class DiscordTalk:
         self._due: dict[int, tuple[float, bool, bool]] = {}
         self._owes: tuple[float, frozenset[int]] = (-float("inf"), frozenset())
         self._queued: dict[int, tuple[float, int]] = {}  # his DM post -> (last queued, tries)
-        # a DM channel -> (his post an answer is being built for, that answer's turn, when):
-        # his posts that arrive while she composes are answered by one reply (_coalesce)
-        self._building: dict[str, tuple[int, Turn, float]] = {}
+        # a DM channel -> the answers being composed there now: (his posts each is built
+        # with, its turn, when); a post is answered by exactly one of them (_coalesce)
+        self._building: dict[str, list[tuple[frozenset, Turn, float]]] = {}
         engine = getattr(app, "engine", None)
         if engine is not None:
             engine.add_instruction_hook(self._instruction_hook)
@@ -750,23 +752,26 @@ class DiscordTalk:
                                    origin="human" if mine else "mind"))
         return tuple(reversed(out))
 
-    def unanswered(self, conn, channel: str, thread: int | None,
-                   message: int) -> list[tuple[int, str]]:
-        """(id, text) of his live posts in a DM after her last answer there and up to
-        `message`, oldest first, the newest UNANSWERED_POSTS: what one answer of hers has to
-        cover (he wrote several while she was away, typing or asleep). Her brb and back are no
-        answer (PAIR_LINE_SQL)."""
+    def unanswered(self, conn, channel: str, thread: int | None, message: int, *,
+                   building=frozenset()) -> list[tuple[int, str]]:
+        """(id, text) of his live posts in a DM up to `message` that no stored answer of hers
+        was built with (discord.covered: each answer records the posts its instruction listed;
+        an answer she was composing when a post arrived does not cover it, whatever their ids),
+        oldest first: what one answer of hers has to cover (he wrote several while she was
+        away, typing or asleep). `building`: posts another turn is composing an answer for
+        right now, left out. Posts he wrote more than owntime.LET_GO_S ago are let go. Her brb
+        and back cover nothing. The public reading of "what does she still owe him here" (the
+        coherence lane reads it too)."""
         hg = self.app.human_guid
-        last = conn.execute(
-            "SELECT coalesce(max(id), 0) FROM discord_message WHERE channel = ? AND thread IS ? "
-            f"AND origin = 'mind' AND deleted IS NULL AND id < ? AND {PAIR_LINE_SQL}",
-            (channel, thread, message)).fetchone()[0]
+        done = covered.read(conn, channel, thread)
         rows = conn.execute(
             "SELECT id, text FROM discord_message WHERE channel = ? AND thread IS ? "
             "AND origin = 'human' AND author = ? AND deleted IS NULL AND id > ? AND id <= ? "
-            "ORDER BY id DESC LIMIT ?",
-            (channel, thread, hg, last, message, UNANSWERED_POSTS)).fetchall()
-        return [(r[0], r[1]) for r in reversed(rows)]
+            "AND ts >= ? ORDER BY id DESC LIMIT ?",
+            (channel, thread, hg, done.floor, message, self.app.clock.now() - owntime.LET_GO_S,
+             UNANSWERED_SCAN)).fetchall()
+        return [(r[0], r[1]) for r in reversed(rows)
+                if r[0] not in done.at and r[0] not in building]
 
     def _name(self, g: int) -> str:
         app = self.app
@@ -781,13 +786,16 @@ class DiscordTalk:
         return p.character_name if p is not None else "someone"
 
     def instruction(self, speaker: int, place: str, message: int,
-                    thread: int | None, *, away: str = "", waited: bool = False) -> str | None:
+                    thread: int | None, *, away: str = "", waited: bool = False,
+                    covers=None) -> str | None:
         """The answer turn's instruction for `speaker` on `place` (a turn channel), answering
         his message `message`; None once it is gone or deleted. A speaker outside the channel's
         audience sees none of its messages. `away`: her answer waited out a time she stepped
         away (Pipeline._waited_away): "note", its late note says she was away; "shape", there is
         none (the LATE shape says so: one excuse in the prompt). `waited`: it waited for her
-        own time (TurnMeta.own_time), so its late note is said from owntime.LATE_OWN_S on."""
+        own time (TurnMeta.own_time), so its late note is said from owntime.LATE_OWN_S on.
+        `covers`: his posts this answer is built with (_coalesce; None at plan time: read
+        again)."""
         app, store = self.app, self.app.store
         cid = channel_id(place)
         reads = speaker in app.world.audience(place, from_guid=speaker, to_guid=app.human_guid)
@@ -806,7 +814,9 @@ class DiscordTalk:
             dm = layout.dm_peer(cid) is not None
             # every post of his she has not answered yet (self-play audit 3: a late answer
             # covered only his newest post and the earlier ones counted as answered)
-            waiting = self.unanswered(store.conn, cid, thread, message) if dm else []
+            waiting = (covers if covers is not None else
+                       self.unanswered(store.conn, cid, thread, message)) if dm else []
+            waiting = waiting[-UNANSWERED_POSTS:]  # the newest are quoted; all are covered
             # a DM's history is its Chat (dm_chat), not packed in here
             lines = (self.context_lines(store.conn, cid, thread, exclude=message, speaker=speaker)
                      if reads and not dm else [])
@@ -906,8 +916,9 @@ class DiscordTalk:
             return previous
         engine = self.app.engine
         cid = channel_id(turn.channel)
+        covers = None
         if layout.dm_peer(cid) is not None:
-            target = self._coalesce(cid, turn, meta, target)
+            target, covers = self._coalesce(cid, turn, meta, target)
         away = ""
         waited = getattr(engine, "_waited_away", None)
         if waited is not None and waited(turn, meta, self.app.clock.now()):
@@ -917,7 +928,7 @@ class DiscordTalk:
         if late_own and not away and engine._shapes(turn, meta):
             away = "shape"  # the LATE shape says where she was: one excuse in the prompt
         fresh = self.instruction(turn.speaker, turn.channel, target.reply_to, target.thread,
-                                 away=away, waited=late_own)
+                                 away=away, waited=late_own, covers=covers)
         query = self.recall_query(target.reply_to)
         if fresh is None or query is None:
             raise TurnWithdrawn(GONE)
@@ -929,37 +940,52 @@ class DiscordTalk:
         return fresh
 
     def _coalesce(self, cid: str, turn: Turn, meta: TurnMeta, target: DiscordTarget):
-        """His DM posts that arrived before this answer is composed are answered by this one
-        reply: the turn now answers his newest live post (its instruction lists every post
-        still unanswered, `unanswered`), and the newer post's own turn, when it comes to
-        compose, finds this one building its answer or already answered and is withdrawn
-        (TurnWithdrawn, SUPERSEDED). A building record whose turn has ended, or older than
-        BUILDING_S, is forgotten: a dropped answer never holds off its retry or the owed
-        watch's rescue."""
+        """What this DM answer is built with, decided as she starts composing: every post of
+        his no stored answer covers (`unanswered`) and no other turn is composing an answer for
+        right now (_building). The turn answers them all in one reply to the newest of them
+        (meta.discord), records them (meta.covers: written with her message, discord.covered),
+        and sizes itself by them (meta.his_words their words together, meta.covers_ask: one of
+        them asks her for something). With nothing left to answer (another turn's reply covers
+        its post, or is being built with it) the turn is withdrawn (TurnWithdrawn, SUPERSEDED).
+        A building record whose turn has ended, or older than BUILDING_S, is forgotten: a
+        dropped answer never holds off its retry or the owed watch's rescue, and the posts it
+        was built with are unanswered again. Returns (target, the posts). A post he deleted is
+        left to the instruction (GONE)."""
+        from leeroy_mind.talk.asking import asks
         conn, hg, now = self.app.store.conn, self.app.human_guid, self.app.clock.now()
+        planned = self.app.engine.planned_turns()
+        live = [r for r in self._building.get(cid, ()) if r[1] is not turn
+                and now - r[2] <= BUILDING_S and any(t is r[1] for t in planned)]
+        others = frozenset(i for r in live for i in r[0])
         with self.app.store.transaction():
+            row = conn.execute("SELECT deleted FROM discord_message WHERE id = ?",
+                               (target.reply_to,)).fetchone()
+            if row is None or row[0] is not None:
+                return target, None  # gone: the instruction drops the turn (GONE)
             newest = conn.execute(
                 "SELECT coalesce(max(id), 0) FROM discord_message WHERE channel = ? "
                 "AND thread IS ? AND origin = 'human' AND author = ? AND deleted IS NULL",
                 (cid, target.thread, hg)).fetchone()[0]
-            answered = conn.execute(
-                "SELECT 1 FROM discord_message WHERE channel = ? AND origin = 'mind' "
-                f"AND deleted IS NULL AND reply_to >= ? AND {PAIR_LINE_SQL} LIMIT 1",
-                (cid, target.reply_to)).fetchone()
-        building = self._building.get(cid)
-        if building is not None and (now - building[2] > BUILDING_S or not any(
-                t is building[1] for t in self.app.engine.planned_turns())):
-            building = None  # that turn ended (sent or dropped): nothing is being built
-        if building is not None and building[1] is not turn and building[0] >= target.reply_to:
-            raise TurnWithdrawn(SUPERSEDED)  # another turn's reply is being built with this post
-        if answered and (building is None or building[1] is not turn):
-            raise TurnWithdrawn(SUPERSEDED)  # her reply to this post or a later one is out
-        if newest > target.reply_to:
-            log.info("discord_dm_coalesced: guid=%d message=%d newest=%d", turn.speaker,
-                     target.reply_to, newest)
-            target = meta.discord = DiscordTarget(reply_to=newest, thread=target.thread)
-        self._building[cid] = (target.reply_to, turn, now)
-        return target
+            waiting = self.unanswered(conn, cid, target.thread, max(newest, target.reply_to),
+                                      building=others)
+        if not waiting:
+            self._building[cid] = live
+            raise TurnWithdrawn(SUPERSEDED)  # her reply to this post is out, or being built
+        if len(waiting) > COVER_POSTS:
+            log.info("discord_dm_posts_let_go: guid=%d posts=%d", turn.speaker,
+                     len(waiting) - COVER_POSTS)
+            waiting = waiting[-COVER_POSTS:]
+        ids = tuple(i for i, _ in waiting)
+        if ids[-1] != target.reply_to or len(ids) > 1:
+            log.info("discord_dm_coalesced: guid=%d message=%d newest=%d posts=%d",
+                     turn.speaker, target.reply_to, ids[-1], len(ids))
+        if ids[-1] != target.reply_to:
+            target = meta.discord = DiscordTarget(reply_to=ids[-1], thread=target.thread)
+        meta.covers = ids
+        meta.his_words = sum(len(text.split()) for _, text in waiting)
+        meta.covers_ask = any(asks(text) for _, text in waiting)
+        self._building[cid] = [*live, (frozenset(ids), turn, now)]
+        return target, waiting
 
     # -- the lease -------------------------------------------------------------------------
 

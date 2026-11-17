@@ -98,8 +98,9 @@ def test_the_dm_budget_fits_the_live_context_with_a_full_dm_reply():
 def test_the_dm_history_is_the_chat_and_not_the_instruction(store, clock, tmp_path):
     rig = rig_for(store, clock, tmp_path, reply="sure thing")
     talk = talk_for(rig)
-    post(rig, "dm:102", HIS_LONG)
-    member_post(rig, 102, "dm:102", HERS_LONG)
+    earlier = post(rig, "dm:102", HIS_LONG)
+    dstore.post(rig.store, channel="dm:102", author=102, origin="mind", text=HERS_LONG,
+                reply_to=earlier, now=rig.clock.now())  # her answer to it
     member_post(rig, 104, "dm:104", "quaxle is another member's dm")
     member_post(rig, 103, "general", "vorpine in general")
     mid = post(rig, "dm:102", "so what do you think?")
