@@ -1,4 +1,5 @@
 """Enable delivery only after all three opt-ins have been resolved at startup."""
+import random
 from leeroy_mind.logs import log
 from leeroy_mind.nightly.romance import set_pictures_available
 from .config import load_photos_config
@@ -16,7 +17,7 @@ def attach_photos(app):
     if needed:
         log('photos_send_needs', key=needed)
         return None
-    sender = PhotoSender(app, config, app.rng)
+    sender = PhotoSender(app, config, random.Random(app.rng.getrandbits(64)))
     app.engine.attach_photos(sender.offer)
     app.engine.photos_send = True
     set_pictures_available(True)
