@@ -84,5 +84,6 @@ def test_an_expected_refusal_is_an_info_line_and_names_where_it_stopped(
             assert said[0].levelno == logging.INFO
             assert said[0].getMessage() == 'realm_source_rejected n=1 codes=event:duel_end:private_evidence=1'
             assert len(said) == 2 and 'admission:channel_chat:' in said[1].getMessage()
+            assert said[1].levelno == logging.INFO  # talk off the topic is the rule working
             assert 'unrelated' not in caplog.text
     run(scenario())

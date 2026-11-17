@@ -38,9 +38,11 @@ log = logging.getLogger(__name__)
 # A source that makes no fact is counted and said at most once a minute, by where it stopped,
 # its event type and its reason: until 2026-11-17 these were debug lines, and ten days of
 # refusing every world event left nothing in the log. Reasons that are the rules working (a
-# duel in a city, an ordinary achievement, a cap) stay INFO; any other is a WARNING.
+# duel in a city, an ordinary achievement, channel talk off the topic, a screened text, a cap)
+# stay INFO; any other is a WARNING.
 REJECTION_LOG_S = 60.0
-EXPECTED_REJECTIONS = frozenset({"private_evidence", "capped", "ineligible"})
+EXPECTED_REJECTIONS = frozenset({"private_evidence", "capped", "ineligible", "topic_mismatch",
+                                 "unsupported_text", "real_name", "romance"})
 
 JOB_COMMANDS = frozenset({
     "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue",
@@ -443,12 +445,12 @@ class Realm:
         self._flush_rejections()
         return rejection
 
-    def _flush_rejections(self, *, force=False):
+    def _flush_rejections(self):
         """One line for everything refused since the last one, a minute apart at most."""
         if not self._rejections:
             return
         now = self.app.clock.now()
-        if not force and now - self._rejections_at < REJECTION_LOG_S:
+        if now - self._rejections_at < REJECTION_LOG_S:
             return
         counts, self._rejections, self._rejections_at = self._rejections, Counter(), now
         level = (logging.INFO if all(reason in EXPECTED_REJECTIONS for _, _, reason in counts)
