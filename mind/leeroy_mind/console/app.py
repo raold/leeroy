@@ -169,6 +169,7 @@ from ..discord import layout as discord_layout, store as discord_store
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
 from . import opsview
 from . import playbookview
+from . import unreadview
 from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview, views, insightview)
@@ -930,6 +931,7 @@ class ConsoleApp:
                   ("GET", "/api/training/playbooks"): self._api_playbooks,
                   ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/ops/badge"): self._api_ops_badge,
+                  ("GET", "/api/unread"): self._api_unread,
                   ("GET", "/api/ops/action"): self._api_ops_action_status,
                   ("POST", "/api/ops/action"): self._ops_actions.post,
                   ("GET", "/api/dojo"): self._api_dojo,
@@ -1331,6 +1333,18 @@ class ConsoleApp:
 
     async def _api_ops_badge(self, req: Request):
         return json_response(200, await self._ops.badge({"mind": self.view.state}))
+
+    async def _api_unread(self, req: Request):
+        """What reached him since the ids the page holds: counts and the newest sender's name
+        for the tab title while the page is hidden (unreadview.py). Never a message's text."""
+        marks = {}
+        for name in ("chat", "discord"):
+            raw = req.query.get(name, [None])[0]
+            marks[name] = None if raw is None else digits(raw, 18)
+            if raw is not None and marks[name] is None:
+                return text(400, f"{name}: a row id")
+        return await self._db_view("unread", unreadview.unread_view, chat=marks["chat"],
+                                   discord=marks["discord"], now=self._clock())
 
     async def _api_playbooks(self, req: Request):
         try:

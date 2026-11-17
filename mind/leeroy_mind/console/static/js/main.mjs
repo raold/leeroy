@@ -29,6 +29,7 @@ import { currentRoute, showTab } from "./tabs.mjs";
 import { ReconnectingStream } from "./eventstream.mjs";
 import "./freshness.mjs";
 import "./gpu.mjs";
+import "./unread.mjs";
 
 // The page's start: the key, the first drawing, the open tab and the console's event stream.
 // Every tab module above registers its tab and its bus listeners as it loads.
