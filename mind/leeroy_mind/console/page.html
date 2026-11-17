@@ -326,6 +326,7 @@
   </section>
   <section id="tab-personas" class="tab mindtab" role="tabpanel" aria-labelledby="t-personas" hidden>
     <div id="personas-banner" class="banner bad" hidden></div>
+    <div id="p-list">
     <label><input id="p-world-filter" type="checkbox"> World (read-only)</label>
     <div id="p-world" class="panel" hidden></div>
     <div class="cards wide">
@@ -354,7 +355,7 @@
           <th>mood</th><th>stance</th><th>toward you</th><th>closest ties</th><th class="num" id="p-memhead">memories</th>
           <th>persona</th><th>drift</th></tr></thead>
           <tbody id="p-roster"></tbody></table></div>
-        <p class="why">Read from mind.db; nothing here changes a stored persona. Pick a member for their card, dials, ties, memories and ledger.</p>
+        <p class="why">Read from mind.db; nothing here changes a stored persona. Pick a member for their page: card, dials, ties, memories and ledger.</p>
       </article>
     </div>
     <div id="p-tuning" class="cards wide">
@@ -363,7 +364,7 @@
         <p id="t-lead" class="lead">-</p>
         <p class="why">Dials are numbers laid over the stored personas; nothing is rewritten. A member's own value wins over
           group and world changes. 5 is as the persona is written (a score dial starts at their own score). Preview first:
-          lines for the dials that change how they talk, numbers for the ones that change how often.</p>
+          lines for the dials that change how they talk, numbers for the ones that change how often. A preview shows under the dial it was asked for.</p>
       </article>
       <article class="panel">
         <header><h3>World</h3><span class="muted">over mind.toml, which is never written</span></header>
@@ -384,24 +385,21 @@
           <button type="button" id="t-gclear">Clear</button>
         </div>
       </article>
-      <article id="t-pvcard" class="panel span" hidden>
-        <header><h3>Preview</h3><span id="t-pvwhat" class="muted"></span>
-          <button type="button" id="t-pvclose" class="close">Close</button></header>
-        <div id="t-preview"></div>
-      </article>
-      <article class="panel span">
-        <header><h3>Change log</h3><span class="muted">your dial changes, newest first</span></header>
-        <div id="t-history" class="scroll"></div>
-        <p class="why">Undo reverses one change and is itself a change (undo it to redo). It is refused when a later change
-          moved the same value. Neither undo nor revert takes back what was said, remembered, felt or gossiped while a value
-          was in force; that is the guild's history now. A full rewind is a snapshot restore with the mind stopped.</p>
-      </article>
+    </div>
     </div>
     <div id="p-detail" class="cards wide" hidden>
-      <article class="panel span">
-        <div id="p-face" class="pface"></div>
-        <header><h3 id="p-name">-</h3><span id="p-sub" class="muted"></span>
-          <button type="button" id="p-close" class="close">Close</button></header>
+      <article class="panel span member-head" aria-labelledby="p-name">
+        <button type="button" id="p-close" class="back">Back to the cast</button>
+        <div class="member-id">
+          <div id="p-face" class="pface"></div>
+          <div><h3 id="p-name" tabindex="-1">-</h3><p id="p-sub" class="muted"></p></div>
+        </div>
+        <div id="p-actions" class="acts" role="group" aria-label="Reach this member">
+          <button type="button" id="p-act-dm" class="primary">Message</button>
+          <button type="button" id="p-act-whisper">Whisper</button>
+          <button type="button" id="p-act-strings">Strings</button>
+          <button type="button" id="p-act-nudge">Nudge</button>
+        </div>
         <p id="p-lead" class="lead"></p>
         <p id="p-why" class="why"></p>
       </article>
@@ -454,7 +452,7 @@
       </article>
       <article class="panel span">
         <header><h3>Relationships</h3><span id="p-tien" class="muted"></span></header>
-        <div class="scroll"><table><thead><tr><th>with</th><th>label</th><th class="num">affinity</th><th class="num">trust</th>
+        <div class="scroll" tabindex="0" role="region" aria-label="Relationships"><table><thead><tr><th>with</th><th>label</th><th class="num">affinity</th><th class="num">trust</th>
           <th class="num">respect</th><th class="num">attraction</th><th class="num">familiarity</th><th>stage</th>
           <th class="num">talks</th><th>last seen</th><th>notes</th></tr></thead><tbody id="p-ties"></tbody></table></div>
       </article>
@@ -472,6 +470,15 @@
           <p class="why">One embedding call, only if the mind already holds the model. Your line stays in this form; it is never logged, stored or sent as chat.</p>
           <p id="insight-result" class="why" role="status"></p>
         </form>
+      </article>
+    </div>
+    <div id="t-log" class="cards wide">
+      <article class="panel span">
+        <header><h3>Change log</h3><span class="muted">your dial changes, newest first</span></header>
+        <div id="t-history" class="scroll"></div>
+        <p class="why">Undo reverses one change and is itself a change (undo it to redo). It is refused when a later change
+          moved the same value. Neither undo nor revert takes back what was said, remembered, felt or gossiped while a value
+          was in force; that is the guild's history now. A full rewind is a snapshot restore with the mind stopped.</p>
       </article>
     </div>
   </section>

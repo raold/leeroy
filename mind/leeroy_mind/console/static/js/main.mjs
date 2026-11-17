@@ -25,7 +25,7 @@ import "./lab.mjs";
 import "./ops.mjs";
 import "./personas.mjs";
 import "./mind.mjs";
-import { showTab } from "./tabs.mjs";
+import { currentRoute, showTab } from "./tabs.mjs";
 import { ReconnectingStream } from "./eventstream.mjs";
 import "./freshness.mjs";
 import "./gpu.mjs";
@@ -106,7 +106,7 @@ function takeKey(key) {
   lost("");
   connect();
   refreshFaces();  // the room's faces and the card's photo, with the new key
-  showTab(S.tab);  // the open tab asks again at once
+  showTab(currentRoute());  // the open tab asks again at once
 }
 
 renderStrip();
@@ -118,12 +118,12 @@ showTab((location.hash || "#comms").slice(1));
 window.addEventListener("hashchange", function () {
   var key = hashKey(location.hash);
   if (key !== null) {
-    history.replaceState(null, "", location.pathname + "#" + S.tab);
+    history.replaceState(null, "", location.pathname + "#" + currentRoute());
     if (key) { takeKey(key); }
     return;
   }
   var want = location.hash.slice(1);
-  if (want !== S.tab) { showTab(want); }
+  if (want !== currentRoute()) { showTab(want); }
 });
 connect();
 document.addEventListener("visibilitychange", function () {

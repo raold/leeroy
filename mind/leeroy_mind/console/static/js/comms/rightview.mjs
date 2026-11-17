@@ -3,6 +3,7 @@ import { S, hereRoom, isMuted, roomName } from "../state.mjs";
 import { faceButton, lightSpeakers } from "../faces.mjs";
 import { photoButton } from "../gallery.mjs";
 import { openMember } from "../personas.mjs";
+import { showTab } from "../tabs.mjs";
 import { cardText } from "../words.mjs";
 import { FEED, openView } from "./feedview.mjs";
 import { renderRooms } from "./leftview.mjs";
@@ -168,6 +169,34 @@ $("mcard-dm").addEventListener("click", function () {
   if (CARD.guid && DISCORD.dms.some(function (d) { return d.guid === CARD.guid; })) {
     openView("dm:" + CARD.guid); $("dc-text").focus();
   }
+});
+// From a member's page (personas.mjs): her DM, or her whisper thread, with the reply box focused
+// (the server's DM list is read when Comms opens, so a first Message waits for that read)
+var wantDm = null;
+function openDm(d) {
+  if (!DISCORD.dms.some(function (x) { return x.guid === d.guid; })) { return false; }
+  openView("dm:" + d.guid);
+  $("dc-text").focus();
+  return true;
+}
+function noDm(d) { emit("note", "The guild Discord has no DM with " + (str(d.name) || "that member") + "."); }
+on("open-dm", function (d) {
+  showTab("comms");
+  wantDm = null;
+  if (openDm(d)) { return; }
+  if (DISCORD.loaded) { noDm(d); } else { wantDm = d; }
+});
+on("comms-hide", function () { wantDm = null; });
+on("discord-view", function () {
+  if (!wantDm || !(DISCORD.loaded || DISCORD.error)) { return; }
+  var d = wantDm;
+  wantDm = null;
+  if (!openDm(d)) { noDm(d); }
+});
+on("open-whisper", function (d) {
+  showTab("comms");
+  openView(FEED.openThread(d.guid, str(d.name) || "#" + d.guid));
+  focusComposer();
 });
 on("discord-view", function () {
   $("mcard-dm").disabled = !DISCORD.dms.some(function (d) { return d.guid === CARD.guid; });

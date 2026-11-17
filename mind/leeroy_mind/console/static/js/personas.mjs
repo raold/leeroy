@@ -12,7 +12,7 @@ import { SHAPES, bustText, canUndoLooks, shapeText } from "./looksmodel.mjs";
 import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
-import { registerTab, showTab } from "./tabs.mjs";
+import { registerTab, setRoute, showTab } from "./tabs.mjs";
 import { CLASSES, bioText, leadText, moodText, moodTitle, photoKindText, romanceText, signed, tileState, when,
          whoText, youText, youTitle } from "./words.mjs";
 
@@ -28,14 +28,18 @@ var BY = { seed: "the seeding", owner: "you (an import, a personas command or th
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
                      drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "weight and figure",
                      home: "home state", undo: "undo" };
-var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
+var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0;
+// The member page replaces the list (wall or table, selfies, tuning). lastPick and listScroll
+// are where he was in the list, so Back puts him there again.
+var lastPick = 0, listScroll = 0;
+function scroller() { return document.querySelector("main"); }
 function worldMode() { return $("p-world-filter").checked; }
 $("p-world-filter").addEventListener("change", function () {
-  pick = 0; pickSeq += 1;
-  $("p-detail").hidden = true;
+  pickSeq += 1;
+  if (pick) { setRoute("personas"); choose(0); }
   $("p-world").hidden = !worldMode();
   $("p-selfies").parentNode.hidden = worldMode();
-  $("p-tuning").hidden = worldMode();
+  $("p-tuning").hidden = $("t-log").hidden = worldMode();
   paging.hidden = worldMode();
   pollPersonas();
 });
@@ -146,7 +150,7 @@ function renderPersonas(v) {
   var body = $("p-roster");
   clear(body);
   members.forEach(function (m) {
-    var tr = el("tr", (m.online === false ? "off" : "") + (m.guid === pick ? " sel" : ""));
+    var tr = el("tr", (m.online === false ? "off" : "") + (m.guid === (pick || lastPick) ? " sel" : ""));
     tr.tabIndex = 0;
     tr.dataset.guid = String(m.guid);
     var nameTd = el("td"), who = el("div", "who");
@@ -195,7 +199,7 @@ function renderWall(v) {
   var members = arr(v.members), missing = arr(v.missing), box = $("p-wall");
   clear(box);
   members.forEach(function (m) {
-    var st = tileState(m), t = el("div", "tile" + (st.off ? " off" : "") + (m.guid === pick ? " sel" : ""));
+    var st = tileState(m), t = el("div", "tile" + (st.off ? " off" : "") + (m.guid === (pick || lastPick) ? " sel" : ""));
     t.dataset.guid = String(m.guid);
     t.appendChild(photoButton(m.guid, str(m.name), "wall"));
     var detail = el("button", "tile-detail tname", st.label);
@@ -238,6 +242,8 @@ function renderMember(j) {
   var m = obj(j.member), c = j.card ? obj(j.card) : null, p = m.persona, days = num(j.recent_days) || 7;
   var missing = arr(j.missing), traits = obj(obj(m.drift).traits), values = obj(traits.values);
   $("p-detail").hidden = false;
+  $("p-detail").classList.remove("pending");
+  memberName = str(m.name);
   setText("p-name", str(m.name));
   if (shownFace !== m.guid) {
     shownFace = m.guid;
@@ -359,7 +365,7 @@ function renderMember(j) {
   });
   if (!arr(j.ledger).length) { box.appendChild(el("div", "muted", j.ledger ? "No ledger rows yet." : "Unavailable in this mind.db.")); }
   renderStrings(j, m.guid, tuneLive(), tuneWhy());
-  if (reveal) { reveal = false; $("p-detail").scrollIntoView({ block: "start" }); }
+  renderActions();
 }
 function pollMember() {
   if (!pick || S.tab !== "personas") { return; }
@@ -371,43 +377,128 @@ function pollMember() {
   }).then(function (x) {
     if (!x || seq !== pickSeq || guid !== pick) { return; }
     if (x.status === 200) { renderMember(x.j); }
-    else if (x.status === 404) { choose(0); }
+    else if (x.status === 404) { setRoute("personas"); choose(0); emit("note", "That member is not in mind.db."); }
     else { setText("p-why", str(x.j.error) || "mind.db could not be read."); }
   }, function () { /* the strip says it */ });
 }
-function choose(guid) {
-  pick = guid;
-  selectInsight(guid);
+var memberName = "";
+function knownName(guid) {
+  return str(obj(tuneView().names)[String(guid)]) || "#" + guid;
+}
+function mark(guid) {
   var rows = $("p-roster").querySelectorAll("tr[data-guid]");
   for (var i = 0; i < rows.length; i++) { rows[i].classList.toggle("sel", Number(rows[i].dataset.guid) === guid); }
   var tiles = $("p-wall").querySelectorAll(".tile[data-guid]");
   for (var j = 0; j < tiles.length; j++) { tiles[j].classList.toggle("sel", Number(tiles[j].dataset.guid) === guid); }
-  if (!guid) { $("p-detail").hidden = true; reveal = false; return; }
+}
+// The member page in place of the list (guid), or the list again as he left it (0): the same
+// page of members, the same scroll, the member he opened marked and holding the focus.
+function choose(guid) {
+  var was = pick;
+  pick = guid;
+  selectInsight(guid);
+  if (!guid) {
+    $("p-detail").hidden = true;
+    $("p-list").hidden = false;
+    mark(lastPick);
+    if (was) {
+      scroller().scrollTop = listScroll;
+      var back = view === "table" ? $("p-roster").querySelector('tr[data-guid="' + was + '"]')
+                                  : $("p-wall").querySelector('.tile-detail[data-guid="' + was + '"]');
+      if (back && S.tab === "personas") { back.focus({ preventScroll: true }); }
+    }
+    return;
+  }
+  if (!was) { listScroll = scroller().scrollTop; }
+  lastPick = guid;
+  mark(guid);
+  if (was !== guid) {
+    // Her name at once; the rest waits for mind.db (never the member shown before her)
+    memberName = knownName(guid);
+    setText("p-name", memberName);
+    setText("p-sub", "");
+    setText("p-lead", "Reading mind.db…");
+    setText("p-why", "");
+    clear($("p-face"));
+    shownFace = null;
+    $("p-detail").classList.add("pending");
+  }
+  $("p-list").hidden = true;
+  $("p-detail").hidden = false;
+  renderActions();
+  if (!was) {
+    scroller().scrollTop = 0;
+    window.scrollTo(0, 0);
+    if (S.tab === "personas") { $("p-name").focus({ preventScroll: true }); }
+  }
   if (TUNE) { renderDials(guid); }
   pollMember();
 }
 $("p-roster").addEventListener("click", function (ev) {
   var tr = ev.target.closest("tr[data-guid]");
-  if (tr) { choose(Number(tr.dataset.guid)); }
+  if (tr) { openMember(Number(tr.dataset.guid)); }
 });
 $("p-roster").addEventListener("keydown", function (ev) {
   var tr = ev.target.closest("tr[data-guid]");
-  if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); choose(Number(tr.dataset.guid)); }
+  if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); openMember(Number(tr.dataset.guid)); }
 });
 $("p-wall").addEventListener("click", function (ev) {
   if (ev.target.closest(".gallery-opener")) { return; }
   var t = ev.target.closest(".tile[data-guid]");
-  if (t) { choose(Number(t.dataset.guid)); }
+  if (t) { openMember(Number(t.dataset.guid)); }
 });
-$("p-close").addEventListener("click", function () { choose(0); });
+// Back: the browser's own step when this page was opened from the list in this tab (so its Back
+// button and this one agree), else straight to the list (a deep link, a reload).
+$("p-close").addEventListener("click", function () {
+  if (history.state && history.state.member === true) { history.back(); }
+  else { setRoute("personas"); choose(0); }
+});
 
-// Open this tab on one member's detail (the Profile of their card in Comms), scrolled into view
-// once it is drawn. The tab is shown first, so the member is asked for at once.
+// One member's page, from anywhere: a face or a name with data-profile (faces.mjs), the Comms
+// card's Profile, the wall and the table. It is a step in the browser's history ("#personas/<guid>"),
+// so Back returns to where he was.
 export function openMember(guid) {
-  showTab("personas");
-  reveal = true;
-  choose(guid);
+  guid = Number(guid);
+  if (!(Number.isInteger(guid) && guid > 0)) { return; }
+  if (worldMode()) { $("p-world-filter").checked = false; $("p-world-filter").dispatchEvent(new Event("change")); }
+  var hash = "#personas/" + guid;
+  if (location.hash !== hash) { history.pushState({ member: true }, "", hash); }
+  showTab("personas/" + guid);
 }
+document.addEventListener("click", function (ev) {
+  var t = ev.target.closest ? ev.target.closest("[data-profile]") : null;
+  if (!t) { return; }
+  ev.preventDefault();
+  openMember(Number(t.dataset.profile));
+});
+// The tab's route: "" is the list, a guid is that member's page
+function route(sub) {
+  var guid = /^[1-9]\d{0,9}$/.test(sub) ? Number(sub) : 0;
+  if (sub && !guid) { setRoute("personas"); }
+  if (guid !== pick) { choose(guid); }
+}
+
+// The member page's first row: Message (her DM in Comms), Whisper (her thread and the reply box),
+// Strings and Nudge (those panels of this page, their first field holding the focus)
+function reach(panel, field) {
+  var target = panel && !panel.hidden ? panel : null;
+  if (!target) { return; }
+  target.scrollIntoView({ block: "start" });
+  var f = target.querySelector(field);
+  if (f && !f.disabled) { f.focus({ preventScroll: true }); }
+  else { target.tabIndex = -1; target.focus({ preventScroll: true }); }
+}
+function renderActions() {
+  var strings = $("p-strings"), nudges = $("p-dials").querySelector(".nudges");
+  $("p-act-strings").disabled = strings.hidden;
+  $("p-act-strings").title = strings.hidden ? "Strings are off: [godmode] enabled = true in mind.toml, then restart the mind and console." : "";
+  $("p-act-nudge").disabled = !nudges;
+  $("p-act-nudge").title = nudges ? "" : "No nudges: this member has no readable persona, or the tuning tables are not there yet.";
+}
+$("p-act-dm").addEventListener("click", function () { if (pick) { emit("open-dm", { guid: pick, name: memberName }); } });
+$("p-act-whisper").addEventListener("click", function () { if (pick) { emit("open-whisper", { guid: pick, name: memberName }); } });
+$("p-act-strings").addEventListener("click", function () { reach($("p-strings"), "select, input, button:not(:disabled)"); });
+$("p-act-nudge").addEventListener("click", function () { reach($("p-dials").querySelector(".nudges"), "textarea"); });
 
 // The dials: read from mind.db (/api/tuning); every change and preview goes to the running
 // mind's tune op (/api/tune), which checks it again and says why when it refuses. Preview text
@@ -422,11 +513,15 @@ function tuneWhy() {
   return obj(TUNE.mind).ok === true ? "" : str(obj(TUNE.mind).error);
 }
 function previewKey(scope, target, dial, value) { return [scope, target, dial, value].join("|"); }
-function showPreview(what, r) {
-  var box = $("t-preview");
-  clear(box);
-  $("t-pvcard").hidden = false;
-  setText("t-pvwhat", what);
+// A preview shows under the control it was asked from (a dial's row, a nudge panel), and is drawn
+// there again after each redraw of the dials until it is closed or another one is asked for. Its
+// text lives in this page's memory only.
+var PREVIEW = null;  // { anchor: the control's data-preview-key, what, r: the mind's answer or null while asking }
+function anchorOf(args) {
+  return args.action === "nudge" ? "nudge|" + args.target_kind + ":" + args.target
+                                 : [args.scope, args.target, args.dial].join("|");
+}
+function previewBody(box, r) {
   if (r.ok !== true) { box.appendChild(el("p", "why bad", str(r.error) || "refused")); return; }
   arr(r.world).forEach(function (x) { box.appendChild(el("p", "pv", numberText(x))); });
   if (r.note) { box.appendChild(el("p", "why", str(r.note))); }
@@ -446,22 +541,50 @@ function showPreview(what, r) {
   });
   if (typeof r.reach === "number") { box.appendChild(el("p", "why", "It reaches " + plural(r.reach, "member") + " now.")); }
 }
+function drawPreview(show) {
+  var old = document.querySelectorAll(".pv-inline"), hadFocus = false;
+  for (var i = 0; i < old.length; i++) { hadFocus = hadFocus || old[i].contains(document.activeElement); old[i].remove(); }
+  if (!PREVIEW) { return; }
+  var anchors = document.querySelectorAll("[data-preview-key]"), anchor = null;
+  for (var k = 0; k < anchors.length; k++) { if (anchors[k].dataset.previewKey === PREVIEW.anchor) { anchor = anchors[k]; break; } }
+  if (!anchor) { return; }
+  var card = el("div", "pv-inline"), head = el("div", "pv-head"), close = el("button", "", "Close preview");
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", "Preview: " + PREVIEW.what);
+  head.appendChild(el("strong", "", "Preview"));
+  head.appendChild(el("span", "muted", PREVIEW.what + (PREVIEW.r ? "" : ": asking the mind")));
+  close.type = "button";
+  close.addEventListener("click", function () { PREVIEW = null; drawPreview(); });
+  head.appendChild(close);
+  card.appendChild(head);
+  var body = el("div", "pv-body");
+  body.setAttribute("role", "status");
+  if (PREVIEW.r) { previewBody(body, PREVIEW.r); }
+  card.appendChild(body);
+  anchor.appendChild(card);
+  if (hadFocus) { close.focus({ preventScroll: true }); }
+  if (show) { card.scrollIntoView({ block: "nearest" }); }
+}
 function numberText(x) {
   function v(y) { return y === true ? "yes" : y === false ? "no" : y === null ? "never" : String(y) + (x.unit ? " " + x.unit : ""); }
   return str(x.what) + ": " + v(x.before) + " → " + v(x.after);
 }
 function tuneAsk(args, what) {
   var preview = args.action === "preview" || (args.action === "nudge" && args.verb === "preview");
-  if (preview) { setText("t-pvwhat", what + ": asking the mind"); $("t-pvcard").hidden = false; }
+  var asked = preview ? { anchor: anchorOf(args), what: what, r: null } : null;
+  if (preview) { PREVIEW = asked; drawPreview(true); }
   return post("/api/tune", args).then(function (r) {
     if (r.status === 403 && !r.error) { emit("key-lost"); return r; }
     if (preview) {
-      showPreview(what, r);
+      if (PREVIEW === asked) { asked.r = r; drawPreview(true); }
       if (r.ok === true) { lastPreview = previewKey(args.scope, args.target, args.dial, args.value); }
     } else if (r.ok !== true) { emit("note", what + " refused: " + str(r.error)); }
     else { emit("note", what + ": " + str(r.message)); pollTuning(); }
     return r;
-  }, function () { emit("note", what + ": the console could not be reached"); });
+  }, function () {
+    if (preview && PREVIEW === asked) { asked.r = { ok: false, error: "The console could not be reached." }; drawPreview(true); }
+    emit("note", what + ": the console could not be reached");
+  });
 }
 function setValue(scope, target, dial, value, what) {
   return tuneAsk({ action: "set", scope: scope, target: target, dial: dial, value: value,
@@ -470,6 +593,7 @@ function setValue(scope, target, dial, value, what) {
 // One dial: its name and what it moves, a slider, and Preview / Set / Clear
 function dialRow(box, o) {
   var row = el("div", "dial" + (o.off ? " off" : ""));
+  row.dataset.previewKey = [o.scope, o.target, o.dial].join("|");
   var nm = el("div", "nm", o.label);
   if (o.sub) { nm.appendChild(el("small", "", o.sub)); }
   row.appendChild(nm);
@@ -556,6 +680,7 @@ function renderTuning() {
                      dial: d.name, what: (g.builtin ? "everyone" : g.name) + " " + d.label, clearable: false,
                      moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
       add.remove();
+      drawPreview();
     });
     groups.appendChild(add);
     nudgePanel(groups, v, "group", g.target, live, tuneWhy(), tuneAsk);
@@ -588,6 +713,7 @@ function renderTuning() {
   if (pick) { renderDials(pick); }
   nudgeBadges(v);
   restoreGroupFocus();
+  drawPreview();
 }
 function rowText(v, r) {
   var who = r.scope === "world" ? "world" : r.scope === "group" ? "group " + groupName(v, r.target) : pname(v, Number(r.target));
@@ -623,6 +749,8 @@ function renderDials(guid) {
   nudgePanel(box, v, "member", String(guid), tuneLive(), tuneWhy(), tuneAsk);
   godmodePanel(box, v, guid, tuneLive(), tuneWhy(), tuneAsk, obj(TUNE).godmode === true, obj(v.names));
   restoreFocus();
+  renderActions();
+  drawPreview();
 }
 function fillValues() {
   var vals = arr(obj(tuneView().fields)[$("t-gfield").value]), sel = $("t-gvalues");
@@ -648,7 +776,6 @@ $("t-gsave").addEventListener("click", function () {
   tuneAsk({ action: "group", id: null, name: $("t-gname").value, where: gWhere }, "group " + $("t-gname").value)
     .then(function (r) { if (r && r.ok === true) { gWhere = {}; $("t-gname").value = ""; whereText(); } });
 });
-$("t-pvclose").addEventListener("click", function () { $("t-pvcard").hidden = true; });
 function pollTuning() {
   if (tuneBusy || S.tab !== "personas") { return; }
   tuneBusy = true;
@@ -678,6 +805,7 @@ on("selfie", function (d) {
   if (S.tab === "personas") { pollPersonas(); pollSelfies(); }
 });
 registerTab("personas", {
+  route: route,
   show: function () {
     pollPersonas(); pollTuning(); pollSelfies();
     personasTimer = setInterval(function () { pollPersonas(); pollTuning(); pollSelfies(); }, PERSONAS_MS);

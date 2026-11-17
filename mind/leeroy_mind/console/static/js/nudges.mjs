@@ -25,6 +25,7 @@ export function nudgePanel(box, view, kind, target, live, why, ask) {
   const draft = drafts.get(key) || { text: "", strength: "light", scope: "everywhere", hours: 24 };
   const section = el("section", "nudges");
   section.dataset.nudgeKey = key;
+  section.dataset.previewKey = "nudge|" + key;  // personas.mjs draws a preview under this panel
   section.appendChild(el("h4", "", "Temporary nudges"));
   section.appendChild(el("p", "muted", "A temporary state of mind, in their own words. It expires automatically; safety and privacy rules still apply."));
   const status = el("p", "why"); status.setAttribute("role", "status");

@@ -312,7 +312,24 @@ img.av { background: var(--surface-2); }
 .tile .tname { font-weight: 700; overflow-wrap: anywhere; }
 .tile .tsub { font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
 .av.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: 12px; font-size: 40px; }
-.pface { width: 96px; margin-bottom: 8px; }
+.pface { width: 96px; flex: none; }
+/* a member's page: it replaces the list, Back first, then who and how to reach them */
+#p-list { display: flex; flex-direction: column; gap: inherit; min-width: 0; }
+#p-list > label { display: flex; align-items: center; gap: 6px; align-self: start; }
+#p-list[hidden], #p-detail[hidden] { display: none; }
+#p-detail.pending > article:not(.member-head) { display: none; }
+.member-head { display: grid; gap: 10px; }
+.member-head .back { justify-self: start; }
+.member-head .back::before { content: "\2190\00a0" / ""; }
+.member-id { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.member-id h3 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.member-id p { margin: 2px 0 0; }
+.panel.member-head .acts { margin-top: 0; }
+.member-head .lead, .member-head .why { margin: 0; }
+/* a member's name that opens their page */
+.namebtn { padding: 0; border: 0; background: none; font: inherit; font-weight: inherit; color: inherit;
+  text-align: left; cursor: pointer; border-radius: 4px; min-width: 0; overflow-wrap: anywhere; }
+.namebtn:hover, .namebtn:focus-visible { text-decoration: underline; color: var(--accent); }
 div.who { display: flex; align-items: center; gap: 8px; }
 .av.speaking, .speaking > .av { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--live); }
 /* a member's face that opens their card */
@@ -400,6 +417,10 @@ select, input[type="text"], input[type="number"] { color: var(--ink); background
 .dial .ctl button { padding: 1px 8px; }
 .dial .moves { grid-column: 2; color: var(--ink-2); }
 .dial.off .nm, .dial.off .moves { color: var(--ink-3); }
+.pv-inline { grid-column: 1 / -1; margin: 8px 0 2px; padding: 8px 10px; border: 1px solid var(--accent);
+  border-radius: 8px; background: var(--surface-2); min-width: 0; }
+.pv-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pv-head button { margin-left: auto; padding: 1px 8px; }
 .pv { margin: 4px 0 0; font-size: 13px; }
 .pv .said { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .chg { margin: 0 0 8px; }
