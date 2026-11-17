@@ -238,13 +238,13 @@ SAMPLE_KINDS = ("answer", "tease", "tired", "flirt", "warm", "annoyed")
 class Speech:
     register: str = _f(max_len=60)                                   # "dry, exact, ledger-minded"
     shape: str = _f(max_len=120)                                     # her sentence shape
-    says: tuple[str, ...] = _f(min_items=4, max_items=8, max_len=24)  # her words, now and then
+    says: tuple[str, ...] = _f(min_items=4, max_items=8, max_len=30)  # her words, now and then
     never: tuple[str, ...] = _f(max_items=4, max_len=30)             # words she never uses
-    brings_up: tuple[str, ...] = _f(min_items=1, max_items=4, max_len=70)  # from her own life
+    brings_up: tuple[str, ...] = _f(min_items=1, max_items=4, max_len=90)  # from her own life
     with_him: str = _f(max_len=120)        # how she is with the owner; shown on turns to him
     stance: str = _f(max_len=140)          # what her household means for it; whispers and DMs
     # one line per kind (SAMPLE_KINDS; flirt or warm, never both): how she sounds, never reused
-    samples: dict[str, str] = _f(max_items=5, max_len=160)
+    samples: dict[str, str] = _f(max_items=5, max_len=220)
 
 
 DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
@@ -418,6 +418,22 @@ def persona_from_dict(d) -> Persona:
     if errs:
         raise PersonaError(errs)
     return _words_out_of_emoticons(p)
+
+
+def speech_from_dict(d) -> Speech:
+    """A voice sheet from its plain dict (shape only, as persona_from_dict checks a persona's;
+    validate_persona checks the rest once it is on a persona). PersonaError otherwise."""
+    if not isinstance(d, dict):
+        raise PersonaError(["speech: must be an object"])
+    errs: list[str] = []
+    s = _parse_obj(Speech, d, "speech", errs)
+    if errs:
+        raise PersonaError(errs)
+    return s
+
+
+def speech_to_dict(s: Speech) -> dict:
+    return _dump(s)
 
 
 # -- emoticons are marks, chat words are words ----------------------------------------------

@@ -3,18 +3,23 @@ prompt of hers in place of the generic trait sentences and the canned attachment
 lines (talk/prompt.py PromptParts.voice; personas/card.py leaves those out for her).
 
 - voice_block: the block a turn shows. Her register and sentence shape, the words she uses
-  ("now and then, never in every message"), the words she never uses and what she brings up
+  ("only now and then"), the words she never uses and what she brings up
   unasked, on every turn; how she is with him (`with_him`) only on a turn that is his; what her
   household means for it (`stance`) only where only he reads (a whisper to him, his DM); then
   one or two sample lines under SAMPLES_HEAD, which says they are how she sounds and never
-  lines to reuse.
+  lines to reuse. The block without its samples never passes BLOCK_TOKENS estimated tokens: a
+  sheet too long for a turn loses, in order (TRIMS), its fourth topic, its seventh and eighth
+  words, its never-words beyond two (the guards hold her to all of them, shown or not), its
+  third topic, the rest of its never-words, then words and a topic down to four and one
+  (fitted says what a turn keeps); what is left is cut at a word.
 - pick_samples: which samples a turn shows. The first by the turn's want (WANT_SAMPLE: the
   twelve wants of talk.intent onto the five kinds), the second a seeded draw among the others,
   so the same line is not shown every turn. A flirt sample is shown only on a turn that is
   his; one she already sent word for word is never shown again.
 - speech_errors: the schema's checks (validate_persona): the sample kinds, flirt only for a
-  woman and never beside warm, plain one-line text, no entry both said and never said, the
-  rendered block within BLOCK_TOKENS estimated tokens and each sample within SAMPLE_TOKENS.
+  woman and never beside warm, plain one-line text, no entry both said and never said, each
+  sample within SAMPLE_TOKENS, and a block that fits BLOCK_TOKENS once trimmed (her register,
+  shape, `with_him` and `stance` are never trimmed, so they must leave room).
 - screen: what an import refuses beyond the persona screens (personas.io._screen: his real
   name, romance aimed at a member), each as a code: a later era's slang or year, a guild
   member's name in a sample, a never-word inside a sample, stock slop among her words.
@@ -24,16 +29,19 @@ lines (talk/prompt.py PromptParts.voice; personas/card.py leaves those out for h
 Pure: no clock, no I/O, no logging. The seeded draw is the caller's own stream."""
 import re
 
-from ..text import estimate_tokens, has_meta, normalize_words
+from ..text import estimate_tokens, has_meta, normalize_words, truncate_words
 from .schema import SAMPLE_KINDS, Persona, Speech
 
-BLOCK_TOKENS = 120   # the block without its samples, with every part shown
-SAMPLE_TOKENS = 40   # one sample line
+BLOCK_TOKENS = 120   # the block without its samples, whatever the turn shows
+SAMPLE_TOKENS = 55   # one sample line
+# What a block over BLOCK_TOKENS keeps, tried in order: (her words, never-words, topics)
+TRIMS = ((8, 4, 4), (8, 4, 3), (7, 4, 3), (6, 4, 3), (6, 2, 3), (6, 2, 2), (6, 0, 2), (5, 0, 2),
+         (4, 0, 2), (4, 0, 1))
 MAX_SAMPLES = 2      # shown on one turn
 NOMINAL_HUMAN = "Guildmaster"  # the cap is checked with a name this long in "With <him>:"
 RECIPE_TAG = "sheet-1"  # learn.recipe.voice_used: `voice.sheet-1` on lines whose prompt had one
 
-VOICE_HEAD = "How you talk (your own voice; every line you write is in it):"
+VOICE_HEAD = "Your voice:"  # how the block opens
 SAMPLES_HEAD = "How you sound, not lines to reuse (never copy one; say new things this way):"
 
 # The twelve wants (talk.intent.Intent codes) onto the five sample kinds; "flirt" reads as
@@ -67,35 +75,51 @@ def _listed(items) -> str:
     return ", ".join(x for x in (_one(i) for i in items) if x)
 
 
-def voice_block(speech: Speech, human: str, *, to_him: bool = False, private: bool = False,
-                samples=()) -> str:
-    """The block for one turn. `human`: what the guild calls him. `to_him`: the turn is his
-    (her `with_him` line is shown); `private`: only he reads it (her `stance` too). `samples`:
-    the lines pick_samples chose."""
-    lines = [VOICE_HEAD,
-             _sentence(f"Your voice: {_one(speech.register)}; {_one(speech.shape)}")]
-    words = f"Words you use now and then, never in every message: {_listed(speech.says)}."
-    if speech.never:
-        words += f" You never say: {_listed(speech.never)}."
+def _body(speech: Speech, human: str, to_him: bool, private: bool,
+          keep: tuple[int, int, int]) -> str:
+    says, never, topics = keep
+    lines = [_sentence(f"{VOICE_HEAD} {_one(speech.register)}; {_one(speech.shape)}")]
+    words = f"You say, only now and then: {_listed(speech.says[:says])}."
+    if speech.never[:never]:
+        words += f" Never: {_listed(speech.never[:never])}."
     lines.append(words)
-    if speech.brings_up:
-        lines.append("Unasked, you bring up: "
-                     + "; ".join(x for x in (_one(b).rstrip(".") for b in speech.brings_up) if x)
-                     + ".")
+    brought = [x for x in (_one(b).rstrip(".") for b in speech.brings_up[:topics]) if x]
+    if brought:
+        lines.append("Unasked, you bring up: " + "; ".join(brought) + ".")
     him = [_sentence(x) for x in ((speech.with_him if to_him else ""),
                                   (speech.stance if to_him and private else "")) if _one(x)]
     if him:
         lines.append(f"With {human}: " + " ".join(him))
-    shown = [x for x in (_one(s) for s in samples) if x]
-    if shown:
-        lines.append(SAMPLES_HEAD)
-        lines += ["- " + s for s in shown]
     return "\n".join(lines)
 
 
+def fitted(speech: Speech, human: str = NOMINAL_HUMAN, *, to_him: bool = True,
+           private: bool = True) -> tuple[tuple[int, int, int], int]:
+    """(what the turn's block keeps: her words, never-words and topics; its estimated tokens):
+    the first of TRIMS within BLOCK_TOKENS, else the last (which voice_block then cuts)."""
+    for keep in TRIMS:
+        size = estimate_tokens(_body(speech, human, to_him, private, keep))
+        if size <= BLOCK_TOKENS:
+            break
+    return (min(keep[0], len(speech.says)), min(keep[1], len(speech.never)),
+            min(keep[2], len(speech.brings_up))), size
+
+
+def voice_block(speech: Speech, human: str, *, to_him: bool = False, private: bool = False,
+                samples=()) -> str:
+    """The block for one turn. `human`: what the guild calls him. `to_him`: the turn is his
+    (her `with_him` line is shown); `private`: only he reads it (her `stance` too). `samples`:
+    the lines pick_samples chose, after the block and outside its BLOCK_TOKENS."""
+    keep, _ = fitted(speech, human, to_him=to_him, private=private)
+    body = truncate_words(_body(speech, human, to_him, private, keep), BLOCK_TOKENS * 4)
+    shown = [x for x in (_one(s) for s in samples) if x]
+    return "\n".join([body, *([SAMPLES_HEAD] + ["- " + s for s in shown] if shown else [])])
+
+
 def block_tokens(speech: Speech) -> int:
-    """The block's estimated tokens at its fullest (a private turn of his), samples left out."""
-    return estimate_tokens(voice_block(speech, NOMINAL_HUMAN, to_him=True, private=True))
+    """The block's estimated tokens at its fullest (a private turn of his) once trimmed,
+    samples left out."""
+    return fitted(speech)[1]
 
 
 def _kind_for(want: str, speech: Speech) -> str:
@@ -185,8 +209,9 @@ def speech_errors(p: Persona) -> list[str]:
         errs.append("speech.says: the same word twice")
     size = block_tokens(s)
     if size > BLOCK_TOKENS:
-        errs.append(f"speech: the rendered block is {size} estimated tokens; at most "
-                    f"{BLOCK_TOKENS}")
+        errs.append(f"speech: the block is {size} estimated tokens with four words and one "
+                    f"topic; at most {BLOCK_TOKENS}: shorten the register, shape, with_him or "
+                    "stance")
     return errs
 
 
@@ -228,6 +253,6 @@ def screen(p: Persona, *, characters=()) -> list[str]:
     return codes
 
 
-__all__ = ["BLOCK_TOKENS", "MAX_SAMPLES", "RECIPE_TAG", "SAMPLES_HEAD", "SAMPLE_TOKENS",
-           "VOICE_HEAD", "WANT_SAMPLE", "block_tokens", "pick_samples", "screen",
+__all__ = ["BLOCK_TOKENS", "MAX_SAMPLES", "RECIPE_TAG", "SAMPLES_HEAD", "SAMPLE_TOKENS", "TRIMS",
+           "VOICE_HEAD", "WANT_SAMPLE", "block_tokens", "fitted", "pick_samples", "screen",
            "speech_errors", "strings", "voice_block", "word_range"]

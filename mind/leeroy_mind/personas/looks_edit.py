@@ -35,6 +35,7 @@ from .schema import BUSTS, GLUTES, HIPS, WAISTS, Appearance, validate_persona
 KIND = "looks"
 RECEIPT = "personas:looks-undo:{ledger}"
 ACTIONS = ("set", "undo")
+VOICE_KIND = "voice"  # a voice sheet's ledger row (personas.voices): the op's undo takes it too
 SOURCES = ("seed", "generated", "owner", "variety")  # persona_core's sources
 _WEIGHT = next(f.metadata for f in fields(Appearance) if f.name == "weight_kg")
 WEIGHT_MIN, WEIGHT_MAX = _WEIGHT["lo"], _WEIGHT["hi"]
@@ -226,12 +227,18 @@ class LooksService:
         with app.store.transaction():
             row = app.store.conn.execute("SELECT guid, kind FROM persona_ledger WHERE id=?",
                                          (ledger,)).fetchone()
-        if row is None or row["kind"] != KIND:
+        if row is None or row["kind"] not in (KIND, VOICE_KIND):
             raise LooksError(f"Ledger #{ledger} is not a weight or figure change.")
         self._cast_member(row["guid"])
         if not undo(app.store, ledger, now=app.clock.now(), personas=app.personas):
             raise LooksError(f"Ledger #{ledger} was undone already, or a later change moved "
-                             "the weight or figure: undo that first.")
+                             "the weight or figure: undo that first."
+                             if row["kind"] == KIND else
+                             f"Ledger #{ledger} was undone already, or a later change moved "
+                             "the voice sheet: undo that first.")
+        if row["kind"] == VOICE_KIND:  # her voice sheet (personas.voices): no photo to redo
+            return {"ok": True, "guid": row["guid"], "ledger": ledger, "set": None,
+                    "message": "Undone."}
         return self._after(row["guid"], ledger, "Undone.")
 
     def _after(self, guid: int, ledger: int, said: str) -> dict:

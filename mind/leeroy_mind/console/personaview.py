@@ -20,7 +20,8 @@ connection that is closed again). The mind writes these rows; the console only r
   days (counts only, never their text);
 - persona_ledger (nightly.store.ledger_add): the night's growth (note_added, note_dropped,
   note_rolled_back), its critic's drift_flag rows, stance moves (stance_band), his weight and
-  bust edits (looks, personas.looks_edit), home states (home, personas.homes) and undo rows.
+  bust edits (looks, personas.looks_edit), home states (home, personas.homes), voice sheets
+  (voice, personas.voices) and undo rows.
   An open drift flag is one from the last RECENT_DAYS days that is neither undone nor resolved
   in review_queue, as the critic counts them;
 - trait_state (nightly.motives): the Big Five the night sampled for each member around their
@@ -29,7 +30,7 @@ connection that is closed again). The mind writes these rows; the console only r
 Persona content is read through the persona loader (schema.persona_from_dict); of a persona
 only its card summary and bio are shown (the summary with a US member's home state and a
 relationship status built by code; the bio: job, household, rhythm, birthday, life thread,
-likes, dislikes, values and when they drink or smoke), never its secret, disclosures, opinions,
+likes, dislikes, values and when they drink or smoke) and its voice sheet, never its secret, disclosures, opinions,
 sample lines, bits, interview, money, sleep or real name. A part whose table this mind.db lacks (an older schema) is None and the
 table is listed in `missing`; a part with no rows yet is empty or None, never zeros."""
 import json
@@ -301,6 +302,8 @@ def _card(p, status: str | None = None) -> dict:
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},
             "appearance": d["appearance"], "photo": d.get("photo"),
+            # her voice sheet (personas.voices), whole: it is the owner's console
+            "speech": d.get("speech"),
             "life": {k: d["real_life"][k] for k in BIO_LIFE},
             "likes": list(d["likes"]), "dislikes": list(d["dislikes"]), "values": list(d["values"]),
             "habits": [{"substance": h["substance"], "when": h["when"]} for h in d["habits"]]}
