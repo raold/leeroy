@@ -163,8 +163,11 @@ def test_group_composed_prompt_has_friendship_without_romance_or_private_notes(s
         rig.sync(talk.close()); rig.close()
 
 
-def test_group_dm_member_in_his_wow_group_answers_at_once_whatever_her_schedule(store,tmp_path):
+def test_group_dm_member_in_his_wow_group_answers_at_once_whatever_her_schedule(store,tmp_path,
+                                                                                monkeypatch):
     from discord.test_own_time import in_his_group, life
+    from leeroy_mind.life import config as life_config
+    monkeypatch.setattr(life_config, "dm_wait_cap", lambda: 0)  # her schedule, without the cap
     rig,talk,desk=setup(store,tmp_path,hour=2)  # 02:00 for the US cast: asleep by schedule
     try:
         life(rig)

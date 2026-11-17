@@ -240,8 +240,17 @@ class DiscordTalk:
         if message_id in self._due:
             due, urgent, insist = self._due[message_id]
             # urgent words or his third post in a row reach her wherever she is, as in game
-            return (due if urgent or insist
-                    else max(due, self._back_at(guid, message_id, post_ts)))
+            if urgent or insist:
+                return due
+            back = self._back_at(guid, message_id, post_ts)
+            if back <= due:
+                return due
+            # she stepped away: back no later than [life] dm_wait_cap_s after his post (his
+            # line ends her away, LifeService._came_back, and her answer says she was away)
+            app = self.app
+            return owntime.capped_due(app.personas.get(guid), back, post_ts=post_ts,
+                                      now=app.clock.now(), local_now=app.clock.local(),
+                                      message_id=message_id, state="idle")
         app, conn, hg = self.app, self.app.store.conn, self.app.human_guid
         channel = f"dm:{guid}"
         # her last line to him in either medium: this DM, or a whisper (one conversation)
@@ -420,6 +429,8 @@ class DiscordTalk:
         if not items:
             self._answered(mid, guid)
             return
+        for _, meta in items:
+            meta.own_time = True  # it waited for her: she says where she was (LATE_OWN_S)
         self._queued[mid] = (now, tries + 1)
         while len(self._queued) > 256:
             del self._queued[next(iter(self._queued))]
@@ -718,12 +729,13 @@ class DiscordTalk:
         return p.character_name if p is not None else "someone"
 
     def instruction(self, speaker: int, place: str, message: int,
-                    thread: int | None, *, away: str = "") -> str | None:
+                    thread: int | None, *, away: str = "", waited: bool = False) -> str | None:
         """The answer turn's instruction for `speaker` on `place` (a turn channel), answering
         his message `message`; None once it is gone or deleted. A speaker outside the channel's
         audience sees none of its messages. `away`: her answer waited out a time she stepped
         away (Pipeline._waited_away): "note", its late note says she was away; "shape", there is
-        none (the LATE shape says so: one excuse in the prompt)."""
+        none (the LATE shape says so: one excuse in the prompt). `waited`: it waited for her
+        own time (TurnMeta.own_time), so its late note is said from owntime.LATE_OWN_S on."""
         app, store = self.app, self.app.store
         cid = channel_id(place)
         reads = speaker in app.world.audience(place, from_guid=speaker, to_guid=app.human_guid)
@@ -752,7 +764,9 @@ class DiscordTalk:
             if p is not None and away != "shape":
                 late = owntime.late_note(p, post_ts=row[2], now=app.clock.now(),
                                          local_now=app.clock.local(), forms=app.engine.human.forms,
-                                         why=AWAY_EXCUSE if away else "")
+                                         why=AWAY_EXCUSE if away else "",
+                                         **({"after": owntime.LATE_OWN_S} if waited or away
+                                            else {}))
         answer = f"Answer {their} message: "
         # a DM's instruction holds no history: his message may take the room it leaves
         his_chars = (max(HIS_CHARS, INSTRUCTION_CHARS - len(purpose) - len(late) - len(answer) - 8)
@@ -833,8 +847,12 @@ class DiscordTalk:
         waited = getattr(engine, "_waited_away", None)
         if waited is not None and waited(turn, meta, self.app.clock.now()):
             away = "shape" if engine._shapes(turn, meta) else "note"
+        own = getattr(engine, "_waited_own_time", None)
+        late_own = own is not None and own(turn, meta, self.app.clock.now())
+        if late_own and not away and engine._shapes(turn, meta):
+            away = "shape"  # the LATE shape says where she was: one excuse in the prompt
         fresh = self.instruction(turn.speaker, turn.channel, target.reply_to, target.thread,
-                                 away=away)
+                                 away=away, waited=late_own)
         query = self.recall_query(target.reply_to)
         if fresh is None or query is None:
             raise TurnWithdrawn(GONE)

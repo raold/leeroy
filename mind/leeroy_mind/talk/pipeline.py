@@ -555,6 +555,9 @@ class TurnMeta:
     # a DM's mirrored length; shape_ctx, the ShapeContext its Turn.shape was drawn from
     his_words: int = 0
     shape_ctx: object | None = field(default=None, repr=False)
+    # her answer to his DM (or a group DM line) waited for her own time (discord.talk's tick):
+    # from owntime.LATE_OWN_S on she says where she was (the LATE shape, or the late note)
+    own_time: bool = False
     # what a draw changed (turn.max_lines, meta.burst), put back before the next draw
     shape_saved: tuple[int, bool] | None = None
 
@@ -1749,6 +1752,18 @@ class Pipeline:
                 start = rows[0].ts if rows else 0.0
         return bool(start) and life.away_between(turn.speaker, start, now)
 
+    def _waited_own_time(self, turn: Turn, meta: TurnMeta, now: float) -> bool:
+        """Her answer waited for her own time (TurnMeta.own_time: discord.talk's tick queued it
+        when her moment came) and his post is owntime.LATE_OWN_S old or more: she says where she
+        was. With [life] dm_wait_cap_s the wait is short, so this, not owntime.LATE_S, decides
+        (self-play audit, 2026-11-17: 4 of 7 late first answers said nothing of the gap)."""
+        if not meta.own_time or meta.discord is None or not meta.discord.reply_to:
+            return False
+        from leeroy_mind.discord.owntime import LATE_OWN_S
+        row = self.store.conn.execute("SELECT ts FROM discord_message WHERE id = ?",
+                                      (meta.discord.reply_to,)).fetchone()
+        return row is not None and now - row[0] >= LATE_OWN_S
+
     def _shape(self, turn: Turn, meta: TurnMeta, p: Persona, now: float, talk) -> None:
         family = _family(turn.channel)
         mirror = talk.dm_mirror
@@ -1769,7 +1784,8 @@ class Pipeline:
             late_by=max(0.0, late_by), his_words=his_words, discord_words=talk.discord_words,
             dm_words=talk.dm_words, dm_mirror=mirror,
             realism=self.realism.eligible(self, turn, meta), two_lines=two,
-            away=self._waited_away(turn, meta, now))
+            away=self._waited_away(turn, meta, now),
+            waited=self._waited_own_time(turn, meta, now))
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
                                         else 0) or 0
@@ -1855,6 +1871,8 @@ class Pipeline:
         if draw.shape is Shape.LATE and ctx.away:  # she stepped away: that is her one excuse
             excuse = AWAY_EXCUSE
             several = self._several(turn, meta)
+        elif draw.shape is Shape.LATE and ctx.waited:  # her own time: where she was then
+            excuse, still = self._own_time_excuse(turn, meta)
         elif draw.shape is Shape.LATE:
             lp = meta.life_presence if self._life_on() else None
             playing = self.world.human_online and self.world.in_group(turn.speaker)
@@ -1869,6 +1887,25 @@ class Pipeline:
                                      several=several, usual=usual))
         return shape_line(draw, ctx, forms=forms, excuse=excuse, still=still, several=several,
                           usual=usual)
+
+    def _own_time_excuse(self, turn: Turn, meta: TurnMeta) -> tuple[str, bool]:
+        """Where she was when he wrote the DM her answer waited on (discord.owntime.away_words
+        at his post's time: "at work", "asleep"), and whether "Right now" still has her there
+        (her presence now is that block and it is one she stays in). ("", False) when his post
+        or her persona is gone: the bare LATE line."""
+        from leeroy_mind.discord import owntime
+        p = self.personas.get(turn.speaker)
+        row = (self.store.conn.execute("SELECT ts FROM discord_message WHERE id = ?",
+                                       (meta.discord.reply_to,)).fetchone()
+               if meta.discord is not None and meta.discord.reply_to else None)
+        if p is None or row is None:
+            return "", False
+        words = owntime.away_words(p, owntime.shifted(self.clock.local(),
+                                                      row[0] - self.clock.now()))
+        lp = meta.life_presence if self._life_on() else None
+        still = (lp is not None and lp.block in STILL_THERE
+                 and away_words(lp, "discord") == words and bool(self._where_line(turn, meta)))
+        return words, still
 
     def _several(self, turn: Turn, meta: TurnMeta) -> bool:
         """He wrote again while her answer waited: a coalesced whisper's answer answers his

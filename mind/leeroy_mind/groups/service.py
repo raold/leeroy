@@ -101,11 +101,13 @@ class Groups:
             return
         row = app.store.conn.execute('SELECT channel,ts FROM discord_message WHERE id=?',(mid,)).fetchone()
         items = talk.plan(mid)
-        pending = {str(turn.speaker):self._due_of(turn.speaker,mid,row) for turn,_ in items}
+        # a line that names her is answered within [life] dm_wait_cap_s, as his DM is
+        pending = {str(turn.speaker):self._due_of(turn.speaker,mid,row,named=meta.discord_named)
+                   for turn,meta in items}
         app.store.set_meta(key,json.dumps(pending))
         self.tick(talk,app.clock.now())
 
-    def _due_of(self, guid, mid, row):
+    def _due_of(self, guid, mid, row, *, named=False):
         app, conn = self.app,self.app.store.conn
         last = conn.execute("SELECT max(ts) FROM discord_message WHERE channel=? AND author=? "
             "AND origin='mind' AND ts<=?",(row[0],guid,row[1])).fetchone()[0]
@@ -117,15 +119,17 @@ class Groups:
         due = owntime.due_at(app.personas.get(guid),post_ts=row[1],now=app.clock.now(),
             local_now=app.clock.local(),message_id=mid,urgent=urgent,
             talking=(last is not None and row[1]-last<=owntime.TALKING_S)
-            or owntime.with_him(getattr(app,'world',None),guid),insist=len(his)>=owntime.INSIST)
-        return {'due':due,'urgent':urgent}
+            or owntime.with_him(getattr(app,'world',None),guid),insist=len(his)>=owntime.INSIST,
+            capped=bool(named))
+        return {'due':due,'urgent':urgent,'named':bool(named)}
 
     def refresh_due(self):
         """Edits change timing only for recipients still owed; never choose again."""
         if not self.config.enabled:
             return
         for key, mid, row, pending in self._pending(self.app.clock.now()):
-            pending = {guid:self._due_of(int(guid),mid,row) for guid in pending}
+            pending = {guid:self._due_of(int(guid),mid,row,named=due.get('named') is True)
+                       for guid,due in pending.items()}
             self.app.store.set_meta(key,json.dumps(pending))
 
     def _pending(self, now):
@@ -161,7 +165,7 @@ class Groups:
         from leeroy_mind.discord.talk import RETRY_S, TRIES
         app = self.app
         away = away_now(app.store,now)
-        for key, mid, _, pending in self._pending(now):
+        for key, mid, row, pending in self._pending(now):
             for raw_guid, due in list(pending.items()):
                 guid = int(raw_guid)
                 if guid in away or talk.own_time() and now < due['due']:
@@ -178,6 +182,9 @@ class Groups:
                 if not items:
                     pending.pop(raw_guid)
                     continue
+                if talk.own_time() and row is not None and now-row[1] >= owntime.LATE_OWN_S:
+                    for _turn,meta in items:
+                        meta.own_time = True  # it waited for her: she says where she was
                 self._queued[(mid,guid)] = (now,tries+1)
                 while len(self._queued)>256:
                     del self._queued[next(iter(self._queued))]

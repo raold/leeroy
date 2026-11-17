@@ -47,6 +47,16 @@ def clock():
     return engine_clock()
 
 
+@pytest.fixture(autouse=True)
+def _as_drawn(monkeypatch):
+    """Interruptions as her day draws them, without the owner's promptness rules ([life]
+    dm_wait_cap_s = 0, and a brb straight after his line): those have their own tests in
+    test_prompt_dms.py."""
+    from leeroy_mind.life import config as life_config
+    monkeypatch.setattr(life_config, "dm_wait_cap", lambda: 0)
+    monkeypatch.setattr(interrupt, "MIN_AFTER_HIS_S", 0.0)
+
+
 def _lp(block, *, kids=False):
     return LifePresence(block, Where.BUSY, Attention.GLANCING, DayEvent.NONE, kids)
 
