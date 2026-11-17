@@ -125,3 +125,27 @@ def test_feud_departure_is_system_line_and_closes_small_group(h):
     row=h.store.conn.execute('SELECT origin,author,text,bot FROM discord_message').fetchone()
     assert row['origin']=='bot' and row['author']==0 and row['bot']=='group-system'
     assert row['text'].endswith(' left the group')
+
+
+def test_a_group_he_left_is_not_made_again_and_a_closed_one_rests_sixty_days(h):
+    """review-365: pick is deterministic, so the same members came back the next week."""
+    friends(h,[101,102])
+    settle(h.ctx(),ON,can_start=True)
+    groups.remove(h.store,'gdm:1',1,human=1,now=h.clock.now())       # he leaves: it closes
+    h.store.conn.execute("DELETE FROM meta WHERE key GLOB 'groups:starts:*'")
+    settle(h.ctx(),ON,can_start=True)
+    assert count(h)==1
+    h.clock.advance(400*86400)
+    for g in (101,102):
+        wrote(h,g)
+    settle(h.ctx(),ON,can_start=True)
+    assert count(h)==1                                               # for good
+    mine=groups.create(h.store,human=1,members=[101,102],title='Fixture',created_by=1,now=h.clock.now(),config=ON)
+    groups.remove(h.store,mine,101,human=1,now=h.clock.now())        # his own, closed by a removal
+    settle(h.ctx(),ON,can_start=True)
+    assert count(h)==2                                               # closed today: it rests
+    h.clock.advance(61*86400)
+    for g in (101,102):
+        wrote(h,g)
+    settle(h.ctx(),ON,can_start=True)
+    assert count(h)==3                                               # he re-opened that set himself

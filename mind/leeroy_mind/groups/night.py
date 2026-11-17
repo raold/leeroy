@@ -60,6 +60,28 @@ def closeness(store,members,feuds,*,human,now):
     return his,close
 
 
+REST_DAYS = 60     # a closed group's members are not put together again for this long
+
+
+def barred(store,*,human,now):
+    """Member sets the night must not make again: every group closed in REST_DAYS, and every
+    group he left, for good unless he later made a group of those members himself. Without
+    this the same members were put together again the next week (pick is deterministic)."""
+    out = []
+    his_own = [(r[0],r[1]) for r in store.conn.execute(
+        'SELECT id,created FROM discord_group WHERE created_by=?',(human,))]
+    sets = {}
+    for grp,guid in store.conn.execute('SELECT grp,guid FROM discord_group_member WHERE guid!=?',(human,)):
+        sets.setdefault(grp,set()).add(guid)
+    for row in store.conn.execute('SELECT g.id,g.closed,(SELECT max(m.left) FROM discord_group_member m '
+            'WHERE m.grp=g.id AND m.guid=?) AS he_left FROM discord_group g WHERE g.closed IS NOT NULL',(human,)):
+        members = sets.get(row[0],set())
+        reopened = any(created>row[1] and sets.get(gid,set())==members for gid,created in his_own)
+        if members and (row[1]>=now-REST_DAYS*86400 or row[2] is not None and not reopened):
+            out.append(members)
+    return out
+
+
 def pick(members,his,close,existing):
     """The closest group of two to four among the members he talks to, or None. Starters go
     by how much he writes them; each seat goes to whoever is closest to everyone seated."""
@@ -119,7 +141,7 @@ def settle(ctx,config,*,can_start=False):
     members = [g for g in ctx.members() if is_cast(store.conn,g)]
     existing = [groups.readers(store.conn,f'gdm:{r[0]}') for r in store.conn.execute('SELECT id FROM discord_group WHERE closed IS NULL')]
     his,close = closeness(store,members,feuds,human=ctx.human,now=now)
-    chosen = pick(members,his,close,existing)
+    chosen = pick(members,his,close,existing+barred(store,human=ctx.human,now=now))
     # ids and counts only: why a night made no group must be readable from the log
     log.info('groups_night formed=%d talks_to=%d close_pairs=%d open=%d',int(chosen is not None),
              len(his),len(close),len(existing))

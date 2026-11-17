@@ -42,6 +42,11 @@ ration is 3 a day: 719 items were made and 7 told. Two changes, no new turn and 
   brings nothing in on her **first** answer of a conversation (no turn of hers there in 24
   hours), his line asks nothing and her want is share, small talk, react, flirt, tease or
   reassurance, a seeded draw of chattiness / 8 (half at 4, none at 0) brings the item in.
+  Nothing of hers is offered or drawn under his explicit overlay (an explicit scene).
+  The receipt is judged on the line that went out: it is written only when the stored
+  line says the item (`carries`: two of its content words), so a guard's rewrite or the
+  owed fallback that dropped it leaves the item open (`outreach_brought_unsaid`), and the
+  beat's ledger keeps it out of that conversation for a day.
   The stored answer writes the `told` receipt (`outreach_told ... how=answer`) in a
   transaction of its own right after the line: a refusal (ended, raised by him, source gone)
   costs nothing, and a crash between the two leaves the item open. The answer she owes him

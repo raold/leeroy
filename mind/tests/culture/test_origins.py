@@ -174,7 +174,7 @@ LAUGH = "\U0001f602"
 
 def dpost(h, t, guid, text, channel="general", reply_to=None, photo=False):
     from leeroy_mind.discord import store as discord
-    talk = channel if channel.startswith("dm:") else "discord:" + channel
+    talk = channel if channel.startswith(("dm:", "gdm:")) else "discord:" + channel
     line = h.say(t, guid, text, channel=talk, to=1 if channel.startswith("dm:") else 0)
     mid = discord.post(h.store, channel=channel, author=guid, origin="mind", text=text, reply_to=reply_to, now=t)
     h.store.set_meta(f"discord:line:{mid}", str(line))
@@ -216,7 +216,7 @@ def test_a_discord_message_three_members_laughed_at_is_an_origin(h):
     assert origin_text(h.store, found[0], {}) is None and kinds(h) == []
 
 
-@pytest.mark.parametrize("channel", ["dm:101", "officer-chat", "unknown-room"])
+@pytest.mark.parametrize("channel", ["dm:101", "gdm:1", "officer-chat", "unknown-room"])
 def test_discord_origins_never_come_from_private_or_restricted_rooms(h, channel):
     mid = dpost(h, h.T-100, 101, "floor inspector?", channel=channel, photo=True)
     for g in (102, 103, 104):
@@ -311,3 +311,37 @@ def test_a_discord_origin_is_coined_stored_with_its_kind_and_retired_when_it_goe
     lexicon.fade(ctx)
     row = h.store.conn.execute("SELECT * FROM lexicon").fetchone()
     assert row["retired"] is not None
+
+
+def test_a_group_dm_gives_no_streak_either(h):
+    """A group DM's rows count for nothing: not a first answer, not a question left hanging."""
+    for i in range(8):
+        parent = dpost(h, h.T-140+i*4, 102, f"fixture topic {i}", channel="gdm:1")
+        dpost(h, h.T-139+i*4, 101, f"fixture answer {i}", channel="gdm:1", reply_to=parent)
+    dpost(h, h.T-3*86400, 104, "anyone up for heroics?", channel="gdm:1")
+    dpost(h, h.T-2*3600, 104, "nobody?", channel="gdm:1")
+    assert kinds(h, (h.T-86400, h.T)) == []
+
+
+def test_a_discord_streak_joke_has_her_as_its_butt_so_the_tease_gate_decides(h):
+    from leeroy_mind.culture.seeds import _culture_seeds
+    from leeroy_mind.culture.tease import tease_ok
+    for i in range(8):
+        parent = dpost(h, h.T-140+i*4, 102, f"fixture topic {i}")
+        dpost(h, h.T-139+i*4, 101, f"fixture answer {i}", reply_to=parent)
+    enable(h)
+    ctx = h.ctx()
+    class Reasoner:
+        async def json(self, *args):
+            return {"term": "first responder"}
+    ctx.reasoner = Reasoner()
+    asyncio.run(events(ctx))
+    row = h.store.conn.execute("SELECT * FROM lexicon").fetchone()
+    assert row["butt"] == 101 and json.loads(row["origin_refs"])[-1] == "kind:first_answers"
+    personas = {g: ctx.personas.get(g) for g in ctx.members()}
+    seed, = _culture_seeds(h.store, now=h.T+4*86400, personas=personas, human=1, only=row["id"])
+    assert seed.about[0] == 101                      # the target every teasing use is gated on
+    gate = lambda: tease_ok(h.store.conn, 102, 101, personas=personas, human=1, now=h.T+4*86400)
+    assert gate() == (False, "dislikes")             # 102 does not like her enough to tease her
+    h.store.put_relationship(replace(h.store.get_relationship(102, 101), affinity=40))
+    assert gate() == (True, "ok")

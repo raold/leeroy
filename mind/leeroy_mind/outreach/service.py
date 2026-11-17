@@ -23,6 +23,19 @@ def _named_item(about, text):
     return any((a or b).casefold() in text.casefold() for a, b in names)
 
 
+_WORD = re.compile(r"[a-z]{4,}")
+_PLAIN = frozenset("""about after again been before being could does doing from have having here into just
+like more much only over really some than that their them then there these they this those very
+want were what when where which while will with would your yours""".split())
+
+
+def carries(about, text):
+    """Whether a sent line says an item: two of the item's content words (all of them when it
+    has fewer) are in it. Her own words may differ; a line that shares none told nothing."""
+    want = set(_WORD.findall(about.casefold())) - _PLAIN
+    return bool(want) and len(want & set(_WORD.findall(text.casefold()))) >= min(2, len(want))
+
+
 class Outreach:
     def __init__(self, app):
         self.app = app
@@ -155,6 +168,13 @@ class Outreach:
             with self.app.store.transaction():
                 item = records.get(self.app.store, ident)
                 if item is None or item.state != 'open' or item.guid != turn.speaker:
+                    return
+                sent = self.app.store.chat_lines([line_id])
+                if not sent or not carries(item.about, sent[0].text):
+                    # The beat chose it, but the line that went out (a guard's rewrite, the owed
+                    # fallback, a stripped clause) does not say it: it stays open. The beat's
+                    # ledger keeps it out of this conversation for a day.
+                    log('outreach_brought_unsaid', guid=item.guid, kind=item.kind)
                     return
                 if now >= item.expires:
                     records.drop(self.app.store, item.id, 'expired')

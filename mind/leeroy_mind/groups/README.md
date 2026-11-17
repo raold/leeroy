@@ -59,7 +59,9 @@ goes to whoever is closest to everyone already seated (`groups/night.py` `closen
 weekly regression (1%) put all 53 seeded rows at 39, so no group could form (live,
 2026-11-17: 0 pairs at 40, 19 at 30; member-to-member affinity otherwise moves by a
 point or two a night from scenes, reflection and gossip, and 99% of rows are 0). Each
-night logs `groups_night formed= talks_to= close_pairs= open=`. Its screened name uses the starter's character name and
+night logs `groups_night formed= talks_to= close_pairs= open=`. The night never makes a
+group of members (or a subset of them) whose group closed in the last 60 days, and never
+again one he left, unless he later made a group of those members himself (`barred`). Its screened name uses the starter's character name and
 “friends”; its first line is generated the next local day. A feud causes a member
 to leave at night, with a code-built system notice. No model invents memberships.
 Other topics wait for the starter's introduction. If she leaves beforehand, her

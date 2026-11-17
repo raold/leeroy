@@ -20,7 +20,7 @@ NEWS = "Your sister visits on Friday and you are dreading the drive."
 class Stub:
     """The outreach service as the pipeline asks it."""
     def __init__(self, offer=("o7", NEWS)):
-        self.item, self.told, self.asked = offer, [], 0
+        self.item, self.told, self.asked, self.lines = offer, [], 0, []
 
     def offer(self, turn):
         return self.item
@@ -31,17 +31,21 @@ class Stub:
 
     def brought(self, turn, meta, line_id, now):
         self.told.append((meta.outreach_brought, turn.channel, line_id))
+        self.lines.append(line_id)
 
     def release(self, meta):
         pass
 
 
-def script(want="share", use=NEWS, line="fair enough"):
-    """The beat picks `use` among the offered items by its words (None: nothing), then the line."""
+def script(want="share", use=NEWS, line="fair enough", lines=()):
+    """The beat picks `use` among the offered items by its words (None: nothing), then the line
+    (`lines` in order, the last repeating)."""
+    left = list(lines) or [line]
+
     def reply(model_name, messages):
         asked = messages[-1]["content"]
         if beats.MARK not in asked:
-            return line
+            return left.pop(0) if len(left) > 1 else left[0]
         found = re.search(r"^(\d+)\. " + re.escape(use), asked, re.M) if use else None
         return json.dumps({"read": "he is checking in", "lands": "warm", "want": want,
                            "use": int(found.group(1)) if found else None})
@@ -133,14 +137,14 @@ def test_a_nudge_is_never_folded_into_an_answer(app):
 
 def test_the_stored_answer_tells_the_item_once_and_a_refusal_costs_nothing(app):
     item = plan(app)
-    line, _ = chat(app, "A fixture answer.", owner=False, channel="dm:101")
+    line, _ = chat(app, "Fair enough. I might visit that quiet garden later.", owner=False, channel="dm:101")
     meta = TurnMeta("answer")
     meta.outreach_brought = item.id
     app.outreach.brought(answer_turn(), meta, line, app.clock.now())
     told = records.get(app.store, item.id)
     assert told.state == "told" and told.told_via == "dm" and told.line_id == line
     assert app.outreach.offer(answer_turn()) is None
-    other, _ = chat(app, "Another fixture answer.", owner=False, channel="dm:101")
+    other, _ = chat(app, "The quiet garden visit again.", owner=False, channel="dm:101")
     app.outreach.brought(answer_turn(), meta, other, app.clock.now())  # a second line retells nothing
     assert records.get(app.store, item.id).line_id == line
     meta.outreach_brought = 999
@@ -155,3 +159,68 @@ def test_an_item_he_raised_first_is_not_told_by_her_answer(app):
     meta.outreach_brought = item.id
     app.outreach.brought(answer_turn(), meta, line, app.clock.now())
     assert records.get(app.store, item.id).state == "dropped"
+
+
+# -- review-365 P2: told only when the line that went out says it --------------------------------
+
+@pytest.mark.parametrize("sent,told", [
+    ("Fair enough. I might visit that quiet garden later.", True),
+    ("oh. wow. i don't know what to say", False),     # the owed fallback's fresh short line
+    ("fair enough, long day here too", False),        # a guard's rewrite that dropped it
+])
+def test_a_line_that_does_not_say_the_item_tells_nothing(app, sent, told):
+    item = plan(app)
+    line, _ = chat(app, sent, owner=False, channel="dm:101")
+    meta = TurnMeta("answer")
+    meta.outreach_brought = item.id
+    app.outreach.brought(answer_turn(), meta, line, app.clock.now())
+    assert (records.get(app.store, item.id).state == "told") is told
+    assert (app.outreach.offer(answer_turn()) is None) is told  # unsaid: still hers to tell
+
+
+def sent_text(rig, stub):
+    return [rig.store.chat_lines([line])[0].text for line in stub.lines]
+
+
+def test_a_retried_line_is_judged_by_what_went_out(rig):
+    """The first draft trips a tell and is asked again: the receipt is asked for once, for the
+    stored line, so the service judges the words that were sent."""
+    from leeroy_mind.outreach.service import carries
+    rig.engine.outreach = stub = Stub()
+    said = "ugh, my sister visits friday and i am dreading the drive"
+    rig.llm.set_script(script(lines=["happy to help with that", said]))
+    assert dm_answer(rig, "long day, glad it is over") == said
+    assert sent_text(rig, stub) == [said] and carries(NEWS, said)
+
+
+def test_the_owed_fallback_line_is_judged_by_what_went_out(rig):
+    from leeroy_mind.outreach.service import carries
+    rig.engine.outreach = stub = Stub()
+    rig.llm.set_script(script(lines=["happy to help with that", "happy to help with that",
+                                     "oh. wow. i don't know what to say"]))
+    answer = dm_answer(rig, "long day, glad it is over")
+    assert sent_text(rig, stub) == [answer] and not carries(NEWS, answer)
+
+
+# -- no bring-in during an explicit scene ---------------------------------------------------------
+
+def test_his_explicit_overlay_brings_in_nothing_of_hers(store, clock, tmp_path):
+    from conftest import seed_test_cast
+    from engine_rig import make_rig, save_member
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", stance="lust", typo_rate=0.0,
+                split_rate=0.0, emoticon_rate=0.0, abbreviations={})
+    (tmp_path / "prompts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "prompts" / "romance_explicit_whisper.txt").write_bytes(b"WHISPER-OVERLAY\n")
+    r = make_rig(store, clock, tmp_path, beat=True)
+    try:
+        r.engine.outreach = stub = Stub()
+        r.llm.set_script(script(want="flirt", use=None, line="mm come here then"))
+        r.whisper_from_him(102, "long shift, dead on my feet")
+        r.run()
+        assert "WHISPER-OVERLAY" in last_user(line_calls(r)[-1])
+        assert NEWS not in last_user(beat_calls(r)[-1])           # not offered
+        assert stub.asked == 0 and stub.told == []                # nor the first-answer draw
+        assert "Bring in:" not in last_user(line_calls(r)[-1])
+    finally:
+        r.close()

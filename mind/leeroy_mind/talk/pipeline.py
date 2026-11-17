@@ -2073,13 +2073,15 @@ class Pipeline:
         offered = beats.offerable(list(zip(keys, c.beat_items)), entries)
         # something she means to tell him leads what she may bring in, under the same ledger
         # rules: it survives a tight context first (beat.fitting drops from the end)
-        return beats.offerable(self._outreach_offer(turn, meta), entries) + offered
+        return beats.offerable(self._outreach_offer(turn, meta, c), entries) + offered
 
-    def _outreach_offer(self, turn: Turn, meta: TurnMeta) -> list[tuple[str, str]]:
+    def _outreach_offer(self, turn: Turn, meta: TurnMeta, c: "Composed") -> list[tuple[str, str]]:
         """Her top ready outreach item for this answer as the beat keys it, [] with outreach off,
-        on an opener carrying its own item, or with none ready. Never costs the line."""
+        on an opener carrying its own item, under his explicit overlay (c.tail: nothing is
+        brought into an explicit scene), or with none ready. Never costs the line."""
         outreach = getattr(self, "outreach", None)
-        if outreach is None or meta.outreach_item is not None or meta.photo is not None:
+        if (outreach is None or c.tail or meta.outreach_item is not None
+                or meta.photo is not None):
             return []
         try:
             mine = outreach.offer(turn)
@@ -2096,9 +2098,9 @@ class Pipeline:
         nothing and her want leaves room for news of her own, she may bring in one thing she
         means to tell him, by Outreach.first_share's rationed draw (seeded per turn)."""
         outreach = getattr(self, "outreach", None)
-        if (outreach is None or c.asking or want not in FIRST_SHARE_WANTS
+        if (outreach is None or c.asking or c.tail or want not in FIRST_SHARE_WANTS
                 or meta.outreach_item is not None or meta.photo is not None):
-            return None
+            return None  # c.tail: his explicit overlay keeps flirt and tease, never her news
         try:
             if beats.ledger(self.store.get_meta(meta.beat_conversation), now):
                 return None
