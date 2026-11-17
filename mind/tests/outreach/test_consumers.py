@@ -531,3 +531,17 @@ def test_off_preserves_golden_prompts_and_golden_file(store,clock,tmp_path,confi
     before=hashlib.sha256(GOLDEN.read_bytes()).digest()
     assert record(store,clock,tmp_path)==golden()
     assert hashlib.sha256(GOLDEN.read_bytes()).digest()==before
+
+
+@pytest.mark.parametrize('ready',[{104},set()])
+def test_a_dm_opener_goes_to_a_member_with_something_to_tell_him(store,clock,monkeypatch,ready):
+    """The ration is small: while anyone has an item ready, the opener is hers; with none ready
+    it is anyone's, as before."""
+    opener,snap,calls = dm_fixture(store,clock,monkeypatch)
+    asked = []
+    opener.app.outreach=SimpleNamespace(eligible=lambda guid:True,
+        has_ready=lambda guid,via:(asked.append(via),guid in ready)[1],
+        select=lambda *a:None,fallback_seed=lambda *a:True)
+    run(due(opener,clock))
+    assert len(calls)==1 and set(asked)=={'dm'}
+    assert calls[0][0].speaker==104 if ready else calls[0][0].speaker in snap.personas

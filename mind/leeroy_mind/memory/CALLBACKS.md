@@ -90,3 +90,11 @@ Default output is counts only. `--show-text` writes selected seeds solely to a
 new random-named JSON file under that data directory's `scratch/`; they never
 appear in terminal output or logs. Scratch symlinks and Windows junctions are
 refused. Treat these optional artifacts as private. Tests use invented members.
+
+## Live use and the Discord window (2026-11-17)
+
+The selector is wired: `learn/apply.py` offers a callback when `[learn] apply`, `[callbacks]
+enabled` and the bandit's `callback.1.v1` arm agree, and records its use with the sent line.
+The play quota (three a guild and one a member in the last hour of his recorded play) needs
+an open game session. On a Discord turn with no session, his own Discord post within the
+last hour opens the same quota over that hour instead; game turns are unchanged.
