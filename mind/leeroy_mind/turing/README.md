@@ -140,3 +140,7 @@ text.
   writing; they are real tells all the same, since a human reader sees them.
 - The judge is the same reflection model every night and sees a small sample; read its accuracy
   as a trend over a week or more, not night to night.
+- An optional reply scorer exists and is not part of a night: `lab.judge.score_lines(reasoner,
+  lines)` scores the replies of a window of `corpus.Line` 1-5 on the live model (lab/README.md,
+  "The judge"). It is below the lab's bar for agreement with a strong grader, so nothing here
+  reads it yet.
