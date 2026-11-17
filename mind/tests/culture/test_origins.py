@@ -165,3 +165,149 @@ def test_events_recheck_origins_after_model_and_leave_failed_unit_retryable(h):
     asyncio.run(events(ctx))
     assert h.count("lexicon")==0
     assert not ctx.done("language","events")
+
+
+# -- origins from the life he leads now: the guild Discord and the members' own raids -------------
+
+LAUGH = "\U0001f602"
+
+
+def dpost(h, t, guid, text, channel="general", reply_to=None, photo=False):
+    from leeroy_mind.discord import store as discord
+    talk = channel if channel.startswith("dm:") else "discord:" + channel
+    line = h.say(t, guid, text, channel=talk, to=1 if channel.startswith("dm:") else 0)
+    mid = discord.post(h.store, channel=channel, author=guid, origin="mind", text=text, reply_to=reply_to, now=t)
+    h.store.set_meta(f"discord:line:{mid}", str(line))
+    if photo:
+        snap = h.store.conn.execute("INSERT INTO selfie_snap(kind,guid,source,ref,night,status,scene,audience,"
+            "phases,pick,looks,created,not_before,expires,rendered) VALUES('situation',?,'life','beat:1','night',"
+            "'ready','{}','anyone','[]',1,'looks',1,1,100,2)",
+            (guid,)).lastrowid
+        h.store.conn.execute("INSERT INTO discord_attachment(message,kind,path,width,height,bytes,snap) "
+                             "VALUES (?,'snap','fixture.jpg',64,64,1,?)", (mid, snap))
+    return mid
+
+
+def react(h, mid, member, emoji=LAUGH):
+    from leeroy_mind.discord import store as discord
+    discord.react(h.store, mid, member=member, emoji=emoji, now=h.T)
+
+
+def kinds(h, window=None):
+    return [(o.kind, o.butt, o.originator) for o in event_origins(h.store, window or (h.T-200, h.T))]
+
+
+def test_a_discord_message_three_members_laughed_at_is_an_origin(h):
+    mid = dpost(h, h.T-100, 101, "floor inspector reporting in")
+    react(h, mid, 102)
+    react(h, mid, 103, "\U0001f44d")   # a thumbs-up is no laugh
+    react(h, mid, 101)                # nor is her own
+    dpost(h, h.T-90, 104, "lol", reply_to=mid)
+    assert kinds(h) == []
+    react(h, mid, 103, "\U0001f480")
+    found = event_origins(h.store, (h.T-200, h.T))
+    assert kinds(h) == [("discord_laughed", 0, 101)]
+    assert origin_text(h.store, found[0], {101: "Testmember"}) == (
+        'Testmember wrote in the guild Discord: "floor inspector reporting in" and 3 members laughed.')
+    h.store.conn.execute("DELETE FROM discord_reaction WHERE member=102")
+    assert origin_text(h.store, found[0], {}) is None
+    react(h, mid, 102)
+    h.store.conn.execute("UPDATE discord_message SET deleted=? WHERE id=?", (h.T, mid))
+    assert origin_text(h.store, found[0], {}) is None and kinds(h) == []
+
+
+@pytest.mark.parametrize("channel", ["dm:101", "officer-chat", "unknown-room"])
+def test_discord_origins_never_come_from_private_or_restricted_rooms(h, channel):
+    mid = dpost(h, h.T-100, 101, "floor inspector?", channel=channel, photo=True)
+    for g in (102, 103, 104):
+        react(h, mid, g)
+    h.clock.set(h.T + 2*3600)
+    assert kinds(h, (h.T-200, h.T + 2*3600)) == []
+
+
+def test_a_line_that_recalled_a_private_memory_roots_nothing(h):
+    mid = dpost(h, h.T-100, 101, "floor inspector reporting in")
+    for g in (102, 103, 104):
+        react(h, mid, g)
+    assert kinds(h) == [("discord_laughed", 0, 101)]
+    secret = h.mem(101, "A private fixture.", scope="private", scope_with=1)
+    h.store.conn.execute("UPDATE utterance SET memory_ids=? WHERE guid=101", (json.dumps([secret]),))
+    assert kinds(h) == []
+
+
+def test_photo_first_answers_and_unanswered_questions(h):
+    photo = dpost(h, h.T-150, 103, "look", channel="pets", photo=True)
+    react(h, photo, 101, "\U0001f44d")
+    assert kinds(h) == []
+    react(h, photo, 102, "\U0001f525")
+    assert kinds(h) == [("photo_reacted", 103, 103)]
+    h.store.conn.execute("DELETE FROM discord_reaction")
+    for i in range(8):
+        parent = dpost(h, h.T-140+i*4, 102, f"fixture topic {i}")
+        dpost(h, h.T-139+i*4, 101, f"fixture answer {i}", reply_to=parent)
+        dpost(h, h.T-138+i*4, 103, f"fixture second {i}", reply_to=parent)
+    found = event_origins(h.store, (h.T-200, h.T))
+    assert [(o.kind, o.butt) for o in found] == [("first_answers", 101)]
+    assert len(found[0].refs) == 3
+    assert origin_text(h.store, found[0], {101: "Testmember"}) == (
+        "Testmember was the first to answer 8 messages in the guild Discord in one day.")
+    h.store.conn.execute("UPDATE discord_message SET deleted=? WHERE text='fixture answer 7'", (h.T,))
+    assert origin_text(h.store, found[0], {}) is None  # seven is no streak
+    assert kinds(h) == []
+
+
+def test_two_questions_nobody_answered_are_an_origin_until_someone_does(h):
+    day = 86400
+    first = dpost(h, h.T-3*day, 104, "anyone up for heroics?", channel="irl")
+    assert kinds(h) == []
+    dpost(h, h.T-2*3600, 104, "nobody?", channel="irl")
+    found = event_origins(h.store, (h.T-day, h.T))
+    assert [(o.kind, o.butt) for o in found] == [("left_on_read", 104)]
+    h.clock.set(h.T)
+    assert origin_text(h.store, found[0], {104: "Testmember"}) == (
+        "Testmember asked 2 questions in the guild Discord that nobody answered.")
+    assert event_origins(h.store, (h.T, h.T+day)) == []  # nothing new the next night
+    dpost(h, h.T+10, 102, "sure", channel="irl", reply_to=first)
+    assert origin_text(h.store, found[0], {}) is None
+
+
+def test_first_dead_in_wipes_on_two_nights_is_one_origin(h):
+    """The raids members run by themselves wipe once a night."""
+    day = 86400
+    for at in (h.T-2*day, h.T-100):
+        h.boss(at, 631, 11, "engaged", (101, 102))
+        h._event(at+1, Death(int((at+1)*1000), 101, 631, 1))
+        h.boss(at+3, 631, 11, "wiped", (101, 102))
+    assert event_origins(h.store, (h.T-3*day, h.T-day)) == []
+    found = event_origins(h.store, (h.T-200, h.T))
+    assert [(o.kind, o.butt) for o in found] == [("wipe_first_death", 101)]
+    assert origin_text(h.store, found[0], {101: "Testmember"}) == "Testmember died first in 2 wipes on Sindragosa."
+    assert event_origins(h.store, (h.T, h.T+day)) == []
+    h.store.conn.execute("DELETE FROM game_event WHERE id=?", (int(found[0].refs[1][6:]),))
+    assert origin_text(h.store, found[0], {}) is None
+
+
+def test_a_discord_origin_is_coined_stored_with_its_kind_and_retired_when_it_goes(h):
+    from leeroy_mind.culture.origins import term_origin
+    from leeroy_mind.nightly import lexicon
+    mid = dpost(h, h.T-100, 101, "floor inspector reporting in")
+    for g in (102, 103, 104):
+        react(h, mid, g)
+    enable(h)
+    ctx = h.ctx()
+    class Reasoner:
+        async def json(self, *args):
+            return {"term": "floor inspector"}
+    ctx.reasoner = Reasoner()
+    asyncio.run(events(ctx))
+    row = h.store.conn.execute("SELECT * FROM lexicon").fetchone()
+    assert row["origin_kind"] == "event" and row["butt"] == 0 and row["originator"] == 101
+    assert json.loads(row["origin_refs"])[-1] == "kind:discord_laughed"
+    origin = term_origin(row)
+    assert origin.kind == "discord_laughed" and origin.refs == (row["origin_ref"],)
+    assert origin_text(h.store, origin, {}) is not None
+    assert term_origin(dict(row) | {"origin_refs": json.dumps([row["origin_ref"], "kind:nonsense"])}).kind == "invalid"
+    h.store.conn.execute("UPDATE discord_message SET deleted=? WHERE id=?", (h.T, mid))
+    lexicon.fade(ctx)
+    row = h.store.conn.execute("SELECT * FROM lexicon").fetchone()
+    assert row["retired"] is not None
