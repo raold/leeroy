@@ -33,7 +33,7 @@ from leeroy_mind.server.seeds import Seed, fresh
 from leeroy_mind.storage.rows import pack_vec, Relationship
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk import budget
-from leeroy_mind.talk.pipeline import TYPING, TurnMeta
+from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_clock import FakeClock
@@ -164,6 +164,17 @@ def test_whole_server_day(tmp_path, monkeypatch):
 
     async def go():
         clock = FakeClock(START, yields=64)
+        # The tasks asleep on the fake clock: a Discord turn not among them is working on real read
+        # workers and the low model slot, which a 10 s step does not wait for (see advance_to).
+        sleeping, clock_sleep = set(), clock.sleep
+        async def tracked_sleep(s):
+            task = asyncio.current_task()
+            sleeping.add(task)
+            try:
+                await clock_sleep(s)
+            finally:
+                sleeping.discard(task)
+        clock.sleep = tracked_sleep
         cast = [dict(guid=g,name=n,race=r,**{'class':c},gender=0,level=80,
                      rank=1 if g in OFFICERS else 3,online=True,map=0,zone=0,spec_tab=-1)
                 for g,(n,r,c) in TEST_CAST.items()]
@@ -237,29 +248,21 @@ def test_whole_server_day(tmp_path, monkeypatch):
         app.server.engine._finished = finish
         task = asyncio.create_task(app.run())
         held_tasks = []
+        def discord_work():
+            return any(is_discord(turn.channel) and job not in sleeping and not job.done()
+                       for job,turn in list(app.engine._current.items()))
         async def advance_to(hours, minutes=0, *, step=10):
             target = START.replace(hour=0,minute=0).timestamp()+hours*3600+minutes*60
             while clock.now()<target:
+                # Hold the clock (at most 1 s of real time a step) while a Discord turn composes or
+                # is reviewed. Else the steps outrun its 120 s deadline (a DM opener dropped
+                # "expired") and stretch every conversation with the CPU's load, so MAX_LIVE turns
+                # starts away and the phase band measures the machine, not the rate.
+                held = time.monotonic()
+                while discord_work() and time.monotonic()-held < 1:
+                    await asyncio.sleep(.002)
                 await clock.advance(min(step,target-clock.now()),step)
                 # Real SQLite read workers and the loopback dispatcher must settle.
-                await asyncio.sleep(.001)
-        async def through_opener(hours, minutes):
-            # A DM opener composes on real read workers and the low model slot inside a 120 s
-            # Discord deadline that 10 s steps outrun while the server's conversations share the
-            # CPU: step a second at a time and hold the clock while it composes (at most 10 s of
-            # real time a hold), until it has finished.
-            target = START.replace(hour=0,minute=0).timestamp()+hours*3600+minutes*60
-            dms, held = app.server.dms, None
-            while clock.now()<target or dms._pending is not None:
-                guid = dms._pending_guid
-                if guid is not None and not any(t.speaker==guid and phase==TYPING
-                                                for t,phase,_ in app.engine.turn_phases()):
-                    held = held or time.monotonic()
-                    if time.monotonic()-held < 10:
-                        await asyncio.sleep(.005)
-                        continue
-                held = None
-                await clock.advance(1,1)
                 await asyncio.sleep(.001)
         try:
             await until(lambda: app.hello is not None)
@@ -322,8 +325,7 @@ def test_whole_server_day(tmp_path, monkeypatch):
             assert app.store.conn.execute('SELECT id FROM discord_message WHERE reply_to=? AND origin="mind"',
                                           (post['id'],)).fetchone()
             assert app.night_scheduler.running is not None
-            await advance_to(32)
-            await through_opener(32,2)  # the day's one opener slot, 08:00:30
+            await advance_to(32,1)
             assert app.server.lease.ready() and 'server' in app.arbiter.holders
             await advance_to(33,30)
             await app.server.engine.close()
