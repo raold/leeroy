@@ -372,6 +372,7 @@ class Scene:
     shows: str
     style: str = PLAIN  # LUST: setting, outfit and expression were her picks (R2)
     recipe: int = 0  # missing on pre-enum rows; snapstage holds them instead of rendering prose
+    romance_style: str = ""  # opted-in private wardrobe: warm, playful or confident
 
 
 def scene_from(data: dict) -> Scene:
@@ -386,8 +387,9 @@ def scene_from(data: dict) -> Scene:
     if style not in STYLES:
         raise ValueError("scene: unknown style")
     return Scene(**{f.name: data[f.name] for f in fields(Scene)
-                    if f.name not in ("outfit", "style", "recipe")}, outfit=outfit, style=style,
-                 recipe=data.get("recipe", 0))
+                    if f.name not in ("outfit", "style", "recipe", "romance_style")},
+                 outfit=outfit, style=style, recipe=data.get("recipe", 0),
+                 romance_style=data.get("romance_style", ""))
 
 
 def scene_json(s: Scene) -> dict:
@@ -398,6 +400,8 @@ def scene_json(s: Scene) -> dict:
         del out["style"]
     if not s.recipe:
         del out["recipe"]
+    if not s.romance_style:
+        del out["romance_style"]
     return out
 
 
@@ -486,9 +490,20 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
         return missing
     if s.style == LUST and not suggestive(p):
         return LUST_HELD
+    if s.romance_style:
+        from .romance_styling import EXPRESSIONS
+        from .style import looks_age_coded
+        if (s.romance_style not in EXPRESSIONS or s.audience != "him"
+                or p.identity.age < SUGGESTIVE_MIN_AGE or looks_age_coded(p)
+                or p.identity.player_gender != "female"
+                or p.romance.stance not in ("fond", "drawn", "lust")):
+            return "scene.styling: held"
     if UNDRESS_RE.search(s.setting):
         return "scene.setting: undress"  # also hold older planned bathing-context rows
     named = names_re(p)
+    if s.romance_style and named is not None and any(
+            named.search(text) for text in (s.outfit, s.expression)):
+        return "scene.styling: named"
     if s.style == LUST and named is not None and named.search(lust_phrase(s)):
         return LUST_NAMED
     return None
@@ -523,18 +538,20 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
         add(lust_phrase(s), 0, True)
     else:
         add(s.setting, 1, True)
+        if s.romance_style:
+            add(f"wearing {s.outfit}", 0, True)
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
     if s.kind != "snapshot":
         add("looking at the camera", 3)
     details = [d for d in eyes_face(p, name_re) if not limb_detail(d[0])]
     out += identity_first(p, details)  # eye colour, glasses, stubble first
-    if not lust:
+    if not lust and not s.romance_style:
         add(s.outfit, 2, True)
     if _LIGHT[s.when]:
         add(_LIGHT[s.when], 2)
     if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # optional, after who she is
         out.append((glutes_words(p), 2))
-    add(s.expression, 3, True)
+    add(s.expression, 2 if s.romance_style else 3, True)
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)

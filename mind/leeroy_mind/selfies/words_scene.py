@@ -533,6 +533,7 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     if w.get("prop"):
         add(f"with {w['prop']}", 2, True)
     add(LIGHT_WORDS[w["lighting"]], 2)
+    add(s.expression, 2 if s.romance_style else 3, True)  # after face details; empty on old recipes
     if w["framing"] == BEHIND and glutes_words(p):
         out.append((glutes_words(p), 2))
     add(TIME_WORDS[w["time"]], 3)

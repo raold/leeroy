@@ -16,6 +16,7 @@ from . import files
 from .kind import looks_line
 from .prompt import over_fit, renderable
 from .ration import SEND_MIN_AGE
+from .romance_styling import enum_category, restyle
 from .scene import (Scene, scene_from, scene_json, scene_renderable, scene_schema, scene_system,
                     screen_scene)
 from .scene_choices import compose_choices, pairing_codes
@@ -67,6 +68,14 @@ def _subject(app, guid: int, audience: str):
     return p, member, ident, request_names(app, guid), audience
 
 
+def _style(app, guid: int, scene: Scene, *, category, seed, ident, names) -> Scene:
+    if not app.selfies.cfg.romance_styling:
+        return scene
+    return restyle(app.personas.get(guid), scene, enabled=True, category=category,
+                   relationship=app.store.get_relationship(guid, ident.guid, lens=True),
+                   dial=app.cfg.romance.dial, seed=seed, ident=ident, names=names)
+
+
 async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool = True) -> Scene:
     """Choose at most twice, then use a screened everyday choice. Never store his words.
     `model=False` takes that everyday choice at once, without the live model.
@@ -76,6 +85,7 @@ async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool
     """
     p, member, ident, names, audience = _subject(app, guid, audience)
     schema = scene_schema(p)
+    seed = app.clock.now()
 
     def validate(data):
         try:
@@ -91,6 +101,8 @@ async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool
         if codes := screen_scene(p, composed, ident=ident, member_names=names):
             raise ValueError("; ".join(codes))
         scene = replace(scene_from(composed), audience=audience, when="any")
+        scene = _style(app, guid, scene, category=enum_category(data), seed=seed,
+                       ident=ident, names=names)
         if scene_renderable(p, scene):
             raise ValueError("scene.unrenderable")
         return scene
@@ -189,13 +201,22 @@ async def choose_words_scene(app, guid: int, words: str, audience: str, *, reque
     codes = list(screened.fallbacks)
     place, where = (screened.place, "words") if screened.place else W.fallback_place(p, words)
     w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request)
-    scene = W.scene_of(p, w, audience=audience)
+
+    def composed(w):
+        scene = W.scene_of(p, w, audience=audience)
+        category = "as_now" if data["wearing"] == "as_now" else w.wearing
+        styled = _style(app, guid, scene_from(scene), category=category, seed=request,
+                        ident=ident, names=names)
+        scene.update(scene_json(styled))  # keep the words recipe's framing and light codes
+        return scene
+
+    scene = composed(w)
     if screened.place is not None and (scene_renderable(p, scene_from(scene)) is None
                                        and over_fit(W.build_words_prompt(p, scene))):
         place, where = W.fallback_place(p, words)
         codes.append("place:prompt_fit")
         w = W.resolve(p, data, screened, place=place, block=block, hour=hour, seed=request)
-        scene = W.scene_of(p, w, audience=audience)
+        scene = composed(w)
     if scene_renderable(p, scene_from(scene)) is not None:
         return await everyday("unrenderable")
     if where != "words":

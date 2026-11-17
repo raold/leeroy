@@ -23,6 +23,7 @@ from .files import sync_snaps
 from .kind import looks_line
 from .prompt import renderable
 from .ration import MEMBER_GAP_S, MEMBER_STOCK, SEND_MIN_AGE, send_weight, stock_target, channel_stock
+from .romance_styling import enum_category, restyle
 from .style import style_of, LUST
 from .scene import (ABOUT, PHASES, SCENE_ASK, SCENE_ASK_AGAIN, scene_from, scene_json, scene_renderable,
                     scene_schema, scene_system, screen_scene, window)
@@ -174,7 +175,8 @@ def _guild_members(ctx: "NightContext", raid_id: int) -> list[tuple[int, int]]:
     return [(g, have[g]) for g in (first + rest)[:GUILD_MAX]]
 
 
-async def ask_scene(ctx: "NightContext", guid: int, *, about: str):
+async def ask_scene(ctx: "NightContext", guid: int, *, about: str,
+                    romance_styling: bool = False, audience=None):
     """One scene for `guid` from the reflection model, screened: (the Scene, []) or (None, the
     refusal codes). [DECLINED] when the member chose no photo, ["model"] for a non-fatal model
     failure. Writes nothing; a fatal ReflectionError is raised."""
@@ -199,6 +201,7 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str):
         if again:
             return None, codes
         log("selfies_scene_asked_again", night=ctx.night, guid=guid, codes=codes)
+    category = enum_category(data)
     data = compose_choices(data)
     others = [g for g in ctx.members(include_away=True) if g != guid]
     names = [ctx.name(g) for g in others]
@@ -208,6 +211,12 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str):
     names += [ctx.ident.nickname, ctx.ident.character_name]
     codes = screen_scene(p, data, ident=ctx.ident, member_names=names)
     s = None if codes else scene_from(data)
+    if s is not None and romance_styling:
+        if audience is not None:
+            s = replace(s, audience=audience)
+        s = restyle(ctx.persona(guid), s, enabled=True, category=category,
+                    relationship=ctx.store.get_relationship(guid, ctx.human, lens=True),
+                    dial=ctx.settings.romance_dial, seed=ctx.night, ident=ctx.ident, names=names)
     if s is not None and scene_renderable(p, s):
         codes = ["unrenderable"]
     return (None, codes) if codes else (s, [])
@@ -292,7 +301,8 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int], outlets: Calla
             if audience is not None:
                 about += (' This photo is for his private DM only.' if audience == 'him' else
                           ' This photo is for a public guild channel, safe for everyone.')
-            s, codes = await ask_scene(ctx, guid, about=about)
+            s, codes = await ask_scene(ctx, guid, about=about,
+                                       romance_styling=cfg.romance_styling, audience=audience)
             if codes == [DECLINED]:
                 declined += 1
                 log("selfies_scene_declined", night=ctx.night, guid=guid)
