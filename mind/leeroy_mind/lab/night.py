@@ -251,6 +251,27 @@ def _keep_only(data_dir, run_id: int) -> None:
             shutil.rmtree(p, ignore_errors=True)
 
 
+def drop_copy(data_dir) -> int:
+    """The lab's copy of the guild (scratch/lab/mind-data with its library.db, and the
+    snapshot), once its run needs it no more: about 2.6 GB a night otherwise stayed until the
+    next night replaced it. The transcripts (runs/) and child.log stay. Bytes freed; 0 when a
+    child still holds a file (the next pass, or the scratch sweep, takes it)."""
+    layout = child.prepare.lab_layout(Path(data_dir))
+    if not (layout.root / child.prepare.MARKER).is_file():
+        return 0
+    freed = 0
+    for folder in (layout.data, layout.snapshot):
+        if not folder.is_dir() or folder.is_symlink() or folder.is_junction():
+            continue
+        size = sum(p.stat().st_size for p in folder.rglob("*") if p.is_file() and not p.is_symlink())
+        try:
+            shutil.rmtree(folder)
+            freed += size
+        except OSError:
+            pass
+    return freed
+
+
 def make_battery(cfg, *, source: str = "night", make_child=None):
     make_child = make_child or (lambda data_dir, seed: child.SubprocessChild(data_dir, seed=seed))
 
@@ -262,6 +283,19 @@ def make_battery(cfg, *, source: str = "night", make_child=None):
         todo = [a for a in arms if not ctx.done(STAGE_BATTERY, f"arm:{a}")]
         if not todo:
             return
+        try:
+            await _battery(ctx, run, arms, todo)
+        finally:
+            # Every arm settled, or the run failed: the copy is not read again (a resumed
+            # battery with arms still to run keeps it; its snapshot unit is not taken twice).
+            after = _run(ctx, source)
+            if (after is None or after["status"] != "running"
+                    or all(ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms)):
+                freed = await asyncio.to_thread(drop_copy, ctx.settings.data_dir)
+                if freed:
+                    log("lab_copy_removed", night=ctx.night, bytes=freed)
+
+    async def _battery(ctx, run, arms, todo) -> None:
         reason = _held(ctx)
         if reason is not None:
             log("lab_waiting", night=ctx.night, stage=STAGE_BATTERY, reason=reason)

@@ -534,6 +534,9 @@ class MindApp:
         from .bakeoff.capture import attach as attach_bakeoff
         # [bakeoff] capture: off captures nothing, still prunes old rows
         ext("bakeoff", lambda: attach_bakeoff(self))
+        from .nightly.prune import attach as attach_prune
+        # [prune] enabled: the night's bounded retention; off adds no stage
+        ext("prune", lambda: attach_prune(self.night_runner, self.data_dir))
         for name in ("boss", "loot_won"):  # [life] state: her feeling; off moves nothing
             self.register_event_handler(name, self.engine.life.on_event)
 

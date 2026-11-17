@@ -194,6 +194,12 @@ def _prune(dir: Path, keep: int, label: str) -> None:
     snaps.sort()
     for _, _, p in snaps[:max(0, len(snaps) - keep)]:
         p.unlink(missing_ok=True)
+        # what a later reader of the snapshot left beside it goes with it
+        for suffix in ("-wal", "-shm", "-journal"):
+            try:
+                Path(str(p) + suffix).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def check_embedding_meta(store, model: str, dim: int) -> None:

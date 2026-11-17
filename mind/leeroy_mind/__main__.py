@@ -545,6 +545,9 @@ def cmd_db(args) -> int:
     if args.action == "repair-provenance":
         from .storage.repair_cli import run
         return run(root, go=args.go)
+    if args.action == "prune":
+        from .storage.prune_cli import run
+        return run(root, go=args.go, vacuum=args.vacuum, as_of=args.as_of)
     if args.action == "snapshot":
         if not path.exists():
             print(f"no mind.db at {path}", file=sys.stderr)
@@ -1566,6 +1569,14 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                               "--go snapshots and repairs with the mind stopped")
     p_repair.add_argument("--go", action="store_true")
     _add_data_dir(p_repair, after_action=True)
+    p_prune = dsub.add_parser("prune", help="count what retention would remove (rows and bytes); "
+                              "--go snapshots and removes it with the mind stopped")
+    p_prune.add_argument("--dry-run", action="store_true", help="the default: count, write nothing")
+    p_prune.add_argument("--go", action="store_true")
+    p_prune.add_argument("--vacuum", action="store_true", help="with --go: rebuild the file so it shrinks")
+    p_prune.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
+                         help="dry run only: count as if it were that day")
+    _add_data_dir(p_prune, after_action=True)
     p_db.set_defaults(func=cmd_db)
     p_mem = sub.add_parser("memories", help="seed the owner's own memories of the guild")
     _add_data_dir(p_mem)
