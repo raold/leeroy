@@ -34,6 +34,7 @@ def app_for(store,tmp_path):
     world = WorldView(is_officer=lambda g:False)
     world.members = store.cast()
     world.online = set(world.members)
+    world.human_online = True
     app = SimpleNamespace(store=store,data_dir=tmp_path,human_guid=1,world=world,
                           personas=PersonaCache(store),stopping=False,is_backlog=lambda ev:False)
     return app
@@ -155,7 +156,7 @@ def test_a_result_logs_its_reason_code(store,tmp_path,caplog,change,reason):
             return SimpleNamespace(ok=True)
         app.bridge = SimpleNamespace(send=send)
         assert await service.command([101],True) is (reason=='ok')
-    caplog.set_level(logging.INFO,'leeroy_mind')
+    caplog.set_level(logging.DEBUG,'leeroy_mind')
     run(scenario())
     assert f'playstyle_result: count=1 restore=1 ok={int(reason=="ok")} reason={reason}' in caplog.text
 
@@ -173,7 +174,7 @@ def test_an_ack_refusal_logs_its_code_and_count(store,tmp_path,caplog,error,code
         app.bridge = SimpleNamespace(send=send)
         assert not await service.command([101,102],True)
         assert service.owned=={101,102}
-    caplog.set_level(logging.INFO,'leeroy_mind')
+    caplog.set_level(logging.DEBUG,'leeroy_mind')
     run(scenario())
     assert f'playstyle_refused: count=2 restore=1 error={code}' in caplog.text
     assert 'playstyle_result' not in caplog.text
@@ -203,7 +204,7 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
     from leeroy_mind.config import load_config
     from leeroy_mind.testing.fake_bridge import FakeBridge, CORE_COMMAND_TYPES
     from leeroy_mind.testing.fake_llm import FakeLLM
-    from test_app import CAST, hello, seed_db, toml
+    from test_app import CAST, HUMAN, hello, seed_db, toml
 
     async def scenario():
         tasks = set()
@@ -218,7 +219,7 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
             return True,''
-        bridge = FakeBridge([{**hello(0),'features':['playstyle']},CAST],ack=ack,
+        bridge = FakeBridge([{**hello(HUMAN),'features':['playstyle']},CAST],ack=ack,
                             known_types=CORE_COMMAND_TYPES|{'bot_do'})
         port = await bridge.start()
         (tmp_path/'mind.toml').write_text(toml(port,chattiness=0)+'\n[playstyle]\nenabled=true\n')
@@ -241,7 +242,88 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
             await runner
             if tasks: await asyncio.gather(*tasks)
             await bridge.stop()
-        assert 'playstyle_result' in caplog.text
+        assert 'playstyle_result' not in caplog.text       # a line a member is DEBUG now
+        passes = [r.getMessage() for r in caplog.records if r.getMessage().startswith('playstyle_pass')]
+        assert passes[0].startswith('playstyle_pass: commands=5 applied=5 restored=0 other=- owner=1')
         assert 'private' not in caplog.text
     caplog.set_level(logging.INFO,'leeroy_mind')
     run(scenario())
+
+
+def summary_rig(store,tmp_path,owned,*,outcome=lambda cmd:{}):
+    (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=true')
+    app = app_for(store,tmp_path)
+    store.set_meta(KEY,json.dumps(owned))
+    service = PlayStyles(app)
+    sent = []
+    async def send(cmd,**kwargs):
+        sent.append((cmd.action,cmd.guids))
+        change = outcome(cmd)
+        if change.get('refuse'):
+            return SimpleNamespace(ok=False,error=change['refuse'])
+        row = dict(id=cmd.id,kind='bot_do',state='done',reason='',skipped=(),guids=cmd.guids)
+        service.jobs.feed(SimpleNamespace(**(row|change)))
+        return SimpleNamespace(ok=True)
+    app.bridge = SimpleNamespace(send=send)
+    return app,service,sent
+
+
+async def drain(service):
+    task = asyncio.create_task(service.run())
+    for _ in range(200):
+        await asyncio.sleep(0)
+        if not service.pending and not service.wake.is_set() and not service.tally:
+            break
+    task.cancel()
+    await asyncio.gather(task,return_exceptions=True)
+
+
+def test_a_hello_while_he_is_away_restores_and_adds_nothing_back_in_one_line(store,tmp_path,caplog):
+    async def scenario():
+        def outcome(cmd):
+            return ({'state':'failed','reason':'busy:pvp'} if cmd.guids==(102,) else
+                    {'refuse':'busy:realm_owner'} if cmd.guids==(103,) else {})
+        app,service,sent = summary_rig(store,tmp_path,[101,102,103,104],outcome=outcome)
+        app.world.human_online = False
+        await service.connection(True)
+        await service.event(Hello(0,'fake','1',21,0,('playstyle',)))
+        await drain(service)
+        assert sent==[('restore',(g,)) for g in (101,102,103,104)]      # no playstyle command at all
+        assert service.owned=={102,103}                                 # the unproved stay owned
+        sent.clear()
+        await service.event(Hello(0,'fake','1',21,0,('playstyle',)))    # the next hello: only those two
+        await drain(service)
+        assert sent==[('restore',(102,)),('restore',(103,))]
+    caplog.set_level(logging.INFO,'leeroy_mind')
+    run(scenario())
+    lines = [r.getMessage() for r in caplog.records if 'playstyle' in r.getMessage()]
+    assert lines==['playstyle_pass: commands=4 applied=0 restored=2 '
+                   'other=restore:busy:pvp=1,restore:refused:busy:realm_owner=1 owner=0 owned=2',
+                   'playstyle_pass: commands=2 applied=0 restored=0 '
+                   'other=restore:busy:pvp=1,restore:refused:busy:realm_owner=1 owner=0 owned=2']
+
+
+def test_his_login_applies_to_the_online_cast_the_hello_passed_over(store,tmp_path,caplog):
+    from leeroy_mind.protocol import Cast
+    async def scenario():
+        app,service,sent = summary_rig(store,tmp_path,[])
+        app.world.human_online = False
+        await service.connection(True)
+        await service.event(Hello(0,'fake','1',21,0,('playstyle',)))
+        await service.event(Cast(0,tuple(replace(m,online=True) for m in app.world.members.values())))
+        await drain(service)
+        assert sent==[] and not service.owned                           # nobody to fight beside
+        app.world.human_online = True
+        await service.event(Login(0,1,True))
+        await drain(service)
+        assert sorted(sent)==[('playstyle',(g,)) for g in (101,102,103,104,105)]
+        assert service.owned=={101,102,103,104,105}
+        sent.clear()
+        await service.event(Hello(0,'fake','1',21,1,('playstyle',)))    # he is here: restore, then reapply
+        await drain(service)
+        assert [a for a,_ in sent].count('restore')==5 and [a for a,_ in sent].count('playstyle')==5
+    caplog.set_level(logging.INFO,'leeroy_mind')
+    run(scenario())
+    lines = [r.getMessage() for r in caplog.records if 'playstyle' in r.getMessage()]
+    assert lines==['playstyle_pass: commands=5 applied=5 restored=0 other=- owner=1 owned=5',
+                   'playstyle_pass: commands=10 applied=5 restored=5 other=- owner=1 owned=5']
