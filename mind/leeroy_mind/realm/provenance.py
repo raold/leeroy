@@ -26,8 +26,8 @@ from .actions import ActionContext
 from .protocol import (ArenaEnd, ChannelChat, DuelEnd, PvpKill, RealmAchievement, RealmDungeonKill,
                        RealmKill, Wg)
 from .records import (ActorQualification, FactDraft, FactRow, ForumCandidate, ProofNode,
-                      PublicProof, QualificationSnapshot, RealmFactReadStamp, RealmObservation,
-                      RealmReadStamp, Rejected, StoredSource)
+                      PublicProof, QUALIFIED_CAST_MAX, QualificationSnapshot, RealmFactReadStamp,
+                      RealmObservation, RealmReadStamp, Rejected, StoredSource)
 
 _POLICY = "stored_forum_topic_v1"
 _UNIT_ERROR = "Realm public proof requires Store.transaction()"
@@ -577,8 +577,8 @@ def _epoch(value):
     return _integer(int(value), 1, _U64)
 
 
-def _ids(value, *, ordered=True):
-    if type(value) is not list or len(value) > 128:
+def _ids(value, *, ordered=True, maximum=128):
+    if type(value) is not list or len(value) > maximum:
         _fail()
     for identifier in value:
         _integer(identifier, 1)
@@ -651,8 +651,8 @@ def _decode_qualification(value):
     _keys(ctx, _CONTEXT_KEYS)
     if type(snap['captured_at']) is not float:
         _fail()
-    for key in ('cast', 'rival_guilds'):
-        _ids(snap[key])
+    _ids(snap['cast'], maximum=QUALIFIED_CAST_MAX)
+    _ids(snap['rival_guilds'])
     actors = snap['actors']
     if type(actors) is not list or len(actors) > 128:
         _fail()
@@ -1058,6 +1058,8 @@ def capture_qualification_in_unit(store, *, human: HumanIdentity, event,
                 _fail()
             if loaded == 'ok':
                 cast.append(guid)
+        if len(cast) > QUALIFIED_CAST_MAX:
+            _fail('graph_limit')  # named, not the snapshot's bare invalid_input
         guilds = [_integer(row['id'], 1) for row in store.conn.execute(
             "SELECT id FROM realm_guild WHERE status='active' ORDER BY id")]
         rivals = tuple(guild for guild in guilds if guild != context.guild)
