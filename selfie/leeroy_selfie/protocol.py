@@ -7,9 +7,6 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Literal
 
-from . import detail as detail_mod
-from .detail import Detail
-
 MAX_LINE = 65536
 MAX_PHRASES = 64
 MAX_PHRASE_CHARS = 500
@@ -20,6 +17,11 @@ IDENTITY_KEYS = frozenset({"ref", "crop", "scale"})
 # pass and the render is what it was before the detailer existed.
 DETAIL_KEYS = frozenset({"detail_faces", "detail_hands", "detail_face_denoise",
                          "detail_hand_denoise", "detail_size"})
+DETAIL_FACE_DENOISE = 0.35
+DETAIL_HAND_DENOISE = 0.45
+DETAIL_DENOISE_RANGE = (0.1, 0.7)
+DETAIL_SIZE = 1024
+DETAIL_SIZES = (768, 896, 1024)
 GRID_KEYS = frozenset({"id", "op", "tiles", "tile", "gutter", "out", "thumb", "thumb_size"})
 CAPTION_KEYS = frozenset({"id", "op", "base_path", "top", "bottom", "out_path", "nsfw_max"})
 CRITIC_KEYS = frozenset({"id", "op", "path"})  # and optionally ref with crop, both or neither
@@ -36,6 +38,16 @@ PORTRAIT_SIZE = (832, 1216)  # width, height of shape "portrait" (needs size 102
 
 class RenderFailed(Exception):
     """A render that failed with a protocol error name (oom, ...) as its message."""
+
+
+@dataclass(frozen=True)
+class Detail:
+    """What a render request asks of the detailer (detail.py)."""
+    faces: bool = True
+    hands: bool = False
+    face_denoise: float = DETAIL_FACE_DENOISE
+    hand_denoise: float = DETAIL_HAND_DENOISE
+    size: int = DETAIL_SIZE
 
 
 @dataclass(frozen=True)
@@ -192,11 +204,11 @@ def _detail(d: dict) -> Detail | None:
     """The detailer's request, or None without detail_faces or detail_hands true. Every key
     given is checked, asked for or not."""
     faces, hands = _bool(d, "detail_faces"), _bool(d, "detail_hands")
-    lo, hi = detail_mod.DENOISE_RANGE
-    face = _num(d, "detail_face_denoise", lo, hi) if "detail_face_denoise" in d else detail_mod.FACE_DENOISE
-    hand = _num(d, "detail_hand_denoise", lo, hi) if "detail_hand_denoise" in d else detail_mod.HAND_DENOISE
-    size = d.get("detail_size", detail_mod.SIZE)
-    if type(size) is not int or size not in detail_mod.SIZES:
+    lo, hi = DETAIL_DENOISE_RANGE
+    face = _num(d, "detail_face_denoise", lo, hi) if "detail_face_denoise" in d else DETAIL_FACE_DENOISE
+    hand = _num(d, "detail_hand_denoise", lo, hi) if "detail_hand_denoise" in d else DETAIL_HAND_DENOISE
+    size = d.get("detail_size", DETAIL_SIZE)
+    if type(size) is not int or size not in DETAIL_SIZES:
         raise ValueError("detail_size is not 768, 896 or 1024")
     return Detail(faces, hands, face, hand, size) if faces or hands else None
 

@@ -10,9 +10,14 @@ passes in (render.Renderer.refiner). The pass never fails a render: without a de
 out of memory or any other error it keeps what it has and says why in a code. Numbers and codes
 only leave here. cv2, numpy and Pillow are imported inside the functions that need them."""
 import time
-from dataclasses import dataclass
 
 from .face import square
+from .protocol import DETAIL_DENOISE_RANGE as DENOISE_RANGE
+from .protocol import DETAIL_FACE_DENOISE as FACE_DENOISE
+from .protocol import DETAIL_HAND_DENOISE as HAND_DENOISE
+from .protocol import DETAIL_SIZE as SIZE
+from .protocol import DETAIL_SIZES as SIZES
+from .protocol import Detail
 
 FACE_PAD = 2.0  # the crop's side over the face box's longer side: the face, hair, some neck
 HAND_PAD = 3.0  # over the palm box's longer side: the fingers, whichever way they point
@@ -24,24 +29,9 @@ MAX_HAND_FRAC = 0.25
 MAX_FACES = 2
 MAX_HANDS = 2
 FEATHER = 0.125  # of the crop's side: the mask's ramp from the old image to the new
-FACE_DENOISE = 0.35
-HAND_DENOISE = 0.45
-DENOISE_RANGE = (0.1, 0.7)
-SIZE = 1024
-SIZES = (768, 896, 1024)
 FACE_LEAD = "detailed face, natural eyes"
 HAND_LEAD = "a natural hand, five fingers"
 _SEED_STEP = 0x9E3779B1
-
-
-@dataclass(frozen=True)
-class Detail:
-    """What a render request asks of the pass (protocol.parse)."""
-    faces: bool = True
-    hands: bool = False
-    face_denoise: float = FACE_DENOISE
-    hand_denoise: float = HAND_DENOISE
-    size: int = SIZE
 
 
 class Skip(Exception):
