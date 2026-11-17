@@ -55,6 +55,11 @@ def test_nudge_controls_at_phone_width(tmp_path, theme):
                 for root in ('#p-dials', '#t-groups'):
                     if root == '#t-groups':  # the groups are on the list, behind the member page
                         await page.get_by_role("button", name="Back to the cast", exact=True).click()
+                        # Back is a history step: the list is shown again (and polls once) a moment later.
+                        # Let that settle, so the only redraw below is the one this test triggers.
+                        await page.wait_for_function("() => location.hash === '#personas' && !document.querySelector('#p-list').hidden")
+                        async with page.expect_response('**/api/tuning'):
+                            await page.evaluate("async () => { const core = await import('/static/js/core.mjs'); core.emit('tuning', {change: 0}); }")
                     form = page.locator(root + ' .nudges').first
                     line = form.get_by_label('Nudge (1–200 characters)')
                     await line.fill('Keep typing through the refresh')

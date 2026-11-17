@@ -367,7 +367,7 @@ def test_comms_list_is_his_conversations_first(rehearsal, width, height, theme):
             await show_list()
             await page.locator("#rooms-fold > summary").click()
             assert await page.locator("#rooms-fold").evaluate("e => e.open")
-            assert await page.evaluate("localStorage.getItem('guild-console-rooms')") == '"open"'
+            await page.wait_for_function("() => localStorage.getItem('guild-console-rooms') === '\"open\"'")  # toggle is async
             assert not await serious(page)
             assert not r.errors, r.errors
     asyncio.run(run())
