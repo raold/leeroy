@@ -14,7 +14,8 @@ from typing import Sequence
 from leeroy_mind.personas.screens import OBJECT_WINDOW, ROMANCE_RE
 from leeroy_mind.text import (EMOJI_RE, NAME_PREFIX_RE, NAME_TAG, has_meta, normalize_words,
                               strip_emoji, strip_name_prefix, word_jaccard)
-from leeroy_mind.talk.moves import classify, is_summon, main_move
+from leeroy_mind.library.wikitext import names_later
+from leeroy_mind.talk.moves import classify, in_person, is_summon, main_move
 from leeroy_mind.voice.rooms import ROOMS, RoomDef
 
 ASSISTANT_PHRASES = ("happy to help", "absolutely", "great question", "let me know",
@@ -779,7 +780,8 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
                people: Sequence[str] = (), window: Sequence[str] = (),
                held: Sequence[str] = (), tonight: bool = False,
                recent_moves: Sequence[tuple[str, str]] = (),
-               summons_ok: bool | None = None, keep_emoji: bool = False) -> list[Tell]:
+               summons_ok: bool | None = None, keep_emoji: bool = False,
+               far: bool = False) -> list[Tell]:
     """Every tell in the text.
     Fatal: FATAL_PHRASES; meta talk (text.META_RE's unambiguous terms only); 2+ list lines;
     dialogue for other people ("\\nName:"); an *action* over 3 words; an exact repeat of one
@@ -792,7 +794,10 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
     another's line word for word).
     Soft: "feel free"; "absolutely" as the opening word; a closing "let me know (if ...)",
     "if you need anything", "just ask", "would you like" or "want me to ... for you"; a near
-    repeat (word Jaccard >= 0.8, not exact); post-2012 slang ("slang"); with `support` (the
+    repeat (word Jaccard >= 0.8, not exact); post-2012 slang ("slang"); a later expansion's
+    place, person or faction named ("era", library.wikitext.names_later); with `far` (her line
+    to him, a member who has never met him) seeing him in person ("in person",
+    moves.in_person); with `support` (the
     memories and notes the
     prompt showed), a claim of shared history (history_claim, `people` being the names in
     the guild, `tonight` a reaction to a fight that has come before tonight) that none of
@@ -841,6 +846,10 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
         out.append(Tell(f"move repeat: {repeated}", False, True))
     if summons_ok is False and is_summon(text):
         out.append(Tell("summons", False, True))
+    elif far and in_person(text):
+        out.append(Tell("in person", False, True))
+    if names_later(text):
+        out.append(Tell("era", False, True))
     if not keep_emoji and EMOJI_RE.search(text):
         out.append(Tell("emoji", False))
     if _DASH.search(text):

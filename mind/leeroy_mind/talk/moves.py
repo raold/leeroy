@@ -112,6 +112,42 @@ def is_summon(text: str) -> bool:
     return "summon" in classify(text)
 
 
+# Seeing him in person, past the summons words (evening DM audit, 2026-11-16: a member who has
+# never met him planned a date at an event of hers, asking him to come along, sit by her, turn
+# up and settle things in person). A soft tell of its own ("in person", filters), not
+# the summons: an answer owed to him is never pushed to its fallback for it. A clause whose
+# place or activity is in the game is no meeting ("come to the raid"), nor a denial ("we've
+# never met in person").
+_EVENTS = (r"quiz|quiz night|pub quiz|pub|party|gig|show|concert|bar|club|wedding|match|"
+           r"festival|meetup|meet-up|dinner|bbq|barbecue|cinema|movies|theatre|theater|karaoke|"
+           r"open mic|reception|game night|venue")
+_IN_PERSON = re.compile(
+    r"\bin person\b|\bface to face\b|\bin the flesh\b|\bcome on over\b"
+    r"|\b(?:meet|see|hug|kiss)\s+(?:you|u)\s+(?:irl|in real life)\b"
+    r"|\btake (?:you|u) out\b"
+    r"|\b(?:you|u)(?:'re| are| r|re)?\s+(?:showing|turning) up\b|\bur (?:showing|turning) up\b"
+    r"|\b(?:you|u)(?:'ll| will|'d| would| better| should| could| can| have to| gotta| need to)"
+    r"\s+(?:show|turn) up\b"
+    r"|\bsit (?:right )?(?:next to|beside|by|with) me\b"
+    r"|\bi (?:need|want) (?:you|u) (?:there|here with me)\b"
+    rf"|\bcome (?:to|along to) (?:the|my|our|this) (?:{_EVENTS})\b", re.I)
+_DENIED = re.compile(r"\b(?:never|not|no|without|cannot|wont|dont|didnt|havent|hasnt|isnt|"
+                     r"arent|wasnt|werent|couldnt|wouldnt|shouldnt|aint)\b|\bcant\b(?! wait)")
+
+
+def in_person(text: str) -> bool:
+    """A clause of `text` that sees or brings someone in person (_IN_PERSON), not in a game
+    clause and not denied before it in its clause."""
+    t = _fold(text or "")
+    for coarse in _COARSE.split(t):
+        for clause in _SENTENCE.split(coarse):
+            m = _IN_PERSON.search(clause)
+            if (m and not _RE["invite_game"].search(clause)
+                    and not _DENIED.search(clause[:m.start()].replace("'", ""))):
+                return True
+    return False
+
+
 # What the "Lately you've..." hint may name as a topic (owner's live DM test, 2026-11-16: "brought
 # up the actually twice", "brought up the three twice"): a content word, never a chat word
 # (talk.words.COMMON_WORDS, everyday.CHAT_WORDS), a pronoun, a number, a stance adverb or a word

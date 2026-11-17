@@ -836,3 +836,30 @@ so `learn report` separates its rewards. The same switch varies the server's see
 (`server/README.md`). Off: recall and its lines are exactly as before. With `[romance] realism`
 on too, a plan older than 48 h is no candidate at all (`stale_plans`) and other old memories say
 their time words as past as well as carrying this mark.
+
+# Far-apart members stay far apart, and 2009 stays 2009 (2026-11-16)
+
+The evening DM audit found a member who has never met him planning to see him in person turn
+after turn (9 of 38 answers with an in-person, era or persona slip); the source was a stored note
+toward him and a memory of hers that planned it. No switch; #325's state decides who is far:
+`nightly.life.met_him` (romance stage `weekend`/`after` toward him, or an `arc_meetup` row), read
+through the owner's lens (`Pipeline._met_him`).
+
+- **"in person"** (`filters.find_tells(far=True)`, `moves.in_person`): on her line to him while her
+  arc has not met him and no talked plan stands (`summons_ok` False), seeing him in person ("in
+  person", "come on over", "take you out", "you're showing up", "sit next to me", "i need you
+  there", "come to the <event>", "face to face"; never a game clause, never denied) is a soft
+  tell of its own, hinted `IN_PERSON_HINT`. Not the summons: not in `DROP_ON_RETRY` or
+  `OWED_HARD_TELLS`, so a retry that still has it is kept and an owed answer never goes to its
+  fallback for it. `classify` (the moves log) is unchanged.
+- **Her note and intentions** (`prompt.far_note`, `pipeline._far_memories`): until her arc has met
+  him, his card's note loses its sentences that see him in person, and her intentions (a plan,
+  or "I'll / I'm going to / I need to ...", `memory.diversity.intends`) that see him in person
+  are left out of her prompt. Prompt-build only; nothing stored changes.
+- **"era"** (`library.wikitext.names_later`): a later expansion's name or a Cataclysm-and-later
+  place, person or faction, as written and capitalised ("Molten Front", "Three Hammers"), is a
+  soft tell hinted `ERA_HINT`. The wiki era filter's names only, never its prose rules ("retail",
+  years, "mastery"); the guild's stored member lines had none (2026-11-16), lowercase only "mop".
+
+Measured read-only on 2026-11-16: 6 of 1,345 stored member lines to him see him in person (each
+on reading an in-person plan or wish); the golden prompts are unchanged.

@@ -601,11 +601,22 @@ def realism_note(notes: str) -> str:
                  if s and not _NOTE_DATED.search(s)), "")
 
 
+def far_note(notes: str) -> str:
+    """Her note toward him without the sentences that see him in person (talk.moves.in_person:
+    "a rematch she wants to settle in person"), for a member whose arc has not met him (evening
+    DM audit, 2026-11-16: such a note was in every prompt and her answers planned a date with
+    him). The stored note is unchanged; with nothing to leave out, the note as it was."""
+    from leeroy_mind.talk.moves import in_person
+    sentences = [s for s in (x.strip() for x in _SENTENCE.split(notes)) if s]
+    kept = [s for s in sentences if not in_person(s)]
+    return notes if len(kept) == len(sentences) else " ".join(kept)
+
+
 def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
                       is_guild_master: bool = False,
                       forms: tuple[str, str, str] = THEY_FORMS, attitude: str = "",
                       speaker: str = "", friendship_only: bool = False,
-                      pronoun: str = "", realism: bool = False) -> str:
+                      pronoun: str = "", realism: bool = False, far: bool = False) -> str:
     """How the speaker feels about one person, in a few words. Only the warm side of trust
     and respect is shown: a low score usually just means "not yet". The human is tagged "(the
     guild master)" when he is one (HumanIdentity.is_guild_master) and referred to by `forms`
@@ -614,7 +625,7 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     it). On his card a woman's `attitude` (her stance) shows as her attraction band, and her
     note toward him gets HUMAN_NOTE_CHARS. A member with no row at all is GUILDMATE; a label
     reads as how the two get on. `realism` ([romance] realism, his card only): the note is
-    realism_note's one sentence."""
+    realism_note's one sentence. `far` (his card, her arc has not met him): far_note's."""
     if pronoun and not is_human:
         name = f"{name} ({pronoun})"
     if not is_human and (r is None or r == Relationship(a=r.a, b=r.b)):
@@ -650,6 +661,8 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     # Group turns keep friendship scores, never romantic labels or free-form
     # relationship notes (which can contain private romantic material).
     notes = "" if friendship_only else " ".join(r.notes.split()).rstrip(".")
+    if far and is_human:
+        notes = far_note(notes).rstrip(".")
     if realism and is_human:
         notes = realism_note(notes).rstrip(".")
     if is_human and not _note_fits(notes, forms, speaker):

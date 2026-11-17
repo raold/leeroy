@@ -140,6 +140,12 @@ def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
+def intends(m: MemoryRow) -> bool:
+    """A plan memory, or one saying what she means to do ("I need to", "I'll", "I'm going to",
+    "let's"): an intention, whether or not it names a time."""
+    return m.kind == "plan" or bool(_INTENT.search(_fold(m.text)))
+
+
 def horizon(m: MemoryRow) -> int | None:
     """How many nights after it was written a time-bound intention's time has passed, None for a
     memory that is not one. An intention: a plan, or a first-person "I need to", "I'll", "I want
