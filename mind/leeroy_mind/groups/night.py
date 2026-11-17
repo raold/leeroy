@@ -1,4 +1,5 @@
 """Checkpointed, model-free friendship groups and feud departures."""
+import logging
 from datetime import date
 
 from leeroy_mind.personas.screens import redact_real_name
@@ -7,11 +8,73 @@ from leeroy_mind.server.config import load_server_config
 from .config import load_groups_config
 from . import store as groups
 
+log = logging.getLogger(__name__)
 
-def friends(store,a,b,feuds):
-    if frozenset((a,b)) in feuds:
-        return False
-    return all((r:=store.get_relationship(x,y)) is not None and r.affinity>=40 for x,y in ((a,b),(b,a)))
+
+FRIEND = 30       # both ways: an established friendship (seeded at 40, regressing 1% a week)
+WARM = 1          # both ways, with SHARED things done together: a friendship that grew
+SHARED = 3        # raids both raided in, and scenes the night accepted between the two
+SHARED_DAYS = 30
+HIS_DAYS = 60     # he wrote her privately within this: she is someone he talks to
+
+
+def closeness(store,members,feuds,*,human,now):
+    """Who he talks to, and how close each pair of them is, from stored facts only.
+
+    Returns (his, close): `his` maps a member he wrote privately (whisper or DM) in HIS_DAYS
+    to his line count; `close` maps a pair to the lesser of their two affinities when
+    neither dislikes the other, they have no feud and it is FRIEND or more, or WARM or more
+    with SHARED raids and scenes together in SHARED_DAYS. The old bar (40 both ways) was the
+    seed value itself: the first weekly regression put every seeded friendship under it.
+    """
+    members = set(members)
+    his = {r[0]:r[1] for r in store.conn.execute("SELECT to_guid,count(*) FROM chat_line WHERE from_guid=? "
+        "AND origin='human' AND ts>=? AND (channel='whisper' OR channel GLOB 'dm:*') GROUP BY to_guid",
+        (human,now-HIS_DAYS*86400)) if r[0] in members}
+    liking = {(r[0],r[1]):r[2] for r in store.conn.execute(
+        'SELECT a,b,affinity FROM relationship WHERE affinity>0 AND a!=? AND b!=?',(human,human))}
+    shared = {}
+    raids = {}
+    for raid,guid in store.conn.execute("SELECT a.raid_id,a.guid FROM guild_attendance a JOIN guild_raid g "
+            "ON g.raid_id=a.raid_id WHERE a.status='raided' AND g.started>=?",(now-SHARED_DAYS*86400,)):
+        raids.setdefault(raid,[]).append(guid)
+    wanted = {pair for pair in map(frozenset,liking) if len(pair)==2 and pair<=members}
+    for roster in raids.values():
+        roster = set(roster)
+        for pair in wanted:
+            if pair<=roster:
+                shared[pair] = shared.get(pair,0)+1
+    for a,b in store.conn.execute("SELECT a,b FROM encounter WHERE status='done' AND night>=date(?,'unixepoch')",
+                                  (now-SHARED_DAYS*86400,)):
+        pair = frozenset((a,b))
+        if pair in wanted:
+            shared[pair] = shared.get(pair,0)+1
+    close = {}
+    for pair in wanted:
+        a,b = tuple(pair)
+        least = min(liking.get((a,b),0),liking.get((b,a),0))
+        if pair in feuds or least<=0:
+            continue
+        if least>=FRIEND or least>=WARM and shared.get(pair,0)>=SHARED:
+            close[pair] = least
+    return his,close
+
+
+def pick(members,his,close,existing):
+    """The closest group of two to four among the members he talks to, or None. Starters go
+    by how much he writes them; each seat goes to whoever is closest to everyone seated."""
+    known = [g for g in members if g in his]
+    for starter in sorted(known,key=lambda g:(-his[g],g)):
+        chosen = [starter]
+        while len(chosen)<4:
+            fits = [(sum(close[frozenset((g,o))] for o in chosen),his[g],-g) for g in known
+                    if g not in chosen and all(frozenset((g,o)) in close for o in chosen)]
+            if not fits:
+                break
+            chosen.append(-max(fits)[2])
+        if len(chosen)>=2 and not any(set(chosen)<=prior for prior in existing):
+            return chosen
+    return None
 
 
 def _left(store,channel,guid,name,now):
@@ -55,20 +118,18 @@ def settle(ctx,config,*,can_start=False):
     from leeroy_mind.personas.tiers import is_cast
     members = [g for g in ctx.members() if is_cast(store.conn,g)]
     existing = [groups.readers(store.conn,f'gdm:{r[0]}') for r in store.conn.execute('SELECT id FROM discord_group WHERE closed IS NULL')]
-    for starter in members:
-        chosen = [starter]
-        for guid in members:
-            if guid!=starter and all(friends(store,guid,other,feuds) for other in chosen):
-                chosen.append(guid)
-            if len(chosen)==4:
-                break
-        if len(chosen)<2 or any(set(chosen)<=prior for prior in existing):
-            continue
-        name = redact_real_name(ctx.persona(starter).character_name+' & friends',ctx.ident,ctx.ident.called)[:40]
-        channel = groups.create(store,human=ctx.human,members=chosen,title=name,created_by=starter,now=now,config=config)
-        store.set_meta('groups:first:'+channel.removeprefix('gdm:'),'1')
-        store.set_meta(key,str(int(raw)+1))
-        break
+    his,close = closeness(store,members,feuds,human=ctx.human,now=now)
+    chosen = pick(members,his,close,existing)
+    # ids and counts only: why a night made no group must be readable from the log
+    log.info('groups_night formed=%d talks_to=%d close_pairs=%d open=%d',int(chosen is not None),
+             len(his),len(close),len(existing))
+    if chosen is None:
+        return
+    starter = chosen[0]
+    name = redact_real_name(ctx.persona(starter).character_name+' & friends',ctx.ident,ctx.ident.called)[:40]
+    channel = groups.create(store,human=ctx.human,members=chosen,title=name,created_by=starter,now=now,config=config)
+    store.set_meta('groups:first:'+channel.removeprefix('gdm:'),'1')
+    store.set_meta(key,str(int(raw)+1))
 
 
 async def stage_groups(ctx):

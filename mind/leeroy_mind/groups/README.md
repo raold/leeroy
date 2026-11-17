@@ -49,9 +49,17 @@ Topic cooldowns are tracked separately for each group.
 With `[server] enabled = true`, the nightly language stage makes at most one new
 group per night within the global weekly cap. With the server off, it still handles
 feud departures but creates no group waiting for an introduction it cannot post.
-Every member must like every other member at affinity 40 or more in
-both directions, have a persona, be present rather than away, and have no feud in
-the proposed group. Its screened name uses the starter's character name and
+Every member must be someone he wrote privately (a whisper or a DM) in the last 60
+days, have a persona and have no feud in the proposed group, and every pair in it
+must be close: neither dislikes the other, and both affinities are 30 or more (an
+established friendship), or 1 or more with three raids or accepted scenes together in
+30 days (one that grew). The starter is the member he writes most; each further seat
+goes to whoever is closest to everyone already seated (`groups/night.py` `closeness`,
+`pick`). The first rule, 40 both ways, was the seed value of a friendship: the first
+weekly regression (1%) put all 53 seeded rows at 39, so no group could form (live,
+2026-11-17: 0 pairs at 40, 19 at 30; member-to-member affinity otherwise moves by a
+point or two a night from scenes, reflection and gossip, and 99% of rows are 0). Each
+night logs `groups_night formed= talks_to= close_pairs= open=`. Its screened name uses the starter's character name and
 “friends”; its first line is generated the next local day. A feud causes a member
 to leave at night, with a code-built system notice. No model invents memberships.
 Other topics wait for the starter's introduction. If she leaves beforehand, her
