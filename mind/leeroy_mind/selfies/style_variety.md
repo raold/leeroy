@@ -187,7 +187,7 @@ medium to very large, showed no change. So the set an edit queues, or the set al
 is marked (meta `selfies:set-looks-edit:<guid>:<set_no>`) and `render._set_faces` gives every
 slot of it, front views included, her cover's face at the worker's floor `MIN_SCALE` (0.3): still
 recognisably her, clearly fuller. The console says "A new set renders tonight with her new
-figure; pick one as her photo to keep it": once he picks a cover from that set, later sets hold
+looks; pick one as her photo to keep it": once he picks a cover from that set, later sets hold
 that fuller cover at `identity_scale` as before.
 
 **Glutes, waist and hips** (owner, 2026-11-15: "the same adjustment for glutes, waist and
@@ -398,3 +398,111 @@ and a "hands visible" positive phrase did no better.
 her full body in the tall portrait: #316's body phrases (her build and size, required) plus 832 x
 1216 pull the camera back. Untested fixes: a `three_quarter` crop hint in the framing phrase, or
 an 896 x 1152 portrait.
+
+## Hair, wardrobe, makeup and accessories (owner, 2026-11-17)
+
+The Looks panel has three groups, **Body** (weight, and for women bust, glutes, waist, hips),
+**Hair** and **Style**, for women and men. Every new value is an owner-only `Appearance` field
+(`schema.OWNER_STYLE`; no model is asked for one, `enrich.ENRICH_SCHEMA` leaves them out), unset by
+default; unset leaves the stored JSON, `looks_hash` and every prompt exactly as they were. One
+Save sends everything through the same `looks` op (each new argument optional: one left out stays
+as stored) and makes one persona version, one `looks` ledger row with its Undo, and one queued set
+marked `selfies:set-looks-edit:<guid>:<set>` (face scale 0.3), as #316. No migration.
+
+| field | values | in the prompt |
+|---|---|---|
+| `owner_hair_colour` | black, dark_brown, brown, light_brown, auburn, red, copper, strawberry_blonde, dark_blonde, blonde, platinum, grey, silver, pastel_pink, blue, purple | said in place of the looks' own hair colour text |
+| `owner_hair_length` | buzzed, short, chin, shoulder, long, very_long | in place of the looks' own length (a shaved head stays one until a length is set) |
+| `owner_hair_style` | straight, wavy, curly, coily, ponytail, high_bun, messy_bun, braid, braids, bob, pixie, bangs, half_up, slicked_back, shaved_sides; a man also crew_cut, fade, quiff | in place of the looks' own style text |
+| `wardrobe` | up to 4 of casual, sporty, smart, edgy, boho, glam, cosy, workwear, vintage, outdoorsy, minimalist, swim | none: a bias on the outfits picked (below) |
+| `palette` | up to 3 of the 12 lust colours | none: the colours picked |
+| `makeup` (women) | none, natural, defined, glam | "no makeup", "natural makeup", "defined makeup", "glam makeup" |
+| `jewellery` | none, minimal, statement | "delicate necklace" / "statement jewellery" (a man: "chain necklace" / "chunky jewellery"); none adds a negative |
+| `glasses` | never, always | never leaves out the face details that name glasses and adds a negative; always says her own glasses detail first, or "glasses" when the looks name none |
+| `tattoos` | none, small, sleeve | "small tattoo" / "tattoo sleeve", said in place of the clauses that name a tattoo; none leaves them out and adds a negative |
+| `piercings` | none, ears, nose, lip | "pierced ears" / "nose piercing" / "lip piercing", the same way |
+
+**Hair overrides, it never rewrites.** The stored free text (`hair_colour`, `hair_length`,
+`hair_style`) is untouched; `prompt.hair_words` says each owner value in its place. Hair's length
+and colour stay required in every profile, varied and situational prompt and the style still gives
+way first (`hair_skin_short`), so the 75-token fit holds: the enum words are shorter than long free
+text was (tests/selfies/test_looks_style.py, the longest combination on every build, kind and
+framing). The words were counted on RealVisXL's tokenizers on 2026-11-17 (`tokens.WORD_TOKENS`).
+No value or word is one of the age guard's (no pigtails, no bunches); the lust style still reads
+the stored free text (`style.looks_age_coded`), so overriding an age-coded stored style does not
+bring her back into the lust style.
+
+**Accessories keep what is there.** Other face details (a beard, a scar, freckles) are always
+kept; `prompt.face_details` only touches the clause of a detail that names glasses, a tattoo or a
+piercing, and only when the owner set that field ("a faded tattoo and a scar on the chin" keeps
+the scar).
+
+**Accessories get room first** (review of #358: at priority 3 and 2 the worker's fit dropped them
+in almost every prompt). What the owner set is said in one or two tokens each
+(`prompt.accessory_phrases`) at priority 1, right after her hair and skin, in the order glasses,
+tattoo, piercing, makeup, jewellery, so the worker's fit offers them room before every other
+optional phrase. `fit_required` takes their size as a `reserve`: the required set shortens for it
+(the kind and framing's short forms, her hair's style, her skin's modifiers, her size's last
+terms), then the kind of photo (a profile, a situation) or a varied front or side view's framing
+moves to priority 2. Her body, hair length and colour, skin tone, a profile's framing and a
+varied pose never make way. With nothing set the steps are exactly what they were. Checked with
+the worker's own `fit` on RealVisXL's tokenizers (tests/selfies/test_looks_style.py): a voluptuous
+woman of 88 kg with a large bust keeps her glasses and tattoo in every profile, her lust profile,
+every varied front and side look and a situational photo; a curvy woman keeps all five. Known
+limits, which the Looks panel states: a varied **back view** yields nothing for them, so on a full
+figure they may not show there, and with a full figure and the longest outfit or activity the last
+of them may not fit (glasses, the first, do).
+
+**Negatives.** Each "never"/"none" is its own one-word negative phrase at priority 3
+(`style_negative`: glasses, tattoo, piercing, jewellery), added only where the worker's fit has
+room for it beside the fixed negatives, which keep every place: two words on the plain negative,
+three on the lust one, none on a varied set's (it fills the window; there only the face-detail
+removal applies). A word with no room is left out by the mind, never sent to be dropped.
+Situational photos' negatives are unchanged.
+
+**Shaved heads.** Looks that say a shaved head have no colour or style worth saying, so over them
+only the owner's values count: the mind refuses a colour or style without a length, and a length
+without a colour.
+
+**Wardrobe and palette bias the kind, not the looks** (`selfies/wardrobe.py`). They put no word
+in a prompt.
+- *Photo-kind pass.* A lust woman's schema keeps its shape with shorter enums: the lust outfits
+  her tags name (`LUST_TAGS`, every one from the existing vetted lists) and her palette's colours.
+  A narrowed outfit list also narrows what the pairings would refuse, so at least half of the
+  picks left are valid for every tag subset (`wardrobe.MIN_SHARE`; the full lists stand at 76%):
+  only swimwear left gives the water settings, upper body and no headshot; swimwear among other
+  outfits loses the hot tub and keeps as many swimsuits as the share allows; no swimwear loses the
+  hot tub. Everyone else's free-text ask gains one sentence of fixed words (`ask_hint`); the reply
+  meets the same screens. A kind the pass chose is chosen once more when the wardrobe or palette
+  changes (the kind's record keeps the digest of the wardrobe the pass read; restyle, variety and
+  world photos record the stored one), and her queued ordinary sets wait for that
+  (`selfies_set_held reason=wardrobe`; the Looks panel says so). **One refused re-choice ends the
+  wait**: her kind stays, the record takes the wardrobe as attempted, `selfies_wardrobe_released
+  guid= reason=refused` is logged and her sets render with the kind she has. A kind set by hand
+  is never chosen again.
+- *Varied sets.* Still one look of each category; within a category the outfits her tags name
+  come first, and the colours are her palette's. A varied set reads no photo kind, so it never
+  waits for the kind's re-choice.
+- *Situational scenes.* The lust scene's enums as above. A plain scene offers the outfits her
+  tags name, with seven clothed outfits added for the tags the old four did not cover
+  (`SCENE_MORE`, offered only to a member whose wardrobe names them) and the gym's own always.
+- *Swim* counts only for a woman who has the lust style now (the panel offers it only to her and
+  the mind refuses it for anyone else),
+  and only through the existing pairings: swimwear at the water.
+Photo requests (`words_scene.py`) take the hair and accessories, not the wardrobe.
+
+**Rollback hazard.** Older code refuses a persona whose looks carry any of these fields (unknown
+`Appearance` key: the member's persona does not load). Before rolling back, with the mind stopped:
+
+```bash
+python -m leeroy_mind personas --data-dir "$D" looks --clear-style          # the plan: who, which fields
+python -m leeroy_mind personas --data-dir "$D" looks --clear-style --go     # snapshot, then clear them all
+python -m leeroy_mind personas --data-dir "$D" looks --clear-style --guid 1385,1895 --go   # only these
+```
+
+Each cleared member gets an owner persona version and a `looks` ledger row (`personas undo <id>`
+puts the values back after rolling forward again); weight and figure stay. Undo by hand works
+too, newest row first (an older row is refused once a later edit moved the same looks). A member
+is clear when her stored persona's `appearance` has none of the keys `owner_hair_*`, `wardrobe`,
+`palette`, `makeup`, `glasses`, `jewellery`, `tattoos`, `piercings`; a second `--clear-style`
+plan then lists nobody.
