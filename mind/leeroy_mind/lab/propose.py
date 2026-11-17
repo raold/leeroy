@@ -149,14 +149,18 @@ def prompt(name: str, *, k: int, feedback: dict) -> str:
                      f"kept, the rest reworded); write your own, not this one:\n{example}")
     control = feedback.get("control")
     if control:
-        lines.append("Last measured replies (0-3 rubric, 3 best): mean "
-                     f"{control['rubric']:.2f} over {control['n']} replies; most common grades: "
-                     + ", ".join(f"{c} {n}" for c, n in control.get("codes", [])) + "; rule flags: "
+        scale = ("1-5, 5 reads as a real person texting" if control.get("scale") == "1-5"
+                 else "0-3 rubric, 3 best")
+        codes = control.get("codes") or []
+        lines.append(f"Last measured replies ({scale}): mean "
+                     f"{control['rubric']:.2f} over {control['n']} replies; "
+                     + ("most common grades: " + ", ".join(f"{c} {n}" for c, n in codes) + "; "
+                        if codes else "") + "rule flags: "
                      + (", ".join(f"{c} {round(100 * r)}%" for c, r in control.get("flags", {}).items()
                                   if r) or "none") + ".")
     tried = feedback.get("tried") or []
     if tried:
-        lines.append("Variants tried before (change in rubric mean against the instruction now):")
+        lines.append("Variants tried before (change in the mean grade against the instruction now):")
         lines += [f"- {t['delta']:+.2f} ({t['outcome']}): {t['text']}" for t in tried]
     lines.append(f"Write {k * OVERASK} different variants. " + checklist(name))
     return "\n\n".join(lines)

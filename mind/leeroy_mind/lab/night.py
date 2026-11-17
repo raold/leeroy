@@ -14,9 +14,17 @@ start, after `turing` (or `forget` without it). Three stages so the runner swaps
   scratch/lab/runs/<run>/<arm>.json (private, never backed up, only the newest run's kept), its
   rule checks into lab_score. Never while a live lease is held or the GPU is paused: it waits for
   the next night (`lab_waiting`).
-- `lab_grade` (reflection model): one rubric unit per arm and pair, one blind-judge unit for the
-  first `[lab] judge` pairs of each arm, then `finish`: promotion (promote.py) and the run's
-  summary.
+- `lab_score` (live model, only with `[lab] grader = "tells"`): one unit per arm and pair, the
+  lab judge's 1-5 score of each of her answers (lab/judge.py: model-free features and yes/no
+  tells, the same seed for the same pair and turn in every arm); then the marker unit `scored`.
+  Like the battery it never runs while a live lease is held or the GPU is paused.
+- `lab_grade` (reflection model): with `grader = "rubric"` one rubric unit per arm and pair;
+  one blind-judge unit for the first `[lab] judge` pairs of each arm; then `finish`: the
+  comparison (promote.py; with `[lab] promote = false`, the default, nothing becomes an arm) and
+  the run's summary. With the tells grader it waits for `scored`.
+
+The run keeps its grader and whether it may promote in its plan, so a resumed run is graded the
+way it began.
 
 The budget is hard: `[lab] minutes` over all three, kept in lab_run.spent across resumes. The
 battery may use up to BATTERY_SHARE of it, so grading keeps the rest; a pair is never begun past
@@ -33,11 +41,12 @@ from leeroy_mind.logs import log
 from leeroy_mind.nightly.llm import ReflectionError
 from leeroy_mind.talk import pieces
 
-from . import authored, battery, child, grade, promote, propose, store
+from . import authored, battery, child, grade, judge, promote, propose, store
 from .config import load
 
 STAGE_PROPOSE, STAGE_BATTERY, STAGE_GRADE = "lab_propose", "lab", "lab_grade"
-STAGES = (STAGE_PROPOSE, STAGE_BATTERY, STAGE_GRADE)
+STAGE_SCORE = "lab_score"
+STAGES = (STAGE_PROPOSE, STAGE_BATTERY, STAGE_SCORE, STAGE_GRADE)
 BATTERY_SHARE = 0.6
 PROPOSE_TEMPERATURE = 0.8
 
@@ -51,10 +60,12 @@ def attach(runner, data_dir) -> bool:
     runner.add_stage(STAGE_PROPOSE, make_propose(cfg), after=after, model="reflection")
     runner.add_stage(STAGE_BATTERY, make_battery(cfg), after=STAGE_PROPOSE, model="live",
                      wants_gpu=lambda ctx: _wants(ctx, STAGE_BATTERY))
-    runner.add_stage(STAGE_GRADE, make_grade(cfg), after=STAGE_BATTERY, model="reflection",
+    runner.add_stage(STAGE_SCORE, make_score(cfg), after=STAGE_BATTERY, model="live",
+                     wants_gpu=lambda ctx: _wants(ctx, STAGE_SCORE))
+    runner.add_stage(STAGE_GRADE, make_grade(cfg), after=STAGE_SCORE, model="reflection",
                      wants_gpu=lambda ctx: _wants(ctx, STAGE_GRADE))
     log("lab_attached", minutes=cfg.minutes, pairs=cfg.pairs, judge=cfg.judge,
-        variants=cfg.variants)
+        variants=cfg.variants, grader=cfg.grader, promote=int(cfg.promote))
     return True
 
 
@@ -93,10 +104,52 @@ def _wants(ctx, stage: str, source: str = "night") -> bool:
     if run is None or run["status"] != "running":
         return False
     arms = _arms(ctx, run)
+    battery_done = all(ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms)
+    if stage == STAGE_SCORE:
+        return _grader(run) == "tells" and battery_done and not ctx.done(STAGE_SCORE, "scored")
     if stage == STAGE_GRADE:
-        return (not ctx.done(STAGE_GRADE, "finish")
-                and all(ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms))
-    return any(not ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms)
+        return (not ctx.done(STAGE_GRADE, "finish") and battery_done
+                and (_grader(run) != "tells" or ctx.done(STAGE_SCORE, "scored")))
+    return not battery_done
+
+
+def _grader(run) -> str:
+    """The run's grader: its plan's (a run from before the plan carried one: the rubric)."""
+    return run["plan"].get("grader", "rubric")
+
+
+class LiveContext:
+    """The model client with every chat request at the live preset's num_ctx (4096). The
+    reflection presets ask 8192, and Ollama reloads a loaded model for another context size:
+    beside a running live mind that would reload its pinned live model twice a call."""
+
+    def __init__(self, llm):
+        from leeroy_mind.llm.presets import LIVE
+        self._llm = llm
+        self.num_ctx = LIVE.options["num_ctx"]
+
+    async def chat(self, model, messages, *, options, **kwargs):
+        return await self._llm.chat(model, messages, options={**options, "num_ctx": self.num_ctx},
+                                    **kwargs)
+
+    async def embed(self, *args, **kwargs):
+        return await self._llm.embed(*args, **kwargs)
+
+    async def list_models(self):
+        return await self._llm.list_models()
+
+    def __getattr__(self, name):
+        return getattr(self._llm, name)
+
+
+def live_reasoner(ctx):
+    """A Reasoner on the live model at the live num_ctx (the context's own when `lab run
+    --grade-model live` already made it one)."""
+    from leeroy_mind.nightly.llm import Reasoner
+    if ctx.reasoner.model == ctx.settings.live_model:
+        return ctx.reasoner
+    return Reasoner(LiveContext(ctx.reasoner.llm), ctx.settings.live_model,
+                    parallel=ctx.settings.parallel)
 
 
 def _arms(ctx, run) -> list[str]:
@@ -191,7 +244,8 @@ def make_propose(cfg, *, source: str = "night", scripts: set[str] | None = None,
                 return
             sampled = {g: st for g, st in _members(ctx).items() if members is None or g in members}
             pairs = battery.plan(found, sampled, seed, cfg.pairs)
-            plan = {"pairs": pairs, "judge": cfg.judge, "minutes": cfg.minutes}
+            plan = {"pairs": pairs, "judge": cfg.judge, "minutes": cfg.minutes,
+                    "grader": cfg.grader, "promote": bool(cfg.promote)}
 
             def write(s):
                 # an earlier night's run the battery never finished (a lease, a crash) ends here
@@ -421,6 +475,75 @@ def _load(data_dir, run_id: int, arm: str) -> list[dict]:
         return []
 
 
+# -- the judge's scores ----------------------------------------------------------------------------
+
+def make_score(cfg, *, source: str = "night"):
+    async def stage_lab_score(ctx) -> None:
+        run = _run(ctx, source)
+        if (run is None or run["status"] != "running" or _grader(run) != "tells"
+                or ctx.done(STAGE_SCORE, "scored")):
+            return
+        arms = _arms(ctx, run)
+        if not all(ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms):
+            return
+        reason = _held(ctx)
+        if reason is not None:
+            log("lab_waiting", night=ctx.night, stage=STAGE_SCORE, reason=reason)
+            return
+        data_dir = Path(ctx.settings.data_dir)
+        budget = Budget(cfg, run["spent"], ctx.clock)
+        transcripts = {a: {t["pair"]: t for t in _load(data_dir, run["id"], a)} for a in arms}
+        units = [f"score:{a}:{p}" for a in arms for p in sorted(transcripts[a])]
+        reasoner = live_reasoner(ctx)
+        before = (reasoner.calls, reasoner.seconds)
+        base = _seed(run["seed"])
+
+        async def one(unit: str) -> None:
+            _, arm, pair = unit.split(":")
+            marks = await _score(reasoner, transcripts[arm][int(pair)], base)
+
+            def write(s):
+                store.set_score(s.conn, run["id"], arm, int(pair), marks)
+                store.set_spent(s.conn, run["id"], budget.used())
+            ctx.commit(STAGE_SCORE, unit, write)
+
+        left = budget.left()
+        cut = left <= 0
+        if not cut:
+            try:
+                async with asyncio.timeout(left):
+                    await ctx.map_units(STAGE_SCORE, units, one)
+            except TimeoutError:
+                cut = True
+        calls, seconds = reasoner.calls - before[0], reasoner.seconds - before[1]
+        if reasoner is not ctx.reasoner:  # the runner meters the context's own reasoner
+            ctx.reasoner.calls += calls
+            ctx.reasoner.seconds += seconds
+        if ctx.commit(STAGE_SCORE, "scored", _spend(ctx, run["id"], budget)):
+            log("lab_scored", night=ctx.night, run=run["id"], units=len(units),
+                done=sum(1 for u in units if ctx.done(STAGE_SCORE, u)),
+                calls=calls, seconds=round(seconds, 1), cut=int(cut))
+    return stage_lab_score
+
+
+async def _score(reasoner, t: dict, base: int) -> list[tuple[float, int]]:
+    """(score, calls) for each turn of a pair: her answer judged with the pair's earlier turns
+    as its context. The seed is the run's, the pair's and the turn's, never the arm's: the same
+    question is asked the same way of every arm."""
+    out, context, earlier = [], [], []
+    for n, turn in enumerate(t["turns"], 1):
+        got = await judge.score(reasoner, turn["his"], turn["reply"], mode=judge.LAB_MODE,
+                                context=tuple(context), earlier=tuple(earlier),
+                                rewritten=bool(turn.get("rewritten")),
+                                seed=judge.seed_of(base, t["pair"], n))
+        out.append((got["score"], got["calls"]))
+        context.append(("him", turn["his"]))
+        if turn["reply"]:
+            context.append(("her", turn["reply"]))
+            earlier.append(turn["reply"])
+    return out
+
+
 # -- grading ---------------------------------------------------------------------------------------
 
 def make_grade(cfg, *, source: str = "night"):
@@ -431,11 +554,14 @@ def make_grade(cfg, *, source: str = "night"):
         arms = _arms(ctx, run)
         if not all(ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms):
             return  # the battery waits for the next night (a lease, the GPU paused)
+        tells = _grader(run) == "tells"
+        if tells and not ctx.done(STAGE_SCORE, "scored"):
+            return  # so does the judge's scoring
         data_dir = Path(ctx.settings.data_dir)
         budget = Budget(cfg, run["spent"], ctx.clock)
         transcripts = {a: {t["pair"]: t for t in _load(data_dir, run["id"], a)} for a in arms}
         judged_pairs = sorted(p["pair"] for p in run["plan"]["pairs"])[:run["plan"].get("judge", cfg.judge)]
-        units = [f"rubric:{a}:{p}" for a in arms for p in sorted(transcripts[a])]
+        units = [] if tells else [f"rubric:{a}:{p}" for a in arms for p in sorted(transcripts[a])]
         units += [f"judge:{a}:{p}" for a in arms for p in judged_pairs if p in transcripts[a]]
         names: dict = {}
 
@@ -462,10 +588,11 @@ def make_grade(cfg, *, source: str = "night"):
                     store.set_spent(s.conn, run["id"], budget.used())
             ctx.commit(STAGE_GRADE, unit, write)
 
-        cut = False
+        cut = tells and any(not ctx.done(STAGE_SCORE, f"score:{a}:{p}")
+                            for a in arms for p in transcripts[a])
         left = budget.left()
         if left <= 0:
-            cut = any(not ctx.done(STAGE_GRADE, u) for u in units)
+            cut = cut or any(not ctx.done(STAGE_GRADE, u) for u in units)
         else:
             try:
                 async with asyncio.timeout(left):
@@ -479,8 +606,10 @@ def make_grade(cfg, *, source: str = "night"):
 
         def finish(s):
             result = promote.promote(s.conn, run["id"], settings=learn_cfg, now=ctx.clock.now(),
-                                     budget_cut=cut or short)
-            summary = {"arms": result["summary"],
+                                     budget_cut=cut or short, key="score" if tells else "rubric",
+                                     allow=bool(run["plan"].get("promote", True)))
+            summary = {"arms": result["summary"], "grader": _grader(run),
+                       "promote": bool(run["plan"].get("promote", True)),
                        "outcomes": {str(k): v for k, v in result["outcomes"].items()},
                        "deltas": {str(k): v for k, v in result["deltas"].items()},
                        "promoted": result["promoted"], "cut": bool(cut or short)}
@@ -494,8 +623,9 @@ def make_grade(cfg, *, source: str = "night"):
             deltas = [d for d in result["deltas"].values() if d is not None]
             log("lab_done", night=ctx.night, run=run["id"], piece=run["piece"],
                 variants=len(result["outcomes"]), promoted=result["promoted"] or "-",
-                control=result["summary"].get("control", {}).get("rubric"),
-                best_delta=max(deltas) if deltas else None, cut=int(cut or short))
+                control=result["summary"].get("control", {}).get("score" if tells else "rubric"),
+                best_delta=max(deltas) if deltas else None, cut=int(cut or short),
+                grader=_grader(run), promote=int(bool(run["plan"].get("promote", True))))
     return stage_lab_grade
 
 

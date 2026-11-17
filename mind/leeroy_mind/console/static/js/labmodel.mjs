@@ -118,9 +118,14 @@ export function turingView(value) {
   return {available:true, days: Number.isSafeInteger(value.days) ? value.days : 14, families};
 }
 
-// The Conversation lab panel (lab/report.py panel): the nights' control means by kind, rule-flag
-// rates, the blind judge, and the variants tried and promoted with their word diffs.
-const OUTCOMES = {won:'promoted', beaten:'beat the control, not the best', lost:'lost',
+// The Conversation lab panel (lab/report.py panel): the nights' control means by kind (the lab
+// judge's 1-5 score, or the old 0-3 rubric), rule-flag rates, the blind judge, and the variants
+// tried and promoted with their word diffs. A run that only measured says so: its deltas are
+// indicative and nothing was proposed to the weekly gate.
+export const MEASURE_ONLY = 'Measure only: the lab records and reports. Its judge does not yet agree with a strong grader, '
+  +'so the changes shown are indicative and no variant is proposed to the weekly gate.';
+const OUTCOMES = {won:'promoted', measure_only:'ahead of the control (indicative; not proposed)',
+  beaten:'beat the control, not the best', lost:'lost',
   regressed:'a rule check got worse', untested:'never in a prompt', too_few:'too few graded answers',
   budget:'cut by the budget', frozen:'learning frozen'};
 const FLAG_WORDS = {silent:'said nothing', unanswered:'question not answered first', wordy:'wordy',
@@ -133,7 +138,9 @@ export function conversationView(value) {
       .map(([k,v]) => (FLAG_WORDS[k] || k)+' '+pct(v)) : [];
     const kinds=record(r.kinds) ? Object.entries(r.kinds).filter(([,v]) => Number.isFinite(v)).map(([k,v]) => k+' '+fixed(v)) : [];
     const headline=String(r.night || '')+' · '+String(r.piece || '')+' · '+String(r.status || '')+(r.reason ? ' ('+r.reason+')' : '')
-      +(Number.isFinite(r.rubric) ? ' · control '+fixed(r.rubric)+' over '+(r.graded|0)+' answers' : '')
+      +(Number.isFinite(r.score) ? ' · control '+fixed(r.score)+' of 5 over '+(r.scored|0)+' answers'
+        : Number.isFinite(r.rubric) ? ' · control '+fixed(r.rubric)+' of 3 (old rubric) over '+(r.graded|0)+' answers' : '')
+      +(r.promote===false ? ' · measure only' : '')
       +(Number.isFinite(r.human) ? ' · judge called her human '+pct(r.human) : '');
     const variants=(Array.isArray(r.variants) ? r.variants : []).filter(record).map(v =>
       'Variant '+v.id+': '+(OUTCOMES[v.outcome] || v.outcome || 'waiting')+(Number.isFinite(v.delta) ? ' ('+(v.delta>=0 ? '+' : '')+v.delta.toFixed(2)+')' : '')
@@ -141,6 +148,7 @@ export function conversationView(value) {
       +(typeof v.diff==='string' && v.diff ? ' · '+v.diff : ''));
     return {headline, kinds, flags, variants};
   });
-  return {available:true, runs, tried:Number.isSafeInteger(value.tried) ? value.tried : 0,
+  const measuring=value.runs.filter(record).some(r => r.promote===false);
+  return {available:true, runs, note: measuring ? MEASURE_ONLY : '', tried:Number.isSafeInteger(value.tried) ? value.tried : 0,
     promoted:Number.isSafeInteger(value.promoted) ? value.promoted : 0};
 }

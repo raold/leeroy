@@ -1,4 +1,4 @@
-"""`python -m leeroy_mind lab report|run|variants|add-variant`.
+"""`python -m leeroy_mind lab report|run|variants|add-variant|judge-eval`.
 
 - `report [--night N] [--runs K] [--json]`: the stored runs, read only (mode=ro, no migration).
 - `run --dry-run`: tonight's plan as the night would make it (the piece, the pairs, the arms and
@@ -13,6 +13,12 @@
 - `add-variant --piece P --file F [--name N]`: screens a hand-written variant and copies it into
   that folder, where the next night (or `lab run`) tries it before the model's own. It writes
   that one file and nothing else, so it works beside a running mind.
+- `judge-eval --gold DIR [--part test|dev|train|all] [--judges a,b] [--seed N] [--json]`: how
+  well each judge (lab/judge.py's and the old rubric) agrees with a strong grader's grades in a
+  directory of gold conversations (lab/gold.py, lab/judge_eval.py): numbers only on stdout. It
+  asks the live model at its own num_ctx (think off, temperature 0), so it runs beside a live
+  mind; it needs no mind.db, writes nothing and never prints a word of the gold. `--fit` prints
+  weights refit on the train part instead (numbers; a new `judge_weights.json`).
 """
 import argparse
 import asyncio
@@ -29,7 +35,7 @@ from leeroy_mind.config import default_data_dir
 
 from leeroy_mind.talk import pieces
 
-from . import authored, battery, propose, report as reporting, store
+from . import authored, battery, gold, judge, judge_eval, propose, report as reporting, store
 from .config import load
 
 
@@ -62,31 +68,18 @@ def _parser():
     a.add_argument("--file", required=True, help="a text file holding the variant, one paragraph")
     a.add_argument("--name", help="the name it is kept under (default: the file's name)")
     a.add_argument("--data-dir", default=argparse.SUPPRESS)
+    e = sub.add_parser("judge-eval", help="the judges against a directory of gold conversations")
+    e.add_argument("--gold", required=True, help="a directory of conv-*.json (lab/gold.py)")
+    e.add_argument("--part", choices=("test", "dev", "train", "all"), default="test")
+    e.add_argument("--judges", help="comma-separated: " + ", ".join(judge_eval.DESIGNS)
+                   + " (default: all)")
+    e.add_argument("--seed", type=int, default=0)
+    e.add_argument("--parallel", type=int, default=2)
+    e.add_argument("--fit", action="store_true",
+                   help="print weights refit on the train part instead of the tables")
+    e.add_argument("--json", action="store_true")
+    e.add_argument("--data-dir", default=argparse.SUPPRESS)
     return p
-
-
-class LiveContext:
-    """The model client with every chat request at the live preset's num_ctx (4096). The
-    reflection presets ask 8192, and Ollama reloads a loaded model for another context size:
-    beside a running live mind that would reload its pinned live model twice a call."""
-
-    def __init__(self, llm):
-        from leeroy_mind.llm.presets import LIVE
-        self._llm = llm
-        self.num_ctx = LIVE.options["num_ctx"]
-
-    async def chat(self, model, messages, *, options, **kwargs):
-        return await self._llm.chat(model, messages, options={**options, "num_ctx": self.num_ctx},
-                                    **kwargs)
-
-    async def embed(self, *args, **kwargs):
-        return await self._llm.embed(*args, **kwargs)
-
-    async def list_models(self):
-        return await self._llm.list_models()
-
-    def __getattr__(self, name):
-        return getattr(self._llm, name)
 
 
 class _Events(logging.Handler):
@@ -287,7 +280,7 @@ async def _run(root: Path, args, cfg, *, make_llm, make_child) -> int:
                 ctx.night = key
                 swap = args.grade_model == "reflection"
                 if not swap:  # the live model at its own num_ctx: Ollama never reloads it
-                    ctx.reasoner = Reasoner(LiveContext(ctx.reasoner.llm), mind_cfg.models.live,
+                    ctx.reasoner = Reasoner(lab_night.LiveContext(ctx.reasoner.llm), mind_cfg.models.live,
                                             parallel=ctx.settings.parallel)
                 await ctx.reasoner.preflight()
                 scripts = {s.id for s in _scripts(args)} if args.scripts else None
@@ -296,8 +289,10 @@ async def _run(root: Path, args, cfg, *, make_llm, make_child) -> int:
                 stages = (lab_night.make_propose(cfg, source="cli", scripts=scripts, members=members,
                                                  piece=args.piece),
                           lab_night.make_battery(cfg, source="cli", make_child=make_child),
+                          lab_night.make_score(cfg, source="cli"),
                           lab_night.make_grade(cfg, source="cli"))
-                models = (ctx.reasoner.model, mind_cfg.models.live, ctx.reasoner.model)
+                models = (ctx.reasoner.model, mind_cfg.models.live, mind_cfg.models.live,
+                          ctx.reasoner.model)
                 for stage, model in zip(stages, models):
                     if swap:
                         await ctx.arbiter.ensure_model(model)
@@ -320,9 +315,80 @@ async def _run(root: Path, args, cfg, *, make_llm, make_child) -> int:
     return 0 if data["runs"] and data["runs"][0]["status"] in ("done", "budget") else 1
 
 
+def _judge_eval(root: Path, args, *, make_llm) -> int:
+    from leeroy_mind.config import ConfigError, load_config
+    from leeroy_mind.llm.client import GpuPaused, LLMError
+    from leeroy_mind.nightly.llm import Reasoner
+    from . import night as lab_night
+    designs = tuple(d.strip() for d in (args.judges or ",".join(judge_eval.DESIGNS)).split(",")
+                    if d.strip())
+    unknown = [d for d in designs if d not in judge_eval.DESIGNS]
+    if unknown or not designs or not 1 <= args.parallel <= 4:
+        print("lab judge-eval: judges are " + ", ".join(judge_eval.DESIGNS) + "; parallel 1-4",
+              file=sys.stderr)
+        return 2
+    try:
+        cfg = load_config(root / "mind.toml")
+        found = gold.load(args.gold)
+    except (ConfigError, gold.GoldError) as e:
+        print(f"lab judge-eval: {type(e).__name__}"
+              + (f": {e}" if isinstance(e, gold.GoldError) else ""), file=sys.stderr)
+        return 2
+    if not found:
+        print("lab judge-eval: no graded reply in that directory", file=sys.stderr)
+        return 2
+    if _gpu_paused(root):
+        print("lab judge-eval: the GPU is paused from the console (Free GPU): resume it first",
+              file=sys.stderr)
+        return 2
+    if make_llm is not None:
+        llm = make_llm(cfg)
+    else:
+        from leeroy_mind.llm.client import OllamaClient
+        llm = OllamaClient(cfg.ollama.url)
+    reasoner = Reasoner(lab_night.LiveContext(llm), cfg.models.live, parallel=args.parallel)
+
+    async def go():
+        if args.fit:
+            return await judge_eval.refit(reasoner, args.gold, seed=args.seed,
+                                          parallel=args.parallel)
+        return await judge_eval.evaluate(reasoner, args.gold, designs=designs, part=args.part,
+                                         seed=args.seed, parallel=args.parallel)
+    try:
+        data = asyncio.run(go())
+    except GpuPaused:
+        print("lab judge-eval: the GPU is paused", file=sys.stderr)
+        return 2
+    except LLMError as e:
+        print(f"lab judge-eval: the model did not answer ({type(e).__name__})", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    print(json.dumps(data, sort_keys=True) if args.json or args.fit else judge_eval.render(data))
+    return 0
+
+
+def _gpu_paused(root: Path) -> bool:
+    """Free GPU's durable pause (meta gpu:paused), read only; no mind.db: not paused."""
+    from leeroy_mind.gpucontrol import KEY
+    db = root / "mind.db"
+    if not db.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
+        try:
+            return conn.execute("SELECT 1 FROM meta WHERE key=?", (KEY,)).fetchone() is not None
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
 def lab_main(argv=None, *, make_llm=None, make_child=None) -> int:
     args = _parser().parse_args(argv)
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
+    if args.action == "judge-eval":
+        return _judge_eval(root, args, make_llm=make_llm)
     if not (root / "mind.db").is_file():
         print(f"lab: no mind.db in {root}", file=sys.stderr)
         return 2

@@ -71,9 +71,20 @@ test('a lab night reads as a headline, kinds, flags and variants in words',() =>
       {id:8,outcome:'regressed',delta:0.5,arm:null,arm_status:null,diff:''},{id:9,outcome:'mystery',delta:null}]}]});
   assert.equal(view.available,true); assert.equal(view.tried,3); assert.equal(view.promoted,1);
   const r=view.runs[0];
-  assert.equal(r.headline,'2026-11-16 · reply_human · done · control 1.42 over 24 answers · judge called her human 25%');
+  assert.equal(r.headline,'2026-11-16 · reply_human · done · control 1.42 of 3 (old rubric) over 24 answers · judge called her human 25%');
+  assert.equal(view.note,'');
   assert.deepEqual(r.kinds,['flirt 1.50','raid 2.00']);
   assert.deepEqual(r.flags,['wordy 25%','said nothing 4%']);
   assert.deepEqual(r.variants,['Variant 7: promoted (+0.31) · arm lab.reply_human.v7 (active) · a {+b+}',
     'Variant 8: a rule check got worse (+0.50)','Variant 9: mystery']);
+});
+
+
+test('a measure-only night shows the judge score, says so and words a leading variant as indicative',() => {
+  const view=conversationView({available:true,tried:1,promoted:0,runs:[{night:'2026-11-18',status:'done',reason:null,
+    piece:'discord_dm',pairs:12,spent:900,grader:'tells',promote:false,score:3.41,scored:20,rubric:null,graded:0,human:null,
+    kinds:{flirt:3.5},flags:{},variants:[{id:4,outcome:'measure_only',delta:0.26,arm:null,arm_status:null,diff:''}]}]});
+  assert.equal(view.runs[0].headline,'2026-11-18 · discord_dm · done · control 3.41 of 5 over 20 answers · measure only');
+  assert.deepEqual(view.runs[0].variants,['Variant 4: ahead of the control (indicative; not proposed) (+0.26)']);
+  assert.match(view.note,/^Measure only: /); assert.match(view.note,/indicative/);
 });

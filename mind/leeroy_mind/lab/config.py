@@ -7,13 +7,21 @@ unknown keys mean the defaults with the lab off; nothing private reaches a diagn
 - pairs: the battery's (script, member) pairs a night, each run once per arm (2-60, default 12).
 - judge: pairs per arm the blind judge reads (0-60, default 6; never more than pairs).
 - variants: prompt variants proposed a night (0-5, default 3; 0 only measures).
+- grader: what grades her answers: "tells" (lab/judge.py, the judge measured against a strong
+  grader, on the live model) or "rubric" (lab/grade.py's 0-3 rubric on the reflection model,
+  which did not agree with that grader at all). Default "tells".
+- promote: a variant that wins becomes an arm of the learn bandit (lab/promote.py). Default
+  false: the lab measures and reports, and proposes nothing to the weekly gate, until its judge
+  agrees with a strong grader (lab/README.md, "The judge").
 - overlays: a sandbox mind reads `prompts/lab_<piece>.txt` (talk/pieces.py). Set only in a
   sandbox's copied mind.toml (sandbox/prepare.QUIET); the live mind leaves it off."""
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-KEYS = frozenset({"enabled", "minutes", "pairs", "judge", "variants", "overlays"})
+KEYS = frozenset({"enabled", "minutes", "pairs", "judge", "variants", "overlays", "grader",
+                  "promote"})
+GRADERS = ("tells", "rubric")
 
 
 @dataclass(frozen=True)
@@ -24,6 +32,8 @@ class LabCfg:
     judge: int = 6
     variants: int = 3
     overlays: bool = False
+    grader: str = "tells"
+    promote: bool = False
 
 
 def _int(value, low, high):
@@ -40,10 +50,14 @@ def parse(table) -> LabCfg:
     pairs = table.get("pairs", d.pairs)
     judge = table.get("judge", d.judge)
     variants = table.get("variants", d.variants)
+    grader = table.get("grader", d.grader)
+    promote = table.get("promote", d.promote)
+    if type(promote) is not bool or grader not in GRADERS:
+        return LabCfg()
     if (type(enabled) is not bool or type(overlays) is not bool or not _int(minutes, 5, 180)
             or not _int(pairs, 2, 60) or not _int(judge, 0, 60) or not _int(variants, 0, 5)):
         return LabCfg()
-    return LabCfg(enabled, minutes, pairs, min(judge, pairs), variants, overlays)
+    return LabCfg(enabled, minutes, pairs, min(judge, pairs), variants, overlays, grader, promote)
 
 
 def load(path: Path) -> LabCfg:
