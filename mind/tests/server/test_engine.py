@@ -476,3 +476,118 @@ def test_photo_seed_is_spent_only_when_its_photo_was_offered(app,monkeypatch,off
     assert len(app.turns) == 1 and app.turns[0][1].photo_seed == 7
     assert json.loads(app.store.get_meta('server:recent'))[-1]['reason'] == 'opener_dropped'
     assert (fresh(app.store.conn,[seed],now=app.clock.now()) == []) == offered
+
+
+def busy_read():
+    import sqlite3
+    error=sqlite3.OperationalError('database is locked')
+    error.sqlite_errorname='SQLITE_BUSY'
+    return error
+
+
+def test_a_tick_whose_read_failed_keeps_its_start_for_the_next_tick(app,monkeypatch):
+    e=app.server.engine
+    good,calls=runtime.snapshot,[]
+    async def snapshot(*args,**kwargs):
+        calls.append(kwargs)
+        if len(calls)==1:
+            raise busy_read()
+        return await good(*args,**kwargs)
+    monkeypatch.setattr(runtime,'snapshot',snapshot)
+    async def go():
+        now=app.clock.now()
+        due=e.next_start
+        with pytest.raises(Exception):
+            await e.tick(now)
+        assert e.next_start==due and not e.live()   # not pushed out by a gap for a start that never began
+        await e.tick(now)
+        assert len(e.live())==1
+        await finished(e)
+    run(go())
+    assert app.store.conn.execute('SELECT count(*) FROM discord_message').fetchone()[0]==5
+
+
+def test_a_conversation_keeps_its_turn_when_one_read_fails(app,monkeypatch,caplog):
+    monkeypatch.setattr(se,'TICK_S',0)
+    good,calls=runtime.snapshot,[]
+    async def snapshot(*args,**kwargs):
+        calls.append(kwargs)
+        if len(calls) in (3,4):   # the conversation's second turn, twice
+            raise busy_read()
+        return await good(*args,**kwargs)
+    monkeypatch.setattr(runtime,'snapshot',snapshot)
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    with caplog.at_level('INFO'):
+        run(go())
+    assert app.store.conn.execute('SELECT count(*) FROM discord_message').fetchone()[0]==5
+    assert json.loads(app.store.get_meta('server:recent'))[-1]['reason']=='length'
+    assert sum('server_conversation_read_retry' in r.getMessage() and 'code=busy' in r.getMessage()
+               for r in caplog.records)==2
+
+
+def test_a_conversation_whose_reads_keep_failing_ends_with_the_error_class(app,monkeypatch,caplog):
+    monkeypatch.setattr(se,'TICK_S',0)
+    good,calls=runtime.snapshot,[]
+    async def snapshot(*args,**kwargs):
+        calls.append(kwargs)
+        if len(calls)>2:
+            raise busy_read()
+        return await good(*args,**kwargs)
+    monkeypatch.setattr(runtime,'snapshot',snapshot)
+    async def go():
+        await app.server.engine.tick(app.clock.now())
+        await finished(app.server.engine)
+    with caplog.at_level('INFO'):
+        run(go())
+    assert json.loads(app.store.get_meta('server:recent'))[-1]['reason']=='error'
+    assert any('server_conversation_failed' in r.getMessage() and r.getMessage().endswith('code=busy')
+               for r in caplog.records)
+    assert len(calls)==2+se.READ_RETRIES+1
+
+
+def test_a_tick_that_keeps_failing_backs_off_and_is_said_once_then_hourly(app, monkeypatch, caplog):
+    assert [se.tick_wait(n) for n in (0, 1, 2, 3, 7, 8, 40)] == [5, 10, 20, 40, 600, 600, 600]
+    e = app.server.engine
+    waits, codes = [], iter(['busy'] * 4 + ['interrupted'] * 2 + ['ok'])
+    async def tick(now):
+        code = next(codes, 'stop')
+        if code == 'stop':
+            e._closed = True
+        elif code != 'ok':
+            error = __import__('sqlite3').OperationalError('database is locked')
+            error.sqlite_errorname = 'SQLITE_BUSY' if code == 'busy' else 'SQLITE_INTERRUPT'
+            raise error
+    async def sleep(seconds):
+        waits.append(seconds)
+    monkeypatch.setattr(e, 'tick', tick)
+    monkeypatch.setattr(app.clock, 'sleep', sleep)
+    with caplog.at_level('INFO'):
+        run(e.run())
+    e._closed = False
+    assert waits == [10, 20, 40, 80, 160, 320, 5, 5]
+    lines = [r.getMessage() for r in caplog.records if 'server_tick' in r.getMessage()]
+    assert lines == ['server_tick_failed code=busy failures=1 unreported=0',
+                     'server_tick_failed code=interrupted failures=5 unreported=3',
+                     'server_tick_recovered code=interrupted failures=6']
+
+
+def test_a_fault_that_stays_is_counted_once_an_hour(app, monkeypatch, caplog):
+    e = app.server.engine
+    clock = [0.0]
+    async def tick(now):
+        if clock[0] > 3 * 3600:
+            e._closed = True
+        raise ValueError('a fault quoting something private')
+    async def sleep(seconds):
+        clock[0] += seconds
+    monkeypatch.setattr(e, 'tick', tick)
+    monkeypatch.setattr(app.clock, 'sleep', sleep)
+    monkeypatch.setattr(app.clock, 'now', lambda: clock[0])
+    with caplog.at_level('WARNING'):
+        run(e.run())
+    e._closed = False
+    lines = [r.getMessage() for r in caplog.records if 'server_tick_failed' in r.getMessage()]
+    assert 3 <= len(lines) <= 5 and lines[0] == 'server_tick_failed code=ValueError failures=1 unreported=0'
+    assert all('private' not in line for line in lines) and 'unreported=10' in lines[1] and 'unreported=5' in lines[2]

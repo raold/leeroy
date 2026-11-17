@@ -330,3 +330,44 @@ def test_rank_change_during_final_snapshot_prevents_private_reaction(store,clock
         assert store.conn.execute('SELECT count(*) FROM discord_reaction').fetchone()[0]==0
         await reactor.close()
     run(go())
+
+
+def test_a_reaction_refused_for_another_connections_commit_is_written_on_the_second_try(store,clock,monkeypatch,caplog):
+    import sqlite3
+    async def go():
+        reactor,snap = setup(store,clock,monkeypatch)
+        real,calls = ds.react,[]
+        def react(*args,**kw):
+            calls.append(kw)
+            if len(calls)==1:
+                error=sqlite3.OperationalError('database is locked')
+                error.sqlite_errorname='SQLITE_BUSY_SNAPSHOT'
+                raise error
+            return real(*args,**kw)
+        monkeypatch.setattr(reacting.discord_store,'react',react)
+        mid = post(store,clock,author=101)
+        await reactor._write(mid,102,101,'general','👍',0)
+        assert store.conn.execute('SELECT count(*) FROM discord_reaction WHERE message=? AND member=102',(mid,)).fetchone()[0]==1
+        assert len(calls)==2
+        await reactor.close()
+    with caplog.at_level('INFO'):
+        run(go())
+    assert any(r.getMessage().endswith('code=busy_snapshot') and 'server_reaction_retry' in r.getMessage() for r in caplog.records)
+
+
+def test_a_failed_reaction_logs_the_error_class(store,clock,monkeypatch,caplog):
+    import sqlite3
+    async def go():
+        reactor,snap = setup(store,clock,monkeypatch)
+        async def broken(*args,**kw):
+            error=sqlite3.OperationalError('database is locked')
+            error.sqlite_errorname='SQLITE_BUSY'
+            raise error
+        monkeypatch.setattr(reacting.runtime,'snapshot',broken)
+        reactor.after_post(post(store,clock),author=1,channel='discord:general',text='That raid was fun',his=True)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await reactor.close()
+    with caplog.at_level('WARNING'):
+        run(go())
+    assert [r.getMessage() for r in caplog.records]==['server_reaction_failed code=busy']
