@@ -247,6 +247,16 @@ def _life_unpinned():
 
 
 @pytest.fixture(autouse=True)
+def _heat_off():
+    """[heat] is process-wide while a mind runs (heat/live.py): every test starts and ends with
+    it off, today's behaviour, whatever an app or a rig attached."""
+    from leeroy_mind.heat import live as heat_live
+    heat_live._LIVE = None
+    yield
+    heat_live._LIVE = None
+
+
+@pytest.fixture(autouse=True)
 def _pictures_off():
     """The romance ladder skips "picture" unless a test attaches the photo sender."""
     from leeroy_mind.nightly.romance import set_pictures_available
