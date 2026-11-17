@@ -798,7 +798,11 @@ def raidlead_args(args) -> dict:
 
 
 LOOKS_SHAPES = {"set": {"action", "guid", "weight_kg", "bust"}, "undo": {"action", "ledger"}}
-LOOKS_OPTIONAL = ("glutes", "waist", "hips")  # set's own extras: one left out stays as stored
+# set's own extras: one left out stays as stored (her shapes, then his hair, wardrobe, makeup
+# and accessories: personas.schema.OWNER_STYLE)
+LOOKS_OPTIONAL = ("glutes", "waist", "hips", "owner_hair_colour", "owner_hair_length",
+                  "owner_hair_style", "wardrobe", "palette", "makeup", "glasses", "jewellery",
+                  "tattoos", "piercings")
 
 
 def looks_args(args) -> dict:
@@ -816,7 +820,8 @@ def looks_args(args) -> dict:
     if not shape <= set(args) or (action == "undo" and extras) \
             or not extras <= set(LOOKS_OPTIONAL):
         raise BadRequest(f"looks {action}: exactly " + ", ".join(sorted(shape - {"action"}))
-                         + (" (and any of glutes, waist, hips)" if action == "set" else ""))
+                         + (" (and any of " + ", ".join(LOOKS_OPTIONAL) + ")"
+                            if action == "set" else ""))
     if action == "undo":
         if not (type(args["ledger"]) is int and 1 <= args["ledger"] < 1 << 63):
             raise BadRequest("looks undo: ledger is a ledger row's number")

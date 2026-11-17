@@ -209,6 +209,36 @@ class Appearance:
                                                                            enrichment=True)
     hips: Literal["narrow", "average", "wide", "very_wide"] | None = _f(default=None,
                                                                         enrichment=True)
+    # The owner's hair, wardrobe, makeup and accessories (owner, 2026-11-17), set by hand in the
+    # console's Looks panel, for women and men; no model writes them. A hair value set here is
+    # said in the photo prompt in place of the free text above, which stays as stored; unset
+    # (None, or an empty wardrobe or palette) the prompt and the stored JSON are what they were.
+    owner_hair_colour: Literal[
+        "black", "dark_brown", "brown", "light_brown", "auburn", "red", "copper",
+        "strawberry_blonde", "dark_blonde", "blonde", "platinum", "grey", "silver",
+        "pastel_pink", "blue", "purple"] | None = _f(default=None, enrichment=True)
+    owner_hair_length: Literal["buzzed", "short", "chin", "shoulder", "long",
+                               "very_long"] | None = _f(default=None, enrichment=True)
+    owner_hair_style: Literal[
+        "straight", "wavy", "curly", "coily", "ponytail", "high_bun", "messy_bun", "braid",
+        "braids", "bob", "pixie", "bangs", "half_up", "slicked_back", "shaved_sides",
+        "crew_cut", "fade", "quiff"] | None = _f(default=None, enrichment=True)
+    # What they tend to wear and in which colours: a bias on the outfits the photo-kind pass,
+    # the varied sets and the situational scenes pick (selfies/wardrobe.py), never looks words.
+    wardrobe: tuple[Literal[
+        "casual", "sporty", "smart", "edgy", "boho", "glam", "cosy", "workwear", "vintage",
+        "outdoorsy", "minimalist", "swim"], ...] = _f(max_items=4, default=(), enrichment=True)
+    palette: tuple[Literal[
+        "black", "red", "navy", "emerald", "burgundy", "cobalt blue", "teal", "coral", "plum",
+        "olive", "pink", "gold"], ...] = _f(max_items=3, default=(), enrichment=True)
+    makeup: Literal["none", "natural", "defined", "glam"] | None = _f(default=None,
+                                                                      enrichment=True)
+    glasses: Literal["never", "always"] | None = _f(default=None, enrichment=True)
+    jewellery: Literal["none", "minimal", "statement"] | None = _f(default=None,
+                                                                    enrichment=True)
+    tattoos: Literal["none", "small", "sleeve"] | None = _f(default=None, enrichment=True)
+    piercings: Literal["none", "ears", "nose", "lip"] | None = _f(default=None,
+                                                                  enrichment=True)
 
 
 @dataclass(frozen=True)
@@ -231,8 +261,30 @@ BUSTS = get_args(get_args(get_type_hints(Appearance)["bust"])[0])  # smallest fi
 GLUTES = get_args(get_args(get_type_hints(Appearance)["glutes"])[0])
 WAISTS = get_args(get_args(get_type_hints(Appearance)["waist"])[0])
 HIPS = get_args(get_args(get_type_hints(Appearance)["hips"])[0])
-OWNER_LOOKS = ("bust", "glutes", "waist", "hips")  # looks only the owner sets, women only: no
-# model is asked for them
+WOMEN_LOOKS = ("bust", "glutes", "waist", "hips", "makeup")  # the owner's, women only
+
+
+def _owner_options(name: str) -> tuple[str, ...]:
+    """An owner field's values: an optional Literal's, or those of a tuple of Literals."""
+    return get_args(get_args(get_type_hints(Appearance)[name])[0])
+
+
+HAIR_COLOURS = _owner_options("owner_hair_colour")
+HAIR_LENGTHS = _owner_options("owner_hair_length")
+HAIR_STYLES = _owner_options("owner_hair_style")
+MEN_HAIR_STYLES = ("crew_cut", "fade", "quiff")  # the styles only a man's panel offers
+WARDROBES = _owner_options("wardrobe")
+PALETTE = _owner_options("palette")  # the lust colours (selfies.kind.LUST_COLOURS)
+MAKEUPS = _owner_options("makeup")
+GLASSES = _owner_options("glasses")
+JEWELLERY = _owner_options("jewellery")
+TATTOOS = _owner_options("tattoos")
+PIERCINGS = _owner_options("piercings")
+OWNER_SETS = ("wardrobe", "palette")  # the owner's multi-selects: unset is empty
+OWNER_STYLE = ("owner_hair_colour", "owner_hair_length", "owner_hair_style", "wardrobe",
+               "palette", "makeup", "glasses", "jewellery", "tattoos", "piercings")
+# looks only the owner sets: no model is asked for them
+OWNER_LOOKS = ("bust", "glutes", "waist", "hips", *OWNER_STYLE)
 
 
 def appearance_dict(a: Appearance) -> dict:
@@ -241,7 +293,7 @@ def appearance_dict(a: Appearance) -> dict:
     from it)."""
     d = _dump(a)
     for name in OWNER_LOOKS:
-        if getattr(a, name) is None:
+        if getattr(a, name) in (None, ()):
             del d[name]
     return d
 
@@ -586,8 +638,14 @@ def _enrichment_errors(p: Persona) -> list[str]:
         errs += [f"romance.{name}: men stay friends; leave it empty"
                  for name in ("drawn_to", "turned_off_by") if getattr(p.romance, name)]
         if p.appearance is not None:
-            errs += [f"appearance.{name}: women only; leave it empty" for name in OWNER_LOOKS
+            errs += [f"appearance.{name}: women only; leave it empty" for name in WOMEN_LOOKS
                      if getattr(p.appearance, name) is not None]
+    if p.appearance is not None:
+        a = p.appearance
+        if p.identity.player_gender != "male" and a.owner_hair_style in MEN_HAIR_STYLES:
+            errs.append("appearance.owner_hair_style: a man's style; pick another")
+        errs += [f"appearance.{name}: each value once" for name in OWNER_SETS
+                 if len(set(getattr(a, name))) != len(getattr(a, name))]
     ranks = [DEPTHS.index(d.depth) for d in p.disclosures if d.depth in DEPTHS]
     if ranks != sorted(ranks):
         errs.append("disclosures: depths must run surface, then middle, then deep")
