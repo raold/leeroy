@@ -8,7 +8,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from . import caption, critic, face, grid, jpeg, models, similarity
+from . import caption, critic, detail, face, grid, jpeg, models, similarity
 from .fit import fit
 from .protocol import PORTRAIT_SIZE, Caption, Critic, Grid, Identity, Render, RenderFailed
 
@@ -64,7 +64,8 @@ class Renderer:
         self._refs: OrderedDict = OrderedDict()  # (ref, st_mtime_ns, crop, cfg) -> embeds
         self._blanks: dict = {}  # cfg -> the embeds a render without a reference carries
         self.data = data
-        self._detectors = None  # critic.Detectors, loaded at the first critic request
+        self._detectors = None  # critic.Detectors, loaded at the first critic or detail request
+        self._i2i = None  # the img2img pipeline over the same components, at the first detail
 
     def _count(self, text: str) -> int:
         return max(len(tok(text, add_special_tokens=False).input_ids)
@@ -78,12 +79,19 @@ class Renderer:
 
     def render(self, req: Render) -> dict:
         """One image, a square of the requested `size` (768, 896 or 1024) or PORTRAIT for shape
-        "portrait", saved as is to `out`, and a thumbnail with its long side `thumb_size` to
+        "portrait", after the detailer's pass when the request asks for one (detail.py: its
+        detail_ fields are in the answer then), saved as is to `out`, and a thumbnail with its long side `thumb_size` to
         `thumb`; neither when the NSFW score reaches nsfw_max. A render with an identity is
         conditioned on the face in its reference crop, at its scale; one without, on an
         identity pipeline, carries a blank reference at scale 0, which adds nothing. RenderFailed:
         oom, missing_ref (the reference is gone or not a JPEG), identity_unavailable (a reference
-        without the adapter)."""
+        without the adapter).
+
+        With a pass the NSFW check reads the image before and after it. A render that scores
+        nsfw_max or more gets no pass and is flagged as ever (detail_code nsfw_base). An image
+        the pass made that scores nsfw_max or more is never written: the render as it was is
+        (detail_code nsfw_reverted, the counts 0, the score the render's own), so the pass
+        never flags a clean render and never clears a flagged one."""
         if req.identity is not None and not self.identity:
             raise RenderFailed("identity_unavailable")
         torch = self.torch
@@ -109,6 +117,25 @@ class Renderer:
         except torch.cuda.OutOfMemoryError as e:
             raise RenderFailed("oom") from e
         nsfw = self.score(image)
+        detailed = {}
+        if req.detail is not None and nsfw >= req.nsfw_max:
+            detailed = {"detail_faces": 0, "detail_hands": 0, "detail_skipped": 0,
+                        "detail_reverted": 0, "detail_ms": 0, "detail_code": "nsfw_base"}
+        elif req.detail is not None:
+            lead = ((detail.FACE_LEAD, 0), *((t, min(9, p + 1)) for t, p in req.phrases))
+            hand = ((detail.HAND_LEAD, 0), *((t, 1) for t, _ in req.phrases if "wearing" in t))
+            refined, detailed = self.detail_pass(
+                image, req.detail, seed=req.seed, steps=req.steps, cfg=req.cfg,
+                face_prompt=fit(lead, self._count, limit)[0],
+                hand_prompt=fit(hand, self._count, limit)[0],
+                negative=negative, identity=req.identity)
+            if refined is not image:
+                after = self.score(refined)
+                if after >= req.nsfw_max:  # never written; the render as it was is
+                    detailed = {**detailed, "detail_faces": 0, "detail_hands": 0,
+                                "detail_code": "nsfw_reverted"}
+                else:
+                    image, nsfw = refined, after
         flagged = nsfw >= req.nsfw_max
         if not flagged:
             from PIL import Image
@@ -119,7 +146,105 @@ class Renderer:
                 "dropped": list(dropped), "tokens": self._count(prompt),
                 "seconds": round(time.perf_counter() - started, 2),
                 "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                "width": width, "height": height}
+                "width": width, "height": height, **detailed}
+
+    def detail_pass(self, image, opts: detail.Detail, *, seed: int, steps: int, cfg: float,
+                    face_prompt: str, hand_prompt: str, negative: str,
+                    identity: Identity | None = None) -> tuple[object, dict]:
+        """(the image after the detailer's pass, its detail_ fields): detail.run with this
+        renderer's detectors and refiner. It never raises for the pass: a missing detector, CUDA
+        out of memory or any error is a detail_code and the image as far as it got."""
+        try:
+            if self._detectors is None:
+                self._detectors = critic.load_detectors(self.data)
+        except Exception:
+            self._detectors = None
+        return detail.run(image, self._detectors, opts, self.refiner(
+            opts, seed=seed, steps=steps, cfg=cfg, face_prompt=face_prompt,
+            hand_prompt=hand_prompt, negative=negative, identity=identity))
+
+    def refiner(self, opts: detail.Detail, *, seed: int, steps: int, cfg: float,
+                face_prompt: str, hand_prompt: str, negative: str,
+                identity: Identity | None = None):
+        """detail.run's refine: one crop drawn again by img2img at its kind's strength, with the
+        crop's own seed (detail.seed_for). On an identity pipeline the largest face keeps her
+        reference at its scale, so the face stays hers; every other crop carries the blank
+        reference at scale 0. "Largest" is the face's rank among the faces found (0), never its
+        place among the crops kept: when her own face is passed over (a headshot's), a smaller
+        face behind her is drawn again without her reference. That face is also held to her
+        likeness: when the image encoder's cosine between the crop and her reference falls by
+        more than opts.identity_margin in the pass, the crop stays as it was (detail.Keep); an
+        encoder that is missing or fails checks nothing. CUDA out of memory frees what it can and ends the pass
+        (detail.Skip("oom")): the pass works at `size` x `size` (at most 1024), the latents of a
+        square render, on the weights already loaded, so it needs no more VRAM than a render."""
+        torch = self.torch
+
+        hers = self.identity and identity is not None
+        likeness = self._likeness(identity) if hers else None
+
+        def refine(kind: str, rank: int, crop):
+            adapter_kw = {}
+            mine = hers and kind == "face" and rank == 0
+            if self.identity:
+                if mine:
+                    adapter_kw["ip_adapter_image_embeds"] = self._embeds(identity, cfg > 1)
+                    self.pipe.set_ip_adapter_scale(identity.scale)
+                else:
+                    adapter_kw["ip_adapter_image_embeds"] = self._blank(cfg > 1)
+                    self.pipe.set_ip_adapter_scale(0.0)
+            generator = torch.Generator("cuda").manual_seed(detail.seed_for(seed, kind, rank))
+            try:
+                new = self._img2img()(
+                    prompt=hand_prompt if kind == "hand" else face_prompt,
+                    negative_prompt=negative, image=crop,
+                    strength=opts.hand_denoise if kind == "hand" else opts.face_denoise,
+                    num_inference_steps=steps, guidance_scale=cfg, generator=generator,
+                    **adapter_kw).images[0]
+            except torch.cuda.OutOfMemoryError as e:
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                raise detail.Skip("oom") from e
+            if mine and likeness is not None and likeness(crop, new) > opts.identity_margin:
+                raise detail.Keep()
+            return new
+        return refine
+
+    def _likeness(self, identity: Identity):
+        """(the crop before, the crop after) -> how far the image encoder's cosine to her
+        reference's face crop fell (0 when it rose, or when anything here fails); None without
+        an image encoder."""
+        encode = critic.encoder(getattr(self.pipe, "image_encoder", None),
+                                getattr(self.pipe, "feature_extractor", None), self.torch)
+        if encode is None:
+            return None
+        ref = []
+
+        def fell(before, after) -> float:
+            try:
+                if not ref:
+                    ref.append(encode(critic.reference_crop(self._detectors, identity.ref,
+                                                            identity.crop)))
+                return max(0.0, critic.cosine(encode(before), ref[0])
+                           - critic.cosine(encode(after), ref[0]))
+            except Exception:
+                return 0.0
+        return fell
+
+    def _img2img(self):
+        """SDXL img2img over the loaded pipeline's own components (the same objects: no weight
+        is loaded, copied or cast), made at the first detail request."""
+        if self._i2i is None:
+            from diffusers import StableDiffusionXLImg2ImgPipeline
+            pipe = self.pipe
+            self._i2i = StableDiffusionXLImg2ImgPipeline(
+                **pipe.components,
+                force_zeros_for_empty_prompt=getattr(pipe.config, "force_zeros_for_empty_prompt",
+                                                     True),
+                add_watermarker=getattr(pipe, "watermark", None) is not None)
+            self._i2i.set_progress_bar_config(disable=True)
+        return self._i2i
 
     def _embeds(self, identity: Identity, cfg: bool):
         """The adapter's embeds of the reference's crop, computed once per file version, crop

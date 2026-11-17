@@ -4,7 +4,7 @@ from typing import Awaitable, Callable, TYPE_CHECKING
 from leeroy_mind.nightly.budget import register_counter
 from .config import SelfieCfg, worker_command, worker_env
 from .render import (CONTENDED, SET_SIZE, STAGE, THUMB_PX, TRIES, SetRefused, RoomFailed,
-                     _held, _stored, _unleased, queue, todo, render, render_candidates, seed_for,
+                     _held, _set_held, _stored, _unleased, queue, todo, render, render_candidates, seed_for,
                      settle_sets, start_worker)
 from .store import needing_first, queued_sets
 from .worker import SelfieWorker, to_the_end
@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 
 def wants_gpu(ctx: "NightContext") -> bool:
     queue(ctx)
-    return any(_held(ctx, _stored(ctx, int(unit.split(":")[0]))) is None for unit in todo(ctx))
+    return any(_set_held(ctx, _stored(ctx, int(unit.split(":")[0])), *map(int, unit.split(":")))
+               is None for unit in todo(ctx))
 
 
 def make_stage(cfg: SelfieCfg, *, worker: Callable[[], SelfieWorker] | None = None
