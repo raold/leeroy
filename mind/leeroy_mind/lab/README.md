@@ -23,23 +23,40 @@ live mind leaves it off.
 Three stages after `turing` (after `forget` without it), so the runner swaps the models:
 
 1. **`lab_propose`** (reflection model). Unit `plan` makes the night's `lab_run`: tonight's piece,
-   round-robin over the registry (`talk/pieces.py`), and the seeded plan. The battery
+   round-robin over the registry (`talk/pieces.py`), and the seeded plan. The round-robin passes
+   over a piece this mind's settings never render (`pieces.unrendered`: with `[talk] situation`
+   on a reply reads `situation_reply_human`, so `reply_human` and `continue` could only end
+   `untested`; `[romance] realism` picks one of the two romance pieces), and goes first to a
+   piece with a hand-written variant waiting (below). The battery
    (`lab/battery/*.toml`, 30 invented owner-style scripts of 1-2 lines: flirt, logistics, a direct
    question, bored small talk, goodbye, pushback, a photo ask, a long silence then return, a
    name-the-raid question, a request to meet) is paired with up to 20 members drawn across the
    stances (a man's is none), seeded by the night; each pair takes one of its script's channels
    (DM, whisper, guild, party). An earlier night's run still `running` ends `failed` (`unfinished`).
-   Unit `propose`: one call writes up to `variants` rewordings of the piece from the repo's own
-   wording, what it is for, the phrases it must keep and the numbers measured lately (the newest
-   control's rubric mean, commonest grade codes and rule-flag rates, and earlier variants of this
-   piece with their outcome and change); never persona text, his lines or the owner's overlays.
-   Each passes `propose.screen` or is dropped with a code: `shape` (its {placeholders} must be
-   exactly the built-in wording's, kept phrases such as "in one short line" or "(nothing)"
-   verbatim, one paragraph, no `|`), `length` (within 20% of the built-in wording), `names` (a
-   cast, persona or his name the built-in wording lacks, or `@`), `explicit` (an explicit or
-   manipulative word it adds: selfies' EXPLICIT_RE, SEXUAL_RE, the lessons' MANIPULATION), `meta`
-   (AI, bots, prompts), `same` (the built-in wording or a variant already tried). Kept variants
+   Unit `propose`: the piece's waiting hand-written variants take the first of the `variants`
+   slots; for the slots left, one call writes rewordings of the piece from the repo's own
+   wording, what it is for, its placeholders, the phrases it must keep (and why: other code finds
+   them by their words), a valid variant of this piece for the form (`propose.EXAMPLES`, never
+   tried itself) and the numbers measured lately (the newest control's rubric mean, commonest
+   grade codes and rule-flag rates, and earlier variants of this piece with their outcome and
+   change); never persona text, his lines or the owner's overlays. The prompt ends with a
+   checklist of the exact placeholders and kept phrases. Each passes `propose.screen` or is
+   dropped with a code: `placeholders` (its {placeholders} must be exactly the built-in
+   wording's), `kept` (a kept phrase such as "in one short line" or "(nothing)" is not there
+   verbatim), `shape` (not one paragraph of text, a `|`, over 1200 characters), `length` (more
+   than 20% longer or 40% shorter than the built-in wording, or 30 characters either way for a
+   short piece), `names` (a cast, persona or his name the built-in wording lacks, or `@`),
+   `explicit` (an explicit or manipulative word it adds: selfies' EXPLICIT_RE, SEXUAL_RE, the
+   lessons' MANIPULATION), `meta` (AI, bots, prompts), `same` (the built-in wording, the example
+   or a variant already tried). When the screen refused some and slots are left, the model is
+   asked once more with what was wrong with each ("it lost the locked phrase ..."). Kept variants
    are `prompt_variant` rows with a word diff.
+
+   The first live night (2026-11-17) kept none of six proposals: each had reworded the kept
+   phrase ("in one short line" became "Keep it brief."), the old prompt named it once mid-list
+   and then said "keep every part of it, reworded", and the one code `shape` hid which rule it
+   was. The same night's piece, `reply_human`, was not rendered either (`[talk] situation` was
+   on), so its variants could only have ended `untested`.
 2. **`lab`** (live model). Never while a live lease is held or the GPU is paused (`lab_waiting`;
    the run is then ended `unfinished` by the next night). Unit `snapshot` copies the guild into
    `<data dir>/scratch/lab` (the sandbox's copy, `sandbox/README.md`; scratch is never backed
@@ -81,7 +98,7 @@ noise). The best winner becomes an **active arm** of the learn bandit's family f
 lab's). Every other variant is retired with its outcome: `beaten` (beat the control, not the
 best), `lost`, `regressed`, `untested` (never in a prompt), `too_few`, `budget`, `frozen` (a global
 learning freeze or a frozen family promotes nothing). Every variant keeps its scoresheet (numbers
-only). Logs: `lab_plan`, `lab_proposed ... kept= refused= codes=`, `lab_arm ... answered= applied=
+only). Logs: `lab_plan ... authored=`, `lab_proposed ... kept= authored= asks= refused= codes=`, `lab_arm ... answered= applied=
 complete=`, `lab_done ... promoted= control= best_delta= cut=`, `lab_waiting`, `lab_budget`.
 
 ## Live: a promoted arm in the learn bandit
@@ -97,6 +114,34 @@ to the cycle's `promoted` status is the weekly cycle's gate (P(beats control) > 
 uses, no guard regression, no veto); its retirement rule applies too. The Lab's arm buttons
 (accept, reject, retire) and freezes (`frozen_families` takes `prompt.<piece>`) work on them, and
 `learn rollback` restores their statuses like any arm's. Log: `lab_piece: guid= piece= source=arm`.
+
+## Hand-written variants (`lab/authored.py`)
+
+The reflection model's rewordings are mostly a synonym swapped. A variant written by someone who
+has read the replies can aim at one weakness (echoing his line, answering longer than he wrote,
+a polished tone, nothing of her own in it), and the lab tests it like its own:
+
+```bash
+python -m leeroy_mind lab add-variant --piece situation_reply_human --file my-variant.txt [--name N]
+python -m leeroy_mind lab variants        # each file: waiting, tried, or refused with its code
+```
+
+`add-variant` screens the text and copies it to `<data dir>/lab/variants/<piece>/<name>.txt`
+(one variant a file, folded to one paragraph); it writes that one file, so it works beside a
+running mind, and the folder may also be filled by hand. The screen is the proposer's
+(`propose.screen`): the same placeholders, kept phrases, names, explicit and meta checks. Only
+the length band is its own: any length up to half as long again as the built-in wording, or 120
+characters longer for a short piece. A night's plan goes first to a piece with a file waiting
+(among several, round-robin), and its propose unit takes the waiting files in name order before
+it asks the model for the slots left, so with `variants = 3` and four files the fourth waits for
+that piece's next night. A file whose text is a `prompt_variant` row is done (`tried`); the
+files stay where they are. A hand-written variant is marked by meta
+`lab:authored:<variant id>` (its file name) and `lab report` says so; from there it is promoted,
+retired and credited exactly like the model's. A piece the settings never render is not picked
+for its files (`lab variants` and `add-variant` say so); `lab run --piece` names it anyway.
+
+The files are prompt wording only: no persona text, none of his lines, no names. The folder is
+in the data dir, so it is in the guild backup and never in the repo.
 
 ## The pieces (`talk/pieces.py`)
 
@@ -120,10 +165,14 @@ From `mind/` with `--data-dir "$D"`:
 python -m leeroy_mind lab report [--night N] [--runs K] [--json]   # read only
 python -m leeroy_mind lab run --dry-run [--pairs N] [--scripts a,b] [--members g,h]
 python -m leeroy_mind lab run [--grade-model reflection|live] [--pairs N] [--variants K]
-    [--minutes M] [--scripts ...] [--members ...]
+    [--minutes M] [--scripts ...] [--members ...] [--piece P]
+python -m leeroy_mind lab variants
+python -m leeroy_mind lab add-variant --piece P --file F [--name N]
 ```
 
-`report` and the dry run never write or migrate. `run` holds `mind.lock` (the mind stopped) and
+`report`, `variants` and the dry run never write or migrate; `add-variant` writes its one file.
+`--piece` names the piece in place of the round-robin (a piece the settings never render ends
+its variants `untested`). `run` holds `mind.lock` (the mind stopped) and
 runs the loop once as a `cli` run: it swaps the reflection and live models as the night does;
 `--grade-model live` proposes and grades on the live model and swaps nothing, for a run on a copy
 of the data dir beside a running live mind. The console's Lab tab has a "Conversation lab" panel
@@ -139,6 +188,11 @@ transcripts live only in `scratch/lab/runs` (newest run only); `lab_score` keeps
 sandbox (as the sandbox always does) and never read as variants or written.
 
 ## Not covered
+
+- With `[talk] shape` on, a DM renders `discord_dm` only for a drawn length over 45 words (the
+  shape's own lines word the shorter ones and are not pieces), and for a woman with a romance
+  stance the owner's whisper overlay follows the reply instruction, so it, not the piece, is
+  the last thing she reads.
 
 - A long silence cannot be waited out: those scripts say it in his words.
 - The live model's sampling is not seeded, so arms differ by chance too; a 0.15 rubric margin on

@@ -27,10 +27,13 @@ def test_the_round_robin_goes_through_every_piece_and_passes_over_skipped_ones()
 @pytest.mark.parametrize("text, code", [
     (variant(), None),
     (ORIGINAL, "same"),
-    ("  " + ORIGINAL.upper() + " ", "shape"),  # upper-cased placeholders are other fields
-    (ORIGINAL.replace("{they}", "they"), "shape"),                      # a placeholder dropped
-    (ORIGINAL.replace("{extra}", "{extra} {mood}"), "shape"),           # one added
-    (ORIGINAL.replace("in one short line", "briefly"), "shape"),        # a kept phrase lost
+    ("  " + ORIGINAL.upper() + " ", "placeholders"),  # upper-cased ones are other fields
+    (ORIGINAL.replace("{they}", "they"), "placeholders"),               # a placeholder dropped
+    (ORIGINAL.replace("{extra}", "{extra} {mood}"), "placeholders"),    # one added
+    (ORIGINAL.replace("{they}", "{they!r}"), "placeholders"),           # not a plain name
+    (ORIGINAL.replace("in one short line", "briefly"), "kept"),         # a kept phrase lost
+    (ORIGINAL.replace("in one short line", "In one short line"), "kept"),
+    ("   ", "shape"),
     (ORIGINAL.replace(". ", ".\n", 1), "same"),      # whitespace is folded into one paragraph
     (variant(new="Respond | to what"), "shape"),
     (ORIGINAL + " Keep it light, warm and specific to the moment you are in, always.", "length"),
@@ -57,7 +60,7 @@ def test_accept_keeps_k_deduplicates_and_names_refusals():
     kept, refused = propose.accept("reply_human", reply, k=2,
                                    earlier=[variant(new="Simply respond to what")])
     assert [k["text"] for k in kept] == [variant(), variant(new="Honestly respond to what")]
-    assert refused == ["same", "shape", "same"]
+    assert refused == ["same", "placeholders", "same"]
     assert kept[0]["diff"].count("{+Plainly respond+}") == 1 or "{+" in kept[0]["diff"]
     assert propose.accept("reply_human", {"oops": 1}, k=3) == ([], [])
 
@@ -75,6 +78,13 @@ def test_the_prompt_and_schema_carry_numbers_and_the_repo_wording_only():
     assert ORIGINAL in text and "{addressee}" in text and '"in one short line"' in text
     assert "mean 1.42 over 24" in text and "wordy 25%" in text and "echo" not in text
     assert "-0.10 (lost)" in text and "Write 6 different variants." in text
+    # the locked phrase is explained, a valid variant is shown, and the checklist comes last
+    assert 'Locked phrases: "in one short line". Copy each into every variant letter' in text
+    assert propose.EXAMPLES["reply_human"] in text
+    assert text.endswith('check each one: it has {addressee}, {extra}, {they} and no other '
+                         '{placeholder}; it has "in one short line" exactly; it is one paragraph.')
+    assert "keep every part of it, reworded" not in text
+    assert "Locked phrases" not in propose.prompt("beat_ask", k=1, feedback={})
     schema = propose.response_schema(3)
     check_schema(schema, {"variants": [{"text": "x", "idea": "y"}]})
     with pytest.raises(Exception):
@@ -87,3 +97,66 @@ def test_every_piece_has_a_screenable_wording(name):
     assert pieces.fits(name, original)
     assert propose.screen(name, original) == "same"
     assert len(pieces.piece(name).what) > 10
+
+
+@pytest.mark.parametrize("name", pieces.NAMES)
+def test_every_piece_has_an_example_the_screen_accepts_and_never_tries(name):
+    example = propose.EXAMPLES[name]
+    assert propose.screen(name, example) is None
+    kept, codes = propose.judge(name, {"variants": [{"text": example, "idea": "the example"}]}, k=3)
+    assert kept == [] and codes == ["same"]
+    assert example in propose.prompt(name, k=2, feedback={})
+
+
+def test_the_first_live_night_s_proposals_are_refused_for_the_lost_phrase():
+    """2026-11-17: all six candidates turned "in one short line" into "Keep it brief."."""
+    lost = ("Answer {addressee}'s last line. React to what {they} actually said, staying true to "
+            "yourself. Keep it brief. Use a memory or joke only if it fits. {extra}")
+    reply = {"variants": [{"text": lost, "idea": "react"}, {"text": variant(), "idea": "plainer"},
+                          {"text": lost.replace("{they}", "they"), "idea": "no pronoun"}]}
+    kept, codes = propose.judge("reply_human", reply, k=3)
+    assert [k["text"] for k in kept] == [variant()] and codes == ["kept", None, "placeholders"]
+    assert propose.problem("reply_human", lost, "kept") == (
+        'it lost the locked phrase "in one short line": copy it letter for letter')
+    assert propose.problem("reply_human", lost.replace("{they}", "{you}"), "placeholders") == (
+        "it lost {they} and it adds {you}")
+    assert "braces do not parse" in propose.problem("reply_human", "a } b", "placeholders")
+    assert "keep it within 102-202" in propose.problem("reply_human", "x" * 40, "length")
+    assert propose.problem("reply_human", lost, "extra") is None
+    first = propose.prompt("reply_human", k=2, feedback={})
+    again = propose.retry_prompt("reply_human", first, reply, codes, k=2)
+    assert again.startswith(first) and "Your earlier variants were refused by the code:" in again
+    assert again.count("it lost the locked phrase") == 1 and "it lost {they}" in again
+    assert "Write 4 new variants without those faults." in again
+    assert again.endswith("it is one paragraph.")
+
+
+def test_a_short_piece_has_room_and_a_hand_written_variant_its_own_band():
+    assert propose.length_band("reply_human") == (102, 202)           # 169: -40%, +20%
+    assert propose.length_band("situation_reply_human") == (24, 84)   # 54 characters, +-30
+    low, high = propose.length_band("situation_reply_human", authored=True)
+    assert (low, high) == (1, 174)
+    short = "{addressee}: {extra}"
+    assert propose.screen("situation_reply_human", short) == "length"
+    assert propose.screen("situation_reply_human", short, authored=True) is None
+    long = "Answer {addressee}, " + "and say it the way you would say it, " * 3 + "{extra}"
+    assert propose.screen("situation_reply_human", long) == "length"
+    assert propose.screen("situation_reply_human", long, authored=True) is None
+    assert propose.screen("situation_reply_human", long * 2, authored=True) == "length"
+    # everything else is as strict for a hand-written one
+    assert propose.screen("reply_human", ORIGINAL.replace("in one short line", "briefly"),
+                          authored=True) == "kept"
+    assert propose.screen("reply_human", variant(new="As an AI respond to what"), authored=True) == "meta"
+
+
+def test_the_round_robin_prefers_waiting_hand_written_pieces_and_skips_unrendered_ones():
+    order = list(pieces.NAMES)
+    assert propose.pick_piece([], prefer={order[3]}) == order[3]
+    assert propose.pick_piece([order[3]], prefer={order[3], order[5]}) == order[5]
+    assert propose.pick_piece([order[5]], prefer={order[3], order[5]}) == order[3]
+    assert propose.pick_piece([], prefer={order[3]}, skip={order[3]}) == order[0]
+    live = pieces.unrendered(situation=True, realism=True)
+    assert live == {"reply_human", "continue", "romance_hook"}
+    assert propose.pick_piece([], skip=live) == "goodnight"
+    assert pieces.unrendered(situation=False, realism=False) == {"situation_reply_human",
+                                                                 "romance_lead"}
