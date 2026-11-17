@@ -91,6 +91,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
+from leeroy_mind.talk import position
 from leeroy_mind.talk.length import KEEP_SLACK, SHORTER_HINT, content_question, fit_answer
 from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
                                      ordered, topic_for)
@@ -561,6 +562,9 @@ class TurnMeta:
     # [talk] coherence (talk/length.py): the words of a draft kept past her line's cap (a cut that
     # carries the answer, or one sent as written), which the styling then leaves whole; 0 none
     keep_words: int = 0
+    # [talk] coherence (talk/position.py, Pipeline._position): what she has said so far in this
+    # conversation and a rule of hers his line touches, the lines after the beat's block
+    position: str = field(default="", repr=False)
 
 
 class _ScopeChanged(SchedulerError):
@@ -822,6 +826,8 @@ class Pipeline:
         self._length_rng = random.Random()  # a channel message's length band (_discord_words)
         # her last want in each conversation (speaker, chain base), the latest WANTS_KEPT
         self._wants: dict[tuple[int, str], Intent] = {}
+        # her want while his question or disagreement is open, by conversation (position.Hold)
+        self._holds: dict[tuple[int, str], position.Hold] = {}
         # what each member did with each counterpart, kept in mind.db across restarts
         self.moves = MoveLog(self.store)
         self.notes = PairNotes(self.store)
@@ -901,7 +907,7 @@ class Pipeline:
         m = self.world.members.get(guid)
         return m.zone if m is not None else 0
 
-    def _card(self, p: Persona) -> str:
+    def _card(self, p: Persona, topic: str = "") -> str:
         """The card a prompt shows, from the live persona (personas.card.render_prompt_card),
         with race and class from the cast, or from the stored card for a member it lacks."""
         m = self.world.members.get(p.guid)
@@ -909,7 +915,7 @@ class Pipeline:
             race, class_name = RACES.get(m.race, ""), CLASSES.get(m.class_, "")
         else:
             race, class_name = card_race_class(self.store.get_card(p.guid) or "")
-        return render_prompt_card(p, race=race, class_name=class_name)
+        return render_prompt_card(p, race=race, class_name=class_name, topic=topic)
 
     def _pronoun_tags(self, turn: Turn, people: list[int], recent) -> dict:
         """Each member shown other than the speaker and him, tagged once with their persona's
@@ -1546,9 +1552,15 @@ class Pipeline:
             if meta.beat is None:
                 meta.beat = await self._beat(turn, meta, c)
             if meta.beat:
-                return replace(c, messages=_with_hint(c.messages, meta.beat))
-        block = self._block(turn, meta)
+                return replace(c, messages=_with_hint(c.messages, self._positioned(
+                    meta.beat, meta)))
+        block = self._positioned(self._block(turn, meta), meta)
         return replace(c, messages=_with_hint(c.messages, block)) if block else c
+
+    @staticmethod
+    def _positioned(block: str, meta: TurnMeta) -> str:
+        """`block` with her position's lines after it (TurnMeta.position, [talk] coherence)."""
+        return "\n".join(x for x in (block, meta.position) if x)
 
     # -- her state, want and situation (human-likeness core, plan Task 8) ----------------------
 
@@ -1620,6 +1632,10 @@ class Pipeline:
         fwd = forward(p)
         if self._private_to_him(turn) and flirt_chance(p, 1.0) <= 0:
             fwd = 0.0
+        coherent = self._coherent() and bool(his)
+        hold = self._holds.get(self._want_key(turn)) if coherent else None
+        if hold is not None and not position.held(hold, his, self.clock.now()):
+            hold = None
         return IntentContext(
             kind=turn.kind, to_him=self._aimed_at_him(turn), owed=owes_him(self, turn, meta),
             his_line=his, family=family, female=p.identity.player_gender == "female",
@@ -1630,7 +1646,10 @@ class Pipeline:
             event=lp.event if lp is not None else "none",
             block=lp.block if lp is not None else None,
             kids=lp.kids if lp is not None else has_kids(p),
-            last=self._wants.get(self._want_key(turn)), forward=fwd)
+            last=self._wants.get(self._want_key(turn)), forward=fwd,
+            pushback=coherent and position.disagrees(his),
+            bad_news=coherent and position.bad_news(his), scene=coherent and tail,
+            answer_first=coherent, hold=Intent(hold.want) if hold is not None else None)
 
     def _draw_situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
         """Her situation as she starts composing (core plan Task 8; nothing with every switch
@@ -1645,8 +1664,34 @@ class Pipeline:
             self._situation(turn, meta, p, now)
         except Exception as e:  # her situation is colour: nothing in it may cost him an answer
             meta.intent, meta.want_source, meta.lands, meta.intent_ctx = "", "", "", None
+            meta.position = ""
             log.warning("talk_situation_failed: guid=%d reason=%s", turn.speaker,
                         type(e).__name__)
+
+    def _said_here(self, turn: Turn, meta: TurnMeta, now: float) -> list[str]:
+        """Her own lines in this conversation, oldest first, within position.CLAIM_WINDOW_S: her
+        messages in his DM's chat (meta.discord_chat), else the lines of hers this turn may show
+        on its channel (a whisper's only between the same two)."""
+        since = now - position.CLAIM_WINDOW_S
+        if meta.discord_chat is not None:
+            return [r.text for r in meta.discord_chat
+                    if r.from_guid == turn.speaker and r.ts >= since]
+        rows = self.world.recent_visible(
+            turn.speaker, 12, channel=turn.channel,
+            keep=lambda r: (r.from_guid == turn.speaker and r.ts >= max(since, self._chat_from)
+                            and self._may_carry(turn, r)
+                            and (turn.channel != "whisper" or r.to_guid == turn.to_guid)))
+        return [r.text for r in rows]
+
+    def _position(self, turn: Turn, meta: TurnMeta, p: Persona, his: str, now: float) -> str:
+        """[talk] coherence, on an answer to his line (any channel) while a core switch is on:
+        what she has said so far in this conversation (position.claims_so_far) and a rule on
+        her card his line touches (position.opinion_for, strong), as the lines after the
+        turn's block; "" otherwise. Never logged."""
+        if not (self._coherent() and his and self._aimed_at_him(turn)):
+            return ""
+        claims = position.claims_so_far(self._said_here(turn, meta, now))
+        return position.position_block(claims, position.opinion_for(p.opinions, his))
 
     def _situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
         life = getattr(self, "life", None)
@@ -1666,6 +1711,7 @@ class Pipeline:
         if not self._want_eligible(turn, meta):
             return
         his = self._his_line(turn, meta) if (meta.state is not None or intent_on) else ""
+        meta.position = self._position(turn, meta, p, his, now)
         if meta.state is not None and his:
             meta.lands = life_state.lands(meta.state, life_state.tone(his),
                                           agreeableness=p.big_five.agreeableness.score,
@@ -1907,13 +1953,27 @@ class Pipeline:
                           playing=bool(self.world.human_online
                                        and self.world.in_group(turn.speaker)))
 
-    def _remember_want(self, turn: Turn, meta: TurnMeta) -> None:
+    def _remember_want(self, turn: Turn, meta: TurnMeta, said: str = "") -> None:
         """Her want on a line she said, as `last` for her next turn in this conversation."""
         key = self._want_key(turn)
         self._wants.pop(key, None)
         self._wants[key] = Intent(meta.intent)
         while len(self._wants) > WANTS_KEPT:
             del self._wants[next(iter(self._wants))]
+        # [talk] coherence: while his question or disagreement is open the want is held for
+        # her next turn here (position.held: 10 minutes, a new subject or his "fair enough"
+        # lets it go)
+        ctx = meta.intent_ctx
+        old = self._holds.pop(key, None)
+        if (self._coherent() and isinstance(ctx, IntentContext) and ctx.to_him
+                and ctx.his_line.strip() and not position.settled(ctx.his_line)
+                and (ctx.hold is not None or ctx.pushback or asks(ctx.his_line))):
+            words = position.words_of(ctx.his_line, said)
+            if ctx.hold is not None and old is not None:
+                words |= old.words
+            self._holds[key] = position.Hold(meta.intent, self.clock.now(), words)
+            while len(self._holds) > WANTS_KEPT:
+                del self._holds[next(iter(self._holds))]
 
     def _want_who(self, turn: Turn) -> str:
         """Whom "You want to:" names: him by what the guild calls him, a member by name,
@@ -1949,14 +2009,16 @@ class Pipeline:
         outside the budget and inside num_ctx."""
         if not self._core_on():
             return 0
+        held = estimate_tokens("\n" + meta.position) if meta.position else 0
         if self._beat_on(turn, meta):
             if meta.beat is None:
                 state = self._state_lands(turn, meta)
-                return beats.block_room(self.human.called, lands=meta.lands if state else None)
+                return held + beats.block_room(self.human.called,
+                                               lands=meta.lands if state else None)
             if meta.beat:
-                return estimate_tokens("\n" + meta.beat)
+                return held + estimate_tokens("\n" + meta.beat)
         block = self._block(turn, meta)
-        return estimate_tokens("\n" + block) if block else 0
+        return held + (estimate_tokens("\n" + block) if block else 0)
 
     async def _beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> str:
         """One short call on the turn's own prompt, constrained to beat.schema with think false:
@@ -1982,7 +2044,9 @@ class Pipeline:
             options = dict(BEAT.options)
             options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
             offered = self._beat_offer(turn, meta, c, started)
-            items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
+            # what she has said so far, and her rule on it, before the beat's own ask
+            based = _with_hint(c.messages, meta.position) if meta.position else c.messages
+            items = beats.fitting(sum(estimate_tokens(m["content"]) for m in based), human,
                                   wants, [x for _, x in offered], predict=options["num_predict"],
                                   num_ctx=options["num_ctx"], their=their, lean=lean,
                                   ask_lands=ask_lands, asking=c.asking)
@@ -1992,7 +2056,7 @@ class Pipeline:
                 # what fits, in the turn's own order (beat.shuffled): position carries no bias
                 order = beats.shuffled(offered[:len(items)], self._beat_rng(turn, meta, started))
                 items = [x for _, x in order]
-                messages = _with_hint(c.messages, beats.instruction(
+                messages = _with_hint(based, beats.instruction(
                     human, wants, items, their, lean=lean, ask_lands=ask_lands, asking=c.asking))
                 fmt = beats.schema(wants, human, their, ask_lands=ask_lands, offered=bool(items),
                                    asking=c.asking)
@@ -2060,6 +2124,10 @@ class Pipeline:
         one would."""
         meta.beat_conversation = beats.ledger_key(turn.speaker, turn.channel, turn.to_guid)
         meta.beat_use = None
+        if c.tail and self._coherent():
+            # an explicit scene is running (his overlay applies): nothing is brought in from
+            # outside it (explicit-DM audit, 2026-11-17: turns with a Bring in scored lower)
+            return []
         keys = list(c.beat_keys) + [""] * (len(c.beat_items) - len(c.beat_keys))
         try:
             entries = beats.ledger(self.store.get_meta(meta.beat_conversation), now)
@@ -2403,7 +2471,9 @@ class Pipeline:
             if not from_thread and not dm_rows:  # those rows carry their notes already
                 chat_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in recent])
         parts = PromptParts(
-            card=self._card(p), samples=samples,
+            # [talk] coherence, a core switch on: the opinions his line touches lead her card
+            card=self._card(p, his if live and self._coherent() and self._core_on() else ""),
+            samples=samples,
             rules=rules_of(human, p, data_dir=self.data_dir, now=now,
                            channel=turn.channel, recipient=turn.to_guid,
                            at_him=self._aimed_at_him(turn),
@@ -2859,7 +2929,7 @@ class Pipeline:
             spoken = await self._speak_voice(turn, meta, p, text, memory_ids)
             if spoken is not None:
                 if spoken and meta.intent:
-                    self._remember_want(turn, meta)
+                    self._remember_want(turn, meta, text)
                 if spoken:
                     await self._send_emotes(turn, meta, emotes)
                 return spoken
@@ -2972,7 +3042,7 @@ class Pipeline:
             return await self._answer_without_photo(turn, meta, without_photo)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
             if meta.intent:
-                self._remember_want(turn, meta)
+                self._remember_want(turn, meta, " ".join(s.plain for s in sent))
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
         return [s.line for s in sent]

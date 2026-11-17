@@ -138,14 +138,14 @@ def _prompt_mind(p: Persona) -> tuple[str, str]:
 
 
 def _render(p: Persona, race: str, class_name: str, mind: str, view: str, *,
-            budget: int = CARD_BUDGET, about: bool = False) -> str:
+            budget: int = CARD_BUDGET, about: bool = False, topic: str = "") -> str:
     """The card's sections within `budget`. With `about` (the prompt card), the identity and
     work lines give way to about_lines, kept whole, and the rest stays exactly what it was: the
     sections are fitted as before and the head's few more words come on top."""
     ident = _identity_line(p, race, class_name)
     work = " ".join(x for x in (_field("Work", p.real_life.job),
                                 _field("Rhythm", p.real_life.rhythm)) if x)
-    card = _render_rest(p, mind, view, budget=budget, ident=ident, work=work)
+    card = _render_rest(p, mind, view, budget=budget, ident=ident, work=work, topic=topic)
     if not about:
         return card
     old = "\n".join(x for x in (ident, work) if x)
@@ -153,8 +153,21 @@ def _render(p: Persona, race: str, class_name: str, mind: str, view: str, *,
     return "\n".join(x for x in (about_lines(p, race, class_name), rest) if x)
 
 
+def _opinions(p: Persona, topic: str) -> tuple[list[str], bool]:
+    """The two opinions the card shows, and whether his line touches one. Without a `topic`
+    (or when it touches none) her first two, as ever; else the one it touches most leads
+    (talk.position.opinion_for: shared content words), then her first other one."""
+    opinions = [_one_line(o) for o in p.opinions]
+    if topic and opinions:
+        from ..talk.position import opinion_for
+        touched = opinion_for(opinions, topic)
+        if touched is not None:
+            return [touched, *(o for o in opinions if o != touched)][:2], True
+    return opinions[:2], False
+
+
 def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = "",
-                 work: str = "") -> str:
+                 work: str = "", topic: str = "") -> str:
     ext = p.big_five.extraversion
     name, far = _furthest_trait(p)
     behaviours = [_sentence(ext.behaviour)]
@@ -162,14 +175,17 @@ def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = 
         behaviours.append(_sentence(far.behaviour))
     temper = " ".join(b for b in behaviours if b)
 
-    opinions = "Opinions: " + " | ".join(_one_line(o) for o in p.opinions[:2])
+    shown, touched = _opinions(p, topic)
+    opinions = "Opinions: " + " | ".join(shown)
     nevers = "Never: " + "; ".join(_one_line(n) for n in p.nevers[:2])
 
     # Sections in order; the optional ones are dropped in this order while over budget.
     sections = {"ident": ident, "work": work, "temper": temper, "mind": mind, "view": view,
                 "opinions": opinions if p.opinions else "",
                 "nevers": nevers if p.nevers else ""}
-    for drop in (None, "opinions", "view", "mind"):
+    # an opinion his line touches is the last section to go, not the first
+    for drop in ((None, "view", "mind", "opinions") if touched
+                 else (None, "opinions", "view", "mind")):
         if drop:
             sections[drop] = ""
         card = "\n".join(s for s in sections.values() if s)
@@ -184,12 +200,17 @@ def render_core_card(p: Persona, *, race: str, class_name: str) -> str:
     return _render(p, race, class_name, *_stored_mind(p))
 
 
-def render_prompt_card(p: Persona, *, race: str, class_name: str) -> str:
+def render_prompt_card(p: Persona, *, race: str, class_name: str, topic: str = "") -> str:
     """The card a prompt shows: the "About you" head (about_lines: her sex and pronouns, her
     household and her job, never cut), then the same sections as the stored card, attachment,
     humour and how they play said as behaviour, chosen as they would be in PROMPT_CARD_BUDGET
-    estimated tokens with the stored card's shorter identity and work lines."""
-    return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET, about=True)
+    estimated tokens with the stored card's shorter identity and work lines. `topic` ([talk]
+    coherence): the line of his she answers; the opinion it touches leads the two shown and is
+    then the last section dropped for the budget, not the first (self-play audit, 2026-11-17: an
+    officer argued against a rule his card calls law, because the card showed only his first
+    two opinions and dropped them first)."""
+    return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET, about=True,
+                   topic=topic)
 
 
 # The identity line's "You play Name, a/an KIND (ROLE)." with the role the last parentheses,
