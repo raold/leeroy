@@ -916,13 +916,24 @@ For a member with a sheet (`personas/speech.py`, `Pipeline._voice`):
 - It is **in place of**, not on top of: her card loses the two trait sentences and the
   attachment and humour lines (`render_prompt_card(..., voice=True)`; the card's other sections
   are chosen as they would be with them, so nothing else comes back into the room), and her
-  system message loses "How you type" and its five generator samples. What a turn adds is at
-  most 120 estimated tokens of block, the samples' heading (22) and two samples of at most 55
-  each; what it takes out measured about 175 on the live cast's captured prompts (trait
-  sentences and mind line about 100, samples about 73). So the net is at most about +80, and
-  near zero for a sheet with samples of ordinary length. Not yet measured on live turns.
+  system message loses "How you type" and its five generator samples. Measured in review on
+  579 captured requests of members whose sheet imports, each with her own sheet rendered in:
+  the card gives back a median 52 estimated tokens (38 in his DM) and the old samples 65-70,
+  and the block with its samples is 164-190 (209 at most). Net: **median +46 on Discord
+  channels (at most +95), +52 in guild chat, +80 in his DM (at most +117)**. No DM passes its
+  2600 budget; channel turns over 1800 went from 4 to 9 of 562, where the trim gives up under
+  100 tokens of memories or chat and never a mandatory section. No whisper turn was in the
+  capture; a whisper carries the same private block as a DM.
 - `with_him` shows only on a turn that is his; `stance` only where only he reads (a whisper to
-  him, his DM). A guild, party, raid, channel or group-DM turn has neither.
+  him, his DM). A guild, party, raid, officer, voice-room, channel or group-DM turn has
+  neither, and a whisper between two members has neither.
+- Her stance is written for a household. Every saved sheet is stamped with the household her
+  persona has then (`Speech.household`), and the stance is shown only while her card's household
+  still reads the same (`speech.stance_current`). When the night's arc ends a marriage or the
+  owner edits her household (a godmode edit included: the turn's effective persona is what is
+  compared), the stance leaves her prompts at once and stays out until a sheet is imported
+  again, so it can never contradict the identity card. The console marks it "not shown", and an
+  import that would only re-set the stamp says so, so the stance is read first.
 - The block without its samples never passes 120 estimated tokens (`BLOCK_TOKENS`). A sheet too
   long for a turn loses, in order (`TRIMS`): its fourth topic, its seventh and eighth words, its
   never-words beyond two, its third topic, the rest of its never-words, then words and a topic
@@ -944,7 +955,22 @@ For a member with a sheet (`personas/speech.py`, `Pipeline._voice`):
   (`learn.recipe.voice_used`), so `learn report` and the Turing report can split with and
   without.
 - The guards ration her own words and hold her to her never list and samples
-  (`guards/README.md` "Her voice sheet").
+  (`guards/README.md` "Her voice sheet"). The samples a turn shows are also the pipeline's
+  `Composed.samples`: a draft that copies one word for word (3 words or more) is the existing
+  fatal `sample` tell in generation (one of `OWED_HARD_TELLS`), exactly as it was for the
+  generator's five samples, and is regenerated; one or two lines are exposed to it now, not
+  five. Only the guards' `voice_sample_copy` is soft.
+- **The night reads the sheet too** (`card.render_night_card`): the critic, the weekly
+  evaluation's consistency score and everything the night writes from `NightContext.card`
+  (scenes, life beats, reflections, the chronicle, the Realm's letters, posts and Trade beats)
+  get the card live talk shows followed by the sheet's public part (`speech.public_block`:
+  register, shape, words, never-words, topics), **never `with_him`, `stance` or a sample**. The
+  looks and photo passes (`base_card`) and the core judge are unchanged.
+- **A voice change is a new baseline for drift** (`voices.changed_at`: the newest `voice`
+  ledger row of hers or undo of one). The critic never flags a line she said before it and
+  never counts a drift flag from before it toward the three that take back a week of
+  self-notes. The weekly `drift_check` does not check her at all in the week it changed, and
+  the week after has no "fell by 0.15" baseline (only the 0.6 floor).
 
 Importing (`personas/voices.py`), mind stopped for `--go`, which snapshots first
 (`mind-pre-voices-*.db`):
@@ -959,11 +985,18 @@ python -m leeroy_mind personas --data-dir "$D" voices --clear [--guid N,...] [--
 `DIR` holds one `<guid>.json` per member, in the sheet lab's shape (`voice.register`,
 `sentence_shape`, `says`, `never_says`, `unprompted`, `with_him`, `relationship_stance`, and
 top-level `samples`; its other keys are not read) or the schema's (`{"guid", "speech": {...}}`).
-Files whose name is no number are passed over. Each member is `imported`, `unchanged` or
-`refused` with codes (`voices.REFUSALS`: `unreadable`, `not_json`, `bad_shape`, `guid_mismatch`,
-`name_mismatch`, `no_persona`, `invalid`, `real_name`, `member_romance`, `assistant_text`,
-`later_era`, `member_name`, `never_in_sample`, `says_slop`); one refused sheet does not stop the
-others, and the exit code is 1 when any was refused. The output has outcomes, the block's
+Files whose name is no number are passed over. Each member is `imported`, `unchanged`,
+`skipped` or `refused` with codes. Refusals (`voices.REFUSALS`): `unreadable`, `not_json`,
+`bad_shape`, `guid_mismatch`, `name_mismatch`, `no_persona`, `invalid`, `real_name`,
+`member_romance`, `assistant_text`, `later_era`, `member_name`, `never_in_sample`, `says_slop`
+(one of her words holds or sits inside a slop entry of the stock list, by the guards' own test),
+`never_in_typing` (her own abbreviations or typing texture produce a word of her never list
+after the guards have read the line) and `shape_over_typing` (her shape names more words than
+her typing's longest line). Skips (`voices.SKIPS`): `not_cast`, a sheet for a stored persona
+outside the cast (a world persona); sheets are for the cast only (`--only-cast`, the default
+and the only mode). One refused sheet does not stop the others; the exit code is 1 only when a
+sheet was refused or a `--guid` has no file, never for a skip; the last lines give the counts
+by code. The output has outcomes, the block's
 estimated tokens, sample counts, codes and the schema's own messages (paths and limits), never
 a sheet's text. Each import is an owner persona version with a `voice` row in the persona ledger
 (migration `voice_ledger`) and a private receipt (meta `personas:voice-undo:<ledger>`), so

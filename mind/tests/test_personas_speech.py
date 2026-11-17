@@ -268,3 +268,65 @@ def test_nothing_comes_back_into_the_room_the_traits_leave():
     assert "Opinions:" not in usual and "In game" not in usual
     voiced = render_prompt_card(replace(long, speech=sheet()), voice=True, **kind)
     assert "Opinions:" not in voiced and "In game" not in voiced and len(voiced) < len(usual)
+
+
+# -- review of #367 ----------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("says", [
+    ["noted", "sound as", "on my tally", "killing"],            # her word inside a slop entry
+    ["noted", "sound as", "on my tally", "lose my mind"],       # her word is a slop entry
+    ["noted", "sound as", "on my tally", "oh you menace you"],  # a slop entry inside her word
+])
+def test_a_word_that_holds_or_sits_inside_stock_slop_is_refused(says):
+    assert sp.screen(member(says=says)) == ["says_slop"]
+
+
+def test_a_never_word_her_own_typing_produces_is_refused():
+    typist = replace(make_persona(101, "Arkon", abbreviations={"laughing out loud": "lol"}),
+                     speech=sheet())
+    assert "lol" in sp.typed_by_her(typist) and sp.screen(typist) == ["never_in_typing"]
+    assert sp.screen(replace(typist, speech=sheet(never=["awesome"]))) == []
+    # her typing texture's own habits count too, by her character name
+    from leeroy_mind.talk.style import SHORTHAND, texture_of
+    texture = texture_of(typist.typing, typist.character_name)
+    made = {SHORTHAND[i][1] for i in texture.extra} | {h[1] for h in texture.habits}
+    assert made <= sp.typed_by_her(typist)
+    for word in sorted(made)[:1]:
+        assert sp.screen(replace(typist, speech=sheet(never=[word]))) == ["never_in_typing"]
+
+
+def test_a_shape_longer_than_her_typing_is_refused():
+    p = member()
+    hi = max(p.typing.words_per_line)
+    over = replace(p, speech=sheet(shape=f"long rambling lines of {hi + 2} to {hi + 20} words"))
+    assert sp.screen(over) == ["shape_over_typing"]
+    assert sp.screen(replace(p, speech=sheet(shape=f"lines of 2 to {hi} words"))) == []
+
+
+def test_her_stance_is_current_only_for_the_household_it_was_stamped_with():
+    p = member()
+    assert p.speech.household is None and not sp.stance_current(p)  # never stamped: never shown
+    home = p.real_life.household
+    stamped = replace(p, speech=sheet(household=f"  {home.upper()} "))
+    assert sp.stance_current(stamped)                               # spacing and case aside
+    moved = replace(stamped, real_life=replace(stamped.real_life, household="lives alone now"))
+    assert not sp.stance_current(moved)
+    assert "household" not in speech_to_dict(p.speech)
+    assert persona_from_dict(persona_to_dict(stamped)) == stamped
+    assert validate_persona(stamped) == []
+
+
+def test_a_persona_with_a_sheet_never_renders_the_trait_sentences():
+    """A merge that brings the trait sentences back for sheet members must fail here (review of
+    #367, F4: two branches each add a local to card._render_rest and git joins them silently)."""
+    kind = dict(race="Human", class_name="Mage")
+    traits = dict(extraversion={"score": 6, "behaviour": "TRAITONE talks over everyone"},
+                  neuroticism={"score": 1, "behaviour": "TRAITTWO never rattled"})
+    for opinions in (["o one", "o two", "o three"], ["o" * 160, "p" * 160, "q" * 160]):
+        plain = make_persona(101, "Arkon", opinions=opinions, **traits)
+        usual = render_prompt_card(plain, **kind)
+        assert "TRAITONE" in usual and "TRAITTWO" in usual and "Your humour is dry." in usual
+        card = render_prompt_card(replace(plain, speech=sheet()), voice=True, **kind)
+        assert "TRAITONE" not in card and "TRAITTWO" not in card
+        assert "Your humour is" not in card and "You trust people easily" not in card
+        assert ("Opinions:" in card) == ("Opinions:" in usual)

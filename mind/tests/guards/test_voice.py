@@ -265,3 +265,20 @@ def test_an_owed_answer_is_never_dropped_for_her_sheet(rig, monkeypatch, channel
                                                      whisper_reply=channel == 'whisper'))
     assert len(sent) == 1 and 'draft' in sent[0] and meta.guard_rewritten
     assert code in meta.guard_codes
+
+
+# -- review of #367, F2 ----------------------------------------------------------------------------
+
+def test_a_say_word_never_exempts_a_slop_stock_entry(store):
+    """Her word inside a slop entry (the list's "!" lines) lifts nothing: slop is once per
+    member in three days whoever says it. The import refuses such a sheet (speech.screen)."""
+    slop = voice.sheet_of({'speech': {**GRUFF, 'says': ['killing', 'noted', 'sound as', 'well so']}})
+    assert 'killing me' in phrases.slop()
+    put(store, 'this boss is killing me tonight', channel='guild', ts=NOW - 86400)
+    again = draft('honestly the trash is killing me too')
+    assert 'stock_member' in found(store, again, None).codes
+    assert 'stock_member' in found(store, again, slop).codes
+    # in one conversation: a second use of a phrase holding the slop entry is still her tic
+    put(store, 'you are killing me here', channel='whisper', to=1, ts=NOW - 600)
+    twice = draft('you are killing me here again', channel='whisper', to_guid=1)
+    assert {'phrase_conversation', 'stock_member'} <= set(found(store, twice, slop).codes)

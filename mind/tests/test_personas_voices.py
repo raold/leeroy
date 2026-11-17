@@ -358,3 +358,69 @@ def test_the_nights_core_judge_reads_no_sheet(store):
     plain = core_text(load_persona(store, 201))
     voices.set_voice(store, 201, sheet(), now=2000.0)
     assert core_text(load_persona(store, 201)) == plain
+
+
+# -- review of #367 ----------------------------------------------------------------------------------
+
+def _outsider(store):
+    """A stored persona outside the cast (a world persona)."""
+    store.conn.execute("INSERT INTO persona_core SELECT 900, json_set(json, '$.guid', 900, "
+                       "'$.character_name', 'Outsider'), card, card_tokens, version, source, "
+                       "updated FROM persona_core WHERE guid=201")
+    store.conn.execute("INSERT INTO persona_tier(guid, tier) VALUES (900, 'world')")
+    store.conn.commit()
+
+
+def test_a_sheet_for_a_world_persona_is_skipped_never_refused(store, tmp_path):
+    _members(store)
+    _outsider(store)
+    assert 900 not in store.persona_versions() and 900 in store.persona_versions(tier=None)
+    write(tmp_path, 900, lab_file(900, character_name="Outsider"))
+    write(tmp_path, 201, lab_file(201))
+    plans = {h.guid: h for h in voices.plan(store, tmp_path)}
+    assert (plans[900].outcome, plans[900].codes) == ("skipped", ("not_cast",))
+    assert plans[201].outcome == "import" and "not_cast" in voices.SKIPS
+
+
+def test_cli_exits_zero_with_only_skips_and_prints_the_counts_by_code(tmp_path, capsys):
+    d = _data_dir(tmp_path)
+    s = Store(open_migrated(d / "mind.db"), clock=SystemClock())
+    _outsider(s)
+    s.close()
+    folder = tmp_path / "sheets"
+    write(folder, 201, lab_file(201))
+    write(folder, 900, lab_file(900, character_name="Outsider"))
+    assert main(["personas", "--data-dir", str(d), "voices", "--dir", str(folder)]) == 0
+    out = capsys.readouterr().out
+    assert "    900                skipped: not_cast" in out
+    assert "would import 1 voice sheets; 0 unchanged; 0 refused; 1 skipped (not in the cast)" in out
+    assert "by code: not_cast 1" in out
+    assert main(["personas", "--data-dir", str(d), "voices", "--dir", str(folder), "--only-cast",
+                 "--go"]) == 0
+    capsys.readouterr()
+    assert _sheets(d)[201] is not None and _sheets(d)[900] is None
+    write(folder, 203, {"guid": 203, "speech": {**GRUFF, "stance": "single since 2019"}})
+    write(folder, 202, {"guid": 202, "speech": {**GRUFF, "stance": "single since 2018"}})
+    assert main(["personas", "--data-dir", str(d), "voices", "--dir", str(folder)]) == 1
+    assert "by code: later_era 2, not_cast 1" in capsys.readouterr().out
+
+
+def test_a_sheet_is_stamped_with_her_household_and_a_household_change_needs_a_new_import(
+        store, tmp_path):
+    from dataclasses import replace
+    from leeroy_mind.personas.speech import stance_current
+    _members(store)
+    write(tmp_path, 201, lab_file(201))
+    voices.set_voice(store, 201, sheet(), now=2000.0)
+    assert load_persona(store, 201).speech.household == HOME
+    (h,) = voices.plan(store, tmp_path)
+    assert (h.outcome, h.restamps) == ("unchanged", False)
+    p = load_persona(store, 201)  # the night's arc, or an owner edit, changes her household
+    save_persona(store, replace(p, real_life=replace(p.real_life, household="lives alone now")),
+                 source="generated", ts=2500.0, race="Human", class_name="Warrior")
+    assert not stance_current(load_persona(store, 201))
+    (h,) = voices.plan(store, tmp_path)
+    assert (h.outcome, h.restamps) == ("import", True)  # the same sheet: it would re-set her stance
+    voices.set_voice(store, 201, h.speech, now=3000.0)
+    assert stance_current(load_persona(store, 201))
+    assert load_persona(store, 201).speech.household == "lives alone now"

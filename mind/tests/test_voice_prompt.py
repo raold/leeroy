@@ -277,3 +277,44 @@ def test_the_dm_mirror_keeps_its_formula_and_its_draws():
     full = replace(dm, dm_mirror=0)
     assert draw_shape(replace(full, voice_words=(2, 6)), random.Random(1)) == draw_shape(
         full, random.Random(1))
+
+
+# -- review of #367 ----------------------------------------------------------------------------------
+
+def test_no_stance_in_a_group_dm_or_a_whisper_between_members(rig):
+    for t in (Turn(TurnKind.REPLY_HUMAN, 102, "gdm:7", addressee=1),
+              Turn(TurnKind.REPLY_HUMAN, 102, "gdm:7", to_guid=1, addressee=1),
+              Turn(TurnKind.CONTINUE, 102, "whisper", to_guid=101, addressee=101),
+              Turn(TurnKind.REPLY_HUMAN, 102, "officer", addressee=1),
+              Turn(TurnKind.REPLY_HUMAN, 102, "voice:raid", addressee=1)):
+        _, user = composed(rig, t)
+        assert "Your voice: bubbly, scattered, quick to laugh" in user
+        assert "seeing nobody, and cheerful about it" not in user
+    _, user = composed(rig, Turn(TurnKind.CONTINUE, 102, "whisper", to_guid=101, addressee=101))
+    assert "With Zan" not in user  # a whisper to another member is not his turn
+    system, other = composed(rig, turn(103, "whisper"))
+    assert "bubbly" not in system + other and "gruff" not in system + other  # nobody else's sheet
+
+
+def test_a_stance_written_for_another_household_stays_out_of_her_prompt(rig, store):
+    _, user = composed(rig, turn(102, "whisper"))
+    assert "seeing nobody, and cheerful about it" in user
+    p = rig.engine.personas.base(102)
+    from leeroy_mind.personas.io import save_persona
+    save_persona(store, replace(p, real_life=replace(p.real_life, household="married, two kids")),
+                 source="owner", ts=2000.0, race="Night Elf", class_name="Druid")
+    rig.engine.personas.invalidate()
+    system, user = composed(rig, turn(102, "whisper"))
+    assert "married, two kids" in system
+    assert "seeing nobody" not in system + user
+    assert "With Zan: flirts by teasing, then changes the subject." in user  # the rest stays
+
+
+def test_a_persona_with_a_sheet_never_composes_the_trait_sentences(rig, store):
+    give(store, 101, extraversion={"score": 6, "behaviour": "TRAITONE talks over everyone"},
+         neuroticism={"score": 1, "behaviour": "TRAITTWO never rattled"})
+    rig.engine.personas.invalidate()
+    for channel in ("guild", "whisper", "dm:101"):
+        system, user = composed(rig, turn(101, channel))
+        assert "TRAITONE" not in system + user and "TRAITTWO" not in system + user
+        assert "Your humour is" not in system and "Opinions:" in system

@@ -333,13 +333,22 @@ need `[guards] enabled`); a member without a sheet is reviewed exactly as before
   than 2 and more than `ceil((lines + 1) / 3)` (a third use needs seven lines, a fourth ten).
   Over the ration it is named as `phrase_conversation`, so the existing hint ("Don't say
   '...' again") and strip apply. `phrase_cast` and `stock_cast` still count her word.
+  A slop entry (the stock list's `!` lines) is never her own word: a say-word inside one
+  exempts nothing, in either loop of `phrases.check`, and the import refuses such a sheet
+  (`says_slop`, the same test: `voice.hers`).
 - `voice_never`: the draft uses a word of her `never` list (whole words, any case; an entry with
   no word in it, such as "!!", as written). Soft: one rewrite, the hint names the words
   (`Verdict.never`, repr-hidden: "You never say 'x'."). The list is enforced whether or not the
   turn's block showed it (a private turn's block may leave never-words out for room).
 - `voice_sample_copy`: the draft holds one of her five sample lines word for word (as a run of
   words when the sample has 4 or more, else as the whole line). Soft: one rewrite. The samples a
-  turn's prompt showed are also the pipeline's own "sample copied" tell, as before.
+  turn's prompt showed are also `Composed.samples`, so a word-for-word copy of one (3 words or
+  more) is first the pipeline's existing fatal `sample` tell in generation (in
+  `OWED_HARD_TELLS`), as it always was for the generator's samples, and is regenerated. Only
+  this guard code is soft: an owed answer is never withheld for it.
+- A never-word that her own typing produces after the guards have read the line (her
+  abbreviations, her typing texture's shorthand and habitual spellings) cannot be caught here;
+  the import refuses such a sheet (`never_in_typing`).
 
 Neither code is in `HARD_CODES`, `DROP_CODES` or the pipeline's `CUT_CODES`: a bystander line
 that still has one after its rewrite is dropped `guard_rewrite_refused`, and an answer owed to
