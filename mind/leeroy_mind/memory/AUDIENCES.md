@@ -88,3 +88,45 @@ still owed after 3 days is let go. A member away (`away` table) answers when she
 within those 3 days. #259's DM openers skip a member who owes him an answer. Logs:
 `discord_dm_later`, `discord_dm_answered_later`, `discord_dm_let_go` (guid, message id,
 seconds), never words.
+
+## A scope is never wider than its evidence (2026-11-17)
+
+`derive_scope` runs when a memory is written. When a memory it cites is made stricter later
+(a cleanup, an ask for secrecy, an owner's edit, a keyed rewrite), the scope stored on the
+citing memory used to stay as wide as it was, and one level was all recall checked. Now:
+
+- **Readers go by the effective scope** (`privacy.resolve`): the stored scope made as strict
+  as the memory's evidence implies, where a cited memory counts with its own effective scope,
+  to a fixed point over `memory:` refs (cycles included; scopes only rise, so it ends).
+  `Store` hands out every `MemoryRow` with it (recall, the night's provenance walk, outreach's
+  sources), `derive_scope` reads cited memories with it (the writer, culture's and the
+  lexicon's source checks, growth, supersede), and the readers that take rows from SQL use
+  `privacy.gated` (the lesson walk, the callback selector), `effective_scopes` (the ledger walk,
+  the notes' evidence) or `open_sql`.
+- **It is stored, never trusted when missing.** `memory.derived_scope`, `derived_with` and
+  `derived_at` keep the last check. Triggers (migration `scope_evidence`) keep `memory_cite`,
+  the index of each memory's `chat:` and `memory:` refs, and clear `derived_at` on every memory
+  resting, at any depth, on one whose scope or evidence changed, in that change's own
+  transaction. A row without `derived_at` is derived by the reader (at most
+  `RESOLVE_NODES` unchecked memories a read; beyond that it counts as secret with nobody).
+- **Writes settle it** (`memory/scopes.py`): `insert_memory`, `upsert_keyed_memory` and
+  `merge_memory` check the memory they wrote and raise its stored scope, then up to 500 of the
+  memories resting on it; `nightly life-contact` does the same for the beats it makes private;
+  a line that asks for secrecy (inserted, threaded, or added by an edit) makes every memory
+  resting on what the ask covers be derived again. Whatever is left waits for the night.
+- **The night's stage `scopes`** (model-free, after `forget`, always attached) checks the
+  memories written in the last three days again and whatever is unchecked, at most 20,000 a
+  night; the state is the rows' own, so a night cut short loses nothing. Log
+  `scopes_settled night= checked= raised= left= receipt=`.
+- **`python -m leeroy_mind memory rescope`** derives every memory again. A dry run (the
+  default, read-only, also on an unmigrated mind.db) prints counts: by old and new scope, status,
+  kind, source, the kind of evidence, and the sent turns of the last `--days` (7) that carried
+  such a memory to an audience it no longer reaches. `--go` (mind stopped, snapshot
+  `pre-rescope`) raises the stored scopes and writes a receipt (`memory_rescope`); `--receipts`
+  lists them; `--undo N --go` restores the stored scopes of receipt N that are still what it
+  made them. An undo restores what is stored only: readers still go by the evidence, and the
+  night raises a stored scope again when it next checks that memory. Never text.
+- The migration's data step checks every stored memory once and writes the derived columns
+  only; it changes no stored scope (run `memory rescope --go` for that, with its receipt).
+- A scope only ever gets stricter on this path. A status change (archive, supersede, reject,
+  the owner's erase) changes no scope: a memory of any status passes its scope on, as before.

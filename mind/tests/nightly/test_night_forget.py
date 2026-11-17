@@ -226,13 +226,18 @@ def test_deep_legacy_open_wrapper_cannot_launder_private_lineage(h):
     line = h.say(h.T - 10 * 86400, 1, "Quiet dailies.", channel="whisper", to=101)
     h.clock.set(h.T)
     ident = old(h, evidence=(f"chat:{line}",), importance=5)
+    wrappers = [ident]
     for _ in range(6):
         ident = old(h, evidence=(f"memory:{ident}",), importance=5)
+        wrappers.append(ident)
     leaf = old(h, evidence=(f"memory:{ident}",))
+    h.legacy(*wrappers, leaf)  # stored open, as a release before the scope_evidence migration
+    # every reader takes the wrappers as private with him (memory.privacy.resolve), so the
+    # summary of them is his and hers alone too: the lineage is kept, not laundered
+    assert chunk(h, leaf)[0].scope == "private"
     ctx = context(h)
     run(forget.summarize(ctx, 101, chunk(h, leaf), 0))
-    assert summaries(h) == [] and ctx.reasoner.llm.calls == []
-    assert chunk(h, leaf)[0].status == "active"
+    assert [(m.scope, m.scope_with) for m in summaries(h)] == [("private", 1)]
 
 
 def test_ancestor_privacy_changes_during_generation_abort(h):
@@ -272,10 +277,13 @@ def test_source_recalled_during_embedding_is_not_archived(h, monkeypatch):
 def test_wrong_partner_in_legacy_private_wrapper_is_not_borrowed(h):
     source = old(h, scope="private", scope_with=102, importance=5)
     leaf = old(h, scope="private", scope_with=1, evidence=(f"memory:{source}",))
+    h.legacy(leaf, scope="private", scope_with=1)
+    # two partners: the wrapper reaches nobody for every reader (memory.privacy.resolve), and
+    # so does whatever is summarised from it; his scope is never borrowed
+    assert (chunk(h, leaf)[0].scope, chunk(h, leaf)[0].scope_with) == ("private", 0)
     ctx = context(h)
     run(forget.summarize(ctx, 101, chunk(h, leaf), 0))
-    assert summaries(h) == [] and ctx.reasoner.llm.calls == []
-    assert chunk(h, leaf)[0].status == "active"
+    assert [(m.scope, m.scope_with) for m in summaries(h)] == [("private", 0)]
 
 
 @pytest.mark.parametrize("kind", ["cycle", "missing", "rejected"])

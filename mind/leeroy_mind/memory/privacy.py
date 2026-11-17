@@ -399,8 +399,9 @@ def resolve(conn: sqlite3.Connection, ids: Iterable[int], *,
             if cap is not None and len(refs) >= cap:
                 rows[mid] = Resolved(owner, stored, STRICTEST, STRICTEST, False, True)
                 continue
-            derived = _valid(d_scope, d_with) if d_scope is not None else ("open", 0)
-            rows[mid] = Resolved(owner, stored, stricter(stored, derived), derived, False)
+            # derived afresh: what the evidence implies now. The stored scope is what never
+            # widens (settle raises it); a ref taken out of the evidence no longer counts
+            rows[mid] = Resolved(owner, stored, stored, ("open", 0), False)
             refs[mid] = _refs_of(raw)
             todo |= _ids(refs[mid], "memory")
         todo -= rows.keys()
