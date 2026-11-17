@@ -2,6 +2,7 @@
 into the copy on reset (never the live prompts dir), and the CLI's --lab."""
 import asyncio
 import json
+import os
 import tomllib
 
 import pytest
@@ -101,9 +102,19 @@ def test_the_subprocess_child_runs_this_code_on_the_lab_copy(tmp_path):
     env = c.env()
     import leeroy_mind
     from pathlib import Path
-    assert env["PYTHONPATH"].split(";" if ";" in env["PYTHONPATH"] else ":")[0] == str(
-        Path(leeroy_mind.__file__).resolve().parents[1])
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(Path(leeroy_mind.__file__).resolve().parents[1])
     assert env["LEEROY_MIND_DATA"] == str(c.layout.data)
+
+
+def test_the_child_env_keeps_drive_letter_paths_whole(tmp_path, monkeypatch):
+    """PYTHONPATH is split on the platform's own separator: on Windows `F:\\x` is one entry, not
+    `F` and `\\x` (the test once split on ':' and read the code path back as `F`)."""
+    live = make_live(tmp_path)
+    c = child.SubprocessChild(live, seed=1, python="py")
+    root = c.env()["PYTHONPATH"].split(os.pathsep)[0]
+    mine = "F:\\azerothcore\\other\\mind" if os.pathsep == ";" else "/mnt/f/other/mind"
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([mine, root, "/srv/x"]))
+    assert c.env()["PYTHONPATH"].split(os.pathsep) == [root, mine, "/srv/x"]
 
 
 def test_score_rows_run_the_rules_per_turn():

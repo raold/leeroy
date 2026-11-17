@@ -1,5 +1,6 @@
 """One bounded public thread at a time, with cancellation fences at every send."""
 import asyncio
+import random
 from collections import deque
 import json
 import logging
@@ -113,6 +114,9 @@ def choose_cast(app, candidates, topic, rng):
 class Banter:
     def __init__(self,app,cfg):
         self.app,self.cfg = app,cfg
+        # its own stream, split off the app's at attach: threads run when the loop schedules them,
+        # and drawing from the talk pipeline's stream would move its seeded draws with the timing
+        self.rng = random.Random(app.rng.getrandbits(64))
         self.pending = deque(maxlen=16)
         self.stopping = False
         self.active = False
@@ -225,7 +229,7 @@ class Banter:
                 weights.append(min(4,max(1,(now-at)/JOKE_COOLDOWN))*(.5**count))
             else: weights.append(4)
         if eligible:
-            return app.rng.choices(eligible,weights=weights,k=1)[0]
+            return self.rng.choices(eligible,weights=weights,k=1)[0]
         last = app.store.conn.execute("SELECT max(ts) FROM chat_line WHERE channel=?",(channel,)).fetchone()[0]
         if now-max(last or self.started,self.started) >= IDLE:
             t = Topic("quiet:"+channel,"quiet",now,"The channel has been quiet. No personal trait or incident is implied.")
@@ -309,8 +313,8 @@ class Banter:
     async def thread(self,channel,topic,cast):
         app,e = self.app,self.app.engine
         owner_id = self.owner_last(channel)[0]
-        maximum = app.rng.randint(max(3,len(cast)),8)
-        guards = ThreadGuards(maximum,app.rng)
+        maximum = self.rng.randint(max(3,len(cast)),8)
+        guards = ThreadGuards(maximum,self.rng)
         previous,line_id,message = None,None,None
         self.active = True
         e.banter_active = not is_discord(channel)
@@ -325,7 +329,7 @@ class Banter:
             for index in range(maximum):
                 if not self.valid(channel,owner_id,topic,app.clock.now(),delivered > 0):
                     break
-                speaker = cast[index] if index<len(cast) else app.rng.choice([g for g in cast if g!=previous])
+                speaker = cast[index] if index<len(cast) else self.rng.choice([g for g in cast if g!=previous])
                 if speaker not in self.candidates(channel):
                     break
                 if not tease_valid(speaker):
@@ -350,7 +354,7 @@ class Banter:
                     hint + "\n<banter_observation>" + topic.evidence.replace("</banter_observation>","") + "</banter_observation>")
                 turn = Turn(TurnKind.ASIDE if index==0 else TurnKind.CONTINUE,speaker,channel,
                     addressee=previous,instruction=instruction,trigger_line=line_id,max_lines=1,
-                    delay=app.rng.uniform(3,8))
+                    delay=self.rng.uniform(3,8))
                 meta = TurnMeta(e._new_id(),why="banter:"+topic.kind,review_required=True,single_line=True,keep_channel=True,guards=guards,
                     still_valid=lambda:self.valid(channel,owner_id,topic,app.clock.now(),delivered > 0) and tease_valid(speaker))
                 if is_discord(channel):
@@ -426,7 +430,7 @@ class Banter:
             topic = self.topic(channel,now)
             if topic is None:
                 continue
-            cast = choose_cast(self.app,self.candidates(channel),topic,self.app.rng)
+            cast = choose_cast(self.app,self.candidates(channel),topic,self.rng)
             if len(cast)<2 or not self.reserve(topic,now):
                 continue
             self.next_channel = "discord:general" if channel=="guild" else "guild"

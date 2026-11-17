@@ -202,6 +202,20 @@ def test_app_attach_is_last_and_starts_nothing(tmp_path, text, enabled):
         run(app.stop())
 
 
+def test_server_parts_draw_from_their_own_streams_not_the_apps(tmp_path):
+    """Their ticks and reactions run when the loop schedules them; a draw from the app's stream
+    there moves every draw the talk pipeline makes after it (which line gets a typo), so a slow
+    run typed a different line than a fast one (the lab's night test, 1 run in 3 on CI)."""
+    from selfies.fakes import mind_app
+    app = mind_app(tmp_path, toml='[server]\nenabled=true')
+    try:
+        streams = [app.server.engine.rng, app.server.reactions.rng, app.server.dms.rng]
+        assert all(x is not app.rng for x in streams)
+        assert len({id(x) for x in streams}) == 3
+    finally:
+        run(app.stop())
+
+
 def test_live_admission_waits_for_server_and_reload_keeps_window(tmp_path):
     from selfies.fakes import mind_app
     async def go():
