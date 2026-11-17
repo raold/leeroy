@@ -101,7 +101,8 @@ from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
 from leeroy_mind.talk.asking import asks, is_question
-from leeroy_mind.talk.moves import MOVE_PHRASES, classify, is_summon, moves_line, question_first
+from leeroy_mind.talk.moves import (MOVE_PHRASES, classify, is_summon, moves_line, question_first,
+                                    without_meeting)
 from leeroy_mind.talk.owed import (HIS_TALK_WAIT_S, KEEP_WHISPERS, RESCUABLE as OWED_RESCUABLE,
                                    answers_in_flight, extend_owed_deadline, his_talk_after,
                                    owes_him, rescue_text)
@@ -218,7 +219,13 @@ SELF_NAME_HINT = 'You are {name}: talk about yourself in the first person, never
 # evening DM audit, 2026-11-16: a date planned at an event of hers). Soft: a retry
 # that still has it is kept, and an answer owed to him never falls back for it.
 IN_PERSON_HINT = ("You two have never met and live far apart: don't plan to see {them} in person "
-                  "or have {them} turn up anywhere; you talk online.")
+                  "or have {them} turn up anywhere, and never say you have met, been together "
+                  "or have anything of {their}; you talk online.")
+# The plain rule, in every private prompt of a member whose arc has not met him (the "So far
+# between you two" block's first line; self-play audit, 2026-11-17: nothing in the prompt said
+# they had never met, and nine replies said they had). {they}/{them}/{their} are his forms.
+NEVER_MET = ("You and {name} have only ever talked online, in the game and on Discord: you have "
+             "never met in person, never touched, and never sent or given each other anything.")
 # Cataclysm or later named in a 2009 guild (filters "era": library.wikitext.names_later).
 ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
@@ -231,22 +238,28 @@ CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
 SO_FAR_WINDOW_S = 12 * 3600.0  # the stored lines talk/sofar.py reads a conversation from
-DROP_ON_RETRY = frozenset({"history", "summons", "game name", "self name"})
+DROP_ON_RETRY = frozenset({"history", "summons", "in person", "game name", "self name"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
+MEETING_TELLS = frozenset({"summons", "in person"})
 LONG_SLACK = 1.25
 # An answer he is owed when no draft can stand (owner, 2026-11-15: every message of his gets a
 # reply that adds something; Pipeline.owed_fallback): one more short generation, told only this,
 # reviewed only for OWED_HARD_TELLS.
 OWED_FALLBACK_HINT = ("Answer what {human} just said in one or two short sentences, in your own "
                       "voice.")
-OWED_HARD_TELLS = frozenset({"meta", "member flirt", "echo", "summons", "dialogue", "list",
-                             "action", "sample"})
+OWED_HARD_TELLS = frozenset({"meta", "member flirt", "echo", "summons", "in person", "dialogue",
+                             "list", "action", "sample"})
+# An owed answer whose only hard problem is asking him over or having met him loses those
+# sentences (moves.without_meeting) and goes when this many words are left
+MEETING_CUT_WORDS = 3
 # A refused fallback is asked once more with what was wrong, in words (review-325-r2 P3-C).
 OWED_REFUSED = {
     "meta": "don't talk about being an AI, a prompt or instructions",
     "member flirt": "keep it to {human}: no flirting with anyone else",
     "echo": "don't say {their} words back",
     "summons": "don't ask {them} over, you two only talk online",
+    "in person": ("you two have never met: nothing in person, no visits, nothing of {their} at "
+                  "yours, nothing sent"),
     "dialogue": "write only your own words, no one else's lines",
     "list": "no list, just talk",
     "action": "no *actions*, only what you'd type",
@@ -665,13 +678,22 @@ class Composed:
     asking: bool = False
 
 
-def _far_memories(memories: list) -> list:
-    """`memories` without her intentions that see him in person (memory.diversity.intends and
-    talk.moves.in_person: "going to the gig to see if his jokes work in person"), for a
-    member whose arc has not met him. Only what her prompt shows: the stored memory stays."""
+def _far_memories(memories: list, hg: int = 0, names=()) -> list:
+    """`memories` without the ones that see him in person, for a member whose arc has not met
+    him (talk.moves.meets_in_memory): any memory that plans to see him, says they have met or
+    has his things ("going to the gig to see if his jokes work in person", "still wearing his
+    hoodie"), and her intentions (memory.diversity.intends) about him (he is an actor, or it
+    names him by `names`) with a meal, a date or a visit in them ("pin him down on dinner
+    tomorrow": the night's intention became a dinner date in her DM, self-play audit
+    2026-11-17). Only what her prompt shows: the stored memory stays."""
     from leeroy_mind.memory.diversity import intends
-    from leeroy_mind.talk.moves import in_person
-    return [m for m in memories if not (intends(m) and in_person(m.text))]
+    from leeroy_mind.talk.moves import in_person, meets_in_memory
+
+    def far(m) -> bool:
+        about = bool(hg) and hg in (getattr(m, "actors", ()) or ())
+        return in_person(m.text) or meets_in_memory(m.text, names, about_him=about,
+                                                    plans=intends(m))
+    return [m for m in memories if not far(m)]
 
 
 def _pending_of(verdicts) -> tuple[str, ...]:
@@ -2327,7 +2349,7 @@ class Pipeline:
                 turn.speaker, turn.channel, turn.to_guid, **bond_options)
             memories = [*pinned, *memories][:5]
         if apart:
-            memories = _far_memories(memories)
+            memories = _far_memories(memories, hg, self._his_names())
 
         state = self.store.get_state(turn.speaker, lens=True)
         altered = self._altered_of(turn.speaker)
@@ -2495,7 +2517,8 @@ class Pipeline:
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept, situation=situation,
-            so_far=[] if preview else self._so_far(turn, meta, now))
+            so_far=[] if preview else self._so_far(
+                turn, meta, now, lead=(NEVER_MET.format(name=human.called),) if apart else ()))
         if live and getattr(self, 'learn_enabled', False):
             from leeroy_mind.learn.apply import prepare, yield_families
             meta.learning = await prepare(self, turn, meta, p, now=now)
@@ -3691,6 +3714,7 @@ class Pipeline:
         fit = (int(LONG_SLACK * self._word_budget(turn, p, meta.two_lines))
                if owed and emoji else 0)  # an owed Discord answer is cut, never asked again
         kept, why = "", "tells"
+        blocking: set[str] = set()  # the last draft's tells that kept it from going
         for attempt in range(max_attempts):
             if not _scope_valid(meta):
                 return text, "scope_changed"
@@ -3751,6 +3775,7 @@ class Pipeline:
                     silent = True
                 elif not kept and not any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
                     kept = text  # soft tells only: what a retry may still not beat
+                blocking = {t.reason for t in tells if t.fatal or t.reason in DROP_ON_RETRY}
             if silent:
                 dm = self._answers_his_dm(turn, meta)
                 named = is_discord(turn.channel) and meta.discord_named and meta.answers_human
@@ -3777,6 +3802,14 @@ class Pipeline:
                                                  keep_emoji=emoji)):
                 log.info("say_owed_kept: guid=%d kind=%s", turn.speaker, turn.kind)
                 return best, None
+            if blocking and blocking <= MEETING_TELLS and why == "tells":
+                # her rewrite still asks him over or says they have met: those sentences go and
+                # the rest of her answer stands, when it passes the hard screens
+                cut, _ = self.owed_clean_draft(turn, meta, c, without_meeting(text))
+                if cut and len(cut.split()) >= MEETING_CUT_WORDS:
+                    log.info("say_owed_cut: guid=%d kind=%s tells=%s", turn.speaker, turn.kind,
+                             ",".join(sorted(blocking)))
+                    return cut, None
             line = await self.owed_fallback(turn, meta, c, spoken=spoken)
             if line:
                 log.info("say_owed_fallback: guid=%d kind=%s", turn.speaker, turn.kind)
@@ -3803,8 +3836,9 @@ class Pipeline:
             return None, ["silent"]
         hg = self.human.guid
         summons_ok = self._summons_ok(turn) if hg and self._counterpart(turn) == hg else None
+        far = summons_ok is False and not self._met_him(turn.speaker)
         tells = find_tells(text, answers=c.answers, held=c.held, samples=c.samples,
-                           summons_ok=summons_ok, keep_emoji=emoji)
+                           summons_ok=summons_ok, keep_emoji=emoji, far=far)
         refused = list(dict.fromkeys(t.reason for t in tells if t.reason in OWED_HARD_TELLS))
         if self._flirts_at_a_member(turn, text):
             refused.append("member flirt")
@@ -3828,7 +3862,8 @@ class Pipeline:
                            support=c.support, people=list(self._protect(turn.channel)),
                            window=c.window, held=c.held, tonight=meta.again_tonight,
                            recent_moves=[(r.clause, r.main) for r in c.moves],
-                           summons_ok=summons_ok, keep_emoji=is_discord(turn.channel))
+                           summons_ok=summons_ok, keep_emoji=is_discord(turn.channel),
+                           far=summons_ok is False and not self._met_him(turn.speaker))
         if self._invents_game_name(text):
             tells.append(Tell("game name", False, True))
         if any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
