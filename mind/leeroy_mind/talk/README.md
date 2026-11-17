@@ -73,22 +73,30 @@ persona. `talk/style.py` `texture_of` fixes her habits from her character name a
 case and end punctuation (a lower-case, no-full-stop typer is the most casual, a proper-case,
 full-stop typer the most careful):
 
-- **Apostrophes.** Contractions lose theirs ("dont", "im", "thats") at her rate, about 90% of uses
-  for the most casual and 3% for the most careful; one member in ten keeps most of hers whatever
-  her case. "we're", "we'll", "he'll", "she'll", "we'd" and "she'd" always keep theirs: without
-  it each is another word.
+- **Apostrophes.** Contractions lose theirs ("dont", "im", "thats") at her rate: nearly every use
+  for the most casual, about 85% for a lower-case typer with some full stops, 70% and 55% for
+  the two middle styles and about 12% for the most careful (proper case and full stops); one
+  member in eight keeps most of hers whatever her case. "we're", "we'll", "he'll", "she'll",
+  "we'd" and "she'd" always keep theirs: without it each is another word.
 - **Run-ons.** Her full stops between fragments run on at her rate ("x, y", "x y", now and then
   "x and y" between two clauses), short fragments most readily; "?", "!" and "..." stay, and one
   member in eight keeps her full stops. A fragment of one or two words always takes a comma
   ("stop, pull the boss", never "stop pull the boss"). A run-on is punctuation, so the line's
   stored words show it too; an ordinary word after it loses its capital, "I", names and acronyms
   keep theirs.
-- **Shorthand.** Her own list applies use by use, not every time: a real entry ("u", "brb",
-  "dps") at 55-95%, an entry no one types ("tht", "wt", "nt", "2") at about a third of that.
+- **The last full stop.** A line's last full stop is a habit, not her declared rule: of the
+  members who declare full stops about a third type nearly all of them (70-100%), the others
+  few (7-22%); a member who declares "some" types about one in ten (a period typer among them
+  half). Left off, the line also loses a final "!" as a no-full-stop typer's does. It is
+  punctuation, so the stored words show it too.
+- **Shorthand.** Her own list applies use by use, and a one-word entry ("u", "rly", "plz") is a
+  habit of few: about one member in seven types hers at 55-95% of uses, the others at under a
+  tenth of that. A phrase everyone shortens ("brb", "dps", "omg") stays shorthand nearly every
+  time for all; an entry no one types ("tht", "wt", "nt", "2") gets about a third of her rate.
   A casual typer (at least mixed case with some end punctuation) also has two to four real
   shorthands of her own from u, ur, rn, idk, tbh, ngl, imo, ofc, prob, def, w/e, bc, tho,
-  gonna (only before a verb) and wanna, used some of the time. "you're" never becomes "u're"
-  (with the switch off too).
+  gonna (only before a verb) and wanna, used some of the time by those few and rarely by the
+  rest. "you're" never becomes "u're" (with the switch off too).
 - **Spelling habits.** Two or three per member ("definately", "alot", "wierd"; casual typers can
   also have "your" for "you're", "then" for "than", or a finger habit such as "teh" or
   "jsut"), each used some of the time. None for a persona with `typo_rate` 0.
@@ -119,7 +127,18 @@ typed again), against his own lines:
 | lines with two or more | 3.3% | 1.2% | 0.8% | 8.9% | 10.7% | 1.9% |
 
 About 9.5% of game lines then carry a slip worth correcting, and about 1.4% of lines would be
-followed by a "*word". The persona-declared "u" stays a persona choice (about 30% of "you"s).
+followed by a "*word".
+
+**Calibration (2026-11-17).** The habits' numbers are `style.Calibration` (`style.CAL`), fitted to
+his own typed lines with the Turing stage's features (`python -m leeroy_mind turing texture`,
+`turing/README.md`): he leaves out about 86% of his apostrophes, ends about 1 line in 100 with a
+full stop and types "u" for "you" about once in 400. The table above is the first release's;
+its apostrophes (about 63% left out across the cast), last full stops (the declared rule) and
+"u" (every member who lists it, most uses) were what still told the members from him. The
+cast's average now sits near his rates (about 77% of apostrophes left out, "u" in about 6% of
+"you"s) while members differ: about a fifth keep most apostrophes, a few are texters, a third
+of those who declare full stops type them. Case, questions, line length and what a line is
+about are the model's and the persona's, not the texture's.
 
 Run `python -m pytest -q tests/test_typing_texture.py tests/test_timing_realism.py`.
 

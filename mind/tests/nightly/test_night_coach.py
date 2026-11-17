@@ -398,3 +398,94 @@ def test_unknown_snapshot_advertises_no_actionable_options(h):
     ctx = h.ctx(replies={"coach": [answer]})
     asyncio.run(coach.stage_coach(ctx))
     assert not ctx.failures
+
+
+def full_vocab():
+    from leeroy_mind.training.cards import LEVERS
+    from leeroy_mind.training.protocol import DcKey
+    from leeroy_mind.training.vocab import ClassVocab
+    strategies = frozenset(name for name, lever in LEVERS.items() if lever.kind == "strategy")
+    return Vocab({c: ClassVocab(strategies=strategies, class_=c) for c in range(1, 12)}, {},
+                 {name: DcKey(name, 50, 150, 100, 0, 0) for name, lever in LEVERS.items()
+                  if lever.kind == "dc"}, strategies, 0, complete=True)
+
+
+def worst_case(h, pulls=60):
+    """More evidence than any context has had: every part of the question at its largest."""
+    for n in range(pulls):
+        pull(h, f"p{n:03d}", outcome="wiped", start_ms=int((h.T - 9000 + n * 100) * 1000),
+             end_ms=int((h.T - 8950 + n * 100) * 1000), deaths=25,
+             checks_coverage=json.dumps([f"avoid:unverified_damage_source_{i}" for i in range(40)]))
+    with h.store.transaction():
+        conn = h.store.conn
+        for n in range(pulls):
+            conn.executemany("INSERT INTO tg_failure(pull,kind,key,guid,count,deaths,damage_share) "
+                "VALUES (?,?,?,?,?,?,?)", [(f"p{n:03d}", "avoid", f"spell:{70000 + i}", 100 + i, 1 + i, 0, 0)
+                                             for i in range(40)])
+        for n in range(30):
+            conn.execute("INSERT INTO tg_trial(scope,lever,metric,status,opened,closed) "
+                         "VALUES (?,'formation','raid','retired',?,?)", (CONTEXT, h.T - 900 + n, h.T - 800 + n))
+        for n in range(3):
+            conn.execute("INSERT INTO tg_lesson(context,night,text,evidence) VALUES (?,?,?,'[]')",
+                         (CONTEXT, f"2026-10-{20 + n}", "Untested proposal: formation circle. " * 5))
+    for n in range(40):
+        put_card(h.store.conn, replace(stock_card(CONTEXT), version=n + 1, call="Hold position"))
+
+
+def chats(ctx):
+    return [call for call in ctx.reasoner.llm.calls if "messages" in call]
+
+
+def test_worst_case_prompt_fits_the_model_context_with_its_instruction_whole(h, caplog):
+    worst_case(h)
+    sources = coach.CoachSources(full_vocab, lambda context: ["Avoid the ground effect. " * 12] * 20)
+    ctx = h.ctx(replies={"coach": [reply(points=["pull:none:result"]), reply()]})
+    script = ctx.reasoner.llm._script
+    ctx.reasoner.llm._script = lambda model, messages: (
+        script(model, messages) if "matching this schema" in messages[-1]["content"]
+        else "A long thought about the pulls. " * 3000)
+    with caplog.at_level("WARNING"):
+        asyncio.run(coach.stage_coach(ctx, sources=sources))
+    assert not ctx.failures
+    system = coach.system_prompt("coach", coach.COACH_DEFAULT, ctx.settings.data_dir, human=ctx.ident)
+    sent = chats(ctx)
+    assert len(sent) == 3  # the reasoning pass, the answer and its repair
+    for call in sent:
+        assert call["messages"][0] == {"role": "system", "content": system}
+        used = sum(coach.prompt_tokens(m["content"]) for m in call["messages"])
+        assert used + call["options"]["num_predict"] <= call["options"]["num_ctx"] == coach.NUM_CTX
+        data = json.JSONDecoder().raw_decode(call["messages"][-1]["content"])[0]
+        assert data["context"] == CONTEXT and data["metric_coverage"] and data["pulls"]
+        assert data["vocabulary"]["complete"] and data["vocabulary"]["levers"]
+        assert {f["id"] for f in data["facts"]} == {f"pull:{p['pull']}:result" for p in data["pulls"]}
+        assert data["pulls"][-1]["pull"] == "p059"  # the newest pulls are the ones kept
+    assert sent[0]["options"]["num_predict"] >= coach.THINK_PREDICT_MIN
+    assert "Repair these validation failures: unknown_fact" in sent[2]["messages"][-1]["content"]
+    assert all("Your notes:" in call["messages"][-1]["content"] for call in sent[1:])
+    assert any("coach_prompt_trimmed" in record.getMessage() for record in caplog.records)
+    # every new pull is still the lesson's evidence, shown or not
+    evidence = json.loads(h.store.conn.execute(
+        "SELECT evidence FROM tg_lesson WHERE night=?", (ctx.night,)).fetchone()[0])
+    assert len(evidence) == 60
+
+
+def test_a_run_of_whole_numbers_is_two_ends_and_the_menu_stays_valid(h):
+    menu = coach._allowed_menu(full_vocab())
+    assert menu["PartyMaxSpread"] == [{"roles": [], "whole_numbers_from": 50, "to": 150}]
+    assert menu["mana save level"][0]["values"] == [1, 2]
+    assert coach.prompt_tokens(json.dumps(menu)) < 2000
+
+
+def test_prompt_tokens_counts_number_lists_far_above_prose():
+    numbers = json.dumps(list(range(50, 151)))
+    assert coach.prompt_tokens(numbers) >= 400 > len(numbers) / 4
+    assert coach.prompt_tokens("plain words in a row") <= len("plain words in a row") / 2
+
+
+def test_a_prompt_that_cannot_fit_is_refused_not_sent(h, monkeypatch):
+    pull(h)
+    monkeypatch.setattr(coach, "COACH_DEFAULT", "Rule. " * 6000)
+    ctx = h.ctx(replies={"coach": [reply()]})
+    asyncio.run(coach.stage_coach(ctx))
+    assert ctx.failures and not chats(ctx)
+    assert h.count("tg_lesson") == 0

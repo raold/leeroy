@@ -100,6 +100,16 @@ def builtin(name: str) -> str:
     return PIECES[name][1]()
 
 
+def unrendered(*, situation: bool, realism: bool) -> frozenset[str]:
+    """The pieces a mind with these settings never renders, so a variant of one could only end
+    `untested`: with [talk] situation on, a reply and a chime-in read SITUATION_INSTRUCTIONS
+    (`reply_human` and `continue` are never read), with it off `situation_reply_human` is not;
+    [romance] realism picks one of the two romance pieces."""
+    out = {"reply_human", "continue"} if situation else {"situation_reply_human"}
+    out.add("romance_hook" if realism else "romance_lead")
+    return frozenset(out)
+
+
 def overlay_name(name: str) -> str:
     return OVERLAY_PREFIX + name
 
