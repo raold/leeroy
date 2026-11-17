@@ -3,7 +3,7 @@ health's note. Read only; an older database (no lab tables) reads as not set up.
 import json
 import sqlite3
 
-from . import store
+from . import authored, store
 
 DIFF_CHARS = 400
 
@@ -34,12 +34,15 @@ def report(conn, *, night: str | None = None, runs: int = 7) -> dict:
         arms = (r["summary"] or {}).get("arms") or {a: store.arm_summary(rows)
                                                      for a, rows in store.scores(conn, rid).items()}
         variants = []
-        for v in store.variants(conn, rid):
+        found = store.variants(conn, rid)
+        written = authored.names(conn, [v["id"] for v in found])
+        for v in found:
             try:
                 sheet = json.loads(v["scores"]) if v["scores"] else {}
             except ValueError:
                 sheet = {}
             variants.append({"id": v["id"], "status": v["status"], "outcome": v["outcome"],
+                             "authored": written.get(v["id"]),
                              "delta": sheet.get("delta"), "graded": sheet.get("graded"),
                              "applied": sheet.get("applied"), "regressed": sheet.get("regressed", []),
                              "arm": v["arm_id"], "arm_status": _arm_status(conn, v["arm_id"]),
@@ -76,7 +79,9 @@ def render(data: dict) -> str:
             if arm == "control" and s.get("kinds"):
                 lines.append("    by kind: " + ", ".join(f"{k} {_f(v)}" for k, v in s["kinds"].items()))
         for v in r["variants"]:
-            lines.append(f"  variant {v['id']}: {v['outcome'] or v['status']}, change {_f(v['delta'])}"
+            lines.append(f"  variant {v['id']}"
+                         + (f" (hand-written: {v['authored']})" if v.get("authored") else "")
+                         + f": {v['outcome'] or v['status']}, change {_f(v['delta'])}"
                          + (f", regressed {','.join(v['regressed'])}" if v["regressed"] else "")
                          + (f", arm {v['arm']} ({v['arm_status']})" if v["arm"] else ""))
             lines.append(f"    {v['diff']}")

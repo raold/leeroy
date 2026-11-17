@@ -39,6 +39,15 @@ fingerprints and Realm filter it too. Talk, guild life, raids, voice casting and
 night stages retain those defaults. All-persona name blocking is intentionally
 broader for privacy; historical migrations and photo file maintenance keep all rows.
 Only this package and the explicit Realm integration opt in to world reads.
+
+A world persona's real name must differ, as a whole and by first name, from the owner's
+names, every cast character name and its own character name. Every other persona's real
+name (cast and world) and the other world characters' names block it only as a whole
+name, so two people may share a first name with different surnames, as players of one
+realm do. First names unique across every persona ran out: with 177 personas, 26 of the
+30 commonest women's first names were held and 4-5 of each night's 12 were refused. The
+screens still watch every one of those names. Cast generation is unchanged: a cast
+member's first name stays unique within the cast.
 Existing native Realm actors keep their actor cards, moves, whispers and night
 beats even when they have world personas; additional world speakers are separate.
 A world bot present in an authoritative cast roster becomes eligible for the

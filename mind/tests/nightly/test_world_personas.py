@@ -483,3 +483,40 @@ def test_existing_forum_actor_keeps_card_admission_when_world_voice_is_off(h):
     assert "Test rivals" in author[3]["who"]
     enabled(h,"realm=true\n")
     assert night._as_actor(night._actors()[101]) == author
+
+
+def named_context(h,*names):
+    ctx = h.ctx()
+    ctx.settings = replace(ctx.settings,world_per_night=1)
+    ctx.reasoner.llm = FakeLLM(script_from(["synthetic world profile",*map(_persona_json,names),
+        "synthetic looks",json.dumps(ENRICHED)]))
+    return ctx
+
+
+def test_world_real_name_may_share_a_first_name_with_another_persona(h,caplog):
+    enabled(h)
+    observe(h,member(h,101))
+    with h.store.transaction():
+        h.store.conn.execute("DELETE FROM persona_core WHERE guid=101")
+    held = load_persona(h.store,102).identity.real_name
+    ctx = named_context(h,held.split()[0] + " Alderwood")
+    with caplog.at_level(logging.WARNING):
+        run(stage.make_stage(lambda:CastCfg(.7,.7))(ctx))
+    assert not ctx.failures
+    assert load_persona(h.store,101,include_world=True).identity.real_name == held.split()[0] + " Alderwood"
+    assert "persona_name_collision" not in caplog.text and "persona_renamed" not in caplog.text
+
+
+@pytest.mark.parametrize("clash",["persona","cast_character","own_character"])
+def test_world_real_name_still_differs_from_whole_names_and_cast_characters(h,clash):
+    enabled(h)
+    observe(h,member(h,101))
+    with h.store.transaction():
+        h.store.conn.execute("DELETE FROM persona_core WHERE guid=101")
+    first = {"persona":load_persona(h.store,102).identity.real_name,
+             "cast_character":h.store.cast()[103].name + " Alder",
+             "own_character":h.store.cast()[101].name}[clash]
+    ctx = named_context(h,first,"Nolan Alder")
+    run(stage.make_stage(lambda:CastCfg(.7,.7))(ctx))
+    assert not ctx.failures
+    assert load_persona(h.store,101,include_world=True).identity.real_name == "Nolan Alder"
