@@ -1,6 +1,7 @@
-"""[talk] coherence, the length rule (talk/length.py): a draft that is only too long is cut in
-code where the cut keeps the answer, sent as written within twice its words, and only past
-that asked again with the draft itself. Invented lines; pure functions and the test cast."""
+"""[talk] coherence, the length rule (talk/length.py): a game line that is only too long loses
+only what follows its answering sentence, goes as written within twice its words when nothing
+proves where the answer is, and only past that is asked again with the draft itself. Invented
+lines (length_drafts.py holds the review's 40 buried-answer drafts); the test cast."""
 import asyncio
 
 import pytest
@@ -11,8 +12,9 @@ from leeroy_mind.testing.fake_llm import script_from
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.protocol import Chat
 from leeroy_mind.talk.turns import Turn, TurnKind
-from leeroy_mind.talk.length import (KEEP_SLACK, LONG_SLACK, carries, content_question,
-                                     fit_answer)
+from leeroy_mind.talk.length import (KEEP_SLACK, LONG_SLACK, answering, carries,
+                                     content_question, fit_answer)
+from length_drafts import DRAFTS
 from leeroy_mind.talk.shape import CONTENT_WORDS
 
 LORE_Q = "nerd question, who ruled the ogres before the war"
@@ -56,49 +58,87 @@ def test_a_reply_within_its_slack_is_left_alone():
     assert fit_answer(text, 0).action == "fits"  # no limit: nothing to fit
 
 
-def test_a_long_answer_is_cut_to_the_clause_that_answers_him():
+def test_a_long_answer_that_leads_keeps_its_answering_sentence():
     fit = fit_answer(LORE_DRAFT, 8, LORE_Q)
     assert (fit.action, fit.text) == ("cut", "it was Gorak.")
     assert len(fit.text.split()) <= LONG_SLACK * 8
+    # a number answers "how many"; what follows its sentence goes
+    fit = fit_answer("We have 22 now. The calendar looked thin this morning and half of them "
+                     "are alts anyway", 8, "how many people signed up?")
+    assert fit.action == "cut" and fit.text.startswith("We have 22 now.")
+    assert len(fit.text.split()) <= LONG_SLACK * 8 and "alts" not in fit.text
 
 
-def test_a_cut_never_ends_on_a_dangling_word_and_keeps_a_yes():
-    draft = ("lol yeah, i think so but only because the tank keeps pulling extra packs and the "
-             "healers go oom every single time we try")
+@pytest.mark.parametrize("limit", [6, 8, 10, 12, 15])
+def test_no_cut_ever_drops_the_answer_from_a_draft_that_buries_it(limit):
+    """Review of #370: 40 invented drafts with the answer in the second or third clause. The
+    first rule cut 34 of 37 of them before the answer at 12 words. Now no draft that goes out
+    (cut or as written) is without its answer; the rest are asked again with the draft."""
+    counts = {"fits": 0, "cut": 0, "kept": 0, "retry": 0}
+    for his, draft, mark, _ in DRAFTS:
+        fit = fit_answer(draft, limit, his)
+        counts[fit.action] += 1
+        if fit.action != "retry":
+            assert mark.casefold() in fit.text.casefold(), (limit, his)
+    assert sum(counts.values()) == 40
+    if limit == 12:  # the content-question floor: every one goes as written
+        assert counts == {"fits": 0, "cut": 0, "kept": 40, "retry": 0}
+
+
+def test_a_cut_never_ends_inside_a_quote_on_a_dangling_word_or_under_three_words():
+    quoted = ('he said "eight, maybe nine, we will see" and then left. the rest of the night '
+              "was a mess and nobody knew who was leading at all")
+    fit = fit_answer(quoted, 8, "when does the raid start?")
+    assert fit.text.count('"') % 2 == 0
+    # a bare yes is no cut: the sentence it starts goes with it
+    draft = ("yes but only because the tank keeps pulling extra packs and the healers go oom "
+             "every single time we try it that way")
     fit = fit_answer(draft, 8, "you coming tonight?")
-    assert fit.action == "cut" and fit.text.startswith("lol yeah")
-    assert fit.text.split()[-1] not in ("but", "only", "because", "and", "the")
+    assert fit.action == "retry" and fit.text == draft
+    short = "No. " + " ".join(f"w{i}" for i in range(30))
+    assert fit_answer(short, 6, "is he tauntable?").action == "retry"  # never a one-word cut
 
 
-def test_a_reply_with_no_clean_cut_goes_as_written_within_twice_its_words():
+def test_a_reply_with_no_provable_answer_goes_as_written_within_twice_its_words():
     draft = "one two three four five six seven eight nine ten eleven twelve thirteen"
     fit = fit_answer(draft, 8, "what trinkets you running")
     assert (fit.action, fit.text) == ("kept", draft)
     assert len(draft.split()) <= KEEP_SLACK * 8
+    assert fit_answer(draft + " " + draft, 8, "what trinkets you running").action == "retry"
 
 
-def test_a_cut_that_would_lose_the_answer_is_not_made():
-    # the opener is filler: on a content question it carries nothing, so it is no cut
-    draft = "haha oh man, " + " ".join(f"w{i}" for i in range(30))
-    assert fit_answer(draft, 6, "who was it").action == "retry"
-    # past twice its words with a sentence that answers inside that room: cut there
-    late = "haha oh man. " + " ".join(f"w{i}" for i in range(8)) + ". " + " ".join(["more"] * 20)
-    fit = fit_answer(late, 6, "who was it")
-    assert fit.action == "kept" and fit.text.endswith("w7.")
+def test_idle_talk_keeps_its_leading_clauses():
+    draft = "lol that pull was a mess, we should have waited for the healers and the tank"
+    fit = fit_answer(draft, 5)
+    assert fit.action == "cut" and fit.text == "lol that pull was a mess"
 
 
-def test_carries_reads_his_question():
-    assert carries(["yeah"], "you around?")
-    assert not carries(["yeah"], "who tanks tonight")
-    assert not carries(["lol"], "")
-    assert carries(["no", "idea"], "who tanks tonight")
-    assert carries(["at", "8"], "when is raid")
-    assert not carries(["who", "tanks", "tonight"], "who tanks tonight")  # his words back
+def test_an_opener_or_item_is_cut_only_after_the_clause_that_names_its_subject():
+    draft = ("so i was sorting my bags all morning, such a chore honestly, and the flask recipe "
+             "finally dropped for me. going to make a batch for sunday and maybe sell the rest")
+    fit = fit_answer(draft, 10, subject="the flask recipe she was farming")
+    assert fit.action in ("cut", "kept") and "flask recipe" in fit.text
+    # a draft that never names it is not cut: nothing proves where the item is
+    other = "so i was sorting my bags all morning, such a chore honestly, " + "and more " * 12
+    assert fit_answer(other, 10, subject="the flask recipe").action == "retry"
+
+
+def test_answering_is_never_vacuous():
+    q = "who tanks tonight"
+    assert not answering(["yeah"], q) and answering(["lol"], "")  # nothing to answer: any
+    assert not answering("oh thats a good one".split(), q)          # a lead-in
+    assert not carries("yeah i can. let me think about it".split(), "explain the fight")
+    assert answering(["no", "idea"], q) and answering("it was Gorak".split(), q)
+    assert answering(["at", "8"], "when is raid") and not answering(["at", "8"], q)
+    assert answering(["yeah"], "you around?") and not answering(["hmm"], "you around?")
+    assert answering("the flask is ready".split(), "", "your flask") and         not answering("nice weather".split(), "", "your flask")
+    assert carries("hmm let me see. we start at eight".split(), "when do we start")
 
 
 def test_content_question():
     assert content_question("what trinkets you running") and content_question("explain it")
     assert content_question("so tell me about the fight")
+    assert content_question("nerd question, who ruled the ogres before the war")
     assert not content_question("?") and not content_question("you around?")
     assert not content_question("nice one") and not content_question("")
 

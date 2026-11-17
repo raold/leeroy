@@ -520,7 +520,7 @@ def test_the_same_reply_in_the_game_is_still_held_to_her_line(store, clock, tmp_
 def test_discord_words_zero_keeps_the_old_discord_style(store, clock, tmp_path):
     rig = with_words(make_rig(store, clock, tmp_path, reply=LONG_CHANNEL), 0)
     lines = rig.speak_turn(discord_turn(101, "discord:general"), seconds=150)
-    assert len(rig.chat_calls()) == 1  # her game line's length, cut in code ([talk] coherence)
+    assert len(rig.chat_calls()) == 2  # the "long" tell, as before
     assert sum(len(x.split()) for x in lines) < 60
     rig.close()
 

@@ -3893,9 +3893,13 @@ class Pipeline:
         owed = max_attempts > 1 and self.live_review.owed(turn, meta)
         # [talk] coherence: a draft that is only too long is cut in code or sent as written
         # (talk/length.py fit_answer), never asked again from nothing
-        keeps = self._coherent() and turn.template is None and turn.kind is not TurnKind.BIT
+        # (game lines only: a Discord turn keeps its own length rules, fit_words and its bands)
+        keeps = (self._coherent() and not emoji and turn.template is None
+                 and turn.kind is not TurnKind.BIT)
         fit = (int(LONG_SLACK * self._word_budget(turn, p, meta.two_lines))
-               if owed and emoji and not keeps else 0)  # an owed Discord answer is cut, never asked again
+               if owed and emoji else 0)  # an owed Discord answer is cut, never asked again
+        # what a turn that answers nothing is about: an opener's topic, an outreach item's words
+        subject = meta.topic or (meta.recall_query if meta.outreach_item is not None else "")
         asked_line = (self._asked_line(turn, meta, c) if keeps else "")
         meta.keep_words = 0
         kept, why = "", "tells"
@@ -3937,7 +3941,7 @@ class Pipeline:
             length, draft = "", text
             if not silent and keeps:
                 budget = self._word_budget(turn, p, meta.two_lines)
-                fitted = fit_answer(text, budget, asked_line)
+                fitted = fit_answer(text, budget, asked_line, subject=subject)
                 length = fitted.action
                 if length in ("cut", "kept"):
                     text = fitted.text
@@ -4387,9 +4391,10 @@ class Pipeline:
         if room and words:
             cap = max(cap, room)
         elif room:
-            lines = max(1, most) if two_lines or turn.kind is TurnKind.BIT else turn_lines(typing, most)
+            # the whole of it fits one line, so the styling never repacks a clause away (review
+            # of #370: a kept clause longer than its line's share lost its end)
             cap = max(line_cap(typing, self._effects(turn.speaker), PHASE_MODS[phase].length_mult),
-                      math.ceil(room / lines))
+                      room)
         for piece in pieces:
             out += style_lines(piece, typing, self._effects(turn.speaker), self.rng,
                                length_mult=PHASE_MODS[phase].length_mult,
