@@ -77,7 +77,7 @@ def test_scene_uses_live_queue_and_admission_inside_job(app):
     assert app.events == ["queued", "admitted", "chat"]
     assert app.scheduler.priorities == [Priority.REPLY_HUMAN]
     assert (scene.audience, scene.when, scene.recipe) == ("him", "any", RECIPE)
-    assert scene.activity == "out on a walk with a dog alongside, a dog sitting alongside"
+    assert scene.activity == "out on a walk with a dog alongside, the dog looking up at the camera"
     model, _, options = app.llm.calls[0]
     assert model == "invented-live" and options["think"] is False
     assert options["options"]["num_ctx"] == 4096

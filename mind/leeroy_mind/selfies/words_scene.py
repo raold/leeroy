@@ -98,7 +98,7 @@ PROMPT = (
     "to take it.\n{card}\n{facts}\nHow they look: {looks}\nRight now they are {now}.\n"
     "Read the ask into the photo they take, in plain everyday words:\n"
     "- place: where they take it, at most 8 words (for example: office break room, kitchen at "
-    "home, front seat of a parked car)\n"
+    "home, bench in the park)\n"
     "- framing: mirror_selfie, handheld_selfie, timer (the phone propped up) or "
     "from_behind_over_shoulder\n"
     "- wearing: work_uniform (what their job has them wear), gym, casual, going_out, swimwear, "

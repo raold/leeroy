@@ -18,7 +18,7 @@ from .kind import (ERA_RE, EXPLICIT_RE, GYM_OUTFITS, LUST_COLOURS, LUST_EXPRESSI
                    LUST_OUTFITS, PAIRINGS, SWIM_OUTFITS, WEAR_RE, _enum,
                    compose_lust, screen_lust)
 from .prompt import (_COVERED, _COVERED_LUST, _FRAMINGS, GLUTES_FRAMINGS, body_negative,
-                     body_phrases, fit_required, glutes_words,
+                     body_phrases, fit_clothed, fit_required, glutes_words,
                      _HEADSHOT_TAIL, _KINDS, _PHONE_TAIL, LUST_HELD, LUST_NAMED,
                      NEGATIVE, SHORT, PromptSpec, _clean, eyes_face, hair_skin,
                      identity_first, looks_phrases,
@@ -526,7 +526,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
         outfit = _clean(s.outfit)  # priority 2 the outfit was dropped from 14 of 55 prompts)
         if name_re is not None and name_re.search(outfit):
             outfit = ""
-        add(wearing(outfit, gender=p.identity.player_gender, framing=s.framing), 0)
+        worn = wearing(outfit, gender=p.identity.player_gender, framing=s.framing)
+        add(worn, 0)
     add(alone(s.setting), 3)
     if s.kind != "snapshot":
         add("looking at the camera", 3)
@@ -541,7 +542,9 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
         out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)
     stand = pose("front", s.framing, pos="her" if p.identity.player_gender == "female" else "his")
-    out = fit_required(out, p, [kind_words, stand, framing_words], name_re)
+    yields = [kind_words, stand, framing_words]
+    out = (fit_required(out, p, yields, name_re) if lust
+           else fit_clothed(out, p, yields, name_re, worn, s.framing))
     return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if lust else SNAP_NEGATIVE)
 
 

@@ -328,6 +328,27 @@ def fit_required(out: list[tuple[str, int]], p: Persona, yields: list[str],
     return out
 
 
+def fit_clothed(out: list[tuple[str, int]], p: Persona, yields: list[str],
+                name_re: re.Pattern | None, worn: str, framing: str) -> list[tuple[str, int]]:
+    """fit_required for a plain prompt whose clothing phrase `worn` (safe.wearing, free text of
+    up to safe.WEAR_MAX_WORDS words) is required: when the required set still counts more than
+    FIT_MAX after every step, the outfit gives way to the default garments (a few tokens), and
+    if even those do not fit the clothing moves to priority 1, the first phrase the worker's fit
+    keeps. Her body, hair and skin are never traded for it, and no long outfit makes the worker
+    refuse the photo."""
+    from .tokens import joined
+    fitted = fit_required(out, p, yields, name_re)
+    if (worn, 0) not in out:
+        return fitted
+    at = out.index((worn, 0))
+    default = wearing("", gender=p.identity.player_gender, framing=framing)
+    for phrase, priority in ((default, 0), (default, 1)):
+        if joined(t for t, pr in fitted if pr == 0) <= FIT_MAX:
+            break
+        fitted = fit_required(out[:at] + [(phrase, priority)] + out[at + 1:], p, yields, name_re)
+    return fitted
+
+
 def over_fit(spec: "PromptSpec") -> bool:
     """The required set still counts more than the worker's limit by the mind's count."""
     from .tokens import joined
@@ -566,7 +587,8 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
         outfit = _clean(ph.outfit)
         if name_re is not None and name_re.search(outfit):
             outfit = ""
-        add(wearing(outfit, gender=p.identity.player_gender, framing=ph.framing), 0)
+        worn = wearing(outfit, gender=p.identity.player_gender, framing=ph.framing)
+        add(worn, 0)
         add(ph.setting, 2, True)
     if body_shot:
         add(pose("front", ph.framing, p.guid,
@@ -586,8 +608,9 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
     stand = pose("front", ph.framing, p.guid,
                  pos="her" if p.identity.player_gender == "female" else "his")
     # the kind yields first, then a body shot's standing pose, then the framing
-    out = fit_required(out, p, [kind_words, stand, framing_words] if body_shot
-                       else [kind_words, framing_words], name_re)
+    yields = [kind_words, stand, framing_words] if body_shot else [kind_words, framing_words]
+    out = (fit_required(out, p, yields, name_re) if lust
+           else fit_clothed(out, p, yields, name_re, worn, ph.framing))
     if body_shot:  # hands, arms and a waist in frame: the anatomy and garment lines required
         return PromptSpec(tuple(out), BODY_NEGATIVE_LUST if lust else BODY_NEGATIVE)
     return PromptSpec(tuple(out), HEAD_NEGATIVE_LUST if lust else HEAD_NEGATIVE)

@@ -133,6 +133,31 @@ def test_an_outfit_that_holds_a_name_gives_way_to_the_default_garments():
     assert "Arkon" not in _text(spec)
 
 
+def test_a_long_outfit_never_makes_the_worker_refuse_the_photo():
+    from leeroy_mind.selfies.prompt import over_fit
+    long_looks = replace(APPEARANCE, build="voluptuous", height_cm=160, weight_kg=118,
+                         hair_colour="honey blonde with caramel highlights",
+                         hair_style="long glossy waves over one shoulder",
+                         skin_tone="warm golden brown, freckled")
+    outfit = "an oversized hand-knitted mustard cardigan over a striped rollneck and corduroys"
+    photo = {"kind": "snapshot", "framing": "three_quarter", "setting": "a quiet cafe",
+             "outfit": outfit, "expression": "a small smile"}
+    for p in (woman(appearance=long_looks, photo=photo), man(appearance=long_looks, photo=photo)):
+        spec = build_prompt(p)
+        assert not over_fit(spec)
+        worn = [(t, pr) for t, pr in spec.phrases if t.startswith("wearing ")]
+        assert len(worn) == 1 and "trousers" in worn[0][0]  # clothed, whichever phrase fitted
+        for text in body_words(p, short=True):  # her body is never traded for it
+            assert any(t.startswith(text) and pr == 0 for t, pr in spec.phrases)
+        s = Scene("snapshot", "three_quarter", "at a quiet cafe table",
+                  "a cup of tea on the table", outfit, "a relaxed smile", "day", "anyone", "x",
+                  recipe=scene_choices.RECIPE)
+        snap = build_scene_prompt(p, s)
+        assert not over_fit(snap) and any(t.startswith("wearing ") for t, _ in snap.phrases)
+    short = build_prompt(woman(photo=photo))  # ordinary looks: her own outfit stays
+    assert (f"wearing {outfit} and trousers", 0) in short.phrases
+
+
 def test_a_situational_photo_and_a_tile_require_what_they_wear():
     s = Scene("snapshot", "upper_body", "at a quiet cafe table", "a cup of tea on the table",
               scene_choices.OUTFITS["outdoors"], "a relaxed smile", "day", "anyone", "x",

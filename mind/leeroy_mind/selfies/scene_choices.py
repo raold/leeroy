@@ -93,7 +93,7 @@ OUTFITS = {"casual": "a cotton shirt and trousers",
            "exercise": "a loose tee and full-length leggings"}
 # Nothing is held: a prop rests beside the subject
 PROPS = {"none": "", "mug": "a plain mug on the table", "book": "a closed book on the table",
-         "notebook": "a notebook on the table", "leash": "a dog sitting alongside",
+         "notebook": "a notebook on the table", "leash": "the dog looking up at the camera",
          "plant": "beside a potted plant"}
 LEGACY_PROPS = {"mug": "holding a plain mug", "book": "holding a book",
                 "notebook": "holding a notebook", "leash": "holding a dog leash"}

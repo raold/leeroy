@@ -412,13 +412,13 @@ Headshots were clean (1%); defects grew with how much body shows (waist-up 12%, 
 |---|---|
 | mirror selfies and the hallway mirror (25-31%, half a wrong or second reflection) | a selfie is said as `selfie, close arm's-length shot` whatever its kind; the lust style and scenes are no longer offered a mirror selfie; the mirror setting is retired and a stored one renders as `her hallway at home`; `mirror` joins the negatives |
 | a phone held in view (doubled, oversized, back to the camera) | no kind or framing names a phone; `phone` joins the negatives |
-| the car's front seat (the subject cloned as a passenger), the concert crowd (25 faces) | retired; stored ones render as a quiet street beside her parked car and a festival field |
+| the car's front seat (the subject cloned as a passenger), the concert crowd (a frame full of faces) | retired; stored ones render as a quiet street beside her parked car and a festival field |
 | "bike shorts" at the gym (38%: a garbled bicycle every time) | the outfit says gym shorts; the exercise-bike activity is "resting after a workout" |
-| a hand on the hip plus another arm action (every third hand had one), hands on rails, glasses, mugs, pens, sticks | a three-quarter or full-length photo requires one standing pose (`standing, arms at her sides`, or hands behind her back from the front); a waist-up one asks for `arms down, hands out of frame`; props rest on the table and activities are said as what is there, not what the hands do |
+| a hand on the hip plus another arm action (every third hand had one), hands on rails, glasses, mugs, pens, sticks | a three-quarter or full-length photo requires one standing pose (`standing, arms at her sides`, or hands behind her back from the front; it yields to priority 1 before the framing does when the required set is over 75 tokens); a waist-up one asks for `arms down, hands out of frame` at priority 1; props rest on the table and activities are said as what is there, not what the hands do |
 | seated and splayed swimwear poses (merged legs and feet) | every pose stands |
-| busy places (2 or more people in frame: 17%, and most of the severity 3) | `alone, no one else in frame` at bars, clubs, streets, parties; `another person, duplicate person` required in the negative; a garden party is a summer garden, a dance floor an empty one |
+| busy places (2 or more people in frame: 17%, and most of the severity 3) | `another person, duplicate person` required in the negative; a garden party is a summer garden, a dance floor an empty one, a wine bar a quiet one; `alone, no one else in frame` is added at priority 3 for bars, clubs, streets and parties (on the live cast it rarely fits the 75 tokens) |
 | garbled signs and equipment lettering | `text` is required in the body negative |
-| men rendered shirtless, bare shoulders with no top | the outfit sat at priority 2 and never reached the worker's 75 tokens (0 of 12 waist-up prompts kept it, 7 of 42 men's); it is now required as `wearing ...`, a top and for a waist-up or wider photo a bottom, a man always a shirt (`safe.complete`) |
+| men rendered shirtless, bare shoulders with no top | the outfit sat at priority 2 and never reached the worker's 75 tokens (0 of 12 waist-up prompts kept it, 7 of 42 men's); it is now required as `wearing ...`, a top and for a waist-up or wider photo a bottom, a man always a shirt (`safe.complete`); an outfit too long for the window gives way to default garments, never to her body, hair or skin (`prompt.fit_clothed`); free text naming swimwear or underwear is never required |
 | one strap, fused sleeves, a top with no bottom | every list outfit names a top and a bottom or a one-piece with its length; the one-shoulder top is a wrap top; `bottomless, shirtless` join the body negative |
 
 **The body negative.** A photo that shows the body (waist-up or wider; every situational one)
@@ -443,3 +443,9 @@ queued for each member with a defective cover. A cover is never changed: the own
 
 Not verified on the GPU: every wording here was chosen from the audit's numbers and the token
 counts, not from new renders. Check the first night's sets and snaps.
+
+Measured on the live cast's stored personas with the real tokenizers and the worker's fit
+(read-only, 2026-11-17): no prompt of any kind is over the window; all 86 plain profile prompts
+keep `wearing ...` (before: 26 of 86 kept their outfit, 0 of 12 waist-up ones); 61 of 62
+three-quarter lust kinds keep the standing pose; a default varied set keeps it in 174 of 182 body
+shots; all 177 guild tiles keep their top.
