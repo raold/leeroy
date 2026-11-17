@@ -366,6 +366,19 @@ message-to-line receipts. The receipt-index migration adds a partial value index
 receipts, avoiding a scan of accumulated Discord history. Each turn shares a
 512-node provenance memo across lessons and typing; the coach memoizes source
 expansion within a night. Nested generated lines expand their recalled memories.
+
+The walk has a horizon (2026-11-17). A note's own sources, its lines and the memories
+her generated lines carried, pass the strict per-line gates above. A memory is admitted
+as recall admits it (`Recall._shareable`: its stored scope, own or open, the restricted
+lines it rests on at any depth, the pair rule, no missing cited line; an open memory
+with no evidence fails closed, a scoped one stays with its pair). Its evidence is opened
+one level: cited lines must be the turn's to hear (private, officer, restricted and
+deleted checks; not the reader-list checks, since she was told), night-made refs
+(`joke:`, `beat:`, `encounter:`, `arc:`) claim nobody, and a memory beneath is gated and
+not opened. Below that the stored scopes stand. Before this the walk was unbounded:
+on live data one note reached 100-1,200 nodes over 12 levels (lines she never read,
+night refs, the 512-node cap), so no lesson passed on any turn and `talk_recipe` never
+recorded one. A cycle within the horizon still fails closed.
 The regression benchmark uses 20,000 receipts and 300 candidate typing lines,
 with a 250 ms smoke-test ceiling; this is a test guard, not a production timeout.
 

@@ -416,17 +416,79 @@ def test_provenance_cap_is_512_distinct_nodes_and_shared_work_is_memoized(rig):
     assert not audience.visible(conn,refs+['event:513'],guid=101,channel='guild',to_guid=0)
 
 
-def test_deep_provenance_is_bounded_without_using_the_python_call_stack(rig):
-    conn = rig.store.conn
-    ref = 'event:1'
-    for _ in range(511):
+def chain(conn, n, ref='event:1'):
+    for _ in range(n):
         mid = conn.execute("INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,importance,"
             "valence,source,evidence,actors,scope,scope_with) VALUES (101,'conversation','Fixture',"
             "0,0,0,5,0,'chat',?,'[101]','open',0)", (json.dumps([ref]),)).lastrowid
         ref = f'memory:{mid}'
-    assert audience.visible(conn,[ref],guid=101,channel='guild',to_guid=0)
-    conn.execute('UPDATE memory SET evidence=? WHERE id=?', (json.dumps([ref]), mid-510))
+    return ref, mid
+
+
+def test_deep_provenance_is_bounded_and_a_cycle_in_reach_fails_closed(rig):
+    conn = rig.store.conn
+    ref, mid = chain(conn, 511)
+    gate = audience.Visibility(conn, guid=101, channel='guild', to_guid=0)
+    assert gate.visible([ref])
+    assert len(gate.visited) == 2  # the memory and the one it cites: stored scopes stand below
+    conn.execute('UPDATE memory SET evidence=? WHERE id=?', (json.dumps([ref]), mid))
     assert not audience.visible(conn,[ref],guid=101,channel='guild',to_guid=0)
+
+
+def test_a_note_resting_on_her_own_dm_line_reaches_that_dm_whatever_her_memories_cite(rig,monkeypatch):
+    """The live shape (2026-11-17): her DM line carried memories of things she was told, whose
+    evidence is a party line she never read, night-made refs and a deep chain. Before, that
+    refused every note on every turn."""
+    select(monkeypatch)
+    conn = rig.store.conn
+    told = source(rig, 'party', guid=102, readers={102, 103})
+    deep, _ = chain(conn, 40)
+    mid = callback_memory(rig)
+    conn.execute('UPDATE memory SET evidence=? WHERE id=?',
+                 (json.dumps([f'chat:{told}', 'beat:3', 'joke:1', 'arc:102:voice', deep]), mid))
+    felt = conn.execute("INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,importance,"
+        "valence,source,evidence,actors,scope,scope_with) VALUES (101,'reflection','Fixture',"
+        "0,0,0,5,0,'reflection','[]','[101,1]','private',1)").lastrowid
+    conn.commit()
+    turn = Turn(TurnKind.REPLY_HUMAN, 101, 'dm:101', to_guid=1)
+    line = rig.engine._record(turn, TurnMeta('dm-source'), rig.engine.personas.get(101),
+                              'A bland generated fixture.', [mid, felt])
+    message = discord.post(rig.store, channel=channel_id('dm:101'), author=101, origin='mind',
+                           text='A bland generated fixture.', now=rig.clock.now())
+    rig.store.set_meta(f'discord:line:{message}', str(line))
+    ident = lesson(rig, line, scope='whisper')
+    _, meta, composed = compose(rig, 'dm:101')
+    assert ident in meta.recipe_snapshot.lesson_ids
+    assert 'Style observation:' in composed.messages[-1]['content']
+    assert ident in compose(rig, 'whisper')[1].recipe_snapshot.lesson_ids  # one conversation
+    for public in ('guild', 'discord:general', 'party'):
+        assert compose(rig, public)[1].recipe_snapshot.lesson_ids == ()
+    assert compose(rig, 'dm:102', guid=102)[1].recipe_snapshot.lesson_ids == ()
+
+
+def test_a_memory_is_gated_as_recall_gates_it(rig):
+    conn = rig.store.conn
+    see = lambda ref, channel, to=0, **kw: audience.visible(conn, [ref], guid=101, channel=channel, to_guid=to, **kw)
+    unproved = conn.execute("INSERT INTO memory(owner,kind,text,t_event,t_created,t_accessed,importance,"
+        "valence,source,evidence,actors,scope,scope_with) VALUES (101,'reflection','Fixture',"
+        "0,0,0,5,0,'reflection','[]','[101]','open',0)").lastrowid
+    assert not see(f'memory:{unproved}', 'guild')  # absent provenance is no public proof
+    conn.execute("UPDATE memory SET scope='private',scope_with=1 WHERE id=?", (unproved,))
+    assert see(f'memory:{unproved}', 'whisper', 1) and not see(f'memory:{unproved}', 'guild')
+    assert not see(f'memory:{unproved}', 'whisper', 102)
+    theirs = callback_memory(rig, guid=102, channel='whisper')
+    assert not audience.visible(conn, [f'memory:{theirs}'], guid=101, channel='whisper', to_guid=1)
+    officers = source(rig, 'officer', guid=102)
+    mid = callback_memory(rig)
+    conn.execute('UPDATE memory SET evidence=? WHERE id=?', (json.dumps([f'chat:{officers}']), mid))
+    assert not see(f'memory:{mid}', 'guild') and not see(f'memory:{mid}', 'officer')
+    assert see(f'memory:{mid}', 'officer', officer=True)
+    # one level down: a private line of another pair under an open memory still refuses it
+    other = source(rig, 'whisper', guid=102)
+    conn.execute('UPDATE memory SET evidence=? WHERE id=?',
+                 (json.dumps([f'chat:{other}', f'chat:{source(rig)}']), mid))
+    assert not see(f'memory:{mid}', 'guild')
+    assert not see('beat:3', 'guild')  # a night ref is never a note's own source
 
 
 def test_nested_generated_line_expands_its_recalled_private_memory(rig):

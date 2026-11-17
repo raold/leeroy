@@ -3,7 +3,8 @@ import json
 from types import SimpleNamespace
 
 from leeroy_mind.discord.channels import is_discord, is_private, is_officer_channel, is_local_channel, channel_id
-from leeroy_mind.memory.privacy import derive_scope, restricted_channels, OFFICERS
+from leeroy_mind.groups.audience import GroupSource
+from leeroy_mind.memory.privacy import derive_scope, restricted_channels, OFFICERS, GROUP
 from leeroy_mind.memory.recall import scope_ok, hidden_ok, whisper_ok, OWNER_REF
 from leeroy_mind.storage.provenance import paired
 
@@ -81,37 +82,46 @@ def retain(conn, ident, refs, *, fresh=False, forward_min=0):
 class Visibility:
     """One snapshot/audience's memo, shared by its lessons and 300 typing lines.
 
-    Each source is admitted through the canonical gates, so checking every edge
-    computes the intersection without repeatedly walking the whole graph.
+    A note's own sources (its lines, and the memories her generated lines carried) are
+    admitted one by one through the strict gates. A memory is admitted by the gate that lets
+    it into a prompt (Recall._shareable), and its evidence is opened one level: the lines it
+    cites must be the turn's to hear, and what a generated line among them carried must be
+    recallable here too. Deeper than that the stored scopes stand, as they do for recall:
+    the whole graph under one line reaches most of the guild's history (live, 2026-11-17:
+    100-1,200 nodes, 12 levels), so walking all of it refused every note on every turn.
     """
     def __init__(self, conn, *, guid, channel, to_guid, readers=(), officer=False, human_guid=0):
         self.conn, self.guid, self.channel, self.to_guid = conn, guid, channel, to_guid
         # Game recordings contain cast only; the owner is never a missing cast reader.
         self.readers, self.officer = frozenset(readers) - {human_guid}, officer
+        self.all_readers = tuple(readers)
         self.cache, self.visited = {}, set()
 
     def visible(self, refs):
         return bool(refs) and len(refs) <= MAX_REFS and all(self.walk(r) for r in refs)
 
     def walk(self, ref):
-        # Explicit frames keep a deep but bounded graph off Python's call stack.
-        pending, active, edges = [(ref, False)], set(), {}
+        # Explicit frames keep the walk off Python's call stack. A node is (ref, under):
+        # under 0 is a source of the note itself, 1 sits below one memory, 2 is a memory
+        # below that (gated, never opened).
+        root = (ref, 0)
+        pending, active, edges = [(root, False)], set(), {}
         while pending:
             current, finish = pending.pop()
-            if not isinstance(current, str) or len(current) > 100:
+            if not isinstance(current[0], str) or len(current[0]) > 100:
                 return False
             if finish:
                 self.cache[current] = all(self.cache.get(c, False) for c in edges[current])
                 active.remove(current)
                 continue
-            if current in active:
+            if any(a[0] == current[0] for a in active):
                 return False
             if current in self.cache:
                 continue
             if len(self.visited) >= MAX_REFS:
                 return False
             self.visited.add(current)
-            children = self._node(current)
+            children = self._node(*current)
             if type(children) is bool:
                 self.cache[current] = children
                 continue
@@ -119,14 +129,55 @@ class Visibility:
             edges[current] = children
             pending.append((current, True))
             pending.extend((child, False) for child in reversed(children))
-        return self.cache.get(ref, False)
+        return self.cache.get(root, False)
 
-    def _node(self, ref):
+    def _recallable(self, row):
+        """Recall._shareable for one memory row on this turn, over plain SELECTs. Its evidence
+        list when it may come up here, else False; malformed or missing evidence fails closed."""
+        if row['scope'] != 'open' and row['owner'] != self.guid:
+            return False
+        if not scope_ok(SimpleNamespace(**dict(row)), turn_channel=self.channel, to_guid=self.to_guid):
+            return False
+        if (row['key'] or '').startswith('bond:') and row['owner'] != self.guid:
+            return False
+        if row['scope_with'] == OFFICERS and not self.officer:
+            return False
+        try:
+            refs = json.loads(row['evidence'])
+        except (ValueError, TypeError):
+            return False
+        if not (isinstance(refs, list) and len(refs) <= MAX_REFS and all(isinstance(r, str) for r in refs)):
+            return False
+        if not refs and row['scope'] == 'open':
+            return False  # absent provenance is no public proof; a scoped one stays with its pair
+        hidden = restricted_channels(self.conn, {0: refs}).get(0, ())
+        if row['scope_with'] == GROUP and not any(isinstance(c, GroupSource) for c in hidden):
+            return False
+        if hidden and not hidden_ok(hidden, self.channel, speaker=self.guid, to_guid=self.to_guid,
+                                    readers=self.all_readers):
+            return False
+        if not self.officer and any(not isinstance(c, GroupSource) and is_officer_channel(c) for c in hidden):
+            return False
+        ids = sorted({int(r[5:]) for r in refs if r.startswith('chat:') and r[5:].isdecimal()})
+        cited = self.conn.execute('SELECT channel,from_guid,to_guid FROM chat_line WHERE id IN '
+            '(SELECT value FROM json_each(?))', (json.dumps(ids),)).fetchall() if ids else []
+        if len(cited) != len(ids):
+            return False  # a cited line that is gone proves no audience
+        if (not any(r.startswith(OWNER_REF) for r in refs) and cited
+                and all(is_private(c[0]) for c in cited) and not all(
+                    whisper_ok(c[0], c[1], c[2], speaker=self.guid, turn_channel=self.channel,
+                               to_guid=self.to_guid) for c in cited)):
+            return False
+        return refs
+
+    def _node(self, ref, under=0):
         if ref.startswith(OWNER_REF):
             return bool(ref[len(OWNER_REF):])
         kind, sep, ident = ref.partition(':')
         if not sep or kind not in ('chat', 'memory', 'event') or not ident.isdecimal() or not 0 < int(ident) < 2**63:
-            return False
+            # Below a memory the night's own refs (joke:, beat:, encounter:, arc:, rule:fact:)
+            # are non-chat evidence that claims nobody, as privacy.derive_scope reads them.
+            return bool(under and sep and kind and ident)
         if kind == 'event':
             return True  # non-chat evidence, as Recall._shareable treats it
         row = self.conn.execute(f'SELECT * FROM {"chat_line" if kind == "chat" else "memory"} WHERE id=?',
@@ -134,15 +185,10 @@ class Visibility:
         if row is None:
             return False
         if kind == 'memory':
-            if (row['scope'] != 'open' and row['owner'] != self.guid or
-                    not scope_ok(SimpleNamespace(**dict(row)), turn_channel=self.channel, to_guid=self.to_guid)):
-                return False
-            try:
-                children = json.loads(row['evidence'])
-                return children if (isinstance(children, list) and 0 < len(children) <= MAX_REFS
-                        and all(isinstance(r, str) for r in children)) else False
-            except (ValueError, TypeError):
-                return False
+            children = self._recallable(row)
+            if children is False or under or not children:
+                return children is not False
+            return [(r, 1) for r in children]
         source = row['channel']
         if is_discord(source):
             matches = self.conn.execute("SELECT m.deleted FROM meta r JOIN discord_message m "
@@ -158,9 +204,13 @@ class Visibility:
         try:
             readers = json.loads(row['audience']) if row['audience'] is not None else None
             if readers is not None and (not isinstance(readers, list)
-                    or any(type(g) is not int or g <= 0 for g in readers) or self.guid not in readers):
+                    or any(type(g) is not int or g <= 0 for g in readers)):
                 return False
-            if is_local_channel(source) and not is_officer_channel(source) and (
+            # Who read a line matters for the note's own sources. A line under a memory was
+            # somebody else's to hear (she was told); the memory's scope carries that.
+            if not under and readers is not None and self.guid not in readers:
+                return False
+            if not under and is_local_channel(source) and not is_officer_channel(source) and (
                     not readers or not self.readers or not self.readers.issubset(readers)):
                 return False
         except (ValueError, TypeError):
@@ -179,7 +229,7 @@ class Visibility:
                 mids = json.loads(utterance['memory_ids'])
                 if not isinstance(mids, list) or any(type(i) is not int or i <= 0 for i in mids):
                     return False
-                return [f'memory:{i}' for i in mids]
+                return [(f'memory:{i}', 2 if under else 0) for i in mids]
             except (ValueError, TypeError):
                 return False
         return True
