@@ -6,7 +6,7 @@ features attach as parts (parts.py); a command the direct part prepared is its o
 """
 
 import asyncio
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, replace
 import logging
 import uuid
@@ -35,6 +35,14 @@ from .recall import Recall
 from .records import RealmObservation, Rejected
 
 log = logging.getLogger(__name__)
+# A source that makes no fact is counted and said at most once a minute, by where it stopped,
+# its event type and its reason: until 2026-11-17 these were debug lines, and ten days of
+# refusing every world event left nothing in the log. Reasons that are the rules working (a
+# duel in a city, an ordinary achievement, channel talk off the topic, a screened text, a cap)
+# stay INFO; any other is a WARNING.
+REJECTION_LOG_S = 60.0
+EXPECTED_REJECTIONS = frozenset({"private_evidence", "capped", "ineligible", "topic_mismatch",
+                                 "unsupported_text", "real_name", "romance"})
 
 JOB_COMMANDS = frozenset({
     "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue",
@@ -88,6 +96,7 @@ class Realm:
         self._process_id = uuid.uuid4().hex
         self._connected = False
         self._presence_known = False
+        self._rejections, self._rejections_at = Counter(), float("-inf")
         self._connection_epoch = 0
         self._transport_epoch = 0
         self._guild = 0
@@ -410,25 +419,45 @@ class Realm:
             return None
         refused = cannot_qualify(ev)
         if refused is not None:
-            return refused
+            return self._rejected("event", ev, refused)
         receipt_reader = getattr(self.app, "row_receipt", None)
         if receipt_reader is None:
-            return Rejected("invalid_input")
+            return self._rejected("no_receipt_reader", ev, Rejected("invalid_input"))
         receipt = receipt_reader(ev)
         if (receipt is None or self.app.bridge.delivery_origin(ev) is not receipt.wire
                 or self._delivery_epoch(ev) != receipt.wire.transport_epoch):
-            return Rejected("invalid_input")
+            return self._rejected("receipt", ev, Rejected("invalid_input"))
         with self._source_store.transaction():
             context = self.action_context()
             if not self._source_context_current(context, receipt.wire.transport_epoch):
-                return Rejected("proof_changed")
+                return self._rejected("context", ev, Rejected("proof_changed"))
             qualification = capture_qualification_in_unit(self._source_store,
                 human=self.ports.human(), event=ev, receipt=receipt, context=context,
                 confirmed_human_guid=self.app.confirmed_human_guid,
                 transport_epoch=self._transport().epoch, captured_at=self.app.clock.now())
             if type(qualification) is Rejected:
-                return qualification
+                return self._rejected("qualification", ev, qualification)
             return RealmObservation(ev, receipt, context, qualification)
+
+    def _rejected(self, where, ev, rejection):
+        """Count one source that made no fact; the rejection, for the caller to return."""
+        self._rejections[where, event_type(ev), rejection.reason] += 1
+        self._flush_rejections()
+        return rejection
+
+    def _flush_rejections(self):
+        """One line for everything refused since the last one, a minute apart at most."""
+        if not self._rejections:
+            return
+        now = self.app.clock.now()
+        if now - self._rejections_at < REJECTION_LOG_S:
+            return
+        counts, self._rejections, self._rejections_at = self._rejections, Counter(), now
+        level = (logging.INFO if all(reason in EXPECTED_REJECTIONS for _, _, reason in counts)
+                 else logging.WARNING)
+        log.log(level, "realm_source_rejected n=%d codes=%s", sum(counts.values()),
+                ",".join(f"{where}:{name}:{reason}={n}"
+                         for (where, name, reason), n in sorted(counts.items())))
 
     async def _on_source_observation(self, observation):
         # There is deliberately no await from the final current-state barrier
@@ -487,8 +516,7 @@ class Realm:
     async def _admit_source_observation(self, observation):
         result = await self._on_source_observation(observation)
         if type(result) is Rejected:
-            log.debug("realm_source_rejected: type=%s reason=%s",
-                      event_type(observation.event), result.reason)
+            self._rejected("admission", observation.event, result)
 
     # -- the kick guard: his kick, the lead's question, his answer, one readmission -------------
 
@@ -679,8 +707,6 @@ class Realm:
             observation = self._capture_source_observation(ev)
             if type(observation) is RealmObservation:
                 await self._owned(lambda: self._admit_source_observation(observation))
-            elif type(observation) is Rejected:
-                log.debug("realm_source_rejected: type=%s reason=%s", name, observation.reason)
         except Exception as error:
             # A database or programming fault stays this event's failure, raised
             # only after the generic parts have still seen the event.
@@ -711,6 +737,7 @@ class Realm:
                 self.forget.tick()  # Operator cleanup works while ordinary Realm work is disabled.
             except Exception as error:  # Never the Realm loop's failure; it sends nothing then.
                 log.warning("realm_forget_failed: %s", type(error).__name__)
+        self._flush_rejections()
         if not self.enabled or self._stopping:
             return
         state = self.ports.raid_state()

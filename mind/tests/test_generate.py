@@ -1244,3 +1244,56 @@ def test_generate_cast_is_reproducible_by_its_rng(store, tmp_path):
                           rng=random.Random(7)))
     first = [load_persona(store, g).real_life.birthday for g in r.created]
     assert len(set(first)) == 4  # Four free dates, four different ones.
+
+
+# -- names that block only as a whole (the world's personas) ---------------------------------------
+
+def test_a_first_name_shared_with_a_whole_name_is_free():
+    llm = FakeLLM(script_from(["profile", _persona_json("Sam Young")]))
+    notes = GenNotes()
+    p = run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES, notes=notes,
+                             full_names=frozenset({"Sam Carter", "Belra"})))
+    assert p.identity.real_name == "Sam Young" and len(llm.calls) == 2
+    assert notes.collisions == [] and notes.renames == []
+
+
+def test_a_repeated_whole_name_is_asked_again_with_that_name_and_keeps_its_first_name():
+    llm = FakeLLM(script_from(["profile", _persona_json("sam  carter"), _persona_json("Sam Young")]))
+    notes = GenNotes()
+    p = run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES, notes=notes,
+                             taken_names=frozenset({"Arkon"}),
+                             full_names=frozenset({"Sam Carter"})))
+    assert p.identity.real_name == "Sam Young" and notes.collisions == ["sam  carter"]
+    retry = llm.calls[2]["messages"][-1]["content"]
+    assert "These full names are already taken" in retry and "sam  carter" in retry
+    assert "different first name: Arkon." in retry  # Sam is not listed as a taken first name
+
+
+def test_a_name_in_both_sets_blocks_by_first_name():
+    llm = FakeLLM(script_from(["profile", _persona_json("Sam Young"), _persona_json("Dale Finch")]))
+    p = run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES,
+                             taken_names=frozenset({"Sam Carter"}),
+                             full_names=frozenset({"Sam Carter"})))
+    assert p.identity.real_name == "Dale Finch"
+
+
+def test_a_rename_takes_a_candidate_that_shares_only_a_first_name_with_a_whole_name():
+    llm = FakeLLM(script_from(["profile", _persona_json("Sam Carter"), _persona_json("Sam Carter"),
+                               _names_json("Sam Carter", "Sam Young")]))
+    notes = GenNotes()
+    p = run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES, notes=notes,
+                             full_names=frozenset({"Sam Carter"})))
+    assert p.identity.real_name == "Sam Young" and notes.renames == [("Sam Carter", "Sam Young")]
+    assert "These full names are already taken" in llm.calls[3]["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize("how", ["taken_names", "full_names"])
+def test_the_screens_watch_whole_names_as_they_watch_taken_names(how):
+    """Either way a known person's first name beside a romance word is refused."""
+    bad = _persona_json("Dale Finch", secret="I have a crush on Sam and flirt with Sam nightly.")
+    llm = FakeLLM(script_from(["profile", *[bad] * 8]))
+    with pytest.raises(Exception):
+        run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES,
+                             **{how: frozenset({"Sam Carter"})}))
+    assert any("romance involving another member" in call["messages"][-1]["content"]
+               for call in llm.calls[2:])

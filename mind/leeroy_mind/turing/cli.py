@@ -1,10 +1,11 @@
-"""`python -m leeroy_mind turing report|run`: read-only, on mind.db opened mode=ro. No service,
-model, migration or write; an older database reads as not set up."""
+"""`python -m leeroy_mind turing report|run|texture`: read-only, on mind.db opened mode=ro. No
+service, model, migration or write; an older database reads as not set up."""
 import argparse
 import json
 import sqlite3
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from leeroy_mind.config import default_data_dir
@@ -44,6 +45,13 @@ def _human(conn) -> int:
     return int(row[0])
 
 
+def _date(text: str) -> float:
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").timestamp()
+    except ValueError:
+        raise argparse.ArgumentTypeError("a date as YYYY-MM-DD") from None
+
+
 def turing_main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="leeroy_mind turing",
                                      description="How distinguishable the members are from you.")
@@ -55,6 +63,13 @@ def turing_main(argv=None) -> int:
         p.add_argument("--days", type=_days, default=14)
         p.add_argument("--json", action="store_true")
         p.add_argument("--data-dir", default=argparse.SUPPRESS)
+    p = sub.add_parser("texture", help="the typing texture replayed on stored lines (no model, "
+                                       "nothing written)")
+    p.add_argument("--days", type=_days, default=DAYS_MAX)
+    p.add_argument("--until", type=_date, help="only lines before this local date (YYYY-MM-DD): "
+                   "the day the texture went on, since a line typed with it would get it twice")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--data-dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
     db = root / "mind.db"
@@ -67,6 +82,13 @@ def turing_main(argv=None) -> int:
             if args.action == "report":
                 data = reporting.report(conn, now=time.time(), days=args.days)
                 print(json.dumps(data, sort_keys=True) if args.json else reporting.render_report(data))
+                return 0
+            if args.action == "texture":
+                from . import texture
+                until = min(args.until or time.time(), time.time())
+                data = texture.replay(conn, human=_human(conn), start=until - args.days * 86400,
+                                      until=until, his_names=_his_names(conn, root))
+                print(json.dumps(data, sort_keys=True) if args.json else texture.render(data))
                 return 0
             data = stylo.compute(conn, human=_human(conn), end=time.time(), days=args.days,
                                  his_names=_his_names(conn, root))

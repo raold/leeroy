@@ -598,8 +598,11 @@ def test_raw_row_strict_json_rejects_duplicate_hidden_nonfinite_and_surrogate_da
         assert type(validate_live_observation_in_unit(roster, observation, human=HUMAN, policy=proof.policy)) is Rejected
 
 
-def test_capture_accepts_all_128_readable_cast_then_rejects_the_129th(roster):
+def test_capture_accepts_a_guild_past_128_and_rejects_by_name_past_its_bound(roster, monkeypatch):
+    """128 was the bound until the guild passed it (2026-11-07) and every source was refused."""
     from leeroy_mind.personas.io import save_persona
+    from leeroy_mind.realm import provenance, records
+    assert records.QUALIFIED_CAST_MAX >= 1000  # [realm] member_cap's own ceiling
 
     with roster.transaction():
         original = observe(roster)
@@ -615,11 +618,14 @@ def test_capture_accepts_all_128_readable_cast_then_rejects_the_129th(roster):
                     transport_epoch=7, captured_at=1010.0)
                 assert type(complete) is QualificationSnapshot
                 assert complete.cast == (*range(101, 106), *range(1000, 1123))
-        rejected = capture_qualification_in_unit(roster, human=HUMAN, event=original.event,
-            receipt=original.receipt, context=CONTEXT, confirmed_human_guid=10,
-            transport_epoch=7, captured_at=1010.0)
-        assert type(rejected) is Rejected
         assert roster.conn.execute('SELECT count(*) FROM persona_core').fetchone()[0] == 129
+        values = dict(human=HUMAN, event=original.event, receipt=original.receipt, context=CONTEXT,
+                      confirmed_human_guid=10, transport_epoch=7, captured_at=1010.0)
+        whole = capture_qualification_in_unit(roster, **values)
+        assert type(whole) is QualificationSnapshot and len(whole.cast) == 129
+        monkeypatch.setattr(records, 'QUALIFIED_CAST_MAX', 128)
+        monkeypatch.setattr(provenance, 'QUALIFIED_CAST_MAX', 128)
+        assert capture_qualification_in_unit(roster, **values) == Rejected('graph_limit')
 
 
 def test_capture_accepts_all_128_rivals_and_129_knowers_then_rejects_another_guild(roster):

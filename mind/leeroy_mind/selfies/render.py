@@ -19,12 +19,13 @@ from leeroy_mind.wow import CAST_MIN_LEVEL
 
 from . import files
 from .config import SelfieCfg
-from .kind import chosen_style
+from .kind import chosen_style, wardrobe_pending
 from .style import LUST, PLAIN
 from .slot import SetRefused, TRIES, render_slot
 from .prompt import HELD, LUST_HELD, PromptSpec, build_prompt, build_varied_prompt, renderable
+from .wardrobe import WARDROBE_HELD
 from .store import Candidate, ensure_first_sets, mark_ready, needing_first, queued_sets
-from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
+from .worker import Identity, RenderRequest, SelfieWorker, WorkerError, detail_for
 
 # [selfies] identity_sets (owner, 2026-11-14): a profile set of a member with a chosen photo
 # carries that photo's face (store.face_pick: never a back view), cut by its framing (the worker
@@ -164,7 +165,8 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
                             fallback: PromptSpec | None = None,
                             dropped: set[int] | None = None,
                             identity: tuple[Identity | None, ...] | None = None,
-                            measure: SetMeasure | None = None) -> list[Candidate]:
+                            measure: SetMeasure | None = None,
+                            rear: tuple[bool, ...] | None = None) -> list[Candidate]:
     """Slots 0-3 into out_dir/c<idx>.jpg and c<idx>.thumb.jpg, one Candidate each: every slot
     from `spec`, or slot i from spec[i] when it is a tuple of four (a varied set). A slot whose
     prompt the worker finds too long ("prompt_too_long") renders from `fallback` instead when
@@ -174,7 +176,8 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
     make_room fails other than by LiveLeaseHeld, WorkerError for a second oom of a slot, an
     image answered as written whose two files are not both there ("unwritten") or any other
     worker failure, and LiveLeaseHeld. `identity` gives slot i its face reference (None: none).
-    `measure` ([selfies] critic) chooses each slot's parameters and measures each candidate."""
+    `measure` ([selfies] critic) chooses each slot's parameters and measures each candidate.
+    `rear` says which slots show her from behind: [selfies] detailer leaves their faces alone."""
     out_dir = Path(out_dir).absolute()
     specs = (spec,) * SET_SIZE if isinstance(spec, PromptSpec) else tuple(spec)
     if len(specs) != SET_SIZE:
@@ -182,12 +185,15 @@ async def render_candidates(worker, spec: PromptSpec | tuple[PromptSpec, ...], o
     faces = tuple(identity) if identity is not None else (None,) * SET_SIZE
     if len(faces) != SET_SIZE:
         raise ValueError("a set has four face references")
+    behind = tuple(rear) if rear is not None else (False,) * SET_SIZE
+    if len(behind) != SET_SIZE:
+        raise ValueError("a set has four views")
     made = []
     for idx in range(SET_SIZE):
         try:
             made.append(await _slot(worker, specs[idx], out_dir, idx, night=night, guid=guid,
                                     set_no=set_no, cfg=cfg, make_room=make_room, leases=leases,
-                                    identity=faces[idx], measure=measure))
+                                    identity=faces[idx], measure=measure, rear=behind[idx]))
         except WorkerError as e:
             if e.reason != "prompt_too_long" or fallback is None or specs[idx] is fallback:
                 raise
@@ -223,7 +229,8 @@ async def _room(make_room: Callable[[], Awaitable[None]], *, night: str, guid: i
 async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str, guid: int,
                 set_no: int, cfg: SelfieCfg, make_room: Callable[[], Awaitable[None]],
                 leases: Callable[[], frozenset[str]] | None, tag: str = "",
-                identity: Identity | None = None, measure: SetMeasure | None = None) -> Candidate:
+                identity: Identity | None = None, measure: SetMeasure | None = None,
+                rear: bool = False) -> Candidate:
     out, thumb = out_dir / f"c{idx}.jpg", out_dir / f"c{idx}.thumb.jpg"
     steps, arm = cfg.steps, False
     if measure is not None:
@@ -233,7 +240,8 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
         _unleased(leases)
         return RenderRequest(spec.phrases, spec.negative,
                              seed_for(night, guid, set_no, idx, attempt), steps, cfg.guidance,
-                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max, identity=identity)
+                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max, identity=identity,
+                             detail=detail_for(cfg, rear=rear))
 
     async def room() -> None:
         await _room(make_room, night=night, guid=guid, set_no=set_no, idx=idx)
@@ -265,7 +273,23 @@ def _stored(ctx: "NightContext", guid: int) -> Persona | None:
 def _held(ctx: "NightContext", p: Persona | None) -> str | None:
     """renderable() under the style that chose p's kind (a lust kind waits while she lacks the
     lust style)."""
-    return renderable(p, chosen_style(ctx.store, p) if p is not None else PLAIN)
+    why = renderable(p, chosen_style(ctx.store, p) if p is not None else PLAIN)
+    if why is None and wardrobe_pending(ctx.store, p):
+        return WARDROBE_HELD  # the photo pass chooses her kind again for her wardrobe first
+    return why
+
+
+def _set_held(ctx: "NightContext", p: Persona | None, guid: int, set_no: int) -> str | None:
+    """_held for one queued set: a set with a varied plan composes its own looks (from her
+    wardrobe already) and never reads her photo kind, so it does not wait for the kind's
+    re-choice (review of #358). _sets checks again that the plan still renders as varied."""
+    why = _held(ctx, p)
+    if why == WARDROBE_HELD:
+        from . import varied
+        with ctx.store.transaction():
+            if varied.plan_of(ctx.store.conn, guid, set_no) is not None:
+                return None
+    return why
 
 
 def _without_persona(ctx: "NightContext") -> int:
@@ -327,7 +351,8 @@ def todo(ctx: "NightContext", policy: RenderPolicy = NIGHT) -> list[str]:
         return []
     units = [f"{s.guid}:{s.set_no}" for s in queued_sets(ctx.store)
              if allows(ctx,s.guid) and (policy.requested_before is None or (
-                 s.requested <= policy.requested_before and _held(ctx, _stored(ctx, s.guid)) is None))]
+                 s.requested <= policy.requested_before
+                 and _set_held(ctx, _stored(ctx, s.guid), s.guid, s.set_no) is None))]
     return [u for u in units if not ctx.done(policy.stage, u)][:room]
 
 
@@ -502,11 +527,19 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     measure = _set_measure(ctx, cfg, p, guid, set_no, varied is not None)
     if measure is not None and measured is not None:
         measured.append(measure)
+    rear = None
+    if varied is not None and getattr(cfg, "detailer", False):
+        from . import varied as varied_mod
+        from .kind import BACK_VIEWS
+        with ctx.store.transaction():
+            plan = varied_mod.plan_of(ctx.store.conn, guid, set_no)
+        if plan and len(plan) == SET_SIZE:
+            rear = tuple(x is not None and x.view in BACK_VIEWS for x in plan)
     made = await render_candidates(worker, spec, staging, night=ctx.night, guid=guid,
                                    set_no=set_no, cfg=cfg, make_room=ctx.arbiter.make_room,
                                    leases=lambda: ctx.arbiter.holders,
                                    fallback=None if varied is None else ordinary, dropped=dropped,
-                                   identity=faces, measure=measure)
+                                   identity=faces, measure=measure, rear=rear)
     files.publish_set(data, guid, set_no)
     return made
 
@@ -579,10 +612,17 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         p = _stored(ctx, guid)
         built_from = _version(ctx, guid)  # read with p (no await between): what p is
         why = _held(ctx, p)
+        if why == WARDROBE_HELD and getattr(cfg, "varied_sets", False):
+            from . import varied as varied_mod
+            if varied_mod.looks_for(ctx.store, p, guid, set_no) is not None:
+                why = None  # a varied set renders its own looks, not her kind
         if why is not None:
             if why in HELD:  # her kind's text is never rendered plainly, nor without its phrase
                 log("selfies_set_held", night=ctx.night, guid=guid, set=set_no,
                     reason="restyle" if why == LUST_HELD else "name")
+            elif why == WARDROBE_HELD:
+                log("selfies_set_held", night=ctx.night, guid=guid, set=set_no,
+                    reason="wardrobe")
             if ctx.skip(policy.stage, unit):
                 tally["skipped"] += 1
             continue

@@ -25,9 +25,9 @@ from .scene_choices import RECIPE
 from .slot import SetRefused, TRIES, render_slot
 from .snaps import looks_hash, mark_rendered
 from .store import current, face_pick
-from .words_scene import (BEHIND, WORDS_RECIPE, build_words_prompt, face_scale, is_words,
-                          names_in)
-from .worker import Identity, RenderRequest, SelfieWorker, WorkerError
+from .words_scene import (BEHIND, WORDS_RECIPE, build_words_prompt, face_scale, from_behind,
+                          is_words, names_in)
+from .worker import Identity, RenderRequest, SelfieWorker, WorkerError, detail_for
 
 SIZE = 1024
 THUMB_PX = 384
@@ -149,7 +149,8 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         tries = attempt + 1
         return RenderRequest(spec.phrases, spec.negative, seed_for(snap.request, snap.guid, attempt),
             cfg.steps, cfg.guidance, SIZE, staged, small, THUMB_PX, cfg.nsfw_max,
-            identity=identity, shape="portrait")
+            identity=identity, shape="portrait",
+            detail=detail_for(cfg, rear=from_behind(snap.scene)))
 
     try:
         began = time.perf_counter()
@@ -286,7 +287,8 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
                 return RenderRequest(spec.phrases, spec.negative,
                                      seed_for(snap.request, snap.guid, k * TRIES + attempt),
                                      params.steps, cfg.guidance, SIZE, cand, small, THUMB_PX,
-                                     cfg.nsfw_max, identity=identity, shape="portrait")
+                                     cfg.nsfw_max, identity=identity, shape="portrait",
+                                     detail=detail_for(cfg, rear=from_behind(snap.scene)))
             began = time.perf_counter()
             try:
                 got, tries = await render_slot(

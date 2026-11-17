@@ -27,6 +27,12 @@ FAKE_SELFIE_CRITIC_ALL_BAD  the critic op measures two faces in every image
 FAKE_SELFIE_CRITIC_ID    a JSON object seed -> the identity cosine the critic answers (default
                          0.8 for a render with a reference)
 FAKE_SELFIE_LOG_STEPS    the log line of a render ends " steps <n>"
+FAKE_SELFIE_NO_DETAIL    a render that asks for the detailer's pass answers none of its fields
+                         (a worker from before the detailer that ignored the keys)
+
+A render with detail_faces or detail_hands (the detailer) logs " detail faces" and/or " hands"
+after its seed and answers detail_faces 1 / detail_hands 2 for what was asked, detail_ms 7 and
+detail_code "".
 
 A critic answers the measurements of a file this worker rendered (by its seed), or a clean one
 for any other JPEG; a path that is not a file answers missing_image; FAKE_SELFIE_LOG gets
@@ -75,6 +81,15 @@ LAYOUTS = ((1, 1, 1), (2, 2, 1), (4, 2, 2), (6, 3, 2), (9, 3, 3), (12, 4, 3), (1
 def _canvas(n: int, tile: int, gutter: int) -> tuple[int, int]:
     cols, rows = next((c, r) for most, c, r in LAYOUTS if n <= most)
     return gutter + cols * (tile + gutter), gutter + rows * (tile + gutter)
+
+
+def _detail(req: dict, env) -> dict:
+    """The detailer's answer fields of a render that asked for its pass."""
+    if not (req.get("detail_faces") or req.get("detail_hands")) or env.get("FAKE_SELFIE_NO_DETAIL"):
+        return {}
+    return {"detail_faces": 1 if req.get("detail_faces") else 0,
+            "detail_hands": 2 if req.get("detail_hands") else 0, "detail_skipped": 0,
+            "detail_ms": 7, "detail_code": ""}
 
 
 def _grid(req: dict) -> None:
@@ -212,7 +227,9 @@ def main() -> None:
             ref = (req.get("identity") or {}).get("ref")
             with open(env["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
                 scale = (req.get("identity") or {}).get("scale")
+                asked = [k[7:] for k in ("detail_faces", "detail_hands") if req.get(k)]
                 f.write(f"{req['id']} {req['seed']}" + (f" scale {scale} identity {ref}" if ref else "")
+                        + (" detail " + " ".join(asked) if asked else "")
                         + (f" steps {req['steps']}" if env.get("FAKE_SELFIE_LOG_STEPS") else "") + "\n")
         renders += 1
         if any(req["id"].startswith(x) for x in env.get("FAKE_SELFIE_TOO_LONG", "").split(",") if x):
@@ -239,7 +256,8 @@ def main() -> None:
         _send({"id": req["id"], "ok": True, "error": "", "flagged": bad,
                "width": width, "height": height,
                "nsfw": 0.95 if bad else 0.01, "prompt": prompt, "dropped": [],
-               "tokens": len(prompt.split()), "seconds": 0.01, "peak_gib": 10.5})
+               "tokens": len(prompt.split()), "seconds": 0.01, "peak_gib": 10.5,
+               **_detail(req, env)})
 
 
 if __name__ == "__main__":

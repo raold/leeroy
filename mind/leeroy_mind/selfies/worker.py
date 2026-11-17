@@ -29,8 +29,9 @@ from leeroy_mind.logs import log
 
 from .job import ProcessTree, WorkerError
 
-__all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Captioned", "Gridded", "Identity", "Ready",
-           "RenderRequest", "Rendered", "SelfieWorker", "WorkerError", "to_the_end"]
+__all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Captioned", "Detail", "Gridded",
+           "Identity", "Ready", "RenderRequest", "Rendered", "SelfieWorker", "WorkerError", "detail_for",
+           "to_the_end"]
 
 START_S = 180.0  # loading the pipeline and the classifier
 RENDER_S = 90.0  # one image (about 5 s on the 4090)
@@ -61,6 +62,23 @@ class Identity:
 
 
 @dataclass(frozen=True)
+class Detail:
+    """The detailer's pass over the rendered image (the worker's detail.py): its small faces
+    and/or its hands drawn again at a higher resolution, before the NSFW check."""
+    faces: bool = True
+    hands: bool = False
+
+
+def detail_for(cfg, *, rear: bool = False) -> Detail | None:
+    """The pass [selfies] detailer asks for (None: off, and the request is what it always was):
+    faces unless the photo shows her from behind (`rear`), hands with detailer_hands."""
+    if not getattr(cfg, "detailer", False):
+        return None
+    faces, hands = not rear, getattr(cfg, "detailer_hands", False) is True
+    return Detail(faces, hands) if faces or hands else None
+
+
+@dataclass(frozen=True)
 class RenderRequest:
     phrases: tuple[tuple[str, int], ...]  # (text, priority 0-9): the worker drops the lowest
     negative: tuple[tuple[str, int], ...]
@@ -74,6 +92,7 @@ class RenderRequest:
     nsfw_max: float
     identity: Identity | None = None  # an identity worker needs it, a plain one refuses it
     shape: str = "square"  # or "portrait" (832 x 1216, needs size 1024)
+    detail: Detail | None = None  # the detailer's pass; None sends no detail key at all
 
 
 @dataclass(frozen=True)
@@ -86,6 +105,10 @@ class Rendered:
     peak_gib: float
     width: int
     height: int
+    detail_faces: int = 0  # the detailer's pass: faces and hands drawn again, its time, and
+    detail_hands: int = 0  # its code ("" for a pass that ran, or no pass asked for)
+    detail_ms: int = 0
+    detail_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -138,6 +161,22 @@ def _similarity(value, tiles: int) -> dict:
            for n in scores.values()) or scores["mean"] > scores["max"]:
         raise _Malformed("similarity.score")
     return {"code": code, "pairs": count, "pair": list(pair), **scores}
+
+
+def _detailed(answer: dict, rid: str) -> dict:
+    """The detailer's fields of a render answer that asked for the pass, logged (ids, counts,
+    a time and a code); a worker that answers none of them did not run it (unsupported)."""
+    if "detail_code" not in answer:
+        out = {"detail_code": "unsupported"}
+    else:
+        out = {"detail_faces": _field(answer, "detail_faces", int),
+               "detail_hands": _field(answer, "detail_hands", int),
+               "detail_ms": _field(answer, "detail_ms", int),
+               "detail_code": _field(answer, "detail_code", str)}
+    log("selfies_detail", rid=rid, faces=out.get("detail_faces", 0),
+        hands=out.get("detail_hands", 0), ms=out.get("detail_ms", 0),
+        code=out["detail_code"] or "ok")
+    return out
 
 
 def _decode(raw: bytes) -> dict | None:
@@ -279,6 +318,12 @@ class SelfieWorker:
                                 "scale": req.identity.scale}
         if req.shape != "square":
             body["shape"] = req.shape
+        detail = req.detail if req.detail is not None and (req.detail.faces or req.detail.hands) else None
+        if detail is not None:
+            if detail.faces:
+                body["detail_faces"] = True
+            if detail.hands:
+                body["detail_hands"] = True
         line = json.dumps(body).encode("utf-8") + b"\n"
         if len(line) - 1 > MAX_LINE:
             raise WorkerError("bad_request")  # what the worker would answer; it stays up
@@ -296,7 +341,8 @@ class SelfieWorker:
                             _field(answer, "prompt", str), _field(answer, "tokens", int),
                             float(_field(answer, "seconds", int, float)),
                             float(_field(answer, "peak_gib", int, float)),
-                            _field(answer, "width", int), _field(answer, "height", int))
+                            _field(answer, "width", int), _field(answer, "height", int),
+                            **(_detailed(answer, rid) if detail is not None else {}))
         except _Malformed:
             await self._end_failed(tree)
             raise WorkerError("gone") from None
