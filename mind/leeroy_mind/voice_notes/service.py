@@ -172,6 +172,7 @@ class VoiceNotes:
             line,chat=desk._his_line(mid,me,now)
             app.store.set_meta(PENDING_KEY+str(mid),'pending')
             app.store.conn.execute('DELETE FROM meta WHERE key=?',(f'server:dm:open:{layout.dm_peer(args["channel"])}',))
+        desk.signal_post(line,args.get('reply_to'),media=True,voice=True)
         server=getattr(app,'server',None)
         if server is not None:
             server.engine.his_post(args['channel']); server.dms.his_post(args['channel'])

@@ -17,6 +17,9 @@ MEMBER_DAILY_CAP = 10.0
 MEMBER_DECAY = 1 - 1 / MEMBER_DAILY_CAP
 HALF_LIFE_DAYS = 21
 METRICS = ("replied", "speed", "length", "continued")
+# What his Discord reply did (signals/discord.py): each is engagement at its own value when it
+# was observed and absent otherwise, with no baseline (most are 1 or missing).
+BONUS = ("asked_back", "laughed", "affection", "topic_kept", "sent_media", "turns_after")
 JUDGES = ("judge_repetition", "judge_nonsequitur", "judge_unawareness", "judge_contradiction")
 
 
@@ -120,9 +123,15 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, scr
         parts[key] = value
         if key in observed:
             normalized.append(value)
+    for key in BONUS:
+        if key in signals:
+            parts[key] = max(0., min(1., signals[key]))
+            normalized.append(parts[key])
     engagement = sum(normalized) / len(normalized) if normalized else 0.
-    emote = max(-1., min(1., signals.get("emote_friendly", 0.) +
-                        signals.get("emote_romantic", 0.) - signals.get("emote_rude", 0.)))
+    # His emoji on her Discord message is the game's emote at her: the same component.
+    emote = max(-1., min(1., signals.get("emote_friendly", 0.) + signals.get("emote_romantic", 0.)
+                        + signals.get("react_positive", 0.) - signals.get("emote_rude", 0.)
+                        - signals.get("react_negative", 0.)))
     # A missing detector hit is not evidence of a clean line. The completed signals
     # receipt proves bounded screening only on that stage's supported, non-skipped rows.
     screened = screening is not None or channel in GAME_SCREENED and 0 < chars <= 4000 and conn.execute(
@@ -138,12 +147,14 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, scr
     quality_measured = bool(screened or actual_guard or any(source=="judge" for _,source in raw))
     quality = -min(1., max(0., hits + guard_penalty)) if quality_measured else 0.
     penalties = (signals.get("muted", 0.) + .5 * signals.get("dial_down", 0.) +
-                 .5 * signals.get("nudged_against", 0.) + .1 * signals.get("ignored", 0.))
+                 .5 * signals.get("nudged_against", 0.) + .1 * signals.get("ignored", 0.) +
+                 .5 * signals.get("objected", 0.) + .1 * signals.get("topic_changed", 0.))
     components = dict(explicit=explicit, engagement=engagement, emote=emote, quality=quality)
     measured = dict(explicit=("explicit","explicit") in raw or
-                    any(key in signals for key in ("muted","dial_down","nudged_against")),
+                    any(key in signals for key in ("muted","dial_down","nudged_against","objected")),
                     engagement=bool(normalized),
-                    emote=any(key in signals for key in ("emote_friendly","emote_romantic","emote_rude")))
+                    emote=any(key in signals for key in ("emote_friendly","emote_romantic","emote_rude",
+                                                         "react_positive","react_negative")))
     measured_weight = sum(weights.values[k] for k in measured if measured[k])
     owner_part = (sum(weights.values[k] * components[k] for k in measured if measured[k]) /
                   measured_weight if measured_weight else 0.) - penalties

@@ -2,6 +2,7 @@
 import logging
 import re
 
+from leeroy_mind.discord.channels import DM_PREFIX, is_discord
 from leeroy_mind.protocol import AfkEvent, Boss, Group, Hello, Login, Logout, TextEmote, Zone
 from leeroy_mind.talk.emote_names import FRIENDLY_EMOTES, ROMANTIC_EMOTES, RUDE_EMOTES
 from leeroy_mind.tuning.dials import applies
@@ -36,6 +37,10 @@ class Signals:
     def _owner_visible(self, chat):
         world, owner = self.app.world, self.app.human_guid
         channel = chat.channel
+        if is_discord(channel):
+            # The guild Discord is his own server: he reads every channel and group DM of it in
+            # the console, and a DM only when it is his. Never by his WoW presence.
+            return bool(owner) and (not channel.startswith(DM_PREFIX) or chat.to_guid == owner)
         if channel.startswith('voice:'):
             comms = self.app.engine.comms
             return comms is not None and channel == 'voice:' + (comms.human_room() or '')
@@ -60,6 +65,16 @@ class Signals:
         if chat is not None and chat.channel in ('guild', 'officer', 'party', 'raid', 'raid_warning', 'whisper', 'say', 'yell'):
             self.owner_location = (chat.map, chat.zone, self.app.clock.now())
         self.offer('owner', (line_id,), (min(length / REPLY_LEN_SCALE, 1), command))
+
+    def his_discord(self, line_id, *, reply_line=0, media=False, voice=False):
+        """His stored Discord post's chat line (discord.desk), after its commit: ids and flags
+        only. `reply_line` is the chat line of the message he replied to by hand, if any."""
+        self.offer('discord_owner', (line_id, reply_line or 0), (bool(media), bool(voice)))
+
+    def reacted(self, line_id, *, positive, negative):
+        """His emoji on a member's Discord line as they now stand (a removed one takes its
+        observation back)."""
+        self.offer('reaction', (line_id,), (bool(positive), bool(negative)))
 
     def played(self, msg):
         if msg.state == 'dropped' and msg.reason == 'muted':

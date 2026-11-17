@@ -167,6 +167,7 @@ class DiscordDesk:
                 server.reactions.after_post(mid, author=me, channel=args['channel'], text=args['text'], his=True)
             if image is not None:
                 self._photo_posts.append(now)
+            self.signal_post(line, args.get("reply_to"), media=image is not None)
             try:
                 app.on_his_discord_line(line, chat, now)
             except Exception as e:  # the post is stored: its answers still come
@@ -194,8 +195,10 @@ class DiscordDesk:
         if action == "react":
             from leeroy_mind.culture.config import app_emoji
             dstore.react(store, message, member=me, emoji=args["emoji"], now=now, custom=app_emoji(app))
+            self._signal_reactions(message, me)
         elif action == "unreact":
             dstore.unreact(store, message, member=me, emoji=args["emoji"], now=now)
+            self._signal_reactions(message, me)
         elif action == "edit":
             with store.transaction():
                 dstore.edit(store, message, author=me, text=args["text"], now=now)
@@ -208,6 +211,36 @@ class DiscordDesk:
             dstore.unpin(store, message)
         self._his_action()
         return {"ok": True}
+
+    def signal_post(self, line: int, reply_to=None, *, media: bool = False, voice: bool = False) -> None:
+        """His committed post's chat line for the owner-response signals (signals.attach): ids
+        and flags only, never in the way of the post."""
+        signals = getattr(self.app, "signals", None)
+        if signals is None:
+            return
+        try:
+            parent = self.app.store.get_meta(LINE_KEY.format(reply_to)) if reply_to else None
+            signals.his_discord(line, reply_line=int(parent) if parent else 0, media=media, voice=voice)
+        except Exception as e:
+            log_event("discord_signal_failed", level=logging.WARNING, error=type(e).__name__)
+
+    def _signal_reactions(self, message: int, me: int) -> None:
+        """His emoji on a member's message, as they stand after this change, for the signals."""
+        signals = getattr(self.app, "signals", None)
+        if signals is None:
+            return
+        try:
+            from leeroy_mind.signals.discord import reaction_kind
+            store = self.app.store
+            line = store.get_meta(LINE_KEY.format(message))
+            if line is None:
+                return
+            kinds = {reaction_kind(r[0]) for r in store.conn.execute(
+                "SELECT emoji FROM discord_reaction WHERE message = ? AND member = ?", (message, me))}
+            signals.reacted(int(line), positive="react_positive" in kinds,
+                            negative="react_negative" in kinds)
+        except Exception as e:
+            log_event("discord_signal_failed", level=logging.WARNING, error=type(e).__name__)
 
     def _spawn_photo(self, work, *, memory=None) -> None:
         task = asyncio.create_task(work, name='discord-photo')
