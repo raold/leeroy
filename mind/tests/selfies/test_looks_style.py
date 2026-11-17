@@ -516,3 +516,12 @@ def test_the_digest_follows_the_stored_wardrobe_and_palette_only():
     assert a != wardrobe.digest(woman(wardrobe=("casual",), palette=("red",)))
     assert a != wardrobe.digest(woman(wardrobe=("casual", "sporty")))
     assert wardrobe.digest(woman(**HAIR, makeup="glam")) is None
+
+
+def test_the_models_looks_line_says_the_hair_he_set():
+    line = kind.looks_line(woman().appearance)
+    assert "dark brown shoulder hair worn tucked behind one ear" in line
+    styled = kind.looks_line(woman(**HAIR).appearance)
+    assert "strawberry blonde very_long hair worn in a messy bun" in styled
+    assert styled.replace("strawberry blonde very_long hair worn in a messy bun",
+                          "dark brown shoulder hair worn tucked behind one ear") == line

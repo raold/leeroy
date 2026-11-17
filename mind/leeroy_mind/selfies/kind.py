@@ -43,7 +43,8 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.text import has_meta
 
 from . import wardrobe
-from .prompt import lust_named, lust_phrase, names_re
+from .prompt import (HAIR_COLOUR_WORDS, HAIR_STYLE_WORDS, lust_named, lust_phrase,
+                     names_re)
 from .store import queue_restyled
 from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
 
@@ -200,8 +201,12 @@ WEAR_RE = re.compile(
 def looks_line(a: Appearance) -> str:
     """One sentence from the appearance's fields, in schema order."""
     face = f", {', '.join(a.face)}" if a.face else ""
-    return (f"{a.height_cm} cm, {a.build} build, {a.weight_kg} kg, {a.hair_colour} "
-            f"{a.hair_length} hair worn {a.hair_style}, {a.skin_tone} skin, {a.eye_colour} "
+    # the hair the owner set in the Looks panel stands in for the looks' own (prompt.hair_words)
+    colour = HAIR_COLOUR_WORDS[a.owner_hair_colour] if a.owner_hair_colour else a.hair_colour
+    length = a.owner_hair_length or a.hair_length
+    style = HAIR_STYLE_WORDS[a.owner_hair_style] if a.owner_hair_style else a.hair_style
+    return (f"{a.height_cm} cm, {a.build} build, {a.weight_kg} kg, {colour} "
+            f"{length} hair worn {style}, {a.skin_tone} skin, {a.eye_colour} "
             f"eyes{face}; at the computer they wear {a.at_the_pc}.")
 
 
