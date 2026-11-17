@@ -5,6 +5,8 @@ callers keep today's behaviour), 6 is the design point, 10 the most scarcity. Pu
 from __future__ import annotations
 
 import math
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
@@ -161,6 +163,85 @@ def where_text(lp: LifePresence, medium: str, *, playing: bool = False) -> str:
     if lp.block is Block.HOME_DUTY:
         return WHERE_TEXT[(Block.HOME_DUTY, "kids" if lp.kids else "")]
     return WHERE_TEXT.get((lp.block, medium)) or WHERE_TEXT[(lp.block, "")]
+
+
+# One "right now" per conversation ([talk] coherence; self-play audit, 2026-11-17: a member said
+# she was at work on the worst shift of her life, joined his group, and her next prompt said
+# only "You're at your PC, playing", so her next line was "it's a day off"; grouped members
+# talked as if they were elsewhere while he pulled a boss with them). Where she said she is, read
+# from her own lines in the conversation (stated_where), holds for the conversation: the line
+# agrees with it (settled_where), and a member in his group is told so, with the place.
+PLAYING_WITH = "You're at your PC, playing: you're in {name}'s {group} with {them} right now{place}."
+STATED_WORDS = {"work": "at work", "bed": "in bed", "out": "out", "home": "home"}
+# she said it, and her plan (or his group) now has her elsewhere: what the line says instead
+STILL = {"work": "You're still at work, as you told {them} a little while ago.",
+         "bed": "You're still in bed, as you told {them} a little while ago.",
+         "out": "You're still out, as you told {them} a little while ago.",
+         "home": "You're at home, as you told {them} a little while ago."}
+JOINED = {"work": "You told {them} a little while ago you were at work: you've just got in "
+                  "from work and logged on.",
+          "bed": "You told {them} a little while ago you were in bed: you got back up and "
+                 "logged on.",
+          "out": "You told {them} a little while ago you were out: you've just got back in "
+                 "and logged on."}
+_APOS = "['\u2019\u02bc]?"
+_I = rf"(?:i{_APOS}m|i am|im|still|stuck|been)"
+_STATED = (
+    # home first: "just got in from work" is no "at work"
+    ("home", re.compile(
+        rf"\b(?:(?:just )?(?:got|get|back|home)(?: (?:in|home|back))? from (?:work|my shift|the "
+        rf"gym|the shops?)|(?:just )?(?:finished|done with|off|left|clocked off) (?:work|my shift)"
+        rf"|(?:it{_APOS}s|its|on|got|have|having) (?:a|my) day off|off (?:work )?today"
+        rf"|{_I} (?:at )?home|closed up|logged off work)\b", re.IGNORECASE)),
+    ("work", re.compile(
+        rf"\b(?:{_I} (?:at|in) (?:work|the office|the shop|the bar|the hospital|the plant|the "
+        rf"lab|the studio|the depot|the clinic|the site)|at work\b|on (?:my |a |the )?shift"
+        rf"|(?:this|my|whole|worst|long|double|late|night) shift|between (?:tasks|calls|"
+        rf"customers|clients|patients|tables|meetings)|on my (?:lunch |tea )?break"
+        rf"|my (?:boss|manager|supervisor) (?:is|just|keeps)|at my desk)\b", re.IGNORECASE)),
+    ("bed", re.compile(
+        rf"\b(?:{_I} in bed|in bed\b|under the (?:covers|duvet)|half asleep|"
+        rf"about to (?:sleep|pass out)|woke me up|just woke up)\b", re.IGNORECASE)),
+    ("out", re.compile(
+        rf"\b(?:{_I} (?:out|at the (?:gym|shops?|pub|store|vet|dentist|doctors?)|driving|on "
+        rf"the (?:bus|train|road))|(?:on|at) the (?:bus|train)\b|at the gym\b|out with (?:the|my)"
+        rf"|in the car\b)\b", re.IGNORECASE)),
+)
+_STATED_BLOCKS = {"work": frozenset({Block.WORK}), "bed": frozenset({Block.ASLEEP}),
+                  "out": frozenset({Block.OUT, Block.GYM, Block.COMMUTE}),
+                  "home": frozenset({Block.FREE, Block.GAMING, Block.HOME_DUTY, Block.ASLEEP})}
+
+
+def stated_where(lines: Sequence[str]) -> str:
+    """Where she last said she is, from her own `lines` in this conversation (oldest first):
+    "work", "bed", "out" or "home" from the newest line that says one; "" when none does."""
+    for line in reversed(list(lines)):
+        for kind, pattern in _STATED:
+            if pattern.search(line or ""):
+                return kind
+    return ""
+
+
+def playing_text(name: str, them: str, *, raid: bool = False, place: str = "") -> str:
+    """"Right now" for a member in his group while he plays: at her PC, in his group or raid
+    with him, and where they are when the instance is known."""
+    return PLAYING_WITH.format(name=name, them=them, group="raid" if raid else "group",
+                               place=f", in {place}" if place else "")
+
+
+def settled_where(text: str, stated: str, lp: LifePresence, *, playing: bool, them: str) -> str:
+    """`text` (her "Right now" line) made to agree with where she said she is a little while
+    ago (`stated`: stated_where): unchanged when she said nothing or it already agrees; in
+    his group (`playing`) she has just come from there and logged on (JOINED), then `text`;
+    else she is still where she said (STILL), whatever her day plan has moved on to."""
+    if not stated or not text:
+        return text
+    if playing:
+        joined = JOINED.get(stated)
+        return f"{joined.format(them=them)} {text}" if joined else text
+    if lp.block in _STATED_BLOCKS[stated]:
+        return text
+    return STILL[stated].format(them=them)
 
 
 def away_words(lp: LifePresence, medium: str) -> str:

@@ -32,6 +32,8 @@ class JobShape(StrEnum):
     DAY = "day"
     EARLY = "early"
     LATE = "late"
+    EVENING = "evening"   # bar and kitchen work: evenings, Wednesday to Sunday
+    PART = "part"         # part-time, half days: weekday mornings
     NIGHTS = "nights"
     ROTATING = "rotating"
     STUDENT = "student"
@@ -54,16 +56,40 @@ def _bounded(pattern: str) -> re.Pattern:
 _APOS = "['\u2019\u02bc]?"   # typed or phone apostrophe, or none
 
 # first match wins, in this order; "raid nights", "late nights" and "plays on nights" are no night
-# shift. A shape may name text that rules it out (a teacher's classes are no study).
+# shift. A shape may name text that rules it out (a teacher's classes are no study). Self-play
+# audit, 2026-11-17: every job the table did not name worked 09:00-17:00 and gamed 18:00-24:00,
+# so a bartender on "evenings and weekends" was at work at 14:45 and gaming through her shift, a
+# trainer with "early mornings for clients" and a half-day worker likewise, and a paralegal on
+# maternity leave was "at work". Leave comes first (she has the job and is not at it), then the
+# hours her card states outright (_clock_shape: a card whose job says "third shift" and whose
+# rhythm says "4am to 1pm work" has one clock, the stated one), then the words below.
+_LEAVE = _bounded(r"(?:maternity|mat|parental|paternity|medical|sick|long[- ]term) leave"
+                  r"|on (?:extended |unpaid )?leave|signed off (?:work|sick)|sabbatical"
+                  r"|furlough(?:ed)?|laid off|out of work")
 _JOB_PATTERNS = (
     (JobShape.NIGHTS, _bounded(rf"night[- ]?shifts?|third[- ]shifts?|work(?:s|ing)?(?: on)? nights"
                                rf"|(?:i{_APOS}m|she{_APOS}s|is|was|been) on nights"
+                               r"|(?:nurse|ward|hospital|a&e|icu|porter|security|guard|warehouse)"
+                               r"\W+(?:\w+\W+){0,3}?on nights"
+                               r"|nights (?:at|on) the (?:hospital|ward|warehouse|depot|plant)"
                                r"|overnights?|graveyard"), None),
     (JobShape.ROTATING, _bounded(r"\d+\s*on\s*,?\s*\d+\s*off|\d+\s*(?:days|weeks)\s*on|rotating"
                                  r"|rota|12[- ]hour|on call"), None),
     (JobShape.EARLY, _bounded(r"early shifts?|early starts?|[4-6]\s*a\.?m\.?\s*starts?"
-                              r"|starts? at [4-6]"), None),
-    (JobShape.LATE, _bounded(r"late shifts?|evening shifts?|swing shifts?|afternoon shifts?"), None),
+                              r"|starts? at [4-6]|early mornings?|opening shifts?|morning shifts?"
+                              r"|opens (?:up|the)|up (?:at|before) (?:dawn|[4-6])|baker|bakery"
+                              r"|milk round|postie|postal round"), None),
+    # bar, pub, club and kitchen work, and anyone whose card says evenings and weekends
+    (JobShape.EVENING, _bounded(r"bartend\w*|barmaid|barman|barback|bar (?:staff|work|manager)"
+                                r"|(?:behind|tends?|tending|runs?) (?:a |the )?bar"
+                                r"|works? (?:at|in) (?:a |the )?(?:bar|pub|club|nightclub|restaurant)"
+                                r"|pub (?:landlady|landlord|manager)|evenings and weekends"
+                                r"|weekends and evenings|closing shifts?|works? evenings"
+                                r"|evening work|chef|line cook|waits? tables"
+                                r"|waitress(?:es|ing)? (?:evenings|nights)|bouncer|door staff"),
+     None),
+    (JobShape.LATE, _bounded(r"late shifts?|evening shifts?|swing shifts?|afternoon shifts?"
+                             r"|second[- ]shifts?|lates"), None),
     # only what she does: an employer named "... College", a degree she holds, a course she
     # teaches or a job at a university is no study
     (JobShape.STUDENT, _bounded(r"student(?! loans?)|studying"
@@ -76,8 +102,59 @@ _JOB_PATTERNS = (
      _bounded(r"teach\w*|tutor\w*|lecturer|professor|instructor|gives? lectures?"
               r"|works? (?:at|for) (?:the |a )?(?:uni|university|college)")),
     (JobShape.REMOTE, _bounded(r"wfh|works? from home|from home|freelanc\w*|self[- ]employed"), None),
-    (JobShape.HOME, _bounded(r"stay[- ]at[- ]home|unemployed|between jobs|retired"), None),
+    (JobShape.HOME, _bounded(r"stay[- ]at[- ]home|unemployed|between jobs|retired"
+                             r"|full[- ]time (?:mum|mom|mother|dad|father|parent|carer)"
+                             r"|housewife|homemaker"), None),
+    (JobShape.PART, _bounded(r"part[- ]time|half[- ]days?|mornings only|school hours|term[- ]time"
+                             r"|(?:two|three|2|3) (?:days|mornings) a week"), None),
 )
+# The hours her card states outright, next to a word for work: "4am to 1pm work", "works 2pm-10pm",
+# "shift 22:00 to 06:00". Never her raid or play times ("raids 7pm to 11pm").
+_AMPM = r"(?:a\.?m\.?|p\.?m\.?)"
+_CLOCK = re.compile(
+    rf"(?<![\d:])(\d{{1,2}})(?::(\d{{2}}))?\s*({_AMPM})?\s*(?:to|until|till|til|-|\u2013)\s*"
+    rf"(\d{{1,2}})(?::(\d{{2}}))?\s*({_AMPM})?(?![\d:])")
+_CLOCK_WORK = re.compile(r"\b(?:works?|working|worked|shifts?|job|on site|at the (?:office|shop|"
+                         r"plant|depot|clinic|hospital|studio|bar|site)|clients|patients)\b")
+_CLOCK_REACH = 24  # characters either side of the hours in which the work word must sit
+
+
+def _minute(hour: str, minute: str | None, half: str | None) -> int | None:
+    h, m = int(hour), int(minute or 0)
+    if half:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if half.casefold().startswith("p") else 0)
+    elif minute is None:
+        return None  # a bare "4 to 6" is no clock
+    return h * 60 + m if h < 24 and m < 60 else None
+
+
+def _clock_shape(text: str) -> JobShape | None:
+    """The shape of the working hours her card states outright (module comment above); None
+    when it states none. By the hour she starts: 03:00-07:29 early, 07:30-10:59 day (a morning of
+    five hours or less: part), 11:00-15:59 late, 16:00-18:59 evening, else nights."""
+    for m in _CLOCK.finditer(text):
+        start, end = _minute(m[1], m[2], m[3]), _minute(m[4], m[5], m[6])
+        if start is None or end is None:
+            continue
+        around = text[max(0, m.start() - _CLOCK_REACH):m.end() + _CLOCK_REACH]
+        if not _CLOCK_WORK.search(around):
+            continue
+        length = (end - start) % DAY_MIN
+        if not 120 <= length <= 14 * 60:
+            continue
+        if _hm(3) <= start < _hm(7, 30):
+            return JobShape.EARLY
+        if _hm(7, 30) <= start < _hm(11):
+            return JobShape.PART if length <= 300 else JobShape.DAY
+        if _hm(11) <= start < _hm(16):
+            return JobShape.LATE
+        if _hm(16) <= start < _hm(19):
+            return JobShape.EVENING
+        return JobShape.NIGHTS
+    return None
+
 _KIDS = _bounded(r"kids?|sons?|daughters?|bab(?:y|ies)|toddlers?|child(?:ren)?|twins|stepkids?")
 # a household with no child at home: none, child-free, an empty nest, or she lives alone
 _NO_KIDS = _bounded(r"no (?:kids|children)|child[- ]?free|empty nest"
@@ -114,6 +191,10 @@ _HOURS = {
                            _hm(4, 45)),
     JobShape.LATE: _Hours((_hm(14), _hm(22, 30)), ((_hm(13, 30), _hm(14)), (_hm(22, 30), _hm(23))),
                           _hm(10)),
+    JobShape.EVENING: _Hours((_hm(16), _hm(23, 30)), ((_hm(15, 30), _hm(16)), (_hm(23, 30), DAY_MIN)),
+                             _hm(10)),
+    JobShape.PART: _Hours((_hm(9), _hm(13)), ((_hm(8, 30), _hm(9)), (_hm(13), _hm(13, 30))),
+                          _hm(7, 30)),
     JobShape.NIGHTS: _Hours((_hm(22), _hm(30)), ((_hm(21, 30), _hm(22)), (_hm(30), _hm(30, 30))), None),
     JobShape.ROTATING: _Hours((_hm(7), _hm(19)), ((_hm(6, 30), _hm(7)), (_hm(19), _hm(19, 30))),
                               _hm(5, 45)),
@@ -180,6 +261,11 @@ def _facts(p: Persona) -> _Facts:
 
 def _job_shape(job: str, rhythm: str) -> JobShape:
     text = f"{job} {rhythm}".casefold()
+    if _LEAVE.search(text):
+        return JobShape.HOME  # she has the job and is not at it
+    stated = _clock_shape(text)
+    if stated is not None:
+        return stated
     for shape, pattern, unless in _JOB_PATTERNS:
         if pattern.search(text) and not (unless and unless.search(text)):
             return shape
@@ -221,6 +307,8 @@ def _workday(job: JobShape, guid: int, day: date) -> bool:
         return day.weekday() in {(k + guid) % 7 for k in range(4)}
     if job is JobShape.ROTATING:
         return (day.toordinal() + guid) % 8 < 4
+    if job is JobShape.EVENING:
+        return day.weekday() >= 2  # Wednesday to Sunday: her weekend is Monday and Tuesday
     return day.weekday() < 5
 
 

@@ -62,7 +62,8 @@ from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
 from leeroy_mind.life.day import Block, has_kids
 from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
-from leeroy_mind.life.presence import away_words, where_text
+from leeroy_mind.life.presence import (away_words, playing_text, settled_where, stated_where,
+                                       where_text)
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
@@ -135,7 +136,7 @@ from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
-from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
+from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, DUNGEONS, RACES, RAID_INSTANCES
 
 log = logging.getLogger("leeroy_mind.talk")
 
@@ -1949,9 +1950,32 @@ class Pipeline:
         if (lp is None or turn.kind in RAID_CALLS
                 or (turn.channel.startswith("voice:") and not meta.elsewhere)):
             return ""
-        return where_text(lp, "discord" if is_discord(turn.channel) else "game",
-                          playing=bool(self.world.human_online
-                                       and self.world.in_group(turn.speaker)))
+        playing = bool(self.world.human_online and self.world.in_group(turn.speaker))
+        text = where_text(lp, "discord" if is_discord(turn.channel) else "game", playing=playing)
+        if not self._coherent():
+            return text
+        # one "right now" per conversation: in his group she is told so, with the place, and
+        # where she said she is a little while ago still holds (life.presence.settled_where)
+        them = self.human.forms[1]
+        if playing and not is_discord(turn.channel):
+            text = playing_text(self.human.called, them, raid=self._in_his_raid(),
+                                place=self._instance_of(turn.speaker))
+        try:
+            stated = stated_where(self._said_here(turn, meta, self.clock.now()))
+        except Exception as e:  # her situation is colour: nothing in it may cost him an answer
+            log.warning("talk_where_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
+            return text
+        return settled_where(text, stated, lp, playing=playing and not is_discord(turn.channel),
+                             them=them)
+
+    def _in_his_raid(self) -> bool:
+        group = self.world.group
+        return bool(group is not None and group.raid)
+
+    def _instance_of(self, guid: int) -> str:
+        """The raid or dungeon the member stands in, by name ("" anywhere else)."""
+        m = self.world.members.get(guid)
+        return (RAID_INSTANCES.get(m.map) or DUNGEONS.get(m.map) or "") if m is not None else ""
 
     def _remember_want(self, turn: Turn, meta: TurnMeta, said: str = "") -> None:
         """Her want on a line she said, as `last` for her next turn in this conversation."""

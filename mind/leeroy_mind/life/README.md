@@ -32,17 +32,35 @@ is UK time, as Discord presence has it (`discord.presence.local_time`).
 
 ### Job shape
 
-From `job + " " + rhythm`, case-folded; the first word-bounded match wins, else `day`:
+From `job + " " + rhythm`, case-folded. Two rules come before the table (2026-11-17, the
+self-play audit: a bartender, a trainer with early clients, a half-day worker and a paralegal on
+maternity leave all had the `day` plan):
+
+1. **Leave is `home`**: maternity, parental, paternity, medical, sick or long-term leave, "on
+   leave", signed off, sabbatical, furloughed, laid off, out of work. She has the job and is not at it.
+2. **The hours her card states outright** (`_clock_shape`): a range such as "4am to 1pm",
+   "2pm-10pm" or "22:00 to 06:00" within 24 characters of a word for work (work, shift, job,
+   clients, patients, at the office/plant/bar...), 2 to 14 hours long. By its start: 03:00-07:29
+   `early`, 07:30-10:59 `day` (five hours or less: `part`), 11:00-15:59 `late`, 16:00-18:59
+   `evening`, else `nights`. So a card whose job says "third shift" and whose rhythm says "4am to
+   1pm work" has one clock, the stated one. Her raid times ("raids 7pm to 11pm") are never read.
+
+Then the first word-bounded match wins, else `day`:
 
 | Shape | Pattern |
 |---|---|
 | `nights` | `night[- ]?shifts?\|third[- ]shifts?\|work(?:s\|ing)?(?: on)? nights\|(?:i'm\|she's\|is\|was\|been) on nights\|overnights?\|graveyard` ("raid nights", "late nights" and "plays on nights" are no night shift) |
 | `rotating` | `\d+\s*on\s*,?\s*\d+\s*off\|\d+\s*(?:days\|weeks)\s*on\|rotating\|rota\|12[- ]hour\|on call` |
-| `early` | `early shifts?\|early starts?\|[4-6]\s*a\.?m\.?\s*starts?\|starts? at [4-6]` |
-| `late` | `late shifts?\|evening shifts?\|swing shifts?\|afternoon shifts?` |
+| `early` | `early shifts?\|early starts?\|[4-6]\s*a\.?m\.?\s*starts?\|starts? at [4-6]`, and early mornings, opening or morning shifts, "opens up/the", up at or before dawn or 4-6, baker, bakery, milk round, postie |
+| `evening` | bar, pub, club and kitchen work: bartend*, barmaid, barman, bar staff/work/manager, behind/tends/runs a bar, works at or in a bar/pub/club/restaurant, pub landlady/landlord, "evenings and weekends", closing shifts, works evenings, chef, line cook, waits tables, bouncer, door staff ("drinks at the bar" is no bar job) |
+| `late` | `late shifts?\|evening shifts?\|swing shifts?\|afternoon shifts?\|second[- ]shifts?\|lates` |
 | `student` | `student(?! loans?)\|studying\|(?:attends?\|attending\|has\|skips?\|skipping\|goes to\|going to) lectures?\|(?:takes?\|taking\|attends?\|attending\|night\|evening) classes\|(?:back\|off\|goes\|going\|still\|is\|she's\|been\|starts?\|starting) (?:to\|at\|in) (?:uni\|university\|college)\|(?:uni\|college) (?:classes\|courses?\|lectures?\|coursework\|assignments?)\|doing an? (?:[\w-]+ ){0,2}degree`, unless the text also says `teach\w*\|tutor\w*\|lecturer\|professor\|instructor\|gives? lectures?\|works? (?:at\|for) (?:the \|a )?(?:uni\|university\|college)`: only what she does, so an employer named "... College", a degree she holds, a job at a university or a class she teaches is no study |
 | `remote` | `wfh\|works? from home\|from home\|freelanc\w*\|self[- ]employed` |
-| `home` | `stay[- ]at[- ]home\|unemployed\|between jobs\|retired` |
+| `home` | `stay[- ]at[- ]home\|unemployed\|between jobs\|retired`, full-time mum/dad/parent/carer, housewife, homemaker (and leave, above) |
+| `part` | `part[- ]time\|half[- ]days?\|mornings only\|school hours\|term[- ]time`, two or three days or mornings a week |
+
+`nights` also reads "nurse/ward/hospital/security/warehouse ... on nights" and "nights at the
+hospital/ward/warehouse/depot/plant".
 
 **Kids** (home duty) means a dependent child at home. A household that says "no kids", "no
 children", child-free, "empty nest", doesn't/does not/don't/do not/never/without (up to two words)
@@ -63,6 +81,8 @@ fourth" still has kids).
 | `day` | Mon-Fri | 09:00-17:00 | 08:15-09:00, 17:00-17:45 | 07:30 |
 | `early` | Mon-Fri | 06:00-14:30 | 05:30-06:00, 14:30-15:00 | 04:45 |
 | `late` | Mon-Fri | 14:00-22:30 | 13:30-14:00, 22:30-23:00 | 10:00 |
+| `evening` | Wed-Sun (her weekend is Monday and Tuesday) | 16:00-23:30 | 15:30-16:00, 23:30-24:00 | 10:00 |
+| `part` | Mon-Fri | 09:00-13:00 | 08:30-09:00, 13:00-13:30 | 07:30 |
 | `nights` | shifts start on weekdays `(k + guid) % 7`, k = 0-3 | 22:00-06:00 next day | 21:30-22:00, 06:00-06:30 | asleep 07:00-14:30 after a shift |
 | `rotating` | `(date.toordinal() + guid) % 8 < 4` | 07:00-19:00 | 06:30-07:00, 19:00-19:30 | 05:45 |
 | `student` | Mon-Fri | 10:00-15:00 | none | 09:00 |
