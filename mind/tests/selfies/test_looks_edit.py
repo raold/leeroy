@@ -650,3 +650,167 @@ def test_a_shape_edit_queues_a_light_face_set_through_the_service(store, clock, 
     spec = build_prompt(app.personas.base(102))
     assert ("curvy hourglass figure, full bust, very wide hips, very narrow waist", 0) \
         in spec.phrases
+
+
+# -- hair, wardrobe, makeup and accessories (owner, 2026-11-17) ----------------------------------
+
+STYLED = {"owner_hair_colour": "pastel_pink", "owner_hair_length": "long",
+          "owner_hair_style": "bangs", "wardrobe": ["edgy", "cosy"], "palette": ["black"],
+          "makeup": "glam", "glasses": "never", "jewellery": "minimal", "tattoos": "small",
+          "piercings": "nose"}
+
+
+def test_one_save_is_one_version_one_ledger_row_and_one_queued_set(store, clock, tmp_path):
+    from leeroy_mind.personas.schema import persona_to_dict
+    from leeroy_mind.selfies.store import LOOKS_EDIT_SET_KEY
+    app = app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    was = _source(store, 102)["version"]
+    stored_hair = persona_to_dict(load_persona(store, 102))["appearance"]["hair_colour"]
+    reply = run(LooksService(app).handle({**looks(weight_kg=70, bust="medium"), **STYLED}))
+    assert reply["ok"] and reply["set"] == 1 and reply["message"].endswith(
+        f"A new set renders tonight {KEEP}")
+    assert _source(store, 102)["version"] == was + 1  # everything in one version
+    rows = _ledger(store, 102)
+    assert len(rows) == 1 and rows[0]["kind"] == "looks" and rows[0]["text"] == (
+        "weight 64 -> 70 kg, bust the build's own -> medium, hair colour not set -> pastel pink, "
+        "hair length not set -> long, hair style not set -> bangs, wardrobe not set -> edgy, cosy, "
+        "palette not set -> black, makeup not set -> glam, glasses not set -> never, "
+        "jewellery not set -> minimal, tattoos not set -> small, piercings not set -> nose")
+    assert [(s.guid, s.set_no) for s in queued_sets(store)] == [(102, 1)]  # one set
+    assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) == "1"  # the light face
+    a = load_persona(store, 102).appearance
+    assert a.wardrobe == ("edgy", "cosy") and a.palette == ("black",)
+    assert persona_to_dict(load_persona(store, 102))["appearance"]["hair_colour"] == stored_hair
+    spec = build_prompt(app.personas.base(102))  # what the queued set renders
+    assert ("long pastel pink hair, with bangs", 0) in spec.phrases
+    assert ("glamorous makeup, bold lipstick", 3) in spec.phrases
+    assert ("small tattoo", 2) in spec.phrases and ("nose piercing", 2) in spec.phrases
+    assert not any("glasses" in t for t, _ in spec.phrases)
+    # a field not given stays as stored; the same values again write nothing
+    kept = run(LooksService(app).handle({**looks(weight_kg=70, bust="medium"), "makeup": None}))
+    assert kept["ok"] and kept["ledger"] is not None
+    a = load_persona(store, 102).appearance
+    assert a.makeup is None and a.owner_hair_colour == "pastel_pink" and a.tattoos == "small"
+    assert _ledger(store, 102)[-1]["text"] == "makeup glam -> not set"
+    same = run(LooksService(app).handle({**looks(weight_kg=70, bust="medium"),
+                                         "wardrobe": ["edgy", "cosy"]}))
+    assert same["ledger"] is None and same["message"].startswith("Nothing changed")
+    assert len(queued_sets(store)) == 1
+
+
+def test_undo_takes_the_hair_and_style_back_and_the_stored_looks_are_as_before(store, clock,
+                                                                              tmp_path):
+    from leeroy_mind.personas.schema import persona_to_dict
+    from leeroy_mind.selfies.snaps import looks_hash
+    app = app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    before = persona_to_dict(load_persona(store, 102))["appearance"]
+    was = looks_hash(load_persona(store, 102).appearance)
+    made = run(LooksService(app).handle({**looks(weight_kg=64, bust=None), **STYLED}))
+    assert looks_hash(load_persona(store, 102).appearance) != was
+    back = run(LooksService(app).handle({"action": "undo", "ledger": made["ledger"]}))
+    assert back["ok"] and back["message"].startswith("Undone.")
+    assert persona_to_dict(load_persona(store, 102))["appearance"] == before  # no key left behind
+    assert looks_hash(load_persona(store, 102).appearance) == was
+    again = run(LooksService(app).handle({"action": "undo", "ledger": made["ledger"]}))
+    assert again == {"ok": False, "error": f"Ledger #{made['ledger']} was undone already, or a "
+                                           "later change moved the same looks: undo that first."}
+
+
+@pytest.mark.parametrize("over,words", [
+    ({"owner_hair_colour": "green"}, "Hair colour is one of black, dark brown"),
+    ({"owner_hair_style": "pigtails"}, "Hair style is one of straight, wavy"),
+    ({"owner_hair_length": "shaved"}, "Hair length is one of buzzed, short"),
+    ({"wardrobe": ["casual", "sporty", "smart", "edgy", "boho"]}, "Wardrobe is up to 4 of casual"),
+    ({"wardrobe": ["casual", "casual"]}, "Wardrobe is up to 4 of"),
+    ({"wardrobe": None}, "Wardrobe is up to 4 of"),
+    ({"palette": ["black", "red", "navy", "gold"]}, "Palette is up to 3 of black, red"),
+    ({"palette": ["white"]}, "Palette is up to 3 of"),
+    ({"makeup": "heavy"}, "Makeup is one of none, natural, defined, glam, or not set"),
+    ({"glasses": "sometimes"}, "Glasses are one of never, always, or not set"),
+    ({"jewellery": 1}, "Jewellery is one of"), ({"tattoos": "face"}, "Tattoos are one of"),
+    ({"piercings": "navel"}, "Piercings are one of none, ears, nose, lip, or not set"),
+    ({"owner_hair_style": "quiff"}, "That hair style is a man's"),
+    ({"wardrobe": ["swim"]}, "Swim and beach wear is for the lust style only"),
+])
+def test_a_style_value_off_its_list_or_not_hers_is_refused_and_nothing_written(
+        store, clock, tmp_path, over, words):
+    app_for(store, clock, tmp_path)
+    save_woman(store, 102)
+    with pytest.raises(LooksError, match=words):
+        set_looks(store, 102, weight_kg=64, bust=None, now=5000.0, **over)
+    assert _ledger(store, 102) == []
+
+
+def test_a_man_sets_hair_wardrobe_and_accessories_but_no_makeup_and_swim_is_the_lust_styles(
+        store, clock, tmp_path):
+    app = app_for(store, clock, tmp_path)
+    with pytest.raises(LooksError, match="Makeup is for women only"):
+        set_looks(store, 101, weight_kg=64, bust=None, makeup="natural", now=5000.0)
+    with pytest.raises(LooksError, match="lust style only"):
+        set_looks(store, 101, weight_kg=64, bust=None, wardrobe=["swim"], now=5000.0)
+    reply = run(LooksService(app).handle({
+        **looks(guid=101, weight_kg=64, bust=None), "owner_hair_colour": "grey",
+        "owner_hair_length": "buzzed", "owner_hair_style": "fade",
+        "wardrobe": ["smart", "outdoorsy"], "palette": ["navy", "olive"], "glasses": "always",
+        "jewellery": "statement", "tattoos": "sleeve", "piercings": "ears"}))
+    assert reply["ok"] and reply["message"].endswith(
+        "with his new looks; pick one as his photo to keep it.")
+    spec = build_prompt(app.personas.base(101))
+    assert ("buzzed grey hair, fade haircut", 0) in spec.phrases
+    assert ("chunky chain necklace and rings", 3) in spec.phrases
+    save_woman(store, 102, lust=True)
+    made = set_looks(store, 102, weight_kg=64, bust=None, wardrobe=["swim", "glam"], now=5100.0)
+    assert load_persona(store, 102).appearance.wardrobe == ("swim", "glam")
+    assert undo(store, made.ledger, now=5200.0)
+
+
+def test_looks_args_take_the_hair_and_style_optionally_and_refuse_the_rest():
+    full = {**looks(), "glutes": None, **STYLED}
+    assert looks_args(full) == full
+    assert looks_args({**looks(), "wardrobe": [], "palette": []}) == {
+        **looks(), "wardrobe": [], "palette": []}
+    for bad, words in (({"owner_hair_colour": "green"}, "Hair colour is one of"),
+                       ({"wardrobe": "casual"}, "Wardrobe is up to 4"),
+                       ({"palette": ["black"] * 2}, "Palette is up to 3"),
+                       ({"hair_colour": "black"}, "exactly"), ({"hair": "long"}, "exactly"),
+                       ({"glasses": False}, "Glasses are one of")):
+        with pytest.raises(BadRequest, match=words):
+            looks_args({**looks(), **bad})
+
+
+def test_a_wardrobe_change_waits_for_the_photo_pass_to_choose_the_kind_again(store, clock,
+                                                                            tmp_path):
+    """A kind the pass chose is chosen once more for her wardrobe, and her queued set waits for
+    it (it would render the old outfit); hair alone never waits, nor a kind set by hand."""
+    from leeroy_mind.selfies import render
+    from leeroy_mind.selfies.kind import needs_rechoice, wardrobe_pending
+    from leeroy_mind.selfies.style import PLAIN
+    from leeroy_mind.selfies.wardrobe import WARDROBE_HELD
+    app = app_for(store, clock, tmp_path, SelfieCfg(enabled=True, booth=True))
+    save_woman(store, 102)
+    ctx = SimpleNamespace(store=store)
+    hand = run(LooksService(app).handle({**looks(weight_kg=64, bust=None), "wardrobe": ["cosy"]}))
+    assert "renders tonight or at the photo booth" in hand["message"]  # a kind set by hand
+    assert not wardrobe_pending(store, load_persona(store, 102))
+    assert render._held(ctx, load_persona(store, 102)) is None
+    save_woman(store, 103)
+    kind._record(store, 103, PLAIN, PHOTO)  # the photo pass chose hers, with no wardrobe
+    hair = run(LooksService(app).handle({**looks(guid=103, weight_kg=64, bust=None),
+                                         "owner_hair_colour": "red"}))
+    assert "renders tonight or at the photo booth" in hair["message"]
+    assert not needs_rechoice(store, load_persona(store, 103))
+    worn = run(LooksService(app).handle({**looks(guid=103, weight_kg=64, bust=None),
+                                         "wardrobe": ["cosy"], "palette": ["plum"]}))
+    assert worn["ok"] and worn["set"] == hair["set"] and worn["message"].endswith(
+        "A set is already queued; it renders once tonight's photo pass has chosen her photo "
+        "kind again for her wardrobe. Pick one as her photo to keep it.")
+    p = load_persona(store, 103)
+    assert wardrobe_pending(store, p) and needs_rechoice(store, p)
+    assert render._held(ctx, p) == WARDROBE_HELD
+    kind._record(store, 103, PLAIN, p.photo, chosen_for=p)  # the pass chose again, for it
+    assert not wardrobe_pending(store, p) and not needs_rechoice(store, p)
+    assert render._held(ctx, p) is None
+    back = run(LooksService(app).handle({"action": "undo", "ledger": worn["ledger"]}))
+    assert back["ok"] and needs_rechoice(store, load_persona(store, 103))  # and once more back
