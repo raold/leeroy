@@ -66,7 +66,7 @@ def test_offline_request_renders_his_scene_with_her_face_and_she_knows_it(tmp_pa
             assert (photo.scene["setting"], photo.scene["outfit"]) == ("supply cupboard at work", HIVIS)
             assert len(rendered) == 1
             req = rendered[0]
-            for phrase in ("selfie, close arm's-length shot", f"wearing {HIVIS}",
+            for phrase in ("mirror selfie", f"wearing {HIVIS}",
                            "supply cupboard at work"):
                 assert (phrase, 0) in req.phrases
             # her face: the reference is her chosen photo, at the identity scale

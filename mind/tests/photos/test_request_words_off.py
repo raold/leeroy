@@ -6,9 +6,8 @@ request_off_golden.json was recorded by `record` with the code from before the s
 as the answer's prompt carries it. Regenerate only with a documented reason: run this test with
 LEEROY_WRITE_REQUEST_OFF_GOLDEN=1. Every person and word here is invented.
 
-Re-recorded 2026-11-17 for the photo audit (selfies/safe.py): the scene schema no longer offers a
-mirror selfie, and the composed activity, prop and outfit phrases changed (nothing is held, a
-jacket names its top). Nothing else differs."""
+Re-recorded 2026-11-17 for the photo audit (selfies/safe.py): the composed activity, prop and
+outfit phrases changed (nothing is held, a jacket names its top). Nothing else differs."""
 import json
 import os
 from pathlib import Path
