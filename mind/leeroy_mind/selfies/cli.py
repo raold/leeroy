@@ -444,7 +444,8 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
             await ctx.reasoner.preflight()
             await ctx.arbiter.ensure_model(ctx.settings.reflection_model)
         for guid in guids:
-            scene, codes = await ask_scene(ctx, guid, about=ABOUT["everyday"])
+            scene, codes = await ask_scene(ctx, guid, about=ABOUT["everyday"],
+                                           romance_styling=scfg.romance_styling)
             if scene is None:
                 _snap_result(results, guid, "declined" if codes == ["declined"] else "refused",
                              codes=codes)
@@ -549,6 +550,7 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
         await ctx.arbiter.ensure_model(cfg.models.live)
         app = SimpleNamespace(store=store, data_dir=root, personas=ctx.personas, clock=clock,
                               engine=SimpleNamespace(human=ctx.ident), cfg=cfg,
+                              selfies=SimpleNamespace(cfg=scfg),
                               scheduler=_Direct(ctx.reasoner.llm))
         her = local_time(clock.local(), p.identity.region)
         block = (presence_at(p, her, medium="discord").block
