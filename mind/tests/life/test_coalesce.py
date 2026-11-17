@@ -4,6 +4,7 @@ in his DM (his posts since her last message); his leaving words cut her away at 
 brb's reason is in her next prompt in that conversation. Fakes only; invented lines."""
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -158,31 +159,32 @@ def test_her_brb_reason_is_in_her_next_prompt(store, clock, tmp_path):
         r.close()
 
 
-def test_a_late_dm_answers_every_post_since_her_last(store, clock, tmp_path):
-    r = rig(store, clock, tmp_path, situation=True)
+def test_a_dm_is_weighed_against_his_unanswered_question_and_lists_nothing_here(store, clock,
+                                                                                  tmp_path):
+    """DMs are discord.talk's (the DM memory work): this side adds no list of its own, and only
+    reads DiscordTalk.unanswered, when it is there, to weigh the turn against his question."""
+    r = rig(store, clock, tmp_path, situation=True, intent=True, shape=True)
     try:
         now = r.clock.now()
-        mid = dstore.post(r.store, channel="dm:102", author=HUMAN, origin="human",
-                          text="hopping on tonight?", now=now)
-        chat = [(102, "morning, off to the depot"), (HUMAN, "did anything good drop last night?"),
-                (HUMAN, "what time are you done")]
-        rows = tuple(ChatLineRow(900 + i, now - 600 + i, "dm:102", g, "x",
-                                 HUMAN if g == 102 else 102, text, 0, 0, None, None,
-                                 "mind" if g == 102 else "human")
-                     for i, (g, text) in enumerate(chat))
+        dstore.post(r.store, channel="dm:102", author=HUMAN, origin="human",
+                    text="what time does the depot shut on sundays", now=now - 60)
+        mid = dstore.post(r.store, channel="dm:102", author=HUMAN, origin="human", text="?",
+                          now=now)
         turn = Turn(TurnKind.REPLY_HUMAN, 102, "dm:102", to_guid=HUMAN, addressee=HUMAN)
-        meta = TurnMeta(r.engine._new_id(), answers_human=True, why="discord:reply",
-                        discord=DiscordTarget(reply_to=mid, thread=None), discord_chat=rows)
+
+        def meta_():
+            return TurnMeta(r.engine._new_id(), answers_human=True, why="discord:reply",
+                            discord=DiscordTarget(reply_to=mid, thread=None), discord_chat=())
+        assert r.engine._his_line(turn, meta_()) == "?"  # no reader yet: his newest post
+        posts = [(mid - 1, "what time does the depot shut on sundays"), (mid, "?")]
+        talk = SimpleNamespace(unanswered=lambda conn, channel, thread, message: (
+            posts if (channel, thread, message) == ("dm:102", None, mid) else []))
+        r.engine.owed = SimpleNamespace(app=SimpleNamespace(discord_talk=talk))
+        meta = meta_()
+        assert r.engine._his_line(turn, meta) == posts[0][1]  # his question leads the weighing
+        assert r.engine._his_waiting(turn, meta) == []
         r.engine._draw_situation(turn, meta, r.engine.personas.get(102), r.clock.now())
         user = r.sync(r.engine._compose(turn, meta, live=True)).messages[-1]["content"]
-        assert ('He wrote 3 lines you haven\'t answered yet: "did anything good drop last '
-                'night?" / "what time are you done" / "hopping on tonight?". Answer every one of '
-                "them in this reply, his question first.") in user
-        # one post after her last message: nothing more to say
-        meta = TurnMeta(r.engine._new_id(), answers_human=True, why="discord:reply",
-                        discord=DiscordTarget(reply_to=mid, thread=None), discord_chat=rows[:1])
-        r.engine._draw_situation(turn, meta, r.engine.personas.get(102), r.clock.now())
-        user = r.sync(r.engine._compose(turn, meta, live=True)).messages[-1]["content"]
-        assert "you haven't answered yet" not in user
+        assert "you haven't answered yet" not in user  # never a second list
     finally:
         r.close()

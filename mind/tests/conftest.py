@@ -253,3 +253,14 @@ def _pictures_off():
     set_pictures_available(False)
     yield
     set_pictures_available(False)
+
+
+@pytest.fixture(autouse=True)
+def _coherence_switches():
+    """[talk] coherence's module switches (LifeService.configure sets them from a rig's config)
+    start every test on, as the default has them."""
+    from leeroy_mind.guards import pronouns
+    from leeroy_mind.life import day, interrupt
+    day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = True
+    yield
+    day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = True

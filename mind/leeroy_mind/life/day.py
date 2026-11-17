@@ -56,40 +56,16 @@ def _bounded(pattern: str) -> re.Pattern:
 _APOS = "['\u2019\u02bc]?"   # typed or phone apostrophe, or none
 
 # first match wins, in this order; "raid nights", "late nights" and "plays on nights" are no night
-# shift. A shape may name text that rules it out (a teacher's classes are no study). Self-play
-# audit, 2026-11-17: every job the table did not name worked 09:00-17:00 and gamed 18:00-24:00,
-# so a bartender on "evenings and weekends" was at work at 14:45 and gaming through her shift, a
-# trainer with "early mornings for clients" and a half-day worker likewise, and a paralegal on
-# maternity leave was "at work". Leave comes first (she has the job and is not at it), then the
-# hours her card states outright (_clock_shape: a card whose job says "third shift" and whose
-# rhythm says "4am to 1pm work" has one clock, the stated one), then the words below.
-_LEAVE = _bounded(r"(?:maternity|mat|parental|paternity|medical|sick|long[- ]term) leave"
-                  r"|on (?:extended |unpaid )?leave|signed off (?:work|sick)|sabbatical"
-                  r"|furlough(?:ed)?|laid off|out of work")
+# shift. A shape may name text that rules it out (a teacher's classes are no study).
 _JOB_PATTERNS = (
     (JobShape.NIGHTS, _bounded(rf"night[- ]?shifts?|third[- ]shifts?|work(?:s|ing)?(?: on)? nights"
                                rf"|(?:i{_APOS}m|she{_APOS}s|is|was|been) on nights"
-                               r"|(?:nurse|ward|hospital|a&e|icu|porter|security|guard|warehouse)"
-                               r"\W+(?:\w+\W+){0,3}?on nights"
-                               r"|nights (?:at|on) the (?:hospital|ward|warehouse|depot|plant)"
                                r"|overnights?|graveyard"), None),
     (JobShape.ROTATING, _bounded(r"\d+\s*on\s*,?\s*\d+\s*off|\d+\s*(?:days|weeks)\s*on|rotating"
                                  r"|rota|12[- ]hour|on call"), None),
     (JobShape.EARLY, _bounded(r"early shifts?|early starts?|[4-6]\s*a\.?m\.?\s*starts?"
-                              r"|starts? at [4-6]|early mornings?|opening shifts?|morning shifts?"
-                              r"|opens (?:up|the)|up (?:at|before) (?:dawn|[4-6])|baker|bakery"
-                              r"|milk round|postie|postal round"), None),
-    # bar, pub, club and kitchen work, and anyone whose card says evenings and weekends
-    (JobShape.EVENING, _bounded(r"bartend\w*|barmaid|barman|barback|bar (?:staff|work|manager)"
-                                r"|(?:behind|tends?|tending|runs?) (?:a |the )?bar"
-                                r"|works? (?:at|in) (?:a |the )?(?:bar|pub|club|nightclub|restaurant)"
-                                r"|pub (?:landlady|landlord|manager)|evenings and weekends"
-                                r"|weekends and evenings|closing shifts?|works? evenings"
-                                r"|evening work|chef|line cook|waits? tables"
-                                r"|waitress(?:es|ing)? (?:evenings|nights)|bouncer|door staff"),
-     None),
-    (JobShape.LATE, _bounded(r"late shifts?|evening shifts?|swing shifts?|afternoon shifts?"
-                             r"|second[- ]shifts?|lates"), None),
+                              r"|starts? at [4-6]"), None),
+    (JobShape.LATE, _bounded(r"late shifts?|evening shifts?|swing shifts?|afternoon shifts?"), None),
     # only what she does: an employer named "... College", a degree she holds, a course she
     # teaches or a job at a university is no study
     (JobShape.STUDENT, _bounded(r"student(?! loans?)|studying"
@@ -102,21 +78,71 @@ _JOB_PATTERNS = (
      _bounded(r"teach\w*|tutor\w*|lecturer|professor|instructor|gives? lectures?"
               r"|works? (?:at|for) (?:the |a )?(?:uni|university|college)")),
     (JobShape.REMOTE, _bounded(r"wfh|works? from home|from home|freelanc\w*|self[- ]employed"), None),
-    (JobShape.HOME, _bounded(r"stay[- ]at[- ]home|unemployed|between jobs|retired"
-                             r"|full[- ]time (?:mum|mom|mother|dad|father|parent|carer)"
-                             r"|housewife|homemaker"), None),
-    (JobShape.PART, _bounded(r"part[- ]time|half[- ]days?|mornings only|school hours|term[- ]time"
-                             r"|(?:two|three|2|3) (?:days|mornings) a week"), None),
+    (JobShape.HOME, _bounded(r"stay[- ]at[- ]home|unemployed|between jobs|retired"), None),
 )
-# The hours her card states outright, next to a word for work: "4am to 1pm work", "works 2pm-10pm",
-# "shift 22:00 to 06:00". Never her raid or play times ("raids 7pm to 11pm").
+# [talk] coherence (set by LifeService.configure from mind.toml, read at his login): the readings
+# below. Off, a card reads exactly as the table above reads it.
+COHERENT = True
+
+# Self-play audit, 2026-11-17: every job the table did not name worked 09:00-17:00 and gamed
+# 18:00-24:00, so a bartender on "evenings and weekends" was at work at 14:45 and gaming through
+# her shift, a trainer with "early mornings for clients" and a half-day worker likewise, and a
+# paralegal on maternity leave was "at work". With COHERENT, in this order: leave (she has the
+# job and is not at it), the working hours her card states outright (_clock_shape: a card whose
+# job says "third shift" and whose rhythm says "4am to 1pm work" has one clock, the stated one),
+# the table above, then the words below. Leave, the hours and the words below are read only in
+# clauses about work (_work_clauses): never in one about raiding, playing, being online, the gym
+# or sleep ("raids 8pm to 11pm", "early mornings at the gym", "opens the guild bank").
+_CLAUSE_SPLIT = re.compile(r"[,;.()]|\s+-\s+|\b(?:and|then|but|while|before|after which)\b")
+_LEISURE = _bounded(r"raids?|raiding|plays?|playing|played|games?|gaming|wow|guild|online|logs? on"
+                    r"|logging on|logged on|gym|sleeps?|sleeping|asleep|in bed|bedtime|naps?"
+                    r"|after work|before work|off work|days? off|weekends? off|free time|hobby"
+                    r"|stream\w*|discord")
+_PAST = _bounded(r"last (?:year|month|summer|winter|spring)|years? ago|months? ago|used to|was on"
+                 r"|were on|back from|came back|returned from|after (?:her|his|their|my) ")
+_LEAVE = _bounded(r"(?:maternity|mat|parental|paternity|medical|sick|long[- ]term) leave"
+                  r"|on (?:extended |unpaid )?leave|signed off (?:work|sick)|sabbatical"
+                  r"|furlough(?:ed)?|laid off|out of work")
+_EXTRA_PATTERNS = (
+    (JobShape.NIGHTS, _bounded(r"(?:nurse|ward|hospital|a&e|icu|porter|security|guard|warehouse)"
+                               r"\W+(?:\w+\W+){0,3}?on nights"
+                               r"|nights (?:at|on) the (?:hospital|ward|warehouse|depot|plant)")),
+    (JobShape.EARLY, _bounded(r"early mornings?|opening shifts?|morning shifts?"
+                              r"|opens (?:up|the)|up (?:at|before) (?:dawn|[4-6])|baker|bakery"
+                              r"|milk round|postie|postal round")),
+    # bar, pub, club and kitchen work, and anyone whose card says evenings and weekends
+    (JobShape.EVENING, _bounded(r"bartend\w*|barmaid|barman|barback|bar (?:staff|work|manager)"
+                                r"|(?:behind|tends?|tending|runs?) (?:a |the )?bar"
+                                r"|works? (?:at|in) (?:a |the )?(?:bar|pub|club|nightclub|restaurant)"
+                                r"|pub (?:landlady|landlord|manager)|evenings and weekends"
+                                r"|weekends and evenings|closing shifts?|works? evenings"
+                                r"|evening work|chef|line cook|waits? tables"
+                                r"|waitress(?:es|ing)? (?:evenings|nights)|bouncer|door staff")),
+    (JobShape.LATE, _bounded(r"second[- ]shifts?|works? lates")),
+    (JobShape.HOME, _bounded(r"full[- ]time (?:mum|mom|mother|dad|father|parent|carer)"
+                             r"|housewife|homemaker")),
+    (JobShape.PART, _bounded(r"part[- ]time|half[- ]days?|mornings only|school hours|term[- ]time"
+                             r"|(?:two|three|2|3) (?:days|mornings) a week")),
+)
+# she works weekends (her days off fall in the week): "works weekends", "weekend shifts"
+_WEEKENDS = _bounded(r"works? (?:most |every |on |at )?weekends|weekend shifts?|weekends too"
+                     r"|evenings and weekends|weekends and evenings|saturdays? and sundays?")
+# The hours her card states outright, in a clause about work: "4am to 1pm work", "works 2pm-10pm",
+# "shift 22:00 to 06:00", "works 9 to 5".
 _AMPM = r"(?:a\.?m\.?|p\.?m\.?)"
 _CLOCK = re.compile(
-    rf"(?<![\d:])(\d{{1,2}})(?::(\d{{2}}))?\s*({_AMPM})?\s*(?:to|until|till|til|-|\u2013)\s*"
+    rf"(?<![\d:])(\d{{1,2}})(?::(\d{{2}}))?\s*({_AMPM})?\s*(?:to|until|till|til|-|–)\s*"
     rf"(\d{{1,2}})(?::(\d{{2}}))?\s*({_AMPM})?(?![\d:])")
-_CLOCK_WORK = re.compile(r"\b(?:works?|working|worked|shifts?|job|on site|at the (?:office|shop|"
-                         r"plant|depot|clinic|hospital|studio|bar|site)|clients|patients)\b")
-_CLOCK_REACH = 24  # characters either side of the hours in which the work word must sit
+_CLOCK_WORK = _bounded(r"works?|working|worked|shifts?|job|on call|on site|opens?|teach\w*"
+                       r"|clients|patients|at the (?:office|shop|plant|depot|clinic|hospital"
+                       r"|studio|bar|site|school)")
+
+
+def _work_clauses(text: str) -> list[str]:
+    """The clauses of her job and rhythm that are about work: every clause but those about
+    raiding, playing, being online, the gym or sleep."""
+    return [c for c in (x.strip() for x in _CLAUSE_SPLIT.split(text)) if c
+            and not _LEISURE.search(c)]
 
 
 def _minute(hour: str, minute: str | None, half: str | None) -> int | None:
@@ -125,36 +151,48 @@ def _minute(hour: str, minute: str | None, half: str | None) -> int | None:
         if not 1 <= h <= 12:
             return None
         h = h % 12 + (12 if half.casefold().startswith("p") else 0)
-    elif minute is None:
-        return None  # a bare "4 to 6" is no clock
     return h * 60 + m if h < 24 and m < 60 else None
 
 
-def _clock_shape(text: str) -> JobShape | None:
-    """The shape of the working hours her card states outright (module comment above); None
-    when it states none. By the hour she starts: 03:00-07:29 early, 07:30-10:59 day (a morning of
-    five hours or less: part), 11:00-15:59 late, 16:00-18:59 evening, else nights."""
-    for m in _CLOCK.finditer(text):
-        start, end = _minute(m[1], m[2], m[3]), _minute(m[4], m[5], m[6])
-        if start is None or end is None:
+def _clock_shape(clauses: list[str], *, bare: bool = False) -> JobShape | None:
+    """The shape of the working hours her card states outright, read only in a work clause
+    that has a word for working in it (works, shift, on call, opens, teaches, clients...); None
+    when it states none. Hours with am, pm or minutes are read first and win over every word
+    on the card; `bare` hours ("works 9 to 5", a day that ends after it starts) are read only
+    once the table of words has said nothing, so "night shifts, 7 to 7" stays nights.
+    By the hour she starts: 03:00-07:29 early, 07:30-10:59 day (a morning of five hours or
+    less: part), 11:00-15:59 late, 16:00-18:59 evening, else nights."""
+    for clause in clauses:
+        if not _CLOCK_WORK.search(clause):
             continue
-        around = text[max(0, m.start() - _CLOCK_REACH):m.end() + _CLOCK_REACH]
-        if not _CLOCK_WORK.search(around):
-            continue
-        length = (end - start) % DAY_MIN
-        if not 120 <= length <= 14 * 60:
-            continue
-        if _hm(3) <= start < _hm(7, 30):
-            return JobShape.EARLY
-        if _hm(7, 30) <= start < _hm(11):
-            return JobShape.PART if length <= 300 else JobShape.DAY
-        if _hm(11) <= start < _hm(16):
-            return JobShape.LATE
-        if _hm(16) <= start < _hm(19):
-            return JobShape.EVENING
-        return JobShape.NIGHTS
+        for m in _CLOCK.finditer(clause):
+            start, end = _minute(m[1], m[2], m[3]), _minute(m[4], m[5], m[6])
+            if start is None or end is None:
+                continue
+            plain = not m[3] and not m[6] and m[2] is None and m[5] is None
+            if plain is not bare:
+                continue
+            if plain:
+                if not (1 <= int(m[1]) <= 12 and 1 <= int(m[4]) <= 12):
+                    continue
+                if end <= start:  # "9 to 5": the afternoon
+                    end += 12 * 60
+                elif start < _hm(6):  # "1 to 9": an afternoon shift, never 1am
+                    start, end = start + 12 * 60, end + 12 * 60
+            length = (end - start) % DAY_MIN
+            if not 120 <= length <= 14 * 60:
+                continue
+            start %= DAY_MIN
+            if _hm(3) <= start < _hm(7, 30):
+                return JobShape.EARLY
+            if _hm(7, 30) <= start < _hm(11):
+                return JobShape.PART if length <= 300 else JobShape.DAY
+            if _hm(11) <= start < _hm(16):
+                return JobShape.LATE
+            if _hm(16) <= start < _hm(19):
+                return JobShape.EVENING
+            return JobShape.NIGHTS
     return None
-
 _KIDS = _bounded(r"kids?|sons?|daughters?|bab(?:y|ies)|toddlers?|child(?:ren)?|twins|stepkids?")
 # a household with no child at home: none, child-free, an empty nest, or she lives alone
 _NO_KIDS = _bounded(r"no (?:kids|children)|child[- ]?free|empty nest"
@@ -228,11 +266,12 @@ class DayPlan:
     kids: bool
     event: DayEvent
     spans: tuple[Span, ...]
+    weekends: bool = False   # she works weekends: her days off are Monday and Tuesday
 
     @property
     def workday(self) -> bool:
         """Her job's schedule has her working (a night shift starting) on this date."""
-        return _workday(self.job, self.guid, self.day)
+        return _workday(self.job, self.guid, self.day, self.weekends)
 
     def block_at(self, minute: int) -> Block:
         if not 0 <= minute < DAY_MIN:
@@ -252,24 +291,39 @@ class _Facts:
     household: str
     life_thread: str
     night_owl: bool
+    coherent: bool = True   # COHERENT when the plan was asked for: a flipped switch, a fresh plan
 
 
 def _facts(p: Persona) -> _Facts:
     rl = p.real_life
-    return _Facts(p.guid, rl.job, rl.rhythm, rl.household, rl.life_thread, rl.night_owl)
+    return _Facts(p.guid, rl.job, rl.rhythm, rl.household, rl.life_thread, rl.night_owl,
+                  COHERENT)
 
 
 def _job_shape(job: str, rhythm: str) -> JobShape:
     text = f"{job} {rhythm}".casefold()
-    if _LEAVE.search(text):
+    clauses = _work_clauses(f"{job}. {rhythm}".casefold()) if COHERENT else []
+    if any(_LEAVE.search(c) and not _PAST.search(c) for c in clauses):
         return JobShape.HOME  # she has the job and is not at it
-    stated = _clock_shape(text)
+    stated = _clock_shape(clauses)
     if stated is not None:
         return stated
     for shape, pattern, unless in _JOB_PATTERNS:
         if pattern.search(text) and not (unless and unless.search(text)):
             return shape
+    stated = _clock_shape(clauses, bare=True)
+    if stated is not None:
+        return stated
+    for shape, pattern in _EXTRA_PATTERNS:
+        if any(pattern.search(c) for c in clauses):
+            return shape
     return JobShape.DAY
+
+
+def _works_weekends(job: str, rhythm: str) -> bool:
+    """Her card says she works weekends (in a clause about work): her days off fall in the
+    week. Never with COHERENT off."""
+    return COHERENT and any(_WEEKENDS.search(c) for c in _work_clauses(f"{job}. {rhythm}".casefold()))
 
 
 def _kids_at_home(household: str) -> bool:
@@ -300,9 +354,11 @@ def _gym(f: _Facts) -> bool:
     return bool(_GYM.search(f"{f.job} {f.rhythm} {f.life_thread}".casefold()))
 
 
-def _workday(job: JobShape, guid: int, day: date) -> bool:
+def _workday(job: JobShape, guid: int, day: date, weekends: bool = False) -> bool:
     if job is JobShape.HOME:
         return False
+    if weekends and job not in (JobShape.NIGHTS, JobShape.ROTATING):
+        return day.weekday() >= 2  # Wednesday to Sunday
     if job is JobShape.NIGHTS:
         return day.weekday() in {(k + guid) % 7 for k in range(4)}
     if job is JobShape.ROTATING:
@@ -318,20 +374,23 @@ def _day_off_sleep(owl: bool, kids: bool) -> tuple[int, int]:
     return 0, _hm(7) if kids else _hm(8, 30)
 
 
-def _morning_sleep(job: JobShape, guid: int, day: date, owl: bool, kids: bool) -> tuple[int, int]:
+def _morning_sleep(job: JobShape, guid: int, day: date, owl: bool, kids: bool,
+                   weekends: bool = False) -> tuple[int, int]:
     if job is JobShape.NIGHTS:
         if _workday(job, guid, day - timedelta(days=1)):
             return NIGHTS_SLEEP
         return _day_off_sleep(owl, kids)
-    if _workday(job, guid, day):
+    if _workday(job, guid, day, weekends):
         wake = _HOURS[job].wake
         return max(0, wake - (OWL_SLEEP_MIN if owl else SLEEP_MIN)), wake
     return _day_off_sleep(owl, kids)
 
 
-def _evening_sleep(job: JobShape, guid: int, day: date, owl: bool) -> tuple[int, int] | None:
+def _evening_sleep(job: JobShape, guid: int, day: date, owl: bool,
+                   weekends: bool = False) -> tuple[int, int] | None:
     """The part before midnight of the next workday's sleep."""
-    if job in (JobShape.NIGHTS, JobShape.HOME) or not _workday(job, guid, day + timedelta(days=1)):
+    if job in (JobShape.NIGHTS, JobShape.HOME) or not _workday(job, guid, day + timedelta(days=1),
+                                                                weekends):
         return None
     start = _HOURS[job].wake - (OWL_SLEEP_MIN if owl else SLEEP_MIN)
     return (DAY_MIN + start, DAY_MIN) if start < 0 else None
@@ -344,13 +403,13 @@ class _Shift:
     starts_today: bool
 
 
-def _shifts(job: JobShape, guid: int, day: date) -> list[_Shift]:
+def _shifts(job: JobShape, guid: int, day: date, weekends: bool = False) -> list[_Shift]:
     """Yesterday's and today's shifts in today's minutes (a night shift runs past midnight)."""
     if job is JobShape.HOME:
         return []
     hours, out = _HOURS[job], []
     for back in (1, 0):
-        if not _workday(job, guid, day - timedelta(days=back)):
+        if not _workday(job, guid, day - timedelta(days=back), weekends):
             continue
         off = -back * DAY_MIN
         out.append(_Shift((hours.work[0] + off, hours.work[1] + off),
@@ -412,14 +471,15 @@ def _paint_shifts(minutes: list[Block], entries: list[tuple[Block, tuple[int, in
 def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan:
     guid, owl = f.guid, f.night_owl
     job, kids = _job_shape(f.job, f.rhythm), _kids_at_home(f.household)
-    shifts = _shifts(job, guid, day)
+    weekends = _works_weekends(f.job, f.rhythm)
+    shifts = _shifts(job, guid, day, weekends)
     ending = [s for s in shifts if _ends_today(s)]
     event = _event(guid, day, work_ends_today=bool(ending), kids=kids, event=event)
     # yesterday's shift, in today's minutes, keeps yesterday's drawn event past midnight
     carried = next((s for s in shifts if not s.starts_today), None)
     before = DayEvent.NONE
     if carried is not None:
-        earlier = _shifts(job, guid, day - timedelta(days=1))
+        earlier = _shifts(job, guid, day - timedelta(days=1), weekends)
         before = _event(guid, day - timedelta(days=1), kids=kids, event=None,
                         work_ends_today=any(_ends_today(s) for s in earlier))
         if before is DayEvent.LATE_SHIFT and _ended_yesterday(carried):
@@ -433,7 +493,7 @@ def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan
         into = duty if sick else work if shift.starts_today else tail
         into.append((Block.WORK, shift.work))
         into.extend((Block.COMMUTE, c) for c in shift.commutes)
-    morning = _morning_sleep(job, guid, day, owl, kids)
+    morning = _morning_sleep(job, guid, day, owl, kids, weekends)
 
     minutes = [Block.FREE] * DAY_MIN
     if unit("game", guid, day) < GAMING_SHARE:
@@ -457,14 +517,14 @@ def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan
         _paint(minutes, (start, start + GYM_MIN), Block.GYM)
     _paint_shifts(minutes, work + tail)
     _paint(minutes, morning, Block.ASLEEP)
-    evening = _evening_sleep(job, guid, day, owl)
+    evening = _evening_sleep(job, guid, day, owl, weekends)
     if evening:
         _paint(minutes, evening, Block.ASLEEP)
     # a shift that runs past midnight is painted again over the sleep around it
     _paint_shifts(minutes, work + tail if job is JobShape.NIGHTS else tail)
     if event is DayEvent.NIGHT_OUT:
         _paint(minutes, NIGHT_OUT, Block.OUT)
-    return DayPlan(guid, day, job, kids, event, _spans(minutes))
+    return DayPlan(guid, day, job, kids, event, _spans(minutes), weekends)
 
 
 def day_plan(p: Persona, day: date, *, event: DayEvent | None = None) -> DayPlan:

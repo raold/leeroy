@@ -44,7 +44,9 @@ from leeroy_mind.discord.presence import local_time
 from leeroy_mind.logs import log as log_event
 
 from . import config as life_config
-from . import interrupt
+from leeroy_mind.guards import pronouns
+
+from . import day, interrupt
 from .day import Block
 from .interrupt import Away, Interruption
 from .presence import (Attention, LifePresence, stated_where, attention_weight, game_cap_s, latency,
@@ -104,6 +106,11 @@ class LifeService:
         mind's truth; the meta copy is for the console, so a failed write is logged
         (`life_meta_failed`) and never raised."""
         life = getattr(cfg, "life", None)
+        # [talk] coherence reaches the pure readers through their module switches (read here,
+        # so at the mind's start and at each of his logins): her job's shape (life/day.py), her
+        # own boss (life/interrupt.py) and "tell X he ..." (guards/pronouns.py)
+        coherent = getattr(getattr(cfg, "talk", None), "coherence", True) is True
+        day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = coherent
         life_config.pin(getattr(life, "availability", 0), getattr(life, "state", False))
         self._availability = life_config.availability()
         self._states.clear()
@@ -373,7 +380,11 @@ class LifeService:
         said = getattr(pipe, "_said_here", None)
         if coherent is None or said is None or not coherent():
             return lp
-        stated = stated_where(said(turn, meta, now))
+        try:
+            stated = stated_where(said(turn, meta, now))
+        except Exception as e:  # colour only: her plan's block stands
+            log.warning("life_where_failed reason=%s", type(e).__name__)
+            return lp
         if stated in ("home", "bed") and lp.block in (Block.WORK, Block.COMMUTE):
             return replace(lp, block=Block.FREE)
         if stated == "work" and lp.block in (Block.FREE, Block.GAMING, Block.HOME_DUTY):

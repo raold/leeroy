@@ -10,13 +10,16 @@ Read from words alone, the same on every channel and for every member:
 - `bad_news`: his line carries bad news of his own (a hospital, a death, a vet, a lost job, a
   rough day): she neither teases nor flirts on it;
 - `Hold` and `held`: while his question or disagreement is open her want is the one she had
-  (held for HOLD_S, until he changes the subject or settles it with a "fair enough");
+  (held for HOLD_S of quiet, at most HOLD_TURNS answers or HOLD_MAX_S from when it was first
+  set, until he changes the subject or settles it with a "fair enough");
 - `claims_so_far`: what she has said so far in this conversation, as a few short claims
-  (numbers and statements about herself first), and `said_line`, the sentence that shows them
-  with the rule that she does not contradict herself;
+  (numbers and statements about herself first); `relevant_claims`, the ones his line is about,
+  within CLAIM_TOKENS; and `said_line`, the sentence that shows them to the beat with the rule
+  that she does not contradict herself (the line's prompt has one "so far" block, and it is
+  talk/sofar.py's);
 - `opinion_for`, `strong` and `view_line`: the opinion on her card his line touches, and
-  whether she holds it as a rule ("not optional", "never", "the law"), which she then never
-  argues against.
+  whether she holds it as a rule ("not optional", "never", "the law"), which she then does not
+  argue against unless he, as guild leader, overrules it outright.
 
 Pure: no clock, no I/O, no logging. Nothing here is ever logged; the texts go only into her own
 prompt, which already holds the lines they come from."""
@@ -28,14 +31,19 @@ from dataclasses import dataclass
 
 from leeroy_mind.talk.select import _words as topic_words_of
 from leeroy_mind.talk.select import pushback_kind
+from leeroy_mind.text import estimate_tokens
 
 HOLD_S = 600.0  # a held want lets go this long after her last answer on it
+HOLD_MAX_S = 900.0  # ...and this long after it was first set, whatever came since
+HOLD_TURNS = 6  # ...or once she has answered on it this many times
+CLAIM_TOKENS = 50  # the claims shown to the beat, at most (estimated tokens)
 CLAIM_WINDOW_S = 1800.0  # her lines this old are no longer "so far in this conversation"
 MAX_CLAIMS = 3
 CLAIM_WORDS = 12
 SAID = ("So far in this conversation you've said: {claims}. Stay consistent with that: don't "
         "contradict yourself, and if you change your mind, say that you do.")
-VIEW = 'You hold this as a rule: "{opinion}" You never argue against it.'
+VIEW = ('You hold this as a rule: "{opinion}" You don\'t argue against it; if {human}, as '
+        "guild leader, overrules it outright you can give way, and you say that you do.")
 
 _DISAGREES = re.compile(
     r"\b(?:i don'?t think|not sure about that|are (?:you|u) sure|(?:you|u) sure\b|no way\b|"
@@ -59,7 +67,10 @@ cool thanks thx ty cheers got it gotcha np sure alright aight good point makes s
 oh ah fine then so""".split())
 _WORD = re.compile(r"[a-z0-9']+")
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
-_NUMBER = re.compile(r"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+# a number she could later contradict: digits beside a word ("7 wins", "at 8"), or a number
+# word but never "one" ("that one", "no one": review of #370, 14% of claims ranked for it)
+_NUMBER = re.compile(r"\b\d+(?:[.,:]\d+)?%?\s+[a-z]{2,}|\b[a-z]{2,}\s+\d+(?:[.,:]\d+)?\b"
+                     r"|\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
                      r"twenty|thirty|forty|fifty|hundred|thousand|half|twice|double)\b",
                      re.IGNORECASE)
 # what she says of herself that she could later contradict: where she is, what she has, did,
@@ -85,8 +96,13 @@ def disagrees(line: str) -> bool:
 
 
 def bad_news(line: str) -> bool:
-    """His line carries bad news of his own (module docstring)."""
-    return bool(_BAD_NEWS.search(" ".join((line or "").split())))
+    """His line carries bad news of his own (module docstring). One reader: talk/hisline.py's
+    (the DM memory work) once it is there, this module's own pattern until then."""
+    try:
+        from leeroy_mind.talk.hisline import bad_news as theirs
+    except ImportError:
+        return bool(_BAD_NEWS.search(" ".join((line or "").split())))
+    return theirs(line or "")
 
 
 def settled(line: str) -> bool:
@@ -107,14 +123,19 @@ class Hold:
     want: str
     at: float
     words: frozenset[str]
+    first: float = 0.0  # when the hold was first set (0: `at`)
+    turns: int = 1  # her answers on it so far
 
 
 def held(hold: Hold | None, his_line: str, now: float) -> bool:
     """`hold` still stands for an answer to `his_line` now: within HOLD_S of her last answer,
-    not settled by him, and not a new subject (his line has two content words or more and
+    HOLD_MAX_S and HOLD_TURNS answers of when it was first set, not settled by him, and not a
+    new subject (its words are the first exchange's and do not grow) (his line has two content words or more and
     shares none with the exchange; a short "which is it", "?" or "brb" stays on it)."""
     if hold is None or not 0 <= now - hold.at <= HOLD_S or settled(his_line):
         return False
+    if hold.turns >= HOLD_TURNS or now - (hold.first or hold.at) > HOLD_MAX_S:
+        return False  # bounded from its first turn: it never rides a whole evening
     his = words_of(his_line)
     return len(his) < 2 or bool(his & hold.words)
 
@@ -146,6 +167,25 @@ def claims_so_far(lines: Sequence[str], limit: int = MAX_CLAIMS) -> list[str]:
     return [text for _, _, text in sorted(best, key=lambda c: c[1])]
 
 
+def relevant_claims(lines: Sequence[str], his_line: str, *,
+                    tokens: int = CLAIM_TOKENS) -> list[str]:
+    """claims_so_far for a line of his: only the claims it is about (one shares a content word
+    with it; a short follow-up such as "which is it", "?" or "you sure" is about her newest
+    claim), the newest kept within `tokens` estimated tokens. [] when she has claimed nothing
+    his line touches."""
+    claims = claims_so_far(lines, limit=len(lines) * 4 + 4)
+    his = words_of(his_line)
+    picked = [c for c in claims if his & words_of(c)]
+    if not picked and len(his) < 2 and (disagrees(his_line) or "?" in (his_line or "")):
+        picked = claims[-1:]
+    out: list[str] = []
+    for claim in reversed(picked[-MAX_CLAIMS:]):
+        if estimate_tokens(said_line([claim, *out])) > tokens:
+            break
+        out.insert(0, claim)
+    return out
+
+
 def said_line(claims: Sequence[str]) -> str:
     """The sentence that shows her claims ("" without any)."""
     if not claims:
@@ -172,17 +212,10 @@ def strong(opinion: str) -> bool:
     return bool(_STRONG.search(opinion or ""))
 
 
-def view_line(opinion: str) -> str:
-    return VIEW.format(opinion=" ".join(opinion.split()))
+def view_line(opinion: str, human: str = "he") -> str:
+    return VIEW.format(opinion=" ".join(opinion.split()), human=human)
 
 
-def position_block(claims: Sequence[str], opinion: str | None) -> str:
-    """The lines her position adds after a turn's instruction: what she has said so far, then
-    a rule of hers his line touches; "" with neither."""
-    return "\n".join(x for x in (said_line(claims),
-                                 view_line(opinion) if opinion and strong(opinion) else "") if x)
-
-
-__all__ = ["CLAIM_WINDOW_S", "HOLD_S", "Hold", "bad_news", "claims_so_far", "disagrees", "held",
-           "opinion_for", "position_block", "said_line", "settled", "strong", "view_line",
-           "words_of"]
+__all__ = ["CLAIM_TOKENS", "CLAIM_WINDOW_S", "HOLD_MAX_S", "HOLD_S", "HOLD_TURNS", "Hold",
+           "bad_news", "claims_so_far", "disagrees", "held", "opinion_for", "relevant_claims",
+           "said_line", "settled", "strong", "view_line", "words_of"]

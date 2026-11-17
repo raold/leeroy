@@ -42,6 +42,47 @@ JOBS = [
 ]
 
 
+# review of #370: hours and words in a clause about raiding, playing, being online, the gym or
+# sleep are not her work; past leave is no leave; bare hours never outrank "night shifts"
+NOT_WORK = [
+    ("office admin", "works 9 to 5, raids 8pm to 11pm", JobShape.DAY),
+    ("clerk", "plays 7pm-11pm after work", JobShape.DAY),
+    ("analyst", "works 9 to 5, online 19:30 to 23:00", JobShape.DAY),
+    ("student", "varying shifts, online from 6am to 8am some days", JobShape.STUDENT),
+    ("receptionist", "early mornings at the gym", JobShape.DAY),
+    ("cashier", "online early morning", JobShape.DAY),
+    ("clerk", "opens the guild bank", JobShape.DAY),
+    ("fitter", "sick leave last year, back at it now", JobShape.DAY),
+    ("driver", "sleeps 10pm to 6am, works days", JobShape.DAY),
+    ("nurse", "night shifts, 7 to 7", JobShape.NIGHTS),
+    ("porter", "works 1 to 9", JobShape.LATE),
+]
+
+
+@pytest.mark.parametrize("job,rhythm,shape", NOT_WORK)
+def test_only_work_clauses_shape_her_job(job, rhythm, shape):
+    assert job_shape(make_persona(101, "Arkon", job=job, rhythm=rhythm)) is shape
+
+
+def test_working_weekends_moves_her_days_off_into_the_week():
+    p = make_persona(101, "Arkon", job="shop assistant", rhythm="works weekends")
+    assert day_plan(p, SAT, event=DayEvent.NONE).block_at(11 * 60) is Block.WORK
+    assert day_plan(p, MON, event=DayEvent.NONE).block_at(11 * 60) is not Block.WORK
+    plain = make_persona(101, "Arkon", job="shop assistant", rhythm="nine to five")
+    assert day_plan(plain, SAT, event=DayEvent.NONE).block_at(11 * 60) is not Block.WORK
+
+
+def test_with_the_switch_off_every_card_reads_as_before():
+    from leeroy_mind.life import day
+    day.COHERENT = False
+    for job, rhythm, shape in JOBS:
+        got = job_shape(make_persona(101, "Arkon", job=job, rhythm=rhythm))
+        assert got not in (JobShape.EVENING, JobShape.PART), (job, got)
+    assert job_shape(make_persona(101, "Arkon", job="bartender", rhythm="")) is JobShape.DAY
+    p = make_persona(101, "Arkon", job="shop assistant", rhythm="works weekends")
+    assert day_plan(p, SAT, event=DayEvent.NONE).block_at(11 * 60) is not Block.WORK
+
+
 @pytest.mark.parametrize("job,rhythm,shape", JOBS)
 def test_job_shapes_read_the_card(job, rhythm, shape):
     assert job_shape(make_persona(101, "Arkon", job=job, rhythm=rhythm)) is shape
@@ -75,6 +116,27 @@ def test_where_she_said_she_is_is_read_from_her_newest_line():
     assert stated_where(["im in bed already"]) == "bed"
     assert stated_where(["im at the gym, back in an hour"]) == "out"
     assert stated_where(["nice pull", "who has the key"]) == "" and stated_where([]) == ""
+
+
+@pytest.mark.parametrize("line", [
+    "she's at work", "maald is at work again", "im not at work today", "are you at work?",
+    "you still in bed?", "i was at work all day", "ill be at work by nine", "going to bed soon",
+    "he's in bed already", "when i get home ill log on", "if i was at home id be playing",
+    "wish i was in bed", "my husband is at the gym", "not in bed yet", "i hate being at work",
+    "work was awful", "dont tell me youre at work", "nobody is home",
+    "we were at the pub last night", "tomorrow im at work early", "is anyone home", "nice pull"])
+def test_a_place_she_never_claimed_for_herself_now_is_not_read(line):
+    """Review of #370: someone else's place, a negation, a question, the past and the future
+    were read as where she is (14 of 22 such lines)."""
+    assert stated_where([line]) == ""
+
+
+@pytest.mark.parametrize("line,kind", [
+    ("at work, worst shift of my life", "work"), ("im still in bed", "bed"),
+    ("ok im home now", "home"), ("lol im on my break", "work"),
+    ("ugh. stuck at work till six", "work"), ("on the bus home", "out")])
+def test_her_own_place_now_is_read(line, kind):
+    assert stated_where([line]) == kind
 
 
 def test_the_line_agrees_with_what_she_said():

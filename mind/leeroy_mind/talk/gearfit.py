@@ -45,9 +45,11 @@ _KINDS = sorted({k for kinds in WEAPONS.values() for k in kinds} | {"spear"}, ke
                 reverse=True)
 _KIND = re.compile(r"\b(" + "|".join(re.escape(k) for k in _KINDS) + r")\b")
 _ARMOUR = re.compile(r"\b(cloth|leather|mail|plate)\b")
-# a loot table's entry: "Grim Edge (251 one-hand axe)", "Ice Robe (264 cloth chest; 95 Emblem)"
-_ENTRY = re.compile(r"(?P<name>[^,;:()]+?) \((?P<ilvl>\d{2,3}) (?P<desc>[a-z][a-z -]*?)"
-                    r"(?:;[^()]*)?\)")
+# a loot table's entry: "Grim Edge (251 one-hand axe)", "Ice Robe (264 cloth chest; 95 Emblem)".
+# Its descriptor is what is matched; its name is everything since the entry before it (or the
+# table's "...: "), commas included ("Mantle of Fire, Ice and Shadow (251 cloth shoulder)").
+_ENTRY = re.compile(r" \((?P<ilvl>\d{2,3}) (?P<desc>[a-z][a-z -]*?)(?:;[^()]*)?\)")
+_SEPARATOR = re.compile(r"^[,;]\s+")
 # an item's own line: "Avool's Sword: epic one-hand sword, item level 200."
 _ITEM = re.compile(r"^[^:]{2,90}: (?:poor|common|uncommon|rare|epic|legendary|artifact|heirloom) "
                    r"(?P<desc>[a-z][a-z -]*?)(?:, item level (?P<ilvl>\d+))?(?:, requires level "
@@ -80,17 +82,23 @@ def _wanted(desc: str, ilvl: str | None, class_name: str, level: int) -> bool:
 
 
 def _table(line: str, class_name: str, level: int) -> str | None:
-    """A loot table without the entries she cannot use; None when none is left."""
-    entries = list(_ENTRY.finditer(line))
-    keep = [m for m in entries if _wanted(m["desc"], m["ilvl"], class_name, level)]
+    """A loot table without the entries she cannot use; None when none is left. An entry is
+    its whole name with its descriptor: a comma inside a name is part of the name."""
+    marks = list(_ENTRY.finditer(line))
+    # the first entry's name starts after the table's last ": " before its descriptor
+    start = line.rfind(": ", 0, marks[0].start())
+    begin = start + 2 if start >= 0 else 0
+    entries, at = [], begin
+    for m in marks:
+        name = _SEPARATOR.sub("", line[at:m.start()])
+        entries.append((name + m.group(0), m))
+        at = m.end()
+    keep = [text for text, m in entries if _wanted(m["desc"], m["ilvl"], class_name, level)]
     if len(keep) == len(entries):
         return line
     if not keep:
         return None
-    first = entries[0].group(0)
-    head = line[:entries[0].start() + len(first) - len(first.lstrip())]
-    tail = line[entries[-1].end():]
-    return head + ", ".join(m.group(0).strip() for m in keep) + tail
+    return line[:begin] + ", ".join(keep) + line[marks[-1].end():]
 
 
 def for_speaker(lines: Sequence[str], class_name: str, *, level: int = LEVEL_CAP) -> list[str]:

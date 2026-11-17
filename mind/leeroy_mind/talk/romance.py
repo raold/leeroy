@@ -424,21 +424,15 @@ def explicit_whisper(p: Persona, rel: Relationship | None, *, dial: int, channel
 
 def whisper_tail(p: Persona, rel: Relationship | None, *, dial: int, channel: str,
                  data_dir: Path, forms: tuple[str, str, str],
-                 rng: random.Random | None = None, realism: bool = False,
-                 lust_only: bool = False) -> str:
+                 rng: random.Random | None = None, realism: bool = False) -> str:
     """The owner's whisper overlay (mind-data/prompts/romance_explicit_whisper.txt; one of
     its variants, the first without `rng`), capped like the band overlays, then the stage's
     distance frame filled with his `forms` (HumanIdentity.forms), for a whisper to him at the
     explicit band; "" otherwise or when there is no overlay (the band as before). The pipeline
     puts it after the turn's instruction; romance_instruction then leaves the frame out
     (`tail_follows`), so it is said once, after his overlay. `realism`: the realism frame
-    (distance_text). `lust_only` ([talk] coherence): the overlay is for a woman whose stance is
-    lust, at the band her arc's stage has reached (effective_band, as ever), never one who is
-    only drawn to him and reaches the band by the dial (self-play audit, 2026-11-17: a drawn
-    member's lore answer carried it)."""
+    (distance_text)."""
     if not explicit_whisper(p, rel, dial=dial, channel=channel):
-        return ""
-    if lust_only and p.romance.stance != "lust":
         return ""
     variant = _pick(overlay_variants(WHISPER_OVERLAY, data_dir), rng)
     if not variant:

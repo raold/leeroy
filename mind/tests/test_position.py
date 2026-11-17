@@ -74,7 +74,7 @@ def test_her_claims_are_her_numbers_and_what_she_said_of_herself():
     assert position.claims_so_far(lines) == [
         "i have 7 wins against him and 9 losses", "he is down by 2", "im at work till six"]
     # numbers first, the newest winning a tie, in the order she said them
-    many = [f"i did pull number {i}" for i in range(6)]
+    many = [f"i did {i} pulls" for i in range(6)]
     assert position.claims_so_far(many) == many[3:]
     assert position.claims_so_far(many, limit=1) == many[-1:]
     assert position.claims_so_far([]) == [] and position.said_line([]) == ""
@@ -88,9 +88,10 @@ def test_the_opinion_his_line_touches_and_whether_it_is_a_rule():
     assert position.opinion_for(opinions, his) == opinions[1]
     assert position.opinion_for(opinions, "anyone seen my hat") is None
     assert position.strong(opinions[1]) and not position.strong(opinions[0])
-    block = position.position_block(["it stays at 10"], opinions[1])
-    assert "it stays at 10" in block and "You never argue against it." in block
-    assert "rule" not in position.position_block([], opinions[0])
+    view = position.view_line(opinions[1], "Zan")
+    assert view == ('You hold this as a rule: "Decay is not optional; it is the law." You don\'t '
+                    "argue against it; if Zan, as guild leader, overrules it outright you can "
+                    "give way, and you say that you do.")
 
 
 # -- the want --------------------------------------------------------------------------------------
@@ -114,6 +115,30 @@ def test_his_bad_news_draws_no_tease_or_flirt_and_a_scene_no_reassurance():
     assert all(w[i] == 0 for i in BAD_NEWS_OFF) and w[Intent.SHARE] > 0
     assert weights(ctx(his_line="come here then", scene=True))[Intent.REASSURE_SEEK] == 0
     assert weights(ctx(his_line="come here then"))[Intent.REASSURE_SEEK] > 0
+
+
+def test_a_hold_is_bounded_from_when_it_was_first_set():
+    words = position.words_of("that sheet looked legit")
+    young = position.Hold("share", 1000.0, words, first=400.0, turns=3)
+    assert position.held(young, "which is it lol", 1100.0)
+    assert not position.held(replace(young, turns=position.HOLD_TURNS), "which is it lol", 1100.0)
+    old = replace(young, first=1100.0 - position.HOLD_MAX_S - 1)
+    assert not position.held(old, "which is it lol", 1100.0)
+
+
+def test_claims_shown_are_the_ones_his_line_is_about_within_fifty_tokens():
+    lines = ["i have 7 wins against him and 9 losses", "im at work till six",
+             "that one was a mess", "no one came"]
+    assert position.claims_so_far(lines) == lines[:2]  # "one" is no number
+    assert position.relevant_claims(lines, "how many wins was it again") == lines[:1]
+    assert position.relevant_claims(lines, "which is it lol") == lines[1:2]  # her newest
+    assert position.relevant_claims(lines, "anyone seen my hat today") == []
+    assert position.relevant_claims(lines, "nice") == []
+    many = [f"i won {i} duels against him this week and lost {i + 1} more" for i in range(9)]
+    shown = position.relevant_claims(many, "how many duels then")
+    assert shown and shown[-1] == many[-1]
+    from leeroy_mind.text import estimate_tokens
+    assert estimate_tokens(position.said_line(shown)) <= position.CLAIM_TOKENS
 
 
 def test_a_held_want_is_not_drawn_again_and_is_the_only_one_offered():
@@ -195,19 +220,18 @@ def test_a_whisper_holds_her_want_and_shows_what_she_said(store, clock, tmp_path
         assert first.intent_ctx.pushback and first.intent_ctx.hold is None
         enum = beat_calls(r)[-1]["format"]["properties"]["want"]["enum"]
         assert not {i.value for i in ANSWER_OFF} & set(enum)
-        assert "So far in this conversation" not in last_user(line_calls(r)[-1])
+        assert "So far in this conversation" not in last_user(beat_calls(r)[-1])
 
         # his short follow-up keeps her on it: the same want, the only one offered, and her
-        # own tally in both requests
+        # own tally before the beat (never a second "so far" block in the line's prompt)
         r.whisper_from_him(102, "which is it lol")
         r.run()
         second = seen[-1]
         assert second.intent_ctx.hold == Intent(first.intent)
         assert beat_calls(r)[-1]["format"]["properties"]["want"]["enum"] == [first.intent]
         assert second.intent == first.intent
-        for call in (beat_calls(r)[-1], line_calls(r)[-1]):
-            assert 'you\'ve said: "i have 7 wins on him and 9 losses"' in last_user(call)
-        assert last_user(line_calls(r)[-1]).rstrip().endswith("say that you do.")
+        assert 'you\'ve said: "i have 7 wins on him and 9 losses"' in last_user(beat_calls(r)[-1])
+        assert "So far in this conversation" not in last_user(line_calls(r)[-1])
 
         # a new subject lets the hold go
         r.whisper_from_him(102, "anyway what time is raid tonight")
@@ -245,8 +269,8 @@ def test_a_rule_on_her_card_leads_it_and_is_never_argued_against(store, clock, t
         call = line_calls(r)[-1]
         system = call["messages"][0]["content"]
         assert "Opinions: Decay is not optional; it is the law." in system
-        assert ('You hold this as a rule: "Decay is not optional; it is the law." You never '
-                "argue against it.") in last_user(call)
+        rule = position.view_line("Decay is not optional; it is the law.", "Zan")
+        assert rule in last_user(call) and rule in last_user(beat_calls(r)[-1])
         # a line that touches no opinion shows her first two, as ever
         r.whisper_from_him(102, "anyone seen my hat")
         r.run()
@@ -288,14 +312,14 @@ def test_a_dm_shows_what_she_said_and_takes_bad_news_gently(store, clock, tmp_pa
     try:
         seen = spy(r)
         r.llm.set_script(model(BEAT, "oh no, is he alright"))
-        turn, meta = dm_turn(r, "bad news, my dad is in hospital since this morning",
+        turn, meta = dm_turn(r, "bad news, my dad is in hospital, you still on that shift?",
                              earlier=[(102, HUMAN, "im on the late shift till 10 tonight"),
                                       (HUMAN, 102, "ok")])
         assert speak(r, turn, meta)
         assert meta.intent_ctx.bad_news
         assert 'you\'ve said: "im on the late shift till 10 tonight"' in meta.position
-        assert meta.position in last_user(line_calls(r)[-1])
         assert meta.position in last_user(beat_calls(r)[-1])
+        assert meta.position not in last_user(line_calls(r)[-1])
         enum = beat_calls(r)[-1]["format"]["properties"]["want"]["enum"]
         assert not {i.value for i in BAD_NEWS_OFF} & set(enum)
         assert seen[-1] is meta

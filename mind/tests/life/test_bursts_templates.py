@@ -64,14 +64,21 @@ def test_her_brb_takes_no_slip_and_no_emoticon(store, clock, tmp_path):
     for coherence in (True, False):
         r = rig(store, clock, tmp_path / str(coherence), coherence=coherence)
         try:
-            p = member(r, emoticons=["<3"], emoticon_rate=1.0)
+            p = member(r, emoticons=["<3"], emoticon_rate=1.0, typo_rate=0.15)
             brb = [s.line for s in r.engine._style(whisper(template="brb boss"), p, "brb boss",
                                                    close=False, plain=True)]
-            assert (brb == ["brb boss"]) is coherence
             assert any("<3" in x for x in brb) is not coherence
+            # never a typo, whatever her typo rate (review of #370), over many seeds
+            for _ in range(60):
+                again = [s.line for s in r.engine._style(whisper(template="gotta do a work thing"
+                                                                          " brb"), p,
+                                                         "gotta do a work thing brb", close=False,
+                                                         plain=True)]
+                if coherence:
+                    assert again == ["gotta do a work thing brb"]
             # her own line still carries her mark
             own = [s.line for s in r.engine._style(whisper(), p, "see you at eight", close=False)]
-            assert own == ["see you at eight <3"]
+            assert own and own[0].endswith("<3")
         finally:
             r.close()
 

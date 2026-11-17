@@ -3,8 +3,7 @@ a member he names carry their pronoun and role, a second wrong pronoun on a rewr
 in code, library item facts are kept to what the speaker's class can use (and she is told to
 say she is not sure when none is left), an owed answer's kept draft loses an echo opener, his
 short line said back as a question is cut, her attendance counts stay out of talk that is not
-about raids, and his explicit whisper overlay is for a lust woman, never one only drawn. Fakes
-only; invented members and lines."""
+about raids. Fakes only; invented members and lines."""
 from dataclasses import replace
 
 import pytest
@@ -17,11 +16,9 @@ from leeroy_mind.guards import GuardsCfg, Verdict, pronouns
 from leeroy_mind.guards.opener import echo_opener, without_question_echo
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.protocol import Chat, Group
-from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk import awareness as live
 from leeroy_mind.talk.gearfit import for_speaker, usable
 from leeroy_mind.talk.pipeline import UNSURE, TurnMeta
-from leeroy_mind.talk.romance import whisper_tail
 from leeroy_mind.talk.turns import Turn, TurnKind
 
 from .test_live import rig, source, speak, turn  # noqa: F401  (the rig fixture)
@@ -154,6 +151,18 @@ LINES = ["Blade of Jin: epic one-hand sword, item level 200.",
          "Marrowgar is the first boss of Icecrown Citadel."]
 
 
+def test_a_loot_table_name_with_a_comma_stays_whole():
+    line = ("Frost Trash (Icecrown, 25-player loot table): 2 items from: Mantle of Fire, Ice and "
+            "Shadow (251 mail shoulder), Grim Edge (251 one-hand sword), Frost Hood (251 cloth "
+            "head; 60 Emblem of Frost), Chill Band (251 finger).")
+    assert for_speaker([line], "Shaman") == [
+        "Frost Trash (Icecrown, 25-player loot table): 2 items from: Mantle of Fire, Ice and "
+        "Shadow (251 mail shoulder), Chill Band (251 finger)."]
+    mage = for_speaker([line], "Mage")[0]
+    assert "Mantle" not in mage and "Ice and Shadow" not in mage
+    assert "Grim Edge (251 one-hand sword), Frost Hood (251 cloth head; 60 Emblem of Frost)" in mage
+
+
 def test_item_facts_are_kept_to_what_her_class_can_use():
     shaman = for_speaker(LINES, "Shaman")
     assert shaman == [
@@ -279,23 +288,3 @@ def test_attendance_counts_only_where_the_talk_is_about_raids(store, tmp_path):
             assert "Attendance: 1 benched" in card("who is on the bench for the raid tonight")
         finally:
             r.close()
-
-
-# -- his explicit whisper overlay -----------------------------------------------------------------------
-
-def test_the_whisper_overlay_is_for_a_lust_woman_never_one_only_drawn(store, tmp_path):
-    seed_test_cast(store)
-    prompts = tmp_path / "prompts"
-    prompts.mkdir()
-    (prompts / "romance_explicit_whisper.txt").write_text("Invented overlay line.\n",
-                                                          encoding="utf-8")
-    kw = dict(dial=10, channel="whisper", data_dir=tmp_path, forms=("he", "him", "his"))
-
-    def tail(stance, stage, **more):
-        save_member(store, 102, player_gender="female", stance=stance, dial=10)
-        p = PersonaCache(store).get(102)
-        return whisper_tail(p, Relationship(a=102, b=HUMAN, romance_stage=stage), **kw, **more)
-    assert tail("drawn", "late_nights")                       # as before: the band reaches it
-    assert tail("drawn", "late_nights", lust_only=True) == ""
-    assert tail("lust", "whispers", lust_only=True).startswith("Invented overlay line.")
-    assert tail("lust", "whispers") == tail("lust", "whispers", lust_only=True)

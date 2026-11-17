@@ -32,35 +32,48 @@ is UK time, as Discord presence has it (`discord.presence.local_time`).
 
 ### Job shape
 
-From `job + " " + rhythm`, case-folded. Two rules come before the table (2026-11-17, the
+From `job + " " + rhythm`, case-folded. With `[talk] coherence` on (default; read at the
+mind's start and at his login; off, a card reads exactly as the table reads it and the rows
+marked "coherence" below do not exist) three readings come around the table (2026-11-17, the
 self-play audit: a bartender, a trainer with early clients, a half-day worker and a paralegal on
-maternity leave all had the `day` plan):
+maternity leave all had the `day` plan). They read only **clauses about work**: the text is
+split at commas, full stops, brackets, "and", "then", "but", and a clause about raiding,
+playing, the game, the guild, being online, the gym, sleep or "after work" is left out, so
+"raids 8pm to 11pm", "early mornings at the gym" and "opens the guild bank" shape nothing.
 
 1. **Leave is `home`**: maternity, parental, paternity, medical, sick or long-term leave, "on
-   leave", signed off, sabbatical, furloughed, laid off, out of work. She has the job and is not at it.
-2. **The hours her card states outright** (`_clock_shape`): a range such as "4am to 1pm",
-   "2pm-10pm" or "22:00 to 06:00" within 24 characters of a word for work (work, shift, job,
-   clients, patients, at the office/plant/bar...), 2 to 14 hours long. By its start: 03:00-07:29
-   `early`, 07:30-10:59 `day` (five hours or less: `part`), 11:00-15:59 `late`, 16:00-18:59
-   `evening`, else `nights`. So a card whose job says "third shift" and whose rhythm says "4am to
-   1pm work" has one clock, the stated one. Her raid times ("raids 7pm to 11pm") are never read.
+   leave", signed off, sabbatical, furloughed, laid off, out of work; not leave in the past
+   ("sick leave last year"). She has the job and is not at it.
+2. **The working hours her card states outright** (`_clock_shape`): a range such as "4am to
+   1pm", "2pm-10pm" or "22:00 to 06:00" in a work clause that has a word for working in it
+   (works, shift, on call, opens, teaches, clients, patients, at the office/plant/bar...), 2 to
+   14 hours long. By its start: 03:00-07:29 `early`, 07:30-10:59 `day` (five hours or less:
+   `part`), 11:00-15:59 `late`, 16:00-18:59 `evening`, else `nights`. Hours with am, pm or
+   minutes come before the table: a card whose job says "third shift" and whose rhythm says "4am
+   to 1pm work" has one clock, the stated one. Bare hours ("works 9 to 5") are read only after
+   the table has said nothing, so "night shifts, 7 to 7" stays nights.
+3. **After the table**, on work clauses only, the "coherence" rows.
 
-Then the first word-bounded match wins, else `day`:
+**She works weekends** ("works weekends", "weekend shifts", "evenings and weekends"): her
+workdays are Wednesday to Sunday for every shape but `nights` and `rotating`.
+
+The table, first word-bounded match wins, else `day`:
 
 | Shape | Pattern |
 |---|---|
 | `nights` | `night[- ]?shifts?\|third[- ]shifts?\|work(?:s\|ing)?(?: on)? nights\|(?:i'm\|she's\|is\|was\|been) on nights\|overnights?\|graveyard` ("raid nights", "late nights" and "plays on nights" are no night shift) |
 | `rotating` | `\d+\s*on\s*,?\s*\d+\s*off\|\d+\s*(?:days\|weeks)\s*on\|rotating\|rota\|12[- ]hour\|on call` |
-| `early` | `early shifts?\|early starts?\|[4-6]\s*a\.?m\.?\s*starts?\|starts? at [4-6]`, and early mornings, opening or morning shifts, "opens up/the", up at or before dawn or 4-6, baker, bakery, milk round, postie |
-| `evening` | bar, pub, club and kitchen work: bartend*, barmaid, barman, bar staff/work/manager, behind/tends/runs a bar, works at or in a bar/pub/club/restaurant, pub landlady/landlord, "evenings and weekends", closing shifts, works evenings, chef, line cook, waits tables, bouncer, door staff ("drinks at the bar" is no bar job) |
-| `late` | `late shifts?\|evening shifts?\|swing shifts?\|afternoon shifts?\|second[- ]shifts?\|lates` |
+| `early` | `early shifts?\|early starts?\|[4-6]\s*a\.?m\.?\s*starts?\|starts? at [4-6]` |
+| `late` | `late shifts?\|evening shifts?\|swing shifts?\|afternoon shifts?` |
 | `student` | `student(?! loans?)\|studying\|(?:attends?\|attending\|has\|skips?\|skipping\|goes to\|going to) lectures?\|(?:takes?\|taking\|attends?\|attending\|night\|evening) classes\|(?:back\|off\|goes\|going\|still\|is\|she's\|been\|starts?\|starting) (?:to\|at\|in) (?:uni\|university\|college)\|(?:uni\|college) (?:classes\|courses?\|lectures?\|coursework\|assignments?)\|doing an? (?:[\w-]+ ){0,2}degree`, unless the text also says `teach\w*\|tutor\w*\|lecturer\|professor\|instructor\|gives? lectures?\|works? (?:at\|for) (?:the \|a )?(?:uni\|university\|college)`: only what she does, so an employer named "... College", a degree she holds, a job at a university or a class she teaches is no study |
 | `remote` | `wfh\|works? from home\|from home\|freelanc\w*\|self[- ]employed` |
-| `home` | `stay[- ]at[- ]home\|unemployed\|between jobs\|retired`, full-time mum/dad/parent/carer, housewife, homemaker (and leave, above) |
-| `part` | `part[- ]time\|half[- ]days?\|mornings only\|school hours\|term[- ]time`, two or three days or mornings a week |
-
-`nights` also reads "nurse/ward/hospital/security/warehouse ... on nights" and "nights at the
-hospital/ward/warehouse/depot/plant".
+| `home` | `stay[- ]at[- ]home\|unemployed\|between jobs\|retired` |
+| `nights` (coherence) | "nurse/ward/hospital/security/warehouse ... on nights", "nights at the hospital/ward/warehouse/depot/plant" |
+| `early` (coherence) | early mornings, opening or morning shifts, "opens up/the", up at or before dawn or 4-6, baker, bakery, milk round, postie |
+| `evening` (coherence) | bar, pub, club and kitchen work: bartend*, barmaid, barman, bar staff/work/manager, behind/tends/runs a bar, works at or in a bar/pub/club/restaurant, pub landlady/landlord, "evenings and weekends", closing shifts, works evenings, chef, line cook, waits tables, bouncer, door staff |
+| `late` (coherence) | second shift, "works lates" |
+| `home` (coherence) | full-time mum/dad/parent/carer, housewife, homemaker |
+| `part` (coherence) | `part[- ]time\|half[- ]days?\|mornings only\|school hours\|term[- ]time`, two or three days or mornings a week |
 
 **Kids** (home duty) means a dependent child at home. A household that says "no kids", "no
 children", child-free, "empty nest", doesn't/does not/don't/do not/never/without (up to two words)
@@ -163,7 +176,11 @@ the callers keep today's behaviour):
 
 With `[talk] coherence` on (default) the "Right now" line agrees with the conversation
 (`stated_where`, `settled_where`, `playing_text`, `away_note`; `talk/README.md` "Conversations
-that hold together"): where she said she is in the last 30 minutes holds whatever block her plan
+that hold together"). `stated_where` reads only a sentence of hers that opens with the place,
+about herself, now ("at work, ...", "im still in bed", "ok im home now"); never "she's at work",
+"im not at work", "are you at work?", "i was at work" or "ill be at work by nine". Once
+`talk/sofar.py` is merged its `her_place` is the one reader and this only names its kind. Where
+she said she is in the last 30 minutes holds whatever block her plan
 has moved to ("You're still at work, as you told him a little while ago."); joining his group
 after saying so reads "You told him a little while ago you were at work: you've just got in from
 work and logged on."; a member in his group while he plays reads "You're at your PC, playing:

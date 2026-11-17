@@ -56,6 +56,7 @@ whisper check invite inv kick bench flag remind give gave and or'''.split())
 
 
 # Before a name followed by a pronoun: she is told about, not spoken to ("tell belra he ...")
+COHERENT = True  # [talk] coherence (LifeService.configure): off, the reading below is not made
 _TOLD_BEFORE = frozenset('tell told ask asked remind reminded warn warned'.split())
 
 
@@ -81,7 +82,7 @@ def _spoken_to(text: str, m) -> bool:
         return not before or before[-1] not in _OBJECT_BEFORE
     following = re.match(r"\s*([\w'’]+)", rest)
     word = following.group(1).casefold().replace('’', "'") if following else ''
-    if word in _SUBJECT_AFTER and before and before[-1] in _TOLD_BEFORE:
+    if COHERENT and word in _SUBJECT_AFTER and before and before[-1] in _TOLD_BEFORE:
         return False  # "tell belra he needs to ...": said about her, not to her
     return word in _SUBJECT_AFTER or (not before and word in _START_CUES)
 

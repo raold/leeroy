@@ -57,6 +57,7 @@ from leeroy_mind.discord.presence import local_time
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
+from leeroy_mind.discord.channels import channel_id
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
@@ -315,7 +316,6 @@ ROMANCE_LATE_BONUS = 0.15
 ROMANCE_COOL_S = 300.0
 OWN_LINES = 5
 SHORT_WAIT_S = 60.0  # an answer this soon after his line is not late, whatever her brb planned
-WAITING_S = 7200.0  # his DM posts older than this are no longer waiting for this answer
 NAMED_CARDS = 3  # roster lines for members his line names (Pipeline._named_cards)
 # his game question found no fact she can use: she says so, never an invented proc or item
 UNSURE = ("You have no facts at hand for this: if you aren't sure, say you aren't sure. Never "
@@ -578,6 +578,7 @@ class TurnMeta:
     # [talk] coherence (talk/position.py, Pipeline._position): what she has said so far in this
     # conversation and a rule of hers his line touches, the lines after the beat's block
     position: str = field(default="", repr=False)
+    view: str = field(default="", repr=False)
     # his whispers a waiting answer covers, oldest first, once a later one joined it
     # (talk.engine._life_waiting); empty for an answer to one line
     coalesced: list = field(default_factory=list, repr=False)
@@ -1612,8 +1613,10 @@ class Pipeline:
 
     @staticmethod
     def _positioned(block: str, meta: TurnMeta) -> str:
-        """`block` with her position's lines after it (TurnMeta.position, [talk] coherence)."""
-        return "\n".join(x for x in (block, meta.position) if x)
+        """`block` with her rule his line touches after it (TurnMeta.view, [talk] coherence).
+        What she has said so far (TurnMeta.position) is the beat's to read, never a second
+        "so far" block in the line's prompt (talk/sofar.py renders that one)."""
+        return "\n".join(x for x in (block, meta.view) if x)
 
     # -- her state, want and situation (human-likeness core, plan Task 8) ----------------------
 
@@ -1639,11 +1642,11 @@ class Pipeline:
 
     def _his_waiting(self, turn: Turn, meta: TurnMeta) -> list[str]:
         """[talk] coherence: his lines this answer covers when more than one waits for it,
-        oldest first; [] for an answer to one line. In game, the whispers that joined her waiting
-        answer (TurnMeta.coalesced, talk.engine._life_waiting); in his DM, his posts since her
-        last message there (meta.discord_chat) with the one she answers. A waiting or late
-        answer used to answer only the newest (self-play audit, 2026-11-17: a question, then
-        "?", got an apology and no answer)."""
+        oldest first; [] for an answer to one line: the whispers that joined her waiting answer
+        (TurnMeta.coalesced, talk.engine._life_waiting). A waiting or late answer used to
+        answer only the newest (self-play audit, 2026-11-17: a question, then "?", got an apology
+        and no answer). His DM's posts are discord.talk's to list (its own instruction says so,
+        the DM memory work); _dm_waiting only reads them to weigh the turn."""
         hg = self.human.guid
         if not hg or not self._coherent():
             return []
@@ -1652,27 +1655,35 @@ class Pipeline:
                     if r.from_guid == hg and self._may_carry(turn, r)]
             rows.sort(key=lambda r: r.id)
             return [r.text for r in rows] if len(rows) > 1 else []
-        if meta.discord_chat is not None and self._answers_his_dm(turn, meta):
-            tail, since = [], self.clock.now() - WAITING_S
-            for r in reversed(meta.discord_chat):
-                if r.from_guid != hg or r.ts < since:
-                    break
-                tail.append(r)
-            tail.reverse()
-            found = self._his_message(meta)
-            mid = meta.discord.reply_to if meta.discord is not None else None
-            texts = [r.text for r in tail if r.id != mid]
-            if found is not None:
-                texts.append(found[0])
-            return texts if len(texts) > 1 else []
         return []
+
+    def _dm_waiting(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        """His unanswered posts in her DM that this answer covers, oldest first, as
+        DiscordTalk.unanswered gives them (the DM memory work; reached through the owed watch's
+        app): read only to weigh the turn against his question (_his_line), never shown from
+        here. [] for one post, another channel, or while that reader is not there."""
+        if (not self._coherent() or meta.discord is None or not meta.discord.reply_to
+                or not self._answers_his_dm(turn, meta)):
+            return []
+        talk = getattr(getattr(getattr(self, "owed", None), "app", None), "discord_talk", None)
+        unanswered = getattr(talk, "unanswered", None)
+        if unanswered is None:
+            return []
+        try:
+            posts = unanswered(self.store.conn, channel_id(turn.channel), meta.discord.thread,
+                               meta.discord.reply_to)
+        except Exception as e:  # only ever read to weigh the turn
+            log.warning("talk_dm_waiting_failed: guid=%d reason=%s", turn.speaker,
+                        type(e).__name__)
+            return []
+        return [text for _, text in posts] if len(posts) > 1 else []
 
     def _his_line(self, turn: Turn, meta: TurnMeta) -> str:
         """The line of his this turn answers, "" when it answers none: its trigger line when it is
         his (and hers to see), his Discord post it replies to, or his whisper a carried DM answer
         answers (its recall query); of several waiting lines (_his_waiting) his first question,
         so the turn is weighed as an answer to it. Read only to weigh it; never shown from here."""
-        waiting = self._his_waiting(turn, meta)
+        waiting = self._his_waiting(turn, meta) or self._dm_waiting(turn, meta)
         if waiting:
             return next((t for t in waiting if is_question(t)), waiting[-1])
         return self._his_one_line(turn, meta)
@@ -1717,7 +1728,7 @@ class Pipeline:
         dial = self.cfg.romance.dial
         tail = bool(hg and turn.to_guid == hg and (
             whisper_tail(p, rel, dial=dial, channel=channel, data_dir=self.data_dir,
-                         forms=self.human.forms, **self._lust_only())
+                         forms=self.human.forms)
             or dm_explicit(p, rel, dial=dial, channel=channel, data_dir=self.data_dir)))
         fwd = forward(p)
         if self._private_to_him(turn) and flirt_chance(p, 1.0) <= 0:
@@ -1754,7 +1765,7 @@ class Pipeline:
             self._situation(turn, meta, p, now)
         except Exception as e:  # her situation is colour: nothing in it may cost him an answer
             meta.intent, meta.want_source, meta.lands, meta.intent_ctx = "", "", "", None
-            meta.position = ""
+            meta.position = meta.view = ""
             log.warning("talk_situation_failed: guid=%d reason=%s", turn.speaker,
                         type(e).__name__)
 
@@ -1775,13 +1786,18 @@ class Pipeline:
 
     def _position(self, turn: Turn, meta: TurnMeta, p: Persona, his: str, now: float) -> str:
         """[talk] coherence, on an answer to his line (any channel) while a core switch is on:
-        what she has said so far in this conversation (position.claims_so_far) and a rule on
-        her card his line touches (position.opinion_for, strong), as the lines after the
-        turn's block; "" otherwise. Never logged."""
+        what she has said so far in this conversation that his line is about
+        (position.relevant_claims, at most position.CLAIM_TOKENS), for the beat; and into
+        meta.view a rule on her card his line touches (position.opinion_for, strong), the line
+        after the turn's block. "" otherwise. Never logged."""
+        meta.view = ""
         if not (self._coherent() and his and self._aimed_at_him(turn)):
             return ""
-        claims = position.claims_so_far(self._said_here(turn, meta, now))
-        return position.position_block(claims, position.opinion_for(p.opinions, his))
+        opinion = position.opinion_for(p.opinions, his)
+        if opinion and position.strong(opinion):
+            meta.view = position.view_line(opinion, self.human.called)
+        claims = position.relevant_claims(self._said_here(turn, meta, now), his)
+        return position.said_line(claims)
 
     def _situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
         life = getattr(self, "life", None)
@@ -2092,17 +2108,20 @@ class Pipeline:
         while len(self._wants) > WANTS_KEPT:
             del self._wants[next(iter(self._wants))]
         # [talk] coherence: while his question or disagreement is open the want is held for
-        # her next turn here (position.held: 10 minutes, a new subject or his "fair enough"
-        # lets it go)
+        # her next turn here (position.held: 10 quiet minutes, a new subject, his "fair
+        # enough", HOLD_TURNS turns or HOLD_MAX_S from when it was first set lets it go)
         ctx = meta.intent_ctx
         old = self._holds.pop(key, None)
         if (self._coherent() and isinstance(ctx, IntentContext) and ctx.to_him
                 and ctx.his_line.strip() and not position.settled(ctx.his_line)
                 and (ctx.hold is not None or ctx.pushback or asks(ctx.his_line))):
-            words = position.words_of(ctx.his_line, said)
-            if ctx.hold is not None and old is not None:
-                words |= old.words
-            self._holds[key] = position.Hold(meta.intent, self.clock.now(), words)
+            now = self.clock.now()
+            if ctx.hold is not None and old is not None:  # held on: its first words and time
+                hold = position.Hold(meta.intent, now, old.words, old.first, old.turns + 1)
+            else:
+                hold = position.Hold(meta.intent, now, position.words_of(ctx.his_line, said),
+                                     now, 1)
+            self._holds[key] = hold
             while len(self._holds) > WANTS_KEPT:
                 del self._holds[next(iter(self._holds))]
 
@@ -2140,7 +2159,7 @@ class Pipeline:
         outside the budget and inside num_ctx."""
         if not self._core_on():
             return 0
-        held = estimate_tokens("\n" + meta.position) if meta.position else 0
+        held = estimate_tokens("\n" + meta.view) if meta.view else 0
         if self._beat_on(turn, meta):
             if meta.beat is None:
                 state = self._state_lands(turn, meta)
@@ -2176,7 +2195,8 @@ class Pipeline:
             options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
             offered = self._beat_offer(turn, meta, c, started)
             # what she has said so far, and her rule on it, before the beat's own ask
-            based = _with_hint(c.messages, meta.position) if meta.position else c.messages
+            known = "\n".join(x for x in (meta.position, meta.view) if x)
+            based = _with_hint(c.messages, known) if known else c.messages
             items = beats.fitting(sum(estimate_tokens(m["content"]) for m in based), human,
                                   wants, [x for _, x in offered], predict=options["num_predict"],
                                   num_ctx=options["num_ctx"], their=their, lean=lean,
@@ -2512,8 +2532,7 @@ class Pipeline:
         # distance frame, which her romance text then leaves out, so it is said once
         tail_text = (whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
                                   data_dir=self.data_dir, forms=human.forms, rng=draws("tail"),
-                                  **({"realism": True} if realism else {}),
-                                  **({} if preview else self._lust_only()))
+                                  **({"realism": True} if realism else {}))
                      if hg and turn.to_guid == hg else "")
         romance = self._romance(turn, meta, p, rel_h, phase, now, draws("roll"), trigger, dial,
                                 tail_follows=bool(tail_text), vary=draws("vary"))
@@ -4202,11 +4221,6 @@ class Pipeline:
         shaped = draw.words if isinstance(draw, ShapeDraw) and draw.content else 0
         return max(meta.keep_words, shaped)
 
-    def _lust_only(self) -> dict:
-        """whisper_tail's `lust_only` with [talk] coherence and a core switch on: his explicit
-        whisper overlay only for a woman whose stance is lust; {} otherwise (as before)."""
-        return {"lust_only": True} if self._coherent() and self._core_on() else {}
-
     def _asked_line(self, turn: Turn, meta: TurnMeta, c: Composed) -> str:
         """The line this turn answers, for the length rule's "carries the answer": the line it
         was composed to answer, else his line (a DM post, a carried whisper); "" for none."""
@@ -4383,9 +4397,9 @@ class Pipeline:
             # on its own: repacked as one text its clauses ran together and the rest was dropped
             # (hard-case audit, 2026-11-17)
             pieces = own_lines[:turn.max_lines]
-        plain = plain and coherent  # her brb and back: no slips, no marks
+        plain = plain and coherent  # her brb and back: no slips, no typos, no marks
         out: list[Styled] = []
-        typing = p.typing
+        typing = replace(p.typing, typo_rate=0.0) if plain else p.typing
         most = 1 if words else turn.max_lines
         cap = math.ceil(words * LONG_SLACK) if words else None
         if room and words:
