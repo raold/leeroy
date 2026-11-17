@@ -746,3 +746,29 @@ def test_a_recorded_night_writes_only_its_own_tables(h, monkeypatch):
 def test_the_recorder_is_no_part_of_the_base_pipeline():
     from leeroy_mind.nightly.pipeline import STAGES
     assert "pulls" not in [s.name for s in STAGES]
+
+
+def test_the_mode_is_pinned_at_mind_start(h):
+    from nightly.test_night_wiring import app_for, context
+    path = h.settings.data_dir / "mind.toml"
+    path.write_bytes(b'[drama]\nthreads = "record"\n')
+    app = app_for(h)
+    try:
+        path.write_bytes(b'[drama]\nthreads = "off"\n')
+        assert context(app).settings.drama_threads == "record"
+        names = [s.name for s in app.night_runner.stages]
+        assert names.index("pulls") == names.index("encounters") + 1
+    finally:
+        run(app.stop())
+
+
+def test_a_mind_started_without_it_has_no_stage(h):
+    from nightly.test_night_wiring import app_for, context
+    path = h.settings.data_dir / "mind.toml"
+    app = app_for(h)
+    try:
+        path.write_bytes(b'[drama]\nthreads = "record"\n')
+        assert context(app).settings.drama_threads == "off"
+        assert "pulls" not in [s.name for s in app.night_runner.stages]
+    finally:
+        run(app.stop())

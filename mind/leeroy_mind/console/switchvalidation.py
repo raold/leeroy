@@ -13,6 +13,9 @@ def valid_table(name, table, raw):
               'playstyle':{'enabled'},'photos':{'enabled','send','requests','scene_from_words'},
               'raidlead':{'enabled','briefs'},
               'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'}}
+    if name == 'drama':
+        # `threads` is a mode, not a boolean; a bad one turns only itself off (drama.config)
+        table = {k:v for k,v in table.items() if k != 'threads'}
     if name in simple:
         return not set(table)-simple[name] and all(type(v) is bool for v in table.values())
     if name in ('talk','romance','selfies','control'):
