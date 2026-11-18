@@ -47,6 +47,13 @@ DISCORD_SHORT_WORDS = CHANNEL_BANDS[1][1]  # a quick line on Discord (20 words)
 # many words, so a terse typist is never asked for "about 1 words" (review of #343, P1); a
 # shorter draw elsewhere is worded as a word or two (shape_template)
 MIN_LINE_WORDS = 3
+# His short DM lines get short answers (self-play audit, 2026-11-17: he averaged 12 words and
+# she 52; to his lines of 5 words or fewer she averaged 32): a line of his of SHORT_HIS words or
+# fewer caps her at about SHORT_CAP words, one of up to MID_HIS at about MID_CAP, and the mirror
+# formula decides above that. A short line that asks her for something ("describe it
+# properly", talk.asking.asks) keeps the middle cap: the answer needs the room.
+SHORT_HIS, SHORT_CAP = 5, 12
+MID_HIS, MID_CAP = 12, 25
 
 Family = Literal["game", "whisper", "discord", "dm", "group"]
 GAME_FAMILIES = frozenset({"game", "whisper"})
@@ -153,6 +160,12 @@ class ShapeContext:
     # her answer to him waited out a time she stepped away (life/interrupt.py, core plan Task
     # 10): LATE, in game or her DM, its excuse "away" (Pipeline._waited_away)
     away: bool = False
+    # her DM answer waited for her own time (discord/owntime.py) owntime.LATE_OWN_S or more:
+    # LATE, its excuse where she was when he wrote (Pipeline._waited_own_time)
+    waited: bool = False
+    # his line asks her for something (talk.asking.asks): a short line of his still gets the
+    # middle cap (dm_words_for)
+    his_asks: bool = False
     # the line length her voice sheet's sentence shape names (personas.speech.word_range:
     # "clipped, three to seven words"); None without one. It only moves the word draw of her own
     # line and her habit in a DM's mirror: never the shape's odds, MIN_LINE_WORDS or the caps
@@ -282,7 +295,7 @@ def _line_words(ctx: ShapeContext, rng) -> int:
 
 def _dm_words(ctx: ShapeContext, rng) -> int:
     return dm_words_for(ctx.his_words, ctx.typing, ctx.dm_mirror, ctx.dm_words, rng,
-                        habit=ctx.voice_words)
+                        asks=ctx.his_asks, habit=ctx.voice_words)
 
 
 def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
@@ -312,12 +325,19 @@ def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
     return ShapeDraw(shape, words, 1, num_predict(words))
 
 
+def resized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
+    """`shape` sized for `ctx` with `rng`, in place of a drawn one (Pipeline._shape: a question
+    back is never forced on his goodbye or his bad news)."""
+    return _sized(shape, ctx, rng)
+
+
 def draw_shape(ctx: ShapeContext, rng) -> ShapeDraw:
     """The reply's shape, words, lines and num_predict for `ctx`, drawn with `rng`. A game or
     whisper answer LATE_SHAPE_S after his line is LATE (not drawn), as is an answer that waited
-    out a time she stepped away (`ctx.away`, a DM's too); a DM with `dm_mirror` 0 is today's DM
+    out a time she stepped away (`ctx.away`, a DM's too) or for her own time (`ctx.waited`); a
+    DM with `dm_mirror` 0 is today's DM
     (a paragraph of up to `dm_words`, not drawn)."""
-    if ctx.away or (ctx.family in GAME_FAMILIES and ctx.late_by >= LATE_SHAPE_S):
+    if ctx.away or ctx.waited or (ctx.family in GAME_FAMILIES and ctx.late_by >= LATE_SHAPE_S):
         return _sized(Shape.LATE, ctx, rng)
     if ctx.family == "dm" and ctx.dm_words > 0 and ctx.dm_mirror <= 0:
         return ShapeDraw(Shape.PARAGRAPH, ctx.dm_words, 1, num_predict(ctx.dm_words))
@@ -411,8 +431,16 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return min(hi, max(lo, x))
 
 
+def short_cap(his_words: int, asks: bool = False) -> int:
+    """The most words her DM answer holds for a short line of his (SHORT_HIS, MID_HIS): 0 for no
+    cap (a longer line, or one whose words are not known)."""
+    if his_words <= 0 or his_words > MID_HIS:
+        return 0
+    return SHORT_CAP if his_words <= SHORT_HIS and not asks else MID_CAP
+
+
 def dm_words_for(his_words: int, typing: Typing, dm_mirror: int, dm_words: int, rng, *,
-                 habit: tuple[int, int] | None = None) -> int:
+                 asks: bool = False, habit: tuple[int, int] | None = None) -> int:
     """A DM's words: his message's length (mirrored) leading and her habit (her typing's longest
     line) tempering it, as a distribution within the owner's `dm_words` cap, pulled from the cap
     toward that target by `dm_mirror` (0 returns `dm_words`: today's; 10 follows the target
@@ -420,6 +448,8 @@ def dm_words_for(his_words: int, typing: Typing, dm_mirror: int, dm_words: int, 
     of his (40 words or more) gets the full cap a quarter of the time. At mirror 5, with her line
     (3, 8): his 3 words get a median of about 33, his 28 about 74, his 120 about 141; p90/p10 for
     one message is about 1.7 (review of #331, replacing the plan's sqrt(mirrored * habit)).
+    His short lines cap her (short_cap; `asks`: his line asks her for something): a draw over the
+    cap is drawn again in its upper third, never under 3 words.
     `habit`: her voice sheet's line length in place of her typing's (the same draws)."""
     if dm_mirror <= 0 or dm_words <= 0:
         return dm_words
@@ -433,4 +463,8 @@ def dm_words_for(his_words: int, typing: Typing, dm_mirror: int, dm_words: int, 
     words = round(words * rng.lognormvariate(0.0, 0.35 * m))  # a real spread, none at m = 0
     if his_words >= 40 and rng.random() < 0.25:
         words = dm_words
-    return int(_clamp(words, 3, dm_words))
+    words = int(_clamp(words, 3, dm_words))
+    cap = min(short_cap(his_words, asks), dm_words)
+    if cap and words > cap:
+        words = rng.randint(max(3, cap - cap // 3), cap)
+    return words

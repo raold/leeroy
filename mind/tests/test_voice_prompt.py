@@ -264,10 +264,11 @@ def test_an_owed_line_keeps_its_floor_whatever_her_shape_says():
 
 def test_the_dm_mirror_keeps_its_formula_and_its_draws():
     assert dm_words_for(28, T, 0, 200, random.Random(3), habit=(2, 6)) == 200  # mirror 0: today's
-    usual = [dm_words_for(10, T, 5, 200, random.Random(i)) for i in range(500)]
-    terse = [dm_words_for(10, T, 5, 200, random.Random(i), habit=(2, 6)) for i in range(500)]
+    # his 20 words: above the short-line caps of #368 (12 words or fewer cap her at 25)
+    usual = [dm_words_for(20, T, 5, 200, random.Random(i)) for i in range(500)]
+    terse = [dm_words_for(20, T, 5, 200, random.Random(i), habit=(2, 6)) for i in range(500)]
     assert sum(terse) < sum(usual) and all(3 <= w <= 200 for w in terse)
-    same = [dm_words_for(10, T, 5, 200, random.Random(i), habit=(8, 14)) for i in range(500)]
+    same = [dm_words_for(20, T, 5, 200, random.Random(i), habit=(8, 14)) for i in range(500)]
     assert same == usual                          # her typing's own range: nothing moves
     a, b = random.Random(9), random.Random(9)     # and the stream is read the same either way
     dm_words_for(30, T, 5, 200, a)

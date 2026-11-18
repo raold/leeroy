@@ -23,7 +23,7 @@ from leeroy_mind.personas.facts import (Facts, conflicts as persona_conflicts, f
 from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.moves import topics
 
-from . import phrases, pronouns, voice
+from . import owncopy, phrases, pronouns, voice
 from .identity import CODES as SLIP_CODES, code_for as slip_code, slips
 from .opener import echo_opener
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
@@ -39,10 +39,14 @@ _CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm', '
 _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
                         'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener',
-                        'echo_parent'})
-# Never sent, and never an owed answer's fallback: his words said back as hers, and her speaking
-# with the other sex's body or role (identity.py). A slip is a rewrite, so it gets one retry.
-HARD_CODES = frozenset({'echo_parent', *SLIP_CODES.values()})
+                        'echo_parent', 'own_copy'})
+# Never sent, and never an owed answer's fallback: his words said back as hers, her speaking
+# with the other sex's body or role (identity.py), and her own previous message in this
+# conversation sent again (owncopy.py). A slip is a rewrite, so it gets one retry.
+HARD_CODES = frozenset({'echo_parent', 'own_copy', *SLIP_CODES.values()})
+# A draft is never her candidate's "clean part" for these (Pipeline._short_answer cuts slips)
+WHOLE_CODES = frozenset({'echo_parent', 'own_copy'})
+OWN_COPY_SECONDS = 3 * 3600  # her messages of the conversation going on
 ECHO_RUN, ECHO_RATIO, ECHO_MIN_WORDS = 8, .9, 6
 ECHO_OPENING = 5  # his first words said back as hers, carried past his first sentence
 ECHO_OPENING_FIRST = 3  # ...when that first sentence has this many words
@@ -59,6 +63,8 @@ HINTS = {
                     'quoted or restated; answer it without saying it back'),
     'member_misgender': 'it calls a guild member by the wrong pronoun',
     'nothing_new': 'it only repeats what was already said',
+    'own_copy': ('it says your own previous message again; say something new that answers the '
+                 'message in front of you'),
     'own_repeat_same_channel': 'it repeats one of your own recent lines',
     'own_repeat_cross_channel': 'it repeats one of your own recent lines',
     'own_repeat_discord': 'it repeats one of your own recent messages',
@@ -551,6 +557,15 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         drop.append('own_repeat_same_channel' if _same_room(previous, draft) else 'own_repeat_cross_channel')
         scores.append(Score('repeat', round(score, 6)))
         refs.append(Reference('line', previous.id))
+    # Her own previous message in this conversation, said again whole or as one piece of it
+    # (owncopy.py): never when he asked her to say it again, never a short line.
+    if not filler_post and not (parent and parent.guid != draft.guid
+                                and owncopy.asked_again(parent.text)):
+        here = [line for line in own if now - line.ts <= OWN_COPY_SECONDS
+                and (_same_room(line, draft) or {line.channel, draft.channel} <= {'whisper', 'dm'})]
+        if owncopy.copies_any(draft.text, [line.text for line in here]):
+            drop.append('own_copy')
+            refs.append(Reference('line', here[-1].id))
     shared = defaultdict(set)
     bucket = evening(now)
     if draft.channel in {'guild', 'discord', 'group'} and bucket is not None:

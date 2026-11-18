@@ -40,6 +40,7 @@ dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
 state = false                 # her feeling through the day
+dm_wait_cap_s = 75            # the longest his DM waits for her answer, whatever her day (0: no cap; asleep: twice this)
 wow_vs_life = 5               # 0-10: how present the WoW-vs-life theme is in the night's stories (0: off)
 
 [romance]
@@ -74,6 +75,7 @@ RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 DISCORD_WORDS_MAX = 200  # [talk] discord_words and dm_words
 DM_MIRROR_MAX = 10  # [talk] dm_mirror
+DM_WAIT_CAP_MAX = 3600  # [life] dm_wait_cap_s
 THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] and [life] values already logged in this process
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", "realm",
@@ -125,6 +127,9 @@ class LifeCfg:
     """[life]: her day (life/), and the night's WoW-vs-life theme (nightly.settings.load_life)."""
     availability: int = 0  # 0-10; 0: always present, today's behaviour (life/config.py pin)
     state: bool = False  # her feeling through the day
+    # the longest his DM (and a group DM line that names her) waits for her answer, in
+    # seconds, whatever her day; asleep twice this; 0: no cap (discord/owntime.py)
+    dm_wait_cap_s: int = 75
     wow_vs_life: int = 5
 
 
@@ -245,6 +250,8 @@ _RULES = {
     "life": {
         "availability": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "state": (lambda v: type(v) is bool, "a boolean"),
+        "dm_wait_cap_s": (lambda v: _int_in(v, 0, DM_WAIT_CAP_MAX),
+                          f"an integer 0-{DM_WAIT_CAP_MAX}"),
         "wow_vs_life": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
     },
     "romance": {
@@ -327,7 +334,8 @@ def _build(data: dict, source: str) -> MindConfig:
             if section == 'romance' and key in ('activities', 'realism') and type(v) is not bool:
                 v = False
             if section == "life" and not check(v):
-                # the default (availability 0, state false, wow_vs_life 5), logged once a value
+                # the default (availability 0, state false, dm_wait_cap_s 75, wow_vs_life 5),
+                # logged once a value
                 # (each login reads it again); the night's load_life still refuses wow_vs_life
                 if ("life." + key, repr(v)) not in _WARNED:
                     _WARNED.add(("life." + key, repr(v)))
