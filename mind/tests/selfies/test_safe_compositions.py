@@ -291,6 +291,57 @@ def test_the_selfies_long_form_shortens_before_the_worker_would_refuse_a_request
         p, w, audience="him")))
 
 
+def test_a_request_keeps_the_owners_accessories_ahead_of_its_moment_and_the_timer_pose():
+    """Review of #362, round 2: what the owner set her to wear are a request's first optional
+    phrases, their room reserved; the moment and a timer photo's pose come after them, so
+    neither takes an accessory's room."""
+    from leeroy_mind.selfies.scene import limb_detail
+    a = replace(APPEARANCE, glasses="always", tattoos="small", piercings="nose",
+                makeup="defined", jewellery="statement")
+    p = woman(appearance=a)
+    acc = [t for t, _ in accessory_phrases(p) if not limb_detail(t)]
+    assert len(acc) == 5
+    for framing in words_scene.FRAMINGS:
+        w = words_scene.Words("staff bathroom at work", framing, "casual",
+                              scene_choices.OUTFITS["casual"], "quick, between calls", "day",
+                              "fluorescent", None, ())
+        spec = words_scene.build_words_prompt(p, words_scene.scene_of(p, w, audience="him"))
+        texts = [t for t, _ in spec.phrases]
+        assert all((t, 1) in spec.phrases for t in acc)
+        assert max(map(texts.index, acc)) < texts.index("quick, between calls")
+        if framing == "timer":
+            assert texts.index("quick, between calls") < texts.index(safe.POSE_WAIST_UP)
+        else:
+            assert safe.POSE_WAIST_UP not in texts  # a selfie's arm holds the camera
+        kept, dropped = _worker_fit()(spec.phrases, estimate, FIT_MAX)
+        assert all(t in kept for t in acc), (framing, dropped)
+
+
+def test_a_requests_selfie_framing_shortens_before_an_accessory_or_her_hair_style():
+    """Review of #362, round 2: the selfie's long form takes its short one in the first step of
+    the fit (prompt.fit_required's `short`), before her hair's style would go for the
+    accessories' room; it never yields."""
+    from leeroy_mind.selfies.prompt import hair_skin
+    worn = dict(glasses="always", piercings="nose", makeup="defined", jewellery="statement")
+    p = woman(appearance=replace(APPEARANCE, build="curvy", weight_kg=70, height_cm=165,
+                                 hair_style="loose beach waves over one shoulder", **worn))
+    w = words_scene.Words("staff bathroom at work", "handheld_selfie", "work_uniform",
+                          words_scene.OFFICE_WEAR, "quick, between calls", "day", "fluorescent",
+                          None, ())
+    spec = words_scene.build_words_prompt(p, words_scene.scene_of(p, w, audience="him"))
+    assert spec.phrases[0] == ("selfie", 0)  # shortened, still required
+    assert (hair_skin(p, None)[0][0], 0) in spec.phrases  # her hair keeps its style
+    kept, dropped = _worker_fit()(spec.phrases, estimate, FIT_MAX)
+    assert all(t in kept for t, _ in accessory_phrases(p)), dropped
+    for build, kg in (("average", 60), ("curvy", 70), ("voluptuous", 98)):
+        for style in ("in a messy bun", "long glossy waves", "loose beach waves over one shoulder"):
+            q = woman(appearance=replace(APPEARANCE, build=build, weight_kg=kg, height_cm=165,
+                                         hair_style=style, **worn))
+            spec = words_scene.build_words_prompt(q, words_scene.scene_of(q, w, audience="him"))
+            if (hair_skin(q, None)[0][0], 0) not in spec.phrases:  # her hair lost its style ...
+                assert spec.phrases[0] == ("selfie", 0)  # ... only after the framing shortened
+
+
 def test_the_lust_style_is_never_offered_a_mirror_selfie():
     props = kind.LUST_SCHEMA["properties"]
     text = json.dumps(kind.LUST_SCHEMA)

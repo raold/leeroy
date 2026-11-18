@@ -347,7 +347,7 @@ GIVEN = object()  # fit_required: a phrase that makes way for what the owner set
 def fit_required(out: list[tuple[str, int]], p: Persona, yields: list[str],
                  name_re: re.Pattern | None = None, last: tuple[str, ...] = (),
                  pose: str | None = None, reserve: int = 0,
-                 give: tuple[str, ...] = ()) -> list[tuple[str, int]]:
+                 give: tuple[str, ...] = (), short: tuple[str, ...] = ()) -> list[tuple[str, int]]:
     """`out` made to fit the worker (controller ruling, 2026-11-15, measured on the GPU): while
     the required (priority-0) set counts more than FIT_MAX by the mind's own count
     (tokens.estimate, never below the real one), one step at a time: the phrases of `yields`
@@ -366,10 +366,13 @@ def fit_required(out: list[tuple[str, int]], p: Persona, yields: list[str],
     also run while the required set counts more than FIT_MAX less `reserve`; then the phrases
     of `give` (a profile's or a situation's kind of photo; a varied front or side view's framing)
     move to priority 2, behind what the reserve is for. Nothing else is yielded for it. With no
-    reserve the steps are exactly what they were."""
+    reserve the steps are exactly what they were.
+
+    `short`: phrases that take their short forms (SHORT) in the first step, ahead of `yields`,
+    and never yield (a request's selfie framing, words_scene)."""
     from .tokens import joined
     out = list(out)
-    shorten = [(t, SHORT[t]) for t in yields if t in SHORT]
+    shorten = [(t, SHORT[t]) for t in (*short, *yields) if t in SHORT]
     shorten += hair_skin_short(p, name_re)
     shorten += [x for x in zip(body_words(p), body_words(p, short=True)) if x[0] != x[1]]
     steps = list(shorten)

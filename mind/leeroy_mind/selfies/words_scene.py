@@ -126,7 +126,8 @@ NOW_ANY = "going about an ordinary day"
 # view came doubled or oversized) and their negative names the mirror and the phone. A mirror
 # selfie he asks for stays one (the owner's GPU-checked bathroom mirror selfie; the mirror
 # defects were the lust profile kinds'), with a negative that names neither. The selfie's long
-# form takes its short one when the required set is too long (prompt.POSE_SHORT).
+# form takes its short one first when the required set is too long, or leaves the owner's
+# accessories no room (prompt.fit_required's `short`).
 FRAMING_WORDS = {"mirror_selfie": KIND_WORDS["mirror_selfie"],
                  "handheld_selfie": KIND_WORDS["selfie"],
                  "timer": "photo taken on a timer",
@@ -505,12 +506,14 @@ def framing_words(p: Persona, framing: str) -> str:
 def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     """The prompt for a scene read from his words, in this order: the framing (0), who she is (0),
     her body (0), `wearing <outfit>` (0), the place (0; with swimwear, a waist-up framing, 0), her
-    hair and skin (0), the moment (1), looking at the camera (3, not from behind), her eyes and
-    face details (2; none about her hands, arms, legs or feet), the prop (2), the lighting (2), her glutes when seen from behind (2), the
-    time of day (3), a plain average build (1) and the phone look (1, without natural light
-    unless the lighting is daylight). fit_required shortens her hair's style, her skin's
-    modifiers, her size and a back view's pose; nothing at priority 0 yields. ValueError when
-    scene_renderable says why not, or a code is off its list."""
+    hair and skin (0), what the owner set her to wear (1, its room reserved), the moment (1), a
+    timer photo's waist-up pose when nothing is in her hands (1), looking at the camera (3, not
+    from behind), her eyes and face details (2; none about her hands, arms, legs or feet), the
+    prop (2), the lighting (2), her glutes when seen from behind (2), the time of day (3), a
+    plain average build (1) and the phone look (1, without natural light unless the lighting is
+    daylight). fit_required shortens a selfie's framing first, then her hair's style, her skin's
+    modifiers, her size and last a back view's pose; nothing at priority 0 yields. ValueError
+    when scene_renderable says why not, or a code is off its list."""
     s = scene_from(scene)
     missing = scene_renderable(p, s)
     if missing:
@@ -538,13 +541,16 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     if w["wearing"] == "swimwear":
         out.append((SWIM_FRAMING, 0))
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
-    if w["framing"] == "timer" and not w.get("prop"):
-        add(POSE_WAIST_UP, 1)  # nothing in her hands (a selfie's arm holds the camera)
     add(alone(setting), 3)
-    add(s.activity, 1, True)
+    # what the owner set her to wear, the first optional phrases (prompt.fit_clothed's order),
+    # with their room reserved; then the moment, then a timer photo's pose (nothing in her
+    # hands: the phone is propped up), as a situational photo's pose follows its activity
     worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
     room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
     out += worn
+    add(s.activity, 1, True)
+    if w["framing"] == "timer" and not w.get("prop"):
+        add(POSE_WAIST_UP, 1)
     if w["framing"] != BEHIND:
         add("looking at the camera", 3)
     # none of her face details about her hands, arms, legs or feet (scene.limb_detail)
@@ -559,7 +565,10 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
         out.append(plain_build)
     daylight = w["lighting"] == "daylight"
     add(_PHONE_TAIL if daylight else _PHONE_TAIL.replace("natural light, ", ""), 1)
-    out = fit_required(out, p, [], name_re, pose=pose, reserve=room)
+    # a selfie's long form takes its short one in the first shortening step, before an
+    # accessory or her hair's style would go, and never yields (`short`); a back view's pose
+    # takes its short form only last
+    out = fit_required(out, p, [], name_re, pose=pose, reserve=room, short=(pose,))
     # his explicit ask for a mirror selfie keeps its mirror: the negative does not name it
     return PromptSpec(tuple(out), negative_for(p, snap_negative(
         s.style == LUST, w["framing"] == "mirror_selfie")))
