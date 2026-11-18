@@ -10,7 +10,7 @@ from leeroy_mind.nightly.critic import _line, _members, _safe, sample_lines
 from leeroy_mind.nightly.growth import rollback_week
 from leeroy_mind.nightly.llm import check_schema, schema, system_prompt
 from leeroy_mind.nightly.settings import iso_week, night_of_ts
-from leeroy_mind.personas.card import render_prompt_card
+from leeroy_mind.personas.card import render_night_card
 from leeroy_mind.personas.io import load_effective
 from leeroy_mind.tuning.lines import tuned_card
 from leeroy_mind.storage.rows import cosine, unpack_vec
@@ -36,8 +36,9 @@ def _card(store, guid):
     persona = load_effective(store, guid)  # the member as the owner tuned them
     if persona is None:
         return None
-    card = tuned_card(render_prompt_card(persona, race=RACES.get(member.race, ""),
-                                         class_name=CLASSES.get(member.class_, "")), persona)
+    # with her voice sheet's public part when she has one (card.render_night_card)
+    card = tuned_card(render_night_card(persona, race=RACES.get(member.race, ""),
+                                        class_name=CLASSES.get(member.class_, "")), persona)
     return (store.get_persona_json(guid), store.persona_versions()[guid], member.name,
             member.race, member.class_, member.level), card
 
@@ -234,7 +235,16 @@ async def distinctiveness(ctx, bounds, rng, *, trials=60):
                       "cross_member_pairs": 0, "within_member_pairs": 0})}
 
 
+WEEK_S = 7 * 86400.0
+
+
 def drift_check(store, week, prev_week, *, since, now):
+    """Members whose week of self-notes is taken back: consistency under 0.6, or down more than
+    0.15 on last week. A member whose voice sheet changed (personas.voices.changed_at: an
+    import, a removal or an undo of one) gets a new baseline: in the week it changed she is not
+    checked at all (part of her week's lines were written to the card she had before), and the
+    week after, last week's score is no baseline (only the 0.6 floor applies)."""
+    from leeroy_mind.personas.voices import changed_at
     if not all(math.isfinite(x) for x in (since, now)) or since > now:
         raise ValueError("Invalid drift rollback interval")
     key = f"eval:drift:{week}"
@@ -248,7 +258,12 @@ def drift_check(store, week, prev_week, *, since, now):
             guid, value = row
             if guid not in _members(store) or value is None or not math.isfinite(value) or not 0 <= value <= 1:
                 continue
+            voiced = changed_at(store, guid)
+            if voiced is not None and voiced >= since:
+                continue  # her voice changed this week: no drift against the old card
             old = previous.get(guid)
+            if voiced is not None and voiced >= since - WEEK_S:
+                old = None  # last week was scored on the card before it: no baseline
             fell = old is not None and math.isfinite(old) and old - value > 0.15 + 1e-9
             if value < 0.6 or fell:
                 rollback_week(store, guid, since, now)
