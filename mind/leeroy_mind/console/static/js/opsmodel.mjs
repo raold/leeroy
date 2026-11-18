@@ -1,5 +1,6 @@
 // Pure, deliberately content-free words for the Ops payload. No generic JSON renderer.
 import { pausedWords } from "./gpumodel.mjs";
+import { isoMinute } from "./dates.mjs";
 export const PANELS = [
   ["health", "Health"], ["night", "Night"], ["realm", "Realm holds"], ["raids", "Raids"],
   ["selfies", "Selfies and snaps"], ["backups", "Backups"], ["drift", "Release drift"], ["schedules", "Scheduled tasks"], ["switches", "Feature switchboard"]
@@ -9,7 +10,7 @@ const arr = x => Array.isArray(x) ? x : [];
 const str = x => typeof x === "string" ? x : "unknown";
 const n = x => typeof x === "number" && Number.isFinite(x) ? String(x) : "unknown";
 export function at(x) {
-  return typeof x === "number" && Number.isFinite(x) ? new Date(x * 1000).toLocaleString() : "not recorded";
+  return typeof x === "number" && Number.isFinite(x) ? isoMinute(x) : "not recorded";
 }
 export function panelWords(value) {
   const p = obj(value);
@@ -22,6 +23,14 @@ export function badge(value) {
   const count = x => typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : null;
   const fails = count(c.fails), held = count(c.held_members);
   return { fails, held, show: (fails || 0) > 0 || (held || 0) > 0, text: (fails === null ? "?" : fails) + " FAIL · " + (held === null ? "?" : held) + " held" };
+}
+// "invalid" is a table its loader refuses (so the feature is off); "unknown" is a table the
+// console has no rule for, which says nothing about the feature.
+export function switchState(r) {
+  if (r.state === 'invalid') { return 'invalid, so off'; }
+  if (r.state === 'unknown') { return 'unknown: the console cannot check this table'; }
+  if (r.state === 'number') { return typeof r.value === 'number' ? String(r.value) : 'unknown'; }
+  return r.state === 'on' ? 'on' : 'off';
 }
 export function lines(name, value) {
   const p = obj(value), out = [];
@@ -83,7 +92,7 @@ export function lines(name, value) {
     arr(p.tasks).forEach(t => out.push(str(t.name) + " · " + (t.installed ? str(t.state) + " · last " + at(t.last_run) + " · result " + n(t.result) : "Not set up yet: task is not installed.")));
   } else if (name === 'switches') {
     if (p.gpu?.paused) { out.push(pausedWords(p.gpu,at)); }
-    arr(p.rows).forEach(r => out.push(str(r.label)+' · '+(r.state==='invalid' ? 'invalid, so off' : r.state==='on' ? 'on' : 'off')
+    arr(p.rows).forEach(r => out.push(str(r.label)+' · '+switchState(r)
       +(r.needs ? ' · needs '+str(r.needs) : '')+(arr(r.unmet).length ? ' · unmet: '+r.unmet.join(', ') : '')
       +(r.blocklist ? ' · blocklist '+str(r.blocklist) : '')+(r.restart ? ' · config changed since the mind started; restart to apply' : '')));
   }

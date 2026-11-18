@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from leeroy_mind.groups.config import GroupsConfig
-from .test_tabs import open_console
+from .test_tabs import choose, open_console
 from .test_flows import submit
 
 
@@ -12,7 +12,7 @@ def test_create_name_leave_group_mobile_keyboard(rehearsal,tmp_path,theme):
         async with rehearsal(width=390,theme=theme) as r:
             r.app.groups.config=r.console.groups=GroupsConfig(enabled=True)
             await open_console(r)
-            await r.page.get_by_role('button',name='New group',exact=True).click()
+            await choose(r.page,'#dc-groups button:text-is("New group")')
             await expect(r.page.locator('.group-dialog')).to_be_visible()
             await r.page.locator('#group-dialog-name').fill('Tea and raids')
             await r.page.locator('.group-dialog input[value="101"]').check()

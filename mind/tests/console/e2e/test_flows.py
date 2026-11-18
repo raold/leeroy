@@ -126,7 +126,7 @@ def test_tuning_set_preview_refused_and_undo(rehearsal):
             result = await submit(r, wording.get_by_role("button", name="Preview", exact=True), "/api/tune", ok=False)
             assert "isn't loaded" in result["error"], result
             assert r.app.arbiter.admin.calls == model_calls
-            await expect(r.page.locator("#t-preview")).to_contain_text("isn't loaded")
+            await expect(wording.locator(".pv-inline")).to_contain_text("isn't loaded")
             change = r.page.locator("#t-history .chg").filter(has_text="6 → 8")
             await submit(r, change.get_by_role("button", name="Undo", exact=True), "/api/tune")
             await expect(dial).to_contain_text("your value 6")

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from .test_tabs import open_console
+from .test_tabs import choose, open_console
 
 
 def test_preparing_photo_blocks_caption_send(rehearsal):
@@ -13,7 +13,7 @@ def test_preparing_photo_blocks_caption_send(rehearsal):
         async with rehearsal(photos=True) as r:
             r.app.llm._script = lambda *_: 'A blue square.'
             await open_console(r, timeout=15000)
-            await r.page.locator('#dc-channels [data-view="d:pics"]').click()
+            await choose(r.page, '#dc-channels [data-view="d:pics"]')
             await r.page.locator('#dc-text').fill('Caption with my photo')
             data = await r.page.evaluate('''() => {
                 const c = document.createElement('canvas'); c.width = c.height = 32;
@@ -54,7 +54,7 @@ def test_photo_pick_remove_retry_post_and_keyboard_viewer(rehearsal, tmp_path, t
         async with rehearsal(width=390, theme=theme, photos=True) as r:
             r.app.llm._script = lambda *_: 'A blue square on a yellow background.'
             await open_console(r, timeout=15000)
-            await r.page.locator('#dc-channels [data-view="d:pics"]').click()
+            await choose(r.page, '#dc-channels [data-view="d:pics"]')
             await expect(r.page.locator('#dc-photo-pick')).to_be_visible()
             # A synthetic, decodable image, made locally by the browser; no real photos.
             data = await r.page.evaluate('''() => {

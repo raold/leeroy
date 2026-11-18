@@ -1,12 +1,13 @@
 import { $, api, on, refused } from "../core.mjs";
-import { NOTE_SECONDS, VoiceRecorder, mono, resample, wav, noteTime } from "./voicenotes.mjs";
+import { S } from "../state.mjs";
+import { NOTE_SECONDS, VoiceRecorder, mono, ours, resample, wav, noteTime } from "./voicenotes.mjs";
 
 const drafts = new Map();
 let recorder, owner = '', options, visible = '';
 
 async function decode(blob) {
   const Audio = window.AudioContext || window.webkitAudioContext;
-  if (!Audio) { throw new Error('This browser cannot prepare a voice note.'); }
+  if (!Audio) { throw ours('This browser cannot prepare a voice note.'); }
   const context = new Audio();
   try {
     const audio = await context.decodeAudioData(await blob.arrayBuffer());
@@ -46,7 +47,11 @@ export function renderVoiceDraft(key, enabled, busy) {
   const preparing = own && recorder?.busy, draft = enabled && voiceDraft(key);
   const button = $('dc-voice-record');
   button.hidden = !enabled;
-  button.disabled = busy || phase === 'encoding' || !!draft;
+  // A voice note is transcribed by the voice service: while it is down, Record says so instead
+  // of taking a note that could not be read
+  const down = enabled && phase === 'idle' && S.status.voice.enabled && !S.status.voice.service;
+  button.disabled = busy || phase === 'encoding' || !!draft || down;
+  button.title = down ? 'The voice service is not running, so a voice note cannot be transcribed. Start it from the Mind tab.' : '';
   button.textContent = phase === 'recording' ? 'Stop recording' : phase === 'asking' ? 'Cancel microphone request' : 'Record voice note';
   button.setAttribute('aria-pressed', String(phase === 'recording'));
   $('dc-voice-timer').hidden = !preparing;
@@ -64,9 +69,9 @@ export function setupVoiceComposer(config) {
   options = config;
   recorder = new VoiceRecorder({
     capture:() => {
-      if (!window.isSecureContext) { throw new Error('Microphone access needs the local console or its HTTPS address.'); }
+      if (!window.isSecureContext) { throw ours('Microphone access needs the local console or its HTTPS address.'); }
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        throw new Error('This browser cannot record voice notes.');
+        throw ours('This browser cannot record voice notes.');
       }
       return navigator.mediaDevices.getUserMedia({ audio:true });
     },

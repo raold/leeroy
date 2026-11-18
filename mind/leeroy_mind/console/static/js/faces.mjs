@@ -185,7 +185,31 @@ export function faceButton(guid, name, kind, opts) {
   return b;
 }
 
-// A table cell holding a member's face and name (.who). opts go to face; opts.text is the words
+// A member's face that opens their page on the Personas tab in one click (personas.mjs listens
+// for data-profile anywhere on the page). His own face, and nobody's, is a plain face.
+export function profileButton(guid, name, kind, opts) {
+  opts = opts || {};
+  var f = face(guid, name, kind, opts);
+  if (opts.you || !(Number(guid) > 0)) { return f; }
+  var b = el("button", "facebtn profile-opener");
+  b.type = "button";
+  b.title = "Profile of " + name;
+  b.setAttribute("aria-label", "Profile of " + name);
+  b.dataset.profile = String(guid);
+  b.appendChild(f);
+  return b;
+}
+// A member's name as the same one-click way to their page
+export function profileName(guid, name, text) {
+  var b = el("button", "namebtn profile-opener", text || name);
+  b.type = "button";
+  b.title = "Profile of " + name;
+  b.dataset.profile = String(guid);
+  return b;
+}
+
+// A table cell holding a member's face and name (.who): the face opens their page, and so does
+// the name where the face has another job (opts.build: the gallery's opener). opts go to face; opts.text is the words
 // shown when they are not the bare name (tags, "(you)"); opts.build(guid, name, kind, opts) replaces
 // the face (the gallery's opener). Nobody (guid 0 or none) is a plain "-".
 export function nameCell(tr, guid, name, opts) {
@@ -195,8 +219,8 @@ export function nameCell(tr, guid, name, opts) {
     td.textContent = opts.text || name || "-";
   } else {
     var box = el("div", "who");
-    box.appendChild((opts.build || face)(guid, name, "list", opts));
-    box.appendChild(el("span", "", opts.text || name));
+    box.appendChild((opts.build || profileButton)(guid, name, "list", opts));
+    box.appendChild(opts.build && !opts.you ? profileName(guid, name, opts.text) : el("span", "", opts.text || name));
     td.appendChild(box);
   }
   tr.appendChild(td);

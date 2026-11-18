@@ -1,3 +1,4 @@
+import { isoDate } from "./dates.mjs";
 export const REASONS = ['funny','in-character','boring','repetitive','weird','too-much','wrong-facts'];
 export const WEIGHTS = ['explicit','engagement','emote','quality'];
 
@@ -143,4 +144,30 @@ export function conversationView(value) {
   });
   return {available:true, runs, tried:Number.isSafeInteger(value.tried) ? value.tried : 0,
     promoted:Number.isSafeInteger(value.promoted) ? value.promoted : 0};
+}
+
+// -- what waits for his decision (labview._pending): plain rows, the counts for the badge -------
+const list = x => Array.isArray(x) ? x.filter(i => i && typeof i === 'object') : [];
+export function pendingView(value) {
+  const p = value && typeof value === 'object' ? value : {};
+  const arms = list(p.arms).filter(a => typeof a.id === 'string').map(a => ({id:a.id, words:'Arm '+a.id+' ('+String(a.family)+') · proposed'}));
+  const lessons = list(p.lessons).filter(l => Number.isSafeInteger(l.id)).map(l => ({id:l.id, name:String(l.name),
+    words:'Lesson for '+String(l.name)+' · '+String(l.scope)+': '+String(l.text)}));
+  const total = Number.isSafeInteger(p.lessons_total) ? p.lessons_total : lessons.length;
+  const variants = list(p.variants).filter(v => typeof v.id === 'string').map(v => ({id:v.id,
+    words:'Arm '+v.id+' ('+String(v.family)+') came from the conversation lab'+(Number.isFinite(v.created) ? ' on '+isoDate(v.created) : '')+'. It is in use; retire it if you do not want it.'}));
+  return {arms, lessons, variants, count: Number.isSafeInteger(p.count) && p.count>0 ? p.count : 0,
+    more: total>lessons.length ? (total-lessons.length)+' more proposed lessons are under Lessons, by member.' : ''};
+}
+export function ratedWords(n) {
+  return Number.isSafeInteger(n) && n>=0 ? 'You rated '+n+(n===1 ? ' line' : ' lines')+' this week.' : '';
+}
+// The folded panels say what is inside before they are opened
+export function familyTitle(family, arms) {
+  const mine = list(arms).filter(a => a.family === family), proposed = mine.filter(a => a.status === 'proposed').length;
+  return family+' ('+mine.length+(mine.length===1 ? ' arm' : ' arms')+(proposed ? ', '+proposed+' proposed' : '')+')';
+}
+export function armTitle(arm, contexts) {
+  const n = list(contexts).filter(c => c.arm_id === arm.id).length;
+  return arm.id+' · '+arm.status+' ('+n+(n===1 ? ' context' : ' contexts')+')';
 }

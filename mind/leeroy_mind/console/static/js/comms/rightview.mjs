@@ -3,9 +3,10 @@ import { S, hereRoom, isMuted, roomName } from "../state.mjs";
 import { faceButton, lightSpeakers } from "../faces.mjs";
 import { photoButton } from "../gallery.mjs";
 import { openMember } from "../personas.mjs";
+import { showTab } from "../tabs.mjs";
 import { cardText } from "../words.mjs";
-import { FEED, openView } from "./feedview.mjs";
-import { renderRooms } from "./leftview.mjs";
+import { FEED, focusReply, openView } from "./feedview.mjs";
+import { renderRooms, voiceOff } from "./leftview.mjs";
 import { roomMates } from "./tree.mjs";
 import { DISCORD } from "./discordstate.mjs";
 import { panelHidden, setPanel } from "./panel.mjs";
@@ -46,7 +47,8 @@ function renderFaces() {
 
 function renderVoiceControls() {
   if (!CARD.guid) { return; }
-  var up = !!S.voice, db = volumeOf(CARD.guid), why = up ? "" : "The voice service is not connected.";
+  var off = voiceOff(), up = !!S.voice && !off, db = volumeOf(CARD.guid);
+  var why = off || (up ? "" : "The voice service is not connected.");
   $("mcard-vol").value = String(db);
   $("mcard-db").textContent = fmtDb(db);
   ["mcard-vol", "mcard-reset", "mcard-mute"].forEach(function (id) {
@@ -143,11 +145,6 @@ function setMute(guid, muted) {
   renderVoiceControls();
   renderRooms();  // the tree strikes a muted member through
 }
-// The reply box (#composer, composer.mjs): its line while it takes one, else the box itself
-function focusComposer() {
-  var box = $("composer"), f = box.querySelector("input:not(:disabled)");
-  (f || box).focus();
-}
 
 $("mcard-vol").addEventListener("input", function () { $("mcard-db").textContent = fmtDb(Number(this.value)); });
 $("mcard-vol").addEventListener("change", function () { if (CARD.guid) { setVolume(CARD.guid, Number(this.value)); } });
@@ -161,13 +158,41 @@ $("mcard-mute").addEventListener("click", function () { if (CARD.guid) { setMute
 $("mcard-whisper").addEventListener("click", function () {
   if (!CARD.guid) { return; }
   openView(FEED.openThread(CARD.guid, CARD.name));
-  focusComposer();
+  focusReply();
 });
 $("mcard-profile").addEventListener("click", function () { if (CARD.guid) { openMember(CARD.guid); } });
 $("mcard-dm").addEventListener("click", function () {
   if (CARD.guid && DISCORD.dms.some(function (d) { return d.guid === CARD.guid; })) {
     openView("dm:" + CARD.guid); $("dc-text").focus();
   }
+});
+// From a member's page (personas.mjs): her DM, or her whisper thread, with the reply box focused
+// (the server's DM list is read when Comms opens, so a first Message waits for that read)
+var wantDm = null;
+function openDm(d) {
+  if (!DISCORD.dms.some(function (x) { return x.guid === d.guid; })) { return false; }
+  openView("dm:" + d.guid);
+  $("dc-text").focus();
+  return true;
+}
+function noDm(d) { emit("note", "The guild Discord has no DM with " + (str(d.name) || "that member") + "."); }
+on("open-dm", function (d) {
+  showTab("comms");
+  wantDm = null;
+  if (openDm(d)) { return; }
+  if (DISCORD.loaded) { noDm(d); } else { wantDm = d; }
+});
+on("comms-hide", function () { wantDm = null; });
+on("discord-view", function () {
+  if (!wantDm || !(DISCORD.loaded || DISCORD.error)) { return; }
+  var d = wantDm;
+  wantDm = null;
+  if (!openDm(d)) { noDm(d); }
+});
+on("open-whisper", function (d) {
+  showTab("comms");
+  openView(FEED.openThread(d.guid, str(d.name) || "#" + d.guid));
+  focusReply();
 });
 on("discord-view", function () {
   $("mcard-dm").disabled = !DISCORD.dms.some(function (d) { return d.guid === CARD.guid; });
@@ -208,6 +233,8 @@ var ON_VOICE = {
   }
 };
 on("snapshot", renderRight);
+var voiceWasOff = "";
+on("status", function () { if (voiceOff() !== voiceWasOff) { voiceWasOff = voiceOff(); renderVoiceControls(); } });
 on("voice", function (m) {
   if (typeof m.type === "string" && own(ON_VOICE, m.type)) { ON_VOICE[m.type](m); }
 });
