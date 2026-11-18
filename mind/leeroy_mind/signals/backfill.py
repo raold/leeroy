@@ -73,7 +73,7 @@ def plan(conn, *, since, now, owner):
     messages = {}
     if _table(conn, "discord_message"):
         messages = {r[0]: r[1:] for r in conn.execute(
-            "SELECT id,author,reply_to,turn FROM discord_message WHERE ts>=?", (since - D.WINDOW_S,))}
+            "SELECT id,author,reply_to,turn,thread FROM discord_message WHERE ts>=?", (since - D.WINDOW_S,))}
     his_lines = {r[0] for r in conn.execute(
         f"SELECT id FROM chat_line WHERE origin='human' AND from_guid=? AND {discord}", (owner,))}
     parents = {}
@@ -100,7 +100,7 @@ def plan(conn, *, since, now, owner):
             return True
         if message is None:
             return False
-        author, reply_to, turn = message
+        author, reply_to, turn, _ = message
         parent = messages.get(reply_to)
         return (parent is not None and parent[0] == owner) or triggers.get(turn) in his_lines
 
@@ -111,15 +111,17 @@ def plan(conn, *, since, now, owner):
             "AND (origin='mind' OR (origin='human' AND from_guid=?)) ORDER BY ts,id",
             (since - D.WINDOW_S, now, owner)):
         channels[lid] = channel
+        thread = (messages.get(message_of.get(lid)) or (0, None, None, None))[3] or 0
         if origin == "mind":
-            events.append((ts, 0, lid, Observation("sent", ts, owner, (lid,), (addressed(lid, to_guid), False, True))))
+            events.append((ts, 0, lid, Observation(
+                "sent", ts, owner, (lid,), (addressed(lid, to_guid), False, True, thread))))
         elif ts >= since:
             mid = message_of.get(lid)
-            target = (messages.get(mid) or (0, None, None))[1]
+            target = (messages.get(mid) or (0, None, None, None))[1]
             reply = line_of.get(target, -1) if target else 0  # a bot's row has no line: nobody
             # A voice note's words are never read, transcribed or not, as live.
             events.append((ts, 1, lid, Observation(
-                "discord_owner", ts, owner, (lid, reply), (mid in media or mid in voice, mid in voice))))
+                "discord_owner", ts, owner, (lid, reply, thread), (mid in media or mid in voice, mid in voice))))
     reactions = {}
     if _table(conn, "discord_reaction"):
         for message, emoji, ts in conn.execute(

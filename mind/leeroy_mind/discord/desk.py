@@ -167,7 +167,7 @@ class DiscordDesk:
                 server.reactions.after_post(mid, author=me, channel=args['channel'], text=args['text'], his=True)
             if image is not None:
                 self._photo_posts.append(now)
-            self.signal_post(line, args.get("reply_to"), media=image is not None)
+            self.signal_post(line, args.get("reply_to"), media=image is not None, thread=args.get("thread"))
             try:
                 app.on_his_discord_line(line, chat, now)
             except Exception as e:  # the post is stored: its answers still come
@@ -212,7 +212,8 @@ class DiscordDesk:
         self._his_action()
         return {"ok": True}
 
-    def signal_post(self, line: int, reply_to=None, *, media: bool = False, voice: bool = False) -> None:
+    def signal_post(self, line: int, reply_to=None, *, media: bool = False, voice: bool = False,
+                    thread=None) -> None:
         """His committed post's chat line for the owner-response signals (signals.attach): ids
         and flags only, never in the way of the post."""
         signals = getattr(self.app, "signals", None)
@@ -221,7 +222,7 @@ class DiscordDesk:
         try:
             parent = self.app.store.get_meta(LINE_KEY.format(reply_to)) if reply_to else None
             signals.his_discord(line, reply_line=int(parent) if parent else -1 if reply_to else 0,
-                                media=media, voice=voice)
+                                media=media, voice=voice, thread=thread or 0)
         except Exception as e:
             log_event("discord_signal_failed", level=logging.WARNING, error=type(e).__name__)
 

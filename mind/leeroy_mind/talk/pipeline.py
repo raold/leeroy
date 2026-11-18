@@ -5257,7 +5257,8 @@ class Pipeline:
             signals.sent(line_id, chat, addressed=bool(hg and
                          (meta.answers_human or turn.addressee == hg or turn.to_guid == hg)
                          and not meta.pair_line and not (discord and meta.photo is not None)),
-                         heard=heard)
+                         heard=heard,
+                         thread=getattr(getattr(meta, "discord", None), "thread", None) if discord else 0)
         if meta.on_recorded is not None and ack is not None:
             try:
                 meta.on_recorded(line_id, ack)

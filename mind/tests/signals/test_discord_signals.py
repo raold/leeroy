@@ -378,8 +378,59 @@ def test_discord_visibility_never_asks_his_game_presence(channel, to, owner, vis
     signals.app, signals.owner_location = app, None
     signals.capture = SimpleNamespace(offer=lambda observation, result=None: seen.append(observation) or True)
     signals.sent(5, Chat(0, channel, 101, 'Arkon', to, 'invented', 0, 0), addressed=True, heard=True)
-    assert seen[0].kind == 'sent' and seen[0].values == (True, False, visible)
-    signals.his_discord(9, reply_line=5, media=True)
+    assert seen[0].kind == 'sent' and seen[0].values == (True, False, visible, 0)
+    signals.his_discord(9, reply_line=5, media=True, thread=3)
     signals.reacted(5, positive=True, negative=False)
     assert [(o.kind, o.ids, o.values) for o in seen[1:]] == [
-        ('discord_owner', (9, 5), (True, False)), ('reaction', (5,), (True, False))]
+        ('discord_owner', (9, 5, 3), (True, False)), ('reaction', (5,), (True, False))]
+
+
+
+def test_a_thread_is_its_own_conversation(store, clock):
+    """His post in a thread answers a line in that thread, never one in the channel's feed, and
+    a post in the feed never answers a line in a thread (review of #359)."""
+    async def go():
+        async with worker(store, clock) as c:
+            feed, inside = hers(store, clock, CHANNEL), hers(store, clock, CHANNEL)
+            observe(c, clock, 'sent', (feed,), (True, False, True, 0))
+            observe(c, clock, 'sent', (inside,), (True, False, True, 9))
+            await clock.advance(60, step=3600)
+            observe(c, clock, 'discord_owner', (his(store, clock, CHANNEL, 'in the other thread'), 0, 4), (False, False))
+            await c.flush()
+            assert saved(store) == []  # another thread: neither line
+            observe(c, clock, 'discord_owner', (his(store, clock, CHANNEL, 'in her thread'), 0, 9), (False, False))
+            await c.flush()
+            assert set(kinds(store, inside)) >= {'replied'} and kinds(store, feed) == {}
+            observe(c, clock, 'discord_owner', (his(store, clock, CHANNEL, 'in the feed'), 0), (False, False))
+            await c.flush()
+            assert set(kinds(store, feed)) >= {'replied'}
+            # by hand across the two: nobody
+            other = hers(store, clock, CHANNEL, 102)
+            observe(c, clock, 'sent', (other,), (False, False, True, 9))
+            observe(c, clock, 'discord_owner', (his(store, clock, CHANNEL, 'by hand from the feed'), other, 0), (False, False))
+            await c.flush()
+            assert kinds(store, other) == {}
+    asyncio.run(go())
+
+
+def test_his_post_made_while_her_answer_was_written_is_not_his_reply_to_it(store, clock):
+    """Her answer lands after a post of his that it was not built with (discord/covered.py: the
+    answer's receipt does not name that post). That post answers the line that waited before
+    it; the late answer waits for his next message."""
+    async def go():
+        async with worker(store, clock) as c:
+            earlier = await exchange(c, store, clock, DM, 'first post')  # his post she now answers
+            await clock.advance(20, step=3600)
+            meanwhile = his(store, clock, DM, 'second post, typed while she writes')
+            observe(c, clock, 'discord_owner', (meanwhile, 0), (False, False))
+            await clock.advance(5, step=3600)
+            answer = hers(store, clock, DM)  # stored after his second post, built without it
+            observe(c, clock, 'sent', (answer,), (True, False, True))
+            await c.flush()
+            assert kinds(store, answer) == {}
+            assert set(kinds(store, earlier)) == {'replied', 'reply_latency_s', 'reply_len'}  # once
+            await clock.advance(40, step=3600)
+            observe(c, clock, 'discord_owner', (his(store, clock, DM, 'third post'), 0), (False, False))
+            await c.flush()
+            assert kinds(store, answer)['reply_latency_s'] == pytest.approx(40 / D.WINDOW_S)
+    asyncio.run(go())

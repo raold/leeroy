@@ -44,8 +44,8 @@ def test_his_post_reaches_the_signals_after_its_commit_with_ids_and_flags_only(s
         reply = ask(app, action='post', channel=channel, text='INVENTEDWORDS again', reply_to=mid)
         mine = [int(app.store.get_meta(LINE_KEY.format(r['id']))) for r in (plain, reply)]
         assert app.signals.calls[-2:] == [
-            ('post', mine[0], dict(reply_line=0, media=False, voice=False)),
-            ('post', mine[1], dict(reply_line=line, media=False, voice=False))]
+            ('post', mine[0], dict(reply_line=0, media=False, voice=False, thread=0)),
+            ('post', mine[1], dict(reply_line=line, media=False, voice=False, thread=0))]
         # committed before the hook: the capture's own connection must find the line
         assert not app.store.conn.in_transaction or app.store.conn.execute(
             'SELECT 1 FROM chat_line WHERE id=?', (mine[1],)).fetchone()
@@ -58,7 +58,7 @@ def test_a_reply_by_hand_to_a_row_without_a_chat_line_names_no_line(store, clock
     with store.transaction():
         bot = dstore.post_bot(store, channel='general', bot='signups', text='an invented bot row', now=clock.now())
     assert ask(app, action='post', channel='general', text='noted', reply_to=bot)['ok'] is True
-    assert app.signals.calls[-1][2] == dict(reply_line=-1, media=False, voice=False)
+    assert app.signals.calls[-1][2] == dict(reply_line=-1, media=False, voice=False, thread=0)
 
 
 def test_his_emoji_reach_the_signals_as_they_stand(store, clock):

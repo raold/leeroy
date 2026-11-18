@@ -299,3 +299,73 @@ def test_a_backlog_drains_and_answered_lines_go_first(context, store, clock, tmp
             await night.stage_rewards(ctx)
         return store.conn.execute("SELECT count(*) FROM talk_reward").fetchone()[0]
     assert asyncio.run(go()) == 3 + 3 * night.BACKLOG_FACTOR
+
+
+
+def test_replay_keeps_a_thread_apart_from_its_channel(store, clock):
+    store.set_meta('human_guid', str(HUMAN))
+    t = clock.now() - 3600
+    mine, _ = message(store, clock, 'general', HUMAN, 'who tried the invented recipe', at=t)
+    reply, feed = message(store, clock, 'general', 102, 'me, the invented soup', reply_to=mine, at=t + 30)
+    thread = dstore.open_thread(store, mine, name='invented', now=t + 40)
+
+    def threaded(author, text, at, reply_to=None):
+        mid, lid = message(store, clock, 'general', author, text, reply_to=reply_to, at=at)
+        store.conn.execute('UPDATE discord_message SET thread=? WHERE id=?', (thread, mid))
+        return mid, lid
+    _, inside = threaded(103, 'the invented stew for me', t + 50, reply_to=mine)
+    threaded(HUMAN, 'how was the stew', t + 90)
+    store.conn.commit()
+    sink, _ = backfill.plan(store.conn, since=clock.now() - 7200, now=clock.now(), owner=HUMAN)
+    assert {line for line, _ in sink.rows} == {inside}  # his thread post never credits the feed's line
+    message(store, clock, 'general', HUMAN, 'and the soup', at=t + 120)
+    sink, _ = backfill.plan(store.conn, since=clock.now() - 7200, now=clock.now(), owner=HUMAN)
+    assert {line for line, _ in sink.rows} == {inside, feed}
+
+
+def test_replay_reads_a_post_made_while_she_wrote_as_live_does(store, clock):
+    """Her answer is stored after a post of his it was not built with (its `discord:built:`
+    receipt names only the earlier post): that post is no reply to the answer."""
+    store.set_meta('human_guid', str(HUMAN))
+    t = clock.now() - 3600
+    _, opener = message(store, clock, 'dm:101', 101, 'the invented ferry was late again', at=t)
+    first, _ = message(store, clock, 'dm:101', HUMAN, 'how late was the ferry', at=t + 60)
+    message(store, clock, 'dm:101', HUMAN, 'typed while she writes', at=t + 80)
+    answer, late = message(store, clock, 'dm:101', 101, 'an hour, the invented captain overslept',
+                           reply_to=first, at=t + 85)
+    store.set_meta(f'discord:built:{answer}', str(first))
+    store.conn.commit()
+    sink, _ = backfill.plan(store.conn, since=clock.now() - 7200, now=clock.now(), owner=HUMAN)
+    assert {line for line, _ in sink.rows} == {opener}
+    message(store, clock, 'dm:101', HUMAN, 'poor captain', at=t + 150)
+    sink, _ = backfill.plan(store.conn, since=clock.now() - 7200, now=clock.now(), owner=HUMAN)
+    assert sink.rows[late, 'reply_latency_s'][1] == pytest.approx(65 / D.WINDOW_S)
+    assert sink.rows[opener, 'reply_latency_s'][1] == pytest.approx(60 / D.WINDOW_S)
+
+
+def test_a_dm_reaction_is_never_evidence_for_a_public_lesson(store, clock):
+    """His reply and emoji in her DM raise that DM line's reward. A lesson coached from the
+    exchange carries the DM's lines as its sources, and the lesson gate (learn/audience.py, on
+    resolved scopes) lets them into her conversation with him and nowhere else."""
+    from leeroy_mind.learn import audience, coach
+    store.set_meta('human_guid', str(HUMAN))
+    t = clock.now() - 3600
+    text = 'the invented lighthouse keeper waved back'
+    mid, hers = message(store, clock, 'dm:101', 101, text, at=t)
+    store.log_utterance(t, 101, 'dm:101', 'reply_human', text, [], None, None, to_guid=HUMAN)
+    _, his = message(store, clock, 'dm:101', HUMAN, 'haha did he really wave?', at=t + 60)
+    with store.transaction():
+        dstore.react(store, mid, member=HUMAN, emoji='\U0001F44D', now=t + 70)
+    sink, facts = backfill.plan(store.conn, since=clock.now() - 7200, now=clock.now(), owner=HUMAN)
+    _, new = backfill.report(store.conn, sink, facts)
+    with store.transaction():
+        backfill.write(store.conn, new)
+    assert {'replied', 'laughed', 'react_positive'} <= {kind for line, kind in new if line == hers}
+    assert reward(store.conn, hers, now=clock.now()).value > 0
+    assert coach.scope('dm:101') == 'whisper' and coach.scope('gdm:7') is None  # never a guild lesson
+    refs = audience.evidence(store.conn, [his, hers])
+    assert sorted(refs) == sorted([f'chat:{his}', f'chat:{hers}'])
+    see = lambda guid, channel, to=0: audience.visible(store.conn, refs, guid=guid, channel=channel, to_guid=to)
+    assert see(101, 'dm:101', HUMAN)
+    assert not see(101, 'guild') and not see(101, 'discord:general') and not see(101, 'party')
+    assert not see(102, 'dm:102', HUMAN) and not see(102, 'guild')

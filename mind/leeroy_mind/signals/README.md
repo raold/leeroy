@@ -89,8 +89,11 @@ week of DMs produced no observation at all.
   row, to a line from before a restart or past the 512 held, credits nobody. In a channel or
   group DM where several members wait, his message credits the one it names (her character
   name as a word), else nobody. A brb/back line (`pair_line`) and a photo's caption never wait:
-  the real answer before them takes his reply. Discord threads are not told apart from their
-  channel. `reply_latency_s` is elapsed / 1800
+  the real answer before them takes his reply. A thread is its own conversation: his post in a
+  thread answers a line in that thread, never one in the channel's feed, and the other way
+  round. A post of his made while her answer was still being written (stored before it, and
+  not among the posts that answer was built with: `discord/covered.py`) is never his reply to
+  that answer; it answers whatever line of hers was waiting before it. `reply_latency_s` is elapsed / 1800
   for a Discord line (multiply by 1800), `reply_len` as in game. A message of his with no waiting
   line before it (he wrote first, or twice running) is no observation. Discord and game lines
   never answer each other.

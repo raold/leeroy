@@ -46,6 +46,12 @@ def scope(row):
     return (ch,)
 
 
+def dscope(row):
+    """A Discord line's conversation: its room and, in a channel, its thread (0: the room's own
+    feed). A post in a thread never answers a line in the feed, nor the other way round."""
+    return (*scope(row), row.get('dthread') or 0)
+
+
 class Capture:
     def __init__(self, path, clock, store=None):
         self.path, self.clock = path, clock
@@ -205,20 +211,22 @@ class Capture:
             log.warning('signals_capture_failed: kind=%s error=%s', item.kind, type(exc).__name__)
             return {'ok': False, 'error': 'Signal capture could not save this observation.'}
 
-    def _sent_discord(self, row, owner, addressed, heard):
+    def _sent_discord(self, row, owner, addressed, heard, thread=0):
         if not (self._visible(row, owner) and heard):
             return
-        self.drecent[row['id']] = dict(row)
+        held = dict(row) | {'dthread': thread or 0}
+        self.drecent[row['id']] = held
         while len(self.drecent) > PENDING_LIMIT:
             self.drecent.popitem(last=False)
         if addressed:
-            self.dpending[row['id']] = dict(row)
+            self.dpending[row['id']] = dict(held)
             while len(self.dpending) > PENDING_LIMIT:
                 self.dpending.popitem(last=False)
 
     def _his_discord(self, conn, item):
         """His Discord message as his reply to a member's line: the one he replied to by hand,
-        else the newest line addressed to him in that conversation within D.WINDOW_S. A message
+        else the newest line addressed to him in that conversation (the room and, in a channel,
+        the thread: item.ids[2]) within D.WINDOW_S. A message
         of his with no such line before it (he wrote first, or twice running) says nothing."""
         now, owner = item.at, item.owner
         row = self._row(conn, item.ids[0])
@@ -226,18 +234,18 @@ class Capture:
                 or not is_discord(row['channel'])):
             return
         media, voice = item.values
-        place = scope(row)
+        place = (*scope(row), (item.ids[2] if len(item.ids) > 2 else 0) or 0)
         his = '' if voice else (conn.execute('SELECT text FROM chat_line WHERE id=?', (row['id'],)).fetchone() or ('',))[0]
         if item.ids[1]:
             # He replied to one message by hand: that member line or nobody. A bot row, a line
             # from before a restart or one of another conversation (-1 or an id not held) never
             # falls back to whoever else is waiting.
             answered = self.drecent.get(item.ids[1])
-            if answered is None or scope(answered) != place or answered['id'] >= row['id'] or now < answered['ts']:
+            if answered is None or dscope(answered) != place or answered['id'] >= row['id'] or now < answered['ts']:
                 return
         else:
             candidates = [r for r in self.dpending.values()
-                          if 0 <= now - r['ts'] <= D.WINDOW_S and r['id'] < row['id'] and scope(r) == place]
+                          if 0 <= now - r['ts'] <= D.WINDOW_S and r['id'] < row['id'] and dscope(r) == place]
             if not candidates:
                 return
             if not direct(row['channel']) and len({r['from_guid'] for r in candidates}) > 1:
@@ -276,7 +284,7 @@ class Capture:
             while len(store) > PENDING_LIMIT:
                 store.popitem(last=False)
         for other in [k for k, r in self.dpending.items()
-                      if scope(r) == place and (r['ts'], r['id']) <= (answered['ts'], lid)
+                      if dscope(r) == place and (r['ts'], r['id']) <= (answered['ts'], lid)
                       and (direct(row['channel']) or r['from_guid'] == guid)]:
             self.dpending.pop(other)
 
@@ -300,9 +308,9 @@ class Capture:
         kind, now, owner = item.kind, item.at, item.owner
         if kind == 'sent':
             row = self._row(conn, item.ids[0])
-            addressed, grouped, heard = item.values
+            addressed, grouped, heard = item.values[:3]
             if row is not None and is_discord(row['channel']):
-                self._sent_discord(row, owner, addressed, heard)
+                self._sent_discord(row, owner, addressed, heard, item.values[3] if len(item.values) > 3 else 0)
             elif self._visible(row, owner) and heard:
                 self.recent[row['id']] = dict(row)
                 while len(self.recent) > PENDING_LIMIT:
