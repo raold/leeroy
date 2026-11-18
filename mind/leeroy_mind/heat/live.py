@@ -2,8 +2,10 @@
 
 `[heat] enabled` is read once at the mind's start (attach). With it off there is no HeatLive:
 `current()` is None, every reader takes the path it took before the dial, and stored heat rows
-do nothing. With it on and no world value set, the world heat follows `[romance] dial` (9 is 9),
-so nothing moves until the owner moves the dial.
+do nothing. With it on and no world value set, heat governs nobody either (HeatLive.reaches):
+the romance dial and each woman's own dial keep their exact effect, whatever the romance dial
+is. Only his session override reaches the member it was said to, on the world value the
+romance dial stands for (DIAL_TO_HEAT). Heat takes over once the owner sets a world value.
 
 The module-level functions are pure over what they are given, so the console (another process,
 reading mind.db read-only) builds its page from the very same code."""
@@ -226,13 +228,16 @@ class HeatLive:
 
     def member_dial(self, p, legacy: int) -> int:
         """The romance dial the older readers of a member take (learn's coach and apply, the
-        outreach fill, the bond night and invitations): `legacy`, what they read before the
-        dial, where heat does not govern her; else the dial her heat stands for, and 0 at a
-        heat with no romance wording at all, so each of them leaves romance out."""
+        outreach fill, the bond night, invitations and recall): `legacy`, what they read
+        before the dial, where heat does not govern her. Where it does, they follow her heat
+        down from that dial and never up past it: the dial her heat stands for when it is
+        lower, and 0 at a heat with no romance wording at all, so each of them leaves romance
+        out. (Their `legacy` already reads the romance dial derived from the world heat, so at
+        world 9 every woman, the two at their own 10 included, reads what she read before.)"""
         r = self.turn(p, lead=False)
         if r is None or not r.applies:
             return legacy
-        return 0 if r.ceiling == "none" else r.dial
+        return 0 if r.ceiling == "none" else min(legacy, r.dial)
 
     # his lead ----------------------------------------------------------------------------------
 

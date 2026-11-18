@@ -55,8 +55,8 @@ class Bond:
                                  'ORDER BY created,id LIMIT 1').fetchone()
 
     def _dial(self, persona):
-        """The romance dial that governs her: the world's, or under a set heat her own
-        resolved one (heat.live.member_dial)."""
+        """The romance dial that governs her: the world's, and under a set heat that dial
+        lowered to her resolved heat's (heat.live.member_dial)."""
         from leeroy_mind.heat import live as heat_live
         return heat_live.member_dial(persona, self.app.cfg.romance.dial)
 

@@ -2811,7 +2811,9 @@ class Pipeline:
             [r.from_guid for r in recent if r.from_guid and r.from_guid != turn.speaker]
             + ([hg] if hg and self.world.human_online else [])))
         from leeroy_mind.bond.policy import eligible as bond_eligible
-        bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(p, self.cfg.romance.dial) else {}
+        from leeroy_mind.heat import live as heat_live  # [heat] set: her resolved heat's dial
+        bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(
+            p, heat_live.member_dial(p, self.cfg.romance.dial)) else {}
         diverse = None if preview else self._recall_diversity(turn, meta, trigger, live=live)
         aged = {"aged": True} if diverse is not None else {}
         memories = [] if preview else await self.recall.recall(

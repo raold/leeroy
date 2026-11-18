@@ -3,11 +3,12 @@ today, bit for bit, at every world romance dial (the live one is 10, not 9) and 
 woman has of her own. Heat governs nobody until the owner sets a world heat.
 
 Compared through the engine, heat attached and unset against no heat at all: the full prompt of
-turns to him over every stance, arc stage, channel, own dial and world dial 1-10 (the romance
-dial's whole range) for women of low, middling and high extraversion; the clocks (the flirt
-conversion's rate, the whisper planner's draws and gaps); the photo side (the offer rate, the
-tier, what may be sent); and the dials the older readers take. Stored member and group offsets
-change none of it while the world value is unset."""
+turns to him over every stance, arc stage, channel, own dial (none, 1-10) and world dial 0-10
+(the romance dial's range 1-10, and 0), for women of low, middling and high extraversion where
+it moves the wording (no dial of her own, or her own 10); the clocks (the flirt conversion's
+rate, the whisper planner's draws and gaps); the photo side (the offer rate, the tier, what may
+be sent); and the dials the older readers take. Stored member and group offsets change none of
+it while the world value is unset."""
 import asyncio
 import itertools
 import random
@@ -19,7 +20,7 @@ from conftest import HUMAN, make_persona, seed_test_cast
 from engine_rig import make_rig, save_member
 from heat.rig import ON, attach, set_values
 from leeroy_mind.heat import live as heat_live
-from leeroy_mind.heat.table import P4
+from leeroy_mind.heat.table import P0, P4
 from leeroy_mind.storage.rows import ChatLineRow
 from leeroy_mind.storage.rows import ROMANCE_STAGES, Relationship
 from leeroy_mind.talk.pipeline import TurnMeta
@@ -31,8 +32,12 @@ GUID = 104
 CHANNELS = ("whisper", f"dm:{GUID}", "guild", "officer", "party", "raid", "say", "voice:1",
             "discord:general")
 STANCES = ("fond", "drawn", "lust")
-OWN = (None, 4, 10)
+OWN = (None, *range(1, 11))
+DIALS = range(0, 11)
 EXTRAVERSION = (3, 5, 8)  # a lust woman reads "quiet", "open" and "bold": only her own 10 lifts it
+# every own dial at middling extraversion, and all three where extraversion moves the wording
+WOMEN = tuple(dict.fromkeys([(own, 5) for own in OWN]
+                            + [(own, ext) for own in (None, 10) for ext in EXTRAVERSION]))
 HEATED = "can't stop thinking about you"
 
 
@@ -74,8 +79,10 @@ def _rig(store, clock, tmp_path):
     return r, live
 
 
+@pytest.mark.parametrize("dials", (range(0, 6), range(6, 11)), ids=("dial0-5", "dial6-10"))
 @pytest.mark.parametrize("stance", STANCES)
-def test_on_and_unset_every_prompt_is_the_prompt_without_heat(store, clock, tmp_path, stance):
+def test_on_and_unset_every_prompt_is_the_prompt_without_heat(store, clock, tmp_path, stance,
+                                                             dials):
     r, live = _rig(store, clock, tmp_path)
     engine, base = r.engine, r.engine.cfg
     # offsets he stored before setting a world value: they wait, and change nothing
@@ -84,12 +91,12 @@ def test_on_and_unset_every_prompt_is_the_prompt_without_heat(store, clock, tmp_
 
     async def go():
         compared = 0
-        for own, ext, stage in itertools.product(OWN, EXTRAVERSION, ROMANCE_STAGES):
+        for (own, ext), stage in itertools.product(WOMEN, ROMANCE_STAGES):
             p = _persona(stance, own, ext)
             store.put_relationship(Relationship(a=GUID, b=HUMAN, affinity=40.0, trust=40.0,
                                                 attraction=80.0, familiarity=50.0,
                                                 romance_stage=stage))
-            for dial, channel in itertools.product(range(1, 11), CHANNELS):
+            for dial, channel in itertools.product(dials, CHANNELS):
                 engine.cfg = replace(base, romance=replace(base.romance, dial=dial))
                 for n, turn in enumerate(_turns(channel)):
                     seed = dial * 100 + n
@@ -102,7 +109,47 @@ def test_on_and_unset_every_prompt_is_the_prompt_without_heat(store, clock, tmp_
                     compared += 1
         return compared
     done = asyncio.run(go())
-    assert done == len(OWN) * len(EXTRAVERSION) * len(ROMANCE_STAGES) * 10 * (len(CHANNELS) + 3)
+    assert done == len(WOMEN) * len(ROMANCE_STAGES) * len(dials) * (len(CHANNELS) + 3)
+
+
+@pytest.mark.parametrize("stance", STANCES)
+def test_at_world_nine_the_women_with_their_own_ten_are_as_before(store, clock, tmp_path, stance):
+    """Ruling 2a: once the world is set to 9, a woman at her own dial 10 (two live) gets the
+    prompt she got before heat at the romance dial 9 (her wording, every turn carrying it), on
+    every stage and channel; and so does every woman without a dial of her own. The rates
+    follow what the owner set (x1.0), the photo lists are whole, and the older readers take
+    the dial they took."""
+    r, live = _rig(store, clock, tmp_path)
+    set_values(store, r.engine, [("world", "", 9)])
+    engine = r.engine
+    assert engine.cfg.romance.dial == 9 and engine.personas.tuning.heat_world == 9
+
+    women = [w for w in WOMEN if w[0] in (None, 9, 10)]
+
+    async def go():
+        compared = 0
+        for (own, ext), stage in itertools.product(women, ROMANCE_STAGES):
+            p = _persona(stance, own, ext)
+            store.put_relationship(Relationship(a=GUID, b=HUMAN, affinity=40.0, trust=40.0,
+                                                attraction=80.0, familiarity=50.0,
+                                                romance_stage=stage))
+            for channel in CHANNELS:
+                for n, turn in enumerate(_turns(channel)):
+                    engine.heat, heat_live._LIVE = live, live
+                    assert live.turn(p, channel=channel) is not None
+                    on = await _prompt(engine, turn, p, 900 + n)
+                    engine.heat, heat_live._LIVE = None, None
+                    off = await _prompt(engine, turn, p, 900 + n)
+                    assert on == off, (own, ext, stage, channel, turn.kind)
+                    compared += 1
+            heat_live._LIVE = live
+            assert (live.starts(p), live.offers(p), live.never_starts(p)) == (1.0, 1.0, False)
+            # the lust photo style's lists whole; no lust style, no tiers (plain photos)
+            assert live.photo_tier(p) == (P4 if stance == "lust" else P0)
+            assert live.member_dial(p, 9) == 9
+            assert live.member_dial(p, 10) == (10 if own == 10 else 9)
+        return compared
+    assert asyncio.run(go()) == len(women) * len(ROMANCE_STAGES) * (len(CHANNELS) + 3)
 
 
 def test_on_and_unset_the_clocks_the_photo_side_and_the_older_dials_are_todays(
@@ -111,9 +158,8 @@ def test_on_and_unset_the_clocks_the_photo_side_and_the_older_dials_are_todays(
     engine, base = r.engine, r.engine.cfg
     set_values(store, engine, [("member", str(GUID), 5), ("group", "everyone", 2)])
     swim = dict(style="lust", outfit="a red halter bikini", setting="the beach at sunset")
-    women = [_persona(stance, own, ext)
-             for stance, own, ext in itertools.product(STANCES, OWN, EXTRAVERSION)]
-    for dial in range(1, 11):
+    women = [_persona(stance, own, ext) for stance, (own, ext) in itertools.product(STANCES, WOMEN)]
+    for dial in DIALS:
         engine.cfg = replace(base, romance=replace(base.romance, dial=dial))
         assert merge(engine.cfg, engine.personas.tuning) is engine.cfg  # no derived dial
         for p in women:

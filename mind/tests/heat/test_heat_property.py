@@ -4,12 +4,14 @@ at her own dial 10 used to turn "every turn" into "every private turn".)
 
 Each point is compared with its neighbour one step up on every ordered axis: the world value,
 a pinned offset, the groups' sum, her own dial, his lead, the session (clean <= none <= open),
-the public cap (on <= off), the channel (public <= private) and the hour (not late <= late)."""
+the public cap (on <= off), the channel (public <= private) and the hour (not late <= late);
+and in the derived mode (heat unset, a session override reaching her on a world value derived
+from the romance dial) that dial too."""
 import itertools
 from dataclasses import replace
 
 from leeroy_mind import heat as H
-from leeroy_mind.heat.table import P0, P4, TIERS, tier_index
+from leeroy_mind.heat.table import DIAL_TO_HEAT, P0, P4, TIERS, tier_index
 
 EVERY = {"": 0, "private": 1, "all": 2}
 SESSION_UP = {"clean": None, None: "open"}
@@ -115,3 +117,36 @@ def test_the_rates_never_read_her_own_dial():
             r = H.resolve(world, H.Member(stance="lust", own_dial=own, groups=groups),
                           session=session)
             assert (r.starts, r.offers) == (plain.starts, plain.offers), (world, groups, own)
+
+
+def test_the_derived_mode_is_monotonic_and_gives_the_older_readers_their_very_dial():
+    """While no world heat is set only his session override reaches a member, on the world value
+    the romance dial stands for (`legacy`). Raising that dial, an offset or a group, or opening
+    the session, never lowers a field; with nothing else moving her the older readers get that
+    very dial back, and the dial is the only field `legacy` changes."""
+    points = 0
+    for legacy, own, offset, groups, session, private in itertools.product(
+            range(1, 11), OWN, OFFSETS, GROUPS, SESSIONS, (True, False)):
+        member = H.Member(stance="lust", own_dial=own, offset=offset, groups=groups,
+                          lust_style=True)
+        kw = dict(private=private, session=session, legacy=legacy)
+        r = H.resolve(DIAL_TO_HEAT[legacy], member, **kw)
+        points += 1
+        here = (legacy, own, offset, groups, session, private)
+        if legacy < 10:
+            _never_lower(r, H.resolve(DIAL_TO_HEAT[legacy + 1], member,
+                                      **{**kw, "legacy": legacy + 1}), ("legacy", here))
+        if offset is not None and offset < 5:
+            _never_lower(r, H.resolve(DIAL_TO_HEAT[legacy], replace(member, offset=offset + 1),
+                                      **kw), ("offset", here))
+        _never_lower(r, H.resolve(DIAL_TO_HEAT[legacy], replace(member, groups=groups + 1), **kw),
+                     ("groups", here))
+        if session in SESSION_UP:
+            _never_lower(r, H.resolve(DIAL_TO_HEAT[legacy], member,
+                                      **{**kw, "session": SESSION_UP[session]}), ("session", here))
+        assert 1 <= r.dial <= 10 and 0 <= r.heat <= 10
+        bare = H.resolve(DIAL_TO_HEAT[legacy], member, private=private, session=session)
+        assert replace(r, dial=bare.dial) == bare  # legacy reaches the dial and nothing else
+        if own is None and not offset and not groups and session is None:
+            assert r.dial == legacy
+    assert points == 10 * 6 * 6 * 5 * 3 * 2

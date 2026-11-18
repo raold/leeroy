@@ -23,8 +23,11 @@ nobody (`HeatLive.reaches`): the world romance dial, each woman's own dial, ever
 photo rate keep their exact effect, at whatever the romance dial is (the live one is 10, not 9).
 Offsets stored before a world value wait for it. The page says "Heat is on but not set: the
 romance dial (N) ... in force exactly as before". `tests/heat/test_heat_neutral.py` holds it:
-the full prompt over every stance, arc stage, channel, own dial and world dial 1-10, the clocks,
-the photo side and the dials the older readers take.
+the full prompt over every stance, arc stage, channel, own dial (none, 1-10) and world dial
+0-10, the clocks, the photo side and the dials the older readers take. A replay of the 500
+newest captured turns (`bakeoff_turn`) plus turns to him from every woman with an attitude, on a
+copy of the live database, composed the same prompts on and unset as on main (review of #373,
+fix round 1).
 
 **Heat takes over when the owner sets a world value.** Heat 9 is the wording from before the
 dial: with the world set to 9 the tuning goldens are byte-identical
@@ -49,7 +52,9 @@ override, then how far his own lines have led, then (with `public_cap`) the publ
   own dial)". A pinned offset, 0 included, replaces it. At world 9 she is as today: the wording
   and the every-turn rule are her dial's, and **the rates (how often she starts it, how often a
   photo is offered) follow only what the owner set** (world, a pinned offset, groups, the
-  session), never that stored dial, so no x1.3 or x1.2 for her at world 9. Note that the offset
+  session), never that stored dial, so no x1.3 or x1.2 for her at world 9; the older readers
+  (below) take the dial they took. Her full prompt at world 9 is the one without heat
+  (`test_heat_neutral.py`, every stage and channel). Note that the offset
   is in heat steps: an own dial of 6 or 8 at world 9 is heat 6 (suggestive) or 8 (frank), where
   the old dial 6 was flirty and 8 suggestive; no live persona has such a dial.
 - **Groups'** offsets add up.
@@ -82,12 +87,17 @@ override, then how far his own lines have led, then (with `public_cap`) the publ
   guard's screen (`guard.public_hit`: a short built-in list plus his `public_block.txt`), not
   the tier its prompt was worded at; every other line is spoken as before.
 - **What else reads it** once heat is set, through one helper (`live.member_dial`): the learn
-  coach's lesson screen and `learn/apply`, the outreach fill's "miss you", the bond's night and
-  invitations. At a heat with no romance wording (0) each leaves romance out; unset, each reads
-  the dial it always read.
+  coach's lesson screen and `learn/apply`, the outreach fill's "miss you", the bond's night,
+  invitations and recall (the pipeline's bond memories). Each already reads the romance dial
+  derived from the world heat; her heat can only lower that dial for her (her offset, her
+  groups, a clean evening), never raise it, and at a heat with no romance wording (0) each
+  leaves romance out. A raise (her own 10, a positive offset, an open evening) stays with the
+  wording, voice and photos, so at world 9 the two women at their own 10 read what they read
+  before. Unset, each reads the dial it always read (`tests/heat/test_heat_reach.py`).
 - `resolve` is monotonic over its whole input space (`tests/heat/test_heat_property.py`):
   raising the world, an offset, a group, her own dial or his lead, opening the session, lifting
-  the cap, going private or late never lowers any field.
+  the cap, going private or late never lowers any field; nor, while heat is unset, does raising
+  the romance dial a session override's derived value stands for.
 
 ## Photo tiers (a proposal for the owner to edit)
 

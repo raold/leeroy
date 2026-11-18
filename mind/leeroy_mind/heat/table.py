@@ -50,8 +50,9 @@ ROWS: tuple[Row, ...] = (
 LATE_SELF = 8  # at this heat she may take one step herself late at night (no lead needed)
 EVERY_TURN = 10  # from here every private turn of hers to him carries her romance
 
-# The legacy romance dial (1-10) as a heat, for a world with no heat set and for a woman's own
-# stored dial: the same band, and 9 and 10 are themselves.
+# The legacy romance dial (1-10) as a heat, for a world with no heat set (where only his session
+# override reaches a member): the same band, and 9 and 10 are themselves. A woman's own stored
+# dial counts as an offset on the world value instead (resolve.own_offset).
 DIAL_TO_HEAT = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 5, 7: 6, 8: 7, 9: 9, 10: 10}
 
 

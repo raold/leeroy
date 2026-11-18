@@ -48,7 +48,7 @@ def test_off_by_default_nothing_is_attached_and_heat_is_refused_in_words(tmp_pat
         run(app.stop())
 
 
-def test_on_and_unset_the_world_follows_the_romance_dial(tmp_path):
+def test_on_and_unset_heat_governs_nobody_and_the_romance_dial_is_in_force(tmp_path):
     app = _heat_app(tmp_path)
     try:
         assert app.heat is heat_live.current() is app.engine.heat
