@@ -6,7 +6,7 @@ import { openMember } from "../personas.mjs";
 import { showTab } from "../tabs.mjs";
 import { cardText } from "../words.mjs";
 import { FEED, focusReply, openView } from "./feedview.mjs";
-import { renderRooms } from "./leftview.mjs";
+import { renderRooms, voiceOff } from "./leftview.mjs";
 import { roomMates } from "./tree.mjs";
 import { DISCORD } from "./discordstate.mjs";
 import { panelHidden, setPanel } from "./panel.mjs";
@@ -47,7 +47,8 @@ function renderFaces() {
 
 function renderVoiceControls() {
   if (!CARD.guid) { return; }
-  var up = !!S.voice, db = volumeOf(CARD.guid), why = up ? "" : "The voice service is not connected.";
+  var off = voiceOff(), up = !!S.voice && !off, db = volumeOf(CARD.guid);
+  var why = off || (up ? "" : "The voice service is not connected.");
   $("mcard-vol").value = String(db);
   $("mcard-db").textContent = fmtDb(db);
   ["mcard-vol", "mcard-reset", "mcard-mute"].forEach(function (id) {
@@ -232,6 +233,8 @@ var ON_VOICE = {
   }
 };
 on("snapshot", renderRight);
+var voiceWasOff = "";
+on("status", function () { if (voiceOff() !== voiceWasOff) { voiceWasOff = voiceOff(); renderVoiceControls(); } });
 on("voice", function (m) {
   if (typeof m.type === "string" && own(ON_VOICE, m.type)) { ON_VOICE[m.type](m); }
 });

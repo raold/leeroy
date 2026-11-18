@@ -4,7 +4,7 @@
 //
 // In sight and focused the title is plain: the page's own badges say it. In sight without the
 // focus it counts what the page already knows (the event stream is still open). Hidden, the
-// stream is closed and nothing else polls, so ONE light read (/api/unread, at most every 20 s)
+// stream is closed and nothing else polls, so ONE light read (/api/unread, once as it hides and then every 60 s)
 // counts what came since the page went out of sight.
 import { $, api, emit, on, recall, refused, remember } from "./core.mjs";
 import { FEED } from "./comms/feedview.mjs";

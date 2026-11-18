@@ -2,7 +2,7 @@
 // favicon's dot and the words of a notification. Never a message's text.
 
 export var TITLE = "Guild Console";
-export var HIDDEN_POLL_MS = 20000;  // the one request a hidden page makes, at most this often
+export var HIDDEN_POLL_MS = 60000;  // the one request a hidden page makes, at most this often
 
 // The SVG namespace's name (an identifier the icon's markup needs, not an address anything loads)
 var SVG_NS = ["http:", "", "www.w3.org", "2000", "svg"].join("/");

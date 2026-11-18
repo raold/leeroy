@@ -38,7 +38,7 @@ test("the hidden page's one read carries only the ids it holds", () => {
   assert.equal(unreadPath({ chat: 12, discord: 0 }), "/api/unread?chat=12&discord=0");
   assert.equal(unreadPath({ chat: -1, discord: 1.5 }), "/api/unread");
   assert.deepEqual(adoptTops({ chat: null, discord: 7 }, { chat_top: 40, discord_top: 90 }), { chat: 40, discord: 7 });
-  assert.ok(HIDDEN_POLL_MS >= 20000);
+  assert.ok(HIDDEN_POLL_MS >= 60000);
 });
 
 test("the feed's top is the newest line it holds", async () => {

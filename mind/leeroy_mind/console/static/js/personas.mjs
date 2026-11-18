@@ -638,6 +638,9 @@ function dialRow(box, o) {
   if (o.moves) { row.appendChild(el("div", "moves", o.moves)); }
   box.appendChild(row);
 }
+// Offsets he opened from "offset another dial" and has not set yet: their rows (and a preview
+// under one) stay through each redraw of the dials
+var OPENED = new Set();
 function dialSpec(name) { return arr(tuneView().dials).filter(function (d) { return d.name === name; })[0] || {}; }
 function renderTuning() {
   var v = tuneView(), live = tuneLive();
@@ -675,8 +678,9 @@ function renderTuning() {
     }
     var offs = obj(g.offsets);
     arr(v.dials).forEach(function (d) {
-      var set = own(offs, d.name);
-      if (!set && !g.showAll) { return; }
+      var set = own(offs, d.name), key = g.target + "|" + d.name;
+      if (set) { OPENED.delete(key); }
+      if (!set && !g.showAll && !OPENED.has(key)) { return; }
       dialRow(groups, { label: d.label, sub: set ? "offset " + (offs[d.name] > 0 ? "+" : "") + offs[d.name] : "",
                         lo: -10, hi: 10, start: set ? offs[d.name] : 0, signed: true,
                         scope: "group", target: g.target, dial: d.name, what: (g.builtin ? "everyone" : g.name) + " " + d.label,
@@ -685,16 +689,13 @@ function renderTuning() {
     var add = el("select");
     add.setAttribute("aria-label", "Offset another dial for " + (g.builtin ? "everyone" : g.name));
     add.appendChild(el("option", "", "offset another dial"));
-    arr(v.dials).forEach(function (d) { if (!own(offs, d.name)) { var o = el("option", "", d.label); o.value = d.name; add.appendChild(o); } });
+    arr(v.dials).forEach(function (d) {
+      if (!own(offs, d.name) && !OPENED.has(g.target + "|" + d.name)) { var o = el("option", "", d.label); o.value = d.name; add.appendChild(o); }
+    });
     add.addEventListener("change", function () {
       if (!add.value) { return; }
-      var d = dialSpec(add.value), box = el("div");
-      add.parentNode.insertBefore(box, add);
-      dialRow(box, { label: d.label, lo: -10, hi: 10, start: 0, signed: true, scope: "group", target: g.target,
-                     dial: d.name, what: (g.builtin ? "everyone" : g.name) + " " + d.label, clearable: false,
-                     moves: d.who !== "everyone" ? WHO[d.who] + ": the others are skipped" : "" });
-      add.remove();
-      drawPreview();
+      OPENED.add(g.target + "|" + add.value);
+      renderTuning();
     });
     groups.appendChild(add);
     nudgePanel(groups, v, "group", g.target, live, tuneWhy(), tuneAsk);

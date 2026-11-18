@@ -30,7 +30,7 @@ page's memory only.
 
 While the page is hidden its event stream is closed and no tab polls. One light read,
 `GET /api/unread?chat=<newest chat line id held>&discord=<newest Discord message id held>`, at most
-every 20 s, counts what came since: whispers to him, messages in his DMs and group DMs, and channel
+every 60 s, counts what came since: whispers to him, messages in his DMs and group DMs, and channel
 messages that mention him (`@Name`) or answer one of his. The answer is counts, the newest sender's
 name and row ids; never a message's text. The count (what was already unread when the page went
 out of sight plus what came since) shows as `(3) Guild Console` in the tab's title with a dot on

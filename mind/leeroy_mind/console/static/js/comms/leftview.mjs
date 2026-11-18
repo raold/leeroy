@@ -148,8 +148,12 @@ function crowd(r) {
 var ROOMS_KEY = "guild-console-rooms";
 $("rooms-fold").open = recall(ROOMS_KEY, "closed") === "open";
 $("rooms-fold").addEventListener("toggle", function () { remember(ROOMS_KEY, this.open ? "open" : "closed"); });
+// Under --no-control the server refuses every voice change, so its buttons say so before a press
+export function voiceOff() {
+  return obj(S.status.control).enabled === false ? "Voice controls are off: this console runs with --no-control." : "";
+}
 export function renderRooms() {
-  var box = $("tree"), here = hereRoom();
+  var box = $("tree"), here = hereRoom(), off = voiceOff();
   $("rooms-now").textContent = here ? "· in " + roomName(here) : "";
   keepFocus(box, function () {
     clear(box);
@@ -168,7 +172,8 @@ export function renderRooms() {
       var b = el("button", "ch room" + (r.here ? " on" : ""));
       b.type = "button";
       b.dataset.room = r.id;
-      b.title = r.here ? "You are here" : "Join " + r.name;
+      b.title = r.here ? "You are here" : off || "Join " + r.name;
+      b.disabled = !!off && !r.here;
       if (r.here) { b.setAttribute("aria-current", "true"); }
       b.appendChild(el("span", "nm", r.name));
       if (r.locked) { b.appendChild(el("span", "lock", "locked")); }
@@ -217,16 +222,16 @@ function renderVoiceStatus() {
   $("v-err").title = errs.join(", ");
 }
 function renderControls() {
-  var v = S.voice, me = selfView(v), here = hereRoom();
+  var v = S.voice, me = selfView(v), here = hereRoom(), off = voiceOff();
   $("c-ptt").classList.toggle("on", !!(v && v.ptt));
   $("c-room").textContent = !v ? "voice not connected" : here ? roomName(here) : "not in a room";
   [["c-mute", me.mute], ["c-deafen", me.deafen]].forEach(function (x) {
     var b = $(x[0]);
-    b.disabled = !v;
+    b.disabled = !v || !!off;
     b.setAttribute("aria-pressed", String(x[1]));
   });
-  $("c-mute").title = !v ? "The voice service is not connected." : me.deafen ? "Muted while deafened: this undeafens too." : "";
-  $("c-deafen").title = !v ? "The voice service is not connected." : "";
+  $("c-mute").title = off || !v ? off || "The voice service is not connected." : me.deafen ? "Muted while deafened: this undeafens too." : "";
+  $("c-deafen").title = off || (!v ? "The voice service is not connected." : "");
   renderVoiceStatus();
 }
 function pressSelf(which) {
@@ -335,7 +340,11 @@ var ON_VOICE = {
   self: renderControls
 };
 on("snapshot", renderLeft);
-on("status", renderBanner);
+var voiceWasOff = "";
+on("status", function () {
+  renderBanner();
+  if (voiceOff() !== voiceWasOff) { voiceWasOff = voiceOff(); renderRooms(); renderControls(); }
+});
 // Push-to-talk the voice service recognised but the mind never matched to a line of his
 var HEARD = new Heard(), HEARD_SHOWN = 160, heardTimer = null;
 function heardNotes() {

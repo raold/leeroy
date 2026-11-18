@@ -284,6 +284,7 @@ BUILD_MARK = b"__CONSOLE_BUILD__"  # page.html's meta, replaced with this consol
 
 
 COMPRESS_MIN = 1024  # a text answer longer than this goes out gzipped to a browser that takes it
+COMPRESS_THREAD = 64 * 1024  # a longer one is gzipped on a worker thread, off the event loop
 _COMPRESSIBLE = ("text/", "application/json", "image/svg+xml")
 
 
@@ -924,7 +925,10 @@ class ConsoleApp:
                          "it started (the key changes each time it starts).")
 
     async def handle(self, req: Request):
-        return compress(req, await self._handle(req))
+        response = await self._handle(req)
+        if isinstance(response, Response) and len(response.body) > COMPRESS_THREAD:
+            return await asyncio.to_thread(compress, req, response)
+        return compress(req, response)
 
     def _cached(self, req: Request, name: str, body: bytes, kind: str, headers: list) -> Response:
         """The page ("") or one static file: 304 when the browser already holds this build's

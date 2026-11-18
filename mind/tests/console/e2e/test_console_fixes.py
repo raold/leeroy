@@ -521,3 +521,50 @@ def test_forward_to_a_member_leaves_world_mode(rehearsal):
             await expect(page.locator("#p-world")).to_be_hidden()
             await expect(page.locator("#p-wall .tile.sel")).to_have_attribute("data-guid", "101")
     asyncio.run(run())
+
+
+def test_unsaved_group_offset_keeps_its_row_and_preview_through_a_redraw(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(width=1440, height=900) as r:
+            page = r.page
+            await open_console(r)
+            await visit(page, "personas")
+            groups = page.locator("#t-groups")
+            await groups.get_by_label("Offset another dial for everyone").select_option(label="argumentative")
+            dial = groups.locator(".dial").filter(has=page.get_by_role("slider", name="argumentative", exact=True))
+            await dial.get_by_role("slider").fill("3")
+            r.app.arbiter.admin.loaded.clear()
+            r.expected_http_errors.add(("/api/tune", 409))
+            await dial.get_by_role("button", name="Preview", exact=True).click()
+            await expect(dial.locator(".pv-inline")).to_contain_text("isn't loaded")
+            # a redraw of the dials (a saved change elsewhere, as the 30 s refresh): the unsaved
+            # offset's row is still there with its preview under it
+            world = page.locator("#t-world .dial").first
+            await world.get_by_role("slider").fill("4")
+            await world.get_by_role("button", name="Set", exact=True).click()
+            await expect(world).to_contain_text("set here 4")
+            await expect(dial.locator(".pv-inline")).to_contain_text("isn't loaded")
+            assert await page.locator(".pv-inline").count() == 1
+            # it is offered once: not again in the list of dials to offset
+            options = await groups.get_by_label("Offset another dial for everyone").locator("option").all_text_contents()
+            assert "argumentative" not in options
+    asyncio.run(run())
+
+
+def test_voice_buttons_say_why_under_no_control(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(width=1440, height=900) as r:
+            r.console.controls.enabled = False
+            page = r.page
+            await open_console(r)
+            why = "Voice controls are off: this console runs with --no-control."
+            for name in ("#c-mute", "#c-deafen"):
+                await expect(page.locator(name)).to_be_disabled()
+                await expect(page.locator(name)).to_have_attribute("title", why)
+            rooms = page.locator("#tree button.room:not([aria-current])")
+            for i in range(await rooms.count()):
+                await expect(rooms.nth(i)).to_be_disabled()
+                await expect(rooms.nth(i)).to_have_attribute("title", why)
+    asyncio.run(run())
