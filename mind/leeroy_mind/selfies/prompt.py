@@ -30,7 +30,7 @@ from ..personas.schema import MIN_AGE, Persona
 from .safe import POSE_SHORT as POSE_WORDS_SHORT
 from .safe import (BODY_ALONE, BODY_ANATOMY, BODY_GARMENT, BODY_NO_MIRROR, BODY_OPTIONAL,
                    HEAD_FRAMINGS, KIND_SHORT, KIND_WORDS, alone, kind_of, outfit_words, pose,
-                   pose_priority, setting_words, wearing)
+                   pose_priority, selfie_framing, setting_words, wearing)
 from .style import LUST, PLAIN, suggestive
 
 LUST_HELD = "lust kind awaits a re-choice"
@@ -764,7 +764,9 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
     # to what she wears and how she stands (safe.py); its framing shortens only when it must
     shown = kind_of(ph.kind, lust)  # a lust kind's mirror selfie renders as a selfie
     mirror = shown == "mirror_selfie"
-    kind_words, framing_words = _KINDS[shown], _FRAMINGS[ph.framing]
+    # a lust selfie stored three-quarter renders waist-up (safe.selfie_framing)
+    framing = selfie_framing(shown, ph.framing) if lust else ph.framing
+    kind_words, framing_words = _KINDS[shown], _FRAMINGS[framing]
     if body_shot:
         kind_words = SHORT.get(kind_words, kind_words)
     add(kind_words, 0)
@@ -803,7 +805,7 @@ def build_prompt(p: Persona, *, kind_style: str = PLAIN, light: str = "") -> Pro
     stand = pose("front", ph.framing, p.guid, kind=shown,
                  pos="her" if p.identity.player_gender == "female" else "his")
     add(stand, pose_priority(ph.framing))
-    if glutes_words(p) and ph.framing in GLUTES_FRAMINGS:  # optional, after who she is
+    if glutes_words(p) and framing in GLUTES_FRAMINGS:  # optional, after who she is
         out.append((glutes_words(p), 2))
     add(ph.expression, 3, True)
     tail = _HEADSHOT_TAIL if headshot else _PHONE_TAIL

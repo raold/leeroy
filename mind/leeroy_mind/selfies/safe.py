@@ -17,7 +17,9 @@ The triggers, and what this module does about each:
 - Hands on hips with another arm action gave a third hand; hands gripping a glass, a mug, a
   rail, a pen, sticks: a body shot gets one simple standing pose (pose), props rest beside the
   subject (scene_choices.PROPS) and activities are said as what is there, not what the hands do
-  (scene_choices.ACTIVITIES).
+  (scene_choices.ACTIVITIES). A selfie gets no pose at any framing (an arm holds the camera),
+  and a lust selfie kind is waist-up (selfie_framing; the three-quarter mirror selfie was the
+  audit's worst cell, 38%).
 - Seated and splayed swimwear poses merged legs and feet: every pose stands.
 - Garments: an outfit phrase at priority 2 never reached the worker's 75 tokens (0 of 12 plain
   waist-up prompts kept it, 7 of 42 men's), which rendered men shirtless; one-shoulder and
@@ -235,13 +237,13 @@ def _draw(seed, salt: str) -> float:
 
 def pose(view: str, framing: str, seed="", *, pos: str = "her", kind: str = "snapshot") -> str:
     """The pose phrase for a photo seen from `view` ("front" for an ordinary one), framed
-    `framing`: a pose of POSES for a body shot, POSE_WAIST_UP for a waist-up one that is no
-    selfie (an arm holds the camera there), none for a head-and-shoulders or face photo.
-    Deterministic in `seed`."""
-    if framing in HEAD_FRAMINGS:
+    `framing`: a pose of POSES for a body shot, POSE_WAIST_UP for a waist-up one, none for a
+    head-and-shoulders or face photo and none for a selfie of any framing (an arm holds the
+    camera: "arms at her sides" would contradict it). Deterministic in `seed`."""
+    if framing in HEAD_FRAMINGS or kind in SELFIE_KINDS:
         return ""
     if framing not in BODY_FRAMINGS:
-        return "" if kind in SELFIE_KINDS else POSE_WAIST_UP
+        return POSE_WAIST_UP
     poses = POSES.get(view, POSES["front"])
     return poses[int(_draw(seed, "pose") * len(poses))].replace("her", pos)
 
@@ -271,10 +273,20 @@ def settle_framing(framing: str, share: float, seed, *, wide=BODY_FRAMINGS,
     return framing if framing not in wide or body_shot(share, seed) else narrow
 
 
-def lust_framing(wide: int, close: int, share: float) -> str:
+def lust_framing(wide: int, close: int, share: float, kind: str = "snapshot") -> str:
     """A lust profile kind's framing that keeps the cast nearest `share` three-quarter, given
-    how many are three-quarter (`wide`) and waist-up (`close`) already."""
+    how many are three-quarter (`wide`) and waist-up (`close`) already. A selfie is always
+    waist-up (selfie_framing)."""
+    if kind in SELFIE_KINDS:
+        return "upper_body"
     return "three_quarter" if wide < share * (wide + close + 1) or share >= 1 else "upper_body"
+
+
+def selfie_framing(kind: str, framing: str) -> str:
+    """The framing a lust profile kind of `kind` takes: a selfie waist-up, never wider (the
+    audit's worst cell was the three-quarter mirror selfie, 38% defective, and an arm's-length
+    shot does not reach mid-thigh); any other kind keeps `framing`."""
+    return "upper_body" if kind in SELFIE_KINDS and framing in BODY_FRAMINGS else framing
 
 
 def body_slots(share: float, n: int = 4) -> int:

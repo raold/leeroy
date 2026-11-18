@@ -16,6 +16,7 @@ from leeroy_mind.personas.schema import (BUSTS, PersonaError, ProfilePhoto, appe
                                          persona_from_dict, persona_to_dict, validate_persona)
 from leeroy_mind.selfies import kind, varied
 from leeroy_mind.selfies.kind import EXPLICIT_RE, WEAR_RE
+from leeroy_mind.selfies.safe import selfie_framing
 from leeroy_mind.selfies.prompt import (_FRAMINGS, _KINDS, BUILD_WORDS, BUST_WORDS, FIT_MAX,
                                         FULL_BUILDS, LUST_NEGATIVE, NEGATIVE, PLAIN, SHORT,
                                         SIZE_WORDS, hair_skin_short, over_fit,
@@ -371,9 +372,10 @@ def test_the_longest_lust_prompt_fits_and_never_cuts_her_body_hair_or_skin(build
                 assert not over_fit(spec), (framing, kind_, kg)
                 _never_cut(spec, p)
                 assert f"wearing {ph.outfit}, {ph.setting}" in _texts(spec, 0)
-                # a lust kind's mirror selfie renders as a selfie (safe.kind_of)
-                for text in (_KINDS["selfie" if kind_ == "mirror_selfie" else kind_],
-                             _FRAMINGS[framing]):
+                # a lust kind's mirror selfie renders as a selfie (safe.kind_of), and a lust
+                # selfie waist-up (safe.selfie_framing)
+                shown = "selfie" if kind_ == "mirror_selfie" else kind_
+                for text in (_KINDS[shown], _FRAMINGS[selfie_framing(shown, framing)]):
                     forms = {text, SHORT.get(text, text)}
                     assert forms & set(_texts(spec, 0)) or forms & set(_texts(spec, 1))
                 kept, dropped = fit(spec.phrases, estimate, 75)

@@ -379,6 +379,55 @@ def test_a_body_shot_takes_one_of_a_few_simple_poses_and_never_a_hand_on_a_hip()
     assert safe.pose_priority("upper_body") == 1
 
 
+def test_a_selfie_takes_no_pose_and_a_lust_selfie_kind_is_waist_up():
+    """Review of #362, round 2: an arm holds the camera, so no selfie takes a pose of POSES or
+    the waist-up one at any framing ("arms at her sides" would contradict it); a lust selfie
+    kind is waist-up (the three-quarter mirror selfie was the audit's worst cell, 38%): chosen
+    so, and one stored three-quarter renders so."""
+    hands = ({t for poses in safe.POSES.values() for t in poses} | {safe.POSE_WAIST_UP}
+             | set(safe.POSE_SHORT.values()))
+    framings = ("face", "head_and_shoulders", "upper_body", "three_quarter", "full_body")
+    for k in safe.SELFIE_KINDS:
+        assert all(safe.pose("front", f, "seed", kind=k) == "" for f in framings)
+        assert safe.lust_framing(0, 9, 1.0, k) == "upper_body" == safe.lust_framing(0, 9, 0.5, k)
+        assert safe.selfie_framing(k, "three_quarter") == "upper_body"
+        assert safe.selfie_framing(k, "head_and_shoulders") == "head_and_shoulders"  # never wider
+    assert safe.selfie_framing("snapshot", "three_quarter") == "three_quarter"
+    assert safe.lust_framing(0, 9, 1.0) == "three_quarter"
+    # a plain kind keeps its framing as stored, and a selfie no pose
+    for k in safe.SELFIE_KINDS:
+        spec = build_prompt(woman(photo={"kind": k, "framing": "three_quarter",
+                                         "setting": "a quiet cafe", "outfit": "a grey jumper",
+                                         "expression": "a small smile"}))
+        assert not hands & {t for t, _ in spec.phrases}
+        assert any(t.startswith("three-quarter shot") for t, _ in spec.phrases)
+    # a lust selfie stored three-quarter (or a mirror one, which renders as a selfie)
+    for k in safe.SELFIE_KINDS:
+        stored = ProfilePhoto(k, "three_quarter", "a rooftop bar at night",
+                              "a red satin midi dress", "a playful smile")
+        spec = build_prompt(lusty(photo=stored), kind_style=LUST)
+        texts = [t for t, _ in spec.phrases]
+        assert spec.phrases[0] == ("selfie", 0) and not hands & set(texts)
+        assert any(t.startswith("waist-up shot") for t in texts)
+        assert not any("three-quarter" in t for t in texts)
+        assert spec.negative == BODY_NEGATIVE_LUST
+    # a situational selfie at three-quarter: no pose; a snapshot keeps its required one
+    s = Scene("selfie", "three_quarter", "at a quiet cafe table", "a cup of tea on the table",
+              scene_choices.OUTFITS["casual"], "a relaxed smile", "day", "anyone", "x",
+              recipe=scene_choices.RECIPE)
+    for k in safe.SELFIE_KINDS:
+        snap = build_scene_prompt(woman(), replace(s, kind=k))
+        assert not hands & {t for t, _ in snap.phrases}
+    snap = build_scene_prompt(woman(), replace(s, kind="snapshot"))
+    assert any(t in hands and pr == 0 for t, pr in snap.phrases)
+    # the variety balancer and a re-roll never give a lust selfie three-quarter
+    from leeroy_mind.selfies import variety
+    rolled = [variety.choose_photo(lusty(), seed=seed, ident=_NOBODY, names=())
+              for seed in range(40)]
+    assert {x.framing for x in rolled if x.kind == "selfie"} == {"upper_body"}
+    assert {x.framing for x in rolled if x.kind == "snapshot"} == {"upper_body", "three_quarter"}
+
+
 def test_a_three_quarter_profile_photo_requires_its_pose():
     stored = ProfilePhoto("snapshot", "three_quarter", "a rooftop bar at night",
                           "a red satin midi dress", "a playful smile")

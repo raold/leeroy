@@ -46,7 +46,7 @@ from . import wardrobe
 from .prompt import (HAIR_COLOUR_WORDS, HAIR_STYLE_WORDS, lust_named, lust_phrase,
                      names_re)
 from .safe import (BODY_SHOT_SHARE, NEW_SETTINGS, OUTFIT_WORDS, RETIRED_SETTINGS,
-                   settle_framing)
+                   selfie_framing, settle_framing)
 from .store import queue_restyled
 from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
 
@@ -548,6 +548,8 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False,
             # three-quarter for `share` of the members, else waist-up ([selfies] body_shot_share)
             data = {**data, "framing": settle_framing(data.get("framing"), share,
                                                       f"{guid}:{ctx.night}")}
+        # a lust selfie is waist-up, never three-quarter (safe.selfie_framing)
+        data = {**data, "framing": selfie_framing(data.get("kind"), data.get("framing"))}
         problems = screen_lust(p, data)
         if not problems:
             return compose_lust(data), []

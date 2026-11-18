@@ -9,6 +9,7 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.wow import CAST_MIN_LEVEL
 from . import files, kind, similarity
 from .config import worker_command, worker_env
+from .safe import selfie_framing
 from .store import photos, queue_restyled
 from .style import LUST, style_of
 from .worker import SelfieWorker, WorkerError
@@ -25,6 +26,7 @@ def choose_photo(p, *, seed, ident, names):
             framing=rng.choice(("upper_body","three_quarter")), setting=rng.choice(kind.LUST_SETTINGS),
             outfit=rng.choice(tuple(kind.LUST_OUTFITS)), colour=rng.choice(kind.LUST_COLOURS),
             expression=rng.choice(kind.LUST_EXPRESSIONS))
+        data["framing"] = selfie_framing(data["kind"],data["framing"])  # a selfie is waist-up
         if kind.screen_lust(p,data):
             continue
         photo = kind.compose_lust(data)

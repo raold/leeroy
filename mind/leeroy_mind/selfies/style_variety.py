@@ -107,9 +107,6 @@ def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
     settings = [(i,s) for i,s in settings if counts.settings[key(s)] < cap]
     expressions = sorted(enumerate(expressions),key=lambda x:(counts.expressions[key(x[1])],rng.random()))
     kinds = sorted(KINDS,key=lambda x:(counts.kinds[x],rng.random()))
-    # three-quarter for `share` of the cast's lust kinds ([selfies] body_shot_share), else
-    # waist-up: whichever keeps the cast nearest that share
-    frames = [lust_framing(counts.framings[frames[0]], counts.framings[frames[1]], share)]
     # Name collisions are removed before products, bounding work even for hostile names.
     forbidden = tuple(names) + (p.character_name,p.identity.real_name)
     def clear(s):
@@ -118,6 +115,11 @@ def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
     settings = [(i,s) for i,s in settings if clear(s)]
     expressions = [(i,s) for i,s in expressions if clear(s)]
     kinds = [s for s in kinds if clear(s)]
+    # three-quarter for `share` of the cast's lust kinds ([selfies] body_shot_share), else
+    # waist-up: whichever keeps the cast nearest that share; the kind she gets (kinds[0]) is
+    # waist-up when it is a selfie (safe.lust_framing)
+    frames = [lust_framing(counts.framings[frames[0]], counts.framings[frames[1]], share,
+                           kinds[0] if kinds else "snapshot")]
     frames = [s for s in frames if clear(s)]
     if p.identity.age < 25 or not options or not settings or not expressions or not kinds or not frames:
         return None
