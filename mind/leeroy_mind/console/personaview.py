@@ -20,7 +20,8 @@ connection that is closed again). The mind writes these rows; the console only r
   days (counts only, never their text);
 - persona_ledger (nightly.store.ledger_add): the night's growth (note_added, note_dropped,
   note_rolled_back), its critic's drift_flag rows, stance moves (stance_band), his weight and
-  bust edits (looks, personas.looks_edit), home states (home, personas.homes) and undo rows.
+  bust edits (looks, personas.looks_edit), home states (home, personas.homes), voice sheets
+  (voice, personas.voices) and undo rows.
   An open drift flag is one from the last RECENT_DAYS days that is neither undone nor resolved
   in review_queue, as the critic counts them;
 - trait_state (nightly.motives): the Big Five the night sampled for each member around their
@@ -29,7 +30,7 @@ connection that is closed again). The mind writes these rows; the console only r
 Persona content is read through the persona loader (schema.persona_from_dict); of a persona
 only its card summary and bio are shown (the summary with a US member's home state and a
 relationship status built by code; the bio: job, household, rhythm, birthday, life thread,
-likes, dislikes, values and when they drink or smoke), never its secret, disclosures, opinions,
+likes, dislikes, values and when they drink or smoke) and its voice sheet, never its secret, disclosures, opinions,
 sample lines, bits, interview, money, sleep or real name. A part whose table this mind.db lacks (an older schema) is None and the
 table is listed in `missing`; a part with no rows yet is empty or None, never zeros."""
 import json
@@ -39,9 +40,13 @@ from leeroy_mind.nightly.enrich import STAGE as LOOKS_STAGE  # the looks pass's 
 from leeroy_mind.nightly.mood import octant
 from leeroy_mind.nightly.motives import TRAITS
 from leeroy_mind.personas.looks_edit import WEIGHT_MAX, WEIGHT_MIN
-from leeroy_mind.personas.schema import (BUSTS, GLUTES, HIPS, WAISTS, persona_from_dict,
-                                         persona_to_dict)
+from leeroy_mind.personas.schema import (BUSTS, GLASSES, GLUTES, HAIR_COLOURS, HAIR_LENGTHS,
+                                         HAIR_STYLES, HIPS, JEWELLERY, MAKEUPS, MEN_HAIR_STYLES,
+                                         PALETTE, PIERCINGS, TATTOOS, WAISTS, WARDROBES,
+                                         persona_from_dict, persona_to_dict)
+from leeroy_mind.personas.speech import stance_current
 from leeroy_mind.selfies.kind import STAGE as PHOTO_STAGE  # the photo-kind pass's stage
+from leeroy_mind.selfies.style import suggestive
 
 from .feed import guild_mood, human_guid
 from .raidview import people
@@ -53,7 +58,13 @@ LEDGER = 25         # ledger rows in a member's detail
 LOOKS_S = 60.0      # a looks pass saves its persona this soon after its unit's time, at most
 # what his weight and bust edit accepts (personas.looks_edit, the looks op): the Looks panel's form
 LOOKS_LIMITS = {"weight_kg": [WEIGHT_MIN, WEIGHT_MAX], "busts": list(BUSTS),
-                "glutes": list(GLUTES), "waists": list(WAISTS), "hips": list(HIPS)}
+                "glutes": list(GLUTES), "waists": list(WAISTS), "hips": list(HIPS),
+                # his hair, wardrobe, makeup and accessories (owner, 2026-11-17), women's and men's
+                "hair_colours": list(HAIR_COLOURS), "hair_lengths": list(HAIR_LENGTHS),
+                "hair_styles": list(HAIR_STYLES), "men_hair_styles": list(MEN_HAIR_STYLES),
+                "wardrobes": list(WARDROBES), "palette": list(PALETTE), "makeups": list(MAKEUPS),
+                "glasses": list(GLASSES), "jewellery": list(JEWELLERY), "tattoos": list(TATTOOS),
+                "piercings": list(PIERCINGS)}
 TABLES = ("cast_member", "persona_core", "pad_mood", "guild_mood", "relationship", "memory",
           "persona_ledger", "trait_state")
 _SCORED = ("affinity != 0 OR trust != 0 OR respect != 0 OR attraction != 0 "
@@ -297,10 +308,17 @@ def _card(p, status: str | None = None) -> dict:
     return {"identity": {**{k: d["identity"][k] for k in ("age", "player_gender", "region")},
                          "home": p.identity.home},
             "status": status,
+            # she has the lust style now (selfies.style.suggestive): the Looks panel offers the
+            # swim wardrobe tag only then
+            "lust_style": suggestive(p),
             "big_five": d["big_five"], "attachment": d["attachment"], "humour": d["humour"],
             "typing": d["typing"], "game": d["game"], "play": d["play"],
             "romance": {k: d["romance"][k] for k in ("stance", "style", "jealousy_mode")},
             "appearance": d["appearance"], "photo": d.get("photo"),
+            # her voice sheet (personas.voices), whole: it is the owner's console
+            "speech": d.get("speech"),
+            # her stance is shown to her only while her household is the one it was written for
+            "stance_current": stance_current(p),
             "life": {k: d["real_life"][k] for k in BIO_LIFE},
             "likes": list(d["likes"]), "dislikes": list(d["dislikes"]), "values": list(d["values"]),
             "habits": [{"substance": h["substance"], "when": h["when"]} for h in d["habits"]]}

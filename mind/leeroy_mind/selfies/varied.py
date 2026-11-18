@@ -41,7 +41,7 @@ from leeroy_mind.personas.io import load_persona
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import CAST_MIN_LEVEL
 
-from . import kind
+from . import kind, wardrobe
 from .prompt import renderable
 from .store import FACE_VIEWS, VARIED_SET_KEY, queue_more
 from .style import PLAIN, suggestive
@@ -109,6 +109,7 @@ def _pick(p: Persona, rng: random.Random, category: str, view: str, framing: str
     dressed = any(_DRESS.search(x.outfit) for x in others)
     options = [(o, s) for o in outfits for s in settings if not (dressed and _DRESS.search(o))]
     rng.shuffle(options)
+    options = wardrobe.ordered(p, options, outfit=lambda x: x[0])  # her wardrobe's first
     used_c = {x.colour for x in others}
     used_e = {x.expression for x in others}
     free_c = [c for c in colours if c not in used_c] or colours
@@ -132,6 +133,7 @@ def compose(p: Persona, seed: str) -> tuple[Look, ...] | None:
     rng.shuffle(views)
     colours = list(kind.LUST_COLOURS)
     rng.shuffle(colours)
+    colours = wardrobe.colours(p, colours)  # her palette's, when she has one
     expressions = list(kind.LUST_EXPRESSIONS)
     rng.shuffle(expressions)
     looks: list[Look] = []
@@ -151,6 +153,7 @@ def recompose_slot(p: Persona, looks, idx: int, seed: str) -> Look | None:
     rng = random.Random(f"selfie-varied-front:{seed}")
     colours = list(kind.LUST_COLOURS)
     rng.shuffle(colours)
+    colours = wardrobe.colours(p, colours)
     expressions = list(kind.LUST_EXPRESSIONS)
     rng.shuffle(expressions)
     others = [x for i, x in enumerate(looks) if i != idx and x is not None]

@@ -177,6 +177,10 @@ async def doctor(root: Path, *, make_llm=None, ollama_conf: Path | None = None
     except ConfigError as e:
         cfg = None
         out.append((False, f"mind.toml: {e}"))
+    from . import features
+    # an optional table a reader refuses never stops the start: its feature is off instead
+    out += [(False, f"mind.toml: {features.words(row)} (the mind starts without it)")
+            for row in features.check_file(root / "mind.toml")]
     out += _doctor_db(root, latest_version(), cfg)
     out.append(_doctor_library(root, cfg))
     out += _doctor_overlays(root)
@@ -541,6 +545,9 @@ def cmd_db(args) -> int:
     if args.action == "repair-provenance":
         from .storage.repair_cli import run
         return run(root, go=args.go)
+    if args.action == "prune":
+        from .storage.prune_cli import run
+        return run(root, go=args.go, vacuum=args.vacuum, as_of=args.as_of)
     if args.action == "snapshot":
         if not path.exists():
             print(f"no mind.db at {path}", file=sys.stderr)
@@ -1203,6 +1210,110 @@ def cmd_fix_typing(args) -> int:
         _close_fix_store(store, lock)
 
 
+def cmd_persona_voices(args) -> int:
+    """`personas voices`: voice sheets (`<guid>.json` in --dir; personas/voices.py) checked and,
+    with --go, saved as each member's persona `speech` field: an owner persona version with a
+    "voice" ledger row (`personas undo <id>` takes one back). `--clear` takes sheets off again.
+    A read-only plan unless --go. It prints outcomes, sizes and refusal codes, never a sheet's
+    text."""
+    from .config import ConfigError
+    from .human import human_identity
+    from .personas.schema import PersonaError
+    from .personas.speech import BLOCK_TOKENS
+    from collections import Counter
+    from .personas.voices import REFUSALS, SKIPS, plan, plan_clear, set_voice
+    root = _root(args)
+    if args.go and args.dry_run:
+        print("personas voices: --dry-run or --go, not both", file=sys.stderr)
+        return 1
+    if not args.clear and not args.dir:
+        print("personas voices: --dir DIR names the folder of <guid>.json sheets", file=sys.stderr)
+        return 1
+    guids = None
+    if args.guid:
+        try:
+            guids = {int(x) for x in args.guid.split(",") if x.strip()}
+        except ValueError:
+            print("personas voices: --guid is a comma-separated list of guids", file=sys.stderr)
+            return 1
+    folder = Path(args.dir).resolve() if args.dir else None
+    if folder is not None and not folder.is_dir():
+        print(f"personas voices: no folder {folder}", file=sys.stderr)
+        return 1
+    try:
+        cfg = _load_cfg(root)
+    except ConfigError as e:
+        print(f"mind.toml: {e}", file=sys.stderr)
+        return 1
+    args.dry_run = not args.go
+    opened = _fix_store(args, root, "pre-voices")
+    if isinstance(opened, int):
+        return opened
+    store, lock = opened
+    try:
+        if args.clear:
+            plans = plan_clear(store, guids=guids)
+        else:
+            try:
+                human_guid = _human_guid(store, None)
+            except SystemExit:  # no stored human and no guild master on the roster
+                human_guid = 0
+                print("the guild master is not known here: the real-name and romance screens "
+                      "are skipped")
+            plans = plan(store, folder, guids=guids,
+                         human=human_identity(cfg, store, human_guid) if human_guid else None)
+        missing = sorted((guids or set()) - {h.guid for h in plans})
+        done = {"import": 0, "unchanged": 0, "clear": 0, "refused": 0, "skipped": 0}
+        by_code, restamped = Counter(), 0
+        for h in plans:
+            size = f"block {h.tokens}/{BLOCK_TOKENS} tokens, {h.samples} samples" if h.tokens else ""
+            said, outcome = h.outcome, h.outcome
+            if outcome in ("import", "clear") and args.go:
+                try:
+                    ledger = set_voice(store, h.guid, h.speech, now=store.clock.now())
+                    said = (("imported" if outcome == "import" else "cleared")
+                            + (f" (ledger #{ledger})" if ledger is not None else ""))
+                except (PersonaError, LookupError) as e:
+                    outcome, said = "refused", "refused: invalid"
+                    for line in getattr(e, "errors", [str(e)]):
+                        print(f"         {_ascii(line)[:200]}")
+            elif outcome in ("import", "clear"):
+                said = "would import" if outcome == "import" else "would clear"
+            elif outcome == "refused":
+                said = "refused: " + ", ".join(h.codes)
+            elif outcome == "skipped":
+                said = "skipped: " + ", ".join(h.codes)
+            done[outcome] += 1
+            by_code.update(h.codes)
+            if h.restamps and outcome == "import":
+                restamped += 1
+                said += " (the same sheet: her household changed, this re-sets her stance)"
+            print(f"{h.guid:>7}  {_ascii(h.name):<12}  {said}" + (f"  [{size}]" if size else ""))
+            for code in h.codes:
+                print(f"         {code}: {REFUSALS.get(code) or SKIPS.get(code, code)}")
+            for line in h.details:
+                print(f"         {_ascii(line)[:200]}")
+        for g in missing:
+            print(f"{g:>7}  {'':<12}  " + ("no sheet to clear" if args.clear else "no sheet file"))
+        verb = "would" if args.dry_run else "did"
+        if args.clear:
+            print(f"{verb} take the voice sheet off {done['clear']} members"
+                  + (f"; {done['refused']} refused" if done["refused"] else ""))
+        else:
+            print(f"{verb} import {done['import']} voice sheets; {done['unchanged']} unchanged; "
+                  f"{done['refused']} refused; {done['skipped']} skipped (not in the cast)")
+            if by_code:
+                print("by code: " + ", ".join(f"{code} {n}" for code, n in sorted(by_code.items())))
+            if restamped:
+                print(f"{restamped} of the imports only re-set a stance for a changed household: "
+                      "read those stances first")
+        if args.dry_run:
+            print("nothing was written")
+        return 1 if done["refused"] or (missing and not args.clear) else 0
+    finally:
+        _close_fix_store(store, lock)
+
+
 def cmd_homes(args) -> int:
     """`personas homes`: a home state for each US member of the cast without one, from where her
     own words put her, else a population-weighted draw by guid (personas/homes.py); `--clear`
@@ -1256,6 +1367,65 @@ def cmd_homes(args) -> int:
         if args.dry_run:
             print("nothing was written")
         return 1 if bad or failed else 0
+    finally:
+        _close_fix_store(store, lock)
+
+
+def cmd_looks(args) -> int:
+    """`personas looks --clear-style [--guid N,...]`: takes the owner's hair, wardrobe, makeup
+    and accessories (the Looks panel's Hair and Style groups) off the named members, or off
+    every member who has any, before rolling back to code that does not know those fields. A
+    read-only plan unless --go, which saves each as an owner persona version with a "looks"
+    ledger row (`personas undo <id>` takes one back). Weight and figure are left as they are."""
+    from .personas.io import load_persona
+    from .personas.looks_edit import clear_style, style_set
+    if not args.clear_style:
+        print("personas looks: say what to do (--clear-style)", file=sys.stderr)
+        return 2
+    try:
+        wanted = None if args.guid is None else sorted({int(g) for g in args.guid.split(",")})
+    except ValueError:
+        print("personas looks: --guid is a comma list of member guids", file=sys.stderr)
+        return 2
+    root = _root(args)
+    args.dry_run = not args.go
+    opened = _fix_store(args, root, "pre-looks-clear")
+    if isinstance(opened, int):
+        return opened
+    store, lock = opened
+    try:
+        stored = store.persona_versions()  # the cast's, never a world persona
+        bad, done = [], 0
+        for g in sorted(stored) if wanted is None else wanted:
+            if g not in stored:
+                bad.append(g)
+                print(f"{g:>7}  no stored persona")
+                continue
+            try:
+                p = load_persona(store, g)
+            except ValueError as e:  # PersonaError and JSON errors alike
+                bad.append(g)
+                print(f"{g:>7}  cannot read persona: {_ascii(str(e))[:200]}")
+                continue
+            fields = style_set(p.appearance) if p is not None else []
+            if not fields:
+                if wanted is not None:
+                    print(f"{g:>7}  nothing set")
+                continue
+            print(f"{g:>7}  {_ascii(p.character_name):<12}  {', '.join(fields)}")
+            if args.go:
+                try:
+                    clear_style(store, g, now=store.clock.now())
+                except ValueError as e:
+                    bad.append(g)
+                    print(f"         cannot save: {_ascii(str(e))[:200]}")
+                    continue
+            done += 1
+        verb = "would" if args.dry_run else "did"
+        print(f"{verb} take the hair, wardrobe, makeup and accessories off {done} members")
+        if args.dry_run:
+            print("nothing was written")
+        return 1 if bad else 0
     finally:
         _close_fix_store(store, lock)
 
@@ -1562,6 +1732,14 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
                               "--go snapshots and repairs with the mind stopped")
     p_repair.add_argument("--go", action="store_true")
     _add_data_dir(p_repair, after_action=True)
+    p_prune = dsub.add_parser("prune", help="count what retention would remove (rows and bytes); "
+                              "--go snapshots and removes it with the mind stopped")
+    p_prune.add_argument("--dry-run", action="store_true", help="the default: count, write nothing")
+    p_prune.add_argument("--go", action="store_true")
+    p_prune.add_argument("--vacuum", action="store_true", help="with --go: rebuild the file so it shrinks")
+    p_prune.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
+                         help="dry run only: count as if it were that day")
+    _add_data_dir(p_prune, after_action=True)
     p_db.set_defaults(func=cmd_db)
     p_mem = sub.add_parser("memories", help="seed the owner's own memories of the guild")
     _add_data_dir(p_mem)
@@ -1649,6 +1827,47 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     p_home.add_argument("--data-dir", default=argparse.SUPPRESS,
                         help="the mind's data folder (as personas --data-dir)")
     p_home.set_defaults(func=cmd_homes)
+    p_voice = psub.add_parser("voices",
+                              help="import voice sheets (<guid>.json in --dir) as each member's "
+                                   "persona speech field, or take them off with --clear; a "
+                                   "read-only plan unless --go")
+    p_voice.add_argument("--dir", default=None, metavar="DIR",
+                         help="the folder of <guid>.json sheets (outside the repo and the data dir)")
+    p_voice.add_argument("--guid", default=None, metavar="N,...",
+                         help="only these members (comma-separated guids)")
+    p_voice.add_argument("--dry-run", action="store_true",
+                         help="the default: print each member's outcome, the block's token size "
+                              "and refusal codes, never a sheet's text; nothing is written")
+    p_voice.add_argument("--go", action="store_true",
+                         help="save them as owner persona versions with ledger rows (the mind "
+                              "stopped; mind.db is snapshot first)")
+    p_voice.add_argument("--only-cast", action="store_true", default=True,
+                         help="the default, and the only mode: a sheet for a persona outside "
+                              "the cast (a world persona) is skipped and counted, never a "
+                              "refusal")
+    p_voice.add_argument("--clear", action="store_true",
+                         help="take the sheet off (every member with one, or --guid's), before "
+                              "rolling back to code without them")
+    p_voice.add_argument("--data-dir", default=argparse.SUPPRESS,
+                         help="the mind's data folder (as personas --data-dir)")
+    p_voice.set_defaults(func=cmd_persona_voices)
+    p_looks = psub.add_parser("looks",
+                              help="the owner's looks edits in bulk: --clear-style takes the "
+                                   "Looks panel's hair, wardrobe, makeup and accessories off "
+                                   "again (before rolling back to code without them); a "
+                                   "read-only plan unless --go")
+    p_looks.add_argument("--clear-style", action="store_true",
+                         help="take every hair, wardrobe, palette, makeup, glasses, jewellery, "
+                              "tattoo and piercing value off (weight and figure stay)")
+    p_looks.add_argument("--guid", default=None,
+                         help="only these members, a comma list of guids (default: every "
+                              "member who has one set)")
+    p_looks.add_argument("--go", action="store_true",
+                         help="save them as owner persona versions with ledger rows (the mind "
+                              "stopped; mind.db is snapshot first)")
+    p_looks.add_argument("--data-dir", default=argparse.SUPPRESS,
+                         help="the mind's data folder (as personas --data-dir)")
+    p_looks.set_defaults(func=cmd_looks)
     p_clean = psub.add_parser("clean-contamination",
                               help="retire (never delete) the claims, disclosures, memories and "
                                    "coach lessons built from members' echoes of his words, from "

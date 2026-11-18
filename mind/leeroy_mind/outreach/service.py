@@ -23,6 +23,19 @@ def _named_item(about, text):
     return any((a or b).casefold() in text.casefold() for a, b in names)
 
 
+_WORD = re.compile(r"[a-z]{4,}")
+_PLAIN = frozenset("""about after again been before being could does doing from have having here into just
+like more much only over really some than that their them then there these they this those very
+want were what when where which while will with would your yours""".split())
+
+
+def carries(about, text):
+    """Whether a sent line says an item: two of the item's content words (all of them when it
+    has fewer) are in it. Her own words may differ; a line that shares none told nothing."""
+    want = set(_WORD.findall(about.casefold())) - _PLAIN
+    return bool(want) and len(want & set(_WORD.findall(text.casefold()))) >= min(2, len(want))
+
+
 class Outreach:
     def __init__(self, app):
         self.app = app
@@ -95,6 +108,9 @@ class Outreach:
     def select(self, guid, via):
         if via not in records.VIA or not self.eligible(guid):
             return None
+        return self._pick(guid, via)
+
+    def _pick(self, guid, via, *, answering=False):
         now = self.app.clock.now()
         records.expire(self.app.store, now)
         for item in records.open_items(self.app.store, guid):
@@ -103,9 +119,71 @@ class Outreach:
         for item in sorted(records.open_items(self.app.store, guid), key=lambda r: (-r.weight, r.created, r.id)):
             if (item.not_before <= now < item.expires and item.id not in self._held
                     and (item.audience == 'guild' or via in {'whisper', 'dm'})
-                    and (item.kind != 'dm_nudge' or via == 'whisper')):
+                    and (item.kind != 'dm_nudge' or via == 'whisper' and not answering)):
                 return item
         return None
+
+    def has_ready(self, guid, via):
+        """Whether an opener to him from this member would have something of hers to carry."""
+        return self.select(guid, via) is not None
+
+    # -- folded into an answer -------------------------------------------------------------------
+    # He is on Discord only (2026-11-17): the whisper and opener clocks need him in game, and
+    # the DM-opener ration is 3 a day, so 719 items were made and 7 told. When he writes her, her
+    # answer may carry one: the beat is offered it beside her memories ("o<id>"), and her first
+    # answer of a conversation may bring it in by a rationed draw. No turn is added.
+
+    def _answer_via(self, turn):
+        human = self.app.human_guid
+        if not human or turn.to_guid != human:
+            return None
+        if turn.channel == 'whisper':
+            return 'whisper'
+        return 'dm' if layout.dm_peer(turn.channel) == turn.speaker else None
+
+    def offer(self, turn):
+        """Her top ready item an answer to his whisper or DM could bring in, as (key, words);
+        None at chattiness 0, in any other place, or with nothing ready. Never a nudge: he is
+        writing her now. Her own deferred answer does not block it, since this is that answer."""
+        via = self._answer_via(turn)
+        if via is None or self._closed or self.app.engine.cfg.talk.chattiness <= 0:
+            return None
+        item = self._pick(turn.speaker, via, answering=True)
+        return None if item is None else (f'o{item.id}', item.about)
+
+    def first_share(self, turn, rng):
+        """offer, by the ration of her first answer in a conversation: chattiness 4 brings one
+        in on half of them, 8 or more on all, 0 on none."""
+        chattiness = self.app.engine.cfg.talk.chattiness
+        return self.offer(turn) if rng.random() < min(1.0, chattiness / 8) else None
+
+    def brought(self, turn, meta, line_id, now):
+        """Her answer carrying the item is stored: its receipt, in a transaction of its own. A
+        refusal (it ended meanwhile, he raised it first, the source went) leaves the answer as
+        said and the item as it is; nothing here may cost him his answer."""
+        ident, via = meta.outreach_brought, self._answer_via(turn)
+        if ident is None or via is None or meta.said:
+            return
+        try:
+            with self.app.store.transaction():
+                item = records.get(self.app.store, ident)
+                if item is None or item.state != 'open' or item.guid != turn.speaker:
+                    return
+                sent = self.app.store.chat_lines([line_id])
+                if not sent or not carries(item.about, sent[0].text):
+                    # The beat chose it, but the line that went out (a guard's rewrite, the owed
+                    # fallback, a stripped clause) does not say it: it stays open. The beat's
+                    # ledger keeps it out of this conversation for a day.
+                    log('outreach_brought_unsaid', guid=item.guid, kind=item.kind)
+                    return
+                if now >= item.expires:
+                    records.drop(self.app.store, item.id, 'expired')
+                elif not self._alive(item, delivered_line=line_id):
+                    records.drop(self.app.store, item.id, 'superseded')
+                elif records.told(self.app.store, item.id, via=via, line_id=line_id, now=now):
+                    log('outreach_told', guid=item.guid, kind=item.kind, via=via, how='answer')
+        except Exception as error:
+            log('outreach_brought_failed', code=type(error).__name__)
 
     def _via(self, turn, item):
         human = self.app.human_guid

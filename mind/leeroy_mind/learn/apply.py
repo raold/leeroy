@@ -211,7 +211,7 @@ async def prepare(engine, turn, meta, persona, *, now):
         # In-flight offers count against the quotas too; failed/cancelled turns
         # release their holds, and only an acknowledged line records use.
         from leeroy_mind.memory.callbacks import _play_floor
-        floor = _play_floor(engine.store.conn, now)
+        floor = _play_floor(engine.store.conn, now, turn.channel)
         uses = engine.store.conn.execute('SELECT guid FROM callback_use WHERE ts BETWEEN ? AND ?',
                                         (floor, now)).fetchall() if floor is not None else []
         if (floor is not None and len(holds)+len(uses) < 3

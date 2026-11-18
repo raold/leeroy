@@ -11,20 +11,50 @@ from leeroy_mind.lifecycle import spawn_mind, CREATE_NO_WINDOW
 from leeroy_mind.stdio import rotate_before_launch
 
 
-def test_launch_rotation_keeps_fourteen_backups_and_same_day_output(tmp_path,monkeypatch):
+def test_launch_rotation_keeps_fourteen_backups_and_same_day_output(tmp_path):
     path=tmp_path/'mind-stdout.log'
     path.write_text('before\n')
     prior=int(datetime(2026,10,16,12).timestamp())
     os.utime(path,(prior,prior))
     for day in range(1,16): (tmp_path/f'mind-stdout.log.2026-10-{day:02}').write_text('older\n')
-    monkeypatch.setattr('logging.handlers.time.time',lambda:int(datetime(2026,10,17,12).timestamp()))
-    rotate_before_launch(path)
+    today=int(datetime(2026,10,17,12).timestamp())
+    rotate_before_launch(path,now=today)
     assert (tmp_path/'mind-stdout.log.2026-10-16').read_text()=='before\n'
     assert len(list(tmp_path.glob('mind-stdout.log.*')))==14
     path.write_text('after\n')
-    today=int(datetime(2026,10,17,12).timestamp()); os.utime(path,(today,today))
-    rotate_before_launch(path)
+    os.utime(path,(today,today))
+    rotate_before_launch(path,now=today)
     assert path.read_text()=='after\n'
+
+
+def test_a_mind_restarted_every_day_still_rolls_its_output(tmp_path):
+    """The file's last write is always today's when a mind is restarted (it writes as it
+    stops): the day the file was begun decides, not the day it was last written."""
+    path=tmp_path/'mind-stdout.log'
+    day=lambda d,h=12:int(datetime(2026,11,d,h).timestamp())
+    rotate_before_launch(path,now=day(13))             # the first launch
+    path.write_text('the 13th\n'); os.utime(path,(day(13),day(13)))
+    rotate_before_launch(path,now=day(13,18))          # a restart the same day
+    assert path.read_text()=='the 13th\n'
+    with path.open('a') as out: out.write('stopping on the 14th\n')
+    os.utime(path,(day(14),day(14)))                   # written moments before the restart
+    rotate_before_launch(path,now=day(14))
+    assert not path.exists()
+    assert (tmp_path/'mind-stdout.log.2026-11-13').read_text()=='the 13th\nstopping on the 14th\n'
+    path.write_text('the 14th\n'); os.utime(path,(day(17),day(17)))
+    rotate_before_launch(path,now=day(17))
+    assert (tmp_path/'mind-stdout.log.2026-11-14').read_text()=='the 14th\n'
+
+
+def test_a_rotation_never_overwrites_an_earlier_file_of_that_day(tmp_path):
+    path=tmp_path/'mind-stdout.log'
+    (tmp_path/'mind-stdout.log.2026-11-13').write_text('kept\n')
+    path.write_text('later\n')
+    stamp=int(datetime(2026,11,13,12).timestamp()); os.utime(path,(stamp,stamp))
+    (tmp_path/'mind-stdout.log-since').write_text('2026-11-13')
+    rotate_before_launch(path,now=int(datetime(2026,11,15,9).timestamp()))
+    assert (tmp_path/'mind-stdout.log.2026-11-13').read_text()=='kept\n'
+    assert (tmp_path/'mind-stdout.log.2026-11-13.1').read_text()=='later\n'
 
 
 def test_launcher_passes_an_append_handle_for_all_child_output(tmp_path):

@@ -153,6 +153,10 @@ class ShapeContext:
     # her answer to him waited out a time she stepped away (life/interrupt.py, core plan Task
     # 10): LATE, in game or her DM, its excuse "away" (Pipeline._waited_away)
     away: bool = False
+    # the line length her voice sheet's sentence shape names (personas.speech.word_range:
+    # "clipped, three to seven words"); None without one. It only moves the word draw of her own
+    # line and her habit in a DM's mirror: never the shape's odds, MIN_LINE_WORDS or the caps
+    voice_words: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -265,13 +269,20 @@ def _pick(w: dict[Shape, float], rng) -> Shape:
     return last
 
 
+def _habit(ctx: ShapeContext) -> tuple[int, int]:
+    """Her line's words, low and high: her voice sheet's range when it names one, else her
+    typing's."""
+    wpl = ctx.voice_words or ctx.typing.words_per_line
+    return min(wpl), max(wpl)
+
+
 def _line_words(ctx: ShapeContext, rng) -> int:
-    wpl = ctx.typing.words_per_line
-    return rng.randint(min(wpl), max(wpl))
+    return rng.randint(*_habit(ctx))
 
 
 def _dm_words(ctx: ShapeContext, rng) -> int:
-    return dm_words_for(ctx.his_words, ctx.typing, ctx.dm_mirror, ctx.dm_words, rng)
+    return dm_words_for(ctx.his_words, ctx.typing, ctx.dm_mirror, ctx.dm_words, rng,
+                        habit=ctx.voice_words)
 
 
 def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
@@ -400,18 +411,21 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return min(hi, max(lo, x))
 
 
-def dm_words_for(his_words: int, typing: Typing, dm_mirror: int, dm_words: int, rng) -> int:
+def dm_words_for(his_words: int, typing: Typing, dm_mirror: int, dm_words: int, rng, *,
+                 habit: tuple[int, int] | None = None) -> int:
     """A DM's words: his message's length (mirrored) leading and her habit (her typing's longest
     line) tempering it, as a distribution within the owner's `dm_words` cap, pulled from the cap
     toward that target by `dm_mirror` (0 returns `dm_words`: today's; 10 follows the target
     alone) and spread by a lognormal factor that grows with the dial (none at 0). A long message
     of his (40 words or more) gets the full cap a quarter of the time. At mirror 5, with her line
     (3, 8): his 3 words get a median of about 33, his 28 about 74, his 120 about 141; p90/p10 for
-    one message is about 1.7 (review of #331, replacing the plan's sqrt(mirrored * habit))."""
+    one message is about 1.7 (review of #331, replacing the plan's sqrt(mirrored * habit)).
+    `habit`: her voice sheet's line length in place of her typing's (the same draws)."""
     if dm_mirror <= 0 or dm_words <= 0:
         return dm_words
     m = min(dm_mirror, 10) / 10
-    lo, hi = min(typing.words_per_line), max(typing.words_per_line)
+    wpl = habit or typing.words_per_line
+    lo, hi = min(wpl), max(wpl)
     mirrored = _clamp(max(his_words, 0) * rng.uniform(0.7, 1.8), max(3, lo), dm_words)
     habit = _clamp(hi * rng.uniform(1.0, 3.0), 3, dm_words)
     target = mirrored ** 0.75 * habit ** 0.25  # his length leads; her habit tempers it

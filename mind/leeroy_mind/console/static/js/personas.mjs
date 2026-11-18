@@ -8,7 +8,8 @@ import { photoButton } from "./gallery.mjs";
 import { nudgeBadges, nudgeFocus, nudgePanel } from "./nudges.mjs";
 import { godmodePanel, renderStrings } from "./godmode.mjs";
 import { looksEditor, looksUndoButton } from "./looks.mjs";
-import { SHAPES, bustText, canUndoLooks, shapeText } from "./looksmodel.mjs";
+import { SHAPES, bustText, canUndoLooks, shapeText, styleRows } from "./looksmodel.mjs";
+import { canUndoVoice, voiceRows } from "./voicemodel.mjs";
 import { historyEdits } from "./godmodemodel.mjs";
 import { forgetMemberShots, pollSelfies, setSelfieNames, showMemberPhoto } from "./selfies.mjs";
 import { S } from "./state.mjs";
@@ -26,9 +27,9 @@ var BY = { seed: "the seeding", owner: "you (an import, a personas command or th
            night: "the night's looks pass", photo: "the night's photo-kind pass", stance: "a stance move",
            undo: "an undo of a stance move" };
 var LEDGER_KINDS = { note_added: "note added", note_dropped: "note dropped", note_rolled_back: "note rolled back (drift)",
-                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "weight and figure",
-                     home: "home state", undo: "undo" };
-var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0;
+                     drift_flag: "drift flag", stance_band: "stance move", variety: "variety pass", looks: "looks edit",
+                     home: "home state", voice: "voice sheet", undo: "undo" };
+var personasTimer = null, personasBusy = false, pick = 0, pickSeq = 0, reveal = false;
 // The member page replaces the list (wall or table, selfies, tuning). lastPick and listScroll
 // are where he was in the list, so Back puts him there again.
 var lastPick = 0, listScroll = [0, 0];
@@ -307,10 +308,12 @@ function renderMember(j) {
                         ...(c.identity && c.identity.player_gender === "female"
                           ? [["bust", bustText(a.bust)], ...SHAPES.map(function (sh) { return [sh.name, shapeText(sh.name, a[sh.name])]; })] : []),
                         ["hair", [a.hair_colour, str(a.hair_length).replace(/_/g, " "), a.hair_style].filter(Boolean).join(", ")],
+                        ...styleRows(a),
                         ["skin", a.skin_tone], ["eyes", a.eye_colour], ["face", arr(a.face).join(", ")], ["at the PC", a.at_the_pc],
                         ["photo kind", c.photo ? photoKindText(c.photo) : "none yet: the night's photo-kind pass gives one"]]
                      : [["looks", c ? "none yet: the night's looks pass gives them" : "-"]]);
   looksEditor($("p-looks-edit"), j, m.guid, tuneLive(), tuneWhy(), pollMember);
+  kv($("p-voice"), voiceRows(c));  // her voice sheet, read-only: `personas voices` writes it
   var kinds = $("p-kinds"), mem = j.memories;
   setText("p-kindhead", "in " + days + " d");
   clear(kinds);
@@ -362,7 +365,7 @@ function renderMember(j) {
   clear(box);
   arr(j.ledger).forEach(function (r) {
     var row = el("div", "r", when(r.ts) + "  " + (LEDGER_KINDS[r.kind] || str(r.kind)) + ": " + str(r.text) + (r.undone ? "  (undone)" : ""));
-    if (canUndoLooks(r)) { row.appendChild(looksUndoButton(r, m.guid, tuneLive(), tuneWhy(), pollMember)); }
+    if (canUndoLooks(r) || canUndoVoice(r)) { row.appendChild(looksUndoButton(r, m.guid, tuneLive(), tuneWhy(), pollMember)); }
     box.appendChild(row);
   });
   if (!arr(j.ledger).length) { box.appendChild(el("div", "muted", j.ledger ? "No ledger rows yet." : "Unavailable in this mind.db.")); }
