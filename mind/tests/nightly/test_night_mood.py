@@ -257,13 +257,7 @@ def test_incomplete_and_unrepresentable_private_evidence_writes_no_copy(h, bad):
     feeling(h, refs=[f"memory:{second}"])
     ctx = h.ctx()
     run(mood.stage_mood(ctx))
-    assert ctx.done("mood", "all")
-    if bad == "wrong_partner":
-        # two partners down the chain: the evidence reaches nobody for every reader
-        # (memory.privacy.resolve), and the copy made from it reaches nobody either
-        assert [(m.scope, m.scope_with) for m in memories(h, 101)] == [("private", 0)]
-    else:
-        assert memories(h, 101) == []
+    assert memories(h, 101) == [] and ctx.done("mood", "all")
 
 
 def test_every_occ_type_has_a_line_unknown_types_log_once(h, caplog):

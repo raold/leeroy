@@ -597,7 +597,7 @@ class Store:
         for r in rows:
             m = _memory_from_row(r)
             if r["id"] in found:
-                scope = found[r["id"]].effective
+                scope = found[r["id"]].read
             else:
                 try:
                     derived = (r["derived_scope"] or "open", r["derived_with"] or 0)

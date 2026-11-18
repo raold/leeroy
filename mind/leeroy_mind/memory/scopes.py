@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from leeroy_mind.discord.channels import is_private, is_restricted
 from leeroy_mind.memory import privacy
-from leeroy_mind.memory.privacy import SCOPES, resolve
+from leeroy_mind.memory.privacy import RESOLVE_NODES, SCOPES, resolve
 
 log = logging.getLogger("leeroy_mind")
 
@@ -74,16 +74,20 @@ def _receipt(conn: sqlite3.Connection, changes: list, *, now: float, source: str
 
 
 def settle(conn: sqlite3.Connection, ids, *, now: float, raise_stored: bool = True,
-           recheck: bool = False, source: str | None = "write") -> Settled:
+           recheck: bool = False, source: str | None = "write",
+           cap: int | None = None) -> Settled:
     """Check the memories `ids`, and every unchecked memory they rest on, to a fixed point, and
     store it: derived_scope, derived_with and derived_at, and with `raise_stored` the stored
     scope made as strict as the effective one. Memories of `ids` already checked are left alone
     unless `recheck`. The stored scopes it raises go into one receipt (`source`; None writes
     none: a row being inserted has nothing to restore). The triggers then clear derived_at on
     whatever rests on a memory this changed; those are the caller's or the night's
-    (settle_pending). Inside the caller's transaction; no commit."""
-    found = resolve(conn, ids, cap=None, recheck=recheck)
-    nodes = {mid: r for mid, r in found.items() if not r.checked}
+    (settle_pending). With `cap` (the write paths: they run inside the mind's own
+    transaction) at most that many unchecked memories are worked through; one past it, and
+    whatever rests on it, is left exactly as it is, unchecked, for the night: a budget is
+    never written down as a scope. Inside the caller's transaction; no commit."""
+    found = resolve(conn, ids, cap=cap, recheck=recheck)
+    nodes = {mid: r for mid, r in found.items() if not r.checked and not r.bounded}
     out = Settled(checked=len(nodes))
     if not nodes:
         return out
@@ -93,9 +97,10 @@ def settle(conn: sqlite3.Connection, ids, *, now: float, raise_stored: bool = Tr
         stored = r.effective if raise_stored else r.stored
         if stored != r.stored:
             out.changes.append([mid, *r.stored, *stored])
-        rows.append((*r.derived, *stored, now, mid))
-    conn.executemany("UPDATE memory SET derived_scope = ?, derived_with = ?, scope = ?, "
-                     "scope_with = ?, derived_at = ? WHERE id = ?", rows)
+        rows.append((*r.derived, int(r.complete), *stored, now, mid))
+    conn.executemany("UPDATE memory SET derived_scope = ?, derived_with = ?, "
+                     "derived_complete = ?, scope = ?, scope_with = ?, derived_at = ? "
+                     "WHERE id = ?", rows)
     # a change above cleared derived_at on what rests on it, these rows among them; they are
     # at a fixed point with each other, so they are checked
     ids = sorted(nodes)
@@ -110,16 +115,20 @@ def settle(conn: sqlite3.Connection, ids, *, now: float, raise_stored: bool = Tr
 
 def settle_pending(conn: sqlite3.Connection, *, now: float, limit: int | None = None,
                    raise_stored: bool = True, source: str | None = "write",
-                   chunk: int = CHUNK) -> Settled:
+                   chunk: int = CHUNK, cap: int | None = None) -> Settled:
     """settle whatever is unchecked, oldest first, until nothing is or `limit` memories were
-    checked (a settle may leave new ones: what rests on a memory it raised). One receipt for
-    all the stored scopes raised."""
+    checked (a settle may leave new ones: what rests on a memory it raised), or, with `cap`,
+    a pass could check none (what is left rests on more than the cap allows: the night's).
+    One receipt for all the stored scopes raised."""
     out = Settled()
     while limit is None or out.checked < limit:
         ids = pending(conn, chunk if limit is None else min(chunk, limit - out.checked))
         if not ids:
             break
-        out.add(settle(conn, ids, now=now, raise_stored=raise_stored, source=None))
+        done = settle(conn, ids, now=now, raise_stored=raise_stored, source=None, cap=cap)
+        out.add(done)
+        if not done.checked:
+            break
     if out.changes and source is not None:
         out.receipt = _receipt(conn, out.changes, now=now, source=source)
     return out
@@ -129,12 +138,14 @@ def after_write(conn: sqlite3.Connection, mid: int, *, now: float, new: bool) ->
     """The store's step after it wrote memory `mid` (inserted: `new`), in the same transaction:
     the memory is checked and its stored scope made as strict as its evidence, then what rests
     on it, when that changed anything, up to WRITE_ROWS memories (the night takes the rest;
-    until then readers derive them). A database from before the migration is left as it is."""
+    until then readers derive them). Each is bounded (WRITE_ROWS memories, RESOLVE_NODES
+    unchecked ones beneath them): past that a row stays as stored and unchecked. A database
+    from before the migration is left as it is."""
     try:
-        settle(conn, (mid,), now=now, source=None if new else "write")
+        settle(conn, (mid,), now=now, source=None if new else "write", cap=RESOLVE_NODES)
         if conn.execute("SELECT EXISTS(SELECT 1 FROM memory WHERE derived_at IS NULL)"
                         ).fetchone()[0]:
-            settle_pending(conn, now=now, limit=WRITE_ROWS)
+            settle_pending(conn, now=now, limit=WRITE_ROWS, cap=RESOLVE_NODES)
     except sqlite3.OperationalError as e:
         if "no such" not in str(e):
             raise
@@ -145,7 +156,7 @@ def after_raise(conn: sqlite3.Connection, *, now: float, source: str) -> Settled
     triggers left unchecked is settled in the caller's transaction, up to WRITE_ROWS."""
     if not available(conn):
         return Settled()
-    return settle_pending(conn, now=now, limit=WRITE_ROWS, source=source)
+    return settle_pending(conn, now=now, limit=WRITE_ROWS, source=source, cap=RESOLVE_NODES)
 
 
 def lines_changed(conn: sqlite3.Connection, lines, *, now: float) -> int:

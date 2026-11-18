@@ -71,6 +71,7 @@ class _Memory:
     owner: int
     scope: str
     scope_with: int
+    nobody: bool = False  # a scope that claims nobody whoever asks (a read past its bound)
 
 
 def _ids(refs, kind: str) -> set[int]:
@@ -190,13 +191,22 @@ def secret_lines(conn: sqlite3.Connection, ids: Iterable[int]) -> set[int]:
     return {i for i, ln in lines.items() if _asked_secrecy(ln, threads)}
 
 
-def _memories(conn: sqlite3.Connection, ids: set[int]) -> dict[int, _Memory]:
+def _memories(conn: sqlite3.Connection, ids: set[int], *,
+              known: bool = False) -> dict[int, _Memory]:
     """The cited memories, each with its effective scope (resolve): the stored one made as
     strict as its own evidence implies, to a fixed point. So what derive_scope gives a memory
-    citing them never rests on a stored scope its evidence has outgrown."""
+    citing them never rests on a stored scope its evidence has outgrown. One past the read
+    bound counts as secret with nobody, whoever its owner; with `known` (the writer storing a
+    new memory) as the strictest scope known for it, so no budget is ever stored as a scope."""
     if not ids:
         return {}
-    return {i: _Memory(r.owner, *r.effective) for i, r in resolve(conn, ids).items()}
+    out = {}
+    for i, r in resolve(conn, ids).items():
+        if r.bounded and not known:
+            out[i] = _Memory(r.owner, *STRICTEST, nobody=True)
+        else:
+            out[i] = _Memory(r.owner, *r.effective)
+    return out
 
 
 def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
@@ -221,7 +231,8 @@ def _derive(owner: int, evidence: list, shown: list, lines: dict[int, _Line],
             if mem is None or mem.scope == "open":
                 continue
             here = mem.scope
-            claim = mem.scope_with if mem.owner == owner or mem.scope_with == GROUP else mem.owner
+            claim = 0 if mem.nobody else (
+                mem.scope_with if mem.owner == owner or mem.scope_with == GROUP else mem.owner)
         cls = max(cls, here, key=SCOPES.index)
         claims.append(claim)
     if cls == "open":
@@ -272,7 +283,7 @@ def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
 
 
 def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], *,
-                 shown: Iterable[str] = ()) -> Scope:
+                 shown: Iterable[str] = (), known: bool = False) -> Scope:
     """The least scope a memory of `owner` citing `evidence` may have; `shown` is what its
     generating prompt showed beyond what it cites. Each ref gives a class, and may claim a
     partner:
@@ -288,13 +299,16 @@ def derive_scope(conn: sqlite3.Connection, owner: int, evidence: Iterable[str], 
     one non-zero guid, else 0 (two partners, a claim of nobody). On top of that, refs that rest
     on a restricted line, at any depth (restricted_channels), make it at least private: with the
     officers (OFFICERS) when every such line is the officers' and the rest derives open or the
-    officers already, else with nobody (ruling R10). Plain SELECTs on `conn` and no commit, so it
-    can run inside the caller's transaction."""
+    officers already, else with nobody (ruling R10). A cited memory that cannot be resolved
+    within the read bound counts as secret with nobody; `known` (the writer, which stores what
+    this gives and leaves the row unchecked for the night) takes the strictest scope known for
+    it instead. Plain SELECTs on `conn` and no commit, so it can run inside the caller's
+    transaction."""
     evidence, shown = list(evidence), list(shown)
     refs = evidence + shown
     lines = _lines(conn, _ids(refs, "chat"))
     derived = _derive(owner, evidence, shown, lines, _secret_threads(conn, lines),
-                      _memories(conn, _ids(refs, "memory")))
+                      _memories(conn, _ids(refs, "memory"), known=known))
     return _with_hidden(derived, restricted_channels(conn, {0: refs}).get(0), owner)
 
 
@@ -334,18 +348,29 @@ RESOLVE_NODES = 2000  # unchecked memories one read works through; the rest fail
 
 @dataclass
 class Resolved:
-    """One memory as resolve read it. `effective` is what every reader goes by; `derived`
-    what its evidence alone implies; `checked` False for one whose stored check was missing
-    (computed here), and `bounded` True when that hit the bound and failed closed."""
+    """One memory as resolve read it. `effective` is the strictest scope known for it: the
+    stored one and what its evidence implies; `derived` what its evidence alone implies;
+    `checked` False for one whose stored check was missing (computed here). `bounded`: the
+    read bound was hit in what it rests on, so `effective` may still be too wide: readers go by
+    `read` (secret with nobody), and nothing is stored for it. `complete` False when its
+    evidence, at any depth, is malformed or cites a memory that has no row: its scope stands,
+    but a gate that needs whole provenance (the lesson walk) must not take it as proved."""
     owner: int
     stored: tuple[str, int]
     effective: tuple[str, int]
     derived: tuple[str, int]
     checked: bool
     bounded: bool = False
+    complete: bool = True
+
+    @property
+    def read(self) -> tuple[str, int]:
+        """The scope a reader goes by."""
+        return STRICTEST if self.bounded else self.effective
 
 
-_SCOPE_COLS = "id, owner, evidence, scope, scope_with, derived_scope, derived_with, derived_at"
+_SCOPE_COLS = ("id, owner, evidence, scope, scope_with, derived_scope, derived_with, derived_at, "
+               "derived_complete")
 
 
 def _scope_rows(conn: sqlite3.Connection, ids: set[int]) -> list:
@@ -359,17 +384,24 @@ def _scope_rows(conn: sqlite3.Connection, ids: set[int]) -> list:
     except sqlite3.OperationalError as e:
         if "no such column" not in str(e):
             raise
-        return [(*r, r[3], r[4], 0.0) for r in conn.execute(
+        return [(*r, r[3], r[4], 0.0, 1) for r in conn.execute(
             "SELECT id, owner, evidence, scope, scope_with FROM memory "
             "WHERE id IN (SELECT value FROM json_each(?))", (wanted,))]
 
 
 def _refs_of(raw) -> list:
+    return _parsed(raw)[0]
+
+
+def _parsed(raw) -> tuple[list, bool]:
+    """A memory's evidence as a list, and whether it is well formed (a JSON list of strings)."""
     try:
         refs = json.loads(raw)
     except (ValueError, TypeError, RecursionError):
-        return []
-    return refs if isinstance(refs, list) else []
+        return [], False
+    if not isinstance(refs, list):
+        return [], False
+    return refs, all(isinstance(r, str) for r in refs)
 
 
 def _valid(scope, scope_with) -> tuple[str, int]:
@@ -378,41 +410,49 @@ def _valid(scope, scope_with) -> tuple[str, int]:
 
 def resolve(conn: sqlite3.Connection, ids: Iterable[int], *,
             cap: int | None = RESOLVE_NODES, recheck: bool = False) -> dict[int, Resolved]:
-    """Each memory of `ids` with its effective scope. One whose check is stored
-    (derived_at) costs nothing beyond the one SELECT. An unchecked one is derived here from
-    its evidence, and so is every unchecked memory it cites, at any depth, all to a fixed
-    point (cycles included: scopes only rise, so it ends). At most `cap` unchecked memories
-    are worked through in one call; one beyond that counts as STRICTEST, and so may whatever
-    cites it. `recheck` takes every memory of `ids` as unchecked (what they cite keeps its
-    stored check). Ids with no row are left out. Plain SELECTs, no write."""
+    """Each memory of `ids` as its evidence makes it. One whose check is stored (derived_at)
+    costs nothing beyond the one SELECT. An unchecked one is derived here from its evidence,
+    and so is every unchecked memory it cites, at any depth, all to a fixed point (cycles
+    included: scopes only rise, so it ends). At most `cap` unchecked memories are worked
+    through in one call; one beyond that is `bounded`, and so is everything resting on it
+    (Resolved.read: secret with nobody, never another member's). `recheck` takes every memory
+    of `ids` as unchecked (what they cite keeps its stored check). Ids with no row are left
+    out. Plain SELECTs, no write."""
     rows: dict[int, Resolved] = {}
     refs: dict[int, list] = {}
+    sound: dict[int, bool] = {}
     todo = {i for i in ids if type(i) is int}
     again = set(todo) if recheck else set()
+    absent: set[int] = set()
     while todo:
         found = _scope_rows(conn, todo)
-        todo = set()
-        for mid, owner, raw, scope, scope_with, d_scope, d_with, d_at in found:
+        asked, todo = todo, set()
+        for mid, owner, raw, scope, scope_with, d_scope, d_with, d_at, d_complete in found:
             stored = _valid(scope, scope_with)
             if d_at is not None and mid not in again:
                 derived = _valid(d_scope, d_with)
-                rows[mid] = Resolved(owner, stored, stricter(stored, derived), derived, True)
+                rows[mid] = Resolved(owner, stored, stricter(stored, derived), derived, True,
+                                     complete=d_complete is None or bool(d_complete))
                 continue
             if cap is not None and len(refs) >= cap:
-                rows[mid] = Resolved(owner, stored, STRICTEST, STRICTEST, False, True)
+                known = stricter(stored, _valid(d_scope, d_with)) if d_scope is not None else stored
+                rows[mid] = Resolved(owner, stored, known, ("open", 0), False, bounded=True)
                 continue
             # derived afresh: what the evidence implies now. The stored scope is what never
             # widens (settle raises it); a ref taken out of the evidence no longer counts
             rows[mid] = Resolved(owner, stored, stored, ("open", 0), False)
-            refs[mid] = _refs_of(raw)
+            refs[mid], sound[mid] = _parsed(raw)
             todo |= _ids(refs[mid], "memory")
-        todo -= rows.keys()
+        absent |= asked - rows.keys()
+        todo -= rows.keys() | absent
     if not refs:
         return rows
     lines = _lines(conn, {i for r in refs.values() for i in _ids(r, "chat")})
     secret_threads = _secret_threads(conn, lines)
     hidden = restricted_channels(conn, refs)
-    cited = {mid: _ids(r, "memory") & rows.keys() for mid, r in refs.items()}
+    wanted = {mid: _ids(r, "memory") for mid, r in refs.items()}
+    cited = {mid: w & rows.keys() for mid, w in wanted.items()}
+    whole = {mid: sound[mid] and wanted[mid] <= rows.keys() for mid in refs}
     citers: dict[int, list[int]] = {}
     for mid, deps in cited.items():
         for d in deps:
@@ -428,9 +468,11 @@ def resolve(conn: sqlite3.Connection, ids: Iterable[int], *,
                 c: _Memory(rows[c].owner, *rows[c].effective) for c in cited[mid]}),
                 hidden.get(mid), row.owner)
             row.derived = stricter(row.derived, (d.scope, d.scope_with))
-            now = stricter(row.effective, row.derived)
-            if now != row.effective:
-                row.effective = now
+            state = (stricter(row.effective, row.derived),
+                     any(rows[c].bounded for c in cited[mid]),
+                     whole[mid] and all(rows[c].complete for c in cited[mid]))
+            if state != (row.effective, row.bounded, row.complete):
+                row.effective, row.bounded, row.complete = state
                 for c in citers.get(mid, ()):
                     if c not in queued:
                         queued.add(c)
@@ -441,7 +483,8 @@ def resolve(conn: sqlite3.Connection, ids: Iterable[int], *,
 
 def effective_scopes(conn: sqlite3.Connection, ids: Iterable[int]) -> dict[int, tuple[str, int]]:
     """The (scope, scope_with) a reader must go by for each memory of `ids` (resolve)."""
-    return {i: r.effective for i, r in resolve(conn, ids).items()}
+    ids = set(ids)
+    return {i: r.read for i, r in resolve(conn, ids).items() if i in ids}
 
 
 def gated(conn: sqlite3.Connection, row, cache: dict | None = None):
@@ -457,16 +500,8 @@ def gated(conn: sqlite3.Connection, row, cache: dict | None = None):
             cache.update(read)
         found = read.get(out["id"])
     if found is not None:
-        out["scope"], out["scope_with"] = found.effective
+        out["scope"], out["scope_with"] = found.read
     return out
-
-
-def open_sql(alias: str = "") -> str:
-    """SQL for "this memory is open": stored open and checked open. One whose check is
-    missing is not taken as open (a set-based reader cannot derive it; the write paths and the
-    night's scopes stage check it)."""
-    a = f"{alias}." if alias else ""
-    return f"({a}scope = 'open' AND {a}derived_at IS NOT NULL AND {a}derived_scope = 'open')"
 
 
 def _officer_guids(conn: sqlite3.Connection) -> frozenset[int]:
@@ -565,11 +600,16 @@ def with_request(derived: Scope, scope: str, scope_with: int) -> tuple[str, int]
 
 def stricter(a: tuple[str, int], b: tuple[str, int]) -> tuple[str, int]:
     """The stricter of two (scope, scope_with); two non-open scopes with different partners
-    give partner 0."""
+    give partner 0, but the group's (GROUP) and one reader give that reader."""
     cls = max(a[0], b[0], key=SCOPES.index)
     if cls == "open":
         return "open", 0
     partners = {w for s, w in (a, b) if s != "open"}
+    if len(partners) == 2 and GROUP in partners and max(partners) > 0:
+        # a group's memory that is also one reader's: that reader's, whichever came first
+        # (derive_scope gives the same for the two together; the group's readers are still
+        # checked where it is read: recall.hidden_ok)
+        partners.discard(GROUP)
     return cls, partners.pop() if len(partners) == 1 else 0
 
 
@@ -603,8 +643,10 @@ def backfill_scopes(conn: sqlite3.Connection) -> int:
 _DEPENDANTS = (
     "UPDATE memory SET derived_at = NULL WHERE derived_at IS NOT NULL AND id IN ("
     "WITH RECURSIVE dep(id) AS (SELECT src FROM memory_cite WHERE kind = ? AND dst IN "
-    "(SELECT value FROM json_each(?)) UNION SELECT c.src FROM memory_cite c JOIN dep "
-    "ON c.dst = dep.id WHERE c.kind = 'memory') SELECT id FROM dep)")
+    # dep CROSS JOIN: the queue outside, the cites by index (kind, dst). Left to itself the
+    # planner (no sqlite_stat1) reads every memory cite once per row of the queue
+    "(SELECT value FROM json_each(?)) UNION SELECT c.src FROM dep CROSS JOIN memory_cite c "
+    "WHERE c.kind = 'memory' AND c.dst = dep.id) SELECT id FROM dep)")
 
 
 def uncheck_citing(conn: sqlite3.Connection, kind: str, ids: Iterable[int]) -> int:

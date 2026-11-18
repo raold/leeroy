@@ -251,7 +251,8 @@ def test_reading_past_the_bound_fails_closed(cast):
     for _ in range(6):
         chain.append(raw(cast, 101, ref(chain[-1])))
     found = privacy.resolve(cast.conn, [chain[-1]], cap=3)
-    assert found[chain[-1]].effective == STRICTEST and any(r.bounded for r in found.values())
+    assert found[chain[-1]].read == STRICTEST and found[chain[-1]].bounded
+    assert found[chain[-1]].effective == ("open", 0)  # what is known; never stored from here
     assert privacy.resolve(cast.conn, [chain[-1]])[chain[-1]].effective == ("open", 0)
     assert stored(cast, chain[-1]) == ("open", 0)  # a read writes nothing
 
@@ -274,29 +275,28 @@ def test_every_reader_goes_by_the_effective_scope(cast, state):
     # the night's ledger walk and the notes' evidence
     assert knowledge._memory_rows(conn, [m0])[m0][1] == "secret"
     assert m0 not in relations._open_ids(cast, relations._NEWEST_OPEN, 101, HUMAN, 10)
-    # SQL readers that cannot derive take only a checked open memory as open
-    open_now = {r[0] for r in conn.execute(f"SELECT id FROM memory WHERE {privacy.open_sql()}")}
-    assert not open_now & {m0, m1}
 
 
 @pytest.mark.parametrize("state", STATES)
 def test_a_life_beat_made_private_at_depth_seeds_nothing_public(cast, state):
-    """server.seeds reads the beat's own memory; one checked private by its evidence is no
-    seed even while it is stored open."""
+    """server.seeds reads the beat's own memory by its effective scope: one that is private by
+    its evidence is no seed while it is stored open, checked or not."""
     from leeroy_mind.server import seeds
+    now = cast.clock.now()
+    thread = cast.conn.execute("INSERT INTO life_thread(guid, title, status) "
+                               "VALUES (101, 'Fixture', 'active')").lastrowid
+    beats = [cast.conn.execute("INSERT INTO life_beat(thread_id, night, text, ts) "
+                               "VALUES (?, '2026-10-29', 'Fixture beat.', ?)",
+                               (thread, now - 60)).lastrowid for _ in range(2)]
     private = raw(cast, 101, f"chat:{line(cast, 'whisper', HUMAN, 101)}", scope="private",
                   scope_with=HUMAN)
-    beat = raw(cast, 101, "beat:1", ref(private))
-    cast.conn.execute("UPDATE memory SET source = 'offscreen' WHERE id = ?", (beat,))
+    closed = raw(cast, 101, f"beat:{beats[0]}", ref(private))
+    plain = raw(cast, 101, f"beat:{beats[1]}")
+    cast.conn.execute("UPDATE memory SET source = 'offscreen' WHERE id IN (?, ?)", (closed, plain))
     cast.conn.commit()
     to_state(cast, state)
-    if state == "unchecked":
-        scopes.settle_pending(cast.conn, now=cast.clock.now(), raise_stored=False, source=None)
-    row = cast.conn.execute(
-        "SELECT (m.scope!='open' OR m.status!='active' OR COALESCE(m.derived_scope,'open')!='open') "
-        "FROM memory m WHERE id = ?", (beat,)).fetchone()
-    assert row[0] == 1
-    assert "derived_scope" in seeds._life.__code__.co_consts.__repr__()
+    world = SimpleNamespace(now=now, cast={101})
+    assert [seed.key for seed in seeds._life(cast.conn, world)] == [f"life:{beats[1]}"]
 
 
 # -- propagation on each path that raises a scope ---------------------------------------------
@@ -522,6 +522,16 @@ def test_the_cli_dry_run_writes_nothing_and_go_writes_a_receipt(cast, tmp_path, 
     assert scope_cli.memory_main(["rescope", "--data-dir", root, "--undo", "1", "--go"]) == 0
     assert "2 stored scopes restored" in capsys.readouterr().out
     assert scope_cli.memory_main(["rescope", "--data-dir", root, "--undo", "1", "--go"]) == 1
+    capsys.readouterr()
+    # the mind's own raises leave receipts too, and --receipts lists them all, counts only
+    with cast.transaction():
+        scopes._receipt(cast.conn, [[m0, "open", 0, "secret", HUMAN]], now=cast.clock.now(),
+                        source="secrecy")
+    cast.conn.commit()
+    assert scope_cli.memory_main(["rescope", "--data-dir", root, "--receipts"]) == 0
+    out = capsys.readouterr().out
+    assert "cli: 1 receipts, 2 memories" in out and "secrecy: 1 receipts, 1 memories" in out
+    assert WORD not in out and "fixture" not in out.lower()
     assert stored(cast, m0) == ("open", 0) and effective(cast, m0) == ("secret", HUMAN)
 
 
@@ -585,3 +595,185 @@ def test_the_migration_checks_every_stored_memory_and_changes_no_stored_scope(tm
                                            "ORDER BY id")] == sorted((m0, m1))
     finally:
         conn.close()
+
+
+# -- review round 1 ---------------------------------------------------------------------------
+
+def bulk(store, n, *evidence, owner=101):
+    """`n` plain memories citing `evidence`, straight SQL, unchecked; their ids."""
+    first = store.conn.execute("SELECT COALESCE(max(id), 0) + 1 FROM memory").fetchone()[0]
+    t = int(store.clock.now())
+    store.conn.executemany(
+        "INSERT INTO memory(id, owner, kind, text, t_event, t_created, t_accessed, importance, "
+        "valence, source, evidence) VALUES (?, ?, 'reflection', 'Fixture.', ?, ?, ?, 5, 0, "
+        "'reflection', ?)",
+        [(first + i, owner, t, t, t, json.dumps(list(evidence))) for i in range(n)])
+    return list(range(first, first + n))
+
+
+def checked_hub(store, n, *evidence):
+    """A memory with `n` checked memories resting on it, in a cite index as big as the live
+    one's (50,000 more memory cites), so a bad plan shows."""
+    hub = raw(store, 101, *(evidence or ("event:1",)))
+    rest = bulk(store, n, ref(hub))
+    store.conn.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) "
+        "INSERT INTO memory_cite(src, kind, dst) SELECT 1000000 + i, 'memory', 2000000 + i FROM n")
+    scopes.settle_pending(store.conn, now=store.clock.now())
+    store.conn.commit()
+    assert scopes.pending_count(store.conn) == 0
+    return hub, rest
+
+
+def test_what_rests_on_a_memory_is_read_through_the_index(cast):
+    """The queue first, the cites by (kind, dst): never a pass over every cite per dependant."""
+    plan = " | ".join(r[3] for r in cast.conn.execute(
+        "EXPLAIN QUERY PLAN " + privacy._DEPENDANTS, ("memory", "[1]")))
+    assert "SEARCH c USING" in plan and "kind=? AND dst=?" in plan and "SCAN c" not in plan
+    triggers = dict(cast.conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'memory' "
+        "AND name IN ('memory_cite_ai', 'memory_cite_au', 'memory_cite_ad', 'memory_scope_au')"))
+    assert len(triggers) == 4
+    for name, sql in triggers.items():
+        assert "FROM dep CROSS JOIN memory_cite c" in sql and "JOIN dep ON" not in sql, name
+    step = ("EXPLAIN QUERY PLAN WITH RECURSIVE dep(id) AS (SELECT src FROM memory_cite "
+            "WHERE kind = 'memory' AND dst = 1 UNION SELECT c.src FROM dep CROSS JOIN "
+            "memory_cite c WHERE c.kind = 'memory' AND c.dst = dep.id) SELECT id FROM dep")
+    plan = " | ".join(r[3] for r in cast.conn.execute(step))
+    assert "kind=? AND dst=?" in plan and "SCAN c" not in plan
+
+
+def test_a_hub_with_2500_dependants_costs_a_write_milliseconds(cast):
+    """An insert on it, a raise of it and an ask for secrecy under it, each inside the mind's own
+    transaction (review-372 P1: 6.5 s, 42 s and 17 s on the live copy with the planner's order)."""
+    import time
+    whisper = line(cast, "whisper", HUMAN, 101)
+    thread = cast.open_thread(f"whisper:{HUMAN}:101", 0)
+    cast.set_thread([whisper], thread)
+    hub, rest = checked_hub(cast, 2500, f"chat:{whisper}")
+    assert stored(cast, rest[0]) == ("private", HUMAN)
+
+    def timed(step):
+        started = time.perf_counter()
+        step()
+        return time.perf_counter() - started
+    took = timed(lambda: cast.insert_memory(make_mem(owner=101, evidence=(ref(hub),))))
+    assert took < 0.25, took
+    took = timed(lambda: cast.conn.execute(
+        "UPDATE memory SET scope_with = 0 WHERE id = ?", (hub,)))
+    assert took < 0.25, took
+    assert scopes.pending_count(cast.conn) == 2501
+    scopes.night(cast.conn, now=cast.clock.now())
+    cast.conn.commit()
+    ask = line(cast, "whisper", HUMAN, 101, ASK)
+    took = timed(lambda: cast.set_thread([ask], thread))
+    assert took < 0.25, took
+    # the write settled its bounded share; the rest waits, unchecked, and reads strict
+    assert stored(cast, hub) == ("secret", 0) and 0 < scopes.pending_count(cast.conn) <= 2500
+    assert effective(cast, rest[-1]) == ("secret", 0)
+    took = timed(lambda: line(cast, "whisper", HUMAN, 101))
+    assert took < 0.25, took
+
+
+def test_a_budget_is_never_stored_as_a_scope(cast):
+    """More unchecked memories under a new one than a read works through: the writer stores
+    what is known (never secret with nobody), the row stays unchecked, and the night settles
+    it. A reader meanwhile, and another member's derive, get nobody."""
+    hub, rest = checked_hub(cast, 2100)
+    cast.conn.execute("UPDATE memory SET scope = 'private', scope_with = ? WHERE id = ?",
+                      (HUMAN, hub))
+    cast.conn.commit()
+    assert scopes.pending_count(cast.conn) == 2100
+    refs = [ref(i) for i in rest]
+    read = derive_scope(cast.conn, 101, refs)
+    assert (read.scope, read.scope_with) == STRICTEST
+    other = derive_scope(cast.conn, 103, refs)                 # never ('secret', 101)
+    assert (other.scope, other.scope_with) == STRICTEST
+    known = derive_scope(cast.conn, 101, refs, known=True)
+    assert (known.scope, known.scope_with) == ("private", HUMAN)
+    # the writer's row and the store's step after it (straight SQL: the store's realm
+    # lineage walk refuses this many refs before the scope is ever asked)
+    mid = raw(cast, 101, *refs, scope=known.scope, scope_with=known.scope_with)
+    first = scopes.settle(cast.conn, (mid,), now=cast.clock.now(), source=None,
+                          cap=privacy.RESOLVE_NODES)        # after_write's first step
+    assert first.raised == 0 and stored(cast, mid) == ("private", HUMAN)
+    row = cast.conn.execute("SELECT derived_at, derived_scope FROM memory WHERE id = ?",
+                            (mid,)).fetchone()
+    assert tuple(row) == (None, None)                          # unchecked, nothing written down
+    bounded = privacy.resolve(cast.conn, [mid], cap=10)[mid]
+    assert bounded.bounded and bounded.read == STRICTEST and bounded.effective == ("private", HUMAN)
+    # the rest of the write's own step, then the night: settled, and never secret
+    scopes.after_write(cast.conn, mid, now=cast.clock.now(), new=True)
+    scopes.night(cast.conn, now=cast.clock.now())
+    assert stored(cast, mid) == ("private", HUMAN) and scopes.pending_count(cast.conn) == 0
+    assert cast.conn.execute("SELECT count(*) FROM memory WHERE scope = 'secret' "
+                             "OR derived_scope = 'secret'").fetchone()[0] == 0
+
+
+def test_a_bounded_parent_of_another_members_memory_reaches_nobody(cast):
+    theirs = raw(cast, 102, "event:1")
+    for _ in range(3):
+        theirs = raw(cast, 102, ref(theirs))
+    parent = raw(cast, 101, ref(theirs))
+    found = privacy.resolve(cast.conn, [parent], cap=1)[parent]
+    assert found.bounded and found.read == STRICTEST
+    assert effective_scopes(cast.conn, [parent]) == {parent: ("open", 0)}   # within the bound
+    done = scopes.settle(cast.conn, [parent], now=cast.clock.now(), cap=1)
+    assert done.checked == 0 and stored(cast, parent) == ("open", 0)        # left for the night
+    assert scopes.pending_count(cast.conn) == 5
+
+
+@pytest.mark.parametrize("state", STATES)
+def test_a_missing_deep_ref_is_never_proof_for_a_lesson(cast, recall, state):
+    """A chain whose deepest memory cites a memory with no row: its scope stands (recall shows
+    it as before), but the lesson gate takes no unknown as open, checked or not."""
+    deep = raw(cast, 101, "event:1", "memory:99999")
+    top = raw(cast, 101, ref(raw(cast, 101, ref(deep))))
+    whole = raw(cast, 101, ref(raw(cast, 101, ref(raw(cast, 101, "event:1")))))
+    to_state(cast, state)
+    assert not lesson_visible(cast, 101, top) and lesson_visible(cast, 101, whole)
+    assert effective(cast, top) == ("open", 0) and top in recalled(recall, 101, "guild")
+    if state != "unchecked":
+        flags = dict(cast.conn.execute("SELECT id, derived_complete FROM memory"))
+        assert flags[top] == flags[deep] == 0 and flags[whole] == 1
+    # the row appears: what waited for it is derived again, and whole
+    cast.conn.execute(
+        "INSERT INTO memory(id, owner, kind, text, t_event, t_created, t_accessed, importance, "
+        "valence, source, evidence) VALUES (99999, 101, 'reflection', 'Fixture.', 0, 0, 0, 5, 0, "
+        "'reflection', '[\"event:1\"]')")
+    scopes.settle_pending(cast.conn, now=cast.clock.now())
+    assert lesson_visible(cast, 101, top)
+    # and goes again
+    cast.conn.execute("DELETE FROM memory_actor WHERE memory_id = 99999")
+    cast.conn.execute("DELETE FROM memory WHERE id = 99999")
+    assert scopes.pending_count(cast.conn) == 3
+    scopes.settle_pending(cast.conn, now=cast.clock.now())
+    assert not lesson_visible(cast, 101, top)
+
+
+def test_malformed_evidence_at_depth_is_incomplete(cast):
+    deep = raw(cast, 101, "event:1")
+    top = raw(cast, 101, ref(deep))
+    cast.conn.execute("UPDATE memory SET evidence = '[\"event:1\", 7]' WHERE id = ?", (deep,))
+    scopes.settle_pending(cast.conn, now=cast.clock.now())
+    assert not lesson_visible(cast, 101, top)
+    assert not privacy.resolve(cast.conn, [top])[top].complete
+
+
+def test_the_groups_memory_and_one_readers_is_that_readers_in_either_order(cast):
+    """A memory citing a group line and a memory later made private with one of the group's
+    readers: that reader's, whichever was derived first (it used to come out nobody's)."""
+    assert privacy.stricter(("private", GROUP), ("private", 102)) == ("private", 102)
+    assert privacy.stricter(("private", 102), ("private", GROUP)) == ("private", 102)
+    assert privacy.stricter(("private", GROUP), ("secret", 102)) == ("secret", 102)
+    assert privacy.stricter(("private", GROUP), ("private", OFFICERS)) == ("private", 0)
+    assert privacy.stricter(("private", GROUP), ("private", GROUP)) == ("private", GROUP)
+    group = f"chat:{line(cast, 'gdm:1', 102, audience=[HUMAN, 101, 102])}"
+    beside = cast.insert_memory(make_mem(owner=101, evidence=("event:1",)))
+    first = cast.insert_memory(make_mem(owner=101, evidence=(group, ref(beside))))
+    assert stored(cast, first) == ("private", GROUP)
+    cast.conn.execute("UPDATE memory SET scope = 'private', scope_with = 102 WHERE id = ?",
+                      (beside,))
+    scopes.settle_pending(cast.conn, now=cast.clock.now())
+    fresh = derive_scope(cast.conn, 101, [group, ref(beside)])
+    assert stored(cast, first) == (fresh.scope, fresh.scope_with) == ("private", 102)

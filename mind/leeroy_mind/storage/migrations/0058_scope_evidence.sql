@@ -10,9 +10,15 @@ ALTER TABLE memory ADD COLUMN derived_scope TEXT
     CHECK (derived_scope IS NULL OR derived_scope IN ('open', 'private', 'secret'));
 ALTER TABLE memory ADD COLUMN derived_with INTEGER;
 ALTER TABLE memory ADD COLUMN derived_at REAL;
+-- 0 when the evidence, at any depth, is malformed or cites a memory that has no row: the scope
+-- stands, but a gate that needs whole provenance (the lesson walk) does not take it as proved
+ALTER TABLE memory ADD COLUMN derived_complete INTEGER;
 CREATE INDEX memory_unchecked ON memory(id) WHERE derived_at IS NULL;
 
--- The memory: and chat: refs of each memory's evidence, so "what rests on this" is an index read
+-- The memory: and chat: refs of each memory's evidence, so "what rests on this" is an index read.
+-- Every "what rests on this" below walks the queue first (dep CROSS JOIN memory_cite): left to
+-- itself the planner, with no sqlite_stat1, reads every memory cite once per row of the queue
+-- (6.7 s for 2,400 dependants on the live copy; 2.4 ms this way).
 CREATE TABLE memory_cite (
     src  INTEGER NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('chat', 'memory')),
@@ -40,7 +46,8 @@ CREATE TRIGGER memory_cite_ai AFTER INSERT ON memory BEGIN
     UPDATE memory SET derived_at = NULL WHERE derived_at IS NOT NULL AND id IN (
         WITH RECURSIVE dep(id) AS (
             SELECT src FROM memory_cite WHERE kind = 'memory' AND dst = NEW.id
-            UNION SELECT c.src FROM memory_cite c JOIN dep ON c.dst = dep.id WHERE c.kind = 'memory')
+            UNION SELECT c.src FROM dep CROSS JOIN memory_cite c
+                  WHERE c.kind = 'memory' AND c.dst = dep.id)
         SELECT id FROM dep);
 END;
 
@@ -56,26 +63,37 @@ WHEN OLD.evidence IS NOT NEW.evidence BEGIN
     UPDATE memory SET derived_at = NULL WHERE derived_at IS NOT NULL AND (id = NEW.id OR id IN (
         WITH RECURSIVE dep(id) AS (
             SELECT src FROM memory_cite WHERE kind = 'memory' AND dst = NEW.id
-            UNION SELECT c.src FROM memory_cite c JOIN dep ON c.dst = dep.id WHERE c.kind = 'memory')
+            UNION SELECT c.src FROM dep CROSS JOIN memory_cite c
+                  WHERE c.kind = 'memory' AND c.dst = dep.id)
         SELECT id FROM dep));
 END;
 
 CREATE TRIGGER memory_cite_ad AFTER DELETE ON memory BEGIN
     DELETE FROM memory_cite WHERE src = OLD.id;
+    -- what cited it now cites a memory with no row
+    UPDATE memory SET derived_at = NULL WHERE derived_at IS NOT NULL AND id IN (
+        WITH RECURSIVE dep(id) AS (
+            SELECT src FROM memory_cite WHERE kind = 'memory' AND dst = OLD.id
+            UNION SELECT c.src FROM dep CROSS JOIN memory_cite c
+                  WHERE c.kind = 'memory' AND c.dst = dep.id)
+        SELECT id FROM dep);
 END;
 
 -- A scope made stricter (or changed at all), stored or derived: everything resting on it is
 -- unchecked again
-CREATE TRIGGER memory_scope_au AFTER UPDATE OF scope, scope_with, derived_scope, derived_with, owner
+CREATE TRIGGER memory_scope_au
+AFTER UPDATE OF scope, scope_with, derived_scope, derived_with, derived_complete, owner
 ON memory
 WHEN OLD.scope IS NOT NEW.scope OR OLD.scope_with IS NOT NEW.scope_with
   OR OLD.owner IS NOT NEW.owner
   OR COALESCE(OLD.derived_scope, 'open') IS NOT COALESCE(NEW.derived_scope, 'open')
-  OR COALESCE(OLD.derived_with, 0) IS NOT COALESCE(NEW.derived_with, 0) BEGIN
+  OR COALESCE(OLD.derived_with, 0) IS NOT COALESCE(NEW.derived_with, 0)
+  OR COALESCE(OLD.derived_complete, 1) IS NOT COALESCE(NEW.derived_complete, 1) BEGIN
     UPDATE memory SET derived_at = NULL WHERE derived_at IS NOT NULL AND id IN (
         WITH RECURSIVE dep(id) AS (
             SELECT src FROM memory_cite WHERE kind = 'memory' AND dst = NEW.id
-            UNION SELECT c.src FROM memory_cite c JOIN dep ON c.dst = dep.id WHERE c.kind = 'memory')
+            UNION SELECT c.src FROM dep CROSS JOIN memory_cite c
+                  WHERE c.kind = 'memory' AND c.dst = dep.id)
         SELECT id FROM dep);
 END;
 

@@ -102,7 +102,7 @@ citing memory used to stay as wide as it was, and one level was all recall check
   sources, the lesson walk's `Visibility._effective`), `derive_scope` reads cited memories with it (the writer, culture's and the
   lexicon's source checks, growth, supersede), and the readers that take rows from SQL use
   `privacy.gated` (the callback selector), `effective_scopes` (the ledger walk,
-  the notes' evidence) or `open_sql`.
+  the notes' evidence, the server's life-beat seeds).
 - **It is stored, never trusted when missing.** `memory.derived_scope`, `derived_with` and
   `derived_at` keep the last check (what the evidence implies now, derived afresh each time;
   the stored scope is the one that never widens). Triggers (migration `scope_evidence`) keep `memory_cite`,

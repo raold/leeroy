@@ -6,7 +6,10 @@ printed: by old and new scope, by status, kind and source, by the kind of eviden
 it, and how many sent turns of the last `--days` days carried such a memory to an audience it will
 no longer reach. `--go` needs the mind stopped and a migrated mind.db: it holds mind.lock
 throughout, snapshots first and writes one receipt; `--undo N --go` restores the stored scopes
-receipt N changed. A scope is only ever made stricter. Counts and ids only: never a memory's or a
+receipt N changed. `--receipts` lists every receipt: this command's (`cli`) and the ones the
+running mind writes without it, whenever it makes a stored scope stricter (`night`: the scopes
+stage; `write`, `secrecy`, `life-contact`: a write's own transaction). A scope is only ever made
+stricter. Counts and ids only: never a memory's or a
 line's text."""
 import argparse
 import sqlite3
@@ -83,9 +86,22 @@ def memory_main(argv=None) -> int:
             now = time.time()
             ready = scopes.available(conn)
             if args.receipts:
-                for rid, at, source, n, undone in (scopes.receipts(conn) if ready else ()):
+                listed = scopes.receipts(conn) if ready else []
+                for rid, at, source, n, undone in listed:
                     print(f"receipt {rid}: {source}, {n} memories, at {at:.0f}"
                           + (f", undone at {undone:.0f}" if undone is not None else ""))
+                by_source: dict[str, list[int]] = {}
+                for _, _, source, n, _ in listed:
+                    tally = by_source.setdefault(source, [0, 0])
+                    tally[0] += 1
+                    tally[1] += n
+                # cli: this command; night: the scopes stage; write, secrecy, life-contact:
+                # the mind's own writes, in the transaction that made the scope stricter
+                for source in sorted(by_source):
+                    print(f"{source}: {by_source[source][0]} receipts, "
+                          f"{by_source[source][1]} memories")
+                if not listed:
+                    print("no receipts")
                 return 0
             if (args.go or args.undo is not None) and not ready:
                 print("refused: this mind.db is older than the code (run db migrate); "

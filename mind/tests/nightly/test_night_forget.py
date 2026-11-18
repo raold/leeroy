@@ -278,12 +278,13 @@ def test_wrong_partner_in_legacy_private_wrapper_is_not_borrowed(h):
     source = old(h, scope="private", scope_with=102, importance=5)
     leaf = old(h, scope="private", scope_with=1, evidence=(f"memory:{source}",))
     h.legacy(leaf, scope="private", scope_with=1)
-    # two partners: the wrapper reaches nobody for every reader (memory.privacy.resolve), and
-    # so does whatever is summarised from it; his scope is never borrowed
+    # two partners: the wrapper reaches nobody for every reader (memory.privacy.resolve), so
+    # nothing is summarised from it; his scope is never borrowed
     assert (chunk(h, leaf)[0].scope, chunk(h, leaf)[0].scope_with) == ("private", 0)
     ctx = context(h)
     run(forget.summarize(ctx, 101, chunk(h, leaf), 0))
-    assert [(m.scope, m.scope_with) for m in summaries(h)] == [("private", 0)]
+    assert summaries(h) == [] and ctx.reasoner.llm.calls == []
+    assert chunk(h, leaf)[0].status == "active"
 
 
 @pytest.mark.parametrize("kind", ["cycle", "missing", "rejected"])

@@ -162,8 +162,11 @@ class Visibility:
             row = self.conn.execute('SELECT * FROM memory WHERE id=?', (current,)).fetchone()
             if (row is not None and 'derived_at' in row.keys() and row['derived_at'] is not None
                     and row['scope'] in SCOPES and row['derived_scope'] in SCOPES):
+                # derived_complete 0: its evidence, at some depth, is malformed or cites a
+                # memory with no row. Unknown is never open here, checked or not
+                whole = 'derived_complete' not in row.keys() or row['derived_complete'] != 0
                 done[current] = stricter((row['scope'], row['scope_with']),
-                                         (row['derived_scope'], row['derived_with'] or 0))
+                                         (row['derived_scope'], row['derived_with'] or 0)) if whole else None
                 continue
             try:
                 refs = json.loads(row['evidence']) if row is not None else None
