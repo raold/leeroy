@@ -73,7 +73,10 @@ def test_recall_keeps_private_and_secret_out_of_public_prompts(h, caplog):
     caplog.clear()
     with caplog.at_level(logging.DEBUG, logger="leeroy_mind"):
         assert recalled("guild") == [seen]
-    assert "recall_private_excluded: n=1" in caplog.text
+    # the store stored it private with him (memory.scopes.after_write), so the scope already
+    # keeps it out; _shareable's line check stays underneath as the second one
+    assert h.store.get_memories([whispered])[0].scope == "private"
+    assert "recall_scope_excluded: n=4" in caplog.text
     assert recalled("whisper", 1) == sorted([seen, private, whispered])
 
 
@@ -448,6 +451,7 @@ def test_an_ask_covers_the_pairs_later_threads_that_night(h):
     # a memory stored with the per-thread reading: the check lists it, the backfill raises it
     old = h.mem(101, "Testy is leaving his job.", evidence=(f"chat:{told[0]}",), scope="private",
                 scope_with=1)
+    h.legacy(old, scope="private", scope_with=1)  # as stored before the store checked evidence
     assert old in scope_leaks(h.store)
     with h.store.transaction():
         backfill_scopes(h.store.conn)

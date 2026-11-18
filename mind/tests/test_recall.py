@@ -336,7 +336,9 @@ def test_whisper_only_memories_stay_out_of_public_turns(rig, store, clock, caplo
     with caplog.at_level(logging.DEBUG, logger="leeroy_mind"):
         for channel in PUBLIC:
             assert recalled(r, channel) == [], channel
-    assert caplog.text.count("recall_private_excluded: n=1") == len(PUBLIC)
+    # the store stored it private with him (memory.scopes.after_write): its scope keeps it
+    # out before the line rule underneath is asked
+    assert caplog.text.count("recall_scope_excluded: n=1") == len(PUBLIC)
     assert store.get_memories([secret])[0].access_n == 0
     assert recalled(r, "whisper", HUMAN) == [secret]
 
@@ -355,12 +357,14 @@ def test_a_whisper_between_two_members_stays_between_them(rig, store, clock):
     assert recalled(r, "whisper", 102) == [theirs]
 
 
-def test_a_memory_with_a_guild_line_is_not_whisper_only(rig, store, clock):
+def test_a_memory_with_a_guild_line_and_a_whisper_is_theirs_alone(rig, store, clock):
+    """A whisper among the evidence makes the memory the pair's, a guild line beside it or not
+    (privacy.derive_scope), and the store holds it so whoever wrote it."""
     r, _ = rig
     mixed = remembered(store, clock, "Zan said in guild and then told me he is quitting.",
                        said(store, "guild", HUMAN), said(store, "whisper", HUMAN, 101))
-    assert recalled(r, "guild") == [mixed]
-    assert recalled(r, "whisper", 102) == [mixed]
+    assert recalled(r, "guild") == [] and recalled(r, "whisper", 102) == []
+    assert recalled(r, "whisper", HUMAN) == [mixed]
 
 
 def test_memories_without_a_stored_chat_line_are_eligible_everywhere(rig, store, clock):
@@ -380,8 +384,8 @@ def test_the_whisper_rule_reads_the_lines_in_one_query(rig, store, clock):
     r, _ = rig
     for i in range(6):
         remembered(store, clock, f"Zan told me plan {i} for the raid.",
-                   said(store, "guild", HUMAN), said(store, "whisper", HUMAN, 101),
-                   said(store, "whisper", 101, HUMAN))
+                   said(store, "guild", HUMAN), said(store, "guild", HUMAN),
+                   said(store, "guild", 101))
     secret = remembered(store, clock, "Zan told me he is quitting his job.",
                         said(store, "whisper", HUMAN, 101))
     with statements(store) as sql:
@@ -535,8 +539,9 @@ def test_recency_is_not_stretched_over_the_candidates(rig, store, clock):
 
 def test_owner_memories_are_public(rig, store, clock):
     """Part A seeds the guild's history as owner-authored memories (evidence "owner:<moment>").
-    It is public, non-chat evidence: such a memory reaches every channel's turns, even one that
-    also cites a whisper between two others."""
+    It is public, non-chat evidence: such a memory reaches every channel's turns. One that also
+    cites a whisper between two others is nobody's to tell (privacy.derive_scope), as the writer
+    would have stored it."""
     r, _ = rig
     lore = remembered(store, clock, "We were the first guild to clear the old keep.",
                       "owner:the-keep-2007", kind="story", source="owner")
@@ -544,8 +549,9 @@ def test_owner_memories_are_public(rig, store, clock):
                        "owner:quitting-2008", said(store, "whisper", 103, 104), kind="story",
                        source="owner")
     for channel in PUBLIC:
-        assert {lore, mixed} <= set(recalled(r, channel)), channel
-    assert {lore, mixed} <= set(recalled(r, "whisper", to_guid=HUMAN))
+        assert lore in recalled(r, channel) and mixed not in recalled(r, channel), channel
+    assert lore in recalled(r, "whisper", to_guid=HUMAN)
+    assert mixed not in recalled(r, "whisper", to_guid=HUMAN)
 
 
 def test_memory_depth_can_change_without_a_restart(rig, store, clock):

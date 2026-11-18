@@ -268,7 +268,9 @@ def test_the_dots_animate_only_without_reduced_motion():
 def test_the_whisper_list_marks_a_member_writing_to_him():
     left = (STATIC / "js" / "comms" / "leftview.mjs").read_text("utf-8")
     assert "whisperTypers" in left or "typingWhispers" in left
-    assert re.search(r'on\("typing",\s*renderWhispers\)', left)
+    # the whisper threads are rows of the one list of conversations now
+    assert re.search(r'on\("typing",\s*renderConversations\)', left)
+    assert "typingDots(r.name" in left
 
 
 def test_the_page_never_holds_the_minds_clock_against_its_own():

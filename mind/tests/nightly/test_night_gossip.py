@@ -283,8 +283,9 @@ def test_private_original_party_can_tell_once_but_hearer_cannot(h, monkeypatch, 
     assert not knowledge.may_tell(h.store, 102, f"chat:{chat}")
     assert tell(h, heard, enc=scene(h, a=102, b=104)) is None
     assert h.count("rumor") == h.count("rumor_version") == h.count("rumor_state") == 0
-    # A deliberately legacy open seed is already a leak; none of the new copies is.
-    assert knowledge.scope_leaks(h.store) == ([m.id] if scope == "open" else [])
+    # The store raises a seed handed to it open itself (memory.scopes.after_write), so not even
+    # that one is a leak; none of the new copies is.
+    assert knowledge.scope_leaks(h.store) == []
 
 
 def test_private_discretion_and_open_source_tainted_by_another_shown_memory(h, monkeypatch):

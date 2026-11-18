@@ -72,6 +72,9 @@ class CardContext:
     decisions: bool = False  # [decisions] enabled: the Decisions part (D4)
     intents: tuple[str, ...] = ()  # her own plans from his strings (godmode), caller-filtered
     holidays: bool = False  # culture's server calendar ([culture] calendar): its events join Upcoming
+    # her attendance counts under "Your standing"; the live caller turns them off outside talk
+    # about raids and rosters ([talk] coherence: "5 benched" leaked into answers about anything)
+    attendance: bool = True
 
 
 @dataclass(frozen=True)
@@ -645,7 +648,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         standing.append(f"DKP: {dkp[0]['balance']:g}; rank {dkp[0]['place']}")
     attendance = reader.rows(("guild_attendance",), "SELECT status,count(*) AS n FROM guild_attendance "
                              "WHERE guid=? GROUP BY status ORDER BY status", (guid,))
-    standing.extend(f"Attendance: {r['n']} {r['status']}" for r in attendance)
+    if context.attendance:
+        standing.extend(f"Attendance: {r['n']} {r['status']}" for r in attendance)
     add("standing", "Your standing", standing)
     if context.decisions:
         add("decisions", "Guild decisions", _decisions(reader, guid, officer, context, now))

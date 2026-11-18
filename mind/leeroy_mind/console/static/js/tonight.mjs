@@ -1,5 +1,5 @@
 import { $, clear, el } from "./core.mjs";
-import { face } from "./faces.mjs";
+import { profileButton } from "./faces.mjs";
 import { pollTab } from "./tabkit.mjs";
 import { SECTIONS, INTRO, cardModel } from "./tonightmodel.mjs";
 
@@ -13,7 +13,7 @@ function renderTonight(value) {
     model.lines.forEach(line => {
       const r = el('p','tonight-line');
       line.people.forEach(p => {
-        r.appendChild(face(p.guid,p.name,'list'));
+        r.appendChild(profileButton(p.guid,p.name,'list'));
         r.appendChild(el('span','',p.name));
       });
       const text = el(line.href ? 'a' : 'span','',line.text);

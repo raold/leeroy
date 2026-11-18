@@ -256,6 +256,32 @@ class ProfilePhoto:
     expression: str = _f(max_len=40)
 
 
+# Her voice sheet (2026-11-17: the cast sounded alike because nothing of how a member talks
+# reached a prompt). Written by hand or by `personas voices`, never by a model here; a persona
+# stored without one loads, and saves, exactly as before (persona_to_dict leaves it out).
+# personas/speech.py renders it (its block is capped there at BLOCK_TOKENS estimated tokens)
+# and holds its checks; talk/prompt.py shows it late, by the instruction.
+SAMPLE_KINDS = ("answer", "tease", "tired", "flirt", "warm", "annoyed")
+
+
+@dataclass(frozen=True)
+class Speech:
+    register: str = _f(max_len=60)                                   # "plain, clipped, a bit gruff"
+    shape: str = _f(max_len=120)                                     # her sentence shape
+    says: tuple[str, ...] = _f(min_items=4, max_items=8, max_len=30)  # her words, now and then
+    never: tuple[str, ...] = _f(max_items=4, max_len=30)             # words she never uses
+    brings_up: tuple[str, ...] = _f(min_items=1, max_items=4, max_len=90)  # from her own life
+    with_him: str = _f(max_len=120)        # how she is with the owner; shown on turns to him
+    stance: str = _f(max_len=140)          # what her household means for it; whispers and DMs
+    # one line per kind (SAMPLE_KINDS; flirt or warm, never both): how she sounds, never reused
+    samples: dict[str, str] = _f(max_items=5, max_len=220)
+    # The household her stance was written for (her real_life.household then; personas.voices
+    # stamps it at import). Her stance is shown only while her household still reads the same
+    # (speech.stance_current): the night can end a marriage and the owner can edit a
+    # household, and a stance must never contradict the card. None: not stamped, never shown.
+    household: str | None = _f(max_len=120, default=None)
+
+
 DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
 BUSTS = get_args(get_args(get_type_hints(Appearance)["bust"])[0])  # smallest first
 GLUTES = get_args(get_args(get_type_hints(Appearance)["glutes"])[0])
@@ -328,6 +354,7 @@ class Persona:
     appearance: Appearance | None = _f(default=None, enrichment=True)
     disclosures: tuple[Disclosure, ...] = _f(max_items=4, default=(), enrichment=True)
     photo: ProfilePhoto | None = _f(default=None, enrichment=True)
+    speech: Speech | None = _f(default=None, enrichment=True)
 
 
 # -- type helpers ---------------------------------------------------------------------------
@@ -450,6 +477,25 @@ def persona_from_dict(d) -> Persona:
     return _words_out_of_emoticons(p)
 
 
+def speech_from_dict(d) -> Speech:
+    """A voice sheet from its plain dict (shape only, as persona_from_dict checks a persona's;
+    validate_persona checks the rest once it is on a persona). PersonaError otherwise."""
+    if not isinstance(d, dict):
+        raise PersonaError(["speech: must be an object"])
+    errs: list[str] = []
+    s = _parse_obj(Speech, d, "speech", errs)
+    if errs:
+        raise PersonaError(errs)
+    return s
+
+
+def speech_to_dict(s: Speech) -> dict:
+    d = _dump(s)
+    if s.household is None:
+        del d["household"]  # a sheet without the stamp, as a file has it
+    return d
+
+
 # -- emoticons are marks, chat words are words ----------------------------------------------
 
 # Chat words a stored persona may hold among its emoticons, and the full form each shortens.
@@ -533,6 +579,10 @@ def persona_to_dict(p: Persona) -> dict:
         d["appearance"] = appearance_dict(p.appearance)  # likewise looks without shape words
     if p.identity.home is None:
         del d["identity"]["home"]  # and an identity without a home state
+    if p.speech is None:
+        del d["speech"]  # and a persona without a voice sheet
+    else:
+        d["speech"] = speech_to_dict(p.speech)
     return d
 
 
@@ -616,6 +666,9 @@ def validate_persona(p: Persona) -> list[str]:
     errs += _typing_errors(p.typing)
     errs += _enrichment_errors(p)
     errs += _home_errors(p.identity)
+    if p.speech is not None:
+        from .speech import speech_errors
+        errs += speech_errors(p)
     return errs
 
 

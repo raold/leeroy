@@ -2038,7 +2038,7 @@ def test_his_whisper_and_her_reply_never_reach_her_guild_prompt(store, clock, tm
         private = text_of(r.chat_calls()[-1]["messages"])
         assert f"(whisper to Arkon): {his.text}" in private  # his line
         assert "(whisper to Zan): mine too, keep it quiet" in private  # hers
-        assert "Your last lines (don't make the same move again):\nmine too, keep it quiet" in private
+        assert private.count("mine too, keep it quiet") == 1  # in the chat, not shown twice
         assert QUITTING in private
     run(main())
 

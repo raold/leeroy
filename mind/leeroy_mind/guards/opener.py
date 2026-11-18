@@ -300,6 +300,39 @@ def echo_opener(text: str, parent: str) -> bool:
     return _found(strip_wow_markup(text or ''), parent)[1] is not None
 
 
+QUESTION_ECHO_WORDS = 4  # his line this short, said back as a question, is cut from her opening
+_ECHO_WORD = re.compile(r"[a-z0-9']+")
+
+
+def without_question_echo(text: str, parent: str) -> str:
+    """`text` without an opening that only says his short line back as a question ("brb?",
+    "be nice to him? you know im no angel"): his whole line of at most QUESTION_ECHO_WORDS words,
+    a lead-in aside ("oh", "wait"), then a question mark, when MIN_LEFT words or more follow.
+    One word said back and nothing else ("fish??") is a reaction and stays, as does a line he
+    asked her to repeat. The self-play audit, 2026-11-17: 5 of 8 echoes were this shape, under
+    echo_opener's two-word floor."""
+    plain = text or ''
+    his = _ECHO_WORD.findall((parent or '').casefold().replace('’', "'"))
+    if not his or len(his) > QUESTION_ECHO_WORDS or _ASKED.search(parent or ''):
+        return text
+    words = list(re.finditer(r"[A-Za-z0-9'’]+", plain))
+    i = 0
+    while i < len(words) and words[i].group(0).casefold() in LEAD and (
+            words[i].group(0).casefold() != his[0]):
+        i += 1
+    said = [w.group(0).casefold().replace('’', "'") for w in words[i:i + len(his)]]
+    if said != his:
+        return text
+    rest = plain[words[i + len(his) - 1].end():]
+    mark = re.match(r"\s*\?[?!]*", rest)
+    if mark is None:
+        return text
+    left = rest[mark.end():].lstrip(" \t,.-")
+    if len(left.split()) < MIN_LEFT:
+        return text
+    return left
+
+
 def cut(text: str, parent: str) -> str | None:
     """`text` without what its opening says back of `parent`: leading clauses cut to the clause
     after them, a later clause cut as the phrase cooldown cuts one (phrases._clause_span: never

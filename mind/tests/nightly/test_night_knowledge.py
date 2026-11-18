@@ -387,6 +387,9 @@ def test_scope_leaks_finds_what_the_writer_would_not_write(h):   # controller ru
     open_encounter = h.mem(103, "We talked late.", source="offscreen", evidence=("encounter:9",))
     owner0 = h.mem(0, "The guild heard news.", evidence=(f"memory:{a}",), scope="private", scope_with=101)
     h.mem(101, "Testy's exam went fine, old news.", evidence=(wr,), status="superseded")   # only active rows count
+    # as an older release stored them: the store no longer writes a scope wider than the evidence
+    h.legacy(open_whisper)
+    h.legacy(other_partner, scope="private", scope_with=103)
     assert scope_leaks(h.store) == [open_whisper, other_partner, open_encounter, owner0]
     news = h.say(h.T + 2, 104, "my sister is visiting", channel="whisper", to=1)
     with h.store.transaction():

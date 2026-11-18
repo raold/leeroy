@@ -87,6 +87,23 @@ test('permission and recorder failures are worded and release captured tracks', 
   assert.equal(denied.recorder.phase,'idle');
   const failed=rig({makeRecorder:()=>{throw new Error('Recording is unavailable.');}});
   await failed.recorder.start(); assert.equal(failed.stats().stopped,1); assert.equal(failed.recorder.phase,'idle');
+  // the browser's own exception text is never shown: words instead
+  assert.equal(failed.recorder.error,'The voice note could not be recorded.');
+});
+test('a recording error is said in the console\u2019s words, never the browser\u2019s', async () => {
+  const { recordingError, ours } = await import('../../../leeroy_mind/console/static/js/comms/voicenotes.mjs');
+  const named = name => Object.assign(new Error('raw browser text: DOMException 0x80004005'),{name});
+  assert.match(recordingError(named('NotAllowedError')),/permission was refused/);
+  assert.match(recordingError(named('NotReadableError')),/in use by another program/);
+  assert.equal(recordingError(named('NotFoundError')),'No microphone is available.');
+  assert.match(recordingError(named('SecurityError')),/may not use the microphone/);
+  for (const e of [named('TypeError'),named('SomethingNew'),new Error('raw'),null,undefined,'text',{message:'raw'}]) {
+    assert.equal(recordingError(e),'The voice note could not be recorded.');
+  }
+  assert.equal(recordingError(ours('The recording is too large. Try a shorter note.')),'The recording is too large. Try a shorter note.');
+  for (const name of ['NotAllowedError','NotReadableError','AbortError','EncodingError','NotSupportedError','OverconstrainedError']) {
+    assert.ok(!recordingError(named(name)).includes('raw browser text'));
+  }
 });
 test('oversized decoded notes never become sendable drafts', async () => {
   const r=rig({decode:async()=>new Blob([new Uint8Array(NOTE_BYTES+1)])});
