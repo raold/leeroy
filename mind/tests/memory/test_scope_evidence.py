@@ -499,7 +499,10 @@ def test_turns_that_carried_a_memory_the_plan_refuses(cast):
                       "VALUES (100, 103, 'guild', 'reply', 'fixture', ?, 0)", (json.dumps([m0]),))
     got = scopes.recalled(cast.conn, scopes.plan(cast.conn), since=0)
     assert got == {"turns": 4, "public_turns": 3, "public_refused": 3, "other_refused": 0,
-                   "memories": 1, "other_members": 1}
+                   "memories": 1, "other_members": 1,
+                   "by_place": {"guild": 2, "Discord channels": 1},
+                   "by_kind_turns": {"reflection / reflection": 3},
+                   "by_kind_rows": {"reflection / reflection": 1}}
 
 
 def test_the_cli_dry_run_writes_nothing_and_go_writes_a_receipt(cast, tmp_path, capsys):

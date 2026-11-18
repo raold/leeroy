@@ -321,11 +321,13 @@ def recalled(conn: sqlite3.Connection, p: Plan, *, since: float) -> dict:
     from leeroy_mind.discord.channels import is_group
     from leeroy_mind.memory.recall import scope_ok
     new = {c[0]: (c[3], c[4]) for c in p.changes}
-    owners = {r[0]: r[1] for r in conn.execute(
-        "SELECT id, owner FROM memory WHERE id IN (SELECT value FROM json_each(?))",
+    info = {r[0]: r[1:] for r in conn.execute(
+        "SELECT id, owner, kind, source FROM memory WHERE id IN (SELECT value FROM json_each(?))",
         (json.dumps(sorted(new)),))} if new else {}
+    owners = {i: v[0] for i, v in info.items()}
     out = {"turns": 0, "public_turns": 0, "public_refused": 0, "other_refused": 0,
-           "memories": set(), "other_members": 0}
+           "memories": set(), "other_members": 0, "by_place": Counter(),
+           "by_kind_turns": Counter(), "by_kind_rows": {}}
     for guid, channel, to_guid, raw in conn.execute(
             "SELECT guid, channel, to_guid, memory_ids FROM utterance "
             "WHERE ts >= ? AND dropped IS NULL", (since,)):
@@ -343,8 +345,27 @@ def recalled(conn: sqlite3.Connection, p: Plan, *, since: float) -> dict:
             out["public_refused" if public else "other_refused"] += 1
             out["memories"] |= set(hit)
             out["other_members"] += any(owners.get(i) != guid for i in hit)
+            if public:
+                out["by_place"][_place(channel)] += 1
+                for label in {f"{info[i][1]} / {info[i][2]}" for i in hit if i in info}:
+                    out["by_kind_turns"][label] += 1
+                for i in hit:
+                    if i in info:
+                        out["by_kind_rows"].setdefault(f"{info[i][1]} / {info[i][2]}", set()).add(i)
     out["memories"] = len(out["memories"])
+    out["by_kind_rows"] = Counter({k: len(v) for k, v in out["by_kind_rows"].items()})
     return out
+
+
+def _place(channel: str) -> str:
+    """The kind of public place a turn was said in, for the dry run's counts."""
+    if not isinstance(channel, str):
+        return "other"
+    if channel.startswith("discord:"):
+        return "Discord channels"
+    if channel.startswith("voice:"):
+        return "voice rooms"
+    return channel if channel in ("guild", "raid", "party", "say", "yell") else "other"
 
 
 def apply(conn: sqlite3.Connection, *, now: float, source: str = "cli") -> Settled:

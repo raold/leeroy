@@ -390,7 +390,9 @@ rests on a stored scope alone. The one source of the effective scope is the stor
 (`memory/AUDIENCES.md`, "A scope is never wider than its evidence": `derived_scope`,
 `derived_with`, `derived_at`, kept by `memory/scopes.py` and the `scope_evidence` triggers): a
 memory that carries one is read from it and not opened, and only an unchecked one is walked
-here, leaves first (1,200 levels over a scoped leaf settle in one pass).
+here, leaves first (1,200 levels over a scoped leaf settle in one pass). A checked memory
+whose evidence is malformed or cites a missing memory at any depth carries `derived_complete
+= 0` and is refused like an unchecked one: unknown is never open here.
 "At any depth" means through `memory:` refs. One route stays outside it: a memory below
 the note's own sources that cites a *public line* whose prompt carried a private memory
 still derives open (3 such lines live, 2026-11-17). The scope rule reads a public line as

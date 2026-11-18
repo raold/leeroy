@@ -53,6 +53,10 @@ def _report(conn, plan, days: float, now: float) -> None:
         print(f"  {r['other_refused']:6d}  private, officers' or group turns likewise")
         print(f"  {r['other_members']:6d}  of those turns carried another member's memory")
         print(f"  {r['memories']:6d}  distinct memories in them")
+        _table("public turns that carried one, by place", r["by_place"])
+        _table("public turns that carried one, by the memory's kind / source",
+               r["by_kind_turns"])
+        _table("distinct memories refused in public turns, by kind / source", r["by_kind_rows"])
 
 
 def memory_main(argv=None) -> int:

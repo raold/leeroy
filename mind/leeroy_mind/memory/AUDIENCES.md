@@ -109,7 +109,16 @@ citing memory used to stay as wide as it was, and one level was all recall check
   the index of each memory's `chat:` and `memory:` refs, and clear `derived_at` on every memory
   resting, at any depth, on one whose scope or evidence changed, in that change's own
   transaction. A row without `derived_at` is derived by the reader (at most
-  `RESOLVE_NODES` unchecked memories a read; beyond that it counts as secret with nobody).
+  `RESOLVE_NODES`, 2,000, unchecked memories a read; a memory beyond that, and whatever rests
+  on it, reads as secret with nobody, never as another member's). That bound is a reader's
+  only: nothing is ever stored from it. The writer derives a new memory from the strictest
+  scope known for such a cited memory (`derive_scope(known=True)`), and the store leaves the
+  row unchecked for the night. `derived_complete` is 0 when the evidence, at any depth, is
+  malformed or cites a memory with no row: the scope stands as it always did (a missing ref
+  claims nothing), but the lesson walk takes no such memory as proved, checked or not.
+  Every "what rests on this" walk goes queue first, cites by index (`dep CROSS JOIN
+  memory_cite`): the planner's own order read every cite once per dependant (6.7 s for the
+  largest live hub, 2,391 dependants; now 2.4 ms).
 - **Writes settle it** (`memory/scopes.py`): `insert_memory`, `upsert_keyed_memory` and
   `merge_memory` check the memory they wrote and raise its stored scope, then up to 500 of the
   memories resting on it; `nightly life-contact` does the same for the beats it makes private;
@@ -128,7 +137,19 @@ citing memory used to stay as wide as it was, and one level was all recall check
   made them. An undo restores what is stored only: readers still go by the evidence, and the
   night raises a stored scope again when it next checks that memory. Never text.
 - The migration's data step checks every stored memory once and writes the derived columns
-  only; it changes no stored scope (run `memory rescope --go` for that, with its receipt).
+  only; it changes no stored scope.
+- **Stored scopes change without `--go` too.** From the first night and the first write
+  after the migration, the running mind raises the stored scope of whatever it checks: the
+  `scopes` stage (receipt source `night`; 172 rows on the first night of the live copy), a
+  write that touches a memory (`write`), an ask for secrecy (`secrecy`; 462 rows for the
+  widest live thread), `nightly life-contact` (`life-contact`). Each batch writes one receipt
+  (ids and scopes, no text); `memory rescope --receipts` lists them all with totals by source.
+  `memory rescope --go` raises what is left in one step (`cli`), and `--undo N` restores only
+  receipt N's rows.
+- Measured on the live copy (17,823 memories, 171,920 cites): migration 7.8 s, `--go` 9.8 s,
+  `--undo` 2.7 s; a raw raise of the largest hub 63 ms and its settle (565 rows) 250 ms; an
+  ask for secrecy in the widest private thread 208 ms, each later line there 1 ms; the night's
+  stage after a hub raise 0.75 s.
 - **What it does not follow.** `memory:` refs and the lines a memory cites, nothing else: a
   public line counts as public evidence even when the prompt that produced it carried a
   private memory (ruling B2: what was said on a public channel is public; the lesson walk

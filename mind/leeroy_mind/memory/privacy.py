@@ -245,40 +245,67 @@ def restricted_channels(conn: sqlite3.Connection, refs: dict) -> dict:
     """For each key of `refs` (key -> refs) whose refs rest on a line of a restricted channel
     (discord.channels.is_restricted), directly or through memory:<id> refs followed up
     to WALK_DEPTH levels (each memory's evidence, of any status), the set of those channels
-    (ruling R10). Keys that rest on none are left out. A few batched SELECTs per level, no
-    commit."""
-    out: dict = {}
-    frontier = {k: list(v) for k, v in refs.items()}
-    walked: dict = {k: set() for k in refs}
+    (ruling R10). Keys that rest on none are left out. Each memory under the keys is read and
+    walked once, whatever the number of keys that reach it (the store checks every memory it
+    writes through this, in the mind's own transaction): a few batched SELECTs per level, then
+    the sets are carried up the cites to a fixed point (cycles included). No commit."""
+    own = {k: list(v) for k, v in refs.items()}
+    cites: dict[int, set[int]] = {}       # memory -> the memories it cites
+    chats: dict[int, set[int]] = {}       # memory -> the lines it cites
+    frontier: set[int] = set()
+    for v in own.values():
+        frontier |= _ids(v, "memory")
     for _ in range(WALK_DEPTH + 1):
-        chats = {k: _ids(v, "chat") for k, v in frontier.items()}
-        wanted = set().union(*chats.values()) if chats else set()
-        hidden = {r[0]: GroupSource(r[1],parse_readers(r[2])) if is_group(r[1]) else r[1] for r in conn.execute(
-            "SELECT id, channel, audience FROM chat_line WHERE id IN (SELECT value FROM json_each(?)) "
-            f"AND {restricted_sql()}",
-            (json.dumps(sorted(wanted)),)) if is_restricted(r[1])} if wanted else {}
-        for k, ids in chats.items():
-            found = {hidden[i] for i in ids if i in hidden}
-            if found:
-                out[k] = out.get(k, frozenset()) | found
-        nxt = {k: _ids(v, "memory") - walked[k] for k, v in frontier.items()}
-        nxt = {k: ids for k, ids in nxt.items() if ids}
-        if not nxt:
+        frontier -= cites.keys()
+        if not frontier:
             break
-        mids = set().union(*nxt.values())
-        # a cited memory's evidence that does not parse cites nothing here (the store checks
-        # every memory it writes through this walk; one bad old row must not stop a write)
-        evidence = {r[0]: _refs_of(r[1]) for r in conn.execute(
+        found = {r[0]: _refs_of(r[1]) for r in conn.execute(
             "SELECT id, evidence FROM memory WHERE id IN (SELECT value FROM json_each(?))",
-            (json.dumps(sorted(mids)),))}
-        frontier = {}
-        for k, ids in nxt.items():
-            walked[k] |= ids
-            frontier[k] = [e for i in ids for e in evidence.get(i, ())]
-    else:
-        for k, pending in frontier.items():
-            if pending:
-                out[k] = out.get(k, frozenset()) | {'unresolved'}
+            (json.dumps(sorted(frontier)),))}
+        nxt: set[int] = set()
+        for mid in frontier:
+            # a cited memory's evidence that does not parse, or one with no row, cites nothing
+            evidence = found.get(mid, [])
+            cites[mid] = _ids(evidence, "memory")
+            chats[mid] = _ids(evidence, "chat")
+            nxt |= cites[mid]
+        frontier = nxt
+    unresolved = frontier - cites.keys()  # deeper than the walk goes: fails closed below
+    key_chats = {k: _ids(v, "chat") for k, v in own.items()}
+    wanted = set().union(*key_chats.values(), *chats.values()) if (key_chats or chats) else set()
+    hidden = {r[0]: GroupSource(r[1], parse_readers(r[2])) if is_group(r[1]) else r[1]
+              for r in conn.execute(
+                  "SELECT id, channel, audience FROM chat_line "
+                  f"WHERE id IN (SELECT value FROM json_each(?)) AND {restricted_sql()}",
+                  (json.dumps(sorted(wanted)),)) if is_restricted(r[1])} if wanted else {}
+    reach: dict[int, set] = {}
+    for mid, ids in chats.items():
+        found = {hidden[i] for i in ids if i in hidden}
+        if cites[mid] & unresolved:
+            found.add('unresolved')
+        if found:
+            reach[mid] = found
+    citers: dict[int, list[int]] = {}
+    for mid, deps in cites.items():
+        for d in deps:
+            citers.setdefault(d, []).append(mid)
+    queue = list(reach)
+    while queue:
+        mid = queue.pop()
+        for parent in citers.get(mid, ()):
+            have = reach.setdefault(parent, set())
+            if not reach[mid] <= have:
+                have |= reach[mid]
+                queue.append(parent)
+    out: dict = {}
+    for k, v in own.items():
+        found = {hidden[i] for i in key_chats[k] if i in hidden}
+        for mid in _ids(v, "memory"):
+            found |= reach.get(mid, set())
+            if mid in unresolved:
+                found.add('unresolved')
+        if found:
+            out[k] = frozenset(found)
     return out
 
 
@@ -657,6 +684,21 @@ def uncheck_citing(conn: sqlite3.Connection, kind: str, ids: Iterable[int]) -> i
     if not ids:
         return 0
     try:
+        if kind == "chat":
+            # a memory whose evidence already derives secret gains nothing from another ask
+            # (its partner comes from the lines' ends, not from their secrecy), and neither
+            # does what rests on it: only the others are derived again
+            ids = [r[0] for r in conn.execute(
+                "SELECT DISTINCT c.src FROM memory_cite c JOIN memory m ON m.id = c.src "
+                "WHERE c.kind = 'chat' AND c.dst IN (SELECT value FROM json_each(?)) "
+                "AND NOT (m.derived_at IS NOT NULL AND m.derived_scope = 'secret')",
+                (json.dumps(ids),))]
+            if not ids:
+                return 0
+            n = conn.execute("UPDATE memory SET derived_at = NULL WHERE derived_at IS NOT NULL "
+                             "AND id IN (SELECT value FROM json_each(?))",
+                             (json.dumps(ids),)).rowcount
+            return n + conn.execute(_DEPENDANTS, ("memory", json.dumps(ids))).rowcount
         return conn.execute(_DEPENDANTS, (kind, json.dumps(ids))).rowcount
     except sqlite3.OperationalError as e:
         if "no such" not in str(e):
