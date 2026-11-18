@@ -349,7 +349,8 @@ def _judge_eval(root: Path, args, *, make_llm) -> int:
     else:
         from leeroy_mind.llm.client import OllamaClient
         llm = OllamaClient(cfg.ollama.url)
-    reasoner = Reasoner(lab_night.LiveContext(llm), cfg.models.live, parallel=args.parallel)
+    reasoner = Reasoner(lab_night.LiveContext(_PauseChecked(llm, root)), cfg.models.live,
+                        parallel=args.parallel)
 
     async def go():
         if args.fit:
@@ -369,6 +370,25 @@ def _judge_eval(root: Path, args, *, make_llm) -> int:
         return 130
     print(json.dumps(data, sort_keys=True) if args.json or args.fit else judge_eval.render(data))
     return 0
+
+
+class _PauseChecked:
+    """The judge's model client with Free GPU read again before every request. judge-eval is
+    its own process: the running mind's GPU gate never sees its requests, so a pause set from
+    the console while it runs would otherwise be met by a reload of the model the console just
+    unloaded. A pause stops the evaluation (GpuPaused; requests already sent finish)."""
+
+    def __init__(self, llm, root: Path):
+        self._llm, self._root = llm, root
+
+    async def chat(self, *args, **kwargs):
+        if _gpu_paused(self._root):
+            from leeroy_mind.llm.client import GpuPaused
+            raise GpuPaused("The GPU is paused.")
+        return await self._llm.chat(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._llm, name)
 
 
 def _gpu_paused(root: Path) -> bool:

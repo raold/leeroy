@@ -510,12 +510,28 @@ async def score(reasoner, his: str, reply: str, *, mode: str = LAB_MODE, context
         raise ValueError(f"judge mode {mode!r}")
     if not (reply or "").strip():
         return {"score": EMPTY_SCORE, "inputs": {}, "calls": 0}
-    before = reasoner.calls
-    found = await inputs(reasoner, his, reply, mode=mode, context=context, earlier=earlier,
+    counted = _Counted(reasoner)
+    found = await inputs(counted, his, reply, mode=mode, context=context, earlier=earlier,
                          card=card, rewritten=rewritten, seed=seed)
     model = model if model is not None else weights()["modes"][mode]
-    return {"score": round(combine(found, model), 4), "inputs": found,
-            "calls": reasoner.calls - before}
+    return {"score": round(combine(found, model), 4), "inputs": found, "calls": counted.calls}
+
+
+class _Counted:
+    """A reasoner as one reply's judgement sees it, counting that reply's own calls. Replies are
+    scored concurrently on one shared Reasoner, whose meter counts every unit's calls, so the
+    difference of that meter over one reply would count the others' too."""
+
+    def __init__(self, reasoner):
+        self._reasoner, self.calls = reasoner, 0
+
+    async def chat(self, *args, **kwargs):
+        r = await self._reasoner.chat(*args, **kwargs)
+        self.calls += 1
+        return r
+
+    def __getattr__(self, name):
+        return getattr(self._reasoner, name)
 
 
 async def score_lines(reasoner, lines, *, mode: str = LAB_MODE, seed: int = 0) -> dict:

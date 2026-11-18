@@ -59,18 +59,20 @@ def read_conversation(name: str, doc: dict) -> list[Item]:
         raise GoldError(f"{name}: no turns")
     by_id, out, hers, seen = {}, [], [], []
     card = doc.get("card") if isinstance(doc.get("card"), str) else ""
-    last_his = ""
+    last_his = None   # his latest line and where it sits in `seen`
     for n, t in enumerate(turns):
         if not isinstance(t, dict) or t.get("who") not in ("him", "her") or not isinstance(t.get("text"), str):
             raise GoldError(f"{name}: turn {n} is not a line")
         text = t["text"]
         if t["who"] == "him":
+            last_his = (text, len(seen))
             if "id" in t:
-                by_id[t["id"]] = (text, len(seen))
-            last_his = text
+                by_id[t["id"]] = last_his
             seen.append(("him", text))
             continue
-        his, upto = by_id.get(t.get("answers"), (last_his, max(0, len(seen) - 1)))
+        # A reply that names no line answers his latest one, read with the turns before it,
+        # however many of hers came after it.
+        his, upto = by_id.get(t.get("answers"), last_his or ("", max(0, len(seen) - 1)))
         grade = t.get("grade")
         if isinstance(grade, dict) and type(grade.get("score")) is int and 1 <= grade["score"] <= 5:
             out.append(Item(name, n, his, text, tuple(hers), tuple(seen[:upto][-CONTEXT_TURNS:]),

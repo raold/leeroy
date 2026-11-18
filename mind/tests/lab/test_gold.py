@@ -35,6 +35,8 @@ def test_a_conversation_reads_as_graded_replies_with_what_came_before():
     assert b.earlier == ("yeah",) and b.context == (("him", "you there"), ("her", "yeah"))
     # without an id to answer, the reply answers his last line
     assert c.his == "or tomorrow" and c.flags == {"O"} and c.earlier == ("yeah", "tonight", "ungraded line")
+    # ...read with the turns before that line, not with it or her replies after it (review of #369)
+    assert c.context == (("him", "you there"), ("her", "yeah"), ("him", "raid tonight?"))
     assert a.key != b.key
 
 

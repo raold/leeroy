@@ -165,3 +165,34 @@ def test_the_command_waits_for_a_paused_gpu(tmp_path, capsys):
     assert lab_main(["--data-dir", str(data_dir), "judge-eval", "--gold", str(folder)],
                     make_llm=lambda cfg: asked.append(cfg)) == 2
     assert not asked and "paused" in capsys.readouterr().err
+
+
+def test_a_pause_set_while_it_runs_stops_it(tmp_path, capsys):
+    """judge-eval is its own process, outside the mind's GPU gate: it reads Free GPU's pause
+    again before every request and stops at it (review of #369)."""
+    import sqlite3
+    from leeroy_mind.gpucontrol import KEY
+    folder = make_gold(tmp_path, convs=5, turns=2)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = sqlite3.connect(data_dir / "mind.db")
+    conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+    conn.commit()
+    made = []
+
+    def pausing(model, messages):
+        if len(made[0].calls) == 3:   # the console pauses the GPU after the third request
+            conn.execute("INSERT INTO meta VALUES (?, '1')", (KEY,))
+            conn.commit()
+        return script(model, messages)
+
+    def make_llm(cfg):
+        made.append(FakeLLM(pausing, models={cfg.models.live}))
+        return made[-1]
+    try:
+        assert lab_main(["--data-dir", str(data_dir), "judge-eval", "--gold", str(folder),
+                         "--judges", "tells", "--parallel", "1"], make_llm=make_llm) == 2
+    finally:
+        conn.close()
+    assert "paused" in capsys.readouterr().err
+    assert len(made[0].calls) == 3   # nothing was asked after the pause

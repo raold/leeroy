@@ -280,3 +280,20 @@ def test_a_window_of_lines_is_scored_reply_by_reply_for_turing_and_the_bakeoff()
     assert "her: an aside from someone else" in grades[1]
     assert run(judge.score_lines(r, [line(1, 7, False, "nobody asked")])) == {
         "mean": None, "replies": 0, "calls": 0, "scores": []}
+
+
+def test_replies_scored_together_each_count_only_their_own_calls():
+    """Scoring units share one Reasoner; its meter counts every unit's calls, so each reply's
+    `calls` is counted on its own (review of #369)."""
+    async def go():
+        gate = asyncio.Event()
+        llm = FakeLLM(tell_script(), models={"m"}, gate=gate)
+        r = Reasoner(llm, "m", parallel=3)
+        tasks = [asyncio.create_task(judge.score(r, HIS, f"{REPLY} {n}", mode="tells", seed=n))
+                 for n in range(3)]
+        while llm.inflight < 3:   # all three are asking before any answer comes
+            await asyncio.sleep(0)
+        gate.set()
+        return [t["calls"] for t in await asyncio.gather(*tasks)], r.calls
+    each, total = run(go())
+    assert each == [judge.CALLS["tells"]] * 3 and total == sum(each)
