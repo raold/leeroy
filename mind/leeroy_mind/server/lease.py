@@ -32,6 +32,12 @@ class ServerLease:
         if getattr(self.app.arbiter, 'paused', False):
             await self._release('gpu_pause')
             return
+        manual = getattr(self.app, 'selfie_manual', None)
+        if manual is not None and manual.running:
+            # His Render selfies run (selfies/manual.py) has the GPU: no live model is pinned
+            # beside its worker. Its end ticks this lease again.
+            await self._release('selfie_render')
+            return
         local = self.app.clock.local()
         if in_window(local, self.config.quiet_window):
             self._waited_since = None

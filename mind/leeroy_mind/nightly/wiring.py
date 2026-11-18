@@ -191,7 +191,8 @@ def enable_borrow(app):
     def busy():
         # Include winding-down passes: `running` deliberately omits them, but
         # their worker tree may still own VRAM. A new pass is fenced by our lease.
-        owners = (app.night_scheduler, getattr(app, 'selfie_booth', None))
+        owners = (app.night_scheduler, getattr(app, 'selfie_booth', None),
+                  getattr(app, 'selfie_manual', None))
         return any((task := getattr(owner, '_task', None)) is not None and not task.done()
                    for owner in owners if owner is not None)
     app.arbiter.borrow_busy = busy

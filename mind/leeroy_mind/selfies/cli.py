@@ -14,7 +14,8 @@ store it); stdout carries the enum codes, the fallbacks and the NSFW score, neve
 vary --stance lust plans (the default, read-only) or queues (--go) a varied set (varied.py) for
 every cast member of the lust style. With the mind stopped --go holds its instance lock and
 writes the rows itself; while it runs, --go asks the running mind's `selfie` op (`vary`), the
-one writer of photo rows then. Rendering stays the night's and the booth's.
+one writer of photo rows then. Rendering stays the night's, the booth's and his Render
+selfies button's (manual.py); status shows the latest of each.
 
 critic --path FILE [--ref FILE [--crop L,T,R,B]] measures one JPEG as the photo critic does
 (selfies/critic.py) with the mind stopped: an embed-only selfie worker's detectors, then, once
@@ -223,7 +224,26 @@ def _status(store, clock) -> dict:
     except sqlite3.Error:  # an older database has no selfie_snap
         snaps = {}
     return {"queue": view, "snaps": snaps, "stages": _stages(store.conn),
-            "booth": _booth_status(store)}
+            "booth": _booth_status(store), "manual": _manual_status(store)}
+
+
+def _manual_status(store) -> dict:
+    """His Render selfies button's latest run (manual.LAST) and its day's record, apart from
+    the night's and the booth's."""
+    from .manual import LAST, SNAPS_STAGE, STAGE as MANUAL
+    try:
+        row = store.conn.execute("SELECT * FROM night_stage WHERE stage=? "
+                                 "ORDER BY night DESC LIMIT 1", (MANUAL,)).fetchone()
+        if row is None:
+            return {}
+        rec = dict(row)
+        rec["day"] = rec["night"].removeprefix("manual:")
+        rec["units"] = store.conn.execute("SELECT count(*) FROM night_step WHERE night=? "
+            "AND stage IN (?, ?) AND unit<>'queue'", (rec["night"], MANUAL, SNAPS_STAGE)).fetchone()[0]
+        rec["last"] = json.loads(store.get_meta(LAST) or "{}")
+        return rec
+    except (sqlite3.Error, ValueError, TypeError):
+        return {}
 
 
 def _booth_status(store) -> dict:
