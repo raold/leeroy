@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass
 
 from ..personas.schema import MIN_AGE, Persona
+from .safe import POSE_SHORT as POSE_WORDS_SHORT
 from .safe import (BODY_ALONE, BODY_ANATOMY, BODY_GARMENT, BODY_NO_MIRROR, BODY_OPTIONAL,
                    HEAD_FRAMINGS, KIND_SHORT, KIND_WORDS, alone, kind_of, outfit_words, pose,
                    pose_priority, setting_words, wearing)
@@ -95,7 +96,7 @@ _FRAMINGS = {"face": "close-up of the face", "head_and_shoulders": "head and sho
              "three_quarter": "three-quarter shot from mid-thigh up, waist and hips in frame",  # the waist in frame, so the figure shows
              "full_body": "full-body shot"}  # a varied set's candidate only (no photo kind has it)
 # Their short forms, fit_required's first step (2026-11-15)
-SHORT = {**KIND_SHORT,
+SHORT = {**KIND_SHORT, **POSE_WORDS_SHORT,
          "candid photo taken by a friend": "candid photo", "professional headshot": "headshot",
          "waist-up shot, upper body": "waist-up shot",
          "three-quarter shot from mid-thigh up, waist and hips in frame":

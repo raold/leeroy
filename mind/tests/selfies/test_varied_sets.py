@@ -326,7 +326,8 @@ def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
     for text in ("honey blonde with highlights", "olive skin"):
         assert text in kept
     # her pose (safe.POSES) yielded, before the framing would
-    assert any(t in safe_poses and pr == 1 for t, pr in spec.phrases)
+    assert any(t in ("standing", "walking", "walking away")
+               for t, _ in spec.phrases)  # in its short form (safe.POSE_SHORT)
     assert "f" * 40 in dropped
 
 

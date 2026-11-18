@@ -388,6 +388,26 @@ def test_a_three_quarter_profile_photo_requires_its_pose():
     assert spec.phrases[0] == ("candid photo", 0)  # the short forms make the room
 
 
+def test_the_pose_takes_its_short_form_before_her_hair_loses_its_style():
+    """Review of #362: the required pose had cost the hair style on three-quarter lust profiles.
+    The pose now shortens first ("standing"), so a hair style that fits beside it stays."""
+    assert set(safe.POSE_SHORT.values()) == {"standing", "walking", "walking away"}
+    assert all(text.replace("her", "his") in safe.POSE_SHORT
+               for poses in safe.POSES.values() for text in poses)
+    stored = ProfilePhoto("snapshot", "three_quarter", "a rooftop bar at night",
+                          "a red satin midi dress", "a playful smile")
+    roomy = build_prompt(lusty(photo=stored), kind_style=LUST)
+    assert any(t in safe.POSES["front"] and pr == 0 for t, pr in roomy.phrases)  # whole
+    looks = replace(APPEARANCE, build="curvy", hair_style="loose beach waves")
+    tight = build_prompt(lusty(appearance=looks, photo=replace(
+        stored, outfit="a cobalt blue leather jacket over a crop top and jeans")), kind_style=LUST)
+    required = [t for t, pr in tight.phrases if pr == 0]
+    if any(t in ("standing", "walking") for t in required):  # the pose shortened ...
+        assert any("loose beach waves" in t for t in required)  # ... and her hair kept its style
+    else:
+        assert any(t in safe.POSES["front"] for t in required)
+
+
 def test_a_situational_photo_keeps_its_hands_out_of_the_picture():
     s = Scene("snapshot", "upper_body", "at a quiet cafe table", "a cup of tea on the table",
               scene_choices.OUTFITS["casual"], "a relaxed smile", "day", "anyone", "x",

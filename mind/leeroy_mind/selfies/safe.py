@@ -217,6 +217,11 @@ POSES = {
     "rear_three_quarter": ("standing, arms at her sides", "walking away, arms at her sides",
                            "standing, hands clasped in front"),
 }
+# A body shot's pose in its short form ("standing", "walking away"): what the fit says before it
+# would drop her hair's style (prompt.SHORT; the review of #362: the required pose had cost the
+# hair style in 59 of 62 three-quarter lust profiles). His and her forms alike.
+POSE_SHORT = {text.replace("her", pos): text.split(",")[0]
+              for poses in POSES.values() for text in poses for pos in ("her", "his")}
 POSE_WAIST_UP = "arms down, hands out of frame"  # a waist-up photo
 ALONE = "alone, no one else in frame"  # a busy place (a bar, a club, a street, a party)
 BUSY_RE = re.compile(r"\b(?:bar|nightclub|club|dance floor|street|party|festival|concert|cafe|"

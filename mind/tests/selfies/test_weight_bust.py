@@ -407,7 +407,10 @@ def test_the_steps_run_in_the_rulings_order():
     texts = _texts(build_prompt(replace(heavy, photo=ph0), kind_style=LUST), 0)
     assert "shoulder-length honey blonde with highlights hair" in texts and "olive skin" in texts
     assert build_words(heavy) in texts and "plus-size, heavyset" in texts
-    assert SHORT == {"selfie, close arm's-length shot": "selfie",
+    from leeroy_mind.selfies.safe import POSE_SHORT as poses
+    assert set(poses.values()) == {"standing", "walking", "walking away"}
+    assert SHORT == {**poses,  # a body shot's pose shortens before her hair's style would go
+                     "selfie, close arm's-length shot": "selfie",
                      "candid photo taken by a friend": "candid photo",
                      "professional headshot": "headshot",
                      "waist-up shot, upper body": "waist-up shot",
