@@ -539,13 +539,18 @@ pose and the framing yield.
 
 Measured on the live cast with the real tokenizers and the worker's fit (read-only):
 
-| prompt (live cast, as stored) | n | too long | `wearing` kept | pose kept | hair style kept | eye colour kept |
+| prompt (live cast, as stored, 2026-11-18) | n | too long | `wearing` kept | pose kept (whole) | hair style kept | eye colour kept |
 |---|---|---|---|---|---|---|
-| lust profile, three-quarter | 62 | 0 | 62 | 59 | 3 | 43 |
-| lust profile, waist-up | 29 | 0 | 29 | n/a (selfies) | 22 | 25 |
-| plain profile | 86 | 0 | 86 | 10 of 12 waist-up | 85 | 76 |
-| varied, the two back views | 182 | 0 | 182 | 167 | 14 | 72 |
-| request selfies from his words | 354 | 0 | 354 | n/a | 337 | 309 |
+| lust profile, three-quarter | 62 | 0 | 62 | 62 (0) | 15 | 58 |
+| lust profile, waist-up | 30 | 0 | 30 | n/a (selfies) | 22 | 25 |
+| plain profile | 95 | 0 | 95 | 9 of the waist-up ones | 94 | 83 |
+| varied, the two back views | 184 | 0 | 184 | 179 (161) | 60 | 97 |
+| request selfies from his words | 374 | 0 | 374 | n/a | 352 | 325 |
+
+A body shot's pose takes its short form ("standing", "walking", "walking away": `safe.POSE_SHORT`)
+with the other short forms, before her hair would lose its style: on three-quarter lust profiles
+the pose is always kept and the hair style in 15 of 62 (3 before the short form; about 29 on main
+without this work). The rest is the required set itself.
 
 With every accessory set on every member (the stress case), all of them keep their room in: lust
 three-quarter profiles 31 of 62 (main 34), varied back views 51 of 182 (main 66), request selfies
