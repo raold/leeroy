@@ -93,6 +93,13 @@ _NO_CAR = re.compile(
     r"|(?:doesn|don|can)['\u2019]?t drive|does not drive|no car|no licen[cs]e)\b")
 
 
+# [talk] coherence (LifeService.configure): a trade with private clients is her own boss too
+COHERENT = False
+_OWN_TRADE = re.compile(
+    r"\b(?:(?:private|(?:her|his|their) own|own) (?:clients|customers|practice|round)"
+    r"|works? for (?:her|him|them)self|mobile (?:hairdresser|barber|mechanic|groomer|beautician"
+    r"|massage therapist|nail technician)|personal trainer|private tutor|childminder"
+    r"|dog (?:walker|groomer))\b")
 # her job says she is not working now, whatever shape her day plan reads from it
 _NOT_WORKING = re.compile(
     r"\b(?:(?:maternity|paternity|parental|sick|medical|family|extended|unpaid) leave|on leave"
@@ -123,11 +130,13 @@ def workplace(p) -> str:
 
 
 def own_boss(p) -> bool:
-    """Her job or days say she is her own boss: "brb boss" is not hers (OWN_BOSS_WORK)."""
+    """Her job or days say she is her own boss: "brb boss" is not hers (OWN_BOSS_WORK). With
+    [talk] coherence also a trade with private clients (nobody walks by her desk)."""
     rl = getattr(p, "real_life", None)
     if rl is None:
         return False
-    return bool(_OWN_BOSS.search(f"{rl.job} {rl.rhythm}".casefold()))
+    text = f"{rl.job} {rl.rhythm}".casefold()
+    return bool(_OWN_BOSS.search(text) or (COHERENT and _OWN_TRADE.search(text)))
 
 
 def drives(p) -> bool:

@@ -58,12 +58,14 @@ from leeroy_mind.discord.presence import local_time
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
+from leeroy_mind.discord.channels import channel_id
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
 from leeroy_mind.life.day import Block, has_kids
 from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
-from leeroy_mind.life.presence import away_words, where_text
+from leeroy_mind.life.presence import (AWAY_NOTE_S, away_note, away_words, playing_text,
+                                       settled_where, stated_where, where_text)
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
@@ -92,13 +94,18 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       line_addressee, member_flirt, names_any, repair,
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
+from leeroy_mind.talk import position
+from leeroy_mind.talk.length import (KEEP_SLACK, SHORTER_HINT, content_question,
+                                     fit_answer, split_lines, tail_lines)
 from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
                                      ordered, topic_for)
 from leeroy_mind.guards.owncopy import LINES as OWN_COPY_LINES, asked_again, copies_any
 from leeroy_mind.guards.review import HARD_CODES, WHOLE_CODES, fresh_hint, rewrite_hint
 from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hint, strip as strip_phrases
-from leeroy_mind.guards.opener import cut as cut_opener
+from leeroy_mind.guards.opener import cut as cut_opener, without_question_echo
+from leeroy_mind.guards.pronouns import fix as fix_pronouns
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk.gearfit import for_speaker as facts_for_speaker
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
 from leeroy_mind.talk.movelog import MoveLog, MoveRow, PairNotes
@@ -108,6 +115,7 @@ from leeroy_mind.talk.moves import (MOVE_PHRASES, classify, is_summon, moves_lin
 from leeroy_mind.talk.owed import (HIS_TALK_WAIT_S, KEEP_WHISPERS, RESCUABLE as OWED_RESCUABLE,
                                    answers_in_flight, extend_owed_deadline, his_talk_after,
                                    owes_him, rescue_text)
+from leeroy_mind.talk.prompt import unanswered_text
 from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_line_text,
                                      comms_rules, facts_head, knows_real_name, mood_line,
                                      quest_help, real_name_line, redact_for, relationship_card,
@@ -140,7 +148,7 @@ from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup, truncate_words
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
-from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
+from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, DUNGEONS, RACES, RAID_INSTANCES
 
 log = logging.getLogger("leeroy_mind.talk")
 
@@ -243,6 +251,9 @@ _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "s
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
+# ...and with [talk] coherence a second draft's wrong pronoun for a member, swapped in code
+# (guards/pronouns.fix) instead of sent
+FIX_CODES = frozenset({"member_misgender"})
 # Soft tells a retry may not keep: a claim of shared history still there is dropped, and so is
 # a summons, a boss or battleground that does not exist, and a message still naming its own
 # speaker.
@@ -344,6 +355,13 @@ DRAWN_TALKED_TO_SHARE = 0.75
 ROMANCE_LATE_BONUS = 0.15
 ROMANCE_COOL_S = 300.0
 OWN_LINES = 5
+OWED_LINES = 3  # game lines an owed answer still too long after its retry may take
+VOICE_LINE_WORDS = 36  # a voice sheet's longest line that one game line surely holds
+SHORT_WAIT_S = 60.0  # an answer this soon after his line is not late, whatever her brb planned
+NAMED_CARDS = 3  # roster lines for members his line names (Pipeline._named_cards)
+# his game question found no fact she can use: she says so, never an invented proc or item
+UNSURE = ("You have no facts at hand for this: if you aren't sure, say you aren't sure. Never "
+          "make up an item, a proc or a number.")
 WANTS_KEPT = 256  # her last want per conversation (_draw_situation's `last`), the latest kept
 # [talk] shape (core plan Task 9, Pipeline._draw_shape): the drop reasons of a turn left on read
 # and of one that only reacts; the learned arm families a drawn shape takes over (credited to
@@ -610,6 +628,17 @@ class TurnMeta:
     covers_ask: bool = False
     # what a draw changed (turn.max_lines, meta.burst), put back before the next draw
     shape_saved: tuple[int, bool] | None = None
+    # [talk] coherence (talk/length.py): the words of a draft kept past her line's cap (a cut that
+    # carries the answer, or one sent as written), which the styling then leaves whole; 0 none
+    keep_words: int = 0
+    keep_lines: int = 0  # ...and the game lines it takes when it is an owed answer laid out
+    # on more lines than her turn has (_generate_serial: still too long after the retry)
+    # [talk] coherence (talk/position.py, Pipeline._position): what she has said so far in this
+    # conversation and a rule of hers his line touches, the lines after the beat's block
+    view: str = field(default="", repr=False)
+    # his whispers a waiting answer covers, oldest first, once a later one joined it
+    # (talk.engine._life_waiting); empty for an answer to one line
+    coalesced: list = field(default_factory=list, repr=False)
 
 
 class _ScopeChanged(SchedulerError):
@@ -893,6 +922,8 @@ class Pipeline:
         self._length_rng = random.Random()  # a channel message's length band (_discord_words)
         # her last want in each conversation (speaker, chain base), the latest WANTS_KEPT
         self._wants: dict[tuple[int, str], Intent] = {}
+        # her want while his question or disagreement is open, by conversation (position.Hold)
+        self._holds: dict[tuple[int, str], position.Hold] = {}
         # what each member did with each counterpart, kept in mind.db across restarts
         self.moves = MoveLog(self.store)
         self.notes = PairNotes(self.store)
@@ -972,7 +1003,7 @@ class Pipeline:
         m = self.world.members.get(guid)
         return m.zone if m is not None else 0
 
-    def _card(self, p: Persona) -> str:
+    def _card(self, p: Persona, topic: str = "") -> str:
         """The card a prompt shows, from the live persona (personas.card.render_prompt_card),
         with race and class from the cast, or from the stored card for a member it lacks."""
         m = self.world.members.get(p.guid)
@@ -980,7 +1011,8 @@ class Pipeline:
             race, class_name = RACES.get(m.race, ""), CLASSES.get(m.class_, "")
         else:
             race, class_name = card_race_class(self.store.get_card(p.guid) or "")
-        return render_prompt_card(p, race=race, class_name=class_name, voice=True)
+        return render_prompt_card(p, race=race, class_name=class_name, voice=True,
+                                  topic=topic)
 
     def _voice(self, turn: Turn, meta: TurnMeta, p: Persona, *, live: bool) -> tuple[list[str], str]:
         """Her voice sheet for this turn (personas/speech.py; ([], "") without one): the sample
@@ -1032,6 +1064,43 @@ class Pipeline:
         for g, line in newest.items():
             if g not in people and (t := of(g)):
                 out[("line", line)] = t
+        if self._coherent() and self._core_on():
+            # every line of a member carries their pronoun, not only the newest of one without
+            # a card (self-play audit, 2026-11-17: "Maald (she): ..." beside "Maald: ..." and
+            # she was "he" in five answers)
+            for r in recent:
+                if (r.id in self._greet_lines and greet and r.from_guid != turn.speaker):
+                    continue
+                if t := of(r.from_guid):
+                    out[("line", r.id)] = t
+        return out
+
+    def _named_cards(self, turn: Turn, his: str, people: list[int], names: dict) -> list[str]:
+        """A roster line for each member his line names who has no card under "People here"
+        (at most NAMED_CARDS): name, pronoun, what they play and their role, so nobody is
+        called by the wrong sex or given the wrong job ("Ronaval tanks")."""
+        hg = self.human.guid
+        if not his or not (self._coherent() and self._core_on()):
+            return []
+        folded = his.casefold()
+        out = []
+        for g, name in names.items():
+            if g in (hg, turn.speaker) or g in people or len(name) < 3:
+                continue
+            if not re.search(r"(?<!\w)" + re.escape(name.casefold()) + r"(?!\w)", folded):
+                continue
+            p = self.personas.get(g)
+            m = self.world.members.get(g)
+            if p is None:
+                continue
+            klass = CLASSES.get(m.class_, "") if m is not None else ""
+            plays = " ".join(x for x in (" ".join(p.play.main_spec.split()), klass) if x)
+            role = ", ".join(x for x in (p.play.raid_role, p.play.guild_role) if x)
+            tag = pronoun_of(p)
+            out.append(f"{name}{f' ({tag})' if tag else ''}: plays {plays or 'in the guild'}"
+                       f" ({role})")
+            if len(out) >= NAMED_CARDS:
+                break
         return out
 
     def _altered_of(self, guid: int) -> Altered:
@@ -1445,8 +1514,10 @@ class Pipeline:
             if not skip and meta.discord is not None and meta.discord.reply_to:
                 raw = self.store.get_meta(f"discord:line:{meta.discord.reply_to}")
                 skip = int(raw) if isinstance(raw, str) and raw.isdecimal() else 0
+            # [talk] coherence, a core switch on: "You said" lists her claims in this
+            # conversation (position.claims_so_far), the one presentation of what she said
             return self.so_far.lines(turn.speaker, now, forms=self.human.forms, skip=skip,
-                                     lead=lead)
+                                     lead=lead, claims=self._coherent() and self._core_on())
         except Exception as e:
             log.warning("so_far_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
             return [f"- {x}" for x in lead if x]
@@ -1725,9 +1796,18 @@ class Pipeline:
             if meta.beat is None:
                 meta.beat = await self._beat(turn, meta, c)
             if meta.beat:
-                return replace(c, messages=_with_hint(c.messages, meta.beat))
-        block = self._block(turn, meta)
+                return replace(c, messages=_with_hint(c.messages, self._positioned(
+                    meta.beat, meta)))
+        block = self._positioned(self._block(turn, meta), meta)
         return replace(c, messages=_with_hint(c.messages, block)) if block else c
+
+    @staticmethod
+    def _positioned(block: str, meta: TurnMeta) -> str:
+        """`block` with her rule his line touches after it (TurnMeta.view, [talk] coherence).
+        What she has said so far is in the prompt's one "So far between you two" block
+        (talk/sofar.py, which reads her claims with position.claims_so_far), never a block of
+        its own."""
+        return "\n".join(x for x in (block, meta.view) if x)
 
     # -- her state, want and situation (human-likeness core, plan Task 8) ----------------------
 
@@ -1752,10 +1832,55 @@ class Pipeline:
                 and not meta.elsewhere and meta.why != "hotmic"
                 and not self._server_turn(turn, meta))
 
+    def _his_waiting(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        """[talk] coherence: his lines this answer covers when more than one waits for it,
+        oldest first; [] for an answer to one line: the whispers that joined her waiting answer
+        (TurnMeta.coalesced, talk.engine._life_waiting). A waiting or late answer used to
+        answer only the newest (self-play audit, 2026-11-17: a question, then "?", got an apology
+        and no answer). His DM's posts are discord.talk's to list (its own instruction says so,
+        the DM memory work); _dm_waiting only reads them to weigh the turn."""
+        hg = self.human.guid
+        if not hg or not self._coherent():
+            return []
+        if len(meta.coalesced) > 1:
+            rows = [r for r in self.store.chat_lines(list(meta.coalesced))
+                    if r.from_guid == hg and self._may_carry(turn, r)]
+            rows.sort(key=lambda r: r.id)
+            return [r.text for r in rows] if len(rows) > 1 else []
+        return []
+
+    def _dm_waiting(self, turn: Turn, meta: TurnMeta) -> list[str]:
+        """His posts in her DM that no stored answer of hers covers, up to the one this turn
+        answers, oldest first, as DiscordTalk.unanswered gives them (discord.covered's receipts;
+        reached through the owed watch's app): read only to weigh the turn against his question
+        (_his_line), never shown from here (discord.talk lists them). [] for one post or another
+        channel."""
+        if (not self._coherent() or meta.discord is None or not meta.discord.reply_to
+                or not self._answers_his_dm(turn, meta)):
+            return []
+        talk = getattr(getattr(getattr(self, "owed", None), "app", None), "discord_talk", None)
+        if talk is None:  # a pipeline with no app behind it (a rig, the sandbox's bare engine)
+            return []
+        try:
+            posts = talk.unanswered(self.store.conn, channel_id(turn.channel),
+                                    meta.discord.thread, meta.discord.reply_to)
+        except Exception as e:  # only ever read to weigh the turn
+            log.warning("talk_dm_waiting_failed: guid=%d reason=%s", turn.speaker,
+                        type(e).__name__)
+            return []
+        return [text for _, text in posts] if len(posts) > 1 else []
+
     def _his_line(self, turn: Turn, meta: TurnMeta) -> str:
         """The line of his this turn answers, "" when it answers none: its trigger line when it is
         his (and hers to see), his Discord post it replies to, or his whisper a carried DM answer
-        answers (its recall query). Read only to weigh it; never shown from here."""
+        answers (its recall query); of several waiting lines (_his_waiting) his first question,
+        so the turn is weighed as an answer to it. Read only to weigh it; never shown from here."""
+        waiting = self._his_waiting(turn, meta) or self._dm_waiting(turn, meta)
+        if waiting:
+            return next((t for t in waiting if is_question(t)), waiting[-1])
+        return self._his_one_line(turn, meta)
+
+    def _his_one_line(self, turn: Turn, meta: TurnMeta) -> str:
         hg = self.human.guid
         if not hg:
             return ""
@@ -1800,6 +1925,10 @@ class Pipeline:
         fwd = forward(p)
         if self._private_to_him(turn) and flirt_chance(p, 1.0) <= 0:
             fwd = 0.0
+        coherent = self._coherent() and bool(his)
+        hold = self._holds.get(self._want_key(turn)) if coherent else None
+        if hold is not None and not position.held(hold, his, self.clock.now()):
+            hold = None
         return IntentContext(
             kind=turn.kind, to_him=self._aimed_at_him(turn), owed=owes_him(self, turn, meta),
             his_line=his, family=family, female=p.identity.player_gender == "female",
@@ -1810,7 +1939,10 @@ class Pipeline:
             event=lp.event if lp is not None else "none",
             block=lp.block if lp is not None else None,
             kids=lp.kids if lp is not None else has_kids(p),
-            last=self._wants.get(self._want_key(turn)), forward=fwd)
+            last=self._wants.get(self._want_key(turn)), forward=fwd,
+            pushback=coherent and position.disagrees(his),
+            bad_news=coherent and bad_news(his), scene=coherent and tail,
+            answer_first=coherent, hold=Intent(hold.want) if hold is not None else None)
 
     def _draw_situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
         """Her situation as she starts composing (core plan Task 8; nothing with every switch
@@ -1825,8 +1957,36 @@ class Pipeline:
             self._situation(turn, meta, p, now)
         except Exception as e:  # her situation is colour: nothing in it may cost him an answer
             meta.intent, meta.want_source, meta.lands, meta.intent_ctx = "", "", "", None
+            meta.view = ""
             log.warning("talk_situation_failed: guid=%d reason=%s", turn.speaker,
                         type(e).__name__)
+
+    def _said_here(self, turn: Turn, meta: TurnMeta, now: float) -> list[str]:
+        """Her own lines in this conversation, oldest first, within position.CLAIM_WINDOW_S: her
+        messages in his DM's chat (meta.discord_chat), else the lines of hers this turn may show
+        on its channel (a whisper's only between the same two)."""
+        since = now - position.CLAIM_WINDOW_S
+        if meta.discord_chat is not None:
+            return [r.text for r in meta.discord_chat
+                    if r.from_guid == turn.speaker and r.ts >= since]
+        rows = self.world.recent_visible(
+            turn.speaker, 12, channel=turn.channel,
+            keep=lambda r: (r.from_guid == turn.speaker and r.ts >= max(since, self._chat_from)
+                            and self._may_carry(turn, r)
+                            and (turn.channel != "whisper" or r.to_guid == turn.to_guid)))
+        return [r.text for r in rows]
+
+    def _position(self, turn: Turn, meta: TurnMeta, p: Persona, his: str) -> None:
+        """[talk] coherence, on an answer to his line (any channel) while a core switch is on:
+        into meta.view a rule on her card his line touches (position.opinion_for, strong),
+        the line after the turn's block. (Her claims are lines of the one "So far" block,
+        talk/sofar.py.) Never logged."""
+        meta.view = ""
+        if not (self._coherent() and his and self._aimed_at_him(turn)):
+            return
+        opinion = position.opinion_for(p.opinions, his)
+        if opinion and position.strong(opinion):
+            meta.view = position.view_line(opinion, self.human.called)
 
     def _situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
         life = getattr(self, "life", None)
@@ -1846,6 +2006,7 @@ class Pipeline:
         if not self._want_eligible(turn, meta):
             return
         his = self._his_line(turn, meta) if (meta.state is not None or intent_on) else ""
+        self._position(turn, meta, p, his)
         if meta.state is not None and his:
             meta.lands = life_state.lands(meta.state, life_state.tone(his),
                                           agreeableness=p.big_five.agreeableness.score,
@@ -1933,6 +2094,8 @@ class Pipeline:
             if not start and turn.trigger_line:
                 rows = self.store.chat_lines([turn.trigger_line])
                 start = rows[0].ts if rows else 0.0
+        if start and self._coherent() and now - start < SHORT_WAIT_S:
+            return False  # hurried back at once (his urgent words): nothing to excuse
         return bool(start) and life.away_between(turn.speaker, start, now)
 
     def _waited_own_time(self, turn: Turn, meta: TurnMeta, now: float) -> bool:
@@ -1968,6 +2131,7 @@ class Pipeline:
             dm_words=talk.dm_words, dm_mirror=mirror,
             realism=self.realism.eligible(self, turn, meta), two_lines=two,
             away=self._waited_away(turn, meta, now),
+            content=self._coherent() and content_question(self._his_line(turn, meta)),
             waited=self._waited_own_time(turn, meta, now),
             his_asks=meta.covers_ask or asks(self._his_line(turn, meta)),
             voice_words=_voice_words(p))
@@ -2129,17 +2293,73 @@ class Pipeline:
         if (lp is None or turn.kind in RAID_CALLS
                 or (turn.channel.startswith("voice:") and not meta.elsewhere)):
             return ""
-        return where_text(lp, "discord" if is_discord(turn.channel) else "game",
-                          playing=bool(self.world.human_online
-                                       and self.world.in_group(turn.speaker)))
+        playing = bool(self.world.human_online and self.world.in_group(turn.speaker))
+        text = where_text(lp, "discord" if is_discord(turn.channel) else "game", playing=playing)
+        if not self._coherent():
+            return text
+        # one "right now" per conversation: in his group she is told so, with the place, and
+        # where she said she is a little while ago still holds (life.presence.settled_where)
+        them = self.human.forms[1]
+        if playing and not is_discord(turn.channel):
+            text = playing_text(self.human.called, them, raid=self._in_his_raid(),
+                                place=self._instance_of(turn.speaker))
+        try:
+            stated = stated_where(self._said_here(turn, meta, self.clock.now()))
+        except Exception as e:  # her situation is colour: nothing in it may cost him an answer
+            log.warning("talk_where_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
+            return text
+        text = settled_where(text, stated, lp, playing=playing and not is_discord(turn.channel),
+                             them=them)
+        return " ".join(x for x in (text, self._away_note(turn)) if x)
 
-    def _remember_want(self, turn: Turn, meta: TurnMeta) -> None:
+    def _away_note(self, turn: Turn) -> str:
+        """Why she stepped away a little while ago in this conversation (her brb's reason,
+        life/interrupt.py), for AWAY_NOTE_S after she is back: "" otherwise."""
+        life, hg = getattr(self, "life", None), self.human.guid
+        if life is None or not hg or turn.template is not None:
+            return ""
+        a = life.last_away(turn.speaker)
+        now = self.clock.now()
+        with_him = (turn.channel == "whisper" and turn.to_guid == hg) or turn.channel.startswith(
+            DM_PREFIX)
+        if (a is None or not with_him or a.channel != turn.channel or a.since <= 0
+                or a.since > now or now - a.until > AWAY_NOTE_S):
+            return ""
+        return away_note(a.reason, self.human.forms[1])
+
+    def _in_his_raid(self) -> bool:
+        group = self.world.group
+        return bool(group is not None and group.raid)
+
+    def _instance_of(self, guid: int) -> str:
+        """The raid or dungeon the member stands in, by name ("" anywhere else)."""
+        m = self.world.members.get(guid)
+        return (RAID_INSTANCES.get(m.map) or DUNGEONS.get(m.map) or "") if m is not None else ""
+
+    def _remember_want(self, turn: Turn, meta: TurnMeta, said: str = "") -> None:
         """Her want on a line she said, as `last` for her next turn in this conversation."""
         key = self._want_key(turn)
         self._wants.pop(key, None)
         self._wants[key] = Intent(meta.intent)
         while len(self._wants) > WANTS_KEPT:
             del self._wants[next(iter(self._wants))]
+        # [talk] coherence: while his question or disagreement is open the want is held for
+        # her next turn here (position.held: 10 quiet minutes, a new subject, his "fair
+        # enough", HOLD_TURNS turns or HOLD_MAX_S from when it was first set lets it go)
+        ctx = meta.intent_ctx
+        old = self._holds.pop(key, None)
+        if (self._coherent() and isinstance(ctx, IntentContext) and ctx.to_him
+                and ctx.his_line.strip() and not position.settled(ctx.his_line)
+                and (ctx.hold is not None or ctx.pushback or asks(ctx.his_line))):
+            now = self.clock.now()
+            if ctx.hold is not None and old is not None:  # held on: its first words and time
+                hold = position.Hold(meta.intent, now, old.words, old.first, old.turns + 1)
+            else:
+                hold = position.Hold(meta.intent, now, position.words_of(ctx.his_line, said),
+                                     now, 1)
+            self._holds[key] = hold
+            while len(self._holds) > WANTS_KEPT:
+                del self._holds[next(iter(self._holds))]
 
     def _want_who(self, turn: Turn) -> str:
         """Whom "You want to:" names: him by what the guild calls him, a member by name,
@@ -2175,14 +2395,16 @@ class Pipeline:
         outside the budget and inside num_ctx."""
         if not self._core_on():
             return 0
+        held = estimate_tokens("\n" + meta.view) if meta.view else 0
         if self._beat_on(turn, meta):
             if meta.beat is None:
                 state = self._state_lands(turn, meta)
-                return beats.block_room(self.human.called, lands=meta.lands if state else None)
+                return held + beats.block_room(self.human.called,
+                                               lands=meta.lands if state else None)
             if meta.beat:
-                return estimate_tokens("\n" + meta.beat)
+                return held + estimate_tokens("\n" + meta.beat)
         block = self._block(turn, meta)
-        return estimate_tokens("\n" + block) if block else 0
+        return held + (estimate_tokens("\n" + block) if block else 0)
 
     async def _beat(self, turn: Turn, meta: TurnMeta, c: "Composed") -> str:
         """One short call on the turn's own prompt, constrained to beat.schema with think false:
@@ -2208,7 +2430,11 @@ class Pipeline:
             options = dict(BEAT.options)
             options["num_predict"] = getattr(self, "think_budget", options["num_predict"])
             offered = self._beat_offer(turn, meta, c, started)
-            items = beats.fitting(sum(estimate_tokens(m["content"]) for m in c.messages), human,
+            # what she has said so far, and her rule on it, before the beat's own ask
+            # her rule his line touches, before the beat's own ask (what she has said so far
+            # is in the prompt's one "So far" block already)
+            based = _with_hint(c.messages, meta.view) if meta.view else c.messages
+            items = beats.fitting(sum(estimate_tokens(m["content"]) for m in based), human,
                                   wants, [x for _, x in offered], predict=options["num_predict"],
                                   num_ctx=options["num_ctx"], their=their, lean=lean,
                                   ask_lands=ask_lands, asking=c.asking)
@@ -2218,7 +2444,7 @@ class Pipeline:
                 # what fits, in the turn's own order (beat.shuffled): position carries no bias
                 order = beats.shuffled(offered[:len(items)], self._beat_rng(turn, meta, started))
                 items = [x for _, x in order]
-                messages = _with_hint(c.messages, beats.instruction(
+                messages = _with_hint(based, beats.instruction(
                     human, wants, items, their, lean=lean, ask_lands=ask_lands, asking=c.asking))
                 fmt = beats.schema(wants, human, their, ask_lands=ask_lands, offered=bool(items),
                                    asking=c.asking)
@@ -2290,6 +2516,10 @@ class Pipeline:
         one would."""
         meta.beat_conversation = beats.ledger_key(turn.speaker, turn.channel, turn.to_guid)
         meta.beat_use = None
+        if c.tail and self._coherent():
+            # an explicit scene is running (his overlay applies): nothing is brought in from
+            # outside it (explicit-DM audit, 2026-11-17: turns with a Bring in scored lower)
+            return []
         keys = list(c.beat_keys) + [""] * (len(c.beat_items) - len(c.beat_keys))
         try:
             entries = beats.ledger(self.store.get_meta(meta.beat_conversation), now)
@@ -2547,6 +2777,15 @@ class Pipeline:
         to_human = bool(hg) and turn.addressee == hg
         if to_human and not his and not preview:
             his = self._his_line(turn, meta)  # his Discord post, DM or carried whisper
+        # several lines of his wait for this answer: each is answered, his question first
+        waiting = self._his_waiting(turn, meta) if to_human and not preview else []
+        unanswered = ""
+        if waiting:
+            asked = next((t for t in waiting if is_question(t)), "")
+            his = asked or his
+            unanswered = unanswered_text(waiting, human)
+        if not preview and to_human:
+            cards += self._named_cards(turn, his, people, names)
         them = human.forms[1] if to_human else "them"
         greet = turn.kind is TurnKind.GREET
         # the greetings of his login a later greeter sees, as who said hi and never the words
@@ -2624,6 +2863,17 @@ class Pipeline:
         # the facts go to the first answer only: a second recited the same table (rehearsal 2)
         facts = (await self.facts.for_line(meta.facts_line)
                  if meta.facts_line and self.facts is not None and not earlier else [])
+        unsure = ""
+        if meta.facts_line and not earlier and live and self._coherent() and self._core_on():
+            # the lookup is shared by every replier: an item her class cannot use, or one far
+            # under her level, is no fact for her (talk/gearfit.py); with none left she is told
+            # to say she is not sure
+            m = self.world.members.get(turn.speaker)
+            facts = facts_for_speaker(facts, CLASSES.get(m.class_, "") if m is not None else "",
+                                      level=m.level if m is not None and m.level > 0
+                                      else CAST_MIN_LEVEL)
+            if not facts:
+                unsure = UNSURE
         pinned = next((i for i, r in enumerate(recent) if r.id == turn.trigger_line), None)
         kept = next((i for i, r in enumerate(recent) if r.id == meta.pushback_line), None
                     ) if meta.pushback_line else None
@@ -2665,8 +2915,8 @@ class Pipeline:
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
             topic=meta.topic, lead=romance or "",
-            extra=" ".join(x for x in (turn.instruction, follow, seen, story, lore, quest,
-                                       *ends) if x),
+            extra=" ".join(x for x in (turn.instruction, unanswered, follow, seen, story, lore,
+                                       quest, unsure, *ends) if x),
             forms=forms, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN,
             channel=turn.channel, discord_words=words, length_text=length_text,
@@ -2691,7 +2941,10 @@ class Pipeline:
             if not from_thread and not dm_rows:  # those rows carry their notes already
                 chat_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in recent])
         parts = PromptParts(
-            card=self._card(p), samples=[] if voice else samples, voice=voice,
+            # [talk] coherence, a core switch on: the opinions his line touches lead her card
+            card=(self._card(p, his) if his and live and self._coherent() and self._core_on()
+                  else self._card(p)),
+            samples=[] if voice else samples, voice=voice,
             rules=rules_of(human, p, data_dir=self.data_dir, now=now,
                            channel=turn.channel, recipient=turn.to_guid,
                            at_him=self._aimed_at_him(turn),
@@ -2784,7 +3037,10 @@ class Pipeline:
         return Composed(messages,
                         list(dict.fromkeys([m.id for m in memories[:len(trimmed.memories)]] +
                              ([callback.memory_id] if callback else []))), p, close,
-                        [trigger] if trigger else [], [r.text for r in earlier], samples,
+                        # the line it answers; of several waiting lines his question first
+                        (list(dict.fromkeys([his, *waiting])) if waiting
+                         else [trigger] if trigger else []),
+                        [r.text for r in earlier], samples,
                         # a DM's copy check reads his earlier messages there (her own are the
                         # repeat check's): the audit's answer that sent his message back
                         support, [r.text for r in recent
@@ -3156,7 +3412,7 @@ class Pipeline:
             spoken = await self._speak_voice(turn, meta, p, text, memory_ids)
             if spoken is not None:
                 if spoken and meta.intent:
-                    self._remember_want(turn, meta)
+                    self._remember_want(turn, meta, text)
                 if spoken:
                     await self._send_emotes(turn, meta, emotes)
                 return spoken
@@ -3166,13 +3422,14 @@ class Pipeline:
         if meta.before_transport is not None and meta.pair_line and text.strip() and not only:
             # her brb or back (life/interrupt.py): one line in her own typing; its barrier only
             # decides whether it goes
-            lines = self._style(turn, p, text, close=close)[:1] or [Styled(text, text)]
+            lines = self._style(turn, p, text, close=close, plain=True)[:1] or [Styled(text, text)]
         elif meta.before_transport is not None:  # its sender's barrier vouches for exactly this text
             lines = [] if only or not text.strip() else [Styled(text, text)]
         else:
             lines = [] if only else self._style(turn, p, text, close=close,
                                                 two_lines=meta.two_lines, romance=meta.romance,
-                                                realism=self.realism.eligible(self, turn, meta))
+                                                realism=self.realism.eligible(self, turn, meta),
+                                                room=self._room(turn, meta), lines=meta.keep_lines)
         # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
         # each line is defused once more as it is kept and sent (talk/items.py).
         lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
@@ -3268,7 +3525,7 @@ class Pipeline:
             return await self._answer_without_photo(turn, meta, without_photo)
         if sent:  # a cancelled turn's follow-ups never start: a fight began or the session ends
             if meta.intent:
-                self._remember_want(turn, meta)
+                self._remember_want(turn, meta, " ".join(s.plain for s in sent))
             await self._send_emotes(turn, meta, emotes)
             self._after_sent(turn, meta, p, " ".join(s.line for s in sent))
         return [s.line for s in sent]
@@ -3298,7 +3555,8 @@ class Pipeline:
             worst = max(verdicts,key=lambda v:severity[v.action])
             rank = (severity[worst.action],sum(len(v.codes) for v in verdicts))
             if best is None or rank<best[0]:
-                best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)))
+                best = (rank,list(candidate),worst.action,tuple(dict.fromkeys(c for v in verdicts for c in v.codes)),
+                        list(verdicts))
         async def fallback():
             if best is None:
                 # Owner, 2026-11-15: every message from him gets a reply. The longest clean part
@@ -3323,7 +3581,10 @@ class Pipeline:
             meta.guard_codes = best[3]
             if ' '.join(' '.join(s.plain for s in best[1]).split()) == ' '.join(meta.preference_original.split()):
                 meta.preference_original = ''
-            return best[1]
+            # the draft kept for an owed answer still has what the guard named: an opener that
+            # says his line back is cut, a member's wrong pronoun swapped, before it is sent
+            return self._fixed_in_code(turn, meta, p, best[1], best[4], close=close,
+                                       spoken=spoken)
         def drop(code):
             return self._drop(turn,meta,code,meta.memory_ids)
         for attempt in range(2):
@@ -3351,7 +3612,8 @@ class Pipeline:
                     return drop("guard_react")
                 if verdict.action == "drop" and not owed:
                     return drop("guard_drop")
-                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(CUT_CODES)
+                cuts = CUT_CODES | FIX_CODES if self._coherent() else CUT_CODES
+                if meta.guard_rewritten and all(v.action == "send" or v.codes and set(v.codes).issubset(cuts)
                                                 for v in verdicts):
                     return await self._without_phrases(turn, meta, p, lines, verdicts, owed,
                                                        close=close, spoken=spoken)
@@ -3387,7 +3649,8 @@ class Pipeline:
                 if command_only(text):
                     return await fallback() if owed else drop("guard_rewrite_failed")
                 lines = ([Styled(text, text)] if spoken else
-                         self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
+                         self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance,
+                                    room=self._room(turn, meta), lines=meta.keep_lines))
                 lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
                 break
             else:
@@ -3478,7 +3741,7 @@ class Pipeline:
         scope changed meanwhile."""
         lines = ([Styled(text, text)] if spoken else
                  self._style(turn, p, text, close=close, two_lines=meta.two_lines,
-                             romance=meta.romance))
+                             romance=meta.romance, room=self._room(turn, meta), lines=meta.keep_lines))
         lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
         if not lines:
             return None
@@ -3509,18 +3772,26 @@ class Pipeline:
         before)."""
         named = tuple(dict.fromkeys(x for v in verdicts for x in v.phrases))
         echoed = next((v.echo_of for v in verdicts if v.echo_of), "")
+        wrong = (tuple(x for v in verdicts for x in v.pronouns) if self._coherent() else ())
         joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
         text = joined.join(s.plain for s in lines)
+        if wrong:  # the rewrite still calls a member by the wrong pronoun: swapped in code
+            text = fix_pronouns(text, wrong)
+            log.info("guard_pronoun_fixed: guid=%d kind=%s n=%d", turn.speaker, turn.kind,
+                     len(wrong))
         if echoed:
-            text = cut_opener(text, echoed)
+            cut = cut_opener(text, echoed)
+            text = cut if cut is not None or not wrong else text  # the swap is kept either way
         if text is not None and named:
             cut = strip_phrases(text, named, epithet_only=owed)
             text = cut if cut is not None or not (owed and echoed) else text
-        elif not echoed:
+        elif not echoed and not wrong:
             text = None
+        kept = []
         if text is not None:
             kept = ([Styled(text, text)] if spoken else
-                    self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance))
+                    self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance,
+                                    room=self._room(turn, meta), lines=meta.keep_lines))
             kept = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in kept]
             checked = []
             for line in kept:
@@ -3536,10 +3807,41 @@ class Pipeline:
         meta.guard_codes = tuple(dict.fromkeys(c for v in verdicts for c in v.codes))
         if owed:
             meta.guard_verdict = "rewrite"
-            return lines
+            # as it was written, but never with the wrong pronoun the code already swapped
+            return kept if wrong and text is not None and kept else lines
         meta.guard_verdict = "drop"
         return self._drop(turn, meta, "guard_phrase_refused" if named else "guard_rewrite_refused",
                           meta.memory_ids)
+
+    def _fixed_in_code(self, turn, meta, p, lines, verdicts, *, close, spoken):
+        """[talk] coherence: the draft an owed answer falls back to (its best candidate, soft
+        codes only), with what code can mend mended first: an opener that says his line back
+        loses those clauses (guards/opener.cut, when what is left stands alone) and a member's
+        wrong pronoun is swapped (guards/pronouns.fix). The self-play audit's `echo_opener`
+        turn sent its first draft unchanged this way. Unchanged with the switch off, when
+        nothing applies or when the mended text styles to nothing."""
+        if not self._coherent() or not lines:
+            return lines
+        echoed = next((v.echo_of for v in verdicts if v.echo_of), "")
+        wrong = tuple(x for v in verdicts for x in v.pronouns)
+        if not echoed and not wrong:
+            return lines
+        joined = "\n" if is_discord(turn.channel) or turn.kind is TurnKind.BIT else " "
+        text = joined.join(s.plain for s in lines)
+        mended = fix_pronouns(text, wrong) if wrong else text
+        if echoed:
+            mended = cut_opener(mended, echoed) or mended
+        if mended == text:
+            return lines
+        kept = ([Styled(mended, mended)] if spoken else
+                self._style(turn, p, mended, close=close, two_lines=meta.two_lines,
+                            romance=meta.romance, room=self._room(turn, meta), lines=meta.keep_lines))
+        kept = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in kept]
+        if not kept:
+            return lines
+        log.info("guard_fixed_in_code: guid=%d kind=%s echo=%d pronouns=%d", turn.speaker,
+                 turn.kind, bool(echoed), len(wrong))
+        return kept
 
     async def _guard_react(self, turn, meta, reaction, allowed=None) -> bool:
         """Her reaction instead of a line: True once it is posted (a Discord reaction added, a
@@ -3963,8 +4265,17 @@ class Pipeline:
         # when he asked her to leave her husband): a draft with soft tells only is kept and sent
         # when the retry is worse or silent, else owed_fallback asks once more, simply.
         owed = max_attempts > 1 and self.live_review.owed(turn, meta)
+        # [talk] coherence: a draft that is only too long is cut in code or sent as written
+        # (talk/length.py fit_answer), never asked again from nothing
+        # (game lines only: a Discord turn keeps its own length rules, fit_words and its bands)
+        keeps = (self._coherent() and not emoji and turn.template is None
+                 and turn.kind is not TurnKind.BIT)
         fit = (int(LONG_SLACK * self._word_budget(turn, p, meta.two_lines))
                if owed and emoji else 0)  # an owed Discord answer is cut, never asked again
+        # what a turn that answers nothing is about: an opener's topic, an outreach item's words
+        subject = meta.topic or (meta.recall_query if meta.outreach_item is not None else "")
+        asked_line = (self._asked_line(turn, meta, c) if keeps else "")
+        meta.keep_words = meta.keep_lines = 0
         kept, why = "", "tells"
         blocking: set[str] = set()  # the last draft's tells that kept it from going
         for attempt in range(max_attempts):
@@ -4000,6 +4311,44 @@ class Pipeline:
                 silent = quiet(text)  # a line that was only a command at him included
             if not silent and fit and len(text.split()) > fit:
                 text = fit_words(text, fit)
+            if not silent and keeps and asked_line:
+                text = without_question_echo(text, asked_line)
+            length, draft = "", text
+            if not silent and keeps:
+                budget = self._word_budget(turn, p, meta.two_lines)
+                voiced = _voice_words(p)  # never cut below the line her sheet names
+                fitted = fit_answer(text, budget, asked_line, subject=subject,
+                                    floor=min(voiced) if voiced else 0)
+                length = fitted.action
+                if length in ("cut", "kept"):
+                    text = fitted.text
+                # what goes out whole must fit her game lines by whole clauses: else the
+                # styling would trim its tail at the bridge's bytes, and the answer with it
+                # (a line over her words but inside the slack counts: laid out by the styling
+                # alone it could lose its last clause)
+                # (a line of her turn's words or more counts even inside the slack: laid out
+                # by the styling alone it could lose its last clause)
+                over = length == "fits" and len(text.split()) >= budget
+                whole = length in ("cut", "kept") or over or (
+                    length == "fits" and self._room(turn, meta))
+                meta.keep_lines = 0
+                if whole and split_lines(text, self._lines_allowed(turn, p, meta)) is None:
+                    length, text = "retry", draft
+                if (length == "retry" and (attempt or max_attempts == 1)
+                        and self.live_review.owed(turn, meta)):
+                    # an answer he is owed, still too long after it was asked again: never
+                    # the bridge's byte trim. Its whole clauses on up to OWED_LINES lines,
+                    # nothing dropped; else its tail that fits (the answer is more often
+                    # late than early in a draft that ran long), never its head
+                    parts = split_lines(text, OWED_LINES)
+                    tail = None if parts is not None else tail_lines(text, OWED_LINES)
+                    if parts is not None or tail is not None:
+                        length = "kept" if parts is not None else "cut"
+                        text = text if parts is not None else " ".join(tail)
+                        meta.keep_lines = len(parts or tail)
+                if length != "fits":
+                    log.info("say_length: guid=%d kind=%s attempt=%d action=%s words=%d limit=%d",
+                             turn.speaker, turn.kind, attempt, length, len(draft.split()), budget)
             if not silent:
                 tells = find_tells(text, recent_own=self._own_lines(turn), speaker=name,
                                    answers=c.answers, others=c.others, samples=c.samples,
@@ -4007,7 +4356,8 @@ class Pipeline:
                                    window=c.window, held=c.held, tonight=meta.again_tonight,
                                    recent_moves=moves, summons_ok=summons_ok,
                                    keep_emoji=emoji, far=far)
-                if len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines):
+                if (length == "retry" if keeps else
+                        len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines)):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
                     tells.append(Tell("member flirt", True))
@@ -4025,6 +4375,9 @@ class Pipeline:
                            for t in tells):
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
                     if not quiet(text):
+                        if length in ("cut", "kept") or (
+                                length == "fits" and len(text.split()) >= budget):
+                            meta.keep_words = len(text.split())
                         return text, None
                     silent = True
                 elif not kept and not any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
@@ -4049,8 +4402,12 @@ class Pipeline:
                 break
             log.info("say_tells: guid=%d kind=%s attempt=%d tells=%s", turn.speaker, turn.kind,
                      attempt, ",".join(t.reason for t in tells))
-            messages = asking(" ".join(x for x in (self._retry_hint(tells, p, turn), rest_hint)
-                                       if x))
+            only_long = length == "retry" and all(
+                t.reason == "long" or not (t.fatal or t.soft) for t in tells)
+            messages = asking(" ".join(x for x in (
+                self._retry_hint(tells, p, turn, draft=draft if only_long else "",
+                                 words=self._word_budget(turn, p, meta.two_lines)), rest_hint)
+                if x))
         if owed:
             if kept and not quiet(best := repair(kept, speaker=name, aliases=own, him=his,
                                                  keep_emoji=emoji)):
@@ -4258,11 +4615,39 @@ class Pipeline:
         return bool(hg) and (turn.addressee == hg or turn.kind is TurnKind.FLIRT
                              or (turn.channel == "whisper" and turn.to_guid == hg))
 
-    def _retry_hint(self, tells: list[Tell], p: Persona, turn: Turn | None = None) -> str:
+    def _coherent(self) -> bool:
+        """[talk] coherence (default off; anything but true is off): a long draft is kept, her
+        want and place hold through a conversation, every waiting line of his is answered."""
+        return getattr(getattr(self.cfg, "talk", None), "coherence", False) is True
+
+    def _room(self, turn: Turn, meta: TurnMeta) -> int:
+        """The words the turn's lines must have room for past her habit (0: her line's cap, as
+        ever): a draft the length rule kept (TurnMeta.keep_words), or a game shape whose words
+        were raised for a content answer (talk.shape CONTENT_WORDS)."""
+        if not self._coherent():
+            return 0
+        draw = turn.shape
+        shaped = draw.words if isinstance(draw, ShapeDraw) and draw.content else 0
+        p = self.personas.get(turn.speaker)
+        voiced = self._voice_room(p) if p is not None and not is_discord(turn.channel) else 0
+        return max(meta.keep_words, shaped, voiced)
+
+    def _asked_line(self, turn: Turn, meta: TurnMeta, c: Composed) -> str:
+        """The line this turn answers, for the length rule's "carries the answer": the line it
+        was composed to answer, else his line (a DM post, a carried whisper); "" for none."""
+        if c.answers:
+            return c.answers[0]
+        try:
+            return self._his_line(turn, meta)
+        except Exception:  # only ever read to weigh a cut
+            return ""
+
+    def _retry_hint(self, tells: list[Tell], p: Persona, turn: Turn | None = None, *,
+                    draft: str = "", words: int = 0) -> str:
         reasons = {t.reason for t in tells if t.fatal or t.soft}
         repeated = {r.removeprefix(MOVE_REPEAT) for r in reasons if r.startswith(MOVE_REPEAT)}
         unhinted = {r for r in reasons - _HINTED if not r.startswith(MOVE_REPEAT)}
-        words = 0 if turn is None else self._discord_words(turn)
+        limit, words = words, 0 if turn is None else self._discord_words(turn)
         hints = ([(DISCORD_REGEN_HINT if words else REGEN_HINT).format(name=p.character_name)]
                  if unhinted else [])
         forms = dict(zip(("they", "them", "their"), THEY_FORMS if turn is None
@@ -4302,7 +4687,12 @@ class Pipeline:
             hints.append(GAME_NAME_HINT)
         if "self name" in reasons:
             hints.append(SELF_NAME_HINT.format(name=p.character_name))
-        if ("long" in reasons and turn is not None and isinstance(turn.shape, ShapeDraw)
+        if "long" in reasons and draft and turn is not None:
+            # only too long, with no cut that keeps the answer: her own draft, said shorter
+            hints.append(SHORTER_HINT.format(
+                draft=" ".join(draft.split()[:int(4 * KEEP_SLACK * 30)]),
+                words=limit or self._word_budget(turn, p)))
+        elif ("long" in reasons and turn is not None and isinstance(turn.shape, ShapeDraw)
                 and turn.shape.shape is Shape.ONE_WORD):
             hints.append(ONE_WORD_HINT)
         elif "long" in reasons and words:
@@ -4354,10 +4744,27 @@ class Pipeline:
                        PHASE_MODS[day_phase(self.clock.local())].length_mult)
         if self._shape_words(turn, discord=False):
             draw = turn.shape
-            return ONE_WORD_WORDS if draw.shape is Shape.ONE_WORD else cap * max(1, draw.lines)
+            if draw.shape is Shape.ONE_WORD:
+                return ONE_WORD_WORDS
+            return max(cap * max(1, draw.lines), draw.words if draw.content else 0,
+                       self._voice_room(p) * max(1, draw.lines))
         lines = (turn.max_lines if turn.kind is TurnKind.BIT or two_lines
                  else turn_lines(p.typing, turn.max_lines))
-        return cap * max(1, lines)
+        return max(cap * max(1, lines), self._voice_room(p) * max(1, lines))
+
+    def _voice_room(self, p: Persona) -> int:
+        """[talk] coherence: the longest line her voice sheet names (0 without one), at most
+        VOICE_LINE_WORDS (what one game line holds): a line inside her sheet's range is never
+        long, so the length rule never cuts her below it."""
+        voiced = _voice_words(p) if self._coherent() else None
+        return min(max(voiced), VOICE_LINE_WORDS) if voiced else 0
+
+    def _lines_allowed(self, turn: Turn, p: Persona, meta: TurnMeta) -> int:
+        """The game lines her turn may take, as the styling counts them (_style)."""
+        most = max(1, turn.max_lines)
+        if meta.two_lines or turn.kind is TurnKind.BIT:
+            return most
+        return turn_lines(p.typing, most)
 
     def _link_level(self, guid: int) -> int:
         m = self.world.members.get(guid)
@@ -4395,23 +4802,53 @@ class Pipeline:
 
     def _style(self, turn: Turn, p: Persona, text: str, *, close: bool,
                two_lines: bool = False, romance: bool = False,
-               realism: bool = False) -> list[Styled]:
+               realism: bool = False, room: int = 0, plain: bool = False,
+               lines: int = 0) -> list[Styled]:
         """The member's typing over the words: at most turn.max_lines lines (style_lines). A
         bit of several lines keeps the lines the model wrote, one each; any other turn is
         styled as one text. A member of his inner circle keeps his real name capitalised
         through it where it was written so (_real_name_spelling). A Discord turn keeps its
         letters and emoji (no ASCII fold) and its lines become one message, joined by "\n", at
         most the store's MAX_TEXT. A longer Discord message ([talk] discord_words) is one
-        paragraph of up to LONG_SLACK times its words, whatever her game line."""
+        paragraph of up to LONG_SLACK times its words, whatever her game line. `room`: the words
+        a kept draft holds (TurnMeta.keep_words, talk/length.py) or a content answer's shape
+        asks for, which her lines then have room for: the length rule already chose the cut.
+        `plain` ([talk] coherence): her brb or back line, typed without slips or an emoticon."""
         discord = is_discord(turn.channel)
         words = self._discord_words(turn)
         phase = day_phase(self.clock.local())
         keep = self._real_name_spelling() if close else frozenset()
         pieces = ([x for x in text.split("\n") if x.strip()]
                   if turn.kind is TurnKind.BIT and turn.max_lines > 1 and not words else [text])
+        coherent = self._coherent()
+        own_lines = [x for x in text.split("\n") if x.strip()]
+        if (coherent and len(pieces) == 1 and two_lines and not words and turn.max_lines > 1
+                and len(own_lines) > 1):
+            # a game burst the model wrote as two lines keeps its own break, each line laid out
+            # on its own: repacked as one text its clauses ran together and the rest was dropped
+            # (hard-case audit, 2026-11-17)
+            pieces = own_lines[:turn.max_lines]
+        if coherent and room and not words and len(pieces) == 1 and turn.kind is not TurnKind.BIT:
+            # a kept draft longer than one game line: its whole clauses on the lines she has
+            # (talk.length.split_lines; _generate only keeps a draft that fits them)
+            allowed = max(lines, max(1, turn.max_lines) if two_lines else turn_lines(
+                p.typing, max(1, turn.max_lines)))
+            parts = split_lines(text, allowed)
+            if parts is not None and len(parts) > 1:
+                pieces = parts
+                room = max(room, *(len(x.split()) for x in parts))
+        plain = plain and coherent  # her brb and back: no slips, no typos, no marks
         out: list[Styled] = []
-        typing = p.typing
-        most = 1 if words else turn.max_lines
+        typing = replace(p.typing, typo_rate=0.0) if plain else p.typing
+        most = 1 if words else max(turn.max_lines, len(pieces) if lines else 0)
+        cap = math.ceil(words * LONG_SLACK) if words else None
+        if room and words:
+            cap = max(cap, room)
+        elif room:
+            # the whole of it fits one line, so the styling never repacks a clause away (review
+            # of #370: a kept clause longer than its line's share lost its end)
+            cap = max(line_cap(typing, self._effects(turn.speaker), PHASE_MODS[phase].length_mult),
+                      room)
         for piece in pieces:
             out += style_lines(piece, typing, self._effects(turn.speaker), self.rng,
                                length_mult=PHASE_MODS[phase].length_mult,
@@ -4419,13 +4856,13 @@ class Pipeline:
                                speaker=p.character_name, kind=turn.kind, keep_case=keep,
                                max_lines=most if len(pieces) == 1 else 1,
                                aliases=aliases(p), force_lines=two_lines and not words,
-                               no_emoticon=romance or turn.kind in NO_MARK_KINDS,
+                               no_emoticon=romance or turn.kind in NO_MARK_KINDS or plain,
                                wink_ok=not (self._to_member(turn) or names_any(
                                    piece, [m.name for g, m in self._members_for(turn.channel).items()
                                            if g != self.human.guid])), game=not discord,
-                               cap=math.ceil(words * LONG_SLACK) if words else None,
+                               cap=cap,
                                max_chars=DISCORD_MAX_TEXT if discord else None,
-                               texture=self.cfg.talk.texture)
+                               texture=self.cfg.talk.texture and not plain)
         out = out[:max(1, most)]
         if discord and out:
             slipped = next((s for s in reversed(out) if s.slip), Styled("", ""))

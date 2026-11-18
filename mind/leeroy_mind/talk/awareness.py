@@ -45,6 +45,12 @@ def _block_text(parts) -> str:
     return BEGIN + "\n" + PREAMBLE + "\n" + "\n\n".join(parts) + "\n" + END if parts else ""
 
 
+# Talk about raids and rosters: the turns whose card shows her attendance counts
+_PLANNING = re.compile(r"\b(?:raids?|raiding|roster|bench\w*|attendance|sign(?:ed)? ?ups?|"
+                       r"line ?up|standby|s[ai]t(?:ting)? out|spots?|invites?|dkp|"
+                       r"who'?s (?:in|coming)|tonight'?s run)\b", re.IGNORECASE)
+
+
 class AwarenessBlock(str):
     """Detached, already-screened sections that can be rendered again without a read. `keys`
     (the card's part keys, one per part) let a trim keep chosen parts whole (fit's `keep`)."""
@@ -391,7 +397,11 @@ class LiveReview:
         if (godmode is not None and getattr(meta, 'outreach_item', None) is None
                 and getattr(meta, 'godmode_intent', None) is None):
             intents = tuple(godmode.card_lines(turn.speaker, raw, to_guid=to, conn=conn))
+        # her bench and raid counts only where the talk is about raids and rosters
+        planning = (not (e._coherent() and e._core_on()) or "raid" in raw or "officer" in raw or bool(
+            _PLANNING.search(" ".join(h.text for h in history[-3:]))))
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
+            attendance=planning,
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
             discord_events=tuple(events[-4:]), now=now,names=names,
             romance_activities=bond[0] and not is_group(raw), jealousy=0 if is_group(raw) else bond[1], server=observed.server,

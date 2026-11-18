@@ -36,6 +36,7 @@ intent = false                 # her want for each turn, drawn by code, in the b
 situation = false              # the prompt as her situation: hard rules only, "Right now" by the instruction
 shape = false                  # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
 dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length follows his (0: as full as she likes)
+coherence = false              # conversations hold together (talk/README.md): long game lines kept, her want and place hold, every waiting whisper answered; read at start and at his login
 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
@@ -120,6 +121,7 @@ class TalkCfg:
     situation: bool = False  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
     shape: bool = False  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
     dm_mirror: int = 5  # [talk] dm_mirror: with shape on, a DM's length follows his (0: today's)
+    coherence: bool = False  # [talk] coherence: talk/length.py, talk/position.py (anything but true: off)
 
 
 @dataclass(frozen=True)
@@ -243,6 +245,7 @@ _RULES = {
         "situation": (lambda v: type(v) is bool, "a boolean"),
         "shape": (lambda v: type(v) is bool, "a boolean"),
         "dm_mirror": (lambda v: _int_in(v, 0, DM_MIRROR_MAX), f"an integer 0-{DM_MIRROR_MAX}"),
+        "coherence": (lambda v: type(v) is bool, "a boolean"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -316,7 +319,8 @@ def _build(data: dict, source: str) -> MindConfig:
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
             if section == "talk" and key in ("realism", "texture", "dm_own_time",
-                                             "think_private", "recall_diversity") and type(v) is not bool:
+                                             "think_private", "recall_diversity",
+                                             "coherence") and type(v) is not bool:
                 v = False
             if (section == "talk" and key in ("intent", "situation", "shape")
                     and type(v) is not bool):

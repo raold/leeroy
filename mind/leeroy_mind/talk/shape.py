@@ -47,6 +47,11 @@ DISCORD_SHORT_WORDS = CHANNEL_BANDS[1][1]  # a quick line on Discord (20 words)
 # many words, so a terse typist is never asked for "about 1 words" (review of #343, P1); a
 # shorter draw elsewhere is worded as a word or two (shape_template)
 MIN_LINE_WORDS = 3
+# His line asks for content (talk.length.content_question: who, what, when, where, why, how,
+# which, "explain"): a game line that answers it (SHORT, QUESTION, LATE) holds at least this many
+# words, whatever her habit, so the answer fits (self-play audit, 2026-11-17: a 3-word shape
+# could not name two trinkets, and a right 36-word lore answer was asked again at "2-8 words")
+CONTENT_WORDS = 12
 # His short DM lines get short answers (self-play audit, 2026-11-17: he averaged 12 words and
 # she 52; to his lines of 5 words or fewer she averaged 32): a line of his of SHORT_HIS words or
 # fewer caps her at about SHORT_CAP words, one of up to MID_HIS at about MID_CAP, and the mirror
@@ -160,6 +165,8 @@ class ShapeContext:
     # her answer to him waited out a time she stepped away (life/interrupt.py, core plan Task
     # 10): LATE, in game or her DM, its excuse "away" (Pipeline._waited_away)
     away: bool = False
+    # his line asks for content ([talk] coherence; Pipeline._shape): CONTENT_WORDS
+    content: bool = False
     # her DM answer waited for her own time (discord/owntime.py) owntime.LATE_OWN_S or more:
     # LATE, its excuse where she was when he wrote (Pipeline._waited_own_time)
     waited: bool = False
@@ -178,6 +185,7 @@ class ShapeDraw:
     words: int
     lines: int
     num_predict: int | None  # None: the preset's own
+    content: bool = False  # a game line whose words were raised to CONTENT_WORDS for his question
 
 
 def _code(value) -> str:
@@ -310,7 +318,16 @@ def _sized(shape: Shape, ctx: ShapeContext, rng) -> ShapeDraw:
         words = _line_words(ctx, rng)
         if _row_for(ctx)[Shape.ONE_WORD] <= 0 or (two and shape is not Shape.BURST):
             words = max(words, MIN_LINE_WORDS)  # never a word or two here (review of #343, P1)
-        return ShapeDraw(shape, 2 * words, 2, None) if two else ShapeDraw(shape, words, 1, None)
+        # room for the answer he asked for; never past the line her voice sheet names (a
+        # "three to seven words" member answers in seven, not twelve)
+        floor = (CONTENT_WORDS if ctx.voice_words is None
+                 else min(CONTENT_WORDS, max(ctx.voice_words)))
+        raised = (ctx.content and shape in (Shape.SHORT, Shape.QUESTION, Shape.LATE)
+                  and words < floor)
+        if raised:
+            words = floor
+        return (ShapeDraw(shape, 2 * words, 2, None, raised) if two
+                else ShapeDraw(shape, words, 1, None, raised))
     dm = ctx.family == "dm"
     if two:
         words = _dm_words(ctx, rng) if dm else band(cap, burst_draw(rng))

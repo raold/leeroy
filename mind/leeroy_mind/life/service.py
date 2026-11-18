@@ -45,10 +45,12 @@ from leeroy_mind.discord.presence import local_time
 from leeroy_mind.logs import log as log_event
 
 from . import config as life_config
-from . import interrupt
+from leeroy_mind.guards import pronouns
+
+from . import day, interrupt
 from .day import Block
 from .interrupt import Away, Interruption
-from .presence import (Attention, LifePresence, attention_weight, game_cap_s, latency,
+from .presence import (Attention, LifePresence, stated_where, attention_weight, game_cap_s, latency,
                        presence_at)
 from .seed import seeded
 from .state import State
@@ -105,6 +107,11 @@ class LifeService:
         mind's truth; the meta copy is for the console, so a failed write is logged
         (`life_meta_failed`) and never raised."""
         life = getattr(cfg, "life", None)
+        # [talk] coherence reaches the pure readers through their module switches (read here,
+        # so at the mind's start and at each of his logins): her job's shape (life/day.py), her
+        # own boss (life/interrupt.py) and "tell X he ..." (guards/pronouns.py)
+        coherent = getattr(getattr(cfg, "talk", None), "coherence", False) is True
+        day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = coherent
         cap = getattr(life, "dm_wait_cap_s", 0)
         life_config.pin(getattr(life, "availability", 0), getattr(life, "state", False),
                         cap if type(cap) is int else 0)
@@ -352,6 +359,8 @@ class LifeService:
             return
         if getattr(self.world, "human_online", False) and self._in_group(g):
             lp = replace(lp, block=Block.GAMING)  # at her PC playing with him (PM log D15)
+        else:
+            lp = self._where_she_said(pipe, turn, meta, lp, now)
         local = self.clock.local()
         night, minute = night_of(local), local.hour * 60 + local.minute
         rng = seeded("interrupt", night, g, minute, self._her_line(g, turn.channel, now))
@@ -372,6 +381,27 @@ class LifeService:
         except BaseException:
             self._stepping.discard(g)  # never stuck: her next line may draw again
             raise
+
+    @staticmethod
+    def _where_she_said(pipe, turn, meta, lp, now: float):
+        """Her presence with the block of where she said she is in this conversation ([talk]
+        coherence, presence.stated_where): home or in bed while her plan has her at work reads
+        as free time (never "brb boss" from the sofa), at work while her plan has her free as
+        work. Unchanged when she said nothing, it agrees, or the switch is off."""
+        coherent = getattr(pipe, "_coherent", None)
+        said = getattr(pipe, "_said_here", None)
+        if coherent is None or said is None or not coherent():
+            return lp
+        try:
+            stated = stated_where(said(turn, meta, now))
+        except Exception as e:  # colour only: her plan's block stands
+            log.warning("life_where_failed reason=%s", type(e).__name__)
+            return lp
+        if stated in ("home", "bed") and lp.block in (Block.WORK, Block.COMMUTE):
+            return replace(lp, block=Block.FREE)
+        if stated == "work" and lp.block in (Block.FREE, Block.GAMING, Block.HOME_DUTY):
+            return replace(lp, block=Block.WORK)
+        return lp
 
     def _came_back(self, guid: int, now: float) -> None:
         """A line of hers to him in their whisper or her DM while she is away (his urgent words,

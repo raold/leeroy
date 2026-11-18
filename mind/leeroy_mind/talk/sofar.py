@@ -43,6 +43,7 @@ from leeroy_mind.text import estimate_tokens
 HEAD = ("So far between you two (keep to it, never contradict it; if he asks about something "
         "he told you that is not here or in the chat, say you don't remember, never guess):")
 IDLE_S = 3 * 3600.0
+CLAIM_TOKENS = 50  # her claims ([talk] coherence), at most (estimated tokens)
 MAX_TOKENS = 120
 FACTS = 6
 LINE_WORDS = 12
@@ -233,11 +234,13 @@ def her_state(lines: Sequence[Line]) -> str:
     return ""
 
 
-def her_said(lines: Sequence[Line]) -> list[str]:
+def her_said(lines: Sequence[Line], *, claims: bool = False) -> list[str]:
     """What she has claimed about herself so far in this conversation, as plain strings
     (talk.position.claims_so_far when that module is there, else her place and state); for a
     caller that wants her own claims."""
-    return _her_claims(lines) or [x for x in (her_place(lines), her_state(lines)) if x]
+    place, state = her_place(lines), her_state(lines)
+    return [x for x in (place, state) if x] + (
+        _claims_after(lines, place, state) if claims else [])
 
 
 def plans(lines: Sequence[Line], *, skip: int = 0, taken: Sequence[int] = ()) -> list[tuple[bool, str]]:
@@ -259,7 +262,7 @@ def plans(lines: Sequence[Line], *, skip: int = 0, taken: Sequence[int] = ()) ->
 
 
 def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
-          lead: Sequence[str] = ()) -> list[str]:
+          lead: Sequence[str] = (), claims: bool = False) -> list[str]:
     """The section's lines for a conversation (`conversation`'s rows), "- " each: `lead` (lines
     the caller always wants first), where and how she said she is, what he asked and is still
     owed, his news, the plans; the conversation's lines within MAX_TOKENS, what is over left out
@@ -269,23 +272,26 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
     facts = _news(lines, skip)
     n = len([x for x in lead if x])
     first = [f"- {x}" for x in lead if x]
-    claims = _her_claims(lines)
-    if claims:
-        first += [f"- You said: {c}." for c in claims]
-    else:
-        place, state = her_place(lines), her_state(lines)
-        if place:
-            first.append(f"- You said you're {place}.")
-        if state:
-            first.append(f"- You said: {state}.")
+    place, state = her_place(lines), her_state(lines)
+    if place:
+        first.append(f"- You said you're {place}.")
+    if state:
+        first.append(f"- You said: {state}.")
+    # `claims` ([talk] coherence with a core switch on, the pipeline's call): her claims
+    # (numbers and self-statements) after where and how she said she is, within CLAIM_TOKENS
+    # They are the first lines to go when the block is over MAX_TOKENS: none of main's lines
+    # is ever dropped for one
+    extra = [f"- You said: {c}." for c in (_claims_after(lines, place, state) if claims else [])]
     asked = [f"- {they} also asked: {q}" for q in open_questions(lines, skip=skip)]
     later = [f"- {they if his else 'You'} said: {text}"
              for his, text in plans(lines, skip=skip, taken=[i for i, _, _ in facts])]
     lead_lines, said = first[:n], first[n:]  # the caller's lead is not the conversation's
 
     def size(news) -> int:
-        return estimate_tokens("\n".join([*said, *asked, *(f"- {they} told you: {t}"
-                                                           for _, t, _ in news), *later]))
+        return estimate_tokens("\n".join([*said, *extra, *asked, *(f"- {they} told you: {t}"
+                                                                   for _, t, _ in news), *later]))
+    while extra and size(facts) > MAX_TOKENS:
+        extra.pop(0)
     # what is over goes by worth: his least important news first (the oldest of it), then the
     # plans, then what she said; what he asked and is still owed goes last
     while facts and size(facts) > MAX_TOKENS:
@@ -296,18 +302,25 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
         said.pop()
     while asked and size(facts) > MAX_TOKENS:
         asked.pop(0)
-    return [*lead_lines, *said, *asked, *(f"- {they} told you: {t}" for _, t, _ in facts),
+    return [*lead_lines, *said, *extra, *asked, *(f"- {they} told you: {t}" for _, t, _ in facts),
             *later]
 
 
+def _claims_after(lines: Sequence[Line], place: str, state: str) -> list[str]:
+    """Her claims that go after her place and state: none that only repeats one of them, the
+    oldest dropped until their lines are within CLAIM_TOKENS estimated tokens."""
+    said = [x.casefold() for x in (place, state) if x]
+    out = [c for c in _her_claims(lines) if not any(x in c.casefold() for x in said)]
+    while out and estimate_tokens("\n".join(f"- You said: {c}." for c in out)) > CLAIM_TOKENS:
+        out.pop(0)
+    return out
+
+
 def _her_claims(lines: Sequence[Line]) -> list[str]:
-    """What she has claimed about herself so far, by the coherence lane's extractor when that
-    module is there (talk.position.claims_so_far: numbers and self-statements, the better
-    reader); [] without it, and block falls back to her_place and her_state."""
-    try:
-        from leeroy_mind.talk.position import claims_so_far
-    except ImportError:
-        return []
+    """What she has claimed about herself so far (talk.position.claims_so_far: numbers and
+    self-statements); [] when she has claimed nothing, and block falls back to her_place and
+    her_state."""
+    from leeroy_mind.talk.position import claims_so_far
     return list(claims_so_far([x.text for x in lines if not x.his]))
 
 
@@ -321,23 +334,23 @@ class SoFar:
         self._kept: dict[int, tuple[tuple, float, list[str], list[str]]] = {}
 
     def lines(self, guid: int, now: float, *, forms: tuple[str, str, str], skip: int = 0,
-              lead: Sequence[str] = ()) -> list[str]:
+              lead: Sequence[str] = (), claims: bool = False) -> list[str]:
         """Her block now (see `block`); [] with no conversation and no `lead`."""
-        return self._build(guid, now, forms, skip, tuple(lead))[0]
+        return self._build(guid, now, forms, skip, tuple(lead), claims)[0]
 
     def her_said(self, guid: int, now: float) -> list[str]:
         """What she has claimed about herself so far in the conversation going on (`her_said`)."""
         return list(self._build(guid, now, ("they", "them", "their"), 0, ())[1])
 
-    def _build(self, guid, now, forms, skip, lead):
+    def _build(self, guid, now, forms, skip, lead, claims=False):
         for g in [g for g, kept in self._kept.items() if now - kept[1] > IDLE_S]:
             del self._kept[g]
         talk = conversation(self._read(guid), now)
-        key = (talk[-1].id if talk else 0, len(talk), skip, lead, forms)
+        key = (talk[-1].id if talk else 0, len(talk), skip, lead, forms, claims)
         kept = self._kept.get(guid)
         if kept is not None and kept[0] == key:
             return kept[2], kept[3]
-        built = block(talk, forms=forms, skip=skip, lead=lead)
+        built = block(talk, forms=forms, skip=skip, lead=lead, claims=claims)
         said = her_said(talk)
         if talk:
             self._kept[guid] = (key, talk[-1].ts, built, said)

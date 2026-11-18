@@ -78,19 +78,21 @@ def test_only_news_about_himself_is_kept_and_the_least_important_goes_first():
     assert "stuck at the airport for another two hours" not in kept  # the oldest place went
 
 
-def test_her_claims_come_from_the_coherence_extractor_when_it_is_there(monkeypatch):
-    """talk.position.claims_so_far (the coherence lane) is the reader of what she has said of
-    herself when that module exists; without it, her place and state."""
+def test_her_claims_come_from_the_coherence_extractor_when_asked_for(monkeypatch):
+    """talk.position.claims_so_far is the reader of what she has said of herself when the
+    caller asks for her claims (`claims`: [talk] coherence with a core switch on, the
+    pipeline's call): they go after her place and state, which stay as before."""
     import sys
     import types
     lines = talk(("s", "im at the studio till ten and i start at six tomorrow"), ("h", "ok"))
-    monkeypatch.setitem(sys.modules, "leeroy_mind.talk.position", None)  # not there
     assert block(lines, forms=HE)[0].startswith("- You said you're at the studio")
     fake = types.ModuleType("leeroy_mind.talk.position")
     fake.claims_so_far = lambda hers, limit=3: [f"claim of {len(hers)} lines"]
     monkeypatch.setitem(sys.modules, "leeroy_mind.talk.position", fake)
-    assert block(lines, forms=HE) == ["- You said: claim of 1 lines."]
-    assert sofar.her_said(lines) == ["claim of 1 lines"]
+    assert block(lines, forms=HE)[0].startswith("- You said you're at the studio")
+    plain = block(lines, forms=HE)
+    assert block(lines, forms=HE, claims=True) == [*plain, "- You said: claim of 1 lines."]
+    assert sofar.her_said(lines, claims=True) == [*sofar.her_said(lines), "claim of 1 lines"]
 
 
 def test_her_place_state_open_questions_and_plans():
@@ -289,3 +291,25 @@ def test_an_over_budget_dm_lets_its_oldest_chat_rows_go_before_style_and_memorie
     assert none.chat == chat
     plain = trim_to_budget(PromptParts(**{**parts.__dict__, "old_chat": 0}), budget=whole - 150)
     assert plain.style == []  # as before without old rows to give: the style note goes first
+
+
+def test_claims_are_the_first_lines_dropped_from_a_block_over_its_budget(monkeypatch):
+    """Re-review round 2 of #370: adding her claims pushed one of main's lines out of the
+    120-token block (6 of 656 live answers). Claims go first: every line main shows stays."""
+    import sys
+    import types
+    lines = talk(("s", "im at the studio till ten, the producer is in a mood"),
+                 ("h", "my car broke down on the motorway this morning and the tow took hours"),
+                 ("h", "also my landlord is selling the flat so i have to move out by spring"),
+                 ("h", "what are you wearing?"), ("s", "hm"),
+                 ("h", "ok. talk thursday at 11pm then"), ("s", "deal, thursday"),
+                 ("h", "did you eat yet?"), ("h", "and how was the gig on friday night"))
+    plain = block(lines, forms=HE)
+    fake = types.ModuleType("leeroy_mind.talk.position")
+    fake.claims_so_far = lambda hers, limit=3: [
+        f"claim number {i} about something long that she said earlier on" for i in range(3)]
+    monkeypatch.setitem(sys.modules, "leeroy_mind.talk.position", fake)
+    on = block(lines, forms=HE, claims=True)
+    assert [x for x in on if not x.startswith("- You said: claim number")] == plain
+    from leeroy_mind.text import estimate_tokens
+    assert estimate_tokens("\n".join(on)) <= sofar.MAX_TOKENS or on == plain

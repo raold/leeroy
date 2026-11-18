@@ -337,6 +337,27 @@ def _is_goodbye(t: str, tokens: list[str]) -> bool:
         len(tokens) < 2 or tokens[-2] not in _NIGHT_NOT_AFTER)
 
 
+# He is leaving, in words classify_human_line's goodbye does not read ("ok im out, kid needs
+# picking up" was answered 340 s later, behind her own brb: self-play audit, 2026-11-17). Read
+# only to hurry an answer still waiting for him (talk.engine), never to plan goodnights.
+_LEAVING = re.compile(
+    r"\b(?:i'?m (?:out|off|gone|done for (?:the night|tonight|today))|(?:gotta|got to|have to|"
+    r"need to|gonna|going to|better) (?:go|run|bounce|head|dash|leave|log|get going|get off)"
+    r"|heading (?:off|out|to bed|home)|logging (?:off|out)|log(?:ging)? for the night"
+    r"|off to (?:bed|work|sleep)|bed ?time for me|talk (?:later|tomorrow)|ttyl|bbl|cya|"
+    r"see (?:you|ya|u) (?:later|tomorrow|tonight|soon)|catch (?:you|ya|u) later)\b",
+    re.IGNORECASE)
+
+
+def is_leaving(text: str) -> bool:
+    """His line says he is leaving: a goodbye (classify_human_line), or leaving words anywhere
+    in a line that is no question ("ok im out, kid needs picking up", "gotta run")."""
+    t = (text or "").casefold().strip()
+    if not t or t.endswith("?"):
+        return False
+    return classify_human_line(t) == "goodbye" or bool(_LEAVING.search(t))
+
+
 def classify_human_line(text: str) -> Literal["greeting", "goodbye", "question_all", "remark"]:
     t = text.casefold().strip()
     tokens = _WORD.findall(t)

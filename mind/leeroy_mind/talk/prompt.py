@@ -314,6 +314,30 @@ PUSHBACK_STRAIGHT = ("{human} is annoyed with you. Take it seriously and answer 
 SORRY_FROM, FIRM_UNTIL = 7, 4  # agreeableness: who apologises, who stands their ground
 
 
+# Several lines of his wait for one answer ([talk] coherence; Pipeline._his_waiting): each is
+# answered, his question first. His own words, already in her chat, quoted so none is missed.
+UNANSWERED = ("{He} wrote {n} lines you haven't answered yet: {lines}. Answer every one of "
+              "them in this reply, {first}.")
+UNANSWERED_QUESTION = "{their} question first"
+UNANSWERED_OLDEST = "the oldest first"
+UNANSWERED_WORDS = 30  # each quoted line's words
+UNANSWERED_MOST = 4  # the newest lines quoted
+
+
+def unanswered_text(lines: list[str], human: HumanIdentity) -> str:
+    """The instruction for an answer that covers several of his lines (oldest first); "" for
+    fewer than two."""
+    from leeroy_mind.talk.asking import is_question
+    lines = [" ".join(x.split()) for x in lines if x and x.strip()][-UNANSWERED_MOST:]
+    if len(lines) < 2:
+        return ""
+    he, _, their = human.forms
+    quoted = " / ".join('"' + " ".join(x.split()[:UNANSWERED_WORDS]) + '"' for x in lines)
+    first = (UNANSWERED_QUESTION.format(their=their) if any(is_question(x) for x in lines)
+             else UNANSWERED_OLDEST)
+    return UNANSWERED.format(He=he.capitalize(), n=len(lines), lines=quoted, first=first)
+
+
 def pushback_help(human: HumanIdentity, kind: str, agreeableness: float) -> str:
     """The text for the answer of the member his pushback (select.pushback_kind) is aimed at,
     with his name and pronouns as the reply's own instruction has them: PUSHBACK_DOUBT, or for
