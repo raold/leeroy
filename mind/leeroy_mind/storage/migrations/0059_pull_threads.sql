@@ -1,8 +1,8 @@
 -- Romantic threads, phase 1 (drama/README.md "Threads (recording)"): what would pull two
 -- members together, recorded and never applied. pull_event is the ledger: one row per recorded
 -- fact of a night that would have moved the directed pull a -> b, with its kind, its weight
--- before and after the household and stance factors, the scope of its evidence and the
--- evidence's id (never text). pull_shadow is the would-be pull per directed pair with the
+-- (after presence's saturation), the household and stance factor, the pair's likeness, what the
+-- shadow pull took, the scope of its evidence and the evidence's id (never text). pull_shadow is the would-be pull per directed pair with the
 -- thread it would have opened; it is never relationship.attraction, and nothing reads it but
 -- the report, the console panel and health. pull_night is one summary (counts only) per
 -- recorded night. Only the night's `pulls` stage and the replay tool (on a scratch copy) write
@@ -13,9 +13,10 @@ CREATE TABLE pull_event (
   a INTEGER NOT NULL,                  -- whose pull would move
   b INTEGER NOT NULL,                  -- toward whom
   kind TEXT NOT NULL,
-  weight REAL NOT NULL CHECK (weight >= 0),   -- the kind's weight
+  weight REAL NOT NULL CHECK (weight >= 0),   -- the kind's weight, saturated for presence
   factor REAL NOT NULL CHECK (factor BETWEEN 0 AND 1),  -- household cost x stance damping
-  amount REAL NOT NULL CHECK (amount >= 0),   -- what the shadow pull took, after the night cap
+  likeness REAL NOT NULL DEFAULT 1 CHECK (likeness BETWEEN 0.5 AND 1.5),
+  amount REAL NOT NULL CHECK (amount >= 0),   -- what the shadow pull took, after the caps
   scope TEXT NOT NULL CHECK (scope IN ('public','pair','restricted','private')),
   ref TEXT NOT NULL,                   -- raid:<id>, event:<id>, encounter:<id>, chat:<id>, ...
   ts REAL NOT NULL,
@@ -29,6 +30,7 @@ CREATE TABLE pull_shadow (
   b INTEGER NOT NULL,
   pull REAL NOT NULL DEFAULT 0 CHECK (pull BETWEEN 0 AND 100),
   public_pull REAL NOT NULL DEFAULT 0 CHECK (public_pull BETWEEN 0 AND 100),  -- from public evidence only
+  social_pull REAL NOT NULL DEFAULT 0 CHECK (social_pull BETWEEN 0 AND 100),  -- not from presence
   events INTEGER NOT NULL DEFAULT 0,
   first_night TEXT NOT NULL,
   last_event_night TEXT NOT NULL,

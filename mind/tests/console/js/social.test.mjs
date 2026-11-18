@@ -71,6 +71,7 @@ test("a shadow pull's chips say what would have happened, never what did", () =>
 });
 test("what held candidates back reads as counts", () => {
   assert.equal(heldText({}), "");
-  assert.equal(heldText({ draw: 2, affinity: 5 }),
-    "5 they don't like each other enough yet · 2 the night's draw said not yet");
+  assert.equal(heldText({ draw: 2, social: 5, cap_night: 1 }),
+    "5 only time spent together so far · 2 the night's draw said not yet · 1 one new thread a night");
+  assert.equal(kindText("answered"), "was replied to");
 });

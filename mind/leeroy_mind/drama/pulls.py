@@ -5,44 +5,56 @@ number a -> b (0-100) for a man and a woman of the cast that only recorded event
 it is a shadow: `pull_shadow`, never `relationship.attraction`, and no member's prompt, card,
 scene, relationship row or memory reads or is written from it.
 
-- **Events** (`pull_event`, one row per fact with its kind, weight, factor, scope and evidence
-  id): raids together with him (`raided`) and without him (`grouped_away`), standing at a kill
-  (`kill_alive`, `first_kill` for the guild's first of that boss) or still standing when a wipe
-  was called (`wipe_stood`), a warm accepted scene (`warm_scene`), someone setting a rumour
-  about her straight or siding with her in a feud (`took_side`), being agreed with by name in
-  chat (`heard`), someone answering a taunt aimed at her (`defended`), a line of his she
-  reacted to in a Discord conversation both spoke in (`banter`), a late voice room together
-  (`voice_late`), a close DKP award (`dkp_close`, weight 0: an outcome) and respect after one
-  (`dkp_respect`, once per pair and award).
+- **Events** (`pull_event`, one row per fact with its kind, weight, factor, likeness, scope and
+  evidence id). Two families:
+  - *presence* (PRESENCE): a raid together with him (`raided`) or without him (`grouped_away`),
+    standing at a kill (`kill_alive`, `first_kill`) or at a wipe's end (`wipe_stood`), his
+    5-man party (`partied`). Presence saturates: a
+    pair's first presence event of a night counts whole, later ones at PRESENCE_LATER, and
+    presence can give a pair at most PRESENCE_CAP a night. A thread never opens on presence
+    alone (OPEN_SOCIAL).
+  - *social*: a warm accepted scene (`warm_scene`), someone setting a rumour about her straight
+    or siding with her in a feud (`took_side`), being agreed with by name (`heard`), a taunt at
+    her answered (`defended`), a Discord reply (`answered` for the one replied to, `replied`
+    for the replier), talking back and forth (`talked`), being named (`mentioned`), a reaction
+    to the other's line (`reacted`; `banter` when she spoke in that conversation too), a joke
+    or tease aimed at the other (`joked`), a compliment (`complimented`), speaking well of the
+    other by name (`spoke_well` for the one spoken of, `praised` for the speaker), tonight's
+    admiration or gratitude toward the other (`admired`), a small voice room together
+    (`voice_room`, `voice_late` late at night), a close DKP award (`dkp_close`, weight 0: an
+    outcome) and respect after one (`dkp_respect`).
 - **Cost, not ban.** The gains of a member taken at home (`couples.taken`) are multiplied by
-  TAKEN_FACTOR. A woman's gains are damped by her stance toward the owner (STANCE_FACTOR), and
-  a thread of a woman whose arc with him is at late_nights or later is marked with the ceiling
-  `acknowledged`.
+  TAKEN_FACTOR; a woman's by her stance toward the owner (STANCE_FACTOR), the two never below
+  FACTOR_FLOOR together. A thread of a woman whose arc with him is at late_nights or later is
+  marked with the ceiling `acknowledged`.
+- **Likeness.** A pair's gains are multiplied by 0.8-1.25 from what their cards share (region,
+  night rhythm, humour, what they do outside raids, likes) and a small seeded draw.
 - **Decay.** HALF_LIFE nights without an event halve a pull.
-- **Would-be threads.** A pull of OPEN_PULL with affinity OPEN_AFFINITY would open a thread on
-  a seeded draw (OPEN_P a night) when the caps allow (THREADS_MAX live, TAKEN_MAX with a taken
-  member, one per member); the label (`shape`) and what kept a candidate out (`thread_why`) are
-  stored with the shadow row. A would-be thread fades when its pull falls under FADE_PULL.
-- **Privacy.** Every event carries the scope of its evidence (public, pair, restricted,
-  private). A pull moves only by what its holder could have witnessed: a line on a channel
-  whose stored audience leaves her out, or a restricted channel with no stored audience, counts
-  for nothing, and whispers and DMs (which are with the owner) are never read. `public_pull`
-  is the part public evidence alone would have built. Nothing here is shown to a member.
+- **Would-be threads.** A pull of OPEN_PULL (OPEN_SOCIAL of it social) with affinity
+  OPEN_AFFINITY would open a thread on a seeded draw (OPEN_P a night) when the caps allow
+  (THREADS_MAX live, TAKEN_MAX with a taken member, one per member, OPENS_PER_NIGHT a night);
+  the label (`shape`) and what kept a candidate out (`thread_why`) are stored with the shadow
+  row. A would-be thread fades when its pull falls under FADE_PULL.
+- **Privacy.** Only public evidence is read: public chat channels, public Discord channels,
+  public voice rooms, guild raids and kills. Whispers, DMs, group DMs, the officers' channels
+  and rooms, and the private voice rooms are never read. A scene and a feeling are between the
+  two (scope `pair`); a rumour set straight reaches its subject second-hand (`restricted`).
+  `public_pull` is the part public evidence alone would have built. Nothing here is shown to a
+  member.
 
 The stage and `record_night` write only `pull_event`, `pull_shadow` and `pull_night`, inside
-the caller's transaction. Chat text is read to detect a reply and never stored or logged; logs
-and rows carry ids, counts and codes.
+the caller's transaction. Chat text is read to detect a reply or a name and never stored or
+logged; logs and rows carry ids, counts and codes.
 """
 import json
 import random
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from leeroy_mind.discord.channels import (CHANNEL_PREFIX, DM_PREFIX, GROUP_PREFIX, is_private,
-                                          is_restricted)
+from leeroy_mind.discord.channels import CHANNEL_PREFIX, DM_PREFIX, GROUP_PREFIX, is_public
 from leeroy_mind.logs import log
 from leeroy_mind.storage.rows import ROMANCE_STAGES
 
@@ -51,38 +63,56 @@ DAY_S = 86400.0
 HALF_LIFE = 21.0
 DECAY = 0.5 ** (1.0 / HALF_LIFE)
 OPEN_PULL = 35.0
-OPEN_AFFINITY = 20.0
-OPEN_P = 0.25
+OPEN_SOCIAL = 12.0   # of that pull, what must have come from social events
+OPEN_AFFINITY = 0.0  # not disliking each other; the liking is the pull's social part
+OPEN_P = 0.5
 FADE_PULL = 10.0
-MUTUAL_PULL = 25.0   # the other's pull from which it is mutual
-TRIANGLE_PULL = 20.0  # a third member's pull toward either that makes a triangle
+MUTUAL_PULL = 20.0   # the other's pull from which it is mutual
+TRIANGLE_PULL = 25.0  # a third member's pull toward either that makes a triangle
 SLOW_NIGHTS = 20     # nights from the first event to the opening that make a slow burn
 THREADS_MAX = 3      # live threads guild-wide (phase 2 starts here)
 TAKEN_MAX = 1        # of those, threads with a taken member
-NIGHT_CAP = 8.0      # what one directed pair's pull can take in a night
+OPENS_PER_NIGHT = 1
+NIGHT_CAP = 12.0     # what one directed pair's pull can take in a night
+PRESENCE_CAP = 2.0   # of that, from presence events
+PRESENCE_LATER = 0.25  # a pair's presence events after its first of the night
 TAKEN_FACTOR = 0.6
-STANCE_FACTOR = {"fond": 0.8, "drawn": 0.5, "lust": 0.3}
+STANCE_FACTOR = {"fond": 0.9, "drawn": 0.8, "lust": 0.6}
+FACTOR_FLOOR = 0.4
+LIKENESS_MIN, LIKENESS_MAX = 0.8, 1.25
 EX_COOLDOWN_DAYS = 30.0
 SHAPES = ("unrequited", "mutual_secret", "mutual_open", "triangle", "slow_burn")
+PRESENCE = frozenset({"raided", "grouped_away", "kill_alive", "first_kill", "wipe_stood",
+                      "partied"})
 # kind: (weight, how many a directed pair can take a night)
 KINDS = {
     "raided": (1.0, 1), "grouped_away": (1.5, 1), "kill_alive": (1.0, 2), "first_kill": (2.0, 2),
-    "wipe_stood": (0.5, 1), "warm_scene": (2.0, 1), "took_side": (4.0, 1), "heard": (2.0, 1),
-    "defended": (4.0, 1), "banter": (2.0, 1), "voice_late": (1.0, 1), "dkp_close": (0.0, 1),
-    "dkp_respect": (3.0, 1),
+    "wipe_stood": (0.5, 1), "partied": (1.5, 1),
+    "warm_scene": (10.0, 1), "took_side": (12.0, 1), "heard": (7.5, 1), "defended": (12.0, 1),
+    "answered": (5.0, 3), "replied": (4.0, 3), "talked": (2.5, 2), "mentioned": (4.0, 2),
+    "reacted": (2.5, 2), "banter": (6.0, 1), "joked": (4.0, 1), "complimented": (7.5, 1),
+    "spoke_well": (9.0, 1), "praised": (5.0, 1), "admired": (5.0, 1),
+    "voice_room": (5.0, 1), "voice_late": (7.5, 1), "dkp_close": (0.0, 1), "dkp_respect": (7.5, 1),
 }
 SCOPES = ("public", "pair", "restricted", "private")
-WHY = ("draw", "affinity", "feud", "ex", "pair_open", "cap_member", "cap_live", "cap_taken")
+WHY = ("draw", "affinity", "social", "feud", "ex", "pair_open", "cap_member", "cap_taken",
+       "cap_live", "cap_night")
 RAID_MIN_S = 600.0       # a raid that neither ran this long nor met a boss was no evening together
-REPLY_S = 300.0          # a reply answers a line this recent on its channel
+REPLY_S = 300.0          # a chat reply answers a line this recent on its channel
 RECENT_LINES = 8
+DISCORD_REPLY_S = 600.0  # a Discord reply counts within this of the message it answers
+TALK_S = 300.0           # two members' messages this close in a channel are talking
 BANTER_S = 1800.0        # she spoke in the conversation within this of the line she reacted to
-VOICE_MIN_S = 1800.0
-VOICE_LONG_S = 5400.0
-VOICE_SKIP = frozenset({"afk", "penalty_box"})
-VOICE_CROWD = 6          # more members than this in a room that night is a crowd, not company
+PARTY_MAX = 5
+VOICE_MIN_S = 1200.0
+VOICE_LATE_S = 1800.0
+VOICE_SKIP = frozenset({"afk", "penalty_box", "officers"})
+VOICE_ROOM_MAX = 4       # more members than this in a room that night is a crowd, not company
 LATE_FROM, LATE_TO = time(22, 0), time(4, 0)
 RESPECT_DAYS = 7.0
+JOKE_MOVES = frozenset({"joke", "tease", "callback"})
+WARM_MOVES = frozenset({"compliment", "petname"})
+WARM_FEELINGS = frozenset({"admiration", "gratitude"})
 SOUR_EMOJI = frozenset({"\U0001f44e", "\U0001f620", "\U0001f621", "\U0001f644", "\U0001f92e",
                         "\U0001f595", "\U0001f612"})
 US_ZONE = ZoneInfo("America/New_York")
@@ -125,7 +155,7 @@ class Event:
 @dataclass(frozen=True)
 class Cast:
     """Who the recorder reads tonight: the cast without the owner and without a member on a
-    break, with what each event's factors need. Names are for spotting a named reply only."""
+    break, with what each event's factors need. Names are for spotting a named line only."""
     human: int
     members: frozenset
     gender: dict
@@ -133,12 +163,13 @@ class Cast:
     stance: dict   # a woman's attitude toward the owner: fond, drawn, lust
     region: dict
     names: dict    # guid -> character name, the owner's included
+    traits: dict = field(default_factory=dict)  # guid -> (region, night owl, humour, activities, likes)
 
 
 def build_cast(human: int, members, persona, names: dict) -> Cast:
     """`persona(guid)` is the night's stored persona (never the owner's godmode lens)."""
     from leeroy_mind.drama.couples import taken
-    gender, took, stance, region = {}, set(), {}, {}
+    gender, took, stance, region, traits = {}, set(), {}, {}, {}
     kept = []
     for g in sorted(members):
         if g == human:
@@ -149,12 +180,15 @@ def build_cast(human: int, members, persona, names: dict) -> Cast:
         kept.append(g)
         gender[g] = p.identity.player_gender
         region[g] = p.identity.region
+        traits[g] = (p.identity.region, bool(p.real_life.night_owl), p.humour,
+                     frozenset(p.game.outside_raids),
+                     frozenset(" ".join(x.casefold().split()) for x in p.likes))
         if taken(p):
             took.add(g)
         if gender[g] == "female" and p.romance.stance in STANCE_FACTOR:
             stance[g] = p.romance.stance
     return Cast(human=human, members=frozenset(kept), gender=gender, taken=frozenset(took),
-                stance=stance, region=region, names=dict(names))
+                stance=stance, region=region, names=dict(names), traits=traits)
 
 
 def cast_of(ctx) -> Cast:
@@ -176,12 +210,6 @@ def cast_from_store(store, human: int) -> Cast:
     return build_cast(human, members, personas.get, {g: m.name for g, m in roster.items()})
 
 
-def scope_of(channel: str) -> str:
-    if is_private(channel):
-        return "private"
-    return "restricted" if is_restricted(channel) else "public"
-
-
 def _object(text) -> dict:
     try:
         value = json.loads(text)
@@ -198,7 +226,13 @@ def _pairs(kind, who, scope, ref, weight=None):
                 yield Event(kind, a, b, scope, ref, weight)
 
 
-# -- the sources -----------------------------------------------------------------------------
+def _named(cast):
+    """guid -> a matcher for that member's name as a word (names of three letters or more)."""
+    return {g: re.compile(rf"(?<!\w){re.escape(n)}(?!\w)", re.IGNORECASE)
+            for g, n in cast.names.items() if isinstance(n, str) and len(n) >= 3}
+
+
+# -- presence ----------------------------------------------------------------------------------
 
 def _raids(conn, window, cast):
     for r in conn.execute(
@@ -253,6 +287,22 @@ def _bosses(conn, window, cast):
             continue
 
 
+def _parties(conn, window, cast):
+    """His 5-man party: a `group` event that is no raid, of PARTY_MAX or fewer. (Battlegrounds
+    are not read: the cast's random-bot queues put hundreds of members a night in one.)"""
+    for row in conn.execute(
+            "SELECT id, type, payload FROM game_event WHERE ts >= ? AND ts < ? "
+            "AND type = 'group' ORDER BY ts, id", window).fetchall():
+        p = _object(row["payload"])
+        members = p.get("members")
+        if not isinstance(members, list) or not all(type(g) is int for g in members):
+            continue
+        if p.get("raid") is False and 2 <= len(members) <= PARTY_MAX:
+            yield from _pairs("partied", members, "public", f"event:{row['id']}")
+
+
+# -- scenes, feuds, feelings ---------------------------------------------------------------------
+
 def _scenes(conn, night, window, cast):
     """Tonight's accepted scenes: a warm one (its applied changes sum above zero) draws both,
     and one that set a rumour straight is the corrector taking the side of whom it is about."""
@@ -295,37 +345,44 @@ def _feuds(conn, window, cast):
                     yield Event("took_side", int(ally), s, "public", f"feud:{r['id']}")
 
 
-def _named(cast):
-    """guid -> a matcher for that member's name as a word (names of three letters or more)."""
-    return {g: re.compile(rf"(?<!\w){re.escape(n)}(?!\w)", re.IGNORECASE)
-            for g, n in cast.names.items() if isinstance(n, str) and len(n) >= 3}
+def _feelings(conn, night, cast):
+    """Tonight's reflection left her admiring or grateful to another member, on memories that
+    are all open (a feeling resting on a private or secret memory is never read)."""
+    for r in conn.execute(
+            "SELECT id, guid, target, type, intensity, evidence FROM emotion WHERE night = ? "
+            "AND source = 'reflect' AND target > 0 ORDER BY id", (night,)).fetchall():
+        if r["type"] not in WARM_FEELINGS or r["target"] == cast.human:
+            continue
+        try:
+            refs = json.loads(r["evidence"])
+        except (TypeError, ValueError):
+            continue
+        ids = [int(x[7:]) for x in refs if isinstance(x, str) and x.startswith("memory:")
+               and x[7:].isdecimal()] if isinstance(refs, list) else []
+        if not ids or len(ids) != len(refs):
+            continue
+        marks = ",".join("?" * len(ids))
+        open_ = conn.execute(f"SELECT count(*) FROM memory WHERE id IN ({marks}) "
+                             "AND scope = 'open'", ids).fetchone()[0]
+        if open_ == len(set(ids)):
+            yield Event("admired", r["guid"], r["target"], "pair", f"emotion:{r['id']}",
+                        KINDS["admired"][0] * (0.5 + 0.25 * r["intensity"]))
 
 
-def _sees(audience, guid, scope) -> bool:
-    """Whether `guid` could have read the line. A stored audience decides; without one a public
-    line is everyone's and a restricted one is nobody's (fail closed)."""
-    if audience is None:
-        return scope == "public"
-    try:
-        return guid in json.loads(audience)
-    except (TypeError, ValueError):
-        return False
-
+# -- chat and Discord ----------------------------------------------------------------------------
 
 def _chat(conn, window, cast):
-    """A member agreeing by name with a line another member just said (`heard`: the one agreed
-    with), and a member answering a taunt aimed at another (`defended`: the one it was aimed
-    at). Whispers and DMs are with the owner and are never read; the gainer must have been
-    able to read the reply. The text is matched here and goes nowhere."""
+    """On public channels only: a member agreeing by name with a line another member just said
+    (`heard`: the one agreed with), and a member answering a taunt aimed at another
+    (`defended`: the one it was aimed at). The text is matched here and goes nowhere."""
     named = _named(cast)
     recent: dict[str, list] = {}
     for row in conn.execute(
-            "SELECT id, ts, channel, from_guid, text, audience, origin FROM chat_line "
+            "SELECT id, ts, channel, from_guid, text, origin FROM chat_line "
             "WHERE ts >= ? AND ts < ? ORDER BY ts, id", window).fetchall():
         channel, x, text = row["channel"], row["from_guid"], row["text"] or ""
-        if is_private(channel):
+        if not is_public(channel):
             continue
-        scope = scope_of(channel)
         before = [p for p in recent.get(channel, ()) if row["ts"] - p[0] <= REPLY_S]
         if row["origin"] == "mind" and x in cast.members:
             ref = f"chat:{row['id']}"
@@ -334,21 +391,18 @@ def _chat(conn, window, cast):
             done = set()
             for _, y, their_text in before:
                 if (agrees and y != x and y in cast.members and ("heard", y) not in done
-                        and y in named and named[y].search(text)
-                        and _sees(row["audience"], y, scope)):
+                        and y in named and named[y].search(text)):
                     done.add(("heard", y))
-                    yield Event("heard", y, x, scope, ref)
+                    yield Event("heard", y, x, "public", ref)
                 if not (defends and y != x and TAUNT_RE.search(their_text)):
                     continue
                 for target, match in named.items():
                     if (target in (x, y) or target not in cast.members
                             or ("defended", target) in done or not match.search(their_text)):
                         continue
-                    answers = (match.search(text)
-                               or (y in named and named[y].search(text)))
-                    if answers and _sees(row["audience"], target, scope):
+                    if match.search(text) or (y in named and named[y].search(text)):
                         done.add(("defended", target))
-                        yield Event("defended", target, x, scope, ref)
+                        yield Event("defended", target, x, "public", ref)
         before.append((row["ts"], x, text))
         recent[channel] = before[-RECENT_LINES:]
 
@@ -357,16 +411,54 @@ def _talk_channel(channel: str) -> str:
     return channel if channel.startswith((DM_PREFIX, GROUP_PREFIX)) else CHANNEL_PREFIX + channel
 
 
-def _banter(conn, window, cast):
-    """A member's reaction to another member's Discord line in a conversation she spoke in
-    herself (the same channel and thread, within BANTER_S of that line)."""
+def _discord(conn, window, cast):
+    """Members' messages on public Discord channels: a reply to another member's message within
+    DISCORD_REPLY_S (`answered` for the one replied to, `replied` for the replier), a message
+    right after another member's in the channel (`talked`, both), and a message naming another
+    member (`mentioned`: the one named)."""
+    named = _named(cast)
+    last: dict[tuple, tuple] = {}
+    public: dict[str, bool] = {}
+    for m in conn.execute(
+            "SELECT m.id, m.channel, m.thread, m.author, m.text, m.ts, p.author AS to_author, "
+            "p.origin AS to_origin, p.ts AS to_ts FROM discord_message m "
+            "LEFT JOIN discord_message p ON p.id = m.reply_to "
+            "WHERE m.ts >= ? AND m.ts < ? AND m.origin = 'mind' AND m.deleted IS NULL "
+            "ORDER BY m.ts, m.id", window).fetchall():
+        channel = m["channel"]
+        if channel not in public:
+            public[channel] = is_public(_talk_channel(channel))
+        if not public[channel]:
+            continue
+        x, ref = m["author"], f"discord:{m['id']}"
+        said = set()
+        if (m["to_author"] and m["to_origin"] == "mind" and m["to_author"] != x
+                and m["ts"] - m["to_ts"] <= DISCORD_REPLY_S):
+            said.add(m["to_author"])
+            yield Event("answered", m["to_author"], x, "public", ref)
+            yield Event("replied", x, m["to_author"], "public", ref)
+        key = (channel, m["thread"])
+        before = last.get(key)
+        if before and before[0] != x and before[0] not in said and m["ts"] - before[1] <= TALK_S:
+            said.add(before[0])
+            yield Event("talked", x, before[0], "public", ref)
+            yield Event("talked", before[0], x, "public", ref)
+        last[key] = (x, m["ts"])
+        text = m["text"] or ""
+        for y, match in named.items():
+            if y != x and y not in said and y in cast.members and match.search(text):
+                yield Event("mentioned", y, x, "public", ref)
+
+
+def _reactions(conn, window, cast):
+    """A member's reaction to another member's public Discord line: `banter` when she spoke in
+    that conversation herself (the same channel and thread, within BANTER_S), else `reacted`."""
     for r in conn.execute(
             "SELECT r.message, r.member, r.emoji, m.author, m.channel, m.thread, m.ts AS said "
             "FROM discord_reaction r JOIN discord_message m ON m.id = r.message "
             "WHERE r.ts >= ? AND r.ts < ? AND m.origin = 'mind' AND m.deleted IS NULL "
             "AND r.member != m.author ORDER BY r.ts, r.message, r.member", window).fetchall():
-        channel = _talk_channel(r["channel"])
-        if is_private(channel) or r["emoji"] in SOUR_EMOJI:
+        if not is_public(_talk_channel(r["channel"])) or r["emoji"] in SOUR_EMOJI:
             continue
         if r["member"] not in cast.members or r["author"] not in cast.members:
             continue
@@ -375,10 +467,45 @@ def _banter(conn, window, cast):
             "AND deleted IS NULL AND thread IS ? AND ts BETWEEN ? AND ? LIMIT 1",
             (r["channel"], r["member"], r["thread"], r["said"] - BANTER_S,
              r["said"] + BANTER_S)).fetchone()
-        if spoke is not None:
-            yield Event("banter", r["member"], r["author"], scope_of(channel),
-                        f"discord:{r['message']}")
+        yield Event("banter" if spoke is not None else "reacted", r["member"], r["author"],
+                    "public", f"discord:{r['message']}")
 
+
+def _moves(conn, window, cast):
+    """What the talk pipeline already scored about a member's public line at another member: a
+    joke, tease or callback (`joked`, both) or a compliment (`complimented`: the one it was
+    for)."""
+    for r in conn.execute(
+            "SELECT id, guid, counterpart, channel, main FROM talk_move WHERE ts >= ? AND ts < ? "
+            "AND counterpart > 0 AND counterpart != guid ORDER BY id", window).fetchall():
+        if not is_public(r["channel"]):
+            continue
+        ref = f"move:{r['id']}"
+        if r["main"] in JOKE_MOVES:
+            yield from _pairs("joked", (r["guid"], r["counterpart"]), "public", ref)
+        elif r["main"] in WARM_MOVES:
+            yield Event("complimented", r["counterpart"], r["guid"], "public", ref)
+
+
+def _claims(conn, window, cast):
+    """A good opinion a member voiced about another by name on a public channel, as the claims
+    table scored it: `spoke_well` for the one spoken of, `praised` for the speaker."""
+    by_name = {n.casefold(): g for g, n in cast.names.items()
+               if isinstance(n, str) and g in cast.members}
+    for r in conn.execute(
+            "SELECT c.id, c.guid, c.subject, l.channel FROM member_claim c "
+            "JOIN chat_line l ON l.id = c.source_line WHERE c.first_seen >= ? AND c.first_seen < ? "
+            "AND c.kind = 'opinion' AND c.polarity = 1 AND c.source = 'chat' ORDER BY c.id",
+            window).fetchall():
+        about = by_name.get(" ".join((r["subject"] or "").casefold().split()))
+        if about is None or about == r["guid"] or not is_public(r["channel"]):
+            continue
+        ref = f"claim:{r['id']}"
+        yield Event("spoke_well", about, r["guid"], "public", ref)
+        yield Event("praised", r["guid"], about, "public", ref)
+
+
+# -- voice and DKP ---------------------------------------------------------------------------------
 
 def _late_spans(window, zone):
     """The stretches of the window that are late (LATE_FROM to LATE_TO) on `zone`'s clock."""
@@ -395,15 +522,17 @@ def _late_spans(window, zone):
 
 
 def _voice(conn, window, cast, notes=None):
-    """Two members in one voice room late on the holder's own clock, VOICE_MIN_S or more over
-    the night. A room that held more than VOICE_CROWD members in the night's late hours is a
-    crowd (the hall while a raid runs, the evening's silent seats) and counts for nobody. The
-    officers' room and the private rooms are restricted evidence."""
+    """Two members in one public voice room for VOICE_MIN_S or more over the night
+    (`voice_room`), or VOICE_LATE_S of it late on the holder's own clock (`voice_late`). A room
+    that held more than VOICE_ROOM_MAX members that night is a crowd (the hall while a raid
+    runs, the evening's silent seats) and counts for nobody; the officers' and the private
+    rooms are never read."""
     rooms: dict[str, list] = {}
     for r in conn.execute(
             "SELECT id, guid, room, since, until FROM voice_presence WHERE since < ? "
             "AND coalesce(until, ?) > ? ORDER BY id", (window[1], window[1], window[0])).fetchall():
-        if r["guid"] not in cast.members or r["room"] in VOICE_SKIP:
+        if (r["guid"] not in cast.members or r["room"] in VOICE_SKIP
+                or r["room"].startswith("private")):
             continue
         if r["until"] is None and r["since"] < window[0] - DAY_S:
             continue  # a row nobody closed is no evidence of a night in the room
@@ -412,16 +541,12 @@ def _voice(conn, window, cast, notes=None):
         if hi > lo:
             rooms.setdefault(r["room"], []).append((r["guid"], lo, hi, r["id"]))
     late = {"UK": _late_spans(window, UK_ZONE), "US": _late_spans(window, US_ZONE)}
-    any_late = late["UK"] + late["US"]
     seconds: dict[tuple, list] = {}
     for room, rows in sorted(rooms.items()):
-        there = {g for g, lo, hi, _ in rows if any(min(hi, e) > max(lo, s) for s, e in any_late)}
-        if len(there) > VOICE_CROWD:
+        if len({g for g, _, _, _ in rows}) > VOICE_ROOM_MAX:
             if notes is not None:
                 notes["voice_crowd"] += 1
             continue
-        channel = f"voice:{room}"
-        scope = "restricted" if room.startswith("private") or is_restricted(channel) else "public"
         for i, (a, alo, ahi, aid) in enumerate(rows):
             for b, blo, bhi, bid in rows[i + 1:]:
                 lo, hi = max(alo, blo), min(ahi, bhi)
@@ -429,16 +554,15 @@ def _voice(conn, window, cast, notes=None):
                     continue
                 for x, y, ident in ((a, b, aid), (b, a, bid)):
                     spans = late["UK" if cast.region.get(x) == "UK" else "US"]
-                    got = sum(max(0.0, min(hi, e) - max(lo, s)) for s, e in spans)
-                    if got > 0:
-                        slot = seconds.setdefault((x, y), [0.0, 0.0, ident])
-                        slot[0] += got
-                        slot[1] += got if scope == "public" else 0.0
-                        slot[2] = min(slot[2], ident)
-    for (x, y), (total, public, ident) in sorted(seconds.items()):
-        if total >= VOICE_MIN_S:
-            yield Event("voice_late", x, y, "public" if public >= VOICE_MIN_S else "restricted",
-                        f"voice:{ident}", 2.0 if total >= VOICE_LONG_S else 1.0)
+                    slot = seconds.setdefault((x, y), [0.0, 0.0, ident])
+                    slot[0] += hi - lo
+                    slot[1] += sum(max(0.0, min(hi, e) - max(lo, s)) for s, e in spans)
+                    slot[2] = min(slot[2], ident)
+    for (x, y), (total, lately, ident) in sorted(seconds.items()):
+        if lately >= VOICE_LATE_S:
+            yield Event("voice_late", x, y, "public", f"voice:{ident}")
+        elif total >= VOICE_MIN_S:
+            yield Event("voice_room", x, y, "public", f"voice:{ident}")
 
 
 def _dkp(conn, window, cast):
@@ -476,9 +600,12 @@ def collect(conn, night: str, window, cast: Cast, notes=None) -> list[Event]:
     `notes` counts what a source passed over whole (a crowded voice room)."""
     out = []
     for source in (_raids(conn, window, cast), _bosses(conn, window, cast),
-                   _scenes(conn, night, window, cast), _feuds(conn, window, cast),
-                   _chat(conn, window, cast), _banter(conn, window, cast),
-                   _voice(conn, window, cast, notes), _dkp(conn, window, cast)):
+                   _parties(conn, window, cast), _scenes(conn, night, window, cast),
+                   _feuds(conn, window, cast), _feelings(conn, night, cast),
+                   _chat(conn, window, cast), _discord(conn, window, cast),
+                   _reactions(conn, window, cast), _moves(conn, window, cast),
+                   _claims(conn, window, cast), _voice(conn, window, cast, notes),
+                   _dkp(conn, window, cast)):
         out.extend(source)
     return out
 
@@ -487,9 +614,25 @@ def collect(conn, night: str, window, cast: Cast, notes=None) -> list[Event]:
 
 def factor(cast: Cast, a: int) -> float:
     """What a gain of `a` is multiplied by: the household cost and, for a woman, her stance
-    toward the owner."""
-    return ((TAKEN_FACTOR if a in cast.taken else 1.0)
-            * STANCE_FACTOR.get(cast.stance.get(a), 1.0))
+    toward the owner, never below FACTOR_FLOOR together."""
+    return max(FACTOR_FLOOR, (TAKEN_FACTOR if a in cast.taken else 1.0)
+               * STANCE_FACTOR.get(cast.stance.get(a), 1.0))
+
+
+def likeness(cast: Cast, a: int, b: int) -> float:
+    """How alike two members' cards are, the same for both directions, LIKENESS_MIN to
+    LIKENESS_MAX: region, night rhythm, humour, what they do outside raids, likes, and a small
+    draw seeded by the pair."""
+    ta, tb = cast.traits.get(a), cast.traits.get(b)
+    if ta is None or tb is None:
+        return 1.0
+    lo, hi = min(a, b), max(a, b)
+    acts, likes = len(ta[3] & tb[3]), len(ta[4] & tb[4])
+    value = (1.0 + 0.05 * (ta[0] == tb[0]) + 0.05 * (ta[1] == tb[1]) + 0.04 * (ta[2] == tb[2])
+             + 0.05 * min(2, acts) + 0.04 * min(2, likes)
+             - 0.08 * (acts == 0) - 0.06 * (ta[0] != tb[0] and ta[1] != tb[1])
+             + random.Random(f"likeness|{lo}|{hi}").uniform(-0.04, 0.04))
+    return round(max(LIKENESS_MIN, min(LIKENESS_MAX, value)), 3)
 
 
 def _nights(earlier: str, later: str) -> int:
@@ -502,10 +645,11 @@ def decayed(pull: float, idle_nights: int) -> float:
 
 
 def _ledger(conn, night, events, cast, now):
-    """The night's rows: man-woman pairs of the cast only, each kind's cap, the factors, the
-    night cap. Returns ({(a, b): [amount, public amount, events]}, kinds, scopes, skipped)."""
+    """The night's rows: man-woman pairs of the cast only, each kind's cap, presence's
+    saturation, the factors, the night cap. Returns ({(a, b): [amount, public amount, social
+    amount, events]}, kinds, scopes, skipped)."""
     gains, kinds, scopes, skipped = {}, Counter(), Counter(), Counter()
-    seen, per_kind = set(), Counter()
+    seen, per_kind, presence, alike = set(), Counter(), {}, {}
     for e in events:
         if e.a == e.b or e.kind not in KINDS or e.scope not in SCOPES:
             continue
@@ -519,28 +663,43 @@ def _ledger(conn, night, events, cast, now):
         if key in seen:
             continue
         seen.add(key)
+        pair = (e.a, e.b)
         if per_kind[(e.a, e.b, e.kind)] >= KINDS[e.kind][1]:
             skipped["kind_cap"] += 1
             continue
         weight = KINDS[e.kind][0] if e.weight is None else e.weight
         mult = factor(cast, e.a)
-        slot = gains.setdefault((e.a, e.b), [0.0, 0.0, 0])
-        amount = min(weight * mult, max(0.0, NIGHT_CAP - slot[0]))
+        both = (min(pair), max(pair))
+        if both not in alike:
+            alike[both] = likeness(cast, *both)
+        slot = gains.setdefault(pair, [0.0, 0.0, 0.0, 0])
+        amount = weight * mult * alike[both]
+        if e.kind in PRESENCE:
+            had = presence.setdefault(pair, [0, 0.0])
+            if had[0]:
+                weight *= PRESENCE_LATER
+                amount *= PRESENCE_LATER
+            amount = min(amount, max(0.0, PRESENCE_CAP - had[1]))
+        amount = min(amount, max(0.0, NIGHT_CAP - slot[0]))
         if weight > 0 and amount <= 0:
-            skipped["night_cap"] += 1
+            skipped["presence_cap" if e.kind in PRESENCE else "night_cap"] += 1
             continue
+        if e.kind in PRESENCE:
+            presence[pair][0] += 1
+            presence[pair][1] += amount
         per_kind[(e.a, e.b, e.kind)] += 1
         conn.execute(
-            "INSERT INTO pull_event(night, a, b, kind, weight, factor, amount, scope, ref, ts) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (night, e.a, e.b, e.kind, weight, mult, amount, e.scope, e.ref, now))
+            "INSERT INTO pull_event(night, a, b, kind, weight, factor, likeness, amount, scope, "
+            "ref, ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (night, e.a, e.b, e.kind, weight, mult, alike[both], amount, e.scope, e.ref, now))
         kinds[e.kind] += 1
         scopes[e.scope] += 1
         if amount > 0:
             slot[0] += amount
             slot[1] += amount if e.scope == "public" else 0.0
-            slot[2] += 1
-    return {k: v for k, v in gains.items() if v[2]}, kinds, scopes, skipped
+            slot[2] += 0.0 if e.kind in PRESENCE else amount
+            slot[3] += 1
+    return {k: v for k, v in gains.items() if v[3]}, kinds, scopes, skipped
 
 
 def _shadow(conn, night, gains):
@@ -550,18 +709,19 @@ def _shadow(conn, night, gains):
         row, gain = rows.get(pair), gains.get(pair)
         if row is None:
             conn.execute(
-                "INSERT INTO pull_shadow(a, b, pull, public_pull, events, first_night, "
-                "last_event_night, updated_night) VALUES (?,?,?,?,?,?,?,?)",
-                (*pair, min(100.0, gain[0]), min(100.0, gain[1]), gain[2], night, night, night))
+                "INSERT INTO pull_shadow(a, b, pull, public_pull, social_pull, events, "
+                "first_night, last_event_night, updated_night) VALUES (?,?,?,?,?,?,?,?,?)",
+                (*pair, min(100.0, gain[0]), min(100.0, gain[1]), min(100.0, gain[2]), gain[3],
+                 night, night, night))
             continue
         idle = _nights(row["updated_night"], night) - (1 if gain else 0)
-        pull, public = decayed(row["pull"], idle), decayed(row["public_pull"], idle)
+        values = [decayed(row[c], idle) for c in ("pull", "public_pull", "social_pull")]
         if gain:
-            pull, public = min(100.0, pull + gain[0]), min(100.0, public + gain[1])
+            values = [min(100.0, v + g) for v, g in zip(values, gain)]
         conn.execute(
-            "UPDATE pull_shadow SET pull = ?, public_pull = ?, events = events + ?, "
-            "last_event_night = ?, updated_night = ? WHERE a = ? AND b = ?",
-            (pull, public, gain[2] if gain else 0,
+            "UPDATE pull_shadow SET pull = ?, public_pull = ?, social_pull = ?, "
+            "events = events + ?, last_event_night = ?, updated_night = ? WHERE a = ? AND b = ?",
+            (*values, gain[3] if gain else 0,
              night if gain else row["last_event_night"], night, *pair))
 
 
@@ -577,10 +737,13 @@ def shape_of(*, reverse: float, taken: bool, third: bool, nights_to_open: int) -
     return "slow_burn" if nights_to_open >= SLOW_NIGHTS else "unrequited"
 
 
-def admit(candidates, live, *, threads_max=THREADS_MAX, taken_max=TAKEN_MAX):
+def admit(candidates, live, *, threads_max=None, taken_max=None, opens_max=None):
     """Which waiting candidates the caps would let open, rarest shape among the live threads
     first, then the stronger pull. `candidates` and `live` are dicts with a, b, pull, shape,
     taken. Returns (opened, {(a, b): why})."""
+    threads_max = THREADS_MAX if threads_max is None else threads_max
+    taken_max = TAKEN_MAX if taken_max is None else taken_max
+    opens_max = OPENS_PER_NIGHT if opens_max is None else opens_max
     live = list(live)
     opened, why = [], {}
     counts = Counter(t["shape"] for t in live)
@@ -592,6 +755,8 @@ def admit(candidates, live, *, threads_max=THREADS_MAX, taken_max=TAKEN_MAX):
             why[(c["a"], c["b"])] = "cap_taken"
         elif len(live) >= threads_max:
             why[(c["a"], c["b"])] = "cap_live"
+        elif len(opened) >= opens_max:
+            why[(c["a"], c["b"])] = "cap_night"
         else:
             live.append(c)
             opened.append(c)
@@ -607,7 +772,7 @@ def _one(conn, sql, params, default=0.0):
 def _threads(conn, night, cast, now, rng):
     """The would-be threads after tonight's pulls: fade, relabel, then let the caps admit."""
     rows = {(r["a"], r["b"]): dict(r) for r in conn.execute("SELECT * FROM pull_shadow").fetchall()}
-    strong = [(k, r["pull"]) for k, r in rows.items() if r["pull"] >= TRIANGLE_PULL]
+    strong = [k for k, r in rows.items() if r["pull"] >= TRIANGLE_PULL]
     late = {g for g in cast.members if cast.gender.get(g) == "female" and _one(
         conn, "SELECT romance_stage FROM relationship WHERE a = ? AND b = ?",
         (g, cast.human), "none") in HIS_LATE}
@@ -621,7 +786,7 @@ def _threads(conn, night, cast, now, rng):
 
     def facts(a, b):
         r = rows[(a, b)]
-        third = (any({x, y} & {a, b} and {x, y} != {a, b} for (x, y), _ in strong)
+        third = (any({x, y} & {a, b} and {x, y} != {a, b} for x, y in strong)
                  or bool({a, b} & late) or couple_with_other(a, b) or couple_with_other(b, a))
         taken = a in cast.taken or b in cast.taken
         since = r["thread_night"] if r["thread_state"] == "open" and r["thread_night"] else night
@@ -673,6 +838,8 @@ def _threads(conn, night, cast, now, rng):
             why = "feud"
         elif both in exes:
             why = "ex"
+        elif r["social_pull"] < OPEN_SOCIAL:
+            why = "social"
         elif _one(conn, "SELECT affinity FROM relationship WHERE a = ? AND b = ?", pair) < OPEN_AFFINITY:
             why = "affinity"
         elif rng(a, b).random() >= OPEN_P:
@@ -731,10 +898,17 @@ def record_night(store, night: str, window, cast: Cast, *, now: float | None = N
     def rng(a, b):
         return random.Random(f"{night}|{STAGE}|open|{a}|{b}")
 
+    def tops(gender):
+        return round(max((r["pull"] for r in conn.execute("SELECT a, pull FROM pull_shadow")
+                          if cast.gender.get(r["a"]) == gender), default=0.0), 1)
+
     summary = {"events": sum(kinds.values()), "kinds": dict(sorted(kinds.items())),
                "scopes": dict(sorted(scopes.items())), "skipped": dict(sorted(skipped.items())),
                "pairs": len(gains), "members": len(cast.members), "taken": len(cast.taken),
                **_threads(conn, night, cast, now, rng)}
+    summary["at"] = {str(t): conn.execute("SELECT count(*) FROM pull_shadow WHERE pull >= ?",
+                                          (t,)).fetchone()[0] for t in (10, 20, 35)}
+    summary["max"] = {"men": tops("male"), "women": tops("female")}
     conn.execute("INSERT INTO pull_night(night, ts, summary) VALUES (?,?,?)",
                  (night, now, json.dumps(summary, sort_keys=True)))
     log("pulls_night", night=night, events=summary["events"], pairs=summary["pairs"],

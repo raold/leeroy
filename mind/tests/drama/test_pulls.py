@@ -1,7 +1,8 @@
-"""Romantic threads, phase 1 (drama/pulls.py): the recorder's event kinds, the household cost and
-stance damping, decay, the would-be openings with their labels and caps, privacy scoping, the
-switch, and the proof that a recorded night writes nothing but its own three tables. Invented
-members only (TEST_CAST 101-105; 101, 103 and 105 are men, 102 and 104 women; the owner is 1)."""
+"""Romantic threads, phase 1 (drama/pulls.py): the recorder's event kinds, presence's saturation,
+the household cost, stance damping and likeness, decay, the would-be openings with their labels
+and caps, privacy scoping, the switch, and the proof that a recorded night writes nothing but
+its own three tables. Invented members only (TEST_CAST 101-105; 101, 103 and 105 are men, 102
+and 104 women; the owner is 1)."""
 import asyncio
 import hashlib
 import json
@@ -23,7 +24,15 @@ WINDOW = night_bounds(NIGHT, UTC)
 T = datetime(2026, 10, 29, 21, 0, tzinfo=UTC).timestamp()
 MEN, WOMEN = (101, 103, 105), (102, 104)
 OWN = ("pull_event", "pull_shadow", "pull_night")
-REF = re.compile(r"^(raid|event|encounter|feud|chat|discord|voice):\d+$|^loot:guild:loot:\d+:[a-f0-9]+$")
+REF = re.compile(r"^(raid|event|encounter|feud|chat|discord|voice|move|claim|emotion):\d+$"
+                 r"|^loot:guild:loot:\d+:[a-f0-9]+$")
+REAL_LIKENESS = pulls.likeness
+
+
+@pytest.fixture(autouse=True)
+def alike(monkeypatch):
+    """Every pair is exactly alike unless a test asks for the real likeness."""
+    monkeypatch.setattr(pulls, "likeness", lambda cast, a, b: 1.0)
 
 
 def cast(h, *, taken=(), stance=None, us=()):
@@ -80,10 +89,11 @@ def game(h, t, kind, guid):
 
 
 def seed_shadow(h, a, b, pull, *, first="2026-10-20", night="2026-10-28", state="none",
-                thread_night=None, public=None):
-    sql(h, "INSERT INTO pull_shadow(a, b, pull, public_pull, events, first_night, last_event_night, "
-           "updated_night, thread_state, thread_night) VALUES (?,?,?,?,3,?,?,?,?,?)",
-        (a, b, pull, pull if public is None else public, first, night, night, state, thread_night))
+                thread_night=None, public=None, social=None):
+    sql(h, "INSERT INTO pull_shadow(a, b, pull, public_pull, social_pull, events, first_night, "
+           "last_event_night, updated_night, thread_state, thread_night) VALUES (?,?,?,?,?,3,?,?,?,?,?)",
+        (a, b, pull, pull if public is None else public, pull if social is None else social,
+         first, night, night, state, thread_night))
 
 
 def hold(pull):
@@ -91,7 +101,7 @@ def hold(pull):
     return pull / pulls.DECAY
 
 
-# -- raids and bosses ----------------------------------------------------------------------------
+# -- presence: raids, bosses, parties --------------------------------------------------------------
 
 def test_a_raid_with_him_pairs_each_man_and_woman_both_ways(h):
     cast(h)
@@ -123,11 +133,14 @@ def test_who_stood_at_a_kill_and_a_first_kill_counts_double(h):
     game(h, T + 210, "death", 104)
     game(h, T + 220, "resurrect", 104)  # a battle rez: she stood at the end
     again = h.boss(T + 300, 533, 15956, "killed", (101, 102, 104))
-    record(h)
+    summary = record(h)
     assert pairs(h, "first_kill") == [(101, 102), (102, 101)]
     assert [(e["weight"], e["ref"]) for e in events(h, "first_kill")] == [(2.0, f"event:{kill}")] * 2
-    assert pairs(h, "kill_alive") == [(101, 102), (101, 104), (102, 101), (104, 101)]
+    # she was dead at the first kill and stood at the second; for the pair the first kill had
+    # already given, the night's presence is full
+    assert pairs(h, "kill_alive") == [(101, 104), (104, 101)]
     assert {e["ref"] for e in events(h, "kill_alive")} == {f"event:{again}"}
+    assert summary["skipped"]["presence_cap"] == 2
 
 
 def test_a_wipe_counts_only_for_those_still_standing_and_a_kill_without_its_engage_for_nobody(h):
@@ -142,7 +155,35 @@ def test_a_wipe_counts_only_for_those_still_standing_and_a_kill_without_its_enga
     assert not events(h, "first_kill") and not events(h, "kill_alive")
 
 
-# -- scenes, rumours and feuds ---------------------------------------------------------------------
+def test_his_five_man_party_is_presence_and_a_raid_group_or_a_battleground_is_not(h):
+    cast(h)
+    party = h.group(T, (1, 101, 102, 104))
+    h.group(T + 60, (1, 101, 102, 103, 104, 105), raid=True)
+    h.bg(T + 120, (103, 104))
+    record(h)
+    assert pairs(h, "partied") == [(101, 102), (101, 104), (102, 101), (104, 101)]
+    assert {(e["weight"], e["scope"], e["ref"]) for e in events(h)} == {(1.5, "public", f"event:{party}")}
+
+
+def test_presence_saturates_and_is_capped_a_night(h):
+    cast(h)
+    raid(h, 1, (101, 102))
+    h.boss(T, 533, 1, "engaged", (101, 102))
+    h.boss(T + 60, 533, 1, "killed", (101, 102))
+    h.boss(T + 100, 533, 2, "engaged", (101, 102))
+    h.boss(T + 160, 533, 2, "killed", (101, 102))
+    h.group(T + 300, (1, 101, 102))
+    summary = record(h)
+    got = [(e["kind"], e["weight"], e["amount"]) for e in events(h) if e["a"] == 101]
+    # the raid counts whole; every later presence event at a quarter; never above 2 a night
+    assert sorted(got) == [("first_kill", 0.5, 0.5), ("first_kill", 0.5, 0.5), ("raided", 1.0, 1.0)]
+    assert shadow(h, 101, 102)["pull"] == 2.0 and shadow(h, 101, 102)["social_pull"] == 0.0
+    assert summary["skipped"]["presence_cap"] == 2          # the party, both ways
+    assert pulls.PRESENCE_CAP == 2.0 and pulls.PRESENCE_LATER == 0.25
+    assert pulls.PRESENCE == {"raided", "grouped_away", "kill_alive", "first_kill", "wipe_stood", "partied"}
+
+
+# -- scenes, rumours, feuds, feelings ----------------------------------------------------------------
 
 def scene(h, a, b, deltas, *, volition=None, ref="", night=NIGHT, reason="encounter"):
     ident = sql(h, "INSERT INTO encounter(night, idx, a, b, setting, status, scene, volition, ref) "
@@ -163,7 +204,7 @@ def test_a_warm_accepted_scene_draws_both_and_a_cold_or_unapplied_one_neither(h)
     scene(h, 105, 102, [(105, 102, 3)], night="2026-10-28")  # another night's scene
     record(h)
     assert pairs(h, "warm_scene") == [(101, 102), (102, 101)]
-    assert {(e["scope"], e["ref"], e["weight"]) for e in events(h)} == {("pair", f"encounter:{warm}", 2.0)}
+    assert {(e["scope"], e["ref"], e["weight"]) for e in events(h)} == {("pair", f"encounter:{warm}", 10.0)}
 
 
 def test_setting_a_rumour_straight_takes_the_side_of_whom_it_is_about(h):
@@ -173,8 +214,8 @@ def test_setting_a_rumour_straight_takes_the_side_of_whom_it_is_about(h):
     ident = scene(h, 101, 103, [], volition="correct", ref=f"rule:rumor:{rumour}")
     scene(h, 104, 103, [], volition="correct", ref=f"rule:rumor:{rumour}")  # she spoke for herself
     record(h)
-    assert events(h, "took_side") == [{"a": 104, "b": 101, "kind": "took_side", "weight": 4.0,
-                                       "factor": 1.0, "amount": 4.0, "scope": "restricted",
+    assert events(h, "took_side") == [{"a": 104, "b": 101, "kind": "took_side", "weight": 12.0,
+                                       "factor": 1.0, "amount": 12.0, "scope": "restricted",
                                        "ref": f"encounter:{ident}"}]
 
 
@@ -187,6 +228,28 @@ def test_siding_with_a_member_in_a_feud_is_public(h):
     assert {(e["scope"], e["ref"]) for e in events(h, "took_side")} == {("public", f"feud:{feud}")}
 
 
+def feel(h, guid, target, kind, memories, *, intensity=2, source="reflect", night=NIGHT):
+    return sql(h, "INSERT INTO emotion(guid, night, type, target, intensity, why, source, evidence, ts) "
+                  "VALUES (?,?,?,?,?,'x',?,?,?)",
+               (guid, night, kind, target, intensity, source,
+                json.dumps([f"memory:{m}" for m in memories]), T))
+
+
+def test_tonights_admiration_for_a_member_counts_only_on_open_memories(h):
+    cast(h)
+    seen = h.mem(102, "a memory of the raid")
+    hidden = h.mem(104, "a memory of a whisper", scope="private", scope_with=1)
+    ident = feel(h, 102, 101, "admiration", [seen], intensity=3)
+    feel(h, 104, 103, "gratitude", [seen, hidden])          # one memory is private
+    feel(h, 104, 105, "resentment", [seen])                 # no warm feeling
+    feel(h, 102, 1, "admiration", [seen])                   # toward the owner
+    feel(h, 102, 103, "admiration", [seen], source="encounter")   # the scene's own, counted as a scene
+    feel(h, 102, 105, "admiration", [seen], night="2026-10-28")
+    record(h)
+    assert events(h) == [{"a": 102, "b": 101, "kind": "admired", "weight": 6.25, "factor": 1.0,
+                          "amount": 6.25, "scope": "pair", "ref": f"emotion:{ident}"}]
+
+
 # -- chat ------------------------------------------------------------------------------------------
 
 def test_a_reply_naming_and_agreeing_with_a_member_is_her_being_heard(h):
@@ -197,8 +260,8 @@ def test_a_reply_naming_and_agreeing_with_a_member_is_her_being_heard(h):
     h.say(T + 90, 105, "Belra is wrong, I don't agree")   # no agreement
     h.say(T + 5000, 105, "exactly, Belra")                # nothing of hers recent enough
     record(h)
-    assert events(h, "heard") == [{"a": 102, "b": 101, "kind": "heard", "weight": 2.0, "factor": 1.0,
-                                   "amount": 2.0, "scope": "public", "ref": f"chat:{line}"}]
+    assert events(h, "heard") == [{"a": 102, "b": 101, "kind": "heard", "weight": 7.5, "factor": 1.0,
+                                   "amount": 7.5, "scope": "public", "ref": f"chat:{line}"}]
 
 
 def test_answering_a_taunt_aimed_at_another_member_defends_her(h):
@@ -211,39 +274,28 @@ def test_answering_a_taunt_aimed_at_another_member_defends_her(h):
     h.say(T + 1210, 105, "anyone want to do a heroic")   # no defence
     record(h)
     assert [(e["a"], e["b"], e["ref"], e["weight"]) for e in events(h, "defended")] == [
-        (102, 105, f"chat:{second}", 4.0), (104, 101, f"chat:{first}", 4.0)]
+        (102, 105, f"chat:{second}", 12.0), (104, 101, f"chat:{first}", 12.0)]
 
 
-def test_whispers_and_dms_are_never_read_and_a_reader_must_have_seen_the_line(h):
+@pytest.mark.parametrize("channel", ["whisper", "dm:102", "officer", "voice:officers", "gdm:7",
+                                     "discord:officer-chat", "discord:no-such-channel"])
+def test_only_public_channels_are_read(h, channel):
+    """Whispers and DMs are with the owner; the officers' channels, a group DM and a Discord
+    channel the layout lacks are restricted audiences: nothing said there pulls anyone."""
     cast(h)
-    # a whisper or a DM is with the owner: nothing in it can pull two members together
-    h.say(T, 102, "we should swap the tanks", channel="whisper", to=1)
-    h.say(T + 5, 101, "exactly, Belra is right", channel="whisper", to=1)
-    h.say(T + 10, 102, "we should swap the tanks", channel="dm:102")
-    h.say(T + 15, 101, "exactly, Belra is right", channel="dm:102")
-    # officer chat with a stored audience that leaves her out, and one with none stored
-    h.say(T + 100, 102, "we should swap the tanks", channel="officer")
-    hidden = h.say(T + 105, 101, "exactly, Belra is right", channel="officer")
-    sql(h, "UPDATE chat_line SET audience = ? WHERE id = ?", (json.dumps([101, 103]), hidden))
-    h.say(T + 800, 102, "bench the late ones", channel="officer")
-    h.say(T + 805, 103, "exactly, Belra", channel="officer")
-    # a group DM she reads: restricted evidence, never public
-    h.say(T + 1600, 104, "naxx tomorrow then", channel="gdm:7")
-    h.say(T + 1605, 103, "naxx tomorrow, agreed Dunna", channel="gdm:7")  # no stored audience
-    h.say(T + 2400, 104, "naxx tomorrow then", channel="gdm:7")
-    seen = h.say(T + 2405, 105, "agreed Dunna", channel="gdm:7")
-    sql(h, "UPDATE chat_line SET audience = ? WHERE id = ?", (json.dumps([104, 105]), seen))
+    h.say(T, 102, "we should swap the tanks", channel=channel, to=1 if channel == "whisper" else 0)
+    h.say(T + 5, 101, "exactly, Belra is right", channel=channel, to=1 if channel == "whisper" else 0)
+    h.say(T + 60, 103, "Dunna is such a noob", channel=channel)
+    h.say(T + 70, 105, "lay off Dunna", channel=channel)
     record(h)
-    assert events(h) == [{"a": 104, "b": 105, "kind": "heard", "weight": 2.0, "factor": 1.0,
-                          "amount": 2.0, "scope": "restricted", "ref": f"chat:{seen}"}]
-    assert shadow(h, 104, 105)["pull"] == 2.0 and shadow(h, 104, 105)["public_pull"] == 0.0
+    assert events(h) == [] and h.count("pull_shadow") == 0
 
 
-# -- banter ------------------------------------------------------------------------------------------
+# -- Discord ------------------------------------------------------------------------------------------
 
-def post(h, ident, channel, author, t):
-    sql(h, "INSERT INTO discord_message(id, channel, author, origin, text, ts) VALUES (?,?,?,'mind','x',?)",
-        (ident, channel, author, t))
+def post(h, ident, channel, author, t, *, reply_to=None, text="x", origin="mind"):
+    sql(h, "INSERT INTO discord_message(id, channel, author, origin, text, reply_to, ts) "
+           "VALUES (?,?,?,?,?,?,?)", (ident, channel, author, origin, text, reply_to, t))
 
 
 def react(h, message, member, t, emoji="\U0001f602"):
@@ -251,22 +303,96 @@ def react(h, message, member, t, emoji="\U0001f602"):
         (message, emoji, member, t))
 
 
-def test_a_reaction_in_a_conversation_she_spoke_in_is_banter_that_landed(h):
+def test_a_discord_reply_counts_both_ways_and_a_late_one_not(h):
     cast(h)
-    post(h, 1, "general", 101, T)
-    post(h, 2, "general", 102, T + 60)
-    react(h, 1, 102, T + 90)               # she spoke and laughed
-    react(h, 1, 104, T + 95)               # she only reacted
-    react(h, 2, 101, T + 99, "\U0001f44e")  # a thumbs down is no banter
-    post(h, 3, "officer-chat", 103, T)
-    post(h, 4, "officer-chat", 104, T + 30)
-    react(h, 3, 104, T + 40)
-    post(h, 5, "dm:102", 102, T)
-    post(h, 6, "dm:102", 102, T + 5)
-    react(h, 5, 102, T + 9)
+    post(h, 1, "general", 102, T)
+    post(h, 2, "general", 101, T + 400, reply_to=1)          # within ten minutes
+    post(h, 3, "general", 104, T + 2000)
+    post(h, 4, "general", 103, T + 2000 + 700, reply_to=3)   # too late
+    post(h, 5, "general", 1, T + 5000, origin="human")
+    post(h, 6, "general", 105, T + 5010, reply_to=5)         # a reply to the owner
     record(h)
-    assert [(e["a"], e["b"], e["scope"], e["ref"]) for e in events(h, "banter")] == [
-        (102, 101, "public", "discord:1"), (104, 103, "restricted", "discord:3")]
+    assert [(e["a"], e["b"], e["weight"], e["scope"], e["ref"]) for e in events(h, "answered")] == [
+        (102, 101, 5.0, "public", "discord:2")]
+    assert [(e["a"], e["b"], e["weight"]) for e in events(h, "replied")] == [(101, 102, 4.0)]
+    assert not events(h, "talked")       # 400 s apart is no back and forth; a reply is no second event
+
+
+def test_talking_back_and_forth_and_naming_a_member(h):
+    cast(h)
+    post(h, 1, "general", 102, T)
+    post(h, 2, "general", 101, T + 60)                               # right after her
+    post(h, 3, "general", 104, T + 90, text="ask Ebbo, he knows")    # names another member
+    post(h, 4, "food", 103, T + 95)                                  # another channel
+    record(h)
+    assert pairs(h, "talked") == [(101, 102), (101, 104), (102, 101), (104, 101)]
+    assert events(h, "talked")[0]["weight"] == 2.5
+    assert [(e["a"], e["b"], e["weight"], e["ref"]) for e in events(h, "mentioned")] == [
+        (105, 104, 4.0, "discord:3")]
+
+
+def test_a_reaction_counts_and_more_when_she_spoke_in_the_conversation(h):
+    cast(h)
+    post(h, 1, "pets", 101, T)
+    post(h, 2, "pets", 102, T + 1000)
+    react(h, 1, 102, T + 1090)             # she spoke and laughed
+    react(h, 1, 104, T + 1095)             # she only reacted
+    react(h, 2, 101, T + 1099, "\U0001f44e")  # a thumbs down is nothing
+    record(h)
+    assert [(e["a"], e["b"], e["weight"], e["scope"], e["ref"]) for e in events(h, "banter")] == [
+        (102, 101, 6.0, "public", "discord:1")]
+    assert [(e["a"], e["b"], e["weight"]) for e in events(h, "reacted")] == [(104, 101, 2.5)]
+
+
+@pytest.mark.parametrize("channel", ["officer-chat", "dm:102", "gdm:3", "no-such-channel"])
+def test_discord_outside_the_public_channels_is_never_read(h, channel):
+    cast(h)
+    post(h, 1, channel, 102, T)
+    post(h, 2, channel, 101, T + 30, reply_to=1, text="Dunna said so")
+    react(h, 1, 101, T + 40)
+    record(h)
+    assert events(h) == []
+
+
+# -- what the talk pipeline and the claims table already scored ---------------------------------------
+
+def move(h, guid, counterpart, main, *, channel="guild", t=T):
+    return sql(h, "INSERT INTO talk_move(ts, guid, counterpart, channel, main) VALUES (?,?,?,?,?)",
+               (t, guid, counterpart, channel, main))
+
+
+def test_a_joke_at_a_member_is_shared_and_a_compliment_is_hers(h):
+    cast(h)
+    joke = move(h, 101, 102, "joke")
+    nice = move(h, 103, 104, "compliment", channel="discord:general")
+    move(h, 105, 104, "tease", channel="whisper")      # never read
+    move(h, 105, 102, "raid")                          # no social move
+    move(h, 101, 1, "joke")                            # at the owner
+    record(h)
+    assert [(e["a"], e["b"], e["weight"], e["ref"]) for e in events(h, "joked")] == [
+        (101, 102, 4.0, f"move:{joke}"), (102, 101, 4.0, f"move:{joke}")]
+    assert [(e["a"], e["b"], e["weight"], e["ref"]) for e in events(h, "complimented")] == [
+        (104, 103, 7.5, f"move:{nice}")]
+
+
+def claim(h, guid, subject, line, *, polarity=1, kind="opinion"):
+    return sql(h, "INSERT INTO member_claim(guid, kind, subject, text, polarity, source, source_line, "
+                  "first_seen, last_seen, embedding) VALUES (?,?,?,'x',?,'chat',?,?,?,zeroblob(2048))",
+               (guid, kind, subject, polarity, line, T, T))
+
+
+def test_speaking_well_of_a_member_by_name_in_public(h):
+    cast(h)
+    said = h.say(T, 101, "Belra carried that fight")
+    private = h.say(T + 5, 103, "Dunna is great", channel="officer")
+    good = claim(h, 101, "belra", said)
+    claim(h, 105, "Belra", said, polarity=-1)            # a poor opinion
+    claim(h, 103, "Dunna", private)                      # said among the officers
+    claim(h, 105, "the new patch", said)                 # about no member
+    claim(h, 102, "Belra", said)                         # about herself
+    record(h)
+    assert [(e["a"], e["b"], e["kind"], e["weight"], e["ref"]) for e in events(h)] == [
+        (101, 102, "praised", 5.0, f"claim:{good}"), (102, 101, "spoke_well", 9.0, f"claim:{good}")]
 
 
 # -- voice ---------------------------------------------------------------------------------------------
@@ -277,38 +403,42 @@ def seat(h, guid, room, start, minutes):
 
 
 LATE = datetime(2026, 10, 29, 23, 0, tzinfo=UTC).timestamp()  # 23:00 in Britain, 19:00 in New York
+NOON = datetime(2026, 10, 29, 15, 0, tzinfo=UTC).timestamp()
 
 
-def test_a_late_voice_room_together_counts_on_the_holders_own_clock(h):
+def test_a_small_voice_room_together_and_late_on_the_holders_own_clock(h):
     cast(h, us=(103,))
     seat(h, 101, "smoke_room", LATE, 45)
     seat(h, 102, "smoke_room", LATE, 45)
-    seat(h, 103, "irl", LATE, 120)       # 19:00 for him: not late
-    seat(h, 104, "irl", LATE, 120)       # 23:00 for her, two hours of it
-    seat(h, 105, "lore", LATE, 20)
-    seat(h, 102, "lore", LATE + 3600, 20)  # too short together (and not together at all)
+    seat(h, 103, "irl", LATE, 120)       # 19:00 for him: a room together, not a late one
+    seat(h, 104, "irl", LATE, 120)       # 23:00 for her
+    seat(h, 105, "lore", LATE, 15)
+    seat(h, 102, "lore", LATE, 15)       # too short together
     record(h)
-    got = {(e["a"], e["b"]): (e["weight"], e["scope"]) for e in events(h, "voice_late")}
-    assert got == {(101, 102): (1.0, "public"), (102, 101): (1.0, "public"), (104, 103): (2.0, "public")}
+    got = {(e["a"], e["b"]): (e["kind"], e["weight"], e["scope"]) for e in events(h)}
+    assert got == {(101, 102): ("voice_late", 7.5, "public"), (102, 101): ("voice_late", 7.5, "public"),
+                   (104, 103): ("voice_late", 7.5, "public"), (103, 104): ("voice_room", 5.0, "public")}
 
 
-def test_an_afternoon_room_a_crowd_and_the_private_rooms(h, monkeypatch):
+def test_a_crowded_room_and_the_officers_and_private_rooms_count_for_nobody(h, monkeypatch):
     cast(h)
-    noon = datetime(2026, 10, 29, 15, 0, tzinfo=UTC).timestamp()
-    seat(h, 101, "smoke_room", noon, 120)
-    seat(h, 102, "smoke_room", noon, 120)
+    seat(h, 101, "smoke_room", NOON, 120)
+    seat(h, 102, "smoke_room", NOON, 120)
     for g in (101, 102, 103):
         seat(h, g, "guild_hall", LATE, 60)
     seat(h, 105, "officers", LATE, 60)
     seat(h, 104, "officers", LATE, 60)
     seat(h, 103, "private1", LATE + 4000, 40)
     seat(h, 104, "private1", LATE + 4000, 40)
-    monkeypatch.setattr(pulls, "VOICE_CROWD", 2)
+    monkeypatch.setattr(pulls, "VOICE_ROOM_MAX", 2)
     summary = record(h)
-    got = {(e["a"], e["b"]): e["scope"] for e in events(h, "voice_late")}
-    assert got == {(104, 105): "restricted", (105, 104): "restricted",
-                   (103, 104): "restricted", (104, 103): "restricted"}
-    assert summary["skipped"]["voice_crowd"] == 1
+    assert {(e["a"], e["b"]): e["kind"] for e in events(h)} == {
+        (101, 102): "voice_room", (102, 101): "voice_room"}
+    assert summary["skipped"]["voice_crowd"] == 1 and pulls.VOICE_ROOM_MAX == 2
+
+
+def test_the_room_limit_is_four_members():
+    assert pulls.VOICE_ROOM_MAX == 4 and pulls.DISCORD_REPLY_S == 600.0
 
 
 # -- DKP -------------------------------------------------------------------------------------------------
@@ -332,7 +462,7 @@ def test_a_close_award_is_an_outcome_and_respect_after_it_is_a_pull_once(h):
     record(h, "2026-10-30")
     record(h, "2026-10-31")
     assert [(e["a"], e["b"], e["amount"], e["ref"]) for e in events(h, "dkp_respect")] == [
-        (102, 101, 3.0, "loot:guild:loot:3:abc123")]
+        (102, 101, 7.5, "loot:guild:loot:3:abc123")]
     assert shadow(h, 102, 101)["events"] == 1
 
 
@@ -343,29 +473,61 @@ def test_an_award_that_was_not_close_is_nothing(h):
     assert events(h) == []
 
 
-# -- the household cost, the stance damping, the caps -----------------------------------------------------
+# -- the household cost, the stance damping, likeness, the caps ---------------------------------------------
 
-def test_a_household_is_a_cost_and_her_stance_toward_him_damps_her_pull(h):
+def test_a_household_is_a_cost_and_her_stance_toward_him_damps_her_pull_a_little(h):
     cast(h, taken=(101, 104), stance={102: "lust", 104: "drawn"})
     raid(h, 1, (101, 102, 103, 104))
     record(h)
     got = {(e["a"], e["b"]): (e["factor"], e["amount"]) for e in events(h, "raided")}
     assert got[(103, 102)] == (1.0, 1.0)                       # a free man: no cost
     assert got[(101, 102)] == (0.6, 0.6)                       # a married man
-    assert got[(102, 101)] == pytest.approx((0.3, 0.3))        # she lusts after the owner
-    assert got[(104, 103)] == pytest.approx((0.3, 0.3))        # married and drawn to him: 0.6 x 0.5
-    assert shadow(h, 104, 103)["pull"] == pytest.approx(0.3)
+    assert got[(102, 101)] == (0.6, 0.6)                       # she lusts after the owner
+    assert got[(104, 103)] == pytest.approx((0.48, 0.48))      # married and drawn to him: 0.6 x 0.8
     who = pulls.cast_from_store(h.store, h.human)
     assert who.taken == {101, 104} and who.stance == {102: "lust", 104: "drawn"}
     assert pulls.factor(who, 105) == 1.0
-    assert pulls.STANCE_FACTOR == {"fond": 0.8, "drawn": 0.5, "lust": 0.3} and pulls.TAKEN_FACTOR == 0.6
+    assert pulls.STANCE_FACTOR == {"fond": 0.9, "drawn": 0.8, "lust": 0.6} and pulls.TAKEN_FACTOR == 0.6
 
 
-def test_a_man_is_never_damped_by_a_stance_and_fond_is_a_light_damping(h):
-    cast(h, stance={102: "fond"})
-    h.persona(101, player_gender="male", stance="lust")
+def test_the_two_costs_together_never_go_under_the_floor(h):
+    cast(h, taken=(102,), stance={102: "lust", 104: "fond"})
+    h.persona(101, player_gender="male", stance="lust")       # a man is never damped by a stance
     who = pulls.cast_from_store(h.store, h.human)
-    assert pulls.factor(who, 101) == 1.0 and pulls.factor(who, 102) == 0.8
+    assert pulls.factor(who, 102) == 0.4 == pulls.FACTOR_FLOOR   # 0.6 x 0.6 would be 0.36
+    assert pulls.factor(who, 104) == 0.9 and pulls.factor(who, 101) == 1.0
+
+
+def test_likeness_is_bounded_symmetric_seeded_and_follows_the_cards(h):
+    cast(h, us=(105,))
+    h.persona(101, player_gender="male", region="UK", night_owl=True, humour="dry",
+              outside_raids=["fishing", "arena"], likes=["Old maps", "tea"])
+    h.persona(102, player_gender="female", region="UK", night_owl=True, humour="dry",
+              outside_raids=["arena", "fishing"], likes=["tea", "old  maps"])
+    h.persona(104, player_gender="female", region="UK", night_owl=False, humour="puns",
+              outside_raids=["crafting"], likes=["spreadsheets"])
+    h.persona(105, player_gender="male", region="US", night_owl=True, humour="dark",
+              outside_raids=["gathering"], likes=["trucks"])
+    who = pulls.cast_from_store(h.store, h.human)
+    near, far = REAL_LIKENESS(who, 101, 102), REAL_LIKENESS(who, 105, 104)
+    assert near == REAL_LIKENESS(who, 102, 101) == REAL_LIKENESS(pulls.cast_from_store(h.store, h.human), 101, 102)
+    assert 1.2 <= near <= pulls.LIKENESS_MAX == 1.25      # everything shared
+    assert pulls.LIKENESS_MIN == 0.8 <= far <= 0.9        # nothing shared, an ocean and a clock apart
+    for a in MEN:
+        for b in WOMEN:
+            assert 0.8 <= REAL_LIKENESS(who, a, b) <= 1.25
+    assert REAL_LIKENESS(who, 101, 999) == 1.0            # no card: no opinion
+
+
+def test_likeness_multiplies_what_a_pair_takes(h, monkeypatch):
+    cast(h)
+    monkeypatch.setattr(pulls, "likeness", lambda cast, a, b: 1.2 if {a, b} == {101, 102} else 0.8)
+    raid(h, 1, (101, 102, 104))
+    record(h)
+    got = {(e["a"], e["b"]): e["amount"] for e in events(h)}
+    assert got == {(101, 102): 1.2, (102, 101): 1.2, (101, 104): 0.8, (104, 101): 0.8}
+    assert [r[0] for r in h.store.conn.execute(
+        "SELECT DISTINCT likeness FROM pull_event ORDER BY 1")] == [0.8, 1.2]
 
 
 def test_each_kind_and_each_night_has_a_cap(h, monkeypatch):
@@ -378,9 +540,9 @@ def test_each_kind_and_each_night_has_a_cap(h, monkeypatch):
     scene(h, 101, 102, [(101, 102, 2)], night="2026-10-30")
     raid(h, 3, (101, 102), t=T + 86400)
     again = record(h, "2026-10-30")
-    amounts = sorted(e["amount"] for e in events(h) if e["a"] == 101 and e["ref"] in ("raid:3",)
-                     or e["a"] == 101 and e["kind"] == "warm_scene")
-    assert amounts == [0.5, 1.0]    # the raid's 1, then what was left of 1.5 for the scene's 2
+    amounts = sorted(e["amount"] for e in events(h)
+                     if e["a"] == 101 and (e["ref"] == "raid:3" or e["kind"] == "warm_scene"))
+    assert amounts == [0.5, 1.0]    # the raid's 1, then what was left of 1.5 for the scene's 10
     assert again["skipped"] == {}
 
 
@@ -399,15 +561,17 @@ def test_a_pull_halves_over_twenty_one_nights_without_an_event(h):
     raid(h, 1, (101, 102))
     scene(h, 101, 102, [(101, 102, 2)])
     record(h)
-    assert shadow(h, 101, 102)["pull"] == 3.0
+    assert shadow(h, 101, 102)["pull"] == 11.0
     record(h, "2026-10-30")
-    assert shadow(h, 101, 102)["pull"] == pytest.approx(3.0 * 0.5 ** (1 / 21))
+    assert shadow(h, 101, 102)["pull"] == pytest.approx(11.0 * 0.5 ** (1 / 21))
     record(h, "2026-11-19")   # 21 nights after the event
     row = shadow(h, 101, 102)
-    assert row["pull"] == pytest.approx(1.5) and row["public_pull"] == pytest.approx(0.5)
+    assert row["pull"] == pytest.approx(5.5) and row["public_pull"] == pytest.approx(0.5)
+    assert row["social_pull"] == pytest.approx(5.0)
     assert (row["first_night"], row["last_event_night"], row["updated_night"]) == (
         NIGHT, NIGHT, "2026-11-19")
     assert pulls.decayed(40.0, 0) == 40.0 and pulls.decayed(40.0, 42) == pytest.approx(10.0)
+    assert pulls.HALF_LIFE == 21.0
 
 
 def test_a_night_with_an_event_does_not_decay_and_a_night_is_recorded_once(h):
@@ -427,14 +591,13 @@ def test_a_night_with_an_event_does_not_decay_and_a_night_is_recorded_once(h):
 @pytest.fixture
 def sure(monkeypatch):
     monkeypatch.setattr(pulls, "OPEN_P", 1.0)
+    monkeypatch.setattr(pulls, "OPENS_PER_NIGHT", 9)
 
 
-def test_a_thread_would_open_at_pull_35_with_affinity_20(h, sure):
+def test_a_thread_would_open_at_pull_35(h, sure):
     cast(h)
     seed_shadow(h, 101, 102, hold(35.0))
     seed_shadow(h, 103, 104, hold(34.9))
-    h.rel(101, 102, affinity=20.0)
-    h.rel(103, 104, affinity=60.0)
     summary = record(h)
     row = shadow(h, 101, 102)
     assert (row["thread_state"], row["thread_night"], row["shape"], row["thread_why"]) == (
@@ -442,13 +605,17 @@ def test_a_thread_would_open_at_pull_35_with_affinity_20(h, sure):
     assert shadow(h, 103, 104)["thread_state"] == "none"       # under the threshold
     assert (summary["threshold"], summary["opened"], summary["open"], summary["waiting"]) == (1, 1, 1, {})
     assert summary["shapes"] == {"unrequited": 1}
+    assert (summary["at"], summary["max"]) == ({"10": 2, "20": 2, "35": 1}, {"men": 35.0, "women": 0.0})
+    assert pulls.OPEN_PULL == 35.0
 
 
-@pytest.mark.parametrize("why", ["affinity", "draw", "feud", "ex"])
+@pytest.mark.parametrize("why", ["affinity", "social", "draw", "feud", "ex"])
 def test_what_holds_a_candidate_back(h, monkeypatch, why):
     cast(h)
-    seed_shadow(h, 101, 102, 60.0)
-    h.rel(101, 102, affinity=19.9 if why == "affinity" else 40.0)
+    # presence alone never opens a thread: enough of the pull must be social
+    seed_shadow(h, 101, 102, 60.0, social=11.0 if why == "social" else 60.0)
+    if why == "affinity":
+        h.rel(101, 102, affinity=-0.5)      # he dislikes her
     monkeypatch.setattr(pulls, "OPEN_P", 0.0 if why == "draw" else 1.0)
     if why == "feud":
         sql(h, "INSERT INTO feud(a, b, started, cause) VALUES (101, 102, ?, 'x')", (T - 9 * 86400,))
@@ -461,10 +628,19 @@ def test_what_holds_a_candidate_back(h, monkeypatch, why):
     assert summary["waiting"] == {why: 1} and summary["open"] == 0
 
 
+def test_raids_alone_never_open_a_thread(h, monkeypatch):
+    monkeypatch.setattr(pulls, "OPEN_P", 1.0)
+    cast(h)
+    seed_shadow(h, 101, 102, 80.0, social=0.0)
+    raid(h, 1, (101, 102))
+    record(h)
+    assert (shadow(h, 101, 102)["thread_state"], shadow(h, 101, 102)["thread_why"]) == ("waiting", "social")
+    assert pulls.OPEN_SOCIAL == 12.0 and pulls.OPEN_AFFINITY == 0.0
+
+
 def test_the_draw_is_seeded_by_the_night_and_the_pair(h):
     cast(h)
     seed_shadow(h, 101, 102, 60.0)
-    h.rel(101, 102, affinity=40.0)
     record(h)
     first = shadow(h, 101, 102)["thread_state"]
     sql(h, "DELETE FROM pull_night")
@@ -477,7 +653,6 @@ def test_one_thread_a_member_and_the_stronger_direction_holds_the_pair(h, sure):
     cast(h)
     for a, b, pull in ((101, 102, 50.0), (102, 101, 45.0), (103, 102, 48.0)):
         seed_shadow(h, a, b, pull)
-        h.rel(a, b, affinity=30.0)
     summary = record(h)
     assert shadow(h, 101, 102)["thread_state"] == "open"
     assert (shadow(h, 102, 101)["thread_state"], shadow(h, 102, 101)["thread_why"]) == ("waiting", "pair_open")
@@ -489,24 +664,39 @@ def test_one_thread_a_member_and_the_stronger_direction_holds_the_pair(h, sure):
     assert shadow(h, 102, 101)["thread_why"] == "pair_open"
 
 
-def test_the_caps_admit_three_threads_and_one_with_a_taken_member():
+def test_the_caps_admit_three_threads_one_with_a_taken_member_and_one_a_night():
     def c(a, b, pull, shape="unrequited", taken=False):
         return {"a": a, "b": b, "pull": pull, "shape": shape, "taken": taken}
     live = [c(1, 2, 40.0), c(3, 4, 40.0, taken=True)]
     opened, why = pulls.admit([c(5, 6, 50.0, taken=True), c(7, 8, 45.0), c(9, 10, 60.0), c(1, 12, 70.0)], live)
     assert [(t["a"], t["b"]) for t in opened] == [(9, 10)]
     assert why == {(1, 12): "cap_member", (5, 6): "cap_taken", (7, 8): "cap_live"}
-    assert pulls.THREADS_MAX == 3 and pulls.TAKEN_MAX == 1
+    assert (pulls.THREADS_MAX, pulls.TAKEN_MAX, pulls.OPENS_PER_NIGHT) == (3, 1, 1)
     # the rarest shape among the live threads opens first, whatever its pull
     opened, why = pulls.admit([c(5, 6, 90.0), c(7, 8, 36.0, "triangle")], [c(1, 2, 40.0), c(3, 4, 40.0)])
     assert [(t["a"], t["b"]) for t in opened] == [(7, 8)] and why == {(5, 6): "cap_live"}
+    # at most one new thread a night
+    opened, why = pulls.admit([c(5, 6, 90.0), c(7, 8, 80.0)], [])
+    assert [(t["a"], t["b"]) for t in opened] == [(5, 6)] and why == {(7, 8): "cap_night"}
+
+
+def test_one_opening_a_night_in_the_ledger(h, monkeypatch):
+    monkeypatch.setattr(pulls, "OPEN_P", 1.0)
+    cast(h)
+    seed_shadow(h, 101, 102, 60.0)
+    seed_shadow(h, 103, 104, 50.0)
+    first = record(h)
+    assert first["opened"] == 1 and first["waiting"] == {"cap_night": 1}
+    assert shadow(h, 103, 104)["thread_why"] == "cap_night"
+    second = record(h, "2026-10-30")
+    assert second["opened"] == 1 and second["open"] == 2
+    assert shadow(h, 103, 104)["thread_night"] == "2026-10-30"
 
 
 def test_the_taken_cap_holds_a_second_thread_with_a_taken_member(h, sure):
     cast(h, taken=(102, 104))
     for a, b, pull in ((101, 102, 60.0), (103, 104, 50.0)):
         seed_shadow(h, a, b, pull)
-        h.rel(a, b, affinity=30.0)
     summary = record(h)
     assert shadow(h, 101, 102)["thread_state"] == "open" and shadow(h, 101, 102)["taken"] == 1
     assert shadow(h, 103, 104)["thread_why"] == "cap_taken"
@@ -519,9 +709,9 @@ def test_the_labels():
                                  "nights_to_open": 5, **kw})
     assert shape() == "unrequited"
     assert shape(nights_to_open=20) == "slow_burn"
-    assert shape(reverse=25.0) == "mutual_open"
-    assert shape(reverse=25.0, taken=True) == "mutual_secret"
-    assert shape(reverse=24.9, taken=True) == "unrequited"
+    assert shape(reverse=20.0) == "mutual_open"
+    assert shape(reverse=20.0, taken=True) == "mutual_secret"
+    assert shape(reverse=19.9, taken=True) == "unrequited"
     assert shape(reverse=60.0, taken=True, third=True) == "triangle"
     assert set(pulls.SHAPES) == {"unrequited", "mutual_secret", "mutual_open", "triangle", "slow_burn"}
 
@@ -529,12 +719,11 @@ def test_the_labels():
 def test_labels_come_from_the_nights_facts(h, sure):
     cast(h, taken=(102,))
     seed_shadow(h, 101, 102, 60.0)
-    seed_shadow(h, 102, 101, hold(26.0))
-    h.rel(101, 102, affinity=30.0)
+    seed_shadow(h, 102, 101, hold(21.0))
     record(h)
     assert shadow(h, 101, 102)["shape"] == "mutual_secret"
     # a third member's pull toward her makes it a triangle the next night
-    seed_shadow(h, 103, 102, 22.0, night=NIGHT)
+    seed_shadow(h, 103, 102, 30.0, night=NIGHT)
     record(h, "2026-10-30")
     assert shadow(h, 101, 102)["shape"] == "triangle" and shadow(h, 101, 102)["thread_state"] == "open"
 
@@ -543,8 +732,6 @@ def test_a_slow_burn_and_her_arc_with_him_as_a_ceiling_and_a_triangle(h, sure):
     cast(h, stance={104: "lust"})
     seed_shadow(h, 101, 102, 60.0, first="2026-10-01")
     seed_shadow(h, 104, 103, 60.0)
-    h.rel(101, 102, affinity=30.0)
-    h.rel(104, 103, affinity=30.0)
     h.rel(104, 1, romance_stage="late_nights")
     record(h)
     assert (shadow(h, 101, 102)["shape"], shadow(h, 101, 102)["ceiling"]) == ("slow_burn", "")
@@ -555,7 +742,6 @@ def test_a_slow_burn_and_her_arc_with_him_as_a_ceiling_and_a_triangle(h, sure):
 def test_a_member_couple_with_someone_else_makes_a_triangle(h, sure):
     cast(h)
     seed_shadow(h, 101, 102, 60.0)
-    h.rel(101, 102, affinity=30.0)
     for x, y in ((102, 105), (105, 102)):
         h.rel(x, y, romance_stage="whispers")
     record(h)
@@ -574,24 +760,34 @@ def test_a_would_be_thread_fades_under_ten_and_a_waiting_one_lets_go(h, sure):
 
 # -- privacy -----------------------------------------------------------------------------------------------------
 
-def test_rows_hold_ids_counts_and_codes_never_text(h):
-    cast(h)
+def everything(h):
     raid(h, 1, (101, 102))
     h.boss(T, 533, 1, "engaged", (101, 102))
     h.boss(T + 60, 533, 1, "killed", (101, 102))
+    h.group(T + 90, (1, 101, 102))
     scene(h, 101, 102, [(101, 102, 2)])
-    h.say(T, 102, "SECRETWORDS we should swap the tanks")
+    first = h.say(T, 102, "SECRETWORDS we should swap the tanks")
     h.say(T + 30, 101, "SECRETWORDS exactly, Belra is right")
-    post(h, 1, "general", 101, T)
-    post(h, 2, "general", 102, T + 60)
+    post(h, 1, "general", 101, T, text="SECRETWORDS")
+    post(h, 2, "general", 102, T + 60, reply_to=1, text="SECRETWORDS Arkon")
     react(h, 1, 102, T + 90)
+    move(h, 101, 102, "joke")
+    claim(h, 101, "Belra", first)
+    feel(h, 102, 101, "admiration", [h.mem(102, "SECRETWORDS a memory of the raid")])
     seat(h, 101, "smoke_room", LATE, 45)
     seat(h, 102, "smoke_room", LATE, 45)
     award(h, 101, 102)
+
+
+def test_rows_hold_ids_counts_and_codes_never_text(h, monkeypatch):
+    monkeypatch.setattr(pulls, "NIGHT_CAP", 1000.0)
+    cast(h)
+    everything(h)
     record(h)
     rows = events(h)
-    assert {e["kind"] for e in rows} >= {"raided", "first_kill", "warm_scene", "heard", "banter",
-                                         "voice_late", "dkp_close"}
+    assert {e["kind"] for e in rows} >= {"raided", "first_kill", "warm_scene", "heard", "answered",
+                                         "replied", "banter", "joked", "spoke_well", "praised",
+                                         "admired", "voice_late", "dkp_close"}
     assert all(REF.match(e["ref"]) for e in rows), [e["ref"] for e in rows]
     assert all(e["scope"] in pulls.SCOPES for e in rows)
     dump = json.dumps([list(r) for t in OWN for r in h.store.conn.execute(f"SELECT * FROM {t}")])
@@ -602,12 +798,20 @@ def test_public_pull_counts_only_public_evidence(h):
     cast(h)
     raid(h, 1, (101, 102))                    # public
     scene(h, 101, 102, [(101, 102, 2)])       # between the two
-    seat(h, 101, "private1", LATE, 45)        # restricted
-    seat(h, 102, "private1", LATE, 45)
     record(h)
     row = shadow(h, 101, 102)
-    assert row["pull"] == 4.0 and row["public_pull"] == 1.0
+    assert row["pull"] == 11.0 and row["public_pull"] == 1.0 and row["social_pull"] == 10.0
     assert record(h, "2026-10-30")["scopes"] == {}
+
+
+def test_every_kind_has_a_weight_and_a_cap():
+    assert set(pulls.KINDS) == pulls.PRESENCE | {
+        "warm_scene", "took_side", "heard", "defended", "answered", "replied", "talked", "mentioned",
+        "reacted", "banter", "joked", "complimented", "spoke_well", "praised", "admired",
+        "voice_room", "voice_late", "dkp_close", "dkp_respect"}
+    social = [w for k, (w, _) in pulls.KINDS.items() if k not in pulls.PRESENCE and w > 0]
+    # a social event weighs more than a whole night of presence can give... or at least as much
+    assert min(social) > pulls.PRESENCE_CAP
 
 
 # -- the switch -----------------------------------------------------------------------------------------------------
@@ -664,23 +868,13 @@ def test_only_record_attaches_the_stage(tmp_path, text, stages):
 
 def busy_night(h):
     cast(h, taken=(102,), stance={104: "lust"})
-    raid(h, 1, (101, 102, 103, 104, 105))
-    h.boss(T, 533, 1, "engaged", (101, 102, 104))
-    h.boss(T + 60, 533, 1, "killed", (101, 102, 104))
-    scene(h, 101, 102, [(101, 102, 2)])
-    h.say(T, 102, "we should swap the tanks")
-    h.say(T + 30, 101, "exactly, Belra is right")
+    everything(h)
+    raid(h, 2, (101, 102, 103, 104, 105), t=T + 60)
     h.say(T + 100, 103, "Dunna is such a noob")
     h.say(T + 120, 105, "lay off Dunna")
-    post(h, 1, "general", 101, T)
-    post(h, 2, "general", 102, T + 60)
-    react(h, 1, 102, T + 90)
-    seat(h, 101, "smoke_room", LATE, 45)
-    seat(h, 102, "smoke_room", LATE, 45)
     seed_shadow(h, 105, 104, 60.0)
     h.rel(105, 104, affinity=30.0)
     h.rel(101, 102, affinity=12.0, attraction=7.0)
-    h.mem(101, "a memory of the raid")
     h.clock.set(WINDOW[1] + 600)
 
 
@@ -695,13 +889,14 @@ def test_off_runs_nothing_and_writes_no_row(h):
 
 def test_record_runs_once_a_night(h, monkeypatch):
     monkeypatch.setattr(pulls, "OPEN_P", 1.0)
+    monkeypatch.setattr(pulls, "NIGHT_CAP", 1000.0)
     busy_night(h)
     h.settings = replace(h.settings, drama_threads="record")
     ctx = h.ctx()
     run(pulls.stage_pulls(ctx))
     assert ctx.done("pulls", "all") and not ctx.failures
     counts = [h.count(t) for t in OWN]
-    assert counts[0] > 10 and counts[2] == 1
+    assert counts[0] > 20 and counts[2] == 1
     assert shadow(h, 105, 104)["thread_state"] == "open"
     run(pulls.stage_pulls(h.ctx()))
     assert [h.count(t) for t in OWN] == counts
@@ -724,18 +919,22 @@ def table_hashes(conn):
 
 def test_a_recorded_night_writes_only_its_own_tables(h, monkeypatch):
     """The owner's ruling for this phase: no relationship row, attraction, scene, prompt input or
-    memory changes. Every other table hashes the same before and after a busy recorded night."""
+    memory changes. Every other table hashes the same before and after a busy recorded night
+    that exercises every source."""
     monkeypatch.setattr(pulls, "OPEN_P", 1.0)
+    monkeypatch.setattr(pulls, "likeness", REAL_LIKENESS)
+    monkeypatch.setattr(pulls, "NIGHT_CAP", 1000.0)
     busy_night(h)
     h.settings = replace(h.settings, drama_threads="record")
     before = table_hashes(h.store.conn)
     for must in ("relationship", "rel_delta", "encounter", "memory", "volition", "emotion",
                  "persona_core", "persona_state", "jealousy", "feud", "rumor", "knows", "fact",
-                 "attraction_state", "chat_line", "utterance", "meta", "breakup"):
+                 "attraction_state", "chat_line", "utterance", "meta", "breakup", "talk_move",
+                 "member_claim", "discord_message", "discord_reaction", "voice_presence"):
         assert must in before
     ctx = h.ctx()
     run(pulls.stage_pulls(ctx))
-    assert ctx.done("pulls", "all") and h.count("pull_event") > 10 and h.count("pull_night") == 1
+    assert ctx.done("pulls", "all") and h.count("pull_event") > 20 and h.count("pull_night") == 1
     after = table_hashes(h.store.conn)
     assert {t for t in before if before[t] != after[t]} == set()
     assert set(before) == set(after)

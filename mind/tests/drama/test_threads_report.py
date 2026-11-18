@@ -37,7 +37,7 @@ def recorded(h, monkeypatch):
     seed_shadow(h, 105, 104, 60.0)
     seed_shadow(h, 103, 104, 50.0)
     h.rel(105, 104, affinity=30.0)
-    h.rel(103, 104, affinity=5.0)
+    h.rel(103, 104, affinity=-5.0)
     record(h)
     raid(h, 2, (101, 102), t=T + DAY)
     record(h, "2026-10-30")
@@ -61,6 +61,10 @@ def test_the_report_counts_events_pulls_and_would_be_threads(h, monkeypatch):
     assert data["waiting"] == {"affinity": 2}                  # one candidate, two nights
     assert data["top"][0]["a"] == 105 and data["top"][0]["pull"] == pytest.approx(60 * pulls.DECAY ** 2, abs=0.05)
     assert data["rules"]["threads_max"] == 3 and data["rules"]["taken_max"] == 1
+    assert data["rules"]["opens_per_night"] == 1 and data["rules"]["open_social"] == 12.0
+    last = data["nights"][-1]
+    assert last["at"] == {"10": 4, "20": 2, "35": 2} and last["max"]["men"] == data["top"][0]["pull"]
+    assert data["top"][0]["social_pull"] == data["top"][0]["pull"]
     assert report.threads_report(h.store.conn, nights=1)["nights"][0]["night"] == "2026-10-30"
 
 
@@ -70,7 +74,8 @@ def test_the_report_text_is_labelled_and_holds_no_name(h, monkeypatch):
     assert text.startswith("Romantic threads: recording only. Nothing below is in effect")
     for part in ("Events by kind, per night (last 2):", "raided", "warm_scene", "105 -> 104",
                  "Would be open now:", "triangle", "affinity", "left out: same_sex 4",
-                 "caps 3 live, 1 with a taken member"):
+                 "caps 3 live, 1 with a taken member, 1 opening a night", "pulls at 10+/20+/35+",
+                 "max pull men/women"):
         assert part in text, part
     for name in ("Arkon", "Belra", "Coros", "Dunna", "Ebbo", "Testmage", "Quillon"):
         assert name not in text
@@ -257,9 +262,9 @@ def test_the_migration_adds_the_three_tables(h):
     number = migration_number("pull_threads")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db_mod.latest_version() >= number
     cols = {t: [r[1] for r in conn.execute(f"PRAGMA table_info({t})")] for t in OWN}
-    assert cols["pull_event"] == ["id", "night", "a", "b", "kind", "weight", "factor", "amount",
-                                  "scope", "ref", "ts"]
-    assert cols["pull_shadow"] == ["a", "b", "pull", "public_pull", "events", "first_night",
+    assert cols["pull_event"] == ["id", "night", "a", "b", "kind", "weight", "factor", "likeness",
+                                  "amount", "scope", "ref", "ts"]
+    assert cols["pull_shadow"] == ["a", "b", "pull", "public_pull", "social_pull", "events", "first_night",
                                    "last_event_night", "updated_night", "thread_state",
                                    "thread_night", "thread_why", "shape", "ceiling", "taken"]
     assert cols["pull_night"] == ["night", "ts", "summary"]
@@ -272,6 +277,8 @@ def test_the_migration_adds_the_three_tables(h):
     "INSERT INTO pull_event(night,a,b,kind,weight,factor,amount,scope,ref,ts) VALUES ('n',1,2,'raided',1,1,1,'guild','raid:1',0)",
     "INSERT INTO pull_event(night,a,b,kind,weight,factor,amount,scope,ref,ts) VALUES ('n',1,2,'raided',1,1.5,1,'public','raid:1',0)",
     "INSERT INTO pull_shadow(a,b,pull,first_night,last_event_night,updated_night) VALUES (1,2,101,'n','n','n')",
+    "INSERT INTO pull_shadow(a,b,social_pull,first_night,last_event_night,updated_night) VALUES (1,2,101,'n','n','n')",
+    "INSERT INTO pull_event(night,a,b,kind,weight,factor,likeness,amount,scope,ref,ts) VALUES ('n',1,2,'raided',1,1,3,1,'public','raid:1',0)",
     "INSERT INTO pull_shadow(a,b,pull,first_night,last_event_night,updated_night,thread_state) VALUES (1,2,5,'n','n','n','involved')",
     "INSERT INTO pull_night(night,ts,summary) VALUES ('n',0,'[]')",
 ])

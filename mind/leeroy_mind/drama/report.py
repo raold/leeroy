@@ -6,15 +6,17 @@ import json
 import sqlite3
 from collections import Counter
 
-from leeroy_mind.drama.pulls import (FADE_PULL, HALF_LIFE, OPEN_AFFINITY, OPEN_PULL, TAKEN_MAX,
-                                     THREADS_MAX)
+from leeroy_mind.drama.pulls import (FADE_PULL, HALF_LIFE, OPEN_AFFINITY, OPEN_PULL, OPEN_SOCIAL,
+                                     OPENS_PER_NIGHT, TAKEN_MAX, THREADS_MAX)
 
 TABLES = ("pull_event", "pull_shadow", "pull_night")
 NIGHTS_MAX = 90
 TOP = 15
 WHY_WORDS = {
     "draw": "the night's draw said not yet",
-    "affinity": f"affinity under {OPEN_AFFINITY:g}",
+    "affinity": f"affinity under {OPEN_AFFINITY:g} (they dislike each other)",
+    "social": f"under {OPEN_SOCIAL:g} of the pull is social (presence alone never opens one)",
+    "cap_night": f"{OPENS_PER_NIGHT} opening a night",
     "feud": "the two are feuding",
     "ex": "exes inside their cooldown",
     "pair_open": "the pair's other direction holds the thread",
@@ -34,7 +36,8 @@ def _summary(text) -> dict:
 
 def _thread(r) -> dict:
     return {"a": r["a"], "b": r["b"], "pull": round(r["pull"], 1),
-            "public_pull": round(r["public_pull"], 1), "events": r["events"],
+            "public_pull": round(r["public_pull"], 1), "social_pull": round(r["social_pull"], 1),
+            "events": r["events"],
             "first_night": r["first_night"], "last_event_night": r["last_event_night"],
             "state": r["thread_state"], "night": r["thread_night"], "why": r["thread_why"],
             "shape": r["shape"], "ceiling": r["ceiling"], "taken": bool(r["taken"])}
@@ -49,7 +52,8 @@ def _empty(rules) -> dict:
 def threads_report(conn, *, nights: int = 14, top: int = TOP) -> dict:
     nights = max(1, min(NIGHTS_MAX, int(nights)))
     rules = {"open_pull": OPEN_PULL, "open_affinity": OPEN_AFFINITY, "fade_pull": FADE_PULL,
-             "half_life_nights": HALF_LIFE, "threads_max": THREADS_MAX, "taken_max": TAKEN_MAX}
+             "half_life_nights": HALF_LIFE, "threads_max": THREADS_MAX, "taken_max": TAKEN_MAX,
+             "open_social": OPEN_SOCIAL, "opens_per_night": OPENS_PER_NIGHT}
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     if any(t not in have for t in TABLES):
         return _empty(rules)
@@ -68,7 +72,8 @@ def threads_report(conn, *, nights: int = 14, top: int = TOP) -> dict:
                              "open_taken": int(s.get("open_taken", 0)),
                              "faded": int(s.get("faded", 0)),
                              "waiting": dict(s.get("waiting", {})),
-                             "shapes": dict(s.get("shapes", {}))})
+                             "shapes": dict(s.get("shapes", {})),
+                             "at": dict(s.get("at", {})), "max": dict(s.get("max", {}))})
         recorded.reverse()
         kinds, scopes, skipped, waiting = Counter(), Counter(), Counter(), Counter()
         for n in recorded:
@@ -120,16 +125,24 @@ def render(data: dict) -> str:
         extra = " ".join(x for x in (t["state"] if t["state"] != "none" else "", t["shape"],
                                      "taken" if t["taken"] else "",
                                      f"ceiling={t['ceiling']}" if t["ceiling"] else "") if x)
-        out.append(f"  {_pair(t):>14}  pull {t['pull']:5.1f}  public {t['public_pull']:5.1f}  "
-                   f"events {t['events']:3d}  since {t['first_night']}  {extra}".rstrip())
+        out.append(f"  {_pair(t):>14}  pull {t['pull']:5.1f}  social {t['social_pull']:5.1f}  "
+                   f"public {t['public_pull']:5.1f}  events {t['events']:3d}  "
+                   f"since {t['first_night']}  {extra}".rstrip())
     r = data["rules"]
-    out.append(f"\nWould-be threads (pull {r['open_pull']:g} with affinity {r['open_affinity']:g}; "
-               f"caps {r['threads_max']} live, {r['taken_max']} with a taken member):")
-    out.append("  night       at-threshold opened open faded  held back")
+    out.append(f"\nWould-be threads (pull {r['open_pull']:g}, {r['open_social']:g} of it social, "
+               f"affinity {r['open_affinity']:g} or more; caps {r['threads_max']} live, "
+               f"{r['taken_max']} with a taken member, {r['opens_per_night']} opening a night):")
+    out.append("  night       candidates opened live taken faded  shapes; held back")
     for n in data["nights"]:
         held = ", ".join(f"{k} {v}" for k, v in sorted(n["waiting"].items())) or "-"
-        out.append(f"  {n['night']}  {n['threshold']:12d} {n['opened']:6d} {n['open']:4d} "
-                   f"{n['faded']:5d}  {held}")
+        shapes = ", ".join(f"{k} {v}" for k, v in sorted(n["shapes"].items())) or "-"
+        out.append(f"  {n['night']}  {n['threshold']:10d} {n['opened']:6d} {n['open']:4d} "
+                   f"{n['open_taken']:5d} {n['faded']:5d}  {shapes}; {held}")
+    out.append("\nShadow pulls per night (pulls at 10+/20+/35+, max pull men/women):")
+    for n in data["nights"]:
+        at, top = n["at"], n["max"]
+        out.append(f"  {n['night']}  {at.get('10', 0):4d} {at.get('20', 0):4d} {at.get('35', 0):4d}   "
+                   f"{top.get('men', 0):5.1f} {top.get('women', 0):5.1f}")
     for title, key in (("Would be open now", "open"), ("Would have faded", "ended")):
         out.append(f"  {title}:" + (" none" if not data[key] else ""))
         for t in data[key]:

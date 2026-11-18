@@ -120,8 +120,9 @@ unknown `[drama]` key as an invalid table and turns `member_romance` off) and re
 `pre-release-*.db` snapshot (older code refuses a newer schema).
 
 - `python -m leeroy_mind drama threads report [--nights N] [--json]` reads `mind.db` read-only:
-  events by kind per night, the top shadow pulls by pair (guids), the would-be threads and why
-  candidates were held back.
+  events by kind per night, the top shadow pulls by pair (guids), the would-be threads per
+  night with their shapes, how many pulls stand at 10, 20 and 35, the men's and women's highest
+  pull, and why candidates were held back.
 - `python -m leeroy_mind drama threads replay --from YYYY-MM-DD [--keep] [--json]` runs the same
   recorder over the nights `night_run` already holds (status done, their stored windows) on a
   copy in the data directory's `scratch/` folder, prints the report and deletes the copy
@@ -139,51 +140,89 @@ unknown `[drama]` key as an invalid table and turns `member_romance` off) and re
 
 One `pull_event` row per fact that would have moved the directed pull a -> b (a's pull toward
 b), for a man and a woman of the cast (same-sex pairs are not in this release; a member on a
-break and the owner are left out):
+break and the owner are left out). Only public evidence is read.
 
-| Kind | The fact | Weight | Scope |
+**Presence** (time spent in one place). It saturates: a pair's first presence event of a night
+counts whole, every later one at a quarter, and presence gives a pair at most 2 a night. A
+thread never opens on presence alone.
+
+| Kind | The fact | Weight |
+|---|---|---|
+| `raided` | both raided in a guild raid with him | 1 |
+| `grouped_away` | both raided in an offline raid (him absent) | 1.5 |
+| `kill_alive` / `first_kill` | both stood at a boss kill (the guild's first of that boss) | 1 / 2 |
+| `wipe_stood` | both still standing when a wipe was called | 0.5 |
+| `partied` | both in his party of five or fewer | 1.5 |
+
+**Social** (something passed between them).
+
+| Kind | The fact | Whose pull | Weight |
 |---|---|---|---|
-| `raided` | both raided in a guild raid with him | 1 | public |
-| `grouped_away` | both raided in an offline raid (him absent) | 1.5 | public |
-| `kill_alive` / `first_kill` | both stood at a boss kill (the guild's first of that boss) | 1 / 2 | public |
-| `wipe_stood` | both still standing when a wipe was called | 0.5 | public |
-| `warm_scene` | tonight's accepted scene of theirs whose applied changes sum above zero | 2 | pair |
-| `took_side` | someone set a rumour about her straight (a `correct` scene), or sided with her in a feud | 4 | restricted / public |
-| `heard` | a member's reply naming her and agreeing, within 5 minutes of her line on that channel | 2 | the channel's |
-| `defended` | a member answering a taunt aimed at her (the owner's taunt counts) | 4 | the channel's |
-| `banter` | her reaction to his Discord line in a conversation she spoke in within 30 minutes | 2 | the channel's |
-| `voice_late` | 30 minutes or more in one voice room between 22:00 and 04:00 on the holder's own clock (90 minutes: 2); a room that held more than 6 members that night is a crowd and counts for nobody | 1 / 2 | public, or restricted for the officers' and private rooms |
-| `dkp_close` | a close DKP award between them: an outcome, it moves nothing | 0 | public |
-| `dkp_respect` | respect gained for the other within 7 days of a close award, once per pair and award | 3 | public |
+| `warm_scene` | tonight's accepted scene of theirs whose applied changes sum above zero | both | 10 |
+| `took_side` | someone set a rumour about her straight (a `correct` scene), or sided with her in a feud | hers | 12 |
+| `heard` | a reply naming her and agreeing, within 5 minutes of her line on a public channel | hers | 7.5 |
+| `defended` | a member answering a taunt aimed at her on a public channel (the owner's taunt counts) | hers | 12 |
+| `answered` / `replied` | a Discord reply to her message within 10 minutes, on a public channel | hers 5 / the replier's 4 | |
+| `talked` | his message right after hers in a public Discord channel (5 minutes) | both | 2.5 |
+| `mentioned` | a public Discord message naming her | hers | 4 |
+| `reacted` / `banter` | her reaction to his public Discord line; `banter` when she spoke in that conversation within 30 minutes | hers | 2.5 / 6 |
+| `joked` | a joke, tease or callback the talk pipeline scored (`talk_move`) at the other on a public channel | both | 4 |
+| `complimented` | a compliment scored the same way | the one complimented | 7.5 |
+| `spoke_well` / `praised` | a good opinion of her by name on a public channel, as the claims table scored it (`member_claim`) | hers 9 / the speaker's 5 | |
+| `admired` | tonight's reflection left her admiring or grateful to him, on open memories only | hers | 5 (3.75 to 6.25 by intensity) |
+| `voice_room` / `voice_late` | 20 minutes in one public voice room of at most 4 members that night; 30 of them between 22:00 and 04:00 on her own clock | hers | 5 / 7.5 |
+| `dkp_close` | a close DKP award between them: an outcome, it moves nothing | both | 0 |
+| `dkp_respect` | respect gained for the other within 7 days of a close award, once per pair and award | the one who gained it | 7.5 |
 
-Each kind has a cap per directed pair and night, and a pair's pull can take at most 8 a night.
-A gain is multiplied by 0.6 for a member taken at home (`couples.taken`: married, engaged or
-partnered; a cost, not a ban) and, for a woman, by her stance toward the owner (fond 0.8, drawn
-0.5, lust 0.3). A pull halves over 21 nights without an event.
+Each kind has a cap per directed pair and night, and a pair's pull can take at most 12 a night.
+A gain is multiplied by:
 
-**Privacy.** Every row carries the scope of its evidence and the evidence's id, never text. A
-pull moves only by what its holder could have witnessed: whispers and DMs (which are with the
-owner) are never read; a line on a channel whose stored audience leaves her out counts for
-nothing; a restricted channel (the officers', a group DM, a Discord channel the layout lacks)
-with no stored audience counts for nothing; a group DM line counts only for a reader in its
-stored audience and is restricted evidence. `pull_shadow.public_pull` is the part public
-evidence alone would have built, for the later "what the guild knows" view. Nothing recorded is
-shown to a member or creates a fact.
+- **the household cost**: 0.6 for a member taken at home (`couples.taken`: married, engaged or
+  partnered; a cost, not a ban);
+- **her stance toward the owner**, for a woman: fond 0.9, drawn 0.8, lust 0.6. Her pull toward
+  a member is about her and him, so the bite is small, and the two costs together never go
+  under 0.4;
+- **likeness**, 0.8 to 1.25, the same both ways: same region, same night rhythm, same humour,
+  shared things they do outside raids, shared likes, less when nothing is shared, and a small
+  draw seeded by the pair.
+
+A pull halves over 21 nights without an event.
+
+Not read, because nothing is stored for it: members sitting near each other (the inn seats are
+the owner's invitations only), member-only 5-mans (only his party and offline raids are
+recorded), battlegrounds (the cast's random queues put hundreds of members a night in one, so
+it says nothing about a pair).
+
+**Privacy.** Every row carries the scope of its evidence and the evidence's id, never text.
+Whispers, DMs, group DMs, the officers' channels and voice room, the private voice rooms and
+Discord channels the layout lacks are never read. A scene and a feeling are between the two
+(`pair`); a rumour set straight reaches its subject second-hand (`restricted`). A feeling
+resting on any private or secret memory is not read. `pull_shadow.public_pull` is the part
+public evidence alone would have built, for the later "what the guild knows" view;
+`social_pull` is the part that did not come from presence. Nothing recorded is shown to a
+member or creates a fact.
 
 ### Would-be threads
 
-After the night's pulls, a directed pull of 35 with affinity 20 would open a thread on a seeded
-draw (25% a night) unless the pair is feuding, exes inside 30 days, or the pair's other
-direction already holds one; the caps then admit the rarest shape among the live ones first:
-3 live guild-wide, 1 with a taken member, one per member. `pull_shadow.thread_state` is `open`,
-`waiting` (with `thread_why`: `draw`, `affinity`, `feud`, `ex`, `pair_open`, `cap_member`,
-`cap_live`, `cap_taken`), `faded` (an open one whose pull fell under 10) or `none`. `shape` is
-computed from the night's facts: `triangle` (a third member's pull of 20 toward either, either
-in a member couple with someone else, or her arc with the owner at `late_nights` or later),
-`mutual_secret` / `mutual_open` (the other's pull at 25; secret when either is taken),
-`slow_burn` (20 nights from the first event) or `unrequited`. A woman whose arc with the owner
-is at `late_nights` or later gets `ceiling = acknowledged`: her thread would never pass that.
+After the night's pulls, a directed pull of 35, at least 12 of it social, between two who do
+not dislike each other (affinity 0 or more) would open a thread on a seeded draw (50% a night)
+unless the pair is feuding, exes inside 30 days, or the pair's other direction already holds
+one. The caps then admit the rarest shape among the live ones first: 3 live guild-wide, 1 with
+a taken member, one per member, one new thread a night. `pull_shadow.thread_state` is `open`,
+`waiting` (with `thread_why`: `draw`, `affinity`, `social`, `feud`, `ex`, `pair_open`,
+`cap_member`, `cap_taken`, `cap_live`, `cap_night`), `faded` (an open one whose pull fell under
+10) or `none`. `shape` is computed from the night's facts: `triangle` (a third member's pull
+of 25 toward either, either in a member couple with someone else, or her arc with the owner at
+`late_nights` or later), `mutual_secret` / `mutual_open` (the other's pull at 20; secret when
+either is taken), `slow_burn` (20 nights from the first event) or `unrequited`. A woman whose
+arc with the owner is at `late_nights` or later gets `ceiling = acknowledged`: her thread would
+never pass that.
 
-Not in phase 1: the design's likeness multiplier, the rescue source (it needs a new native
-fact), the drama dial on the opening draw, cooldowns after an ending, pressures, choices,
-exposure, and anything a member could notice.
+The design asked for affinity 20. The stored affinity between members is almost empty (about
+70 of 18,700 directed member rows are above 0), so that gate would admit nobody whatever
+happened between two members; the social part of the pull is the liking, and the stored
+affinity only vetoes a pair who dislike each other.
+
+Not in phase 1: the rescue source (it needs a new native fact), the drama dial on the opening
+draw, cooldowns after an ending, pressures, choices, exposure, and anything a member could
+notice.
