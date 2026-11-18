@@ -76,7 +76,8 @@ def test_new_pose_and_light_phrases_pass_screens_and_unknown_codes_are_held():
     s = styled(p)
     for phrase in (*S.POSES.values(), *S.LIGHTS.values()):
         assert not _text_codes('pose', phrase, ident=IDENT, names=[])
-    for invalid in (replace(s, romance_pose='free text'), replace(s, romance_light=['lamp']),
+    for invalid in (replace(s, romance_style=['warm']), replace(s, romance_style=False),
+                    replace(s, romance_pose='free text'), replace(s, romance_light=['lamp']),
                     replace(s, romance_style='', romance_pose='direct'),
                     replace(s, audience='anyone', romance_pose='direct')):
         assert scene_renderable(p, invalid) == 'scene.styling: held'

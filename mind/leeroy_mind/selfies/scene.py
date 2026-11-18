@@ -503,7 +503,8 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
     if s.style == LUST and not suggestive(p):
         return LUST_HELD
     from .romance_styling import EXPRESSIONS, LIGHTS, POSES
-    if (not isinstance(s.romance_pose, str) or not isinstance(s.romance_light, str)
+    if (not isinstance(s.romance_style, str) or not isinstance(s.romance_pose, str)
+            or not isinstance(s.romance_light, str)
             or (s.romance_pose and (not s.romance_style or s.romance_pose not in POSES))
             or (s.romance_light and (not s.romance_style or s.romance_light not in LIGHTS))):
         return "scene.styling: held"
