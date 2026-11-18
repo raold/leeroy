@@ -314,6 +314,8 @@ class DiscordDesk:
         if row is None or (DONT_TELL_RE.search(row[0]) and not DONT_TELL_RE.search(text)):
             return
         store.conn.execute("UPDATE chat_line SET text = ? WHERE id = ?", (text, int(line)))
+        if DONT_TELL_RE.search(text) and not DONT_TELL_RE.search(row[0]):
+            store.lines_changed([int(line)])  # an ask added by the edit covers what cites it
 
     def _his_action(self) -> None:
         """An action of his other than a post keeps his Discord lease (discord.talk)."""

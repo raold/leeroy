@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from leeroy_mind.discord.channels import is_discord, is_private, is_officer_channel, is_local_channel, channel_id
 from leeroy_mind.groups.audience import GroupSource
-from leeroy_mind.memory.privacy import (derive_scope, restricted_channels, stricter, OFFICERS, GROUP,
+from leeroy_mind.memory.privacy import (derive_scope, restricted_channels, stricter, OFFICERS, GROUP, SCOPES,
     _derive as derive_rows, _lines as privacy_lines, _secret_threads as secret_threads,
     _Memory as privacy_memory)
 from leeroy_mind.memory.recall import scope_ok, hidden_ok, whisper_ok, OWNER_REF
@@ -141,7 +141,12 @@ class Visibility:
         memories cite a non-open one, 434 reach a private line through memory refs), so a gate
         that stops at a memory must not take its stored scope alone. Only memory refs are
         followed, never the lines' own recalled memories. None: unknown, cyclic or past the
-        node budget, which no caller may read as open."""
+        node budget, which no caller may read as open.
+
+        The stored check is the one source of it (memory.privacy.resolve; the scope_evidence
+        migration's derived_scope, derived_with, derived_at): a memory that carries one is
+        read from it and not opened. Only a memory without one (unchecked since something it
+        rests on changed, or a database from before that migration) is walked here."""
         done = self.scopes
         if ident in done:
             return done[ident]
@@ -154,8 +159,15 @@ class Visibility:
             if len(seen) + len(done) > SCOPE_NODES:
                 done[ident] = None
                 return None
-            row = self.conn.execute('SELECT id,owner,scope,scope_with,evidence FROM memory WHERE id=?',
-                                    (current,)).fetchone()
+            row = self.conn.execute('SELECT * FROM memory WHERE id=?', (current,)).fetchone()
+            if (row is not None and 'derived_at' in row.keys() and row['derived_at'] is not None
+                    and row['scope'] in SCOPES and row['derived_scope'] in SCOPES):
+                # derived_complete 0: its evidence, at some depth, is malformed or cites a
+                # memory with no row. Unknown is never open here, checked or not
+                whole = 'derived_complete' not in row.keys() or row['derived_complete'] != 0
+                done[current] = stricter((row['scope'], row['scope_with']),
+                                         (row['derived_scope'], row['derived_with'] or 0)) if whole else None
+                continue
             try:
                 refs = json.loads(row['evidence']) if row is not None else None
             except (ValueError, TypeError):
@@ -176,7 +188,9 @@ class Visibility:
         secret = secret_threads(self.conn, lines)
         for _ in range(len(order) + 1):
             changed = False
-            for i in order:
+            # leaves first: a walk finds a memory before what it cites, and a scoped leaf under
+            # a deep chain then settles in one pass instead of one pass a level
+            for i in reversed(order):
                 row, refs = rows[i]
                 cited, broken = {}, False
                 for r in refs:

@@ -1029,7 +1029,8 @@ Files whose name is no number are passed over. Each member is `imported`, `uncha
 `bad_shape`, `guid_mismatch`, `name_mismatch`, `no_persona`, `invalid`, `real_name`,
 `member_romance`, `assistant_text`, `later_era`, `member_name`, `never_in_sample`, `says_slop`
 (one of her words holds or sits inside a slop entry of the stock list, by the guards' own test),
-`never_in_typing` (her own abbreviations or typing texture produce a word of her never list
+`never_in_typing` (her own abbreviations or typing texture produce an entry of her never list,
+or one word of an entry of several words,
 after the guards have read the line) and `shape_over_typing` (her shape names more words than
 her typing's longest line). Skips (`voices.SKIPS`): `not_cast`, a sheet for a stored persona
 outside the cast (a world persona); sheets are for the cast only (`--only-cast`, the default
