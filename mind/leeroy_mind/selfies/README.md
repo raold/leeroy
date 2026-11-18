@@ -4,6 +4,7 @@
 512 additional clothed outfit templates in `kind.py`, with twelve colour choices. It defaults
 to false and is read when the mind starts. An invalid table does not enable it. It needs the
 existing selfie/request features enabled; it does not start a worker itself.
+The Ops switchboard lists it as "Private photo romance styling".
 
 The same romance stance, relationship stage and world/member romance dial used by talk
 select a warm, playful or confident expression. The top two talk bands both use confident,
