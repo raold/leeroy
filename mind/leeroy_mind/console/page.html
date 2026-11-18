@@ -28,6 +28,7 @@
     <button id="photos" type="button" class="theme photos" aria-pressed="false">Hide photos</button>
     <button id="notify" type="button" class="theme notify" aria-pressed="false">Notify: off</button>
     <button id="gpu" type="button" class="theme gpu" aria-disabled="true">Free GPU</button>
+    <button id="render" type="button" class="theme render" aria-disabled="true">Render selfies</button>
   </div>
   <div id="gpu-banner" class="gpu-banner" role="status" hidden></div>
   <div id="s-lost" class="lost" role="status" hidden></div>
@@ -52,6 +53,11 @@
 </nav>
 <div id="toasts" role="status"></div>
 </header>
+<dialog id="render-confirm" aria-labelledby="render-confirm-title" aria-describedby="render-confirm-words">
+  <h2 id="render-confirm-title">Render selfies now?</h2><div id="render-confirm-words"></div>
+  <div class="acts"><button id="render-confirm-cancel" type="button" autofocus>Cancel</button>
+    <button id="render-confirm-go" type="button">Render now</button></div>
+</dialog>
 <main tabindex="0" aria-label="Console panels">
   <section id="tab-lab" class="tab mindtab" role="tabpanel" aria-labelledby="t-lab" hidden>
     <div id="lab-banner" class="banner bad" hidden></div>

@@ -203,6 +203,8 @@ KEY_HEADER = "x-console-key"
 TUNE_S = 10.0  # a dial change's answer
 SELFIE_S = 10.0  # a photo change's answer; the call waits this plus SELFIE_MARGIN_S
 SELFIE_MARGIN_S = 5.0  # a held chosen.jpg retries for about 2 s inside the op
+RENDER_S = 90.0  # Render selfies: a stop waits up to 60 s for the worker tree inside the op
+RENDER_DOWN = "Start the mind to render selfies."
 PREVIEW_S = endpoint.PREVIEW_S + 5.0  # a preview's two lines per member, at background priority
 MIND_DOWN = ("The mind isn't running, so it can't preview or change dials. Start it from the "
              "Mind tab.")
@@ -446,6 +448,9 @@ class ConsoleApp:
         self._mind_snapshot, self._mind_snapshot_at = None, float('-inf')
         self._gpu_state = {'paused': False, 'since': None, 'loaded': [], 'holders': [],
                            'refusal': None, 'enabled': controls.enabled, 'mind_down': True}
+        # His Render selfies run as the mind's status last said it (selfie_render); None: not
+        # read yet, or the mind is not running
+        self._render_state: dict | None = None
         self._tonight_seen = float('-inf')
         self._feed_last = 0
         self._discord_last: int | None = None  # newest Discord message id the pass has seen
@@ -472,7 +477,8 @@ class ConsoleApp:
                 "game": {"state": self.game.state, "reason": self.game.reason,
                          "since": self.game.since},
                 "voice": {"enabled": self.s.voice_enabled, "service": voice_up, "link": link},
-                "control": self.controls.describe(), "typing": self._typing, "gpu": self._gpu_view()}
+                "control": self.controls.describe(), "typing": self._typing, "gpu": self._gpu_view(),
+                "render": self._render_view()}
 
     def _probe(self, force: bool) -> None:
         """Worker thread. A probe of a free mind.lock takes it for a moment, and a mind starting
@@ -532,6 +538,7 @@ class ConsoleApp:
         self.game = status.game_view(self.view.state, self.bridge, session, unread=unread)
         self._typing = await self._read_typing()
         if self.view.state != 'running':
+            self._render_state = None
             from .gpuview import stored
             try:
                 value = await asyncio.to_thread(feed.read, self.s.data_dir / 'mind.db', stored)
@@ -558,6 +565,10 @@ class ConsoleApp:
         self._mind_snapshot, self._mind_snapshot_at = reply, self._monotonic()
         if isinstance(reply.get('gpu'), dict):
             self._gpu_state = reply['gpu']
+        # No selfie_render: selfies are off in this mind (it attaches no Render selfies); null:
+        # the mind is stopping or could not read it
+        render = reply.get('selfie_render', {'selfies': False})
+        self._render_state = render if isinstance(render, dict) else None
         return typing_entries(reply.get("typing")) if self.game.state == status.IN_GAME or discord else []
 
     def _publish_status(self) -> None:
@@ -981,6 +992,7 @@ class ConsoleApp:
                   ("GET", "/api/tonight"): self._api_tonight,
                   ("GET", "/api/gpu"): self._api_gpu,
                   ("POST", "/api/gpu"): self._api_gpu,
+                  ("POST", "/api/selfies/render"): self._api_render,
                   ("GET", "/api/lab"): self._api_lab,
                   ("GET", "/api/lab/line"): self._api_lab_line,
                   ("POST", "/api/learn"): self._api_learning_action,
@@ -1183,6 +1195,71 @@ class ConsoleApp:
         if not self.controls.enabled:
             value['refusal'] = self.controls.reason or 'Control is off. GPU pause and resume are disabled.'
         return value
+
+    def _render_view(self):
+        """The top bar's Render selfies (console/RENDER.md): the mind's own selfie_render while it
+        runs, else why nothing can render; `enabled` is control's, as the GPU control's."""
+        value = dict(self._render_state or {})
+        out = {'selfies': value.get('selfies') is True, 'snaps': value.get('snaps') is True,
+               'running': value.get('running') is True, 'stopping': value.get('stopping') is True,
+               'progress': value.get('progress') if isinstance(value.get('progress'), dict) else None,
+               'backlog': value.get('backlog') if isinstance(value.get('backlog'), dict) else None,
+               'last': value.get('last') if isinstance(value.get('last'), dict) else None,
+               'code': value.get('code') if isinstance(value.get('code'), str) else None,
+               'refusal': value.get('refusal') if isinstance(value.get('refusal'), str) else None,
+               'enabled': self.controls.enabled,
+               'mind_down': self.view.state in ('stopped', 'crashed')}
+        if self.view.state != 'running':
+            out.update(running=False, stopping=False, progress=None, backlog=None, code='mind',
+                       refusal=RENDER_DOWN if out['mind_down'] else
+                       'The mind state is unknown; nothing can render now.')
+        elif not value:
+            out.update(code='unknown', refusal='The mind has not said what can render yet.')
+        elif not out['selfies']:
+            out.update(code='off', refusal='Selfies are off ([selfies] enabled in mind.toml).')
+        if not self.controls.enabled:
+            out['refusal'] = self.controls.reason or 'Control is off. Render selfies is disabled.'
+        return out
+
+    async def _api_render(self, req: Request):
+        """POST /api/selfies/render {action: render | render_stop}: his Render selfies button,
+        relayed to the mind's selfie op behind the usual key, Host, Origin and fetch-site gates;
+        403 with --no-control."""
+        try:
+            args = endpoint.selfie_args(req.json())  # exactly as the mind will check it
+        except endpoint.BadRequest as exc:
+            return json_response(400, {'ok': False, 'error': 'invalid_action', 'message': str(exc)})
+        if args['action'] not in ('render', 'render_stop'):
+            return json_response(400, {'ok': False, 'error': 'invalid_action',
+                                       'message': 'Render selfies takes render or render_stop.'})
+        if not self.controls.enabled:
+            return json_response(403, {'ok': False, 'error': 'control_disabled',
+                                       'message': self._render_view()['refusal'],
+                                       'render': self._render_view()})
+        if self.controls.busy is not None:
+            return json_response(409, {'ok': False, 'error': 'mind_unavailable',
+                                       'message': 'Wait for the current mind action to finish.',
+                                       'render': self._render_view()})
+        if self.view.state != 'running' or self.link is None:
+            return json_response(409, {'ok': False, 'error': 'mind_unavailable',
+                                       'message': self._render_view()['refusal'],
+                                       'render': self._render_view()})
+        try:
+            reply = await asyncio.to_thread(self.link.call, self._mind_pids(), 'selfie', args,
+                                            timeout=RENDER_S)
+        except LinkError:
+            reply = {'ok': False, 'error': 'mind_unavailable',
+                     'message': 'The mind did not confirm this render action. Check its state before trying again.'}
+        if isinstance(reply.get('render'), dict):
+            self._render_state = reply['render']
+        self._publish_status()
+        said = reply.get('message') if isinstance(reply.get('message'), str) else None
+        if reply.get('ok') is not True and said is None:
+            said = str(reply.get('error') or 'refused')[:300]
+        return json_response(200 if reply.get('ok') is True else 409,
+                             {'ok': reply.get('ok') is True, 'error': reply.get('error'),
+                              'message': said, 'pending': reply.get('pending') is True,
+                              'render': self._render_view()})
 
     async def _api_gpu(self, req: Request):
         from .gpuview import stopped
@@ -1690,6 +1767,8 @@ class ConsoleApp:
             args = endpoint.selfie_args(req.json())  # exactly as the mind will check it
         except endpoint.BadRequest as e:
             return json_response(400, {"ok": False, "error": str(e)})
+        if args["action"] in ("render", "render_stop"):  # the top bar's own route (_api_render)
+            return json_response(400, {"ok": False, "error": "Render selfies has its own route."})
         problem = self._raid_problem()
         if problem is not None:
             status_code, words = problem
