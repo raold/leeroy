@@ -1,6 +1,7 @@
 // Godmode in a member's detail: her edits (the tune op's "edit" action) beside her dials, and her
 // strings (the string op) in their own panel. Drafts stay in this page's memory only.
 import { $, arr, clear, el, emit, obj, post, setText, str } from "./core.mjs";
+import { isoMinute } from "./dates.mjs";
 import { cancelArgs, canCancel, codeText, editArgs, editsFor, editText, EDIT_KINDS, GAME_EMOTES, gameArgs,
          gameButtons, gameOutcome, stringArgs, stringState, stringText, STRING_KINDS } from "./godmodemodel.mjs";
 
@@ -56,7 +57,7 @@ export function godmodePanel(box, view, guid, live, why, ask, enabled, names) {
   active.forEach(e => {
     const row = el("div", "godmode-row");
     row.appendChild(el("p", "", editText(e, names)));
-    row.appendChild(el("p", "muted", `#${e.id} · ${str(e.kind).replace(/_/g, " ")}` + (e.ends ? " · until " + new Date(e.ends * 1000).toLocaleString() : "")));
+    row.appendChild(el("p", "muted", `#${e.id} · ${str(e.kind).replace(/_/g, " ")}` + (e.ends ? " · until " + isoMinute(e.ends) : "")));
     const b = el("button", "", "Retire");
     b.type = "button"; b.disabled = !live; if (!live) b.title = why;
     b.addEventListener("click", () => ask({ action: "edit", verb: "retire", id: e.id }, "Edit #" + e.id));

@@ -545,6 +545,11 @@ class RequestPhotos:
         meta = TurnMeta(app.engine._new_id(), why='selfie:request', answers_human=True,
             single_line=True, keep_channel=True, review_required=True, photo_request=latest.message,
             photo_request_part=part, discord=DiscordTarget(latest.message if same else None, latest.thread if same else None))
+        if same and latest.audience == 'him':
+            # her photo answer is built for his ask and nothing else (discord/covered.py): an
+            # earlier post of his whose answer was dropped stays unanswered
+            meta.covers = (latest.message,)
+
         def receipt(line, message, now):
             if not self._source_open(latest):
                 raise records.RequestError('request source changed')

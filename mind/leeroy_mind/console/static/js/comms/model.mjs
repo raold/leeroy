@@ -111,6 +111,12 @@ export class Feed {
     });
     if (this.floor === null) { this.floor = top; }
   }
+  // The newest line id the page holds (0 before any): what the hidden page's unread read starts from
+  top() {
+    var t = this.floor || 0;
+    this.where.forEach(function (v, id) { if (id > t) { t = id; } });
+    return t;
+  }
   // A snapshot's lines are the feed as it is now, from `since` (epoch seconds) on, every shown
   // line of each view but those it names `partial` (cut to their newest lines): a line here it
   // lacks within what it covered of the line's view (newer than its oldest line there, or from

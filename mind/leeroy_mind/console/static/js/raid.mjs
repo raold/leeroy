@@ -1,6 +1,6 @@
 import { $, api, arr, cell, clear, el, emit, emptyRow, num, obj, on, own, pad, plural, post, refused,
          setText, str } from "./core.mjs";
-import { face, nameCell } from "./faces.mjs";
+import { nameCell, profileButton } from "./faces.mjs";
 import { askConfirm } from "./mind.mjs";
 import { S, roomOf } from "./state.mjs";
 import { setPill } from "./strip.mjs";
@@ -258,7 +258,7 @@ function renderRaidDkp(view, open) {
     var line = el("div", "r");
     if (e.guid) {
       var wrap = el("span", "dkpface");
-      wrap.appendChild(face(e.guid, who(view, e.guid), "list", { you: e.guid === view.human }));
+      wrap.appendChild(profileButton(e.guid, who(view, e.guid), "list", { you: e.guid === view.human }));
       line.appendChild(wrap);
     }
     line.appendChild(document.createTextNode(when(e.ts) + "  " + text));

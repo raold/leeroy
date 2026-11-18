@@ -886,6 +886,45 @@ through the owner's lens (`Pipeline._met_him`).
 Measured read-only on 2026-11-16: 6 of 1,345 stored member lines to him see him in person (each
 on reading an in-person plan or wish); the golden prompts are unchanged.
 
+## Private conversations with him (2026-11-17, the DM self-play audits)
+
+- **So far between you two** (`sofar.py`, `PromptParts.so_far`): in her whisper and Discord DM
+  turns with him the prompt carries a few code-built lines after the Chat: the never-met rule
+  (until her arc has met him), where and how she said she is, what he asked and is still owed,
+  his news (first-person statements about his health, a person, his work or a place, never a
+  flirt or a bare plan; at most 6, the least important going first) and plans. What she said
+  of herself comes from `talk.position.claims_so_far` when that module is there. No model call; the conversation's lines hold at most 120
+  estimated tokens; a conversation ends after 3 idle hours; kept in memory and rebuilt from the
+  stored lines after a restart. `SoFar.her_said` gives her own stated place and state.
+- **The DM's Chat** (`discord/talk.py dm_chat`) is sized by his turns: his last 10 messages
+  before the one she answers with hers in between, her older messages shorter, each of hers
+  shown by its closing words, the whole under `DM_CHAT_TOKENS`. Her lines the Chat shows are not
+  repeated under "Your last lines".
+- **One answer covers every unanswered post** (`DiscordTalk.unanswered`, `_coalesce`,
+  `discord/covered.py`): each answer records the posts its instruction listed (meta
+  `discord:built:<her message>`), and a post is answered only when a stored answer covers it,
+  never by id order. The DM instruction lists the uncovered posts oldest first; a post that
+  arrives before she composes joins that reply and its own turn is withdrawn
+  (`discord_superseded`). The owed watch and health read the same receipts. His game
+  logout never cancels a Discord answer (`Pipeline.discord_answer_jobs`).
+- **Never met** (`moves.have_met`, `without_meeting`, `meets_in_memory`): the prompt line is
+  the main defence; the "in person" tell is a narrow backstop (a physical act together, him at
+  her place, his clothes at hers; never the game) and is hard for owed answers (rewrite, then
+  the claim's sentences are cut, `say_owed_cut`); memories about him that put him in person
+  stay out of the prompt.
+- **Her own message again** (`guards/owncopy.py`): guard code `own_copy` (hard) and the tell
+  "own copy". A draft flagged `claim_conflict` on every review is cut or replaced by a fresh
+  short answer (`guard_claim_conflict_cut|fresh|kept`).
+- **His line** (`hisline.py`): his goodbye is answered with one (no `later` repeat tell) and a
+  question back is never forced on his goodbye or bad news. Fake attachments in brackets are a
+  fatal tell ("attachment"); Discord messages get no game item links.
+- **Length** (`shape.dm_words_for`): his line of 5 words or fewer caps her at about 12 words,
+  6-12 at about 25; the owed rescue draws a shape.
+- **Memories** (`memory/thirdparty.py`): in a private turn with him a memory whose "he" is
+  somebody else, on positive evidence (a role in the text, another member, the man of her
+  household for a memory of her own day), names them. None is left out.
+- **Budget**: an over-budget DM prompt lets chat older than his sixth-last turn go first
+  (`PromptParts.old_chat`), before style notes, awareness and memories.
 # Voice sheets (`Persona.speech`, 2026-11-17)
 
 Members sounded alike because nothing of how a member talks reached a prompt: `speech_habits`,

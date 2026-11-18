@@ -76,7 +76,7 @@ def test_a_life_that_is_no_table_reads_as_empty(tmp_path, caplog, monkeypatch):
 def test_the_default_template_says_what_the_code_does(tmp_path):
     import tomllib
     life = tomllib.loads(config.DEFAULT_TOML)["life"]
-    assert life == {"availability": 0, "state": False, "wow_vs_life": 5}
+    assert life == {"availability": 0, "state": False, "dm_wait_cap_s": 75, "wow_vs_life": 5}
     assert config.load_config(tmp_path / "absent.toml").life == config.LifeCfg()
 
 
@@ -87,6 +87,24 @@ def test_pin_reads_back_and_refuses_nonsense():
     for bad in (11, -1, True, 2.0, "6", None):
         life_config.pin(bad, 1)
         assert (life_config.availability(), life_config.state_on()) == (0, False)
+
+
+def test_the_cap_pins_reads_back_and_is_stored(store, tmp_path):
+    assert life_config.dm_wait_cap() == 0  # until pinned: no cap, today's behaviour
+    life_config.pin(6, False, 75)
+    assert life_config.dm_wait_cap() == 75
+    life_config.pin(6, False)  # a pin without a cap clears it
+    assert life_config.dm_wait_cap() == 0
+    for bad in (-1, 3601, True, 7.5, "75", None):
+        life_config.pin(6, False, bad)
+        assert life_config.dm_wait_cap() == 0
+    for raw, value in ((None, 0), ("75", 75), ("0", 0), ("3600", 3600), ("3601", 0), ("x", 0),
+                       ("-5", 0)):
+        if raw is not None:
+            store.set_meta(life_config.CAP_KEY, raw)
+        assert life_config.stored_cap(store.conn) == value
+    (tmp_path / "mind.toml").write_bytes(b"[life]\ndm_wait_cap_s = 9000\n")
+    assert config.load_config(tmp_path / "mind.toml").life.dm_wait_cap_s == 75  # the default
 
 
 @pytest.mark.parametrize("raw,value", [(None, 0), ("6", 6), ("0", 0), ("10", 10), ("11", 0),

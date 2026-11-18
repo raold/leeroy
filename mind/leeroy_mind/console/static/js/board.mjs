@@ -1,6 +1,6 @@
 import { $, arr, clear, el, obj, on, post, str } from "./core.mjs";
 import { S } from "./state.mjs";
-import { face } from "./faces.mjs";
+import { profileButton } from "./faces.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
 import { NOTHING, RAW_MAX, REALM_OFF, REPLIES_OLD, REPLY_WORDS, answeredHere, answeredLetters, boardEmpty, cleanReply,
          hasWaiting, itemText, minutes, postCount, qualityClass, replyLabel, replyShows, replyState,
@@ -23,7 +23,7 @@ function nameOf(v, g) { return str(obj(v.names)[String(g)]) || "#" + g; }
 
 function whoLine(guid, name) {
   var w = el("span", "who");
-  w.appendChild(face(guid, name, "list"));
+  w.appendChild(profileButton(guid, name, "list"));
   w.appendChild(el("span", "", name));
   return w;
 }

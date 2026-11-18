@@ -363,7 +363,8 @@ def test_worst_case_whisper_keeps_the_lately_line_without_a_last_resort_trim(
         assert user.count(overlay) == 2  # both overlays, whole
         assert user.count("three days ago: Zan") == 5  # every memory
         assert user.split("Chat:\n")[1].split("\n\n")[0].count("\n") == 7  # 8 chat lines
-        assert user.split("(don't make the same move again):\n")[1].count("\n") >= 5
+        # her lines the chat already shows are not shown again (2026-11-17)
+        assert user.split("(don't make the same move again):\n")[1].count("\n") >= 2
         assert "last-resort trim" not in caplog.text
     finally:
         r.close()

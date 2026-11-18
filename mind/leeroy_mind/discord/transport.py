@@ -15,6 +15,7 @@ from .channels import CHANNEL_PREFIX, DM_PREFIX, channel_id, is_discord, is_grou
 # starts with this: it answers nothing, so no answered check counts it (PAIR_LINE_SQL)
 PAIR_LINE_TURN = "pair_line:"
 PAIR_LINE_SQL = "(turn IS NULL OR substr(turn, 1, 10) != 'pair_line:')"
+BUILT_KEY = "discord:built:{}"  # meta: her answer's id -> his posts it was built with
 
 __all__ = ("CHANNEL_PREFIX", "DM_PREFIX", "LINES", "DiscordTarget", "channel_id", "is_discord",
            "store_line")
@@ -66,10 +67,16 @@ def store_line(store, turn, meta, text: str, now: float, *, audience) -> int:
     attachment = photo.attachment if photo is not None and not meta.said else None
     # Only a turn's first message is a reply: the rest of a burst, or a "*word" correction,
     # follow it as plain messages, the way people type on.
-    return dstore.post(store, channel=cid, author=turn.speaker, origin="mind", text=text,
-                       reply_to=target.reply_to if target is not None and not meta.said else None,
-                       thread=target.thread if target is not None else None,
-                       turn=("realism_correction:" if getattr(meta,"realism_correction",False)
-                             else PAIR_LINE_TURN if getattr(meta, "pair_line", False)
-                             else "")+meta.turn_id, now=now,
-                       attachment=attachment)
+    covers = getattr(meta, "covers", ()) if target is not None and not meta.said else ()
+    with store.transaction():  # her message and the posts it was built with, together
+        mid = dstore.post(store, channel=cid, author=turn.speaker, origin="mind", text=text,
+                          reply_to=target.reply_to if target is not None and not meta.said else None,
+                          thread=target.thread if target is not None else None,
+                          turn=("realism_correction:" if getattr(meta,"realism_correction",False)
+                                else PAIR_LINE_TURN if getattr(meta, "pair_line", False)
+                                else "")+meta.turn_id, now=now,
+                          attachment=attachment)
+        if covers and peer is not None:
+            # which of his posts this answer was built with (discord/covered.py)
+            store.set_meta(BUILT_KEY.format(mid), ",".join(str(int(i)) for i in covers))
+    return mid

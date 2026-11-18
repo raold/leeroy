@@ -15,6 +15,14 @@ from leeroy_mind.testing.fake_clock import FakeClock
 NY = ZoneInfo("America/New_York")
 
 
+@pytest.fixture(autouse=True)
+def _no_cap(monkeypatch):
+    """Her own time as it is without the cap ([life] dm_wait_cap_s = 0): the cap's own tests
+    are in test_dm_wait_cap.py."""
+    from leeroy_mind.life import config as life_config
+    monkeypatch.setattr(life_config, "dm_wait_cap", lambda: 0)
+
+
 def at(year, month, day, hour, minute=0):
     return FakeClock(datetime(year, month, day, hour, minute, tzinfo=NY), yields=64)
 

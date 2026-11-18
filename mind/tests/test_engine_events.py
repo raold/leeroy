@@ -886,7 +886,7 @@ def test_asides_follow_what_was_sent(store, clock, tmp_path):
             hits += any("flirting with Zan in chat" in p for p in r.prompts())
             await r.engine.end_session()
         assert hits >= 3
-        r = make_rig(store, clock, tmp_path, jealousy=10, reply="come home to me after you get it")
+        r = make_rig(store, clock, tmp_path, jealousy=10, reply="you owe me a dance after you get it")
         task = asyncio.create_task(r.engine.speak(Turn(kind=TurnKind.FLIRT, speaker=102,
                                                        channel="guild", addressee=HUMAN)))
         await r.advance(60)

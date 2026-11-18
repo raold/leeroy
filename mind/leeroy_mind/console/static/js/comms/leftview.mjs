@@ -1,11 +1,14 @@
 import { $, arr, clear, el, obj, on, own, plural, post, recall, remember, str } from "../core.mjs";
 import { S, hereRoom, isMuted, name, roomName } from "../state.mjs";
 import { face, faceButton, lightSpeakers } from "../faces.mjs";
-import { FEED, currentView, openView } from "./feedview.mjs";
+import { FEED, currentView, focusReply, openView } from "./feedview.mjs";
 import { Heard } from "./heard.mjs";
 import { roomRows, selfPress, selfView } from "./tree.mjs";
 import { typingDots, typingWhispers } from "./typingview.mjs";
 import { channelOf } from "./discord.mjs";
+import { DISCORD } from "./discordstate.mjs";
+import { KIND_WORDS, conversationRows, hiddenWords, needle, rowLabel, shortcut } from "./convmodel.mjs";
+import { showTab } from "../tabs.mjs";
 
 // The Comms left column, top to bottom: the WoW channels with their unread counts (a click opens
 // the view), every voice room (folding groups, greyed empties, locks, n / 3, who sits where; a
@@ -28,7 +31,7 @@ var collapsed = obj(recall(COLLAPSED_KEY, {}));
 function keepFocus(box, draw) {
   var a = document.activeElement, key = null;
   if (a && a !== box && box.contains(a)) {
-    ["view", "room", "fold", "guid", "card"].forEach(function (k) {
+    ["focus", "view", "room", "fold", "guid", "card"].forEach(function (k) {
       if (!key && a.dataset && a.dataset[k] !== undefined) { key = [k, a.dataset[k]]; }
     });
   }
@@ -66,26 +69,42 @@ function renderChannels() {
     });
   });
 }
-function renderWhispers() {
-  var box = $("whispers"), open = currentView(), threads = FEED.threads(), writing = typingWhispers();
-  var known = new Set(threads.map(function (t) { return t.guid; }));
-  threads = writing.filter(function (w) { return !known.has(w.guid); })
-    .map(function (w) { return { guid: w.guid, name: w.name, unread: 0, fresh: true }; }).concat(threads);
-  var typing = new Set(writing.map(function (w) { return w.guid; }));
+// His conversations with one member, Discord DMs and WoW whisper threads as one list: the unread
+// first, then the newest (convmodel.mjs). A DM nobody has written in yet stays out until he
+// finds the member by name in the box above the list.
+function renderConversations() {
+  var box = $("dc-dms"), open = currentView(), find = $("conv-find").value;
+  var view = conversationRows({ dms: DISCORD.dms, threads: FEED.threads(), writing: typingWhispers(), open: open, find: find });
   keepFocus(box, function () {
     clear(box);
-    if (!threads.length) { box.appendChild(el("div", "none", "No whispers yet.")); }
-    threads.forEach(function (t) {
-      var b = viewButton("w:" + t.guid, open);
-      b.appendChild(faceButton(t.guid, t.name, "list", { inButton: true }));
-      b.appendChild(el("span", "nm", t.name));
-      if (typing.has(t.guid)) { b.appendChild(typingDots(t.name + " is typing")); }
-      if (t.fresh) { b.dataset.who = t.name; }  // opened, it stays a thread (FEED.openThread)
-      badge(b, t.unread);
+    view.rows.forEach(function (r) {
+      var b = viewButton(r.view, open);
+      b.dataset.focus = r.view;
+      b.appendChild(r.kind === "whisper" ? faceButton(r.guid, r.name, "list", { inButton: true }) : face(r.guid, r.name, "list"));
+      b.appendChild(el("span", "nm", r.name));
+      b.appendChild(el("span", "kind", KIND_WORDS[r.kind]));
+      if (r.typing) { b.appendChild(typingDots(r.name + " is typing")); }
+      if (r.fresh) { b.dataset.who = r.name; }  // opened, it stays a thread (FEED.openThread)
+      badge(b, r.unread);
+      b.setAttribute("aria-label", rowLabel(r));
       box.appendChild(b);
     });
+    if (!view.rows.length) {
+      box.appendChild(el("div", "none", needle(find) ? "No member by that name." : "No conversations yet."));
+    }
   });
+  var more = $("conv-more");
+  more.textContent = hiddenWords(view.hidden);
+  more.hidden = !more.textContent;
 }
+$("conv-find").addEventListener("input", renderConversations);
+$("conv-find").addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape" && this.value) { ev.stopPropagation(); this.value = ""; renderConversations(); }
+  else if (ev.key === "Enter") {  // the first match opens
+    var first = $("dc-dms").querySelector("[data-view]");
+    if (first) { ev.preventDefault(); first.click(); }
+  }
+});
 
 // -- the voice rooms -----------------------------------------------------------------------------
 
@@ -124,8 +143,18 @@ function crowd(r) {
   strip.setAttribute("aria-label", names);
   return strip;
 }
+// The voice rooms are folded until he opens them (remembered), with his own room said beside
+// the heading, so 32 rooms never push his conversations down
+var ROOMS_KEY = "guild-console-rooms";
+$("rooms-fold").open = recall(ROOMS_KEY, "closed") === "open";
+$("rooms-fold").addEventListener("toggle", function () { remember(ROOMS_KEY, this.open ? "open" : "closed"); });
+// Under --no-control the server refuses every voice change, so its buttons say so before a press
+export function voiceOff() {
+  return obj(S.status.control).enabled === false ? "Voice controls are off: this console runs with --no-control." : "";
+}
 export function renderRooms() {
-  var box = $("tree");
+  var box = $("tree"), here = hereRoom(), off = voiceOff();
+  $("rooms-now").textContent = here ? "· in " + roomName(here) : "";
   keepFocus(box, function () {
     clear(box);
     roomRows(S.rooms, S.voice, collapsed).forEach(function (r) {
@@ -143,7 +172,8 @@ export function renderRooms() {
       var b = el("button", "ch room" + (r.here ? " on" : ""));
       b.type = "button";
       b.dataset.room = r.id;
-      b.title = r.here ? "You are here" : "Join " + r.name;
+      b.title = r.here ? "You are here" : off || "Join " + r.name;
+      b.disabled = !!off && !r.here;
       if (r.here) { b.setAttribute("aria-current", "true"); }
       b.appendChild(el("span", "nm", r.name));
       if (r.locked) { b.appendChild(el("span", "lock", "locked")); }
@@ -192,16 +222,16 @@ function renderVoiceStatus() {
   $("v-err").title = errs.join(", ");
 }
 function renderControls() {
-  var v = S.voice, me = selfView(v), here = hereRoom();
+  var v = S.voice, me = selfView(v), here = hereRoom(), off = voiceOff();
   $("c-ptt").classList.toggle("on", !!(v && v.ptt));
   $("c-room").textContent = !v ? "voice not connected" : here ? roomName(here) : "not in a room";
   [["c-mute", me.mute], ["c-deafen", me.deafen]].forEach(function (x) {
     var b = $(x[0]);
-    b.disabled = !v;
+    b.disabled = !v || !!off;
     b.setAttribute("aria-pressed", String(x[1]));
   });
-  $("c-mute").title = !v ? "The voice service is not connected." : me.deafen ? "Muted while deafened: this undeafens too." : "";
-  $("c-deafen").title = !v ? "The voice service is not connected." : "";
+  $("c-mute").title = off || !v ? off || "The voice service is not connected." : me.deafen ? "Muted while deafened: this undeafens too." : "";
+  $("c-deafen").title = off || (!v ? "The voice service is not connected." : "");
   renderVoiceStatus();
 }
 function pressSelf(which) {
@@ -268,7 +298,7 @@ function renderBanner() {
 }
 
 export function renderLeft() {
-  renderChannels(); renderRooms(); renderWhispers(); renderControls(); renderToasts(); renderBanner();
+  renderChannels(); renderRooms(); renderConversations(); renderControls(); renderToasts(); renderBanner();
 }
 
 // -- what he does --------------------------------------------------------------------------------
@@ -310,7 +340,11 @@ var ON_VOICE = {
   self: renderControls
 };
 on("snapshot", renderLeft);
-on("status", renderBanner);
+var voiceWasOff = "";
+on("status", function () {
+  renderBanner();
+  if (voiceOff() !== voiceWasOff) { voiceWasOff = voiceOff(); renderRooms(); renderControls(); }
+});
 // Push-to-talk the voice service recognised but the mind never matched to a line of his
 var HEARD = new Heard(), HEARD_SHOWN = 160, heardTimer = null;
 function heardNotes() {
@@ -334,6 +368,30 @@ on("voice", function (m) {
   heardWatch();
   if (typeof m.type === "string" && own(ON_VOICE, m.type)) { ON_VOICE[m.type](m); }
 });
-on("feed", function () { renderChannels(); renderWhispers(); renderBanner(); });
-on("typing", renderWhispers);
+on("feed", function () { renderChannels(); renderConversations(); renderBanner(); });
+on("typing", renderConversations);
+on("discord-view", renderConversations);
+on("discord-read", renderConversations);
+
+// -- the keyboard: "/" is the reply box, Ctrl+K the member filter, and the page's first Tab stop
+// skips to the reply box -------------------------------------------------------------------------
+function typingNow() {
+  var a = document.activeElement;
+  return !!a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable);
+}
+function toReply() { showTab("comms"); focusReply(); }
+function toFind() {
+  showTab("comms");
+  if (!$("comms-left").getClientRects().length) { $("c-drawer").click(); }  // the drawer, in a small window
+  $("conv-find").focus();
+  $("conv-find").select();
+}
+document.addEventListener("keydown", function (ev) {
+  if (ev.defaultPrevented || document.querySelector("dialog[open]")) { return; }
+  var what = shortcut(ev, typingNow());
+  if (!what) { return; }
+  ev.preventDefault();
+  if (what === "find") { toFind(); } else { toReply(); }
+});
+$("skip-reply").addEventListener("click", toReply);
 on("note", note);

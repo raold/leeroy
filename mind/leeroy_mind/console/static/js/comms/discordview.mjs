@@ -1,4 +1,5 @@
 import { $, clear, clock, el, emit, on, str } from "../core.mjs";
+import { isoSecond } from "../dates.mjs";
 import { S, roomName } from "../state.mjs";
 import { feedbackButtons } from "./feedback.mjs";
 import { face, faceButton } from "../faces.mjs";
@@ -95,11 +96,10 @@ function renderLists() {
     left.appendChild(rooms);
   }
   restore(left, key);
-  var dms = $("dc-dms"), dmkey = focusKey(dms); clear(dms);
-  DISCORD.dms.forEach(function (d) { dms.appendChild(channelButton("dm:" + d.guid, d.name, false)); });
-  groupList(dms,channelButton);
-  if (DISCORD.loaded && !DISCORD.dms.length) { dms.appendChild(el("p", "none", "No members with personas yet.")); }
-  restore(dms, dmkey);
+  // The DMs are drawn with the whisper threads, as one list of conversations (leftview.mjs)
+  var groups = $("dc-groups"), gkey = focusKey(groups); clear(groups);
+  groupList(groups, channelButton);
+  restore(groups, gkey);
 }
 function channelButton(channel, label, locked) {
   var view = viewOfChannel(channel), b = button("", "ch" + (currentView() === view ? " on" : ""));
@@ -165,7 +165,7 @@ function messageRow(item, data) {
     var head = el("header", "h"), who = el("span", "who", mine ? "You" : author(m)); head.appendChild(who);
     if (m.bot) { head.appendChild(el("span", "dc-bot-tag", "BOT")); }
     var time = el("time", "t", clock(m.ts * 1000)); time.dateTime = new Date(m.ts * 1000).toISOString();
-    time.title = new Date(m.ts * 1000).toLocaleString(); head.appendChild(time); content.appendChild(head);
+    time.title = isoSecond(m.ts); head.appendChild(time); content.appendChild(head);
   }
   var quote = quoteOf(m, (data.quotes || []).concat(data.messages), function (guid) {
     var q = (data.quotes || []).concat(data.messages).find(function (x) { return x.id === m.reply_to; });

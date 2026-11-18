@@ -474,3 +474,18 @@ on a turn from her persona and her presence then (talk/README.md, "Wants"). `sta
 member, `<guid> now valence= energy= stress= social= toward_him= stored=<age>|none` (her
 feeling now, two decimals) and `<guid> baseline ...`; it never writes, even while `[life]
 state` is off. Exit 0 done, 1 unknown guid or a database error, 2 no `mind.db`.
+
+## His DMs are answered promptly (2026-11-17)
+
+`[life] dm_wait_cap_s` (default 75; 0 = no cap; an invalid value reads 75) is the longest his
+Discord DM, or a group DM line that names her, waits for her answer, whatever `availability`
+says: idle and do-not-disturb alike, twice the cap for a member asleep or not about, and for a
+post made while she stepped away. The cap is applied in `discord/owntime.due_at` after the
+availability scaling; a capped wait is drawn in the cap's upper half. An answer that waited 45 s
+or more says where she was (the LATE shape with `[talk] shape`, else the late note). The mind
+writes the cap in force to meta `life:dm_wait_cap_s`; health's `owner-replies` bound follows it.
+
+Interruptions (`interrupt.py`, `LifeService._after_line`) never start within 60 s of his message,
+after his bad news (`talk/hisline.py`) or in an explicit scene he is turning up, and a work line
+needs a workplace (`interrupt.workplace`): a member on leave, at home or out of work gets the
+home lines, one who works from home has no boss walking by.

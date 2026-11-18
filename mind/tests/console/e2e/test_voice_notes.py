@@ -13,7 +13,7 @@ from console.rig import KEY
 from leeroy_mind.console import feed
 from leeroy_mind.discord import store as discord
 from leeroy_mind.voice import wire
-from .test_tabs import open_console
+from .test_tabs import choose, open_console
 from .test_flows import submit
 
 
@@ -42,7 +42,7 @@ def seed_note(r):
 
 async def open_dm(r):
     from playwright.async_api import expect
-    await r.page.locator('#dc-dms [data-view="dm:101"]').click()
+    await choose(r.page, '#dc-dms [data-view="dm:101"]')
     await expect(r.page.locator('#dc-to')).to_contain_text('Arkon')
 
 
@@ -139,7 +139,7 @@ def test_voice_player_and_record_preview_send(rehearsal,tmp_path,theme):
             assert response.status==404
             retained(uploaded)
             assert await r.page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-            await r.page.locator('#dc-channels [data-view="d:general"]').click()
+            await choose(r.page, '#dc-channels [data-view="d:general"]')
             await expect(record).to_be_hidden()
             retained(before); assert not r.errors,r.errors
     asyncio.run(run())
@@ -157,7 +157,7 @@ def test_recording_cancels_and_permission_refusal_is_worded(rehearsal):
             await expect(r.page.locator('#dc-voice-preview')).to_be_hidden()
             assert await r.page.evaluate('window.micStops')==1
             await record.click(); await expect(record).to_have_text('Stop recording')
-            await r.page.locator('#dc-channels [data-view="d:general"]').click()
+            await choose(r.page, '#dc-channels [data-view="d:general"]')
             assert await r.page.evaluate('window.micStops')==2
             await open_dm(r)
             await r.page.evaluate("() => {navigator.mediaDevices.getUserMedia = async () => {throw new DOMException('Denied','NotAllowedError');};}")
