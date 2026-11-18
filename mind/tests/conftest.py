@@ -258,9 +258,19 @@ def _pictures_off():
 @pytest.fixture(autouse=True)
 def _coherence_switches():
     """[talk] coherence's module switches (LifeService.configure sets them from a rig's config)
-    start every test on, as the default has them."""
+    start every test off, as the default has them; a test of the switch turns them on
+    (the `coherent` fixture, or a rig with coherence=True)."""
     from leeroy_mind.guards import pronouns
     from leeroy_mind.life import day, interrupt
-    day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = True
+    day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = False
     yield
+    day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = False
+
+
+@pytest.fixture
+def coherent():
+    """[talk] coherence's module switches on for one test (the pure readers: job shapes, her
+    own boss, "tell X he")."""
+    from leeroy_mind.guards import pronouns
+    from leeroy_mind.life import day, interrupt
     day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = True

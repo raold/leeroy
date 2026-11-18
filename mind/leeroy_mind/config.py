@@ -36,7 +36,7 @@ intent = false                 # her want for each turn, drawn by code, in the b
 situation = false              # the prompt as her situation: hard rules only, "Right now" by the instruction
 shape = false                  # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
 dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length follows his (0: as full as she likes)
-coherence = true               # conversations hold together (talk/README.md): long game lines kept, her want and place hold, every waiting whisper answered; read at start and at his login
+coherence = false              # conversations hold together (talk/README.md): long game lines kept, her want and place hold, every waiting whisper answered; read at start and at his login
 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
@@ -121,7 +121,7 @@ class TalkCfg:
     situation: bool = False  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
     shape: bool = False  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
     dm_mirror: int = 5  # [talk] dm_mirror: with shape on, a DM's length follows his (0: today's)
-    coherence: bool = True  # [talk] coherence: talk/length.py, talk/position.py (anything but true: off)
+    coherence: bool = False  # [talk] coherence: talk/length.py, talk/position.py (anything but true: off)
 
 
 @dataclass(frozen=True)

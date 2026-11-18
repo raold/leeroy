@@ -9,7 +9,13 @@ from dataclasses import replace
 import pytest
 
 from conftest import HUMAN, seed_test_cast
-from engine_rig import FakeLibrary, chunk, engine_clock, make_rig, save_member
+from engine_rig import FakeLibrary, chunk, engine_clock, save_member
+from engine_rig import make_rig as _make_rig
+
+
+def make_rig(*args, **kw):
+    kw.setdefault("coherence", True)  # the switch under test; a test of "off" says so
+    return _make_rig(*args, **kw)
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.guards import GuardsCfg, Verdict, pronouns
@@ -21,7 +27,20 @@ from leeroy_mind.talk.gearfit import for_speaker, usable
 from leeroy_mind.talk.pipeline import UNSURE, TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 
-from .test_live import rig, source, speak, turn  # noqa: F401  (the rig fixture)
+from .test_live import source, speak, turn
+
+pytestmark = pytest.mark.usefixtures("coherent")  # [talk] coherence is off by default
+
+
+@pytest.fixture
+def rig(store, tmp_path):
+    """tests/guards/test_live.py's rig with [talk] coherence on."""
+    r = make_rig(store, engine_clock(), tmp_path, reply="the ferry leaves at seven")
+    r.clock._yields = 0  # read-only SQLite workers need real scheduling between fake ticks
+    r.engine.live_review.config = GuardsCfg(enabled=True)
+    r.world.apply(Group(0, 1, True, (1, 101, 102, 103, 104, 105)), r.clock.now())
+    yield r
+    r.close()
 
 HIS = "you and belra ok? guild chat was tense last night"
 DRAFT = "all good between us. we argued about the pull timer and he got loud about it"

@@ -888,20 +888,13 @@ def test_a_reply_that_parrots_his_line_is_asked_again_then_never_said(store, clo
     run(main())
 
 
-def test_a_reply_far_over_her_length_is_cut_and_not_asked_again(store, clock, tmp_path):
-    """[talk] coherence (talk/length.py; tests/test_length.py has the rule): the draft's leading
-    clauses are kept; with it off the "long" tell asks afresh, as before."""
+def test_a_reply_far_over_her_length_is_asked_again_shorter(store, clock, tmp_path):
     long_reply = ("lol yeah that pull was a mess, we should have waited for the healers and the "
                   "tank was not even ready")
     async def main():
         seed_test_cast(store)
         save_member(store, 102, typo_rate=0.0, emoticon_rate=0.0, words_per_line=[1, 4])
         r = make_rig(store, clock, tmp_path, script=script_from([long_reply, "bad pull lol"]))
-        said = " ".join(await spoken(r, reply_to_human(102)))
-        assert len(r.chat_calls()) == 1 and "pull was a mess" in said and "healers" not in said
-        r = make_rig(store, clock, tmp_path, script=script_from([long_reply, "bad pull lol"]),
-                     coherence=False)
-        await r.advance(15)
         assert await spoken(r, reply_to_human(102)) == ["bad pull lol"]
         assert len(r.chat_calls()) == 2 and "Shorter: 1-4 words" in r.prompts()[1]
         # a reply that fits the turn's lines is never asked again

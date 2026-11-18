@@ -16,7 +16,7 @@ SWITCHES = (
     ('talk','texture','Typing texture',''),
     ('talk','recall_diversity','Recall diversity',''),
     ('talk','think_private','Private beat before answers to him','',True),
-    ('talk','coherence','Conversations hold together (read at start and at his login)','',True),
+    ('talk','coherence','Conversations hold together (read at start and at his login)',''),
     ('talk','intent','Her want for each turn',''),
     ('talk','situation','Situation prompts',''),
     ('talk','shape','Reply shapes',''),

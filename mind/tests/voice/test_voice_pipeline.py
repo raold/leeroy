@@ -292,7 +292,7 @@ def test_spoken_hint(vrig):
     calls = [c["messages"][-1]["content"] for c in v.chat_calls()]
     assert len(calls) == 2
     assert all(c.endswith(SPOKEN_HINT) for c in calls)
-    assert "Say the same thing shorter" in calls[1]
+    assert "Shorter:" in calls[1]
 
 
 def test_no_spoken_hint_on_a_typed_turn(vrig):

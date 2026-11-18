@@ -94,7 +94,7 @@ _NO_CAR = re.compile(
 
 
 # [talk] coherence (LifeService.configure): a trade with private clients is her own boss too
-COHERENT = True
+COHERENT = False
 _OWN_TRADE = re.compile(
     r"\b(?:(?:private|(?:her|his|their) own|own) (?:clients|customers|practice|round)"
     r"|works? for (?:her|him|them)self|mobile (?:hairdresser|barber|mechanic|groomer|beautician"

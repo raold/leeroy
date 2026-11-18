@@ -56,7 +56,7 @@ whisper check invite inv kick bench flag remind give gave and or'''.split())
 
 
 # Before a name followed by a pronoun: she is told about, not spoken to ("tell belra he ...")
-COHERENT = True  # [talk] coherence (LifeService.configure): off, the reading below is not made
+COHERENT = False  # [talk] coherence (LifeService.configure): off, the reading below is not made
 _TOLD_BEFORE = frozenset('tell told ask asked remind reminded warn warned'.split())
 
 

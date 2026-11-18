@@ -110,7 +110,7 @@ class LifeService:
         # [talk] coherence reaches the pure readers through their module switches (read here,
         # so at the mind's start and at each of his logins): her job's shape (life/day.py), her
         # own boss (life/interrupt.py) and "tell X he ..." (guards/pronouns.py)
-        coherent = getattr(getattr(cfg, "talk", None), "coherence", True) is True
+        coherent = getattr(getattr(cfg, "talk", None), "coherence", False) is True
         day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = coherent
         cap = getattr(life, "dm_wait_cap_s", 0)
         life_config.pin(getattr(life, "availability", 0), getattr(life, "state", False),

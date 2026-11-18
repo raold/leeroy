@@ -512,7 +512,7 @@ def test_the_same_reply_in_the_game_is_still_held_to_her_line(store, clock, tmp_
     rig = make_rig(store, clock, tmp_path, reply=LONG_CHANNEL)
     lines = rig.speak_turn(Turn(kind=TurnKind.REPLY_HUMAN, speaker=101, channel="guild",
                                 addressee=HUMAN), seconds=60)
-    assert len(rig.chat_calls()) == 1  # cut to her line in code ([talk] coherence), not asked again
+    assert len(rig.chat_calls()) == 2  # asked again shorter, as before
     assert sum(len(x.split()) for x in lines) < 40
     rig.close()
 

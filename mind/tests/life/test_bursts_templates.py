@@ -15,10 +15,19 @@ from leeroy_mind.life.presence import Attention, LifePresence, Where
 from leeroy_mind.life.service import LifeService
 from leeroy_mind.talk.pipeline import SHORT_WAIT_S, TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
-from life.test_interrupt import rig, said
+from life.test_interrupt import said
+from life.test_interrupt import rig as _rig
 
 BURST = ("check your addons list, it might be switched off\n"
          "lost my keys last night and climbed in through my own window")
+
+
+pytestmark = pytest.mark.usefixtures("coherent")  # [talk] coherence is off by default
+
+
+def rig(*args, **kw):
+    kw.setdefault("coherence", True)  # the switch under test; a test of "off" says so
+    return _rig(*args, **kw)
 
 
 @pytest.fixture
