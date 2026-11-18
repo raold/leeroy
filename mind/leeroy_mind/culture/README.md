@@ -27,6 +27,36 @@ screened library/receipt and encounter facts; unknown names stay generic. Each
 coin attempt is a separate nightly unit: a nonfatal model failure stays retryable
 and does not prevent later stages from running.
 
+### Origins from the life he leads now (2026-11-17)
+
+He has not raided since 2026-11-13, so no night produced an origin: no joke was ever
+coined and `culture_meme_plan` ended `no_joke` every night. Still code-built facts only:
+
+- **Wipes across nights.** The first-dead rule looks back 14 days (`WIPE_LOOKBACK`): the
+  raids the members run by themselves wipe once a night, so two wipes on one boss span
+  nights. The latest wipe must be the night's own; each wipe is rechecked on its own span.
+- **The guild Discord** (`DISCORD_KINDS`), from `discord_message`, `discord_reaction` and
+  `discord_attachment` rows of members' own messages in channels the whole guild reads
+  (never a DM, a group, an officers' room, a channel the layout lacks, a bot's post or a
+  deleted message): `discord_laughed`, a message of at most 300 characters that 3 distinct
+  other members laughed at (a 😂, 🤣 or 💀 reaction, or a reply matching the night's laugh
+  pattern), no butt; `photo_reacted`, her own photo that 2 members reacted to;
+  `first_answers`, the member who answered first on 8 messages in the night, more than
+  anyone else; `left_on_read`, 2 of her questions in 7 days that nobody replied to, reacted
+  to or spoke after for an hour. The last three have her as their butt, so the kindness
+  gates apply to every use.
+- Each is rooted on up to three `chat:` refs that pass the lexicon's public-line check
+  (a sent, paired line whose recalled memories are all public); a streak's count comes
+  from the rows and is recounted at every use. A stored term keeps which kind it is as
+  the last entry of `origin_refs` (`kind:<name>`). Changed, deleted or no longer public
+  rows retire the joke as any missing origin does.
+- The scan logs `culture_origins night= found= room= by_kind=` (counts only).
+
+Not added: day-plan facts (three late shifts running has a 4% daily draw, and a plan has
+no stored row a term could be rooted on) and teased typos (the Discord rows hold no
+correction to build one from). Offline-raid loot gives no origin while every receipt
+ends unclaimed.
+
 Banter folds each old joke-use receipt into lifetime usage once when culture
 first consults that joke or the nightly fade runs. Delivered banter consumes lifetime usage; dropped
 threads do not. Its first delivered chat row is marked so nightly spread cannot

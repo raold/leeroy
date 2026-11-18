@@ -138,7 +138,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.timing import TurnTiming
 from leeroy_mind.talk.words import COMMON_WORDS
 from leeroy_mind.talk.world import WorldView
-from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup
+from leeroy_mind.text import EMOJI_RE, estimate_tokens, strip_wow_markup, truncate_words
 from leeroy_mind.voice.comms import SPOKEN_HINT, typed
 from leeroy_mind.wow import CAST_MIN_LEVEL, CLASSES, RACES
 
@@ -354,6 +354,9 @@ LEFT_ON_READ = "left_on_read"
 REACTED = "reacted"
 REACT_SKIPPED = "react_skipped"  # a reaction shape whose reaction could not be posted
 SHAPE_YIELDS = frozenset({"length", "questions", "followup"})
+# The wants that leave room for news of her own on her first answer in a conversation
+# (_outreach_first): never while she vents, steers away, draws a line, asks or sorts a plan
+FIRST_SHARE_WANTS = frozenset({"share", "small_talk", "react", "flirt", "tease", "reassure_seek"})
 ONE_WORD_WORDS = 3
 STILL_THERE = frozenset({Block.WORK, Block.COMMUTE, Block.GYM, Block.OUT, Block.HOME_DUTY})
 DEAD_FORGET_S = 900.0  # a death with no resurrect event this old is forgotten
@@ -488,6 +491,9 @@ class TurnMeta:
     photo_request_part: str = 'initial'
     borrow_credit: object | None = None
     outreach_item: int | None = None
+    # an item of her list her answer to him brings in (the beat's "Bring in", key "o<id>"):
+    # told with the stored line (Outreach.brought); never an opener's bound item
+    outreach_brought: int | None = None
     # initiates: the turn starts a conversation with him unprompted (whisper:<trigger>,
     # burst:to_him): its silence is asked again once (SILENT_START_HINT), and a chain never
     # stops it, since its own clock paces it. casual: an opener to him in party or guild,
@@ -790,6 +796,16 @@ def _with_hint(messages: list[dict], hint: str) -> list[dict]:
     return out
 
 
+def _voice_words(p: Persona) -> tuple[int, int] | None:
+    """The line length her voice sheet's sentence shape names (personas.speech.word_range);
+    None without a sheet or a range."""
+    speech = getattr(p, "speech", None)
+    if speech is None:
+        return None
+    from leeroy_mind.personas.speech import word_range
+    return word_range(speech.shape)
+
+
 def _family(channel: str) -> str:
     """A turn's channel family, as talk.intent and talk.shape read it: group (a group DM), dm,
     discord (a channel), whisper or game."""
@@ -964,7 +980,40 @@ class Pipeline:
             race, class_name = RACES.get(m.race, ""), CLASSES.get(m.class_, "")
         else:
             race, class_name = card_race_class(self.store.get_card(p.guid) or "")
-        return render_prompt_card(p, race=race, class_name=class_name)
+        return render_prompt_card(p, race=race, class_name=class_name, voice=True)
+
+    def _voice(self, turn: Turn, meta: TurnMeta, p: Persona, *, live: bool) -> tuple[list[str], str]:
+        """Her voice sheet for this turn (personas/speech.py; ([], "") without one): the sample
+        lines it shows and the block that goes just before the instruction. How she is with him
+        only on a turn that is his, her stance only where only he reads and only while her
+        household is still the one it was written for; one or two samples,
+        the first by the turn's want (the draw's; on an answer that gets a beat, its lean), the
+        second from a seeded stream of its own (voice, night, her, the minute, his line or
+        post: never the engine's rng), and never a sample she already sent. A live turn's
+        recipe is tagged `voice.sheet-1` (learn.recipe.voice_used)."""
+        speech = getattr(p, "speech", None)
+        if speech is None:
+            return [], ""
+        from leeroy_mind.personas.speech import (RECIPE_TAG, pick_samples, stance_current,
+                                                 voice_block)
+        to_him = self._aimed_at_him(turn) or self._private_to_him(turn)
+        local = self.clock.local()
+        trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
+                                        else 0) or 0
+        rng = seeded("voice", night_of(local), turn.speaker, local.hour * 60 + local.minute,
+                     trigger)
+        shown = pick_samples(speech, meta.intent or "", rng, to_him=to_him,
+                             sent=[text for _, _, text in self._own_of(turn.speaker)])
+        if live and getattr(self, "learn_enabled", False):
+            from leeroy_mind.learn.recipe import voice_used
+            try:
+                voice_used(meta, RECIPE_TAG)
+            except Exception:
+                log.warning("learn_recipe_describe_failed")
+        # her stance only while her household is the one it was written for (stance_current)
+        return shown, voice_block(speech, self.human.called, to_him=to_him,
+                                  private=self._private_to_him(turn) and stance_current(p),
+                                  samples=shown)
 
     def _pronoun_tags(self, turn: Turn, people: list[int], recent) -> dict:
         """Each member shown other than the speaker and him, tagged once with their persona's
@@ -1920,7 +1969,8 @@ class Pipeline:
             realism=self.realism.eligible(self, turn, meta), two_lines=two,
             away=self._waited_away(turn, meta, now),
             waited=self._waited_own_time(turn, meta, now),
-            his_asks=meta.covers_ask or asks(self._his_line(turn, meta)))
+            his_asks=meta.covers_ask or asks(self._his_line(turn, meta)),
+            voice_words=_voice_words(p))
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
                                         else 0) or 0
@@ -2212,6 +2262,10 @@ class Pipeline:
                      round(elapsed * 1000))
             return ""
         meta.beat_use = next((k for k, x in order if x == found.use), None) if found.use else None
+        if found.use is None and (mine := self._outreach_first(turn, meta, c, found.want, started)):
+            meta.beat_use, found = mine[0], replace(found, use=mine[1])
+        meta.outreach_brought = (int(meta.beat_use[1:]) if meta.beat_use
+                                 and meta.beat_use[:1] == "o" and meta.beat_use[1:].isdecimal() else None)
         if ctx is None:
             log.info("think_beat: guid=%d want=%s use=%d ms=%d", turn.speaker, found.want,
                      found.use is not None, round(elapsed * 1000))
@@ -2241,7 +2295,49 @@ class Pipeline:
             entries = beats.ledger(self.store.get_meta(meta.beat_conversation), now)
         except sqlite3.Error:
             entries = []
-        return beats.offerable(list(zip(keys, c.beat_items)), entries)
+        offered = beats.offerable(list(zip(keys, c.beat_items)), entries)
+        # something she means to tell him leads what she may bring in, under the same ledger
+        # rules: it survives a tight context first (beat.fitting drops from the end)
+        return beats.offerable(self._outreach_offer(turn, meta, c), entries) + offered
+
+    def _outreach_offer(self, turn: Turn, meta: TurnMeta, c: "Composed") -> list[tuple[str, str]]:
+        """Her top ready outreach item for this answer as the beat keys it, [] with outreach off,
+        on an opener carrying its own item, under his explicit overlay (c.tail: nothing is
+        brought into an explicit scene), or with none ready. Never costs the line."""
+        outreach = getattr(self, "outreach", None)
+        if (outreach is None or c.tail or meta.outreach_item is not None
+                or meta.photo is not None):
+            return []
+        try:
+            mine = outreach.offer(turn)
+        except Exception as e:
+            log.warning("outreach_offer_failed: guid=%d error=%s", turn.speaker, type(e).__name__)
+            return []
+        return [] if mine is None else [(mine[0], truncate_words(" ".join(mine[1].split()),
+                                                                beats.ITEM_CHARS))]
+
+    def _outreach_first(self, turn: Turn, meta: TurnMeta, c: "Composed", want: str,
+                        now: float) -> tuple[str, str] | None:
+        """The beat found nothing that bears on his line: on her first answer in this conversation
+        (an empty ledger: no turn of hers there within beat.LEDGER_TTL), when his line asks her
+        nothing and her want leaves room for news of her own, she may bring in one thing she
+        means to tell him, by Outreach.first_share's rationed draw (seeded per turn)."""
+        outreach = getattr(self, "outreach", None)
+        if (outreach is None or c.asking or c.tail or want not in FIRST_SHARE_WANTS
+                or meta.outreach_item is not None or meta.photo is not None):
+            return None  # c.tail: his explicit overlay keeps flirt and tease, never her news
+        try:
+            if beats.ledger(self.store.get_meta(meta.beat_conversation), now):
+                return None
+            from leeroy_mind.life.seed import seeded
+            mine = outreach.first_share(turn, seeded(
+                "outreach_first", night_of(self.clock.local()), turn.speaker, int(now // 60),
+                zlib.crc32(str(meta.turn_id).encode())))
+        except Exception as e:
+            log.warning("outreach_offer_failed: guid=%d error=%s", turn.speaker, type(e).__name__)
+            return None
+        return None if mine is None else (mine[0], truncate_words(" ".join(mine[1].split()),
+                                                                  beats.ITEM_CHARS))
 
     def _pending_phrases(self, guid: int, now: float) -> tuple[str, ...]:
         """Her common stock phrases waiting to be named on her next turn, within
@@ -2521,7 +2617,10 @@ class Pipeline:
             if real and live:
                 self._real_name_hold = meta.turn_id
 
-        samples = select_samples(p)
+        # a member with a voice sheet shows it by the instruction, with its own samples, in
+        # place of the generator's sample lines (and of the card's trait sentences: _card)
+        samples, voice = (self._voice(turn, meta, p, live=live)
+                          if getattr(p, "speech", None) is not None else (select_samples(p), ""))
         # the facts go to the first answer only: a second recited the same table (rehearsal 2)
         facts = (await self.facts.for_line(meta.facts_line)
                  if meta.facts_line and self.facts is not None and not earlier else [])
@@ -2592,7 +2691,7 @@ class Pipeline:
             if not from_thread and not dm_rows:  # those rows carry their notes already
                 chat_notes = by_lines(self.store.conn, [(r.id, r.channel) for r in recent])
         parts = PromptParts(
-            card=self._card(p), samples=samples,
+            card=self._card(p), samples=[] if voice else samples, voice=voice,
             rules=rules_of(human, p, data_dir=self.data_dir, now=now,
                            channel=turn.channel, recipient=turn.to_guid,
                            at_him=self._aimed_at_him(turn),
@@ -2657,6 +2756,7 @@ class Pipeline:
         rl = p.real_life
         support = [*trimmed.memories, *trimmed.rel_cards, parts.card, rl.job, rl.rhythm,
                    rl.household, rl.money, rl.sleep, rl.life_thread,
+                   *([parts.voice] if parts.voice else []),  # what her sheet says of her life
                    *(r.text for r in recent
                      if (not turn.trigger_line or r.id < turn.trigger_line) and r.id != answered),
                    *(r.text for r in pair),
@@ -3274,7 +3374,8 @@ class Pipeline:
                         {"role": "assistant", "content": "\n".join(s.plain for s in lines)},
                         {"role": "user", "content": rewrite_hint(
                             verdict.codes, tuple(x for v in verdicts for x in v.phrases),
-                            tuple(x for v in verdicts for x in v.pronouns))}])
+                            tuple(x for v in verdicts for x in v.pronouns),
+                            tuple(x for v in verdicts for x in v.never))}])
                 text, why = await self._generate(turn, meta, retry, spoken=spoken, max_attempts=1)
                 if why:
                     if owed:
@@ -4604,6 +4705,8 @@ class Pipeline:
                 meta.photo.on_sent(line_id, discord_id)
         if meta.outreach_item is not None:
             self.outreach.record(turn, meta, line_id, now)
+        elif meta.outreach_brought is not None and getattr(self, "outreach", None) is not None:
+            self.outreach.brought(turn, meta, line_id, now)
         def finished():
             self._after_record(turn, meta, p, text, memory_ids, line_id=line_id, chat=chat,
                 now=now, discord=discord, heard=heard, sid=sid, zone=zone, map_id=map_id,

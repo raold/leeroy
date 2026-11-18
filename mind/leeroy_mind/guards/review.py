@@ -23,7 +23,7 @@ from leeroy_mind.personas.facts import (Facts, conflicts as persona_conflicts, f
 from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.moves import topics
 
-from . import owncopy, phrases, pronouns
+from . import owncopy, phrases, pronouns, voice
 from .identity import CODES as SLIP_CODES, code_for as slip_code, slips
 from .opener import echo_opener
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
@@ -87,6 +87,9 @@ HINTS = {
                          'role; you are a man, so say it as yourself, about your own body'),
     'persona_conflict': ('it gets your own life wrong: keep to who you live with, your kids, your '
                          'pets, your job and where you live as your card says'),
+    'voice_never': 'it uses words you never use',
+    'voice_sample_copy': ('it repeats one of your example lines word for word; they show how '
+                          'you sound, so say something new that way'),
 }
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
           'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
@@ -143,12 +146,14 @@ def echoes(text: str, parent: str) -> bool:
             and where[opening - 1] != where[0])
 
 
-def rewrite_hint(codes, named=(), misgendered=()) -> str:
+def rewrite_hint(codes, named=(), misgendered=(), never=()) -> str:
     """The screened retry's instruction in words; a code without words is named as it is.
     `named` are the phrase cooldown's words from the draft itself (Verdict.phrases);
-    `misgendered` the member and pronouns of `member_misgender` (Verdict.pronouns)."""
+    `misgendered` the member and pronouns of `member_misgender` (Verdict.pronouns); `never`
+    the words of her voice sheet's never list the draft used (Verdict.never)."""
     reasons = list(dict.fromkeys(HINTS.get(code, code) for code in codes))
-    said = ' '.join(x for x in (phrases.hint(named), pronouns.hint(misgendered)) if x)
+    said = ' '.join(x for x in (phrases.hint(named), pronouns.hint(misgendered),
+                                voice.hint(never)) if x)
     if not reasons:
         return 'Rewrite your reply once.' + (' ' + said if said else '')
     hint = 'Rewrite your reply once in your own words. Your draft has a problem: ' + '; '.join(reasons)
@@ -650,8 +655,17 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     if not filler and not filler_post and _pairs(draft.text, draft.embedding,
                                                  [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
+    # Her voice sheet (Persona.speech): a word she never uses, a sample line said again; her
+    # own words are rationed by the phrase cooldown instead of cooled (guards/voice.py).
+    sheet = voice.sheet_of(stored)
+    never = voice.never_used(draft.text, sheet)
+    if never:
+        rewrite.append('voice_never')
+    if voice.copies_sample(draft.text, sheet):
+        rewrite.append('voice_sample_copy')
     # A line already dropped as a repeat or echo stays dropped; phrases only add a rewrite.
-    cooled = phrases.check(reader, draft, now) if cfg.phrase_cooldown and not drop else phrases.Found()
+    cooled = (phrases.check(reader, draft, now, sheet) if cfg.phrase_cooldown and not drop
+              else phrases.Found())
     rewrite.extend(cooled.codes)
     filler_code = 'server_filler' if draft.server else 'filler_after_question'
     codes = tuple(dict.fromkeys([*rewrite, *drop, *([filler_code] if filler else [])]))
@@ -661,4 +675,5 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     reaction = '👍' if parent and parent.text.rstrip().endswith('?') else '😄' if set(words(draft.text)) & {'lol','haha','hehe'} else '👍'
     return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)),
                    (server_reaction or reaction) if action == 'react' else None, cooled.phrases,
-                   cooled.pending, echo_of if 'echo_opener' in codes else '', misgendered)
+                   cooled.pending, echo_of if 'echo_opener' in codes else '', misgendered,
+                   never)

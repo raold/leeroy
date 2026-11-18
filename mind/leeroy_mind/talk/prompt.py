@@ -126,6 +126,9 @@ class PromptParts:
     # memories (review of #368: in the longest conversations those gave way to chat from ten
     # turns back; the so-far block carries his older news)
     old_chat: int = 0
+    # Her voice sheet's block (personas.speech.voice_block; "" without a sheet): the last
+    # thing before the instruction in both modes, never cut
+    voice: str = ""
 
 
 def replay(text: str, words: int = REPLAY_WORDS) -> str:
@@ -872,6 +875,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         _section("Your last lines (don't make the same move again):", p.own_recent),
         p.awareness.strip(),
         right_now if p.situation else "",
+        p.voice.strip(),
         p.instruction.strip()) if x)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -883,6 +887,7 @@ def _tokens(msgs: list[dict]) -> int:
 def section_tokens(p: PromptParts) -> dict[str, int]:
     """Rendered section estimates, including headings; never any prompt text."""
     return {name: estimate_tokens(text) for name, text in (
+        *((("voice", p.voice.strip()),) if p.voice.strip() else ()),
         ("card", p.card.strip()), ("samples", _section(SAMPLES_HEAD, p.samples)),
         ("rules", p.rules.strip()),
         ("untrimmed", "\n\n".join(u.strip() for u in p.untrimmed if u.strip())),
@@ -913,8 +918,9 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     when later answers came after it. The speaker's own line his pushback is about (kept, fix
     wave G6) is never cut nor shortened either, and the last resort keeps it with the floor.
     The system message, the untrimmed sections, mood, real-name line, facts, the conversation's
-    "so far" lines (bounded where they are built) and instruction are never cut (the mood in either place: PromptParts.situation). Memories stay a prefix of
-    the input, so len(result.memories) says which recalled memories were used."""
+    "so far" lines (bounded where they are built), her voice block and instruction are never
+    cut (the mood in either place: PromptParts.situation). Memories stay a prefix of the input,
+    so len(result.memories) says which recalled memories were used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
                 elsewhere=list(p.elsewhere), style=list(p.style), so_far=list(p.so_far),
                 own_recent=list(p.own_recent), untrimmed=list(p.untrimmed))
@@ -1021,7 +1027,7 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
                    elsewhere=[r(x) for x in parts.elsewhere],
                    so_far=[r(x) for x in parts.so_far],
                    style=[r(x) for x in parts.style],
-                   untrimmed=[r(x) for x in parts.untrimmed],
+                   untrimmed=[r(x) for x in parts.untrimmed], voice=r(parts.voice),
                    instruction=r(parts.instruction), awareness=(parts.awareness.redacted(r)
                        if hasattr(parts.awareness,"redacted") else r(parts.awareness)), facts=[r(x) for x in parts.facts],
                    real_name="")

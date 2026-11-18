@@ -10,7 +10,8 @@ of his is answered only when some stored answer covers it.
 
 An answer with no receipt (stored before receipts existed, or posted outside the talk
 pipeline) keeps the old reading for the posts up to the one it replies to: `floor` is the
-largest such reply_to. Her brb and back (pair lines) and her messages that reply to nothing
+largest such reply_to. Only her newest ANSWERS answers are read: his posts older than all of
+them are past the window and count as covered. Her brb and back (pair lines) and her messages that reply to nothing
 (an opener, the later messages of a burst, a carried whisper answer) cover nothing.
 
 Read-only helpers on a connection, for the talk (DiscordTalk.unanswered, _coalesce), the owed
@@ -39,16 +40,21 @@ def receipt(ids) -> str:
 
 class Covered:
     """His posts in one DM that her answers cover: `at[post]` is when the first answer built
-    with it was stored; `legacy` are (reply_to, ts) of her answers without a receipt."""
+    with it was stored; `legacy` are (reply_to, ts) of her answers without a receipt; `older`,
+    when the read was a full window of ANSWERS answers, is the oldest post any of them replies
+    to: everything before it is past the window and reads as covered (a long DM's old stretch
+    never reads as owed again, after a restart either)."""
 
-    __slots__ = ("at", "legacy")
+    __slots__ = ("at", "legacy", "older")
 
-    def __init__(self, at: dict[int, float], legacy: list[tuple[int, float]]):
-        self.at, self.legacy = at, legacy
+    def __init__(self, at: dict[int, float], legacy: list[tuple[int, float]], older: int = 0):
+        self.at, self.legacy, self.older = at, legacy, older
 
     @property
     def floor(self) -> int:
-        return max((r for r, _ in self.legacy), default=0)
+        """His posts up to this id are covered without a receipt of their own: by an answer
+        from before receipts, or by being older than the window read."""
+        return max(max((r for r, _ in self.legacy), default=0), self.older - 1)
 
     def has(self, post: int) -> bool:
         """Some stored answer covers `post`."""
@@ -57,8 +63,8 @@ class Covered:
     def by(self, post: int, after: float, until: float) -> bool:
         """...and it was stored after `after` and no later than `until` (health's window)."""
         t = self.at.get(post)
-        if t is not None and t <= until:  # a receipt names the post: it cannot precede it
-            return True
+        if (t is not None and t <= until) or post < self.older:
+            return True  # a receipt names the post (it cannot precede it); or past the window
         return any(r >= post and after < ts <= until for r, ts in self.legacy)
 
 
@@ -83,4 +89,5 @@ def read(conn, channel: str, thread: int | None = None, *, any_thread: bool = Fa
         for i in ids:
             if i not in at or ts < at[i]:
                 at[i] = ts
-    return Covered(at, legacy)
+    older = min(r for r, _, _ in rows) if len(rows) >= ANSWERS else 0
+    return Covered(at, legacy, older)

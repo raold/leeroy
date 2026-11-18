@@ -125,3 +125,58 @@ def test_a_dropped_answer_leaves_its_posts_unanswered_for_the_next(store, tmp_pa
         assert talk.unanswered(conn, "dm:101", None, mids[-1]) == []
     finally:
         rig.close()
+
+
+def test_a_long_dms_old_stretch_never_reads_as_owed(store, tmp_path):
+    """Review follow-up F1: only her newest covered.ANSWERS answers are read; his posts older
+    than all of them are past the window and count as covered, with or without receipts."""
+    from leeroy_mind.discord import store as dstore
+    rig = rig_for(store, at(2026, 10, 29, 20), tmp_path)
+    talk = talk_for(rig)
+    conn, now = rig.store.conn, rig.clock.now()
+    posts = []
+    for n in range(250):
+        mid = post(rig, "dm:101", f"question number {n}")
+        answer = dstore.post(rig.store, channel="dm:101", author=101, origin="mind",
+                             text=f"answer number {n}", reply_to=mid, now=now)
+        rig.store.set_meta(covered.BUILT_KEY.format(answer), str(mid))
+        posts.append(mid)
+    assert covered.ANSWERS == 200
+    done = covered.read(conn, "dm:101")
+    assert done.older == posts[50] and len(done.at) == 200
+    assert all(done.has(m) for m in posts)  # the 50 past the window too
+    assert all(done.by(m, 0.0, now + 1) for m in posts[:60])
+    newest = post(rig, "dm:101", "and one more")
+    assert [i for i, _ in talk.unanswered(conn, "dm:101", None, newest)] == [newest]
+    got = count_unanswered(conn, 1, 0.0, now + OWNER_ANSWER_S + 1, window=OWNER_ANSWER_S)
+    assert got.unanswered.get("discord_dm", 0) <= 1  # only the newest, never the old stretch
+    rig.close()
+
+
+def test_a_photo_request_answer_covers_only_his_ask(store, tmp_path):
+    """Review follow-up F2: a photo-request answer writes its receipt (covers = the ask), so an
+    earlier post of his whose answer was dropped stays unanswered; without the receipt the
+    old reading would have called it answered."""
+    from leeroy_mind.discord.transport import DiscordTarget, store_line
+    from leeroy_mind.talk.pipeline import TurnMeta
+    from leeroy_mind.talk.turns import Turn, TurnKind
+    rig = rig_for(store, at(2026, 10, 29, 20), tmp_path)
+    talk = talk_for(rig)
+    conn = rig.store.conn
+    earlier = post(rig, "dm:101", "did the parcel ever turn up")  # its answer was dropped
+    ask = post(rig, "dm:101", "send me a selfie")
+    turn = Turn(TurnKind.REPLY_HUMAN, 101, "dm:101", to_guid=1, addressee=1)
+    meta = TurnMeta("req", why="selfie:request", answers_human=True, photo_request=ask,
+                    discord=DiscordTarget(ask, None), covers=(ask,))
+    import inspect
+    args = inspect.signature(store_line).parameters
+    kw = dict(store=rig.store, turn=turn, meta=meta, text="here you go", now=rig.clock.now(),
+              audience=frozenset({1, 101}))
+    mid = store_line(**{k: v for k, v in kw.items() if k in args})
+    assert covered.parse(rig.store.get_meta(covered.BUILT_KEY.format(mid))) == (ask,)
+    done = covered.read(conn, "dm:101")
+    assert done.has(ask) and not done.has(earlier)
+    assert [i for i, _ in talk.unanswered(conn, "dm:101", None, ask)] == [earlier]
+    import leeroy_mind.photos.requests as requests
+    assert "meta.covers = (latest.message,)" in inspect.getsource(requests)
+    rig.close()
