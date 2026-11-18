@@ -25,6 +25,7 @@ from .prompt import renderable
 from .ration import MEMBER_GAP_S, MEMBER_STOCK, SEND_MIN_AGE, send_weight, stock_target, channel_stock
 from .romance_styling import enum_category, restyle
 from .style import style_of, LUST
+from . import styling_history
 from .scene import (ABOUT, PHASES, SCENE_ASK, SCENE_ASK_AGAIN, scene_from, scene_json, scene_renderable,
                     scene_schema, scene_system, screen_scene, window)
 from .scene_choices import compose_choices, pairing_codes
@@ -214,9 +215,14 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str,
     if s is not None and romance_styling:
         if audience is not None:
             s = replace(s, audience=audience)
+        from leeroy_mind.learn.config import load_learn_config
+        history = (styling_history.read(ctx.store, guid, ctx.human, now=ctx.clock.now(),
+                    learn=load_learn_config(ctx.settings.data_dir / 'mind.toml'))
+                   if s.audience == 'him' else styling_history.History())
         s = restyle(ctx.persona(guid), s, enabled=True, category=category,
                     relationship=ctx.store.get_relationship(guid, ctx.human, lens=True),
-                    dial=ctx.settings.romance_dial, seed=ctx.night, ident=ctx.ident, names=names)
+                    dial=ctx.settings.romance_dial, seed=ctx.night, ident=ctx.ident, names=names,
+                    history=history)
     if s is not None and scene_renderable(p, s):
         codes = ["unrenderable"]
     return (None, codes) if codes else (s, [])

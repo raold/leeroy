@@ -525,6 +525,7 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
     from types import SimpleNamespace
     from leeroy_mind.discord.presence import local_time
     from leeroy_mind.life.presence import presence_at
+    from leeroy_mind.learn.config import load_learn_config
     from .ration import SEND_MIN_AGE
     from .request_render import SIZE, THUMB_PX, seed_for
     from .request_scene import RequestSceneError, choose_words_scene
@@ -559,7 +560,8 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
             return 1
         await ctx.arbiter.ensure_model(cfg.models.live)
         app = SimpleNamespace(store=store, data_dir=root, personas=ctx.personas, clock=clock,
-                              engine=SimpleNamespace(human=ctx.ident), cfg=cfg,
+                              engine=SimpleNamespace(human=ctx.ident,
+                                  learn_settings=load_learn_config(root / 'mind.toml')), cfg=cfg,
                               selfies=SimpleNamespace(cfg=scfg),
                               scheduler=_Direct(ctx.reasoner.llm))
         her = local_time(clock.local(), p.identity.region)

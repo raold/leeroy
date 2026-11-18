@@ -374,6 +374,8 @@ class Scene:
     style: str = PLAIN  # LUST: setting, outfit and expression were her picks (R2)
     recipe: int = 0  # missing on pre-enum rows; snapstage holds them instead of rendering prose
     romance_style: str = ""  # opted-in private wardrobe: warm, playful or confident
+    romance_pose: str = ""  # fixed code in romance_styling.POSES
+    romance_light: str = ""  # fixed code in romance_styling.LIGHTS
 
 
 def scene_from(data: dict) -> Scene:
@@ -388,9 +390,12 @@ def scene_from(data: dict) -> Scene:
     if style not in STYLES:
         raise ValueError("scene: unknown style")
     return Scene(**{f.name: data[f.name] for f in fields(Scene)
-                    if f.name not in ("outfit", "style", "recipe", "romance_style")},
+                    if f.name not in ("outfit", "style", "recipe", "romance_style",
+                                      "romance_pose", "romance_light")},
                  outfit=outfit, style=style, recipe=data.get("recipe", 0),
-                 romance_style=data.get("romance_style", ""))
+                 romance_style=data.get("romance_style", ""),
+                 romance_pose=data.get("romance_pose", ""),
+                 romance_light=data.get("romance_light", ""))
 
 
 def scene_json(s: Scene) -> dict:
@@ -403,6 +408,9 @@ def scene_json(s: Scene) -> dict:
         del out["recipe"]
     if not s.romance_style:
         del out["romance_style"]
+    for field in ('romance_pose', 'romance_light'):
+        if not getattr(s, field):
+            del out[field]
     return out
 
 
@@ -494,8 +502,12 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
         return missing
     if s.style == LUST and not suggestive(p):
         return LUST_HELD
+    from .romance_styling import EXPRESSIONS, LIGHTS, POSES
+    if (not isinstance(s.romance_pose, str) or not isinstance(s.romance_light, str)
+            or (s.romance_pose and (not s.romance_style or s.romance_pose not in POSES))
+            or (s.romance_light and (not s.romance_style or s.romance_light not in LIGHTS))):
+        return "scene.styling: held"
     if s.romance_style:
-        from .romance_styling import EXPRESSIONS
         from .style import looks_age_coded
         if (s.romance_style not in EXPRESSIONS or s.audience != "him"
                 or p.identity.age < SUGGESTIVE_MIN_AGE or looks_age_coded(p)
@@ -506,7 +518,8 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
         return "scene.setting: undress"  # also hold older planned bathing-context rows
     named = names_re(p)
     if s.romance_style and named is not None and any(
-            named.search(text) for text in (s.outfit, s.expression)):
+            named.search(text) for text in (s.outfit, s.expression,
+                POSES.get(s.romance_pose, ''), LIGHTS.get(s.romance_light, ''))):
         return "scene.styling: named"
     if s.style == LUST and named is not None and named.search(lust_phrase(s)):
         return LUST_NAMED
@@ -550,17 +563,21 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]
     room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
     out += worn
-    if s.kind != "snapshot":
+    if s.kind != "snapshot" and not s.romance_pose:
         add("looking at the camera", 3)
     details = [d for d in eyes_face(p, name_re) if not limb_detail(d[0])]
     out += identity_first(p, details)  # eye colour, glasses, stubble first
     if not lust and not s.romance_style:
         add(s.outfit, 2, True)
-    if _LIGHT[s.when]:
+    if _LIGHT[s.when] and not s.romance_light:
         add(_LIGHT[s.when], 2)
     if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # optional, after who she is
         out.append((glutes_words(p), 2))
     add(s.expression, 2 if s.romance_style else 3, True)
+    if s.romance_style:
+        from .romance_styling import LIGHTS, POSES
+        add(POSES.get(s.romance_pose, ''), 2, True)
+        add(LIGHTS.get(s.romance_light, ''), 3, True)
     if plain_build:  # a plain average build stays where the build always was
         out.append(plain_build)
     add(_LATE_TAIL if s.when == "late" else _PHONE_TAIL, 1)

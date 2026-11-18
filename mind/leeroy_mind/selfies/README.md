@@ -9,8 +9,11 @@ The same romance stance, relationship stage and world/member romance dial used b
 select a warm, playful or confident expression. The top two talk bands both use confident,
 non-explicit photo styling. Casual outfits become more polished as the level rises, and
 going-out outfits gain evening choices. Cold-weather, outdoor and gym clothes keep their
-category. The lists include fitted tops, crop tops, shorts, mini and midi dresses, date-night
-clothes, loungewear and gym clothes. Expressions also offer a slight head tilt. The owner's
+category. Within each category, warm styling favours ordinary outfits, playful styling favours
+fitted clothes, and confident styling favours crop tops, mini dresses, off-shoulder tops and
+similar date-night choices. These are weighted choices, so each level still has variety.
+The lists include fitted tops, crop tops, shorts, mini and midi dresses, date-night
+clothes, loungewear and gym clothes. The owner's
 saved wardrobe keeps the outfit chosen for the scene; new outfits use her saved colour palette
 when present. Requests for work uniforms or current clothes keep those choices. No model call
 is added.
@@ -26,6 +29,37 @@ still required, the crop remains waist-up, and rear views and indoor or bathing 
 their existing fallbacks. The opted-in request prompt welcomes non-explicit fitted outfits
 and appropriate swimwear. The owner's prompt overlay still takes precedence.
 
+Fixed poses add direct eye contact, a slight head tilt, angled shoulders and, for an idle
+mirror or timer photo, an over-the-shoulder glance. Action snapshots keep their action;
+a requested rear view keeps its existing framing and face-reference scale. Soft daylight,
+warm lamplight and golden evening light follow the place, time or requested light source.
+Neon, fluorescent and flash requests retain their original light. Poses follow face details
+in the prompt; lighting has lower priority so it cannot crowd out her identity.
+
+### Photo preferences and repetition
+
+With styling on, new private choices avoid the outfit templates in her eight newest private
+recipes, including planned stock, and avoid the previous expression/pose/light when another
+choice is available. Changing only the colour does not evade an outfit repeat. If every
+eligible option was recent, the same eligible pool remains available. Work uniforms, current
+clothes, saved wardrobe choices and swimwear keep their original outfit selection.
+
+`[learn] apply = true` additionally uses the owner's current thumbs-up/down feedback controls
+on photo-bearing lines and thumbs-up/down emoji on the actual DM photo. A feedback-control
+vote takes precedence over emoji; opposing thumbs together count as a downvote. Silence, other
+members' reactions and ordinary text replies contribute no preference. Likes softly favour
+similar clothes, colours, expressions, poses and lighting; the bias is capped at 2x or 0.5x
+and stays inside the activity, palette and romance choices already allowed.
+
+The reader considers at most 64 private recipes from the last 90 days, for this member only,
+and uses those recorded with romance styling.
+Sent photos must have an exact private delivery to the owner. Discord requires the live
+message, attachment and chat-line receipt to agree. A removed reaction, changed vote or deleted
+message is reflected at the next choice; nothing is copied into a separate preference table.
+The Lab/global learning freeze and member freezes stop preference bias immediately. Repeat
+avoidance still works. Public requests read no private styling history. Night planning, live
+requests and offline rehearsals use the same selector, with no added model call.
+
 This applies only to private photos of eligible fictional adult women, age 25 or older.
 Men, non-romantic members, former partners and members with their forward dial at zero
 keep their existing choices. Public photos and profile pictures are unchanged, including
@@ -33,7 +67,8 @@ manually chosen profile outfits. The photo's real destination wins over the mode
 choice. The name, likeness, age and content screens, negative prompts and image classifier
 threshold are unchanged.
 
-The chosen outfit, expression and `romance_style` are stored with the scene, so rendering,
+The chosen outfit, expression, `romance_style` and optional `romance_pose`/`romance_light` codes
+are stored with the scene, so rendering,
 captions and later memories agree. Clothing is required in the image prompt beside her
 identity; the expression is optional. The selection is repeatable for a night/member or
 request seed, with variation across seeds. Existing photos are not rewritten. Disabling the

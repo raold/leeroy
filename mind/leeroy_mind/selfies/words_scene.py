@@ -545,14 +545,19 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
     room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
     out += worn
-    if w["framing"] != BEHIND:
+    if w["framing"] != BEHIND and not s.romance_pose:
         add("looking at the camera", 3)
     # none of her face details about her hands, arms, legs or feet (scene.limb_detail)
     out += identity_first(p, [d for d in eyes_face(p, name_re) if not limb_detail(d[0])])
     if w.get("prop"):
         add(f"with {w['prop']}", 2, True)
-    add(LIGHT_WORDS[w["lighting"]], 2)
+    if not s.romance_light:
+        add(LIGHT_WORDS[w["lighting"]], 2)
     add(s.expression, 2 if s.romance_style else 3, True)  # after face details; empty on old recipes
+    if s.romance_style:
+        from .romance_styling import LIGHTS, POSES
+        add(POSES.get(s.romance_pose, ''), 2, True)
+        add(LIGHTS.get(s.romance_light, ''), 3, True)
     if w["framing"] == BEHIND and glutes_words(p):
         out.append((glutes_words(p), 2))
     add(TIME_WORDS[w["time"]], 3)

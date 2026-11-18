@@ -22,6 +22,7 @@ from .scene import (Scene, scene_from, scene_json, scene_renderable, scene_schem
 from .scene_choices import compose_choices, pairing_codes
 from .store import current
 from .style import LUST, style_of
+from . import styling_history
 
 SCENE_LIVE = Preset(False, dict(LIVE_BIT.options) | {"num_predict": 512}, timeout=30.0)
 # the reading of his words: LIVE's sampling and num_ctx, think false, no stop, room for 7 fields
@@ -68,12 +69,16 @@ def _subject(app, guid: int, audience: str):
     return p, member, ident, request_names(app, guid), audience
 
 
-def _style(app, guid: int, scene: Scene, *, category, seed, ident, names) -> Scene:
-    if not app.selfies.cfg.romance_styling:
+def _style(app, guid: int, scene: Scene, *, category, seed, ident, names,
+           framing=None, lighting=None) -> Scene:
+    if not app.selfies.cfg.romance_styling or scene.audience != 'him':
         return scene
+    history = styling_history.read(app.store, guid, ident.guid, now=app.clock.now(),
+                                    learn=getattr(app.engine, 'learn_settings', None))
     return restyle(app.personas.get(guid), scene, enabled=True, category=category,
                    relationship=app.store.get_relationship(guid, ident.guid, lens=True),
-                   dial=app.cfg.romance.dial, seed=seed, ident=ident, names=names)
+                   dial=app.cfg.romance.dial, seed=seed, ident=ident, names=names,
+                   history=history, framing=framing, lighting=lighting)
 
 
 async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool = True) -> Scene:
@@ -211,7 +216,7 @@ async def choose_words_scene(app, guid: int, words: str, audience: str, *, reque
         scene = W.scene_of(p, w, audience=audience)
         category = "as_now" if data["wearing"] == "as_now" else w.wearing
         styled = _style(app, guid, scene_from(scene), category=category, seed=request,
-                        ident=ident, names=names)
+                        ident=ident, names=names, framing=w.framing, lighting=w.lighting)
         scene.update(scene_json(styled))  # keep the words recipe's framing and light codes
         return scene
 
