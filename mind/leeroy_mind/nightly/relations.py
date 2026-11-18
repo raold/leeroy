@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.logs import log
-from leeroy_mind.memory.privacy import restricted_channels
+from leeroy_mind.memory.privacy import effective_scopes, restricted_channels
 from leeroy_mind.nightly.evidence import Evidence, Facts, load_facts, load_items
 from leeroy_mind.nightly.ground import REL_DELTA_DIMS, Claim, Verdict, check, ground, log_verdicts
 from leeroy_mind.nightly.llm import schema, system_prompt
@@ -329,6 +329,8 @@ def _open_ids(store: Store, sql: str, owner: int, about: int, limit: int) -> lis
             evidence = {r["id"]: json.loads(r["evidence"]) for r in rows}
             hidden = set(restricted_channels(store.conn, evidence)) | {
                 r["id"] for r in rows if _everyday_slang(r["key"])}
+            # open by its evidence too, at any depth (privacy.resolve), not only as stored
+            hidden |= {i for i, s in effective_scopes(store.conn, ids).items() if s[0] != "open"}
             out += [i for i in ids if i not in hidden]
     return out[:limit]
 

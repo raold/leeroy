@@ -198,6 +198,8 @@ class OpsControl:
                 message = {"done": "The photo booth pass finished.", "partial": "The photo booth pass finished with failed sets.",
                            "preempted": "The photo booth yielded to a live lease or night."}.get(outcome, "The photo booth pass failed.")
             else:
+                if self.app.guild is None:
+                    raise ValueError("Guild life is off (see health): there is no offline raid to stop.")
                 offline = self.app.guild.offline
                 await offline.request_stop(args["id"])
                 if (offline._owned or {}).get("stop_unsupported"):

@@ -66,7 +66,7 @@ def load_voice_config(path: Path) -> VoiceCfg:
             log.warning("%s: unknown key voice.%s", path, key)
             continue
         if not rule[0](v):
-            raise ConfigError(f"voice.{key}: expected {rule[1]}, got {v!r}")
+            raise ConfigError(f"voice.{key}: expected {rule[1]}")
         values[key] = float(v) if key in _FLOATS else v
     assert set(values) <= {f.name for f in fields(VoiceCfg)}
     return VoiceCfg(**values)

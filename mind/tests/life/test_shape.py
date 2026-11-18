@@ -208,7 +208,8 @@ def test_dm_mirror_follows_his_length_with_a_spread():   # review #331 ruling
         w = sorted(dm_words_for(his, T, 5, 200, random.Random(i)) for i in range(2000))
         return w[200], w[1000], w[1800]
     short, mid, long = spread(3), spread(28), spread(120)
-    assert 25 <= short[1] <= 42 and 60 <= mid[1] <= 90 and 120 <= long[1] <= 160
+    # his short lines cap her (self-play audit, 2026-11-17; test_short_lines.py)
+    assert 8 <= short[1] <= 12 and 60 <= mid[1] <= 90 and 120 <= long[1] <= 160
     assert mid[2] / mid[0] >= 1.4  # a distribution for one message, not one length
     assert dm_words_for(28, T, 0, 200, random.Random(1)) == 200
 

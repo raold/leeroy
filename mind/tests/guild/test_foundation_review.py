@@ -119,6 +119,8 @@ def _preserved_rows(conn):
               "voice_line", "voice_heard", "night_run", "night_step", "probe_run")
     rows = {table: tuple(tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1"))
             for table in tables}
+    # the columns schema 6 has; later migrations add the stored scope check after them
+    rows["memory"] = tuple(row[:24] for row in rows["memory"])
     rows["memory_vec"] = tuple(tuple(row) for row in conn.execute(
         "SELECT memory_id,owner,embedding FROM memory_vec ORDER BY memory_id"))
     return rows

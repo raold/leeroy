@@ -10,7 +10,7 @@ from leeroy_mind.discord import store as discord
 from leeroy_mind.learn import arms, control, weights
 from leeroy_mind.protocol import Chat
 from leeroy_mind.voice.store import VoiceStore
-from .test_tabs import open_console, visit
+from .test_tabs import choose, open_console, visit
 from .test_flows import submit
 
 
@@ -75,7 +75,7 @@ def test_thumbs_game_whisper_voice_discord_and_paged_history(rehearsal):
                         "SELECT 1 FROM talk_signal WHERE line_id=? AND kind='reason_funny'",(lid,)).fetchone())
             for channel,(lid,mid) in ids['discord'].items():
                 view=channel if channel.startswith('dm:') else 'd:'+channel
-                await r.page.locator(f'[data-view="{view}"]').click()
+                await choose(r.page, f'[data-view="{view}"]')
                 box=r.page.locator(f'[data-feedback="{lid}"]'); await expect(box).to_be_visible()
                 await submit(r,box.get_by_role('button',name='Thumbs down',exact=False),'/api/feedback')
                 await expect(box.get_by_role('button',name='Thumbs down',exact=False)).to_have_attribute('aria-pressed','true')

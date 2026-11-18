@@ -82,7 +82,7 @@ from leeroy_mind.talk.reactions import (EVENING_S, GZ_TEMPLATES, LEAD_CALL, LEAD
                                         LOGIN_QUIET_S, MID_GROUP, MID_RAID)
 from leeroy_mind.talk.romance import JealousyAsides, WhisperPlanner, flirt_chance
 from leeroy_mind.talk.select import (PUSHBACK_WINDOW_S, WHISPER_REPLY_P, Pushback, ReplyTurn,
-                                     aimed_at_one, asks_the_past, classify_human_line,
+                                     aimed_at_one, asks_the_past, classify_human_line, is_leaving,
                                      is_quest_talk, mentioned, pick_speakers, plan_reply_turns,
                                      pushback_kind, topic_words, whisper_reply_p)
 from leeroy_mind.talk.select import _PLAY_WORDS, _interest_pull
@@ -301,6 +301,10 @@ class TalkEngine(EmoteReactions):
                 owed.persist()
         elif not self.world.human_online:
             carried = self.life.on_logout()
+        if not stopping:
+            # his Discord is not his game: an answer to his DM or post in flight survives his
+            # logout (self-play audit 3: the logout cancelled her DM answer)
+            carried = set(carried) | self.discord_answer_jobs()
         await self._cancel_all(keep=carried)
         if self.cfg.talk.realism:
             self.realism.fights.clear()
@@ -477,6 +481,7 @@ class TalkEngine(EmoteReactions):
         if items:
             items[0][1].owed_answer = True  # the answer he is owed (talk/owed.py)
             if timed is not None and (classify_human_line(row.text) == "goodbye"
+                                      or (self._coherent() and is_leaving(row.text))
                                       or (whisper and owntime.URGENT_RE.search(row.text))):
                 # he is leaving: his goodnight back comes at once; his urgent whisper wakes her
                 self.hurry(items[0][1])
@@ -540,7 +545,9 @@ class TalkEngine(EmoteReactions):
         line, now, when the whisper has urgent words (owntime.URGENT_RE) or is his third line
         since her last (owntime.INSIST)."""
         waiting = self._waiting_to_him()
-        if classify_human_line(row.text) == "goodbye":
+        coherent = self._coherent()
+        # his goodbye, and with [talk] coherence any leaving words ("ok im out"), cut her away
+        if classify_human_line(row.text) == "goodbye" or (coherent and is_leaving(row.text)):
             for _, meta in waiting:
                 self.hurry(meta)
         if not whisper:
@@ -550,8 +557,13 @@ class TalkEngine(EmoteReactions):
         if not waiting:
             return False
         turn, meta = waiting[0]
+        # every line of his the waiting answer now covers, oldest first: its prompt is told to
+        # answer each, his question first (Pipeline._his_waiting, [talk] coherence), where it
+        # used to answer only the newest
+        earlier = meta.coalesced or ([turn.trigger_line] if turn.trigger_line else [])
+        meta.coalesced = [*earlier, row.id]
         turn.trigger_line = row.id
-        if (owntime.URGENT_RE.search(row.text)
+        if (owntime.URGENT_RE.search(row.text) or (coherent and is_leaving(row.text))
                 or self._his_lines_since_hers(row.to_guid) >= owntime.INSIST):
             self.hurry(meta)
         log.info("reply_coalesced: line=%d guid=%d", row.id, row.to_guid)

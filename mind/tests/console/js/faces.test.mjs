@@ -627,8 +627,18 @@ test("nameCell puts opts.build's node where the face goes, whatever the cell's s
   var tr = document.createElement("tr");
   var td = page.mod.nameCell(tr, 2201, "Arkon", { build: function (g, n) { var b = document.createElement("button"); b.dataset.opener = g + n; return b; } });
   assert.equal(td.children[0].children[0].dataset.opener, "2201Arkon");
+  // the name beside a gallery opener is the one-click way to the member page
+  assert.equal(td.children[0].children[1].dataset.profile, "2201");
+  assert.equal(td.children[0].children[1].textContent, "Arkon");
+  // without a build, the face itself opens the member page and the name is plain text
   var plain = page.mod.nameCell(tr, 2201, "Arkon", {});
-  assert.notEqual(plain.children[0].children[0].tagName, "BUTTON");
+  assert.equal(plain.children[0].children[0].dataset.profile, "2201");
+  assert.equal(plain.children[0].children[0].getAttribute("aria-label"), "Profile of Arkon");
+  assert.equal(plain.children[0].children[1].dataset.profile, undefined);
+  // his own row and nobody's are never links
+  var you = page.mod.nameCell(tr, 900, "Hero", { you: true });
+  assert.equal(you.children[0].children[0].dataset.profile, undefined);
+  assert.equal(page.mod.profileButton(0, "Nobody", "list").dataset.profile, undefined);
 });
 
 test("a refused key is not asked again on its own; the next key (forgetFaces) asks again and draws the page", async (t) => {

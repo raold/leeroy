@@ -41,18 +41,25 @@ def test_nudge_controls_at_phone_width(tmp_path, theme):
                 await panel.get_by_label("Nudge (1–200 characters)").fill("Be excited about the raid")
                 await panel.get_by_label("Where it applies").select_option("whispers")
                 await panel.get_by_role("button", name="Add nudge", exact=True).click()
-                await page.locator("#p-wall .tile[data-guid='102'] .nudge-badge").wait_for()
+                await page.locator("#p-wall .tile[data-guid='102'] .nudge-badge").wait_for(state="attached")
                 await panel.get_by_role("button", name="Retire", exact=True).click()
                 await pw.expect(page.locator("#p-wall .tile[data-guid='102'] .nudge-badge")).to_have_count(0)
                 await panel.locator("summary").click()
                 await panel.get_by_role("button", name="Undo", exact=True).first.click()
-                await page.locator("#p-wall .tile[data-guid='102'] .nudge-badge").wait_for()
+                await page.locator("#p-wall .tile[data-guid='102'] .nudge-badge").wait_for(state="attached")
                 await panel.get_by_label("Nudge (1–200 characters)").fill("Think about tonight")
                 await panel.get_by_role("button", name="Preview a line", exact=True).click()
-                await pw.expect(page.locator("#t-preview")).to_contain_text("isn't loaded")
+                await pw.expect(panel.locator(".pv-inline")).to_contain_text("isn't loaded")
                 # A real tuning event triggers the same redraw as the thirty-second poll.
                 # Preserve the draft, focused control and backwards selection in both forms.
                 for root in ('#p-dials', '#t-groups'):
+                    if root == '#t-groups':  # the groups are on the list, behind the member page
+                        await page.get_by_role("button", name="Back to the cast", exact=True).click()
+                        # Back is a history step: the list is shown again (and polls once) a moment later.
+                        # Let that settle, so the only redraw below is the one this test triggers.
+                        await page.wait_for_function("() => location.hash === '#personas' && !document.querySelector('#p-list').hidden")
+                        async with page.expect_response('**/api/tuning'):
+                            await page.evaluate("async () => { const core = await import('/static/js/core.mjs'); core.emit('tuning', {change: 0}); }")
                     form = page.locator(root + ' .nudges').first
                     line = form.get_by_label('Nudge (1–200 characters)')
                     await line.fill('Keep typing through the refresh')

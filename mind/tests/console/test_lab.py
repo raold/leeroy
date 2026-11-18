@@ -394,5 +394,114 @@ def test_promoted_arms_and_lessons_are_listed(store,clock):
         store.conn.execute("INSERT INTO learn_promotion VALUES ('lesson',?,'','promoted','2026-W44',?,?)",(str(note),now,now))
     result=labview.read(data_path(store),now=now)
     flags={(c['arm_id'],tuple(c['context'])):c['promoted'] for c in result['arms']['contexts']}
-    assert flags[('length.1.v1',tuple(json.loads(key)))] and not flags[('length.0.v1',tuple(json.loads(key)))]
+    assert flags[('length.1.v1',tuple(json.loads(key)))]
+    assert ('length.0.v1',tuple(json.loads(key))) not in flags  # at its prior: no row (the page says so)
     assert [n['promoted'] for n in result['lessons']['items']]==[True]
+
+
+def test_arm_contexts_carry_only_what_was_measured_and_are_bounded(store,clock,monkeypatch):
+    now=clock.now()
+    keys=[bandit.Context(channel).key for channel in ('guild','party','whisper')]
+    with store.transaction():
+        arms.ensure(store.conn,now=now)
+        for i,key in enumerate(keys):
+            store.conn.execute('INSERT INTO bandit_share VALUES (?,?,?)',(key,'length.1.v1',i+1))
+    result=labview.read(data_path(store),now=now)
+    rows=result['arms']['contexts']
+    registry=len(result['arms']['arms'])
+    assert registry>3 and len(rows)==3 and {r['arm_id'] for r in rows}=={'length.1.v1'}
+    assert [r['turns'] for r in rows]==[3,2,1]  # the busiest first
+    assert not result['arms']['limited']
+    monkeypatch.setattr(labview,'CONTEXT_ROWS',2)
+    cut=labview.read(data_path(store),now=now)['arms']
+    assert len(cut['contexts'])==2 and cut['limited']
+
+
+def test_the_lab_read_waits_longer_than_a_second(monkeypatch,tmp_path):
+    seen=[]
+    class Stop(Exception): pass
+    def database(data_dir,deadline):
+        import time
+        seen.append(deadline-time.monotonic())
+        raise Stop
+    monkeypatch.setattr(labview,'database',database)
+    with pytest.raises(Stop):
+        labview.read(tmp_path,now=1.0)
+    assert 5 <= seen[0] <= labview.READ_S
+
+
+def test_a_busy_database_is_read_again_inside_the_budget(store,clock,monkeypatch):
+    real, calls = labview.database, []
+    from contextlib import contextmanager
+    @contextmanager
+    def busy_twice(data_dir, deadline):
+        calls.append(1)
+        if len(calls) < 3:
+            raise sqlite3.OperationalError('database is locked')
+        with real(data_dir, deadline) as conn:
+            yield conn
+    monkeypatch.setattr(labview,'database',busy_twice)
+    monkeypatch.setattr(labview,'RETRY_S',0.01)
+    assert 'rewards' in labview.read(data_path(store),now=clock.now()) and len(calls)==3
+    calls.clear()
+    @contextmanager
+    def broken(data_dir, deadline):
+        calls.append(1)
+        raise sqlite3.OperationalError('no such column: x')
+        yield
+    monkeypatch.setattr(labview,'database',broken)
+    with pytest.raises(sqlite3.OperationalError):
+        labview.read(data_path(store),now=clock.now())
+    assert len(calls)==1
+
+
+def test_pending_lists_what_waits_for_his_decision(store,clock):
+    now=clock.now()
+    assert labview.read(data_path(store),now=now)['pending']['count']==0
+    with store.transaction():
+        arms.ensure(store.conn,now=now)
+        store.conn.execute("INSERT INTO learn_arm VALUES ('tease.9.v1','tease','{}',1,'proposed','coach',?)",(now,))
+        store.conn.execute("INSERT INTO learn_arm VALUES ('lab.rules.v7','prompt.rules','{}',1,'active','coach',?)",(now-3600,))
+        store.conn.execute("INSERT INTO learn_arm VALUES ('lab.rules.v2','prompt.rules','{}',1,'active','coach',?)",(now-40*86400,))
+    lesson(store,now,status='proposed')
+    lesson(store,now,status='active',text='She already does this one.')
+    with store.transaction():
+        store.conn.execute("INSERT INTO talk_lesson(guid,scope,text,status,expires,origin_night) VALUES (102,'guild','An expired proposal.','proposed',?,'2026-11-01')",(now-1,))
+    view=labview.read(data_path(store),now=now)
+    pending=view['pending']
+    assert pending['count']==2 and labview.badge(data_path(store),now=now)==2
+    assert [a['id'] for a in pending['arms']]==['tease.9.v1']
+    assert pending['lessons_total']==1 and pending['lessons'][0]['text']=='She keeps her guild replies brief.'
+    assert [v['id'] for v in pending['variants']]==['lab.rules.v7']
+    assert view['rated_week']==0
+
+
+def test_rated_lines_this_week_are_counted_once_each(store,clock):
+    now=clock.now()
+    a,b,old=line(store,now),line(store,now),line(store,now)
+    with store.transaction():
+        for lid,ts,kind,value in ((a,now-60,'explicit',1),(a,now-60,'reason_funny',1),(b,now-3*86400,'explicit',-1),
+                                  (old,now-9*86400,'explicit',1)):
+            store.conn.execute("INSERT INTO talk_signal(line_id,guid,kind,value,ts,source) VALUES (?,?,?,?,?,'explicit')",
+                               (lid,101,kind,value,ts))
+    assert labview.read(data_path(store),now=now)['rated_week']==2
+
+
+def test_the_badge_is_none_without_a_database(tmp_path):
+    assert labview.badge(tmp_path,now=1.0) is None
+
+
+def test_the_tab_badge_read_carries_the_lab_count(store,clock):
+    now=clock.now()
+    with store.transaction():
+        arms.ensure(store.conn,now=now)
+        store.conn.execute("INSERT INTO learn_arm VALUES ('tease.9.v1','tease','{}',1,'proposed','coach',?)",(now,))
+    async def go():
+        app=make_app(data_path(store),mind=running(data_path(store)),clock=lambda: now)
+        await app.start()
+        try:
+            return (await http(app,'GET','/api/ops/badge')).json()
+        finally:
+            await app.close()
+    badge=asyncio.run(go())
+    assert badge['lab']==1 and 'counts' in badge and 'at' in badge

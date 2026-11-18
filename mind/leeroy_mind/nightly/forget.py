@@ -201,6 +201,9 @@ async def summarize(ctx, owner, chunk, n):
             return
         chunk = current
         scope = (chunk[0].scope, chunk[0].scope_with)
+        if scope[0] != "open" and scope[1] == 0:
+            ctx.skip(STAGE, unit)  # memories that reach nobody: a summary of them would too
+            return
         refs = [f"memory:{m.id}" for m in chunk]
         if not secret_memory_ok(ctx, owner, refs):
             return  # wait with sources, frozen chunk and checkpoint untouched

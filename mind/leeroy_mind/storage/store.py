@@ -7,7 +7,9 @@ from dataclasses import fields, replace
 
 from leeroy_mind import protocol
 from leeroy_mind.clock import Clock
-from leeroy_mind.memory.privacy import stricter
+from leeroy_mind.memory import scopes
+from leeroy_mind.memory.privacy import DONT_TELL_RE, resolve, stricter
+from leeroy_mind.discord.channels import is_private
 from leeroy_mind.protocol import Chat, Member
 from leeroy_mind.storage import db
 from leeroy_mind.storage.rows import (
@@ -59,6 +61,15 @@ def _memory_from_row(r: sqlite3.Row) -> MemoryRow:
         confidence=r["confidence"], status=r["status"], superseded_by=r["superseded_by"],
         key=r["key"], merged_n=r["merged_n"], embedding=r["embedding"], scope=r["scope"],
         scope_with=r["scope_with"])
+
+
+def _checked(r: sqlite3.Row) -> bool:
+    """Whether the row carries a stored scope check (memory.privacy.resolve); a database from
+    before the scope_evidence migration has none to carry, and its stored scopes stand."""
+    try:
+        return r["derived_at"] is not None
+    except IndexError:
+        return True
 
 
 def _chat_from_row(r: sqlite3.Row) -> ChatLineRow:
@@ -267,12 +278,22 @@ class Store:
         the line (stored sorted; None: unknown)."""
         seen = None if audience is None else _j(sorted(set(audience)))
         with self.transaction():
-            return self.conn.execute(
+            line = self.conn.execute(
                 "INSERT INTO chat_line(ts, channel, from_guid, from_name, to_guid, text, map, "
                 "zone, session_id, origin, audience) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (self.clock.now() if ts is None else ts, clean(ev.channel), ev.from_guid,
                  clean(ev.from_name), ev.to_guid, clean(ev.text), ev.map, ev.zone, session_id,
                  origin, seen)).lastrowid
+            if is_private(ev.channel) and DONT_TELL_RE.search(ev.text):
+                self.lines_changed([line])
+            return line
+
+    def lines_changed(self, line_ids) -> None:
+        """After chat lines were added, put in a thread or edited: an ask for secrecy among
+        them makes every memory resting on what it covers be derived again, in this
+        transaction (memory.scopes.lines_changed)."""
+        with self.transaction():
+            scopes.lines_changed(self.conn, line_ids, now=self.clock.now())
 
     def chat_lines(self, ids) -> list[ChatLineRow]:
         ids = list(ids)
@@ -366,8 +387,10 @@ class Store:
 
     def set_thread(self, line_ids, thread_id: int) -> None:
         with self.transaction():
+            line_ids = list(line_ids)
             self.conn.executemany("UPDATE chat_line SET thread_id = ? WHERE id = ?",
                                   [(thread_id, i) for i in line_ids])
+            self.lines_changed(line_ids)
 
     def close_thread(self, id: int, ts: float, status: str) -> None:
         with self.transaction():
@@ -458,6 +481,8 @@ class Store:
             if m.embedding is not None:
                 self._index_vec(mid, m.owner, m.embedding)
             attach_realm_dependencies_in_unit(self, mid, facts)
+            # the stored scope is made as strict as the evidence here too, whoever the caller
+            scopes.after_write(self.conn, mid, now=self.clock.now(), new=True)
             return mid
 
     def upsert_keyed_memory(self, m: MemoryRow, *, shown=()) -> int:
@@ -491,6 +516,7 @@ class Store:
             self._index_actors(mid, m.actors)
             self._index_vec(mid, m.owner, m.embedding)
             attach_realm_dependencies_in_unit(self, mid, facts)
+            scopes.after_write(self.conn, mid, now=self.clock.now(), new=False)
             return mid
 
     def merge_memory(self, id: int, evidence, importance: int, *, shown=()) -> None:
@@ -513,6 +539,8 @@ class Store:
                 "UPDATE memory SET evidence = ?, importance = ?, merged_n = merged_n + 1 "
                 "WHERE id = ?", (_j(ev), max(r["importance"], importance), id))
             attach_realm_dependencies_in_unit(self, id, facts)
+            # the added evidence may be stricter than what the memory was stored with
+            scopes.after_write(self.conn, id, now=self.clock.now(), new=False)
 
     def _cites_memory(self, ref, target: int, limit: int = 5000) -> bool:
         """Whether an addition reaches this memory through the full evidence graph.
@@ -564,26 +592,50 @@ class Store:
             (since, until, *kinds))
         return (r["title"], float(r["at"])) if r is not None else None
 
+    def _memory_rows(self, rows) -> list[MemoryRow]:
+        """The rows as MemoryRows carrying their effective scope (memory.privacy.resolve): the
+        stored scope made as strict as the memory's evidence implies. A checked row costs
+        nothing; unchecked ones are derived together, in one bounded walk. So every reader of a
+        MemoryRow goes by a scope that is never wider than the evidence."""
+        rows = list(rows)
+        out = []
+        loose = [r["id"] for r in rows if not _checked(r)]
+        found = resolve(self.conn, loose) if loose else {}
+        for r in rows:
+            m = _memory_from_row(r)
+            if r["id"] in found:
+                scope = found[r["id"]].read
+            else:
+                try:
+                    derived = (r["derived_scope"] or "open", r["derived_with"] or 0)
+                except IndexError:
+                    derived = ("open", 0)
+                scope = stricter((m.scope, m.scope_with), derived)
+            if scope != (m.scope, m.scope_with):
+                m = replace(m, scope=scope[0], scope_with=scope[1])
+            out.append(m)
+        return out
+
     def get_memories(self, ids) -> list[MemoryRow]:
         ids = list(ids)
         if not ids:
             return []
         marks = ",".join("?" * len(ids))
-        by_id = {r["id"]: _memory_from_row(r)
-                 for r in self._all(f"SELECT * FROM memory WHERE id IN ({marks})", ids)}
+        by_id = {m.id: m for m in self._memory_rows(
+            self._all(f"SELECT * FROM memory WHERE id IN ({marks})", ids))}
         return [by_id[i] for i in ids if i in by_id]
 
     def keyed_memory(self, owner: int, key: str) -> MemoryRow | None:
         """The owner's memory with this key (upsert_keyed_memory's), if there is one."""
         r = self._one("SELECT * FROM memory WHERE owner = ? AND key = ?", (owner, clean(key)))
-        return None if r is None else _memory_from_row(r)
+        return None if r is None else self._memory_rows([r])[0]
 
     def memories_missing_embedding(self, limit: int, exclude=()) -> list[MemoryRow]:
         """Active memories without a vector, oldest first, leaving out the ids in `exclude`."""
-        return [_memory_from_row(r) for r in self._all(
+        return self._memory_rows(self._all(
             "SELECT * FROM memory WHERE embedding IS NULL AND status = 'active' "
             "AND id NOT IN (SELECT value FROM json_each(?)) ORDER BY id LIMIT ?",
-            (json.dumps(sorted(exclude)), limit))]
+            (json.dumps(sorted(exclude)), limit)))
 
     def memories_with_actors(self, owner: int, guids, limit: int = 200) -> list[MemoryRow]:
         """The owner's active memories that involve any of `guids`, newest first."""
@@ -591,10 +643,10 @@ class Store:
         if not guids:
             return []
         marks = ",".join("?" * len(guids))
-        return [_memory_from_row(r) for r in self._all(
+        return self._memory_rows(self._all(
             f"SELECT * FROM memory WHERE owner = ? AND status = 'active' AND id IN "
             f"(SELECT memory_id FROM memory_actor WHERE guid IN ({marks})) "
-            f"ORDER BY t_created DESC, id DESC LIMIT ?", (owner, *guids, limit))]
+            f"ORDER BY t_created DESC, id DESC LIMIT ?", (owner, *guids, limit)))
 
     def recent_similar_candidates(self, owner: int, kind: str, actors, since: float
                                   ) -> list[MemoryRow]:
@@ -611,8 +663,7 @@ class Store:
             params += [n, *actors, n]
         else:
             sql += " AND NOT EXISTS (SELECT 1 FROM memory_actor WHERE memory_id = memory.id)"
-        return [_memory_from_row(r) for r in self._all(sql + " ORDER BY t_created DESC, id DESC",
-                                                       params)]
+        return self._memory_rows(self._all(sql + " ORDER BY t_created DESC, id DESC", params))
 
     def count_inserted_since(self, owner: int, ts: float) -> int:
         return self._one("SELECT count(*) AS n FROM memory WHERE owner = ? AND t_created >= ?",

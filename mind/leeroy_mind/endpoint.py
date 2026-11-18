@@ -92,6 +92,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from leeroy_mind.config import ConfigError, log
+from . import features
 from leeroy_mind.logs import log as log_event
 from leeroy_mind.control_json import decode_body
 
@@ -196,7 +197,7 @@ def load_control_config(path: Path) -> ControlCfg:
             log.warning("%s: unknown key control.%s", path, key)
             continue
         if not rule[0](v):
-            raise ConfigError(f"control.{key}: expected {rule[1]}, got {v!r}")
+            raise ConfigError(f"control.{key}: expected {rule[1]}")
         values[key] = v
     return ControlCfg(**values)
 
@@ -1132,7 +1133,9 @@ class ControlEndpoint:
         return {"ok": True, "v": VERSION, "pid": os.getpid(), "stopping": self.app.stopping,
                 "raid": raid, **self._health(), "world": world, "typing": self._typing(),
                 **({"raid_lead": self._raid_lead()} if getattr(self.app, "raidlead", None) is not None else {}),
-                "gpu": self.app.gpu.snapshot() if getattr(self.app, "gpu", None) is not None else None}
+                "gpu": self.app.gpu.snapshot() if getattr(self.app, "gpu", None) is not None else None,
+                # features a bad optional mind.toml table (or a failed attach) turned off at the start
+                "disabled_features": features.report(getattr(self.app, "disabled_features", {}))}
 
     def _raid_lead(self) -> dict | None:
         """The raid lead's state for the console's picker (raidlead.service.console_status), or

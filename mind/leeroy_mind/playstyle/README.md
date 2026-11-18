@@ -25,8 +25,12 @@ healing-potion and mana-potion triggers; it neither creates items nor bypasses
 their cooldowns. No loot tendencies, gear, formation, duel policy, idle movement,
 flasks or combat emotes are changed.
 
-The mind requests styles at initial online-cast discovery, member login and new
-owner-group membership. Repeated unchanged snapshots do not reapply. It rejects
+The mind requests styles only while the owner is in game: at his login (for the
+online cast), then at member login, online-cast discovery and new owner-group
+membership. While he is away a hello still restores every owned member (the
+reconciliation below) and adds nothing back: a style changes how his bots fight
+beside him, and the restore-then-reapply of about 190 `bot_do` at each of 46
+hellos in three days ran for nobody. Repeated unchanged snapshots do not reapply. It rejects
 known instance maps, raid groups and observed engaged members. Native is the final
 combat/instance authority: it refuses every dungeon/raid instance, raid group,
 combat, travel, casting, trade, PvP, foreign controller, Realm group/body hold,
@@ -59,5 +63,9 @@ receipt for hello/restart reconciliation. Pending work and receipts cap at 512
 members. Shutdown attempts groups of at most 40 for at most 20 seconds; any
 unconfirmed cleanup remains recorded. Set the native flag off to request its
 independent cleanup even while the mind is stopped. A successful ack alone is never
-reported as restoration. Logs contain ids, counts, numeric style codes and exception
-classes only; the off/no-receipt path attaches no hooks or tasks and changes no prompt.
+reported as restoration. Each pass (a hello's reconciliation, his login, a group)
+logs one `playstyle_pass` line: `commands`, `applied`, `restored`, `other` (counts by
+`apply:`/`restore:` and reason: native's code, `skipped:<code>`, `refused:<ack error>`,
+`no_job`, `guids`, `kind`, `transport:<class>`), `owner` and `owned`; the per-command
+`playstyle_result`, `playstyle_refused` and `playstyle_transport` lines are DEBUG.
+Logs contain ids, counts, numeric style codes and exception classes only; the off/no-receipt path attaches no hooks or tasks and changes no prompt.

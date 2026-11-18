@@ -21,6 +21,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from leeroy_mind.clock import SystemClock
+from leeroy_mind.memory import scopes
 from leeroy_mind.nightly.life import his_names, meets_him, private_beat
 from leeroy_mind.personas.io import load_persona
 from leeroy_mind.storage.store import Store
@@ -78,6 +79,9 @@ def apply(store: Store, p: Plan, *, human: int, now: float) -> tuple[int, int]:
                 store.set_meta(RESCOPED_KEY.format(id=mid),
                                json.dumps({"scope": "open", "scope_with": 0, "at": now}))
                 rescoped += 1
+        # whatever rests on a beat made private is private from now on too
+        if rescoped:
+            scopes.after_raise(store.conn, now=now, source="life-contact")
     return retired, rescoped
 
 

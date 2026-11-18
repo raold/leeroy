@@ -39,3 +39,20 @@ test('switchboard uses boolean words and spells out unmet needs and restart', ()
   assert.match(output,/invalid, so off/); assert.match(output,/unmet: learn.enabled/);
   assert.match(output,/restart to apply/); assert.match(output,/blocklist missing/);
 });
+
+test("a switch row says on, off, invalid, unknown or its number", async () => {
+  const { switchState, lines } = await import("../../../leeroy_mind/console/static/js/opsmodel.mjs");
+  assert.equal(switchState({ state: "on" }), "on");
+  assert.equal(switchState({ state: "off" }), "off");
+  assert.equal(switchState({ state: "invalid" }), "invalid, so off");
+  assert.match(switchState({ state: "unknown" }), /^unknown: /);
+  assert.equal(switchState({ state: "number", value: 6 }), "6");
+  assert.equal(switchState({ state: "number", value: null }), "unknown");
+  const out = lines("switches", { status: "ok", rows: [
+    { label: "Decisions", state: "on", needs: "server.enabled", unmet: [] },
+    { label: "Availability", state: "number", value: 0, needs: "", unmet: [] },
+    { label: "Mystery", state: "unknown", needs: "", unmet: [] }] });
+  assert.equal(out[0], "Decisions · on · needs server.enabled");
+  assert.equal(out[1], "Availability · 0");
+  assert.ok(!out[2].includes("invalid"));
+});

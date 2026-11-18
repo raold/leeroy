@@ -1,7 +1,10 @@
 import { $, api, clear, el, on, post, refused } from "./core.mjs";
 import { S } from "./state.mjs";
+import { isoMinute } from "./dates.mjs";
 import { pollTab } from "./tabkit.mjs";
-import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords, turingView, conversationView, CHART } from "./labmodel.mjs";
+import { controlReason, WEIGHTS, weightValues, score, percent, reportView, versionLabel, rollbackWords, turingView, conversationView, CHART,
+         pendingView, ratedWords, familyTitle, armTitle } from "./labmodel.mjs";
+import { setBadge } from "./tabs.mjs";
 import { BoundedMap } from "./resilience.mjs";
 
 let latest=null, busy=false, editVersion=null, returnTo=null, confirmed=null, withWeights=false;
@@ -47,11 +50,31 @@ function lineButton(item) {
     } catch { b.disabled=false; b.textContent='Read failed — try line '+item.id+' again'; }
   }); delete b.dataset.labAction; box.appendChild(b); return box;
 }
+// What waits for him, first on the tab: each row with its own buttons, so nothing has to be
+// found inside the folded panels below.
+function pending(value) {
+  const box=$('lab-pending'); clear(box); const view=pendingView(value.pending);
+  setBadge('lab',view.count);
+  $('lab-pending-title').textContent=view.count ? 'Needs your decision ('+view.count+')' : 'Needs your decision';
+  if (!view.arms.length && !view.lessons.length && !view.variants.length) { empty(box,'Nothing is waiting for you.'); return; }
+  const row=(text,cls) => { const r=el('div','lab-pending-row'); r.appendChild(el('p',cls || '',text)); box.appendChild(r); return r; };
+  const act=(r,label,words,args,key) => { const b=button(label,() => confirm(words,() => mutate(args))); b.dataset.labFocus=key+'-'+label; r.appendChild(b); };
+  view.arms.forEach(a => { const r=row(a.words);
+    act(r,'Accept','Accept arm '+a.id+'?',{action:'arm',id:a.id,verb:'accept'},'pending-arm-'+a.id);
+    act(r,'Reject','Reject arm '+a.id+'?',{action:'arm',id:a.id,verb:'reject'},'pending-arm-'+a.id); });
+  view.lessons.forEach(l => { const r=row(l.words);
+    act(r,'Approve','approve this lesson for '+l.name+'?',{action:'lesson',id:l.id,verb:'approve'},'pending-lesson-'+l.id);
+    act(r,'Veto','veto this lesson for '+l.name+'?',{action:'lesson',id:l.id,verb:'veto'},'pending-lesson-'+l.id); });
+  if (view.more) { empty(box,view.more); }
+  if (view.variants.length) { box.appendChild(el('h4','','Lab variants now in use')); }
+  view.variants.forEach(v => { const r=row(v.words,'lab-stat');
+    act(r,'Retire','Retire arm '+v.id+'?',{action:'arm',id:v.id,verb:'retire'},'pending-variant-'+v.id); });
+}
 function rewards(view) {
   const box=$('lab-rewards'); clear(box);
   if (!view.available) { empty(box); return; }
   box.appendChild(el('p','hint','Last '+view.period_days+' days. Silence scores 0; quality only deducts. Days follow the computer’s local clock.'));
-  const trend=details('Guild reward trend by day','reward-trend');
+  const trend=details('Guild reward trend by day ('+view.days.length+')','reward-trend');
   view.days.forEach(d => trend.appendChild(el('p','mono',d.day+' · '+score(d.average)+' average · '+d.lines+' lines')));
   if (!view.days.length) { empty(trend,'No rewarded lines yet.'); } box.appendChild(trend);
   view.members.forEach(m => {
@@ -64,14 +87,14 @@ function rewards(view) {
 function arms(view) {
   const box=$('lab-arms'); clear(box);
   latest.families.forEach(f => {
-    const d=details(f,'family-'+f), frozen=latest.frozen_families.includes(f);
+    const d=details(familyTitle(f,view.arms),'family-'+f), frozen=latest.frozen_families.includes(f);
     const fixed=(latest.config_frozen_families || []).includes(f);
     const toggle=button(fixed ? 'Frozen in mind.toml' : frozen ? 'Unfreeze family' : 'Freeze family',() => mutate({action:'family',family:f,frozen:!frozen}));
     if (fixed) { toggle.disabled=true; }
     d.appendChild(toggle);
     if (!view.available) { empty(d); }
     view.arms.filter(a => a.family===f).forEach(a => {
-      const arm=details(a.id+' · '+a.status,'arm-'+a.id); arm.appendChild(el('p','mono',JSON.stringify(a.params)));
+      const arm=details(armTitle(a,view.contexts),'arm-'+a.id); arm.appendChild(el('p','mono',JSON.stringify(a.params)));
       const verbs=a.status==='proposed' ? ['accept','reject'] : a.status==='active' ? ['retire'] : a.status==='retired' ? ['accept'] : [];
       verbs.forEach(verb => { const label=a.status==='retired' ? 'Accept again' : verb[0].toUpperCase()+verb.slice(1);
         arm.appendChild(button(label,() => confirm(label+' arm '+a.id+'?',() => mutate({action:'arm',id:a.id,verb})))); });
@@ -101,7 +124,7 @@ function lessons(view) {
   if (!view.items.length) { empty(box,'No active or proposed lessons yet.'); }
   view.items.forEach(l => {
     const d=details(l.name+' · '+l.scope+' · '+l.status+(l.promoted ? ' · promoted' : ''),'lesson-'+l.id); d.appendChild(el('p','',l.text));
-    d.appendChild(el('p','hint','Reinforced '+l.reinforced+' times · expires '+new Date(l.expires*1000).toLocaleString()));
+    d.appendChild(el('p','hint','Reinforced '+l.reinforced+' times · expires '+isoMinute(l.expires)));
     (l.status==='proposed' ? ['approve','veto','expire'] : ['veto','expire']).forEach(verb =>
       d.appendChild(button(verb==='expire' ? 'Expire now' : verb[0].toUpperCase()+verb.slice(1),() =>
         confirm((verb==='expire' ? 'Expire' : verb)+' this lesson for '+l.name+'?',() => mutate({action:'lesson',id:l.id,verb})))));
@@ -115,7 +138,7 @@ function weights(view) {
   }
   $('lab-weights-save').hidden=!view.available;
   const box=$('lab-weight-history'); clear(box);
-  view.history.forEach(w => box.appendChild(el('p','mono','Version '+w.version+' · '+new Date(w.created*1000).toLocaleString()+' · '+
+  view.history.forEach(w => box.appendChild(el('p','mono','Version '+w.version+' · '+isoMinute(w.created)+' · '+
     WEIGHTS.map(k => k+' '+w.values[k]).join(', '))));
 }
 function weekly(value) {
@@ -143,7 +166,7 @@ function weekly(value) {
   check.id='lab-rollback-weights'; check.checked=withWeights; check.addEventListener('change',() => { withWeights=check.checked; });
   label.htmlFor=check.id; d.append(label,check);
   saved.forEach(v => {
-    d.appendChild(el('p','lab-stat',versionLabel(v)+' · '+new Date(v.created*1000).toLocaleString()));
+    d.appendChild(el('p','lab-stat',versionLabel(v)+' · '+isoMinute(v.created)));
     d.appendChild(button('Roll back to version '+v.version,() => { const weights=withWeights;
       confirm(rollbackWords(v.version,weights),() => mutate({action:'rollback',version:v.version,weights})); }));
   });
@@ -222,6 +245,8 @@ function render(value) {
   $('lab-freeze').setAttribute('aria-pressed',String(value.freeze));
   $('lab-freeze').disabled=!!value.config_freeze;
   $('lab-learning-state').textContent=value.config_freeze ? 'Learning is frozen in mind.toml ([learn] freeze). Change it there.' : value.freeze ? 'Learning is frozen.' : value.enabled ? 'Learning is enabled by its config.' : 'Learning is disabled in config. Controls do not enable it.';
+  pending(value); $('lab-rated').textContent=ratedWords(value.rated_week);
+  $('lab-weight-history').parentNode.querySelector('summary').textContent='Version history ('+value.weights.history.length+')';
   rewards(value.rewards); arms(value.arms); lessons(value.lessons); weights(value.weights);
   weekly(value); turing(value.turing); conversation(value.conversation);
   $('tab-lab').querySelectorAll('details').forEach(d => {
