@@ -259,7 +259,8 @@ has looks and, at night only, has the `selfie/` worker render four candidates
 each with RealVisXL on the local GPU. The player picks one, undoes it or asks
 for four more in the console's Personas tab, and can browse each member's
 earlier photos and make any of them the cover. An optional photo booth renders
-requested sets between nights. Rendering never runs while he is in game, and
+requested sets between nights, and the console's Render selfies button renders the
+whole queue at once while he is out of the game. Rendering never runs while he is in game, and
 every image passes a local NSFW check first; members are adults, clothed, and
 never anyone's likeness. See [selfie/README.md](selfie/README.md).
 
