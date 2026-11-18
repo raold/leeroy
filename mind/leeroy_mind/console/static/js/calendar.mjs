@@ -1,5 +1,5 @@
 import { $, arr, clear, el, num, obj, str } from "./core.mjs";
-import { face } from "./faces.mjs";
+import { profileButton } from "./faces.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
 import { birthdaysThisWeek, dayGroups, kindWord, nextRaid, signupCounts, youText } from "./calendarmodel.mjs";
 import { when } from "./words.mjs";
@@ -45,7 +45,7 @@ function renderCalendar(v) {
       var counts = signupCounts(e.signups);
       if (counts.length) { r.appendChild(el("span", "muted", counts.join(" · "))); }
       var faces = el("span", "who");
-      arr(obj(e.signups).signed_up).slice(0, 12).forEach(function (gd) { faces.appendChild(face(gd, nameOf(v, gd), "list")); });
+      arr(obj(e.signups).signed_up).slice(0, 12).forEach(function (gd) { faces.appendChild(profileButton(gd, nameOf(v, gd), "list")); });
       if (faces.firstChild) { r.appendChild(faces); }
       if (e.you) { r.appendChild(el("span", "chip", youText(e.you))); }
       day.appendChild(r);

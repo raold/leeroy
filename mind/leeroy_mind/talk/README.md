@@ -885,3 +885,274 @@ through the owner's lens (`Pipeline._met_him`).
 
 Measured read-only on 2026-11-16: 6 of 1,345 stored member lines to him see him in person (each
 on reading an in-person plan or wish); the golden prompts are unchanged.
+
+## Private conversations with him (2026-11-17, the DM self-play audits)
+
+- **So far between you two** (`sofar.py`, `PromptParts.so_far`): in her whisper and Discord DM
+  turns with him the prompt carries a few code-built lines after the Chat: the never-met rule
+  (until her arc has met him), where and how she said she is, what he asked and is still owed,
+  his news (first-person statements about his health, a person, his work or a place, never a
+  flirt or a bare plan; at most 6, the least important going first) and plans. What she said
+  of herself comes from `talk.position.claims_so_far` when that module is there. No model call; the conversation's lines hold at most 120
+  estimated tokens; a conversation ends after 3 idle hours; kept in memory and rebuilt from the
+  stored lines after a restart. `SoFar.her_said` gives her own stated place and state.
+- **The DM's Chat** (`discord/talk.py dm_chat`) is sized by his turns: his last 10 messages
+  before the one she answers with hers in between, her older messages shorter, each of hers
+  shown by its closing words, the whole under `DM_CHAT_TOKENS`. Her lines the Chat shows are not
+  repeated under "Your last lines".
+- **One answer covers every unanswered post** (`DiscordTalk.unanswered`, `_coalesce`,
+  `discord/covered.py`): each answer records the posts its instruction listed (meta
+  `discord:built:<her message>`), and a post is answered only when a stored answer covers it,
+  never by id order. The DM instruction lists the uncovered posts oldest first; a post that
+  arrives before she composes joins that reply and its own turn is withdrawn
+  (`discord_superseded`). The owed watch and health read the same receipts. His game
+  logout never cancels a Discord answer (`Pipeline.discord_answer_jobs`).
+- **Never met** (`moves.have_met`, `without_meeting`, `meets_in_memory`): the prompt line is
+  the main defence; the "in person" tell is a narrow backstop (a physical act together, him at
+  her place, his clothes at hers; never the game) and is hard for owed answers (rewrite, then
+  the claim's sentences are cut, `say_owed_cut`); memories about him that put him in person
+  stay out of the prompt.
+- **Her own message again** (`guards/owncopy.py`): guard code `own_copy` (hard) and the tell
+  "own copy". A draft flagged `claim_conflict` on every review is cut or replaced by a fresh
+  short answer (`guard_claim_conflict_cut|fresh|kept`).
+- **His line** (`hisline.py`): his goodbye is answered with one (no `later` repeat tell) and a
+  question back is never forced on his goodbye or bad news. Fake attachments in brackets are a
+  fatal tell ("attachment"); Discord messages get no game item links.
+- **Length** (`shape.dm_words_for`): his line of 5 words or fewer caps her at about 12 words,
+  6-12 at about 25; the owed rescue draws a shape.
+- **Memories** (`memory/thirdparty.py`): in a private turn with him a memory whose "he" is
+  somebody else, on positive evidence (a role in the text, another member, the man of her
+  household for a memory of her own day), names them. None is left out.
+- **Budget**: an over-budget DM prompt lets chat older than his sixth-last turn go first
+  (`PromptParts.old_chat`), before style notes, awareness and memories.
+# Voice sheets (`Persona.speech`, 2026-11-17)
+
+Members sounded alike because nothing of how a member talks reached a prompt: `speech_habits`,
+likes and values are read by no prompt code, the card carried two generic trait sentences and
+one of a few canned attachment and humour lines, and most of a prompt is text the whole cast
+shares. A voice sheet is an optional persona field (`personas/schema.py` `Speech`): `register`,
+`shape` (her sentence shape), `says` (4-8 words or phrases), `never` (up to 4), `brings_up` (1-4
+things from her own life), `with_him`, `stance`, and `samples` (one line each for `answer`,
+`tease`, `tired`, `flirt` or `warm`, `annoyed`). No model writes it; no switch. **A member
+without a sheet is stored, hashed and prompted byte for byte as before** (the four goldens in
+`tests/tuning`); `tests/tuning/golden_voice.json` holds the scenario with two invented sheets.
+
+For a member with a sheet (`personas/speech.py`, `Pipeline._voice`):
+
+- The block is the last section before her instruction in both prompt modes (after "Right now:"
+  in the situation mode) and is never cut by the trim, which counts it:
+
+  ```
+  Your voice: <register>; <shape>.
+  You say, only now and then: <says>. Never: <never>.
+  Unasked, you bring up: <brings_up>.
+  With <him>: <with_him>. <stance>.
+  How you sound, not lines to reuse (never copy one; say new things this way):
+  - <sample>
+  - <sample>
+  ```
+
+- It is **in place of**, not on top of: her card loses the two trait sentences and the
+  attachment and humour lines (`render_prompt_card(..., voice=True)`; the card's other sections
+  are chosen as they would be with them, so nothing else comes back into the room), and her
+  system message loses "How you type" and its five generator samples. Measured in review on
+  579 captured requests of members whose sheet imports, each with her own sheet rendered in:
+  the card gives back a median 52 estimated tokens (38 in his DM) and the old samples 65-70,
+  and the block with its samples is 164-190 (209 at most). Net: **median +46 on Discord
+  channels (at most +95), +52 in guild chat, +80 in his DM (at most +117)**. No DM passes its
+  2600 budget; channel turns over 1800 went from 4 to 9 of 562, where the trim gives up under
+  100 tokens of memories or chat and never a mandatory section. No whisper turn was in the
+  capture; a whisper carries the same private block as a DM.
+- `with_him` shows only on a turn that is his; `stance` only where only he reads (a whisper to
+  him, his DM). A guild, party, raid, officer, voice-room, channel or group-DM turn has
+  neither, and a whisper between two members has neither.
+- Her stance is written for a household. Every saved sheet is stamped with the household her
+  persona has then (`Speech.household`), and the stance is shown only while her card's household
+  still reads the same (`speech.stance_current`). When the night's arc ends a marriage or the
+  owner edits her household (a godmode edit included: the turn's effective persona is what is
+  compared), the stance leaves her prompts at once and stays out until a sheet is imported
+  again, so it can never contradict the identity card. The console marks it "not shown", and an
+  import that would only re-set the stamp says so, so the stance is read first.
+- The block without its samples never passes 120 estimated tokens (`BLOCK_TOKENS`). A sheet too
+  long for a turn loses, in order (`TRIMS`): its fourth topic, its seventh and eighth words, its
+  never-words beyond two, its third topic, the rest of its never-words, then words and a topic
+  down to four and one. Her register, shape, `with_him` and `stance` are never trimmed (a sheet
+  whose four leave no room is refused at import). On the 177 sheets written so far a public
+  turn is trimmed by at most a topic and a word, and a private turn of his, which also carries
+  `with_him` and `stance`, mostly keeps 6 words and 2 or 3 topics (10 of them no never-words).
+- One or two samples a turn: the first by the turn's want (`WANT_SAMPLE`: vent, deflect ->
+  tired; tease, gossip -> tease; flirt, reassure_seek -> flirt, or warm for a sheet without it;
+  boundary -> annoyed; everything else, and a turn with no want -> answer), the second a draw
+  among the rest from a seeded stream of its own (`seeded("voice", night, guid, minute,
+  trigger)`, never the engine's rng). On an answer that gets a beat the want is the draw's lean
+  (the beat chooses after the prompt is composed). A flirt sample is shown only on his turns; a
+  sample she already sent word for word is never shown again.
+- Her sentence shape may name a line length ("clipped, three to seven words": `word_range`). It
+  moves only the word draw of her own line and her habit in a DM's mirror (`ShapeContext.
+  voice_words`): never a shape's odds, `MIN_LINE_WORDS`, the DM cap or the number of draws.
+- A live line whose prompt carried a sheet has `voice.sheet-1` in its recipe's template id
+  (`learn.recipe.voice_used`), so `learn report` and the Turing report can split with and
+  without.
+- The guards ration her own words and hold her to her never list and samples
+  (`guards/README.md` "Her voice sheet"). The samples a turn shows are also the pipeline's
+  `Composed.samples`: a draft that copies one word for word (3 words or more) is the existing
+  fatal `sample` tell in generation (one of `OWED_HARD_TELLS`), exactly as it was for the
+  generator's five samples, and is regenerated; one or two lines are exposed to it now, not
+  five. Only the guards' `voice_sample_copy` is soft.
+- **The night reads the sheet too** (`card.render_night_card`): the critic, the weekly
+  evaluation's consistency score and everything the night writes from `NightContext.card`
+  (scenes, life beats, reflections, the chronicle, the Realm's letters, posts and Trade beats)
+  get the card live talk shows followed by the sheet's public part (`speech.public_block`:
+  register, shape, words, never-words, topics), **never `with_him`, `stance` or a sample**. The
+  looks and photo passes (`base_card`) and the core judge are unchanged.
+- **A voice change is a new baseline for drift** (`voices.changed_at`: the newest `voice`
+  ledger row of hers or undo of one). The critic never flags a line she said before it and
+  never counts a drift flag from before it toward the three that take back a week of
+  self-notes. The weekly `drift_check` does not check her at all in the week it changed, and
+  the week after has no "fell by 0.15" baseline (only the 0.6 floor).
+
+Importing (`personas/voices.py`), mind stopped for `--go`, which snapshots first
+(`mind-pre-voices-*.db`):
+
+```bash
+python -m leeroy_mind personas --data-dir "$D" voices --dir DIR [--guid N,...]        # dry run
+python -m leeroy_mind personas --data-dir "$D" voices --dir DIR [--guid N,...] --go
+python -m leeroy_mind personas --data-dir "$D" undo <ledger id>                       # one back
+python -m leeroy_mind personas --data-dir "$D" voices --clear [--guid N,...] [--go]   # take off
+```
+
+`DIR` holds one `<guid>.json` per member, in the sheet lab's shape (`voice.register`,
+`sentence_shape`, `says`, `never_says`, `unprompted`, `with_him`, `relationship_stance`, and
+top-level `samples`; its other keys are not read) or the schema's (`{"guid", "speech": {...}}`).
+Files whose name is no number are passed over. Each member is `imported`, `unchanged`,
+`skipped` or `refused` with codes. Refusals (`voices.REFUSALS`): `unreadable`, `not_json`,
+`bad_shape`, `guid_mismatch`, `name_mismatch`, `no_persona`, `invalid`, `real_name`,
+`member_romance`, `assistant_text`, `later_era`, `member_name`, `never_in_sample`, `says_slop`
+(one of her words holds or sits inside a slop entry of the stock list, by the guards' own test),
+`never_in_typing` (her own abbreviations or typing texture produce an entry of her never list,
+or one word of an entry of several words,
+after the guards have read the line) and `shape_over_typing` (her shape names more words than
+her typing's longest line). Skips (`voices.SKIPS`): `not_cast`, a sheet for a stored persona
+outside the cast (a world persona); sheets are for the cast only (`--only-cast`, the default
+and the only mode). One refused sheet does not stop the others; the exit code is 1 only when a
+sheet was refused or a `--guid` has no file, never for a skip; the last lines give the counts
+by code. The output has outcomes, the block's
+estimated tokens, sample counts, codes and the schema's own messages (paths and limits), never
+a sheet's text. Each import is an owner persona version with a `voice` row in the persona ledger
+(migration `voice_ledger`) and a private receipt (meta `personas:voice-undo:<ledger>`), so
+`personas undo` and the console's Undo (Personas, member detail, Ledger) take it back while it
+is still what the step left; `--clear` gives a member back the source she had before her first
+sheet. The console's member detail lists the sheet read-only under "Voice".
+
+**Rollback hazard:** older code refuses a persona with an unknown `speech` field (the member
+goes silent as `persona_unreadable`). Run `personas voices --clear --go` before rolling the code
+back, as with `home` and `bust`. `personas import` also carries a sheet in an exported file, but
+writes no ledger row: use `voices` for sheets.
+
+## Conversations that hold together (`[talk] coherence`, 2026-11-17)
+
+`[talk] coherence` (a boolean, default **false**: the owner turns it on at a release; anything
+but `true` is off) holds the fixes the
+2026-11-17 self-play audits asked for (100 graded whisper turns, 67 explicit DM turns, 197
+hard-case turns). **It is read with the rest of `mind.toml`: at the mind's start and at each of
+his logins, not per turn**; a change mid-session takes effect when he next logs in or the mind
+restarts. With it off every rule below is exactly as before, the job shapes, the own-boss
+reading and the "tell X he" pronoun reading included (their pure modules carry a `COHERENT`
+switch that `LifeService.configure` sets). The rules that change a prompt also need a core
+switch on (`[talk] intent`, `[talk] situation` or `[life] availability`/`state`), so
+no golden prompt changes: with the switch off (the default) every golden file is main's.
+
+**A game line that is only too long is kept** (`talk/length.py`, `Pipeline._generate_serial`).
+The "long" tell used to ask for a fresh generation at her line's length ("Shorter: 2-8 words"),
+which lost correct answers. The owner's rule is absolute: a cut that removes the answer is
+never acceptable, and three reviews of #370 showed no test of tokens can say where an answer
+is. So **an answer to a line of his that asks anything is never cut in code** (`length.asks`: a
+question mark, a question, a request to explain). It is sent as written when
+`length.split_lines` fits it on the game lines her turn has by whole clauses, each within
+`LINE_BYTES` (230) bytes; else the model is asked again once with her own draft: `You wrote:
+"..." Say the same thing shorter, in at most about N words. Keep the answer in it.` **When
+that is still too long and the answer is owed to him** it is never byte-trimmed: its whole
+clauses go on up to `OWED_LINES` (3) game lines, nothing dropped, as a short burst through her
+typing (`TurnMeta.keep_lines`); only if it still does not fit, its tail goes
+(`length.tail_lines`: the last sentences that fit, never the head). A turn that is not owed to
+him keeps main's behaviour there. A line that asks nothing keeps her leading whole clauses, as
+many as fit (never ending on a dangling word or inside a quotation, never under 3 words), goes
+as written within twice the turn's words when there is no clean cut, and past that is asked
+again with the draft; a turn with its own subject (an opener's topic, an outreach item's
+words) is cut only after the last clause that names it. A draft of the turn's words or more
+that "fits" is also checked against her lines, so the styling never repacks its last clause
+away (`TurnMeta.keep_words`, `_style`'s `room`). The reviews' 92 invented drafts
+(`tests/length_drafts.py`) all go out with their answer at 6, 8, 10, 12 and 15 words. A voice
+sheet's range gives room for at most `VOICE_LINE_WORDS` (36) words. Discord turns are not
+touched: they keep `fit_words` and their bands.
+A content question from him gives a game SHORT, QUESTION or LATE shape at least
+`shape.CONTENT_WORDS` (12) words, but never more than the longest line her voice sheet names
+("three to seven words" answers in seven). A line inside her sheet's range is never long, a
+cut never leaves fewer words than the range's low end, and nothing is ever added to a line. A
+DM keeps its mirror and its short-line cap. Log: `say_length: guid= kind= attempt= action=cut|kept|retry
+words= limit=`.
+
+**Her position holds** (`talk/position.py`, `talk/intent.py`, `personas/card.py`). On his direct
+question or his pushback (`position.disagrees`) her want is never `reassure_seek`, `vent`,
+`gossip` or `ask` (`intent.ANSWER_OFF`); on his bad news never `tease` or `flirt` (`talk/hisline.py`'s `bad_news`, the one
+reader); under his explicit overlay never `reassure_seek`, and the beat brings nothing in.
+While his question or disagreement is open her want is the one she had (`position.Hold`, kept
+per conversation in the pipeline); it lets go after 10 quiet minutes, a new subject, his "fair
+enough", 6 of her answers or 15 minutes from when it was first set, and its words are the first
+exchange's (they do not grow). The draw then draws nothing and the beat is offered only that
+want. **What she has said so far has one presentation**: the "So far between you two" block of
+her whispers and DMs with him (`talk/sofar.py`). Its lines for where and how she said she is
+stay as they are; while `[talk] coherence` and a core switch are on her claims
+(`position.claims_so_far`: her own sentences with a number beside a word, or a statement of
+herself) follow them as "- You said: ..." lines, without a claim that repeats the place, the
+oldest dropped until they are within `sofar.CLAIM_TOKENS` (50); when the block is over its 120
+tokens the claims are the first lines to go, so none of main's lines is dropped for one. The line's prompt and the beat (which reads the same prompt) both see that one
+block; nothing here adds a second. When his line touches an opinion on her card that
+reads as a rule ("never", "not optional", "the law"), the line's block and the beat get `You
+hold this as a rule: "..." You don't argue against it; if <his name>, as guild leader,
+overrules it outright you can give way, and you say that you do.` The opinion his line touches
+leads the two her card shows and is the last card section dropped for the budget.
+
+**One "right now"** (`life/presence.py`, `Pipeline._where_line`; `life/README.md` has the job
+shapes). Where she said she is in the last 30 minutes of the conversation (`stated_where`: at
+work, in bed, out, home; only a sentence of hers that opens with the place, about herself, now:
+never someone else's place, a negation, a question, the past or the future; the one reader
+is `talk/sofar.py`'s `her_place` and `her_state`, and `stated_where` filters the sentences it
+hands them and names the kind of what they read) holds: the situation line says she is still there, and in his group it says she has just
+logged on from there, then that she is at her PC in his group or raid with him and in which
+instance. Her brb's reason stays in "Right now" for 30 minutes after she is back
+(`presence.away_note`).
+
+**Every waiting whisper is answered** (`talk/engine.py` `_life_waiting`, `Pipeline._his_waiting`,
+`prompt.unanswered_text`). A whisper that joins her waiting answer is added to
+`TurnMeta.coalesced`; the answer's prompt quotes each unanswered line and says to answer every
+one, his question first, and the turn is weighed (want, shape, length, "answer his question
+first") as an answer to that question. **His DM's posts are `discord/talk.py`'s to list** (the
+DM memory work): nothing is listed from here; `Pipeline._dm_waiting` only reads
+`DiscordTalk.unanswered` (his posts no stored answer covers, by `discord/covered.py`'s
+receipts) to weigh a DM turn against his question. His leaving
+words (`select.is_leaving`: "ok im out", "gotta run") hurry an answer still waiting, also behind
+her brb, as a goodbye does; they plan no goodnights.
+
+**Who is who, and what she can know** (`Pipeline._pronoun_tags`, `_named_cards`,
+`guards/pronouns.py`, `talk/gearfit.py`). Every member's chat line carries their pronoun, and a
+member his line names gets a roster line under "People here" (`Name (she): plays Holy Paladin
+(healer, officer)`). A second `member_misgender` on a rewrite is swapped in code
+(`pronouns.fix`; log `guard_pronoun_fixed`), and the draft an owed answer falls back to is
+mended the same way and loses an echo opener before it goes (`_fixed_in_code`; log
+`guard_fixed_in_code`). His short line said back as a question ("brb? ...") is cut from her
+opening (`opener.without_question_echo`). The library's item facts are kept to what the
+speaker's class can use and to item level 200 and up at the level cap (a loot table's entry is
+its whole name, commas included); with none left she is told to say she is not sure rather than
+make up an item, a proc or a number.
+
+**Smaller.** Her attendance counts ("5 benched") show on her awareness card only where the last
+lines are about raids, rosters or the bench. A game burst the model wrote as two lines keeps its
+own line break (`_style`: each line laid out on its own, where one repacked text ran its clauses
+together and dropped the rest). Her brb and back lines take no typing slips, no typos and no
+emoticon; every other template line is typed as before. An answer sent within 60 s of his line
+makes no late excuse, whatever her brb had planned (`_waited_away`, `SHORT_WAIT_S`). Her brb's
+reason follows where she said she is in the conversation (`LifeService._where_she_said`: at home
+or in bed never "brb boss"), and `interrupt.own_boss` reads a trade with private clients (a
+mobile hairdresser, a personal trainer, "works for herself") as her own boss. His explicit
+whisper overlay is gated exactly as before (the owner's setting; not changed here).

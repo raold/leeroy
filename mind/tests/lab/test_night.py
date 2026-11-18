@@ -25,7 +25,7 @@ def answer(model, messages):
         return json.dumps({"read": "he says hi", "lands": "warm", "want": "share", "use": None})
     if f"{WIN} respond to what" in last:
         return "yes, tonight works for me"
-    return "ha maybe, depends on the day"
+    return "ha maybe, we will see"  # under six words: the same line again is no copy
 
 
 def reflection(model, messages):
@@ -106,8 +106,13 @@ def test_a_night_measures_tests_variants_and_promotes_the_winner(live, tmp_path)
     # one child, stopped; the live prompts dir is as it was, the overlays only in the copy
     assert len(children) == 1 and not children[0].killed
     assert digest(live / "prompts") == prompts_before
-    copy = live / "scratch" / "lab" / "mind-data" / "prompts"
-    assert (copy / "romance_explicit.txt").read_bytes() == (live / "prompts" / "romance_explicit.txt").read_bytes()
+    # the run is over: its copy of the guild (mind-data with library.db, the snapshot) is gone,
+    # the transcripts stay
+    lab = live / "scratch" / "lab"
+    assert not (lab / "mind-data").exists() and not (lab / "snapshot").exists()
+    assert (lab / ".leeroy-sandbox").is_file()
+    assert sorted(p.name for p in (lab / "runs" / str(run["id"])).iterdir()) == sorted(
+        f"{arm}.json" for arm in scores)
 
 
 def test_a_resumed_night_runs_nothing_again(live, tmp_path):

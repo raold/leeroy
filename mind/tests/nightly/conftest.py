@@ -247,6 +247,15 @@ class NightHarness:
             "owner": owner, "text": text, "t_event": at, "t_created": at, "t_accessed": at,
             "embedding": pack_vec(fake_embed(text)), **kw}))
 
+    def legacy(self, *ids: int, scope: str = "open", scope_with: int = 0) -> None:
+        """Memories as a release before the scope_evidence migration could leave them: stored
+        with this scope whatever their evidence says, and unchecked. The store itself no longer
+        writes a scope wider than the evidence (memory.scopes.after_write)."""
+        self.store.conn.executemany(
+            "UPDATE memory SET scope = ?, scope_with = ?, derived_scope = NULL, "
+            "derived_with = NULL, derived_at = NULL WHERE id = ?",
+            [(scope, scope_with, i) for i in ids])
+
     def rows(self, owner: int) -> list[MemoryRow]:
         """Every memory of `owner`, of any status, by id."""
         ids = [r[0] for r in self.store.conn.execute(

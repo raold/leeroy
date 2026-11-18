@@ -94,6 +94,17 @@ def _personas(conn) -> tuple[dict[int, Persona], int]:
     return out, unreadable
 
 
+def _switch(root: Path) -> None:
+    """[talk] coherence for this command, as the running mind has it (LifeService.configure):
+    a process that builds no LifeService reads the day plan's module switch."""
+    from . import day as day_module
+    try:
+        talk = load_config(root / "mind.toml").talk
+    except (ConfigError, OSError):
+        return  # the default: off
+    day_module.COHERENT = getattr(talk, "coherence", False) is True
+
+
 def _day(personas: dict[int, Persona], args) -> int:
     if args.guid is not None:
         if args.guid not in personas:
@@ -300,6 +311,7 @@ def life_main(argv=None) -> int:
         return 1
     if unreadable:
         print(f"life: {unreadable} stored personas unreadable, left out", file=sys.stderr)
+    _switch(root)
     if args.action == "shapes":
         return _shapes(personas, args, root)
     if args.action == "state":

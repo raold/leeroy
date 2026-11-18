@@ -21,6 +21,13 @@ a rewrite on every turn; its other lines are common phrases, a rewrite only on a
 to him: on an owed answer (`Draft.real_answer_due`) one gives no code but `Found.pending`, the
 list's own words, named on her next turn (talk/pipeline.py `_phrase_pending`).
 
+A member with a voice sheet (Persona.speech) keeps her own words: a phrase that is one of her
+`says` is never her tic for the conversation, day or per-member stock rules, and is rationed
+instead (guards/voice.py: about one in three of her lines in a conversation; above that it is
+named as `phrase_conversation`). The cast rules still count it. A slop entry ("!" lines) is
+never anyone's own word: a say-word inside one exempts nothing, and such a sheet is refused at
+import (`says_slop`).
+
 Reads are bounded and read-only; nothing here writes, logs or calls a model. Evidence is her own
 lines in any channel and other members' lines, counted and never quoted: the rewrite hint names
 only words of the draft itself (`Found.phrases`), never who else said them or where.
@@ -393,13 +400,17 @@ def _surface(text, toks, spans):
     return list(dict.fromkeys(out))
 
 
-def check(reader, draft, now: float) -> Found:
+def check(reader, draft, now: float, sheet=None) -> Found:
     """The draft's overused phrases. `reader` is review.Reader on a read-only snapshot; replay
-    passes `draft.line_id` so a stored line never counts against itself or later lines."""
+    passes `draft.line_id` so a stored line never counts against itself or later lines.
+    `sheet`: her voice sheet (guards.voice.Sheet), whose own words are rationed, not cooled."""
+    from . import voice
     text = strip_wow_markup(draft.text)
     toks, phrases = candidates(text, names(reader))
     stocked = _stock_spans(toks)
-    if not phrases and not stocked:
+    says = sheet is not None and bool(sheet.says)
+    said = says and voice.any_said(toks, sheet)  # one of her own words is in the draft
+    if not phrases and not stocked and not said:
         return Found()
     cutoff = draft.line_id if draft.line_id is not None else 2**63 - 1
     rows = reader.rows('phrases_unavailable', 'SELECT from_guid,ts,channel,to_guid,origin,text FROM chat_line '
@@ -417,8 +428,11 @@ def check(reader, draft, now: float) -> Found:
     # was writing about, said back, was flagged as her tic): a phrase whose every content word
     # he or another member used in this conversation is its topic.
     subject, his = _subject(rows, draft.guid, key, now)
+    talk = _conversation(own, key, now)[0] if phrases or said else []
+    if said:  # her own words, over their ration in this conversation (voice.over_ration)
+        hits['phrase_conversation'] += voice.rationed(
+            toks, [_words(strip_wow_markup(r['text'] or '')) for r in talk], sheet)
     if phrases:
-        talk, _ = _conversation(own, key, now)
         seen_talk = [_seen(r['text'])[1] for r in talk]
         day = [_seen(r['text'])[1] for r in own if now - r['ts'] <= DAY_SECONDS]
         wanted = {words for words in phrases if len(words) >= CAST_WORDS
@@ -435,9 +449,13 @@ def check(reader, draft, now: float) -> Found:
                 continue  # a two-word phrase only of words nobody else here used
             held = _stock_in(words)
             uses = sum(words in grams for grams in seen_talk)
+            # rationed above, never cooled; a slop entry is nobody's own word
+            own_word = says and voice.hers(words, sheet) and not set(held) & sloppy
             flagged = [code for code, met in (
-                ('phrase_conversation', uses >= CONVERSATION_USES or bool(uses and held)),
-                ('phrase_day', sum(words in grams for grams in day) >= DAY_USES),
+                ('phrase_conversation', not own_word and (uses >= CONVERSATION_USES
+                                                          or bool(uses and held))),
+                ('phrase_day', not own_word
+                 and sum(words in grams for grams in day) >= DAY_USES),
                 ('phrase_cast', len(others.get(words, ())) >= CAST_MEMBERS)) if met]
             if flagged and owed and held and not set(held) & sloppy:
                 pending.update(held)  # a common phrase on his answer: a hint next turn
@@ -450,8 +468,10 @@ def check(reader, draft, now: float) -> Found:
         for name, alts, span in stocked:
             if _topic(tuple(t.norm for t in toks[span[0]:span[1] + 1]), his):
                 continue  # his own words said back ("thinking about you" to his)
+            own_word = says and name not in sloppy and voice.hers(
+                tuple(t.norm for t in toks[span[0]:span[1] + 1]), sheet)
             flagged = [code for code, met in (
-                ('stock_member', any(_has(clauses, alts) for clauses in mine)),
+                ('stock_member', not own_word and any(_has(clauses, alts) for clauses in mine)),
                 ('stock_cast', sum(_has(clauses, alts) for clauses in recent) >= STOCK_CAST_USES))
                 if met]
             if flagged and owed and name not in sloppy:

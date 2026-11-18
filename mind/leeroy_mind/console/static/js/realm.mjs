@@ -4,6 +4,7 @@ import { pollWorld } from "./world.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
 import { firstKills, poachText, raidersText, roleWord, standing, tradeCount } from "./realmmodel.mjs";
 import { when } from "./words.mjs";
+import { isoDate } from "./dates.mjs";
 
 // -- the realm tab: mind.db only ------------------------------------------------------------------
 
@@ -11,7 +12,7 @@ var REALM_MS = 60000;
 var NONE = "there are no rival guilds (realm plan rivals, then approve it).";
 
 function nameOf(v, g) { return str(obj(v.names)[String(g)]) || "#" + g; }
-function dateText(sec) { return sec ? new Date(sec * 1000).toLocaleDateString() : "-"; }
+function dateText(sec) { return sec ? isoDate(sec) : "-"; }
 function meter(pct) {
   var m = el("div", "meter"), i = el("i");
   i.style.setProperty("width", pct + "%");

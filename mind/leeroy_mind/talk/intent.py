@@ -13,7 +13,12 @@ attitude (never toward a member, never in a group DM), flirting scaled by her fo
 flirt); an answer owed to him never "just reacts" (it adds something); under his explicit whisper
 overlay (`tail`) she never vents, gossips, deflects, draws a line, sorts out plans or keeps it
 light (the overlay wins: PM log 2026-11-16; beat.wants_for drops the same wants from the beat);
-her feeling about him moves only her turns to him.
+her feeling about him moves only her turns to him. With [talk] coherence (the pipeline fills
+the context's last fields): on his direct question or his pushback she never seeks reassurance,
+vents, gossips or wants something from him (ANSWER_OFF), on his bad news she neither teases nor
+flirts (BAD_NEWS_OFF), in an explicit scene she never seeks reassurance, and while his question
+or disagreement is open her want is the one she had (`hold`: no draw, and the beat is offered
+only that want).
 
 Her day comes from life.day (Block, DayEvent) and life.presence (Attention); her feeling from
 life.state (State; plan Task 3, not built yet). An event or block is compared with its code (a
@@ -115,6 +120,15 @@ class IntentContext:
     # her forward / flirty dial (tuning), as romance.forward gives it: 0-2, 1 as written. It
     # scales flirt, which only a turn to him can draw (review-332)
     forward: float = 1.0
+    # [talk] coherence (talk/position.py; the pipeline fills them, all off by default): his line
+    # pushes back on her; it carries bad news of his; an explicit scene is running (his overlay
+    # applies); `answer_first`, the answer-first rule below applies; `hold`, her want while his
+    # question or disagreement is open
+    pushback: bool = False
+    bad_news: bool = False
+    scene: bool = False
+    answer_first: bool = False
+    hold: Intent | None = None
 
 
 def _row(vent=0.0, share=0.0, ask=0.0, tease=0.0, flirt=0.0, reassure_seek=0.0, gossip=0.0,
@@ -146,6 +160,12 @@ TAIL_OFF = frozenset({Intent.VENT, Intent.GOSSIP, Intent.DEFLECT, Intent.BOUNDAR
 # 2026-11-16: the beat chose flirt on 6 of 7 of his DMs, questions included): the ones that
 # answer him, each only where the turn allows it; the rest follow in enum order.
 ASKING_FIRST = (Intent.REACT, Intent.LOGISTICS, Intent.BOUNDARY, Intent.TEASE, Intent.SHARE)
+# Never her want on his direct question or his pushback ([talk] coherence; self-play audit,
+# 2026-11-17: she sought reassurance, vented or asked for something where he had asked her a
+# plain question or disagreed with her): only wants that answer him are left
+ANSWER_OFF = frozenset({Intent.REASSURE_SEEK, Intent.VENT, Intent.GOSSIP, Intent.ASK})
+# Never on his bad news (explicit-DM audit: a tease drawn on "he's in hospital")
+BAD_NEWS_OFF = frozenset({Intent.TEASE, Intent.FLIRT})
 
 
 def ordered(wants, asking: bool) -> tuple[Intent, ...]:
@@ -250,9 +270,26 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
         w[Intent.LOGISTICS] *= 3
     if ctx.family in ("dm", "whisper") and not ctx.to_him:
         w[Intent.GOSSIP] = 0.0
-    if ctx.last is not None and ctx.last in w:
+    if ctx.answer_first and ctx.to_him and ctx.his_line.strip() and (
+            ctx.pushback or asks(ctx.his_line)):
+        for i in ANSWER_OFF:
+            w[i] = 0.0
+    if ctx.to_him and ctx.bad_news:
+        for i in BAD_NEWS_OFF:
+            w[i] = 0.0
+    if ctx.scene:
+        w[Intent.REASSURE_SEEK] = 0.0
+    if ctx.last is not None and ctx.last in w and ctx.hold is None:
         w[Intent(ctx.last)] *= 0.5
     return w
+
+
+def _held(ctx: IntentContext, w: dict[Intent, float]) -> Intent | None:
+    """Her held want (`ctx.hold`) while the turn still allows it; None otherwise."""
+    if ctx.hold is None:
+        return None
+    hold = Intent(ctx.hold)
+    return hold if w.get(hold, 0.0) > 0 else None
 
 
 def allowed(ctx: IntentContext) -> tuple[Intent, ...]:
@@ -260,6 +297,8 @@ def allowed(ctx: IntentContext) -> tuple[Intent, ...]:
     above. In enum order, or with ASKING_FIRST leading on a turn to him whose line asks her
     something (asking.asks), on every channel."""
     w = weights(ctx)
+    if (hold := _held(ctx, w)) is not None:
+        return (hold,)  # his question or disagreement is still open: she stays on it
     return ordered((i for i in Intent if w[i] > 0), ctx.to_him and asks(ctx.his_line))
 
 
@@ -270,6 +309,8 @@ def draw_intent(ctx: IntentContext, rng: random.Random) -> Intent | None:
     total = sum(w.values())
     if total <= 0:
         return None
+    if (hold := _held(ctx, w)) is not None:
+        return hold  # held from her last turn here: nothing is drawn from `rng`
     x = rng.random() * total
     last = None
     for i in Intent:
@@ -307,6 +348,6 @@ def topic_for(intent: Intent, ctx: IntentContext) -> str:
     return ""
 
 
-__all__ = ["ASKING_FIRST", "INTENT_KINDS", "Intent", "IntentContext", "ROWS", "TAIL_OFF",
+__all__ = ["ANSWER_OFF", "ASKING_FIRST", "BAD_NEWS_OFF", "INTENT_KINDS", "Intent", "IntentContext", "ROWS", "TAIL_OFF",
            "WANT_WORDS", "allowed", "draw_intent", "ordered", "topic_for", "want_words",
            "weights"]

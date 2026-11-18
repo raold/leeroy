@@ -48,7 +48,14 @@ recorded.
 His DM as the Chat's last line (2026-11-16, Pipeline._his_dm_row: every DM answer to him, no
 switch) changed none of these goldens: the scenario has no Discord DM, only game channels and
 whispers (whose trigger line was already in the Chat). tests/discord/test_dm_prompt.py and
-tests/test_romance_realism.py cover it."""
+tests/test_romance_realism.py cover it.
+
+Voice sheets (Persona.speech, 2026-11-17) changed none of these four goldens: no member of the
+scenario's cast has one. golden_voice.json (record_voice) holds the same script in both prompt
+modes ("plain" and "core") with invented sheets (tests/sheets.py) on Belra (102) and Coros
+(103): their cards without the trait sentences and the attachment and humour lines, no "How you
+type" samples, and the voice block just before each of their instructions. The other three
+members' prompts in it are the ones the other goldens hold."""
 import asyncio
 import json
 import random
@@ -69,6 +76,8 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 
 GOLDEN = Path(__file__).with_name("golden_prompts.json")
 BEAT_GOLDEN = Path(__file__).with_name("golden_beat.json")
+VOICE_GOLDEN = Path(__file__).with_name("golden_voice.json")
+VOICED = (102, 103)  # the scenario's members with a voice sheet in record_voice
 CORE_GOLDEN = Path(__file__).with_name("golden_core.json")
 ROMANCE_GOLDEN = Path(__file__).with_name("golden_romance.json")
 
@@ -155,6 +164,40 @@ def record(store, clock, data_dir, core: bool = False) -> dict:
     return asyncio.run(_run(store, clock, data_dir, core))
 
 
+def voiced_cast(store) -> None:
+    """cast(), with a voice sheet on Belra (a woman drawn to him: flirt) and Coros (a man:
+    warm)."""
+    from dataclasses import replace
+
+    from leeroy_mind.personas.io import load_persona, save_persona
+    from leeroy_mind.wow import CLASSES, RACES
+    from leeroy_mind.personas.voices import stamped
+    from sheets import BRIGHT, GRUFF, sheet
+    cast(store)
+    for guid, data in zip(VOICED, (BRIGHT, GRUFF)):
+        _, race, cls = TEST_CAST[guid]
+        p = load_persona(store, guid)
+        save_persona(store, replace(p, speech=stamped(sheet(data), p)), source="seed",
+                     ts=1000.0, race=RACES[race], class_name=CLASSES[cls])
+
+
+def record_voice(store, clock, data_dir, core: bool = False) -> dict:
+    """The scenario with voice sheets on two members (golden_voice.json's "plain", or "core"
+    with the core prompt's switches on): the prompts and the lines sent."""
+    voiced_cast(store)
+    got = asyncio.run(_run(store, clock, data_dir, core))
+    return {"prompts": got["prompts"], "sent": got["sent"]}
+
+
+def write_golden_voice(result: dict) -> None:
+    VOICE_GOLDEN.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n", encoding="utf-8",
+                            newline="\n")
+
+
+def golden_voice() -> dict:
+    return json.loads(VOICE_GOLDEN.read_text(encoding="utf-8"))
+
+
 def record_romance(store, clock, data_dir) -> dict:
     """The scenario with [romance] realism on (golden_romance.json)."""
     cast(store)
@@ -232,6 +275,7 @@ def golden_beat() -> dict:
     return json.loads(BEAT_GOLDEN.read_text(encoding="utf-8"))
 
 
-__all__ = ["TEST_CAST", "cast", "engine_clock", "golden", "golden_beat", "golden_core",
-           "golden_romance", "record", "record_beat", "record_romance", "write_golden",
-           "write_golden_beat", "write_golden_core", "write_golden_romance"]
+__all__ = ["TEST_CAST", "VOICED", "cast", "engine_clock", "golden", "golden_beat", "golden_core",
+           "golden_romance", "golden_voice", "record", "record_beat", "record_romance",
+           "record_voice", "voiced_cast", "write_golden", "write_golden_beat",
+           "write_golden_core", "write_golden_romance", "write_golden_voice"]

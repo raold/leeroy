@@ -12,6 +12,7 @@ import sqlite3
 from leeroy_mind.claims.visibility import audience_class
 from leeroy_mind.discord import layout
 from leeroy_mind.guild.raids import CATALOG
+from leeroy_mind.memory.privacy import STRICTEST, effective_scopes
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import boss_name
 
@@ -186,13 +187,28 @@ def _loot(conn, c):
 def _life(conn, c):
     # A beat whose memory is not open to everyone (private with him, about her secret: nightly
     # life.private_beat) or no longer active (retired: nightly life-contact) seeds nothing public.
-    for bid, guid, text in conn.execute(
-            'SELECT b.id,t.guid,b.text FROM life_beat b JOIN life_thread t ON t.id=b.thread_id '
-            'WHERE b.night=(SELECT max(night) FROM life_beat WHERE ts<=?) '
-            'AND b.ts BETWEEN ? AND ? AND NOT EXISTS (SELECT 1 FROM memory m WHERE m.owner=t.guid '
-            "AND m.source='offscreen' AND (m.scope!='open' OR m.status!='active') AND EXISTS "
-            "(SELECT 1 FROM json_each(m.evidence) e WHERE e.value='beat:'||b.id)) "
-            'ORDER BY b.id DESC LIMIT 64', (c.now, c.now-FRESH_DEFAULT_S, c.now)):
+    # Its scope is the effective one (memory.privacy.resolve): as strict as its evidence, at any
+    # depth, checked or not; never the stored column alone.
+    beats = conn.execute(
+        'SELECT b.id,t.guid,b.text FROM life_beat b JOIN life_thread t ON t.id=b.thread_id '
+        'WHERE b.night=(SELECT max(night) FROM life_beat WHERE ts<=?) '
+        'AND b.ts BETWEEN ? AND ? ORDER BY b.id DESC', (c.now, c.now-FRESH_DEFAULT_S, c.now)).fetchall()
+    rows = conn.execute(
+        "SELECT m.id,m.owner,m.status,e.value FROM memory m, json_each(m.evidence) e "
+        "WHERE m.source='offscreen' AND m.owner IN (SELECT value FROM json_each(?)) "
+        "AND e.value IN (SELECT value FROM json_each(?))",
+        (json.dumps(sorted({b[1] for b in beats})),
+         json.dumps([f'beat:{b[0]}' for b in beats]))).fetchall() if beats else []
+    scopes = effective_scopes(conn, [r[0] for r in rows])
+    closed = {(r[1], r[3]) for r in rows
+              if r[2] != 'active' or scopes.get(r[0], STRICTEST)[0] != 'open'}
+    left = 64
+    for bid, guid, text in beats:
+        if (guid, f'beat:{bid}') in closed:
+            continue
+        if not left:
+            break
+        left -= 1
         if guid in c.cast:
             yield Seed(f'life:{bid}', 'life', ('irl', 'general', 'food'), text, (guid,))
 

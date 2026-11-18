@@ -36,10 +36,12 @@ intent = false                 # her want for each turn, drawn by code, in the b
 situation = false              # the prompt as her situation: hard rules only, "Right now" by the instruction
 shape = false                  # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
 dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length follows his (0: as full as she likes)
+coherence = false              # conversations hold together (talk/README.md): long game lines kept, her want and place hold, every waiting whisper answered; read at start and at his login
 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
 state = false                 # her feeling through the day
+dm_wait_cap_s = 75            # the longest his DM waits for her answer, whatever her day (0: no cap; asleep: twice this)
 wow_vs_life = 5               # 0-10: how present the WoW-vs-life theme is in the night's stories (0: off)
 
 [romance]
@@ -74,6 +76,7 @@ RAID_RULES = frozenset({"leaders_and_urgent"})
 MAX_PER_HOUR = 60  # [talk] whispers_per_hour and openers_per_hour
 DISCORD_WORDS_MAX = 200  # [talk] discord_words and dm_words
 DM_MIRROR_MAX = 10  # [talk] dm_mirror
+DM_WAIT_CAP_MAX = 3600  # [life] dm_wait_cap_s
 THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] and [life] values already logged in this process
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", "realm",
@@ -81,7 +84,7 @@ EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", 
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
                                 "banter", "photos", "voice_notes", "groups", "culture", "outreach",
                                 "godmode", "decisions", "raidlead", "raidplay", "drama", "turing",
-                                "bakeoff", "lab"})
+                                "bakeoff", "lab", "prune"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
@@ -118,6 +121,7 @@ class TalkCfg:
     situation: bool = False  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
     shape: bool = False  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
     dm_mirror: int = 5  # [talk] dm_mirror: with shape on, a DM's length follows his (0: today's)
+    coherence: bool = False  # [talk] coherence: talk/length.py, talk/position.py (anything but true: off)
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,9 @@ class LifeCfg:
     """[life]: her day (life/), and the night's WoW-vs-life theme (nightly.settings.load_life)."""
     availability: int = 0  # 0-10; 0: always present, today's behaviour (life/config.py pin)
     state: bool = False  # her feeling through the day
+    # the longest his DM (and a group DM line that names her) waits for her answer, in
+    # seconds, whatever her day; asleep twice this; 0: no cap (discord/owntime.py)
+    dm_wait_cap_s: int = 75
     wow_vs_life: int = 5
 
 
@@ -238,6 +245,7 @@ _RULES = {
         "situation": (lambda v: type(v) is bool, "a boolean"),
         "shape": (lambda v: type(v) is bool, "a boolean"),
         "dm_mirror": (lambda v: _int_in(v, 0, DM_MIRROR_MAX), f"an integer 0-{DM_MIRROR_MAX}"),
+        "coherence": (lambda v: type(v) is bool, "a boolean"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -245,6 +253,8 @@ _RULES = {
     "life": {
         "availability": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "state": (lambda v: type(v) is bool, "a boolean"),
+        "dm_wait_cap_s": (lambda v: _int_in(v, 0, DM_WAIT_CAP_MAX),
+                          f"an integer 0-{DM_WAIT_CAP_MAX}"),
         "wow_vs_life": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
     },
     "romance": {
@@ -309,7 +319,8 @@ def _build(data: dict, source: str) -> MindConfig:
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
             if section == "talk" and key in ("realism", "texture", "dm_own_time",
-                                             "think_private", "recall_diversity") and type(v) is not bool:
+                                             "think_private", "recall_diversity",
+                                             "coherence") and type(v) is not bool:
                 v = False
             if (section == "talk" and key in ("intent", "situation", "shape")
                     and type(v) is not bool):
@@ -327,7 +338,8 @@ def _build(data: dict, source: str) -> MindConfig:
             if section == 'romance' and key in ('activities', 'realism') and type(v) is not bool:
                 v = False
             if section == "life" and not check(v):
-                # the default (availability 0, state false, wow_vs_life 5), logged once a value
+                # the default (availability 0, state false, dm_wait_cap_s 75, wow_vs_life 5),
+                # logged once a value
                 # (each login reads it again); the night's load_life still refuses wow_vs_life
                 if ("life." + key, repr(v)) not in _WARNED:
                     _WARNED.add(("life." + key, repr(v)))

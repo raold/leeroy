@@ -635,6 +635,24 @@ class GpuArbiter:
                         raise RuntimeError("nightly models changed during model admission")
             self._prune_managed(remaining)
 
+    async def night_over(self) -> list[str]:
+        """The night's last step: unload the reflection model if it is still loaded (and is
+        neither the live nor the embedding model); the names it unloaded. A night whose last
+        model stage was a reflection stage (no image stage after it, or one a lease refused),
+        or that failed in one, left it resident until the next hand-over: beside the live model
+        once anything loaded that, one of the two partly on the CPU. Nothing is loaded here and
+        the live model is left alone. A paused GPU has nothing loaded."""
+        async with self._lock:
+            if self.paused:
+                return []
+            listed = await self.admin.loaded_models()
+            gone = [name for name in listed if norm(name) == norm(self._reflection)
+                    and norm(name) not in {norm(self._live), norm(self._embedding)}]
+            for name in gone:
+                await self.admin.unload(name)
+            self._prune_managed([n for n in listed if n not in gone])
+            return gone
+
     async def foreign_models(self, expected: str | None) -> list[str]:
         """The loaded models other than `expected` and the embedding model, as Ollama lists
         them; with None (an image stage expects no chat model), every loaded model but the
