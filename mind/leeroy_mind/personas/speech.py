@@ -257,6 +257,21 @@ def typed_by_her(p: Persona) -> set[str]:
     return {" ".join(w.casefold().split()) for w in words if w.strip()}
 
 
+def typing_makes(never: str, made: set[str]) -> bool:
+    """Her typing (`made`: typed_by_her) produces the never-entry or a word of it. Compared
+    word by word, so an entry of several words is caught by the one word her abbreviations put
+    into her lines ("saying idk every time" by an "idk" of hers); a form of several words her
+    typing makes counts where the entry holds it as a run. Words are compared whole, lower
+    case, with the punctuation around them dropped (a "w/e" stays one word)."""
+    words = [w for w in (x.strip(".,;:!?\"'()[]") for x in never.casefold().split()) if w]
+    if not words:
+        return False
+    if " ".join(words) in made or any(w in made for w in words):
+        return True
+    runs = [m.split() for m in made if " " in m]
+    return any(words[i:i + len(r)] == r for r in runs for i in range(len(words) - len(r) + 1))
+
+
 def screen(p: Persona, *, characters=()) -> list[str]:
     """Codes for what a voice import refuses beyond the schema and the persona screens (never
     the text): `assistant_text` (reads like an assistant), `later_era` (slang or a year after
@@ -264,9 +279,9 @@ def screen(p: Persona, *, characters=()) -> list[str]:
     turn, whoever it is to), `never_in_sample` (a never-word inside one of her own samples),
     `says_slop` (one of her words holds, or sits inside, an entry of the stock list's slop
     lines: the guards rewrite those on every turn and never count one as her own word; the
-    test is the guards' own, guards.voice.hers), `never_in_typing` (a never-word her own
-    abbreviations or typing texture produce after the guards have passed the line:
-    typed_by_her), `shape_over_typing` (her sentence shape names more words than her typing's
+    test is the guards' own, guards.voice.hers), `never_in_typing` (a never-entry, or a word
+    of one, that her own abbreviations or typing texture produce after the guards have passed
+    the line: typed_by_her, typing_makes), `shape_over_typing` (her sentence shape names more words than her typing's
     longest line, which the styler would cut)."""
     from leeroy_mind.guards import phrases, voice
     from leeroy_mind.nightly.lexicon import era_ok
@@ -296,8 +311,7 @@ def screen(p: Persona, *, characters=()) -> list[str]:
                                              for words in said) for anchored, alt in alts):
             codes.append("says_slop")
             break
-    made = typed_by_her(p)
-    if any(" ".join(n.casefold().split()) in made for n in s.never):
+    if any(typing_makes(n, typed_by_her(p)) for n in s.never):
         codes.append("never_in_typing")
     named = word_range(s.shape)
     if named is not None and named[1] > max(p.typing.words_per_line):
@@ -307,5 +321,5 @@ def screen(p: Persona, *, characters=()) -> list[str]:
 
 __all__ = ["BLOCK_TOKENS", "MAX_SAMPLES", "RECIPE_TAG", "SAMPLES_HEAD", "SAMPLE_TOKENS", "TRIMS",
            "VOICE_HEAD", "WANT_SAMPLE", "block_tokens", "fitted", "pick_samples", "public_block", "screen",
-           "stance_current", "typed_by_her",
+           "stance_current", "typed_by_her", "typing_makes",
            "speech_errors", "strings", "voice_block", "word_range"]

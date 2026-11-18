@@ -35,11 +35,27 @@ def turn(channel="guild", **kw):
                 addressee=1, **kw)
 
 
+FAR_S = 3600.0  # a deadline no test's own waiting reaches
+
+
 def speak(rig, t, meta=None):
+    """Run the turn to its end. The guards read mind.db on real worker threads while the rig's
+    clock moves half a fake second for every 5 ms of real time (its fixture sets `_yields` 0),
+    so on a loaded machine a turn's own 20 or 30 s deadline could pass in the middle of a
+    review and the turn was dropped `expired` (CI, 2026-11-18, under `-n auto`: a guard test
+    saw no line and the verdict of the draft before, not its own). A turn that names no
+    deadline therefore gets one no wait here reaches, and the clock goes on until the turn has
+    ended instead of stopping after a fixed 100 s; a test of the deadline passes its own."""
     meta = meta or TurnMeta(rig.engine._new_id(), why="test", answers_human=True)
+    if t.deadline <= 0:
+        t.deadline = rig.clock.now() + FAR_S
     async def go():
         task = asyncio.create_task(rig.engine._speak(t, meta))
         await rig.advance(100)
+        for _ in range(600):  # a loaded machine: until the turn ends, 25 fake minutes at most
+            if task.done():
+                break
+            await rig.advance(2.5)
         assert task.done()
         return task.result()
     return rig.sync(go()), meta

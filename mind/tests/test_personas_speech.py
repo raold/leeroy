@@ -295,6 +295,24 @@ def test_a_never_word_her_own_typing_produces_is_refused():
         assert sp.screen(replace(typist, speech=sheet(never=[word]))) == ["never_in_typing"]
 
 
+@pytest.mark.parametrize("never,refused", [
+    ("saying idk every time", True),      # one word of a four-word entry is her abbreviation
+    ("IDK!", True), ("(idk)", True),      # case and the punctuation around it aside
+    ("an i dunno shrug", False),          # the full form is not what her typing makes
+    ("kidking around", False),            # whole words only
+    ("for the win now", True),            # a form of several words, held as a run
+    ("for a win", False),
+    ("...", False),
+])
+def test_a_never_entry_is_compared_with_her_typing_word_by_word(never, refused):
+    """Review of #367, R1: an entry of several words was only compared whole, so the word her
+    own abbreviation types slipped through."""
+    typist = replace(make_persona(101, "Arkon", abbreviations={
+        "i do not know": "idk", "for the win today": "for the win"}), speech=sheet(never=[never]))
+    assert sp.typing_makes(never, sp.typed_by_her(typist)) is refused
+    assert sp.screen(typist) == (["never_in_typing"] if refused else [])
+
+
 def test_a_shape_longer_than_her_typing_is_refused():
     p = member()
     hi = max(p.typing.words_per_line)
