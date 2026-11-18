@@ -618,9 +618,11 @@ def style_negative(p: Persona, base: tuple[tuple[str, int], ...]) -> tuple[tuple
 
 def negative_for(p: Persona, base: tuple[tuple[str, int], ...]) -> tuple[tuple[str, int], ...]:
     """`base` with what the owner's "never" and "none" keep out. A body negative's required set
-    leaves little room, so there the words go in at priority 1 ahead of its optional phrases
-    (each one token: at worst the last optional phrase the fit kept makes way); any other
-    negative takes them where they have room, as before (style_negative)."""
+    leaves little room, so there the words go in at priority 1 ahead of its optional phrases,
+    and the worker's fit keeps as many as fit: all four in the plain, lust and situational body
+    negatives, the first two (glasses, tattoo) in a varied set's, whose required set counts 71
+    (main: none there). Any other negative takes them where they have room, as before
+    (style_negative)."""
     if (BODY_ANATOMY, 0) not in base:
         return base + style_negative(p, base)
     a = p.appearance

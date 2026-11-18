@@ -292,8 +292,8 @@ def test_the_profile_prompt_golden_for_a_man_who_set_none():
     first = BODY_NEGATIVE.index(("plastic skin", 1))
     assert spec.negative == BODY_NEGATIVE[:first] + (
         ("glasses", 1), ("tattoo", 1), ("piercing", 1), ("jewellery", 1)) + BODY_NEGATIVE[first:]
-    kept = fit(spec.negative)[0].split(", ")
-    assert all(w in kept for w in ("glasses", "tattoo", "piercing", "jewellery"))
+    # (what the worker's fit keeps of them is counted on the real tokenizers only:
+    # test_the_never_words_fit_in_the_body_negatives)
     # head and shoulders: the fixed negatives keep their places, the words where there is room
     close = build_prompt(replace(p, photo=replace(p.photo, framing="head_and_shoulders")))
     assert close.negative[:len(HEAD_NEGATIVE)] == HEAD_NEGATIVE
@@ -369,20 +369,21 @@ def test_each_never_or_none_is_its_own_one_word_negative_where_it_fits():
     assert style_negative(woman(jewellery="none", glasses="never"), NEGATIVE) == (
         ("glasses", 3), ("jewellery", 3))  # jewellery no longer costs him the glasses
     assert style_negative(woman(jewellery="none"), NEGATIVE) == (("jewellery", 3),)
-    for base, room in ((NEGATIVE, 2), (LUST_NEGATIVE, 3), (VARIED_NEGATIVE, 0)):
+    for base, room in ((NEGATIVE, 2), (LUST_NEGATIVE, 3)):
         got = style_negative(p, base)
         assert [w for w, _ in got] == ["glasses", "tattoo", "piercing", "jewellery"][:room]
         dropped = fit(base + got)[1]
         assert not any(w in dropped for w, _ in got), base  # what is sent is kept
         assert fit(base)[1] == dropped  # and it costs the fixed negatives nothing
     # a varied set's required negatives fill most of the window: style_negative adds nothing
-    # there, so negative_for puts the words ahead of its optional phrases (#362)
+    # there, so negative_for puts the words ahead of its optional phrases (#362); what the
+    # worker's fit keeps of a body negative is counted on the real tokenizers only
+    # (test_the_never_words_fit_in_the_body_negatives)
     assert style_negative(p, VARIED_NEGATIVE) == ()
     look = next(_looks(views=("front",)))
     got = build_varied_prompt(p, look).negative
     assert [x for x in got if x not in VARIED_NEGATIVE] == [
         ("glasses", 1), ("tattoo", 1), ("piercing", 1), ("jewellery", 1)]
-    assert "glasses" in fit(got)[0].split(", ")
     assert not any("glasses" in t for t, _ in build_varied_prompt(
         replace(p, appearance=replace(p.appearance, face=("thin glasses",))), look).phrases)
 
@@ -407,6 +408,30 @@ def fit(phrases, count=None):
 _TOKENIZERS = pytest.mark.skipif(clip_bpe.tokenizers() is None,
                                  reason="RealVisXL tokenizer files are not on this machine")
 WORN = dict(glasses="always", tattoos="small")  # the review's heaviest realistic member
+
+
+@_TOKENIZERS
+def test_the_never_words_fit_in_the_body_negatives():
+    """The body negatives' required sets count 57 to 71 on RealVisXL's tokenizers; the mind's
+    count is only an upper bound for them (77 to 91), so what the worker's fit keeps is measured
+    with the real files only. All four words fit in the plain, lust and situational body
+    negatives; a varied set's has room for the first two (main: none there)."""
+    from leeroy_mind.selfies.prompt import BODY_NEGATIVE_LUST, BODY_NEGATIVE_MIRROR, negative_for
+    from leeroy_mind.selfies.scene import (SNAP_NEGATIVE, SNAP_NEGATIVE_LUST,
+                                           SNAP_NEGATIVE_LUST_MIRROR, SNAP_NEGATIVE_MIRROR)
+    off = dict(glasses="never", tattoos="none", piercings="none", jewellery="none")
+    p = woman(build="curvy", **off)
+    words = ("glasses", "tattoo", "piercing", "jewellery")
+    bodies = (BODY_NEGATIVE, BODY_NEGATIVE_MIRROR, BODY_NEGATIVE_LUST, SNAP_NEGATIVE,
+              SNAP_NEGATIVE_LUST, SNAP_NEGATIVE_MIRROR, SNAP_NEGATIVE_LUST_MIRROR)
+    for base in bodies:
+        kept = fit(negative_for(p, base), clip_bpe.count)[0].split(", ")
+        assert all(w in kept for w in words), base
+    varied = fit(negative_for(p, VARIED_NEGATIVE), clip_bpe.count)[0].split(", ")
+    assert [w for w in words if w in varied] == ["glasses", "tattoo"]  # where room allows
+    for base in (*bodies, VARIED_NEGATIVE):
+        kept = fit(negative_for(p, base), clip_bpe.count)[0]
+        assert all(t in kept for t, pr in base if pr == 0)  # never at a required word's cost
 
 
 def heavy(**more):
