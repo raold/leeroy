@@ -11,7 +11,10 @@ import re
 
 from . import feed, views
 
-SCAN = 500  # the newest discord rows after the mark that one read looks at
+SCAN = 500  # the newest channel rows after the mark that one read looks at for mentions
+# His DMs and group DMs are counted by SQL, whole: never lost behind newer channel rows
+PRIVATE = "(substr(m.channel, 1, 3) = 'dm:' OR substr(m.channel, 1, 4) = 'gdm:')"
+NEW = "m.id > ? AND m.origin = 'mind' AND m.deleted IS NULL"
 
 
 def _top(conn, table: str) -> int:
@@ -45,24 +48,26 @@ def unread_view(conn, *, chat: int | None, discord: int | None, now: float | Non
                 newest = (line["ts"], {"key": f"w:{line['id']}", "kind": "whisper",
                                        "name": line["from"] or names.get(line["from_guid"], "")})
     if discord is not None and human:
+        out["dms"] = int(views.rows(conn,
+            f"SELECT count(*) FROM discord_message m WHERE {NEW} AND {PRIVATE}", (discord,))[0][0] or 0)
         rows = views.rows(conn,
-            "SELECT m.id, m.ts, m.channel, m.author, m.text, m.reply_to FROM discord_message m "
-            "WHERE m.id > ? AND m.origin = 'mind' AND m.deleted IS NULL ORDER BY m.id DESC LIMIT ?",
-            (discord, SCAN))
+            f"SELECT m.id, m.ts, m.author FROM discord_message m WHERE {NEW} AND {PRIVATE} "
+            "ORDER BY m.id DESC LIMIT 1", (discord,))
+        for r in rows:
+            if r["ts"] >= newest[0]:
+                newest = (r["ts"], {"key": f"d:{r['id']}", "kind": "dm", "name": names.get(r["author"], "")})
+        rows = views.rows(conn,
+            f"SELECT m.id, m.ts, m.author, m.text, m.reply_to FROM discord_message m "
+            f"WHERE {NEW} AND NOT {PRIVATE} ORDER BY m.id DESC LIMIT ?", (discord, SCAN))
         parents = sorted({r["reply_to"] for r in rows if r["reply_to"]})
         his = {r[0] for r in views.rows(conn,
             "SELECT id FROM discord_message WHERE author = ? AND origin = 'human' "
             "AND id IN (SELECT value FROM json_each(?))", (human, json.dumps(parents)))} if parents else set()
         for r in rows:
-            private = r["channel"].startswith(("dm:", "gdm:"))
-            if private:
-                kind = "dm"
-            elif r["reply_to"] in his or _mentions(r["text"], hname):
-                kind = "mention"
-            else:
+            if not (r["reply_to"] in his or _mentions(r["text"], hname)):
                 continue
-            out["dms" if private else "mentions"] += 1
+            out["mentions"] += 1
             if r["ts"] >= newest[0]:
-                newest = (r["ts"], {"key": f"d:{r['id']}", "kind": kind, "name": names.get(r["author"], "")})
+                newest = (r["ts"], {"key": f"d:{r['id']}", "kind": "mention", "name": names.get(r["author"], "")})
     out["latest"] = newest[1]
     return out

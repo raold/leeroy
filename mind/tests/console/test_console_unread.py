@@ -52,6 +52,21 @@ def test_nothing_is_counted_before_the_page_has_a_mark(data, cast):
     assert v["chat_top"] >= 1 and v["discord_top"] == posted
 
 
+def test_an_unread_dm_is_never_lost_behind_newer_channel_rows(data, cast):
+    cast.conn.commit()
+    top = read(data, chat=None, discord=None)
+    dstore.post(cast, channel="dm:102", author=102, origin="mind", text=SECRET, now=NOW - 5000)
+    dstore.post(cast, channel="gdm:1", author=101, origin="mind", text=SECRET, now=NOW - 4999)
+    dstore.post(cast, channel="general", author=101, origin="mind", text="@hero early one", now=NOW - 4998)
+    for i in range(unreadview.SCAN + 100):
+        dstore.post(cast, channel="general", author=101, origin="mind", text="guild talk", now=NOW - 4000 + i)
+    cast.conn.commit()
+    v = read(data, chat=top["chat_top"], discord=top["discord_top"], now=NOW + 60)
+    assert v["dms"] == 2 and v["mentions"] == 0     # the mention scan stays bounded, the DM count is whole
+    assert v["latest"]["kind"] == "dm" and v["latest"]["name"] == "Arkon"
+    assert SECRET not in json.dumps(v)
+
+
 def test_whispers_dms_and_mentions_after_the_marks(data, cast):
     old = whisper(cast, 101, HUMAN)
     mine = dstore.post(cast, channel="general", author=HUMAN, origin="human", text="who is on tonight", now=NOW - 50)
