@@ -30,20 +30,24 @@ def _terms(negative, priority=None) -> set[str]:
 # -- the negative -------------------------------------------------------------------------------
 
 def test_the_snap_negatives_require_the_anatomy_line():
+    # since the photo audit (2026-11-17, safe.py): no eye words, a third hand, a duplicate
+    # person, the mirror, the phone, text and the missing garments required
     assert SNAP_NEGATIVE == (
-        ("cartoon, painting, 3d render", 0), (NEGATIVE[1][0], 0), ("child, teenager", 0),
-        ("celebrity, famous person", 0), (SNAP_ANATOMY, 0), ("another person", 0),
-        ("second face, duplicate person", 1), ("plastic skin, airbrushed, doll", 1),
-        ("crowd, group of people", 1), ("vintage, retro, film grain, sepia, old photo", 1),
-        ("anime, illustration, cgi", 2), ("face on screen, webcam, video call, portrait on wall", 2),
-        ("watermark, text, logo", 2))
-    assert SNAP_NEGATIVE_LUST == (
-        ("cartoon, painting", 0), (LUST_NEGATIVE[1][0], 0), *SNAP_NEGATIVE[2:10],
-        ("3d render, anime, illustration, cgi", 2), *SNAP_NEGATIVE[11:])
+        ("cartoon, painting", 0), (NEGATIVE[1][0], 0), ("child, teenager", 0),
+        ("celebrity, famous person", 0), (SNAP_ANATOMY, 0),
+        ("another person, duplicate person", 0), ("bottomless, shirtless", 0),
+        ("mirror, phone", 0),
+        # optional, in the order the fit offers them room: the realism words first
+        ("plastic skin", 1), ("airbrushed, doll", 1), ("text, logo", 1),
+        ("deformed face, bad hands", 1), ("3d render, anime, cgi", 1),
+        ("second face, crowd, group of people", 2),
+        ("vintage, retro, film grain, sepia, old photo", 2), ("illustration, watermark", 2),
+        ("face on screen, webcam, video call, portrait on wall", 2))
+    assert SNAP_NEGATIVE_LUST == (SNAP_NEGATIVE[0], (LUST_NEGATIVE[1][0], 0), *SNAP_NEGATIVE[2:])
     assert NEGATIVE[1][0] == "nsfw, nude, cleavage, lingerie, swimwear"
     assert LUST_NEGATIVE[1][0] == "nsfw, nude, topless, lingerie, underwear, see-through, sheer"
-    for word in ("extra limbs", "fused fingers", "malformed hands", "deformed feet", "cross-eyed",
-                 "lazy eye", "asymmetric eyes", "disfigured"):
+    for word in ("extra arms", "extra legs", "extra hands", "fused fingers", "extra fingers",
+                 "malformed hands", "deformed feet"):
         assert word in _terms(SNAP_NEGATIVE, 0) and word in _terms(SNAP_NEGATIVE_LUST, 0)
 
 
@@ -64,7 +68,10 @@ def test_the_guild_tile_keeps_its_old_negative():
 
 
 def test_profile_sets_keep_their_negative():
-    assert build_prompt(woman()).negative == NEGATIVE
+    from leeroy_mind.selfies.prompt import BODY_NEGATIVE, HEAD_NEGATIVE
+    assert build_prompt(woman()).negative == BODY_NEGATIVE  # a waist-up kind (safe.py)
+    close = replace(woman(), photo=replace(woman().photo, framing="head_and_shoulders"))
+    assert build_prompt(close).negative == HEAD_NEGATIVE and set(NEGATIVE) < set(HEAD_NEGATIVE)
 
 
 @_TOKENIZERS

@@ -29,7 +29,7 @@ REPLY = {"place": "supply cupboard at work", "framing": "mirror_selfie",
          "wearing": "work_uniform", "moment": "slipped out for a minute", "time": "now",
          "lighting": "fluorescent", "prop": "paper coffee cup"}
 HIS = "sneak off and send me a pic from the supply cupboard"
-HIVIS = "a hi-vis vest over a work t-shirt"  # the test cast's job: warehouse supervisor
+HIVIS = "a hi-vis vest over a work t-shirt and work trousers"  # the test cast's job: warehouse supervisor
 LUST_PICKS = {**PICKS, "setting": "her living room couch", "activity": "relaxing", "prop": "none",
               "outfit": "satin midi dress", "colour": "navy", "expression": "laughing"}
 
@@ -196,8 +196,10 @@ def test_no_job_to_go_to_means_casual(app):
     assert "wearing:no_work" in scene["words"]["fallbacks"]
 
 
-@pytest.mark.parametrize("job,uniform", [("night nurse on a children's ward", "medical scrubs"),
-                                         ("barista in a station cafe", "a black work apron over a black t-shirt"),
+@pytest.mark.parametrize("job,uniform", [("night nurse on a children's ward",
+                                          "a medical scrubs top and scrubs trousers"),
+                                         ("barista in a station cafe",
+                                          "a black work apron over a black t-shirt and jeans"),
                                          ("claims handler", W.OFFICE_WEAR)])
 def test_work_uniform_is_read_from_her_job(job, uniform):
     p = woman(age=30)
@@ -300,14 +302,17 @@ def test_wearing_place_and_framing_are_required_and_the_rest_keep_their_prioriti
     p = woman(age=30)
     spec = W.build_words_prompt(p, _scene(p))
     required = [t for t, pr in spec.phrases if pr == 0]
-    assert required[0] == "mirror selfie"
+    assert required[0] == "mirror selfie"  # the mirror he asked for stays (safe.py)
+    held = W.build_words_prompt(p, _scene(p, framing="handheld_selfie"))
+    assert held.phrases[0] == ("selfie, close arm's-length shot", 0)  # no phone
     assert f"wearing {HIVIS}" in required and "supply cupboard at work" in required
     assert ("slipped out for a minute", 1) in spec.phrases
     assert ("with paper coffee cup", 2) in spec.phrases
     assert ("harsh fluorescent light", 2) in spec.phrases and ("early morning", 3) in spec.phrases
     assert ("looking at the camera", 3) in spec.phrases
     assert ("recent smartphone photo, natural skin texture, unretouched", 1) in spec.phrases
-    assert spec.negative == SNAP_NEGATIVE
+    from leeroy_mind.selfies.scene import SNAP_NEGATIVE_MIRROR
+    assert spec.negative == SNAP_NEGATIVE_MIRROR and held.negative == SNAP_NEGATIVE
 
 
 def test_from_behind_turns_away_and_takes_the_face_lightly():
