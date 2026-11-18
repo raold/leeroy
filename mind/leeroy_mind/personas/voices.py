@@ -54,7 +54,8 @@ REFUSALS = {
     "never_in_sample": "a sample line uses a word she never uses",
     "says_slop": ("one of her words holds or sits inside a stock slop entry, which the guards "
                   "rewrite on every turn"),
-    "never_in_typing": "her own abbreviations or typing habits produce a word she never uses",
+    "never_in_typing": ("her own abbreviations or typing habits produce a word she never uses, "
+                        "or a word of a never-entry"),
     "shape_over_typing": "her shape names more words than her typing's longest line",
 }
 # A file passed over without a refusal, by code (never an error exit)
