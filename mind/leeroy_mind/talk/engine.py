@@ -301,6 +301,10 @@ class TalkEngine(EmoteReactions):
                 owed.persist()
         elif not self.world.human_online:
             carried = self.life.on_logout()
+        if not stopping:
+            # his Discord is not his game: an answer to his DM or post in flight survives his
+            # logout (self-play audit 3: the logout cancelled her DM answer)
+            carried = set(carried) | self.discord_answer_jobs()
         await self._cancel_all(keep=carried)
         if self.cfg.talk.realism:
             self.realism.fights.clear()

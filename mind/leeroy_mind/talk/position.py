@@ -7,8 +7,8 @@ Read from words alone, the same on every channel and for every member:
 
 - `disagrees`: his line pushes back on what she said or doubts it (select.pushback_kind's cues
   and the plain ones: "you said", "which is it", "are you sure", "idk, it looked legit");
-- `bad_news`: his line carries bad news of his own (a hospital, a death, a vet, a lost job, a
-  rough day): she neither teases nor flirts on it;
+- his bad news (talk/hisline.py `bad_news`, the one reader): she neither teases nor flirts
+  on it (talk/intent.py);
 - `Hold` and `held`: while his question or disagreement is open her want is the one she had
   (held for HOLD_S of quiet, at most HOLD_TURNS answers or HOLD_MAX_S from when it was first
   set, until he changes the subject or settles it with a "fair enough");
@@ -52,16 +52,6 @@ _DISAGREES = re.compile(
     r"(?:you|u) were the one|(?:you|u) wrote|nah\b|wait (?:what|you|u)\b|since when|"
     r"how come|make up your mind)", re.IGNORECASE)
 _DOUBT_OPEN = re.compile(r"^\W*(?:idk|hmm+|eh|really)\b", re.IGNORECASE)
-_BAD_NEWS = re.compile(
-    r"\b(?:hospital|icu|emergency room|in the er|passed away|died|dying|funeral|cancer|"
-    r"diagnos\w+|heart (?:attack|thing|problem)|stroke|surgery|at the vet|to the vet|"
-    r"put (?:him|her|them|it) (?:down|to sleep)|laid off|got fired|lost my job|made redundant|"
-    r"broke up|dumped me|divorce|car accident|miscarr\w+|"
-    r"(?:rough|bad|terrible|awful|shit|shitty|horrible|worst) (?:day|night|week|news)|"
-    r"not doing (?:well|good|great|so good)|worried sick|scared (?:for|about)|"
-    r"my (?:dad|mom|mum|mother|father|brother|sister|wife|kid|son|daughter|dog|cat) "
-    r"(?:is|was|got|has|had) (?:sick|ill|hurt|in|not)|want to think about something else)\b",
-    re.IGNORECASE)
 _ACK = frozenset("""ok okay k kk fair enough true right yeah yea yep yup lol lmao haha hah nice
 cool thanks thx ty cheers got it gotcha np sure alright aight good point makes sense i see
 oh ah fine then so""".split())
@@ -93,16 +83,6 @@ def disagrees(line: str) -> bool:
         return False
     return (pushback_kind(text) is not None or bool(_DISAGREES.search(text))
             or bool(_DOUBT_OPEN.search(text)))
-
-
-def bad_news(line: str) -> bool:
-    """His line carries bad news of his own (module docstring). One reader: talk/hisline.py's
-    (the DM memory work) once it is there, this module's own pattern until then."""
-    try:
-        from leeroy_mind.talk.hisline import bad_news as theirs
-    except ImportError:
-        return bool(_BAD_NEWS.search(" ".join((line or "").split())))
-    return theirs(line or "")
 
 
 def settled(line: str) -> bool:
@@ -217,5 +197,5 @@ def view_line(opinion: str, human: str = "he") -> str:
 
 
 __all__ = ["CLAIM_TOKENS", "CLAIM_WINDOW_S", "HOLD_MAX_S", "HOLD_S", "HOLD_TURNS", "Hold",
-           "bad_news", "claims_so_far", "disagrees", "held", "opinion_for", "relevant_claims",
+           "claims_so_far", "disagrees", "held", "opinion_for", "relevant_claims",
            "said_line", "settled", "strong", "view_line", "words_of"]

@@ -138,14 +138,18 @@ def _prompt_mind(p: Persona) -> tuple[str, str]:
 
 
 def _render(p: Persona, race: str, class_name: str, mind: str, view: str, *,
-            budget: int = CARD_BUDGET, about: bool = False, topic: str = "") -> str:
+            budget: int = CARD_BUDGET, about: bool = False, temper: bool = True,
+            topic: str = "") -> str:
     """The card's sections within `budget`. With `about` (the prompt card), the identity and
     work lines give way to about_lines, kept whole, and the rest stays exactly what it was: the
-    sections are fitted as before and the head's few more words come on top."""
+    sections are fitted as before and the head's few more words come on top. Without `temper`
+    the two trait sentences and the mind line are left out (her voice sheet says them), the
+    other sections chosen as they would be with them."""
     ident = _identity_line(p, race, class_name)
     work = " ".join(x for x in (_field("Work", p.real_life.job),
                                 _field("Rhythm", p.real_life.rhythm)) if x)
-    card = _render_rest(p, mind, view, budget=budget, ident=ident, work=work, topic=topic)
+    card = _render_rest(p, mind, view, budget=budget, ident=ident, work=work, temper=temper,
+                        topic=topic)
     if not about:
         return card
     old = "\n".join(x for x in (ident, work) if x)
@@ -167,13 +171,13 @@ def _opinions(p: Persona, topic: str) -> tuple[list[str], bool]:
 
 
 def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = "",
-                 work: str = "", topic: str = "") -> str:
+                 work: str = "", temper: bool = True, topic: str = "") -> str:
     ext = p.big_five.extraversion
     name, far = _furthest_trait(p)
     behaviours = [_sentence(ext.behaviour)]
     if name != "extraversion":
         behaviours.append(_sentence(far.behaviour))
-    temper = " ".join(b for b in behaviours if b)
+    with_traits, temper = temper, " ".join(b for b in behaviours if b)
 
     shown, touched = _opinions(p, topic)
     opinions = "Opinions: " + " | ".join(shown)
@@ -183,6 +187,14 @@ def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = 
     sections = {"ident": ident, "work": work, "temper": temper, "mind": mind, "view": view,
                 "opinions": opinions if p.opinions else "",
                 "nevers": nevers if p.nevers else ""}
+
+    def joined() -> str:
+        # without `temper` (her voice sheet says it), the sections are chosen as they would be
+        # with the trait sentences and the mind line, then those two are left out: the sheet
+        # takes their place and nothing else comes back into the room they leave
+        return "\n".join(s for k, s in sections.items()
+                         if s and (with_traits or k not in ("temper", "mind")))
+
     # an opinion his line touches is the last section to go, not the first
     for drop in ((None, "view", "mind", "opinions") if touched
                  else (None, "opinions", "view", "mind")):
@@ -190,9 +202,9 @@ def _render_rest(p: Persona, mind: str, view: str, *, budget: int, ident: str = 
             sections[drop] = ""
         card = "\n".join(s for s in sections.values() if s)
         if estimate_tokens(card) <= budget:
-            return card
+            return joined()
     # Still over: the persona's own strings are long. Trim the tail, keeping the identity line.
-    return truncate_words(card, max(0, budget) * 4)
+    return truncate_words(joined(), max(0, budget) * 4)
 
 
 def render_core_card(p: Persona, *, race: str, class_name: str) -> str:
@@ -200,17 +212,40 @@ def render_core_card(p: Persona, *, race: str, class_name: str) -> str:
     return _render(p, race, class_name, *_stored_mind(p))
 
 
-def render_prompt_card(p: Persona, *, race: str, class_name: str, topic: str = "") -> str:
+def render_prompt_card(p: Persona, *, race: str, class_name: str, voice: bool = False,
+                       topic: str = "") -> str:
     """The card a prompt shows: the "About you" head (about_lines: her sex and pronouns, her
     household and her job, never cut), then the same sections as the stored card, attachment,
     humour and how they play said as behaviour, chosen as they would be in PROMPT_CARD_BUDGET
-    estimated tokens with the stored card's shorter identity and work lines. `topic` ([talk]
-    coherence): the line of his she answers; the opinion it touches leads the two shown and is
-    then the last section dropped for the budget, not the first (self-play audit, 2026-11-17: an
-    officer argued against a rule his card calls law, because the card showed only his first
-    two opinions and dropped them first)."""
+    estimated tokens with the stored card's shorter identity and work lines. `voice` (a live
+    turn's prompt, which shows her voice sheet by its instruction: personas.speech): for a
+    member with a sheet the two trait sentences and the attachment and humour lines are left
+    out, since the sheet says how she is in her own terms; without one the card is the same.
+    `topic` ([talk] coherence): the line of his she answers; the opinion it touches leads the
+    two shown and is then the last section dropped for the budget, not the first (self-play
+    audit, 2026-11-17: an officer argued against a rule his card calls law, because the card
+    showed only his first two opinions and dropped them first)."""
+    if voice and getattr(p, "speech", None) is not None:
+        return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET,
+                       about=True, temper=False, topic=topic)
     return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET, about=True,
                    topic=topic)
+
+
+def render_night_card(p: Persona, *, race: str, class_name: str) -> str:
+    """The card the night's readers get (the critic, the weekly evaluation, and the scenes,
+    beats, letters and posts written from NightContext.card): the prompt card, and for a member
+    with a voice sheet the card live talk shows (no trait sentences, no attachment or humour
+    line) followed by the sheet's public part (personas.speech.public_block: her register,
+    shape, words, never-words and topics; never how she is with him nor her stance, which only
+    a private turn of his reads). So a member is judged against, and written in, the voice she
+    talks in. Without a sheet it is render_prompt_card, word for word."""
+    card = render_prompt_card(p, race=race, class_name=class_name, voice=True)
+    speech = getattr(p, "speech", None)
+    if speech is None:
+        return card
+    from .speech import public_block
+    return card + "\n" + public_block(speech)
 
 
 # The identity line's "You play Name, a/an KIND (ROLE)." with the role the last parentheses,

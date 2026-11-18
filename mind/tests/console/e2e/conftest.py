@@ -46,8 +46,8 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
         pytest.skip(message)
 
     @asynccontextmanager
-    async def start(*, width=1440, theme="dark", state="running", photos=False, learning=False, voice_notes=False,
-                    godmode=False):
+    async def start(*, width=1440, height=1000, theme="dark", state="running", photos=False, learning=False,
+                    voice_notes=False, godmode=False):
         # A rehearsal that runs past 75 s prints every asyncio task's stack once, so a
         # wait with no deadline names itself before the job's timeout cancels it. Capture
         # is suspended for it: a job killed mid-test never shows captured output.
@@ -68,13 +68,13 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
         watchdog.daemon = True
         watchdog.start()
         try:
-            async with _browser(width, theme, state, photos, learning, voice_notes, godmode) as fixture:
+            async with _browser(width, theme, state, photos, learning, voice_notes, godmode, height) as fixture:
                 yield fixture
         finally:
             watchdog.cancel()
 
     @asynccontextmanager
-    async def _browser(width, theme, state, photos, learning, voice_notes, godmode=False):
+    async def _browser(width, theme, state, photos, learning, voice_notes, godmode=False, height=1000):
         async with playwright.async_playwright() as pw:
             if not Path(pw.chromium.executable_path).is_file():
                 message = "Chromium is not installed; run python -m playwright install chromium"
@@ -82,7 +82,7 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
                     pytest.fail(message)
                 pytest.skip(message)
             browser = await pw.chromium.launch()
-            context = await browser.new_context(viewport={"width": width, "height": 1000},
+            context = await browser.new_context(viewport={"width": width, "height": height},
                                                 reduced_motion="reduce")
             fixture = Rehearsal(tmp_path, monkeypatch)
             errors = []

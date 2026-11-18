@@ -139,7 +139,7 @@ def _join(units) -> str:
     return " ".join(w for ws, _ in units for w in ws).rstrip(",;:- ")
 
 
-def _cut(units, first: int, room: int, sentence: bool = True) -> str:
+def _cut(units, first: int, room: int, sentence: bool = True, floor: int = MIN_WORDS) -> str:
     """The longest run of whole leading clauses within `room` words that holds clause `first`
     (the answering one) and ends cleanly; "" when there is none. `sentence`: the answering
     clause goes with the rest of its sentence (its reason, its "because")."""
@@ -154,16 +154,19 @@ def _cut(units, first: int, room: int, sentence: bool = True) -> str:
         if units[k - 1][1] != SENT and (_bare(last[-1]) in _DANGLING or (
                 len(last) <= 3 and _bare(last[0]) in _CONJUNCTIONS)):
             continue  # never ends on "but only" or "the" (a sentence's own end is whole)
-        if len(_QUOTE.findall(_join(head))) % 2 or _n(head) < MIN_WORDS:
+        if len(_QUOTE.findall(_join(head))) % 2 or _n(head) < max(MIN_WORDS, floor):
             continue
         best = _join(head)
     return best
 
 
-def fit_answer(text: str, limit: int, his: str = "", *, subject: str = "") -> Fit:
+def fit_answer(text: str, limit: int, his: str = "", *, subject: str = "",
+               floor: int = 0) -> Fit:
     """What a game reply of `text` becomes on a turn of `limit` words (module docstring).
     `his`: the line of his it answers ("" none); `subject`: what the turn is about when it
-    answers nothing."""
+    answers nothing; `floor`: the fewest words a cut may leave (the low end of the line her
+    voice sheet names; MIN_WORDS at least), so she is never cut below her own shape. Nothing
+    is ever added: a line is never padded."""
     words = text.split()
     if limit <= 0 or len(words) <= int(LONG_SLACK * limit):
         return Fit(text, "fits")
@@ -172,11 +175,11 @@ def fit_answer(text: str, limit: int, his: str = "", *, subject: str = "") -> Fi
     within = len(words) <= int(KEEP_SLACK * limit)
     if first is not None:
         answers = bool(his.strip() or subject.strip())  # else there is no answer to lose
-        cut = _cut(units, first, int(LONG_SLACK * limit), answers)
+        cut = _cut(units, first, int(LONG_SLACK * limit), answers, floor)
         if cut:
             return Fit(cut, "cut")
         if not within:
-            cut = _cut(units, first, int(KEEP_SLACK * limit), answers)
+            cut = _cut(units, first, int(KEEP_SLACK * limit), answers, floor)
             if cut:
                 return Fit(cut, "kept")
     return Fit(text, "kept" if within else "retry")

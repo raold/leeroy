@@ -45,14 +45,11 @@ def ctx(**over):
 
 # -- the words ------------------------------------------------------------------------------------
 
-def test_disagreement_bad_news_and_settling_are_read_from_his_words():
+def test_disagreement_and_settling_are_read_from_his_words():
     assert position.disagrees("idk that sheet looked pretty legit")
     assert position.disagrees("wait you said it was nine")
     assert position.disagrees("which is it lol") and position.disagrees("what are you talking about")
     assert not position.disagrees("nice pull") and not position.disagrees("")
-    assert position.bad_news("hes in hospital, heart thing")
-    assert position.bad_news("rough day, the dog is at the vet")
-    assert not position.bad_news("good raid tonight")
     assert position.settled("ok fair enough") and position.settled("lol")
     assert not position.settled("ok but why") and not position.settled("ok?")
 
@@ -220,18 +217,21 @@ def test_a_whisper_holds_her_want_and_shows_what_she_said(store, clock, tmp_path
         assert first.intent_ctx.pushback and first.intent_ctx.hold is None
         enum = beat_calls(r)[-1]["format"]["properties"]["want"]["enum"]
         assert not {i.value for i in ANSWER_OFF} & set(enum)
-        assert "So far in this conversation" not in last_user(beat_calls(r)[-1])
+        assert "You said: i have" not in last_user(beat_calls(r)[-1])
 
         # his short follow-up keeps her on it: the same want, the only one offered, and her
-        # own tally before the beat (never a second "so far" block in the line's prompt)
+        # own tally as one line of the one "So far between you two" block, in both requests
         r.whisper_from_him(102, "which is it lol")
         r.run()
         second = seen[-1]
         assert second.intent_ctx.hold == Intent(first.intent)
         assert beat_calls(r)[-1]["format"]["properties"]["want"]["enum"] == [first.intent]
         assert second.intent == first.intent
-        assert 'you\'ve said: "i have 7 wins on him and 9 losses"' in last_user(beat_calls(r)[-1])
-        assert "So far in this conversation" not in last_user(line_calls(r)[-1])
+        said = "- You said: i have 7 wins on him and 9 losses."
+        for call in (beat_calls(r)[-1], line_calls(r)[-1]):
+            user = last_user(call)
+            assert user.count(said) == 1 and user.count("So far between you two") == 1
+            assert "So far in this conversation" not in user
 
         # a new subject lets the hold go
         r.whisper_from_him(102, "anyway what time is raid tonight")
@@ -254,7 +254,6 @@ def test_coherence_off_draws_and_shows_as_before(store, clock, tmp_path):
         r.run()
         ctx2 = seen[-1].intent_ctx
         assert not ctx2.answer_first and ctx2.hold is None and not ctx2.pushback
-        assert seen[-1].position == ""
         assert "So far in this conversation" not in last_user(line_calls(r)[-1])
     finally:
         r.close()
@@ -312,14 +311,15 @@ def test_a_dm_shows_what_she_said_and_takes_bad_news_gently(store, clock, tmp_pa
     try:
         seen = spy(r)
         r.llm.set_script(model(BEAT, "oh no, is he alright"))
+        dstore.post(r.store, channel="dm:102", author=102, origin="mind",
+                    text="im on the late shift till 10 tonight", now=r.clock.now() - 300)
         turn, meta = dm_turn(r, "bad news, my dad is in hospital, you still on that shift?",
                              earlier=[(102, HUMAN, "im on the late shift till 10 tonight"),
                                       (HUMAN, 102, "ok")])
         assert speak(r, turn, meta)
         assert meta.intent_ctx.bad_news
-        assert 'you\'ve said: "im on the late shift till 10 tonight"' in meta.position
-        assert meta.position in last_user(beat_calls(r)[-1])
-        assert meta.position not in last_user(line_calls(r)[-1])
+        for call in (beat_calls(r)[-1], line_calls(r)[-1]):
+            assert "So far in this conversation" not in last_user(call)  # never a second block
         enum = beat_calls(r)[-1]["format"]["properties"]["want"]["enum"]
         assert not {i.value for i in BAD_NEWS_OFF} & set(enum)
         assert seen[-1] is meta

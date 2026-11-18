@@ -184,43 +184,22 @@ JOINED = {"work": "You told {them} a little while ago you were at work: you've j
                  "logged on.",
           "out": "You told {them} a little while ago you were out: you've just got back in "
                  "and logged on."}
-_APOS = "['’ʼ]?"
-# Where she says she is, as a statement about herself now (review of #370: the first reader
-# held places she never claimed: someone else's, a negation, a question to him, the past or
-# the future). A sentence of hers counts only when it opens with the place, after at most a
-# filler and "i'm" with "still", "just", "back" and the like: "at work, worst shift of my life",
-# "im still in bed", "ok im home now". "she's at work", "im not at work", "are you at work?",
-# "i was at work" and "ill be at work by nine" open with something else and are not read.
-_OPEN = (rf"^(?:(?:lol|lmao|haha|ugh|yeah|yea|ya|yep|nah|ok|okay|well|and|but|so|sorry|honestly"
-         rf"|oh|ah|hey|omg)[\s,]+)*(?:(?:i{_APOS}m|i am|im)\s+)?"
-         rf"(?:(?:still|just|stuck|currently|already|back|literally|actually|finally)\s+)*")
-_STATED = (
-    # home first: "just got in from work" is no "at work"
-    ("home", re.compile(
-        _OPEN + rf"(?:(?:at )?home\b|on the (?:sofa|couch)\b|in the (?:kitchen|living room|"
-        rf"bath)\b|(?:got|get)(?: (?:in|home|back))? from (?:work|my shift|the gym|the shops?)\b"
-        rf"|(?:in|home) from (?:work|my shift)\b|(?:finished|done with|off|left|clocked off) "
-        rf"(?:work|my shift)\b|(?:it{_APOS}s |its |on |got |having )?(?:a|my) day off\b"
-        rf"|closed up\b)", re.IGNORECASE)),
-    ("work", re.compile(
-        _OPEN + rf"(?:(?:at|in) (?:work|the office|the shop|the bar|the hospital|the plant|the "
-        rf"lab|the studio|the depot|the clinic|the site)\b|on (?:my |a |the )?(?:shift|break|"
-        rf"lunch break|tea break)\b|at my desk\b|between (?:tasks|calls|customers|clients|"
-        rf"patients|tables|meetings)\b)", re.IGNORECASE)),
-    ("bed", re.compile(
-        _OPEN + r"(?:in bed\b|under the (?:covers|duvet)\b|half asleep\b)", re.IGNORECASE)),
-    ("out", re.compile(
-        _OPEN + r"(?:at the (?:gym|shops?|pub|store|vet|dentist|doctors?)\b|on the (?:bus|"
-        r"train|road)\b|in the car\b|driving\b|out (?:with|for|at)\b)", re.IGNORECASE)),
-)
 _STATED_BLOCKS = {"work": frozenset({Block.WORK}), "bed": frozenset({Block.ASLEEP}),
                   "out": frozenset({Block.OUT, Block.GYM, Block.COMMUTE}),
                   "home": frozenset({Block.FREE, Block.GAMING, Block.HOME_DUTY, Block.ASLEEP})}
 _SENTENCES = re.compile(r"[^.!?\n]+[.!?]*")
-# the other reader's words (talk/sofar.py her_place, once it is merged) by kind
+_NOT_NOW = re.compile(
+    r"\?\s*$|\b(?:not|never|no longer|wasn'?t|isn'?t|aren'?t|ain'?t|was|were|will|i'?ll|won'?t"
+    r"|gonna|going to|tomorrow|yesterday|later|soon|when i|if i|wish|until i|once i|before i"
+    r"|after i|he|she|they|you|u|he'?s|she'?s|they'?re|you'?re|nobody|anyone|everyone"
+    r"|my (?:husband|wife|partner|boyfriend|girlfriend|mum|mom|dad|son|daughter|kid|kids|brother"
+    r"|sister|flatmate|roommate|boss|friend|mate))\b", re.IGNORECASE)
+# the reader's words (talk/sofar.py her_place and her_state) by kind; the first that matches
 _KINDS = (
+    ("home", re.compile(r"\boff (?:work|shift)\b|\bdone for the day\b|\bclosed up\b",
+                        re.IGNORECASE)),
     ("work", re.compile(r"\b(?:work|office|shop|bar|hospital|plant|lab|studio|depot|clinic|site"
-                        r"|shift|desk)\b", re.IGNORECASE)),
+                        r"|shift|desk|break|closing up)\b", re.IGNORECASE)),
     ("bed", re.compile(r"\bbed\b", re.IGNORECASE)),
     ("out", re.compile(r"\b(?:gym|shops?|pub|store|vet|dentist|doctors?|bus|train|road|car)\b",
                        re.IGNORECASE)),
@@ -229,29 +208,22 @@ _KINDS = (
 )
 
 
-def _own_place(lines: Sequence[str]) -> str:
-    for line in reversed(list(lines)):
-        for sentence in reversed([x.strip() for x in _SENTENCES.findall(line or "")]):
-            if not sentence or sentence.endswith("?"):
-                continue
-            for kind, pattern in _STATED:
-                if pattern.search(sentence):
-                    return kind
-    return ""
-
-
 def stated_where(lines: Sequence[str]) -> str:
     """Where she last said she is, from her own `lines` in this conversation (oldest first):
-    "work", "bed", "out" or "home" from the newest sentence that states it of herself, now
-    (module comment above); "" when none does. One reader of her place: once talk/sofar.py
-    (the DM memory work) is there, its her_place is the reader and this only names its kind."""
-    try:
-        from leeroy_mind.talk import sofar
-    except ImportError:
-        return _own_place(lines)
-    place = sofar.her_place([sofar.Line(i, 0.0, False, text or "")
-                             for i, text in enumerate(lines)])
-    return next((kind for kind, pattern in _KINDS if pattern.search(place)), "") if place else ""
+    "work", "bed", "out" or "home". One reader of her place: talk/sofar.py's her_place and
+    her_state read the words ("at the studio till ten"; "on my break", "closed up"); this
+    names their kind ("" for none, or words of no kind here)."""
+    from leeroy_mind.talk import sofar
+    # only what she says of herself, now: a sentence about someone else, a negation, the past
+    # or the future is not handed to the reader (review of #370)
+    kept = [" ".join(x for x in _SENTENCES.findall(text or "") if not _NOT_NOW.search(x))
+            for text in lines]
+    rows = [sofar.Line(i, 0.0, False, text) for i, text in enumerate(kept)]
+    for words in (sofar.her_place(rows), sofar.her_state(rows)):
+        for kind, pattern in _KINDS:
+            if pattern.search(words):
+                return kind
+    return ""
 
 
 def playing_text(name: str, them: str, *, raid: bool = False, place: str = "") -> str:

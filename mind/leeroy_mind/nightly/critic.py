@@ -15,8 +15,9 @@ from leeroy_mind.nightly.growth import rollback_week
 from leeroy_mind.nightly.llm import check_schema, schema, system_prompt
 from leeroy_mind.nightly.settings import night_of_ts
 from leeroy_mind.nightly.store import enqueue_review, ledger_add, ledger_rows
-from leeroy_mind.personas.card import render_prompt_card
+from leeroy_mind.personas.card import render_night_card
 from leeroy_mind.personas.io import load_effective
+from leeroy_mind.personas.voices import changed_at as voice_changed_at
 from leeroy_mind.storage.provenance import ProvenanceError, edges, memory_ids, paired
 from leeroy_mind.tuning.lines import tuned_card
 from leeroy_mind.text import strip_wow_markup
@@ -149,8 +150,10 @@ def _current(ctx, guid, ids):
     # bypass NightContext/PersonaCache after awaits; the member as the owner tuned them, with
     # the run's own tuning, so a tuned member is judged against who they were set to be
     persona = load_effective(store, guid, tuning=getattr(ctx, "tuning", None))
-    card = tuned_card(render_prompt_card(persona, race=RACES.get(member.race, ""),
-                                         class_name=CLASSES.get(member.class_, "")), persona)
+    # a member with a voice sheet is judged against it (card.render_night_card), not against
+    # the trait sentences it took the place of
+    card = tuned_card(render_night_card(persona, race=RACES.get(member.race, ""),
+                                        class_name=CLASSES.get(member.class_, "")), persona)
     identity = (store.get_persona_json(guid), store.persona_versions()[guid], member.name,
                 member.race, member.class_, member.level, store.get_meta("human_guid"))
     state = json.dumps(store.get_state(guid).self_notes, sort_keys=True)
@@ -186,9 +189,12 @@ def _recent_flags(ctx, guid):
     first = (date.fromisoformat(ctx.night) - timedelta(days=6)).isoformat()
     rows = ledger_rows(ctx.store, guid)
     undone = {row["ref"] for row in rows if row["kind"] == "undo"}
+    voiced = voice_changed_at(ctx.store, guid)  # flags from before it judged her old card
     flags = []
     for row in rows:
         if row["kind"] != "drift_flag" or row["id"] in undone:
+            continue
+        if voiced is not None and row["ts"] < voiced:
             continue
         night = ctx.store.get_meta(_flag_key(row["id"])) or night_of_ts(row["ts"], ctx.tz)
         if not first <= night <= ctx.night:
@@ -233,8 +239,11 @@ async def critic_member(ctx, guid, lines):
         now = ctx.clock.now()
         store.conn.execute("INSERT INTO critic_score(night,guid,n,mean) VALUES (?,?,?,?)",
             (ctx.night, guid, len(scores), sum(score["score"] for score in scores) / len(scores)))
+        # a line she said before her voice sheet changed was written to the card she had then:
+        # it is scored, never flagged against the new one
+        voiced = voice_changed_at(store, guid)
         for row, score, source in zip(lines, scores, snapshot[3]):
-            if score["score"] > 2:
+            if score["score"] > 2 or (voiced is not None and row["ts"] < voiced):
                 continue
             text, reason = _safe(row["text"], ctx.ident), _safe(score["why"], ctx.ident)
             refs = source[2]

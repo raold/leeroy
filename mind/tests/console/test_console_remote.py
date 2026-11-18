@@ -114,7 +114,9 @@ def test_spoofed_hosts_are_refused(data):
                          f"{NAME}:443:443", f"{NAME},127.0.0.1:{app.s.port}",
                          f"localhost:{app.s.port}", f"127.0.0.1:{app.s.port + 1}"):
                 r = await http(app, "GET", "/api/state", host=host, origin=TAILNET)
-                assert r.status == 403 and b"served at" in r.body, host
+                assert r.status == 403 and b"not the console's address" in r.body, host
+                # a refusal names no address the console is served at
+                assert NAME.encode() not in r.body and b"127.0.0.1" not in r.body, host
                 r = await http(app, "GET", "/api/state", host=host)
                 assert r.status == 403, host
             # a second Host, whichever is first
@@ -146,12 +148,13 @@ def test_origins_do_not_cross_between_the_two_addresses(data):
     run(go())
 
 
-def test_the_refusal_names_both_addresses(data):
+def test_the_refusal_names_neither_address(data):
     async def go():
         async with served(remote(data)) as app:
             r = await http(app, "GET", "/api/state", host="evil.example")
-            assert f"http://127.0.0.1:{app.s.port}/".encode() in r.body
-            assert f"{TAILNET}/".encode() in r.body
+            assert r.status == 403
+            assert b"127.0.0.1" not in r.body and str(app.s.port).encode() not in r.body
+            assert NAME.encode() not in r.body and b"ts.net" not in r.body
     run(go())
 
 
@@ -211,8 +214,7 @@ def test_without_an_allowed_name_nothing_changes(data):
                            headers={"X-Forwarded-Host": NAME})
             assert r.status == 200  # ignored, as it always was
             r = await http(app, "GET", "/api/state", host="evil.example")
-            assert r.body == (f"Forbidden. The console is served at http://127.0.0.1:"
-                              f"{app.s.port}/ only.\n").encode()
+            assert r.body == b"Forbidden: this is not the console's address.\n"
             assert app.tailnet_urls == []
     run(go())
 

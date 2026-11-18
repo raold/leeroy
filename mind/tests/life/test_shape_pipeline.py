@@ -321,7 +321,8 @@ def test_dm_length_follows_dm_mirror(store, clock, tmp_path, caplog):
     caplog.set_level(logging.INFO)
     r = rig_of(store, clock, tmp_path, shape=True, dm_mirror=10)
     try:
-        r.script("ugh mine was slow, the queue ate half of it")
+        r.script("ugh mine was slow, the queue ate half of it",
+                 "same as ever, the printer jammed twice before lunch")  # never her last again
         turn, meta = dm_turn(r, "long day at work here, how was yours")  # 8 words
         assert speak(r, turn, meta)
         assert turn.shape is not None and meta.shape_ctx.his_words == 8

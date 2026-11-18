@@ -605,3 +605,17 @@ def test_presence_reads_the_minds_availability_from_meta(data, cast, stored):
             return (await get(app)).json()
     members = {m["guid"]: m for m in asyncio.run(go())["members"]}
     assert members[101]["presence"]["state"] == want[6 if stored == "6" else 0]
+
+
+def test_each_dm_says_when_it_last_had_a_message(data, cast):
+    dstore.post(cast, channel="dm:101", author=101, origin="mind", text="first", now=NOW - 900)
+    dstore.post(cast, channel="dm:101", author=HUMAN, origin="human", text="second", now=NOW - 60)
+    dstore.post(cast, channel="general", author=102, origin="mind", text="not a dm", now=NOW)
+    cast.conn.commit()
+
+    async def go():
+        async with served(build(data)) as app:
+            return (await get(app)).json()
+    dms = {d["guid"]: d for d in asyncio.run(go())["dms"]}
+    assert dms[101]["last_ts"] == NOW - 60 and dms[101]["last_id"] > 0
+    assert dms[102]["last_ts"] == 0 and dms[102]["last_id"] == 0

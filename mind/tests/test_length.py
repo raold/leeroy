@@ -195,3 +195,48 @@ def test_the_shape_gives_a_content_answer_room(store):
     raised = _sized(Shape.SHORT, ShapeContext(**base, content=True), Random(1))
     assert plain.words <= 4 and not plain.content
     assert raised.words == CONTENT_WORDS and raised.content
+
+
+# -- her voice sheet's line (personas/speech.py word_range) ------------------------------------
+
+def test_a_cut_never_leaves_fewer_words_than_her_sheets_range():
+    draft = "We have 22 now. The calendar looked thin this morning and half of them are alts anyway"
+    q = "how many people signed up?"
+    assert fit_answer(draft, 8, q).text == "We have 22 now. The calendar looked thin this morning"
+    # a sheet that names six words or more: the four-word sentence alone is no cut
+    fit = fit_answer(draft, 5, q, floor=6)
+    assert len(fit.text.split()) >= 6 and "22" in fit.text
+    assert fit_answer(draft, 5, q).text == "We have 22 now."
+
+
+def test_the_content_floor_never_lifts_a_line_past_her_sheets_range(store):
+    from random import Random
+
+    from leeroy_mind.talk.shape import Shape, ShapeContext, _sized
+    seed_test_cast(store)
+    typing = PersonaCache(store).get(102).typing
+    base = dict(family="whisper", kind=TurnKind.REPLY_HUMAN, owed=True, intent=None,
+                typing=typing, attention=None, state=None, late_by=0.0, his_words=5,
+                discord_words=90, dm_words=200, dm_mirror=5, realism=False, two_lines=False,
+                content=True)
+    sheeted = _sized(Shape.SHORT, ShapeContext(**base, voice_words=(3, 7)), Random(1))
+    assert 3 <= sheeted.words <= 7  # "three to seven words": never "about 12 words"
+    roomy = _sized(Shape.SHORT, ShapeContext(**base, voice_words=(8, 20)), Random(1))
+    assert CONTENT_WORDS <= roomy.words <= 20
+    # a DM keeps its own length (the mirror and the short-line cap): never raised here
+    dm = _sized(Shape.SHORT, ShapeContext(**{**base, "family": "dm", "his_words": 3}), Random(1))
+    assert not dm.content and dm.words <= 25
+
+
+def test_a_line_inside_her_sheets_range_is_never_long(store, clock, tmp_path):
+    from sheets import GRUFF, give
+    reply = "the allotment flooded again and i spent the whole morning bailing it out with a bucket"
+    async def main():
+        seed_test_cast(store)
+        give(store, 102, {**GRUFF, "shape": "long rambling lines, twelve to eighteen words"},
+             typo_rate=0.0, emoticon_rate=0.0, split_rate=0.0, abbreviations={},
+             words_per_line=[2, 6], case="lower", end_punct="none")
+        r = make_rig(store, clock, tmp_path, script=script_from([reply, "short"]))
+        said = await spoken(r, answer(his_whisper(r, "how was your morning")))
+        assert len(r.chat_calls()) == 1 and len(" ".join(said).split()) == len(reply.split())
+    run(main())

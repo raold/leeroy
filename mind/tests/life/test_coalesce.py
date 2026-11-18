@@ -29,6 +29,13 @@ def clock():
     return engine_clock()
 
 
+@pytest.fixture(autouse=True)
+def _brb_any_time(monkeypatch):
+    """As tests/life/test_interrupt.py: her brb may follow his line at once here."""
+    from leeroy_mind.life import interrupt
+    monkeypatch.setattr(interrupt, "MIN_AFTER_HIS_S", 0.0)
+
+
 def last_user(r):
     return line_calls(r)[-1]["messages"][-1]["content"]
 
@@ -101,11 +108,12 @@ def test_coherence_off_answers_the_newest_as_before(store, clock, tmp_path):
     asyncio.run(main())
 
 
-def test_his_leaving_words_cut_her_away(store, clock, tmp_path, monkeypatch):
-    async def main(coherence):
+@pytest.mark.parametrize("coherence", [True, False])
+def test_his_leaving_words_cut_her_away(store, clock, tmp_path, monkeypatch, coherence):
+    async def main():
         force(monkeypatch, away_s=300.0)
-        r = rig(store, clock, tmp_path / str(coherence),
-                script=numbered("yeah {n}, the vendor was shut"), shape=True, coherence=coherence)
+        r = rig(store, clock, tmp_path, script=numbered("yeah {n}, the vendor was shut"),
+                shape=True, coherence=coherence)
         await r.session()
         await r.human("you around tonight?", channel="whisper", to_guid=102)
         await ticking(r, 60)
@@ -120,10 +128,11 @@ def test_his_leaving_words_cut_her_away(store, clock, tmp_path, monkeypatch):
         said = whispers(r, 102, t1)
         r.close()
         return said, until
-    said, until = asyncio.run(main(True))
-    assert len(said) == 1 and said[0][0] < until  # at once, not when her brb ends
-    said, until = asyncio.run(main(False))
-    assert said == []  # as before: it waits out her away
+    said, until = asyncio.run(main())
+    if coherence:
+        assert len(said) == 1 and said[0][0] < until  # at once, not when her brb ends
+    else:
+        assert said == []  # as before: it waits out her away
 
 
 def whisper_turn(r, text="who was at the door"):

@@ -98,8 +98,9 @@ def test_the_dm_budget_fits_the_live_context_with_a_full_dm_reply():
 def test_the_dm_history_is_the_chat_and_not_the_instruction(store, clock, tmp_path):
     rig = rig_for(store, clock, tmp_path, reply="sure thing")
     talk = talk_for(rig)
-    post(rig, "dm:102", HIS_LONG)
-    member_post(rig, 102, "dm:102", HERS_LONG)
+    earlier = post(rig, "dm:102", HIS_LONG)
+    dstore.post(rig.store, channel="dm:102", author=102, origin="mind", text=HERS_LONG,
+                reply_to=earlier, now=rig.clock.now())  # her answer to it
     member_post(rig, 104, "dm:104", "quaxle is another member's dm")
     member_post(rig, 103, "general", "vorpine in general")
     mid = post(rig, "dm:102", "so what do you think?")
@@ -108,8 +109,9 @@ def test_the_dm_history_is_the_chat_and_not_the_instruction(store, clock, tmp_pa
     prompt = rig.prompts()[-1]
     chat = sections(prompt)["Chat:"]
     assert "endmark" in chat  # his earlier message whole
-    assert f"w{REPLAY_WORDS - 1}..." in chat and f"w{REPLAY_WORDS} " not in chat  # hers short
-    assert chat.index("zorblat") < chat.index("w0")  # oldest first
+    # hers short: the words she ended on (self-play audit 3), not her opening
+    assert f"... w{120 - REPLAY_WORDS} " in chat and f"w{120 - REPLAY_WORDS - 1} " not in chat
+    assert chat.index("zorblat") < chat.index("w119")  # oldest first
     assert "Recent messages:" not in prompt
     # his message she answers ends the Chat (2026-11-16, the owner's sandbox audit: without it
     # the Chat ended on his previous message and she answered that) and the instruction quotes it
@@ -143,8 +145,8 @@ def test_a_long_dm_fits_its_budget_without_the_last_resort(store, clock, tmp_pat
     chat = parts["Chat:"]
     assert chat.count("Belra (Discord DM to Zan)") >= 5  # her side of the conversation
     assert all(len(line) <= DM_HIS_CHARS + 80 for line in chat.splitlines())
-    own = parts["Your last lines (don't make the same move again):"].splitlines()
-    assert len(own) >= 3 and all(len(line.split()) <= REPLAY_WORDS for line in own)
+    # her last lines are in the Chat, so the prompt does not show them twice (2026-11-17)
+    assert "Your last lines (don't make the same move again):" not in parts
     rig.close()
 
 
@@ -157,8 +159,10 @@ def test_her_own_last_long_line_is_replayed_short(store, clock, tmp_path):
     rig.script("glad you asked")
     second = post(rig, "dm:102", "and after that?")
     answer(rig, talk, second)
-    own = sections(rig.prompts()[-1])["Your last lines (don't make the same move again):"]
-    assert f"w{REPLAY_WORDS - 1}..." in own and f"w{REPLAY_WORDS} " not in own
+    parts = sections(rig.prompts()[-1])
+    assert "Your last lines (don't make the same move again):" not in parts  # it is in the Chat
+    hers = [x for x in parts["Chat:"].splitlines() if "w119" in x]
+    assert len(hers) == 1 and len(hers[0].split()) <= REPLAY_WORDS + 12  # ...and short there
     rig.close()
 
 
