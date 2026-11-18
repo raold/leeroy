@@ -494,3 +494,30 @@ def test_thumbs_show_on_hover_and_focus_on_every_member_line(rehearsal):
             assert not await serious(page)
             assert not r.errors, r.errors
     asyncio.run(run())
+
+
+def test_forward_to_a_member_leaves_world_mode(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(width=1440, height=900) as r:
+            page = r.page
+            await open_console(r)
+            await visit(page, "personas")
+            await page.get_by_role("button", name="Profile of Arkon", exact=True).click()
+            await expect(page.locator("#p-detail")).not_to_have_class("pending")
+            await page.go_back()
+            await expect(page.locator("#p-list")).to_be_visible()
+            await page.locator("#p-world-filter").check()
+            await expect(page.locator("#p-world")).to_be_visible()
+            await page.go_forward()
+            assert page.url.endswith("#personas/101")
+            await expect(page.locator("#p-detail")).to_be_visible()
+            await expect(page.locator("#p-name")).to_have_text("Arkon")
+            await expect(page.locator("#p-detail")).not_to_have_class("pending")
+            await expect(page.locator("#p-world-filter")).not_to_be_checked()
+            # and the list he returns to is the cast again, not the World cards
+            await page.go_back()
+            await expect(page.locator("#p-list")).to_be_visible()
+            await expect(page.locator("#p-world")).to_be_hidden()
+            await expect(page.locator("#p-wall .tile.sel")).to_have_attribute("data-guid", "101")
+    asyncio.run(run())

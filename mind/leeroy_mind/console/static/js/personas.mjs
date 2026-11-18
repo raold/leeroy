@@ -37,15 +37,23 @@ var lastPick = 0, listScroll = [0, 0];
 function scrollNow() { return [document.querySelector("main").scrollTop, window.scrollY]; }
 function scrollTo(at) { document.querySelector("main").scrollTop = at[0]; window.scrollTo(0, at[1]); }
 function worldMode() { return $("p-world-filter").checked; }
-$("p-world-filter").addEventListener("change", function () {
+function applyWorld() {
   pickSeq += 1;
-  if (pick) { setRoute("personas"); choose(0); }
   $("p-world").hidden = !worldMode();
   $("p-selfies").parentNode.hidden = worldMode();
   $("p-tuning").hidden = $("t-log").hidden = worldMode();
   paging.hidden = worldMode();
   pollPersonas();
+}
+$("p-world-filter").addEventListener("change", function () {
+  if (pick) { setRoute("personas"); choose(0); }
+  applyWorld();
 });
+// A member's page is the cast's, never the World cards': every way to one leaves World mode
+// (a click, the browser's Back and Forward, a reload that restored the ticked filter)
+function leaveWorld() {
+  if (worldMode()) { $("p-world-filter").checked = false; applyWorld(); }
+}
 var rosterOffset = 0, rosterPage = null, rosterDrawn = "";
 var paging = el("div", "roster-pages"), previousPage = el("button", "", "Previous members"),
     nextPage = el("button", "", "Next members"), pageWords = el("span", "muted");
@@ -464,7 +472,7 @@ $("p-close").addEventListener("click", function () {
 export function openMember(guid) {
   guid = Number(guid);
   if (!(Number.isInteger(guid) && guid > 0)) { return; }
-  if (worldMode()) { $("p-world-filter").checked = false; $("p-world-filter").dispatchEvent(new Event("change")); }
+  leaveWorld();
   var hash = "#personas/" + guid;
   if (location.hash !== hash) { history.pushState({ member: true }, "", hash); }
   showTab("personas/" + guid);
@@ -479,6 +487,7 @@ document.addEventListener("click", function (ev) {
 function route(sub) {
   var guid = /^[1-9]\d{0,9}$/.test(sub) ? Number(sub) : 0;
   if (sub && !guid) { setRoute("personas"); }
+  if (guid) { leaveWorld(); }
   if (guid !== pick) { choose(guid); }
 }
 
