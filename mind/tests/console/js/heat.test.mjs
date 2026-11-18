@@ -14,10 +14,12 @@ const view = {
   ],
 };
 
-test("the world line says whether heat is set or follows the romance dial", () => {
-  assert.equal(worldText(view), "Heat 9: it follows the romance dial (9) until you set it.");
-  assert.equal(worldText({ ...view, world: 6, set: true }), "Heat 6, set here.");
-  assert.equal(worldText({ world: null }), "Heat is not set, and mind.toml could not be read.");
+test("the world line says whether heat is set or the romance dial is still in force", () => {
+  const unset = { ...view, world: null, set: false, follows: 10, suggest: 10, note: "Heat is on but not set: the romance dial (10) is in force." };
+  assert.equal(worldText(unset), "Heat is on but not set: the romance dial (10) is in force.");
+  assert.equal(worldText({ ...unset, note: "" }), "Heat is not set: the romance dial (10) is in force exactly as before.");
+  assert.equal(worldText({ ...view, world: 6, set: true, follows: null }), "Heat 6, set here.");
+  assert.equal(worldText({ world: null, set: false, follows: null }), "Heat is not set, and mind.toml could not be read.");
 });
 test("a value's words and what changes come from the server's rows, never rebuilt here", () => {
   assert.equal(rowText(view, 6), "row 6");

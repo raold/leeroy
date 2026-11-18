@@ -97,6 +97,7 @@ untouched.
 
 Logs contain IDs, sizes, durations and reason codes, never transcript text or names.
 
-With `[heat] enabled` a voice note speaks only up to the tier the heat allows (frank at most at
-heat 9, the explicit tier at 10 or on a no-limits evening); a line above it is typed, never
-dropped. With it off there is no such rule. See `mind/leeroy_mind/heat/README.md`.
+With a heat set (`[heat] enabled` and a world value), a line that is itself plainly explicit is
+typed instead of voiced below heat 10 and off a no-limits evening; it is never dropped, and
+every other line is spoken as before. With heat off or unset there is no such rule. See
+`mind/leeroy_mind/heat/README.md`.

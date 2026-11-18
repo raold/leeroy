@@ -227,6 +227,8 @@ shows. With the delivery switches on and stock available, check a member's DM ph
 channel photo conversation. These switches are operator choices; tests use only fake models,
 rendered fixtures and isolated ports.
 
-With `[heat] enabled`, a member's photo tier (`mind/leeroy_mind/heat/README.md`) selects which of the
-vetted outfit and setting lists a new photo is composed from, and a stored photo above her tier
-is passed over when sending (never expired or deleted). With it off nothing here changes.
+With a heat set (`[heat] enabled` and a world value), a member's photo tier
+(`mind/leeroy_mind/heat/README.md`) selects which of the vetted outfit and setting lists a new
+photo is composed from, and a stored photo above her tier is passed over when sending (never
+expired or deleted; a gallery copy is judged by the photo it copied). With heat off or unset
+nothing here changes.
