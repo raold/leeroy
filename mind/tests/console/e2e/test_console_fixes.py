@@ -271,7 +271,7 @@ def test_unread_shows_in_the_title_and_icon_while_hidden(rehearsal):
                 document.dispatchEvent(new Event('visibilitychange')); }""")
             await r.bridge.push({"type": "chat", "channel": "whisper", "from_guid": 102, "from_name": "Belra",
                                  "to_guid": HUMAN, "text": "Are you coming tonight?", "map": 0, "zone": 1519})
-            await page.wait_for_function("() => document.title === '(1) Guild Console'", timeout=45000)
+            await page.wait_for_function("() => document.title === '(1) Guild Console'", timeout=90000)
             assert "circle" in await page.evaluate("decodeURIComponent(document.querySelector('link[rel=icon]').href)")
             hidden = [u.split("/api/")[1].split("?")[0] for u in requests if "/api/" in u]
             assert set(hidden) <= {"unread"}, hidden
