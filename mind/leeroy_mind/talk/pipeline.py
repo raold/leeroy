@@ -95,7 +95,8 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk import position
-from leeroy_mind.talk.length import KEEP_SLACK, SHORTER_HINT, content_question, fit_answer
+from leeroy_mind.talk.length import (KEEP_SLACK, SHORTER_HINT, content_question,
+                                     fit_answer, split_lines)
 from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
                                      ordered, topic_for)
 from leeroy_mind.guards.owncopy import LINES as OWN_COPY_LINES, asked_again, copies_any
@@ -354,6 +355,7 @@ DRAWN_TALKED_TO_SHARE = 0.75
 ROMANCE_LATE_BONUS = 0.15
 ROMANCE_COOL_S = 300.0
 OWN_LINES = 5
+VOICE_LINE_WORDS = 36  # a voice sheet's longest line that one game line surely holds
 SHORT_WAIT_S = 60.0  # an answer this soon after his line is not late, whatever her brb planned
 NAMED_CARDS = 3  # roster lines for members his line names (Pipeline._named_cards)
 # his game question found no fact she can use: she says so, never an invented proc or item
@@ -630,7 +632,6 @@ class TurnMeta:
     keep_words: int = 0
     # [talk] coherence (talk/position.py, Pipeline._position): what she has said so far in this
     # conversation and a rule of hers his line touches, the lines after the beat's block
-    position: str = field(default="", repr=False)
     view: str = field(default="", repr=False)
     # his whispers a waiting answer covers, oldest first, once a later one joined it
     # (talk.engine._life_waiting); empty for an answer to one line
@@ -1953,7 +1954,7 @@ class Pipeline:
             self._situation(turn, meta, p, now)
         except Exception as e:  # her situation is colour: nothing in it may cost him an answer
             meta.intent, meta.want_source, meta.lands, meta.intent_ctx = "", "", "", None
-            meta.position = meta.view = ""
+            meta.view = ""
             log.warning("talk_situation_failed: guid=%d reason=%s", turn.speaker,
                         type(e).__name__)
 
@@ -1972,19 +1973,17 @@ class Pipeline:
                             and (turn.channel != "whisper" or r.to_guid == turn.to_guid)))
         return [r.text for r in rows]
 
-    def _position(self, turn: Turn, meta: TurnMeta, p: Persona, his: str, now: float) -> str:
+    def _position(self, turn: Turn, meta: TurnMeta, p: Persona, his: str) -> None:
         """[talk] coherence, on an answer to his line (any channel) while a core switch is on:
-        what she has said so far in this conversation that his line is about
         into meta.view a rule on her card his line touches (position.opinion_for, strong),
-        the line after the turn's block. Always "" (her claims are lines of the one "So far"
-        block, talk/sofar.py). Never logged."""
+        the line after the turn's block. (Her claims are lines of the one "So far" block,
+        talk/sofar.py.) Never logged."""
         meta.view = ""
         if not (self._coherent() and his and self._aimed_at_him(turn)):
-            return ""
+            return
         opinion = position.opinion_for(p.opinions, his)
         if opinion and position.strong(opinion):
             meta.view = position.view_line(opinion, self.human.called)
-        return ""
 
     def _situation(self, turn: Turn, meta: TurnMeta, p: Persona, now: float) -> None:
         life = getattr(self, "life", None)
@@ -2004,7 +2003,7 @@ class Pipeline:
         if not self._want_eligible(turn, meta):
             return
         his = self._his_line(turn, meta) if (meta.state is not None or intent_on) else ""
-        meta.position = self._position(turn, meta, p, his, now)
+        self._position(turn, meta, p, his)
         if meta.state is not None and his:
             meta.lands = life_state.lands(meta.state, life_state.tone(his),
                                           agreeableness=p.big_five.agreeableness.score,
@@ -4320,6 +4319,15 @@ class Pipeline:
                 length = fitted.action
                 if length in ("cut", "kept"):
                     text = fitted.text
+                # what goes out whole must fit her game lines by whole clauses: else the
+                # styling would trim its tail at the bridge's bytes, and the answer with it
+                # (a line over her words but inside the slack counts: laid out by the styling
+                # alone it could lose its last clause)
+                over = length == "fits" and len(text.split()) > budget
+                whole = length in ("cut", "kept") or over or (
+                    length == "fits" and self._room(turn, meta))
+                if whole and split_lines(text, self._lines_allowed(turn, p, meta)) is None:
+                    length, text = "retry", draft
                 if length != "fits":
                     log.info("say_length: guid=%d kind=%s attempt=%d action=%s words=%d limit=%d",
                              turn.speaker, turn.kind, attempt, length, len(draft.split()), budget)
@@ -4349,7 +4357,8 @@ class Pipeline:
                            for t in tells):
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
                     if not quiet(text):
-                        if length in ("cut", "kept"):
+                        if length in ("cut", "kept") or (
+                                length == "fits" and len(text.split()) > budget):
                             meta.keep_words = len(text.split())
                         return text, None
                     silent = True
@@ -4589,9 +4598,9 @@ class Pipeline:
                              or (turn.channel == "whisper" and turn.to_guid == hg))
 
     def _coherent(self) -> bool:
-        """[talk] coherence (default on; anything but true is off): a long draft is kept, her
+        """[talk] coherence (default off; anything but true is off): a long draft is kept, her
         want and place hold through a conversation, every waiting line of his is answered."""
-        return getattr(getattr(self.cfg, "talk", None), "coherence", True) is True
+        return getattr(getattr(self.cfg, "talk", None), "coherence", False) is True
 
     def _room(self, turn: Turn, meta: TurnMeta) -> int:
         """The words the turn's lines must have room for past her habit (0: her line's cap, as
@@ -4726,10 +4735,18 @@ class Pipeline:
         return max(cap * max(1, lines), self._voice_room(p) * max(1, lines))
 
     def _voice_room(self, p: Persona) -> int:
-        """[talk] coherence: the longest line her voice sheet names (0 without one): a line
-        inside her sheet's range is never long, so the length rule never cuts her below it."""
+        """[talk] coherence: the longest line her voice sheet names (0 without one), at most
+        VOICE_LINE_WORDS (what one game line holds): a line inside her sheet's range is never
+        long, so the length rule never cuts her below it."""
         voiced = _voice_words(p) if self._coherent() else None
-        return max(voiced) if voiced else 0
+        return min(max(voiced), VOICE_LINE_WORDS) if voiced else 0
+
+    def _lines_allowed(self, turn: Turn, p: Persona, meta: TurnMeta) -> int:
+        """The game lines her turn may take, as the styling counts them (_style)."""
+        most = max(1, turn.max_lines)
+        if meta.two_lines or turn.kind is TurnKind.BIT:
+            return most
+        return turn_lines(p.typing, most)
 
     def _link_level(self, guid: int) -> int:
         m = self.world.members.get(guid)
@@ -4792,6 +4809,15 @@ class Pipeline:
             # on its own: repacked as one text its clauses ran together and the rest was dropped
             # (hard-case audit, 2026-11-17)
             pieces = own_lines[:turn.max_lines]
+        if coherent and room and not words and len(pieces) == 1 and turn.kind is not TurnKind.BIT:
+            # a kept draft longer than one game line: its whole clauses on the lines she has
+            # (talk.length.split_lines; _generate only keeps a draft that fits them)
+            allowed = max(1, turn.max_lines) if two_lines else turn_lines(p.typing,
+                                                                          max(1, turn.max_lines))
+            parts = split_lines(text, allowed)
+            if parts is not None and len(parts) > 1:
+                pieces = parts
+                room = max(room, *(len(x.split()) for x in parts))
         plain = plain and coherent  # her brb and back: no slips, no typos, no marks
         out: list[Styled] = []
         typing = replace(p.typing, typo_rate=0.0) if plain else p.typing

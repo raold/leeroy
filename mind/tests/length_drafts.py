@@ -42,3 +42,48 @@ DRAFTS = [
 ("do you have a spare flask?", "Let me dig through my bags. So much junk in here. Yes, i have two so take one.", "Yes, i have", "yn"),
 ("which boss drops the mount?", "Ha, everyone wants that thing. I've run it forty times. It's the last boss in the dragon wing.", "last boss", "fact"),
 ]
+
+# Thirty-two more (re-review of #370): a lead-in that holds a false proof (a number, a yes or
+# no word, a capital, "forgot"), the answer in the last clause, lower-case names, two questions
+# from him, quoted lines, an emoji tail. A marker may be a tuple: every part must be kept.
+ADVERSARIAL = [
+# answer in the last clause
+("where is the entrance to ulduar?", "lol you ask me this every Tuesday. it's in storm peaks north of the temple", "storm peaks", "last"),
+("who tanks the adds on gluth?", "not sure why you ask me of all people lol. the bear kites them in the back", "bear", "last"),
+("what gem goes in a red socket?", "i forgot my coffee again this morning so bear with me. bold cardinal ruby is the one", "cardinal ruby", "last"),
+("why did we wipe on that pull?", "no idea how the tank survived that long honestly. the healers were out of range", "out of range", "last"),
+("which trinket is better for a mage?", "funny, Mirela asked me the same thing yesterday. the dying curse wins by a mile", "dying curse", "last"),
+("how do i get to the vendor?", "everyone in Dalaran gets lost looking for it. take the sewers entrance then go left", "sewers", "last"),
+# numeric: a number in the lead-in
+("when does the raid start tonight?", "ive told you two times already lol. we start at eight server time", "eight", "last"),
+("how many flasks do i need?", "third raid in a row you ask, that's 3 now. bring six for the whole night", "six", "last"),
+("what time is the meeting?", "half the guild keeps asking me that today. it's at nine after the raid", "nine", "last"),
+("how long is the fight?", "we wiped 4 times on it last week. about seven minutes if dps is fine", "seven", "last"),
+# lower-case name
+("who pulled the boss early?", "it was a mess from the start honestly, everyone was eating, gorak pulled it with his pet", "gorak", "lcname"),
+("who is leading tonight?", "we argued about it all afternoon in officer chat, then voted, belra leads tonight", "belra", "lcname"),
+("who won the roll on the helm?", "there were five of us rolling and it took ages. coros won it with a 98", "coros", "lcname"),
+("who should i ask about enchants?", "Honestly half the guild has no clue. ask mirela she has every recipe", "mirela", "lcname"),
+("which healer is on the tank?", "we swapped it around after last Thursday. dorn is on the tank now", "dorn", "lcname"),
+# yes/no buried after a lead-in
+("are you coming tonight?", "oh no not this again lol. yeah i'll be there right after dinner", "yeah", "yn"),
+("is he tauntable?", "no way you forgot that already haha. yes he is tauntable after the first phase", "yes he is", "yn"),
+("can you tank it?", "maybe ask me when i'm awake next time lol. no i can't, my gear is all dps", "no i can't", "yn"),
+("did we kill him last week?", "sure feels like forever ago doesn't it. no we wiped at five percent twice", "no we wiped", "yn"),
+("do you have the recipe?", "probably the tenth time someone asks today. yes i have it, send me the mats", "yes i have", "yn"),
+("you around later?", "definitely a weird day at work so far. no, i'm out tonight, sorry", "no,", "yn"),
+# two questions from him
+("what time does it start? and are you coming?", "it starts at eight server time. and yes i'll be there once the kids are in bed", ("eight", "yes"), "twoq"),
+("are you coming? and what time does it start?", "yeah i'm coming for sure. it starts at eight i think, bring flasks", ("yeah", "eight"), "twoq"),
+("who leads tonight and how many healers do we take?", "Belra leads tonight like always. we take six healers for the heroic bosses", ("belra", "six"), "twoq"),
+("did you get the mats? how many do you need still?", "yes got most of them from the bank. i still need twelve of the ore though", ("yes", "twelve"), "twoq"),
+# quoted
+("what did he say about the loot?", 'he was annoyed about the whole thing honestly. he said "the helm goes to the tank, end of story" and logged', "helm goes to the tank", "quote"),
+("when did she say we start?", 'she posted like 3 messages about food first. then "we start at eight, be early" in guild chat', "eight", "quote"),
+("did he say yes?", 'no clue what he meant at first. then he said "yes, fine, i will tank it" and left', "yes, fine", "quote"),
+# emoji / emoticon tail
+("where do we meet?", "lol every time with you :) outside the instance at the summoning stone :D :D", "summoning stone", "emoji"),
+("are you coming tonight?", "ugh long day, kid is sick, work was bad. but yes 😅😅", "yes", "emoji"),
+("how many do we need?", "depends who shows up really, last week was a mess. ten 🙃", "ten", "emoji"),
+("who has the key?", "we passed it around all week and nobody remembers lol. dorn has it 😂", "dorn", "emoji"),
+]

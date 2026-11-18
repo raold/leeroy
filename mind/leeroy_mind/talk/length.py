@@ -2,28 +2,32 @@
 of 100 whisper turns took a second model call, most after the "long" tell, and the fresh
 generation it asked for lost a correct answer, a "yes" and several clean lines).
 
-`fit_answer` decides in code what a game reply over its length becomes. It never cuts anything
-before the clause that answers, and it cuts only when it can prove where that clause is (review
-of #370: a cut to the first clauses kept the lead-in and dropped the answer whenever the answer
-came second or third):
+The owner's rule is absolute: a cut that removes the answer is never acceptable. So
+`fit_answer` cuts only what it can prove comes after the answer, and when in doubt the line
+goes as written or is asked again with the draft (reviews of #370: a cut to the first clauses
+dropped the answer whenever it came second or third, and a cut after the first clause with a
+"proof" in it dropped it whenever the lead-in held one):
 
-- the answering clause (`answering`): for a question that asks how many, how much, how long or
-  when, a clause with a number, a clock time, a weekday or a month; for a yes/no question a
-  clause with a yes or a no; for any question a plain "no idea" or a name written with a capital
-  inside the clause; for a line of his that asks nothing, or a turn's own subject (an opener's
-  topic, an outreach item), a clause that shares a content word with it. A who, what, where,
-  which, why or how question answered in other words has no provable answering clause;
-- cut: the longest run of whole leading clauses within LONG_SLACK times the turn's words that
-  holds the first answering clause and the rest of its sentence, never ending on a dangling
-  word or inside a quotation, never under MIN_WORDS words: only what follows the answer's
-  sentence goes;
-- kept: no such cut and the reply is within KEEP_SLACK times the turn's words: sent as written
-  (or cut the same way inside that room);
-- retry: longer than that. Only then is the model asked again, and it is given the draft to
-  say shorter (SHORTER_HINT), never a fresh start.
+- his line asks how many, how much, how long or when: the answer is a number, a clock time, a
+  weekday or a month, and the cut comes only after the sentence of the LAST clause that holds
+  one;
+- his line is a yes/no question: only after the sentence of the LAST clause with a yes or a no;
+- his line asks who, what, where, which, why or how, asks to have something explained, or
+  holds two questions: never cut. A name or a "no idea" proves nothing on its own;
+- his line asks nothing, or the turn answers nothing (idle talk): the leading whole clauses
+  that fit, as many as fit, so nothing she added is thrown away for the clause that repeats
+  his subject;
+- the turn has a subject of its own (an opener's topic, an outreach item's words): only after
+  the sentence of the last clause that shares a content word with it.
 
-A turn that answers nothing and has no subject (idle talk) keeps its leading clauses: there is
-no answer to lose. Discord turns are not cut here; they keep their own length rules.
+A cut never ends on a dangling word or inside a quotation and never leaves fewer than
+MIN_WORDS words (or the low end of her voice sheet's range). With no cut the reply is kept as
+written within KEEP_SLACK times the turn's words; past that the model is asked again with her
+own draft (SHORTER_HINT), never a fresh start.
+
+`split_lines` says whether a text fits the game lines her turn has, by whole clauses within
+the bridge's bytes: a text that does not is never "kept as written" (the styling would trim its
+tail word by word, and the answer with it). Discord turns are not cut here.
 
 `content_question` is the reading of his line the reply's shape uses (talk/shape.py: a SHORT
 line gets room for an answer).
@@ -41,6 +45,7 @@ from leeroy_mind.talk.style import SENT, _CONJUNCTIONS, _DANGLING, _TOKEN, _bare
 LONG_SLACK = 1.25  # a reply this far over the turn's words is long
 KEEP_SLACK = 2.0  # one with no provable cut is sent as written up to this
 MIN_WORDS = 3  # a cut never leaves fewer words than this
+LINE_BYTES = 230  # a game line's words before her typing (the bridge takes 255 bytes)
 SHORTER_HINT = ('You wrote: "{draft}" Say the same thing shorter, in at most about {words} '
                 "words. Keep the answer in it.")
 # A content question's words past a question word: "explain the fight", "tell me about ulduar"
@@ -58,11 +63,8 @@ _NUMBER = re.compile(
     r"november|december)\b", re.IGNORECASE)
 _YES_NO = frozenset({"yes", "yeah", "yea", "yep", "yup", "no", "nah", "nope", "sure", "maybe",
                      "probably", "definitely"})
-_UNSURE = re.compile(r"\b(?:idk|dunno|no idea|not sure|no clue|don'?t know|dont remember|"
-                     r"don'?t remember|cant remember|can'?t remember|forgot)\b", re.IGNORECASE)
-# a name written with a capital inside a clause ("it was Gorak"); never "I", "I'm", "I've"
-_NAME = re.compile(r"(?<=[a-z,] )[A-Z][a-z]+(?:'[a-z]+)?\b")
 _QUOTE = re.compile(r'["“”]')
+_AND = re.compile(r"\band\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -86,37 +88,47 @@ def content_question(line: str) -> bool:
                for part in (text, *re.split(r"[,.;:!]\s+", text)))
 
 
+def _two_questions(his: str) -> bool:
+    """His line asks two things: two question marks, or a content question with an "and"."""
+    return his.count("?") > 1 or (content_question(his) and bool(_AND.search(his)))
+
+
+def _proof(his: str):
+    """What proves a clause answers his question: a function of the clause's words, or None
+    when no clause can prove it (who, what, where, which, why, how, explain, two questions)."""
+    if _two_questions(his):
+        return None
+    if content_question(his):
+        if not _NUMERIC_ASK.search(his):
+            return None
+        return lambda ws: bool(_NUMBER.search(" ".join(ws)))
+    return lambda ws: any(_bare(w) in _YES_NO for w in ws)
+
+
 def _shares(words: list[str], other: str) -> bool:
-    theirs = set(content_words(other))
-    return bool(theirs & set(content_words(" ".join(words))))
+    return bool(set(content_words(other)) & set(content_words(" ".join(words))))
 
 
 def answering(words: list[str], his: str = "", subject: str = "") -> bool:
-    """The clause `words` provably answers (module docstring). `his`: the line of his the turn
-    answers; `subject`: what a turn that answers nothing is about (an opener's topic, an outreach
-    item). With neither there is nothing to answer: True."""
-    text = " ".join(words)
-    bare = [b for b in (_bare(w) for w in words) if b]
-    if not bare:
+    """The clause `words` holds a proof of the kind his question asks for (module docstring):
+    a number or time for a numeric question, a yes or no for a yes/no question; never for any
+    other question. For a turn with a subject of its own, a content word shared with it. For a
+    line of his that asks nothing, or no line at all, there is nothing to prove: True."""
+    if not [b for b in (_bare(w) for w in words) if b]:
         return False
     his = " ".join((his or "").split())
     if not his:
         return _shares(words, subject) if subject.strip() else True
-    asked = is_question(his) or content_question(his)
-    if not asked:
-        return _shares(words, his) or bool(_NUMBER.search(text))
-    if _UNSURE.search(text) or _NAME.search(text):
+    if not (is_question(his) or content_question(his)):
         return True
-    if content_question(his):
-        return bool(_NUMERIC_ASK.search(his)) and bool(_NUMBER.search(text))
-    return any(b in _YES_NO for b in bare)
+    proof = _proof(his)
+    return proof is not None and proof(words)
 
 
 def carries(words: list[str], his: str = "", subject: str = "") -> bool:
-    """Some clause of `words` provably answers (`answering`): never True for a question just
+    """Some clause of `words` holds a proof (`answering`): never True for a question just
     because the words are not filler."""
-    units = _clauses(" ".join(words))
-    return any(answering(ws, his, subject) for ws, _ in units)
+    return any(answering(ws, his, subject) for ws, _ in _clauses(" ".join(words)))
 
 
 def _clauses(text: str):
@@ -139,20 +151,20 @@ def _join(units) -> str:
     return " ".join(w for ws, _ in units for w in ws).rstrip(",;:- ")
 
 
-def _cut(units, first: int, room: int, sentence: bool = True, floor: int = MIN_WORDS) -> str:
-    """The longest run of whole leading clauses within `room` words that holds clause `first`
-    (the answering one) and ends cleanly; "" when there is none. `sentence`: the answering
-    clause goes with the rest of its sentence (its reason, its "because")."""
+def _cut(units, last: int, room: int, sentence: bool = True, floor: int = MIN_WORDS) -> str:
+    """The longest run of whole leading clauses within `room` words that holds clause `last`
+    and ends cleanly; "" when there is none. `sentence`: clause `last` goes with the rest of
+    its sentence (its reason, its "because")."""
     best = ""
-    whole = (next((j for j in range(first, len(units)) if units[j][1] == SENT), len(units) - 1)
-             if sentence else first)
+    whole = (next((j for j in range(last, len(units)) if units[j][1] == SENT), len(units) - 1)
+             if sentence else last)
     for k in range(whole + 1, len(units)):
         head = units[:k]
         if _n(head) > room:
             break
-        last = head[-1][0]
-        if units[k - 1][1] != SENT and (_bare(last[-1]) in _DANGLING or (
-                len(last) <= 3 and _bare(last[0]) in _CONJUNCTIONS)):
+        tail = head[-1][0]
+        if units[k - 1][1] != SENT and (_bare(tail[-1]) in _DANGLING or (
+                len(tail) <= 3 and _bare(tail[0]) in _CONJUNCTIONS)):
             continue  # never ends on "but only" or "the" (a sentence's own end is whole)
         if len(_QUOTE.findall(_join(head))) % 2 or _n(head) < max(MIN_WORDS, floor):
             continue
@@ -171,19 +183,60 @@ def fit_answer(text: str, limit: int, his: str = "", *, subject: str = "",
     if limit <= 0 or len(words) <= int(LONG_SLACK * limit):
         return Fit(text, "fits")
     units = _clauses(" ".join(words))
-    first = next((i for i, (ws, _) in enumerate(units) if answering(ws, his, subject)), None)
     within = len(words) <= int(KEEP_SLACK * limit)
-    if first is not None:
-        answers = bool(his.strip() or subject.strip())  # else there is no answer to lose
-        cut = _cut(units, first, int(LONG_SLACK * limit), answers, floor)
-        if cut:
-            return Fit(cut, "cut")
-        if not within:
-            cut = _cut(units, first, int(KEEP_SLACK * limit), answers, floor)
+    his = " ".join((his or "").split())
+    asked = bool(his) and (is_question(his) or content_question(his))
+    if asked or (not his and subject.strip()):
+        # only after the LAST clause that proves the answer (or names the subject)
+        held = [i for i, (ws, _) in enumerate(units) if answering(ws, his, subject)]
+        last, sentence = (held[-1] if held else None), True
+    else:  # nothing to prove: her leading clauses, as many as fit
+        last, sentence = 0, False
+    if last is not None:
+        for room in (int(LONG_SLACK * limit), *(() if within else (int(KEEP_SLACK * limit),))):
+            cut = _cut(units, last, room, sentence, floor)
             if cut:
-                return Fit(cut, "kept")
+                return Fit(cut, "cut" if room == int(LONG_SLACK * limit) else "kept")
     return Fit(text, "kept" if within else "retry")
 
 
-__all__ = ["Fit", "KEEP_SLACK", "LONG_SLACK", "MIN_WORDS", "SHORTER_HINT", "answering",
-           "carries", "content_question", "fit_answer"]
+def split_lines(text: str, lines: int, max_bytes: int = LINE_BYTES) -> list[str] | None:
+    """`text` on at most `lines` game lines by whole clauses, each within `max_bytes` bytes and
+    nothing dropped (the fewest lines, the break nearest the middle); None when it does not fit.
+    A kept draft that does not fit is never sent as written: the styling would trim its tail
+    word by word at the bridge's 255 bytes (review of #370)."""
+    flat = " ".join(text.split())
+    if not flat:
+        return None
+    units = _clauses(flat)
+
+    def size(group) -> int:
+        return len(" ".join(w for ws, _ in group for w in ws).encode("utf-8"))
+
+    if size(units) <= max_bytes:
+        return [flat]
+    if lines < 2:
+        return None
+    total = _n(units)
+    best = None
+    for k in range(1, len(units)):
+        if lines == 2:
+            groups = [units[:k], units[k:]]
+            if all(size(g) <= max_bytes for g in groups):
+                key = abs(_n(units[:k]) - total / 2)
+                if best is None or key < best[0]:
+                    best = (key, groups)
+            continue
+        for j in range(k + 1, len(units)):
+            groups = [units[:k], units[k:j], units[j:]]
+            if all(size(g) <= max_bytes for g in groups):
+                key = max(map(_n, groups))
+                if best is None or key < best[0]:
+                    best = (key, groups)
+    if best is None:
+        return None
+    return [" ".join(w for ws, _ in g for w in ws) for g in best[1]]
+
+
+__all__ = ["Fit", "KEEP_SLACK", "LINE_BYTES", "LONG_SLACK", "MIN_WORDS", "SHORTER_HINT",
+           "answering", "carries", "content_question", "fit_answer", "split_lines"]
