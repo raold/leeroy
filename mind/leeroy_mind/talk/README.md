@@ -1051,7 +1051,8 @@ writes no ledger row: use `voices` for sheets.
 
 ## Conversations that hold together (`[talk] coherence`, 2026-11-17)
 
-`[talk] coherence` (a boolean, default **true**; anything else is off) holds the fixes the
+`[talk] coherence` (a boolean, default **false**: the owner turns it on at a release; anything
+but `true` is off) holds the fixes the
 2026-11-17 self-play audits asked for (100 graded whisper turns, 67 explicit DM turns, 197
 hard-case turns). **It is read with the rest of `mind.toml`: at the mind's start and at each of
 his logins, not per turn**; a change mid-session takes effect when he next logs in or the mind
@@ -1059,24 +1060,32 @@ restarts. With it off every rule below is exactly as before, the job shapes, the
 reading and the "tell X he" pronoun reading included (their pure modules carry a `COHERENT`
 switch that `LifeService.configure` sets). The rules that change a prompt also need a core
 switch on (`[talk] intent`, `[talk] situation` or `[life] availability`/`state`), so
-`tests/tuning/golden_prompts.json` is untouched; the core golden (`golden_core.json`) was
-re-recorded.
+no golden prompt changes: with the switch off (the default) every golden file is main's.
 
 **A game line that is only too long is kept** (`talk/length.py`, `Pipeline._generate_serial`).
 The "long" tell used to ask for a fresh generation at her line's length ("Shorter: 2-8 words"),
-which lost correct answers. Now `fit_answer` cuts a game line only after the sentence that
-answers, and only when it can prove where that is: a number, time, weekday or month for a how
-many, how much, how long or when question; a yes or no for a yes/no question; "no idea" or a
-name with a capital inside the clause for any question; a shared content word for a line of his
-that asks nothing or for the turn's own subject (an opener's topic, an outreach item's words).
-The cut keeps that clause's whole sentence, never ends on a dangling word or inside a quotation
-and never leaves under 3 words. With no provable answer the line goes as written within twice
-the turn's words; past that the model is asked again with her own draft: `You wrote: "..." Say
-the same thing shorter, in at most about N words. Keep the answer in it.` A who, what, where,
-which, why or how answer in other words is never cut (review of #370: 40 invented drafts with
-the answer in the second or third clause; none goes out without it, at 12 words all 40 go as
-written). A kept draft is styled on one line (`TurnMeta.keep_words`, `_style`'s `room`), so no
-clause is repacked away. Discord turns are not touched: they keep `fit_words` and their bands.
+which lost correct answers. The owner's rule is absolute: a cut that removes the answer is
+never acceptable. So `fit_answer` cuts a game line only after the sentence of the **last**
+clause that holds a proof of the kind his question asks for: a number, time, weekday or month
+for a how many, how much, how long or when question; a yes or no for a yes/no question. It
+never cuts an answer to a who, what, where, which, why or how question or to an
+explain-request (a name or a "no idea" proves nothing on its own), and never when his line
+holds two questions. To a line of his that asks nothing it keeps her leading whole clauses, as
+many as fit (never only the clause that repeats his subject); for a turn with its own subject
+(an opener's topic, an outreach item's words) it cuts only after the last clause that names
+it. A cut never ends on a dangling word or inside a quotation and never leaves under 3 words.
+With no provable cut the line goes as written within twice the turn's words; past that the
+model is asked again with her own draft: `You wrote: "..." Say the same thing shorter, in at
+most about N words. Keep the answer in it.` (Reviews of #370: 72 invented drafts in
+`tests/length_drafts.py`, 40 with the answer in the second or third clause and 32 with a false
+proof in the lead-in, the answer last, two questions, quotes or an emoji tail; none goes out
+without its answer at 6, 8, 10, 12 or 15 words.) **What goes out whole must fit her game
+lines**: a cut, kept or over-length line is sent only when `length.split_lines` fits it on the
+lines her turn has by whole clauses, each within `LINE_BYTES` (230) bytes; `_style` then lays
+those clauses out (`TurnMeta.keep_words`, `room`) and nothing is dropped. A draft that does not
+fit is asked again with itself, as above (before, the bridge's 255 bytes trimmed its tail word
+by word). A voice sheet's range gives room for at most `VOICE_LINE_WORDS` (36) words. Discord
+turns are not touched: they keep `fit_words` and their bands.
 A content question from him gives a game SHORT, QUESTION or LATE shape at least
 `shape.CONTENT_WORDS` (12) words, but never more than the longest line her voice sheet names
 ("three to seven words" answers in seven). A line inside her sheet's range is never long, a
@@ -1093,10 +1102,11 @@ per conversation in the pipeline); it lets go after 10 quiet minutes, a new subj
 enough", 6 of her answers or 15 minutes from when it was first set, and its words are the first
 exchange's (they do not grow). The draw then draws nothing and the beat is offered only that
 want. **What she has said so far has one presentation**: the "So far between you two" block of
-her whispers and DMs with him (`talk/sofar.py`), whose "- You said: ..." lines are her claims
+her whispers and DMs with him (`talk/sofar.py`). Its lines for where and how she said she is
+stay as they are; while `[talk] coherence` and a core switch are on her claims
 (`position.claims_so_far`: her own sentences with a number beside a word, or a statement of
-herself) while `[talk] coherence` and a core switch are on, and her stated place and state
-otherwise. The line's prompt and the beat (which reads the same prompt) both see that one
+herself) follow them as "- You said: ..." lines, without a claim that repeats the place, the
+oldest dropped until they are within `sofar.CLAIM_TOKENS` (50). The line's prompt and the beat (which reads the same prompt) both see that one
 block; nothing here adds a second. When his line touches an opinion on her card that
 reads as a rule ("never", "not optional", "the law"), the line's block and the beat get `You
 hold this as a rule: "..." You don't argue against it; if <his name>, as guild leader,

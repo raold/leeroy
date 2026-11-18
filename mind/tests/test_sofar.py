@@ -81,7 +81,7 @@ def test_only_news_about_himself_is_kept_and_the_least_important_goes_first():
 def test_her_claims_come_from_the_coherence_extractor_when_asked_for(monkeypatch):
     """talk.position.claims_so_far is the reader of what she has said of herself when the
     caller asks for her claims (`claims`: [talk] coherence with a core switch on, the
-    pipeline's call); otherwise her place and state, as before."""
+    pipeline's call): they go after her place and state, which stay as before."""
     import sys
     import types
     lines = talk(("s", "im at the studio till ten and i start at six tomorrow"), ("h", "ok"))
@@ -90,8 +90,9 @@ def test_her_claims_come_from_the_coherence_extractor_when_asked_for(monkeypatch
     fake.claims_so_far = lambda hers, limit=3: [f"claim of {len(hers)} lines"]
     monkeypatch.setitem(sys.modules, "leeroy_mind.talk.position", fake)
     assert block(lines, forms=HE)[0].startswith("- You said you're at the studio")
-    assert block(lines, forms=HE, claims=True) == ["- You said: claim of 1 lines."]
-    assert sofar.her_said(lines, claims=True) == ["claim of 1 lines"]
+    plain = block(lines, forms=HE)
+    assert block(lines, forms=HE, claims=True) == [*plain, "- You said: claim of 1 lines."]
+    assert sofar.her_said(lines, claims=True) == [*sofar.her_said(lines), "claim of 1 lines"]
 
 
 def test_her_place_state_open_questions_and_plans():

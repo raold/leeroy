@@ -13,10 +13,8 @@ Read from words alone, the same on every channel and for every member:
   (held for HOLD_S of quiet, at most HOLD_TURNS answers or HOLD_MAX_S from when it was first
   set, until he changes the subject or settles it with a "fair enough");
 - `claims_so_far`: what she has said so far in this conversation, as a few short claims
-  (numbers and statements about herself first); `relevant_claims`, the ones his line is about,
-  within CLAIM_TOKENS; and `said_line`, the sentence that shows them to the beat with the rule
-  that she does not contradict herself (the line's prompt has one "so far" block, and it is
-  talk/sofar.py's);
+  (numbers and statements about herself first), shown as lines of the prompt's one "So far"
+  block (talk/sofar.py, after where and how she said she is, within its CLAIM_TOKENS);
 - `opinion_for`, `strong` and `view_line`: the opinion on her card his line touches, and
   whether she holds it as a rule ("not optional", "never", "the law"), which she then does not
   argue against unless he, as guild leader, overrules it outright.
@@ -31,17 +29,13 @@ from dataclasses import dataclass
 
 from leeroy_mind.talk.select import _words as topic_words_of
 from leeroy_mind.talk.select import pushback_kind
-from leeroy_mind.text import estimate_tokens
 
 HOLD_S = 600.0  # a held want lets go this long after her last answer on it
 HOLD_MAX_S = 900.0  # ...and this long after it was first set, whatever came since
 HOLD_TURNS = 6  # ...or once she has answered on it this many times
-CLAIM_TOKENS = 50  # the claims shown to the beat, at most (estimated tokens)
 CLAIM_WINDOW_S = 1800.0  # her lines this old are no longer "so far in this conversation"
 MAX_CLAIMS = 3
 CLAIM_WORDS = 12
-SAID = ("So far in this conversation you've said: {claims}. Stay consistent with that: don't "
-        "contradict yourself, and if you change your mind, say that you do.")
 VIEW = ('You hold this as a rule: "{opinion}" You don\'t argue against it; if {human}, as '
         "guild leader, overrules it outright you can give way, and you say that you do.")
 
@@ -147,32 +141,6 @@ def claims_so_far(lines: Sequence[str], limit: int = MAX_CLAIMS) -> list[str]:
     return [text for _, _, text in sorted(best, key=lambda c: c[1])]
 
 
-def relevant_claims(lines: Sequence[str], his_line: str, *,
-                    tokens: int = CLAIM_TOKENS) -> list[str]:
-    """claims_so_far for a line of his: only the claims it is about (one shares a content word
-    with it; a short follow-up such as "which is it", "?" or "you sure" is about her newest
-    claim), the newest kept within `tokens` estimated tokens. [] when she has claimed nothing
-    his line touches."""
-    claims = claims_so_far(lines, limit=len(lines) * 4 + 4)
-    his = words_of(his_line)
-    picked = [c for c in claims if his & words_of(c)]
-    if not picked and len(his) < 2 and (disagrees(his_line) or "?" in (his_line or "")):
-        picked = claims[-1:]
-    out: list[str] = []
-    for claim in reversed(picked[-MAX_CLAIMS:]):
-        if estimate_tokens(said_line([claim, *out])) > tokens:
-            break
-        out.insert(0, claim)
-    return out
-
-
-def said_line(claims: Sequence[str]) -> str:
-    """The sentence that shows her claims ("" without any)."""
-    if not claims:
-        return ""
-    return SAID.format(claims="; ".join(f'"{c}"' for c in claims))
-
-
 def opinion_for(opinions: Sequence[str], line: str) -> str | None:
     """The opinion of hers his line touches: the one sharing the most content words with it
     (at least one of OPINION_MIN letters or more), the first on a tie; None when none does."""
@@ -196,6 +164,5 @@ def view_line(opinion: str, human: str = "he") -> str:
     return VIEW.format(opinion=" ".join(opinion.split()), human=human)
 
 
-__all__ = ["CLAIM_TOKENS", "CLAIM_WINDOW_S", "HOLD_MAX_S", "HOLD_S", "HOLD_TURNS", "Hold",
-           "claims_so_far", "disagrees", "held", "opinion_for", "relevant_claims",
-           "said_line", "settled", "strong", "view_line", "words_of"]
+__all__ = ["CLAIM_WINDOW_S", "HOLD_MAX_S", "HOLD_S", "HOLD_TURNS", "Hold",
+           "claims_so_far", "disagrees", "held", "opinion_for", "settled", "strong", "view_line", "words_of"]

@@ -12,7 +12,13 @@ from random import Random
 import pytest
 
 from conftest import HUMAN, seed_test_cast
-from engine_rig import engine_clock, make_rig, save_member
+from engine_rig import engine_clock, save_member
+from engine_rig import make_rig as _make_rig
+
+
+def make_rig(*args, **kw):
+    kw.setdefault("coherence", True)  # the switch under test; a test of "off" says so
+    return _make_rig(*args, **kw)
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.personas.card import render_prompt_card
@@ -27,6 +33,9 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 
 BEAT = {"read": "he wants a straight answer", "lands": "a little sting", "want": "share",
         "use": None}
+
+
+pytestmark = pytest.mark.usefixtures("coherent")  # [talk] coherence is off by default
 
 
 @pytest.fixture
@@ -74,8 +83,7 @@ def test_her_claims_are_her_numbers_and_what_she_said_of_herself():
     many = [f"i did {i} pulls" for i in range(6)]
     assert position.claims_so_far(many) == many[3:]
     assert position.claims_so_far(many, limit=1) == many[-1:]
-    assert position.claims_so_far([]) == [] and position.said_line([]) == ""
-    assert '"im at work till six"' in position.said_line(["im at work till six"])
+    assert position.claims_so_far([]) == []
 
 
 def test_the_opinion_his_line_touches_and_whether_it_is_a_rule():
@@ -123,19 +131,26 @@ def test_a_hold_is_bounded_from_when_it_was_first_set():
     assert not position.held(old, "which is it lol", 1100.0)
 
 
-def test_claims_shown_are_the_ones_his_line_is_about_within_fifty_tokens():
-    lines = ["i have 7 wins against him and 9 losses", "im at work till six",
-             "that one was a mess", "no one came"]
-    assert position.claims_so_far(lines) == lines[:2]  # "one" is no number
-    assert position.relevant_claims(lines, "how many wins was it again") == lines[:1]
-    assert position.relevant_claims(lines, "which is it lol") == lines[1:2]  # her newest
-    assert position.relevant_claims(lines, "anyone seen my hat today") == []
-    assert position.relevant_claims(lines, "nice") == []
-    many = [f"i won {i} duels against him this week and lost {i + 1} more" for i in range(9)]
-    shown = position.relevant_claims(many, "how many duels then")
-    assert shown and shown[-1] == many[-1]
+def test_claims_follow_her_place_and_state_within_fifty_tokens():
+    from leeroy_mind.talk import sofar
     from leeroy_mind.text import estimate_tokens
-    assert estimate_tokens(position.said_line(shown)) <= position.CLAIM_TOKENS
+
+    def line(i, text, his=False):
+        return sofar.Line(i, 100.0 + i, his, text)
+    talk = [line(1, "what are you up to", his=True), line(2, "i'm at work until six tonight"),
+            line(3, "i have 7 wins against him and 9 losses")]
+    off = sofar.block(talk, forms=("he", "him", "his"))
+    on = sofar.block(talk, forms=("he", "him", "his"), claims=True)
+    assert off and on[:len(off)] == off  # the place line stays, as with the switch off
+    assert "- You said: i have 7 wins against him and 9 losses." in on
+    assert sum("at work" in x for x in on) == 1  # the claim that repeats her place is left out
+    many = [line(1, "so?", his=True)] + [
+        line(i + 2, f"i won {i} duels against him this week and lost {i + 1} more than him")
+        for i in range(9)]
+    shown = [x for x in sofar.block(many, forms=("he", "him", "his"), claims=True)
+             if x.startswith("- You said: i won")]
+    assert shown and "i won 8 duels" in shown[-1]  # the newest kept
+    assert estimate_tokens("\n".join(shown)) <= sofar.CLAIM_TOKENS
 
 
 def test_a_held_want_is_not_drawn_again_and_is_the_only_one_offered():

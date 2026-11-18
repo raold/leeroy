@@ -43,6 +43,7 @@ from leeroy_mind.text import estimate_tokens
 HEAD = ("So far between you two (keep to it, never contradict it; if he asks about something "
         "he told you that is not here or in the chat, say you don't remember, never guess):")
 IDLE_S = 3 * 3600.0
+CLAIM_TOKENS = 50  # her claims ([talk] coherence), at most (estimated tokens)
 MAX_TOKENS = 120
 FACTS = 6
 LINE_WORDS = 12
@@ -237,8 +238,9 @@ def her_said(lines: Sequence[Line], *, claims: bool = False) -> list[str]:
     """What she has claimed about herself so far in this conversation, as plain strings
     (talk.position.claims_so_far when that module is there, else her place and state); for a
     caller that wants her own claims."""
-    return ((_her_claims(lines) if claims else [])
-            or [x for x in (her_place(lines), her_state(lines)) if x])
+    place, state = her_place(lines), her_state(lines)
+    return [x for x in (place, state) if x] + (
+        _claims_after(lines, place, state) if claims else [])
 
 
 def plans(lines: Sequence[Line], *, skip: int = 0, taken: Sequence[int] = ()) -> list[tuple[bool, str]]:
@@ -270,17 +272,14 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
     facts = _news(lines, skip)
     n = len([x for x in lead if x])
     first = [f"- {x}" for x in lead if x]
-    # `claims` ([talk] coherence with a core switch on, the pipeline's call): what she said
-    # is her claims (numbers and self-statements); else where and how she said she is
-    said_so_far = _her_claims(lines) if claims else []
-    if said_so_far:
-        first += [f"- You said: {c}." for c in said_so_far]
-    else:
-        place, state = her_place(lines), her_state(lines)
-        if place:
-            first.append(f"- You said you're {place}.")
-        if state:
-            first.append(f"- You said: {state}.")
+    place, state = her_place(lines), her_state(lines)
+    if place:
+        first.append(f"- You said you're {place}.")
+    if state:
+        first.append(f"- You said: {state}.")
+    # `claims` ([talk] coherence with a core switch on, the pipeline's call): her claims
+    # (numbers and self-statements) after where and how she said she is, within CLAIM_TOKENS
+    first += [f"- You said: {c}." for c in (_claims_after(lines, place, state) if claims else [])]
     asked = [f"- {they} also asked: {q}" for q in open_questions(lines, skip=skip)]
     later = [f"- {they if his else 'You'} said: {text}"
              for his, text in plans(lines, skip=skip, taken=[i for i, _, _ in facts])]
@@ -301,6 +300,16 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
         asked.pop(0)
     return [*lead_lines, *said, *asked, *(f"- {they} told you: {t}" for _, t, _ in facts),
             *later]
+
+
+def _claims_after(lines: Sequence[Line], place: str, state: str) -> list[str]:
+    """Her claims that go after her place and state: none that only repeats one of them, the
+    oldest dropped until their lines are within CLAIM_TOKENS estimated tokens."""
+    said = [x.casefold() for x in (place, state) if x]
+    out = [c for c in _her_claims(lines) if not any(x in c.casefold() for x in said)]
+    while out and estimate_tokens("\n".join(f"- You said: {c}." for c in out)) > CLAIM_TOKENS:
+        out.pop(0)
+    return out
 
 
 def _her_claims(lines: Sequence[Line]) -> list[str]:
