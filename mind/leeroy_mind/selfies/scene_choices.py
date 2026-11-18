@@ -2,6 +2,12 @@
 
 Pairings describe coherent activities and props, not a substitute for the scene screens.
 Lust outfits/colours/expressions still come from kind.py and meet screen_lust unchanged.
+
+Since the photo audit (2026-11-17, safe.py) an activity is said as what is there, never as what
+the hands do, and a prop rests beside the subject: a gripped mug, pen, glass, knife, needle or
+handlebar was where the hands failed (a mug in hand 23% defective, stick-like things 56%, the
+exercise bike always garbled). The keys are unchanged; LEGACY_ACTIVITIES and LEGACY_PROPS read
+the rows composed before.
 """
 from .kind import LUST_SETTINGS
 from .wardrobe import SCENE_MORE
@@ -31,48 +37,70 @@ PLACES = {
 PLAIN_PLACES = {k: v for k, v in PLACES.items() if k not in ("beach", "pool_deck")}
 # phrase, allowed place keys. Every activity has at least one plain place.
 ACTIVITIES = {
-    "raiding": ("playing a raid game", ("desk",)),
+    "raiding": ("at the computer on a raid night", ("desk",)),
     "guild_planning": ("planning a game session", ("desk",)),
-    "spreadsheet": ("working on a spreadsheet", ("desk",)),
-    "writing": ("writing in a notebook", ("desk", "cafe", "library", "porch")),
-    "reading": ("reading a book", ("library", "living_room", "cafe", "porch", "balcony")),
-    "cooking": ("stirring a pot of soup", ("kitchen",)),
-    "baking": ("rolling bread dough", ("kitchen",)),
-    "chopping": ("chopping vegetables", ("kitchen",)),
-    "coffee": ("enjoying a cup of coffee", ("cafe", "kitchen", "porch", "balcony")),
-    "tea": ("enjoying a cup of tea", ("cafe", "kitchen", "living_room", "garden")),
-    "exercise": ("using an exercise bike", ("gym",)),
-    "stretching": ("stretching both arms overhead", ("gym", "park")),
-    "dog_walk": ("walking a dog on a leash", ("park", "trail", "harbour", "beach")),
+    "spreadsheet": ("at the computer with a spreadsheet open", ("desk",)),
+    "writing": ("an open notebook on the table", ("desk", "cafe", "library", "porch")),
+    "reading": ("a book open on the table", ("library", "living_room", "cafe", "porch",
+                                              "balcony")),
+    "cooking": ("a pot of soup simmering on the stove", ("kitchen",)),
+    "baking": ("a loaf of fresh bread on the counter", ("kitchen",)),
+    "chopping": ("a board of chopped vegetables on the counter", ("kitchen",)),
+    "coffee": ("a cup of coffee on the table", ("cafe", "kitchen", "porch", "balcony")),
+    "tea": ("a cup of tea on the table", ("cafe", "kitchen", "living_room", "garden")),
+    "exercise": ("resting after a workout", ("gym",)),
+    "stretching": ("warming up before a workout", ("gym", "park")),
+    "dog_walk": ("out on a walk with a dog alongside", ("park", "trail", "harbour", "beach")),
     "walking": ("taking a quiet walk", ("park", "trail", "harbour", "beach", "garden")),
     "hiking": ("pausing on a hike", ("trail",)),
-    "gardening": ("planting herbs in a pot", ("garden", "balcony", "porch")),
-    "watering": ("watering a potted plant", ("garden", "balcony", "porch")),
-    "sketching": ("sketching a landscape on paper", ("studio", "desk", "garden", "park")),
-    "painting": ("painting a still life", ("studio", "workbench")),
-    "knitting": ("knitting a scarf", ("living_room", "porch", "cafe")),
-    "puzzle": ("assembling a landscape jigsaw", ("dining_room", "desk")),
-    "guitar": ("playing an acoustic guitar", ("living_room", "studio", "porch")),
-    "repairing": ("repairing a small wooden box", ("workbench",)),
-    "organizing": ("sorting craft supplies", ("workbench", "studio", "desk")),
+    "gardening": ("pots of fresh herbs on a bench nearby", ("garden", "balcony", "porch")),
+    "watering": ("a freshly watered potted plant nearby", ("garden", "balcony", "porch")),
+    "sketching": ("a sketchbook open on the table", ("studio", "desk", "garden", "park")),
+    "painting": ("an easel with a still life nearby", ("studio", "workbench")),
+    "knitting": ("a half-knitted scarf and yarn on the table", ("living_room", "porch", "cafe")),
+    "puzzle": ("a landscape jigsaw laid out on the table", ("dining_room", "desk")),
+    "guitar": ("an acoustic guitar on a stand nearby", ("living_room", "studio", "porch")),
+    "repairing": ("a small wooden box on the workbench", ("workbench",)),
+    "organizing": ("craft supplies sorted on the table", ("workbench", "studio", "desk")),
     "birdwatching": ("watching birds in the distance", ("park", "garden", "trail", "dock")),
-    "picnic": ("enjoying a packed lunch", ("picnic", "park", "garden")),
-    "breakfast": ("eating toast", ("kitchen", "dining_room", "cafe")),
+    "picnic": ("a packed lunch laid out on the table", ("picnic", "park", "garden")),
+    "breakfast": ("a plate of toast on the table", ("kitchen", "dining_room", "cafe")),
     "relaxing": ("taking a quiet break", tuple(PLACES)),
     "sunset": ("watching the horizon", ("beach", "harbour", "dock", "boat", "balcony")),
-    "celebrating": ("raising a mug in celebration", ("desk", "kitchen", "dining_room", "porch")),
+    "celebrating": ("celebrating, a mug on the table", ("desk", "kitchen", "dining_room",
+                                                        "porch")),
+}
+# The phrases rows composed before the audit hold, by key (channel_for and the critic read them)
+LEGACY_ACTIVITIES = {
+    "raiding": "playing a raid game", "spreadsheet": "working on a spreadsheet",
+    "writing": "writing in a notebook", "reading": "reading a book",
+    "cooking": "stirring a pot of soup", "baking": "rolling bread dough",
+    "chopping": "chopping vegetables", "coffee": "enjoying a cup of coffee",
+    "tea": "enjoying a cup of tea", "exercise": "using an exercise bike",
+    "stretching": "stretching both arms overhead", "dog_walk": "walking a dog on a leash",
+    "gardening": "planting herbs in a pot", "watering": "watering a potted plant",
+    "sketching": "sketching a landscape on paper", "painting": "painting a still life",
+    "knitting": "knitting a scarf", "puzzle": "assembling a landscape jigsaw",
+    "guitar": "playing an acoustic guitar", "repairing": "repairing a small wooden box",
+    "organizing": "sorting craft supplies", "picnic": "enjoying a packed lunch",
+    "breakfast": "eating toast", "celebrating": "raising a mug in celebration",
 }
 EXPRESSIONS = {"smile": "a relaxed smile", "grin": "a cheerful grin",
                "laugh": "laughing", "thoughtful": "a thoughtful expression",
                "focused": "a focused expression", "calm": "a calm expression"}
+# Every outfit names a top and a bottom (safe.is_complete): a jacket alone is no top
 OUTFITS = {"casual": "a cotton shirt and trousers",
-           "warm": "a jumper and trousers", "outdoors": "a jacket and trousers",
+           "warm": "a jumper and trousers", "outdoors": "a jacket over a t-shirt and trousers",
            "exercise": "a loose tee and full-length leggings"}
 # with the outfits only a wardrobe offers (wardrobe.scene_outfits): never in the base schema
 ALL_OUTFITS = {**OUTFITS, **SCENE_MORE}
-PROPS = {"none": "", "mug": "holding a plain mug", "book": "holding a book",
-         "notebook": "holding a notebook", "leash": "holding a dog leash",
+# Nothing is held: a prop rests beside the subject
+PROPS = {"none": "", "mug": "a plain mug on the table", "book": "a closed book on the table",
+         "notebook": "a notebook on the table", "leash": "the dog looking up at the camera",
          "plant": "beside a potted plant"}
+LEGACY_PROPS = {"mug": "holding a plain mug", "book": "holding a book",
+                "notebook": "holding a notebook", "leash": "holding a dog leash"}
+LEGACY_OUTFITS = {"outdoors": "a jacket and trousers"}
 PROP_ACTIVITIES = {
     "mug": ("coffee", "tea", "celebrating", "relaxing"),
     "book": ("reading", "relaxing"), "notebook": ("writing", "guild_planning"),
@@ -103,24 +131,39 @@ PROP_CHANNEL = {'none':'pics', 'mug':'pics', 'book':'pics', 'notebook':'pics',
 def channel_for(scene: Mapping) -> str:
     """Read the composed enums stored with the image, never classify model prose."""
     activity, setting = scene.get('activity', ''), scene.get('setting', '')
-    found = {ACTIVITY_CHANNEL[key] for key, (phrase, _) in ACTIVITIES.items()
-             if activity == phrase or activity.startswith(phrase + ', ')}
+    found = {ACTIVITY_CHANNEL[key] for key in activity_keys(activity)}
     found.update(PLACE_CHANNEL[key] for key, phrase in PLACES.items() if setting == phrase)
-    found.update(PROP_CHANNEL[key] for key, phrase in PROPS.items()
-                 if phrase and activity.endswith(', ' + phrase))
+    found.update({PROP_CHANNEL[prop_key(activity)]} - {PROP_CHANNEL["none"]})
     return next((channel for channel in ('food', 'pets', 'irl') if channel in found), 'pics')
 # Same vetted settings as the profile photo, except crowd/bathing/mirror contexts.
 LUST_PLACES = {
     "a rooftop bar at night": "balcony", "a city street at night": "harbour",
     "a cafe terrace": "cafe", "a park in summer": "park",
     "a hotel balcony at dusk": "balcony", "a nightclub": "nightclub",
-    "her living room couch": "living_room", "the front seat of her car": "car",
+    "her living room couch": "living_room", "her hallway at home": "living_room",
+    "a sunny window seat at home": "living_room", "a bookshop": "library",
     "a wine bar": "cafe", "a dance floor": "dance_floor", "a garden party": "garden",
     "a ski lodge terrace": "porch", "the beach at sunset": "beach",
     "a hotel pool deck": "pool_deck", "a lakeside dock": "dock",
     "the deck of a sailing boat": "boat", "a beach bar": "beach", "the gym": "gym",
 }
 SCENE_LUST_SETTINGS = tuple(s for s in LUST_SETTINGS if s in LUST_PLACES)
+
+
+def activity_keys(activity: str) -> list[str]:
+    """The ACTIVITIES keys a composed activity text stands for, as it is said now or as a row
+    composed before the audit says it (LEGACY_ACTIVITIES)."""
+    said = [(key, phrase) for key, (phrase, _) in ACTIVITIES.items()]
+    said += list(LEGACY_ACTIVITIES.items())
+    return list(dict.fromkeys(key for key, phrase in said
+                              if activity == phrase or activity.startswith(phrase + ", ")))
+
+
+def prop_key(activity: str) -> str:
+    """The PROPS key a composed activity text ends with ("none" for none), now or before the
+    audit (LEGACY_PROPS)."""
+    said = [(k, v) for k, v in PROPS.items() if v] + list(LEGACY_PROPS.items())
+    return next((k for k, v in said if activity.endswith(", " + v)), "none")
 
 
 def pairing_codes(data: dict) -> list[str]:

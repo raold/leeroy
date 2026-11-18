@@ -390,7 +390,7 @@ def test_try_ask_reads_his_words_and_renders_one_photo_with_her_face_into_scratc
     assert (base / "ref.jpg").read_bytes() == files.history(snaproot, 101, 1).read_bytes()
     stored = json.loads((base / "scene.json").read_text(encoding="utf-8"))
     assert (stored["setting"], stored["outfit"]) == ("supply cupboard at work",
-                                                     "a hi-vis vest over a work t-shirt")
+                                                     "a hi-vis vest over a work t-shirt and work trousers")
     asked = [c for c in llm.calls if "messages" in c]
     assert len(asked) == 1 and asked[0]["think"] is False
     assert asked[0]["format"]["title"] == "scene_words" and ASK in asked[0]["messages"][-1]["content"]

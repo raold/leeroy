@@ -20,8 +20,9 @@ from leeroy_mind.nightly.llm import ReflectionError
 
 from .config import SelfieCfg
 from .files import sync_snaps
-from .kind import looks_line
+from .kind import SWIM_OUTFITS, looks_line
 from .prompt import renderable
+from .safe import SNAP_BODY_SHARE, settle_framing
 from .ration import MEMBER_GAP_S, MEMBER_STOCK, SEND_MIN_AGE, send_weight, stock_target, channel_stock
 from .romance_styling import enum_category, restyle
 from .style import style_of, LUST
@@ -177,10 +178,14 @@ def _guild_members(ctx: "NightContext", raid_id: int) -> list[tuple[int, int]]:
 
 
 async def ask_scene(ctx: "NightContext", guid: int, *, about: str,
-                    romance_styling: bool = False, audience=None):
+                    share: float = SNAP_BODY_SHARE, romance_styling: bool = False,
+                    audience=None):
     """One scene for `guid` from the reflection model, screened: (the Scene, []) or (None, the
     refusal codes). [DECLINED] when the member chose no photo, ["model"] for a non-fatal model
-    failure. Writes nothing; a fatal ReflectionError is raised."""
+    failure. Writes nothing; a fatal ReflectionError is raised. A waist-up or wider framing
+    stays for `share` of the scenes ([selfies] snap_body_share) and is head and shoulders for
+    the rest (the photo audit: 29% of waist-up situational photos defective, none of the
+    closer ones); swimwear keeps its waist-up framing."""
     p, name = ctx.base(guid), ctx.name(guid)
     system = scene_system(p, ctx.settings.data_dir, human=ctx.ident, name=name,
                           card=ctx.base_card(guid), facts=_facts(p),
@@ -203,6 +208,10 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str,
             return None, codes
         log("selfies_scene_asked_again", night=ctx.night, guid=guid, codes=codes)
     category = enum_category(data)
+    if data.get("outfit") not in SWIM_OUTFITS:
+        data = {**data, "framing": settle_framing(
+            data.get("framing"), share, f"{guid}:{ctx.night}:{about}",
+            wide=("upper_body", "three_quarter"), narrow="head_and_shoulders")}
     data = compose_choices(data)
     others = [g for g in ctx.members(include_away=True) if g != guid]
     names = [ctx.name(g) for g in others]
@@ -308,6 +317,7 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int], outlets: Calla
                 about += (' This photo is for his private DM only.' if audience == 'him' else
                           ' This photo is for a public guild channel, safe for everyone.')
             s, codes = await ask_scene(ctx, guid, about=about,
+                                       share=getattr(cfg, "snap_body_share", SNAP_BODY_SHARE),
                                        romance_styling=cfg.romance_styling, audience=audience)
             if codes == [DECLINED]:
                 declined += 1

@@ -6,7 +6,7 @@ import pytest
 
 from conftest import run
 from leeroy_mind.photos import request_store as records
-from leeroy_mind.selfies.scene import SNAP_NEGATIVE_LUST
+from leeroy_mind.selfies.scene import SNAP_NEGATIVE_LUST, SNAP_NEGATIVE_LUST_MIRROR
 from photos.test_request_rehearsal import check_handback, lust, rig, script, snapshot
 from photos.test_request_service import ON, drive, offline
 from photos.test_request_words_scene import REPLY, words_script
@@ -45,7 +45,9 @@ def test_styled_private_photo_renders_and_sends_one_consistent_recipe(tmp_path, 
             assert len(rendered) == 1
             req = rendered[0]
             assert any(scene["outfit"] in text and priority == 0 for text, priority in req.phrases)
-            assert req.negative == SNAP_NEGATIVE_LUST
+            mirror = scene.get("words", {}).get("framing") == "mirror_selfie"
+            base = SNAP_NEGATIVE_LUST_MIRROR if mirror else SNAP_NEGATIVE_LUST
+            assert set(base) <= set(req.negative)
             assert req.nsfw_max == .2
             assert req.identity is not None
             assert scene["recipe"] == (2 if from_words else 1)

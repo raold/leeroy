@@ -66,13 +66,14 @@ from leeroy_mind.talk.everyday import is_everyday
 
 from . import wardrobe
 from .kind import LUST_COLOURS, VARIED_LOOKS, VARIED_OUTFITS, _enum, outfit_phrase
-from .prompt import (_PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, fit_required,
+from .prompt import (negative_for, _PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, fit_required,
                      accessory_phrases, glutes_words, hair_skin, identity_first, names_re, phrase_adder,
                      reserve,
                      subject_phrase)
-from .scene import (_NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
+from .scene import (snap_negative, _NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
                     SNAP_NEGATIVE_LUST, _text_codes, _young_number, limb_detail, scene_from,
                     scene_renderable)
+from .safe import KIND_WORDS, POSE_WAIST_UP, alone, wearing
 from .scene_choices import OUTFITS, PLACES, PLAIN_PLACES
 from .style import AGE_RE, LUST, style_of
 
@@ -100,7 +101,7 @@ PROMPT = (
     "to take it.\n{card}\n{facts}\nHow they look: {looks}\nRight now they are {now}.\n"
     "Read the ask into the photo they take, in plain everyday words:\n"
     "- place: where they take it, at most 8 words (for example: office break room, kitchen at "
-    "home, front seat of a parked car)\n"
+    "home, bench in the park)\n"
     "- framing: mirror_selfie, handheld_selfie, timer (the phone propped up) or "
     "from_behind_over_shoulder\n"
     "- wearing: work_uniform (what their job has them wear), gym, casual, going_out, swimwear, "
@@ -123,8 +124,15 @@ NOW_ANY = "going about an ordinary day"
 
 # The prompt's framing (priority 0, never yielded: the fit shortens only the back view, to
 # "from behind", as a varied set's pose), what `shows` says of it, and the stored kind.
-FRAMING_WORDS = {"mirror_selfie": "mirror selfie", "handheld_selfie": "phone selfie",
-                 "timer": "timer photo, phone propped up",
+# Since the photo audit (safe.py) a handheld selfie and a timer photo name no phone (a phone in
+# view came doubled or oversized) and their negative names the mirror and the phone. A mirror
+# selfie he asks for stays one (the owner's GPU-checked bathroom mirror selfie; the mirror
+# defects were the lust profile kinds'), with a negative that names neither. The selfie's long
+# form takes its short one first when the required set is too long, or leaves the owner's
+# accessories no room (prompt.fit_required's `short`).
+FRAMING_WORDS = {"mirror_selfie": KIND_WORDS["mirror_selfie"],
+                 "handheld_selfie": KIND_WORDS["selfie"],
+                 "timer": "photo taken on a timer",
                  BEHIND: "from behind, looking over {pos} shoulder"}
 FRAMING_SHOWS = {"mirror_selfie": "a mirror selfie", "handheld_selfie": "a selfie",
                  "timer": "a photo on the phone's timer",
@@ -143,18 +151,19 @@ SWIM_FRAMING = "waist-up shot"  # swimwear only framed upper body, as the lust p
 UNIFORMS = (
     (re.compile(r"\b(?:nurs\w*|midwi\w*|paramedic\w*|hospital|clinic\w*|doctor|surgeon|dent\w*|"
                 r"carers?|care (?:home|assistant|worker)|vets?|veterinar\w*|pharmac\w*|"
-                r"physio\w*)\b", re.I), "medical scrubs"),
-    (re.compile(r"\b(?:chef|cook|kitchen|bakery|baker|catering)\b", re.I), "chef's whites"),
+                r"physio\w*)\b", re.I), "a medical scrubs top and scrubs trousers"),
+    (re.compile(r"\b(?:chef|cook|kitchen|bakery|baker|catering)\b", re.I),
+     "a white chef's shirt and checked trousers"),
     (re.compile(r"\b(?:barista|caf[eé]|coffee|waitress|waiter|bartender|barmaid|pub|restaurant|"
-                r"diner)\b", re.I), "a black work apron over a black t-shirt"),
+                r"diner)\b", re.I), "a black work apron over a black t-shirt and jeans"),
     (re.compile(r"\b(?:warehouse|forklift|construction|builder|electrician|plumber|mechanic|"
                 r"factory|labou?rer|delivery|courier|logistics|depot)\b", re.I),
-     "a hi-vis vest over a work t-shirt"),
+     "a hi-vis vest over a work t-shirt and work trousers"),
     (re.compile(r"\b(?:retail|shop|store|supermarket|cashier|checkout)\b", re.I),
-     "a work polo shirt"),
+     "a work polo shirt and trousers"),
     (re.compile(r"\b(?:hairdresser|stylist|salon|barber|beautician)\b", re.I),
-     "a black salon tunic"))
-OFFICE_WEAR = "smart office clothes"
+     "a black salon tunic and black trousers"))
+OFFICE_WEAR = "a smart office shirt and trousers"
 PLAIN_WEAR = {"gym": OUTFITS["exercise"], "casual": OUTFITS["casual"],
               "going_out": OUTFITS["outdoors"], "pyjamas": OUTFITS["warm"]}
 LUST_WEAR = {"gym": ("sports top and leggings",), "casual": VARIED_LOOKS["casual"][0],
@@ -512,12 +521,14 @@ def framing_words(p: Persona, framing: str) -> str:
 def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     """The prompt for a scene read from his words, in this order: the framing (0), who she is (0),
     her body (0), `wearing <outfit>` (0), the place (0; with swimwear, a waist-up framing, 0), her
-    hair and skin (0), the moment (1), looking at the camera (3, not from behind), her eyes and
-    face details (2; none about her hands, arms, legs or feet), the prop (2), the lighting (2), her glutes when seen from behind (2), the
-    time of day (3), a plain average build (1) and the phone look (1, without natural light
-    unless the lighting is daylight). fit_required shortens her hair's style, her skin's
-    modifiers, her size and a back view's pose; nothing at priority 0 yields. ValueError when
-    scene_renderable says why not, or a code is off its list."""
+    hair and skin (0), what the owner set her to wear (1, its room reserved), the moment (1), a
+    timer photo's waist-up pose when nothing is in her hands (1), looking at the camera (3, not
+    from behind), her eyes and face details (2; none about her hands, arms, legs or feet), the
+    prop (2), the lighting (2), her glutes when seen from behind (2), the time of day (3), a
+    plain average build (1) and the phone look (1, without natural light unless the lighting is
+    daylight). fit_required shortens a selfie's framing first, then her hair's style, her skin's
+    modifiers, her size and last a back view's pose; nothing at priority 0 yields. ValueError
+    when scene_renderable says why not, or a code is off its list."""
     s = scene_from(scene)
     missing = scene_renderable(p, s)
     if missing:
@@ -537,14 +548,24 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     add(*subject_phrase(p))
     body, plain_build = body_phrases(p)
     out += body
-    out += [(f"wearing {outfit}", 0), (setting, 0)]
+    # clothed by construction: a top and a bottom (safe.complete; her words at the computer may
+    # name only one), swimwear as its list says it
+    clothes = (f"wearing {outfit}" if w["wearing"] == "swimwear" else
+               wearing(outfit, gender=p.identity.player_gender, framing="upper_body"))
+    out += [(clothes, 0), (setting, 0)]
     if w["wearing"] == "swimwear":
         out.append((SWIM_FRAMING, 0))
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
-    add(s.activity, 1, True)
+    add(alone(setting), 3)
+    # what the owner set her to wear, the first optional phrases (prompt.fit_clothed's order),
+    # with their room reserved; then the moment, then a timer photo's pose (nothing in her
+    # hands: the phone is propped up), as a situational photo's pose follows its activity
     worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
     room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
     out += worn
+    add(s.activity, 1, True)
+    if w["framing"] == "timer" and not w.get("prop"):
+        add(POSE_WAIST_UP, 1)
     if w["framing"] != BEHIND and not s.romance_pose:
         add("looking at the camera", 3)
     # none of her face details about her hands, arms, legs or feet (scene.limb_detail)
@@ -565,8 +586,13 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
         out.append(plain_build)
     daylight = w["lighting"] == "daylight"
     add(_PHONE_TAIL if daylight else _PHONE_TAIL.replace("natural light, ", ""), 1)
-    out = fit_required(out, p, [], name_re, pose=pose, reserve=room)
-    return PromptSpec(tuple(out), SNAP_NEGATIVE_LUST if s.style == LUST else SNAP_NEGATIVE)
+    # a selfie's long form takes its short one in the first shortening step, before an
+    # accessory or her hair's style would go, and never yields (`short`); a back view's pose
+    # takes its short form only last
+    out = fit_required(out, p, [], name_re, pose=pose, reserve=room, short=(pose,))
+    # his explicit ask for a mirror selfie keeps its mirror: the negative does not name it
+    return PromptSpec(tuple(out), negative_for(p, snap_negative(
+        s.style == LUST, w["framing"] == "mirror_selfie")))
 
 
 def from_behind(scene: dict) -> bool:

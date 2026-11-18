@@ -10,7 +10,8 @@ from .store import queue_restyled
 from .style import LUST, style_of
 
 
-def run(store, ident, clock, *, lust_only=False, go=False, include_owner=False):
+def run(store, ident, clock, *, lust_only=False, go=False, include_owner=False,
+        share=style_variety.BODY_SHOT_SHARE):
     with store.transaction():
         personas,unreadable = {},[]
         for g,m in store.cast().items():
@@ -32,7 +33,8 @@ def run(store, ident, clock, *, lust_only=False, go=False, include_owner=False):
     plain = {g for g in selected if style_of(personas[g]) != LUST}
     names = tuple(m.name for m in store.cast().values()) + tuple(p.identity.real_name for p in personas.values())
     seed = ":".join(f"{g}={versions[g]}" for g in sorted(personas))
-    picked,rejected,cap,violations = style_variety.assign(personas,selected-plain,seed=seed,ident=ident,names=names)
+    picked,rejected,cap,violations = style_variety.assign(personas,selected-plain,seed=seed,ident=ident,names=names,
+                                                            share=share)
     report = dict(dry_run=not go,setting_cap=cap,owner_protected=sorted(owners if not include_owner else ()),
                   skipped=([{"guid":g,"code":"no_safe_capacity"} for g in sorted(rejected)]
                            + [{"guid":g,"code":"persona_unreadable"} for g in sorted(unreadable)]

@@ -13,9 +13,11 @@ from leeroy_mind.selfies.config import SelfieCfg, load_selfie_config
 from leeroy_mind.selfies.kind import CLOTHED_OUTFITS, LUST_COLOURS
 from leeroy_mind.selfies.request_scene import choose_scene
 from leeroy_mind.selfies.romance_styling import EXPRESSIONS, enum_category, level, restyle
+from leeroy_mind.selfies.prompt import negative_for
 from leeroy_mind.selfies.scene import (SNAP_NEGATIVE, SNAP_NEGATIVE_LUST, _text_codes,
-                                     build_scene_prompt, scene_from, scene_json, scene_renderable)
-from leeroy_mind.selfies.scene_choices import compose_choices
+                                     build_scene_prompt, scene_from, scene_json, scene_renderable,
+                                     snap_negative)
+from leeroy_mind.selfies.scene_choices import OUTFITS, compose_choices
 from leeroy_mind.selfies.scenes import make_scenes_stage
 from leeroy_mind.selfies.snaps import planned
 from leeroy_mind.selfies.tokens import estimate
@@ -100,9 +102,10 @@ def test_private_swimwear_allows_three_cameras_and_keeps_waist_up(app, framing):
     s = words(app, {"place": "pool deck", "wearing": "swimwear", "framing": framing,
                     "moment": "relaxing", "prop": None, "lighting": "daylight"})
     assert s["words"]["wearing"] == "swimwear" and s["style"] == "lust"
-    spec = W.build_words_prompt(load_persona(app.store, 101), s)
+    p = load_persona(app.store, 101)
+    spec = W.build_words_prompt(p, s)
     assert (W.SWIM_FRAMING, 0) in spec.phrases
-    assert spec.negative == SNAP_NEGATIVE_LUST
+    assert spec.negative == negative_for(p, snap_negative(True, framing == "mirror_selfie"))
     assert "fitted outfits, date-night clothes" in app.llm.calls[-1][1][0]["content"]
 
 
@@ -251,7 +254,7 @@ def test_live_enum_request_styles_private_output_after_original_screens(app):
     assert s.recipe == 1
     app.llm.answers = [{**PICKS, "audience": "him"}]
     public = run(choose_scene(app, 101, "a walking photo", "anyone"))
-    assert public.romance_style == "" and public.outfit == "a jacket and trousers"
+    assert public.romance_style == "" and public.outfit == OUTFITS["outdoors"]
 
 
 def test_words_request_retains_place_light_prop_framing_and_styled_clothing(app):
@@ -261,12 +264,14 @@ def test_words_request_retains_place_light_prop_framing_and_styled_clothing(app)
     assert s["outfit"] in s["shows"]
     assert s["words"]["lighting"] == "fluorescent"
     assert s["words"]["prop"] == "paper coffee cup"
-    spec = W.build_words_prompt(load_persona(app.store, 101), s)
+    p = load_persona(app.store, 101)
+    spec = W.build_words_prompt(p, s)
     prompt, _ = _worker_fit()(spec.phrases, estimate, 75)
     assert s["outfit"] in prompt and "kitchen at home" in prompt
     assert (s["expression"], 2) in spec.phrases
     assert spec.phrases.index((s["expression"], 2)) > spec.phrases.index(("hazel eyes", 2))
-    assert spec.negative == SNAP_NEGATIVE
+    assert spec.negative == negative_for(p, snap_negative(
+        False, s["words"]["framing"] == "mirror_selfie"))
 
 
 def test_words_as_now_and_work_uniform_remain_unchanged(app):
