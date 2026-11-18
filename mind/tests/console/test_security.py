@@ -56,7 +56,7 @@ def test_static_and_image_ids_never_become_paths(tmp_path):
             assert "script-src 'self'" in csp and "frame-ancestors 'none'" in csp
             assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
             assert page.header("x-content-type-options") == "nosniff"
-            assert page.header("cache-control") == "no-store"
+            assert page.header("cache-control") == "no-cache" and page.header("etag")
             assert page.header("set-cookie") is None and KEY.encode() not in page.body
     run(scenario())
 

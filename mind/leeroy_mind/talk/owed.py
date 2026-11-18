@@ -673,9 +673,17 @@ class OwedWatch:
         """His posts in the stretch a member has answered since: in a DM or a group DM a later
         message of the member's (hers in a DM) that replies to that post or a later one, or to
         nothing, never her pair line (her brb or back: it answers nothing); in a channel an
-        answer replying to that post or a later one."""
+        answer replying to that post or a later one. In her DM: the posts a stored answer of hers
+        was built with."""
         from leeroy_mind.discord.transport import PAIR_LINE_SQL
         conn = self.app.store.conn
+        if o.channel.startswith("dm:"):
+            # a post is answered only when a stored answer of hers was built with it
+            # (discord/covered.py): never by id order, which called a post that arrived while
+            # she was composing answered (review of #368, P1-1)
+            from leeroy_mind.discord import covered
+            done = covered.read(conn, o.channel, any_thread=True)
+            return [m for m in o.ids if done.has(m)]
         if o.channel.startswith(("dm:", "gdm:")):
             who, args = ("", (o.channel, o.ids[0])) if not o.to else (
                 " AND author = ?", (o.channel, o.to, o.ids[0]))
@@ -897,6 +905,11 @@ def _game_reply(conn, key, human, ids, after: float, until: float, *,
 
 
 def _discord_reply(conn, channel, ids, after: float, until: float) -> bool:
+    if channel.startswith("dm:"):
+        # each post of the stretch is covered by a stored answer by then (discord/covered.py)
+        from leeroy_mind.discord import covered
+        done = covered.read(conn, channel, any_thread=True)
+        return all(done.by(m, after, until) for m in ids)
     if channel.startswith(("dm:", "gdm:")):
         from leeroy_mind.discord.transport import PAIR_LINE_SQL
         peer = _dm_peer(channel)

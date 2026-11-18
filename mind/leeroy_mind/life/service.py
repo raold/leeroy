@@ -1,8 +1,9 @@
 """LifeService: her day for the talk engine (TalkEngine.life).
 
 `configure(cfg)` puts `[life]` in force: it pins the process-wide values (life/config.py) that
-Discord presence and the replies on her own time read, and writes the availability to meta
-life:availability when it changed, so the console shows what the mind uses. `presence` is where
+Discord presence and the replies on her own time read (availability, state and dm_wait_cap_s,
+the longest his DM waits), and writes the availability to meta life:availability and the cap to
+life:dm_wait_cap_s when they changed, so the console and health show what the mind uses. `presence` is where
 a member is now and how closely she is watching a medium; None at availability 0 (callers keep
 today's behaviour) or for a member without a persona.
 
@@ -44,10 +45,12 @@ from leeroy_mind.discord.presence import local_time
 from leeroy_mind.logs import log as log_event
 
 from . import config as life_config
-from . import interrupt
+from leeroy_mind.guards import pronouns
+
+from . import day, interrupt
 from .day import Block
 from .interrupt import Away, Interruption
-from .presence import (Attention, LifePresence, attention_weight, game_cap_s, latency,
+from .presence import (Attention, LifePresence, stated_where, attention_weight, game_cap_s, latency,
                        presence_at)
 from .seed import seeded
 from .state import State
@@ -104,7 +107,14 @@ class LifeService:
         mind's truth; the meta copy is for the console, so a failed write is logged
         (`life_meta_failed`) and never raised."""
         life = getattr(cfg, "life", None)
-        life_config.pin(getattr(life, "availability", 0), getattr(life, "state", False))
+        # [talk] coherence reaches the pure readers through their module switches (read here,
+        # so at the mind's start and at each of his logins): her job's shape (life/day.py), her
+        # own boss (life/interrupt.py) and "tell X he ..." (guards/pronouns.py)
+        coherent = getattr(getattr(cfg, "talk", None), "coherence", False) is True
+        day.COHERENT = interrupt.COHERENT = pronouns.COHERENT = coherent
+        cap = getattr(life, "dm_wait_cap_s", 0)
+        life_config.pin(getattr(life, "availability", 0), getattr(life, "state", False),
+                        cap if type(cap) is int else 0)
         self._availability = life_config.availability()
         self._states.clear()
         if not life_config.state_on():
@@ -115,6 +125,8 @@ class LifeService:
         try:
             if life_config.parse(self.store.get_meta(life_config.META_KEY)) != self._availability:
                 self.store.set_meta(life_config.META_KEY, str(self._availability))
+            if life_config.stored_cap(self.store.conn) != life_config.dm_wait_cap():
+                self.store.set_meta(life_config.CAP_KEY, str(life_config.dm_wait_cap()))
         except sqlite3.Error as e:
             log.warning("life_meta_failed reason=%s", type(e).__name__)
 
@@ -292,7 +304,9 @@ class LifeService:
         outside his raid's fight, wipe silence and debrief, and with no answer of hers to him
         on its way: her day may call her away (interrupt.draw_interruption, seeded by
         (interrupt, night, her, the minute, her line); her block as her presence on that medium,
-        her own game's while she plays in his group), at most once per INTERRUPT_GAP_S. Never
+        her own game's while she plays in his group), at most once per INTERRUPT_GAP_S, never
+        within interrupt.MIN_AFTER_HIS_S of his line, after his bad news or in an explicit scene
+        he is turning up (_holds_her). Never
         after a template's line (her own brb and back), the watchdog's rescue or a carried DM.
         Her line goes out 2-6 s later (_step_away). A line of hers to him there while she is
         away, or an answer he is owed anywhere (a hurried or capped answer), ends her away
@@ -335,12 +349,18 @@ class LifeService:
         his = self._his_last(g, hg, now - INTERRUPT_FRESH_S)
         if his is None or now - his >= INTERRUPT_FRESH_S or self._owes_him(pipe, turn, g, hg):
             return
+        if now - his < interrupt.MIN_AFTER_HIS_S:
+            return  # he just wrote: she is in the conversation
         lp = self.presence(g, medium=medium, in_his_group=self._in_group(g))
         p = self.personas.get(g)
         if lp is None or p is None:
             return
+        if self._holds_her(pipe, turn, p, self._his_last_text(g, hg, his)):
+            return
         if getattr(self.world, "human_online", False) and self._in_group(g):
             lp = replace(lp, block=Block.GAMING)  # at her PC playing with him (PM log D15)
+        else:
+            lp = self._where_she_said(pipe, turn, meta, lp, now)
         local = self.clock.local()
         night, minute = night_of(local), local.hour * 60 + local.minute
         rng = seeded("interrupt", night, g, minute, self._her_line(g, turn.channel, now))
@@ -348,7 +368,8 @@ class LifeService:
                else interrupt.DM_CAP_S)
         it = interrupt.draw_interruption(lp, self.state_of(g), self._availability, rng,
                                          cap_s=cap, boss=interrupt.own_boss(p),
-                                         car=interrupt.drives(p))
+                                         car=interrupt.drives(p),
+                                         place=interrupt.workplace(p))
         if it is None:
             return
         delay = rng.uniform(*interrupt.DELAY_S)
@@ -360,6 +381,27 @@ class LifeService:
         except BaseException:
             self._stepping.discard(g)  # never stuck: her next line may draw again
             raise
+
+    @staticmethod
+    def _where_she_said(pipe, turn, meta, lp, now: float):
+        """Her presence with the block of where she said she is in this conversation ([talk]
+        coherence, presence.stated_where): home or in bed while her plan has her at work reads
+        as free time (never "brb boss" from the sofa), at work while her plan has her free as
+        work. Unchanged when she said nothing, it agrees, or the switch is off."""
+        coherent = getattr(pipe, "_coherent", None)
+        said = getattr(pipe, "_said_here", None)
+        if coherent is None or said is None or not coherent():
+            return lp
+        try:
+            stated = stated_where(said(turn, meta, now))
+        except Exception as e:  # colour only: her plan's block stands
+            log.warning("life_where_failed reason=%s", type(e).__name__)
+            return lp
+        if stated in ("home", "bed") and lp.block in (Block.WORK, Block.COMMUTE):
+            return replace(lp, block=Block.FREE)
+        if stated == "work" and lp.block in (Block.FREE, Block.GAMING, Block.HOME_DUTY):
+            return replace(lp, block=Block.WORK)
+        return lp
 
     def _came_back(self, guid: int, now: float) -> None:
         """A line of hers to him in their whisper or her DM while she is away (his urgent words,
@@ -524,6 +566,41 @@ class LifeService:
             "AND origin = 'human' AND deleted IS NULL", (f"dm:{guid}", since, hg)).fetchone()[0]
         times = [t for t in (whisper, dm) if t is not None]
         return max(times) if times else None
+
+    def _his_last_text(self, guid: int, hg: int, ts: float) -> str:
+        """His line to her at `ts` (_his_last's time): his whisper or his post in her DM; ""
+        when it is gone. Read to weigh it, never logged."""
+        conn = self.store.conn
+        row = conn.execute(
+            "SELECT text FROM discord_message WHERE channel = ? AND ts = ? AND author = ? "
+            "AND origin = 'human' AND deleted IS NULL ORDER BY id DESC LIMIT 1",
+            (f"dm:{guid}", ts, hg)).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT text FROM chat_line WHERE channel = 'whisper' AND ts = ? "
+                "AND origin = 'human' AND from_guid = ? AND to_guid = ? ORDER BY id DESC LIMIT 1",
+                (ts, hg, guid)).fetchone()
+        return row[0] if row is not None and isinstance(row[0], str) else ""
+
+    def _holds_her(self, pipe, turn, p, his: str) -> bool:
+        """His last line keeps her in the conversation (owner, 2026-11-17): bad news of his
+        (talk.hisline.bad_news: nobody says "brb" to "my dad is in hospital"), or an explicit
+        scene he is turning up (the explicit overlay in force in this whisper or DM and
+        romance.his_heat on his line)."""
+        from leeroy_mind.talk.hisline import bad_news
+        from leeroy_mind.talk.romance import dm_explicit, explicit_whisper, his_heat
+        if not his:
+            return False
+        if bad_news(his):
+            return True
+        if not his_heat(his):
+            return False
+        hg = pipe.human.guid
+        rel = self.store.get_relationship(turn.speaker, hg, lens=True)
+        dial = pipe.cfg.romance.dial
+        return (explicit_whisper(p, rel, dial=dial, channel=turn.channel)
+                or dm_explicit(p, rel, dial=dial, channel=turn.channel,
+                               data_dir=pipe.data_dir))
 
     def _wrote_since(self, guid: int, hg: int, t: float) -> bool:
         """He wrote to her at `t` or later (the same instant counts: never a brb or back after

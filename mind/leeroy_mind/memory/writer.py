@@ -157,7 +157,9 @@ class MemoryWriter:
         lowered (privacy.with_request). It reads inside a store transaction, which nests, so
         any caller may use it."""
         with self._store.transaction():
-            derived = derive_scope(self._store.conn, owner, evidence, shown=shown)
+            # known: a cited memory past the read bound counts with what is known of it,
+            # never as a budget's secret-with-nobody; the store leaves such a row unchecked
+            derived = derive_scope(self._store.conn, owner, evidence, shown=shown, known=True)
         if scope == "secret" and derived.public:
             log.info("scope_secret_refused: owner=%d", owner)
         return with_request(derived, scope, scope_with)

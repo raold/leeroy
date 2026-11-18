@@ -1,5 +1,6 @@
 import { $, api, clear, clock, el, emit, num, on, pad, recall, refused, remember, str } from "../core.mjs";
 import { S, name, roomName } from "../state.mjs";
+import { isoSecond } from "../dates.mjs";
 import { face, faceButton } from "../faces.mjs";
 import { registerTab, setBadge } from "../tabs.mjs";
 import { Feed, kpis, lineChips } from "./model.mjs";
@@ -42,6 +43,14 @@ export function openView(view) {
   renderFeed(false);
 }
 
+// The reply box of the open view: Discord's message box, or the WoW line (the box itself while
+// it takes no line, so the reason under it is where the keyboard lands)
+export function focusReply() {
+  if (channelOf(VIEW)) { $("dc-text").focus(); return; }
+  var box = $("composer"), f = box.querySelector("input:not(:disabled)");
+  (f || box).focus();
+}
+
 // A view's title: "# guild", "# officer", "# party / raid", or the whisper partner's name
 export function viewTitle(view) {
   if (channelOf(view)) { return DISCORD.title(view); }
@@ -66,7 +75,7 @@ function row(l) {
   h.appendChild(el("span", "who", l.you ? "You" : who));
   var t = el("time", "t", stamp(at));
   t.dateTime = new Date(at).toISOString();
-  t.title = new Date(at).toLocaleString();
+  t.title = isoSecond(at / 1000);
   h.appendChild(t);
   lineChips(l, roomName).forEach(function (c) { h.appendChild(el("span", c.cls, c.text)); });
   m.appendChild(h);

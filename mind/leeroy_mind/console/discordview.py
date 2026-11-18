@@ -173,12 +173,20 @@ def last_by_channel(conn) -> dict[str, int]:
         conn, "SELECT channel, max(id) FROM discord_message GROUP BY channel")}
 
 
+def last_ts_by_channel(conn) -> dict[str, float]:
+    """When each DM last had a message (deleted ones too: the conversation was still used then):
+    the page orders his conversations by it, beside the whisper threads' own times."""
+    return {r[0]: r[1] for r in views.rows(
+        conn, "SELECT channel, max(ts) FROM discord_message WHERE channel LIKE 'dm:%' GROUP BY channel")}
+
+
 def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | None = None,
                  after: int = 0, thread: int | None = None, read_marks: dict | None = None,
                  server: bool = False, groups: bool = False, items=None) -> dict:
     have = views.tables(conn)
     missing = [t for t in DISCORD_TABLES if t not in have]
     last = last_by_channel(conn) if "discord_message" in have else {}
+    last_ts = last_ts_by_channel(conn) if "discord_message" in have else {}
     unread = {r[0]: r[1] for r in views.rows(conn,
         "SELECT m.channel, count(*) FROM discord_message m JOIN json_each(?) r ON m.channel = r.key "
         "WHERE m.id > r.value AND m.origin = 'mind' AND m.deleted IS NULL AND m.thread IS NULL "
@@ -197,6 +205,7 @@ def discord_view(conn, *, owner_now: datetime, trial_rank: int, channel: str | N
             for k in layout.CATEGORIES],
         "dms": sorted(({"guid": m["guid"], "name": m["name"],
                         "last_id": last.get(f"dm:{m['guid']}", 0),
+                        "last_ts": last_ts.get(f"dm:{m['guid']}", 0),
                         "unread": unread.get(f"dm:{m['guid']}", 0)}
                        for m in members if m["persona"]),
                       key=lambda d: (-d["last_id"], d["name"], d["guid"])),

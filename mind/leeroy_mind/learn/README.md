@@ -386,7 +386,19 @@ memory it cites, at any depth through `memory:` refs, read the same way (a fixed
 a cycle settles at its strictest member; past 4,096 memories a turn it fails closed).
 Stored scopes are not always as strict as their evidence (review-365: 281 open memories
 cite a non-open one, 434 reach a private line through memory refs), so the horizon never
-rests on a stored scope alone. Before the horizon the walk was unbounded:
+rests on a stored scope alone. The one source of the effective scope is the stored check
+(`memory/AUDIENCES.md`, "A scope is never wider than its evidence": `derived_scope`,
+`derived_with`, `derived_at`, kept by `memory/scopes.py` and the `scope_evidence` triggers): a
+memory that carries one is read from it and not opened, and only an unchecked one is walked
+here, leaves first (1,200 levels over a scoped leaf settle in one pass). A checked memory
+whose evidence is malformed or cites a missing memory at any depth carries `derived_complete
+= 0` and is refused like an unchecked one: unknown is never open here.
+"At any depth" means through `memory:` refs. One route stays outside it: a memory below
+the note's own sources that cites a *public line* whose prompt carried a private memory
+still derives open (3 such lines live, 2026-11-17). The scope rule reads a public line as
+public evidence (what was said on a public channel is public, ruling B2), and the line's own
+text passed the guards when it was sent; the note's own source lines do have their carried
+memories opened and gated. Before the horizon the walk was unbounded:
 on live data one note reached 100-1,200 nodes over 12 levels (lines she never read,
 night refs, the 512-node cap), so no lesson passed on any turn and `talk_recipe` never
 recorded one. A cycle within the horizon still fails closed.

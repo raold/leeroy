@@ -11,6 +11,14 @@ A member answers his Discord DM when she would see it, by her Discord presence (
 An urgent post (URGENT_RE) cuts any wait to URGENT_S, asleep included: a phone that keeps
 buzzing wakes people. INSIST posts of his in a row cut an idle or dnd wait the same way.
 
+His DMs are answered promptly whatever the dial (owner, 2026-11-17: availability 6 had brought
+back waits of 10-20 minutes at work and 72-86 on a do-not-disturb day): with `[life]
+dm_wait_cap_s` above 0 (default 75) no wait for an idle or dnd member is longer than the cap,
+and none for one asleep or not about longer than twice it, after the availability scaling. A
+capped wait is drawn in the cap's upper half (CAP_SPAN), so answers do not all land on one
+second. She still says where she was (the LATE shape, or late_note from LATE_OWN_S). `capped`
+false (a group DM line that does not name her) keeps her own time.
+
 With `[life] availability` above 0 (life/config.py) her presence is her day's (presence.py), the
 glance and back-online waits are PHONE_S and BACK_S scaled by availability / 6 (never under
 LIFE_FLOOR_S), and the words for where she was come from her day (life.presence.away_words).
@@ -40,6 +48,9 @@ SCAN_MAX_S = 36 * 3600.0
 LET_GO_S = 3 * 86400.0
 LATE_S = 600.0  # an answer this long after his post says she is only now seeing it
 LIFE_FLOOR_S = 30.0  # [life] availability's scaled waits are never shorter
+CAP_SPAN = (0.5, 1.0)  # a capped wait, as a share of the cap
+ASLEEP_CAP = 2.0  # asleep or not about: the cap times this
+LATE_OWN_S = 45.0  # an own-time answer that waited this long says where she was
 
 
 def _scaled(bounds: tuple[float, float]) -> tuple[float, float]:
@@ -80,10 +91,42 @@ def _next(p, at, start: float, states: frozenset, until: float) -> float | None:
     return None
 
 
+def cap_for(state: str) -> float:
+    """The longest wait for a member in presence `state`, seconds; 0: none ([life]
+    dm_wait_cap_s 0, or she is online)."""
+    cap = life_config.dm_wait_cap()
+    if cap <= 0 or state == "online":
+        return 0.0
+    return float(cap) if state in PHONE_S else cap * ASLEEP_CAP
+
+
 def due_at(p, *, post_ts: float, now: float, local_now: datetime, message_id: int,
-           urgent: bool, talking: bool, insist: bool) -> float:
+           urgent: bool, talking: bool, insist: bool, capped: bool = True) -> float:
     """When she answers his DM `message_id` posted at `post_ts` (see the module docstring); a
-    time at or before `post_ts` means at once."""
+    time at or before `post_ts` means at once. `capped`: [life] dm_wait_cap_s applies."""
+    due = _due_at(p, post_ts=post_ts, now=now, local_now=local_now, message_id=message_id,
+                  urgent=urgent, talking=talking, insist=insist)
+    if not capped or due <= post_ts:
+        return due
+    return capped_due(p, due, post_ts=post_ts, now=now, local_now=local_now,
+                      message_id=message_id)
+
+
+def capped_due(p, due: float, *, post_ts: float, now: float, local_now: datetime,
+               message_id: int, state: str = "") -> float:
+    """`due` no later than [life] dm_wait_cap_s allows for her presence when he wrote (cap_for;
+    `state` in its place: "idle" for a member who stepped away from her keyboard); a wait past
+    the cap is drawn within CAP_SPAN of it, seeded as due_at's draws are."""
+    cap = cap_for(state or state_at(p, shifted(local_now, post_ts - now)))
+    if cap <= 0 or due - post_ts <= cap:
+        return due
+    lo, hi = CAP_SPAN
+    draw = random.Random(f"own-time-cap:{message_id}:{p.guid}").random()
+    return post_ts + cap * (lo + (hi - lo) * draw)
+
+
+def _due_at(p, *, post_ts: float, now: float, local_now: datetime, message_id: int,
+            urgent: bool, talking: bool, insist: bool) -> float:
     rng = random.Random(f"own-time:{message_id}:{p.guid}")
     glance_draw, back_draw, urgent_draw = (rng.random() for _ in range(3))
 
@@ -123,18 +166,21 @@ def away_words(p, local: datetime) -> str:
 
 def age_words(seconds: float) -> str:
     minutes = int(seconds // 60)
+    if minutes <= 1:
+        return "a minute"
     if minutes < 60:
-        return f"{max(1, minutes)} minutes"
+        return f"{minutes} minutes"
     hours = round(seconds / 3600)
     return "an hour" if hours <= 1 else f"{hours} hours"
 
 
 def late_note(p, *, post_ts: float, now: float, local_now: datetime, forms,
-              why: str = "") -> str:
-    """The instruction's note for an answer LATE_S or more after his post; "" sooner. `why`
-    says where she was in place of her presence then ("away": she stepped away mid-conversation,
-    life/interrupt.py)."""
-    if now - post_ts < LATE_S:
+              why: str = "", after: float = LATE_S) -> str:
+    """The instruction's note for an answer `after` seconds (LATE_S) or more after his post; ""
+    sooner. `why` says where she was in place of her presence then ("away": she stepped away
+    mid-conversation, life/interrupt.py). An answer that waited for her own time passes
+    LATE_OWN_S: the cap keeps every wait far under LATE_S, and she still says where she was."""
+    if now - post_ts < after:
         return ""
     why = why or away_words(p, shifted(local_now, post_ts - now))
     return (f"{forms[0].capitalize()} wrote this {age_words(now - post_ts)} ago while you were "

@@ -844,3 +844,42 @@ def test_effective_scope_settles_on_cycles_and_fails_closed_past_its_budget(rig,
     ref, _ = chain(conn, 30)
     monkeypatch.setattr(audience, 'SCOPE_NODES', 8)
     assert not audience.visible(conn, [ref], guid=101, channel='guild', to_guid=0)
+
+
+def test_effective_scope_of_a_deep_chain_over_a_scoped_leaf_is_not_quadratic(rig):
+    """1,200 unchecked memories over her private one: one pass, leaves first (the walk finds a
+    memory before what it cites; parents-first took a pass a level, 6.9 s here)."""
+    import time
+    conn = rig.store.conn
+    leaf = memory(rig, [], scope='private', scope_with=1)
+    ref, top = chain(conn, 1200, f'memory:{leaf}')
+    gate = audience.Visibility(conn, guid=101, channel='guild', to_guid=0)
+    started = time.perf_counter()
+    assert gate._effective(top) == ('private', 1)
+    assert time.perf_counter() - started < 3.0
+    assert gate._effective(top - 600) == ('private', 1)
+    assert not audience.visible(conn, [ref], guid=101, channel='guild', to_guid=0)
+
+
+def test_effective_scope_reads_the_stored_check_and_walks_only_without_one(rig):
+    """The stored check (memory.privacy.resolve's derived columns) is the one source: a memory
+    that carries one is read from it and never opened; one without is walked."""
+    from leeroy_mind.memory import scopes
+    conn = rig.store.conn
+    private = memory(rig, [], scope='private', scope_with=1)
+    wrong = memory(rig, [f'memory:{private}'])
+    top = memory(rig, [f'memory:{wrong}'])
+    scopes.settle_pending(conn, now=rig.clock.now(), raise_stored=False, source=None)
+    assert conn.execute('SELECT scope, derived_scope FROM memory WHERE id=?', (top,)).fetchone()[:] == ('open', 'private')
+    sql = []
+    conn.set_trace_callback(sql.append)
+    try:
+        gate = audience.Visibility(conn, guid=101, channel='guild', to_guid=0)
+        assert gate._effective(top) == ('private', 1)
+    finally:
+        conn.set_trace_callback(None)
+    assert len(sql) == 1                                       # the row itself, nothing beneath
+    # something it rests on changes: unchecked again, and the walk gives the same answer
+    conn.execute("UPDATE memory SET scope='secret' WHERE id=?", (private,))
+    assert conn.execute('SELECT derived_at FROM memory WHERE id=?', (top,)).fetchone()[0] is None
+    assert audience.Visibility(conn, guid=101, channel='guild', to_guid=0)._effective(top) == ('secret', 1)

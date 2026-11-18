@@ -1,11 +1,12 @@
 import { pausedWords } from "./gpumodel.mjs";
+import { isoMinute } from "./dates.mjs";
 import { tonightOutreachLine } from "./outreachmodel.mjs";
 export const SECTIONS = ['raid','waiting','loot','bank','kit','week','guild'];
 export const INTRO = 'Your raid, replies and supplies at a glance. Read-only; nothing here sends a message or changes the game.';
 const TITLES = {raid:'Raid tonight',waiting:'Waiting for you',loot:'Due an item',bank:'Bank shortages',kit:'Your kit',week:'This week',guild:'Guild now'};
 const arr = v => Array.isArray(v) ? v : [];
 const count = v => Number.isInteger(v) && v >= 0 ? String(v) : 'unknown';
-const at = v => typeof v === 'number' && Number.isFinite(v) ? new Date(v*1000).toLocaleString() : 'not recorded';
+const at = v => typeof v === 'number' && Number.isFinite(v) ? isoMinute(v) : 'not recorded';
 const why = {mind_down:'The mind is not running.',mind_stopping:'The mind is stopping.',
   no_character:'Your character could not be found.',no_armory:'The mind cannot read the game database.',
   no_link:'The console has no link to the mind.',slow:'This source is taking too long. Try again shortly.'};
@@ -28,8 +29,10 @@ export function cardModel(name, value, outreach) {
     if (!lines.length) { lines.push(row('No raid on the calendar tonight.','#calendar')); }
   } else if (name === 'waiting') {
     [['dms','Unanswered DMs','#comms'],['letters','Letters to answer','#board'],
-     ['selfies','Selfie sets to choose','#personas'],['polls','Open polls','#guild']].forEach(([k,label,href]) =>
-      lines.push(row(label+': '+(p[k]===null ? 'not set up yet' : count(p[k])),href)));
+     ['selfies','Selfie sets to choose','#personas'],['polls','Open polls','#guild'],
+     ['lab','Lab proposals to decide','#lab']].forEach(([k,label,href]) => {
+      if (k === 'lab' && p[k] === undefined) { return; }  // an older console's answer has no such line
+      lines.push(row(label+': '+(p[k]===null ? 'not set up yet' : count(p[k])),href)); });
   } else if (name === 'loot') {
     arr(p.due).forEach(m => lines.push(row(count(m.raids)+' raids since an item','#guild',[m])));
     if (!lines.length) { lines.push(row('Nobody is due an item yet.','#guild')); }
