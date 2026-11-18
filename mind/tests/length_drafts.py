@@ -87,3 +87,32 @@ ADVERSARIAL = [
 ("how many do we need?", "depends who shows up really, last week was a mess. ten 🙃", "ten", "emoji"),
 ("who has the key?", "we passed it around all week and nobody remembers lol. dorn has it 😂", "dorn", "emoji"),
 ]
+
+# Twenty more (re-review round 2 of #370): the answer split across two sentences, a number, a
+# clock time or a quoted yes or no in the lead-in, and answers that hold no token at all.
+FRESH = [
+# answer split across two clauses / sentences
+("are you coming tonight?", "yes for the first two bosses at least. after ten i have to leave though, early shift tomorrow", ("yes", "after ten"), "split"),
+("can you tank it?", "probably the first half of the instance. no chance on the last boss though, my gear is too weak", ("probably", "no chance"), "split"),
+("when does the raid start?", "invites go out at seven like always. first pull is at eight though, so be early", ("seven", "eight"), "split"),
+("how many healers do we take?", "five for the normal bosses is plenty. take six for the last one though, it hits hard", ("five", "six"), "split"),
+("is he tauntable?", "yes in the first phase he is. in the second one he isn't, so swap before it", ("yes", "isn't"), "split"),
+# a number in the lead-in that is not the answer, answer has no number token
+("when does the raid start?", "we wiped 4 times last week because people were late. it starts right after the officers meeting", "after the officers meeting", "leadnum"),
+("how many flasks do i need?", "you asked me this 3 days ago lol. a couple for each boss should do it", "a couple", "leadnum"),
+("how long is the fight?", "took us 2 nights to learn it honestly. it goes on until the adds stop spawning, pretty short", "until the adds", "leadnum"),
+("what level do i need for it?", "my alt got in at 78 by accident once haha. you need the cap, no way around it", "the cap", "leadnum"),
+("when are you back?", "ive been up since 5 with the baby. back once she is asleep again, cant say exactly", "once she is asleep", "leadnum"),
+# "yes" quoted from him, real answer without a yes/no word
+("so you are coming then?", 'you wrote "yes" for me on the sheet without asking lol. i cant make it, work swapped my shift', "cant make it", "quoted"),
+("did he agree?", 'he typed "sure" and then went quiet for an hour. in the end he refused, flat out', "refused", "quoted"),
+("is it fixed now?", 'the patch notes say "yes, resolved" in big letters. it still breaks for me every single pull', "still breaks", "quoted"),
+("are we doing heroic?", 'half the raid shouted "no" in voice when i asked. we are doing it anyway, i decided', "doing it anyway", "quoted"),
+("you ok with that plan?", 'i said "maybe" yesterday because i was tired. i am fully on board with it now', "fully on board", "quoted"),
+# a time in a lead-in
+("when does it start?", "its 2am here so my brain is mush. it starts once the first group is done", "once the first group", "leadtime"),
+("what time is the meeting?", "i only got home at 6 so i havent checked. straight after the raid, same as usual", "after the raid", "leadtime"),
+("when do you finish work?", "started at 7 today, long one. i finish whenever the last delivery shows up", "last delivery", "leadtime"),
+("when can you log on?", "dinner was at 5 and im still stuffed. i can log on as soon as the kids settle", "kids settle", "leadtime"),
+("how long till you are here?", "left the house at noon like an idiot. not long, im parking the car now", "parking the car", "leadtime"),
+]

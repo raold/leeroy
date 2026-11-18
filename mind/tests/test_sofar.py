@@ -291,3 +291,25 @@ def test_an_over_budget_dm_lets_its_oldest_chat_rows_go_before_style_and_memorie
     assert none.chat == chat
     plain = trim_to_budget(PromptParts(**{**parts.__dict__, "old_chat": 0}), budget=whole - 150)
     assert plain.style == []  # as before without old rows to give: the style note goes first
+
+
+def test_claims_are_the_first_lines_dropped_from_a_block_over_its_budget(monkeypatch):
+    """Re-review round 2 of #370: adding her claims pushed one of main's lines out of the
+    120-token block (6 of 656 live answers). Claims go first: every line main shows stays."""
+    import sys
+    import types
+    lines = talk(("s", "im at the studio till ten, the producer is in a mood"),
+                 ("h", "my car broke down on the motorway this morning and the tow took hours"),
+                 ("h", "also my landlord is selling the flat so i have to move out by spring"),
+                 ("h", "what are you wearing?"), ("s", "hm"),
+                 ("h", "ok. talk thursday at 11pm then"), ("s", "deal, thursday"),
+                 ("h", "did you eat yet?"), ("h", "and how was the gig on friday night"))
+    plain = block(lines, forms=HE)
+    fake = types.ModuleType("leeroy_mind.talk.position")
+    fake.claims_so_far = lambda hers, limit=3: [
+        f"claim number {i} about something long that she said earlier on" for i in range(3)]
+    monkeypatch.setitem(sys.modules, "leeroy_mind.talk.position", fake)
+    on = block(lines, forms=HE, claims=True)
+    assert [x for x in on if not x.startswith("- You said: claim number")] == plain
+    from leeroy_mind.text import estimate_tokens
+    assert estimate_tokens("\n".join(on)) <= sofar.MAX_TOKENS or on == plain

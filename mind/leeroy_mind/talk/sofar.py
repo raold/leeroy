@@ -279,15 +279,19 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
         first.append(f"- You said: {state}.")
     # `claims` ([talk] coherence with a core switch on, the pipeline's call): her claims
     # (numbers and self-statements) after where and how she said she is, within CLAIM_TOKENS
-    first += [f"- You said: {c}." for c in (_claims_after(lines, place, state) if claims else [])]
+    # They are the first lines to go when the block is over MAX_TOKENS: none of main's lines
+    # is ever dropped for one
+    extra = [f"- You said: {c}." for c in (_claims_after(lines, place, state) if claims else [])]
     asked = [f"- {they} also asked: {q}" for q in open_questions(lines, skip=skip)]
     later = [f"- {they if his else 'You'} said: {text}"
              for his, text in plans(lines, skip=skip, taken=[i for i, _, _ in facts])]
     lead_lines, said = first[:n], first[n:]  # the caller's lead is not the conversation's
 
     def size(news) -> int:
-        return estimate_tokens("\n".join([*said, *asked, *(f"- {they} told you: {t}"
-                                                           for _, t, _ in news), *later]))
+        return estimate_tokens("\n".join([*said, *extra, *asked, *(f"- {they} told you: {t}"
+                                                                   for _, t, _ in news), *later]))
+    while extra and size(facts) > MAX_TOKENS:
+        extra.pop(0)
     # what is over goes by worth: his least important news first (the oldest of it), then the
     # plans, then what she said; what he asked and is still owed goes last
     while facts and size(facts) > MAX_TOKENS:
@@ -298,7 +302,7 @@ def block(lines: Sequence[Line], *, forms: tuple[str, str, str], skip: int = 0,
         said.pop()
     while asked and size(facts) > MAX_TOKENS:
         asked.pop(0)
-    return [*lead_lines, *said, *asked, *(f"- {they} told you: {t}" for _, t, _ in facts),
+    return [*lead_lines, *said, *extra, *asked, *(f"- {they} told you: {t}" for _, t, _ in facts),
             *later]
 
 

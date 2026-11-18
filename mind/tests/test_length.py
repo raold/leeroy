@@ -1,7 +1,7 @@
-"""[talk] coherence, the length rule (talk/length.py): a game line that is only too long loses
-only what follows its answering sentence, goes as written within twice its words when nothing
-proves where the answer is, and only past that is asked again with the draft itself. Invented
-lines (length_drafts.py holds the review's 40 buried-answer drafts); the test cast."""
+"""[talk] coherence, the length rule (talk/length.py): an answer to a line of his that asks
+anything is never cut (sent as written when it fits her lines, else asked again with the draft,
+then laid on up to three lines or sent by its tail); a line that asks nothing keeps its leading
+clauses. Invented lines (length_drafts.py holds the reviews' 92 drafts); the test cast."""
 import asyncio
 
 import pytest
@@ -18,9 +18,9 @@ from leeroy_mind.testing.fake_llm import script_from
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.protocol import Chat
 from leeroy_mind.talk.turns import Turn, TurnKind
-from leeroy_mind.talk.length import (KEEP_SLACK, LINE_BYTES, LONG_SLACK, Fit, answering, carries,
-                                     content_question, fit_answer, split_lines)
-from length_drafts import ADVERSARIAL, DRAFTS
+from leeroy_mind.talk.length import (KEEP_SLACK, LINE_BYTES, LONG_SLACK, Fit, asks,
+                                     content_question, fit_answer, split_lines, tail_lines)
+from length_drafts import ADVERSARIAL, DRAFTS, FRESH
 from leeroy_mind.talk.shape import CONTENT_WORDS
 
 LORE_Q = "nerd question, who ruled the ogres before the war"
@@ -67,67 +67,63 @@ def test_a_reply_within_its_slack_is_left_alone():
     assert fit_answer(text, 0).action == "fits"  # no limit: nothing to fit
 
 
-def test_a_long_answer_loses_only_what_follows_its_last_proof():
-    # a number answers "how many"; what follows its sentence goes
-    fit = fit_answer("We have 22 now. The calendar looked thin this morning and most of them "
-                     "are alts anyway", 8, "how many people signed up?")
-    assert fit.action == "cut" and fit.text.startswith("We have 22 now.")
-    assert len(fit.text.split()) <= LONG_SLACK * 8 and "alts" not in fit.text
-    # the LAST clause with a number is the answer: a number in the lead-in proves nothing
-    late = ("I counted 3 times to be sure. It was looking thin all week honestly. "
-            "We have 22 now. Bring food.")
-    fit = fit_answer(late, 10, "how many people signed up?")
-    assert "22" in fit.text
-    # a who, what, where, why or how answer is never cut: a name proves nothing on its own
-    assert fit_answer(LORE_DRAFT, 8, LORE_Q) == Fit(LORE_DRAFT, "retry")
-    assert fit_answer(LORE_DRAFT, 16, LORE_Q) == Fit(LORE_DRAFT, "kept")
-    # nor is an answer to two questions
-    two = "yes i'm in for sure. it starts at eight i think, so bring flasks and food for all"
-    assert fit_answer(two, 6, "are you coming? and what time does it start?").text == two
-    # a lead-in "no" before the real "yeah" never goes out as the opposite answer
-    opp = "oh no not this again lol. yeah i'll be there right after dinner with the kids"
-    assert "yeah" in fit_answer(opp, 6, "are you coming tonight?").text
+def test_an_answer_to_a_line_of_his_that_asks_is_never_cut():
+    for his, draft in [
+            ("how many people signed up?", "We have 22 now. The calendar looked thin this "
+                                           "morning and most of them are alts anyway"),
+            (LORE_Q, LORE_DRAFT),
+            ("are you coming tonight?", "oh no not this again lol. yeah i'll be there right "
+                                        "after dinner with the kids"),
+            ("when does it start", "we wiped 4 times last week because people were late. it "
+                                   "starts right after the officers meeting"),
+            ("so explain the fight to me", "first you stack on the tank and then you run out "
+                                           "when the circle shows up under your feet"),
+            ("ok. so?", " ".join(["word"] * 60))]:
+        for limit in (3, 6, 8, 12):
+            assert fit_answer(draft, limit, his) in (Fit(draft, "kept"), Fit(draft, "fits"))
+    assert asks("you around?") and asks("so explain it") and asks("ok? fine")
+    assert not asks("that pull was rough") and not asks("")
 
 
 @pytest.mark.parametrize("limit", [6, 8, 10, 12, 15])
 def test_no_line_that_goes_out_is_without_its_answer(limit):
-    """The reviews' 72 invented drafts (tests/length_drafts.py): 40 with the answer in the
+    """The reviews' 92 invented drafts (tests/length_drafts.py): 40 with the answer in the
     second or third clause, 32 adversarial ones (a false proof in the lead-in, the answer in
-    the last clause, lower-case names, two questions, quotes, an emoji tail). The first rule
-    lost 34 of 37 cuts at 12 words; the second lost 18, 20, 17 and 6 of the 32 at 6, 8, 10 and
-    12. Now none of the 72 goes out, cut or as written, without its answer at any size; the
-    rest are asked again with the draft."""
-    counts = {"fits": 0, "cut": 0, "kept": 0, "retry": 0}
+    the last clause, lower-case names, two questions, quotes, an emoji tail) and 20 fresh ones
+    (the answer split across two sentences; a number, clock time or quoted yes in the lead-in;
+    answers with no token at all). The first rule lost 34 of 37 cuts at 12 words, the second
+    18, 20, 17 and 6 of the 32, the third 17, 16, 17 and 7 of the 20. Now an answer to a line
+    of his that asks is never cut: none of the 92 goes out without its answer at any size."""
     lost = []
-    for his, draft, mark, kind in (*DRAFTS, *ADVERSARIAL):
+    rows = (*DRAFTS, *ADVERSARIAL, *FRESH)
+    for his, draft, mark, kind in rows:
         fit = fit_answer(draft, limit, his)
-        counts[fit.action] += 1
+        assert fit.text == draft and fit.action in ("fits", "kept")
         marks = mark if isinstance(mark, tuple) else (mark,)
-        if fit.action != "retry" and not all(m.casefold() in fit.text.casefold() for m in marks):
+        if not all(m.casefold() in fit.text.casefold() for m in marks):
             lost.append((kind, his))
-    assert sum(counts.values()) == 72 and lost == []
+    assert len(rows) == 92 and lost == []
 
 
 def test_a_cut_never_ends_inside_a_quote_on_a_dangling_word_or_under_three_words():
-    quoted = ('he said "eight, maybe nine, we will see" and then left. the rest of the night '
+    quoted = ('he said "eight, maybe nine, we will see" and then left, the rest of the night '
               "was a mess and nobody knew who was leading at all")
-    fit = fit_answer(quoted, 8, "when does the raid start?")
+    fit = fit_answer(quoted, 8, "raid was late again")
     assert fit.text.count('"') % 2 == 0
-    # a bare yes is no cut: the sentence it starts goes with it
     draft = ("yes but only because the tank keeps pulling extra packs and the healers go oom "
              "every single time we try it that way")
-    fit = fit_answer(draft, 8, "you coming tonight?")
-    assert fit.action == "retry" and fit.text == draft
-    short = "No. " + " ".join(f"w{i}" for i in range(30))
-    assert fit_answer(short, 6, "is he tauntable?").action == "retry"  # never a one-word cut
+    fit = fit_answer(draft, 8, "the tank is fine")
+    assert not fit.text.endswith(("only", "but", "the", "and"))
+    short = "No, " + " ".join(f"w{i}" for i in range(30))
+    assert fit_answer(short, 6, "he is tauntable").action == "retry"  # never a one-word cut
 
 
-def test_a_reply_with_no_provable_answer_goes_as_written_within_twice_its_words():
+def test_a_line_that_asks_nothing_with_no_clean_cut_goes_as_written_within_twice_its_words():
     draft = "one two three four five six seven eight nine ten eleven twelve thirteen"
-    fit = fit_answer(draft, 8, "what trinkets you running")
+    fit = fit_answer(draft, 8, "nice trinkets")
     assert (fit.action, fit.text) == ("kept", draft)
     assert len(draft.split()) <= KEEP_SLACK * 8
-    assert fit_answer(draft + " " + draft, 8, "what trinkets you running").action == "retry"
+    assert fit_answer(draft + " " + draft, 8, "nice trinkets").action == "retry"
 
 
 def test_a_line_that_answers_no_question_keeps_its_leading_clauses():
@@ -151,18 +147,16 @@ def test_an_opener_or_item_is_cut_only_after_the_clause_that_names_its_subject()
     assert fit_answer(other, 10, subject="the flask recipe").action == "retry"
 
 
-def test_answering_is_never_vacuous():
-    q = "who tanks tonight"
-    assert answering(["lol"], "") and answering(["nice", "one"], "good raid")  # nothing to prove
-    assert not answering(["yeah"], q) and not answering("it was Gorak".split(), q)
-    assert not answering(["no", "idea"], q)  # a who question: no clause proves its answer
-    assert not carries("yeah i can. let me think about it".split(), "explain the fight")
-    assert answering(["at", "8"], "when is raid") and not answering(["at", "8"], q)
-    assert answering(["yeah"], "you around?") and not answering(["hmm"], "you around?")
-    assert not answering(["yeah"], "are you coming? and when?")  # two questions: never
-    assert answering("the flask is ready".split(), "", "your flask")
-    assert not answering("nice weather".split(), "", "your flask")
-    assert carries("hmm let me see. we start at eight".split(), "when do we start")
+def test_tail_lines_keeps_the_end_by_whole_clauses():
+    long = ". ".join(f"sentence number {i} goes on for quite a while here you see" for i in range(30))
+    assert split_lines(long, 3) is None
+    tail = tail_lines(long, 3)
+    assert tail and len(tail) <= 3 and all(len(x.encode()) <= LINE_BYTES for x in tail)
+    joined = " ".join(tail)
+    assert long.endswith(joined) and joined.startswith("sentence number")  # a sentence's start
+    assert "sentence number 29" in joined and "sentence number 0 " not in joined
+    assert tail_lines("see you at eight", 3) == ["see you at eight"]
+    assert tail_lines("w " * 300, 3) is None  # not even its last clause fits a line
 
 
 def test_split_lines_keeps_whole_clauses_within_the_bridges_bytes():
@@ -187,7 +181,8 @@ def test_content_question():
     assert not content_question("nice one") and not content_question("")
 
 
-def test_a_long_whisper_answer_is_cut_and_never_asked_again(store, clock, tmp_path):
+def test_a_long_whisper_answer_goes_as_written_and_is_never_asked_again(store, clock,
+                                                                        tmp_path):
     draft = ("we have 22 now. the calendar looked thin this morning and most of them are alts "
              "anyway so who knows what we end up with on the night")
     async def main():
@@ -196,8 +191,61 @@ def test_a_long_whisper_answer_is_cut_and_never_asked_again(store, clock, tmp_pa
                     abbreviations={}, words_per_line=[2, 8], case="lower", end_punct="none")
         r = make_rig(store, clock, tmp_path, script=script_from([draft, "it was the other"]))
         said = await spoken(r, answer(his_whisper(r, "how many people signed up?")))
+        assert len(r.chat_calls()) == 1 and said == [draft]
+    run(main())
+
+
+def test_a_long_remark_is_cut_to_its_leading_clauses(store, clock, tmp_path):
+    draft = ("yeah it was a mess, the healers were out of range the whole time, and "
+             "honestly the tank should have waited for the mark before charging in like that")
+    async def main():
+        seed_test_cast(store)
+        save_member(store, 102, typo_rate=0.0, emoticon_rate=0.0, split_rate=0.0,
+                    abbreviations={}, words_per_line=[2, 10], case="lower", end_punct="none")
+        r = make_rig(store, clock, tmp_path, script=script_from([draft, "other"]))
+        said = await spoken(r, answer(his_whisper(r, "last night went badly")))
         assert len(r.chat_calls()) == 1
-        assert said == ["we have 22 now. the calendar looked thin this morning"]
+        assert said and said[0].startswith("yeah it was a mess") and "tank" not in " ".join(said)
+    run(main())
+
+
+FILL = ("honestly that place is a real maze and i walked around it for ages last week with "
+        "the whole group behind me complaining loudly, then we stopped twice for the warlock "
+        "who kept falling off the ledge near the bridge, and after that the tank went the "
+        "wrong way round the frozen lake while everyone else waited by the big gate arguing "
+        "about the map, and the healer kept saying we should have taken the flight path from "
+        "the dwarven camp instead of riding all the way round the mountain in the snow, which "
+        "in fairness was a good point that nobody wanted to hear at that hour of the "
+        "night").split()
+TAIL = "it is in storm peaks north of the temple"
+
+
+def buried(words):
+    return " ".join(FILL[:words - len(TAIL.split())]).rstrip(",") + ", " + TAIL
+
+
+@pytest.mark.parametrize("words", [60, 80, 100])
+@pytest.mark.parametrize("split_rate", [0.0, 0.5])
+@pytest.mark.parametrize("cap", [8, 25])
+def test_a_model_that_ignores_say_it_shorter_never_costs_him_the_answer(store, clock, tmp_path,
+                                                                        words, split_rate, cap):
+    """Re-review round 2 of #370: when the retry was as long as the first draft the turn fell
+    back to the byte trim and lost the answer (76 of 79 turns). An answer he is owed is now laid
+    on up to three game lines by whole clauses, nothing dropped, or sent by its tail; never its
+    head. The model here answers every call with the same long draft."""
+    draft = buried(words)
+    async def main():
+        seed_test_cast(store)
+        save_member(store, 102, typo_rate=0.0, emoticon_rate=0.0, split_rate=split_rate,
+                    abbreviations={}, words_per_line=[2, cap], case="lower", end_punct="none")
+        r = make_rig(store, clock, tmp_path, reply=draft)
+        said = await spoken(r, answer(his_whisper(r, "where is the entrance to ulduar?")),
+                            seconds=400)
+        assert said and "storm peaks" in said[-1] and len(said) <= 3
+        assert all(len(x.encode()) <= 255 for x in said)
+        assert len(r.chat_calls()) <= 2  # asked again once, with the draft
+        if len(draft.encode()) <= 3 * LINE_BYTES - 40:
+            assert " ".join(said).replace(",", "").split() == draft.replace(",", "").split()
     run(main())
 
 
@@ -209,25 +257,32 @@ def test_a_long_draft_with_the_answer_last_never_loses_it(store, clock, tmp_path
     bridge's 255 bytes, and an answer in the last clause went with the tail. What is sent now
     holds the answer: split on her lines by whole clauses when it fits them, else asked again
     with the draft."""
-    tail = "it is in storm peaks north of the temple"
-    fill = ("honestly that place is a real maze and i walked around it for ages last week with "
-            "the whole group behind me complaining loudly, then we stopped twice for the warlock "
-            "who kept falling off the ledge near the bridge, and after that the tank went the "
-            "wrong way round the frozen lake while everyone else waited by the big gate arguing "
-            "about the map, and the healer kept saying we should have taken the flight path from "
-            "the dwarven camp instead of riding all the way round the mountain in the snow, which "
-            "in fairness was a good point that nobody wanted to hear at that hour of the "
-            "night").split()
-    draft = " ".join(fill[:words - len(tail.split())]).rstrip(",") + ", " + tail
+    draft = buried(words)
     async def main():
         seed_test_cast(store)
         save_member(store, 102, typo_rate=0.0, emoticon_rate=0.0, split_rate=split_rate,
                     abbreviations={}, words_per_line=[5, 25], case="lower", end_punct="none")
-        r = make_rig(store, clock, tmp_path, script=script_from([draft, "ah, " + tail]))
+        r = make_rig(store, clock, tmp_path, script=script_from([draft, "ah, " + TAIL]))
         said = await spoken(r, answer(his_whisper(r, "where is the entrance to ulduar?")),
                             seconds=400)
         assert said and "storm peaks" in " ".join(said)
         assert all(len(x.encode()) <= 255 for x in said)
+    run(main())
+
+
+def test_a_draft_of_exactly_her_words_keeps_its_last_clause(store, clock, tmp_path):
+    """Re-review round 2: a draft of exactly the turn's words "fit", the styling packed it on
+    two lines and dropped the last clause."""
+    draft = buried(50)
+    assert len(draft.split()) == 50
+    async def main():
+        seed_test_cast(store)
+        save_member(store, 102, typo_rate=0.0, emoticon_rate=0.0, split_rate=1.0,
+                    abbreviations={}, words_per_line=[5, 25], case="lower", end_punct="none")
+        r = make_rig(store, clock, tmp_path, script=script_from([draft, "ah, " + TAIL]))
+        said = await spoken(r, answer(his_whisper(r, "where is the entrance to ulduar?")),
+                            seconds=400)
+        assert said and "storm peaks" in " ".join(said)
     run(main())
 
 
@@ -276,14 +331,12 @@ def test_the_shape_gives_a_content_answer_room(store):
 # -- her voice sheet's line (personas/speech.py word_range) ------------------------------------
 
 def test_a_cut_never_leaves_fewer_words_than_her_sheets_range():
-    draft = "We have 22 now. The calendar looked thin this morning and most of them are alts anyway"
-    q = "how many people signed up?"
-    assert fit_answer(draft, 8, q).text == "We have 22 now. The calendar looked thin this morning"
-    draft = "We have 22 now. " + " ".join(["filler"] * 20)
-    # a sheet that names six words or more: the four-word sentence alone is no cut
-    fit = fit_answer(draft, 5, q, floor=6)
+    draft = "We have 22 now, the calendar looked thin this morning, most of them are alts anyway"
+    said = "signups look bad"
+    assert fit_answer(draft, 5, said).text == "We have 22 now"
+    # a sheet that names six words or more: the four-word clause alone is no cut
+    fit = fit_answer(draft, 5, said, floor=6)
     assert len(fit.text.split()) >= 6 and "22" in fit.text
-    assert fit_answer(draft, 5, q).text == "We have 22 now."
 
 
 def test_the_content_floor_never_lifts_a_line_past_her_sheets_range(store):

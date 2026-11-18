@@ -96,7 +96,7 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk import position
 from leeroy_mind.talk.length import (KEEP_SLACK, SHORTER_HINT, content_question,
-                                     fit_answer, split_lines)
+                                     fit_answer, split_lines, tail_lines)
 from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
                                      ordered, topic_for)
 from leeroy_mind.guards.owncopy import LINES as OWN_COPY_LINES, asked_again, copies_any
@@ -355,6 +355,7 @@ DRAWN_TALKED_TO_SHARE = 0.75
 ROMANCE_LATE_BONUS = 0.15
 ROMANCE_COOL_S = 300.0
 OWN_LINES = 5
+OWED_LINES = 3  # game lines an owed answer still too long after its retry may take
 VOICE_LINE_WORDS = 36  # a voice sheet's longest line that one game line surely holds
 SHORT_WAIT_S = 60.0  # an answer this soon after his line is not late, whatever her brb planned
 NAMED_CARDS = 3  # roster lines for members his line names (Pipeline._named_cards)
@@ -630,6 +631,8 @@ class TurnMeta:
     # [talk] coherence (talk/length.py): the words of a draft kept past her line's cap (a cut that
     # carries the answer, or one sent as written), which the styling then leaves whole; 0 none
     keep_words: int = 0
+    keep_lines: int = 0  # ...and the game lines it takes when it is an owed answer laid out
+    # on more lines than her turn has (_generate_serial: still too long after the retry)
     # [talk] coherence (talk/position.py, Pipeline._position): what she has said so far in this
     # conversation and a rule of hers his line touches, the lines after the beat's block
     view: str = field(default="", repr=False)
@@ -3426,7 +3429,7 @@ class Pipeline:
             lines = [] if only else self._style(turn, p, text, close=close,
                                                 two_lines=meta.two_lines, romance=meta.romance,
                                                 realism=self.realism.eligible(self, turn, meta),
-                                                room=self._room(turn, meta))
+                                                room=self._room(turn, meta), lines=meta.keep_lines)
         # The typing's ASCII fold can join two "{" (fullwidth braces, a zero-width space between):
         # each line is defused once more as it is kept and sent (talk/items.py).
         lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
@@ -3647,7 +3650,7 @@ class Pipeline:
                     return await fallback() if owed else drop("guard_rewrite_failed")
                 lines = ([Styled(text, text)] if spoken else
                          self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance,
-                                    room=self._room(turn, meta)))
+                                    room=self._room(turn, meta), lines=meta.keep_lines))
                 lines = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in lines]
                 break
             else:
@@ -3738,7 +3741,7 @@ class Pipeline:
         scope changed meanwhile."""
         lines = ([Styled(text, text)] if spoken else
                  self._style(turn, p, text, close=close, two_lines=meta.two_lines,
-                             romance=meta.romance, room=self._room(turn, meta)))
+                             romance=meta.romance, room=self._room(turn, meta), lines=meta.keep_lines))
         lines = [Styled(defuse(s.line), defuse(s.plain)) for s in lines]
         if not lines:
             return None
@@ -3788,7 +3791,7 @@ class Pipeline:
         if text is not None:
             kept = ([Styled(text, text)] if spoken else
                     self._style(turn, p, text, close=close, two_lines=meta.two_lines, romance=meta.romance,
-                                    room=self._room(turn, meta)))
+                                    room=self._room(turn, meta), lines=meta.keep_lines))
             kept = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in kept]
             checked = []
             for line in kept:
@@ -3832,7 +3835,7 @@ class Pipeline:
             return lines
         kept = ([Styled(mended, mended)] if spoken else
                 self._style(turn, p, mended, close=close, two_lines=meta.two_lines,
-                            romance=meta.romance, room=self._room(turn, meta)))
+                            romance=meta.romance, room=self._room(turn, meta), lines=meta.keep_lines))
         kept = [replace(s, line=defuse(s.line), plain=defuse(s.plain)) for s in kept]
         if not kept:
             return lines
@@ -4272,7 +4275,7 @@ class Pipeline:
         # what a turn that answers nothing is about: an opener's topic, an outreach item's words
         subject = meta.topic or (meta.recall_query if meta.outreach_item is not None else "")
         asked_line = (self._asked_line(turn, meta, c) if keeps else "")
-        meta.keep_words = 0
+        meta.keep_words = meta.keep_lines = 0
         kept, why = "", "tells"
         blocking: set[str] = set()  # the last draft's tells that kept it from going
         for attempt in range(max_attempts):
@@ -4323,11 +4326,26 @@ class Pipeline:
                 # styling would trim its tail at the bridge's bytes, and the answer with it
                 # (a line over her words but inside the slack counts: laid out by the styling
                 # alone it could lose its last clause)
-                over = length == "fits" and len(text.split()) > budget
+                # (a line of her turn's words or more counts even inside the slack: laid out
+                # by the styling alone it could lose its last clause)
+                over = length == "fits" and len(text.split()) >= budget
                 whole = length in ("cut", "kept") or over or (
                     length == "fits" and self._room(turn, meta))
+                meta.keep_lines = 0
                 if whole and split_lines(text, self._lines_allowed(turn, p, meta)) is None:
                     length, text = "retry", draft
+                if (length == "retry" and (attempt or max_attempts == 1)
+                        and self.live_review.owed(turn, meta)):
+                    # an answer he is owed, still too long after it was asked again: never
+                    # the bridge's byte trim. Its whole clauses on up to OWED_LINES lines,
+                    # nothing dropped; else its tail that fits (the answer is more often
+                    # late than early in a draft that ran long), never its head
+                    parts = split_lines(text, OWED_LINES)
+                    tail = None if parts is not None else tail_lines(text, OWED_LINES)
+                    if parts is not None or tail is not None:
+                        length = "kept" if parts is not None else "cut"
+                        text = text if parts is not None else " ".join(tail)
+                        meta.keep_lines = len(parts or tail)
                 if length != "fits":
                     log.info("say_length: guid=%d kind=%s attempt=%d action=%s words=%d limit=%d",
                              turn.speaker, turn.kind, attempt, length, len(draft.split()), budget)
@@ -4358,7 +4376,7 @@ class Pipeline:
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
                     if not quiet(text):
                         if length in ("cut", "kept") or (
-                                length == "fits" and len(text.split()) > budget):
+                                length == "fits" and len(text.split()) >= budget):
                             meta.keep_words = len(text.split())
                         return text, None
                     silent = True
@@ -4784,7 +4802,8 @@ class Pipeline:
 
     def _style(self, turn: Turn, p: Persona, text: str, *, close: bool,
                two_lines: bool = False, romance: bool = False,
-               realism: bool = False, room: int = 0, plain: bool = False) -> list[Styled]:
+               realism: bool = False, room: int = 0, plain: bool = False,
+               lines: int = 0) -> list[Styled]:
         """The member's typing over the words: at most turn.max_lines lines (style_lines). A
         bit of several lines keeps the lines the model wrote, one each; any other turn is
         styled as one text. A member of his inner circle keeps his real name capitalised
@@ -4812,8 +4831,8 @@ class Pipeline:
         if coherent and room and not words and len(pieces) == 1 and turn.kind is not TurnKind.BIT:
             # a kept draft longer than one game line: its whole clauses on the lines she has
             # (talk.length.split_lines; _generate only keeps a draft that fits them)
-            allowed = max(1, turn.max_lines) if two_lines else turn_lines(p.typing,
-                                                                          max(1, turn.max_lines))
+            allowed = max(lines, max(1, turn.max_lines) if two_lines else turn_lines(
+                p.typing, max(1, turn.max_lines)))
             parts = split_lines(text, allowed)
             if parts is not None and len(parts) > 1:
                 pieces = parts
@@ -4821,7 +4840,7 @@ class Pipeline:
         plain = plain and coherent  # her brb and back: no slips, no typos, no marks
         out: list[Styled] = []
         typing = replace(p.typing, typo_rate=0.0) if plain else p.typing
-        most = 1 if words else turn.max_lines
+        most = 1 if words else max(turn.max_lines, len(pieces) if lines else 0)
         cap = math.ceil(words * LONG_SLACK) if words else None
         if room and words:
             cap = max(cap, room)

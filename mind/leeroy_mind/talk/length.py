@@ -2,28 +2,25 @@
 of 100 whisper turns took a second model call, most after the "long" tell, and the fresh
 generation it asked for lost a correct answer, a "yes" and several clean lines).
 
-The owner's rule is absolute: a cut that removes the answer is never acceptable. So
-`fit_answer` cuts only what it can prove comes after the answer, and when in doubt the line
-goes as written or is asked again with the draft (reviews of #370: a cut to the first clauses
-dropped the answer whenever it came second or third, and a cut after the first clause with a
-"proof" in it dropped it whenever the lead-in held one):
+The owner's rule is absolute: a cut that removes the answer is never acceptable. Three
+reviews of #370 showed that no test of tokens can say where an answer is (it came second or
+third; the lead-in held a number, a clock time or a quoted "yes"; the answer held no token at
+all: "after the officers' meeting", "a couple", "can't make it"). So (controller ruling):
 
-- his line asks how many, how much, how long or when: the answer is a number, a clock time, a
-  weekday or a month, and the cut comes only after the sentence of the LAST clause that holds
-  one;
-- his line is a yes/no question: only after the sentence of the LAST clause with a yes or a no;
-- his line asks who, what, where, which, why or how, asks to have something explained, or
-  holds two questions: never cut. A name or a "no idea" proves nothing on its own;
-- his line asks nothing, or the turn answers nothing (idle talk): the leading whole clauses
-  that fit, as many as fit, so nothing she added is thrown away for the clause that repeats
-  his subject;
+- **his line asks anything** (a question mark, a question, a request to explain): never cut.
+  The reply is "kept" as written, whatever its length; the pipeline sends it when it fits her
+  turn's game lines by whole clauses (`split_lines`), else asks again with her own draft
+  (SHORTER_HINT), and when that is still too long lays it on up to three lines or sends its
+  tail (`tail_lines`), never its head;
+- his line asks nothing, or the turn answers nothing (idle talk): her leading whole clauses
+  that fit, as many as fit;
 - the turn has a subject of its own (an opener's topic, an outreach item's words): only after
   the sentence of the last clause that shares a content word with it.
 
 A cut never ends on a dangling word or inside a quotation and never leaves fewer than
-MIN_WORDS words (or the low end of her voice sheet's range). With no cut the reply is kept as
-written within KEEP_SLACK times the turn's words; past that the model is asked again with her
-own draft (SHORTER_HINT), never a fresh start.
+MIN_WORDS words (or the low end of her voice sheet's range). With no cut a line that asks
+nothing is kept as written within KEEP_SLACK times the turn's words; past that the model is
+asked again with her own draft, never a fresh start.
 
 `split_lines` says whether a text fits the game lines her turn has, by whole clauses within
 the bridge's bytes: a text that does not is never "kept as written" (the styling would trim its
@@ -52,19 +49,7 @@ SHORTER_HINT = ('You wrote: "{draft}" Say the same thing shorter, in at most abo
 _EXPLAIN = re.compile(r"\b(?:explain|describe|tell me (?:about|how|why|what|who|where|when)|"
                       r"remind me|walk me through)\b", re.IGNORECASE)
 _WH = re.compile(r"\b(?:" + "|".join(sorted(QUESTION_WORDS)) + r")\b", re.IGNORECASE)
-# a question whose answer is a number or a time
-_NUMERIC_ASK = re.compile(r"\bhow (?:many|much|long|old|often|far|big)\b|\bwhen\b|\bwhens\b|"
-                          r"\bwhat (?:time|level|ilvl|day|date|year)\b", re.IGNORECASE)
-_NUMBER = re.compile(
-    r"\d|\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|"
-    r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|"
-    r"eighty|ninety|hundred|thousand|half|noon|midnight|monday|tuesday|wednesday|thursday|"
-    r"friday|saturday|sunday|january|february|march|april|june|july|august|september|october|"
-    r"november|december)\b", re.IGNORECASE)
-_YES_NO = frozenset({"yes", "yeah", "yea", "yep", "yup", "no", "nah", "nope", "sure", "maybe",
-                     "probably", "definitely"})
 _QUOTE = re.compile(r'["“”]')
-_AND = re.compile(r"\band\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -88,47 +73,15 @@ def content_question(line: str) -> bool:
                for part in (text, *re.split(r"[,.;:!]\s+", text)))
 
 
-def _two_questions(his: str) -> bool:
-    """His line asks two things: two question marks, or a content question with an "and"."""
-    return his.count("?") > 1 or (content_question(his) and bool(_AND.search(his)))
-
-
-def _proof(his: str):
-    """What proves a clause answers his question: a function of the clause's words, or None
-    when no clause can prove it (who, what, where, which, why, how, explain, two questions)."""
-    if _two_questions(his):
-        return None
-    if content_question(his):
-        if not _NUMERIC_ASK.search(his):
-            return None
-        return lambda ws: bool(_NUMBER.search(" ".join(ws)))
-    return lambda ws: any(_bare(w) in _YES_NO for w in ws)
+def asks(his: str) -> bool:
+    """His line asks her anything: a question mark anywhere in it, a question, or a request to
+    explain. The reply to it is never cut."""
+    his = " ".join((his or "").split())
+    return bool(his) and ("?" in his or is_question(his) or content_question(his))
 
 
 def _shares(words: list[str], other: str) -> bool:
     return bool(set(content_words(other)) & set(content_words(" ".join(words))))
-
-
-def answering(words: list[str], his: str = "", subject: str = "") -> bool:
-    """The clause `words` holds a proof of the kind his question asks for (module docstring):
-    a number or time for a numeric question, a yes or no for a yes/no question; never for any
-    other question. For a turn with a subject of its own, a content word shared with it. For a
-    line of his that asks nothing, or no line at all, there is nothing to prove: True."""
-    if not [b for b in (_bare(w) for w in words) if b]:
-        return False
-    his = " ".join((his or "").split())
-    if not his:
-        return _shares(words, subject) if subject.strip() else True
-    if not (is_question(his) or content_question(his)):
-        return True
-    proof = _proof(his)
-    return proof is not None and proof(words)
-
-
-def carries(words: list[str], his: str = "", subject: str = "") -> bool:
-    """Some clause of `words` holds a proof (`answering`): never True for a question just
-    because the words are not filler."""
-    return any(answering(ws, his, subject) for ws, _ in _clauses(" ".join(words)))
 
 
 def _clauses(text: str):
@@ -178,17 +131,19 @@ def fit_answer(text: str, limit: int, his: str = "", *, subject: str = "",
     `his`: the line of his it answers ("" none); `subject`: what the turn is about when it
     answers nothing; `floor`: the fewest words a cut may leave (the low end of the line her
     voice sheet names; MIN_WORDS at least), so she is never cut below her own shape. Nothing
-    is ever added: a line is never padded."""
+    is ever added: a line is never padded. An answer to a line of his that asks anything is
+    never cut ("kept": the caller sends it when it fits her lines, else asks again)."""
     words = text.split()
     if limit <= 0 or len(words) <= int(LONG_SLACK * limit):
         return Fit(text, "fits")
+    if asks(his):
+        return Fit(text, "kept")
     units = _clauses(" ".join(words))
     within = len(words) <= int(KEEP_SLACK * limit)
     his = " ".join((his or "").split())
-    asked = bool(his) and (is_question(his) or content_question(his))
-    if asked or (not his and subject.strip()):
-        # only after the LAST clause that proves the answer (or names the subject)
-        held = [i for i, (ws, _) in enumerate(units) if answering(ws, his, subject)]
+    if not his and subject.strip():
+        # only after the last clause that names the turn's subject
+        held = [i for i, (ws, _) in enumerate(units) if _shares(ws, subject)]
         last, sentence = (held[-1] if held else None), True
     else:  # nothing to prove: her leading clauses, as many as fit
         last, sentence = 0, False
@@ -238,5 +193,23 @@ def split_lines(text: str, lines: int, max_bytes: int = LINE_BYTES) -> list[str]
     return [" ".join(w for ws, _ in g for w in ws) for g in best[1]]
 
 
-__all__ = ["Fit", "KEEP_SLACK", "LINE_BYTES", "LONG_SLACK", "MIN_WORDS", "SHORTER_HINT",
-           "answering", "carries", "content_question", "fit_answer", "split_lines"]
+def tail_lines(text: str, lines: int, max_bytes: int = LINE_BYTES) -> list[str] | None:
+    """The end of `text` that fits `lines` game lines by whole clauses (`split_lines`): its
+    last sentences, as many leading clauses dropped as it takes and no more. For an owed answer
+    still too long after it was asked again: the answer is more often late than early in a
+    draft that ran long, so the tail goes, never the head. None when not even its last clause
+    fits a line."""
+    units = _clauses(" ".join(text.split()))
+    for k in range(len(units)):
+        if k and units[k - 1][1] != SENT and any(
+                units[j][1] == SENT for j in range(k, len(units) - 1)):
+            continue  # start at a sentence while one is left to start at
+        tail = " ".join(w for ws, _ in units[k:] for w in ws)
+        parts = split_lines(tail, lines, max_bytes)
+        if parts is not None:
+            return parts
+    return None
+
+
+__all__ = ["Fit", "KEEP_SLACK", "LINE_BYTES", "LONG_SLACK", "MIN_WORDS", "SHORTER_HINT", "asks",
+           "content_question", "fit_answer", "split_lines", "tail_lines"]

@@ -1065,27 +1065,26 @@ no golden prompt changes: with the switch off (the default) every golden file is
 **A game line that is only too long is kept** (`talk/length.py`, `Pipeline._generate_serial`).
 The "long" tell used to ask for a fresh generation at her line's length ("Shorter: 2-8 words"),
 which lost correct answers. The owner's rule is absolute: a cut that removes the answer is
-never acceptable. So `fit_answer` cuts a game line only after the sentence of the **last**
-clause that holds a proof of the kind his question asks for: a number, time, weekday or month
-for a how many, how much, how long or when question; a yes or no for a yes/no question. It
-never cuts an answer to a who, what, where, which, why or how question or to an
-explain-request (a name or a "no idea" proves nothing on its own), and never when his line
-holds two questions. To a line of his that asks nothing it keeps her leading whole clauses, as
-many as fit (never only the clause that repeats his subject); for a turn with its own subject
-(an opener's topic, an outreach item's words) it cuts only after the last clause that names
-it. A cut never ends on a dangling word or inside a quotation and never leaves under 3 words.
-With no provable cut the line goes as written within twice the turn's words; past that the
-model is asked again with her own draft: `You wrote: "..." Say the same thing shorter, in at
-most about N words. Keep the answer in it.` (Reviews of #370: 72 invented drafts in
-`tests/length_drafts.py`, 40 with the answer in the second or third clause and 32 with a false
-proof in the lead-in, the answer last, two questions, quotes or an emoji tail; none goes out
-without its answer at 6, 8, 10, 12 or 15 words.) **What goes out whole must fit her game
-lines**: a cut, kept or over-length line is sent only when `length.split_lines` fits it on the
-lines her turn has by whole clauses, each within `LINE_BYTES` (230) bytes; `_style` then lays
-those clauses out (`TurnMeta.keep_words`, `room`) and nothing is dropped. A draft that does not
-fit is asked again with itself, as above (before, the bridge's 255 bytes trimmed its tail word
-by word). A voice sheet's range gives room for at most `VOICE_LINE_WORDS` (36) words. Discord
-turns are not touched: they keep `fit_words` and their bands.
+never acceptable, and three reviews of #370 showed no test of tokens can say where an answer
+is. So **an answer to a line of his that asks anything is never cut in code** (`length.asks`: a
+question mark, a question, a request to explain). It is sent as written when
+`length.split_lines` fits it on the game lines her turn has by whole clauses, each within
+`LINE_BYTES` (230) bytes; else the model is asked again once with her own draft: `You wrote:
+"..." Say the same thing shorter, in at most about N words. Keep the answer in it.` **When
+that is still too long and the answer is owed to him** it is never byte-trimmed: its whole
+clauses go on up to `OWED_LINES` (3) game lines, nothing dropped, as a short burst through her
+typing (`TurnMeta.keep_lines`); only if it still does not fit, its tail goes
+(`length.tail_lines`: the last sentences that fit, never the head). A turn that is not owed to
+him keeps main's behaviour there. A line that asks nothing keeps her leading whole clauses, as
+many as fit (never ending on a dangling word or inside a quotation, never under 3 words), goes
+as written within twice the turn's words when there is no clean cut, and past that is asked
+again with the draft; a turn with its own subject (an opener's topic, an outreach item's
+words) is cut only after the last clause that names it. A draft of the turn's words or more
+that "fits" is also checked against her lines, so the styling never repacks its last clause
+away (`TurnMeta.keep_words`, `_style`'s `room`). The reviews' 92 invented drafts
+(`tests/length_drafts.py`) all go out with their answer at 6, 8, 10, 12 and 15 words. A voice
+sheet's range gives room for at most `VOICE_LINE_WORDS` (36) words. Discord turns are not
+touched: they keep `fit_words` and their bands.
 A content question from him gives a game SHORT, QUESTION or LATE shape at least
 `shape.CONTENT_WORDS` (12) words, but never more than the longest line her voice sheet names
 ("three to seven words" answers in seven). A line inside her sheet's range is never long, a
@@ -1106,7 +1105,8 @@ her whispers and DMs with him (`talk/sofar.py`). Its lines for where and how she
 stay as they are; while `[talk] coherence` and a core switch are on her claims
 (`position.claims_so_far`: her own sentences with a number beside a word, or a statement of
 herself) follow them as "- You said: ..." lines, without a claim that repeats the place, the
-oldest dropped until they are within `sofar.CLAIM_TOKENS` (50). The line's prompt and the beat (which reads the same prompt) both see that one
+oldest dropped until they are within `sofar.CLAIM_TOKENS` (50); when the block is over its 120
+tokens the claims are the first lines to go, so none of main's lines is dropped for one. The line's prompt and the beat (which reads the same prompt) both see that one
 block; nothing here adds a second. When his line touches an opinion on her card that
 reads as a rule ("never", "not optional", "the law"), the line's block and the beat get `You
 hold this as a rule: "..." You don't argue against it; if <his name>, as guild leader,
