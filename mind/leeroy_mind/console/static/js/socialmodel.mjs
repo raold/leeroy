@@ -51,10 +51,10 @@ var KIND_WORDS = { raided: "raided together", grouped_away: "grouped without you
   first_kill: "stood at a first kill", wipe_stood: "last standing at a wipe", partied: "in your party",
   warm_scene: "a warm scene", took_side: "took the other's side", heard: "was agreed with", defended: "was defended",
   answered: "was replied to", replied: "replied", talked: "talked back and forth", mentioned: "was named",
-  reacted: "reacted", banter: "banter that landed", joked: "joked together", complimented: "was complimented",
-  spoke_well: "was spoken well of", praised: "spoke well of the other", admired: "admired the other",
-  voice_room: "a small voice room", voice_late: "a late voice room", dkp_close: "a close DKP award",
-  dkp_respect: "respect after a close award" };
+  reacted: "reacted", banter: "banter that landed", riffed: "riffed together", joked: "joked together",
+  complimented: "was complimented", spoke_well: "was spoken well of", praised: "spoke well of the other",
+  admired: "admired the other", voice_room: "a small voice room", voice_late: "a late voice room",
+  dkp_close: "a close DKP award", dkp_respect: "respect after a close award" };
 export function kindText(k) { return KIND_WORDS[str(k)] || str(k); }
 
 var WHY_WORDS = { draw: "the night's draw said not yet", affinity: "one dislikes the other",

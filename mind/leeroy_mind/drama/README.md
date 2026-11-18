@@ -152,20 +152,21 @@ thread never opens on presence alone.
 | `grouped_away` | both raided in an offline raid (him absent) | 1.5 |
 | `kill_alive` / `first_kill` | both stood at a boss kill (the guild's first of that boss) | 1 / 2 |
 | `wipe_stood` | both still standing when a wipe was called | 0.5 |
-| `partied` | both in his party of five or fewer | 1.5 |
 
 **Social** (something passed between them).
 
 | Kind | The fact | Whose pull | Weight |
 |---|---|---|---|
+| `partied` | both in his party of five or fewer: a small activity together | both | 4 |
 | `warm_scene` | tonight's accepted scene of theirs whose applied changes sum above zero | both | 10 |
-| `took_side` | someone set a rumour about her straight (a `correct` scene), or sided with her in a feud | hers | 12 |
+| `took_side` | someone set a rumour about her straight to her face (a `correct` scene with her), or sided with her in a feud | hers | 12 |
 | `heard` | a reply naming her and agreeing, within 5 minutes of her line on a public channel | hers | 7.5 |
 | `defended` | a member answering a taunt aimed at her on a public channel (the owner's taunt counts) | hers | 12 |
 | `answered` / `replied` | a Discord reply to her message within 10 minutes, on a public channel | hers 5 / the replier's 4 | |
 | `talked` | his message right after hers in a public Discord channel (5 minutes) | both | 2.5 |
-| `mentioned` | a public Discord message naming her | hers | 4 |
+| `mentioned` | a public Discord message or game line naming her | hers | 4 |
 | `reacted` / `banter` | her reaction to his public Discord line; `banter` when she spoke in that conversation within 30 minutes | hers | 2.5 / 6 |
+| `riffed` | both spoke in one banter riff (the `[banter]` threads: lines sent as banter, 10 minutes or less apart on one public channel) | both | 6 |
 | `joked` | a joke, tease or callback the talk pipeline scored (`talk_move`) at the other on a public channel | both | 4 |
 | `complimented` | a compliment scored the same way | the one complimented | 7.5 |
 | `spoke_well` / `praised` | a good opinion of her by name on a public channel, as the claims table scored it (`member_claim`) | hers 9 / the speaker's 5 | |
@@ -186,7 +187,9 @@ A gain is multiplied by:
   shared things they do outside raids, shared likes, less when nothing is shared, and a small
   draw seeded by the pair.
 
-A pull halves over 21 nights without an event.
+A pull halves over 21 nights without an event; its public part halves over 21 nights without a
+public event, and its social part over 21 nights without a social one, so a pair that now meets
+only in private scenes keeps no public part it no longer earns.
 
 Not read, because nothing is stored for it: members sitting near each other (the inn seats are
 the owner's invitations only), member-only 5-mans (only his party and offline raids are
@@ -195,12 +198,15 @@ it says nothing about a pair).
 
 **Privacy.** Every row carries the scope of its evidence and the evidence's id, never text.
 Whispers, DMs, group DMs, the officers' channels and voice room, the private voice rooms and
-Discord channels the layout lacks are never read. A scene and a feeling are between the two
-(`pair`); a rumour set straight reaches its subject second-hand (`restricted`). A feeling
-resting on any private or secret memory is not read. `pull_shadow.public_pull` is the part
-public evidence alone would have built, for the later "what the guild knows" view;
-`social_pull` is the part that did not come from presence. Nothing recorded is shown to a
-member or creates a fact.
+Discord channels the layout lacks are never read. A pull moves only by what its holder could
+have witnessed: a game line's stored audience decides who read it (a party, raid, say or voice
+room line reaches only those there), a scored joke or compliment counts only when the one it
+was at could read the speaker's line, and a rumour set straight to someone else moves nothing
+of the one it is about, since nothing stores that she learned of it. A scene and a feeling are
+between the two (`pair`). A feeling resting on any private or secret memory is not read.
+`pull_shadow.public_pull` is the part public evidence alone would have built, for the later
+"what the guild knows" view; `social_pull` is the part that did not come from presence.
+Nothing recorded is shown to a member or creates a fact.
 
 ### Would-be threads
 

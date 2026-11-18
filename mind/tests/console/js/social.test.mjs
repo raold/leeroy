@@ -74,4 +74,5 @@ test("what held candidates back reads as counts", () => {
   assert.equal(heldText({ draw: 2, social: 5, cap_night: 1 }),
     "5 only time spent together so far · 2 the night's draw said not yet · 1 one new thread a night");
   assert.equal(kindText("answered"), "was replied to");
+  assert.equal(kindText("riffed"), "riffed together");
 });
