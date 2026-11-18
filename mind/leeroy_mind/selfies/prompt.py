@@ -55,7 +55,8 @@ LUST_NEGATIVE: tuple[tuple[str, int], ...] = tuple(
 # A guild tile keeps NEGATIVE as it was (scene.TILE_NEGATIVE: its one-face line fills the window).
 def _head(base, mirror: bool = False):
     line = ("shirtless" if mirror else "shirtless, mirror, phone", 0)
-    return base[:4] + (line,) + base[4:]
+    at = next((i for i, (_, pr) in enumerate(base) if pr > 0), len(base))  # after the required
+    return base[:at] + (line,) + base[at:]
 
 
 HEAD_NEGATIVE: tuple[tuple[str, int], ...] = _head(NEGATIVE)
