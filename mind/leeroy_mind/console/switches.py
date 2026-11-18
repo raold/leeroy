@@ -86,6 +86,7 @@ SWITCHES = (
     ('raidplay','respond','Mechanic responder','training.playbooks; Leeroy.Mechanics.Enable = 1'),
     ('turing','enabled','Turing judge',''),
     ('bakeoff','capture','Bake-off capture (stores full prompts, 14 days)',''),
+    ('prune','enabled','Nightly retention prune',''),
     ('lab','enabled','Conversation lab','learn.bandit and learn.apply for its arms to reach live talk'),
 )
 

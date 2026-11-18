@@ -411,7 +411,7 @@ from .switches import SWITCHES, default as _switch_default, is_number as _switch
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:
-    from .switchvalidation import valid_table
+    from .switchvalidation import valid_field, valid_table
     path = data/'mind.toml'
     invalid, changed = False, None
     try:
@@ -436,9 +436,12 @@ def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:
         value = tables.get(table,{}).get(key,_switch_default(switch)) if type(tables.get(table,{})) is dict else None
         row = dict(table=table,key=key,label=label,needs=needs,unmet=[],
                    restart=changed is not None and mind_started is not None and changed>mind_started)
-        if validity[table] is None:
+        # A table whose loader falls back per field ([life]) is judged a row at a time
+        field = None if invalid else valid_field(table,tables.get(table,{}),key)
+        ok = validity[table] if field is None else field
+        if ok is None:
             state = 'unknown'
-        elif not validity[table]:
+        elif not ok:
             state = 'invalid'
         elif _switch_number(switch):
             # Numbers are shown, never text: an absent key reads as the loader's default.

@@ -21,7 +21,7 @@ NOT_TABLES = {("bakeoff", "Candidate"), ("guild", "DkpConfig"), ("guild", "Guild
 # Tables whose loader is a function, not a dataclass or a rule table: their boolean keys by hand.
 BY_HAND = {"fingerprint": {"enabled": False}, "callbacks": {"enabled": False},
            "looks": {"diversity": False}, "playstyle": {"enabled": False},
-           "raidplay": {"respond": False}, "tuning": {"nudge_memories": True}}
+           "raidplay": {"respond": False}, "prune": {"enabled": False}, "tuning": {"nudge_memories": True}}
 
 
 def deadline():
@@ -131,7 +131,7 @@ def test_decisions_invalid_as_its_loader_says(tmp_path, text):
     ("[voice_notes]\nshare=0.6", "voice_notes"), ("[voice_notes]\nmax_words=4", "voice_notes"),
     ("[turing]\nwindows=61", "turing"), ("[turing]\ndays=0", "turing"),
     ("[outreach]\nenabled=1", "outreach"), ("[godmode]\nenabled=true\nx=1", "godmode"),
-    ("[voice]\nport=0", "voice"), ("[life]\nstate=1", "life"), ("[tuning]\nnudge_memories=1", "tuning")])
+    ("[voice]\nport=0", "voice"), ("[prune]\nrows_per_night=0", "prune"), ("[tuning]\nnudge_memories=1", "tuning")])
 def test_new_tables_are_invalid_as_their_loaders_say(tmp_path, text, invalid):
     (tmp_path / "mind.toml").write_text(text)
     rows = ops.switches_view(tmp_path, deadline(), mind_started=None)["rows"]
@@ -177,3 +177,23 @@ def test_defaults_show_when_a_key_is_absent(tmp_path):
     assert by["training", "lab"]["state"] == "on" and by["decisions", "enabled"]["state"] == "off"
     assert all("blocklist" in r for r in rows if (r["table"], r["key"]) == ("realm", "enabled"))
     assert sum("blocklist" in r for r in rows) == 1
+
+
+def test_life_is_judged_a_field_at_a_time_as_its_loader_falls_back(tmp_path):
+    from leeroy_mind.config import load_config
+
+    def by():
+        return {(r["table"], r["key"]): r for r in ops.switches_view(tmp_path, deadline(), mind_started=None)["rows"]}
+    (tmp_path / "mind.toml").write_text('[life]\navailability=6\nstate=true\nwow_vs_life="bad"\n')
+    life = load_config(tmp_path / "mind.toml").life
+    assert (life.availability, life.state) == (6, True)
+    assert by()["life", "state"]["state"] == "on"
+    assert by()["life", "availability"]["state"] == "number" and by()["life", "availability"]["value"] == 6
+    (tmp_path / "mind.toml").write_text("[life]\navailability=6\nstate=1\n")
+    assert load_config(tmp_path / "mind.toml").life.availability == 6
+    assert by()["life", "state"]["state"] == "invalid"
+    assert by()["life", "availability"]["state"] == "number" and by()["life", "availability"]["value"] == 6
+    (tmp_path / "mind.toml").write_text("[life]\navailability=11\nstate=true\n")
+    assert by()["life", "availability"]["state"] == "invalid" and by()["life", "state"]["state"] == "on"
+    (tmp_path / "mind.toml").write_text("life = 3\n")
+    assert by()["life", "availability"]["state"] == "invalid" and by()["life", "state"]["state"] == "invalid"

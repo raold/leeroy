@@ -6,6 +6,16 @@ import re
 from types import SimpleNamespace
 
 
+def valid_field(name, table, key):
+    """One row's own verdict, for a table whose loader falls back field by field: [life] keeps
+    every well-formed field when another is malformed (config.py), so only the malformed field's
+    row is invalid. None: this table is judged whole, by valid_table."""
+    if name != 'life' or type(table) is not dict:
+        return None
+    from leeroy_mind.config import _RULES
+    return key not in table or key not in _RULES['life'] or bool(_RULES['life'][key][0](table[key]))
+
+
 def valid_table(name, table, raw):
     """True: the table is valid. False: it is not, so its loader turns it off (or refuses it).
     None: no rule here for this table, so the console cannot say (shown as unknown, never as
@@ -113,6 +123,10 @@ def valid_table(name, table, raw):
                 return type(v) in (int,float) and math.isfinite(v) and 0 <= v <= .5
             return type(v) is int and ranges[k][0] <= v <= ranges[k][1]
         return not set(table)-{'enabled','share',*ranges} and all(valid(k,v) for k,v in table.items())
+    if name == 'prune':
+        from leeroy_mind.nightly.prune import ROWS_MAX
+        return (not set(table)-{'enabled','rows_per_night'} and type(table.get('enabled',False)) is bool
+                and type(table.get('rows_per_night',1)) is int and 1 <= table.get('rows_per_night',1) <= ROWS_MAX)
     if name == 'turing':
         from leeroy_mind.turing.config import DAYS_MAX, WINDOWS_MAX
         ranges = {'windows':(0,WINDOWS_MAX),'days':(1,DAYS_MAX)}
