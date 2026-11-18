@@ -11,8 +11,8 @@ never her stance); then how far his own lines have led; and last, with `public_c
 every channel other people read."""
 from dataclasses import dataclass
 
-from .table import (CLEAN_CAP, DIAL_TO_HEAT, EVERY_TURN, LATE_SELF, OPEN_HEAT, P0, PHOTO_TIERS,
-                    PUBLIC_TIER, ROWS, TIERS, TODAY, clamp, lower, tier_index)
+from .table import (CLEAN_CAP, DIAL_TO_HEAT, EVERY_TURN, LATE_SELF, OFFSET_HI, OFFSET_LO, OPEN_HEAT,
+                    P0, PHOTO_TIERS, PUBLIC_TIER, ROWS, TIERS, TODAY, clamp, lower, tier_index)
 
 ATTITUDES = ("fond", "drawn", "lust")
 SESSIONS = ("clean", "open")
@@ -21,14 +21,14 @@ SESSIONS = ("clean", "open")
 REASONS = {
     "man": "men stay friends: heat does not apply",
     "stance_none": "stance none: heat does not apply",
-    "own_dial": "she keeps the dial you set for her alone",
+    "own_dial": "her own dial counts as her offset on the world value",
     "clean": "clean for this session",
     "open": "no limits for this session",
     "lead": "she follows your lead: not at her ceiling until your own lines turn it up",
     "public": "other people read this channel: flirty at most",
     "plain_style": "plain photo style: the photo tiers do not apply",
     "age_guard": "age guard: plain photos",
-    "voice": "a line above this is typed, not spoken",
+    "voice": "an explicit line is typed, not spoken",
 }
 
 
@@ -75,6 +75,21 @@ class Resolved:
         """Whether a voice note may speak a line of this tier (None: a line with no romance)."""
         return tier is None or tier == "none" or tier_index(tier) <= tier_index(self.voice)
 
+    @property
+    def speaks_explicit(self) -> bool:
+        """A voice note may speak a line that is itself explicit (heat 10, or a no-limits
+        evening). Otherwise such a line is typed; every other line is spoken as before."""
+        return self.voice == "explicit"
+
+
+OWN_BASE = 9  # a woman's own dial counts as an offset from this: own 10 is +1, own 9 is +0
+
+
+def own_offset(own_dial: int) -> int:
+    """A dial she has of her own (persona.romance.dial) as an offset on the world heat: its
+    distance from OWN_BASE, within the offset range (ruling 2b: the world value reaches her)."""
+    return max(OFFSET_LO, min(OFFSET_HI, int(own_dial) - OWN_BASE))
+
 
 def resolve(world: int, member: Member, *, private: bool = True, session: str | None = None,
             public_cap: bool = False, late: bool = False, his_heat: int = 0,
@@ -82,43 +97,42 @@ def resolve(world: int, member: Member, *, private: bool = True, session: str | 
     """`world`: the world heat. `private`: a whisper or his one-to-one DM. `session`: "clean",
     "open" or None. `late`: late at night. `his_heat`: his own heat lines in this conversation
     so far. `legacy`: the romance dial the world heat was derived from, when it was (so the
-    older readers get that very dial back)."""
+    older readers get that very dial back).
+
+    Her heat is the world's plus her offset plus her groups'. With no offset pinned, a dial she
+    has of her own counts as her offset (own_offset), so the world value reaches her too. The
+    rates (how often she starts it, how often a photo is offered) follow the heat the owner set
+    (world, a pinned offset, groups, the session), never that stored dial: at world 9 a woman
+    at her own 10 starts and offers as she did before the dial."""
     world = clamp(world)
     reasons: list[tuple[str, str]] = []
     applies = member.female and member.stance in ATTITUDES
     own = member.own_dial if applies and member.offset is None else None
     if own is not None:
-        base = DIAL_TO_HEAT[max(1, min(10, own))]
-        offset = base - world
+        offset = own_offset(own)
         if offset:
             reasons.append(("heat", "own_dial"))
     else:
         offset = member.offset or 0
-        base = world + offset
-    heat = clamp(base + member.groups)
+    heat = clamp(world + offset + member.groups)
+    rate = clamp(world + (member.offset or 0) + member.groups)  # what the owner set
     session = session if session in SESSIONS and applies else None  # never her stance
-    moved = bool(member.groups)
-    if session == "clean" and heat > CLEAN_CAP:
-        heat, moved = CLEAN_CAP, True
-        reasons.append(("heat", "clean"))
+    if session == "clean":
+        if heat > CLEAN_CAP:
+            reasons.append(("heat", "clean"))
+        heat, rate = min(heat, CLEAN_CAP), min(rate, CLEAN_CAP)
     elif session == "open":
-        moved = moved or heat != OPEN_HEAT
-        heat = OPEN_HEAT
+        heat = rate = OPEN_HEAT
         reasons.append(("heat", "open"))
-    row = ROWS[heat]
+    row, rates = ROWS[heat], ROWS[rate]
+    plain = legacy is not None and own is None and heat == DIAL_TO_HEAT[legacy]
     if not applies:
         reasons.append(("heat", "man" if not member.female else "stance_none"))
         reasons.append(("photo", member.photo_reason))
-        dial = legacy if legacy is not None and heat == DIAL_TO_HEAT[legacy] else row.dial
-        return Resolved(False, heat, world, 0, member.groups, "none", "none", dial, 1.0, True, 0,
-                        1.0, "", "none", P0, 1.0, None, tuple(reasons))
-    # the dial the older readers take: hers or the world's own when heat left it where it was
-    if own is not None and not moved:
-        dial = own
-    elif legacy is not None and not moved and own is None and not offset:
-        dial = legacy
-    else:
-        dial = row.dial
+        return Resolved(False, heat, world, 0, member.groups, "none", "none",
+                        legacy if plain else row.dial, 1.0, True, 0, 1.0, "", "none", P0, 1.0,
+                        None, tuple(reasons))
+    dial = legacy if plain else row.dial
     ceiling = tier = row.tier
     need = 0 if (heat == LATE_SELF and late) else row.lead
     lead = max(0, need - max(0, his_heat))
@@ -129,7 +143,7 @@ def resolve(world: int, member: Member, *, private: bool = True, session: str | 
         tier = PUBLIC_TIER  # last, and nothing above can lift it
         reasons.append(("tier", "public"))
     voice = ceiling if session == "open" else lower(row.voice, ceiling)
-    if tier_index(voice) < tier_index(ceiling):
+    if voice != "explicit" and ceiling == "explicit":
         reasons.append(("voice", "voice"))
     if member.lust_style:
         photo = row.photo
@@ -137,10 +151,10 @@ def resolve(world: int, member: Member, *, private: bool = True, session: str | 
         photo = P0  # the age rules and the style are decided before heat, never by it
         reasons.append(("photo", member.photo_reason))
     every = ""
-    if heat >= EVERY_TURN:
-        every = "all" if own == 10 and not moved else "private"
+    if heat >= EVERY_TURN:  # her own dial 10 carries it on every turn, as it always did
+        every = "all" if own == 10 else "private"
     return Resolved(True, heat, world, offset, member.groups, tier, ceiling, dial, row.flirt,
-                    row.reassure, lead, row.starts, every, voice, photo, row.offers, session,
+                    row.reassure, lead, rates.starts, every, voice, photo, rates.offers, session,
                     tuple(reasons))
 
 
@@ -190,11 +204,9 @@ def _starts_words(heat: int) -> str:
 
 def _voice_words(heat: int) -> str:
     row = ROWS[heat]
-    if row.tier == "none":
-        return "Voice notes: plain lines only."
-    if row.voice == row.tier:
-        return "Voice notes: as typed."
-    return f"Voice notes: {row.voice} at most; a line past that is typed."
+    if row.voice == "explicit":
+        return "Voice notes: any line may be spoken."
+    return "Voice notes: a plainly explicit line is typed, not spoken."
 
 
 def explain_row(heat: int) -> str:
@@ -226,9 +238,9 @@ def what_changes(before: int, after: int) -> str:
         names = [PHOTO_TIERS[i] + (" wear" if PHOTO_TIERS[i] in ("gym", "swim") else " outfits")
                  for i in range(min(a.photo, b.photo) + 1, max(a.photo, b.photo) + 1)]
         out.append(f"photos {verb} {', '.join(names)}")
-    if a.voice != b.voice:
-        out.append(f"voice notes speak {b.voice} at most" if b.voice != "none"
-                   else "voice notes speak plain lines only")
+    if (a.voice == "explicit") != (b.voice == "explicit"):
+        out.append("voice notes may speak an explicit line" if b.voice == "explicit"
+                   else "an explicit line is typed, not spoken")
     if a.starts != b.starts:
         out.append(f"she starts it x{b.starts:g} as often")
     if a.lead != b.lead or (before == LATE_SELF) != (after == LATE_SELF):
@@ -245,12 +257,14 @@ def explain(r: Resolved) -> dict:
         return {"applies": False, "title": REASONS[r.reason("heat")], "lines": [],
                 "caps": [REASONS[r.reason("heat")]]}
     title = f"Heat {r.heat} (world {r.world}, hers {r.offset:+d}"
+    if any(c == "own_dial" for _, c in r.reasons):
+        title += " from her own dial"
     if r.groups:
         title += f", groups {r.groups:+d}"
     title += ")"
     lines = [f"Wording: {_WORDING[r.tier]}.",
-             f"Voice notes: {r.voice} at most." if r.voice != "none"
-             else "Voice notes: plain lines only.",
+             "Voice notes: any line may be spoken." if r.speaks_explicit
+             else "Voice notes: a plainly explicit line is typed, not spoken.",
              f"Photos: {PHOTO_TIERS[r.photo]} ({_PHOTOS[r.photo]})."]
     caps = [REASONS[code] for _, code in r.reasons if code in REASONS and code != "voice"]
     return {"applies": True, "title": title, "lines": lines, "caps": list(dict.fromkeys(caps))}

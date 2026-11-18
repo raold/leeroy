@@ -1170,7 +1170,7 @@ class TalkEngine(EmoteReactions):
         hg = self.human.guid
         chance = flirt_chance(p, self._effects(speaker).candour)
         if self.heat is not None and chance > 0:  # [heat]: how often she starts it
-            chance *= self.heat.resolve(p, channel=channel, lead=False).starts
+            chance *= self.heat.starts(p)
         if hg and chance > 0 and self.world.human_online and not self.world.human_idle(
                 now, HUMAN_ACTIVE_S) and self.rng.random() < chance:
             return Turn(kind=TurnKind.FLIRT, speaker=speaker, channel=channel, addressee=hg,

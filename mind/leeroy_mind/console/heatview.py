@@ -19,6 +19,9 @@ from leeroy_mind.tuning.state import TABLES, Tuning
 from .feed import human_guid
 from .tuneview import _cast, _have, _personas
 
+UNSET_NOTE = ("Heat is on but not set: the romance dial ({dial}) and each woman's own dial are in "
+              "force exactly as before. Set a value and heat takes over; a woman's own dial then "
+              "counts as her offset on it (her dial minus 9).")
 OFF_NOTE = ("Heat is off ([heat] enabled = false in mind.toml): the romance dial is in force, "
             "exactly as before. Turn it on and restart the mind; heat 9 is today's behaviour.")
 
@@ -33,7 +36,8 @@ def heat_view(conn, *, config: HeatConfig, data_dir: Path, romance_file: int | N
            "note": "" if config.enabled else OFF_NOTE, "lo": HEAT_LO, "hi": HEAT_HI,
            "offset_lo": OFFSET_LO, "offset_hi": OFFSET_HI, "today": TODAY, "when": HEAT_WHEN,
            "moves": HEAT_MOVES, "rows": [H.explain_row(h) for h in range(HEAT_LO, HEAT_HI + 1)],
-           "world": None, "set": False, "follows": None, "changes": [], "groups": [],
+           "world": None, "set": False, "follows": None, "suggest": None, "changes": [],
+           "groups": [],
            "members": [], "sessions": {"all": None, "members": {}}, "photos": None,
            "overlays": overlays.listing(data_dir)}
     if any(t not in have for t in TABLES):
@@ -44,10 +48,18 @@ def heat_view(conn, *, config: HeatConfig, data_dir: Path, romance_file: int | N
     if t.heat_world is None and dial is None:
         return out
     world, legacy = world_of(t, dial if dial is not None else TODAY)
-    out.update(world=world, set=t.heat_world is not None, follows=legacy,
+    out["sessions"] = session.read(conn, now)
+    if t.heat_world is None:
+        # not set: heat governs nobody (heat.live.HeatLive.reaches). The romance dial, each
+        # woman's own dial and every rate are in force exactly as before; the page only offers
+        # the value that dial would stand for as the slider's starting point.
+        out.update(follows=legacy, suggest=world)
+        if config.enabled:
+            out["note"] = UNSET_NOTE.format(dial=legacy)
+        return out
+    out.update(world=world, set=True, follows=None, suggest=world,
                changes=[H.what_changes(world, h) for h in range(HEAT_LO, HEAT_HI + 1)],
-               photos=photos.listing(ROWS[world].photo),
-               sessions=session.read(conn, now))
+               photos=photos.listing(ROWS[world].photo))
     if "cast_member" not in have or "persona_core" not in have:
         return out
     human = human_guid(conn) or t.human

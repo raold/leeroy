@@ -28,7 +28,8 @@ export function heatPanel(box, h, live, why, ask) {
   const can = live;
   const row = el("div", "dial"), ctl = el("div", "ctl");
   row.appendChild(el("div", "nm", "heat"));
-  const start = h.world === null || h.world === undefined ? Number(h.today) : Number(h.world);
+  const pick = h.set ? h.world : h.suggest;
+  const start = pick === null || pick === undefined ? Number(h.today) : Number(pick);
   const [range, shown] = slider(h.lo, h.hi, start, "World heat", false);
   ctl.appendChild(range); ctl.appendChild(shown);
   const means = el("p", "why", rowText(h, start)), changes = el("p", "why", "");
@@ -66,7 +67,15 @@ export function heatCard(box, h, guid, name, live, why, ask) {
   h = obj(h);
   if (!h.enabled) { return; }
   const m = memberHeat(h, guid);
-  if (!m) { return; }
+  if (!m) {
+    if (h.set === false && h.follows !== null && h.follows !== undefined) {
+      const wait = el("section", "heat");
+      wait.appendChild(el("h4", "", "Heat"));
+      wait.appendChild(el("p", "muted", "Heat is not set: her romance dial is in force exactly as before."));
+      box.appendChild(wait);
+    }
+    return;
+  }
   const section = el("section", "heat");
   section.appendChild(el("h4", "", "Heat"));
   section.appendChild(el("p", "lead", m.title));
@@ -82,7 +91,7 @@ export function heatCard(box, h, guid, name, live, why, ask) {
   button(ctl, "Set", live, why, () => ask({ action: "set", scope: "member", target, dial: "heat", value: Number(range.value), previewed: false }, name + " heat " + range.value));
   button(ctl, "Clear", live && m.pinned !== null, why, () => ask({ action: "set", scope: "member", target, dial: "heat", value: null, previewed: false }, name + " heat: cleared"));
   section.appendChild(ctl);
-  if (m.pinned === null && m.ownDial !== null) { section.appendChild(el("p", "muted", "She keeps the dial you set for her alone (" + m.ownDial + ") until you set an offset here.")); }
+  if (m.pinned === null && m.ownDial !== null) { section.appendChild(el("p", "muted", "Her own dial (" + m.ownDial + ") counts as her offset on the world value (her dial minus 9) until you set an offset here.")); }
   const acts = el("div", "acts");
   Object.keys(SESSIONS).forEach(code => button(acts, SESSIONS[code], live && (code !== "clear" || !!m.session), why,
     () => ask(sessionArgs(code, guid), name + " heat " + code)));

@@ -1718,8 +1718,9 @@ class Pipeline:
 
     def _hr(self, turn: Turn, meta: TurnMeta, p: Persona, *, dial: int | None = None,
             words: str | None = None):
-        """[heat]: her heat.Resolved for this turn (None with heat off: every reader then takes
-        the path without the dial). Resolved once a turn and kept on its meta. `dial`: a
+        """[heat]: her heat.Resolved for this turn (None with heat off, and while no world heat
+        is set and no session override reaches her: every reader then takes the path without
+        the dial, bit for bit). Resolved once a turn and kept on its meta. `dial`: a
         preview's candidate romance dial; `words`: his line the turn answers, which on a live
         private turn to him counts toward her lead when it turns things up."""
         live = self.heat
@@ -1734,7 +1735,7 @@ class Pipeline:
             words = words or self._his_line(turn, meta)
             if words:
                 live.heard(p.guid, words, now)
-        meta.heat = live.resolve(
+        meta.heat = live.turn(
             p, channel=turn.channel, late=day_phase(self.clock.local()) in _LATE,
             tuning=meta.heat_tuning, lead=not preview, now=now,
             dial=dial if preview else None)
@@ -4538,11 +4539,11 @@ class Pipeline:
 
     def _heat_public(self, turn: Turn, meta: TurnMeta, text: str) -> bool:
         """[heat] public_cap: a line of hers to him on a channel other people read holds a
-        plainly explicit word (heat.guard). Never with the cap off, on a private channel, or
-        on a turn heat does not reach."""
+        plainly explicit word (heat.guard). Never with the cap off, on a private channel, on a
+        turn that is not aimed at him, or on a turn heat does not reach."""
         live, hr = self.heat, meta.heat
         if (live is None or not live.config.public_cap or hr is None or not hr.applies
-                or is_private(turn.channel)):
+                or is_private(turn.channel) or not self._aimed_at_him(turn)):
             return False
         from leeroy_mind.heat.guard import public_hit
         return public_hit(text, self.data_dir)

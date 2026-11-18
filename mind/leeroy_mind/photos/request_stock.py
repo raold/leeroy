@@ -67,9 +67,13 @@ def _safe_snap(app, request, photo, *, now, member):
             if names_in(photo.scene, request_names(app, request.guid)):
                 return False
         from leeroy_mind.heat import live as heat_live
+        # [heat]: within her photo tier now. A gallery copy carries the tier of the photo it
+        # copied (its pose and the kind it was rendered with); any other by its stored scene.
+        kept = heat_live.stored_tier(app.store, photo.id)
+        within = (heat_live.sends(p, photo.scene) if kept is None
+                  else heat_live.sends_tier(p, kept))
         return (scene.audience == request.audience and scene_renderable(p, scene) is None
-                and (request.audience != 'anyone' or scene.style == PLAIN)
-                and heat_live.sends(p, photo.scene))  # [heat]: within her photo tier now
+                and (request.audience != 'anyone' or scene.style == PLAIN) and within)
     except (KeyError, ValueError, TypeError):
         return False
 
@@ -161,6 +165,14 @@ def _varied_look(conn, guid, set_no, idx):
     return None if looks is None else looks[idx]
 
 
+def _snap_tier(app, photo) -> int:
+    """A stored photo's own tier: its receipt when it is a copy, else its scene's."""
+    from leeroy_mind.heat import live as heat_live
+    from leeroy_mind.heat import photos as heat_photos
+    kept = heat_live.stored_tier(app.store, photo.id)
+    return heat_photos.scene_tier(photo.scene) if kept is None else kept
+
+
 def _candidates(app, request, *, now, member):
     for photo in snaps.ready_for(app.store, request.guid, now=now, phase=None):
         if not _safe_snap(app, request, photo, now=now, member=member):
@@ -168,7 +180,7 @@ def _candidates(app, request, *, now, member):
         images = _images(app, photo)
         if images is not None:
             yield (f'snap:{photo.id}', *images, photo.scene, photo.seed, photo.tries,
-                   photo.nsfw, photo.prompt)
+                   photo.nsfw, photo.prompt, _snap_tier(app, photo))
     p, cur = member
     with app.store.transaction():
         # A set rendered from an older persona than her cover's set may show looks she no longer has.
@@ -197,11 +209,19 @@ def _candidates(app, request, *, now, member):
         scene = _gallery_scene(p, request.audience, was_lust, look)
         if scene_renderable(p, scene_from(scene)) is not None:
             continue
+        # [heat]: the photo's own tier, from the prompt it was rendered with (a varied look's
+        # pose too), never her photo kind of today; a plain set is the plain rules' (P0)
         from leeroy_mind.heat import live as heat_live
-        if not heat_live.sends(p, scene, look):  # [heat]: a ready-made photo above her tier
+        from leeroy_mind.heat import photos as heat_photos
+        tier = 0
+        if was_lust:
+            tier = heat_photos.prompt_tier(row['prompt'])
+            if look is not None:
+                tier = max(tier, heat_photos.look_tier(look))
+        if not heat_live.sends_tier(p, tier):  # a ready-made photo above her tier
             continue
         yield (f"gallery:{request.guid}:{row['set_no']}:{row['idx']}", image, thumb,
-               scene, row['seed'], row['tries'], row['nsfw'], row['prompt'])
+               scene, row['seed'], row['tries'], row['nsfw'], row['prompt'], tier)
 
 
 def reserve_fallback(app, request, *, now=None):
@@ -221,7 +241,7 @@ def reserve_fallback(app, request, *, now=None):
     if member is None:
         return None
     sent_cache = {}
-    for identity, image, thumb, scene, seed, tries, nsfw, prompt in _candidates(
+    for identity, image, thumb, scene, seed, tries, nsfw, prompt, tier in _candidates(
             app, request, now=now, member=member):
         if _sent(app, request, identity=identity, image=image, now=now, cache=sent_cache):
             continue
@@ -235,6 +255,8 @@ def reserve_fallback(app, request, *, now=None):
             if sid is None:
                 return None
             records.bind_snap(app.store, request.message, sid, kind='fallback')
+            from leeroy_mind.heat import live as heat_live
+            heat_live.remember_tier(app.store, sid, tier)  # the copy keeps its photo's tier
             records.remember_image(app.store, sid, identity=identity,
                                    digest=hashlib.sha256(image).hexdigest())
         out = files.snap(app.data_dir, request.guid, sid)

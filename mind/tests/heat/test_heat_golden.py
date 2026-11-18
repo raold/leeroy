@@ -1,6 +1,7 @@
-"""Heat 9 is today (owner's ruling 1): with [heat] on and nothing moved, every prompt, line and
-weight is byte-identical to the goldens recorded without it; and at every legacy dial the
-romance text under a derived heat is the text at that dial.
+"""Heat 9 is today (owner's ruling 1): with [heat] on and unset, and with the world heat set to
+9, every prompt, line and weight of the tuning scenario is byte-identical to the goldens recorded
+without it; and a set heat's wording is the romance text at its tier's dial. (On and unset over
+every dial, stance, stage, channel and own dial: test_heat_neutral.py.)
 
 With [heat] off the goldens are tests/tuning's own, untouched (test_tuning_invariant.py)."""
 import itertools
@@ -82,24 +83,27 @@ def _overlays(data_dir: Path, *, explicit: bool) -> None:
 
 
 @pytest.mark.parametrize("explicit", (True, False))
-def test_at_every_legacy_dial_the_text_under_heat_is_the_text_at_that_dial(tmp_path, explicit):
-    """For each stance, stage, channel and own dial: romance_instruction, the whisper tail and
-    the explicit flags with `hr` (heat derived from the dial, his lines having led) equal the
-    ones without it, byte for byte. Heat 9 (dial 9) is one row of it."""
+def test_a_set_heats_wording_is_the_romance_text_at_its_tiers_dial(tmp_path, explicit):
+    """Once heat is set, for each stance, stage and channel: romance_instruction, the whisper
+    tail and the explicit flags with `hr` (the heat that stands for dials 1-9, his lines having
+    led) equal the ones at that dial, byte for byte; heat 9 (dial 9) is one row of it. Heat 10
+    is its own setting (bold wording for every lust woman), and a woman's own dial is an offset
+    on a set heat: both are test_heat_resolve's. Heat on and NOT set is test_heat_neutral's:
+    there nothing at all is read from heat."""
     _overlays(tmp_path, explicit=explicit)
     checked = 0
     for stance, stage, own in itertools.product(("fond", "drawn", "lust"), ROMANCE_STAGES,
-                                                 (None, 4, 10)):
+                                                 (None,)):
         p = make_persona(102, "Belra", player_gender="female", stance=stance, dial=own)
         rel = _rel(stage)
-        for dial, channel in itertools.product(range(1, 11), CHANNELS):
+        for dial, channel in itertools.product(range(1, 10), CHANNELS):
             hr = H.resolve(DIAL_TO_HEAT[dial], H.Member(stance=stance, own_dial=own),
                            private=channel in ("whisper", "dm:102"), legacy=dial, his_heat=99)
             assert _texts(p, rel, dial=dial, channel=channel, data_dir=tmp_path, hr=hr) == \
                 _texts(p, rel, dial=dial, channel=channel, data_dir=tmp_path), (
                     stance, stage, own, dial, channel)
             checked += 1
-    assert checked == 3 * len(ROMANCE_STAGES) * 3 * 10 * len(CHANNELS)
+    assert checked == 3 * len(ROMANCE_STAGES) * 9 * len(CHANNELS)
 
 
 def test_heat_nine_needs_no_lead_so_it_is_today_from_his_first_line(tmp_path):

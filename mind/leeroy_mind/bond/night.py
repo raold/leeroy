@@ -19,7 +19,9 @@ async def stage_bond(ctx):
         conn = store.conn
         for guid in sorted(ctx.attitudes(fresh=True)):
             persona = ctx.persona(guid)
-            if not eligible(persona, ctx.settings.romance_dial):
+            from leeroy_mind.heat import live as heat_live  # [heat] set: her resolved heat's dial
+            dial = heat_live.member_dial(persona, ctx.settings.romance_dial)
+            if not eligible(persona, dial):
                 continue
             moments = []
             # First recorded shared boss kill, not just the first one in this night.
@@ -80,7 +82,7 @@ async def stage_bond(ctx):
                 "AND m.t_event>? AND m.t_event<=? AND m.valence>=.5 AND m.status='active' "
                 "AND m.source NOT IN ('hearsay','offscreen') AND m.evidence!='[]' LIMIT 1",
                 (guid,human,lo,hi)).fetchone()) and store.get_relationship(guid, human).affinity > 0:
-                mood, strength = 'playful', min(.6, ctx.settings.romance_dial/10)
+                mood, strength = 'playful', min(.6, dial/10)
             conn.execute('INSERT INTO bond_mood VALUES (?,?,?,?,?,?,?) ON CONFLICT(guid,human) DO UPDATE SET '
                 'night=excluded.night,mood=excluded.mood,strength=excluded.strength,updated=excluded.updated,expires=excluded.expires',
                 (guid, human, ctx.night, mood, strength, now, now+48*3600))

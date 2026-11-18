@@ -52,15 +52,40 @@ def test_the_world_plus_her_offset_and_her_groups_is_clamped():
     assert (r.heat, r.offset, r.groups) == (4, 0, -2)
 
 
-def test_a_dial_of_her_own_stands_until_an_offset_is_pinned():
-    """The two women with their own dial 10 show as +1 at world 9 and keep that dial."""
-    own = H.resolve(9, H.Member(stance="lust", own_dial=10), legacy=9)
+def test_a_dial_of_her_own_is_her_offset_until_one_is_pinned():
+    """Ruling 2b: her own dial counts as an offset on the world value (own - 9, within -5..+5),
+    so the world reaches her; a pinned offset (0 included) replaces it."""
+    own = H.resolve(9, H.Member(stance="lust", own_dial=10))
     assert (own.heat, own.offset, own.dial, own.every_turn) == (10, 1, 10, "all")
     assert own.reason("heat") == "own_dial"
+    assert H.explain(own)["title"] == "Heat 10 (world 9, hers +1 from her own dial)"
     pinned = H.resolve(9, H.Member(stance="lust", own_dial=10, offset=0), legacy=9)
     assert (pinned.heat, pinned.offset, pinned.dial, pinned.every_turn) == (9, 0, 9, "")
-    low = H.resolve(9, H.Member(stance="lust", own_dial=4), legacy=9, **LED)
-    assert (low.heat, low.tier, low.dial) == (4, "flirty", 4)
+    low = H.resolve(9, H.Member(stance="lust", own_dial=4), **LED)
+    assert (low.heat, low.offset, low.tier, low.dial) == (4, -5, "flirty", 4)
+    assert [H.own_offset(d) for d in range(1, 11)] == [-5, -5, -5, -5, -4, -3, -2, -1, 0, 1]
+    # world 0 quiets everyone, her too; world 5 has her one above it
+    quiet = H.resolve(0, H.Member(stance="lust", own_dial=10), **LED)
+    assert (quiet.heat, quiet.tier, quiet.every_turn) == (1, "warm", "")
+    assert H.resolve(0, H.Member(stance="lust", own_dial=9)).tier == "none"
+    assert H.resolve(5, H.Member(stance="lust", own_dial=10), **LED).heat == 6
+    same = H.resolve(9, H.Member(stance="lust", own_dial=9), legacy=None)
+    assert (same.heat, same.offset, same.reason("heat")) == (9, 0, "")
+
+
+def test_at_world_nine_a_woman_at_her_own_ten_starts_and_offers_as_before():
+    """Ruling 2a: the rates follow the heat the owner set, never her stored dial: no x1.3 on
+    her starts and no x1.2 on her photo offers at world 9; her wording and every-turn rule are
+    her dial's, as they always were."""
+    r = H.resolve(9, H.Member(stance="lust", own_dial=10, lust_style=True))
+    assert (r.starts, r.offers) == (1.0, 1.0)
+    assert (r.tier, r.dial, r.every_turn, r.photo) == ("explicit", 10, "all", 4)
+    ten = H.resolve(10, H.Member(stance="lust", own_dial=10, lust_style=True))
+    assert (ten.starts, ten.offers) == (1.3, 1.2)  # the world at 10: his setting
+    pinned = H.resolve(9, H.Member(stance="lust", own_dial=10, offset=1, lust_style=True))
+    assert (pinned.starts, pinned.offers, pinned.every_turn) == (1.3, 1.2, "private")
+    grouped = H.resolve(9, H.Member(stance="lust", own_dial=10, groups=1))
+    assert (grouped.starts, grouped.every_turn) == (1.3, "all")  # a group he set; still "all"
 
 
 def test_the_legacy_dial_comes_back_when_heat_was_derived_from_it():
@@ -146,15 +171,10 @@ def test_public_cap_is_off_by_default_and_last_when_on():
 
 
 def test_the_voice_rule():
-    nine, ten, eight = H.resolve(9, LUST), H.resolve(10, LUST), H.resolve(8, LUST, **LED)
-    assert nine.speaks("frank") and nine.speaks("suggestive") and not nine.speaks("explicit")
-    assert ten.speaks("explicit")
-    assert eight.speaks("suggestive") and not eight.speaks("frank")
-    assert H.resolve(9, LUST, session="open").speaks("explicit")  # a no-limits evening
-    assert H.resolve(0, LUST).speaks(None) and not H.resolve(0, LUST).speaks("warm")
-    for heat in range(1, 8):  # as the text tier
-        r = H.resolve(heat, LUST, **LED)
-        assert r.voice == r.ceiling
+    """An explicit line may be spoken only at heat 10 or on a no-limits evening."""
+    assert [h for h in range(11) if H.resolve(h, LUST).speaks_explicit] == [10]
+    assert H.resolve(9, LUST, session="open").speaks_explicit
+    assert not H.resolve(10, LUST, session="clean").speaks_explicit
 
 
 def test_explain_uses_the_table_and_names_no_file_text():

@@ -12,7 +12,7 @@ from engine_rig import OVERLAY, make_rig, save_member
 from heat.rig import attach
 from leeroy_mind.heat import session
 from leeroy_mind.heat.live import ACK
-from leeroy_mind.heat.session import ALL, IDLE_S, KEY, SessionBook, parse
+from leeroy_mind.heat.session import ALL, GAME_S, IDLE_S, KEY, SessionBook, parse
 from leeroy_mind.talk.romance import BUILTIN_ROMANCE
 
 
@@ -60,12 +60,40 @@ def test_everyones_and_hers_together_clean_wins(store, clock):
     assert book.clear(everything=True) == 2 and book.view() == {"all": None, "members": {}}
 
 
-def test_said_in_game_it_ends_at_his_logout_and_not_by_time(store, clock):
+def test_said_in_game_it_ends_at_his_logout(store, clock):
     book = SessionBook(store, clock)
     book.set(104, "open", medium="game")
-    asyncio.run(clock.advance(3 * IDLE_S, 3600))
+    asyncio.run(clock.advance(GAME_S - 600, 600))
+    book.touch(104)  # his lines do not extend one said in game
     assert book.mode(104) == "open"
     assert book.end_game() == 1 and book.mode(104) is None
+
+
+def test_said_in_game_it_ends_six_hours_after_it_was_set_whatever_happens(store, clock):
+    """The mind stopped while he played and started with the worldserver down: no logout and no
+    hello ever comes, and the override still ends (the console reads the same clock)."""
+    SessionBook(store, clock).set(104, "open", medium="game")
+    SessionBook(store, clock).set(None, "clean", medium="game")
+    asyncio.run(clock.advance(GAME_S - 60, 600))
+    restarted = SessionBook(store, clock)  # a new mind: no session, no hello
+    assert restarted.mode(104) == "clean" and restarted.mode(102) == "clean"
+    assert session.read(store.conn, clock.now())["all"] == {"mode": "clean", "ends": "logout"}
+    asyncio.run(clock.advance(120, 60))
+    assert session.read(store.conn, clock.now()) == {"all": None, "members": {}}
+    assert restarted.mode(104) is None and restarted.mode(102) is None
+    assert store.get_meta(KEY.format(guid=104)) is None and store.get_meta(ALL) is None
+
+
+def test_the_idle_clock_is_stored_so_the_console_and_a_restart_agree(store, clock):
+    book = SessionBook(store, clock)
+    book.set(104, "clean", medium="discord")
+    asyncio.run(clock.advance(IDLE_S - 600, 600))
+    book.touch(104)
+    asyncio.run(clock.advance(1200, 600))  # past six hours since it was set, not since his line
+    if clock.now() < json.loads(store.get_meta(KEY.format(guid=104)))["until"]:
+        assert session.read(store.conn, clock.now())["members"] == {
+            "104": {"mode": "clean", "ends": "morning"}}
+        assert SessionBook(store, clock).mode(104) == "clean"
 
 
 def test_said_on_discord_it_ends_after_six_idle_hours_or_at_six_in_the_morning(store, clock):

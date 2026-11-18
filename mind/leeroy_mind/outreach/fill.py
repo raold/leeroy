@@ -58,6 +58,10 @@ def fill_member(store, guid, *, now, local, human, persona, romance_dial=5, iden
                 and persona.romance.stance in ("drawn", "lust") and forward(persona) > 0
                 and quiet_pair(store, guid, human, now=now)):
             dial = persona.romance.dial if persona.romance.dial is not None else romance_dial
-            weight = min(10, max(.1, romance_lift(dial) * forward(persona)))
+            from leeroy_mind.heat import live as heat_live  # [heat] set: her resolved heat's dial
+            ruled = heat_live.member_dial(persona, dial)
+            if ruled != dial and ruled <= 0:
+                return added  # her heat has no romance wording at all: nothing to miss aloud
+            weight = min(10, max(.1, romance_lift(ruled) * forward(persona)))
             put("miss_you", f"miss_you:{at.date()}", MISS_YOU_ABOUT, "pair", weight, now + DAY)
     return added

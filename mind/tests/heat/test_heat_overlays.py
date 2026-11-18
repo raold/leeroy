@@ -7,7 +7,7 @@ import random
 import pytest
 
 from conftest import HUMAN, make_persona, seed_test_cast
-from leeroy_mind.console.heatview import OFF_NOTE, heat_view
+from leeroy_mind.console.heatview import OFF_NOTE, UNSET_NOTE, heat_view
 from leeroy_mind.heat import overlays, photos
 from leeroy_mind.heat import explain_row, what_changes
 from leeroy_mind.heat.config import HeatConfig
@@ -139,9 +139,15 @@ def _sets(store, *sets):
 
 
 def test_the_console_view_is_built_from_the_codes_own_words(cast, data, clock):
-    view = heat_view(cast.conn, config=HeatConfig(enabled=True), data_dir=data, romance_file=9,
+    unset = heat_view(cast.conn, config=HeatConfig(enabled=True), data_dir=data, romance_file=10,
+                      now=clock.now())
+    assert (unset["enabled"], unset["world"], unset["set"], unset["follows"], unset["suggest"],
+            unset["members"], unset["changes"]) == (True, None, False, 10, 10, [], [])
+    assert unset["note"] == UNSET_NOTE.format(dial=10)
+    _sets(cast, ("world", "", 9))
+    view = heat_view(cast.conn, config=HeatConfig(enabled=True), data_dir=data, romance_file=10,
                      now=clock.now())
-    assert (view["enabled"], view["world"], view["set"], view["follows"]) == (True, 9, False, 9)
+    assert (view["enabled"], view["world"], view["set"], view["follows"]) == (True, 9, True, None)
     assert view["rows"] == [explain_row(h) for h in range(11)]
     assert view["changes"] == [what_changes(9, h) for h in range(11)]
     assert view["photos"] == photos.listing(4)

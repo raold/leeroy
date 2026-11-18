@@ -9,9 +9,9 @@ function inRange(h, value) {
 }
 export function worldText(h) {
   h = obj(h);
-  if (h.world === null || h.world === undefined) { return "Heat is not set, and mind.toml could not be read."; }
   if (h.set) { return "Heat " + h.world + ", set here."; }
-  return "Heat " + h.world + ": it follows the romance dial (" + h.follows + ") until you set it.";
+  if (h.follows === null || h.follows === undefined) { return "Heat is not set, and mind.toml could not be read."; }
+  return str(h.note) || "Heat is not set: the romance dial (" + h.follows + ") is in force exactly as before.";
 }
 export function rowText(h, value) {
   return inRange(h, value) ? str(arr(obj(h).rows)[value - Number(obj(h).lo)]) : "";

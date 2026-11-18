@@ -56,9 +56,37 @@ def sends(p, scene, look=None) -> bool:
     return (photos.look_tier(look) if look is not None else photos.scene_tier(scene)) <= tier
 
 
+TIER_KEY = "photos:heat-tier:{snap}"  # a copied photo's own tier, kept beside its row
+
+
+def sends_tier(p, tier) -> bool:
+    """sends() for a photo whose tier is already known (a gallery copy's receipt)."""
+    if _LIVE is None:
+        return True
+    from . import photos
+    return photos.clamp(tier) <= _LIVE.photo_tier(p)
+
+
+def stored_tier(store, snap_id: int):
+    """The tier recorded for a copied photo (remember_tier), or None when none was."""
+    raw = store.get_meta(TIER_KEY.format(snap=int(snap_id)))
+    return int(raw) if raw is not None and raw.isdigit() else None
+
+
+def remember_tier(store, snap_id: int, tier: int) -> None:
+    """Keep a copied photo's own tier (what it shows, read when it was copied), so the check at
+    sending judges the photo and not her photo kind of the day. Written with heat on or off."""
+    store.set_meta(TIER_KEY.format(snap=int(snap_id)), str(int(tier)))
+
+
 def offers_of(p) -> float:
     """Heat's multiplier on the chance a turn to him offers a `him` photo; 1.0 with heat off."""
     return 1.0 if _LIVE is None else _LIVE.offers(p)
+
+
+def member_dial(p, legacy: int) -> int:
+    """HeatLive.member_dial; `legacy` itself with heat off."""
+    return legacy if _LIVE is None else _LIVE.member_dial(p, legacy)
 
 
 def starts_of():
@@ -137,11 +165,31 @@ class HeatLive:
         file_cfg = getattr(self.app, "file_cfg", None) or self.app.cfg
         return t.world.get("romance", file_cfg.romance.dial)
 
-    def _cast_member(self, guid: int):
-        t = self.tuning
+    def _cast_member(self, guid: int, tuning=None):
+        t = self.tuning if tuning is None else tuning  # a preview's candidate has its own groups
         if not t.heat_groups or not t.needs_cast:
             return None
         return self.app.store.cast().get(guid)
+
+    def reaches(self, p, *, tuning=None, now: float | None = None) -> bool:
+        """Whether heat governs `p` now. Until the owner sets a world heat it governs nobody:
+        the romance dial, each woman's own dial and every rate keep their exact effect, as with
+        the switch off (stored offsets wait for a world value). The one exception is his own
+        sentence or button for the evening (the session override), which reaches the member it
+        was said to, on a world value derived from the romance dial."""
+        if p is None:
+            return False
+        t = self.tuning if tuning is None else tuning
+        if t.heat_world is not None:
+            return True
+        return self.sessions.mode(p.guid, self.app.clock.now() if now is None else now) is not None
+
+    def turn(self, p, **kw) -> Resolved | None:
+        """resolve() for a reader of live behaviour: None where heat does not govern `p`
+        (reaches), so the reader takes the path it took before the dial."""
+        if not self.reaches(p, tuning=kw.get("tuning"), now=kw.get("now")):
+            return None
+        return self.resolve(p, **kw)
 
     def resolve(self, p, *, channel: str = "whisper", late: bool = False, tuning=None,
                 lead: bool = True, now: float | None = None, dial: int | None = None) -> Resolved:
@@ -154,27 +202,37 @@ class HeatLive:
             self._file_dial() if dial is None else dial, self.config,
             channel=channel, session=self.sessions.mode(p.guid, now), late=late,
             his_heat=self.led(p.guid, now) if lead else 99,
-            cast_member=self._cast_member(p.guid))
+            cast_member=self._cast_member(p.guid, tuning))
 
     def photo_tier(self, p) -> int:
-        if p is None:
-            return P4
-        return self.resolve(p, lead=False).photo
+        """Her photo tier; P4 (the lists as they are) where heat does not govern her."""
+        r = self.turn(p, lead=False)
+        return P4 if r is None else r.photo
 
     def starts(self, p) -> float:
         """Her multiplier on the romantic share of the whisper and opener clocks."""
-        return self.resolve(p, lead=False).starts
+        r = self.turn(p, lead=False)
+        return 1.0 if r is None else r.starts
 
     def never_starts(self, p) -> bool:
         """Heat says she never starts it (heat 0): her own starts are casual."""
-        if p is None:
-            return False
-        r = self.resolve(p, lead=False)
-        return r.applies and r.starts <= 0
+        r = self.turn(p, lead=False)
+        return r is not None and r.applies and r.starts <= 0
 
     def offers(self, p) -> float:
         """Her multiplier on the chance a turn to him offers a `him` photo."""
-        return 1.0 if p is None else self.resolve(p, lead=False).offers
+        r = self.turn(p, lead=False)
+        return 1.0 if r is None else r.offers
+
+    def member_dial(self, p, legacy: int) -> int:
+        """The romance dial the older readers of a member take (learn's coach and apply, the
+        outreach fill, the bond night and invitations): `legacy`, what they read before the
+        dial, where heat does not govern her; else the dial her heat stands for, and 0 at a
+        heat with no romance wording at all, so each of them leaves romance out."""
+        r = self.turn(p, lead=False)
+        if r is None or not r.applies:
+            return legacy
+        return 0 if r.ceiling == "none" else r.dial
 
     # his lead ----------------------------------------------------------------------------------
 

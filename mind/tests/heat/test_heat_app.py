@@ -5,6 +5,7 @@ import pytest
 from conftest import run
 from leeroy_mind.heat import live as heat_live
 from leeroy_mind.heat.table import P2
+from leeroy_mind.tuning.preview import UNSET_BEFORE, UNSET_CARD, UNSET_OFFSET
 from leeroy_mind.tuning.service import HEAT_OFF
 from tuning.test_tuning_preview import TOML, _app, _written
 
@@ -56,7 +57,13 @@ def test_on_and_unset_the_world_follows_the_romance_dial(tmp_path):
         assert status["enabled"] and not status["public_cap"] and not status["set"]
         assert app.cfg.romance.dial == dial  # nothing derived until heat is set
         p = app.personas.get(102)
-        assert app.heat.resolve(p).dial == dial
+        assert app.heat.resolve(p).dial == dial  # what it would be, for the page
+        # ...but it governs nobody until a world heat is set: every reader's old path
+        assert app.heat.turn(p) is None and not app.heat.reaches(p)
+        assert (app.heat.starts(p), app.heat.offers(p), app.heat.photo_tier(p),
+                app.heat.never_starts(p), app.heat.member_dial(p, 7)) == (1.0, 1.0, 4, False, 7)
+        assert _set(app, "member", "102", -5)["ok"]  # a stored offset waits for a world value
+        assert app.heat.turn(app.personas.get(102)) is None
     finally:
         run(app.stop())
     assert heat_live.current() is None  # stopping detaches it
@@ -123,18 +130,24 @@ def test_the_preview_explains_in_the_codes_own_words_and_writes_nothing(tmp_path
         out = _tune(app, action="preview", scope="world", target="", dial="heat", value=6)
         assert out["ok"] and out["dial"] == "heat"
         heat = out["heat"]
-        assert (heat["before"], heat["after"]) == (9, 6)
-        assert heat["explain"] == H.explain_row(6) and heat["changes"] == H.what_changes(9, 6)
+        assert (heat["before"], heat["after"]) == (None, 6)  # not set: the dial is in force
+        assert heat["explain"] == H.explain_row(6)
+        assert heat["changes"] == UNSET_BEFORE + H.what_changes(9, 6)
         assert "string bikini" not in heat["photos"]["outfits"]
         assert "bodycon mini dress" in heat["photos"]["outfits"]
         member = out["members"][0]
         assert member["guid"] == 102 and member["after"]["title"].startswith("Heat 6 (world 6")
+        assert member["before"]["title"] == UNSET_CARD
         assert out["kind"] == "lines"  # the live model is resident in this rig: a line each way
         line = out["subjects"][0]
         assert line["before"]["text"] and line["after"]["text"]
         assert _written(app) == before
+        waits = _tune(app, action="preview", scope="member", target="102", dial="heat", value=-4)
+        assert waits["note"] == UNSET_OFFSET and waits["members"][0]["after"]["title"] == UNSET_CARD
+        assert _set(app, "world", "", 9)["ok"]
         one = _tune(app, action="preview", scope="member", target="102", dial="heat", value=-4)
         assert one["members"][0]["after"]["title"] == "Heat 5 (world 9, hers -4)"
+        assert one["members"][0]["before"]["title"] == "Heat 9 (world 9, hers +0)"
     finally:
         run(app.stop())
 

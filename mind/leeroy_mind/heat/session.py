@@ -18,6 +18,7 @@ KEY = "heat:session:{guid}"
 ALL = "heat:session:all"
 PREFIX = "heat:session:"
 IDLE_S = 6 * 3600.0
+GAME_S = 6 * 3600.0  # the longest an override said in game lasts
 MORNING_HOUR = 6
 MODES = ("clean", "open")
 MEDIA = ("game", "discord")
@@ -49,10 +50,12 @@ def _morning(local, now: float) -> float:
 
 
 def _expired(rec: dict, now: float) -> bool:
-    """A Discord-medium override past its idle limit or its morning. One said in game ends only
-    at his logout (SessionBook.end_game)."""
-    return rec["medium"] == "discord" and (
-        now - rec["last"] >= IDLE_S or (rec.get("until") is not None and now >= rec["until"]))
+    """A Discord-medium override past its idle limit or its morning. One said in game ends at
+    his logout (SessionBook.end_game), and GAME_S after it was set whatever happens: a mind
+    stopped while he played and started with the worldserver down never hears that logout."""
+    if rec["medium"] == "game":
+        return now - rec["at"] >= GAME_S
+    return now - rec["last"] >= IDLE_S or (rec.get("until") is not None and now >= rec["until"])
 
 
 def _valid(value: str) -> dict | None:
@@ -165,8 +168,9 @@ class SessionBook:
         now = self.clock.now() if now is None else now
         for key in (self._key(guid), ALL):
             rec = self._live(key, now)
-            if rec is not None:
-                rec["last"] = now
+            if rec is not None and rec["medium"] == "discord":
+                rec["last"] = now  # stored, so the console and a restart read the same clock
+                self.store.set_meta(key, json.dumps(rec, sort_keys=True))
 
     def take_ack(self, guid: int) -> str | None:
         """The mode she has yet to acknowledge, once: "clean" or "open", then None."""

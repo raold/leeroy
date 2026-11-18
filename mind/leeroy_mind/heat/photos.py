@@ -173,6 +173,25 @@ def scene_tier(scene) -> int:
         return P4
 
 
+_VIEW_WORDS = (("from behind", P3), ("three-quarter rear view", P2))
+
+
+def prompt_tier(prompt) -> int:
+    """The lowest tier a rendered lust photo fits, read from the prompt it was rendered with
+    (a gallery candidate keeps its own: what it shows, whatever her photo kind is now). The
+    highest tier among the list outfits, settings and poses the prompt names; P4 when it names
+    no list outfit or no list setting (fail closed: sent only where everything is)."""
+    if not isinstance(prompt, str) or not prompt:
+        return P4
+    text = " ".join(prompt.lower().split())
+    wear = [OUTFIT_TIER[choice] for phrase, choice in _phrases().items() if phrase in text]
+    places = [tier for place, tier in SETTING_TIER.items() if place.lower() in text]
+    if not wear or not places:
+        return P4
+    poses = [tier for words, tier in _VIEW_WORDS if words in text]
+    return max(wear + places + poses)
+
+
 def look_tier(look) -> int:
     """The lowest tier a varied look (selfies.varied.Look) fits."""
     try:

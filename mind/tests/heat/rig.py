@@ -11,8 +11,12 @@ ON = HeatConfig(enabled=True)
 CAPPED = HeatConfig(enabled=True, public_cap=True)
 
 
-def attach(engine, store, clock, data_dir, config: HeatConfig = ON):
-    """[heat] on for this engine, as MindApp attaches it; conftest's fixture detaches it."""
+def attach(engine, store, clock, data_dir, config: HeatConfig = ON, world: int | None = 9):
+    """[heat] on for this engine, as MindApp attaches it; conftest's fixture detaches it.
+    `world`: the world heat stored (9 unless a test says otherwise); None leaves heat unset,
+    where it governs nobody and everything is as before the dial."""
+    if world is not None:
+        set_values(store, engine, [("world", "", world)])
     app = SimpleNamespace(personas=engine.personas, store=store, clock=clock, cfg=engine.cfg,
                           file_cfg=engine.cfg, data_dir=data_dir, engine=engine,
                           human_guid=engine.human.guid)
@@ -27,7 +31,7 @@ def on(config: HeatConfig = ON, sets=()):
     def hook(r):
         from pathlib import Path
         set_values(r.store, r.engine, sets)
-        attach(r.engine, r.store, r.clock, Path(r.engine.data_dir), config)
+        attach(r.engine, r.store, r.clock, Path(r.engine.data_dir), config, world=None)
     return hook
 
 

@@ -262,8 +262,9 @@ def test_the_sender_filters_without_expiring_and_the_request_stock_too():
     assert "heat" not in fresh and "snaps.expire" in fresh
     offer = inspect.getsource(send.PhotoSender.offer)
     assert offer.count("heat_live.sends(") == 2 and "heat_live.offers_of(" in offer
-    assert "heat_live.sends(" in inspect.getsource(request_stock._safe_snap)
-    assert "heat_live.sends(" in inspect.getsource(request_stock._candidates)
+    safe = inspect.getsource(request_stock._safe_snap)
+    assert "heat_live.sends(" in safe and "heat_live.sends_tier(" in safe
+    assert "heat_live.sends_tier(" in inspect.getsource(request_stock._candidates)
     for module in (photos, heat_live):
         source = inspect.getsource(module)
         assert "nsfw" not in source.replace("NSFW gate", "") and "unlink" not in source

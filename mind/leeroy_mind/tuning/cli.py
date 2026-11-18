@@ -143,8 +143,9 @@ def _heat(conn, cfg, root: Path, args) -> int:
     if args.what == "status":
         print(f"[heat] enabled = {str(config.enabled).lower()}, public_cap = "
               f"{str(config.public_cap).lower()}")
-        print(f"  world heat {world} " + ("(set)" if legacy is None
-                                           else f"(follows the romance dial {legacy})"))
+        print(f"  world heat {world} (set)" if legacy is None else
+              f"  world heat not set: the romance dial ({legacy}) and each woman's own dial are "
+              "in force, exactly as before; stored offsets wait for a world value")
         names = _names(conn)
         for target, v in sorted(t.heat_groups.items()):
             g = t.groups.get(target)
@@ -174,6 +175,11 @@ def _heat(conn, cfg, root: Path, args) -> int:
     p = personas[args.guid][0]
     if args.heat is not None:
         t = t.with_value("world", "", "heat", max(0, min(10, args.heat)))
+    if t.heat_world is None and session.mode_in(
+            session.read(conn, SystemClock().now()), args.guid) is None:
+        print(f"{cast[args.guid].name} ({args.guid}): heat is not set, so the romance dial is in "
+              "force for them, exactly as before (try --heat N)")
+        return 0
     r = resolve_for(t.apply(p, cast.get(args.guid)), t, 9 if dial is None else dial, config,
                     session=session.mode_in(session.read(conn, SystemClock().now()), args.guid),
                     cast_member=cast.get(args.guid))

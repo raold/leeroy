@@ -300,6 +300,11 @@ async def _lines(app, dial: str, subjects, before, after, romance=(None, None),
             asyncio.ensure_future(arbiter.hand_over())
 
 
+UNSET_BEFORE = "Heat is not set yet: the romance dial is in force, as before. "
+UNSET_OFFSET = "Heat is not set yet, so this offset waits: it counts once a world heat is set."
+UNSET_CARD = "Heat not set: the romance dial is in force, as before"
+
+
 async def _heat_preview(app, pic, current, candidate, scope, target, out) -> dict:
     """Heat's preview: what the value means in words (heat.explain_row, the function the code
     reads), what changes, the photo lists the new value allows (text, no render), and one
@@ -312,19 +317,29 @@ async def _heat_preview(app, pic, current, candidate, scope, target, out) -> dic
     file_dial = live._file_dial()
     b, a = world_of(current, file_dial)[0], world_of(candidate, file_dial)[0]
     subjects = _subjects(app, pic, current, scope, target, HEAT)
+    unset = current.heat_world is None  # the romance dial is in force until a world heat is
     if scope == "world":
-        out["heat"] = {"before": b, "after": a, "explain": H.explain_row(a),
-                       "changes": H.what_changes(b, a),
+        out["heat"] = {"before": None if unset else b, "after": a, "explain": H.explain_row(a),
+                       "changes": (UNSET_BEFORE if unset else "") + H.what_changes(b, a),
                        "photos": heat_photos.listing(H.resolve(a, H.Member(
                            stance="lust", lust_style=True)).photo)}
-        out["world"] = [{"what": "heat", "before": b, "after": a, "unit": ""}]
+        out["world"] = [{"what": "heat", "before": None if unset else b, "after": a,
+                         "unit": ""}]
+    elif candidate.heat_world is None:
+        out["note"] = UNSET_OFFSET
     members = []
+
+    def card(tuning, p, member):
+        if tuning.heat_world is None:  # heat governs nobody yet (HeatLive.reaches)
+            return {"applies": True, "title": UNSET_CARD, "lines": [], "caps": []}, None
+        r = live.resolve(tuning.apply(p, member), tuning=tuning, lead=False)
+        return H.explain(r), r
     for g in subjects:
         p = pic.personas[g]
-        rb = live.resolve(current.apply(p, pic.cast.get(g)), tuning=current, lead=False)
-        ra = live.resolve(candidate.apply(p, pic.cast.get(g)), tuning=candidate, lead=False)
-        members.append({"guid": g, "name": p.character_name, "before": H.explain(rb),
-                        "after": H.explain(ra), "photos": heat_photos.listing(ra.photo)})
+        before, _ = card(current, p, pic.cast.get(g))
+        after, ra = card(candidate, p, pic.cast.get(g))
+        members.append({"guid": g, "name": p.character_name, "before": before, "after": after,
+                        "photos": heat_photos.listing(ra.photo) if ra is not None else None})
     out["members"] = members
     if not subjects:
         out["note"] = REFUSE["nobody"]
