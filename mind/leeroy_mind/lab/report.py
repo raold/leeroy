@@ -18,6 +18,18 @@ def _arm_status(conn, arm_id: str | None) -> str | None:
     return row[0] if row else None
 
 
+def _promote(r: dict) -> bool:
+    """Whether the run may promote, as night.py decides it: what its finish recorded, else its
+    plan's `promote`. A run whose plan says nothing either finished under code from before the
+    setting (which promoted) or will finish under this code, which only measures it."""
+    summary = r["summary"] or {}
+    if "promote" in summary:
+        return summary["promote"] is True
+    if "promote" in r["plan"]:
+        return r["plan"]["promote"] is True
+    return r["status"] != "running"
+
+
 def report(conn, *, night: str | None = None, runs: int = 7) -> dict:
     """The newest `runs` runs (or the runs of `night`): status, piece, budget used, each arm's
     numbers and each variant's outcome, change in rubric mean and the arm it became."""
@@ -50,7 +62,7 @@ def report(conn, *, night: str | None = None, runs: int = 7) -> dict:
                              "diff": v["diff"][:DIFF_CHARS]})
         out.append({"id": rid, "night": r["night"], "source": r["source"], "status": r["status"],
                     "grader": r["plan"].get("grader", "rubric"),
-                    "promote": bool(r["plan"].get("promote", True)),
+                    "promote": _promote(r),
                     "reason": r["reason"], "piece": r["piece"], "started": r["started"],
                     "finished": r["finished"], "spent": r["spent"],
                     "pairs": len(r["plan"].get("pairs", [])), "arms": arms, "variants": variants})

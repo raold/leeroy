@@ -89,8 +89,9 @@ Four stages after `turing` (after `forget` without it), so the runner swaps the 
    pairs of each arm (`turing/judge.py`'s own fixed prompt, names masked; the times are synthetic,
    his reading and her typing at 4 characters a second, since `--fast` skips them). Then
    `finish`: the comparison and the run's summary. A run keeps the grader and the `promote` it
-   was planned with (in its plan), so a resumed run is graded the way it began; a run from
-   before this is the rubric's and may promote.
+   was planned with (in its plan), so a resumed run is graded the way it began; a run planned
+   before this is the rubric's and, finished by this code, only measures (its plan does not say
+   it may promote; `lab report` and the panel say "measure only" for it).
 
 **Rule checks** (`lab/rules.py`, model-free, per answer): `silent`; `unanswered` (his line had an
 `ask` and her first sentence holds no yes/no, number or time, name, or the asked noun); `wordy`

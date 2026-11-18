@@ -15,7 +15,7 @@ from leeroy_mind.talk.beat import MARK
 
 WIN, LOSE = "Plainly", "Truly"
 SCRIPTS = {"flirt-3", "smalltalk-3", "meet-3", "pushback-3"}
-GOOD, PLAIN = "yes, tonight works for me", "ha maybe, depends on the day"
+GOOD, PLAIN = "yes, tonight works for me", "ha maybe, we will see"  # under six words: a repeat is no copy
 MEASURE = LIVE_TOML.replace('grader = "rubric"\npromote = true\n', 'grader = "tells"\n')
 PROMOTE = LIVE_TOML.replace('grader = "rubric"\n', 'grader = "tells"\n')
 DEFAULTS = LIVE_TOML.replace('grader = "rubric"\npromote = true\n', "")
@@ -210,3 +210,19 @@ def test_a_run_keeps_the_grader_it_began_with(tmp_path):
             ctx.store.close()
     (tmp_path / "other").mkdir()
     assert asyncio.run(go()) == []
+
+
+@pytest.mark.parametrize("plan,allowed", [({"promote": True}, True), ({"promote": False}, False),
+                                          ({}, False), ({"promote": 1}, False), ({"promote": "yes"}, False)])
+def test_a_run_promotes_only_when_its_plan_says_so(plan, allowed):
+    """A run planned before the setting existed (no `promote` in its plan) only measures."""
+    assert lab_night._may_promote({"plan": plan}) is allowed
+
+
+@pytest.mark.parametrize("status,plan,summary,shown", [
+    ("done", {}, {"promote": True}, True), ("done", {"promote": True}, {"promote": False}, False),
+    ("running", {"promote": True}, None, True), ("running", {"promote": False}, None, False),
+    ("running", {}, None, False),       # planned before the setting, finished by this code: measures
+    ("done", {}, {"arms": {}}, True)])  # finished before the setting existed: it could promote
+def test_the_report_says_measure_only_as_the_night_decides_it(status, plan, summary, shown):
+    assert report._promote({"status": status, "plan": plan, "summary": summary}) is shown

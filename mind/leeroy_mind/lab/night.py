@@ -26,7 +26,8 @@ start, after `turing` (or `forget` without it). Three stages so the runner swaps
   the run's summary. With the tells grader it waits for `scored`.
 
 The run keeps its grader and whether it may promote in its plan, so a resumed run is graded the
-way it began.
+way it began. A plan that does not say it may promote (a run planned by code from before the
+setting) only measures.
 
 The budget is hard: `[lab] minutes` over all three, kept in lab_run.spent across resumes. The
 battery may use up to BATTERY_SHARE of it, so grading keeps the rest; a pair is never begun past
@@ -118,6 +119,12 @@ def _wants(ctx, stage: str, source: str = "night") -> bool:
 def _grader(run) -> str:
     """The run's grader: its plan's (a run from before the plan carried one: the rubric)."""
     return run["plan"].get("grader", "rubric")
+
+
+def _may_promote(run) -> bool:
+    """Whether the run's winner may become an arm: its plan's `promote`. A run whose plan says
+    nothing (planned by code from before the setting and finished by this one) only measures."""
+    return run["plan"].get("promote") is True
 
 
 class LiveContext:
@@ -674,9 +681,9 @@ def make_grade(cfg, *, source: str = "night"):
         def finish(s):
             result = promote.promote(s.conn, run["id"], settings=learn_cfg, now=ctx.clock.now(),
                                      budget_cut=cut or short, key="score" if tells else "rubric",
-                                     allow=bool(run["plan"].get("promote", True)))
+                                     allow=_may_promote(run))
             summary = {"arms": result["summary"], "grader": _grader(run),
-                       "promote": bool(run["plan"].get("promote", True)),
+                       "promote": _may_promote(run),
                        "outcomes": {str(k): v for k, v in result["outcomes"].items()},
                        "deltas": {str(k): v for k, v in result["deltas"].items()},
                        "promoted": result["promoted"], "cut": bool(cut or short)}
@@ -692,7 +699,7 @@ def make_grade(cfg, *, source: str = "night"):
                 variants=len(result["outcomes"]), promoted=result["promoted"] or "-",
                 control=result["summary"].get("control", {}).get("score" if tells else "rubric"),
                 best_delta=max(deltas) if deltas else None, cut=int(cut or short),
-                grader=_grader(run), promote=int(bool(run["plan"].get("promote", True))))
+                grader=_grader(run), promote=int(_may_promote(run)))
     return stage_lab_grade
 
 
