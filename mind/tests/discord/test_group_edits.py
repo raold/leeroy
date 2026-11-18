@@ -12,6 +12,14 @@ from leeroy_mind.groups.config import GroupsConfig
 from leeroy_mind.groups.service import OWED
 
 
+@pytest.fixture(autouse=True)
+def _no_cap(monkeypatch):
+    """Her own time without the cap ([life] dm_wait_cap_s = 0; test_dm_wait_cap.py has the
+    cap's tests): an edit's urgency moves a due time the cap would otherwise hold."""
+    from leeroy_mind.life import config as life_config
+    monkeypatch.setattr(life_config, "dm_wait_cap", lambda: 0)
+
+
 def pending(store,mid):
     return json.loads(store.get_meta(OWED+str(mid)))
 

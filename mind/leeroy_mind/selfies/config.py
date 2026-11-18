@@ -119,7 +119,7 @@ def load_selfie_config(path: Path) -> SelfieCfg:
             log.warning("%s: unknown key selfies.%s", path, key)
             continue
         if not rule[0](v):
-            raise ConfigError(f"selfies.{key}: expected {rule[1]}, got {v!r}")
+            raise ConfigError(f"selfies.{key}: expected {rule[1]}")
         values[key] = float(v) if key in _FLOATS else Path(v) if key in _PATHS else v
     assert set(values) <= {f.name for f in fields(SelfieCfg)}
     if set(table) - _RULES.keys():

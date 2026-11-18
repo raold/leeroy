@@ -91,3 +91,17 @@ the judge caught by code with up to three of its short phrases (kept only from w
 on public channels), and the nights. The chart is a clone of the page's own empty
 `<svg>`, so scripts carry no namespace URL. Without the tables, or before the first
 night, it says **Not set up yet**.
+
+## Needs your decision
+
+The tab opens with one list of what waits for the owner: every proposed arm (Accept, Reject) and
+every member's proposed, unexpired lessons (Approve, Veto; the newest 50, the rest under Lessons by
+member). Its count is the Lab tab's badge (carried by the tab badges' one light read,
+`GET /api/ops/badge` -> `lab`, so it shows before the tab is opened) and a line of Tonight's
+"Waiting for you". Lab variants that became arms in the last 14 days are listed under it for a look,
+with Retire; they are in use already and are not counted. The folded panels say what they hold
+(arms and proposed arms per family, measured contexts per arm). `GET /api/lab` carries only the
+(arm, context) rows that were measured (a turn, a use, a guard check or a promotion; an arm at its
+prior has no row), the busiest 400, and reads with an 8 s budget, trying again while mind.db is
+only busy. "You rated N lines this week" under the freeze control counts the lines he gave a thumb
+in the last seven days; it is a number, never a prompt to rate.

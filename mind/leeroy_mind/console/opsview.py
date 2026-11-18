@@ -407,43 +407,11 @@ def feature_state(data, section):
     return "on" if value.get("enabled", False) else "off"
 
 
-SWITCHES = (
-    ('talk','aware','Awareness cards',''), ('guards','enabled','Guards',''),
-    ('claims','enabled','Claims',''), ('talk','realism','Typing realism',''),
-    ('talk','recall_diversity','Recall diversity',''),
-    ('signals','enabled','Signals',''), ('fingerprint','enabled','Typing fingerprint',''),
-    ('callbacks','enabled','Memory callbacks',''), ('learn','enabled','Rewards',''),
-    ('learn','bandit','Bandit credit','learn.enabled'), ('learn','coach','Talk coach','learn.enabled'),
-    ('learn','capture_preferences','Preference capture','learn.enabled'), ('banter','enabled','Banter',''),
-    ('learn','cycle','Weekly learning cycle','learn.enabled'),
-    ('server','enabled','24/7 server','nights only inside its quiet window'),
-    ('romance','activities','Romance activities','realm.enabled; native rebuild'),
-    ('romance','realism','Romance realism',''),
-    ('photos','enabled','Discord photos','restart the console too'), ('selfies','enabled','Selfies',''),
-    ('photos','send','Members send photos','selfies.enabled; selfies.snaps; server.enabled'),
-    ('photos','requests','Selfie requests','photos.send; selfies.enabled; selfies.snaps; server.enabled'),
-    ('photos','scene_from_words','Selfie scenes from his words','photos.requests'),
-    ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
-    ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
-    ('selfies','critic','Photo critic','selfies.enabled; critic_model pulled by the operator'),
-    ('selfies','param_bandit','Photo parameter bandit','selfies.critic'),
-    ('personas','auto_newcomers','Newcomer personas',''),
-    ('world','enabled','World personas','realm.enabled; Leeroy.World.Enable = 1'),
-    ('playstyle','enabled','Play styles','Leeroy.PlayStyle.Enable = 1'),
-    ('realm','enabled','The Realm','Leeroy.Realm.Enable = 1; realm/blocklist.txt'),
-    ('training','enabled','Training',''), ('decisions','enabled','Decisions','server.enabled'),
-    ('training','playbooks','Raid playbook checks','training.enabled'),
-    ('control','ops_actions','Ops actions','restart the console too'),
-    ('raidlead','enabled','Raid lead','Leeroy.RaidLead.Enable = 1; native rebuild'),
-    ('raidlead','briefs','Boss briefs','raidlead.enabled'),
-    ('raidplay','respond','Mechanic responder','training.playbooks; Leeroy.Mechanics.Enable = 1'),
-    ('drama','member_romance','Member romances',''), ('talk','texture','Typing texture',''),
-    ('bakeoff','capture','Bake-off capture (stores full prompts, 14 days)',''),
-    ('lab','enabled','Conversation lab','learn.bandit and learn.apply for its arms to reach live talk'))
+from .switches import SWITCHES, default as _switch_default, is_number as _switch_number
 
 
 def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:
-    from .switchvalidation import valid_table
+    from .switchvalidation import valid_field, valid_table
     path = data/'mind.toml'
     invalid, changed = False, None
     try:
@@ -455,23 +423,42 @@ def switches_view(data: Path, deadline, *, mind_started: float | None) -> dict:
     except (OSError,ValueError,UnicodeError,Budget):
         raw, tables, invalid = b'', {}, True
     rows, states, validity = [], {}, {}
-    for table,key,label,needs in SWITCHES:
+    for switch in SWITCHES:
+        table, key, label, needs = switch[:4]
         check(deadline)
-        if table == 'decisions' and not (Path(__file__).parents[1]/'decisions'/'config.py').is_file():
-            continue
         if table not in validity:
+            # True: the table is valid. False: it is not, so its loader turns it off. None: the
+            # console has no rule for this table and cannot say either way.
             try:
-                validity[table] = not invalid and valid_table(table,tables.get(table,{}),raw)
+                validity[table] = False if invalid else valid_table(table,tables.get(table,{}),raw)
             except (ValueError,TypeError,OverflowError):
                 validity[table] = False
-        state = ('invalid' if not validity[table] else 'on' if tables.get(table,{}).get(key,False) else 'off')
-        states[f'{table}.{key}'] = state
-        rows.append(dict(table=table,key=key,label=label,state=state,needs=needs,unmet=[],
-                         restart=changed is not None and mind_started is not None and changed>mind_started))
+        value = tables.get(table,{}).get(key,_switch_default(switch)) if type(tables.get(table,{})) is dict else None
+        row = dict(table=table,key=key,label=label,needs=needs,unmet=[],
+                   restart=changed is not None and mind_started is not None and changed>mind_started)
+        # A table whose loader falls back per field ([life]) is judged a row at a time
+        field = None if invalid else valid_field(table,tables.get(table,{}),key)
+        ok = validity[table] if field is None else field
+        if ok is None:
+            state = 'unknown'
+        elif not ok:
+            state = 'invalid'
+        elif _switch_number(switch):
+            # Numbers are shown, never text: an absent key reads as the loader's default.
+            state = 'number'
+            if key not in tables.get(table,{}):
+                from leeroy_mind.config import DEFAULT_TOML
+                value = tomllib.loads(DEFAULT_TOML).get(table,{}).get(key)
+            row['value'] = value if type(value) is int else None
+        else:
+            state = 'on' if value is True else 'off'
+        row['state'] = state
+        states[f'{table}.{key}'] = 'on' if state == 'number' and row['value'] else state
+        rows.append(row)
     blocklist = (data/'realm'/'blocklist.txt').is_file()
     for row in rows:
         row['unmet'] = [need for need in row['needs'].split('; ') if need in states and states[need]!='on']
-        if row['table']=='realm':
+        if (row['table'],row['key'])==('realm','enabled'):
             row['blocklist'] = 'present' if blocklist else 'missing'
     return panel(rows=rows)
 

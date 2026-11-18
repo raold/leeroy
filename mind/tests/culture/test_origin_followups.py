@@ -241,7 +241,7 @@ def test_wipe_hot_paths_remain_bounded_with_two_jokes_and_50000_chat_lines(app, 
 def test_wipe_recheck_rejects_overlarge_event_window(h, monkeypatch):
     wipes(h)
     origin = origins.event_origins(h.store,(h.T-200,h.T))[0]
-    monkeypatch.setattr(origins,'WIPE_RECHECK_ROWS',6)
+    monkeypatch.setattr(origins,'WIPE_RECHECK_ROWS',3)  # each wipe's own span holds 4 rows
     assert origins.origin_text(h.store,origin,{}) is None
 
 

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from leeroy_mind.discord.channels import is_private, is_officer_channel, is_discord, channel_id
 from leeroy_mind.memory.recall import scope_ok, whisper_ok, hidden_ok
-from leeroy_mind.memory.privacy import restricted_channels
+from leeroy_mind.memory.privacy import gated, restricted_channels
 from leeroy_mind.storage.rows import cosine, unpack_vec
 
 DAY = 86400
@@ -91,16 +91,34 @@ def _old_schema(exc):
     return str(exc).startswith(("no such table:", "no such column:"))
 
 
-def _play_floor(conn, now):
+DISCORD_ACTIVE = 3600  # his own Discord post within this counts as him being there
+
+
+def _discord_floor(conn, now):
+    """The quota window while he is in the guild Discord and not in the game: the last hour,
+    when he posted there himself within DISCORD_ACTIVE. His posts carry no game session."""
+    owner = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
+    if not owner or not str(owner[0]).isdecimal():
+        return None
+    recent = conn.execute("SELECT 1 FROM chat_line WHERE from_guid=? AND origin='human' AND ts>? AND ts<=? "
+        "AND (channel GLOB 'dm:*' OR channel GLOB 'discord:*' OR channel GLOB 'gdm:*') LIMIT 1",
+        (int(owner[0]), now - DISCORD_ACTIVE, now)).fetchone()
+    return now - 3600 if recent else None
+
+
+def _play_floor(conn, now, channel=None):
     """Start of the last hour of recorded owner play, spanning relogs/offline gaps.
 
-    No active session means no offering. Merge overlapping sessions defensively;
-    a truncated history is refused rather than granting an unproved fresh quota.
+    No active session means no offering, except on a Discord turn (`channel`) while he is
+    posting there (_discord_floor): until 2026-11-17 a callback needed a game session, and he
+    had talked to the guild only through Discord DMs for four days, so none was ever offered.
+    Merge overlapping sessions defensively; a truncated history is refused rather than
+    granting an unproved fresh quota.
     """
     rows = _rows(conn, "SELECT started,ended FROM session WHERE started<=? "
                  "ORDER BY started DESC LIMIT 1001", (now,))
     if not rows or not any(r["ended"] is None or r["ended"] >= now for r in rows):
-        return None
+        return _discord_floor(conn, now) if is_discord(channel) else None
     spans = []
     for r in reversed(rows):
         a, b = r["started"], min(now, r["ended"] if r["ended"] is not None else now)
@@ -159,6 +177,8 @@ class _Privacy:
         if rows:
             row = rows[0]
             if kind == "memory":
+                # the effective scope, never wider than its evidence (privacy.resolve)
+                row = gated(self.conn, row, self.__dict__.setdefault('_scopes', {}))
                 refs = _json(row["evidence"])
                 hidden = restricted_channels(self.conn, {0: refs}).get(0, ()) if isinstance(refs, list) else ()
                 ok = (row["t_created"] <= self.now and self.memory_scope(row)
@@ -218,7 +238,7 @@ def _vector(raw):
 
 
 def _pick(conn, guid, ctx, now):
-    floor = _play_floor(conn, now)
+    floor = _play_floor(conn, now, ctx.channel)
     if floor is None:
         return None
     usage = _rows(conn, "SELECT guid FROM callback_use WHERE ts>=? AND ts<=? LIMIT 4", (floor, now))

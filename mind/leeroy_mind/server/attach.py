@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import random
 import logging
 
+from leeroy_mind.storage.db import error_code
 from .config import ServerConfig, load_server_config
 from .lease import ServerLease
 from .state import refresh_play
@@ -41,14 +42,14 @@ def attach_server(app) -> ServerExt | None:
             try:
                 refresh_play(app, app.clock.now())
             except Exception as error:
-                logging.getLogger('leeroy_mind').warning('server_play_failed code=%s', type(error).__name__)
+                logging.getLogger('leeroy_mind').warning('server_play_failed code=%s', error_code(error))
             await app.clock.sleep(60)
     async def dm_tick():
         while True:
             try:
                 await dms.tick(app.clock.now())
             except Exception as error:
-                logging.getLogger('leeroy_mind').warning('server_dm_failed code=%s', type(error).__name__)
+                logging.getLogger('leeroy_mind').warning('server_dm_failed code=%s', error_code(error))
             await app.clock.sleep(30)
     async def seats_tick():
         from .seats import refresh_seats
@@ -56,7 +57,7 @@ def attach_server(app) -> ServerExt | None:
             try:
                 refresh_seats(app, app.clock.now())
             except Exception as error:
-                logging.getLogger('leeroy_mind').warning('server_seats_failed code=%s', type(error).__name__)
+                logging.getLogger('leeroy_mind').warning('server_seats_failed code=%s', error_code(error))
             await app.clock.sleep(300)
     app.register_background(seats_tick)
     app.register_background(play_tick)

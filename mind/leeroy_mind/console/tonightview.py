@@ -113,7 +113,10 @@ def _waiting(conn,data_dir,now):
             and {'guild_poll', 'guild_poll_vote'} <= views.tables(conn)):
         polls = conn.execute("SELECT count(*) FROM guild_poll p WHERE status='open' AND closes>? AND NOT EXISTS "
             "(SELECT 1 FROM guild_poll_vote v WHERE v.poll=p.id AND v.member=?)", (now, human)).fetchone()[0]
-    return result(dms=dms,letters=letters,selfies=len(queue['queue']),polls=polls)
+    # Lab proposals (arms and lessons) waiting for his decision; "not set up yet" before their tables
+    from .labview import pending_count
+    lab = pending_count(conn, now=now) if {'learn_arm', 'talk_lesson'} & views.tables(conn) else None
+    return result(dms=dms,letters=letters,selfies=len(queue['queue']),polls=polls,lab=lab)
 
 
 def _presence(status):

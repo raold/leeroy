@@ -1,3 +1,4 @@
+import { hourMinute } from "./dates.mjs";
 // GPU controls use the shared status stream; no browser timer or stored pause state.
 export function gpuStatus(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -6,7 +7,7 @@ export function gpuStatus(value) {
       !(value.refusal === null || typeof value.refusal === 'string')) { return null; }
   return value;
 }
-export function pausedWords(value, format = t => new Date(t * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})) {
+export function pausedWords(value, format = hourMinute) {
   return value?.paused ? 'GPU paused since ' + (Number.isFinite(value.since) ? format(value.since) : 'an earlier session') : '';
 }
 export function gpuModel(value, {busy=false, keyLost=false, format} = {}) {
@@ -18,7 +19,7 @@ export function gpuModel(value, {busy=false, keyLost=false, format} = {}) {
     busy ? 'Waiting for the GPU control to finish.' : !v ? 'GPU status has not answered yet.' :
     !v.enabled ? v.refusal || 'GPU controls are disabled in this read-only console.' :
     action === 'pause' ? v.refusal || '' : '';
-  const at = v && Number.isFinite(v.since) ? (format || (t => new Date(t*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})))(v.since) : 'an earlier session';
+  const at = v && Number.isFinite(v.since) ? (format || hourMinute)(v.since) : 'an earlier session';
   return {paused, retry, action,
     label:v?.mind_down ? 'Free GPU' : retry ? 'Retry Free GPU' : paused ? 'GPU free · Resume' : 'Free GPU',
     disabled:busy || keyLost || !v || !v.enabled, why,

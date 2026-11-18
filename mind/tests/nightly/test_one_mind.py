@@ -153,6 +153,7 @@ def test_officer_backfill_raises_game_officer_memories_and_never_widens(h):
     public = h.mem(102, "Raid at eight.", evidence=(f"chat:{guild}",))
     paired = h.mem(102, "Testy reassured me.", evidence=(f"chat:{pair}",), scope="private",
                    scope_with=1)
+    h.legacy(old_game, reflection)  # stored open, as before officer chat was restricted
     changed = backfill_officer_scopes(h.store.conn)
     rows = {m.id: (m.scope, m.scope_with) for m in h.store.get_memories(
         [old_game, old_disc, reflection, mixed, public, paired])}
@@ -180,6 +181,7 @@ def test_slang_learned_from_his_officer_lines_keeps_its_public_evidence(h):
     only = h.mem(103, "Zan says pog.", key="slang:pog", evidence=(f"chat:{off}",))
     reflection = h.mem(102, "Zan has his own way of talking.", evidence=(f"memory:{slang}",),
                        kind="reflection", source="reflection")
+    h.legacy(slang, only, reflection)  # stored open, as before officer chat was restricted
     backfill_officer_scopes(h.store.conn)
     rows = {m.id: m for m in h.store.get_memories([slang, only, reflection])}
     assert rows[slang].evidence == (f"chat:{pub}",) and rows[slang].scope == "open"
@@ -203,6 +205,7 @@ def test_a_raider_never_read_officer_chat_so_his_officer_lines_leave_her_evidenc
     officer = h.mem(102, "Zan made a bench call.", evidence=(f"chat:{off}", f"chat:{pub}"))
     h.store.set_meta("nightly:lexicon-sources:7", json.dumps([f"chat:{off}", f"chat:{pub}"]))
     h.store.set_meta("nightly:lexicon-sources:8", json.dumps([f"chat:{off}"]))
+    h.legacy(raider, officer)  # stored open, as before officer chat was restricted
     backfill_officer_scopes(h.store.conn)
     rows = {m.id: m for m in h.store.get_memories([raider, officer])}
     assert rows[raider].evidence == (f"chat:{pub}",) and rows[raider].scope == "open"

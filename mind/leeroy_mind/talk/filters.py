@@ -553,7 +553,13 @@ _SHARED_CLAIM = re.compile(
     r"|\bremember how (?:you|u|we|he|she|they)\b"
     rf"|\b(?:that|the) (?:time|night|day) (?:you|u|we|he|she|they) {_PAST}\b"
     r"|\blast time (?:you|u|we|he|she|they)\b"
-    r"|\b(?:than|like|as) (?:you|u|we) did\b")
+    r"|\b(?:than|like|as) (?:you|u|we) did\b"
+    r"|\b(?:you|u) (?:told|promised|texted|messaged|said to|mentioned to) me "
+    r"(?:last (?:week|night|month|time)|the other (?:day|night|week)|yesterday|ages ago"
+    r"|a (?:while|week|month|few days) (?:ago|back)|back then|once)\b"
+    r"|\b(?:like|as) (?:you|u) (?:said|told me|promised|mentioned) "
+    r"(?:last (?:week|night|month|time)|the other (?:day|night|week)|yesterday|ages ago"
+    r"|a (?:while|week|month|few days) (?:ago|back)|before)\b")
 # Her own life, not the guild's past: "my" anything, or her family with "we" or "she"
 # ("we've been married for 10 years", "my daughter's recital. she's been practicing").
 _MINE = frozenset({"my", "mine", "myself"})
@@ -812,6 +818,8 @@ def find_tells(text: str, *, recent_own: Sequence[str] = (), speaker: str = "",
     out += [Tell(f"phrase: {p}", True) for p, rx in _FATAL_RE.items() if rx.search(low)]
     if has_meta(text):
         out.append(Tell("meta", True))
+    if fake_attachment(text):
+        out.append(Tell("attachment", True))
     marks = len(_LIST_MARK.findall(text))
     if marks >= 2:
         out.append(Tell("list", True))
@@ -881,6 +889,26 @@ def repair(text: str, *, speaker: str = "", aliases: Sequence[str] = (),
 
 _QUIET = re.compile(r"(?:says? |stays? |keeps? |remains? )?"
                     r"(?:nothing|silent|silence|quiet|no (?:reply|response|comment))")
+
+
+# A bracketed attachment or stage direction typed as words ("[sends a photo of the desk]",
+# "[photo: ...]", "<image attached>", "*sends pic*"): nothing was sent, so it is never speech
+# (self-play audit 3; her own real photos show in the chat as a "[photo: ...]" note, which the
+# model copies).
+_ATTACHMENT_WORDS = (r"photo|photos|pic|pics|picture|image|img|selfie|attachment|attached|file"
+                     r"|video|clip|gif|screenshot|voice (?:note|message|memo)|audio|sends?"
+                     r"|sending|sent|uploads?|uploading|attaches|attaching|portrait|drawing"
+                     r"|sketch")
+_ATTACHMENT = re.compile(
+    rf"\[[^\]\n]{{0,80}}\b(?:{_ATTACHMENT_WORDS})\b[^\]\n]{{0,120}}\]"
+    rf"|<[^>\n]{{0,80}}\b(?:{_ATTACHMENT_WORDS})\b[^>\n]{{0,120}}>"
+    r"|\*[^*\n]{0,40}\b(?:sends?|sending|attaches|attaching|uploads?|uploading)\b[^*\n]{0,80}\*",
+    re.IGNORECASE)
+
+
+def fake_attachment(text: str) -> bool:
+    """`text` holds a bracketed attachment or stage direction (_ATTACHMENT)."""
+    return bool(_ATTACHMENT.search(text or ""))
 
 
 def is_silence(text: str) -> bool:

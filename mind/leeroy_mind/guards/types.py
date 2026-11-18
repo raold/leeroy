@@ -91,3 +91,6 @@ class Verdict:
     # `member_misgender`: (member's name, the pronoun as written, "she/her" or "he/him") for the
     # rewrite hint (pronouns.hint); never logged.
     pronouns: tuple[tuple[str, str, str], ...] = field(default=(), repr=False)
+    # `voice_never`: the words of her voice sheet's never list the draft used, as the sheet
+    # has them, for the rewrite hint (voice.hint); never logged.
+    never: tuple[str, ...] = field(default=(), repr=False)

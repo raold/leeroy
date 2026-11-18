@@ -485,8 +485,53 @@ def _mind_log(p: Probes, data: Path, run: MindRun | None, now: float,
     return out
 
 
+def _feature_lines(p: Probes, logs: Path, since: float) -> list[dict]:
+    """What the running mind's start logged as off (`feature_off`), newest per feature."""
+    from . import features
+    found = {}
+    for path in _log_files(logs, since):
+        try:
+            with p.open_log(path) as fh:
+                data = fh.read()
+        except OSError:
+            continue
+        for line in data.splitlines():
+            if b"feature_off" not in line:
+                continue
+            try:
+                r = json.loads(line)
+                at = datetime.fromisoformat(r["ts"]).timestamp()
+            except (ValueError, TypeError, KeyError, RecursionError):
+                continue
+            row = features.from_log(r.get("msg")) if isinstance(r, dict) and at >= since else None
+            if row is not None:
+                found[row["feature"]] = row
+    return [found[k] for k in sorted(found)]
+
+
+def _features(p: Probes, data: Path, run: MindRun | None, seen: dict) -> Check:
+    """Features a bad optional mind.toml table (or a failed attach) turned off: the running
+    mind's own list from `status`; when it does not answer, what its start logged (a failed
+    attach is only there); with no mind, what the file would turn off at the next start."""
+    from . import features
+    rows = seen.get("reply", {}).get("disabled_features")
+    source = "" if isinstance(rows, list) else None
+    if source is None and run is not None:
+        rows, source = _feature_lines(p, data / "logs", run.started - 1), " (from mind.log)"
+        if not rows:
+            rows, source = features.check_file(data / "mind.toml"), " (at the next start)"
+    elif source is None:
+        rows, source = features.check_file(data / "mind.toml"), " (at the next start)"
+    rows = [r for r in rows if isinstance(r, dict) and {"feature", "table", "key", "reason"} <= set(r)]
+    if not rows:
+        return Check("features", OK, "features: no optional table refused"
+                                     + (" (read from mind.toml)" if source else ""))
+    said = "; ".join(features.words(r) for r in rows[:8])
+    return Check("features", FAIL, f"features: {said}{source}")
+
+
 def _endpoint(p: Probes, data: Path, run: MindRun | None, now: float, cfg: HealthCfg,
-              forbidden: frozenset[int]) -> Check:
+              forbidden: frozenset[int], seen: dict | None = None) -> Check:
     from .console.mindlink import LinkError, MindLink
     if run is None:
         return Check("endpoint", NOTE, "control endpoint: not checked, the mind is not running")
@@ -511,6 +556,8 @@ def _endpoint(p: Probes, data: Path, run: MindRun | None, now: float, cfg: Healt
     if reply.get("ok") is not True:
         return Check("endpoint", FAIL, "control endpoint: status refused "
                                        f"({str(reply.get('error') or 'no reason')[:80]})")
+    if seen is not None:
+        seen["reply"] = reply
     if "bridge_connected" not in reply:
         return Check("endpoint", OK, "control endpoint: status answered; this mind does not "
                                      "report its bridge, cast or schema yet")
@@ -1263,8 +1310,9 @@ def _owner_replies(conn, now: float) -> Check:
     OWNER_UNANSWERED_FAIL. Counts by medium only, never a text. With [life] availability above
     0 (meta life:availability, as the mind put it in force) the bounds are her day's: a game
     line within game_cap_s plus OWNER_LATE_MARGIN_S, a DM or group DM by when her own time
-    answers it (discord.owntime.due_at) plus the margin, and her line in her DM answers his
-    whisper too (a whisper carried there at his logout)."""
+    answers it (discord.owntime.due_at, so within [life] dm_wait_cap_s, meta
+    life:dm_wait_cap_s) plus the margin, and her line in her DM answers his whisper too (a
+    whisper carried there at his logout)."""
     from .life import config as life_config
     from .talk.owed import count_unanswered
     name = "owner-replies"
@@ -1335,26 +1383,48 @@ def _own_time_due(conn, human: int, now: float, availability: int):
         return personas[guid]
 
     def due(channel: str, message: int, ts: float) -> float:
+        named: dict[int, bool] | None = None  # None: her own DM, always capped
         if is_group(channel):
             members = [g for g in readers(conn, channel, include_closed=True) if g != human]
+            # a group DM line is capped only for the members it names (groups.service: the
+            # receipt holds `named` while she is owed); anyone else keeps her own time, so
+            # the bound must too, or a late unnamed answer reads as a miss
+            named = {}
+            row = conn.execute("SELECT value FROM meta WHERE key = ?",
+                               (f"groups:owed:{message}",)).fetchone()
+            try:
+                held = json.loads(row[0]) if row is not None else {}
+            except (TypeError, ValueError):
+                held = {}
+            if isinstance(held, dict):
+                named = {int(g): isinstance(d, dict) and d.get("named") is True
+                         for g, d in held.items() if str(g).isdecimal()}
         else:
             peer = channel[3:]
             members = [int(peer)] if peer.isdecimal() else []
-        pinned = life_config.availability(), life_config.state_on()
-        life_config.pin(availability, pinned[1])
+        pinned = (life_config.availability(), life_config.state_on(),
+                  life_config.dm_wait_cap())
+        # the bound follows [life] dm_wait_cap_s as the mind put it in force (meta)
+        life_config.pin(availability, pinned[1], life_config.stored_cap(conn))
         try:
             times = [owntime.due_at(p, post_ts=ts, now=now, local_now=local_now,
                                     message_id=message, urgent=False, talking=False,
-                                    insist=False)
+                                    insist=False,
+                                    capped=named is None or named.get(g, False))
                      for g in members if (p := persona(g)) is not None]
         except Exception:
             times = []
         finally:
             life_config.pin(*pinned)
+        cap = life_config.stored_cap(conn)
         for g in members:  # she stepped away when he wrote: she finds it once she is back
             a = away(g)
             if a is not None and a[0] <= ts < a[1]:
-                times.append(a[1] + BACK_FIND_S[1])
+                back = a[1] + BACK_FIND_S[1]
+                # ...and no later than the cap after his post (DiscordTalk._due_of), for her
+                # own DM and a group line that names her
+                capped = cap > 0 and (named is None or named.get(g, False))
+                times.append(min(back, ts + cap * owntime.ASLEEP_CAP) if capped else back)
         return max(times, default=ts) + OWNER_LATE_MARGIN_S
     return due
 
@@ -1419,7 +1489,9 @@ def run_checks(root: Path, data_dir: Path, *, probes: Probes | None = None) -> l
         mind, run = Check("mind", FAIL, f"mind: the check itself failed ({type(e).__name__})"), None
     out.append(mind)
     out.append(_guarded("mind-log", _mind_log, p, data, run, now, hcfg))
-    out.append(_guarded("endpoint", _endpoint, p, data, run, now, hcfg, forbidden))
+    seen: dict = {}
+    out.append(_guarded("endpoint", _endpoint, p, data, run, now, hcfg, forbidden, seen))
+    out.append(_guarded("features", _features, p, data, run, seen))
     out.append(_guarded("console", _console, p))
     out.append(_guarded("voice", _voice, p, data))
     out.append(_guarded("ollama", _ollama, p, cfg, forbidden))

@@ -106,6 +106,11 @@ def _rewards(conn, now):
     return {'available': True, 'days': daily, 'members': list(members.values())[:LIMIT], 'period_days': DAYS}
 
 
+RETRY_S = 0.25     # between tries of a read the mind's writes got in the way of
+READ_S = 8.0       # the Lab's read budget: a busy mind.db (the night writing) is slow, not gone
+CONTEXT_ROWS = 400  # measured (arm, context) rows one read carries; the rest stay stored
+
+
 def _arms(conn, now):
     if not {'learn_arm', 'bandit_credit', 'bandit_share', 'bandit_rejection'} <= views.tables(conn):
         return {'available': False, 'arms': [], 'contexts': []}
@@ -120,12 +125,20 @@ def _arms(conn, now):
         shares = dict(conn.execute('SELECT arm_id,turns FROM bandit_share WHERE context=?', (key,)))
         totals = {f: sum(shares.get(a.id, 0) for a in registry if a.family == f) for f in arms.all_families()}
         for arm in registry:
+            # Only what was measured: an arm with no turn, use, check or promotion in a context
+            # is at its prior (1 / 1), which the page says without a row for it. This was most
+            # of the answer's size (arms x contexts, nearly all of it priors).
+            turns, is_promoted = shares.get(arm.id, 0), ('arm', arm.id, key) in promoted
+            if arm.id not in stats and not turns and not is_promoted:
+                continue
             p = stats.get(arm.id, {'alpha': 1., 'beta': 1., 'uses': 0, 'bad': 0, 'attempts': 0})
             contexts.append({'context': json.loads(key), 'arm_id': arm.id, **p,
-                             'promoted': ('arm', arm.id, key) in promoted, 'turns': shares.get(arm.id, 0),
-                             'share': shares.get(arm.id, 0)/max(1, totals[arm.family])})
-    return {'available': True, 'arms': [asdict(a) for a in registry], 'contexts': contexts,
-            'limited': len(keys)>64 or len(registry)==LIMIT}
+                             'promoted': is_promoted, 'turns': turns,
+                             'share': turns/max(1, totals[arm.family])})
+    # the busiest first, so a bounded page keeps what he is most likely to look at
+    contexts.sort(key=lambda c: (-c['uses'], -c['turns']))
+    return {'available': True, 'arms': [asdict(a) for a in registry], 'contexts': contexts[:CONTEXT_ROWS],
+            'limited': len(keys)>64 or len(registry)==LIMIT or len(contexts)>CONTEXT_ROWS}
 
 
 IDENT = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}')
@@ -164,6 +177,61 @@ def _conversation(conn):
         return panel(conn)
     except (sqlite3.Error, ValueError, TypeError, KeyError):
         return {'available': False, 'runs': []}
+
+
+PENDING_ROWS = 50   # proposed lessons the "Needs your decision" list carries
+VARIANT_DAYS = 14   # how long a lab variant that became an arm stays listed for a look
+
+
+def pending_count(conn, *, now) -> int:
+    """How many things wait for his decision: proposed arms and proposed, unexpired lessons.
+    The Lab tab's badge and Tonight's line; an older mind.db counts none."""
+    tables, n = views.tables(conn), 0
+    if 'learn_arm' in tables:
+        n += conn.execute("SELECT count(*) FROM learn_arm WHERE status='proposed'").fetchone()[0]
+    if 'talk_lesson' in tables:
+        n += conn.execute("SELECT count(*) FROM talk_lesson WHERE status='proposed' AND expires>?", (now,)).fetchone()[0]
+    return n
+
+
+def _pending(conn, now):
+    """What waits for him, in one place: proposed arms, proposed lessons of every member (the
+    Lessons panel shows one member at a time) and the lab variants that became arms lately (his
+    to look at and retire; they need no decision, so they are not counted)."""
+    tables = views.tables(conn)
+    out = {'arms': [], 'lessons': [], 'lessons_total': 0, 'variants': [], 'count': pending_count(conn, now=now)}
+    if 'learn_arm' in tables:
+        out['arms'] = [{'id': r[0], 'family': r[1]} for r in conn.execute(
+            "SELECT id,family FROM learn_arm WHERE status='proposed' ORDER BY created DESC,id LIMIT ?", (LIMIT,))]
+        out['variants'] = [{'id': r[0], 'family': r[1], 'created': r[2]} for r in conn.execute(
+            "SELECT id,family,created FROM learn_arm WHERE status='active' AND id GLOB 'lab.*' AND created>=? "
+            "ORDER BY created DESC,id LIMIT 20", (now-VARIANT_DAYS*86400,))]
+    if 'talk_lesson' in tables:
+        names = dict(conn.execute('SELECT guid,name FROM cast_member')) if 'cast_member' in tables else {}
+        out['lessons_total'] = conn.execute(
+            "SELECT count(*) FROM talk_lesson WHERE status='proposed' AND expires>?", (now,)).fetchone()[0]
+        out['lessons'] = [{'id': r[0], 'guid': r[1], 'name': names.get(r[1], f'#{r[1]}'), 'scope': r[2], 'text': r[3]}
+                          for r in conn.execute("SELECT id,guid,scope,text FROM talk_lesson WHERE status='proposed' "
+                                                "AND expires>? ORDER BY id DESC LIMIT ?", (now, PENDING_ROWS))]
+    return out
+
+
+def _rated_week(conn, now):
+    """Lines he rated (a thumb up or down) in the last seven days; None before the signals tables."""
+    if 'talk_signal' not in views.tables(conn):
+        return None
+    return conn.execute("SELECT count(DISTINCT line_id) FROM talk_signal WHERE source='explicit' AND kind='explicit' "
+                        "AND ts>=?", (now-7*86400,)).fetchone()[0]
+
+
+def badge(data_dir, *, now) -> int | None:
+    """pending_count for the tab badge, read-only and never creating a database; None when
+    mind.db is absent or cannot be read just now."""
+    try:
+        with database(data_dir, time.monotonic()+1.0) as conn:
+            return pending_count(conn, now=now)
+    except (Missing, sqlite3.Error, OSError):
+        return None
 
 
 def lab_view(conn, *, now, config=None, member=None, offset=0):
@@ -214,7 +282,8 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
             'lessons': {'available': lessons.available(conn), 'items': notes, 'members':people,
                         'member':member, 'offset':offset, 'total':total, 'more':offset+len(notes)<total},
             'weights': {'available': available, 'current': asdict(current), 'history': history}, 'report': report,
-            'turing': _turing(conn, now), 'conversation': _conversation(conn)}
+            'turing': _turing(conn, now), 'conversation': _conversation(conn),
+            'pending': _pending(conn, now), 'rated_week': _rated_week(conn, now)}
 
 
 def line_view(conn, ident, *, now):
@@ -244,12 +313,22 @@ def line_view(conn, ident, *, now):
 
 
 def read(data_dir, *, now, line=None, member=None, offset=0):
-    """No database creation/migrations; query budget also covers an older schema."""
+    """No database creation/migrations; query budget also covers an older schema. A read the
+    mind's own writes got in the way of (locked, busy) is tried again inside the budget: under
+    load the old one-second budget answered 503 for a database that was only busy."""
+    deadline = time.monotonic()+READ_S
     try:
-        with database(data_dir, time.monotonic()+1.0) as conn:
-            conn.execute('BEGIN')
-            return (lab_view(conn, now=now, config=load_learn_config(data_dir/'mind.toml'), member=member, offset=offset)
-                    if line is None else line_view(conn, line, now=now))
+        while True:
+            try:
+                with database(data_dir, deadline) as conn:
+                    conn.execute('BEGIN')
+                    return (lab_view(conn, now=now, config=load_learn_config(data_dir/'mind.toml'), member=member, offset=offset)
+                            if line is None else line_view(conn, line, now=now))
+            except sqlite3.OperationalError as e:
+                if not str(e).startswith(('database is locked', 'database table is locked', 'database is busy')) \
+                        or time.monotonic()+RETRY_S >= deadline:
+                    raise
+                time.sleep(RETRY_S)
     except Missing:
         # Empty in-memory DB preserves exactly the older-schema shape without a disk write.
         with closing(sqlite3.connect(':memory:')) as conn:

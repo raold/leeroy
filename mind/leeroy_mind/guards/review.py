@@ -23,7 +23,7 @@ from leeroy_mind.personas.facts import (Facts, conflicts as persona_conflicts, f
 from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.moves import topics
 
-from . import phrases, pronouns
+from . import owncopy, phrases, pronouns, voice
 from .identity import CODES as SLIP_CODES, code_for as slip_code, slips
 from .opener import echo_opener
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
@@ -39,10 +39,14 @@ _CHANNELS = frozenset({'guild', 'officer', 'whisper', 'game', 'discord', 'dm', '
 _GAME = frozenset({'party', 'raid', 'raid_warning', 'say', 'yell', 'emote'})
 DROP_CODES = frozenset({'empty', 'own_repeat_same_channel', 'own_repeat_cross_channel',
                         'repeated_topic', 'nothing_new', 'own_repeat_discord', 'channel_repeat', 'filler_opener',
-                        'echo_parent'})
-# Never sent, and never an owed answer's fallback: his words said back as hers, and her speaking
-# with the other sex's body or role (identity.py). A slip is a rewrite, so it gets one retry.
-HARD_CODES = frozenset({'echo_parent', *SLIP_CODES.values()})
+                        'echo_parent', 'own_copy'})
+# Never sent, and never an owed answer's fallback: his words said back as hers, her speaking
+# with the other sex's body or role (identity.py), and her own previous message in this
+# conversation sent again (owncopy.py). A slip is a rewrite, so it gets one retry.
+HARD_CODES = frozenset({'echo_parent', 'own_copy', *SLIP_CODES.values()})
+# A draft is never her candidate's "clean part" for these (Pipeline._short_answer cuts slips)
+WHOLE_CODES = frozenset({'echo_parent', 'own_copy'})
+OWN_COPY_SECONDS = 3 * 3600  # her messages of the conversation going on
 ECHO_RUN, ECHO_RATIO, ECHO_MIN_WORDS = 8, .9, 6
 ECHO_OPENING = 5  # his first words said back as hers, carried past his first sentence
 ECHO_OPENING_FIRST = 3  # ...when that first sentence has this many words
@@ -59,6 +63,8 @@ HINTS = {
                     'quoted or restated; answer it without saying it back'),
     'member_misgender': 'it calls a guild member by the wrong pronoun',
     'nothing_new': 'it only repeats what was already said',
+    'own_copy': ('it says your own previous message again; say something new that answers the '
+                 'message in front of you'),
     'own_repeat_same_channel': 'it repeats one of your own recent lines',
     'own_repeat_cross_channel': 'it repeats one of your own recent lines',
     'own_repeat_discord': 'it repeats one of your own recent messages',
@@ -81,6 +87,9 @@ HINTS = {
                          'role; you are a man, so say it as yourself, about your own body'),
     'persona_conflict': ('it gets your own life wrong: keep to who you live with, your kids, your '
                          'pets, your job and where you live as your card says'),
+    'voice_never': 'it uses words you never use',
+    'voice_sample_copy': ('it repeats one of your example lines word for word; they show how '
+                          'you sound, so say something new that way'),
 }
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
           'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
@@ -137,12 +146,14 @@ def echoes(text: str, parent: str) -> bool:
             and where[opening - 1] != where[0])
 
 
-def rewrite_hint(codes, named=(), misgendered=()) -> str:
+def rewrite_hint(codes, named=(), misgendered=(), never=()) -> str:
     """The screened retry's instruction in words; a code without words is named as it is.
     `named` are the phrase cooldown's words from the draft itself (Verdict.phrases);
-    `misgendered` the member and pronouns of `member_misgender` (Verdict.pronouns)."""
+    `misgendered` the member and pronouns of `member_misgender` (Verdict.pronouns); `never`
+    the words of her voice sheet's never list the draft used (Verdict.never)."""
     reasons = list(dict.fromkeys(HINTS.get(code, code) for code in codes))
-    said = ' '.join(x for x in (phrases.hint(named), pronouns.hint(misgendered)) if x)
+    said = ' '.join(x for x in (phrases.hint(named), pronouns.hint(misgendered),
+                                voice.hint(never)) if x)
     if not reasons:
         return 'Rewrite your reply once.' + (' ' + said if said else '')
     hint = 'Rewrite your reply once in your own words. Your draft has a problem: ' + '; '.join(reasons)
@@ -546,6 +557,15 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         drop.append('own_repeat_same_channel' if _same_room(previous, draft) else 'own_repeat_cross_channel')
         scores.append(Score('repeat', round(score, 6)))
         refs.append(Reference('line', previous.id))
+    # Her own previous message in this conversation, said again whole or as one piece of it
+    # (owncopy.py): never when he asked her to say it again, never a short line.
+    if not filler_post and not (parent and parent.guid != draft.guid
+                                and owncopy.asked_again(parent.text)):
+        here = [line for line in own if now - line.ts <= OWN_COPY_SECONDS
+                and (_same_room(line, draft) or {line.channel, draft.channel} <= {'whisper', 'dm'})]
+        if owncopy.copies_any(draft.text, [line.text for line in here]):
+            drop.append('own_copy')
+            refs.append(Reference('line', here[-1].id))
     shared = defaultdict(set)
     bucket = evening(now)
     if draft.channel in {'guild', 'discord', 'group'} and bucket is not None:
@@ -635,8 +655,17 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     if not filler and not filler_post and _pairs(draft.text, draft.embedding,
                                                  [line for line in thread if line.guid != draft.guid], cfg):
         drop.append('nothing_new')
+    # Her voice sheet (Persona.speech): a word she never uses, a sample line said again; her
+    # own words are rationed by the phrase cooldown instead of cooled (guards/voice.py).
+    sheet = voice.sheet_of(stored)
+    never = voice.never_used(draft.text, sheet)
+    if never:
+        rewrite.append('voice_never')
+    if voice.copies_sample(draft.text, sheet):
+        rewrite.append('voice_sample_copy')
     # A line already dropped as a repeat or echo stays dropped; phrases only add a rewrite.
-    cooled = phrases.check(reader, draft, now) if cfg.phrase_cooldown and not drop else phrases.Found()
+    cooled = (phrases.check(reader, draft, now, sheet) if cfg.phrase_cooldown and not drop
+              else phrases.Found())
     rewrite.extend(cooled.codes)
     filler_code = 'server_filler' if draft.server else 'filler_after_question'
     codes = tuple(dict.fromkeys([*rewrite, *drop, *([filler_code] if filler else [])]))
@@ -646,4 +675,5 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     reaction = '👍' if parent and parent.text.rstrip().endswith('?') else '😄' if set(words(draft.text)) & {'lol','haha','hehe'} else '👍'
     return Verdict(action, codes, tuple(scores), tuple(dict.fromkeys(refs)),
                    (server_reaction or reaction) if action == 'react' else None, cooled.phrases,
-                   cooled.pending, echo_of if 'echo_opener' in codes else '', misgendered)
+                   cooled.pending, echo_of if 'echo_opener' in codes else '', misgendered,
+                   never)
