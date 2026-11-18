@@ -65,7 +65,7 @@ def test_entire_wardrobe_passes_existing_screens_in_every_colour(pool):
             assert not _text_codes("outfit", text, ident=IDENT, names=[]), text
             assert len(text.split()) <= 12
     all_choices = [t for values in CLOTHED_OUTFITS.values() for t in values]
-    assert len(set(all_choices)) == len(all_choices) == 128
+    assert len(set(all_choices)) == len(all_choices) == 512
 
 
 def test_all_expressions_and_head_tilts_pass_the_original_screens():

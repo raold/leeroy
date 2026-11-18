@@ -1,7 +1,7 @@
 # Private photo styling
 
 `[selfies] romance_styling = true` opts new private situational and requested photos into
-128 additional clothed outfit templates in `kind.py`, with twelve colour choices. It defaults
+512 additional clothed outfit templates in `kind.py`, with twelve colour choices. It defaults
 to false and is read when the mind starts. An invalid table does not enable it. It needs the
 existing selfie/request features enabled; it does not start a worker itself.
 
@@ -14,6 +14,11 @@ clothes, loungewear and gym clothes. Expressions also offer a slight head tilt. 
 saved wardrobe keeps the outfit chosen for the scene; new outfits use her saved colour palette
 when present. Requests for work uniforms or current clothes keep those choices. No model call
 is added.
+
+The catalogue contains 96 casual, 96 polished, 112 evening, 80 warm, 72 outdoor and 56 gym
+templates. These are 512 distinct clothing combinations before colour is applied, not a count
+inflated by colour variants. Every template is checked in all twelve colours against the
+existing scene screens and word limit. Existing stored scenes keep the outfit they already chose.
 
 Private requests through `[photos] scene_from_words` also allow eligible swimwear photos at
 the water using a mirror or timer, as well as a handheld camera. The existing lust style is
