@@ -7,7 +7,13 @@ from datetime import date
 import pytest
 
 from conftest import HUMAN, make_persona, seed_test_cast
-from engine_rig import engine_clock, make_rig, save_member
+from engine_rig import engine_clock, save_member
+from engine_rig import make_rig as _make_rig
+
+
+def make_rig(*args, **kw):
+    kw.setdefault("coherence", True)  # the switch under test; a test of "off" says so
+    return _make_rig(*args, **kw)
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.life.day import Block, DayEvent, JobShape, day_plan, job_shape
@@ -19,6 +25,9 @@ from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 
 MON, WED, SAT = date(2026, 11, 16), date(2026, 11, 18), date(2026, 11, 21)
+
+
+pytestmark = pytest.mark.usefixtures("coherent")  # [talk] coherence is off by default
 JOBS = [
     ("bartender at a sports bar", "evenings and weekends, logs on after closing", JobShape.EVENING),
     ("sous chef", "home after midnight", JobShape.EVENING),
@@ -95,6 +104,43 @@ def test_a_bartender_is_free_by_day_and_behind_the_bar_at_night():
     assert wed.block_at(20 * 60) is Block.WORK and wed.block_at(9 * 60) is Block.ASLEEP
     assert day_plan(p, SAT, event=DayEvent.NONE).block_at(21 * 60) is Block.WORK
     assert day_plan(p, MON, event=DayEvent.NONE).block_at(21 * 60) is not Block.WORK  # her weekend
+
+
+LATE_CARDS = [  # an early job whose card says she plays late: up until midnight
+    ("baker", "early shifts, late nights are for the game", False),
+    ("postie", "4am to 1pm work, raids at 8pm and plays until 11pm", False),
+    ("barista", "opens the shop most days, raid nights wed and sun", False),
+    ("plant operator", "early starts", True),  # the night-owl field alone
+]
+
+
+@pytest.mark.parametrize("job,rhythm,owl", LATE_CARDS)
+def test_an_early_job_never_puts_a_late_player_to_bed_in_his_evening(job, rhythm, owl):
+    p = make_persona(101, "Arkon", job=job, rhythm=rhythm, night_owl=owl)
+    assert job_shape(p) is JobShape.EARLY
+    plan = day_plan(p, WED, event=DayEvent.NONE)  # Thursday is a workday
+    assert all(plan.block_at(m) is not Block.ASLEEP for m in range(17 * 60, 24 * 60))
+
+
+def test_no_job_shape_alone_has_her_asleep_before_half_past_eleven():
+    plain = make_persona(101, "Arkon", job="baker", rhythm="early shifts")
+    plan = day_plan(plain, WED, event=DayEvent.NONE)
+    assert all(plan.block_at(m) is not Block.ASLEEP for m in range(17 * 60, 23 * 60 + 30))
+    assert plan.block_at(23 * 60 + 45) is Block.ASLEEP and plan.block_at(3 * 60) is Block.ASLEEP
+    # a card that states an early bedtime keeps it
+    early = make_persona(101, "Arkon", job="baker", rhythm="early shifts, in bed by nine")
+    assert day_plan(early, WED, event=DayEvent.NONE).block_at(22 * 60 + 30) is Block.ASLEEP
+    # with the switch off the early plan is main's
+    from leeroy_mind.life import day
+    day.COHERENT = False
+    assert day_plan(plain, WED, event=DayEvent.NONE).block_at(22 * 60 + 30) is Block.ASLEEP
+
+
+def test_weekend_work_is_read_across_an_and():
+    p = make_persona(101, "Arkon", job="carer", rhythm="works saturdays and sundays")
+    assert day_plan(p, SAT, event=DayEvent.NONE).workday
+    q = make_persona(101, "Arkon", job="carer", rhythm="raids saturdays and sundays")
+    assert not day_plan(q, SAT, event=DayEvent.NONE).workday
 
 
 def test_part_time_and_leave_days():
@@ -260,3 +306,13 @@ def test_a_dm_keeps_where_she_said_she_is(store, clock, tmp_path):
             assert "You're still in bed, as you told him a little while ago." in user
     finally:
         r.close()
+
+
+def test_the_life_cli_reads_the_switch_as_the_mind_does(tmp_path):
+    from leeroy_mind.life import cli, day
+    (tmp_path / "mind.toml").write_text("[talk]\ncoherence = false\n", encoding="utf-8")
+    cli._switch(tmp_path)
+    assert day.COHERENT is False
+    (tmp_path / "mind.toml").write_text("[talk]\ncoherence = true\n", encoding="utf-8")
+    cli._switch(tmp_path)
+    assert day.COHERENT is True

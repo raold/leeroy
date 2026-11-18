@@ -19,9 +19,18 @@ from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.prompt import unanswered_text
 from leeroy_mind.talk.select import classify_human_line, is_leaving
 from leeroy_mind.talk.turns import Turn, TurnKind
-from life.test_interrupt import force, line_calls, rig, said, ticking, whispers
+from life.test_interrupt import force, line_calls, said, ticking, whispers
+from life.test_interrupt import rig as _rig
 
-NIGHT_S = 7200.0  # 22:00 UK: the test cast (early shifts) is asleep, so answers wait
+NIGHT_S = 13200.0  # 23:40 UK: the test cast (early shifts) is asleep (never before 23:30)
+
+
+pytestmark = pytest.mark.usefixtures("coherent")  # [talk] coherence is off by default
+
+
+def rig(*args, **kw):
+    kw.setdefault("coherence", True)  # the switch under test; a test of "off" says so
+    return _rig(*args, **kw)
 
 
 @pytest.fixture

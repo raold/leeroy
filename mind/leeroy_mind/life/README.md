@@ -32,7 +32,7 @@ is UK time, as Discord presence has it (`discord.presence.local_time`).
 
 ### Job shape
 
-From `job + " " + rhythm`, case-folded. With `[talk] coherence` on (default; read at the
+From `job + " " + rhythm`, case-folded. With `[talk] coherence` on (default off; read at the
 mind's start and at his login; off, a card reads exactly as the table reads it and the rows
 marked "coherence" below do not exist) three readings come around the table (2026-11-17, the
 self-play audit: a bartender, a trainer with early clients, a half-day worker and a paralegal on
@@ -172,9 +172,20 @@ the callers keep today's behaviour):
   when she is not in one of them now. `NO_PHOTO` is asleep and commute: a requested photo
   (`[photos] scene_from_words`, photos/README.md) waits for that time.
 
+### Her evening under a job shape (`[talk] coherence`)
+
+With the switch on no job shape alone has her asleep before 23:30 (`day.BED_FLOOR`): the early
+plan sleeps from 21:00-22:00, the hours he plays, and five of six live cards read as early
+shifts say they play late. A card that states late play (the night-owl field, "late nights",
+"up late", "raids evenings", "raid nights", "plays until 11pm", "nights are for the game") is
+awake until midnight; a card that states an early bedtime ("in bed by nine", "early nights")
+keeps its shape's. Her work hours and waking time are the shape's as before. The `life day|now`
+commands read the switch from `mind.toml` as the running mind does. Weekend work is also read
+across an "and" ("works saturdays and sundays").
+
 ### One "right now" per conversation (`[talk] coherence`)
 
-With `[talk] coherence` on (default) the "Right now" line agrees with the conversation
+With `[talk] coherence` on the "Right now" line agrees with the conversation
 (`stated_where`, `settled_where`, `playing_text`, `away_note`; `talk/README.md` "Conversations
 that hold together"). `stated_where` reads only a sentence of hers that opens with the place,
 about herself, now ("at work, ...", "im still in bed", "ok im home now"); never "she's at work",

@@ -82,7 +82,7 @@ _JOB_PATTERNS = (
 )
 # [talk] coherence (set by LifeService.configure from mind.toml, read at his login): the readings
 # below. Off, a card reads exactly as the table above reads it.
-COHERENT = True
+COHERENT = False
 
 # Self-play audit, 2026-11-17: every job the table did not name worked 09:00-17:00 and gamed
 # 18:00-24:00, so a bartender on "evenings and weekends" was at work at 14:45 and gaming through
@@ -114,7 +114,7 @@ _EXTRA_PATTERNS = (
     (JobShape.EVENING, _bounded(r"bartend\w*|barmaid|barman|barback|bar (?:staff|work|manager)"
                                 r"|(?:behind|tends?|tending|runs?) (?:a |the )?bar"
                                 r"|works? (?:at|in) (?:a |the )?(?:bar|pub|club|nightclub|restaurant)"
-                                r"|pub (?:landlady|landlord|manager)|evenings and weekends"
+                                r"|pub (?:landlady|landlord|manager)"
                                 r"|weekends and evenings|closing shifts?|works? evenings"
                                 r"|evening work|chef|line cook|waits? tables"
                                 r"|waitress(?:es|ing)? (?:evenings|nights)|bouncer|door staff")),
@@ -125,6 +125,15 @@ _EXTRA_PATTERNS = (
                              r"|(?:two|three|2|3) (?:days|mornings) a week")),
 )
 # she works weekends (her days off fall in the week): "works weekends", "weekend shifts"
+_LATE_PLAY = _bounded(
+    r"night owl|late nights?|up late|stays? up|past midnight|into the (?:night|small hours)"
+    r"|(?:plays?|games?|gaming|raids?|raiding|online|logs? on) (?:\w+ ){0,3}?"
+    r"(?:late|evenings?|nights?|after dark|(?:until|till|til|to|at) (?:1[0-2]|[89])\s*(?:pm|p\.m\.)?)"
+    r"|(?:evenings?|nights?) (?:are|is) for (?:the game|wow|raid\w*|gaming|the guild)"
+    r"|(?:evening|night|late) raids?|raid nights?|after the kids (?:are|go) (?:in|to) bed")
+_EARLY_BED = _bounded(r"early (?:nights?|to bed|bedtimes?)|(?:in bed|asleep|bed|lights out) "
+                      r"(?:by|at|before) (?:[7-9]|10|seven|eight|nine|ten)\b")
+_SENTENCE_SPLIT = re.compile(r"[,;.()]|\s+-\s+|\b(?:then|but|while|before|after which)\b")
 _WEEKENDS = _bounded(r"works? (?:most |every |on |at )?weekends|weekend shifts?|weekends too"
                      r"|evenings and weekends|weekends and evenings|saturdays? and sundays?")
 # The hours her card states outright, in a clause about work: "4am to 1pm work", "works 2pm-10pm",
@@ -240,6 +249,7 @@ _HOURS = {
     JobShape.REMOTE: _Hours((_hm(9, 30), _hm(17)), (), _hm(8, 30)),
 }
 SLEEP_MIN, OWL_SLEEP_MIN = 450, 390          # the night before a workday
+BED_FLOOR = 23 * 60 + 30                     # COHERENT: never asleep before this on a job shape alone
 NIGHTS_SLEEP = (_hm(7), _hm(14, 30))         # the morning after a night shift
 GYM_DAYS = (0, 2, 4)                         # Mon, Wed, Fri
 GYM_MIN = 60
@@ -323,7 +333,13 @@ def _job_shape(job: str, rhythm: str) -> JobShape:
 def _works_weekends(job: str, rhythm: str) -> bool:
     """Her card says she works weekends (in a clause about work): her days off fall in the
     week. Never with COHERENT off."""
-    return COHERENT and any(_WEEKENDS.search(c) for c in _work_clauses(f"{job}. {rhythm}".casefold()))
+    if not COHERENT:
+        return False
+    text = f"{job}. {rhythm}".casefold()
+    # the clauses, and the same text not split at "and" ("works evenings and weekends")
+    whole = [c for c in (x.strip() for x in _SENTENCE_SPLIT.split(text))
+             if c and not _LEISURE.search(c)]
+    return any(_WEEKENDS.search(c) for c in (*_work_clauses(text), *whole))
 
 
 def _kids_at_home(household: str) -> bool:
@@ -387,13 +403,36 @@ def _morning_sleep(job: JobShape, guid: int, day: date, owl: bool, kids: bool,
 
 
 def _evening_sleep(job: JobShape, guid: int, day: date, owl: bool,
-                   weekends: bool = False) -> tuple[int, int] | None:
-    """The part before midnight of the next workday's sleep."""
+                   weekends: bool = False, bed: int | None = None) -> tuple[int, int] | None:
+    """The part before midnight of the next workday's sleep. `bed` (COHERENT, `_bed_floor`):
+    the earliest minute her card lets her be asleep; DAY_MIN is no sleep before midnight."""
     if job in (JobShape.NIGHTS, JobShape.HOME) or not _workday(job, guid, day + timedelta(days=1),
                                                                 weekends):
         return None
     start = _HOURS[job].wake - (OWL_SLEEP_MIN if owl else SLEEP_MIN)
-    return (DAY_MIN + start, DAY_MIN) if start < 0 else None
+    if start >= 0:
+        return None
+    start += DAY_MIN
+    if bed is not None:
+        start = max(start, bed)
+    return (start, DAY_MIN) if start < DAY_MIN else None
+
+
+def _bed_floor(f: "_Facts") -> int | None:
+    """COHERENT: the earliest she is asleep in the evening, whatever her job's shape says
+    (re-review of #370: five of six cards read as early shifts say they play late, and the
+    early plan had them asleep from 21:00-22:00, the hours he plays). A card that states late
+    play (a night owl, late nights, evening raids, a stated hour of 10pm or later) is up until
+    midnight; one that states an early bedtime keeps its shape's; everyone else is never
+    asleep before BED_FLOOR on the strength of a job shape alone. None with COHERENT off."""
+    if not f.coherent:
+        return None
+    text = f"{f.rhythm}. {f.life_thread}".casefold()
+    if f.night_owl or _LATE_PLAY.search(text):
+        return DAY_MIN
+    if _EARLY_BED.search(text):
+        return None
+    return BED_FLOOR
 
 
 @dataclass(slots=True)
@@ -517,7 +556,7 @@ def _build(f: _Facts, day: date, event: DayEvent | None, carry: bool) -> DayPlan
         _paint(minutes, (start, start + GYM_MIN), Block.GYM)
     _paint_shifts(minutes, work + tail)
     _paint(minutes, morning, Block.ASLEEP)
-    evening = _evening_sleep(job, guid, day, owl, weekends)
+    evening = _evening_sleep(job, guid, day, owl, weekends, _bed_floor(f))
     if evening:
         _paint(minutes, evening, Block.ASLEEP)
     # a shift that runs past midnight is painted again over the sleep around it
