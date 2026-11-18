@@ -28,7 +28,6 @@ run nothing else.
                        (a repeated id replaces the line), `chat_gone` and `control` events (server-sent events, a comment every 15 s)
     GET  /api/health   the Mind tab: processes, lock, links, Ollama's resident models, GPU,
                        the night, the latest errors and a content-free log tail
-    GET  /api/feed     ?after=<id>: text lines after that id
     GET  /api/feed/history  ?view=guild|officer|group|voice|w:<guid>&before=<id>[&limit=1-200]:
                        that view's lines older than line `before`, the newest `limit` (100)
                        first, as {"lines", "more"}; every view reads back to its first line
@@ -150,6 +149,7 @@ lines and Board replies are the mind's to take: the console forwards them and sh
 answer, which says why when it refuses. A preview's text, a line's and a reply's are never
 logged, stored or broadcast by the console."""
 import asyncio
+import gzip
 import hashlib
 import hmac
 import json
@@ -169,6 +169,7 @@ from ..discord import layout as discord_layout, store as discord_store
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
 from . import opsview
 from . import playbookview
+from . import unreadview
 from . import (bankview, boardview, calendarview, discordview, dojoview, faces, feed, libraryview, mindlog,
                galleryview, netinfo, personaview, raidview, realmview, selfieview, socialview, status, trainview,
                tuneview, views, insightview)
@@ -282,6 +283,36 @@ log = logging.getLogger("leeroy_mind.console")
 BUILD_MARK = b"__CONSOLE_BUILD__"  # page.html's meta, replaced with this console's build id
 
 
+COMPRESS_MIN = 1024  # a text answer longer than this goes out gzipped to a browser that takes it
+COMPRESS_THREAD = 64 * 1024  # a longer one is gzipped on a worker thread, off the event loop
+_COMPRESSIBLE = ("text/", "application/json", "image/svg+xml")
+
+
+def accepts_gzip(req: Request) -> bool:
+    for part in ",".join(req.all("accept-encoding")).split(","):
+        name, _, params = part.strip().partition(";")
+        if name.strip().lower() == "gzip":
+            q = params.strip().lower().replace(" ", "")
+            return q not in ("q=0", "q=0.0", "q=0.00", "q=0.000")
+    return False
+
+
+def gzipped(body: bytes) -> bytes:
+    return gzip.compress(body, compresslevel=5, mtime=0)
+
+
+def compress(req: Request, response):
+    """The response gzipped when it is text over COMPRESS_MIN and the client takes gzip; anything
+    else (a stream, a photo, a font, a short answer, one already encoded) as it is."""
+    if (not isinstance(response, Response) or len(response.body) <= COMPRESS_MIN
+            or not response.content_type.startswith(_COMPRESSIBLE)
+            or any(k.lower() == "content-encoding" for k, _ in response.headers)
+            or not accepts_gzip(req)):
+        return response
+    return Response(response.status, gzipped(response.body), response.content_type,
+                    [*response.headers, ("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")])
+
+
 def console_build(page: bytes, files: dict[str, tuple[bytes, str]]) -> str:
     """The page and its static files as one short id. A tab left open across a console update
     keeps running the page it loaded; the event stream's snapshot carries this id, and a page
@@ -391,6 +422,13 @@ class ConsoleApp:
         self._static = static_files()
         self.build = console_build(page, self._static)
         self._page = page.replace(BUILD_MARK, self.build.encode("ascii"))
+        # The page and its files are revalidated on every load (no-cache) against an ETag made
+        # of this console's build and the file's own bytes: an unchanged file is a 304, and a
+        # release (another build) is always fetched afresh. Their gzip is made once, when asked.
+        self._etags = {name: f'"{self.build}-{hashlib.sha256(body).hexdigest()[:12]}"'
+                       for name, (body, _) in self._static.items()}
+        self._etags[""] = f'"{self.build}"'  # the page
+        self._gz: dict[str, bytes] = {}
         self._subs: set[_Subscriber] = set()
         self._found = None  # the mind's family at the latest process list (None: none taken)
         self._ambiguous: str | None = None
@@ -857,8 +895,8 @@ class ConsoleApp:
         """None when the request may go on; the refusal otherwise."""
         site = self._site(req)
         if site is None:
-            where = [f"{self.origin}/"] + [f"https://{n}/" for n in self.s.allow_hosts]
-            return text(403, f"Forbidden. The console is served at {' and '.join(where)} only.")
+            # never where it IS served: a request for another Host learns nothing from the refusal
+            return text(403, "Forbidden: this is not the console's address.")
         origins = req.all("origin")
         if len(origins) > 1 or (origins and origins[0] != site):
             return text(403, "Forbidden: another origin.")
@@ -887,6 +925,28 @@ class ConsoleApp:
                          "it started (the key changes each time it starts).")
 
     async def handle(self, req: Request):
+        response = await self._handle(req)
+        if isinstance(response, Response) and len(response.body) > COMPRESS_THREAD:
+            return await asyncio.to_thread(compress, req, response)
+        return compress(req, response)
+
+    def _cached(self, req: Request, name: str, body: bytes, kind: str, headers: list) -> Response:
+        """The page ("") or one static file: 304 when the browser already holds this build's
+        copy, else the bytes (gzipped once for a browser that takes it)."""
+        etag = self._etags[name]
+        headers = [*headers, ("Cache-Control", "no-cache"), ("ETag", etag)]
+        if kind.startswith(_COMPRESSIBLE):
+            headers.append(("Vary", "Accept-Encoding"))
+        known = [t.strip() for t in ",".join(req.all("if-none-match")).split(",")]
+        if etag in known or "W/" + etag in known:
+            return Response(304, b"", kind, headers)
+        if len(body) > COMPRESS_MIN and kind.startswith(_COMPRESSIBLE) and accepts_gzip(req):
+            if name not in self._gz:
+                self._gz[name] = gzipped(body)
+            return Response(200, self._gz[name], kind, [*headers, ("Content-Encoding", "gzip")])
+        return Response(200, body, kind, headers)
+
+    async def _handle(self, req: Request):
         refused = self.gate(req)
         if refused is not None:
             return refused
@@ -895,15 +955,14 @@ class ConsoleApp:
         if req.path == "/":
             if req.method != "GET":
                 return text(405, "Method not allowed.", [("Allow", "GET")])
-            return self._page_response()
+            return self._page_response(req)
         if req.path.startswith("/static/"):
             if req.method != "GET":
                 return text(405, "Method not allowed.", [("Allow", "GET")])
-            return self._static_response(req.path[len("/static/"):])
+            return self._static_response(req, req.path[len("/static/"):])
         routes = {("GET", "/api/state"): self._api_state,
                   ("GET", "/api/events"): self._api_events,
                   ("GET", "/api/health"): self._api_health,
-                  ("GET", "/api/feed"): self._api_feed,
                   ("GET", "/api/feed/history"): self._api_feed_history,
                   ("GET", "/api/raid"): self._api_raid,
                   ("GET", "/api/guild"): self._api_guild,
@@ -930,6 +989,7 @@ class ConsoleApp:
                   ("GET", "/api/training/playbooks"): self._api_playbooks,
                   ("GET", "/api/ops"): self._api_ops,
                   ("GET", "/api/ops/badge"): self._api_ops_badge,
+                  ("GET", "/api/unread"): self._api_unread,
                   ("GET", "/api/ops/action"): self._api_ops_action_status,
                   ("POST", "/api/ops/action"): self._ops_actions.post,
                   ("GET", "/api/dojo"): self._api_dojo,
@@ -964,13 +1024,13 @@ class ConsoleApp:
                         "Method not allowed." if req.path in known else "Not found.")
         return await route(req)
 
-    def _page_response(self) -> Response:
-        return Response(200, self._page, "text/html; charset=utf-8", [
+    def _page_response(self, req: Request) -> Response:
+        return self._cached(req, "", self._page, "text/html; charset=utf-8", [
             ("Content-Security-Policy", CSP), ("X-Frame-Options", "DENY"),
             ("Referrer-Policy", "same-origin"), ("Cross-Origin-Opener-Policy", "same-origin"),
             ("Cross-Origin-Resource-Policy", "same-origin")])
 
-    def _static_response(self, name: str) -> Response:
+    def _static_response(self, req: Request, name: str) -> Response:
         found = self._static.get(name)  # exactly as packaged: nothing is normalised or joined
         if found is None:
             return text(404, "Not found.")
@@ -978,7 +1038,7 @@ class ConsoleApp:
         headers = [("Cross-Origin-Resource-Policy", "same-origin")]
         if kind == "image/svg+xml":  # the guild's emoji: pictures only, never a document that runs
             headers.append(("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'"))
-        return Response(200, body, kind, headers)
+        return self._cached(req, name, body, kind, headers)
 
     # -- the endpoints -----------------------------------------------------------------------
 
@@ -1330,7 +1390,25 @@ class ConsoleApp:
                             "mind_started":min(created) if created else None, "gpu":self._gpu_view()}))
 
     async def _api_ops_badge(self, req: Request):
-        return json_response(200, await self._ops.badge({"mind": self.view.state}))
+        """The tab badges' one light read: the Ops counts, and how many Lab proposals wait for
+        his decision (`lab`; null when mind.db cannot say)."""
+        from . import labview
+        counts, waiting = await asyncio.gather(
+            self._ops.badge({"mind": self.view.state}),
+            asyncio.to_thread(labview.badge, self.s.data_dir, now=self._clock()))
+        return json_response(200, {**counts, "lab": waiting})
+
+    async def _api_unread(self, req: Request):
+        """What reached him since the ids the page holds: counts and the newest sender's name
+        for the tab title while the page is hidden (unreadview.py). Never a message's text."""
+        marks = {}
+        for name in ("chat", "discord"):
+            raw = req.query.get(name, [None])[0]
+            marks[name] = None if raw is None else digits(raw, 18)
+            if raw is not None and marks[name] is None:
+                return text(400, f"{name}: a row id")
+        return await self._db_view("unread", unreadview.unread_view, chat=marks["chat"],
+                                   discord=marks["discord"], now=self._clock())
 
     async def _api_playbooks(self, req: Request):
         try:
@@ -2111,13 +2189,6 @@ class ConsoleApp:
             result['channel'] = reply.get('channel')
         return json_response(200,result)
 
-    async def _api_feed(self, req: Request):
-        after = digits(req.query.get("after", ["0"])[0], 18)  # an SQLite integer
-        if after is None:
-            return text(400, "after: a line id")
-        lines, _ = await asyncio.to_thread(self._feed_since, after)
-        return json_response(200, {"lines": lines})
-
     async def _api_feed_history(self, req: Request):
         view = req.query.get("view", [""])[0]
         before = digits(req.query.get("before", [""])[0], 18)  # an SQLite integer
@@ -2137,6 +2208,9 @@ class ConsoleApp:
         return json_response(200, page)
 
     async def _api_voice(self, req: Request):
+        if not self.controls.enabled:  # --no-control: rooms, volumes and mutes are changes too
+            return json_response(403, {"ok": False, "error": "Voice controls are off: this console "
+                                                             "runs with --no-control."})
         msg = req.json()
         if msg.get("type") == "join":
             problem = self._join_problem()

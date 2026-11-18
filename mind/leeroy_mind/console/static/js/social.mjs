@@ -1,5 +1,5 @@
 import { $, arr, clear, el, num, obj, plural, str } from "./core.mjs";
-import { face } from "./faces.mjs";
+import { profileButton } from "./faces.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
 import { breakupText, feelings, feudText, heldText, jealousyShare, memberStageText, pullChips, romanceText, stageText,
   THREADS_NOTE, threadNightText, threadsHead } from "./socialmodel.mjs";
@@ -13,7 +13,7 @@ var GONE = "the night's stages have not written this.";
 function nameOf(v, g) { return str(obj(v.names)[String(g)]) || "#" + g; }
 function person(v, g, size) {
   var box = el("span", "who");
-  box.appendChild(face(g, nameOf(v, g), size || "list"));
+  box.appendChild(profileButton(g, nameOf(v, g), size || "list"));
   box.appendChild(el("span", "", nameOf(v, g)));
   return box;
 }
@@ -118,9 +118,9 @@ function renderSocial(v) {
       r.appendChild(head);
       r.appendChild(el("p", "", str(m.text)));
       var foot = el("div", "who");
-      arr(m.spreaders).forEach(function (g) { foot.appendChild(face(g, nameOf(v, g), "list")); });
+      arr(m.spreaders).forEach(function (g) { foot.appendChild(profileButton(g, nameOf(v, g), "list")); });
       if (arr(m.stiflers).length) { foot.appendChild(el("span", "muted", "stifled by")); }
-      arr(m.stiflers).forEach(function (g) { foot.appendChild(face(g, nameOf(v, g), "list")); });
+      arr(m.stiflers).forEach(function (g) { foot.appendChild(profileButton(g, nameOf(v, g), "list")); });
       foot.appendChild(el("span", "muted", plural(num(m.knowers), "member") + " know · last told " + when(m.last_told)));
       r.appendChild(foot);
       box.appendChild(r);

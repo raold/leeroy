@@ -32,7 +32,32 @@ is UK time, as Discord presence has it (`discord.presence.local_time`).
 
 ### Job shape
 
-From `job + " " + rhythm`, case-folded; the first word-bounded match wins, else `day`:
+From `job + " " + rhythm`, case-folded. With `[talk] coherence` on (default off; read at the
+mind's start and at his login; off, a card reads exactly as the table reads it and the rows
+marked "coherence" below do not exist) three readings come around the table (2026-11-17, the
+self-play audit: a bartender, a trainer with early clients, a half-day worker and a paralegal on
+maternity leave all had the `day` plan). They read only **clauses about work**: the text is
+split at commas, full stops, brackets, "and", "then", "but", and a clause about raiding,
+playing, the game, the guild, being online, the gym, sleep or "after work" is left out, so
+"raids 8pm to 11pm", "early mornings at the gym" and "opens the guild bank" shape nothing.
+
+1. **Leave is `home`**: maternity, parental, paternity, medical, sick or long-term leave, "on
+   leave", signed off, sabbatical, furloughed, laid off, out of work; not leave in the past
+   ("sick leave last year"). She has the job and is not at it.
+2. **The working hours her card states outright** (`_clock_shape`): a range such as "4am to
+   1pm", "2pm-10pm" or "22:00 to 06:00" in a work clause that has a word for working in it
+   (works, shift, on call, opens, teaches, clients, patients, at the office/plant/bar...), 2 to
+   14 hours long. By its start: 03:00-07:29 `early`, 07:30-10:59 `day` (five hours or less:
+   `part`), 11:00-15:59 `late`, 16:00-18:59 `evening`, else `nights`. Hours with am, pm or
+   minutes come before the table: a card whose job says "third shift" and whose rhythm says "4am
+   to 1pm work" has one clock, the stated one. Bare hours ("works 9 to 5") are read only after
+   the table has said nothing, so "night shifts, 7 to 7" stays nights.
+3. **After the table**, on work clauses only, the "coherence" rows.
+
+**She works weekends** ("works weekends", "weekend shifts", "evenings and weekends"): her
+workdays are Wednesday to Sunday for every shape but `nights` and `rotating`.
+
+The table, first word-bounded match wins, else `day`:
 
 | Shape | Pattern |
 |---|---|
@@ -43,6 +68,12 @@ From `job + " " + rhythm`, case-folded; the first word-bounded match wins, else 
 | `student` | `student(?! loans?)\|studying\|(?:attends?\|attending\|has\|skips?\|skipping\|goes to\|going to) lectures?\|(?:takes?\|taking\|attends?\|attending\|night\|evening) classes\|(?:back\|off\|goes\|going\|still\|is\|she's\|been\|starts?\|starting) (?:to\|at\|in) (?:uni\|university\|college)\|(?:uni\|college) (?:classes\|courses?\|lectures?\|coursework\|assignments?)\|doing an? (?:[\w-]+ ){0,2}degree`, unless the text also says `teach\w*\|tutor\w*\|lecturer\|professor\|instructor\|gives? lectures?\|works? (?:at\|for) (?:the \|a )?(?:uni\|university\|college)`: only what she does, so an employer named "... College", a degree she holds, a job at a university or a class she teaches is no study |
 | `remote` | `wfh\|works? from home\|from home\|freelanc\w*\|self[- ]employed` |
 | `home` | `stay[- ]at[- ]home\|unemployed\|between jobs\|retired` |
+| `nights` (coherence) | "nurse/ward/hospital/security/warehouse ... on nights", "nights at the hospital/ward/warehouse/depot/plant" |
+| `early` (coherence) | early mornings, opening or morning shifts, "opens up/the", up at or before dawn or 4-6, baker, bakery, milk round, postie |
+| `evening` (coherence) | bar, pub, club and kitchen work: bartend*, barmaid, barman, bar staff/work/manager, behind/tends/runs a bar, works at or in a bar/pub/club/restaurant, pub landlady/landlord, "evenings and weekends", closing shifts, works evenings, chef, line cook, waits tables, bouncer, door staff |
+| `late` (coherence) | second shift, "works lates" |
+| `home` (coherence) | full-time mum/dad/parent/carer, housewife, homemaker |
+| `part` (coherence) | `part[- ]time\|half[- ]days?\|mornings only\|school hours\|term[- ]time`, two or three days or mornings a week |
 
 **Kids** (home duty) means a dependent child at home. A household that says "no kids", "no
 children", child-free, "empty nest", doesn't/does not/don't/do not/never/without (up to two words)
@@ -63,6 +94,8 @@ fourth" still has kids).
 | `day` | Mon-Fri | 09:00-17:00 | 08:15-09:00, 17:00-17:45 | 07:30 |
 | `early` | Mon-Fri | 06:00-14:30 | 05:30-06:00, 14:30-15:00 | 04:45 |
 | `late` | Mon-Fri | 14:00-22:30 | 13:30-14:00, 22:30-23:00 | 10:00 |
+| `evening` | Wed-Sun (her weekend is Monday and Tuesday) | 16:00-23:30 | 15:30-16:00, 23:30-24:00 | 10:00 |
+| `part` | Mon-Fri | 09:00-13:00 | 08:30-09:00, 13:00-13:30 | 07:30 |
 | `nights` | shifts start on weekdays `(k + guid) % 7`, k = 0-3 | 22:00-06:00 next day | 21:30-22:00, 06:00-06:30 | asleep 07:00-14:30 after a shift |
 | `rotating` | `(date.toordinal() + guid) % 8 < 4` | 07:00-19:00 | 06:30-07:00, 19:00-19:30 | 05:45 |
 | `student` | Mon-Fri | 10:00-15:00 | none | 09:00 |
@@ -138,6 +171,36 @@ the callers keep today's behaviour):
   after `her_local` in a block outside `busy` (today's plan, then the next two days'), or None
   when she is not in one of them now. `NO_PHOTO` is asleep and commute: a requested photo
   (`[photos] scene_from_words`, photos/README.md) waits for that time.
+
+### Her evening under a job shape (`[talk] coherence`)
+
+With the switch on no job shape alone has her asleep before 23:30 (`day.BED_FLOOR`): the early
+plan sleeps from 21:00-22:00, the hours he plays, and five of six live cards read as early
+shifts say they play late. A card that states late play (the night-owl field, "late nights",
+"up late", "raids evenings", "raid nights", "plays until 11pm", "nights are for the game") is
+awake until midnight; a card that states an early bedtime ("in bed by nine", "early nights")
+keeps its shape's. Her work hours and waking time are the shape's as before. The `life day|now`
+commands read the switch from `mind.toml` as the running mind does. Weekend work is also read
+across an "and" ("works saturdays and sundays").
+
+### One "right now" per conversation (`[talk] coherence`)
+
+With `[talk] coherence` on the "Right now" line agrees with the conversation
+(`stated_where`, `settled_where`, `playing_text`, `away_note`; `talk/README.md` "Conversations
+that hold together"). `stated_where` reads only a sentence of hers that opens with the place,
+about herself, now ("at work, ...", "im still in bed", "ok im home now"); never "she's at work",
+"im not at work", "are you at work?", "i was at work" or "ill be at work by nine". The one
+reader is `talk/sofar.py`'s `her_place` and `her_state`: `stated_where` leaves out sentences
+that are questions, negations, past, future or about someone else, hands the rest to it and
+names the kind of the words it returns. That reader wants "i'm", "still", "back" or "just got"
+before the place, so a bare "at work, ..." is not read. Where
+she said she is in the last 30 minutes holds whatever block her plan
+has moved to ("You're still at work, as you told him a little while ago."); joining his group
+after saying so reads "You told him a little while ago you were at work: you've just got in from
+work and logged on."; a member in his group while he plays reads "You're at your PC, playing:
+you're in <his name>'s raid with him right now, in Naxxramas." (the instance by her map, when it
+is a raid or a 5-man); and for 30 minutes after she is back from a brb the line adds why she
+stepped away ("someone was at the door").
 
 ## Settings (`[life]`, `life/config.py`, `life/service.py`)
 
@@ -474,3 +537,18 @@ on a turn from her persona and her presence then (talk/README.md, "Wants"). `sta
 member, `<guid> now valence= energy= stress= social= toward_him= stored=<age>|none` (her
 feeling now, two decimals) and `<guid> baseline ...`; it never writes, even while `[life]
 state` is off. Exit 0 done, 1 unknown guid or a database error, 2 no `mind.db`.
+
+## His DMs are answered promptly (2026-11-17)
+
+`[life] dm_wait_cap_s` (default 75; 0 = no cap; an invalid value reads 75) is the longest his
+Discord DM, or a group DM line that names her, waits for her answer, whatever `availability`
+says: idle and do-not-disturb alike, twice the cap for a member asleep or not about, and for a
+post made while she stepped away. The cap is applied in `discord/owntime.due_at` after the
+availability scaling; a capped wait is drawn in the cap's upper half. An answer that waited 45 s
+or more says where she was (the LATE shape with `[talk] shape`, else the late note). The mind
+writes the cap in force to meta `life:dm_wait_cap_s`; health's `owner-replies` bound follows it.
+
+Interruptions (`interrupt.py`, `LifeService._after_line`) never start within 60 s of his message,
+after his bad news (`talk/hisline.py`) or in an explicit scene he is turning up, and a work line
+needs a workplace (`interrupt.workplace`): a member on leave, at home or out of work gets the
+home lines, one who works from home has no boss walking by.

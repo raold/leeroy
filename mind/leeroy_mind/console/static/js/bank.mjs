@@ -1,5 +1,5 @@
 import { $, arr, clear, el, num, obj, plural, str } from "./core.mjs";
-import { face } from "./faces.mjs";
+import { profileButton } from "./faces.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
 import { COLUMNS, ROWS, TABS, gridRows, itemName, logWords, money, quality, slotMap, slotsUsed, tabButtons, who } from "./bankgrid.mjs";
 import { when } from "./words.mjs";
@@ -12,7 +12,7 @@ var view = null, current = 0;
 
 function person(v, g) {
   var box = el("span", "who"), you = num(v.human) > 0 && g === v.human;
-  box.appendChild(face(g, who(v, g), "list", { you: you }));
+  box.appendChild(profileButton(g, who(v, g), "list", { you: you }));
   box.appendChild(el("span", "", who(v, g)));
   return box;
 }

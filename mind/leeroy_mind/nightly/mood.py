@@ -284,7 +284,8 @@ def _targeted(ctx, emotions, members, now):
         pending_key = _pending_key(guid, target)
         refs = json.loads(emotion["evidence"])
         scope = evidence_scope(ctx.store, guid, refs)
-        if scope is None:
+        if scope is None or (scope[0] != "open" and scope[1] == 0):
+            # unknown lineage, or one that reaches nobody: a copy of it could reach no prompt
             ctx.store.conn.execute("DELETE FROM meta WHERE key=?", (pending_key,))
             continue
         if not secret_memory_ok(ctx, guid, refs):

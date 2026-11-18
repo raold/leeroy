@@ -1,5 +1,6 @@
 """Real browser rendering, including stopped/older stores and both color themes."""
 import asyncio
+import re
 
 import pytest
 
@@ -30,6 +31,21 @@ async def open_console(r, *, timeout=15000):
     # The parallel mind suite can keep the browser busy loading the module graph.
     # Wait for the real startup signal before testing a tab or action.
     await expect(r.page.locator("#s-mind")).to_contain_text("mind running", timeout=timeout)
+
+
+async def choose(page, selector):
+    """Click something in Comms' left list. In a small window the list is a drawer (Channels
+    opens it), and a DM nobody has written in yet is found by the member's guid through the
+    filter box, as he would find it by name."""
+    if await page.locator("#c-drawer").is_visible() and not await page.locator("#comms-left").is_visible():
+        await page.locator("#c-drawer").click()
+    target = page.locator(selector).first
+    found = re.search(r'data-view="dm:(\d+)"', selector)
+    if found and not await target.count():
+        name = await page.evaluate(
+            "async guid => (await import('/static/js/comms/discordstate.mjs')).DISCORD.name(guid)", int(found[1]))
+        await page.locator("#conv-find").fill(name)
+    await target.click()
 
 
 async def tab_names(page):

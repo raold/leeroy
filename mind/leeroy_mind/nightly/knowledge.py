@@ -31,7 +31,8 @@ from leeroy_mind.discord.channels import is_private as private_channel
 from leeroy_mind.discord.channels import is_restricted as restricted_channel
 from leeroy_mind.discord.channels import private_sql
 from leeroy_mind.logs import log
-from leeroy_mind.memory.privacy import SCOPES, Scope, derive_scope, secret_lines
+from leeroy_mind.memory.privacy import (SCOPES, Scope, derive_scope, effective_scopes,
+                                        secret_lines)
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly.audience import audience_of
 from leeroy_mind.nightly.gpu import norm
@@ -72,9 +73,12 @@ def _number(root: str, kind: str) -> int | None:
 
 def _memory_rows(conn: sqlite3.Connection, ids) -> dict[int, tuple[tuple, str]]:
     """(evidence, scope) of each memory among `ids`, of any status; unknown ids are left out."""
-    return {r["id"]: (tuple(json.loads(r["evidence"])), r["scope"]) for r in conn.execute(
-        "SELECT id, evidence, scope FROM memory WHERE id IN (SELECT value FROM json_each(?))",
-        (json.dumps(sorted(ids)),))}
+    ids = sorted(ids)
+    scopes = effective_scopes(conn, ids)  # never wider than the memory's evidence
+    return {r["id"]: (tuple(json.loads(r["evidence"])), scopes.get(r["id"], (r["scope"], 0))[0])
+            for r in conn.execute(
+                "SELECT id, evidence, scope FROM memory "
+                "WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(ids),))}
 
 
 def _walk(refs: Iterable[str], depth: int,

@@ -5,6 +5,8 @@ callers keep today's behaviour), 6 is the design point, 10 the most scarcity. Pu
 from __future__ import annotations
 
 import math
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
@@ -161,6 +163,106 @@ def where_text(lp: LifePresence, medium: str, *, playing: bool = False) -> str:
     if lp.block is Block.HOME_DUTY:
         return WHERE_TEXT[(Block.HOME_DUTY, "kids" if lp.kids else "")]
     return WHERE_TEXT.get((lp.block, medium)) or WHERE_TEXT[(lp.block, "")]
+
+
+# One "right now" per conversation ([talk] coherence; self-play audit, 2026-11-17: a member said
+# she was at work on the worst shift of her life, joined his group, and her next prompt said
+# only "You're at your PC, playing", so her next line was "it's a day off"; grouped members
+# talked as if they were elsewhere while he pulled a boss with them). Where she said she is, read
+# from her own lines in the conversation (stated_where), holds for the conversation: the line
+# agrees with it (settled_where), and a member in his group is told so, with the place.
+PLAYING_WITH = "You're at your PC, playing: you're in {name}'s {group} with {them} right now{place}."
+STATED_WORDS = {"work": "at work", "bed": "in bed", "out": "out", "home": "home"}
+# she said it, and her plan (or his group) now has her elsewhere: what the line says instead
+STILL = {"work": "You're still at work, as you told {them} a little while ago.",
+         "bed": "You're still in bed, as you told {them} a little while ago.",
+         "out": "You're still out, as you told {them} a little while ago.",
+         "home": "You're at home, as you told {them} a little while ago."}
+JOINED = {"work": "You told {them} a little while ago you were at work: you've just got in "
+                  "from work and logged on.",
+          "bed": "You told {them} a little while ago you were in bed: you got back up and "
+                 "logged on.",
+          "out": "You told {them} a little while ago you were out: you've just got back in "
+                 "and logged on."}
+_STATED_BLOCKS = {"work": frozenset({Block.WORK}), "bed": frozenset({Block.ASLEEP}),
+                  "out": frozenset({Block.OUT, Block.GYM, Block.COMMUTE}),
+                  "home": frozenset({Block.FREE, Block.GAMING, Block.HOME_DUTY, Block.ASLEEP})}
+_SENTENCES = re.compile(r"[^.!?\n]+[.!?]*")
+_NOT_NOW = re.compile(
+    r"\?\s*$|\b(?:not|never|no longer|wasn'?t|isn'?t|aren'?t|ain'?t|was|were|will|i'?ll|won'?t"
+    r"|gonna|going to|tomorrow|yesterday|later|soon|when i|if i|wish|until i|once i|before i"
+    r"|after i|he|she|they|you|u|he'?s|she'?s|they'?re|you'?re|nobody|anyone|everyone"
+    r"|my (?:husband|wife|partner|boyfriend|girlfriend|mum|mom|dad|son|daughter|kid|kids|brother"
+    r"|sister|flatmate|roommate|boss|friend|mate))\b", re.IGNORECASE)
+# the reader's words (talk/sofar.py her_place and her_state) by kind; the first that matches
+_KINDS = (
+    ("home", re.compile(r"\boff (?:work|shift)\b|\bdone for the day\b|\bclosed up\b",
+                        re.IGNORECASE)),
+    ("work", re.compile(r"\b(?:work|office|shop|bar|hospital|plant|lab|studio|depot|clinic|site"
+                        r"|shift|desk|break|closing up)\b", re.IGNORECASE)),
+    ("bed", re.compile(r"\bbed\b", re.IGNORECASE)),
+    ("out", re.compile(r"\b(?:gym|shops?|pub|store|vet|dentist|doctors?|bus|train|road|car)\b",
+                       re.IGNORECASE)),
+    ("home", re.compile(r"\b(?:home|sofa|couch|kitchen|living room|bath|house|flat)\b",
+                        re.IGNORECASE)),
+)
+
+
+def stated_where(lines: Sequence[str]) -> str:
+    """Where she last said she is, from her own `lines` in this conversation (oldest first):
+    "work", "bed", "out" or "home". One reader of her place: talk/sofar.py's her_place and
+    her_state read the words ("at the studio till ten"; "on my break", "closed up"); this
+    names their kind ("" for none, or words of no kind here)."""
+    from leeroy_mind.talk import sofar
+    # only what she says of herself, now: a sentence about someone else, a negation, the past
+    # or the future is not handed to the reader (review of #370)
+    kept = [" ".join(x for x in _SENTENCES.findall(text or "") if not _NOT_NOW.search(x))
+            for text in lines]
+    rows = [sofar.Line(i, 0.0, False, text) for i, text in enumerate(kept)]
+    for words in (sofar.her_place(rows), sofar.her_state(rows)):
+        for kind, pattern in _KINDS:
+            if pattern.search(words):
+                return kind
+    return ""
+
+
+def playing_text(name: str, them: str, *, raid: bool = False, place: str = "") -> str:
+    """"Right now" for a member in his group while he plays: at her PC, in his group or raid
+    with him, and where they are when the instance is known."""
+    return PLAYING_WITH.format(name=name, them=them, group="raid" if raid else "group",
+                               place=f", in {place}" if place else "")
+
+
+def settled_where(text: str, stated: str, lp: LifePresence, *, playing: bool, them: str) -> str:
+    """`text` (her "Right now" line) made to agree with where she said she is a little while
+    ago (`stated`: stated_where): unchanged when she said nothing or it already agrees; in
+    his group (`playing`) she has just come from there and logged on (JOINED), then `text`;
+    else she is still where she said (STILL), whatever her day plan has moved on to."""
+    if not stated or not text:
+        return text
+    if playing:
+        joined = JOINED.get(stated)
+        return f"{joined.format(them=them)} {text}" if joined else text
+    if lp.block in _STATED_BLOCKS[stated]:
+        return text
+    return STILL[stated].format(them=them)
+
+
+# Her brb's reason, carried into her next prompts in that conversation (asked who was at the
+# door, she said "nobody": the reason was a code her prompt never saw). By interrupt.LINES' codes.
+AWAY_NOTE = "A few minutes ago you told {them} you had to step away: {why}. You're back now."
+AWAY_WHY = {"work": "something came up at work", "kids": "the kids needed you",
+            "home": "something needed you at home", "commute": "you were on the move",
+            "door": "someone was at the door", "phone": "your phone rang",
+            "food": "you went to get something to eat"}
+AWAY_NOTE_S = 1800.0  # how long after she is back the note stays
+
+
+def away_note(reason: str, them: str) -> str:
+    """The "Right now" sentence that says why she stepped away ("" for a reason it has no
+    words for)."""
+    why = AWAY_WHY.get(reason)
+    return AWAY_NOTE.format(them=them, why=why) if why else ""
 
 
 def away_words(lp: LifePresence, medium: str) -> str:

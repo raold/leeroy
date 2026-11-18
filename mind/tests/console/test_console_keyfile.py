@@ -259,7 +259,7 @@ def test_the_key_is_never_logged(data, tmp_path, caplog, capsys):
             for headers in ({"X-Console-Key": app.s.key}, {"X-Console-Key": "wrong" * 8}):
                 await http(app, "GET", "/api/state", key=False, headers=headers)
                 await http(app, "GET", "/api/personas", key=False, headers=headers, host=NAME)
-                await http(app, "GET", "/api/feed?after=x", key=False, headers=headers)
+                await http(app, "GET", "/api/feed/history?view=guild&before=x", key=False, headers=headers)
                 await http(app, "POST", "/api/control", key=False, headers=headers,
                            origin=f"https://{NAME}", host=NAME, body={"service": "x"})
             await asyncio.sleep(0.05)

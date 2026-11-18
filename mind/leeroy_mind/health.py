@@ -1311,8 +1311,9 @@ def _owner_replies(conn, now: float) -> Check:
     OWNER_UNANSWERED_FAIL. Counts by medium only, never a text. With [life] availability above
     0 (meta life:availability, as the mind put it in force) the bounds are her day's: a game
     line within game_cap_s plus OWNER_LATE_MARGIN_S, a DM or group DM by when her own time
-    answers it (discord.owntime.due_at) plus the margin, and her line in her DM answers his
-    whisper too (a whisper carried there at his logout)."""
+    answers it (discord.owntime.due_at, so within [life] dm_wait_cap_s, meta
+    life:dm_wait_cap_s) plus the margin, and her line in her DM answers his whisper too (a
+    whisper carried there at his logout)."""
     from .life import config as life_config
     from .talk.owed import count_unanswered
     name = "owner-replies"
@@ -1383,26 +1384,48 @@ def _own_time_due(conn, human: int, now: float, availability: int):
         return personas[guid]
 
     def due(channel: str, message: int, ts: float) -> float:
+        named: dict[int, bool] | None = None  # None: her own DM, always capped
         if is_group(channel):
             members = [g for g in readers(conn, channel, include_closed=True) if g != human]
+            # a group DM line is capped only for the members it names (groups.service: the
+            # receipt holds `named` while she is owed); anyone else keeps her own time, so
+            # the bound must too, or a late unnamed answer reads as a miss
+            named = {}
+            row = conn.execute("SELECT value FROM meta WHERE key = ?",
+                               (f"groups:owed:{message}",)).fetchone()
+            try:
+                held = json.loads(row[0]) if row is not None else {}
+            except (TypeError, ValueError):
+                held = {}
+            if isinstance(held, dict):
+                named = {int(g): isinstance(d, dict) and d.get("named") is True
+                         for g, d in held.items() if str(g).isdecimal()}
         else:
             peer = channel[3:]
             members = [int(peer)] if peer.isdecimal() else []
-        pinned = life_config.availability(), life_config.state_on()
-        life_config.pin(availability, pinned[1])
+        pinned = (life_config.availability(), life_config.state_on(),
+                  life_config.dm_wait_cap())
+        # the bound follows [life] dm_wait_cap_s as the mind put it in force (meta)
+        life_config.pin(availability, pinned[1], life_config.stored_cap(conn))
         try:
             times = [owntime.due_at(p, post_ts=ts, now=now, local_now=local_now,
                                     message_id=message, urgent=False, talking=False,
-                                    insist=False)
+                                    insist=False,
+                                    capped=named is None or named.get(g, False))
                      for g in members if (p := persona(g)) is not None]
         except Exception:
             times = []
         finally:
             life_config.pin(*pinned)
+        cap = life_config.stored_cap(conn)
         for g in members:  # she stepped away when he wrote: she finds it once she is back
             a = away(g)
             if a is not None and a[0] <= ts < a[1]:
-                times.append(a[1] + BACK_FIND_S[1])
+                back = a[1] + BACK_FIND_S[1]
+                # ...and no later than the cap after his post (DiscordTalk._due_of), for her
+                # own DM and a group line that names her
+                capped = cap > 0 and (named is None or named.get(g, False))
+                times.append(min(back, ts + cap * owntime.ASLEEP_CAP) if capped else back)
         return max(times, default=ts) + OWNER_LATE_MARGIN_S
     return due
 

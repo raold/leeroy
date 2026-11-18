@@ -41,12 +41,14 @@ def test_not_in_person(text):
     assert not in_person(text)
 
 
-def test_a_soft_tell_of_its_own_never_the_summons():
+def test_a_tell_of_its_own_never_the_summons():
     assert not is_summon(MEET)
     assert [(t.reason, t.fatal, t.soft) for t in find_tells(MEET, far=True)] == [
         ("in person", False, True)]
     assert find_tells(MEET) == [] and find_tells(MEET, summons_ok=False) == []
-    assert "in person" not in OWED_HARD_TELLS and "in person" not in DROP_ON_RETRY
+    # hard since 2026-11-17 (self-play audit: nine have-met claims went out, one kept as an
+    # owed draft): never sent, an owed answer included (tests/test_never_met.py)
+    assert "in person" in OWED_HARD_TELLS and "in person" in DROP_ON_RETRY
 
 
 def test_a_later_expansion_named_is_a_soft_tell():
@@ -135,15 +137,18 @@ def test_a_met_arc_may_see_him(store, clock, tmp_path, channel):
 
 
 @pytest.mark.parametrize("channel", ["whisper", "dm"])
-def test_an_owed_answer_keeps_a_retry_that_still_sees_him(store, clock, tmp_path, channel):
-    """Soft, never the summons: the retry stands, no fallback generation."""
+def test_an_owed_answer_never_sends_a_retry_that_still_sees_him(store, clock, tmp_path, channel):
+    """Hard since 2026-11-17: the retry's sentence that sees him is cut and the rest goes, with
+    no further generation."""
     r = _rig(store, clock, tmp_path)
     try:
-        r.script(MEET, "ha fine, i need u there saturday")
+        r.script(MEET, "ha fine. i need u there saturday. bring snacks for the raid")
         meta = TurnMeta("owed", why="reply:named", answers_human=True,
                         whisper_reply=channel == "whisper")
         sent = _speak(r, TURNS[channel](), meta)
-        assert sent and "need u there" in " ".join(sent) and len(r.chat_calls()) == 2
+        said = " ".join(sent)
+        assert sent and "need u there" not in said and "snacks" in said
+        assert len(r.chat_calls()) == 2
     finally:
         r.close()
 

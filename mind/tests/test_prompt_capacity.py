@@ -37,7 +37,7 @@ def test_warning_reports_every_rendered_section_as_counts_without_text(caplog):
     record = next(r for r in caplog.records if "last-resort trim" in r.getMessage())
     assert record.args[-1] == section_tokens(p)
     # learned style has its own bounded section, and the untrimmed sections theirs
-    assert len(record.args[-1]) == 14
+    assert len(record.args[-1]) == 15
     assert all(isinstance(v, int) for v in record.args[-1].values())
     assert "PRIVATE_SENTINEL" not in caplog.text
 
