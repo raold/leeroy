@@ -696,7 +696,7 @@ def test_a_budget_is_never_stored_as_a_scope(cast):
     mid = raw(cast, 101, *refs, scope=known.scope, scope_with=known.scope_with)
     first = scopes.settle(cast.conn, (mid,), now=cast.clock.now(), source=None,
                           cap=privacy.RESOLVE_NODES)        # after_write's first step
-    assert first.raised == 0 and stored(cast, mid) == ("private", HUMAN)
+    assert first.checked == 1999 and stored(cast, mid) == ("private", HUMAN)
     row = cast.conn.execute("SELECT derived_at, derived_scope FROM memory WHERE id = ?",
                             (mid,)).fetchone()
     assert tuple(row) == (None, None)                          # unchecked, nothing written down
