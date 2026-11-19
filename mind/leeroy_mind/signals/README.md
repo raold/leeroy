@@ -100,10 +100,11 @@ week of DMs produced no observation at all.
 - **What the reply says** (`signals/discord.py`, the lexicons talk already reads him with):
   `asked_back` (a question of his own: not pushback, not her line said back, and when shorter
   than four words only if it keeps her topic, so "that's it?" and "really?" are not interest),
-  `laughed`, `affection` (thanks, praise, a flirt, a heart), `topic_kept` (a shared content
-  word), `objected` (talk's pushback cues, "you already said that", "not what I asked", "did
-  you even read", "you're not making sense", "that's it?", a bare "what", "huh", "wtf", "ew" or
-  "stop"); "no" or "k" alone is a reply and nothing more. `topic_changed` (she asked a question
+  `laughed` (never with `objected`: "lol what" is pushback), `affection` (thanks, praise, a
+  flirt, a heart), `topic_kept` (a shared content word), `objected` (talk's pushback cues, "you
+  already said that", "not what I asked", "did you even read", "you're not making sense",
+  "that's it?", "is that all you have to say?", a bare "what", "huh", "wtf", "ew" or "stop");
+  "no" or "k" alone is a reply and nothing more. `topic_changed` (she asked a question
   and he, sharing no content word, asked about something else: an answer in his own words shares
   none either, so only his own unrelated question counts; observed only, the reward gives it
   no weight), `sent_media` (his photo or voice
@@ -120,9 +121,10 @@ week of DMs produced no observation at all.
 - **Where it is written.** His Discord actions are written through the mind's own connection,
   on the event loop between its units, never on the capture's second connection: a commit from
   a second connection while the pipeline holds a read snapshot makes the pipeline's next write
-  fail at once, and that write can be an answer he is owed. (The Discord answer's own unit also
-  takes the write lock before it reads and retries a busy store once: `Store.write_first`,
-  `discord_store_retry`.) Game observations still use the worker.
+  fail at once, and that write can be an answer he is owed. Each such unit takes the write lock
+  before it reads (`Store.write_first`). The Discord answer's own unit does too and retries a
+  busy store once (`discord_store_retry`), each try waiting 2.5 s for the lock, so both together
+  wait no longer than the one try did. Game observations still use the worker.
 - **Privacy.** The queue carries line ids and flags. The two lines' text is read only inside
   the classifier, which stores kinds and numbers; logs carry codes and counts. A DM line is
   credited only by his message in that DM.
