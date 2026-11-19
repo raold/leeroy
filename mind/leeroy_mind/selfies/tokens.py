@@ -68,6 +68,8 @@ WORD_TOKENS = {
     # body size and bust (prompt.SIZE_WORDS, BUST_WORDS), measured 2026-11-15
     "arms": 1, "chubby": 1, "frame": 1, "heavyset": 2, "lean": 1, "overweight": 1, "round": 1,
     "slender": 1, "slightly": 1, "small": 1,
+    # C-H bust presets, measured against both local RealVisXL tokenizers, 2026-11-19
+    "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "cup": 1,
     # glutes, waist and hips (prompt.GLUTES_WORDS, WAIST_WORDS, HIPS_WORDS), measured 2026-11-15
     "backside": 2, "glutes": 2, "rounded": 1,
     # the photo kinds and framings (prompt._KINDS, _FRAMINGS), measured 2026-11-15

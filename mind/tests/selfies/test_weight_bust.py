@@ -78,7 +78,8 @@ def test_a_bust_off_the_list_is_refused(bust):
 
 
 def test_weight_keeps_its_bounds_and_a_man_has_no_bust():
-    assert BUSTS == ("small", "medium", "large", "very_large")
+    assert BUSTS == ("small", "medium", "large", "very_large",
+                     "c_cup", "d_cup", "e_cup", "f_cup", "g_cup", "h_cup")
     assert any("appearance.weight_kg: must be at least 40" in e
                for e in validate_persona(woman(weight_kg=39)))
     assert any("at most 180" in e for e in validate_persona(woman(weight_kg=181)))

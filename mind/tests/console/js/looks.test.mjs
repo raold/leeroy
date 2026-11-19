@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { BUST_UNSET, GROUPS, SETS, SHAPES, STYLE, bustText, canUndoLooks, looksArgs, looksForm,
          looksReply, looksUndoArgs, optionText, SAVE_WORDS, shapeText, styleRows } from "../../../leeroy_mind/console/static/js/looksmodel.mjs";
 
-const LIMITS = { weight_kg: [40, 180], busts: ["small", "medium", "large", "very_large"],
+const LIMITS = { weight_kg: [40, 180], busts: ["small", "medium", "large", "very_large",
+                                           "c_cup", "d_cup", "e_cup", "f_cup", "g_cup", "h_cup"],
                  glutes: ["small", "medium", "large", "very_large"],
                  waists: ["very_narrow", "narrow", "average", "wide"],
                  hips: ["narrow", "average", "wide", "very_wide"] };
@@ -60,6 +61,19 @@ test("undo goes only to his weight and bust rows not undone yet", () => {
   assert.equal(canUndoLooks({ id: 7, kind: "looks", undone: true }), false);
   assert.equal(canUndoLooks({ id: 7, kind: "stance_band", undone: false }), false);
   assert.equal(canUndoLooks({ kind: "looks" }), false);
+});
+
+test("C-H presets load, label and submit individually without changing weight", () => {
+  for (const letter of "cdefgh") {
+    const value = `${letter}_cup`;
+    const form = looksForm({ ...her, appearance: { ...her.appearance, bust: value } }, LIMITS);
+    assert.equal(form.bust, value);
+    assert.equal(bustText(value), `${letter.toUpperCase()} cup`);
+    assert.deepEqual(looksArgs(102, form, "88", value),
+      { action: "set", guid: 102, weight_kg: 88, bust: value });
+  }
+  const older = looksForm(her, { ...LIMITS, busts: ["small", "medium", "large", "very_large"] });
+  assert.throws(() => looksArgs(102, older, "88", "h_cup"), /from the list/);
 });
 
 test("the answer's words are the mind's own, and the bust is said in words", () => {

@@ -4,7 +4,7 @@
 // one ledger row (its Undo is in the ledger below) and one queued set of profile photos. Drafts
 // stay in this page's memory.
 import { clear, el, emit, obj, post, str } from "./core.mjs";
-import { BUST_UNSET, BUST_WORDS, GROUPS, SAVE_WORDS, SETS, SHAPES, STYLE, looksArgs, looksForm, looksReply,
+import { BUST_HELP, BUST_UNSET, BUST_WORDS, GROUPS, SAVE_WORDS, SETS, SHAPES, STYLE, looksArgs, looksForm, looksReply,
          looksUndoArgs, optionText } from "./looksmodel.mjs";
 
 const drafts = new Map();
@@ -55,6 +55,10 @@ export function looksEditor(box, j, guid, live, why, done) {
     bust.addEventListener("change", () => { draft.bust = bust.value; });
     const bl = el("label", "godmode-field", "Bust");
     bl.appendChild(bust);
+    const hint = el("small", "why", BUST_HELP);
+    hint.id = `looks-bust-help-${guid}`;
+    bust.setAttribute("aria-describedby", hint.id);
+    bl.appendChild(hint);
     body.appendChild(bl);
   }
   const shapes = {};  // glutes, waist and hips beside her bust, women only

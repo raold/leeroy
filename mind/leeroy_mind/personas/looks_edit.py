@@ -81,10 +81,14 @@ class LooksChange:
 
 
 def bust_text(bust: str | None) -> str:
+    if bust is not None and bust.endswith('_cup'):
+        return bust.removesuffix('_cup').upper() + ' cup'
     return "the build's own" if bust is None else bust.replace("_", " ")
 
 
 def shape_text(name: str, value: str | None) -> str:
+    if name == 'bust':
+        return bust_text(value)
     if value is None:
         return "not said" if name == "glutes" else "the build's own"
     return value.replace("_", " ")
@@ -149,7 +153,7 @@ def check(weight_kg, bust, glutes=KEEP, waist=KEEP, hips=KEEP, **style) -> None:
             continue
         if not isinstance(value, str) or value not in SHAPES[name]:
             raise LooksError(f"{_NAMED[name]} one of "
-                             + ", ".join(v.replace("_", " ") for v in SHAPES[name])
+                             + ", ".join(shape_text(name, v) for v in SHAPES[name])
                              + ", or not set.")
 
 

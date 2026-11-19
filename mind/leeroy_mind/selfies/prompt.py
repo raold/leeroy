@@ -216,7 +216,9 @@ BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "aver
 # body-shape words, each said in place of the build's own (_BUILD_PARTS) or after the build,
 # women only. Never cleavage or a word of the negatives.
 BUST_WORDS = {"small": "small bust", "medium": "medium bust", "large": "large full bust",
-              "very_large": "very large full bust"}
+              "very_large": "very large full bust",
+              "c_cup": "C-cup bust", "d_cup": "D-cup bust", "e_cup": "E-cup bust",
+              "f_cup": "F-cup bust", "g_cup": "G-cup bust", "h_cup": "H-cup bust"}
 WAIST_WORDS = {"very_narrow": "very narrow waist", "narrow": "narrow waist",
                "average": "average waist", "wide": "thick waist"}
 HIPS_WORDS = {"narrow": "narrow hips", "average": "average hips", "wide": "wide hips",

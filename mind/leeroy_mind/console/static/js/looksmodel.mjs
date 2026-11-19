@@ -2,7 +2,9 @@
 // looks op): the form's values, the op's arguments and the ledger rows an Undo can take. Pure,
 // so node --test checks it without a page.
 
-export const BUST_WORDS = { small: "small", medium: "medium", large: "large", very_large: "very large" };
+export const BUST_WORDS = { small: "small", medium: "medium", large: "large", very_large: "very large",
+  c_cup: "C cup", d_cup: "D cup", e_cup: "E cup", f_cup: "F cup", g_cup: "G cup", h_cup: "H cup" };
+export const BUST_HELP = "C-H are visual presets, not exact measurements. Clothing and pose affect the result.";
 export const BUST_UNSET = "the build's own";
 // Her other figure words beside the bust (owner, 2026-11-15), women only: name, label, the
 // persona view's limits key, the words for "not set".
