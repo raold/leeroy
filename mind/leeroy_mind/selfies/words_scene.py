@@ -37,8 +37,9 @@ from the vetted outfit lists (scene_choices.OUTFITS for the plain style, kind.py
 drawn colour for the lust style). Pyjamas resolve to clothed loungewear from those lists, never
 sleepwear; swimwear only for a lust-styled woman, at a water place, framed waist-up. With private
 romance styling it may use a mirror or timer too; otherwise only a handheld selfie, else casual.
-Gym wear or swimwear beside a bed, sofa or the indoors (scene.INDOOR_RE)
-is casual for her too. Every resolved outfit meets her names and the age guard again, and what
+Gym wear or swimwear beside a bed, sofa or the indoors (scene.INDOOR_RE) is casual for her, and
+for every privately styled woman (romance_styling, which also never styles a scene on a bed).
+Every resolved outfit meets her names and the age guard again, and what
 she wears at the computer (her persona's own words) the scene screens.
 
 The scene is stored in the request's snap in the situational shape (scene.Scene's fields, so
@@ -451,8 +452,8 @@ def resolve_wearing(code: str, p: Persona, *, place: str, framing: str, block: B
     elif code == "swimwear" and (not WATER_RE.search(place) or framing not in (
             ("handheld_selfie", "mirror_selfie", "timer") if private_style else ("handheld_selfie",))):
         code, fallback = "casual", "wearing:swimwear_pairing"
-    if lust and code in ("gym", "swimwear") and INDOOR_RE.search(place):
-        code, fallback = "casual", "wearing:indoor_pairing"
+    if (lust or private_style) and code in ("gym", "swimwear") and INDOOR_RE.search(place):
+        code, fallback = "casual", "wearing:indoor_pairing"  # any privately styled woman too
     phrase = _listed(code, p, seed, private_style=private_style)
     if not _wear_ok(p, phrase, vetted=True):
         code, fallback, phrase = "casual", "wearing:screen", PLAIN_WEAR["casual"]
@@ -519,6 +520,19 @@ def framing_words(p: Persona, framing: str) -> str:
 
 
 def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
+    """The prompt for a scene read from his words (_words_prompt). A privately styled one
+    (romance_styling) says its catalogue outfit in the short form whenever the whole one would
+    cost her a required word or leave her expression or the moment no room
+    (romance_styling.fit_choice), as a styled situational photo does (scene.build_scene_prompt)."""
+    if not scene.get("romance_style"):
+        return _words_prompt(p, scene)
+    from .romance_styling import fit_choice, outfit_forms
+    forms = outfit_forms(scene["outfit"])
+    specs = [_words_prompt(p, {**scene, "outfit": outfit}) for outfit in forms]
+    return fit_choice(specs, forms, scene.get("expression", ""), scene.get("activity", ""))
+
+
+def _words_prompt(p: Persona, scene: dict) -> PromptSpec:
     """The prompt for a scene read from his words, in this order: the framing (0), who she is (0),
     her body (0), `wearing <outfit>` (0), the place (0; with swimwear, a waist-up framing, 0), her
     hair and skin (0), what the owner set her to wear (1, its room reserved), the moment (1), a
@@ -563,6 +577,8 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
     room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
     out += worn
+    if s.romance_style:  # her styled expression, after the owner's accessories, before the moment
+        add(s.expression, 1, True)
     add(s.activity, 1, True)
     if w["framing"] == "timer" and not w.get("prop"):
         add(POSE_WAIST_UP, 1)
@@ -574,8 +590,9 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
         add(f"with {w['prop']}", 2, True)
     if not s.romance_light:
         add(LIGHT_WORDS[w["lighting"]], 2)
-    add(s.expression, 2 if s.romance_style else 3, True)  # after face details; empty on old recipes
-    if s.romance_style:
+    if not s.romance_style:
+        add(s.expression, 3, True)  # after face details; empty on old recipes
+    else:  # its pose and light: fixed codes (romance_styling)
         from .romance_styling import LIGHTS, POSES
         add(POSES.get(s.romance_pose, ''), 2, True)
         add(LIGHTS.get(s.romance_light, ''), 3, True)

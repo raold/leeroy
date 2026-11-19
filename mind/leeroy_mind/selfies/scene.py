@@ -4,7 +4,7 @@ The reflection model only chooses enums. Code composes every phrase, then the ex
 screens run unchanged. Stored prose remains readable; lust scenes keep their held-style rules.
 """
 import re
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 from leeroy_mind.human import HumanIdentity
@@ -514,11 +514,13 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
         return "scene.styling: held"
     if s.romance_style:
         from .style import looks_age_coded
+        from .words_scene import BED_RE
         if (s.romance_style not in EXPRESSIONS or s.audience != "him"
                 or p.identity.age < SUGGESTIVE_MIN_AGE or looks_age_coded(p)
                 or p.identity.player_gender != "female"
-                or p.romance.stance not in ("fond", "drawn", "lust")):
-            return "scene.styling: held"
+                or p.romance.stance not in ("fond", "drawn", "lust")
+                or BED_RE.search(s.setting) or BED_RE.search(s.activity)):
+            return "scene.styling: held"  # never a styled outfit on a bed (romance_styling)
     if UNDRESS_RE.search(s.setting):
         return "scene.setting: undress"  # also hold older planned bathing-context rows
     named = names_re(p)
@@ -532,6 +534,19 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
 
 
 def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
+    """The prompt for scene s with p's face (_scene_prompt). A privately styled scene
+    (romance_styling) requires its setting, and its outfit says the short form
+    (romance_styling.short_outfit) whenever the long one would cost her a required word or leave
+    her expression no room (romance_styling.fit_choice)."""
+    if not s.romance_style:
+        return _scene_prompt(p, s)
+    from .romance_styling import fit_choice, outfit_forms
+    forms = outfit_forms(s.outfit)
+    specs = [_scene_prompt(p, replace(s, outfit=outfit)) for outfit in forms]
+    return fit_choice(specs, forms, s.expression, s.activity)
+
+
+def _scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     """The prompt for scene s with p's face, in this order: kind, framing, subject (0), her body
     (0: her size, then the build with her bust, prompt.body_phrases), the activity (1), the
     setting (1), hair and skin (0), what she wears (0: `wearing` the outfit, a top and a bottom,
@@ -540,7 +555,9 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     limb_detail), the light of its time of day (2), the expression (3), a plain
     average build (1) and the phone look (1, without natural light late at night). A lust
     scene's outfit and setting go in as one priority-0 phrase where the setting stands, with
-    SNAP_NEGATIVE_LUST. If the required set would not fit, the kind, framing, hair style, skin
+    SNAP_NEGATIVE_LUST. A privately styled scene (romance_style) requires its setting (0) and puts
+    its expression first among the optional phrases (1, before the activity), never in the
+    accessories' reserve. If the required set would not fit, the kind, framing, hair style, skin
     modifiers and size's last terms shorten, then the kind and the framing yield
     (prompt.fit_required); her build and bust stay whole. Free text holding the persona's names is
     dropped. ValueError when scene_renderable says why not."""
@@ -564,13 +581,13 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
                  pos="her" if p.identity.player_gender == "female" else "his")
     if pose_priority(s.framing) == 0:  # a body shot's pose is required
         add(stand, 0)
+    if s.romance_style:  # her expression first among the optional phrases (build_scene_prompt)
+        add(s.expression, 1, True)
     add(s.activity, 1, True)
     if lust:  # one phrase: the fit keeps both or neither; scene_renderable checked the names
         add(lust_phrase(s), 0, True)
-    else:
-        add(s.setting, 1, True)
-        if s.romance_style:
-            add(f"wearing {s.outfit}", 0, True)
+    else:  # a styled scene's place is required, ahead of its outfit's detail
+        add(s.setting, 0 if s.romance_style else 1, True)
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]  # never traded for body words
     clothes = None
     if not lust:  # clothed by construction: required, a top and a bottom (the audit: at
@@ -583,7 +600,8 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
     # what the owner set her to wear, after the activity and setting among the optional
     # phrases; the required set shortens to leave room for all of them (fit_required's reserve)
     acc = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]
-    room = reserve([x for x in out if x[1] == 1] + acc) if acc else 0
+    room = reserve([x for x in out if x[1] == 1 and not (s.romance_style and x[0] == s.expression)]
+                   + acc) if acc else 0  # her styled expression costs her no identity word
     out += acc
     if pose_priority(s.framing):  # a waist-up photo's: after what the owner set her to wear
         add(stand, 1)
@@ -598,8 +616,9 @@ def build_scene_prompt(p: Persona, s: Scene) -> PromptSpec:
         add(_LIGHT[s.when], 2)
     if glutes_words(p) and s.framing in GLUTES_FRAMINGS:  # optional, after who she is
         out.append((glutes_words(p), 2))
-    add(s.expression, 2 if s.romance_style else 3, True)
-    if s.romance_style:
+    if not s.romance_style:
+        add(s.expression, 3, True)
+    else:  # its pose and light: fixed codes (romance_styling)
         from .romance_styling import LIGHTS, POSES
         add(POSES.get(s.romance_pose, ''), 2, True)
         add(LIGHTS.get(s.romance_light, ''), 3, True)

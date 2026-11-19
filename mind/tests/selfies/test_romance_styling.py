@@ -1,4 +1,5 @@
 """Private clothed styling; fake models, invented adults, no GPU or live services."""
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -8,12 +9,15 @@ from conftest import run
 from leeroy_mind.config import ConfigError
 from leeroy_mind.life.day import Block
 from leeroy_mind.personas.io import load_persona
+from leeroy_mind.selfies import safe
 from leeroy_mind.selfies import words_scene as W
 from leeroy_mind.selfies.config import SelfieCfg, load_selfie_config
 from leeroy_mind.selfies.kind import CLOTHED_OUTFITS, LUST_COLOURS
 from leeroy_mind.selfies.request_scene import choose_scene
-from leeroy_mind.selfies.romance_styling import EXPRESSIONS, enum_category, level, restyle
-from leeroy_mind.selfies.prompt import negative_for
+from leeroy_mind.selfies.romance_styling import (EXPRESSIONS, enum_category, level,
+                                                 outfit_forms, pose_choices, restyle,
+                                                 short_outfit, template_of)
+from leeroy_mind.selfies.prompt import negative_for, over_fit
 from leeroy_mind.selfies.scene import (SNAP_NEGATIVE, SNAP_NEGATIVE_LUST, _text_codes,
                                      build_scene_prompt, scene_from, scene_json, scene_renderable,
                                      snap_negative)
@@ -26,8 +30,29 @@ from nightly.conftest import IDENT, h  # noqa: F401
 from nightly.test_night_scenes import SNAPS_CFG, cast
 from selfies.test_request_scene import app, save  # noqa: F401
 from selfies.test_scene_choices import PICKS
+from selfies import clip_bpe
 from selfies.test_selfie_prompt import _worker_fit, woman, man
 from selfies.test_words_scene import LUST_PICKS, words
+
+_TOKENIZERS = pytest.mark.skipif(
+    clip_bpe.tokenizers() is None,
+    reason="RealVisXL tokenizer files are not on this machine (set LEEROY_SELFIE_DATA)")
+LONGEST = max(LUST_COLOURS, key=len)
+TEMPLATES = [t for pool in CLOTHED_OUTFITS.values() for t in pool]
+# what the photo audit found drawn wrong (safe.OUTFIT_WORDS): fused garments, a skirt read as
+# bottomless, a bicycle in the gym
+AUDIT_TRIGGERS = re.compile(r"one-shoulder|mini ?skirt|\bbike\b|bicycle|cycling", re.I)
+PARTS = dict(bust="very_large", glutes="very_large", waist="wide", hips="very_wide")
+
+
+def composed(template: str, colour: str = LONGEST) -> str:
+    phrase = template.format(colour=colour)
+    return ("an " if phrase[0] in "aeiou" else "a ") + phrase
+
+
+def drawn(parts: bool = False):
+    p = woman(age=30, stance="drawn")
+    return replace(p, appearance=replace(p.appearance, **PARTS)) if parts else p
 
 
 def original(**over):
@@ -216,23 +241,121 @@ def test_added_clothes_and_expressions_obey_owner_and_member_name_screens():
     assert styled(p, s) is s
 
 
-@pytest.mark.parametrize("activity,category", [("hiking", "outdoors"), ("gardening", "outdoors"),
-    ("cooking", "casual"), ("repairing", "casual"), ("exercise", "gym")])
-def test_activity_keeps_the_outfit_practical(activity, category):
-    assert enum_category({**PICKS, "activity": activity}) == category
+@pytest.mark.parametrize("activity,setting,category", [
+    ("hiking", "trail", "outdoors"), ("gardening", "garden", "outdoors"),
+    ("cooking", "kitchen", "casual"), ("repairing", "workbench", "casual"),
+    ("exercise", "gym", "gym"), ("stretching", "gym", "gym"),
+    # the gym pairing (scene_choices.pairing_codes): gym wear only at the gym
+    ("stretching", "park", "outdoors")])
+def test_activity_keeps_the_outfit_practical(activity, setting, category):
+    assert enum_category({**PICKS, "activity": activity, "setting": setting}) == category
 
 
-def test_clothing_and_identity_survive_the_worker_fit_with_unchanged_negatives():
-    p = woman(age=30, stance="drawn")
-    fit = _worker_fit()
-    for category in ("casual", "going_out", "warm", "outdoors", "gym"):
-        for seed in range(40):
-            s = styled(p, category=category, seed=seed)
+def test_lust_gym_wear_stays_at_the_gym():
+    gym = {**LUST_PICKS, "activity": "stretching", "outfit": "sports top and leggings"}
+    assert enum_category({**gym, "setting": "the gym"}) == "gym"
+    assert enum_category({**gym, "setting": "a park in summer"}) == "outdoors"
+
+
+# -- the catalogue: clothed by construction (safe.py) ---------------------------------------------
+
+@pytest.mark.parametrize("template", TEMPLATES)
+def test_every_template_is_complete_short_enough_and_free_of_the_audit_triggers(template):
+    assert not AUDIT_TRIGGERS.search(template), template
+    for colour in LUST_COLOURS:
+        phrase = composed(template, colour)
+        assert safe.is_complete(phrase), phrase
+        assert len(phrase.split()) <= safe.WEAR_MAX_WORDS, phrase
+        # so the required clothing phrase is the template itself, never the default garments
+        for framing in ("upper_body", "three_quarter", "head_and_shoulders"):
+            assert safe.wearing(phrase, gender="female", framing=framing) == f"wearing {phrase}"
+
+
+@pytest.mark.parametrize("template", TEMPLATES)
+def test_every_short_form_keeps_the_garments_colour_and_screens(template):
+    for colour in LUST_COLOURS:
+        phrase = composed(template, colour)
+        assert template_of(phrase) == template
+        forms = outfit_forms(phrase)
+        assert forms[0] == phrase and len(forms) == len(set(forms))
+        for form in forms:
+            assert safe.is_complete(form) and colour in form, (phrase, form)
+            assert set(form.split()) - {"a", "an"} <= set(phrase.split()), (phrase, form)
+            assert not _text_codes("outfit", form, ident=IDENT, names=[]), form
+            assert not AUDIT_TRIGGERS.search(form)
+
+
+def test_short_forms_name_the_same_garments():
+    phrase = "a cobalt blue cap-sleeve ribbed top and wide-leg cotton trousers"
+    assert short_outfit(phrase) == "a cobalt blue ribbed top and cotton trousers"
+    assert short_outfit(phrase, minimal=True) == "a cobalt blue top and trousers"
+    dress = "an emerald satin sweetheart-neckline knee-length fit-and-flare dress"
+    assert short_outfit(dress) == "an emerald knee-length fit-and-flare dress"
+    assert short_outfit(dress, minimal=True) == "an emerald knee-length dress"
+    jacket = "a navy cropped field jacket over a tee and walking shorts"
+    assert short_outfit(jacket, minimal=True) == "a navy jacket over a tee and shorts"
+    # only a catalogue outfit has short forms: swimwear and the lists' own stay whole
+    assert outfit_forms("a red string bikini") == ["a red string bikini"]
+    assert outfit_forms(OUTFITS["outdoors"]) == [OUTFITS["outdoors"]]
+
+
+# -- the prompt: one clothing phrase, the setting required, the expression's room -----------------
+
+def _styled_scene(template: str, framing: str = "upper_body"):
+    base = replace(scene_from(compose_choices({**PICKS, "framing": framing})), audience="him")
+    return replace(base, outfit=composed(template), expression="a knowing smile",
+                   romance_style="confident")
+
+
+@pytest.mark.parametrize("parts", [False, True])
+def test_every_template_fits_with_one_clothing_phrase_and_the_setting_required(parts):
+    p, fit = drawn(parts), _worker_fit()
+    for framing in ("upper_body", "three_quarter", "head_and_shoulders"):
+        for template in TEMPLATES:
+            s = _styled_scene(template, framing)
             spec = build_scene_prompt(p, s)
+            assert not over_fit(spec), (framing, template)
+            worn = [(t, pr) for t, pr in spec.phrases if t.startswith("wearing ")]
+            assert len(worn) == 1 and worn[0][1] == 0, worn
+            assert worn[0][0][len("wearing "):] in outfit_forms(s.outfit)
+            assert (s.setting, 0) in spec.phrases
+            assert (s.expression, 1) in spec.phrases
+            assert spec.negative == negative_for(p, SNAP_NEGATIVE)
             prompt, _ = fit(spec.phrases, estimate, 75)
-            assert s.outfit in prompt and "30-year-old" in prompt
-            assert "hair" in prompt and "skin" in prompt
-            assert spec.negative == SNAP_NEGATIVE
+            assert "30-year-old" in prompt and "hair" in prompt and "skin" in prompt
+
+
+def test_the_whole_outfit_is_said_when_it_costs_nothing():
+    s = _styled_scene("{colour} cotton shirt and jeans")
+    spec = build_scene_prompt(woman(age=30, stance="drawn"), s)
+    assert (f"wearing {s.outfit}", 0) in spec.phrases
+
+
+def test_a_lust_scene_keeps_one_joined_phrase_in_one_of_its_forms(app):
+    enable(app, stance="lust", dial=10)
+    app.llm.answers = [LUST_PICKS]
+    s = run(choose_scene(app, 101, "a photo please", "him"))
+    spec = build_scene_prompt(load_persona(app.store, 101), s)
+    worn = [t for t, pr in spec.phrases if t.startswith("wearing ")]
+    assert len(worn) == 1
+    assert any(worn[0] == f"wearing {form}, {s.setting}" for form in outfit_forms(s.outfit))
+
+
+@_TOKENIZERS
+@pytest.mark.parametrize("parts", [False, True])
+def test_on_the_real_tokenizer_the_setting_always_and_the_expression_nearly_always_show(parts):
+    """The worker's own fit and count (RealVisXL's tokenizers) over all 512 templates in the
+    longest colour, on the review's fixture (a waist-up dog walk in the park): the setting is
+    required; the expression is kept unless her required set leaves it no room."""
+    p, fit = drawn(parts), _worker_fit()
+    kept = {"setting": 0, "expression": 0}
+    for template in TEMPLATES:
+        s = _styled_scene(template)
+        prompt, _ = fit(build_scene_prompt(p, s).phrases, clip_bpe.count, 75)
+        kept["setting"] += s.setting in prompt
+        kept["expression"] += s.expression in prompt
+    assert kept["setting"] == len(TEMPLATES)
+    assert kept["expression"] >= (len(TEMPLATES) if not parts else 500), kept
 
 
 def test_stored_styled_scene_is_held_if_privacy_or_adult_identity_changes():
@@ -267,9 +390,14 @@ def test_words_request_retains_place_light_prop_framing_and_styled_clothing(app)
     p = load_persona(app.store, 101)
     spec = W.build_words_prompt(p, s)
     prompt, _ = _worker_fit()(spec.phrases, estimate, 75)
-    assert s["outfit"] in prompt and "kitchen at home" in prompt
-    assert (s["expression"], 2) in spec.phrases
-    assert spec.phrases.index((s["expression"], 2)) > spec.phrases.index(("hazel eyes", 2))
+    assert "kitchen at home" in prompt and s["expression"] in prompt
+    worn = [t for t, pr in spec.phrases if t.startswith("wearing ")]
+    assert len(worn) == 1 and worn[0][len("wearing "):] in outfit_forms(s["outfit"])
+    assert worn[0] in prompt
+    # her expression is the first optional phrase after what the owner set her to wear, before
+    # the moment
+    assert (s["expression"], 1) in spec.phrases
+    assert spec.phrases.index((s["expression"], 1)) < spec.phrases.index((s["activity"], 1))
     assert spec.negative == negative_for(p, snap_negative(
         False, s["words"]["framing"] == "mirror_selfie"))
 
@@ -306,3 +434,91 @@ def test_night_uses_final_outlet_even_when_model_chooses_private(h):
     assert private.scene["romance_style"] == "playful"
     assert "romance_style" not in public.scene
     assert private.scene["outfit"] in private.scene["shows"]
+
+
+# -- the place pairings, for every styled woman (review of #364, P1-3) ----------------------------
+
+GYM_POOL = frozenset(CLOTHED_OUTFITS["gym"])
+STYLED_POOLS = frozenset(t for pool in CLOTHED_OUTFITS.values() for t in pool)
+
+
+@pytest.mark.parametrize("stance", ["fond", "drawn", "lust"])
+@pytest.mark.parametrize("place", ["bedroom at home", "living room sofa", "bed with a book"])
+def test_no_styled_woman_wears_gym_clothes_indoors(app, stance, place):
+    enable(app, stance=stance, dial=10)
+    s = words(app, {"place": place, "wearing": "gym", "framing": "handheld_selfie"})
+    if place == "bed with a book" and stance == "lust":  # her place is never a bed (screened)
+        assert s["setting"] != place
+    assert s["words"]["wearing"] == "casual"
+    assert "wearing:indoor_pairing" in s["words"]["fallbacks"]
+    assert template_of(s["outfit"]) not in GYM_POOL
+
+
+@pytest.mark.parametrize("stance", ["fond", "drawn"])
+@pytest.mark.parametrize("wearing", ["gym", "going_out", "pyjamas", "casual"])
+@pytest.mark.parametrize("place", ["bedroom at home", "on my bed", "bed with a book"])
+def test_no_styled_outfit_on_a_bed(app, stance, wearing, place):
+    enable(app, stance=stance, dial=10)
+    s = words(app, {"place": place, "wearing": wearing, "framing": "handheld_selfie"})
+    assert W.BED_RE.search(s["setting"])
+    assert "romance_style" not in s and not s["expression"]
+    assert template_of(s["outfit"]) not in STYLED_POOLS
+
+
+def test_a_styled_sofa_scene_takes_the_casual_wardrobe_not_the_gym_one(app):
+    enable(app, stance="fond", dial=10)
+    s = words(app, {"place": "living room sofa", "wearing": "gym", "framing": "handheld_selfie"})
+    assert s["romance_style"] == "warm"
+    assert template_of(s["outfit"]) in CLOTHED_OUTFITS["casual"]
+
+
+@pytest.mark.parametrize("stance", ["fond", "drawn", "lust"])
+def test_restyle_never_styles_a_bed_and_makes_indoor_gym_wear_casual(stance):
+    p = woman(age=30, stance=stance)
+    for setting in ("on her bed", "in her bedroom", "propped up on pillows"):
+        s = original(setting=setting)
+        for category in ("casual", "going_out", "warm", "pyjamas", "gym"):
+            assert styled(p, s, category=category) is s
+    sofa = original(setting="on her living room sofa")
+    for seed in range(40):
+        got = styled(p, sofa, category="gym", seed=seed)
+        assert template_of(got.outfit) not in GYM_POOL and got.romance_style
+    # her wardrobe would keep the scene's own clothes, which the indoors refuses: unstyled
+    tagged = replace(p, appearance=replace(p.appearance, wardrobe=("sporty",)))
+    assert styled(tagged, sofa, category="gym") is sofa
+
+
+def test_a_stored_styled_scene_on_a_bed_is_held():
+    p = woman(age=30, stance="drawn")
+    s = styled(p)
+    assert scene_renderable(p, s) is None
+    assert scene_renderable(p, replace(s, setting="in her bedroom")) == "scene.styling: held"
+    assert scene_renderable(p, replace(s, activity="reading in bed")) == "scene.styling: held"
+
+
+# -- a selfie takes no body pose (safe.pose) -------------------------------------------------------
+
+@pytest.mark.parametrize("kind", ["selfie", "mirror_selfie"])
+@pytest.mark.parametrize("tone", ["warm", "playful", "confident"])
+def test_a_styled_selfie_only_looks_never_turns(kind, tone):
+    s = original(kind=kind, activity="")
+    for framing in (None, "handheld_selfie", "mirror_selfie"):
+        assert set(pose_choices(s, tone, framing)) <= {"direct", "tilt"}
+
+
+def test_a_timer_photo_or_snapshot_may_turn():
+    s = original(activity="")
+    assert "angled" in pose_choices(s, "confident")
+    assert "glance" in pose_choices(s, "confident", "timer")
+    assert "glance" not in pose_choices(s, "confident", "mirror_selfie")
+    assert pose_choices(original(), "confident") == ("",)  # an activity keeps its own pose
+
+
+def test_the_softer_private_instruction_replaces_the_sentence_it_names(tmp_path):
+    # a silent no-op if the sentence were ever reworded
+    assert "Fully clothed, nothing revealing or sexual," in W.PROMPT
+    kw = dict(human=IDENT, name="Ana", card="", facts="", looks="", block=None)
+    plain = W.system(tmp_path, **kw)
+    private = W.system(tmp_path, private_style=True, **kw)
+    assert "nothing revealing or sexual" in plain and "nothing revealing" not in private
+    assert "no nudity or sexual acts" in private
