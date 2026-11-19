@@ -414,8 +414,9 @@ def test_the_minds_refusal_or_silence_comes_back_and_a_success_is_announced(guil
         form = {"action": "form", "raid": "icc", "size": None, "heroic": True, "lead": "me"}
         ok = FakeLink({"ok": True, "message": "forming Icecrown Citadel heroic: ..."})
         async with served(make_app(data, mind=running(data), link=ok)) as app:
-            listen = asyncio.create_task(events(app, count=2))
+            listen = asyncio.create_task(events(app, count=2, skip={"status"}))
             await asyncio.sleep(0.2)
+            await app.refresh()  # a strip pass between the snapshot and the action, every run
             r = await http(app, "POST", "/api/raid", body=form, origin=True)
             assert r.status == 200
             kinds = await listen

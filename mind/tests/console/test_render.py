@@ -89,12 +89,16 @@ def test_mind_down_or_unanswered_says_so_without_forwarding(tmp_path):
     run(go())
 
 
-@pytest.mark.parametrize("reply,expect", [
-    ({"ok": True, "selfie_render": STARTED}, {"running": True, "selfies": True}),
-    ({"ok": True}, {"running": False, "selfies": False, "code": "off"}),
-    ({"ok": True, "selfie_render": None}, {"running": False, "code": "unknown"}),
+@pytest.mark.parametrize("on,reply,expect", [
+    (False, {"ok": True, "selfie_render": STARTED}, {"running": True, "selfies": True}),
+    (False, {"ok": True}, {"running": False, "selfies": False, "code": "off"}),
+    (False, {"ok": True, "selfie_render": None}, {"running": False, "code": "off"}),
+    (True, {"ok": True, "selfie_render": None}, {"running": False, "code": "checking"}),
 ])
-def test_the_strip_reads_the_mind_status(tmp_path, reply, expect):
+def test_the_strip_reads_the_mind_status(tmp_path, on, reply, expect):
+    if on:
+        (tmp_path / "mind.toml").write_text("[selfies]\nenabled = true\n", encoding="utf-8")
+
     async def go():
         link = FakeLink({**reply, "typing": [], "gpu": None})
         app = make_app(tmp_path, mind=running(tmp_path), link=link)
@@ -108,6 +112,35 @@ def test_the_strip_reads_the_mind_status(tmp_path, reply, expect):
             view = app.strip()["render"]
             assert {k: view[k] for k in expect} == expect
             assert view["enabled"] is True and view["mind_down"] is False
+        finally:
+            await app.close()
+    run(go())
+
+
+@pytest.mark.parametrize("on,before", [(False, "off"), (True, "checking")])
+def test_the_strip_never_shows_an_old_read_and_starts_as_mind_toml_says(tmp_path, on, before):
+    """No flip on the first read with selfies off; a page that opens long after the last read
+    sees checking, not a run that may have ended."""
+    if on:
+        (tmp_path / "mind.toml").write_text("[selfies]\nenabled = true\n", encoding="utf-8")
+    now = [1000.0]
+
+    async def go():
+        link = FakeLink({"ok": True, "typing": [], "gpu": None,
+                         **({"selfie_render": STARTED} if on else {})})
+        app = make_app(tmp_path, mind=running(tmp_path), link=link, monotonic=lambda: now[0])
+        await app.start()
+        try:
+            await app.refresh(force=True)  # nobody listening: the mind's status is not read
+            assert app.strip()["render"]["code"] == before
+            app._subs.add(console_app._Subscriber())
+            await app.refresh(force=True)
+            view = app.strip()["render"]
+            assert view["running"] is on and (on or view["code"] == "off")
+            app._subs.clear()
+            now[0] += 60  # no page listening, so no read since
+            assert app.strip()["render"]["code"] == before
+            assert app.strip()["render"]["running"] is False
         finally:
             await app.close()
     run(go())

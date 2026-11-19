@@ -205,6 +205,8 @@ SELFIE_S = 10.0  # a photo change's answer; the call waits this plus SELFIE_MARG
 SELFIE_MARGIN_S = 5.0  # a held chosen.jpg retries for about 2 s inside the op
 RENDER_S = 90.0  # Render selfies: a stop waits up to 60 s for the worker tree inside the op
 RENDER_DOWN = "Start the mind to render selfies."
+RENDER_FRESH_S = 3 * STATUS_S  # an older read of the mind's selfie_render is shown as checking
+RENDER_OFF = "Selfies are off ([selfies] enabled in mind.toml)."
 PREVIEW_S = endpoint.PREVIEW_S + 5.0  # a preview's two lines per member, at background priority
 MIND_DOWN = ("The mind isn't running, so it can't preview or change dials. Start it from the "
              "Mind tab.")
@@ -448,9 +450,16 @@ class ConsoleApp:
         self._mind_snapshot, self._mind_snapshot_at = None, float('-inf')
         self._gpu_state = {'paused': False, 'since': None, 'loaded': [], 'holders': [],
                            'refusal': None, 'enabled': controls.enabled, 'mind_down': True}
-        # His Render selfies run as the mind's status last said it (selfie_render); None: not
-        # read yet, or the mind is not running
+        # His Render selfies run as the mind's status last said it (selfie_render), and when;
+        # None: not read yet, or the mind is not running. Until a fresh read the strip says
+        # what mind.toml says ([selfies] off) or that it is checking, never an old read.
         self._render_state: dict | None = None
+        self._render_at = float("-inf")
+        try:
+            from ..selfies.config import load_selfie_config
+            self.selfies_enabled = load_selfie_config(settings.data_dir / "mind.toml").enabled
+        except Exception:  # an invalid table: the mind turns selfies off too
+            self.selfies_enabled = False
         self._tonight_seen = float('-inf')
         self._feed_last = 0
         self._discord_last: int | None = None  # newest Discord message id the pass has seen
@@ -569,6 +578,7 @@ class ConsoleApp:
         # the mind is stopping or could not read it
         render = reply.get('selfie_render', {'selfies': False})
         self._render_state = render if isinstance(render, dict) else None
+        self._render_at = self._monotonic()
         return typing_entries(reply.get("typing")) if self.game.state == status.IN_GAME or discord else []
 
     def _publish_status(self) -> None:
@@ -1199,7 +1209,8 @@ class ConsoleApp:
     def _render_view(self):
         """The top bar's Render selfies (console/RENDER.md): the mind's own selfie_render while it
         runs, else why nothing can render; `enabled` is control's, as the GPU control's."""
-        value = dict(self._render_state or {})
+        fresh = self._monotonic() - self._render_at <= RENDER_FRESH_S
+        value = dict(self._render_state or {}) if fresh else {}
         out = {'selfies': value.get('selfies') is True, 'snaps': value.get('snaps') is True,
                'running': value.get('running') is True, 'stopping': value.get('stopping') is True,
                'progress': value.get('progress') if isinstance(value.get('progress'), dict) else None,
@@ -1213,10 +1224,10 @@ class ConsoleApp:
             out.update(running=False, stopping=False, progress=None, backlog=None, code='mind',
                        refusal=RENDER_DOWN if out['mind_down'] else
                        'The mind state is unknown; nothing can render now.')
-        elif not value:
-            out.update(code='unknown', refusal='The mind has not said what can render yet.')
+        elif not value and self.selfies_enabled:
+            out.update(code='checking', refusal='Checking what can render…')
         elif not out['selfies']:
-            out.update(code='off', refusal='Selfies are off ([selfies] enabled in mind.toml).')
+            out.update(code='off', refusal=RENDER_OFF)
         if not self.controls.enabled:
             out['refusal'] = self.controls.reason or 'Control is off. Render selfies is disabled.'
         return out
@@ -1251,7 +1262,7 @@ class ConsoleApp:
             reply = {'ok': False, 'error': 'mind_unavailable',
                      'message': 'The mind did not confirm this render action. Check its state before trying again.'}
         if isinstance(reply.get('render'), dict):
-            self._render_state = reply['render']
+            self._render_state, self._render_at = reply['render'], self._monotonic()
         self._publish_status()
         said = reply.get('message') if isinstance(reply.get('message'), str) else None
         if reply.get('ok') is not True and said is None:
