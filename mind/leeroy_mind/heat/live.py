@@ -1,0 +1,352 @@
+"""Heat in the running mind: the glue between `resolve` (pure) and what it reads.
+
+`[heat] enabled` is read once at the mind's start (attach). With it off there is no HeatLive:
+`current()` is None, every reader takes the path it took before the dial, and stored heat rows
+do nothing. With it on and no world value set, heat governs nobody either (HeatLive.reaches):
+the romance dial and each woman's own dial keep their exact effect, whatever the romance dial
+is. Only his session override reaches the member it was said to, on the world value the
+romance dial stands for (DIAL_TO_HEAT). Heat takes over once the owner sets a world value.
+
+The module-level functions are pure over what they are given, so the console (another process,
+reading mind.db read-only) builds its page from the very same code."""
+import logging
+from collections import deque
+
+from leeroy_mind.discord.channels import is_private
+from leeroy_mind.logs import log as log_event
+
+from .config import HeatConfig, load_heat_config
+from .resolve import ATTITUDES, Member, Resolved, resolve
+from .session import SessionBook, parse
+from .table import DIAL_TO_HEAT, P4, ROWS
+
+log = logging.getLogger("leeroy_mind.heat")
+
+LED_WINDOW_S = 3 * 3600.0  # his heat lines count toward her lead for this long
+ACK = {  # the one instruction line on her next private turn to him; built-in, non-explicit
+    "clean": ("{name} just asked you to keep things clean for now. Say you will, once, in your "
+              "own words, and keep to it."),
+    "open": ("{name} just told you not to hold back tonight. Acknowledge it once, in your own "
+             "words."),
+}
+_LIVE = None  # the running mind's HeatLive (attach), for readers with no app in reach
+
+
+def current():
+    """The running mind's HeatLive, or None with `[heat]` off (or no mind in this process)."""
+    return _LIVE
+
+
+def enabled() -> bool:
+    return _LIVE is not None
+
+
+def photo_tier(p) -> int:
+    """Her photo tier now; P4 (the lists as they are) with heat off."""
+    return P4 if _LIVE is None else _LIVE.photo_tier(p)
+
+
+def sends(p, scene, look=None) -> bool:
+    """Whether a stored photo may be sent or offered at her photo tier now: its scene (or a
+    varied set's look) is within the tier. Always True with heat off. A photo above the tier is
+    only passed over: nothing is expired, hidden, deleted or rendered again, and raising the
+    heat makes it eligible again."""
+    if _LIVE is None:
+        return True
+    from . import photos
+    tier = _LIVE.photo_tier(p)
+    return (photos.look_tier(look) if look is not None else photos.scene_tier(scene)) <= tier
+
+
+TIER_KEY = "photos:heat-tier:{snap}"  # a copied photo's own tier, kept beside its row
+
+
+def sends_tier(p, tier) -> bool:
+    """sends() for a photo whose tier is already known (a gallery copy's receipt)."""
+    if _LIVE is None:
+        return True
+    from . import photos
+    return photos.clamp(tier) <= _LIVE.photo_tier(p)
+
+
+def stored_tier(store, snap_id: int):
+    """The tier recorded for a copied photo (remember_tier), or None when none was."""
+    raw = store.get_meta(TIER_KEY.format(snap=int(snap_id)))
+    return int(raw) if raw is not None and raw.isdigit() else None
+
+
+def remember_tier(store, snap_id: int, tier: int) -> None:
+    """Keep a copied photo's own tier (what it shows, read when it was copied), so the check at
+    sending judges the photo and not her photo kind of the day. Written with heat on or off."""
+    store.set_meta(TIER_KEY.format(snap=int(snap_id)), str(int(tier)))
+
+
+def offers_of(p) -> float:
+    """Heat's multiplier on the chance a turn to him offers a `him` photo; 1.0 with heat off."""
+    return 1.0 if _LIVE is None else _LIVE.offers(p)
+
+
+def member_dial(p, legacy: int) -> int:
+    """HeatLive.member_dial; `legacy` itself with heat off."""
+    return legacy if _LIVE is None else _LIVE.member_dial(p, legacy)
+
+
+def starts_of():
+    """For the whisper clocks: a function of a member's persona giving heat's multiplier on the
+    romantic share of her starts, or None with heat off (the clocks as they were)."""
+    return None if _LIVE is None else _LIVE.starts
+
+
+def never_starts(p) -> bool:
+    """Heat says she never starts it (heat 0): her own starts are casual. False with heat off."""
+    return _LIVE is not None and _LIVE.never_starts(p)
+
+
+# -- pure, shared with the console ----------------------------------------------------------------
+
+def member_of(p, tuning=None, cast_member=None) -> Member:
+    """What resolve reads of `p` (an effective or stored persona). The lust photo style and why
+    not are decided here, by selfies.style (stance, 25 or older, the looks' age guard), before
+    heat is consulted."""
+    from leeroy_mind.selfies.style import SUGGESTIVE_MIN_AGE, looks_age_coded, suggestive
+    female = p.identity.player_gender == "female"
+    stance = p.romance.stance
+    own = p.romance.dial if female and stance in ATTITUDES else None
+    offset, groups = tuning.heat_of(p, cast_member) if tuning is not None else (None, 0)
+    lust = suggestive(p)
+    aged = (female and stance == "lust" and not lust
+            and (p.identity.age < SUGGESTIVE_MIN_AGE or looks_age_coded(p)))
+    return Member(female=female, stance=stance, own_dial=own,
+                  offset=offset if female else None, groups=groups if female else 0,
+                  lust_style=lust, photo_reason="age_guard" if aged else "plain_style")
+
+
+def world_of(tuning, romance_dial: int) -> tuple[int, int | None]:
+    """(the world heat, the romance dial it was derived from or None when heat is set)."""
+    if tuning is not None and tuning.heat_world is not None:
+        return tuning.heat_world, None
+    dial = max(1, min(10, int(romance_dial)))
+    return DIAL_TO_HEAT[dial], dial
+
+
+def derived_dial(tuning, enabled: bool) -> int | None:
+    """The legacy romance dial that stands in for the world's while heat is set and on (the old
+    dial becomes a derived value); None otherwise."""
+    if not enabled or tuning is None or tuning.heat_world is None:
+        return None
+    return ROWS[max(0, min(10, tuning.heat_world))].dial
+
+
+def resolve_for(p, tuning, romance_dial: int, config: HeatConfig, *, channel: str = "whisper",
+                session: str | None = None, late: bool = False, his_heat: int = 99,
+                cast_member=None) -> Resolved:
+    world, legacy = world_of(tuning, romance_dial)
+    return resolve(world, member_of(p, tuning, cast_member), private=is_private(channel),
+                   session=session, public_cap=config.public_cap, late=late, his_heat=his_heat,
+                   legacy=legacy)
+
+
+# -- the running mind ------------------------------------------------------------------------------
+
+class HeatLive:
+    def __init__(self, app, config: HeatConfig):
+        self.app, self.config = app, config
+        self.sessions = SessionBook(app.store, app.clock)
+        self._led: dict[int, deque] = {}
+        self._last: dict[int, str] = {}
+
+    # the values in force ---------------------------------------------------------------------
+
+    @property
+    def tuning(self):
+        return self.app.personas.tuning
+
+    def _file_dial(self) -> int:
+        """[romance] dial with the world's own override, never the one derived from heat."""
+        t = self.tuning
+        file_cfg = getattr(self.app, "file_cfg", None) or self.app.cfg
+        return t.world.get("romance", file_cfg.romance.dial)
+
+    def _cast_member(self, guid: int, tuning=None):
+        t = self.tuning if tuning is None else tuning  # a preview's candidate has its own groups
+        if not t.heat_groups or not t.needs_cast:
+            return None
+        return self.app.store.cast().get(guid)
+
+    def reaches(self, p, *, tuning=None, now: float | None = None) -> bool:
+        """Whether heat governs `p` now. Until the owner sets a world heat it governs nobody:
+        the romance dial, each woman's own dial and every rate keep their exact effect, as with
+        the switch off (stored offsets wait for a world value). The one exception is his own
+        sentence or button for the evening (the session override), which reaches the member it
+        was said to, on a world value derived from the romance dial."""
+        if p is None:
+            return False
+        t = self.tuning if tuning is None else tuning
+        if t.heat_world is not None:
+            return True
+        return self.sessions.mode(p.guid, self.app.clock.now() if now is None else now) is not None
+
+    def turn(self, p, **kw) -> Resolved | None:
+        """resolve() for a reader of live behaviour: None where heat does not govern `p`
+        (reaches), so the reader takes the path it took before the dial."""
+        if not self.reaches(p, tuning=kw.get("tuning"), now=kw.get("now")):
+            return None
+        return self.resolve(p, **kw)
+
+    def resolve(self, p, *, channel: str = "whisper", late: bool = False, tuning=None,
+                lead: bool = True, now: float | None = None, dial: int | None = None) -> Resolved:
+        """`p`'s record on `channel` now. `tuning`: a candidate tuning (a preview's), else the
+        one in force. `lead` False: as if his lines had already led (a preview, the page).
+        `dial`: a candidate romance dial (its preview), read only while no world heat is set."""
+        now = self.app.clock.now() if now is None else now
+        return resolve_for(
+            p, tuning if tuning is not None else self.tuning,
+            self._file_dial() if dial is None else dial, self.config,
+            channel=channel, session=self.sessions.mode(p.guid, now), late=late,
+            his_heat=self.led(p.guid, now) if lead else 99,
+            cast_member=self._cast_member(p.guid, tuning))
+
+    def photo_tier(self, p) -> int:
+        """Her photo tier; P4 (the lists as they are) where heat does not govern her."""
+        r = self.turn(p, lead=False)
+        return P4 if r is None else r.photo
+
+    def starts(self, p) -> float:
+        """Her multiplier on the romantic share of the whisper and opener clocks."""
+        r = self.turn(p, lead=False)
+        return 1.0 if r is None else r.starts
+
+    def never_starts(self, p) -> bool:
+        """Heat says she never starts it (heat 0): her own starts are casual."""
+        r = self.turn(p, lead=False)
+        return r is not None and r.applies and r.starts <= 0
+
+    def offers(self, p) -> float:
+        """Her multiplier on the chance a turn to him offers a `him` photo."""
+        r = self.turn(p, lead=False)
+        return 1.0 if r is None else r.offers
+
+    def member_dial(self, p, legacy: int) -> int:
+        """The romance dial the older readers of a member take (learn's coach and apply, the
+        outreach fill, the bond night, invitations and recall): `legacy`, what they read
+        before the dial, where heat does not govern her. Where it does, they follow her heat
+        down from that dial and never up past it: the dial her heat stands for when it is
+        lower, and 0 at a heat with no romance wording at all, so each of them leaves romance
+        out. (Their `legacy` already reads the romance dial derived from the world heat, so at
+        world 9 every woman, the two at their own 10 included, reads what she read before.)"""
+        r = self.turn(p, lead=False)
+        if r is None or not r.applies:
+            return legacy
+        return 0 if r.ceiling == "none" else min(legacy, r.dial)
+
+    # his lead ----------------------------------------------------------------------------------
+
+    def heard(self, guid: int, words: str, now: float) -> None:
+        """A line of his to `guid` in private: when it turns things up (romance.his_heat) it
+        counts once toward her lead."""
+        from leeroy_mind.talk.romance import his_heat
+        words = " ".join((words or "").split())
+        if not words or self._last.get(guid) == words:
+            return
+        self._last[guid] = words
+        if his_heat(words):
+            self._led.setdefault(guid, deque(maxlen=8)).append(now)
+
+    def led(self, guid: int, now: float) -> int:
+        q = self._led.get(guid)
+        if not q:
+            return 0
+        while q and now - q[0] >= LED_WINDOW_S:
+            q.popleft()
+        return len(q)
+
+    # the session override ----------------------------------------------------------------------
+
+    def his_line(self, guid: int, text: str) -> str | None:
+        """A whisper or one-to-one DM of his to `guid`: start, replace or end her session
+        override when it says one of the fixed phrases. The code ("clean", "open", "clear"), or
+        None. Said while he is in game it ends at his logout, else by the Discord rule. The log
+        has the guid and the code, never his words."""
+        medium = "game" if self._in_game() else "discord"
+        self.sessions.touch(guid)
+        code = parse(text)
+        if code is None:
+            return None
+        p = self.app.personas.get(guid)
+        if p is None or not member_of(p).female or p.romance.stance not in ATTITUDES:
+            return None  # nothing of hers to override: never her stance
+        if code == "clear":
+            if not self.sessions.clear(guid):
+                return None
+        else:
+            self.sessions.set(guid, code, medium=medium, ack=True)
+        log_event("heat_session", guid=guid, code=code, medium=medium)
+        return code
+
+    def set_all(self, code: str, *, guid: int | None = None) -> dict:
+        """The console's button: "clean" or "open" for everyone (or one member), or "clear"."""
+        if code == "clear":
+            n = self.sessions.clear(guid, everything=guid is None)
+        else:
+            medium = "game" if self._in_game() else "discord"
+            self.sessions.set(guid, code, medium=medium, ack=guid is not None)
+            n = 1
+        log_event("heat_session", guid=guid or 0, code=code, medium="console")
+        return {"ok": True, "ended" if code == "clear" else "set": n,
+                "sessions": self.sessions.view()}
+
+    def _in_game(self) -> bool:
+        engine = getattr(self.app, "engine", None)
+        return getattr(engine, "_session_id", None) is not None
+
+    def ack_line(self, guid: int, name: str) -> str:
+        """Once per override: the line that has her acknowledge it in her own words ("" when
+        there is none to acknowledge). An open evening reads the owner's heat/session_open.txt
+        after it when he wrote one."""
+        mode = self.sessions.take_ack(guid)
+        if mode is None:
+            return ""
+        line = ACK[mode].format(name=name)
+        if mode == "open":
+            from . import overlays
+            extra = overlays.one_line("session_open", self.app.data_dir)
+            if extra:
+                line = f"{line} {extra}"
+        return line
+
+    def on_logout(self) -> None:
+        n = self.sessions.end_game()
+        if n:
+            log_event("heat_session_ended", reason="logout", n=n)
+
+    def on_hello(self, online: bool) -> None:
+        """The first hello of a mind start with him offline clears every override; a later one
+        with him offline ends those said in game (he left while the link was down)."""
+        if online:
+            self._greeted = True
+            return
+        first, self._greeted = not getattr(self, "_greeted", False), True
+        n = self.sessions.clear(everything=True) if first else self.sessions.end_game()
+        if n:
+            log_event("heat_session_ended", reason="start" if first else "logout", n=n)
+
+
+def attach(app):
+    """Read `[heat]` and, when it is on, make the app's HeatLive the process's own. With it off
+    (or invalid) nothing is attached."""
+    global _LIVE
+    config = load_heat_config(app.data_dir / "mind.toml")
+    if not config.enabled:
+        _LIVE = None
+        log_event("heat_off")
+        return None
+    _LIVE = HeatLive(app, config)
+    log_event("heat_on", public_cap=config.public_cap)
+    return _LIVE
+
+
+def detach(live=None) -> None:
+    """The app is stopping: readers go back to the path without the dial."""
+    global _LIVE
+    if live is None or _LIVE is live:
+        _LIVE = None

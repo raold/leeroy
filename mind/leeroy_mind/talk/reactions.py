@@ -683,7 +683,8 @@ class Reactions(Pipeline):
         if not self.whispers.due(now, hold=held) or not self._may_whisper(now):
             return
         g = self.whispers.start(now, self._whisper_cands(now),
-                                lift=romance_lift(self.cfg.romance.dial))
+                                lift=romance_lift(self.cfg.romance.dial),
+                                starts=self.heat.starts if self.heat is not None else None)
         if g is None:  # the hour's ceiling or the spacing, else nobody who may
             log.info("whisper_skipped: trigger=start reason=%s",
                      self.whispers.refusal(now) or "no_candidates")
@@ -700,6 +701,9 @@ class Reactions(Pipeline):
             return
         item = outreach.select(g, 'whisper') if outreach is not None and trigger == START else None
         kind = whisper_kind(p)
+        if self.heat is not None:  # [heat] 0: she never starts it, so her start is casual
+            if self.heat.never_starts(p):
+                kind = "casual"
         they, them, their = self.human.forms
         what = ("" if item else START_WHAT[kind].format(topic=self._open_topic(p, now), they=they, them=them,
                                        their=their))

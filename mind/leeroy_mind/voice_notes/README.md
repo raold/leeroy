@@ -96,3 +96,8 @@ processes one receipt at a time; switching the feature off leaves the retained r
 untouched.
 
 Logs contain IDs, sizes, durations and reason codes, never transcript text or names.
+
+With a heat set (`[heat] enabled` and a world value), a line that is itself plainly explicit is
+typed instead of voiced below heat 10 and off a no-limits evening; it is never dropped, and
+every other line is spoken as before. With heat off or unset there is no such rule. See
+`mind/leeroy_mind/heat/README.md`.

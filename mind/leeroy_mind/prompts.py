@@ -44,14 +44,15 @@ class Overlay(NamedTuple):
     replaced: int
 
 
-def read_overlay(name: str, data_dir: Path) -> Overlay | None:
+def read_overlay(name: str, data_dir: Path, folder: str = "") -> Overlay | None:
     """mind-data/prompts/<name>.txt, or None when there is none. UTF-8 with or without a byte
     order mark; UTF-16 when it starts with one of UTF-16's (Notepad's "Unicode" save); a file
     in another encoding (an ANSI code page) is still read, each byte that is not UTF-8
-    replaced (privacy minor 11, part F review minor 7)."""
-    if not _NAME.fullmatch(name):
+    replaced (privacy minor 11, part F review minor 7). `folder`: one folder under prompts
+    (heat's files are prompts/heat/<name>.txt), named like a prompt."""
+    if not _NAME.fullmatch(name) or (folder and not _NAME.fullmatch(folder)):
         raise ValueError(f"bad prompt name {name!r}")
-    path = Path(data_dir) / "prompts" / f"{name}.txt"
+    path = Path(data_dir) / "prompts" / folder / f"{name}.txt"
     if not path.is_file():
         return None
     data = path.read_bytes()

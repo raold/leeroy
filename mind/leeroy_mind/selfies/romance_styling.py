@@ -203,9 +203,13 @@ def level(p: Persona | None, relationship, dial: int) -> str | None:
     stage = relationship.romance_stage if relationship is not None else "none"
     if stage == "ex":
         return None
+    from leeroy_mind.heat import live as heat_live  # [heat] set: her heat lowers it, 0 ends it
+    legacy = dial_for(p, dial)
+    dial = heat_live.member_dial(p, legacy)
+    if dial != legacy and dial <= 0:
+        return None
     return {"warm": "warm", "flirty": "playful", "suggestive": "confident",
-            "explicit": "confident"}.get(
-                effective_band(p.romance.stance, stage, dial_for(p, dial)))
+            "explicit": "confident"}.get(effective_band(p.romance.stance, stage, dial))
 
 
 def enum_category(data: dict) -> str | None:

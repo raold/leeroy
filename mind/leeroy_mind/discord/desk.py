@@ -326,6 +326,9 @@ class DiscordDesk:
         channel, text = store.conn.execute(
             "SELECT channel, text FROM discord_message WHERE id = ?", (message,)).fetchone()
         peer = layout.dm_peer(channel)
+        heat = getattr(self.app, "heat", None)
+        if heat is not None and peer is not None:
+            heat.his_line(peer, text)  # "keep it clean tonight" in his DM (heat.session)
         place, to = (channel, peer) if peer is not None else (channel if is_group(channel) else CHANNEL_PREFIX + channel, 0)
         chat = Chat(ts=int(now * 1000), channel=place, from_guid=me,
                     from_name=store.get_meta("human_name") or "", to_guid=to, text=text, map=0,

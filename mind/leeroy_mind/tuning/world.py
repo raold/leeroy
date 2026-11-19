@@ -9,7 +9,11 @@ from .dials import WORLD_DIALS
 def merge(cfg, tuning):
     """`cfg` (a MindConfig read from mind.toml) with the tuning's world overrides; `cfg` itself
     when there are none."""
-    if tuning is None or not tuning.world:
+    if tuning is None:
+        return cfg
+    from leeroy_mind.heat import live as heat_live
+    derived = heat_live.derived_dial(tuning, heat_live.enabled())
+    if not tuning.world and derived is None:
         return cfg
     out = cfg
     for name, value in tuning.world.items():
@@ -18,6 +22,8 @@ def merge(cfg, tuning):
             continue
         section = getattr(out, d.section)
         out = replace(out, **{d.section: replace(section, **{d.key: value})})
+    if derived is not None:  # heat is set and on: the romance dial is derived from it
+        out = replace(out, romance=replace(out.romance, dial=derived))
     return out
 
 

@@ -82,7 +82,7 @@ def plain_pairings(p, data):
     return codes
 
 
-def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
+def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE, tier=4):
     # Plain kinds remain free-text choices under the original schema and screens.
     if style_of(p) != LUST:
         return None
@@ -92,6 +92,9 @@ def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
     worn = wardrobe.outfits(p, dressed)
     if len(worn) < len(dressed):
         outfits = worn
+    if tier < 4:  # [heat]: only her photo tier's outfits and places (heat/photos.py)
+        from leeroy_mind.heat import photos as heat_photos
+        settings, outfits = heat_photos.settings(settings, tier), heat_photos.outfits(outfits, tier)
     expressions, frames = kind.LUST_EXPRESSIONS, FRAMINGS[:2]
     options = []
     for oi,outfit in enumerate(outfits):
@@ -135,7 +138,9 @@ def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
     return None
 
 
-def assign(personas, selected, *, seed="v1", ident, names=(), share=BODY_SHOT_SHARE):
+def assign(personas, selected, *, seed="v1", ident, names=(), share=BODY_SHOT_SHARE, tier=4):
+    """`tier` ([heat]): the photo tier the kind pass read for the member it asks for (4, the
+    lists as they are, with heat off and for the restyle pass)."""
     if len(personas) > MAX_CAST:
         raise ValueError("too_many_members")
     counts = Counts(personas.values())
@@ -147,7 +152,7 @@ def assign(personas, selected, *, seed="v1", ident, names=(), share=BODY_SHOT_SH
         p = personas[guid]
         counts.add(p.photo,-1)
         choice = _choose(p,counts,cap,random.Random(f"photo-variety:{seed}:{guid}"),
-                         seed=seed,ident=ident,names=names,share=share)
+                         seed=seed,ident=ident,names=names,share=share,tier=tier)
         if choice is None:
             rejected.append(guid)
             counts.add(p.photo,1)

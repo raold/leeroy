@@ -54,6 +54,12 @@ class Bond:
         return self.conn.execute("SELECT * FROM bond_invite WHERE state IN ('prepared','offered','accepted','moving','seated') "
                                  'ORDER BY created,id LIMIT 1').fetchone()
 
+    def _dial(self, persona):
+        """The romance dial that governs her: the world's, and under a set heat that dial
+        lowered to her resolved heat's (heat.live.member_dial)."""
+        from leeroy_mind.heat import live as heat_live
+        return heat_live.member_dial(persona, self.app.cfg.romance.dial)
+
     def enabled(self):
         return getattr(self.app.cfg.romance, 'activities', False) is True
 
@@ -66,7 +72,7 @@ class Bond:
             and self.ports.human_online() and not self.ports.human_grouped()
             and not self.ports.raid_holds_all()
             and guid in self.app.world.online and not self.app.world.in_group(guid)
-            and eligible(self.ports.persona(guid), self.app.cfg.romance.dial)):
+            and eligible(self.ports.persona(guid), self._dial(self.ports.persona(guid)))):
             return False
         if body:
             try:
@@ -156,9 +162,10 @@ class Bond:
         if not isinstance(login,(int,float)) or not math.isfinite(login):
             return False
         persona = self.ports.persona(guid)
-        if not eligible(persona,self.app.cfg.romance.dial):
+        dial = self._dial(persona)
+        if not eligible(persona,dial):
             return False
-        wait = 600 + (10-min(10,dials_of(persona).level('forward')))*30 + (10-self.app.cfg.romance.dial)*30
+        wait = 600 + (10-min(10,dials_of(persona).level('forward')))*30 + (10-dial)*30
         return (now-login >= wait and self.app.cfg.talk.chattiness > 0 and e._may_whisper(now)
             and now-e._his_talk_at() >= 60 and guid not in e._whisper_threads(now)
             and e.whispers.refusal(now) is None)

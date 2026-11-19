@@ -138,12 +138,21 @@ def _assign(rng: random.Random, share: float) -> list[tuple[str, str, bool]]:
 
 
 def _pick(p: Persona, rng: random.Random, category: str, view: str, framing: str,
-          colours: list[str], expressions: list[str], others) -> Look | None:
+          colours: list[str], expressions: list[str], others, tier: int = 4) -> Look | None:
     """The first look of `category` in `rng`'s order that passes screen(), with a colour and an
-    expression none of `others` has where one is left, and no second dress."""
+    expression none of `others` has where one is left, and no second dress. `tier` ([heat]):
+    below P4 only the category's outfits and settings the photo tier allows (heat/photos.py),
+    an outfit no other slot wears first."""
     outfits, settings = kind.VARIED_LOOKS[category]
+    if tier < 4:
+        from leeroy_mind.heat import photos as heat_photos
+        outfits, settings = heat_photos.varied_looks(category, tier)
+        worn = {x.outfit for x in others}
+        outfits = tuple(o for o in outfits if o not in worn) or outfits
     dressed = any(_DRESS.search(x.outfit) for x in others)
     options = [(o, s) for o in outfits for s in settings if not (dressed and _DRESS.search(o))]
+    if tier < 4 and not options:  # a tier with dresses only: a second dress beats no look
+        options = [(o, s) for o in outfits for s in settings]
     rng.shuffle(options)
     options = wardrobe.ordered(p, options, outfit=lambda x: x[0])  # her wardrobe's first
     used_c = {x.colour for x in others}
@@ -159,11 +168,22 @@ def _pick(p: Persona, rng: random.Random, category: str, view: str, framing: str
     return None
 
 
-def compose(p: Persona, seed: str, share: float = BODY_SHOT_SHARE) -> tuple[Look, ...] | None:
+def compose(p: Persona, seed: str, share: float = BODY_SHOT_SHARE,
+            tier: int | None = None) -> tuple[Look, ...] | None:
     """Four looks for `p`, one of each category in kind.CATEGORIES order, each with its own
     view, colour and expression and at most one dress among them, every one passing screen();
     `share` of them show her whole figure (_assign), the others waist-up. None when a category
-    has no safe look left (her names can clash with every choice). Deterministic in `seed`."""
+    has no safe look left (her names can clash with every choice). Deterministic in `seed`.
+
+    `tier` ([heat]): her photo tier (None: read from heat.live; P4 with heat off). At P4 this
+    is the composition as it always was. Below it the four looks come from the categories,
+    outfits, settings and poses the tier allows (heat/photos.py), the categories and poses
+    taken in turn when there are fewer than four, with as many body shots as `share` gives."""
+    if tier is None:
+        from leeroy_mind.heat import live as heat_live
+        tier = heat_live.photo_tier(p)
+    if tier < 4:
+        return _compose_tier(p, seed, tier, share)
     rng = random.Random(f"selfie-varied:{seed}")
     slots = _assign(rng, share)
     colours = list(kind.LUST_COLOURS)
@@ -181,11 +201,40 @@ def compose(p: Persona, seed: str, share: float = BODY_SHOT_SHARE) -> tuple[Look
     return tuple(looks)
 
 
+def _compose_tier(p: Persona, seed: str, tier: int,
+                  share: float = BODY_SHOT_SHARE) -> tuple[Look, ...] | None:
+    """compose below P4: the same draws over the tier's shorter lists. The body shots are
+    body_slots(share) of the four, given in _BODY_ORDER as _assign gives them (never more than
+    the composition at P4 has), the others waist-up. Swimwear is P4 only, so no trade of views."""
+    from leeroy_mind.heat import photos as heat_photos
+    rng = random.Random(f"selfie-varied:{seed}")
+    views = list(heat_photos.views(tier))
+    rng.shuffle(views)
+    categories = heat_photos.categories(tier)
+    slots = [(categories[i % len(categories)], views[i % len(views)]) for i in range(4)]
+    order = sorted(range(4), key=lambda i: (_BODY_ORDER.index(slots[i][1]), i))
+    body = set(order[:body_slots(share, len(slots))])
+    colours = list(kind.LUST_COLOURS)
+    rng.shuffle(colours)
+    colours = wardrobe.colours(p, colours)
+    expressions = list(kind.LUST_EXPRESSIONS)
+    rng.shuffle(expressions)
+    looks: list[Look] = []
+    for i, (category, view) in enumerate(slots):
+        found = _pick(p, rng, category, view, _framing(rng, category, view, i in body), colours,
+                      expressions, looks, tier)
+        if found is None:
+            return None
+        looks.append(found)
+    return tuple(looks)
+
+
 def recompose_slot(p: Persona, looks, idx: int, seed: str,
                    share: float = BODY_SHOT_SHARE) -> Look | None:
     """Slot `idx`'s look composed again as a front view of the same category (three-quarter when
     `share` gives the front view a body shot, else waist-up), kept apart from the other slots'
-    colours and expressions where it can be; None when none is safe."""
+    colours and expressions where it can be; None when none is safe. [heat]: inside her photo
+    tier, as compose."""
     rng = random.Random(f"selfie-varied-front:{seed}")
     colours = list(kind.LUST_COLOURS)
     rng.shuffle(colours)
@@ -194,7 +243,9 @@ def recompose_slot(p: Persona, looks, idx: int, seed: str,
     rng.shuffle(expressions)
     others = [x for i, x in enumerate(looks) if i != idx and x is not None]
     framing = "three_quarter" if body_slots(share) > len(kind.BACK_VIEWS) else "upper_body"
-    return _pick(p, rng, looks[idx].category, "front", framing, colours, expressions, others)
+    from leeroy_mind.heat import live as heat_live  # [heat]: inside her photo tier, as compose
+    return _pick(p, rng, looks[idx].category, "front", framing, colours, expressions, others,
+                 heat_live.photo_tier(p))
 
 
 def _valid(x) -> bool:

@@ -9,6 +9,7 @@ import math
 from leeroy_mind.discord.store import AttachmentIn
 from leeroy_mind.discord import layout
 from leeroy_mind.discord.channels import channel_id, is_discord, is_private
+from leeroy_mind.heat import live as heat_live
 from leeroy_mind.imagefiles import read_image
 from leeroy_mind.logs import log
 from leeroy_mind.selfies import files, ration, snaps
@@ -141,6 +142,9 @@ class PhotoSender:
                 continue
             if not self._fresh(snap, now) or self._copied(snap, now):
                 continue
+            # [heat]: a photo above her photo tier is passed over, never expired or deleted
+            if not heat_live.sends(app.personas.get(turn.speaker), snap.scene):
+                continue
             shows = snap.scene.get('shows')
             if not isinstance(shows, str) or not shows:
                 continue  # never reserve a photo whose offer cannot be built
@@ -150,6 +154,7 @@ class PhotoSender:
             if audience == 'him':
                 p = app.personas.get(turn.speaker)
                 weight = ration.send_weight(p, app.store.get_relationship(turn.speaker, app.human_guid, lens=True))
+                weight *= heat_live.offers_of(p)  # [heat]: how often a `him` photo is offered
                 if self.rng.random() >= ration.chance('reply' if meta.why == 'discord:reply' else 'whisper', weight):
                     return None
             self._in_flight[snap.id] = audience
@@ -170,6 +175,7 @@ class PhotoSender:
                 row = app.store.conn.execute('SELECT status FROM selfie_snap WHERE id=?', (snap.id,)).fetchone()
                 last = snaps.last_sent(app.store, turn.speaker)
                 return bool(row and row[0] == 'ready' and (last is None or moment-last >= ration.MEMBER_GAP_S)
+                            and heat_live.sends(app.personas.get(turn.speaker), snap.scene)
                             and self._fresh(snap, moment) and not self._copied(snap, moment)
                             and self._attachment(snap) is not None)
             def sent(line_id, msg_id):

@@ -1053,7 +1053,12 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False,
     ask = KIND_ASK.format(name=name)
     if not lust:
         ask += wardrobe.ask_hint(p)  # what they tend to wear; nothing with no wardrobe set
-    lust_schema = wardrobe.lust_schema(p, LUST_SCHEMA)
+    # [heat]: her photo tier selects among the vetted lists (heat/photos.py); at P4, and with
+    # heat off, the schema is LUST_SCHEMA itself. Her style (the age rules) was decided above.
+    from leeroy_mind.heat import live as heat_live
+    from leeroy_mind.heat import photos as heat_photos
+    tier = heat_live.photo_tier(p)
+    lust_schema = wardrobe.lust_schema(p, heat_photos.narrow_schema(LUST_SCHEMA, tier))
     if variety:
         from . import photo_extra, style_variety
         all_personas = _personas(ctx)
@@ -1061,7 +1066,7 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False,
             member.identity.real_name for member in all_personas.values()]
         if lust:
             picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,
-                                               names=members,share=share)
+                                               names=members,share=share,tier=tier)
             return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
         ask += photo_extra.common(ctx.store,ctx.clock.now(),persona=p,ident=ctx.ident,names=members)
         ask += (" Prefer a coherent crop: headshots near the face, mirror selfies showing the upper body, "
@@ -1087,6 +1092,8 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False,
         # a lust selfie is waist-up, never three-quarter (safe.selfie_framing)
         data = {**data, "framing": selfie_framing(data.get("kind"), data.get("framing"))}
         problems = screen_lust(p, data)
+        if not problems and not heat_photos.picks_ok(data, tier):
+            return _refused(ctx, guid, ["photo.outfit: above the heat tier"])
         if not problems:
             return compose_lust(data), []
         if again or not set(problems) <= set(PAIRINGS) | set(NAME_CLASHES):

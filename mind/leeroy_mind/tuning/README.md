@@ -99,3 +99,10 @@ python -m pytest -q tests/console/test_nudges_browser.py
 
 The browser test uses invented members, a fake-model mind and a scratch console
 on a free loopback port. It skips explicitly when Playwright or Chromium is absent.
+
+## Heat
+
+The heat dial (`[heat] enabled`, off by default) is stored here as `tuning_value` rows with dial
+`heat` (a world value 0-10, a woman's or a group's offset -5..+5) and goes through the same `tune`
+op, change log, undo and revert. It is not a persona dial: nothing is folded into the effective
+persona, and it is in neither dial registry. See `mind/leeroy_mind/heat/README.md`.

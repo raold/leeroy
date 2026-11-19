@@ -120,6 +120,7 @@ class IntentContext:
     # her forward / flirty dial (tuning), as romance.forward gives it: 0-2, 1 as written. It
     # scales flirt, which only a turn to him can draw (review-332)
     forward: float = 1.0
+    reassure: bool = True  # [heat]: at heat 0 she seeks no reassurance about the two of them
     # [talk] coherence (talk/position.py; the pipeline fills them, all off by default): his line
     # pushes back on her; it carries bad news of his; an explicit scene is running (his overlay
     # applies); `answer_first`, the answer-first rule below applies; `hold`, her want while his
@@ -223,7 +224,7 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
     attitude = ctx.female and ctx.to_him and ctx.stance in STANCE_FLIRT
     w[Intent.FLIRT] *= STANCE_FLIRT[ctx.stance] if attitude else 0.0
     w[Intent.FLIRT] *= max(0.0, ctx.forward)  # her forward dial: at 0 she draws no flirt
-    if not attitude:
+    if not attitude or not ctx.reassure:
         w[Intent.REASSURE_SEEK] = 0.0
     elif ctx.attachment == "anxious":
         w[Intent.REASSURE_SEEK] *= 2

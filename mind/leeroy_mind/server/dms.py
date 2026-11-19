@@ -13,6 +13,7 @@ from leeroy_mind.talk.budget import day_phase
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.romance import WhisperPlanner, forward, romance_lift, whisper_kind
+from leeroy_mind.heat.live import never_starts as _never_starts
 from leeroy_mind.talk.turns import Turn, TurnKind
 
 from . import runtime
@@ -185,7 +186,9 @@ class DmOpeners:
             # (dms_per_day) is the only way an item reaches him from a member he is not writing.
             ready = {g:v for g,v in candidates.items() if outreach.has_ready(g,'dm')}
             candidates = ready or candidates
-        guid = self._planner.start(now,candidates,lift=romance_lift(self.app.engine.cfg.romance.dial))
+        from leeroy_mind.heat import live as heat_live
+        guid = self._planner.start(now,candidates,lift=romance_lift(self.app.engine.cfg.romance.dial),
+                                   starts=heat_live.starts_of())
         if guid is None:
             return
         p = snap.personas[guid]
@@ -199,7 +202,8 @@ class DmOpeners:
             priority=Priority.BACKGROUND,max_lines=1,
             instruction='Start a private Discord message to him in your own words.'+('' if item else ' '+topic))
         meta = TurnMeta(self.app.engine._new_id(),why='server:dm',initiates=True,
-            casual=whisper_kind(p)=='casual' or forward(p)<=0,topic=topic,server_anchor=topic,
+            casual=whisper_kind(p)=='casual' or forward(p)<=0 or heat_live.never_starts(p),
+            topic=topic,server_anchor=topic,
             discord=DiscordTarget(None,None),single_line=True,review_required=True)
         meta.guards = self._guards
         meta.keep_channel = True
@@ -278,7 +282,8 @@ class DmOpeners:
         p = self.app.personas.get(guid)
         about = intent['args']['about']
         meta = TurnMeta(self.app.engine._new_id(), why='server:dm', initiates=True,
-                        casual=whisper_kind(p) == 'casual' or forward(p) <= 0, topic=about,
+                        casual=(whisper_kind(p) == 'casual' or forward(p) <= 0
+                                or _never_starts(p)), topic=about,
                         server_anchor=about, discord=DiscordTarget(None, None), single_line=True,
                         review_required=True)
         meta.guards = self._guards

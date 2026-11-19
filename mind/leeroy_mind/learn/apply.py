@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass, field, replace
 
 from leeroy_mind.discord.channels import is_discord, is_private, is_officer_channel
+from leeroy_mind.heat import live as heat_live
 from leeroy_mind.bond.policy import eligible as bond_eligible
 from leeroy_mind.fingerprint import measure, seed, render_style_hint
 from leeroy_mind.fingerprint.config import enabled as fingerprint_enabled
@@ -107,6 +108,7 @@ def context_for(engine, turn, persona, cfg, readers=None):
     callbacks, fingerprint = _features(engine)
     member_romance = persona.romance.dial
     romance = min(engine.cfg.romance.dial, engine.cfg.romance.dial if member_romance is None else member_romance)
+    romance = heat_live.member_dial(persona, romance)  # [heat] set: her resolved heat's dial
     readers = _readers(engine, turn) if readers is None else readers
     human = engine.human.guid
     owner_present = bool(human and (human in (turn.addressee, turn.to_guid)
@@ -177,7 +179,8 @@ async def prepare(engine, turn, meta, persona, *, now):
         # participate in the independent historical-audience privacy check.
         cb_context = CallbackContext(callbacks, turn.channel, turn.to_guid,
             (human,) if human in callback_readers else (), tuple(callback_readers),
-            bond_enabled=engine.cfg.romance.activities and bond_eligible(persona, engine.cfg.romance.dial))
+            bond_enabled=engine.cfg.romance.activities and bond_eligible(
+                persona, heat_live.member_dial(persona, engine.cfg.romance.dial)))
         arm = registry.get(selected['callback'])
         callback = pick_callback(conn, turn.speaker, cb_context, now=now) if (
             callbacks and 'callback' not in cfg.frozen_families and arm is not None

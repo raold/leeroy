@@ -20,7 +20,8 @@ import json
 from dataclasses import dataclass
 
 from . import groups as G
-from .dials import MEMBER_DIALS, OFFSET_HI, OFFSET_LO, WORLD_DIALS, applies, bounds, not_applicable
+from .dials import (HEAT, HEAT_HI, HEAT_LO, HEAT_OFFSET_HI, HEAT_OFFSET_LO, MEMBER_DIALS, OFFSET_HI,
+                    OFFSET_LO, WORLD_DIALS, applies, bounds, not_applicable)
 from .state import Tuning
 
 SOURCES = ("console", "cli")
@@ -77,6 +78,8 @@ def check_set(s: Set, pic: Picture, live_groups: set[str]) -> Set:
     v = s.value
     if v is not None and not _int(v):
         raise TuneError("a value is a whole number, or null to clear it")
+    if s.dial == HEAT:
+        return _check_heat(s, pic, live_groups)
     if s.scope == "world":
         d = WORLD_DIALS.get(s.dial)
         if d is None or s.target != "":
@@ -106,6 +109,35 @@ def check_set(s: Set, pic: Picture, live_groups: set[str]) -> Set:
         lo, hi = bounds(s.dial)
         if not lo <= v <= hi:
             raise TuneError(f"{MEMBER_DIALS[s.dial].label} runs {lo}-{hi}")
+    return s
+
+
+def _check_heat(s: Set, pic: Picture, live_groups: set[str]) -> Set:
+    """Heat: the world value 0-10; a group's offset (0 is a clear); a woman's own offset, where
+    0 is kept (it stands in for a dial she has of her own)."""
+    v = s.value
+    if s.scope == "world":
+        if s.target != "":
+            raise TuneError("the world's heat has no target")
+        if v is not None and not HEAT_LO <= v <= HEAT_HI:
+            raise TuneError(f"heat runs {HEAT_LO}-{HEAT_HI}")
+        return s
+    if v is not None and not HEAT_OFFSET_LO <= v <= HEAT_OFFSET_HI:
+        raise TuneError(f"a heat offset runs {HEAT_OFFSET_LO} to +{HEAT_OFFSET_HI}")
+    if s.scope == "group":
+        if s.target not in live_groups:
+            raise TuneError("no such group (it may have been retired)")
+        return Set(s.scope, s.target, s.dial, None if v == 0 else v)
+    if not s.target.isdigit() or not 0 < int(s.target) < 1 << 32:
+        raise TuneError("a member is one guid")
+    guid = int(s.target)
+    if guid == pic.human:
+        raise TuneError("your own character is never tuned")
+    p = pic.personas.get(guid)
+    if guid not in pic.cast or p is None:
+        raise TuneError("only cast members with a stored persona can be tuned")
+    if v is not None and p.identity.player_gender != "female":
+        raise TuneError("Men stay friends: heat has no effect on him.")
     return s
 
 

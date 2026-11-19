@@ -97,10 +97,13 @@ def cast(store) -> None:
                 habits=[{"substance": "weed", "when": "daily", "odds": 0.5, "max_state": "high"}])
 
 
-async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = False) -> dict:
+async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = False,
+               heat=None) -> dict:
     r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7,
                  availability=6 if core else 0, life_state=core, intent=core, situation=core,
                  shape=core, romance_realism=realism)
+    if heat is not None:  # [heat] on (tests/heat): a function that attaches it to the rig
+        heat(r)
     # the initiation clocks came later and have their own tests (test_initiate.py): off here,
     # so the scenario's draws stay the ones the golden recorded
     r.engine.whispers.set_rate(0.0)
@@ -157,11 +160,11 @@ async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = Fa
             "weights": weights, "flirts": flirts, "attitudes": attitudes, "states": states}
 
 
-def record(store, clock, data_dir, core: bool = False) -> dict:
+def record(store, clock, data_dir, core: bool = False, heat=None) -> dict:
     """`clock`: engine_clock(), the store's own. `core`: the core prompt's switches on, as
-    golden_core.json was recorded."""
+    golden_core.json was recorded. `heat`: attaches [heat] to the rig (tests/heat)."""
     cast(store)
-    return asyncio.run(_run(store, clock, data_dir, core))
+    return asyncio.run(_run(store, clock, data_dir, core, heat=heat))
 
 
 def voiced_cast(store) -> None:
@@ -198,10 +201,10 @@ def golden_voice() -> dict:
     return json.loads(VOICE_GOLDEN.read_text(encoding="utf-8"))
 
 
-def record_romance(store, clock, data_dir) -> dict:
+def record_romance(store, clock, data_dir, heat=None) -> dict:
     """The scenario with [romance] realism on (golden_romance.json)."""
     cast(store)
-    return asyncio.run(_run(store, clock, data_dir, realism=True))
+    return asyncio.run(_run(store, clock, data_dir, realism=True, heat=heat))
 
 
 def write_golden_romance(result: dict) -> None:

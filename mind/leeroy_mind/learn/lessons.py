@@ -56,6 +56,8 @@ def screen(item, *, scope, persona, ident, world_romance=0):
         return None
     forward = dials_of(persona).value('forward',persona)
     member_romance=persona.romance.dial if persona.romance.dial is not None else world_romance
+    from leeroy_mind.heat import live as heat_live  # [heat] set: her resolved heat's dial
+    member_romance=heat_live.member_dial(persona, member_romance)
     if item['forward_min']>forward or (ROMANCE_RE.search(text) or flirty(text)) and (
             min(forward,member_romance,world_romance)<=0 or not is_woman(persona) or persona.romance.stance=='none'):
         return None

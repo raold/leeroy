@@ -27,7 +27,8 @@ def valid_table(name, table, raw):
               'playstyle':{'enabled'},'photos':{'enabled','send','requests','scene_from_words'},
               'raidlead':{'enabled','briefs'},
               'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'},
-              'outreach':{'enabled'},'godmode':{'enabled'},'tuning':{'nudge_memories'}}
+              'outreach':{'enabled'},'godmode':{'enabled'},'tuning':{'nudge_memories'},
+              'heat':{'enabled','public_cap'}}
     if name == 'drama':
         # `threads` is a mode, not a boolean; a bad one turns only itself off (drama.config)
         table = {k:v for k,v in table.items() if k != 'threads'}

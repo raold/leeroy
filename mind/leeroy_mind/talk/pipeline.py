@@ -124,6 +124,7 @@ from leeroy_mind.talk.prompt import (DM_BUDGET, LIVE_BUDGET, PromptParts, chat_l
                                      situation_rules, trim_to_budget)
 from leeroy_mind.talk.questions import game_question
 from leeroy_mind.talk.raid import RaidState
+from leeroy_mind.talk.romance import turn_band
 from leeroy_mind.talk.romance import (FULL_DIAL, NO_BRAKES_DIAL, dial_for, dm_explicit,
                                       explicit_whisper, flirt_chance, forward, his_heat,
                                       his_moves, own_dial, romance_instruction, scene_notes,
@@ -248,9 +249,15 @@ NEVER_MET = ("You and {name} have only ever talked online, in the game and on Di
              "the game.")
 # Cataclysm or later named in a 2009 guild (filters "era": library.wikitext.names_later).
 ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
+# [heat] public_cap (heat/guard.py): a line to him others can read with a plainly explicit word.
+# Fatal: asked again once with this, never sent; an owed answer's fallback is screened for it too.
+from leeroy_mind.heat.guard import HINT as HEAT_PUBLIC_HINT  # noqa: E402
+from leeroy_mind.heat.guard import OWED as _HEAT_OWED  # noqa: E402
+from leeroy_mind.heat.guard import TELL as HEAT_PUBLIC  # noqa: E402
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
-                     "phrase: resting", "in person", "era", "own copy", "attachment"})
+                     "phrase: resting", "in person", "era", "own copy", "attachment",
+                     HEAT_PUBLIC})
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
@@ -301,6 +308,7 @@ OWED_REFUSED = {
     "action": "no *actions*, only what you'd type",
     "sample": "don't copy your example lines",
     "silent": "say something back, not (nothing)",
+    HEAT_PUBLIC: _HEAT_OWED,
 }
 OWED_RETRY_HINT = "Not like that: {reasons}. " + OWED_FALLBACK_HINT
 # The second and third answers to his line see the ones before them (prompts I8), and so do
@@ -469,6 +477,11 @@ class TurnMeta:
     lab: object | None = field(default=None, repr=False)  # lab/live.py: the turn's piece draw
     facts_line: int = 0
     two_lines: bool = False  # a whisper to him at the explicit band: a line or two
+    # [heat]: her heat.Resolved for this turn (None: off), a preview's candidate tuning, and the
+    # tier her romance text was worded at (None: the line carries none), for the voice rule
+    heat: object = None
+    heat_tuning: object = None
+    heat_band: str | None = None
     emote_target: int = 0  # whom an emote in the line is aimed at by default (a birthday)
     words: str = ""  # the line being sent, before styling (Pipeline.said_words)
     # his question about the guild's past (engine._plan_lore): KEEPER, THEIRS or NOBODY, and
@@ -866,6 +879,7 @@ class Pipeline:
     human: HumanIdentity
     facts: LibraryFacts | None  # the library's facts, None without a library.db
     comms = None  # the voice extension's Comms; None: voice off, and nothing here changes
+    heat = None  # heat.live.HeatLive ([heat] enabled); None: off, and nothing here changes
     # what a turn's delay and its typing are waited out at: 1 everywhere but the sandbox mind's
     # --fast (sandbox/README.md), whose 0 sends each line as soon as it is made
     wait_scale: float = 1.0
@@ -1431,7 +1445,7 @@ class Pipeline:
         return c.messages, c.memory_ids
 
     async def preview_line(self, turn: Turn, persona: Persona, *, trigger: str, seed: int,
-                           dial: int | None = None) -> tuple[str, str | None]:
+                           dial: int | None = None, heat_tuning=None) -> tuple[str, str | None]:
         """The console's tuning preview: the line `persona` (a candidate effective persona)
         would say for `turn`, answering his line `trigger` (text, never a stored line), through
         the live prompt and the model with the tells, repairs and retries a line gets, styled
@@ -1446,7 +1460,7 @@ class Pipeline:
                           from_name=self.human.character_name, to_guid=turn.to_guid,
                           text=trigger, map=0, zone=0, session_id=None, thread_id=None,
                           origin="human") if trigger else None
-        meta = TurnMeta(turn_id="preview", seed=seed)
+        meta = TurnMeta(turn_id="preview", seed=seed, heat_tuning=heat_tuning)
         c = await self._compose(turn, meta, live=False, persona=persona,
                                 window=[row] if row is not None else [],
                                 trigger_text=trigger or None, dial=dial)
@@ -1664,16 +1678,22 @@ class Pipeline:
         if (is_group(turn.channel) or not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE or meta.casual):
             return None
+        hr = None if self.heat is None else self._hr(
+            turn, meta, p, dial=dial, words=self._his_words(meta, trigger))
+        if hr is not None and hr.tier == "none":
+            return None  # heat 0: no romance wording at all
         dial = self.cfg.romance.dial if dial is None else dial
         talked_to = turn.kind in (TurnKind.REPLY_HUMAN, TurnKind.GOODNIGHT) and bool(
             turn.trigger_line)
+        full = (own_dial(p) == FULL_DIAL if hr is None else hr.every_turn == "all"
+                or (hr.every_turn == "private" and is_private(turn.channel)))
         always = (turn.kind in ROMANCE_ALWAYS or meta.loot_cheer
                   or (turn.channel == "whisper" and turn.to_guid == hg)
-                  or (talked_to and flirty(trigger)) or own_dial(p) == FULL_DIAL)
+                  or (talked_to and flirty(trigger)) or full)
         if not always:
             share = ROMANCE_SHARE[p.romance.stance]
             if (p.romance.stance == "drawn" and talked_to
-                    and dial_for(p, dial) >= NO_BRAKES_DIAL):
+                    and self._dial_of(p, dial, hr) >= NO_BRAKES_DIAL):
                 share = DRAWN_TALKED_TO_SHARE
             if phase in _LATE:
                 share += ROMANCE_LATE_BONUS
@@ -1689,12 +1709,45 @@ class Pipeline:
                                     now=now), *arc.scene]
         realism = self.cfg.romance.realism
         heat = realism and his_heat(self._his_words(meta, trigger))
-        return romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
+        text = romance_instruction(p, rel_h, dial=dial, channel=turn.channel,
                                    addressee_is_human=True, phase=phase, human=self.human,
                                    data_dir=self.data_dir, rng=vary or rng,
                                    tail_follows=tail_follows, scene=scene,
                                    arc_lines=arc.arc_lines, rival=arc.rival, cooling=arc.cooling,
-                                   realism=realism, heat=heat)
+                                   realism=realism, heat=heat, **({} if hr is None else {"hr": hr}))
+        if hr is not None and text:
+            meta.heat_band = turn_band(p, rel_h, dial, hr)
+        return text
+
+    def _hr(self, turn: Turn, meta: TurnMeta, p: Persona, *, dial: int | None = None,
+            words: str | None = None):
+        """[heat]: her heat.Resolved for this turn (None with heat off, and while no world heat
+        is set and no session override reaches her: every reader then takes the path without
+        the dial, bit for bit). Resolved once a turn and kept on its meta. `dial`: a
+        preview's candidate romance dial; `words`: his line the turn answers, which on a live
+        private turn to him counts toward her lead when it turns things up."""
+        live = self.heat
+        if live is None:
+            return None
+        if meta.heat is not None:
+            return meta.heat
+        preview = meta.turn_id == "preview"
+        now = self.clock.now()
+        if not preview and self._private_to_him(turn) and not is_group(turn.channel):
+            # whichever reader asks first (the shape's draw gives no words): his line it answers
+            words = words or self._his_line(turn, meta)
+            if words:
+                live.heard(p.guid, words, now)
+        meta.heat = live.turn(
+            p, channel=turn.channel, late=day_phase(self.clock.local()) in _LATE,
+            tuning=meta.heat_tuning, lead=not preview, now=now,
+            dial=dial if preview else None)
+        return meta.heat
+
+    def _dial_of(self, p: Persona, dial: int, hr) -> int:
+        """The romance dial that governs her: her own or the owner's (romance.dial_for), or
+        under heat the one her heat stands for."""
+        return dial_for(p, dial) if hr is None else hr.dial
 
     def _his_words(self, meta: TurnMeta, trigger: str) -> str:
         """His line the turn answers, for [romance] realism's his_heat: the trigger line's text,
@@ -1921,13 +1974,19 @@ class Pipeline:
         lp = meta.life_presence
         rel = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
         dial = self.cfg.romance.dial
+        hr = self._hr(turn, meta, p, words=his)
+        hx = {} if hr is None else {"hr": hr}
         tail = bool(hg and turn.to_guid == hg and (
             whisper_tail(p, rel, dial=dial, channel=channel, data_dir=self.data_dir,
-                         forms=self.human.forms)
-            or dm_explicit(p, rel, dial=dial, channel=channel, data_dir=self.data_dir)))
+                         forms=self.human.forms, **hx)
+            or dm_explicit(p, rel, dial=dial, channel=channel, data_dir=self.data_dir, **hx)))
+        if hr is not None and turn_band(p, rel, dial, hr) != "explicit":
+            tail = False  # the brakes come off under his explicit words only, as before heat
         fwd = forward(p)
         if self._private_to_him(turn) and flirt_chance(p, 1.0) <= 0:
             fwd = 0.0
+        if hr is not None and hr.applies:
+            fwd *= hr.flirt  # heat: a flirt want at half weight when low, none at 0
         coherent = self._coherent() and bool(his)
         hold = self._holds.get(self._want_key(turn)) if coherent else None
         if hold is not None and not position.held(hold, his, self.clock.now()):
@@ -1943,6 +2002,7 @@ class Pipeline:
             block=lp.block if lp is not None else None,
             kids=lp.kids if lp is not None else has_kids(p),
             last=self._wants.get(self._want_key(turn)), forward=fwd,
+            **({} if hr is None or hr.reassure else {"reassure": False}),
             pushback=coherent and position.disagrees(his),
             bad_news=coherent and bad_news(his), scene=coherent and tail,
             answer_first=coherent, hold=Intent(hold.want) if hold is not None else None)
@@ -2123,8 +2183,10 @@ class Pipeline:
         late_by = now - meta.heard_at if family in GAME_FAMILIES and meta.heard_at else 0.0
         rel = self.store.get_relationship(turn.speaker, hg, lens=True) if hg else None
         # the explicit whisper band (as _compose_prompt reads it): at least two lines
+        hr = self._hr(turn, meta, p)
         two = bool(hg and turn.addressee == hg and turn.max_lines > 1 and explicit_whisper(
-            p, rel, dial=self.cfg.romance.dial, channel=turn.channel))
+            p, rel, dial=self.cfg.romance.dial, channel=turn.channel,
+            **({} if hr is None else {"hr": hr})))
         lp = meta.life_presence
         ctx = ShapeContext(
             family=family, kind=turn.kind, owed=owed,
@@ -2423,7 +2485,9 @@ class Pipeline:
         lean, ask_lands = None, not self._state_lands(turn, meta)
         try:
             human, their = self.human.called, self.human.forms[2]
-            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0, tail=c.tail,
+            hr = meta.heat  # [heat]: at a heat where she never flirts, no flirt on offer
+            wants = beats.wants_for(flirt_chance(c.persona, 1.0) > 0
+                                    and (hr is None or hr.flirt > 0), tail=c.tail,
                                     asking=c.asking)
             if ctx is not None:
                 wants = tuple(i.value for i in allowed(ctx) if i.value in wants) or wants
@@ -2750,7 +2814,9 @@ class Pipeline:
             [r.from_guid for r in recent if r.from_guid and r.from_guid != turn.speaker]
             + ([hg] if hg and self.world.human_online else [])))
         from leeroy_mind.bond.policy import eligible as bond_eligible
-        bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(p, self.cfg.romance.dial) else {}
+        from leeroy_mind.heat import live as heat_live  # [heat] set: her resolved heat's dial
+        bond_options = {'include_bond': True} if self.cfg.romance.activities and bond_eligible(
+            p, heat_live.member_dial(p, self.cfg.romance.dial)) else {}
         diverse = None if preview else self._recall_diversity(turn, meta, trigger, live=live)
         aged = {"aged": True} if diverse is not None else {}
         memories = [] if preview else await self.recall.recall(
@@ -2811,9 +2877,11 @@ class Pipeline:
         quest = (quest_help(human) if turn.kind is TurnKind.REPLY_HUMAN and to_human
                  and quest_helper(p) and _quest_line(trigger) else "")
         story = self._their_story(turn, meta, trigger, memories) if to_human else ""
+        hr = self._hr(turn, meta, p, dial=dial, words=trigger) if to_human else None
+        hx = {} if hr is None else {"hr": hr}
         ends = []
         if (to_human and turn.kind in (TurnKind.GREET, TurnKind.GOODNIGHT)
-                and dial_for(p, dial) >= NO_BRAKES_DIAL  # the ruling's dial
+                and self._dial_of(p, dial, hr) >= NO_BRAKES_DIAL  # the ruling's dial
                 and p.identity.player_gender == "female" and p.romance.stance in ROMANCE_SHARE):
             ends.append(FEELINGS.format(them=them))
         if greet and any(r.from_guid not in (hg, turn.speaker) for r in recent):
@@ -2825,7 +2893,7 @@ class Pipeline:
         # distance frame, which her romance text then leaves out, so it is said once
         tail_text = (whisper_tail(p, rel_h, dial=dial, channel=turn.channel,
                                   data_dir=self.data_dir, forms=human.forms, rng=draws("tail"),
-                                  **({"realism": True} if realism else {}))
+                                  **({"realism": True} if realism else {}), **hx)
                      if hg and turn.to_guid == hg else "")
         romance = self._romance(turn, meta, p, rel_h, phase, now, draws("roll"), trigger, dial,
                                 tail_follows=bool(tail_text), vary=draws("vary"))
@@ -2833,11 +2901,18 @@ class Pipeline:
         # his explicit overlay in his DM (the band overlay in her romance text): the beat drops
         # the same brakes as under the whisper tail (PM log D13, review-340 S1)
         overlaid = bool(tail) or bool(romance and hg and turn.to_guid == hg and dm_explicit(
-            p, rel_h, dial=dial, channel=turn.channel, data_dir=self.data_dir))
+            p, rel_h, dial=dial, channel=turn.channel, data_dir=self.data_dir, **hx))
+        if hr is not None and overlaid and turn_band(p, rel_h, dial, hr) != "explicit":
+            overlaid = False  # a frank tail lifts no brake: only his explicit words do
         two = False
         if romance:  # a line or two, unless the turn holds one (her answer to his pushback)
             two = turn.max_lines > 1 and explicit_whisper(p, rel_h, dial=dial,
-                                                          channel=turn.channel)
+                                                          channel=turn.channel, **hx)
+        if (hr is not None and live and self._private_to_him(turn)
+                and not is_group(turn.channel)):
+            ack = self.heat.ack_line(p.guid, human.called)  # his "keep it clean" / "no limits"
+            if ack:
+                ends.append(ack)
         # her reply's shape ([talk] shape, _draw_shape; never in a preview): its length line
         # (_shape_text; on a failure the turn goes on without a shape, today's length), and a
         # game shape of two lines (a burst, the explicit band's) takes both, whatever her split
@@ -4366,6 +4441,8 @@ class Pipeline:
                     tells.append(Tell("member flirt", True))
                 if self._invents_game_name(text):
                     tells.append(Tell("game name", False, True))
+                if self._heat_public(turn, meta, text):  # [heat] public_cap: never sent
+                    tells.append(Tell(HEAT_PUBLIC, True))
                 if self._copies_own(turn, meta, text):
                     tells.append(Tell("own copy", False, True))
                 # never on an answer to him, which a second miss must not drop
@@ -4456,12 +4533,25 @@ class Pipeline:
         refused = list(dict.fromkeys(t.reason for t in tells if t.reason in OWED_HARD_TELLS))
         if self._flirts_at_a_member(turn, text):
             refused.append("member flirt")
+        if self._heat_public(turn, meta, text):
+            refused.append(HEAT_PUBLIC)
         if self._copies_own(turn, meta, text):
             refused.append("own copy")
         if refused:
             return None, refused
         text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
         return (None, ["silent"]) if quiet(text) else (text, [])
+
+    def _heat_public(self, turn: Turn, meta: TurnMeta, text: str) -> bool:
+        """[heat] public_cap: a line of hers to him on a channel other people read holds a
+        plainly explicit word (heat.guard). Never with the cap off, on a private channel, on a
+        turn that is not aimed at him, or on a turn heat does not reach."""
+        live, hr = self.heat, meta.heat
+        if (live is None or not live.config.public_cap or hr is None or not hr.applies
+                or is_private(turn.channel) or not self._aimed_at_him(turn)):
+            return False
+        from leeroy_mind.heat.guard import public_hit
+        return public_hit(text, self.data_dir)
 
     def owed_late_draft(self, turn: Turn, meta: TurnMeta, c: Composed, raw: str) -> str | None:
         """A draft that arrived after its deadline (owed.rescue_text): the hard screens
@@ -4688,6 +4778,8 @@ class Pipeline:
             hints.append(ERA_HINT)
         if "game name" in reasons:
             hints.append(GAME_NAME_HINT)
+        if HEAT_PUBLIC in reasons:
+            hints.append(HEAT_PUBLIC_HINT)
         if "self name" in reasons:
             hints.append(SELF_NAME_HINT.format(name=p.character_name))
         if "long" in reasons and draft and turn is not None:
