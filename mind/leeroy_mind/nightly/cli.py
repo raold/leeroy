@@ -361,6 +361,8 @@ async def _run(root, store, cfg, clock, args, make_llm):
             attach_rewards(runner, root, store)
             from leeroy_mind.turing.night import attach as attach_turing
             attach_turing(runner, root)
+            from leeroy_mind.drama.pulls import attach_night as attach_pulls
+            attach_pulls(runner, ctx.settings)  # [drama] threads = "record"
             from leeroy_mind.memory.scopes import attach as attach_scopes
             attach_scopes(runner)
             await runner.run(night, ctx.window)

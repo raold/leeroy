@@ -1299,7 +1299,8 @@ def _activity(root: Path, data: Path, now: float, open_log=None) -> list[Check]:
                 _guarded("gpu-pause", _gpu_pause, conn, now),
                 _guarded("owner-replies", _owner_replies, conn, now),
                 _guarded("regear", _regear, conn, now),
-                _guarded("conversation-lab", _conversation_lab, conn, data, now)]
+                _guarded("conversation-lab", _conversation_lab, conn, data, now),
+                _guarded("drama-threads", _drama_threads, conn, data)]
     finally:
         conn.close()
 
@@ -1705,4 +1706,37 @@ def _conversation_lab(conn, data: Path, now: float) -> Check:
         last = f"{row[0]}" + (f" ({row[1]})" if row[1] else "") if row else "none"
         return Check(name, NOTE, "conversation lab: no night run finished in 3 nights (newest: "
                      f"{last}); see lab_* lines in mind.log")
+    return _table_check(name, check)
+
+
+THREADS_QUIET_NIGHTS = 3
+
+
+def _drama_threads(conn, data: Path) -> Check:
+    """[drama] threads = "record" (drama/README.md): a note when the last three recorded nights
+    held no event at all, or when three finished nights after the newest recorded one were not
+    recorded (before the first recorded night nothing is missed yet); counts only."""
+    from .drama.config import load_drama_config
+    name = "drama-threads"
+    if load_drama_config(data / "mind.toml").threads != "record":
+        return Check(name, OK, "romantic threads: off ([drama] threads is not 'record')")
+
+    def check():
+        rows = conn.execute("SELECT night, json_extract(summary, '$.events') FROM pull_night "
+                            "ORDER BY night DESC LIMIT ?", (THREADS_QUIET_NIGHTS,)).fetchall()
+        if not rows:
+            return Check(name, OK, "romantic threads: recording only; no night recorded yet")
+        newest = rows[0][0]
+        missed = conn.execute("SELECT count(*) FROM night_run WHERE status = 'done' AND night > ?",
+                              (newest,)).fetchone()[0]
+        if missed >= THREADS_QUIET_NIGHTS:
+            return Check(name, NOTE, f"romantic threads: recording is on but the last {missed} "
+                         "finished nights were not recorded (restart the mind after turning it on)")
+        if len(rows) < THREADS_QUIET_NIGHTS:
+            return Check(name, OK, f"romantic threads: recording only; {len(rows)} nights so far")
+        if all(not r[1] for r in rows):
+            return Check(name, NOTE, "romantic threads: recording is on but the last "
+                         f"{THREADS_QUIET_NIGHTS} nights recorded no events")
+        return Check(name, OK, f"romantic threads: recording only; newest night {newest}, "
+                     f"{rows[0][1] or 0} events")
     return _table_check(name, check)

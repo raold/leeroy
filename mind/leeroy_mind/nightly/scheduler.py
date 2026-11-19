@@ -29,7 +29,9 @@ due() names a night when all of these hold:
   window to now) of min_window_hours or more; a shorter one waits until it is that long, and its
   events stay in that later window (review N8);
 - the last done run finished min_gap_hours ago or more, so a run that ended past 06:00 never
-  starts the next night at once (controller ruling I11).
+  starts the next night at once (controller ruling I11);
+- no image work of his own owns the GPU (`image_work`, his Render selfies button's run,
+  selfies/manual.py): a night that falls due meanwhile starts at the first tick after it ends.
 
 tick() begins that night's run with run_begin (window_for's window, which a resumed or retried
 run keeps) and runs run_night in a task. How the task ends:
@@ -106,6 +108,7 @@ class NightScheduler:
         self._night: str | None = None
         self._stopping = False  # the run in _task has been told to stop
         self._handbacks: set[asyncio.Task] = set()
+        self.image_work: Callable[[], bool] | None = None  # his manual render (selfies/manual.py)
         arbiter.set_preempt(self.cancel_run)
 
     @property
@@ -164,6 +167,8 @@ class NightScheduler:
         s = self.settings
         local = self.clock.local()
         if s.quiet is not None and not in_window(local, s.quiet):
+            return None
+        if self.image_work is not None and self.image_work():
             return None
         if not self.arbiter.reflection_allowed(gate=gate):
             return None

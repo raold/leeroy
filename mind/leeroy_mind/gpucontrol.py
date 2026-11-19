@@ -189,13 +189,17 @@ class GpuControl:
         return finishing.result()
 
     def _stop_gpu_work(self):
-        """The night's and the booth's own stop requests, with no await (the image stages are
-        the night's, so their worker trees end with it). _finish then waits for the cleanup."""
+        """The night's, the booth's and the Render selfies run's own stop requests, with no await
+        (the image stages are the night's, so their worker trees end with it). _finish then waits
+        for the cleanup."""
         self.app.night_scheduler._stop_run()
         self.app.arbiter.cancel_borrow('gpu_pause')
         booth = getattr(self.app, 'selfie_booth', None)
         if booth is not None:
             booth.stop()
+        manual = getattr(self.app, 'selfie_manual', None)
+        if manual is not None:
+            manual.stop('gpu_pause')
 
     async def _finish(self):
         """Wait for the night's and the booth's cleanup through the existing preempt, then unload

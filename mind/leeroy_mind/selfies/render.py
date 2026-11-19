@@ -68,12 +68,17 @@ class RenderPolicy:
 
     Its attempts consume the day's allowance even when refused or failed, avoiding an
     every-minute retry of the same bad set. The night's existing success/skip cap is unchanged.
+    `first_first` (his Render selfies button, manual.py) renders first sets before "4 more" ones;
+    the night and the booth keep queued_sets' order. `record_refusals` (that button too) gives
+    only a set the photo checks refused its receipt for the day, never one a worker error ended.
     """
     stage: str = STAGE
     cap: int | None = None
     requested_before: float | None = None
     day: str | None = None
     record_failures: bool = False
+    first_first: bool = False
+    record_refusals: bool = False
 
 
 NIGHT = RenderPolicy()
@@ -349,7 +354,10 @@ def todo(ctx: "NightContext", policy: RenderPolicy = NIGHT) -> list[str]:
     room = max(0, (ctx.settings.selfie_per_night if policy.cap is None else policy.cap) - done_sets(ctx, policy))
     if policy.day is not None and ctx.clock.local().date().isoformat() != policy.day:
         return []
-    units = [f"{s.guid}:{s.set_no}" for s in queued_sets(ctx.store)
+    sets = queued_sets(ctx.store)
+    if policy.first_first:
+        sets = sorted(sets, key=lambda s: s.reason != "first")  # stable: first sets, then more
+    units = [f"{s.guid}:{s.set_no}" for s in sets
              if allows(ctx,s.guid) and (policy.requested_before is None or (
                  s.requested <= policy.requested_before
                  and _set_held(ctx, _stored(ctx, s.guid), s.guid, s.set_no) is None))]
@@ -658,7 +666,7 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         except Exception as e:  # SetRefused; a folder that could not be made or moved
             _discard(ctx, guid, set_no)
             ctx.fail(policy.stage, unit, e)
-            if policy.record_failures:
+            if policy.record_failures or (policy.record_refusals and isinstance(e, SetRefused)):
                 ctx.skip(policy.stage, unit)
             if isinstance(e, SetRefused):
                 tally["refused"] += 1

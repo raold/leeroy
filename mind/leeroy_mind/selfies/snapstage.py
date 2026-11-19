@@ -68,6 +68,13 @@ def _unit(row: SnapRow) -> str:
     return f"snap:{row.id}"
 
 
+def _stage(ctx: "NightContext") -> str:
+    """The stage its units are recorded under: STAGE for the night, the manual render's own
+    (manual.SNAPS_STAGE, set on its ctx as snaps_stage) so his button's work never reads as the
+    night's."""
+    return getattr(ctx, "snaps_stage", STAGE)
+
+
 def _rendered_tonight(ctx: "NightContext") -> int:
     """The units done tonight that rendered a photo (ready, or sent since); a held or expired
     one is done but made nothing, so it takes no room."""
@@ -75,7 +82,7 @@ def _rendered_tonight(ctx: "NightContext") -> int:
         return ctx.store.conn.execute(
             "SELECT count(*) FROM night_step n JOIN selfie_snap s ON n.unit = 'snap:' || s.id "
             "WHERE n.night=? AND n.stage=? AND s.status IN ('ready','sent')",
-            (ctx.night, STAGE)).fetchone()[0]
+            (ctx.night, _stage(ctx))).fetchone()[0]
 
 
 def _todo(ctx: "NightContext") -> list[SnapRow]:
@@ -88,7 +95,7 @@ def _todo(ctx: "NightContext") -> list[SnapRow]:
         return []
     out = []
     for r in planned(ctx.store, 100000):  # held and done ones are read past
-        if ctx.done(STAGE, _unit(r)):
+        if ctx.done(_stage(ctx), _unit(r)):
             continue
         out.append(r)
         # a held one is passed over, and one that will expire renders nothing: no room taken
@@ -235,8 +242,8 @@ def wants_gpu(ctx: "NightContext") -> bool:
 
 
 def _unavailable(ctx: "NightContext", err: BaseException, reason: str) -> None:
-    ctx.fail(STAGE, "worker", err)
-    log("selfies_unavailable", level=logging.WARNING, night=ctx.night, stage=STAGE,
+    ctx.fail(_stage(ctx), "worker", err)
+    log("selfies_unavailable", level=logging.WARNING, night=ctx.night, stage=_stage(ctx),
         reason=reason)
 
 
@@ -249,7 +256,7 @@ async def _start(ctx: "NightContext", worker: SelfieWorker) -> bool:
         raise
     except WorkerError as e:
         if e.reason == "stopped":
-            log("selfies_preempted", night=ctx.night, stage=STAGE)
+            log("selfies_preempted", night=ctx.night, stage=_stage(ctx))
         else:
             _unavailable(ctx, e, e.reason)
         return False
@@ -310,7 +317,7 @@ class SnapRenderer:
 
 def _expiry(ctx: "NightContext", row: SnapRow, why: str) -> bool:
     now = ctx.clock.now()
-    if not ctx.commit(STAGE, _unit(row), lambda store: expire(store, row.id, why, now=now)):
+    if not ctx.commit(_stage(ctx), _unit(row), lambda store: expire(store, row.id, why, now=now)):
         return False
     log("selfies_snap_expired", night=ctx.night, snap=row.id, reason=why)
     return True
@@ -344,7 +351,7 @@ async def _situation(ctx: "NightContext", r: SnapRenderer, row: SnapRow, began: 
             return
         mark_rendered(store, row.id, width=got.width, height=got.height, seed=seed,
                       tries=tries, nsfw=got.nsfw, prompt=got.prompt, now=ctx.clock.now())
-    if not ctx.commit(STAGE, _unit(row), write):
+    if not ctx.commit(_stage(ctx), _unit(row), write):
         return "failed"
     if moved is not None:
         log("selfies_snap_expired", night=ctx.night, snap=row.id, reason=moved)
@@ -410,7 +417,7 @@ def _send_best(ctx: "NightContext", item: "bestof.Pending", verdicts) -> str:
     if chosen is None:
         log("selfies_snap_held", night=ctx.night, snap=row.id, reason="critic", seeds=len(item.shots),
             flagged=flagged)
-        return "held" if ctx.skip(STAGE, _unit(row)) else "failed"
+        return "held" if ctx.skip(_stage(ctx), _unit(row)) else "failed"
     shot = next(s for s in item.shots if s.row_id == chosen)
     data = ctx.settings.data_dir
     files.replace_atomic(shot.out, files.snap(data, row.guid, row.id).absolute())
@@ -427,7 +434,7 @@ def _send_best(ctx: "NightContext", item: "bestof.Pending", verdicts) -> str:
                       seed=shot.seed, tries=shot.tries, nsfw=shot.got.nsfw,
                       prompt=shot.got.prompt, now=ctx.clock.now())
         critic.mark_chosen(store.conn, chosen)
-    if not ctx.commit(STAGE, _unit(row), write):
+    if not ctx.commit(_stage(ctx), _unit(row), write):
         return "failed"
     if moved is not None:
         log("selfies_snap_expired", night=ctx.night, snap=row.id, reason=moved)
@@ -454,7 +461,7 @@ async def _publish(ctx: "NightContext", cfg: SelfieCfg, pending: list) -> Counte
         except LiveLeaseHeld:
             raise
         except Exception as e:  # a file that could not be copied: that unit's failure only
-            ctx.fail(STAGE, _unit(item.row), e)
+            ctx.fail(_stage(ctx), _unit(item.row), e)
             tally["failed"] += 1
     if judge.used:
         await critic.unload(ctx.arbiter.admin, judge.model)
@@ -522,7 +529,7 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
                       tries=sum(m[3] for m in made), nsfw=max(m[4] for m in made), prompt=None,
                       now=ctx.clock.now(), members=[(guid, pick) for guid, pick, *_ in made])
         marked = True
-    if not ctx.commit(STAGE, _unit(row), write):
+    if not ctx.commit(_stage(ctx), _unit(row), write):
         return "failed"
     if not marked:
         log("selfies_snap_held", night=ctx.night, snap=row.id, reason="photo_changed")
@@ -536,11 +543,12 @@ async def _guild(ctx: "NightContext", r: SnapRenderer, row: SnapRow, members, be
 
 
 async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
-                  todo: list[SnapRow]) -> list:
+                  todo: list[SnapRow], tally: Counter | None = None) -> list:
     """Renders the todo list with the worker; with [selfies] critic the situations' seeds are
-    measured and returned (bestof.Pending) for _publish once the worker is gone, else []."""
+    measured and returned (bestof.Pending) for _publish once the worker is gone, else []. Each
+    row's outcome is counted in `tally` (a fresh Counter when None) as it lands."""
     r = SnapRenderer(ctx, cfg, worker)
-    tally = Counter()
+    tally = Counter() if tally is None else tally
     started = restarted = False
     contended = 0
     pending = []
@@ -568,10 +576,10 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
                     held = "no_face_ref"  # her only covers are from behind: stays planned
                 if held is not None:
                     log("selfies_snap_held", night=ctx.night, snap=row.id, reason=held)
-                    tally["held" if ctx.skip(STAGE, unit) else "failed"] += 1
+                    tally["held" if ctx.skip(_stage(ctx), unit) else "failed"] += 1
                     continue
         except Exception as e:  # a row it cannot read: that unit's failure only
-            ctx.fail(STAGE, unit, e)
+            ctx.fail(_stage(ctx), unit, e)
             tally["failed"] += 1
             continue
         if not started:
@@ -594,7 +602,7 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
         except LiveLeaseHeld:
             raise
         except WorkerError as e:  # RoomFailed too: contention either way
-            ctx.fail(STAGE, unit, e)
+            ctx.fail(_stage(ctx), unit, e)
             tally["failed"] += 1
             contended += 1
             if contended >= CONTENDED or (not worker.running and restarted):
@@ -607,7 +615,7 @@ async def _render(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
                     break
             continue
         except Exception as e:  # a folder that could not be made or cleared
-            ctx.fail(STAGE, unit, e)
+            ctx.fail(_stage(ctx), unit, e)
             tally["failed"] += 1
             continue
         contended = 0

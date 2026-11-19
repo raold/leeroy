@@ -1,7 +1,8 @@
 import { $, arr, clear, el, num, obj, plural, str } from "./core.mjs";
 import { profileButton } from "./faces.mjs";
 import { notSetUp, pollTab, renderKpis } from "./tabkit.mjs";
-import { breakupText, feelings, feudText, jealousyShare, memberStageText, romanceText, stageText } from "./socialmodel.mjs";
+import { breakupText, feelings, feudText, heldText, jealousyShare, memberStageText, pullChips, romanceText, stageText,
+  THREADS_NOTE, threadNightText, threadsHead } from "./socialmodel.mjs";
 import { signed, when } from "./words.mjs";
 
 // -- the social tab: mind.db only -----------------------------------------------------------------
@@ -125,6 +126,29 @@ function renderSocial(v) {
       box.appendChild(r);
     });
     empty(box, "No rumour is going round.");
+  });
+  section("social-threads", ["pull_event", "pull_shadow", "pull_night"], v, function (box) {
+    var t = obj(v.threads);
+    box.appendChild(el("p", "note", THREADS_NOTE));
+    box.appendChild(el("p", "", threadsHead(t)));
+    arr(t.top).forEach(function (p) {
+      var r = row();
+      r.appendChild(person(v, p.a));
+      r.appendChild(el("span", "muted", "→"));
+      r.appendChild(person(v, p.b));
+      r.appendChild(meter(num(p.pull) / 100));
+      r.appendChild(el("span", "muted", "pull " + Math.round(num(p.pull)) + " · " + plural(num(p.events), "event")));
+      pullChips(p).forEach(function (c) { r.appendChild(el("span", "chip", c)); });
+      box.appendChild(r);
+    });
+    var held = heldText(t.waiting);
+    if (held) { box.appendChild(el("p", "muted", "Held back: " + held)); }
+    arr(t.nights).slice().reverse().forEach(function (n) {
+      var r = row();
+      r.appendChild(el("span", "", str(n.night)));
+      r.appendChild(el("span", "muted", threadNightText(n)));
+      box.appendChild(r);
+    });
   });
 }
 

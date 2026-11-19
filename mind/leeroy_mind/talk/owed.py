@@ -337,9 +337,9 @@ class OwedWatch:
         if o is not None:
             o.carried, o.held = True, ""
         log.info("owed_carried: line=%d guid=%d", line, guid)
-        take = getattr(getattr(self.app, "discord_talk", None), "_take_lease", None)
+        take = getattr(getattr(self.app, "discord_talk", None), "take_lease", None)
         if take is not None:
-            take()
+            take("answer")
 
     # -- the tick ------------------------------------------------------------------------------
 
@@ -774,9 +774,9 @@ class OwedWatch:
         log.info("owed_rescue: medium=discord channel=%s message=%d posts=%d age_s=%d "
                  "speaker=%d reason=no_answer try=%d", o.channel, mid, len(o.ids),
                  int(now - o.first), speaker, o.rescues)
-        take = getattr(talk, "_take_lease", None)
+        take = getattr(talk, "take_lease", None)
         if take is not None:
-            take()
+            take("answer")
         self.app.engine._queue(items)
         return True
 

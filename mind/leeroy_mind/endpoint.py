@@ -33,9 +33,12 @@ connection closes.
                     edit {verb: set|preview {kind, args} | retire {id} | list}: godmode edits
                     (leeroy_mind.tuning.edits), set and preview only with [godmode] enabled
     selfie {action} status | pick {guid, set, index} | undo {pick} | more {guid} |
-                    vary {go[, guids]}:
+                    vary {go[, guids]} | render | render_stop:
                     profile photos (leeroy_mind.selfies), written by this mind only, one change
-                    at a time until its files are written; status at any time
+                    at a time until its files are written; status at any time. render starts his
+                    Render selfies run of the whole backlog (selfies.manual), render_stop ends it
+                    (answered once its worker tree is gone, or pending after 60 s); the run's
+                    progress, backlog and refusal ride `status` as selfie_render
     say {channel, text[, to]}
                     guild | officer | group | whisper (to: a cast member's guid): the owner's
                     own line, said in game as his through native owner_say
@@ -129,13 +132,15 @@ TUNE_SHAPES = {
     "preview": {"action", "scope", "target", "dial", "value"},
 }
 TUNE_SCOPES = ("world", "group", "member")
-SELFIE_ACTIONS = ("status", "pick", "more", "undo", "vary")
+SELFIE_ACTIONS = ("status", "pick", "more", "undo", "vary", "render", "render_stop")
 SELFIE_SHAPES = {
     "status": {"action"},
     "pick": {"action", "guid", "set", "index"},
     "more": {"action", "guid"},
     "undo": {"action", "pick"},
     "vary": {"action", "go"},
+    "render": {"action"},
+    "render_stop": {"action"},
 }
 SAY_CHANNELS = ("guild", "officer", "group", "whisper")
 MAX_SAY_CHARS = 1024  # what the console's box may hold; a line the game takes is 255 bytes
@@ -584,8 +589,8 @@ def selfie_args(args) -> dict:
     if action == "vary" and set(args) == shape | {"guids"}:
         shape = shape | {"guids"}
     if set(args) != shape:
-        if action == "status":
-            raise BadRequest("selfie status: takes no arguments")
+        if shape == {"action"}:
+            raise BadRequest(f"selfie {action}: takes no arguments")
         raise BadRequest(f"selfie {action}: exactly " + ", ".join(sorted(shape - {"action"})))
     if "guid" in shape and not _count(args["guid"], 1):
         raise BadRequest(f"selfie {action}: guid is a member's guid")
@@ -1143,8 +1148,22 @@ class ControlEndpoint:
                 "raid": raid, **self._health(), "world": world, "typing": self._typing(),
                 **({"raid_lead": self._raid_lead()} if getattr(self.app, "raidlead", None) is not None else {}),
                 "gpu": self.app.gpu.snapshot() if getattr(self.app, "gpu", None) is not None else None,
+                **({"selfie_render": self._selfie_render()}
+                   if getattr(self.app, "selfie_manual", None) is not None else {}),
                 # features a bad optional mind.toml table (or a failed attach) turned off at the start
                 "disabled_features": features.report(getattr(self.app, "disabled_features", {}))}
+
+    def _selfie_render(self) -> dict | None:
+        """His Render selfies run (selfies.manual.ManualRender.snapshot), or None while selfies
+        are off in this mind."""
+        manual = getattr(self.app, "selfie_manual", None)
+        if manual is None or self.app.stopping:
+            return None
+        try:
+            return manual.snapshot()
+        except Exception as e:
+            log_event("control_status_failed", level=logging.WARNING, error=type(e).__name__)
+            return None
 
     def _raid_lead(self) -> dict | None:
         """The raid lead's state for the console's picker (raidlead.service.console_status), or
@@ -1292,10 +1311,23 @@ class ControlEndpoint:
             return {"ok": False, "error": "photos are not running in this mind"}
         if args["action"] == "status":
             return await service.handle(args)
+        manual = getattr(self.app, "selfie_manual", None)
+        if args["action"] in ("render", "render_stop"):
+            if manual is None:
+                return {"ok": False, "error": "off",
+                        "message": "Selfies are off ([selfies] enabled in mind.toml)."}
+            if args["action"] == "render" and self._selfie.locked():
+                return {"ok": False, "error": "busy",
+                        "message": "Another photo change is still being written."}
+            return await manual.action(args["action"])
         if self._selfie.locked():
             return {"ok": False, "error": "another photo change is still being written"}
         async with self._selfie:
-            return await service.handle(args)
+            try:
+                return await service.handle(args)
+            finally:
+                if manual is not None:
+                    manual.invalidate()  # the Render selfies count reads the change
 
     async def looks(self, args: dict) -> dict:
         """His weight and bust edits (personas.looks_edit.LooksService): a set or undo one at a
@@ -1309,6 +1341,9 @@ class ControlEndpoint:
             return {"ok": False, "error": "another photo change is still being written"}
         async with self._selfie:
             from leeroy_mind.personas.looks_edit import LooksService
+            manual = getattr(self.app, "selfie_manual", None)
+            if manual is not None:
+                manual.invalidate()  # a looks edit queues a set: the count reads it
             try:
                 return await LooksService(self.app).handle(args)
             except Exception as e:

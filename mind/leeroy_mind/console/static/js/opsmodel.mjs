@@ -1,5 +1,6 @@
 // Pure, deliberately content-free words for the Ops payload. No generic JSON renderer.
 import { pausedWords } from "./gpumodel.mjs";
+import { outcomeWords } from "./rendermodel.mjs";
 import { isoMinute } from "./dates.mjs";
 export const PANELS = [
   ["health", "Health"], ["night", "Night"], ["realm", "Realm holds"], ["raids", "Raids"],
@@ -74,6 +75,7 @@ export function lines(name, value) {
     if (p.snaps) { const s = obj(p.snaps); out.push("Snaps: " + n(s.planned) + " planned · " + n(s.ready) + " ready · " + n(s.sent_week) + " sent this week · " + n(s.expired_week) + " expired this week"); }
     else { out.push("Not set up yet: snap records are absent."); }
     out.push(p.booth ? "Booth: " + str(p.booth.outcome) + " · " + n(p.booth.sets) + " sets · " + at(p.booth.finished) : "Not set up yet: no photo booth pass recorded.");
+    if (p.manual) { out.push("Render selfies " + at(p.manual.finished) + ": " + outcomeWords(p.manual) + " (" + n(p.manual.done) + " of " + n(p.manual.total) + ")"); }
   } else if (name === "backups") {
     const s = obj(p.snapshots);
     out.push(n(s.count) + " mind snapshots · " + n(s.bytes) + " bytes");

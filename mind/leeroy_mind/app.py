@@ -528,6 +528,10 @@ class MindApp:
         self.mechanics = ext("raidplay", lambda: attach_mechanics(self))
         from .drama.couples import attach as attach_drama
         self.drama = ext("drama", lambda: attach_drama(self))  # [drama] member_romance: off adds no stage
+        from .drama.pulls import attach as attach_pulls
+        # [drama] threads = "record": off adds no stage (its own name: a failure here is not
+        # member romance being off)
+        ext("threads", lambda: attach_pulls(self))
         from .turing.night import attach as attach_turing
         # [turing]: off adds no stage
         ext("turing", lambda: attach_turing(self.night_runner, self.data_dir))

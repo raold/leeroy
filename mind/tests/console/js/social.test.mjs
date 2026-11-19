@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { stageText, romanceText, feelings, feudText, memberStageText, jealousyShare, breakupText } from "../../../leeroy_mind/console/static/js/socialmodel.mjs";
+import { stageText, romanceText, feelings, feudText, memberStageText, jealousyShare, breakupText, THREADS_NOTE,
+  heldText, kindText, pullChips, shapeText, threadNightText, threadsHead, whyText } from "../../../leeroy_mind/console/static/js/socialmodel.mjs";
 
 test("a stage reads as words and none is empty", () => {
   assert.equal(stageText("whispers"), "whispers");
@@ -41,4 +42,37 @@ test("jealousy fills its meter by its 0-100 level", () => {
 test("a breakup says who left whom for whom", () => {
   assert.equal(breakupText({ woman: 2, partner: 3, for: 1 }, { 1: "Rex", 2: "Ana", 3: "Bo" }), "Ana left Bo for Rex");
   assert.equal(breakupText({ woman: 2, partner: 4, for: 1 }, { 2: "Ana" }), "Ana left #4 for #1");
+});
+
+test("the threads panel says it is recording and not in effect", () => {
+  assert.match(THREADS_NOTE, /^Recording only, not in effect/);
+  assert.equal(threadsHead({}), "No night recorded yet.");
+  assert.equal(threadsHead({ nights: [{}], events: 12, pairs: 4, open: [{}] }),
+    "1 night recorded · 12 events · 4 pairs with a pull · 1 would-be thread");
+  assert.equal(threadsHead({ nights: [{}, {}], events: 0, pairs: 0, open: [] }),
+    "2 nights recorded · 0 events · 0 pairs with a pull · 0 would-be threads");
+});
+test("a recorded night lists its kinds, most first, in words", () => {
+  assert.equal(threadNightText({ events: 10, kinds: { warm_scene: 2, raided: 8 } }),
+    "10 events: 8 raided together, 2 a warm scene");
+  assert.equal(threadNightText({ events: 0, kinds: {} }), "0 events");
+  assert.equal(kindText("grouped_away"), "grouped without you");
+  assert.equal(kindText("something_new"), "something_new");
+});
+test("a shadow pull's chips say what would have happened, never what did", () => {
+  assert.deepEqual(pullChips({ state: "none", shape: "" }), []);
+  assert.deepEqual(pullChips({ state: "open", shape: "mutual_secret", taken: true, ceiling: "acknowledged" }),
+    ["would be open", "mutual, a secret", "one is taken", "never past acknowledged"]);
+  assert.deepEqual(pullChips({ state: "waiting", why: "cap_live", shape: "triangle" }),
+    ["held back: enough threads are live", "a triangle"]);
+  assert.deepEqual(pullChips({ state: "faded" }), ["would have faded"]);
+  assert.equal(shapeText("slow_burn"), "a slow burn");
+  assert.equal(whyText("unknown_code"), "unknown_code");
+});
+test("what held candidates back reads as counts", () => {
+  assert.equal(heldText({}), "");
+  assert.equal(heldText({ draw: 2, social: 5, cap_night: 1 }),
+    "5 only time spent together so far · 2 the night's draw said not yet · 1 one new thread a night");
+  assert.equal(kindText("answered"), "was replied to");
+  assert.equal(kindText("riffed"), "riffed together");
 });

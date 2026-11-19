@@ -93,6 +93,22 @@ def test_standalone_runner_attaches_enabled_claims_after_notes(h, data, tiny_pip
     assert invoked == [NIGHT]
 
 
+@pytest.mark.parametrize("mode,runs", [("record", 1), ("off", 0)])
+def test_standalone_runner_attaches_the_threads_recorder_after_encounters(
+        h, data, tiny_pipeline, monkeypatch, mode, runs):
+    from leeroy_mind.drama import pulls
+    pipeline = sys.modules["leeroy_mind.nightly.pipeline"]
+    invoked = []
+    async def record(ctx):
+        invoked.append((ctx.night, ctx.settings.drama_threads))
+    monkeypatch.setattr(pulls, "stage_pulls", record)
+    monkeypatch.setattr(pipeline, "STAGES", (Stage("encounters", pipeline.STAGES[0].fn, None),))
+    with (data / "mind.toml").open("a", encoding="utf-8") as config:
+        config.write(f'\n[drama]\nthreads = "{mode}"\n')
+    assert cli.nightly_main(["run", "--night", NIGHT], make_llm=lambda: client(h)) == 0
+    assert invoked == [(NIGHT, "record")] * runs
+
+
 def test_live_nightly_run_holds_exclusive_lock_until_done(h, data, tiny_pipeline):
     original = tiny_pipeline
     assert cli.nightly_main(["run", "--night", NIGHT, "--live-db"], make_llm=lambda cfg: client(h)) == 0

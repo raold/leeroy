@@ -92,6 +92,15 @@ button.danger:not(:disabled), .btn.danger { color: var(--bad);
 html[data-photos="hidden"] img { visibility: hidden; }
 .gpu.gpu-paused { color: var(--accent); border-color: var(--accent); }
 .gpu[aria-disabled="true"] { cursor: not-allowed; }
+/* Render selfies: a running run reads in the accent, as a paused GPU does */
+.render.render-running { color: var(--accent); border-color: var(--accent); font-variant-numeric: tabular-nums; }
+.render[aria-disabled="true"] { cursor: not-allowed; }
+#render-confirm { max-width: min(520px, calc(100vw - 32px)); color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius); }
+#render-confirm::backdrop { background: rgb(0 0 0 / .45); }
+#render-confirm h2 { margin: 0 0 8px; font-size: 17px; }
+#render-confirm p { margin: 0 0 8px; overflow-wrap: anywhere; }
+#render-confirm .acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .gpu-banner { width: 100%; padding: 5px 10px; border-left: 3px solid var(--accent); background: var(--surface-2); font-size: 12px; }
 .ptt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
 .lamp { width: 12px; height: 12px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); }

@@ -132,6 +132,23 @@ class Groups:
                        for guid,due in pending.items()}
             self.app.store.set_meta(key,json.dumps(pending))
 
+    def answers_due(self, until: float) -> int:
+        """Group DM answers to him still owed (urgent, or due by `until`), read without the
+        tick's housekeeping (DiscordTalk.answers_due)."""
+        if not self.config.enabled:
+            return 0
+        n = 0
+        for _key, raw in self.app.store.conn.execute(
+                "SELECT key,value FROM meta WHERE key GLOB 'groups:owed:*' AND value<>'{}'").fetchall():
+            try:
+                pending = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(pending, dict):
+                n += sum(1 for d in pending.values() if isinstance(d, dict) and (
+                    d.get('urgent') is True or (type(d.get('due')) in (int, float) and d['due'] <= until)))
+        return n
+
     def _pending(self, now):
         app, conn = self.app,self.app.store.conn
         for key, raw in conn.execute("SELECT key,value FROM meta WHERE key GLOB 'groups:owed:*' AND value<>'{}'").fetchall():
@@ -188,6 +205,6 @@ class Groups:
                 self._queued[(mid,guid)] = (now,tries+1)
                 while len(self._queued)>256:
                     del self._queued[next(iter(self._queued))]
-                talk._take_lease()
+                talk.take_lease("group")
                 app.engine._queue(items)
             app.store.set_meta(key,json.dumps(pending))

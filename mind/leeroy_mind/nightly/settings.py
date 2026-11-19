@@ -38,6 +38,7 @@ class NightlySettings:
     looks_diversity: bool = False
     romance_activities: bool = False
     member_romance: bool = False  # [drama] member_romance (drama.config)
+    drama_threads: str = "off"  # [drama] threads: off | record (drama.pulls)
     grace_minutes: int = 10
     retry_minutes: int = 60
     max_attempts: int = 3
@@ -144,6 +145,7 @@ def load_settings(cfg: MindConfig, data_dir: Path, *, culture=None) -> NightlySe
         looks_diversity=enabled(data_dir), quiet=server.quiet_window if server.enabled else None,
         romance_activities=cfg.romance.activities,
         member_romance=load_drama_config(data_dir / "mind.toml").member_romance,
+        drama_threads=load_drama_config(data_dir / "mind.toml").threads,
         turing_windows=load_turing(data_dir / "mind.toml").windows)
 
 
