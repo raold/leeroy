@@ -22,6 +22,7 @@ from leeroy_mind.personas.schema import (GLASSES, HAIR_COLOURS, HAIR_LENGTHS, HA
                                          persona_to_dict, validate_persona)
 from leeroy_mind.selfies import kind, scene, scene_choices, style_variety, varied, wardrobe
 from leeroy_mind.selfies.kind import ERA_RE, EXPLICIT_RE, WEAR_RE
+from leeroy_mind.selfies.prompt import BODY_NEGATIVE, HEAD_NEGATIVE
 from leeroy_mind.selfies.prompt import (_LENGTHS, ACCESSORY, FIT_MAX, GLASSES_WORDS,
                                         HAIR_COLOUR_WORDS,
                                         HAIR_STYLE_WORDS, JEWELLERY_WORDS, LUST_NEGATIVE,
@@ -220,7 +221,11 @@ def test_unset_the_prompt_is_what_the_looks_say():
     assert hair_words(p) == ("shoulder-length dark brown hair", "tucked behind one ear")
     assert face_details(p) == list(APPEARANCE.face)
     assert accessory_phrases(p) == [] and style_negative(p, NEGATIVE) == ()
-    assert build_prompt(p).negative == NEGATIVE
+    # a waist-up kind takes the body negative since #362 (safe.py); a closer one NEGATIVE with
+    # the audit's three words
+    assert build_prompt(p).negative == BODY_NEGATIVE
+    close = replace(p, photo=replace(p.photo, framing="head_and_shoulders"))
+    assert build_prompt(close).negative == HEAD_NEGATIVE and set(NEGATIVE) < set(HEAD_NEGATIVE)
 
 
 def test_a_set_hair_value_is_said_in_place_of_the_looks_own():
@@ -254,15 +259,17 @@ def test_the_profile_prompt_golden_with_hair_makeup_and_accessories():
     p = replace(woman(**EVERYTHING), photo=replace(PHOTO, kind="selfie", framing="upper_body"))
     spec = build_prompt(p)
     assert spec.phrases == (
-        ("phone selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0),
+        # a selfie names no phone, and a waist-up photo says its kind short (#362, safe.py)
+        ("selfie", 0), ("waist-up shot, upper body", 0), ("34-year-old British woman", 0),
         ("very long strawberry blonde hair, in a messy bun", 0), ("light olive skin", 0),
         # what he set, first among the optional phrases; her own glasses detail moves up here
         ("thin glasses", 1), ("tattoo sleeve", 1), ("nose piercing", 1), ("glam makeup", 1),
         ("statement jewellery", 1),
         ("hazel eyes", 2), ("freckles", 2), ("looking at the camera", 2), ("average build", 1),
-        ("a grey hoodie", 2), ("a quiet cafe", 2), ("a small smile", 3),
+        # what she wears is required, a top and a bottom (#362)
+        ("wearing a grey hoodie and trousers", 0), ("a quiet cafe", 2), ("a small smile", 3),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
-    assert spec.negative == NEGATIVE  # nothing set to "never" or "none"
+    assert spec.negative == BODY_NEGATIVE  # nothing set to "never" or "none"
     assert spec.phrases[:3] == build_prompt(replace(woman(), photo=p.photo)).phrases[:3]
 
 
@@ -272,15 +279,25 @@ def test_the_profile_prompt_golden_for_a_man_who_set_none():
             face=("round wire glasses", "a short beard", "a small anchor tattoo", "pierced ear"))
     spec = build_prompt(p)
     assert spec.phrases == (
-        ("candid photo taken by a friend", 0),
+        ("candid photo", 0),
         ("three-quarter shot from mid-thigh up, waist and hips in frame", 0),
         ("34-year-old British man", 0), ("short silver hair, crew cut", 0), ("light olive skin", 0),
-        ("hazel eyes", 2), ("a short beard", 2), ("average build", 1), ("a grey hoodie", 2),
-        ("a quiet cafe", 2), ("a small smile", 3),
+        ("hazel eyes", 2), ("a short beard", 2), ("average build", 1),
+        ("wearing a grey hoodie and trousers", 0), ("a quiet cafe", 2),
+        ("standing, hands clasped in front", 0),  # a body shot's pose, drawn by seed (#362)
+        ("a small smile", 3),
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
-    # one word each, a phrase apiece, only as many as the fixed negatives leave room for
-    assert spec.negative == NEGATIVE + (("glasses", 3), ("tattoo", 3))
-    assert spec.negative[:len(NEGATIVE)] == NEGATIVE  # the fixed negatives keep their places
+    # one word each, a phrase apiece; in a body negative they go ahead of its optional phrases
+    # (prompt.negative_for), so all four have room there
+    first = BODY_NEGATIVE.index(("plastic skin", 1))
+    assert spec.negative == BODY_NEGATIVE[:first] + (
+        ("glasses", 1), ("tattoo", 1), ("piercing", 1), ("jewellery", 1)) + BODY_NEGATIVE[first:]
+    # (what the worker's fit keeps of them is counted on the real tokenizers only:
+    # test_the_never_words_fit_in_the_body_negatives)
+    # head and shoulders: the fixed negatives keep their places, the words where there is room
+    close = build_prompt(replace(p, photo=replace(p.photo, framing="head_and_shoulders")))
+    assert close.negative[:len(HEAD_NEGATIVE)] == HEAD_NEGATIVE
+    assert close.negative[len(HEAD_NEGATIVE):] == style_negative(p, HEAD_NEGATIVE)
 
 
 def test_identity_details_already_there_are_kept():
@@ -328,7 +345,9 @@ def test_what_he_set_reaches_the_varied_situational_and_tile_prompts():
     snap = build_scene_prompt(p, Scene(**SCENE))
     plain = build_scene_prompt(woman(build="curvy"), Scene(**SCENE))
     assert all(x in snap.phrases for x in worn)
-    assert snap.negative == plain.negative  # a situational photo's negatives are unchanged
+    # a situational photo's negative gains only her "none" word, ahead of its optional phrases
+    assert [x for x in snap.negative if x != ("tattoo", 1)] == list(plain.negative)
+    assert ("tattoo", 1) in snap.negative
     assert all(x in build_tile_prompt(p).phrases for x in worn)
     # a limb word never reaches a situational photo (scene.limb_detail): none of these has one
     from leeroy_mind.selfies.scene import limb_detail
@@ -350,16 +369,21 @@ def test_each_never_or_none_is_its_own_one_word_negative_where_it_fits():
     assert style_negative(woman(jewellery="none", glasses="never"), NEGATIVE) == (
         ("glasses", 3), ("jewellery", 3))  # jewellery no longer costs him the glasses
     assert style_negative(woman(jewellery="none"), NEGATIVE) == (("jewellery", 3),)
-    for base, room in ((NEGATIVE, 2), (LUST_NEGATIVE, 3), (VARIED_NEGATIVE, 0)):
+    for base, room in ((NEGATIVE, 2), (LUST_NEGATIVE, 3)):
         got = style_negative(p, base)
         assert [w for w, _ in got] == ["glasses", "tattoo", "piercing", "jewellery"][:room]
         dropped = fit(base + got)[1]
         assert not any(w in dropped for w, _ in got), base  # what is sent is kept
         assert fit(base)[1] == dropped  # and it costs the fixed negatives nothing
-    # a varied set's fixed negatives fill the window: nothing is added there, said here plainly
+    # a varied set's required negatives fill most of the window: style_negative adds nothing
+    # there, so negative_for puts the words ahead of its optional phrases (#362); what the
+    # worker's fit keeps of a body negative is counted on the real tokenizers only
+    # (test_the_never_words_fit_in_the_body_negatives)
     assert style_negative(p, VARIED_NEGATIVE) == ()
     look = next(_looks(views=("front",)))
-    assert build_varied_prompt(p, look).negative == VARIED_NEGATIVE
+    got = build_varied_prompt(p, look).negative
+    assert [x for x in got if x not in VARIED_NEGATIVE] == [
+        ("glasses", 1), ("tattoo", 1), ("piercing", 1), ("jewellery", 1)]
     assert not any("glasses" in t for t, _ in build_varied_prompt(
         replace(p, appearance=replace(p.appearance, face=("thin glasses",))), look).phrases)
 
@@ -384,6 +408,30 @@ def fit(phrases, count=None):
 _TOKENIZERS = pytest.mark.skipif(clip_bpe.tokenizers() is None,
                                  reason="RealVisXL tokenizer files are not on this machine")
 WORN = dict(glasses="always", tattoos="small")  # the review's heaviest realistic member
+
+
+@_TOKENIZERS
+def test_the_never_words_fit_in_the_body_negatives():
+    """The body negatives' required sets count 57 to 71 on RealVisXL's tokenizers; the mind's
+    count is only an upper bound for them (77 to 91), so what the worker's fit keeps is measured
+    with the real files only. All four words fit in the plain, lust and situational body
+    negatives; a varied set's has room for the first two (main: none there)."""
+    from leeroy_mind.selfies.prompt import BODY_NEGATIVE_LUST, BODY_NEGATIVE_MIRROR, negative_for
+    from leeroy_mind.selfies.scene import (SNAP_NEGATIVE, SNAP_NEGATIVE_LUST,
+                                           SNAP_NEGATIVE_LUST_MIRROR, SNAP_NEGATIVE_MIRROR)
+    off = dict(glasses="never", tattoos="none", piercings="none", jewellery="none")
+    p = woman(build="curvy", **off)
+    words = ("glasses", "tattoo", "piercing", "jewellery")
+    bodies = (BODY_NEGATIVE, BODY_NEGATIVE_MIRROR, BODY_NEGATIVE_LUST, SNAP_NEGATIVE,
+              SNAP_NEGATIVE_LUST, SNAP_NEGATIVE_MIRROR, SNAP_NEGATIVE_LUST_MIRROR)
+    for base in bodies:
+        kept = fit(negative_for(p, base), clip_bpe.count)[0].split(", ")
+        assert all(w in kept for w in words), base
+    varied = fit(negative_for(p, VARIED_NEGATIVE), clip_bpe.count)[0].split(", ")
+    assert [w for w in words if w in varied] == ["glasses", "tattoo"]  # where room allows
+    for base in (*bodies, VARIED_NEGATIVE):
+        kept = fit(negative_for(p, base), clip_bpe.count)[0]
+        assert all(t in kept for t, pr in base if pr == 0)  # never at a required word's cost
 
 
 def heavy(**more):
@@ -417,9 +465,13 @@ def test_the_workers_fit_keeps_what_he_set_on_the_heaviest_realistic_member():
             assert _lost(build_prompt(lusty, kind_style=LUST), lusty) == [], (kind_, framing)
     for look in _looks(views=("front", "side")):
         assert _lost(build_varied_prompt(p, look), p) == [], look
-    for framing in ("face", "head_and_shoulders", "upper_body"):
+    for framing in ("face", "head_and_shoulders"):
         snap = build_scene_prompt(p, Scene(**{**SCENE, "framing": framing}))
         assert _lost(snap, p) == [], framing
+    # since #362 what she wears is required in a waist-up situation (a top and a bottom): with
+    # this long free-text activity and place her glasses, the first, keep their room
+    waist = build_scene_prompt(p, Scene(**{**SCENE, "framing": "upper_body"}))
+    assert "thin glasses" not in _lost(waist, p)
     # a three-quarter situation with a long activity and place keeps her glasses, the first
     wide = build_scene_prompt(p, Scene(**{**SCENE, "framing": "three_quarter"}))
     assert "thin glasses" not in _lost(wide, p)
@@ -439,8 +491,10 @@ def test_everything_set_shows_on_a_typical_member_and_makeup_is_no_longer_always
             assert _lost(build_prompt(q), q) == [], (kind_, framing)
     for look in _looks(views=("front", "side")):
         assert _lost(build_varied_prompt(p, look), p) == [], look
-    for framing in ("face", "upper_body"):
-        assert _lost(build_scene_prompt(p, Scene(**{**SCENE, "framing": framing})), p) == []
+    assert _lost(build_scene_prompt(p, Scene(**{**SCENE, "framing": "face"})), p) == []
+    # waist-up, her clothing is required since #362: all but the last of the five keep room
+    waist = _lost(build_scene_prompt(p, Scene(**{**SCENE, "framing": "upper_body"})), p)
+    assert waist in ([], ["statement jewellery"])
     him = man(glasses="always", tattoos="sleeve", jewellery="minimal", piercings="ears")
     for framing in ("face", "upper_body", "three_quarter"):
         q = replace(him, photo=replace(PHOTO, framing=framing))
@@ -624,7 +678,8 @@ def test_a_swim_only_wardrobe_offers_only_what_the_pairings_allow():
     assert set(props["outfit"]["enum"]) == set(kind.SWIM_OUTFITS)
     assert props["setting"]["enum"] == list(kind.WATER_SETTINGS)
     assert props["framing"]["enum"] == ["upper_body"]
-    assert "headshot" not in props["kind"]["enum"] and len(props["kind"]["enum"]) == 3
+    # selfie and snapshot: the lust style is not offered a mirror selfie since #362
+    assert "headshot" not in props["kind"]["enum"] and len(props["kind"]["enum"]) == 2
     p = woman(wardrobe=("swim",))
     for k in props["kind"]["enum"]:  # every pick left passes the lust screen
         for place in props["setting"]["enum"]:

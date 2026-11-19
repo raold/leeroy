@@ -8,6 +8,7 @@ from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.personas.screens import has_word, names_real_name
 from . import kind, wardrobe
 from .photo_extra import choose_light
+from .safe import BODY_SHOT_SHARE, lust_framing
 from .style import LUST, style_of
 
 # Explicit date-night subset of the already screened outfits; no swim/gym/workwear.
@@ -16,7 +17,7 @@ DATE_OUTFITS = ("fitted little dress", "low-cut cocktail dress", "bodycon mini d
     "one-shoulder top and leather trousers", "sequin party dress")
 DATE_SETTINGS = tuple(s for s in kind.LUST_SETTINGS
     if s not in kind.WATER_SETTINGS + kind.GYM_SETTINGS and s != "a park in summer")
-KINDS = ("snapshot", "mirror_selfie", "selfie")
+KINDS = ("snapshot", "selfie")  # never a mirror selfie (safe.py, the photo audit)
 FRAMINGS = ("three_quarter", "upper_body", "head_and_shoulders", "face")
 PAIR_CAP = 2
 MAX_CAST = 1024
@@ -81,7 +82,7 @@ def plain_pairings(p, data):
     return codes
 
 
-def _choose(p, counts, cap, rng, *, seed, ident, names):
+def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE):
     # Plain kinds remain free-text choices under the original schema and screens.
     if style_of(p) != LUST:
         return None
@@ -106,7 +107,6 @@ def _choose(p, counts, cap, rng, *, seed, ident, names):
     settings = [(i,s) for i,s in settings if counts.settings[key(s)] < cap]
     expressions = sorted(enumerate(expressions),key=lambda x:(counts.expressions[key(x[1])],rng.random()))
     kinds = sorted(KINDS,key=lambda x:(counts.kinds[x],rng.random()))
-    frames = sorted(frames,key=lambda x:(counts.framings[x],rng.random()))
     # Name collisions are removed before products, bounding work even for hostile names.
     forbidden = tuple(names) + (p.character_name,p.identity.real_name)
     def clear(s):
@@ -115,6 +115,11 @@ def _choose(p, counts, cap, rng, *, seed, ident, names):
     settings = [(i,s) for i,s in settings if clear(s)]
     expressions = [(i,s) for i,s in expressions if clear(s)]
     kinds = [s for s in kinds if clear(s)]
+    # three-quarter for `share` of the cast's lust kinds ([selfies] body_shot_share), else
+    # waist-up: whichever keeps the cast nearest that share; the kind she gets (kinds[0]) is
+    # waist-up when it is a selfie (safe.lust_framing)
+    frames = [lust_framing(counts.framings[frames[0]], counts.framings[frames[1]], share,
+                           kinds[0] if kinds else "snapshot")]
     frames = [s for s in frames if clear(s)]
     if p.identity.age < 25 or not options or not settings or not expressions or not kinds or not frames:
         return None
@@ -130,7 +135,7 @@ def _choose(p, counts, cap, rng, *, seed, ident, names):
     return None
 
 
-def assign(personas, selected, *, seed="v1", ident, names=()):
+def assign(personas, selected, *, seed="v1", ident, names=(), share=BODY_SHOT_SHARE):
     if len(personas) > MAX_CAST:
         raise ValueError("too_many_members")
     counts = Counts(personas.values())
@@ -142,7 +147,7 @@ def assign(personas, selected, *, seed="v1", ident, names=()):
         p = personas[guid]
         counts.add(p.photo,-1)
         choice = _choose(p,counts,cap,random.Random(f"photo-variety:{seed}:{guid}"),
-                         seed=seed,ident=ident,names=names)
+                         seed=seed,ident=ident,names=names,share=share)
         if choice is None:
             rejected.append(guid)
             counts.add(p.photo,1)

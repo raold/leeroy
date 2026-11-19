@@ -57,6 +57,7 @@ SWITCHES = (
     ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
     ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
     ('selfies','variety','Photo style variety','selfies.enabled'),
+    ('selfies','romance_styling','Private photo romance styling','selfies.enabled; selfies.snaps'),
     ('selfies','varied_sets','Varied selfie sets','selfies.enabled'),
     ('selfies','identity_sets','Her face in every new set','selfies.enabled; identity adapter fetched'),
     ('selfies','detailer','Photo detailer: faces','selfies.enabled'),

@@ -390,7 +390,7 @@ def test_try_ask_reads_his_words_and_renders_one_photo_with_her_face_into_scratc
     assert (base / "ref.jpg").read_bytes() == files.history(snaproot, 101, 1).read_bytes()
     stored = json.loads((base / "scene.json").read_text(encoding="utf-8"))
     assert (stored["setting"], stored["outfit"]) == ("supply cupboard at work",
-                                                     "a hi-vis vest over a work t-shirt")
+                                                     "a hi-vis vest over a work t-shirt and work trousers")
     asked = [c for c in llm.calls if "messages" in c]
     assert len(asked) == 1 and asked[0]["think"] is False
     assert asked[0]["format"]["title"] == "scene_words" and ASK in asked[0]["messages"][-1]["content"]
@@ -409,6 +409,31 @@ def test_try_ask_reports_the_enum_path_when_the_words_fail(snaproot, capsys):
                                                                     "scene": [PICKS]}))
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out["rendered"] == 1 and out["scene"]["source"] == "enum"
+
+
+def test_try_ask_uses_romance_styling_config_and_keeps_the_database_unchanged(snaproot, capsys):
+    from conftest import TEST_CAST
+    from leeroy_mind.storage.db import open_db
+    from leeroy_mind.storage.store import Store
+    from leeroy_mind.testing.fake_clock import FakeClock
+    from selfies.fakes import CLOCK
+    (snaproot / "mind.toml").write_text('[selfies]\nromance_styling=true\n', encoding="utf-8")
+    with closing(Store(open_db(snaproot / "mind.db"), clock=FakeClock(CLOCK))) as store:
+        p = load_persona(store, 101)
+        p = replace(p, identity=replace(p.identity, player_gender="female", age=30),
+                    romance=replace(p.romance, stance="drawn"))
+        _, race, cls = TEST_CAST[101]
+        save_persona(store, p, source="seed", ts=1000., race=RACES[race], class_name=CLASSES[cls])
+    before = (snaproot / "mind.db").read_bytes()
+    reply = {**WORDS_REPLY, "wearing": "casual", "place": "kitchen at home"}
+    code = cli.selfies_main(["--data-dir", str(snaproot), "try", "--ask", ASK, "--guid", "101"],
+                            make_llm=lambda cfg: ask_llm(snaproot, {"scene_words": [reply]}))
+    assert code == 0, capsys.readouterr().err
+    scene = json.loads((snaproot / "scratch" / "selfies-try" / "ask" / "101" / "scene.json")
+                       .read_text(encoding="utf-8"))
+    assert scene["romance_style"] in ("warm", "playful", "confident")
+    assert scene["outfit"] in scene["shows"]
+    assert (snaproot / "mind.db").read_bytes() == before
 
 
 @pytest.mark.parametrize("argv", [["try", "--ask", ASK], ["try", "--ask", ASK, "--guid", "101", "--snaps"],
