@@ -20,7 +20,7 @@ class SelfieCfg:
     data: Path | None = None  # its models; None: LEEROY_SELFIE_DATA, else <checkout>/selfie-data
     nsfw_max: float = 0.2  # an image scoring this or more is never written
     steps: int = 30
-    guidance: float = 5.0  # the CFG scale (the protocol's cfg)
+    guidance: float = 5.0  # the protocol's cfg; TOML defaults FLUX to native guidance 3.5
     size: int = 1024
     min_free_gib: float = 11.5  # the worker refuses to load with less VRAM free
     snaps: bool = False  # situational photos and the guild photo (the identity worker)
@@ -148,6 +148,8 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         values["detailer"] = False
         values["detailer_hands"] = False
         values["backend"] = "realvisxl"
+    if values.get("backend") == "flux1-dev":
+        values.setdefault("guidance", 3.5)
     return SelfieCfg(**values)
 
 

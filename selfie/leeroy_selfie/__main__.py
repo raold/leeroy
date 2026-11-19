@@ -122,7 +122,8 @@ def cmd_smoke(args) -> int:
     identity = (Identity(str(Path(args.ref).resolve()), (0.0, 0.0, 1.0, 1.0), SMOKE_SCALE)
                 if args.identity else None)
     req = Render("smoke", tuple(map(tuple, SMOKE_PHRASES)), tuple(map(tuple, SMOKE_NEGATIVE)),
-                 1234, 30, 5.0, 1024, str(out_dir.resolve() / "smoke.jpg"),
+                 1234, 30, 3.5 if args.backend == "flux1-dev" else 5.0,
+                 1024, str(out_dir.resolve() / "smoke.jpg"),
                  str(out_dir.resolve() / "smoke-thumb.jpg"), 256, 0.2, identity,
                  "portrait" if identity else "square",
                  Detail(True, True) if args.detail else None)
@@ -277,7 +278,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="the reference's scale (0.6)")
     p_detail.add_argument("--seed", type=int, default=1234)
     p_detail.add_argument("--steps", type=int, default=30)
-    p_detail.add_argument("--cfg", type=float, default=5.0)
+    p_detail.add_argument("--cfg", type=float, default=None,
+                          help="guidance (default: FLUX 3.5, RealVisXL 5.0)")
     p_detail.add_argument("--prompt", default=DETAIL_FACE_PROMPT, help="the face crops' prompt")
     p_detail.add_argument("--hand-prompt", default=DETAIL_HAND_PROMPT)
     p_detail.add_argument("--negative", default=DETAIL_NEGATIVE)
@@ -290,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
                                "detectors, nothing written")
     p_detail.set_defaults(func=cmd_detail)
     args = parser.parse_args(argv)
+    if args.cmd == "detail" and args.cfg is None:
+        args.cfg = 3.5 if args.backend == "flux1-dev" else 5.0
     if args.cmd == "smoke" and args.identity != (args.ref is not None):
         p_smoke.error("--identity and --ref go together")
     return args.func(args)

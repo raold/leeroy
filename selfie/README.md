@@ -81,8 +81,13 @@ can be checked independently using `smoke --backend flux1-dev --out DIR`, then
 adult's reference. The output reports render time, peak VRAM and classifier score. Restore
 the mind afterward. The owner should inspect face consistency and appearance before enabling
 automatic rendering. The existing conservative prompt budget is retained. The protocol's
-CFG becomes FLUX `true_cfg_scale` (so negative prompts remain active above 1), while distilled
-guidance stays 3.5; SDXL parameter rankings need a fresh visual assessment on FLUX.
+CFG controls FLUX's native distilled guidance. Its default is 3.5 when the backend is selected
+in TOML without an explicit `guidance`; an existing value is preserved, so set `guidance = 3.5`
+when switching a table that already sets it. Smoke/detail commands default to 3.5 too.
+Negative prompts use a separate true CFG of 1.5 (1 when native guidance is 1). Reusing SDXL's
+5.0 as true CFG in addition to native guidance severely clipped colours and sometimes produced
+a colour blob in the initial GPU test. The corrected setting was compared at the same prompt
+and seed. SDXL parameter rankings need a fresh visual assessment on FLUX.
 
 FLUX.1-dev and the adapter use the FLUX.1-dev non-commercial license; the CLIP ViT-L/14
 encoder uses MIT. See the [model card](https://huggingface.co/black-forest-labs/FLUX.1-dev)

@@ -9,7 +9,7 @@ import time
 from . import models
 from .render import RETRY_WAIT_S, ReadyError, Renderer, _face_ref, _free_gib, _ms
 
-DISTILLED_GUIDANCE = 3.5
+NEGATIVE_GUIDANCE = 1.5
 
 
 class FluxRenderer(Renderer):
@@ -21,12 +21,14 @@ class FluxRenderer(Renderer):
 
     def _draw(self, pipe, **kwargs):
         cfg = kwargs.pop("guidance_scale")
-        # `guidance_scale` alone does NOT apply the negative prompt in FLUX. Keep the
-        # protocol's CFG as true CFG, including during img2img, and its trained guidance
-        # at the model's standard value. All prompts still fit the shared CLIP window.
-        if self.identity and "ip_adapter_image_embeds" in kwargs and cfg > 1:
+        # The protocol controls FLUX's distilled guidance. Applying the SDXL default
+        # as true CFG *as well* severely clips colours and can collapse the image.
+        # Keep negative prompts active with a separate, gentle true CFG; cfg 1 retains
+        # the protocol's unguided-negative convention. Img2img uses the same mapping.
+        negative_cfg = NEGATIVE_GUIDANCE if cfg > 1 else 1.0
+        if self.identity and "ip_adapter_image_embeds" in kwargs and negative_cfg > 1:
             kwargs["negative_ip_adapter_image_embeds"] = self._blank(True)
-        return pipe(**kwargs, true_cfg_scale=cfg, guidance_scale=DISTILLED_GUIDANCE,
+        return pipe(**kwargs, true_cfg_scale=negative_cfg, guidance_scale=cfg,
                     max_sequence_length=512)
 
     def _img2img(self):

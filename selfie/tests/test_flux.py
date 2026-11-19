@@ -25,7 +25,7 @@ def test_flux_keeps_negative_guidance_and_shared_image_gate(tmp_path, monkeypatc
     r = renderer(score=score)
     result = r.render(request(tmp_path))
     call = r.pipe.calls[0]
-    assert call['true_cfg_scale'] == 6.0 and call['guidance_scale'] == 3.5
+    assert call['true_cfg_scale'] == 1.5 and call['guidance_scale'] == 6.0
     assert call['negative_prompt'] == 'blurry' and call['max_sequence_length'] == 512
     assert result['flagged'] is flagged
     assert (tmp_path/'o.jpg').exists() is (not flagged)
@@ -65,7 +65,37 @@ def test_detail_uses_flux_img2img_over_the_same_components(tmp_path, monkeypatch
     monkeypatch.setitem(sys.modules, 'diffusers', types.SimpleNamespace(FluxImg2ImgPipeline=create))
     r._draw(r._img2img(), guidance_scale=4, negative_prompt='blurry', image=object())
     assert r._img2img() is i2i and calls == ['create', 'offload']
-    assert i2i.calls[0]['true_cfg_scale'] == 4
+    assert i2i.calls[0]['true_cfg_scale'] == 1.5
+    assert i2i.calls[0]['guidance_scale'] == 4
+
+
+@pytest.mark.parametrize('guidance', [1.0, 3.5, 5.0, 12.0])
+def test_native_guidance_never_becomes_large_true_cfg(guidance):
+    r = renderer()
+    r._draw(r.pipe, guidance_scale=guidance, negative_prompt='blurry')
+    call = r.pipe.calls[0]
+    assert call['guidance_scale'] == guidance
+    assert call['true_cfg_scale'] == (1.0 if guidance == 1 else 1.5)
+    assert call['negative_prompt'] == 'blurry'
+
+
+@pytest.mark.parametrize('backend,expected', [('realvisxl', 5.0), ('flux1-dev', 3.5)])
+def test_smoke_and_detail_use_backend_guidance_defaults(tmp_path, monkeypatch, backend, expected):
+    from leeroy_selfie import __main__ as cli
+    seen = []
+    def draw(req):
+        seen.append(req.cfg)
+        return dict(flagged=False, seconds=1, peak_gib=1, nsfw=0.01, tokens=30)
+    monkeypatch.setattr(render, 'load', lambda *args, **kw: types.SimpleNamespace(render=draw))
+    assert cli.main(['smoke', '--backend', backend, '--out', str(tmp_path)]) == 0
+    assert seen == [expected]
+    monkeypatch.setattr(cli, 'cmd_detail', lambda args: seen.append(args.cfg) or 0)
+    args = ['detail', '--backend', backend, '--in', str(tmp_path/'in.jpg'),
+            '--out', str(tmp_path/'out.jpg')]
+    assert cli.main(args) == 0
+    assert seen[-1] == expected
+    assert cli.main([*args, '--cfg', '4.5']) == 0
+    assert seen[-1] == 4.5
 
 
 def stack(monkeypatch, *, free=20, labels=None):
