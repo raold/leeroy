@@ -45,7 +45,9 @@ def test_invalid_table_reads_as_invalid_off(tmp_path,text):
 
 
 @pytest.mark.parametrize('text,state', [('', 'off'), ('[drama]\nmember_romance=true', 'on'),
-                                        ('[drama]\nmember_romance=1', 'invalid')])
+                                        ('[drama]\nmember_romance=1', 'invalid'),
+                                        ('[drama]\nmember_romance=true\nthreads="record"', 'on'),
+                                        ('[drama]\nthreads="on"', 'off')])
 def test_member_romance_switch_is_listed(tmp_path, text, state):
     (tmp_path/'mind.toml').write_text(text)
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']

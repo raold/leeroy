@@ -1647,6 +1647,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "turing":
         from .turing.cli import turing_main
         return turing_main(argv[1:])
+    if argv and argv[0] == "drama":
+        from .drama.cli import drama_main
+        return drama_main(argv[1:])
     if argv and argv[0] == "bakeoff":
         from .bakeoff.cli import bakeoff_main
         return bakeoff_main(argv[1:])
@@ -1687,6 +1690,7 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("signals", help="read-only response signal counts")
     sub.add_parser("learn", help="read-only reward report")
     sub.add_parser("turing", help="how distinguishable the members are from you: report, run")
+    sub.add_parser("drama", help="member drama: threads report, threads replay (recording only)")
     sub.add_parser("bakeoff", help="other models and prompts on captured turns, judged by the "
                    "Turing judge: run (mind stopped), sheet, tally")
     sub.add_parser("selfies", help="profile photos: status, a trial render with the mind "
