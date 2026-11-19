@@ -310,13 +310,18 @@ def test_heat_touches_no_screen_gate_or_negative():
 
 # -- main's photo audit (#362): review of #373, round 2 ---------------------------------------------
 
-def test_the_audits_settings_are_tiered_and_the_retired_ones_read_p4():
+def test_the_audits_settings_and_the_three_put_back_are_tiered():
+    """The audit's three plain places are P0; the hallway mirror, the car's front seat and the
+    concert crowd, which the owner put back on the lists (2026-11-19), have the tiers they had
+    before the audit (P0, P0, P2), and a stored scene or prompt naming one reads that tier."""
     from leeroy_mind.selfies import safe
     assert {photos.SETTING_TIER[s] for s in safe.NEW_SETTINGS} == {P0}
-    for retired in safe.RETIRED_SETTINGS:  # in no tier: a stored scene naming one fails closed
-        assert retired not in photos.SETTING_TIER
+    for setting, tier in (("the mirror in her hallway", P0), ("the front seat of her car", P0),
+                          ("a concert crowd", P2)):
+        assert photos.SETTING_TIER[setting] == tier
         assert photos.scene_tier(dict(style="lust", outfit="satin midi dress",
-                                      setting=retired)) == P4
+                                      setting=setting)) == tier
+        assert photos.prompt_tier(f"a woman, wearing a navy satin midi dress, {setting}") == tier
 
 
 def test_a_prompt_is_read_in_the_words_it_was_rendered_with_then_and_now():
@@ -379,4 +384,3 @@ def test_the_variety_kind_pass_picks_inside_her_tier(tier):
         assert photos.choice_of(pick.photo.outfit) is not None
         assert photos.picks_ok(dict(outfit=photos.choice_of(pick.photo.outfit),
                                     setting=pick.photo.setting), tier), (tier, pick.photo)
-        assert pick.photo.kind != "mirror_selfie"

@@ -45,8 +45,8 @@ from leeroy_mind.text import has_meta
 from . import wardrobe
 from .prompt import (HAIR_COLOUR_WORDS, HAIR_STYLE_WORDS, lust_named, lust_phrase,
                      names_re)
-from .safe import (BODY_SHOT_SHARE, NEW_SETTINGS, OUTFIT_WORDS, RETIRED_SETTINGS,
-                   selfie_framing, settle_framing)
+from .safe import (BODY_SHOT_SHARE, NEW_SETTINGS, OUTFIT_WORDS, selfie_framing,
+                   settle_framing)
 from .store import queue_restyled
 from .style import AGE_RE, LUST, PLAIN, STYLES, style_of, suggestive
 
@@ -135,17 +135,16 @@ WATER_SETTINGS = ("the beach at sunset", "a hotel pool deck", "a lakeside dock",
                   "a hot tub on a wooden deck", "the deck of a sailing boat", "a beach bar")
 GYM_SETTINGS = ("the gym",)
 SWIM_ONLY_SETTINGS = ("a hot tub on a wooden deck",)  # nothing but swimwear there
-# The mirror, the car's front seat and the concert crowd are retired (safe.RETIRED_SETTINGS: a
-# wrong reflection, a cloned passenger, a crowd of faces); three plain places take their slots.
-# A stored kind that names a retired one keeps its text and renders as safe.SETTING_WORDS says.
+# The photo audit had taken the mirror, the car's front seat and the concert crowd off this list;
+# the owner put them back (2026-11-19), beside the three plain places it added (safe.NEW_SETTINGS).
 LUST_SETTINGS = WATER_SETTINGS + GYM_SETTINGS + (
     "a rooftop bar at night", "a city street at night", "a cafe terrace", "a park in summer",
-    "a hotel balcony at dusk", "a nightclub", "her living room couch", *NEW_SETTINGS,
+    "a hotel balcony at dusk", "a nightclub", "her living room couch",
+    "the mirror in her hallway", "the front seat of her car", "a concert crowd", *NEW_SETTINGS,
     "a wine bar", "a dance floor", "a garden party", "a ski lodge terrace")
-assert not set(RETIRED_SETTINGS) & set(LUST_SETTINGS)
-# The lust style's photo kinds: never a mirror selfie (25% defective in the audit, half of them
-# a second or wrong reflection); a stored one renders as a selfie (safe.KIND_WORDS).
-LUST_KINDS = ("selfie", "snapshot", "headshot")
+# The lust style's photo kinds: every kind a photo can be (personas.schema ProfilePhoto). The
+# photo audit had taken the mirror selfie off; the owner put it back (2026-11-19).
+LUST_KINDS = ("selfie", "mirror_selfie", "headshot", "snapshot")
 # Its framings: waist-up or three-quarter, as every lust kind chosen so far (the outfit lists
 # name no neckline for a closer photo).
 LUST_FRAMINGS = ("upper_body", "three_quarter")
@@ -974,8 +973,8 @@ def screen_lust(p: Persona, data: dict, *, varied: bool = False) -> list[str]:
              ("colour", LUST_COLOURS), ("expression", LUST_EXPRESSIONS))
     if varied:
         lists += (("framing", VARIED_FRAMINGS), ("view", VARIED_VIEWS))
-    elif data.get("kind") not in LUST_KINDS:  # never a mirror selfie; its framing is the
-        return ["photo.kind: not on its list"]  # caller's (a scene may be closer)
+    elif data.get("kind") not in LUST_KINDS:  # its framing is the caller's (a scene may be
+        return ["photo.kind: not on its list"]  # closer)
     problems = [f"photo.{field}: not on its list" for field, values in lists
                 if data.get(field) not in values]
     if not varied and data.get("view") is not None:

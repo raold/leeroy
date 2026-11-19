@@ -1,35 +1,35 @@
-"""Compositions the photo audit showed render badly, designed out (2026-11-17).
+"""Compositions the photo audit showed render badly, designed out (2026-11-17), as far as the
+owner kept them (2026-11-19).
 
 A visual audit of about 1,290 rendered photos (covers, profile sets, situational photos) tied
 each defect to the composition that produced it. Headshots were clean (1%); defects grew with
 how much of the body shows (three-quarter 11%, full-length 21%) and with what the hands touch.
 The triggers, and what this module does about each:
 
-- A mirror in a lust profile kind (27% of 64, half of them a second or wrong reflection; a plain
-  head-and-shoulders mirror selfie was fine, 3% of 92), a phone held in view, a car's front seat
-  (the subject cloned as a passenger), a crowd: the lust style is no longer offered a mirror
-  selfie or the mirror setting, and a stored lust one renders as a selfie (kind_words); the
-  retired settings are said another way (SETTING_WORDS); the negatives name the mirror and the
-  phone wherever no mirror is rendered. A plain mirror selfie, and one he asks for in his words
-  (words_scene), stays a mirror selfie.
+- A mirror in a lust profile kind (27% of 64), the hallway mirror, a car's front seat, a concert
+  crowd: the audit took them off the lust lists; the owner put them back (2026-11-19). The lust
+  style is offered a mirror selfie and those three settings again (beside NEW_SETTINGS, the three
+  plain places the audit added), and a mirror selfie renders as one in every style. A phone held
+  in view: no kind or framing names a phone (KIND_WORDS), and the negatives name the mirror and
+  the phone wherever no mirror is rendered and they fit (prompt.body_negative).
 - "bike shorts" drew a bicycle into the gym (38%, always garbled): the outfit's words change
   (OUTFIT_WORDS), its key stays.
-- Hands on hips with another arm action gave a third hand; hands gripping a glass, a mug, a
-  rail, a pen, sticks: a body shot gets one simple standing pose (pose), props rest beside the
-  subject (scene_choices.PROPS) and activities are said as what is there, not what the hands do
-  (scene_choices.ACTIVITIES). A selfie gets no pose at any framing (an arm holds the camera),
-  and a lust selfie kind is waist-up (selfie_framing; the three-quarter mirror selfie was the
-  audit's worst cell, 38%).
-- Seated and splayed swimwear poses merged legs and feet: every pose stands.
+- Hands gripping a glass, a mug, a rail, a pen, sticks: props rest beside the subject
+  (scene_choices.PROPS) and activities are said as what is there, not what the hands do
+  (scene_choices.ACTIVITIES). The audit's standing poses for body shots were taken out again
+  (owner, 2026-11-19): nothing here adds a pose phrase, and a selfie of any kind takes none
+  (SELFIE_KINDS: an arm holds the camera).
 - Garments: an outfit phrase at priority 2 never reached the worker's 75 tokens (0 of 12 plain
   waist-up prompts kept it, 7 of 42 men's), which rendered men shirtless; one-shoulder and
   one-strap words fused garments; a top without its bottom read as bottomless. Every outfit now
   names a top and a bottom, or a one-piece with its length (complete, is_complete), a man always
   a shirt, a headshot a top with a neckline, and it is required (`wearing ...`, priority 0).
 
-Eyes were never wrong at severity 2 or more in the audit (0 of 1,288), so the body negative
-(BODY_ANATOMY) trades the eye words of the earlier anatomy line for a third hand, a duplicate
-person, the mirror, the phone and the missing-garment words.
+The body negative (prompt.body_negative) requires the anatomy line (BODY_ANATOMY), another or a
+duplicate person, the missing-garment words and the mirror and the phone, beside the covered
+line, minors and likeness, where they fit. The quality words are at the priorities they had
+before the audit (owner, 2026-11-19): the style words required again (BODY_STYLE), the rest in
+BODY_OPTIONAL.
 
 How much body shows is two settings. `[selfies] body_shot_share` (BODY_SHOT_SHARE, 1.0: the
 owner asked for four body views, and the labels do not favour waist-up over three-quarter, 12%
@@ -50,29 +50,22 @@ SNAP_BODY_SHARE = 0.5
 
 # How a photo kind is said. A selfie names no phone: the arm's-length framing is the selfie, and
 # "phone selfie" drew a phone, a second phone or an oversized one into the picture. A mirror
-# selfie keeps its words for the plain style and for his explicit ask; the lust style's renders
-# as a selfie (kind_words).
+# selfie keeps its words in every style (the lust style's too again: owner, 2026-11-19).
 KIND_WORDS = {"selfie": "selfie, close arm's-length shot", "mirror_selfie": "mirror selfie",
               "headshot": "professional headshot", "snapshot": "candid photo taken by a friend"}
 KIND_SHORT = {"selfie, close arm's-length shot": "selfie"}
-SELFIE_KINDS = ("selfie", "mirror_selfie")  # an arm holds the camera: no hands-down pose
+SELFIE_KINDS = ("selfie", "mirror_selfie")  # an arm holds the camera: never a body pose
 
-
-def kind_of(kind: str, lust: bool) -> str:
-    """The kind a photo renders as: a lust-style mirror selfie is a selfie."""
-    return "selfie" if lust and kind == "mirror_selfie" else kind
-
-# A stored setting said so it renders (the kind keeps its text; only the prompt changes). The
-# first three are retired from the lists as well (RETIRED_SETTINGS).
+# A list setting said so it renders (the kind keeps its text; only the prompt changes): a busy
+# place said empty. The hallway mirror, the car's front seat and the concert crowd render as
+# they are named again (owner, 2026-11-19).
 SETTING_WORDS = {
-    "the mirror in her hallway": "her hallway at home",
-    "the front seat of her car": "a quiet street beside her parked car",
-    "a concert crowd": "an open-air festival field at dusk",
     "a garden party": "a summer garden",
     "a dance floor": "an empty dance floor",
     "the gym": "an empty gym",
 }
-RETIRED_SETTINGS = ("the mirror in her hallway", "the front seat of her car", "a concert crowd")
+# The three plain places the audit added to the lust lists; they stay beside the three it had
+# taken off, which the owner put back (kind.LUST_SETTINGS).
 NEW_SETTINGS = ("her hallway at home", "a sunny window seat at home", "a bookshop")
 
 # A list outfit's words where the audit, or the clothed rule, asks for other ones: the key the
@@ -202,29 +195,8 @@ def wearing(outfit: str, *, gender: str, framing: str) -> str:
     return f"wearing {complete(outfit, gender=gender, framing=framing)}"
 
 
-# -- poses ----------------------------------------------------------------------------------------
+# -- a busy place ---------------------------------------------------------------------------------
 
-# A few poses per view, drawn by seed, hands simple or out of sight (the audit: no hand in view
-# 2% defective, one or more 12%; a hand on the hip 44% of the photos that mention one, and 5 of
-# the 7 third hands had one). None puts a hand on a hip, a rail, a glass or anything else, and
-# none sits, kneels or lies. The labels carry no pose, so these are chosen to avoid what failed,
-# not measured.
-POSES = {
-    "front": ("standing, arms at her sides", "standing, hands behind her back",
-              "walking, arms at her sides", "standing, hands clasped in front"),
-    "side": ("standing, arms at her sides", "walking, arms at her sides",
-             "standing, hands clasped in front"),
-    "behind": ("standing, arms at her sides", "walking away, arms at her sides",
-               "standing, hands clasped in front"),
-    "rear_three_quarter": ("standing, arms at her sides", "walking away, arms at her sides",
-                           "standing, hands clasped in front"),
-}
-# A body shot's pose in its short form ("standing", "walking away"): what the fit says before it
-# would drop her hair's style (prompt.SHORT; the review of #362: the required pose had cost the
-# hair style in 59 of 62 three-quarter lust profiles). His and her forms alike.
-POSE_SHORT = {text.replace("her", pos): text.split(",")[0]
-              for poses in POSES.values() for text in poses for pos in ("her", "his")}
-POSE_WAIST_UP = "arms down, hands out of frame"  # a waist-up photo
 ALONE = "alone, no one else in frame"  # a busy place (a bar, a club, a street, a party)
 BUSY_RE = re.compile(r"\b(?:bar|nightclub|club|dance floor|street|party|festival|concert|cafe|"
                      r"terrace|lobby|bookshop|pool deck)\b", re.I)
@@ -233,25 +205,6 @@ BUSY_RE = re.compile(r"\b(?:bar|nightclub|club|dance floor|street|party|festival
 def _draw(seed, salt: str) -> float:
     digest = hashlib.sha256(f"{seed}|{salt}".encode()).digest()
     return int.from_bytes(digest[:8], "big") / 2 ** 64
-
-
-def pose(view: str, framing: str, seed="", *, pos: str = "her", kind: str = "snapshot") -> str:
-    """The pose phrase for a photo seen from `view` ("front" for an ordinary one), framed
-    `framing`: a pose of POSES for a body shot, POSE_WAIST_UP for a waist-up one, none for a
-    head-and-shoulders or face photo and none for a selfie of any framing (an arm holds the
-    camera: "arms at her sides" would contradict it). Deterministic in `seed`."""
-    if framing in HEAD_FRAMINGS or kind in SELFIE_KINDS:
-        return ""
-    if framing not in BODY_FRAMINGS:
-        return POSE_WAIST_UP
-    poses = POSES.get(view, POSES["front"])
-    return poses[int(_draw(seed, "pose") * len(poses))].replace("her", pos)
-
-
-def pose_priority(framing: str) -> int:
-    """A body shot's pose is required (0): it is what keeps a hand off her hip; a waist-up
-    photo's is kept when it fits (1)."""
-    return 0 if framing in BODY_FRAMINGS else 1
 
 
 def alone(setting: str) -> str:
@@ -294,21 +247,24 @@ def body_slots(share: float, n: int = 4) -> int:
 
 # -- negatives ------------------------------------------------------------------------------------
 
-# A body shot's negative (prompt.body_negative), by priority. Required (0): the anatomy line
-# (the earlier scene.SNAP_ANATOMY spent 10 tokens on eyes, which the audit never found wrong, and
-# 11 on "extra limbs", "missing fingers" and "mutated, disfigured" beside what it already named),
-# another or a second person, the missing garments, and the mirror and the phone where no mirror
-# is rendered. Then, in the order the worker's 75-token fit offers them room (BODY_OPTIONAL): the
-# realism words the old profile negative kept ("plastic skin, airbrushed, doll"), "text, logo"
-# (garbled signs), the face and hands words, the render styles; what does not fit is dropped, and
-# test_safe_compositions pins what each negative keeps and drops for the GPU comparison.
+# A profile body shot's negative (prompt.body_negative), by priority. Required (0): the style
+# words as the profile negative has always said them (BODY_STYLE: the audit had kept only
+# "cartoon, painting" there; the owner put the rest back on 2026-11-19), the covered line, minors,
+# likeness, the anatomy line, another or a second person, the missing garments, and the mirror
+# and the phone where no mirror is rendered. Then, in the order the worker's 75-token fit offers
+# them room (BODY_OPTIONAL): the realism words the old profile negative kept ("plastic skin,
+# airbrushed, doll"), "text, logo" (garbled signs), and the quality words at the priorities they
+# had before the audit (owner, 2026-11-19): the face and hands, the second face and the vintage
+# words at 1, the watermark at 2. What does not fit is dropped; test_safe_compositions pins what
+# each negative keeps. A situational photo's negative is scene._snap_negative.
+BODY_STYLE = "cartoon, anime, painting, illustration, 3d render, cgi"
 BODY_ANATOMY = ("extra arms, extra legs, extra hands, fused fingers, extra fingers, "
                 "malformed hands, deformed feet")
 BODY_GARMENT = "bottomless, shirtless"  # a top with no bottom, a man with no shirt
 BODY_ALONE = "another person, duplicate person"
 BODY_NO_MIRROR = "mirror, phone"
 BODY_OPTIONAL = (("plastic skin", 1), ("airbrushed, doll", 1), ("text, logo", 1),
-                 ("deformed face, bad hands", 1), ("3d render, anime, cgi", 1),
-                 ("second face, crowd, group of people", 2),
-                 ("vintage, retro, film grain, sepia, old photo", 2),
-                 ("illustration, watermark", 2))
+                 ("deformed face, bad hands", 1),
+                 ("second face, crowd, group of people", 1),
+                 ("vintage, retro, film grain, sepia, old photo", 1),
+                 ("watermark", 2))

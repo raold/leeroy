@@ -42,14 +42,15 @@ _OUTFIT_STEPS = (P0_OUTFITS, P1_OUTFITS, P2_OUTFITS, P3_OUTFITS, P4_OUTFITS)
 OUTFIT_TIER: dict[str, int] = {o: t for t, step in enumerate(_OUTFIT_STEPS) for o in step}
 
 # -- settings: kind.LUST_SETTINGS ----------------------------------------------------------------
-# The places the photo audit retired (selfies/safe.py RETIRED_SETTINGS: the hallway mirror, the
-# car's front seat, the concert crowd) are in no tier: a stored scene naming one reads P4 (fail
-# closed). The three plain places that took their slots (safe.NEW_SETTINGS) are P0.
-P0_SETTINGS = ("her living room couch", "her hallway at home", "a sunny window seat at home",
-               "a bookshop", "a cafe terrace", "a park in summer")
+# The hallway mirror, the car's front seat and the concert crowd, which the photo audit had
+# taken off the lists and the owner put back (2026-11-19), have the tiers they had before: P0, P0
+# and P2. The three plain places the audit added (selfies/safe.py NEW_SETTINGS) are P0.
+P0_SETTINGS = ("her living room couch", "the mirror in her hallway", "the front seat of her car",
+               "her hallway at home", "a sunny window seat at home", "a bookshop",
+               "a cafe terrace", "a park in summer")
 P1_SETTINGS = ("a garden party", "a city street at night", "a ski lodge terrace")
 P2_SETTINGS = ("a rooftop bar at night", "a wine bar", "a nightclub", "a dance floor",
-               "a hotel balcony at dusk")
+               "a hotel balcony at dusk", "a concert crowd")
 P3_SETTINGS = kind.GYM_SETTINGS
 P4_SETTINGS = kind.WATER_SETTINGS
 _SETTING_STEPS = (P0_SETTINGS, P1_SETTINGS, P2_SETTINGS, P3_SETTINGS, P4_SETTINGS)
@@ -200,7 +201,7 @@ def prompt_tier(prompt) -> int:
     (a gallery candidate keeps its own: what it shows, whatever her photo kind is now). The
     highest tier among the list outfits, settings and poses the prompt names, in the words of
     then or now (_phrases, _places); P4 when it names no list outfit or no list setting (fail
-    closed: sent only where everything is, as a retired setting is)."""
+    closed: sent only where everything is)."""
     if not isinstance(prompt, str) or not prompt:
         return P4
     text = " ".join(prompt.lower().split())

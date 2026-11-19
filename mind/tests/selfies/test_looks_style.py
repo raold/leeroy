@@ -284,8 +284,7 @@ def test_the_profile_prompt_golden_for_a_man_who_set_none():
         ("34-year-old British man", 0), ("short silver hair, crew cut", 0), ("light olive skin", 0),
         ("hazel eyes", 2), ("a short beard", 2), ("average build", 1),
         ("wearing a grey hoodie and trousers", 0), ("a quiet cafe", 2),
-        ("standing, hands clasped in front", 0),  # a body shot's pose, drawn by seed (#362)
-        ("a small smile", 3),
+        ("a small smile", 3),  # no pose: the audit's were taken out again (owner, 2026-11-19)
         ("recent smartphone photo, natural light, natural skin texture, unretouched", 1))
     # one word each, a phrase apiece; in a body negative they go ahead of its optional phrases
     # (prompt.negative_for), so all four have room there
@@ -412,24 +411,26 @@ WORN = dict(glasses="always", tattoos="small")  # the review's heaviest realisti
 
 @_TOKENIZERS
 def test_the_never_words_fit_in_the_body_negatives():
-    """The body negatives' required sets count 57 to 71 on RealVisXL's tokenizers; the mind's
-    count is only an upper bound for them (77 to 91), so what the worker's fit keeps is measured
-    with the real files only. All four words fit in the plain, lust and situational body
-    negatives; a varied set's has room for the first two (main: none there)."""
-    from leeroy_mind.selfies.prompt import BODY_NEGATIVE_LUST, BODY_NEGATIVE_MIRROR, negative_for
+    """The body negatives' required sets count 67 to 74 on RealVisXL's tokenizers since the owner
+    put the style and anatomy words back at 0 (2026-11-19); the mind's count is only an upper
+    bound for them, so what the worker's fit keeps is measured with the real files only. The
+    words go in ahead of the optional phrases, as many as fit: all four beside the mirror body
+    negative, two beside the plain body and situational ones, glasses beside the lust ones, none
+    in a varied set's."""
+    from leeroy_mind.selfies.prompt import (BODY_NEGATIVE_LUST, BODY_NEGATIVE_LUST_MIRROR,
+                                            BODY_NEGATIVE_MIRROR, negative_for)
     from leeroy_mind.selfies.scene import (SNAP_NEGATIVE, SNAP_NEGATIVE_LUST,
                                            SNAP_NEGATIVE_LUST_MIRROR, SNAP_NEGATIVE_MIRROR)
     off = dict(glasses="never", tattoos="none", piercings="none", jewellery="none")
     p = woman(build="curvy", **off)
     words = ("glasses", "tattoo", "piercing", "jewellery")
-    bodies = (BODY_NEGATIVE, BODY_NEGATIVE_MIRROR, BODY_NEGATIVE_LUST, SNAP_NEGATIVE,
-              SNAP_NEGATIVE_LUST, SNAP_NEGATIVE_MIRROR, SNAP_NEGATIVE_LUST_MIRROR)
-    for base in bodies:
+    room = ((BODY_NEGATIVE, 2), (BODY_NEGATIVE_MIRROR, 4), (BODY_NEGATIVE_LUST, 1),
+            (BODY_NEGATIVE_LUST_MIRROR, 1), (SNAP_NEGATIVE, 2), (SNAP_NEGATIVE_LUST, 1),
+            (SNAP_NEGATIVE_MIRROR, 2), (SNAP_NEGATIVE_LUST_MIRROR, 1), (VARIED_NEGATIVE, 0))
+    for base, n in room:
         kept = fit(negative_for(p, base), clip_bpe.count)[0].split(", ")
-        assert all(w in kept for w in words), base
-    varied = fit(negative_for(p, VARIED_NEGATIVE), clip_bpe.count)[0].split(", ")
-    assert [w for w in words if w in varied] == ["glasses", "tattoo"]  # where room allows
-    for base in (*bodies, VARIED_NEGATIVE):
+        assert [w for w in words if w in kept] == list(words[:n]), base
+    for base, _ in room:
         kept = fit(negative_for(p, base), clip_bpe.count)[0]
         assert all(t in kept for t, pr in base if pr == 0)  # never at a required word's cost
 
@@ -678,8 +679,8 @@ def test_a_swim_only_wardrobe_offers_only_what_the_pairings_allow():
     assert set(props["outfit"]["enum"]) == set(kind.SWIM_OUTFITS)
     assert props["setting"]["enum"] == list(kind.WATER_SETTINGS)
     assert props["framing"]["enum"] == ["upper_body"]
-    # selfie and snapshot: the lust style is not offered a mirror selfie since #362
-    assert "headshot" not in props["kind"]["enum"] and len(props["kind"]["enum"]) == 2
+    # selfie, mirror selfie and snapshot (the mirror selfie back: owner, 2026-11-19)
+    assert "headshot" not in props["kind"]["enum"] and len(props["kind"]["enum"]) == 3
     p = woman(wardrobe=("swim",))
     for k in props["kind"]["enum"]:  # every pick left passes the lust screen
         for place in props["setting"]["enum"]:

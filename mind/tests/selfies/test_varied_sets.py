@@ -17,10 +17,8 @@ from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.selfies import cli, files, kind, varied
 from leeroy_mind.selfies.config import SelfieCfg, load_selfie_config
-from leeroy_mind.selfies.safe import POSES, setting_words
-
-safe_poses = {t for poses in POSES.values() for t in poses}
-from leeroy_mind.selfies.prompt import (BODY_NEGATIVE_LUST, BUILD_WORDS, LUST_NEGATIVE,
+from leeroy_mind.selfies.safe import setting_words
+from leeroy_mind.selfies.prompt import (BODY_NEGATIVE_LUST_MIRROR, BUILD_WORDS, LUST_NEGATIVE,
                                         VARIED_FRAMING_WORDS,
                                         VARIED_NEGATIVE, VARIED_VIEW_WORDS, build_prompt,
                                         build_varied_prompt, subject_phrase, varied_parts)
@@ -321,13 +319,10 @@ def test_the_fit_keeps_pose_framing_build_and_outfit_for_the_longest_look(h):
         assert text in kept and text not in dropped
     # her build, whole, and her hair and skin, which are never traded for it (2026-11-15)
     assert BUILD_WORDS["voluptuous"] in kept  # never shortened (controller, 2026-11-15)
-    # her standing pose is required too (safe.POSES), so her skin keeps its tone word and drops
-    # its modifiers, as the rulings allow, before the pose would yield
-    for text in ("honey blonde with highlights", "olive skin"):
+    # no standing pose since 2026-11-19 (owner): the view is the pose, as before the audit
+    for text in ("honey blonde with highlights", "warm golden olive skin"):
         assert text in kept
-    # her pose (safe.POSES) yielded, before the framing would
-    assert any(t in ("standing", "walking", "walking away")
-               for t, _ in spec.phrases)  # in its short form (safe.POSE_SHORT)
+    assert not any(t.startswith(("standing", "walking")) for t, _ in spec.phrases)
     assert "f" * 40 in dropped
 
 
@@ -379,7 +374,7 @@ def test_a_varied_prompt_puts_pose_first_and_keeps_every_negative(h):
     for text, _ in spec.phrases:
         assert "arkon" not in text.lower()
     assert set(varied_parts(look, look.phrase)) == {"view", "framing", "setting", "outfit",
-                                                     "expression", "wearing", "pose", "alone"}
+                                                     "expression", "wearing", "alone"}
 
 
 @pytest.mark.parametrize("over", [{"stance": "fond"}, {"age": 24},
@@ -399,9 +394,11 @@ def test_no_varied_prompt_without_the_lust_style(h, over):
 def test_the_ordinary_prompt_is_untouched(h):
     p = lust(h)
     assert build_prompt(p, kind_style=LUST) == build_prompt(p, kind_style=LUST)
-    # a waist-up kind: the body negative (safe.py), the lust style's covered line in it
-    assert build_prompt(p, kind_style=LUST).negative == BODY_NEGATIVE_LUST
-    assert LUST_NEGATIVE[1] in BODY_NEGATIVE_LUST
+    # a waist-up mirror selfie: the body negative (safe.py) with no mirror in it (a mirror
+    # selfie in every style again, owner 2026-11-19), the lust style's covered line in it
+    assert build_prompt(p, kind_style=LUST).negative == BODY_NEGATIVE_LUST_MIRROR
+    assert build_prompt(p, kind_style=LUST).phrases[0] == ("mirror selfie", 0)
+    assert LUST_NEGATIVE[1] in BODY_NEGATIVE_LUST_MIRROR
     assert not any(t in VARIED_VIEW_WORDS.values() for t, _ in build_prompt(p, kind_style=LUST).phrases)
 
 
