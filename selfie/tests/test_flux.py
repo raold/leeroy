@@ -9,6 +9,7 @@ from fakes import JPEG, FakePipe, make_renderer, make_torch, stub_pil
 from leeroy_selfie import flux, models, render
 from leeroy_selfie.__main__ import main
 from leeroy_selfie.protocol import Identity
+from leeroy_selfie.fit import PromptTooLong
 from test_models import put
 from test_render import request
 
@@ -17,6 +18,53 @@ def renderer(*, identity=False, score=0.05):
     old = make_renderer(make_torch(nsfw=score), identity=identity)
     return flux.FluxRenderer(old.pipe, old.processor, old.classifier, old.nsfw_index,
                              old.torch, old.info, identity=identity)
+
+
+class TokenCount:
+    model_max_length = 77
+
+    def __init__(self, counts):
+        self.counts = counts
+
+    def __call__(self, text, add_special_tokens=False):
+        return types.SimpleNamespace(input_ids=[0] * self.counts(text, add_special_tokens))
+
+
+def test_flux_accepts_description_that_fits_clip_and_t5_individually(tmp_path, monkeypatch):
+    stub_pil(monkeypatch)
+    r = renderer()
+    r.pipe.tokenizer = TokenCount(lambda text, special: 69)
+    r.pipe.tokenizer_2 = TokenCount(lambda text, special: 81 + int(special))
+    got = r.render(request(tmp_path))
+    assert not got['flagged'] and len(r.pipe.calls) == 1
+    assert (tmp_path/'o.jpg').is_file()
+
+
+@pytest.mark.parametrize('clip,t5', [(76, 100), (60, 513)])
+def test_flux_refuses_required_text_exceeding_either_encoder(clip, t5):
+    r = renderer()
+    r.pipe.tokenizer = TokenCount(lambda text, special: clip)
+    r.pipe.tokenizer_2 = TokenCount(lambda text, special: t5)
+    with pytest.raises(PromptTooLong):
+        r._fit((('adult in a coat', 0),))
+    assert not r.pipe.calls
+
+
+def test_flux_drops_optional_text_at_t5_boundary_including_eos():
+    r = renderer()
+    r.pipe.tokenizer = TokenCount(lambda text, special: 50)
+    r.pipe.tokenizer_2 = TokenCount(
+        lambda text, special: (512 if 'background' in text else 511) + int(special))
+    kept, dropped = r._fit((('adult in a coat', 0), ('background', 1)))
+    assert kept == 'adult in a coat' and dropped == ('background',)
+
+
+def test_sdxl_still_enforces_both_clip_encoder_windows():
+    r = make_renderer(make_torch())
+    r.pipe.tokenizer = TokenCount(lambda text, special: 69)
+    r.pipe.tokenizer_2 = TokenCount(lambda text, special: 81)
+    with pytest.raises(PromptTooLong):
+        r._fit((('adult in a coat', 0),))
 
 
 @pytest.mark.parametrize('score,flagged', [(0.05, False), (0.2, True), (0.9, True)])
