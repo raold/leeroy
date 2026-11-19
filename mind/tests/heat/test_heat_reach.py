@@ -100,8 +100,10 @@ def test_the_bond_and_learn_apply_take_her_resolved_dial(store, clock):
     from leeroy_mind.learn import apply
     from leeroy_mind.outreach import fill as fill_module
     from leeroy_mind.realm import bond as realm_bond
+    from leeroy_mind.selfies import romance_styling
     from leeroy_mind.talk import pipeline
-    for module in (night, apply, fill_module, realm_bond, lessons, pipeline):  # one helper
+    for module in (night, apply, fill_module, realm_bond, lessons, pipeline,
+                   romance_styling):  # one helper
         assert "member_dial(" in inspect.getsource(module), module.__name__
 
 
@@ -320,3 +322,24 @@ def test_the_public_guard_leaves_a_line_to_another_member_alone(store, clock, tm
     assert not r.engine._heat_public(to_member, TurnMeta("t2", heat=hr), "so horny")
     assert not r.engine._heat_public(opener, TurnMeta("t3", heat=hr), "so horny")
     assert H.resolve(9, H.Member(stance="lust"), private=False, public_cap=True).tier == "flirty"
+
+
+def test_private_photo_styling_follows_her_heat_down_once_set(store, clock):
+    """Main's [selfies] romance_styling (#364) reads her romance dial for how bold a styled
+    private photo is: the same helper, so unset it is main's, a set heat lowers it, and at heat
+    0 nothing is styled. Its clothed catalogue is not tiered; the tone is what heat moves."""
+    from leeroy_mind.selfies.romance_styling import level
+    from leeroy_mind.storage.rows import Relationship
+    p = make_persona(104, "Dunna", player_gender="female", stance="lust", age=30)
+    rel = Relationship(a=104, b=HUMAN, romance_stage="late_nights")
+    off = level(p, rel, 9)
+    assert off == "confident"
+    live_at(store, clock, None)
+    assert level(p, rel, 9) == off  # on and unset: as main
+    live_at(store, clock, 9)
+    assert level(p, rel, 9) == off  # world 9: the dial she read
+    live_at(store, clock, 2)
+    assert level(p, rel, 9) == "warm"  # heat 2: the warm wording, the warm tone
+    live_at(store, clock, 0)
+    assert level(p, rel, 9) is None  # heat 0: no romance, so nothing is styled
+    assert level(make_persona(101, "Arkon"), rel, 9) is None  # a man: as main

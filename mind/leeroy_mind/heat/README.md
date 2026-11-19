@@ -93,7 +93,9 @@ override, then how far his own lines have led, then (with `public_cap`) the publ
   both.
 - **What else reads it** once heat is set, through one helper (`live.member_dial`): the learn
   coach's lesson screen and `learn/apply`, the outreach fill's "miss you", the bond's night,
-  invitations and recall (the pipeline's bond memories). Each already reads the romance dial
+  invitations and recall (the pipeline's bond memories), and the tone of main's private photo
+  styling (`[selfies] romance_styling`; its clothed catalogue is not tiered, heat 0 turns the
+  styling off). Each already reads the romance dial
   derived from the world heat; her heat can only lower that dial for her (her offset, her
   groups, a clean evening), never raise it, and at a heat with no romance wording (0) each
   leaves romance out. A raise (her own 10, a positive offset, an open evening) stays with the
