@@ -1089,7 +1089,7 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False,
             # three-quarter for `share` of the members, else waist-up ([selfies] body_shot_share)
             data = {**data, "framing": settle_framing(data.get("framing"), share,
                                                       f"{guid}:{ctx.night}")}
-        # a lust selfie is waist-up, never three-quarter (safe.selfie_framing)
+        # a lust selfie keeps its framing (owner lifted the waist-up rule, 2026-11-19)
         data = {**data, "framing": selfie_framing(data.get("kind"), data.get("framing"))}
         problems = screen_lust(p, data)
         if not problems and not heat_photos.picks_ok(data, tier):

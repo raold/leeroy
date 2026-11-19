@@ -120,7 +120,7 @@ def _choose(p, counts, cap, rng, *, seed, ident, names, share=BODY_SHOT_SHARE, t
     kinds = [s for s in kinds if clear(s)]
     # three-quarter for `share` of the cast's lust kinds ([selfies] body_shot_share), else
     # waist-up: whichever keeps the cast nearest that share; the kind she gets (kinds[0]) is
-    # waist-up when it is a selfie (safe.lust_framing)
+    # a selfie follows the share like any kind (owner, 2026-11-19)
     frames = [lust_framing(counts.framings[frames[0]], counts.framings[frames[1]], share,
                            kinds[0] if kinds else "snapshot")]
     frames = [s for s in frames if clear(s)]

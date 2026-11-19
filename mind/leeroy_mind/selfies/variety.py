@@ -26,7 +26,7 @@ def choose_photo(p, *, seed, ident, names):
             framing=rng.choice(("upper_body","three_quarter")), setting=rng.choice(kind.LUST_SETTINGS),
             outfit=rng.choice(tuple(kind.LUST_OUTFITS)), colour=rng.choice(kind.LUST_COLOURS),
             expression=rng.choice(kind.LUST_EXPRESSIONS))
-        data["framing"] = selfie_framing(data["kind"],data["framing"])  # a selfie is waist-up
+        data["framing"] = selfie_framing(data["kind"],data["framing"])  # keeps its framing (owner, 2026-11-19)
         if kind.screen_lust(p,data):
             continue
         photo = kind.compose_lust(data)
