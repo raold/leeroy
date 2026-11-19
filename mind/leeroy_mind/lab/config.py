@@ -13,16 +13,23 @@ unknown keys mean the defaults with the lab off; nothing private reaches a diagn
   Default "rubric".
 - promote: a variant that wins becomes an arm of the learn bandit (lab/promote.py). Default
   false: the lab measures and reports, and proposes nothing to the weekly gate, until its judge
-  agrees with a strong grader (lab/README.md, "The judge").
+  agrees with a strong grader (lab/README.md, "The judge"). Only with grader "tells":
+  `promote = true` with the rubric is refused like any bad value (the table reads as off), and
+  load() logs `lab_config_refused reason=promote_with_rubric` once a process.
 - overlays: a sandbox mind reads `prompts/lab_<piece>.txt` (talk/pieces.py). Set only in a
   sandbox's copied mind.toml (sandbox/prepare.QUIET); the live mind leaves it off."""
+import logging
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from leeroy_mind.logs import log
+
 KEYS = frozenset({"enabled", "minutes", "pairs", "judge", "variants", "overlays", "grader",
                   "promote"})
 GRADERS = ("rubric", "tells")
+PROMOTE_WITH_RUBRIC = "promote_with_rubric"
+_logged: set[str] = set()   # refusals logged by this process
 
 
 @dataclass(frozen=True)
@@ -41,8 +48,16 @@ def _int(value, low, high):
     return type(value) is int and low <= value <= high
 
 
+def refusal(table) -> str | None:
+    """Why a [lab] table reads as off although each value is of its kind: `promote = true` with
+    the rubric grader (it does not agree with a strong grader, so nothing it ranks is proposed)."""
+    if isinstance(table, dict) and table.get("promote") is True and table.get("grader", "rubric") == "rubric":
+        return PROMOTE_WITH_RUBRIC
+    return None
+
+
 def parse(table) -> LabCfg:
-    if not isinstance(table, dict) or set(table) - KEYS:
+    if not isinstance(table, dict) or set(table) - KEYS or refusal(table) is not None:
         return LabCfg()
     d = LabCfg()
     enabled = table.get("enabled", d.enabled)
@@ -66,4 +81,9 @@ def load(path: Path) -> LabCfg:
         doc = tomllib.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         return LabCfg()
-    return parse(doc.get("lab", {}))
+    table = doc.get("lab", {})
+    reason = refusal(table)
+    if reason is not None and reason not in _logged:
+        _logged.add(reason)
+        log("lab_config_refused", level=logging.WARNING, reason=reason)
+    return parse(table)

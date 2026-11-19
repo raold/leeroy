@@ -89,7 +89,7 @@ SWITCHES = (
     ('bakeoff','capture','Bake-off capture (stores full prompts, 14 days)',''),
     ('prune','enabled','Nightly retention prune',''),
     ('lab','enabled','Conversation lab','learn.bandit and learn.apply for its arms to reach live talk'),
-    ('lab','promote','Lab winners proposed to the weekly gate','lab.enabled'),
+    ('lab','promote','Lab winners proposed to the weekly gate','lab.enabled; grader = "tells" (refused with the rubric)'),
 )
 
 # Boolean keys the loaders define that are deliberately not rows, each with its reason.

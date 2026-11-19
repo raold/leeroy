@@ -128,7 +128,16 @@ export const MEASURE_ONLY = 'Measure only: the lab records and reports. Its judg
 const OUTCOMES = {won:'promoted', measure_only:'ahead of the control (indicative; not proposed)',
   beaten:'beat the control, not the best', lost:'lost',
   regressed:'a rule check got worse', untested:'never in a prompt', too_few:'too few graded answers',
-  budget:'cut by the budget', frozen:'learning frozen'};
+  budget:'cut by the budget', failed:'too few scored: judge calls failed', frozen:'learning frozen'};
+// How the nights shown were graded: the old 0-3 rubric (the default grader) or the lab judge's
+// 1-5 score ([lab] grader = "tells"), as each run's own grader says.
+export function scaleWords(runs) {
+  const graders=new Set((Array.isArray(runs) ? runs : []).filter(r => !!r && typeof r==='object' && !Array.isArray(r))
+    .map(r => r.grader==='tells' ? 'tells' : 'rubric'));
+  if (graders.size>1) { return 'each answer graded 0-3 by the rubric or scored 1-5 by the lab judge, as each night says,'; }
+  if (graders.has('tells')) { return 'each answer scored 1-5 by the lab judge (5: reads as a real person texting)'; }
+  return 'each answer graded 0-3 by the rubric (3: would pass as her)';
+}
 const FLAG_WORDS = {silent:'said nothing', unanswered:'question not answered first', wordy:'wordy',
   repeat:'same subject again', rewritten:'guard rewrote', echo:'echoed him', stock:'stock phrase'};
 export function conversationView(value) {
@@ -151,8 +160,12 @@ export function conversationView(value) {
     return {headline, kinds, flags, variants};
   });
   const measuring=value.runs.filter(record).some(r => r.promote===false);
-  return {available:true, runs, note: measuring ? MEASURE_ONLY : '', tried:Number.isSafeInteger(value.tried) ? value.tried : 0,
-    promoted:Number.isSafeInteger(value.promoted) ? value.promoted : 0};
+  const tried=Number.isSafeInteger(value.tried) ? value.tried : 0;
+  const promoted=Number.isSafeInteger(value.promoted) ? value.promoted : 0;
+  const hint='Each night: invented lines of yours to sampled members in a sandbox copy, '+scaleWords(value.runs)
+    +' with rule checks and the blind judge; prompt variants tried against the wording in use. Variants tried: '
+    +tried+', promoted into the learn bandit: '+promoted+'.';
+  return {available:true, runs, hint, note: measuring ? MEASURE_ONLY : '', tried, promoted};
 }
 
 // -- what waits for his decision (labview._pending): plain rows, the counts for the badge -------

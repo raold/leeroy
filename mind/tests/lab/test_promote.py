@@ -82,7 +82,7 @@ def test_the_best_winner_becomes_an_active_arm_and_the_rest_retire(tmp_path):
     conn = open_db(tmp_path / "mind.db")
     try:
         rid, a, b, c = seed(conn)
-        result = promote.promote(conn, rid, settings=LearnCfg(), now=2000.0)
+        result = promote.promote(conn, rid, settings=LearnCfg(), now=2000.0, allow=True)
         conn.commit()
         assert result["promoted"] == f"lab.reply_human.v{a}"
         assert result["outcomes"] == {a: "won", b: "beaten", c: "lost"}
@@ -108,7 +108,7 @@ def test_a_freeze_promotes_nothing(tmp_path, cfg):
     conn = open_db(tmp_path / "mind.db")
     try:
         rid, a, b, c = seed(conn)
-        result = promote.promote(conn, rid, settings=cfg, now=2000.0)
+        result = promote.promote(conn, rid, settings=cfg, now=2000.0, allow=True)
         assert result["promoted"] is None and result["outcomes"][a] == "frozen"
         assert not [x for x in arms.read(conn) if x.id.startswith("lab.")]
     finally:
@@ -121,8 +121,22 @@ def test_a_budget_cut_settles_unfinished_arms_as_budget(tmp_path):
         rid = store.create_run(conn, night="n", source="night", piece="reply_human", seed="s",
                                plan={"pairs": []}, now=1.0)
         v = store.add_variant(conn, rid, "reply_human", "t", "d", 1.0)
-        result = promote.promote(conn, rid, settings=LearnCfg(), now=2.0, budget_cut=True)
-        assert result["outcomes"] == {v: "budget"}
+        result = promote.promote(conn, rid, settings=LearnCfg(), now=2.0, budget_cut=True,
+                                 units_failed=True)
+        assert result["outcomes"] == {v: "budget"}   # the budget's cut names it
+    finally:
+        conn.close()
+
+
+def test_failed_units_settle_too_few_arms_as_failed(tmp_path):
+    conn = open_db(tmp_path / "mind.db")
+    try:
+        rid = store.create_run(conn, night="n", source="night", piece="reply_human", seed="s",
+                               plan={"pairs": []}, now=1.0)
+        v = store.add_variant(conn, rid, "reply_human", "t", "d", 1.0)
+        result = promote.promote(conn, rid, settings=LearnCfg(), now=2.0, units_failed=True)
+        assert result["outcomes"] == {v: "failed"}
+        assert store.variants(conn, rid)[0]["outcome"] == "failed"
     finally:
         conn.close()
 
@@ -161,7 +175,7 @@ def test_measure_only_records_the_winner_and_proposes_nothing(tmp_path):
     conn = open_db(tmp_path / "mind.db")
     try:
         rid, a, b, c = seed(conn)
-        result = promote.promote(conn, rid, settings=LearnCfg(), now=2000.0, allow=False)
+        result = promote.promote(conn, rid, settings=LearnCfg(), now=2000.0)   # allow: false by default
         conn.commit()
         assert result["promoted"] is None
         assert result["outcomes"] == {a: "measure_only", b: "beaten", c: "lost"}

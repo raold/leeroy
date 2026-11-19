@@ -1,5 +1,5 @@
 """The conversation lab's night stages, attached only with `[lab] enabled = true` at the mind's
-start, after `turing` (or `forget` without it). Three stages so the runner swaps the models:
+start, after `turing` (or `forget` without it). Four stages so the runner swaps the models:
 
 - `lab_propose` (reflection model): unit `plan` creates the night's lab_run: tonight's piece
   (round-robin, propose.pick_piece; a piece whose `lab_<piece>.txt` overlay name the live
@@ -18,18 +18,21 @@ start, after `turing` (or `forget` without it). Three stages so the runner swaps
   lab judge's 1-5 score of each of her answers (lab/judge.py: model-free features and yes/no
   tells, the same seed for the same pair and turn in every arm), and one per variant and pair:
   its answers against the control's to the same lines, asked both ways round (judge.prefer);
-  then the marker unit `scored`.
-  Like the battery it never runs while a live lease is held or the GPU is paused.
+  then the marker unit `scored`, and `budget` too when the budget cut it (a unit that failed on
+  a model error is only a failed unit: `finish` tells the two apart). With no blind-judge unit
+  to run (`[lab] judge = 0`) it runs `finish` itself, so the night never loads the reflection
+  model for the lab. Like the battery it never runs while a live lease is held or the GPU is
+  paused.
 - `lab_grade` (reflection model): with `grader = "rubric"` one rubric unit per arm and pair;
   one blind-judge unit for the first `[lab] judge` pairs of each arm; then `finish`: the
   comparison (promote.py; with `[lab] promote = false`, the default, nothing becomes an arm) and
   the run's summary. With the tells grader it waits for `scored`.
 
 The run keeps its grader and whether it may promote in its plan, so a resumed run is graded the
-way it began. A plan that does not say it may promote (a run planned by code from before the
-setting) only measures.
+way it began. Only a plan that says it may promote and grades with the tells grader promotes; a
+plan that does not say so (a run planned by code from before the setting) only measures.
 
-The budget is hard: `[lab] minutes` over all three, kept in lab_run.spent across resumes. The
+The budget is hard: `[lab] minutes` over all four, kept in lab_run.spent across resumes. The
 battery may use up to BATTERY_SHARE of it, so grading keeps the rest; a pair is never begun past
 its share, and the stage's whole work is cancelled at the end of the budget (the child killed).
 `finish` always runs; arms the budget cut short are settled `budget`.
@@ -49,6 +52,7 @@ from .config import load
 
 STAGE_PROPOSE, STAGE_BATTERY, STAGE_GRADE = "lab_propose", "lab", "lab_grade"
 STAGE_SCORE = "lab_score"
+SCORE_CUT = "budget"   # the score stage's marker unit when the budget cut it
 STAGES = (STAGE_PROPOSE, STAGE_BATTERY, STAGE_SCORE, STAGE_GRADE)
 BATTERY_SHARE = 0.6
 PROPOSE_TEMPERATURE = 0.8
@@ -108,10 +112,12 @@ def _wants(ctx, stage: str, source: str = "night") -> bool:
         return False
     arms = _arms(ctx, run)
     battery_done = all(ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms)
+    finished = ctx.done(STAGE_GRADE, "finish")
     if stage == STAGE_SCORE:
-        return _grader(run) == "tells" and battery_done and not ctx.done(STAGE_SCORE, "scored")
+        return _grader(run) == "tells" and battery_done and (
+            not ctx.done(STAGE_SCORE, "scored") or (_score_finishes(run) and not finished))
     if stage == STAGE_GRADE:
-        return (not ctx.done(STAGE_GRADE, "finish") and battery_done
+        return (not finished and battery_done and not _score_finishes(run)
                 and (_grader(run) != "tells" or ctx.done(STAGE_SCORE, "scored")))
     return not battery_done
 
@@ -122,9 +128,11 @@ def _grader(run) -> str:
 
 
 def _may_promote(run) -> bool:
-    """Whether the run's winner may become an arm: its plan's `promote`. A run whose plan says
-    nothing (planned by code from before the setting and finished by this one) only measures."""
-    return run["plan"].get("promote") is True
+    """Whether the run's winner may become an arm: its plan's `promote`, and only with the tells
+    grader (mind.toml refuses promote with the rubric; a plan is held to the same rule). A run
+    whose plan says nothing (planned by code from before the setting and finished by this one)
+    only measures."""
+    return run["plan"].get("promote") is True and _grader(run) == "tells"
 
 
 class LiveContext:
@@ -523,17 +531,23 @@ def _load(data_dir, run_id: int, arm: str) -> list[dict]:
 def make_score(cfg, *, source: str = "night"):
     async def stage_lab_score(ctx) -> None:
         run = _run(ctx, source)
-        if (run is None or run["status"] != "running" or _grader(run) != "tells"
-                or ctx.done(STAGE_SCORE, "scored")):
+        if run is None or run["status"] != "running" or _grader(run) != "tells":
             return
         arms = _arms(ctx, run)
         if not all(ctx.done(STAGE_BATTERY, f"arm:{a}") for a in arms):
+            return
+        data_dir = Path(ctx.settings.data_dir)
+        if ctx.done(STAGE_SCORE, "scored"):
+            # scored on an earlier pass whose `finish` did not commit: no model call left
+            if _score_finishes(run) and not ctx.done(STAGE_GRADE, "finish"):
+                transcripts = {a: {t["pair"]: t for t in _load(data_dir, run["id"], a)} for a in arms}
+                _finish(ctx, run, arms, transcripts, Budget(cfg, run["spent"], ctx.clock),
+                        cut=False)
             return
         reason = _held(ctx)
         if reason is not None:
             log("lab_waiting", night=ctx.night, stage=STAGE_SCORE, reason=reason)
             return
-        data_dir = Path(ctx.settings.data_dir)
         budget = Budget(cfg, run["spent"], ctx.clock)
         transcripts = {a: {t["pair"]: t for t in _load(data_dir, run["id"], a)} for a in arms}
         units = [f"score:{a}:{p}" for a in arms for p in sorted(transcripts[a])]
@@ -573,11 +587,23 @@ def make_score(cfg, *, source: str = "night"):
         if reasoner is not ctx.reasoner:  # the runner meters the context's own reasoner
             ctx.reasoner.calls += calls
             ctx.reasoner.seconds += seconds
+        # the budget's mark, so `finish` tells answers it left unscored from failed units
+        if cut and not ctx.done(STAGE_SCORE, SCORE_CUT) and not ctx.skip(STAGE_SCORE, SCORE_CUT):
+            return
         if ctx.commit(STAGE_SCORE, "scored", _spend(ctx, run["id"], budget)):
             log("lab_scored", night=ctx.night, run=run["id"], units=len(units),
                 done=sum(1 for u in units if ctx.done(STAGE_SCORE, u)),
                 calls=calls, seconds=round(seconds, 1), cut=int(cut))
+            if _score_finishes(run):
+                _finish(ctx, run, arms, transcripts, budget, cut=False)
     return stage_lab_score
+
+
+def _score_finishes(run) -> bool:
+    """With the tells grader and no blind-judge pair planned (`[lab] judge = 0`) nothing is left
+    for the reflection model: the score stage runs `finish` itself and lab_grade is not run, so
+    the night does not load the reflection model for the lab."""
+    return _grader(run) == "tells" and not run["plan"].get("judge", 1)
 
 
 async def _score(reasoner, t: dict, base: int) -> list[tuple[float, int]]:
@@ -631,6 +657,8 @@ def make_grade(cfg, *, source: str = "night"):
         tells = _grader(run) == "tells"
         if tells and not ctx.done(STAGE_SCORE, "scored"):
             return  # so does the judge's scoring
+        if _score_finishes(run):
+            return  # nothing for this model: the score stage finishes the run
         data_dir = Path(ctx.settings.data_dir)
         budget = Budget(cfg, run["spent"], ctx.clock)
         transcripts = {a: {t["pair"]: t for t in _load(data_dir, run["id"], a)} for a in arms}
@@ -662,45 +690,59 @@ def make_grade(cfg, *, source: str = "night"):
                     store.set_spent(s.conn, run["id"], budget.used())
             ctx.commit(STAGE_GRADE, unit, write)
 
-        cut = tells and any(not ctx.done(STAGE_SCORE, f"score:{a}:{p}")
-                            for a in arms for p in transcripts[a])
+        cut = False
         left = budget.left()
         if left <= 0:
-            cut = cut or any(not ctx.done(STAGE_GRADE, u) for u in units)
+            cut = any(not ctx.done(STAGE_GRADE, u) for u in units)
         else:
             try:
                 async with asyncio.timeout(left):
                     await ctx.map_units(STAGE_GRADE, units, one)
             except TimeoutError:
                 cut = True
-        planned = len(run["plan"]["pairs"])
-        short = any(len(transcripts[a]) < planned for a in arms)
-        learn_cfg = _learn_cfg(data_dir)
-        done: dict = {}
-
-        def finish(s):
-            result = promote.promote(s.conn, run["id"], settings=learn_cfg, now=ctx.clock.now(),
-                                     budget_cut=cut or short, key="score" if tells else "rubric",
-                                     allow=_may_promote(run))
-            summary = {"arms": result["summary"], "grader": _grader(run),
-                       "promote": _may_promote(run),
-                       "outcomes": {str(k): v for k, v in result["outcomes"].items()},
-                       "deltas": {str(k): v for k, v in result["deltas"].items()},
-                       "promoted": result["promoted"], "cut": bool(cut or short)}
-            store.finish(s.conn, run["id"], status="budget" if cut or short else "done",
-                         reason="budget" if cut or short else None, summary=summary,
-                         now=ctx.clock.now())
-            store.set_spent(s.conn, run["id"], budget.used())
-            done["result"] = result
-        if ctx.commit(STAGE_GRADE, "finish", finish):
-            result = done["result"]
-            deltas = [d for d in result["deltas"].values() if d is not None]
-            log("lab_done", night=ctx.night, run=run["id"], piece=run["piece"],
-                variants=len(result["outcomes"]), promoted=result["promoted"] or "-",
-                control=result["summary"].get("control", {}).get("score" if tells else "rubric"),
-                best_delta=max(deltas) if deltas else None, cut=int(cut or short),
-                grader=_grader(run), promote=int(_may_promote(run)))
+        _finish(ctx, run, arms, transcripts, budget, cut=cut)
     return stage_lab_grade
+
+
+def _finish(ctx, run, arms, transcripts, budget: Budget, *, cut: bool) -> None:
+    """Unit `finish` (of lab_grade, whichever stage runs it): the comparison (promote.py) and the
+    run's summary. `cut`: grading ran out of budget. An arm the battery left short is the
+    budget's too. With the tells grader an answer left unscored is the budget's when the score
+    stage left its `budget` mark, else its unit failed (a model error): the arms that leaves
+    with too few scores are settled `failed`, not `budget`, and the run `done` with reason
+    `units_failed`, as a failed rubric unit leaves the run `done`."""
+    tells = _grader(run) == "tells"
+    unscored = sum(1 for a in arms for p in transcripts[a]
+                   if not ctx.done(STAGE_SCORE, f"score:{a}:{p}")) if tells else 0
+    planned = len(run["plan"]["pairs"])
+    cut = (cut or any(len(transcripts[a]) < planned for a in arms)
+           or bool(unscored and ctx.done(STAGE_SCORE, SCORE_CUT)))
+    failed = 0 if cut else unscored
+    allow = _may_promote(run)
+    learn_cfg = _learn_cfg(Path(ctx.settings.data_dir))
+    done: dict = {}
+
+    def finish(s):
+        result = promote.promote(s.conn, run["id"], settings=learn_cfg, now=ctx.clock.now(),
+                                 budget_cut=cut, units_failed=bool(failed),
+                                 key="score" if tells else "rubric", allow=allow)
+        summary = {"arms": result["summary"], "grader": _grader(run), "promote": allow,
+                   "outcomes": {str(k): v for k, v in result["outcomes"].items()},
+                   "deltas": {str(k): v for k, v in result["deltas"].items()},
+                   "promoted": result["promoted"], "cut": cut, "failed_units": failed}
+        store.finish(s.conn, run["id"], status="budget" if cut else "done",
+                     reason="budget" if cut else "units_failed" if failed else None,
+                     summary=summary, now=ctx.clock.now())
+        store.set_spent(s.conn, run["id"], budget.used())
+        done["result"] = result
+    if ctx.commit(STAGE_GRADE, "finish", finish):
+        result = done["result"]
+        deltas = [d for d in result["deltas"].values() if d is not None]
+        log("lab_done", night=ctx.night, run=run["id"], piece=run["piece"],
+            variants=len(result["outcomes"]), promoted=result["promoted"] or "-",
+            control=result["summary"].get("control", {}).get("score" if tells else "rubric"),
+            best_delta=max(deltas) if deltas else None, cut=int(cut), failed=failed,
+            grader=_grader(run), promote=int(allow))
 
 
 def _learn_cfg(data_dir):

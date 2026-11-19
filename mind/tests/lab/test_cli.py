@@ -18,7 +18,7 @@ def test_report_on_a_new_database_and_the_dry_run_write_nothing(tmp_path, capsys
     assert lab_main(["--data-dir", str(live), "run", "--dry-run", "--pairs", "5"]) == 0
     out = capsys.readouterr().out
     assert "piece reply_human, 5 pairs" in out and "Nothing was started or written." in out
-    assert "grader rubric, promoting a winner" in out   # the rig's table; the defaults only measure
+    assert "grader rubric, measure only (nothing is proposed)" in out   # the rig's table
     assert out.count("  pair ") == 5
     assert lab_main(["--data-dir", str(live), "run", "--dry-run", "--scripts", "flirt-1,meet-1",
                      "--members", "102", "--pairs", "2"]) == 0
@@ -34,16 +34,16 @@ def test_the_report_health_and_panel_after_a_night(tmp_path, capsys):
     assert lab_main(["--data-dir", str(live), "report"]) == 0
     out = capsys.readouterr().out
     assert "piece reply_human" in out and "control: rubric 1.00 over 8 of 8 answers" in out
-    assert "won" in out and "{+Plainly" in out
+    assert "measure_only" in out and "measure only" in out and "{+Plainly" in out
     assert lab_main(["--data-dir", str(live), "report", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     [run] = data["runs"]
-    assert run["status"] == "done" and len(run["variants"]) == 2
+    assert run["status"] == "done" and len(run["variants"]) == 2 and run["promote"] is False
     import sqlite3
     conn = sqlite3.connect(live / "mind.db")
     try:
         panel = report.panel(conn)
-        assert panel["available"] and panel["tried"] == 2 and panel["promoted"] == 1
+        assert panel["available"] and panel["tried"] == 2 and panel["promoted"] == 0
         assert panel["runs"][0]["rubric"] == 1.0 and panel["runs"][0]["kinds"]
         assert report.last_completed(conn) is not None
         from leeroy_mind.health import _conversation_lab
@@ -51,6 +51,24 @@ def test_the_report_health_and_panel_after_a_night(tmp_path, capsys):
         assert ok.status == "ok" and "last night run finished" in ok.text
         stale = _conversation_lab(conn, live, time.time() + 5 * 86400)
         assert stale.status == "note" and "no night run finished in 3 nights" in stale.text
+        from leeroy_mind.console.labview import _conversation, lab_view
+        assert _conversation(conn)["promoted"] == 0
+        conn.row_factory = sqlite3.Row
+        view = lab_view(conn, now=time.time())   # the rubric's night made no arm
+        assert "prompt.reply_human" not in view["families"]
+    finally:
+        conn.close()
+
+
+def test_a_promoted_judge_winner_reads_as_any_arm_in_the_lab_tab(tmp_path):
+    from lab.test_score_stage import PROMOTE, run_night as judge_night
+    live = make_live(tmp_path, PROMOTE)
+    judge_night(live, tmp_path)
+    import sqlite3
+    conn = sqlite3.connect(live / "mind.db")
+    try:
+        panel = report.panel(conn)
+        assert panel["tried"] == 2 and panel["promoted"] == 1 and panel["runs"][0]["grader"] == "tells"
         from leeroy_mind.console.labview import _conversation, lab_view
         assert _conversation(conn)["promoted"] == 1
         conn.row_factory = sqlite3.Row

@@ -13,9 +13,10 @@ outcome code. Every variant keeps its scoresheet (numbers only). A global learni
 frozen family promotes nothing (outcome `frozen`).
 
 The grade compared is the run's grader's (`key`): "rubric" (lab/grade.py's 0-3) or "score"
-(lab/judge.py's 1-5), each with its own margin (THRESHOLDS). With `allow` false ([lab] promote,
-the default) nothing becomes an arm: the variant that would have is retired `measure_only` with
-its scoresheet, so the lab records and reports and the weekly gate never sees it.
+(lab/judge.py's 1-5), each with its own margin (THRESHOLDS). With `allow` false (the default;
+the night passes true only for a run planned with [lab] promote and the tells grader) nothing
+becomes an arm: the variant that would have is retired `measure_only` with its scoresheet, so
+the lab records and reports and the weekly gate never sees it.
 
 With the tells grader the sheet also carries `prefer`: over the lines both arms answered, how
 often the judge, shown the variant's answer and the control's to the same line both ways round,
@@ -83,19 +84,21 @@ def arm_id(piece: str, variant: int) -> str:
 
 
 def promote(conn, run_id: int, *, settings=None, now: float, budget_cut: bool = False,
-            key: str = "rubric", allow: bool = True) -> dict:
+            units_failed: bool = False, key: str = "rubric", allow: bool = False) -> dict:
     """Settle every proposed variant of the run and promote the best winner. Returns
     {"promoted": arm id or None, "outcomes": {variant id: outcome}, "summary": per arm}.
-    `budget_cut`: an arm the budget left unfinished is `budget` rather than too_few. `key`:
-    the grade compared; `allow` false: measure only (the winner is retired `measure_only`)."""
+    `budget_cut`: an arm the budget left unfinished is `budget` rather than too_few;
+    `units_failed` (and no budget cut): one that grading units failed for is `failed`. `key`:
+    the grade compared. `allow` (default false, so a caller that forgets it only measures):
+    the best winner becomes an arm; without it the winner is retired `measure_only`."""
     by_arm = store.scores(conn, run_id)
     control = by_arm.get("control", {})
     proposed = [v for v in store.variants(conn, run_id) if v["status"] == "proposed"]
     sheets = {v["id"]: compare(control, by_arm.get(f"v{v['id']}", {}), key=key) for v in proposed}
-    if budget_cut:
+    if budget_cut or units_failed:
         for sheet in sheets.values():
             if sheet["outcome"] == "too_few":
-                sheet["outcome"] = "budget"
+                sheet["outcome"] = "budget" if budget_cut else "failed"
     cfg = effective(conn, settings)
     winners = sorted((sheets[v["id"]]["delta"], -v["id"], v) for v in proposed
                      if sheets[v["id"]]["outcome"] == "won")

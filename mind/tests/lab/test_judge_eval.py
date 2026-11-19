@@ -263,3 +263,71 @@ def test_a_pause_set_while_it_runs_stops_it(tmp_path, capsys):
         conn.close()
     assert "paused" in capsys.readouterr().err
     assert len(made[0].calls) == 3   # nothing was asked after the pause
+
+
+def night_db(data_dir, status):
+    """A mind.db whose night_run has one row in `status` (the columns the check reads)."""
+    import sqlite3
+    conn = sqlite3.connect(data_dir / "mind.db")
+    conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("CREATE TABLE night_run(night TEXT PRIMARY KEY, status TEXT)")
+    if status is not None:
+        conn.execute("INSERT INTO night_run VALUES ('2026-11-18', ?)", (status,))
+    conn.commit()
+    return conn
+
+
+@pytest.mark.parametrize("status,refused", [("running", True), ("done", False),
+                                            ("interrupted", False), (None, False)])
+def test_the_command_refuses_while_a_night_runs(tmp_path, capsys, status, refused):
+    """Review of #369: a night loads the reflection model, which cannot share the GPU with the
+    live model judge-eval asks."""
+    folder = make_gold(tmp_path, convs=5, turns=2)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    night_db(data_dir, status).close()
+    made = []
+
+    def make_llm(cfg):
+        made.append(FakeLLM(script, models={cfg.models.live}))
+        return made[-1]
+    code = lab_main(["--data-dir", str(data_dir), "judge-eval", "--gold", str(folder),
+                     "--judges", "features"], make_llm=make_llm)
+    err = capsys.readouterr().err
+    assert (code, "a night is running" in err, not made) == ((2, True, True) if refused else (0, False, False))
+
+
+def test_a_night_that_begins_while_it_runs_stops_it(tmp_path, capsys):
+    folder = make_gold(tmp_path, convs=5, turns=2)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = night_db(data_dir, None)
+    made = []
+
+    def starting(model, messages):
+        if len(made[0].calls) == 2:   # the mind's night begins after the second request
+            conn.execute("INSERT INTO night_run VALUES ('2026-11-18', 'running')")
+            conn.commit()
+        return script(model, messages)
+
+    def make_llm(cfg):
+        made.append(FakeLLM(starting, models={cfg.models.live}))
+        return made[-1]
+    try:
+        assert lab_main(["--data-dir", str(data_dir), "judge-eval", "--gold", str(folder),
+                         "--judges", "tells", "--parallel", "1"], make_llm=make_llm) == 2
+    finally:
+        conn.close()
+    assert "a night began" in capsys.readouterr().err
+    assert len(made[0].calls) == 2
+
+
+def test_an_unreadable_mind_db_refuses_it(tmp_path, capsys):
+    folder = make_gold(tmp_path, convs=5, turns=2)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "mind.db").write_bytes(b"not a database, " * 64)
+    asked = []
+    assert lab_main(["--data-dir", str(data_dir), "judge-eval", "--gold", str(folder)],
+                    make_llm=lambda cfg: asked.append(cfg)) == 2
+    assert not asked and "cannot read mind.db" in capsys.readouterr().err

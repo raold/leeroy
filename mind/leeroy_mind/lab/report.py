@@ -20,14 +20,16 @@ def _arm_status(conn, arm_id: str | None) -> str | None:
 
 def _promote(r: dict) -> bool:
     """Whether the run may promote, as night.py decides it: what its finish recorded, else its
-    plan's `promote`. A run whose plan says nothing either finished under code from before the
-    setting (which promoted) or will finish under this code, which only measures it."""
+    plan's `promote` (and only with the tells grader). A run whose plan says nothing either
+    finished under code from before the setting, which promoted (`done` or `budget`), or will
+    finish under this code, which only measures it; a `failed` or `skipped` one promoted
+    nothing."""
     summary = r["summary"] or {}
     if "promote" in summary:
         return summary["promote"] is True
     if "promote" in r["plan"]:
-        return r["plan"]["promote"] is True
-    return r["status"] != "running"
+        return r["plan"]["promote"] is True and r["plan"].get("grader", "rubric") == "tells"
+    return r["status"] in ("done", "budget")
 
 
 def report(conn, *, night: str | None = None, runs: int = 7) -> dict:

@@ -89,4 +89,19 @@ test('a measure-only night shows the judge score, says so and words a leading va
   assert.deepEqual(view.runs[0].variants,['Variant 4: ahead of the control (indicative; not proposed) (+0.26) · preferred to the control’s answer 63% of 16 lines',
     'Variant 5: lost (-0.10)']);
   assert.match(view.note,/^Measure only: /); assert.match(view.note,/indicative/);
+  assert.match(view.hint,/scored 1-5 by the lab judge/); assert.doesNotMatch(view.hint,/0-3/);
+  assert.match(view.hint,/Variants tried: 1, promoted into the learn bandit: 0\.$/);
+});
+
+test('the panel words the scale by the grader each night used, the rubric by default',() => {
+  const night=(grader,extra={}) => ({night:'2026-11-18',status:'done',reason:null,piece:'p',grader,promote:false,variants:[],...extra});
+  const rubric=conversationView({available:true,tried:0,promoted:0,runs:[night('rubric')]});
+  assert.match(rubric.hint,/graded 0-3 by the rubric/); assert.doesNotMatch(rubric.hint,/1-5/);
+  assert.match(conversationView({available:true,runs:[]}).hint,/graded 0-3 by the rubric/);
+  const mixed=conversationView({available:true,runs:[night('tells'),night('rubric')]});
+  assert.match(mixed.hint,/0-3 by the rubric or scored 1-5 by the lab judge, as each night says/);
+  const failed=conversationView({available:true,runs:[night('tells',{status:'done',reason:'units_failed',
+    variants:[{id:3,outcome:'failed',delta:null}]})]});
+  assert.equal(failed.runs[0].headline,'2026-11-18 · p · done (units_failed) · measure only');
+  assert.deepEqual(failed.runs[0].variants,['Variant 3: too few scored: judge calls failed']);
 });

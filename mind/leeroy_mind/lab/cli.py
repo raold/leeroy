@@ -17,8 +17,10 @@
   well each judge (lab/judge.py's and the old rubric) agrees with a strong grader's grades in a
   directory of gold conversations (lab/gold.py, lab/judge_eval.py): numbers only on stdout. It
   asks the live model at its own num_ctx (think off, temperature 0), so it runs beside a live
-  mind; it needs no mind.db, writes nothing and never prints a word of the gold. `--fit` prints
-  weights refit on the train part instead (numbers; a new `judge_weights.json`).
+  mind, but never during a night (the reflection model the night loads cannot share the GPU with
+  the live one) or while Free GPU is paused: it refuses then, and when mind.db exists but cannot
+  be read. It needs no mind.db, writes nothing and never prints a word of the gold. `--fit`
+  prints weights refit on the train part instead (numbers; a new `judge_weights.json`).
 """
 import argparse
 import asyncio
@@ -68,7 +70,8 @@ def _parser():
     a.add_argument("--file", required=True, help="a text file holding the variant, one paragraph")
     a.add_argument("--name", help="the name it is kept under (default: the file's name)")
     a.add_argument("--data-dir", default=argparse.SUPPRESS)
-    e = sub.add_parser("judge-eval", help="the judges against a directory of gold conversations")
+    e = sub.add_parser("judge-eval", help="the judges against a directory of gold conversations "
+                                          "(the live model; not while a night runs)")
     e.add_argument("--gold", required=True, help="a directory of conv-*.json (lab/gold.py)")
     e.add_argument("--part", choices=("test", "dev", "train", "all"), default="test")
     e.add_argument("--judges", help="comma-separated: " + ", ".join(judge_eval.DESIGNS)
@@ -296,8 +299,13 @@ async def _run(root: Path, args, cfg, *, make_llm, make_child) -> int:
                           lab_night.make_grade(cfg, source="cli"))
                 models = (ctx.reasoner.model, mind_cfg.models.live, mind_cfg.models.live,
                           ctx.reasoner.model)
-                for stage, model in zip(stages, models):
-                    if swap:
+                names = lab_night.STAGES
+                for name, stage, model in zip(names, stages, models):
+                    # as the night's runner: a scoring or grading stage with nothing to do loads
+                    # no model (the rubric scores nothing; tells with judge 0 grades nothing)
+                    wanted = (name not in (lab_night.STAGE_SCORE, lab_night.STAGE_GRADE)
+                              or lab_night._wants(ctx, name, "cli"))
+                    if swap and wanted:
                         await ctx.arbiter.ensure_model(model)
                     print(f"lab run: {stage.__name__.removeprefix('stage_')}...", flush=True)
                     await stage(ctx)
@@ -340,9 +348,19 @@ def _judge_eval(root: Path, args, *, make_llm) -> int:
     if not found:
         print("lab judge-eval: no graded reply in that directory", file=sys.stderr)
         return 2
-    if _gpu_paused(root):
+    try:
+        state = _state(root)
+    except sqlite3.Error as e:
+        print(f"lab judge-eval: cannot read mind.db for Free GPU and the night ({type(e).__name__})",
+              file=sys.stderr)
+        return 2
+    if state["paused"]:
         print("lab judge-eval: the GPU is paused from the console (Free GPU): resume it first",
               file=sys.stderr)
+        return 2
+    if state["night"]:
+        print("lab judge-eval: a night is running (its reflection model cannot share the GPU with "
+              "the live model): run this after it ends", file=sys.stderr)
         return 2
     if make_llm is not None:
         llm = make_llm(cfg)
@@ -363,6 +381,9 @@ def _judge_eval(root: Path, args, *, make_llm) -> int:
     except GpuPaused:
         print("lab judge-eval: the GPU is paused", file=sys.stderr)
         return 2
+    except NightStarted:
+        print("lab judge-eval: a night began; run this after it ends", file=sys.stderr)
+        return 2
     except LLMError as e:
         print(f"lab judge-eval: the model did not answer ({type(e).__name__})", file=sys.stderr)
         return 1
@@ -372,39 +393,55 @@ def _judge_eval(root: Path, args, *, make_llm) -> int:
     return 0
 
 
+class NightStarted(RuntimeError):
+    """A night began while judge-eval ran."""
+
+
 class _PauseChecked:
-    """The judge's model client with Free GPU read again before every request. judge-eval is
-    its own process: the running mind's GPU gate never sees its requests, so a pause set from
-    the console while it runs would otherwise be met by a reload of the model the console just
-    unloaded. A pause stops the evaluation (GpuPaused; requests already sent finish)."""
+    """The judge's model client with Free GPU and the night read again before every request.
+    judge-eval is its own process: the running mind's GPU gate never sees its requests, so a
+    pause set from the console while it runs would otherwise be met by a reload of the model the
+    console just unloaded, and a night that began would find the live model beside its
+    reflection model. Either stops the evaluation (GpuPaused, NightStarted; requests already sent
+    finish). Here an unreadable mind.db reads as neither (the start refused one)."""
 
     def __init__(self, llm, root: Path):
         self._llm, self._root = llm, root
 
     async def chat(self, *args, **kwargs):
-        if _gpu_paused(self._root):
+        try:
+            state = _state(self._root)
+        except sqlite3.Error:
+            state = {"paused": False, "night": False}
+        if state["paused"]:
             from leeroy_mind.llm.client import GpuPaused
             raise GpuPaused("The GPU is paused.")
+        if state["night"]:
+            raise NightStarted("a night is running")
         return await self._llm.chat(*args, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self._llm, name)
 
 
-def _gpu_paused(root: Path) -> bool:
-    """Free GPU's durable pause (meta gpu:paused), read only; no mind.db: not paused."""
+def _state(root: Path) -> dict:
+    """{"paused": Free GPU's durable pause (meta gpu:paused), "night": a night_run row says
+    `running`}, read only. No mind.db, or no such table, is neither; sqlite3.Error otherwise.
+    A crash can leave a `running` row: the mind's next start resumes and ends that night."""
     from leeroy_mind.gpucontrol import KEY
     db = root / "mind.db"
     if not db.is_file():
-        return False
+        return {"paused": False, "night": False}
+    conn = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
     try:
-        conn = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
-        try:
-            return conn.execute("SELECT 1 FROM meta WHERE key=?", (KEY,)).fetchone() is not None
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return False
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        paused = "meta" in tables and conn.execute(
+            "SELECT 1 FROM meta WHERE key=?", (KEY,)).fetchone() is not None
+        night = "night_run" in tables and conn.execute(
+            "SELECT 1 FROM night_run WHERE status='running' LIMIT 1").fetchone() is not None
+        return {"paused": paused, "night": night}
+    finally:
+        conn.close()
 
 
 def lab_main(argv=None, *, make_llm=None, make_child=None) -> int:
