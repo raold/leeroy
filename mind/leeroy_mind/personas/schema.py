@@ -199,8 +199,9 @@ class Appearance:
     # A clothed body descriptor the photo prompt says (owner, 2026-11-15), set by hand in the
     # console's Looks panel; None leaves it to the build. Women only; the looks pass never
     # writes it (enrich.ENRICH_SCHEMA leaves it out), and a persona stored without it loads.
-    bust: Literal["small", "medium", "large", "very_large"] | None = _f(default=None,
-                                                                        enrichment=True)
+    bust: Literal["small", "medium", "large", "very_large",
+                  "c_cup", "d_cup", "e_cup", "f_cup", "g_cup", "h_cup"] | None = _f(
+        default=None, enrichment=True)
     # Her figure's other clothed shape words, set the same way (owner, 2026-11-15: "the same
     # adjustment for glutes, waist and hips"): women only, owner-set, never the looks pass's.
     glutes: Literal["small", "medium", "large", "very_large"] | None = _f(default=None,
@@ -283,7 +284,7 @@ class Speech:
 
 
 DEPTHS = get_args(get_type_hints(Disclosure)["depth"])  # the order the layers open in
-BUSTS = get_args(get_args(get_type_hints(Appearance)["bust"])[0])  # smallest first
+BUSTS = get_args(get_args(get_type_hints(Appearance)["bust"])[0])  # legacy sizes, then C-H presets
 GLUTES = get_args(get_args(get_type_hints(Appearance)["glutes"])[0])
 WAISTS = get_args(get_args(get_type_hints(Appearance)["waist"])[0])
 HIPS = get_args(get_args(get_type_hints(Appearance)["hips"])[0])

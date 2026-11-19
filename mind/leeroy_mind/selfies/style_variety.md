@@ -168,7 +168,7 @@ A varied candidate offered as a photo-request fallback records its own look. Ima
 ## Weight and bust (owner edits)
 
 The owner sets a member's weight (kg, the schema's 40-180) and, for a woman, her bust
-(`small`, `medium`, `large`, `very_large`, or not set) in the console's Personas member detail,
+(`small`, `medium`, `large`, `very_large`, C-H cup presets, or not set) in the console's Personas member detail,
 under Looks. Saving goes through the running mind's `looks` control op (`POST /api/looks`,
 behind the key, Origin and `--no-control` gates, under the photo changes' lock) to
 `personas/looks_edit.py`: an owner persona version (source `owner`, so the variety pass leaves
@@ -180,6 +180,26 @@ they are still what the edit left. Each save or console undo queues a fresh prof
 a woman of the lust style while `varied_sets` is on (the once-a-day rule does not apply), else an
 ordinary one. A set already queued is not doubled: it renders from the persona as it is at render
 time. With `[selfies] enabled = false` the looks save and no set is queued.
+
+**C-H presets** (owner, 2026-11-19). The same Bust select also offers C cup, D cup,
+E cup, F cup, G cup and H cup, stored as `c_cup` through `h_cup`. These are visual
+presets, not exact measurements: clothing, pose, seed and the reference influence the result.
+Bare cup letters produced nearly identical C and H images in the local comparison. The presets
+instead use the renderer's body descriptions: C `medium bust`, D `full bust`, E `large bust`,
+F `large full bust`, G `very large bust`, H `very large full bust`. Each is carried whole into
+the profile, situation and requested-photo prompts, with the existing clothing and identity
+requirements. They change only bust, not weight, waist, hips, outfit or romance level.
+The 2026-11-19 local visual pass did **not** establish six distinct or progressively larger
+results: both wordings overlapped heavily at two fixed seeds. A further C/H check without
+the face reference also showed weak separation. These are prompt preferences, not reliable
+size controls; inspect the queued images before choosing a cover. The tested reference used
+a detected face crop, not a whole-body fallback. No production renderer or identity setting
+was changed.
+Saving still queues the usual set; select a
+new cover to carry the changed proportions into later photos. The broad sizes and unset
+retain their original prompts. No migration or new global switch is needed; no member is
+changed until the owner selects a preset. Before rolling back to code without these values,
+undo those edits or choose a supported broad size, since older schemas reject the new values.
 
 **Her new figure under a light face.** Measured on the GPU (2026-11-15), her cover's face
 reference at `identity_scale` (0.6) carried her slim cover body into every set: 68 kg to 96 kg,

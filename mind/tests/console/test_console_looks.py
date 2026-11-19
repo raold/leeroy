@@ -154,7 +154,8 @@ def test_the_member_detail_carries_the_forms_limits(cast, data):
             j = (await http(app, "GET", "/api/persona?guid=101")).json()
             limits = j["looks_limits"]
             assert {k: limits[k] for k in ("weight_kg", "busts", "glutes", "waists", "hips")} == {
-                "weight_kg": [40, 180], "busts": ["small", "medium", "large", "very_large"],
+                "weight_kg": [40, 180], "busts": ["small", "medium", "large", "very_large",
+                                                "c_cup", "d_cup", "e_cup", "f_cup", "g_cup", "h_cup"],
                 "glutes": ["small", "medium", "large", "very_large"],
                 "waists": ["very_narrow", "narrow", "average", "wide"],
                 "hips": ["narrow", "average", "wide", "very_wide"]}

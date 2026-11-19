@@ -85,9 +85,11 @@ can be checked independently using `smoke --backend flux1-dev --out DIR`, then
 `smoke --backend flux1-dev --identity --ref FILE --out ANOTHER_DIR` with a generated fictional
 adult's reference. The output reports render time, peak VRAM and classifier score. Restore
 the mind afterward. The owner should inspect face consistency and appearance before enabling
-automatic rendering. The existing conservative prompt budget is retained. The protocol's
-CFG controls FLUX's native distilled guidance. Its default is 3.5 when the backend is selected
-in TOML without an explicit `guidance`; an existing value is preserved, so set `guidance = 3.5`
+automatic rendering. Prompt fitting checks CLIP's 75 content-token window and T5's 512-token
+window separately, including T5's end token. Optional phrases may be omitted to fit; required
+appearance and clothing phrases are never silently truncated. The protocol's CFG controls
+FLUX's native distilled guidance. Its default is 3.5 when the backend is selected in TOML
+without an explicit `guidance`; an existing value is preserved, so set `guidance = 3.5`
 when switching a table that already sets it. Smoke/detail commands default to 3.5 too.
 Negative prompts use a separate true CFG of 1.5 (1 when native guidance is 1). Reusing SDXL's
 5.0 as true CFG in addition to native guidance severely clipped colours and sometimes produced

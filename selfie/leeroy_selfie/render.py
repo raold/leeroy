@@ -71,6 +71,9 @@ class Renderer:
         return max(len(tok(text, add_special_tokens=False).input_ids)
                    for tok in (self.pipe.tokenizer, self.pipe.tokenizer_2))
 
+    def _fit(self, phrases):
+        return fit(phrases, self._count, self.pipe.tokenizer.model_max_length - 2)
+
     def score(self, image) -> float:
         torch = self.torch
         with torch.no_grad():
@@ -96,9 +99,8 @@ class Renderer:
             raise RenderFailed("identity_unavailable")
         torch = self.torch
         started = time.perf_counter()
-        limit = self.pipe.tokenizer.model_max_length - 2
-        prompt, dropped = fit(req.phrases, self._count, limit)
-        negative, _ = fit(req.negative, self._count, limit)
+        prompt, dropped = self._fit(req.phrases)
+        negative, _ = self._fit(req.negative)
         width, height = PORTRAIT if req.shape == "portrait" else (req.size, req.size)
         torch.cuda.reset_peak_memory_stats()
         try:  # the reference is encoded inside, so its VRAM counts in peak_gib
@@ -126,8 +128,8 @@ class Renderer:
             hand = ((detail.HAND_LEAD, 0), *((t, 1) for t, _ in req.phrases if "wearing" in t))
             refined, detailed = self.detail_pass(
                 image, req.detail, seed=req.seed, steps=req.steps, cfg=req.cfg,
-                face_prompt=fit(lead, self._count, limit)[0],
-                hand_prompt=fit(hand, self._count, limit)[0],
+                face_prompt=self._fit(lead)[0],
+                hand_prompt=self._fit(hand)[0],
                 negative=negative, identity=req.identity)
             if refined is not image:
                 after = self.score(refined)

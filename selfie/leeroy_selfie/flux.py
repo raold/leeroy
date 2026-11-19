@@ -7,12 +7,27 @@ from pathlib import Path
 import time
 
 from . import models
+from .fit import fit
 from .render import RETRY_WAIT_S, ReadyError, Renderer, _face_ref, _free_gib, _ms
 
 NEGATIVE_GUIDANCE = 1.5
+TEXT_SEQUENCE_LENGTH = 512
 
 
 class FluxRenderer(Renderer):
+    def _fit(self, phrases):
+        # CLIP and T5 have different windows. Applying CLIP's 75 content-token
+        # limit to both incorrectly refuses descriptions that fit both encoders.
+        limit = self.pipe.tokenizer.model_max_length - 2
+
+        def count(text):
+            clip = len(self.pipe.tokenizer(text, add_special_tokens=False).input_ids)
+            t5 = len(self.pipe.tokenizer_2(text, add_special_tokens=True).input_ids)
+            # fit() may drop optional phrases, but never required identity/clothing.
+            return max(clip, limit + 1) if t5 > TEXT_SEQUENCE_LENGTH else clip
+
+        return fit(phrases, count, limit)
+
     def _encode_reference(self, crop, cfg: bool):
         # FLUX keeps positive/negative embeds separately; no SDXL CFG concatenation.
         return self.pipe.prepare_ip_adapter_image_embeds(
@@ -29,7 +44,7 @@ class FluxRenderer(Renderer):
         if self.identity and "ip_adapter_image_embeds" in kwargs and negative_cfg > 1:
             kwargs["negative_ip_adapter_image_embeds"] = self._blank(True)
         return pipe(**kwargs, true_cfg_scale=negative_cfg, guidance_scale=cfg,
-                    max_sequence_length=512)
+                    max_sequence_length=TEXT_SEQUENCE_LENGTH)
 
     def _img2img(self):
         if self._i2i is None:
