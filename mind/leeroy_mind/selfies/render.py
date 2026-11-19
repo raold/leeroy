@@ -69,7 +69,8 @@ class RenderPolicy:
     Its attempts consume the day's allowance even when refused or failed, avoiding an
     every-minute retry of the same bad set. The night's existing success/skip cap is unchanged.
     `first_first` (his Render selfies button, manual.py) renders first sets before "4 more" ones;
-    the night and the booth keep queued_sets' order.
+    the night and the booth keep queued_sets' order. `record_refusals` (that button too) gives
+    only a set the photo checks refused its receipt for the day, never one a worker error ended.
     """
     stage: str = STAGE
     cap: int | None = None
@@ -77,6 +78,7 @@ class RenderPolicy:
     day: str | None = None
     record_failures: bool = False
     first_first: bool = False
+    record_refusals: bool = False
 
 
 NIGHT = RenderPolicy()
@@ -664,7 +666,7 @@ async def _sets(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker, todo:
         except Exception as e:  # SetRefused; a folder that could not be made or moved
             _discard(ctx, guid, set_no)
             ctx.fail(policy.stage, unit, e)
-            if policy.record_failures:
+            if policy.record_failures or (policy.record_refusals and isinstance(e, SetRefused)):
                 ctx.skip(policy.stage, unit)
             if isinstance(e, SetRefused):
                 tally["refused"] += 1

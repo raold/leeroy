@@ -58,18 +58,26 @@ export function confirmLines(value) {
   if (b && count(b.held) && b.held) {
     lines.push(plural(b.held, 'held set stays', 'held sets stay') + ' queued until the night can render it.');
   }
-  if (b && Number.isFinite(b.estimate_s)) {
-    lines.push('Rough time: about ' + durationWords(b.estimate_s) + (b.estimate_measured === true
-      ? ', from earlier renders.' : ' (a first guess: no render has been timed yet).'));
+  if (b && count(b.refused) && b.refused) {
+    lines.push(plural(b.refused, 'set', 'sets') + ' the photo check refused today '
+      + (b.refused === 1 ? 'waits' : 'wait') + ' for the night, which renders with new seeds.');
   }
-  lines.push('It stops if you log into WoW or post in Discord; an offline raid, the voice service '
-    + 'or Free GPU stop it too. Whatever is not rendered stays queued.');
+  if (b) {
+    lines.push(Number.isFinite(b.estimate_s) && b.estimate_s > 0
+      ? 'Rough time: about ' + durationWords(b.estimate_s) + ', from earlier renders.'
+      : 'Rough time: no estimate yet (no render has been timed).');
+  }
+  lines.push('It stops if you log into WoW or post in Discord, or when an answer owed to you '
+    + 'needs the chat model; an offline raid, the voice service or Free GPU stop it too. '
+    + 'Whatever is not rendered stays queued.');
   return lines;
 }
 
-const BY = {login: 'your WoW login', discord: 'your Discord post', offline_raid: 'an offline raid',
-  voice: 'the voice service', gpu_pause: 'Free GPU', shutdown: 'the mind stopping',
-  night: 'the night', booth: 'the photo booth', lease: 'another GPU job'};
+const BY = {login: 'your WoW login', discord: 'your Discord post',
+  discord_answer: 'an answer owed to you on Discord', discord_group: "a group DM's answer",
+  offline_raid: 'an offline raid', voice: 'the voice service', gpu_pause: 'Free GPU',
+  shutdown: 'the mind stopping', night: 'the night', booth: 'the photo booth',
+  lease: 'another GPU job'};
 
 // The toast (and the Ops line) for a finished run's record.
 export function outcomeWords(last) {

@@ -4,8 +4,8 @@ import { confirmLines, durationWords, kindsWords, outcomeWords, renderModel, ren
          renderStatus } from '../../../leeroy_mind/console/static/js/rendermodel.mjs';
 import { lines } from '../../../leeroy_mind/console/static/js/opsmodel.mjs';
 
-const backlog = {first: 3, more: 6, snaps: 2, held: 1, total: 11, images: 38, estimate_s: 840,
-                 estimate_measured: true};
+const backlog = {first: 3, more: 6, snaps: 2, held: 1, refused: 0, total: 11, images: 38,
+                 estimate_s: 840};
 const idle = {selfies: true, snaps: true, running: false, stopping: false, progress: null, backlog,
               refusal: null, code: null, last: null, enabled: true, mind_down: false};
 const running = {...idle, backlog: null, running: true,
@@ -32,14 +32,19 @@ test('idle shows the backlog count and confirms before rendering', () => {
   assert.equal(words[0], 'Renders 11 now: 3 first sets, 6 sets of four more, 2 situational photos.');
   assert.match(words[1], /1 held set stays queued/);
   assert.match(words[2], /Rough time: about 14 minutes, from earlier renders\./);
-  assert.match(confirmLines({...idle, backlog: {...backlog, estimate_measured: false}})[2],
-               /a first guess: no render has been timed yet/);
-  assert.match(words.at(-1), /log into WoW or post in Discord/);
+  for (const estimate_s of [null, 0]) {
+    assert.equal(confirmLines({...idle, backlog: {...backlog, estimate_s}})[2],
+                 'Rough time: no estimate yet (no render has been timed).');
+  }
+  assert.match(confirmLines({...idle, backlog: {...backlog, refused: 2}})[2],
+               /^2 sets the photo check refused today wait for the night/);
+  assert.match(words.at(-1), /log into WoW or post in Discord, or when an answer owed to you/);
 });
 
 test('refusals stay readable on a disabled button', () => {
   for (const refusal of ['Log out of WoW first: photos render only while you are out of the game.',
-                         'The GPU is paused. Resume the GPU first.', 'Nothing is queued to render.']) {
+                         'The GPU is paused. Resume the GPU first.', 'Nothing is queued to render.',
+                         'Checking what can render…']) {
     const view = renderModel({...idle, refusal, backlog: {...backlog, total: 0}});
     assert.equal(view.disabled, true); assert.equal(view.why, refusal); assert.equal(view.title, refusal);
     assert.equal(view.label, 'Render selfies');
@@ -63,6 +68,7 @@ test('outcomes name what stopped a run and keep counts', () => {
   assert.equal(outcomeWords({outcome: 'stopped', sets: 1, snaps: 0, failed: 0, held: 0}),
                'Selfie render stopped: 1 set rendered. The rest stays queued.');
   for (const [by, words] of [['login', 'your WoW login'], ['discord', 'your Discord post'],
+       ['discord_answer', 'an answer owed to you on Discord'], ['discord_group', "a group DM's answer"],
        ['offline_raid', 'an offline raid'], ['voice', 'the voice service'], ['gpu_pause', 'Free GPU']]) {
     assert.match(outcomeWords({outcome: 'preempted', by, sets: 0}), new RegExp('stopped by ' + words + ': nothing rendered'));
   }

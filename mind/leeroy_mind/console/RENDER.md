@@ -13,10 +13,17 @@ In this order:
 2. **"4 more" sets** he asked for.
 3. With `[selfies] snaps = true`, **planned situational and guild photos** that can render now.
 
-The button reads `Render selfies (11)`. A click opens a dialog with the counts by kind, the held
-sets that stay queued, a rough time and what stops a run. The time comes from earlier renders
-(the booth's and this button's seconds per image, else the night's selfies stage), or a fixed
-guess when nothing has been measured.
+The button reads `Render selfies (11)`. A click opens a dialog with:
+
+- the counts by kind;
+- the held sets that stay queued, and the sets the photo check refused earlier today, which wait
+  for the night;
+- a rough time;
+- what stops a run.
+
+The time comes from earlier renders: the booth's and this button's seconds per image that came
+back, else the night's selfies stage. A pass whose renders only failed fast measures nothing.
+With nothing measured the dialog says "no estimate yet".
 
 **Photo requests are not part of it.** A request renders when he asks, inside its own bounded
 GPU borrow (`photos/requests.py`), or sends a ready-made photo, so it never waits in a backlog.
@@ -46,15 +53,37 @@ Each is said in words on the button's title, and as a toast on click:
 - a night is running or winding down: its own photo stages render the queue. Try again after it
   ends;
 - the photo booth is rendering;
-- members are still answering his Discord messages;
+- members are writing answers to him on Discord, or owe him answers that fall due while the run
+  would render. This covers DM and group DM answers put off to her own time; with no estimate,
+  the next 30 minutes count. A run would hold those back, so it waits for them instead;
+- with `[server]` on, the night's quiet window. Inside the window, no run starts until tonight's
+  night has finished. Outside it, no run starts when its estimate is longer than the time left
+  before the window opens;
 - a run is already going;
-- selfies are off, or nothing is queued.
+- selfies are off, or nothing is queued (with how many refused sets wait for the night).
+
+Until the console has a fresh read from the mind, the button says it is checking (or that
+selfies are off, as `mind.toml` says). It never shows an old read.
 
 ## The GPU
 
-A run takes the GPU as an image stage does. It lets go of the server and Discord presence
-leases (as Free GPU does), unloads every model but the embedding model, and starts the worker. A
-second worker, the identity one, starts for the photos.
+A run takes the GPU as an image stage does. Admission is one step: the checks, letting go of
+the server and Discord presence leases (as Free GPU does) and the run's start. The run unloads
+every model but the embedding model and starts the worker. A second worker, the identity one,
+starts for the photos.
+
+**Any lease taken after the click stops the run**, before or after its first step. That covers:
+
+- his Discord post;
+- a rescue of an answer owed to him;
+- a whisper answer carried to his DM;
+- a group DM answer;
+- his WoW login;
+- an offline raid or the voice service.
+
+Free GPU stops it too. The worker's whole process tree ends before any live model preloads. The
+outcome names the cause: his post, an answer owed to him, a group DM's answer, his login and so
+on.
 
 While a run renders:
 
@@ -64,10 +93,6 @@ While a run renders:
 - the server lease stays released, so the guild's Discord stays quiet. The run's end takes it
   back at once, and that hand-over reloads the live model whole.
 
-**Every live lease stops a run as it stops the booth**: his WoW login, his Discord post, an
-offline raid or the voice service; Free GPU stops it too. The worker's whole process tree ends
-before any live model preloads.
-
 ## Progress and Stop
 
 While a run renders the button reads `Rendering 3 of 11 · Stop`. Its state comes from the
@@ -76,17 +101,20 @@ console's shared status stream, as the GPU control's does; the page keeps no tim
 seconds). A set mid-render stays queued; its `.part` folder is cleared by the next render, as
 after the booth.
 
-The outcome (done, stopped, stopped by his login or post and so on, or failed, with counts)
-shows as a toast on a page that watched the run, and in Ops under Selfies and snaps.
-`selfies status` prints it as `manual`.
+The outcome (done, stopped, stopped by what took the GPU, or failed, with counts) shows as a
+toast on a page that watched the run, and in Ops under Selfies and snaps. A run stopped before
+its first step is recorded too. `selfies status` prints it as `manual`. With `[selfies] critic`
+on, a measured photo counts as rendered only once it is published.
 
 ## Receipts
 
 Units go under night `manual:<local date>`, stages `selfies_manual` and `snaps_manual`, with a
 `night_stage` row of their own and meta `selfies:manual:last`. A run never resets a night's stall
-counter, never spends the booth's day allowance and never shows as nightly work. A set refused
-or failed in a run is skipped by later runs that day (the same seeds would be refused again);
-the night, under its own key, tries it again.
+counter, never spends the booth's day allowance and never shows as nightly work.
+
+A set the photo check refused (NSFW, three seeds) is skipped by later runs that day, since the
+same seeds would be refused again; the night tries it with new seeds. A set a worker error ended
+(a timeout, contention, an out-of-memory) is offered again at once.
 
 ## Control
 

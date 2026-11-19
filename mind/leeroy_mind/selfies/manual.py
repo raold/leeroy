@@ -13,21 +13,24 @@ the failure cooldown, the ten-minute offline wait) and the night's per-night cap
 
 Receipts: units go under night "manual:<local date>" and the stages STAGE and SNAPS_STAGE, with a
 night_stage row of its own and the meta LAST, so it never resets a night's stall counter, never
-spends the booth's allowance and never reads as nightly work. A set refused or failed in a run is
-skipped by later runs that day (the same seeds would render the same refusal): the night, under
-its own key, tries it again.
+spends the booth's allowance and never reads as nightly work. A set the photo checks refused in a
+run is skipped by later runs that day (the same seeds would be refused again; the night, under
+its own key, tries new ones); one a worker error ended (a timeout, contention, an OOM) is not.
 
 The GPU: it refuses while he is in WoW or his presence is unknown, an offline raid, the voice
 service or another job holds a lease, Free GPU is paused, a night or a booth pass runs or winds
-down, a photo request renders, members are still answering him on Discord, or another run is on.
-It releases the server and Discord presence leases (Free GPU does too), makes room as an image
-stage does and starts the worker. While it runs no night is due (NightScheduler.image_work), the
-booth does not start, a photo request's borrow is busy and the server lease stays released (its
-end ticks that lease again). Every live lease preempts it as it preempts the booth: the arbiter's
-preempt, chained after the night's and the booth's, cancels the run, whose worker's whole
-process tree ends before the hand-over preloads; that hand-over reloads the live model whole
-(make_room marked the GPU shared). Free GPU stops it before unloading. A cancel path never calls
-the arbiter: hand_over holds its lock while it awaits the preempt.
+down, a photo request renders, answers to him on Discord are being written or fall due within the
+run, a run would eat into the night's quiet window, or another run is on. Admission is one step
+on the loop: the checks, the release of the server and Discord presence leases (Free GPU lets
+them go too) and the task's creation. From then on any lease holder at all is a preemption: the
+run's first step finds it (his post, an owed answer's rescue, a carried whisper or a group DM
+tick taken between the click and that step), and later every live lease preempts it as it
+preempts the booth, through the arbiter's preempt, chained after the night's and the booth's;
+the worker's whole process tree ends before the hand-over preloads, and that hand-over reloads
+the live model whole (make_room marked the GPU shared). Free GPU stops it before unloading. While
+it runs no night is due (NightScheduler.image_work), the booth does not start, a photo request's
+borrow is busy and the server lease stays released (its end ticks that lease again). A cancel
+path never calls the arbiter: hand_over holds its lock while it awaits the preempt.
 
 Logs: selfies_manual_render_started total= kinds=, selfies_manual_render_done done= failed= held=
 seconds= outcome= by=; codes, ids and counts only, never a prompt, a scene or a name."""
@@ -40,6 +43,7 @@ import time
 from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.logs import log
@@ -57,12 +61,12 @@ SNAPS_STAGE = "snaps_manual"
 LAST = "selfies:manual:last"
 ALL = 1 << 30  # no per-run cap: the whole backlog
 POLICY = RenderPolicy(stage=STAGE, cap=ALL, requested_before=math.inf, day=None,
-                      record_failures=True, first_first=True)
+                      first_first=True, record_refusals=True)
 STOP_WAIT_S = 60.0  # render_stop's wait for the worker tree, before it answers anyway
 COUNT_S = 30.0  # the idle backlog count is read again after this long
-START_S = 45.0  # one worker's start, for an estimate with nothing measured
-IMAGE_S = 12.0  # one image, for an estimate with nothing measured
 MEASURED = 10  # the newest records an estimate reads
+MIN_IMAGE_S = 1.0  # no SDXL image comes back faster: a pass measuring less only failed fast
+ANSWER_HORIZON_S = 1800.0  # owed answers due this soon hold a start whose length is unknown
 UNIT_KEYS = ("ready", "refused", "failed", "skipped", "expired", "held", "measured")
 
 OFF = "Selfies are off ([selfies] enabled in mind.toml)."
@@ -78,13 +82,15 @@ def night_key(day: str) -> str:
 @dataclass(frozen=True)
 class Plan:
     """What a run renders now: first and "4 more" sets, situational/guild photos (`rows`), the
-    held sets that stay queued, and the images they make (four a set, one a situation, a guild
+    held sets that stay queued, the queued sets the photo checks refused in an earlier run today
+    (they wait for the night), and the images they make (four a set, one a situation, a guild
     photo one a member)."""
     first: int = 0
     more: int = 0
     held: int = 0
     images: int = 0
     rows: tuple = ()
+    refused: int = 0
 
     @property
     def snaps(self) -> int:
@@ -102,11 +108,13 @@ def plan(ctx, cfg, policy: RenderPolicy = POLICY, *, queued: bool) -> Plan:
     """The run's work on `ctx`: the queued sets todo() would give (not done in today's runs,
     not held), and the photos snapstage would render now. `queued` says queue() already ran on
     ctx; without it the members queue() would give a first set count as first sets too."""
-    first = more = held = 0
+    first = more = held = refused = 0
     for s in queued_sets(ctx.store):
-        if not allows(ctx, s.guid) or ctx.done(policy.stage, f"{s.guid}:{s.set_no}"):
+        if not allows(ctx, s.guid):
             continue
-        if _set_held(ctx, _stored(ctx, s.guid), s.guid, s.set_no) is not None:
+        if ctx.done(policy.stage, f"{s.guid}:{s.set_no}"):
+            refused += 1
+        elif _set_held(ctx, _stored(ctx, s.guid), s.guid, s.set_no) is not None:
             held += 1
         elif s.reason == "first":
             first += 1
@@ -126,33 +134,32 @@ def plan(ctx, cfg, policy: RenderPolicy = POLICY, *, queued: bool) -> Plan:
             if ok:
                 rows.append(row)
                 images += max(1, len(row.members)) if row.kind == "guild" else 1
-    return Plan(first, more, held, images, tuple(rows))
+    return Plan(first, more, held, images, tuple(rows), refused)
 
 
 def per_image_s(conn) -> float | None:
     """Seconds an image, worker start included, over the newest measured passes: the booth's
-    and this button's night_stage rows (calls: render attempts, call_s: the pass's seconds), else
-    the night's selfies stage (its time over four images a unit). None with nothing measured."""
+    and this button's night_stage rows (calls: images rendered, call_s: the pass's seconds), else
+    the night's selfies stage (its time over four images a unit). A pass faster than MIN_IMAGE_S
+    an image only failed fast and says nothing. None with nothing measured."""
     rows = conn.execute("SELECT calls, call_s FROM night_stage WHERE stage IN (?, ?) AND calls > 0 "
                         "ORDER BY finished DESC LIMIT ?", ("selfies_booth", STAGE, MEASURED))
-    samples = [r[1] / r[0] for r in rows if r[1] > 0]
+    samples = [r[1] / r[0] for r in rows if r[1] / r[0] >= MIN_IMAGE_S]
     if not samples:
         rows = conn.execute(
             "SELECT s.started, s.finished, (SELECT count(*) FROM night_step n WHERE "
             "n.night = s.night AND n.stage = s.stage AND n.unit <> 'queue') FROM night_stage s "
             "WHERE s.stage = 'selfies' AND s.finished IS NOT NULL ORDER BY s.night DESC LIMIT ?",
             (MEASURED,))
-        samples = [(f - st) / (SET_SIZE * n) for st, f, n in rows if n and f > st]
+        samples = [x for st, f, n in rows if n and (x := (f - st) / (SET_SIZE * n)) >= MIN_IMAGE_S]
     return statistics.median(samples) if samples else None
 
 
-def estimate(conn, p: Plan) -> tuple[int, bool]:
-    """(rough seconds the run takes, whether earlier renders measured it, not a first guess)."""
+def estimate(conn, p: Plan) -> int | None:
+    """Rough seconds the run takes from earlier renders; None (no estimate yet) with nothing
+    measured or nothing to render."""
     per = per_image_s(conn)
-    if per is None:
-        workers = (p.first + p.more > 0) + (p.snaps > 0)
-        return round(workers * START_S + p.images * IMAGE_S), False
-    return round(p.images * per), True
+    return None if per is None or not p.images else max(1, round(p.images * per))
 
 
 class _Tally(Counter):
@@ -171,6 +178,12 @@ def _units(*tallies) -> int:
     return sum(t[k] for t in tallies for k in UNIT_KEYS)
 
 
+def duration_words(seconds: float) -> str:
+    minutes = max(1, round(seconds / 60))
+    return f"{minutes} minute{'s' if minutes != 1 else ''}" if minutes < 90 else \
+        f"{round(minutes / 60, 1):g} hours"
+
+
 class ManualRender:
     """`app.selfie_manual` with [selfies] enabled (attach_selfies, after the booth). `worker` and
     `snap_worker` make the sets' worker and the photos' identity worker (tests pass fakes)."""
@@ -186,6 +199,9 @@ class ManualRender:
         self._progress: dict | None = None
         self._tallies: tuple = ()
         self._calls = 0
+        self._run_ctx = None  # the run's context, for a record its cancelled task never made
+        self._began = 0.0
+        self._recorded = True
         self._count: dict | None = None
         self._count_at = -math.inf
         self._count_warned = False
@@ -214,7 +230,8 @@ class ManualRender:
         self._count_at = -math.inf
 
     def problem(self) -> tuple[str, str] | None:
-        """(code, words) of why a run cannot start now, else None. The backlog is not asked."""
+        """(code, words) of why a run cannot start now, else None; what the backlog decides
+        (the owed answers, the night's window) is late_problem's."""
         app, arbiter = self.app, self.app.arbiter
         if not self.cfg.enabled:
             return "off", OFF
@@ -257,26 +274,71 @@ class ManualRender:
         booth = getattr(app, "selfie_booth", None)
         if booth is not None and (booth.running or booth._exclusive.locked()):
             return "booth", "The photo booth is rendering. Try again when it finishes."
-        if self._answering():
-            return "answering", "Members are still answering you on Discord. Try again in a minute."
         return None
 
-    def _answering(self) -> bool:
+    def late_problem(self, seconds: int | None) -> tuple[str, str] | None:
+        """(code, words) of why a run of about `seconds` (None: no estimate) cannot start now:
+        answers to him on Discord being written or falling due within it, or the night's quiet
+        window it would eat into."""
+        if self._answering(ANSWER_HORIZON_S if seconds is None else seconds):
+            return "answering", ("Members are still answering you on Discord, or owe you answers "
+                                 "due while it would render. Try again once they have answered.")
+        return self._window(seconds)
+
+    def _answering(self, within: float) -> bool:
+        """Answers to him on Discord the engine is writing, or that she put off to her own time
+        and that fall due within `within` seconds: a run would hold those back (no live lease
+        is left for them), so it waits for them instead."""
         from leeroy_mind.talk.owed import answers_in_flight
         engine = getattr(self.app, "engine", None)
+        talk = getattr(self.app, "discord_talk", None)
         try:
-            return engine is not None and answers_in_flight(engine, discord=True) > 0
+            if engine is not None and answers_in_flight(engine, discord=True) > 0:
+                return True
+            return talk is not None and talk.answers_due(within) > 0
         except Exception:
             return False
 
+    def _window(self, seconds: int | None) -> tuple[str, str] | None:
+        """With [server] on the night runs only in its quiet window, and a run holds it back:
+        inside the window, while tonight's night has not finished, no run starts; outside it, a
+        run whose estimate is longer than the time left before the window opens does not."""
+        from leeroy_mind.nightly.scheduler import tonight
+        from leeroy_mind.nightly.store import run_get
+        from leeroy_mind.server.clock import in_window, window_bounds
+        scheduler = self.app.night_scheduler
+        quiet = getattr(scheduler.settings, "quiet", None)
+        if quiet is None:
+            return None
+        local, now = self.app.clock.local(), self.app.clock.now()
+        start, end = window_bounds(local, quiet, clock=self.app.clock)
+        span = f"{quiet[0]:%H:%M}-{quiet[1]:%H:%M}"
+        if in_window(local, quiet):
+            run = run_get(self.app.store, tonight(local, scheduler.settings))
+            over = run is not None and (run.status in ("done", "abandoned") or (
+                run.status == "failed" and run.attempts >= scheduler.settings.max_attempts))
+            if not over:
+                return "night_window", (f"The night's window is open ({span}) and tonight's "
+                                        "night has not finished: a render now would hold it back. "
+                                        "Try after the night.")
+            return None
+        if seconds is not None and seconds > start - now:
+            opens = datetime.fromtimestamp(start, local.tzinfo)
+            return "night_window", (f"This render takes about {duration_words(seconds)}, longer "
+                                    f"than the {duration_words(start - now)} left before the "
+                                    f"night's window opens at {opens:%H:%M}. Try after the night.")
+        return None
+
     def _fence(self) -> str | None:
-        """Why the run's first step must not take the GPU after all (a lease, a pause, a night or
-        a booth pass that arrived after the request): its `by` code, else None."""
+        """Why the run's first step must not take the GPU after all: the pause, a night or a
+        booth pass, or any lease holder at all (admission let the presence leases go, so one
+        here was taken after the click: his post, an owed answer, a lease job). Its `by` code,
+        else None."""
         arbiter = self.app.arbiter
         if getattr(arbiter, "paused", False):
             return "gpu_pause"
-        if held := arbiter.holders - {"server", "discord"}:
-            return _reason(held)
+        if held := arbiter.holders:
+            return self._reason(held)
         task = getattr(self.app.night_scheduler, "_task", None)
         if task is not None and not task.done():
             return "night"
@@ -284,6 +346,23 @@ class ManualRender:
         if booth is not None and (booth.running or booth._exclusive.locked()):
             return "booth"
         return None
+
+    def _reason(self, holders) -> str:
+        """The `by` code of what stopped a run: the GPU pause, his login, the Discord lease as
+        whatever last took it (his post, an answer owed to him, a group DM's answer), an offline
+        raid, the voice service, else another lease."""
+        arbiter = self.app.arbiter
+        if getattr(arbiter, "paused", False) or "gpu_pause" in holders:
+            return "gpu_pause"
+        if "human" in holders:
+            return "login"
+        if "discord" in holders:
+            why = getattr(getattr(self.app, "discord_talk", None), "lease_reason", "post")
+            return {"answer": "discord_answer", "group": "discord_group"}.get(why, "discord")
+        for holder, code in (("offline_raid", "offline_raid"), ("voice_gpu", "voice")):
+            if holder in holders:
+                return code
+        return "lease"
 
     def _peek(self):
         """A read-only context for the idle count: the night's settings and the app's personas,
@@ -309,17 +388,17 @@ class ManualRender:
         return ctx
 
     def backlog(self) -> dict | None:
-        """What a run would render now (kinds, held sets, images, a rough estimate in seconds),
-        read at most every COUNT_S; None when it could not be read."""
+        """What a run would render now (kinds, held sets, sets refused today, images, a rough
+        estimate in seconds or None), read at most every COUNT_S; None when it could not be
+        read."""
         now = time.monotonic()
         if now - self._count_at < COUNT_S:
             return self._count
         self._count_at = now
         try:
             p = plan(self._peek(), self.cfg, queued=False)
-            seconds, measured = estimate(self.app.store.conn, p)
-            self._count = {**p.kinds(), "held": p.held, "total": p.total, "images": p.images,
-                           "estimate_s": seconds, "estimate_measured": measured}
+            self._count = {**p.kinds(), "held": p.held, "refused": p.refused, "total": p.total,
+                           "images": p.images, "estimate_s": estimate(self.app.store.conn, p)}
             self._count_warned = False
         except Exception as e:
             self._count = None
@@ -338,31 +417,43 @@ class ManualRender:
             out["progress"] = dict(self._progress or {})
             return out
         found = self.problem()
-        out["backlog"] = self.backlog() if self.cfg.enabled else None
-        if found is None and out["backlog"] is not None and out["backlog"]["total"] == 0:
-            found = ("nothing", NOTHING)
+        backlog = out["backlog"] = self.backlog() if self.cfg.enabled else None
+        if found is None and backlog is not None:
+            if backlog["total"] == 0:
+                found = ("nothing", self._nothing(backlog["refused"]))
+            else:
+                found = self.late_problem(backlog["estimate_s"])
         if found is not None:
             out["code"], out["refusal"] = found
         return out
+
+    @staticmethod
+    def _nothing(refused: int) -> str:
+        if not refused:
+            return NOTHING
+        return (f"{NOTHING} {refused} set{'s' if refused != 1 else ''} the photo check refused "
+                "today wait for the night, which renders them with new seeds.")
 
     # -- the control op ---------------------------------------------------------------------------
 
     async def action(self, name: str) -> dict:
         if name == "render_stop":
             return await self.stop_now()
-        return self.request()
+        return await self.request()
 
-    def request(self) -> dict:
-        """Start a run of the whole backlog, or refuse in words. No await: the checks, the first
-        sets' queueing and the task's creation are one step on the loop."""
+    async def request(self) -> dict:
+        """Start a run of the whole backlog, or refuse in words. Admission is one step on the
+        loop (no await suspends it): the checks, the first sets' queueing, the release of the
+        presence leases and the task's creation, so any lease taken after it is the run's
+        first step's to find (_fence)."""
         found = self.problem()
         if found is not None:
-            log("selfies_manual_render_refused", reason=found[0])
-            return {"ok": False, "error": found[0], "message": found[1], "render": self.snapshot()}
+            return self._refused(found)
         try:
             ctx = self._ctx(night_key(self.app.clock.local().date().isoformat()))
             queue(ctx, POLICY)  # the first sets, as the night and the booth queue them
             p = plan(ctx, self.cfg, queued=True)
+            seconds = estimate(ctx.store.conn, p)
         except Exception as e:  # its text can carry stored data: the class only
             log("selfies_manual_render_refused", level=logging.WARNING, reason="plan_failed",
                 error=type(e).__name__)
@@ -370,16 +461,27 @@ class ManualRender:
                     "message": f"The render could not be planned ({type(e).__name__}). Nothing started."}
         if p.total == 0:
             self.invalidate()
-            log("selfies_manual_render_refused", reason="nothing")
-            return {"ok": False, "error": "nothing", "message": NOTHING, "render": self.snapshot()}
-        self._stopping, self._calls = None, 0
+            return self._refused(("nothing", self._nothing(p.refused)))
+        found = self.late_problem(seconds)
+        if found is not None:
+            return self._refused(found)
+        # The presence leases go here, not in the run: a post that lands before its first step
+        # keeps its lease, and that step finds it (_fence). Neither release suspends.
+        await self._release_presence()
+        self._stopping, self._calls, self._recorded = None, 0, False
+        self._run_ctx, self._began = ctx, time.monotonic()
         self._progress = {"done": 0, "total": p.total, "started": ctx.clock.now(),
                           "phase": "sets" if p.first + p.more else "snaps",
-                          "estimate_s": estimate(ctx.store.conn, p)[0], **p.kinds()}
+                          "estimate_s": seconds, **p.kinds()}
+        self._tallies = ()
         self._task = asyncio.create_task(self._run(ctx, p), name="selfies-manual")
         self._task.add_done_callback(self._finished)
         log("selfies_manual_render_started", total=p.total, kinds=p.kinds())
         return {"ok": True, "render": self.snapshot()}
+
+    def _refused(self, found: tuple[str, str]) -> dict:
+        log("selfies_manual_render_refused", reason=found[0])
+        return {"ok": False, "error": found[0], "message": found[1], "render": self.snapshot()}
 
     async def stop_now(self) -> dict:
         """His Stop: the run is told to stop and its worker tree ends; answered once it has, or
@@ -415,7 +517,7 @@ class ManualRender:
         """The arbiter's preempt: the night's (and the booth's) first, then this run's."""
         if self._prior is not None:
             await self._prior()
-        await self.cancel(_reason(self.app.arbiter.holders, self.app.arbiter))
+        await self.cancel(self._reason(self.app.arbiter.holders))
 
     async def close(self) -> None:
         """The app's shutdown drain: the run ends with its worker tree, and the lease tick."""
@@ -435,18 +537,21 @@ class ManualRender:
             self._progress["total"] = max(self._progress["total"], done)
 
     def _counting(self, worker):
+        """Count the images that came back (an estimate's seconds an image), not the attempts
+        a failure ended."""
         original = worker.render
 
         async def counted(*args, **kwargs):
+            got = await original(*args, **kwargs)
             self._calls += 1
-            return await original(*args, **kwargs)
+            return got
         worker.render = counted
         return worker
 
     async def _release_presence(self) -> None:
         """The server and Discord presence leases go, as Free GPU lets them go: the server's
-        stays released while the run runs (ServerLease.tick); his next Discord post takes the
-        Discord one again, and that preempts the run."""
+        stays released while the run runs (ServerLease.tick); a Discord lease taken again (his
+        next post, an answer owed to him) preempts the run."""
         server = getattr(self.app, "server", None)
         if server is not None:
             await server.lease._release("selfie_render")
@@ -455,17 +560,16 @@ class ManualRender:
             await discord._release()
 
     async def _run(self, ctx, p: Plan) -> str:
-        began, started = time.monotonic(), ctx.clock.now()
-        sets, snaps = _Tally(self._moved), _Tally(self._moved)
-        self._tallies = (sets, snaps)
+        began, started = self._began, ctx.clock.now()
+        sets, snaps, published = _Tally(self._moved), _Tally(self._moved), _Tally(self._moved)
+        self._tallies = (sets, snaps, published)
         outcome, by = "failed", None
         arbiter = self.app.arbiter
         try:
             try:
-                if (by := self._fence()) is not None:  # arrived after the request
+                if (by := self._fence()) is not None:  # arrived after the click
                     outcome = "preempted"
                     return outcome
-                await self._release_presence()
                 await arbiter.make_room()
                 if p.first + p.more:
                     w = self._counting(self.worker())
@@ -487,19 +591,23 @@ class ManualRender:
                     finally:
                         await to_the_end(w.stop())
                     if pending:  # [selfies] critic: best-of-N, the worker's VRAM free now
-                        await snapstage._publish(ctx, self.cfg, pending)
+                        # Measured photos are not rendered ones until published: their
+                        # outcomes replace the measurement in the record.
+                        snaps["measured"] -= len(pending)
+                        published.update(await snapstage._publish(ctx, self.cfg, pending))
+                        self._moved()
                 # Failed: the worker never came up, or every unit broke. A set the NSFW gate
                 # refused, or a photo that expired or waits, is a run that did its work.
-                landed = (sets["ready"] + sets["refused"] + sets["skipped"] + snaps["ready"]
-                          + snaps["measured"] + snaps["expired"] + snaps["held"])
+                landed = sum(t[k] for t in (sets, snaps, published)
+                             for k in ("ready", "refused", "skipped", "expired", "held"))
                 outcome = "failed" if ctx.failures and not landed else "done"
                 # Normal completion only: a chat model loaded beside the worker loads whole
                 # again; a lease taken meanwhile owns the next cold preload.
                 with suppress(LiveLeaseHeld):
                     await arbiter.make_room()
             except (LiveLeaseHeld, GpuPaused) as e:  # a lease, or the owner's GPU pause
-                outcome, by = "preempted", self._stopping or _reason(
-                    getattr(e, "holders", frozenset()), arbiter)
+                outcome, by = "preempted", self._stopping or self._reason(
+                    getattr(e, "holders", frozenset()))
         except asyncio.CancelledError:
             outcome = "stopped" if self._stopping == "owner" else "preempted"
             by = self._stopping or "lease"
@@ -507,23 +615,24 @@ class ManualRender:
         except Exception as e:
             log("selfies_manual_render_failed", level=logging.WARNING, error=type(e).__name__)
         finally:
-            self._record(ctx, started, began, outcome, by, sets, snaps)
+            self._record(ctx, started, began, outcome, by, sets, snaps, published)
         return outcome
 
-    def _record(self, ctx, started, began, outcome, by, sets, snaps) -> None:
+    def _record(self, ctx, started, began, outcome, by, sets, snaps, published) -> None:
+        self._recorded = True
         seconds = round(time.monotonic() - began, 3)
-        failed = sets["refused"] + sets["failed"] + snaps["failed"]
-        held = sets["skipped"] + snaps["held"]
+        failed = sets["refused"] + sets["failed"] + snaps["failed"] + published["failed"]
+        held = sets["skipped"] + snaps["held"] + published["held"]
         progress = self._progress or {}
         rec = {"day": ctx.night.removeprefix("manual:"), "started": started,
                "finished": ctx.clock.now(), "outcome": outcome, "by": by,
-               "total": progress.get("total", 0), "done": _units(sets, snaps),
-               "sets": sets["ready"], "snaps": snaps["ready"] + snaps["measured"],
+               "total": progress.get("total", 0), "done": _units(sets, snaps, published),
+               "sets": sets["ready"], "snaps": snaps["ready"] + published["ready"],
                "refused": sets["refused"], "failed": failed, "held": held,
-               "expired": snaps["expired"], "seconds": seconds}
+               "expired": snaps["expired"] + published["expired"], "seconds": seconds}
         try:
             with ctx.store.transaction():
-                # Calls are actual render attempts, so the next estimate reads seconds an image.
+                # Calls are images that came back, so the next estimate reads seconds an image.
                 ctx.store.conn.execute(
                     "INSERT INTO night_stage(night,stage,started,finished,calls,call_s) "
                     "VALUES(?,?,?,?,?,?) ON CONFLICT(night,stage) DO UPDATE SET "
@@ -539,6 +648,14 @@ class ManualRender:
 
     def _finished(self, task: asyncio.Task) -> None:
         self.invalidate()
+        if not self._recorded and self._run_ctx is not None:
+            # Cancelled before its first step (a lease, the pause or his Stop in the same loop
+            # pass as the click): the coroutine never ran, so its record is made here.
+            empty = Counter()
+            self._record(self._run_ctx, (self._progress or {}).get("started",
+                         self._run_ctx.clock.now()), self._began,
+                         "stopped" if self._stopping == "owner" else "preempted",
+                         self._stopping or "lease", empty, empty, empty)
         if not task.cancelled() and (error := task.exception()) is not None:
             log("selfies_manual_render_failed", level=logging.WARNING, error=type(error).__name__)
         if self._stopping == "shutdown" or getattr(self.app, "stopping", False):
@@ -558,15 +675,3 @@ class ManualRender:
             await server.lease.tick(self.app.clock.now())
         except Exception as e:
             log("selfies_manual_lease_failed", level=logging.WARNING, error=type(e).__name__)
-
-
-def _reason(holders, arbiter=None) -> str:
-    """The `by` code of what stopped a run: the GPU pause, his login, his Discord post, an
-    offline raid, the voice service, else another lease."""
-    if (arbiter is not None and getattr(arbiter, "paused", False)) or "gpu_pause" in holders:
-        return "gpu_pause"
-    for holder, code in (("human", "login"), ("discord", "discord"),
-                         ("offline_raid", "offline_raid"), ("voice_gpu", "voice")):
-        if holder in holders:
-            return code
-    return "lease"

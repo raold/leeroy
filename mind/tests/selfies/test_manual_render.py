@@ -16,7 +16,7 @@ from leeroy_mind.selfies import manual as manual_mod
 from leeroy_mind.selfies.booth import STAGE as BOOTH_STAGE
 from leeroy_mind.selfies.cli import _status
 from leeroy_mind.selfies.files import staging_dir, sync_chosen
-from leeroy_mind.selfies.job import pid_alive
+from leeroy_mind.selfies.job import WorkerError, pid_alive
 from leeroy_mind.selfies.kind import _record
 from leeroy_mind.selfies.manual import LAST, SNAPS_STAGE, STAGE, night_key
 from leeroy_mind.selfies.scene import scene_from, scene_json
@@ -111,7 +111,7 @@ def test_renders_first_then_more_then_snaps_under_its_own_receipts(app, caplog):
         before = app.selfie_manual.snapshot()["backlog"]
         assert {k: before[k] for k in ("first", "more", "snaps", "total", "images")} == \
             {"first": 1, "more": 1, "snaps": 1, "total": 3, "images": 9}
-        reply = app.selfie_manual.request()
+        reply = await app.selfie_manual.request()
         assert reply["ok"] and reply["render"]["running"]
         assert reply["render"]["progress"]["total"] == 3
         assert await app.selfie_manual._task == "done"
@@ -164,7 +164,7 @@ def test_receipts_never_touch_the_night_or_the_booth(tmp_path):
         queue_more(app.store, 102, now=now)
 
         async def go():
-            assert app.selfie_manual.request()["ok"]  # no ten-minute wait, no request age
+            assert (await app.selfie_manual.request())["ok"]  # no ten-minute wait, no request age
             await finish(app)
             assert ready_set(app.store, 101, 1) and ready_set(app.store, 102, 2)
             real = night_status(app.store, today)
@@ -195,7 +195,7 @@ def test_held_sets_stay_queued_without_a_receipt(app):
     async def go():
         backlog = app.selfie_manual.snapshot()["backlog"]
         assert (backlog["held"], backlog["first"], backlog["more"]) == (1, 1, 1)  # 103 first
-        assert app.selfie_manual.request()["ok"]
+        assert (await app.selfie_manual.request())["ok"]
         await finish(app)
     run(go())
     assert ready_set(app.store, 102, 2) and ready_set(app.store, 103, 1)
@@ -216,7 +216,7 @@ def test_snaps_off_leaves_planned_photos_to_the_night(tmp_path):
 
         async def go():
             assert app.selfie_manual.snapshot()["backlog"]["snaps"] == 0
-            assert app.selfie_manual.request()["ok"]  # 101 and 102 still need first sets
+            assert (await app.selfie_manual.request())["ok"]  # 101 and 102 still need first sets
             await finish(app)
         run(go())
         assert snap_row(app, sid).status == "planned"
@@ -252,7 +252,7 @@ def test_refusals_in_words(app, case, code):
             for guid in (101, 102, 103):
                 chosen_photo(app, guid)
         if case == "answering":
-            m._answering = lambda: True
+            m._answering = lambda within: True
         if case == "request":
             app.arbiter.hold("selfie_request:7")
         reply = await m.action("render")
@@ -272,9 +272,10 @@ def test_booth_running_refuses_and_the_booth_waits_for_a_run(tmp_path):
         app.arbiter.admin = FakeAdmin([])
         finished_night(app)
         known_offline(app)
-        gate = asyncio.Event()
+        gate, rendering = asyncio.Event(), asyncio.Event()
 
         async def hold(req):
+            rendering.set()
             await gate.wait()
         app.selfie_manual.worker = lambda: MemoryWorker(on_render=hold)
 
@@ -283,8 +284,8 @@ def test_booth_running_refuses_and_the_booth_waits_for_a_run(tmp_path):
             app.selfie_booth._task = asyncio.get_running_loop().create_future()
             assert (await app.selfie_manual.action("render"))["error"] == "booth"
             app.selfie_booth._task = None
-            assert app.selfie_manual.request()["ok"]
-            await until(lambda: app.selfie_manual._calls > 0)
+            assert (await app.selfie_manual.request())["ok"]
+            await rendering.wait()
             assert "Render selfies" in app.selfie_booth.problem()
             assert not app.selfie_booth._eligible()
             gate.set()
@@ -307,7 +308,7 @@ def test_no_night_falls_due_while_a_run_renders(app):
         app.store.conn.commit()
         await app.clock.advance(3600, step=3600)
         assert app.night_scheduler.due() is not None
-        assert app.selfie_manual.request()["ok"]
+        assert (await app.selfie_manual.request())["ok"]
         assert app.night_scheduler.due() is None
         await app.night_scheduler.tick()
         assert app.night_scheduler._task is None
@@ -384,13 +385,45 @@ def test_failed_renders_are_skipped_for_the_day_and_counted(app):
     app.selfie_manual.worker = lambda: w
 
     async def go():
-        assert app.selfie_manual.request()["ok"]
+        assert (await app.selfie_manual.request())["ok"]
         await finish(app)
         rec = json.loads(app.store.get_meta(LAST))
         assert (rec["outcome"], rec["refused"], rec["failed"]) == ("done", 1, 1)
         assert len(w.requests) == 3 and not ready_set(app.store, 101, 1)
         # The same seeds would be refused again today: the night tries it under its own key.
-        assert (await app.selfie_manual.action("render"))["error"] == "nothing"
+        reply = await app.selfie_manual.action("render")
+        assert reply["error"] == "nothing"
+        assert "1 set the photo check refused today" in reply["message"]
+        app.selfie_manual.invalidate()
+        assert app.selfie_manual.snapshot()["backlog"]["refused"] == 1
+    run(go())
+
+
+class Broken(MemoryWorker):
+    """A worker whose renders end in a worker error (a timeout), never a refusal."""
+    async def render(self, req, *, rid=None):
+        self.requests.append(req)
+        raise WorkerError("timeout")
+
+
+def test_a_worker_error_is_not_skipped_for_the_day(app):
+    chosen_photo(app, 102)
+    chosen_photo(app, 103)
+    app.selfie_manual.worker = Broken
+
+    async def go():
+        assert (await app.selfie_manual.request())["ok"]
+        await finish(app)
+        rec = json.loads(app.store.get_meta(LAST))
+        assert (rec["outcome"], rec["refused"], rec["failed"], rec["sets"]) == ("failed", 0, 1, 0)
+        assert not app.store.conn.execute("SELECT 1 FROM night_step WHERE stage=? AND unit='101:1'",
+                                          (STAGE,)).fetchone()
+        # Calls count images that came back: a failing pass measures no time an image.
+        assert manual_mod.per_image_s(app.store.conn) is None
+        app.selfie_manual.worker = MemoryWorker
+        assert (await app.selfie_manual.request())["ok"]  # offered again the same day
+        await finish(app)
+        assert ready_set(app.store, 101, 1)
     run(go())
 
 
@@ -398,11 +431,17 @@ def test_estimate_reads_measured_passes(app):
     conn = app.store.conn
     assert manual_mod.per_image_s(conn) is None
     p = manual_mod.Plan(first=1, more=1, images=8)
-    assert manual_mod.estimate(conn, p) == (round(manual_mod.START_S + 8 * manual_mod.IMAGE_S), False)
+    assert manual_mod.estimate(conn, p) is None  # no estimate yet, never 0
     conn.execute("INSERT INTO night_stage(night,stage,started,finished,calls,call_s) "
                  "VALUES('booth:2026-10-28',?,0,100,10,200)", (BOOTH_STAGE,))
     conn.commit()
-    assert manual_mod.per_image_s(conn) == 20 and manual_mod.estimate(conn, p) == (160, True)
+    assert manual_mod.per_image_s(conn) == 20 and manual_mod.estimate(conn, p) == 160
+    # A pass whose renders failed fast measures nothing.
+    conn.execute("INSERT INTO night_stage(night,stage,started,finished,calls,call_s) "
+                 "VALUES('manual:2026-10-29',?,0,200,10,0.5)", (STAGE,))
+    conn.commit()
+    assert manual_mod.per_image_s(conn) == 20
+    assert manual_mod.estimate(conn, manual_mod.Plan()) is None  # nothing to render
 
 
 # -- preemption: every live lease, the tree gone before the preload --------------------------------
@@ -429,7 +468,7 @@ def test_every_live_lease_preempts_and_the_tree_ends_before_the_preload(app, tmp
     app.arbiter.admin = Admin([app.cfg.models.embedding])
 
     async def go():
-        assert app.selfie_manual.request()["ok"]
+        assert (await app.selfie_manual.request())["ok"]
         await until(requests.exists)
         if lease == "human":
             await app.night_scheduler.on_event(Login(ts=app.clock.now(), guid=OWNER, human=True))
@@ -453,7 +492,7 @@ def test_every_live_lease_preempts_and_the_tree_ends_before_the_preload(app, tmp
 
 def test_a_lease_arriving_after_the_request_never_starts_the_worker(app):
     async def go():
-        assert app.selfie_manual.request()["ok"]
+        assert (await app.selfie_manual.request())["ok"]
         app.arbiter.hold("voice_gpu")
         await finish(app)
         rec = json.loads(app.store.get_meta(LAST))
@@ -478,7 +517,7 @@ def test_presence_leases_are_released_and_free_gpu_stops_the_run(app, tmp_path):
         app.discord_talk._take_lease()
         await app.discord_talk.handback()
         assert app.arbiter.holders == {"discord"}
-        assert app.selfie_manual.request()["ok"]
+        assert (await app.selfie_manual.request())["ok"]
         await until(requests.exists)
         assert not app.arbiter.holders  # Discord's presence lease was let go for the run
         reply = await app.gpu.action({"action": "pause"})
@@ -500,7 +539,7 @@ def test_photo_request_borrow_is_busy_while_a_run_renders(app):
     enable_borrow(app)
 
     async def go():
-        assert app.selfie_manual.request()["ok"]
+        assert (await app.selfie_manual.request())["ok"]
         assert app.arbiter.borrow_busy()
         gate.set()
         await finish(app)
@@ -515,9 +554,10 @@ def test_server_lease_is_let_go_for_the_run_and_taken_back_after(tmp_path):
         app.clock._t = datetime(2026, 11, 13, 12, tzinfo=timezone.utc).timestamp()
         app.arbiter.admin = FakeAdmin([app.cfg.models.live, app.cfg.models.embedding])
         known_offline(app)
-        gate = asyncio.Event()
+        gate, rendering = asyncio.Event(), asyncio.Event()
 
         async def hold(req):
+            rendering.set()
             await gate.wait()
         app.selfie_manual.worker = lambda: MemoryWorker(on_render=hold)
 
@@ -526,8 +566,8 @@ def test_server_lease_is_let_go_for_the_run_and_taken_back_after(tmp_path):
             await lease.tick(app.clock.now())
             await lease.handback()
             assert app.arbiter.holders == {"server"}
-            assert app.selfie_manual.request()["ok"]
-            await until(lambda: app.selfie_manual._calls > 0)
+            assert (await app.selfie_manual.request())["ok"]
+            await rendering.wait()
             assert not lease.held and not app.arbiter.holders
             assert ("unload", app.cfg.models.live) in app.arbiter.admin.calls
             await lease.tick(app.clock.now())  # its own tick while the run renders
@@ -560,4 +600,166 @@ def test_server_lease_stays_released_while_a_run_renders():
         app.selfie_manual.running = True
         await lease.tick(app.clock.now())
         assert not lease.held and not app.arbiter.holders
+    run(go())
+
+
+# -- fix round 1: admission, attribution, owed answers, the night's window -------------------------
+
+@pytest.mark.parametrize("reason,by", [("post", "discord"), ("answer", "discord_answer"),
+                                       ("group", "discord_group")])
+def test_a_discord_lease_taken_between_the_click_and_the_first_step_stops_the_run(app, reason, by):
+    """Admission lets go of the presence leases; a lease taken after it (his post, an owed
+    answer's rescue, a group DM tick) is kept and stops the run, never dropped by it."""
+    seen = []
+    app.selfie_manual.worker = lambda: Order(seen, "set")
+
+    async def go():
+        app.discord_talk.take_lease("post")  # an earlier post: its lease is let go at admission
+        await app.discord_talk.handback()
+        assert (await app.selfie_manual.request())["ok"]
+        assert not app.arbiter.holders
+        app.discord_talk.take_lease(reason)  # the same loop pass as the click
+        await finish(app)
+        await app.discord_talk.handback()
+        rec = json.loads(app.store.get_meta(LAST))
+        assert (rec["outcome"], rec["by"], rec["done"]) == ("preempted", by, 0)
+        assert app.arbiter.holders == {"discord"} and app.discord_talk._held
+        assert not seen  # the worker never started
+        assert app.arbiter.admin.calls[-1][:2] == ("preload", app.cfg.models.live)
+        await app.discord_talk.close()
+    run(go())
+
+
+def test_a_cancel_before_the_first_step_leaves_a_record_and_a_log_line(app, caplog):
+    async def go():
+        assert (await app.selfie_manual.request())["ok"]
+        app.selfie_manual.stop("owner")  # before the task's first step
+        await finish(app)
+        rec = json.loads(app.store.get_meta(LAST))
+        assert (rec["outcome"], rec["by"], rec["done"], rec["total"]) == ("stopped", "owner", 0, 3)
+        assert app.selfie_manual.snapshot()["last"] == rec
+        assert not app.arbiter.admin.calls
+    with caplog.at_level(logging.INFO, logger="leeroy_mind"):
+        run(go())
+    assert any(getattr(r, "leeroy_event", "") == "selfies_manual_render_done" for r in caplog.records)
+
+
+def test_answers_owed_on_discord_within_the_run_hold_a_start(app):
+    asked = []
+
+    def due(within):
+        asked.append(within)
+        return 1
+    app.discord_talk.answers_due = due
+
+    async def go():
+        reply = await app.selfie_manual.request()
+        assert reply["error"] == "answering" and "owe you answers" in reply["message"]
+        assert manual_mod.ANSWER_HORIZON_S in asked  # no estimate yet: the horizon
+        app.selfie_manual.invalidate()
+        assert app.selfie_manual.snapshot()["code"] == "answering"
+        app.discord_talk.answers_due = lambda within: 0
+        assert (await app.selfie_manual.request())["ok"]
+        await finish(app)
+    run(go())
+
+
+def test_deferred_dm_and_group_dm_answers_count_by_when_they_fall_due(app):
+    from types import SimpleNamespace
+    from leeroy_mind.groups.service import Groups
+    talk = app.discord_talk
+    app.groups = None
+    talk.own_time = lambda: True
+    talk._owed = lambda: [(101, 7, app.clock.now() - 60), (102, 8, app.clock.now() - 60)]
+    talk._due_of = lambda guid, mid, ts: app.clock.now() + (100 if guid == 101 else 5000)
+    assert talk.answers_due(600) == 1 and talk.answers_due(6000) == 2
+    talk.own_time = lambda: False  # with the switch off they go at once
+    assert talk.answers_due(0) == 2
+    groups = Groups.__new__(Groups)
+    groups.app, groups.config = app, SimpleNamespace(enabled=True)
+    with app.store.transaction():
+        app.store.set_meta("groups:owed:41", json.dumps({
+            "101": {"due": app.clock.now() + 50, "urgent": False},
+            "102": {"due": app.clock.now() + 9000, "urgent": False},
+            "103": {"due": app.clock.now() + 9000, "urgent": True}}))
+    assert groups.answers_due(app.clock.now() + 600) == 2
+    app.groups = groups
+    assert talk.answers_due(0) == 3  # two DMs at once, and the urgent group answer
+    groups.config = SimpleNamespace(enabled=False)
+    assert groups.answers_due(app.clock.now() + 600) == 0
+
+
+def window_app(tmp_path, hour, minute=0):
+    from datetime import datetime, timezone
+    app = mind_app(tmp_path, toml=ON + "[server]\nenabled=true\n")
+    app.clock._t = datetime(2026, 10, 30, hour, minute, tzinfo=timezone.utc).timestamp()
+    app.arbiter.admin = FakeAdmin([app.cfg.models.embedding])
+    known_offline(app)
+    app.selfie_manual.worker = app.selfie_manual.snap_worker = MemoryWorker
+    # 60 s an image from an earlier booth pass: three first sets are about 12 minutes
+    app.store.conn.execute("INSERT INTO night_stage(night,stage,started,finished,calls,call_s) "
+                           "VALUES('booth:2026-10-29',?,0,100,10,600)", (BOOTH_STAGE,))
+    app.store.conn.commit()
+    return app
+
+
+@pytest.mark.parametrize("minute,refused", [(50, True), (40, False)])
+def test_a_run_longer_than_the_time_before_the_nights_window_is_refused(tmp_path, minute, refused):
+    app = window_app(tmp_path, 2, minute)
+    try:
+        async def go():
+            reply = await app.selfie_manual.request()
+            if refused:
+                assert reply["error"] == "night_window"
+                assert "about 12 minutes, longer than the 10 minutes left" in reply["message"]
+                assert "opens at 03:00" in reply["message"]
+            else:
+                assert reply["ok"]
+                await finish(app)
+        run(go())
+    finally:
+        app.store.close()
+
+
+def test_inside_the_window_no_run_starts_before_tonights_night_has_finished(tmp_path):
+    from leeroy_mind.nightly.scheduler import tonight
+    app = window_app(tmp_path, 4)
+    try:
+        async def go():
+            reply = await app.selfie_manual.request()
+            assert reply["error"] == "night_window" and "window is open (03:00-08:00)" in reply["message"]
+            night = tonight(app.clock.local(), app.night_scheduler.settings)
+            now = app.clock.now()
+            run_begin(app.store, night, now - 3600, now, now=now)
+            run_finish(app.store, night, now=now, status="done")
+            assert (await app.selfie_manual.request())["ok"]
+            await finish(app)
+        run(go())
+    finally:
+        app.store.close()
+
+
+def test_measured_photos_count_only_once_published(app, monkeypatch):
+    """[selfies] critic: a measured photo is not a rendered one until _publish says so."""
+    from collections import Counter
+    from leeroy_mind.selfies import snapstage
+    for guid in (101, 102, 103):
+        chosen_photo(app, guid)
+    situation(app, 102)
+    situation(app, 103)
+
+    async def measured(ctx, cfg, worker, rows, tally=None):
+        tally["measured"] += len(rows)
+        return list(rows)
+
+    async def publish(ctx, cfg, pending):
+        return Counter(ready=1, held=1)
+    monkeypatch.setattr(snapstage, "_render", measured)
+    monkeypatch.setattr(snapstage, "_publish", publish)
+
+    async def go():
+        assert (await app.selfie_manual.request())["ok"]
+        await finish(app)
+        rec = json.loads(app.store.get_meta(LAST))
+        assert (rec["outcome"], rec["snaps"], rec["held"], rec["done"]) == ("done", 1, 1, 2)
     run(go())

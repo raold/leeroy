@@ -42,7 +42,7 @@ def test_render_bar_refuses_in_game_then_confirms_renders_and_stops_on_every_tab
             dialog = r.page.locator('#render-confirm')
             await expect(dialog).to_be_visible()
             await expect(dialog).to_contain_text('Renders 7 now: 7 first sets.')
-            await expect(dialog).to_contain_text('Rough time: about')
+            await expect(dialog).to_contain_text('Rough time: no estimate yet')  # nothing timed in the rehearsal
             await expect(dialog).to_contain_text('log into WoW or post in Discord')
             await r.page.screenshot(path=str(tmp_path / f'render-confirm-{theme}-390.png'))
             await r.page.keyboard.press('Escape')
