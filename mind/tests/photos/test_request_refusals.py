@@ -1,5 +1,6 @@
 """A paused GPU or a still-failed reload refuses a request's render; it never fails the request."""
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import pytest
 
@@ -38,14 +39,18 @@ def test_paused_scene_choice_keeps_the_plan_and_sends_a_ready_photo(tmp_path):
 
 
 @pytest.mark.parametrize('error', [GpuPaused('The GPU is paused.'), LiveReloadFailed('live_reload_failed')])
-def test_borrow_refused_at_admission_keeps_the_plan_and_sends_a_ready_photo(tmp_path, monkeypatch, error):
+@pytest.mark.parametrize('backend', ['realvisxl', 'flux1-dev'])
+def test_borrow_refused_at_admission_keeps_the_plan_and_sends_a_ready_photo(
+        tmp_path, monkeypatch, error, backend):
     async def scenario():
         app = make_app(tmp_path)
+        app.selfies.cfg = replace(app.selfies.cfg, backend=backend)
         try:
             await offline(app)
             made = workers(app)
             @asynccontextmanager
-            async def refused(holder, *, on_admitted=None):
+            async def refused(holder, *, on_admitted=None, work_timeout=None):
+                assert work_timeout == (600.0 if backend == 'flux1-dev' else None)
                 raise error
                 yield
             monkeypatch.setattr(app.arbiter, 'borrow', refused)

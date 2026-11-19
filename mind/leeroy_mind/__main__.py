@@ -322,12 +322,14 @@ def _doctor_voice_specs(root: Path, personas) -> tuple[bool | None, str]:
 _QUICK_MARKS = {"ok": True, "FAIL": False, "note": None}
 
 
-def _quick_doctor(python: Path, data: Path) -> list[tuple[bool | None, str]]:
+def _quick_doctor(python: Path, data: Path, *, backend: str = "realvisxl") -> list[tuple[bool | None, str]]:
     """The worker venv's own `doctor --quick` (no torch, no hashing), relayed line by line."""
     import subprocess
     try:
         done = subprocess.run([str(python), "-I", "-m", "leeroy_selfie", "doctor", "--quick",
-                               "--data", str(data)], capture_output=True, text=True,
+                               "--data", str(data),
+                               *(["--backend", backend] if backend != "realvisxl" else [])],
+                              capture_output=True, text=True,
                               timeout=30, stdin=subprocess.DEVNULL,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError) as e:
@@ -357,10 +359,21 @@ def _doctor_selfies(root: Path) -> list[tuple[bool | None, str]]:
     if not python.is_file():
         return [(False, f"selfies: no worker venv at {python} (see selfie/README.md)")]
     lines = []
-    for ok, text in _quick_doctor(python, worker_data(cfg)):
-        if text.startswith("ipadapter: not fetched"):  # only the identity worker needs it
-            ok = False if cfg.snaps else None
-            text = "identity adapter not fetched (fetch-models --only ipadapter)"
+    backend = {"backend": cfg.backend} if cfg.backend != "realvisxl" else {}
+    for ok, text in _quick_doctor(python, worker_data(cfg), **backend):
+        if text.startswith("ipadapter: not fetched"):
+            if cfg.backend == "flux1-dev":
+                ok = False if cfg.critic or cfg.variety else None
+                text = "critic/variety encoder not fetched (fetch-models --only ipadapter)"
+            else:
+                ok = False if cfg.snaps else None
+                text = "identity adapter not fetched (fetch-models --only ipadapter)"
+        if cfg.backend == "flux1-dev" and ": not fetched" in text:
+            name = text.partition(":")[0]
+            if name in ("flux1-dev", "nsfw"):
+                ok = False
+            elif name in ("flux-ipadapter", "flux-clip"):
+                ok = False if cfg.snaps or cfg.identity_sets else None
         lines.append((ok, f"selfies: {text}"))
     return lines
 
