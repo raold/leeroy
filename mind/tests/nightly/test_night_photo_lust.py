@@ -377,11 +377,11 @@ def test_swimwear_goes_only_framed_upper_body_and_never_as_a_headshot(h, kind_, 
 
 
 @pytest.mark.parametrize("kind_,framing,stored", [
-    ("selfie", "three_quarter", "upper_body"), ("selfie", "upper_body", "upper_body"),
+    ("selfie", "three_quarter", "three_quarter"), ("selfie", "upper_body", "upper_body"),
     ("snapshot", "three_quarter", "three_quarter"), ("headshot", "three_quarter", "three_quarter")])
-def test_a_lust_selfie_is_framed_waist_up(h, kind_, framing, stored):
-    """Review of #362, round 2: an arm's-length selfie is waist-up (safe.selfie_framing); the
-    other kinds keep the share's framing."""
+def test_a_lust_selfie_keeps_the_framing_it_was_given(h, kind_, framing, stored):
+    """Every lust kind keeps the framing it was given, a selfie too (the owner lifted the
+    selfie's waist-up rule, 2026-11-19)."""
     lust(h, 102)
     night(h, 0, lusty=[{**LUST_REPLY, "kind": kind_, "framing": framing}])
     assert photo(h, 102) == replace(LUST_PHOTO, kind=kind_, framing=stored)

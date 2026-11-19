@@ -380,5 +380,3 @@ def test_the_variety_kind_pass_picks_inside_her_tier(tier):
         assert photos.picks_ok(dict(outfit=photos.choice_of(pick.photo.outfit),
                                     setting=pick.photo.setting), tier), (tier, pick.photo)
         assert pick.photo.kind != "mirror_selfie"
-        if pick.photo.kind == "selfie":
-            assert pick.photo.framing == "upper_body"

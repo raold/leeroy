@@ -275,18 +275,16 @@ def settle_framing(framing: str, share: float, seed, *, wide=BODY_FRAMINGS,
 
 def lust_framing(wide: int, close: int, share: float, kind: str = "snapshot") -> str:
     """A lust profile kind's framing that keeps the cast nearest `share` three-quarter, given
-    how many are three-quarter (`wide`) and waist-up (`close`) already. A selfie is always
-    waist-up (selfie_framing)."""
-    if kind in SELFIE_KINDS:
-        return "upper_body"
+    how many are three-quarter (`wide`) and waist-up (`close`) already. A selfie follows the
+    share like any other kind (owner, 2026-11-19); it still takes no pose (pose)."""
     return "three_quarter" if wide < share * (wide + close + 1) or share >= 1 else "upper_body"
 
 
 def selfie_framing(kind: str, framing: str) -> str:
-    """The framing a lust profile kind of `kind` takes: a selfie waist-up, never wider (the
-    audit's worst cell was the three-quarter mirror selfie, 38% defective, and an arm's-length
-    shot does not reach mid-thigh); any other kind keeps `framing`."""
-    return "upper_body" if kind in SELFIE_KINDS and framing in BODY_FRAMINGS else framing
+    """The framing a lust profile kind of `kind` takes: the one it was given, a selfie too.
+    The owner lifted the waist-up rule for lust selfies on 2026-11-19 (the audit had found the
+    three-quarter mirror selfie its worst cell, 38% defective); a selfie still takes no pose."""
+    return framing
 
 
 def body_slots(share: float, n: int = 4) -> int:

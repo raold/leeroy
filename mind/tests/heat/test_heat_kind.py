@@ -61,11 +61,12 @@ def test_with_heat_off_the_tier_table_imports_and_the_pass_runs_as_main(h):  # n
 
 
 @pytest.mark.parametrize("tier", (P0, P1, P2, P3, P4, None))
-def test_a_lust_selfie_is_waist_up_at_every_tier(h, tier):  # noqa: F811
-    """Main's rules run before heat's check: a selfie is framed waist-up whatever the reply says
-    (safe.selfie_framing), and heat only refuses a pick above the tier, never re-frames."""
+def test_a_lust_selfie_keeps_its_framing_at_every_tier(h, tier):  # noqa: F811
+    """Main's rules run before heat's check: a selfie keeps the framing the reply chose (the
+    owner lifted its waist-up rule, 2026-11-19), and heat only refuses a pick above the tier,
+    never re-frames."""
     reply = {**LUST_REPLY, "framing": "three_quarter", "outfit": "satin midi dress",
              "setting": "a cafe terrace"}
     _pass(h, reply, tier)
     got = photo(h, 102)
-    assert got is not None and got.kind == "selfie" and got.framing == "upper_body"
+    assert got is not None and got.kind == "selfie" and got.framing == "three_quarter"

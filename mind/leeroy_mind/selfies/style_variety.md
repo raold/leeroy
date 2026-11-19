@@ -600,8 +600,9 @@ against the new) before trusting it.
 **`[selfies] body_shot_share`** (0-1, default 1.0; read at the mind's start): the share of a
 varied set's four candidates that show her figure (below 1.0 the views from behind keep theirs
 first, then the front, then the side; the rest are waist-up) and of the lust profile kinds that
-are three-quarter (else waist-up); a lust selfie kind is waist-up whatever the share (a dry run of
-the balancer over the live lust cast at 1.0: 60 selfies waist-up, 32 snapshots three-quarter). 1.0, four body views, is the owner's ask (#307) and what the
+are three-quarter (else waist-up); since 2026-11-19 (owner) a lust selfie follows the share like
+any other kind (the waist-up rule that the audit's 38%-defective three-quarter mirror selfie
+prompted is lifted; a selfie still takes no pose). 1.0, four body views, is the owner's ask (#307) and what the
 labels support: waist-up was no safer than three-quarter (12% against 11%). Front and side
 candidates are three-quarter rather than full-length (planned three-quarter 6% defective,
 full-length 12%).
