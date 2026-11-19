@@ -29,7 +29,8 @@ _OBJECT = re.compile(
     r"|did (?:you|u) even (?:read|listen|look|see)|(?:why are (?:you|u)|stop|quit) repeating"
     r"|repeating (?:my|the) (?:question|words)|(?:you'?re|you are|ur) not making (?:any )?sense)\b"
     r"|^\W*(?:(?:lol|lmao|uh|um|wait|bro|dude)\W+)?(?:what|wut|wat|huh|wtf)\W*$"
-    r"|\b(?:that'?s|is that) (?:it|all)\s*\?|^\W*e+w+\W*$"
+    r"|\b(?:that'?s|is that) (?:it|all)(?: (?:you|u)(?:'ve| have)?(?: got)?(?: to say| to tell me)?)?\s*\?"
+    r"|^\W*e+w+\W*$"
     r"|^\W*(?:please |pls |ok |okay )?stop(?: it| that| saying\b.*| doing\b.*| asking\b.*)?\W*$", re.I)
 
 
@@ -78,7 +79,7 @@ def read(his, hers):
     # not a curt one off her topic ("that's it?", "really?"). "no" or "k" alone say nothing more.
     if asked and not objected and not echo and (len(words) >= MIN_ASK_WORDS or kept):
         out['asked_back'] = 1.
-    if _LAUGH.search(plain):
+    if _LAUGH.search(plain) and not objected:  # "lol what" is pushback, not a laugh
         out['laughed'] = 1.
     if not objected and (flirty(plain) or WARM_RE.search(plain) or _HEART.search(plain)):
         out['affection'] = 1.

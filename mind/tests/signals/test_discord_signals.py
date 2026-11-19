@@ -79,7 +79,12 @@ def test_his_next_message_is_a_reply_with_normalised_latency_and_length(store, c
     ('those croissants never stood a chance', {'topic_kept'}, {'asked_back', 'topic_changed'}),
     ('what?', {'objected'}, {'asked_back', 'affection'}),
     ("that's it?", {'objected'}, {'asked_back'}),
-    ('lol what', {'objected'}, {'asked_back'}),
+    ('lol what', {'objected'}, {'asked_back', 'laughed'}),
+    ('lmao what', {'objected'}, {'asked_back', 'laughed'}),
+    ('is that all you have to say?', {'objected'}, {'asked_back'}),
+    ("that's all you've got?", {'objected'}, {'asked_back'}),
+    ('is that all u got?', {'objected'}, {'asked_back'}),
+    ('is that all the croissants you baked today?', {'asked_back', 'topic_kept'}, {'objected'}),
     ("wait, that's it? ok", {'objected'}, {'asked_back'}),
     ('huh', {'objected'}, {'asked_back'}),
     ('wtf', {'objected'}, {'asked_back'}),
@@ -294,6 +299,35 @@ def test_his_discord_writes_use_the_minds_own_connection_and_never_the_worker(st
         bare.executor.shutdown(wait=False)
         assert 'react_positive' not in kinds(store, lid)
     asyncio.run(go())
+
+
+def test_his_discord_write_holds_the_lock_before_it_reads(store, clock, monkeypatch):
+    """Re-review 359: a commit from another connection between the unit's reads and its write
+    would refuse the write at once and clear the Discord attribution state."""
+    import sqlite3
+    path = store.conn.execute('PRAGMA database_list').fetchone()[2]
+    other, tried, real = sqlite3.connect(path, timeout=0, isolation_level=None), [], S.available
+
+    def available(conn):
+        found = real(conn)  # the unit's first read
+        if conn is store.conn:  # his Discord writes; the worker thread's own rows are not touched
+            try:
+                other.execute("INSERT INTO meta(key,value) VALUES ('invented:w:%d','1')" % len(tried))
+                tried.append('wrote')
+            except sqlite3.OperationalError:
+                tried.append('waited')
+        return found
+    monkeypatch.setattr(S, 'available', available)
+
+    async def go():
+        async with worker(store, clock) as c:
+            lid = await exchange(c, store, clock, DM, 'haha')
+            assert {'replied', 'laughed'} <= set(kinds(store, lid))
+    try:
+        asyncio.run(go())
+    finally:
+        other.close()
+    assert tried and set(tried) == {'waited'}
 
 
 def test_unaddressed_channel_talk_is_not_waiting_for_him(store, clock):

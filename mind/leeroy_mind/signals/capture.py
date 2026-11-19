@@ -104,6 +104,9 @@ class Capture:
             return {'ok': False, 'error': 'Signal capture lost observations.'}
         try:
             with self.store.transaction():
+                # The lock before the reads: another connection's commit between them and the
+                # write would refuse the write at once and clear the attribution state below.
+                self.store.write_first()
                 if not S.available(self.store.conn):
                     return {'ok': False, 'error': 'Signals are not set up in this database.'}
                 self._expire_discord(item.at)
