@@ -111,11 +111,12 @@ class VoiceNotes:
         if arbiter is not None and not arbiter.holders:
             return False
         # [heat]: below heat 10 (and off a no-limits evening) a line that is itself plainly
-        # explicit is typed, never dropped; the line is judged, not the tier its prompt was at
+        # explicit is typed, never dropped; the line is judged (heat.guard.voice_hit, its own
+        # screen beside the public guard's), not the tier its prompt was at
         hr=getattr(meta,'heat',None)
         if hr is not None and not hr.speaks_explicit:
-            from leeroy_mind.heat.guard import public_hit
-            if public_hit(text,app.data_dir):
+            from leeroy_mind.heat.guard import voice_hit
+            if voice_hit(text,app.data_dir):
                 return False
         # an item: a game link or placeholder, or Discord's [Item Name] (talk.items), stays text
         if not 3<=len(text.split())<=cfg.max_words or not re.search(r'\w',text) or re.search(r'\|[Hh]|\[item|<item|\[[^\]\n]+\]',text,re.I):
