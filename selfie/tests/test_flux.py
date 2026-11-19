@@ -184,8 +184,10 @@ def test_cli_flux_fetch_and_doctor_select_flux_not_sdxl(monkeypatch,capsys):
     seen=[]
     monkeypatch.setattr(models,'fetch_models',lambda data,only,**kw:seen.append((only,kw)) or [])
     assert main(['fetch-models','--backend','flux1-dev','--auth'])==0
-    assert seen==[(set(models.FLUX_BASE_PINS+models.FLUX_IDENTITY_PINS+models.FACE_PINS),
+    assert seen==[(set(models.FLUX_BASE_PINS+models.FLUX_IDENTITY_PINS+models.FACE_PINS
+                      +models.EMBEDDING_PINS),
                    {'authenticated':True})]
     assert main(['doctor','--backend','flux1-dev','--quick'])==0
     output=capsys.readouterr().out
     assert 'flux1-dev' in output and 'realvisxl' not in output
+    assert 'ipadapter: not fetched' in output

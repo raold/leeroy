@@ -338,7 +338,7 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
         room.check()
         chosen = critic.best(verdicts)
         arbiter = getattr(room, "arbiter", None)
-        budget = getattr(arbiter, "borrow_timeout", BORROW_S)
+        budget = getattr(room, "work_timeout", getattr(arbiter, "borrow_timeout", BORROW_S))
         left = budget - (time.monotonic() - getattr(room, "started", time.monotonic()))
         need = (state.get("last_start_ms", 0.0) / 1000 + cfg.best_of * state["slowest"]
                 + JUDGE_ALLOWANCE_S)

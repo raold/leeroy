@@ -361,9 +361,13 @@ def _doctor_selfies(root: Path) -> list[tuple[bool | None, str]]:
     lines = []
     backend = {"backend": cfg.backend} if cfg.backend != "realvisxl" else {}
     for ok, text in _quick_doctor(python, worker_data(cfg), **backend):
-        if text.startswith("ipadapter: not fetched"):  # only the identity worker needs it
-            ok = False if cfg.snaps else None
-            text = "identity adapter not fetched (fetch-models --only ipadapter)"
+        if text.startswith("ipadapter: not fetched"):
+            if cfg.backend == "flux1-dev":
+                ok = False if cfg.critic or cfg.variety else None
+                text = "critic/variety encoder not fetched (fetch-models --only ipadapter)"
+            else:
+                ok = False if cfg.snaps else None
+                text = "identity adapter not fetched (fetch-models --only ipadapter)"
         if cfg.backend == "flux1-dev" and ": not fetched" in text:
             name = text.partition(":")[0]
             if name in ("flux1-dev", "nsfw"):

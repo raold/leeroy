@@ -28,7 +28,7 @@ def cmd_fetch_models(args) -> int:
     only = None if args.only is None else {n.strip() for n in args.only.split(",") if n.strip()}
     if only is None and args.backend != "realvisxl":
         base, identity = models.backend_pins(args.backend)
-        only = set(base + identity + models.FACE_PINS)
+        only = set(base + identity + models.FACE_PINS + models.EMBEDDING_PINS)
     try:
         extra = {"authenticated": True} if args.auth else {}
         lines = models.fetch_models(data_dir(), only, **extra)
@@ -48,7 +48,9 @@ def cmd_doctor(args) -> int:
     base, identity = models.backend_pins(args.backend)
     for name in base:
         lines += models.check(root, name, quick=args.quick)
-    for name in identity + models.FACE_PINS + models.CRITIC_PINS:  # not fetched: a note
+    optional = tuple(dict.fromkeys(identity + models.FACE_PINS + models.CRITIC_PINS
+                                   + models.EMBEDDING_PINS))
+    for name in optional:  # not fetched: a note
         lines += models.check(root, name, quick=args.quick)
     from .caption import FONT  # the memes' caption font and its licence, bundled with the package
     lines.append((FONT.is_file() and FONT.with_name("OFL.txt").is_file(), "caption font " + FONT.name))

@@ -422,15 +422,20 @@ class GpuArbiter:
                     await to_the_end(self._recover_borrow_locked())
 
     @contextlib.asynccontextmanager
-    async def borrow(self, holder, *, on_admitted=None):
+    async def borrow(self, holder, *, on_admitted=None, work_timeout=None):
         """Own an image pass, its worker teardown and live reload as one admission.
 
-        Only server/Discord leases may coexist. The 180s work cap covers active-chat
-        drain, unloading and the caller's render. Teardown/reload must still finish
+        Only server/Discord leases may coexist. The default 180s work cap covers active-chat
+        drain, unloading and the caller's render. A slower backend may request up to 600s;
+        hard live leases still interrupt immediately. Teardown/reload must still finish
         safely afterward; all of that closed-admission time credits waiting turns.
         """
         from leeroy_mind.llm.borrow import BorrowInterrupted, LiveReloadFailed
         from .borrow import BorrowRoom
+        if work_timeout is not None and (type(work_timeout) not in (int, float)
+                                         or not 0 < work_timeout <= 600):
+            raise ValueError('borrow work timeout must be between 0 and 600 seconds')
+        timeout = self.borrow_timeout if work_timeout is None else work_timeout
         gate = self.live_admission
         if not isinstance(holder, str) or not holder or holder in {
                 'server', 'discord', 'human', 'offline_raid', 'voice_gpu'}:
@@ -457,7 +462,7 @@ class GpuArbiter:
                 raise LiveLeaseHeld(frozenset({'image_work'}))
             if on_admitted is not None and on_admitted() is False:
                 raise LiveLeaseHeld(frozenset({'request_budget'}))
-            room = BorrowRoom(self, holder)
+            room = BorrowRoom(self, holder, work_timeout=timeout)
             # Inline holder + gate close prevent a new night/booth or chat exchange
             # between the busy checks and the first await.
             self._borrow = room
@@ -465,7 +470,7 @@ class GpuArbiter:
             gate.close()
             error = None
             try:
-                async with asyncio.timeout(self.borrow_timeout):
+                async with asyncio.timeout(timeout):
                     began = time.monotonic()
                     await gate.drain()
                     room.timings['drain_ms'] = round((time.monotonic() - began) * 1000)

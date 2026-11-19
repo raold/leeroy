@@ -79,6 +79,7 @@ DEFAULT_PINS = tuple(MODEL_PINS)  # the existing SDXL download; FLUX is an expli
 BACKENDS = ("realvisxl", "flux1-dev")
 FLUX_BASE_PINS = ("flux1-dev", "nsfw")
 FLUX_IDENTITY_PINS = ("flux-ipadapter", "flux-clip")
+EMBEDDING_PINS = ("ipadapter",)  # ViT-H critic/variety vectors stay comparable across backends
 MODEL_PINS.update({
     "flux1-dev": ModelPin(
         "flux1-dev", "FLUX.1-dev (quantized locally to NF4)", "flux-1-dev-non-commercial-license",

@@ -47,7 +47,9 @@ RealVisXL remains the default. Standard FLUX.1-dev is an explicit alternative; i
 own transformer, text encoders and XLabs IP-Adapter v2, retaining the shared image checks,
 reference cropping, captions, grids and detail pass. SDXL adapter weights cannot be reused.
 The existing embed-only worker still uses the SDXL ViT-H encoder so stored diversity vectors
-remain comparable. No prompt lists or content settings change when selecting a backend.
+remain comparable. FLUX fetch includes that `ipadapter` pin too; its doctor checks it and the
+mind requires it when critic or variety is enabled. No prompt lists or content settings change
+when selecting a backend.
 
 Install the extra into the worker's Python 3.12 environment, accept the model's access terms
 on Hugging Face, and sign in locally (never put a token in TOML, shell arguments or the repo):
@@ -71,6 +73,9 @@ checked on the intended hardware before release; unit tests do not establish tho
 After deploying both packages, add `backend = "flux1-dev"` inside the existing `[selfies]`
 table and restart the mind. Remove that key or set `"realvisxl"` to switch back; old images
 and picks remain. Worker startup and render waits are bounded at 600 seconds for FLUX only.
+Fresh-photo requests also get a 600-second total work budget, including drain, load, renders
+and judging; SDXL keeps 180 seconds. Login, voice and GPU pause still interrupt immediately,
+and worker teardown finishes before the live chat model reloads.
 The existing VRAM floors still apply. A low-VRAM refusal happens before quantization and
 retries loading only after memory has been freed. The mind doctor checks the selected model
 and requires the FLUX identity weights when snaps or identity sets are enabled.

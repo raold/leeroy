@@ -87,3 +87,15 @@ def test_quick_doctor_passes_backend_without_loading_models(tmp_path, monkeypatc
         return subprocess.CompletedProcess(command, 0, "ok checked\n")
     monkeypatch.setattr(subprocess, "run", run)
     assert m._quick_doctor(tmp_path / "p", tmp_path, backend="flux1-dev") == [(True, "checked")]
+
+
+@pytest.mark.parametrize('setting', ['', 'critic=true', 'variety=true', 'snaps=true'])
+def test_flux_doctor_reports_retained_embedding_encoder(tmp_path, monkeypatch, setting):
+    python = tmp_path / 'python.exe'
+    python.write_bytes(b'')
+    monkeypatch.setattr(m, '_quick_doctor', lambda *args, **kw: [
+        (None, 'ipadapter: not fetched (fetch-models --only ipadapter)')])
+    head = f'[selfies]\nenabled=true\nbackend="flux1-dev"\npython="{python.as_posix()}"\n'
+    expected = False if setting in ('critic=true', 'variety=true') else None
+    assert m._doctor_selfies(toml(tmp_path, head + setting)) == [
+        (expected, 'selfies: critic/variety encoder not fetched (fetch-models --only ipadapter)')]
