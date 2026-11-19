@@ -159,6 +159,9 @@ DEADLINE_S = {Priority.REPLY_HUMAN: 30.0}
 # the night holds, and nobody is standing in the game for it (ruling R9).
 DISCORD_DEADLINE_S = 120.0
 OTHER_DEADLINE_S = 20.0  # social talk and the raid lead; counted after the turn's delay
+# A Discord line's store takes the write lock first and is tried twice; each try waits this long
+# for another connection's lock, so the two together wait no longer than the one try before.
+STORE_LOCK_WAIT_S = 2.5
 # The deadline governs the model's answer; the first line's typing is capped to land this far
 # inside it, and never shorter than MIN_TYPING_S.
 SEND_MARGIN_S = 1.0
@@ -5009,13 +5012,14 @@ class Pipeline:
         # An answer he is owed must never be lost to a lock. The unit takes the write lock before
         # it reads (Store.write_first), so no other connection's commit can land between its
         # reads and its insert; and a store SQLite still refuses as busy is tried once more,
-        # after the rollback, on a fresh snapshot.
+        # after the rollback, on a fresh snapshot. Each try waits half the connection's
+        # busy_timeout, so the event loop waits no longer than before the retry existed.
         for attempt in (1, 2):
             stage = 'store'
             after_commit = []
             try:
                 with self.store.transaction():
-                    self.store.write_first()
+                    self.store.write_first(wait_s=STORE_LOCK_WAIT_S)
                     if photo is not None and (meta.photo_finished or not photo.valid()):
                         return 'photo_stale'
                     posted_at = self.clock.now()

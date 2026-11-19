@@ -103,12 +103,21 @@ class Store:
         """Whether this Store is inside one of its transaction units."""
         return self._depth > 0
 
-    def write_first(self) -> None:
+    def write_first(self, *, wait_s: float | None = None) -> None:
         """Take the write lock at the start of an outermost unit, before it reads: a unit that
         reads first can meet another connection's commit before its own write, and SQLite then
         refuses that write at once. With the lock held from its first statement, the unit's
-        snapshot is the newest and a writer elsewhere waits its turn (busy_timeout)."""
-        self.conn.execute("UPDATE meta SET value = value WHERE key = ''")
+        snapshot is the newest and a writer elsewhere waits its turn (busy_timeout). `wait_s`
+        bounds this one wait for another connection's lock instead of busy_timeout."""
+        if wait_s is None:
+            self.conn.execute("UPDATE meta SET value = value WHERE key = ''")
+            return
+        before = int(self.conn.execute("PRAGMA busy_timeout").fetchone()[0])
+        self.conn.execute(f"PRAGMA busy_timeout={max(0, round(wait_s * 1000))}")
+        try:
+            self.conn.execute("UPDATE meta SET value = value WHERE key = ''")
+        finally:
+            self.conn.execute(f"PRAGMA busy_timeout={before}")
 
     @contextmanager
     def transaction(self):
