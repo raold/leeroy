@@ -4,13 +4,13 @@ A nightly loop that measures how real the members' answers to him read, proposes
 one prompt piece and tests them on the same battery. **It only measures by default**
 (`promote = false`): its judge does not yet agree well enough with a strong grader (see "The
 judge"), so the changes it reports are indicative and it proposes nothing to the learn bandit.
-With `promote = true` the winner goes to the bandit, which promotes it live only through the
-weekly cycle's own gate. Spec: human-likeness design section 11
+With `promote = true` (only with `grader = "tells"`) the winner goes to the bandit, which
+promotes it live only through the weekly cycle's own gate. Spec: human-likeness design section 11
 (`docs/superpowers/specs/2026-11-15-human-likeness-design.md`, local).
 
 ```toml
 [lab]
-enabled = true     # default false: the night's three lab stages (read at mind start)
+enabled = true     # default false: the night's lab stages (read at mind start)
 minutes = 40       # the hard budget of one night's lab (5-180)
 pairs = 12         # (script, member) pairs a night, each run once per arm (2-60)
 judge = 6          # pairs per arm the blind judge reads (0-60, never more than pairs)
@@ -19,7 +19,9 @@ grader = "rubric"  # what grades her answers: "tells" (lab/judge.py, live model)
 promote = false    # true: a winning variant becomes an arm of the learn bandit
 ```
 
-An unknown key or a bad value reads the whole table as the defaults with the lab off. Restart the
+An unknown key or a bad value reads the whole table as the defaults with the lab off. So does
+`promote = true` with `grader = "rubric"` (the rubric does not agree with a strong grader at all,
+"The judge"); the mind logs `lab_config_refused reason=promote_with_rubric` once. Restart the
 mind after changing it. `overlays` is one more key the sandbox sets in its own copy (below); the
 live mind leaves it off. Code from before `grader` and `promote` reads a table that has them as
 off (an unknown key): remove both before rolling back.
@@ -81,7 +83,12 @@ Four stages after `turing` (after `forget` without it), so the runner swaps the 
    arm; her answers of the pair before as context). An answer she never gave is 1 without a
    call. Like the battery it waits while a live lease is held or the GPU is paused. The scores
    and the calls they took go into `lab_score` (`score`, `score_calls`, migration
-   `*_lab_judge.sql`). Log: `lab_scored ... units= done= calls= seconds= cut=`.
+   `*_lab_judge.sql`). A unit the budget cut leaves the marker unit `budget`, so `finish` settles
+   the run `budget`; a unit that failed on a model error is a failed unit, and the arms it left
+   with too few scored answers are settled `failed` (the run `done`, reason `units_failed`).
+   With `judge = 0` there is nothing left for the reflection model, so this stage runs `finish`
+   itself and the night never swaps to it for the lab. Log:
+   `lab_scored ... units= done= calls= seconds= cut=`.
 4. **`lab_grade`** (reflection model). With `grader = "rubric"`, one rubric unit per arm and
    pair: her answers graded 0-3 on bake-off 1's scale (0 a bot tell, wrong, empty or out of character; 1 generic or
    sycophantic; 2 specific and in her voice; 3 would pass as her) with a reason code, reading her
@@ -89,9 +96,10 @@ Four stages after `turing` (after `forget` without it), so the runner swaps the 
    pairs of each arm (`turing/judge.py`'s own fixed prompt, names masked; the times are synthetic,
    his reading and her typing at 4 characters a second, since `--fast` skips them). Then
    `finish`: the comparison and the run's summary. A run keeps the grader and the `promote` it
-   was planned with (in its plan), so a resumed run is graded the way it began; a run planned
-   before this is the rubric's and, finished by this code, only measures (its plan does not say
-   it may promote; `lab report` and the panel say "measure only" for it).
+   was planned with (in its plan), so a resumed run is graded the way it began. Only a plan with
+   `"promote": true` and the tells grader may promote: a run planned before this is the rubric's
+   and, finished by this code, only measures (`lab report` and the panel say "measure only" for
+   it); a run older code finished (`done` or `budget`) could have promoted.
 
 **Rule checks** (`lab/rules.py`, model-free, per answer): `silent`; `unanswered` (his line had an
 `ask` and her first sentence holds no yes/no, number or time, name, or the asked noun); `wordy`
@@ -99,7 +107,7 @@ Four stages after `turing` (after `forget` without it), so the runner swaps the 
 answer of hers in the conversation, not counting his current line's words); `rewritten` (a guard
 rewrote the draft); `echo` (the live echo guard's rule); `stock` (the guards' stock list).
 
-**The budget** is hard: `minutes` over all three stages, kept in `lab_run.spent` across resumes.
+**The budget** is hard: `minutes` over all four stages, kept in `lab_run.spent` across resumes.
 The battery may use 60% of it; a pair is never begun past that, and the stage's work is cancelled
 when it is gone (the child killed, the arm in flight kept as far as it got). Grading takes the
 rest. `finish` always runs; arms the budget cut short are settled `budget`.
@@ -114,12 +122,13 @@ noise). The best winner becomes an **active arm** of the learn bandit's family f
 `prompt.<piece>` (id `lab.<piece>.v<variant>`; its origin column says `coach` because migration
 0034's CHECK allows only builtin and coach, and the id and `prompt_variant.arm_id` mark it the
 lab's). Every other variant is retired with its outcome: `beaten` (beat the control, not the
-best), `lost`, `regressed`, `untested` (never in a prompt), `too_few`, `budget`, `frozen` (a global
+best), `lost`, `regressed`, `untested` (never in a prompt), `too_few`, `budget`, `failed` (too
+few scored because judge units failed), `frozen` (a global
 learning freeze or a frozen family promotes nothing), and with `promote = false` the variant
 that would have been promoted is retired `measure_only`: no arm is made and the weekly gate
 never sees it. Every variant keeps its scoresheet (numbers
 only). Logs: `lab_plan ... authored=`, `lab_proposed ... kept= authored= asks= refused= codes=`, `lab_arm ... answered= applied=
-complete=`, `lab_scored`, `lab_done ... promoted= control= best_delta= cut= grader= promote=`,
+complete=`, `lab_scored`, `lab_done ... promoted= control= best_delta= cut= failed= grader= promote=`,
 `lab_waiting`, `lab_budget`.
 
 ## The judge (`lab/judge.py`, `lab/features.py`, `lab/gold.py`, `lab/judge_eval.py`)
@@ -150,9 +159,10 @@ length -0.18.
 
 **The designs, on the test part** (82 replies of 6 conversations, the shipped command, the live
 model at temperature 0 with `think` off; arm agreement: which of two resampled arms of 24
-replies is better, over the draws whose gold means differ by 0.15 or more):
+replies is better, over the draws whose gold means differ by 0.15 or more; the interval is the
+one measured then, with replies resampled one by one, which is too narrow: see "The bar"):
 
-| judge | rho | 95% interval | arm agreement | calls a reply | model seconds a reply |
+| judge | rho | 95% interval (by reply) | arm agreement | calls a reply | model seconds a reply |
 |---|---|---|---|---|---|
 | rubric (old; three runs) | +0.17, +0.17, +0.27 | -0.04..+0.45 | 75%, 75%, 77% | 0.5 | 1.4 |
 | features (no model) | +0.16 | -0.05..+0.37 | 64% | 0 | 0 |
@@ -168,13 +178,37 @@ row is out of sample there): rubric +0.11 and 55%, features +0.14 and 57%, fewsh
 parallel decoding is not bit-exact even at temperature 0 with a seed, so a rho here is good to
 about 0.03, and the test part is small (the intervals are wide).
 
-**The bar is not met.** A judge becomes the default and the lab may promote at rho 0.35 or
-more and arm agreement 70% or more on the test part (`judge_eval.PASS_RHO`, `PASS_ARM`). The
-combination reaches +0.31 and 71%: steadier than the rubric across the parts and with the
-right sign for length, but not clear of the bar and not clear of the rubric on the test part.
-So `grader` stays `"rubric"` by default, `promote` is false, and every delta the lab shows is
-indicative. Setting `grader = "tells"` gives the steadier numbers (and the same-line
-preference below) at 4 calls an answer on the live model.
+**The bar** (`judge_eval.verdict`). A judge passes when the lower end of the 90% interval of its
+rho, resampling whole conversations rather than replies (`gold.cluster_bootstrap`), is 0.35 or
+more (`PASS_RHO`) on the test part, and that part holds at least 12 conversations and 150 graded
+replies (`MIN_CONVERSATIONS`, `MIN_REPLIES`); with fewer, `judge-eval` says "not enough gold",
+and on train, dev or all "not the test part" (they chose the design and fit the weights). Arm
+agreement is reported, never a criterion. The bar used to be rho 0.35 and arm agreement 70% on
+the test part, point estimates both; a simulation of the test part's shape (82 replies in 6
+conversations, gold and judge each with a conversation effect; synthetic numbers) showed it
+could be met by chance:
+
+- With 6 conversations there are only 10 ways to split them three and three, so arm agreement
+  mostly says whether the judge orders those groups as the gold does: a judge with no agreement
+  at all reached 70% in 13% of trials, one with a true reply-level agreement of 0.25 in 14%. It
+  is not the lab's decision either: the lab compares two arms answering the same lines, not two
+  sets of conversations.
+- Replies of one conversation move together, so resampling replies makes rho's interval too
+  narrow, and the point estimate of a judge whose true agreement is 0.25 cleared 0.35 in 9% of
+  trials (7% together with arm agreement). The command is not bit-exact either, and nothing
+  stops a second run of the test part.
+
+Under the new bar (`tests/lab/test_judge_eval.py` runs the simulation at the smallest gold it
+reads, 12 conversations of 13 replies) a judge with no agreement passes under 2% of the time and
+one with a true agreement of 0.25 under 5%, while one that agrees well passes. **On today's gold
+no judge has a verdict:** the test part has 6 conversations and 82 replies ("not enough gold"),
+and the combination's point estimate, +0.31, is below 0.35 anyway. So `grader` stays
+`"rubric"` by default, `promote` is false, and every delta the lab shows is indicative. A pass
+is a reason to grade a fresh gold set (new conversations, graded after the judge and its weights
+were fixed) and confirm it there; only then turn `promote` on, and only with `grader = "tells"`
+(mind.toml refuses `promote = true` with the rubric). Setting `grader = "tells"` without
+`promote` gives the steadier numbers (and the same-line preference below) at 4 calls an answer
+on the live model.
 
 **Why.** The local model does see the surface tells it is asked about (its `echo` tell against
 the grader's echo letter +0.38, `repeats` +0.36, `met` +0.25; features' dodged question +0.27,
@@ -283,12 +317,19 @@ python -m leeroy_mind lab judge-eval --gold DIR [--part test|dev|train|all] [--j
 ```
 
 `report`, `variants`, `judge-eval` and the dry run never write or migrate; `add-variant` writes its one file.
+`judge-eval` asks the live model at its own `num_ctx`, so it may run beside a live mind, but not
+during a night: it refuses while a night runs (a `night_run` row says `running`; the reflection
+model the night loads cannot share the GPU with the live one) or while Free GPU is paused, and
+an unreadable mind.db refuses it too. While it runs it reads both again before every request
+and stops at either; there an unreadable mind.db reads as neither (the start checked it). A
+crash can leave a `night_run` row `running`; the mind's next start resumes and ends that night.
 `--piece` names the piece in place of the round-robin (a piece the settings never render ends
 its variants `untested`). `run` holds `mind.lock` (the mind stopped) and
 runs the loop once as a `cli` run: it swaps the reflection and live models as the night does;
 `--grade-model live` proposes and grades on the live model and swaps nothing, for a run on a copy
 of the data dir beside a running live mind. The console's Lab tab has a "Conversation lab" panel
-(the nights' control means by kind, rule-flag rates, the judge, and the variants tried and
+(the nights' control means by kind, on the judge's 1-5 score or the rubric's 0-3 as each night
+was graded, rule-flag rates, the judge, and the variants tried and
 promoted with their word diffs; a night that only measured says "measure only", a variant ahead
 of its control reads "ahead of the control (indicative; not proposed)", and the panel says the
 changes are indicative). Health notes a night run that has not finished in 3 nights with
