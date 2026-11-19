@@ -608,7 +608,7 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
             await start_worker(worker.worker, ctx.arbiter.make_room)
             got, _ = await render_slot(worker, request, rid=lambda attempt: f"ask:{attempt}",
                                        make_room=ctx.arbiter.make_room)
-            result.update(rendered=1, nsfw=got.nsfw)
+            result.update(rendered=1, nsfw=round(got.nsfw, 4))
         except SetRefused:
             result.update(refused="flagged", nsfw=worker.last_nsfw)
         except WorkerError as e:
