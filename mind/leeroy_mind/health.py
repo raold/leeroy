@@ -1714,7 +1714,8 @@ THREADS_QUIET_NIGHTS = 3
 
 def _drama_threads(conn, data: Path) -> Check:
     """[drama] threads = "record" (drama/README.md): a note when the last three recorded nights
-    held no event at all, or when three finished nights were not recorded; counts only."""
+    held no event at all, or when three finished nights after the newest recorded one were not
+    recorded (before the first recorded night nothing is missed yet); counts only."""
     from .drama.config import load_drama_config
     name = "drama-threads"
     if load_drama_config(data / "mind.toml").threads != "record":
@@ -1723,7 +1724,9 @@ def _drama_threads(conn, data: Path) -> Check:
     def check():
         rows = conn.execute("SELECT night, json_extract(summary, '$.events') FROM pull_night "
                             "ORDER BY night DESC LIMIT ?", (THREADS_QUIET_NIGHTS,)).fetchall()
-        newest = rows[0][0] if rows else ""
+        if not rows:
+            return Check(name, OK, "romantic threads: recording only; no night recorded yet")
+        newest = rows[0][0]
         missed = conn.execute("SELECT count(*) FROM night_run WHERE status = 'done' AND night > ?",
                               (newest,)).fetchone()[0]
         if missed >= THREADS_QUIET_NIGHTS:

@@ -32,16 +32,28 @@ scene, relationship row or memory reads or is written from it.
 - **Decay.** HALF_LIFE nights without an event halve a pull; its public part halves over
   HALF_LIFE nights without a public event and its social part without a social one.
 - **Would-be threads.** A pull of OPEN_PULL (OPEN_SOCIAL of it social) with affinity
-  OPEN_AFFINITY would open a thread on a seeded draw (OPEN_P a night) when the caps allow
-  (THREADS_MAX live, TAKEN_MAX with a taken member, one per member, OPENS_PER_NIGHT a night);
-  the label (`shape`) and what kept a candidate out (`thread_why`) are stored with the shadow
-  row. A would-be thread fades when its pull falls under FADE_PULL.
+  OPEN_AFFINITY or more both ways would open a thread on a seeded draw (OPEN_P a night) when
+  the caps allow (THREADS_MAX live, TAKEN_MAX with a taken member, one per member,
+  OPENS_PER_NIGHT a night, the rarest shape first); the label (`shape`) and what kept a
+  candidate out (`thread_why`) are stored with the shadow row. A member couple counts as a
+  third person from `banter` on (two who only notice each other do not). A would-be thread
+  fades when its pull falls under FADE_PULL.
 - **Privacy.** Only public evidence is read: public chat channels, public Discord channels,
   public voice rooms, guild raids and kills. Whispers, DMs, group DMs, the officers' channels
-  and rooms, and the private voice rooms are never read, and a line whose stored audience
-  leaves the holder out moves nothing of hers. A scene and a feeling are between the two (scope
-  `pair`). `public_pull` is the part public evidence alone would have built. Nothing here is
-  shown to a member.
+  and room, and the private, interview and penalty-box voice rooms are never read, and a line
+  whose stored audience leaves the holder out (or that was stored without one) moves nothing of
+  hers. A scene is between the two (scope `pair`). A feeling of the holder's own that the other
+  never saw (an admiration, respect gained) is `private`, and an admiration is read only when
+  every memory it rests on reads open by its effective scope (memory.privacy.effective_scopes).
+  `public_pull` is the part public evidence alone would have built. Nothing here is shown to a
+  member.
+- **The gate for anything shown.** Whatever a later phase shows beyond the owner's console must
+  gate on `public_pull` (what the guild could know) or on `pull_event.scope` (`pair` for what
+  the two share), never on `pull`, `thread_state` or `shape`: those come from the whole pull,
+  and the would-be threads of the live replay rest mostly on pair and private evidence.
+  "Public" here is "not private or restricted": a party, raid, say or voice-room line and
+  presence are public though only those there saw them, so a "what the guild knows" view must
+  not read them as known to all.
 
 The stage and `record_night` write only `pull_event`, `pull_shadow` and `pull_night`, inside
 the caller's transaction. Chat text is read to detect a reply or a name and never stored or
@@ -56,9 +68,10 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from leeroy_mind.discord.channels import (CHANNEL_PREFIX, DM_PREFIX, GROUP_PREFIX, is_discord,
-                                          is_local_channel, is_public)
+                                          is_public)
 from leeroy_mind.logs import log
 from leeroy_mind.storage.rows import ROMANCE_STAGES
+from leeroy_mind.voice.rooms import PRIVATE
 
 STAGE = "pulls"
 DAY_S = 86400.0
@@ -110,7 +123,10 @@ MOVE_LINE_S = 60.0       # a scored move's own chat line is this close to it
 PARTY_MAX = 5
 VOICE_MIN_S = 1200.0
 VOICE_LATE_S = 1800.0
-VOICE_SKIP = frozenset({"afk", "penalty_box", "officers"})
+# Voice rooms that are never public (learn reads them the same way): the private rooms, the
+# officers', applicant interviews and the penalty box. Neither their lines nor their seats count.
+NON_PUBLIC_ROOMS = frozenset({*PRIVATE, "officers", "interview", "penalty_box"})
+VOICE_SKIP = NON_PUBLIC_ROOMS | {"afk"}
 VOICE_ROOM_MAX = 4       # more members than this in a room that night is a crowd, not company
 LATE_FROM, LATE_TO = time(22, 0), time(4, 0)
 RESPECT_DAYS = 7.0
@@ -123,7 +139,6 @@ US_ZONE = ZoneInfo("America/New_York")
 UK_ZONE = ZoneInfo("Europe/London")
 # Her stages toward the owner from which a thread of hers never passes `acknowledged`.
 HIS_LATE = frozenset(ROMANCE_STAGES[ROMANCE_STAGES.index("late_nights"):ROMANCE_STAGES.index("ex")])
-MEMBER_ACTIVE = ("notices", "banter", "whispers", "late_nights", "confession")  # couples.ACTIVE
 
 AGREE_RE = re.compile(
     r"\b(?:agreed?|exactly|good point|fair point|so true|true that|you(?:'| a)?re right|"
@@ -232,17 +247,21 @@ def _pairs(kind, who, scope, ref, weight=None):
 
 def _readable(channel) -> bool:
     """A channel the recorder may read: public (never a whisper, a DM, a group DM, the officers'
-    or a Discord channel the layout lacks) and not one of the private voice rooms."""
-    return (is_public(channel) and isinstance(channel, str)
-            and not channel.startswith("voice:private"))
+    or a Discord channel the layout lacks) and no voice room of NON_PUBLIC_ROOMS."""
+    if not (isinstance(channel, str) and is_public(channel)):
+        return False
+    if not channel.startswith("voice:"):
+        return True
+    room = channel.removeprefix("voice:")
+    return room not in NON_PUBLIC_ROOMS and not room.startswith("private")
 
 
 def _sees(audience, guid) -> bool:
     """Whether `guid` could have read a line on a readable channel: its stored audience decides
-    (a party, raid, say or voice-room line reaches only those there); a line stored without one
-    is the whole public channel's."""
+    (a party, raid, say or voice-room line reaches only those there). A line stored without one
+    is an unknown audience, which proves nobody read it."""
     if audience is None:
-        return True
+        return False
     try:
         readers = json.loads(audience)
     except (TypeError, ValueError):
@@ -251,9 +270,16 @@ def _sees(audience, guid) -> bool:
 
 
 def _named(cast):
-    """guid -> a matcher for that member's name as a word (names of three letters or more)."""
-    return {g: re.compile(rf"(?<!\w){re.escape(n)}(?!\w)", re.IGNORECASE)
-            for g, n in cast.names.items() if isinstance(n, str) and len(n) >= 3}
+    """guid -> a matcher for that member's name as a word (names of three letters or more),
+    written as a name is, capitalised ("Rose", "ROSE"), or as an @-mention in any case: a name
+    that is also a common word ("rose", "will") written in lower case names nobody."""
+    out = {}
+    for g, n in cast.names.items():
+        if not isinstance(n, str) or len(n) < 3:
+            continue
+        head, rest = re.escape(n[0].upper()), re.escape(n[1:])
+        out[g] = re.compile(rf"(?<!\w)(?:@(?i:{re.escape(n)})|{head}(?i:{rest}))(?!\w)")
+    return out
 
 
 # -- presence ----------------------------------------------------------------------------------
@@ -372,7 +398,10 @@ def _feuds(conn, window, cast):
 
 def _feelings(conn, night, cast):
     """Tonight's reflection left her admiring or grateful to another member, on memories that
-    are all open (a feeling resting on a private or secret memory is never read)."""
+    all read open by their effective scope (memory.privacy: a memory stored open that rests on a
+    private or secret one reads as that, and a feeling resting on any such memory is never
+    read). The feeling is hers alone and the other never saw it: scope `private`."""
+    from leeroy_mind.memory.privacy import effective_scopes
     for r in conn.execute(
             "SELECT id, guid, target, type, intensity, evidence FROM emotion WHERE night = ? "
             "AND source = 'reflect' AND target > 0 ORDER BY id", (night,)).fetchall():
@@ -386,11 +415,9 @@ def _feelings(conn, night, cast):
                and x[7:].isdecimal()] if isinstance(refs, list) else []
         if not ids or len(ids) != len(refs):
             continue
-        marks = ",".join("?" * len(ids))
-        open_ = conn.execute(f"SELECT count(*) FROM memory WHERE id IN ({marks}) "
-                             "AND scope = 'open'", ids).fetchone()[0]
-        if open_ == len(set(ids)):
-            yield Event("admired", r["guid"], r["target"], "pair", f"emotion:{r['id']}",
+        read = effective_scopes(conn, ids)
+        if len(read) == len(set(ids)) and all(s == ("open", 0) for s in read.values()):
+            yield Event("admired", r["guid"], r["target"], "private", f"emotion:{r['id']}",
                         KINDS["admired"][0] * (0.5 + 0.25 * r["intensity"]))
 
 
@@ -531,8 +558,8 @@ def _moves(conn, window, cast):
     """What the talk pipeline already scored about a member's public line at another member: a
     joke, tease or callback (`joked`, both) or a compliment (`complimented`: the one it was
     for). The one it was at must have been able to read it: the speaker's own line on that
-    channel, within MOVE_LINE_S, carries its audience; a line of a party, raid, say or voice
-    room that cannot be found proves nobody was there and counts for nothing."""
+    channel, within MOVE_LINE_S, carries its audience; a move whose line cannot be found proves
+    nobody heard it and counts for nothing."""
     for r in conn.execute(
             "SELECT id, ts, guid, counterpart, channel, main FROM talk_move "
             "WHERE ts >= ? AND ts < ? AND counterpart > 0 AND counterpart != guid ORDER BY id",
@@ -544,9 +571,7 @@ def _moves(conn, window, cast):
             "AND origin = 'mind' AND ts BETWEEN ? AND ? ORDER BY abs(ts - ?), id LIMIT 1",
             (r["guid"], r["channel"], r["ts"] - MOVE_LINE_S, r["ts"] + MOVE_LINE_S,
              r["ts"])).fetchone()
-        if line is None and is_local_channel(r["channel"]):
-            continue
-        if line is not None and not _sees(line["audience"], r["counterpart"]):
+        if line is None or not _sees(line["audience"], r["counterpart"]):
             continue
         ref = f"move:{r['id']}"
         if r["main"] in JOKE_MOVES:
@@ -636,8 +661,9 @@ def _voice(conn, window, cast, notes=None):
 
 def _dkp(conn, window, cast):
     """A close award (the runner-up lost by a little) is recorded as an outcome that moves
-    nothing; respect either gained for the other within RESPECT_DAYS of it is worth a pull,
-    once per pair and award."""
+    nothing; respect either gained for the other within RESPECT_DAYS of it, and before this
+    night's window ends (a replay never reads a later night's deltas), is worth a pull, once per
+    pair and award. The respect is the holder's own, which the other never saw: `private`."""
     from leeroy_mind.culture.origins import loot_record
     for row in conn.execute("SELECT key FROM meta WHERE key GLOB 'guild:loot:*' ORDER BY key").fetchall():
         found = loot_record(conn, "loot:close_loot:" + row["key"])
@@ -660,18 +686,42 @@ def _dkp(conn, window, cast):
             if conn.execute(
                     "SELECT 1 FROM rel_delta WHERE a = ? AND b = ? AND dim = 'respect' "
                     "AND delta > 0 AND reason NOT LIKE '%not applied%' AND ts > ? AND ts <= ? "
-                    "LIMIT 1", (x, y, when, when + RESPECT_DAYS * DAY_S)).fetchone():
-                yield Event("dkp_respect", x, y, "public", ref)
+                    "AND ts < ? LIMIT 1",
+                    (x, y, when, when + RESPECT_DAYS * DAY_S, window[1])).fetchone():
+                yield Event("dkp_respect", x, y, "private", ref)
+
+
+def _mirrored(conn, chat) -> set:
+    """{(a, b, "discord:<message>")} for each `heard` or `defended` _chat found on a Discord
+    message's own chat line (meta discord:line:<message>): that message already counted for the
+    pair, so _discord's events of the same pair for it are not counted again."""
+    lines: dict[str, list] = {}
+    for e in chat:
+        if e.ref.startswith("chat:") and e.kind in ("heard", "defended"):
+            lines.setdefault(e.ref[5:], []).append(e)
+    if not lines:
+        return set()
+    out = set()
+    for key, value in conn.execute(
+            "SELECT key, value FROM meta WHERE key GLOB 'discord:line:*' "
+            "AND value IN (SELECT value FROM json_each(?))", (json.dumps(sorted(lines)),)):
+        for e in lines.get(str(value), ()):
+            out.add((e.a, e.b, "discord:" + key[len("discord:line:"):]))
+    return out
 
 
 def collect(conn, night: str, window, cast: Cast, notes=None) -> list[Event]:
     """Every raw event of the night, in a stable order; no factor, cap or pairing rule yet.
-    `notes` counts what a source passed over whole (a crowded voice room)."""
+    `notes` counts what a source passed over whole (a crowded voice room). One Discord message
+    counts once for a pair: a `heard` or `defended` on its chat line, else _discord's events."""
+    chat = list(_chat(conn, window, cast))
+    counted = _mirrored(conn, chat)
+    discord = (e for e in _discord(conn, window, cast) if (e.a, e.b, e.ref) not in counted)
     out = []
     for source in (_raids(conn, window, cast), _bosses(conn, window, cast),
                    _parties(conn, window, cast), _scenes(conn, night, window, cast),
                    _feuds(conn, window, cast), _feelings(conn, night, cast),
-                   _chat(conn, window, cast), _discord(conn, window, cast),
+                   chat, discord,
                    _reactions(conn, window, cast), _riffs(conn, window, cast),
                    _moves(conn, window, cast),
                    _claims(conn, window, cast), _voice(conn, window, cast, notes),
@@ -811,15 +861,18 @@ def shape_of(*, reverse: float, taken: bool, third: bool, nights_to_open: int) -
 
 def admit(candidates, live, *, threads_max=None, taken_max=None, opens_max=None):
     """Which waiting candidates the caps would let open, rarest shape among the live threads
-    first, then the stronger pull. `candidates` and `live` are dicts with a, b, pull, shape,
-    taken. Returns (opened, {(a, b): why})."""
+    first (counted again after each opening), then the stronger pull. `candidates` and `live`
+    are dicts with a, b, pull, shape, taken. Returns (opened, {(a, b): why})."""
     threads_max = THREADS_MAX if threads_max is None else threads_max
     taken_max = TAKEN_MAX if taken_max is None else taken_max
     opens_max = OPENS_PER_NIGHT if opens_max is None else opens_max
     live = list(live)
     opened, why = [], {}
     counts = Counter(t["shape"] for t in live)
-    for c in sorted(candidates, key=lambda c: (counts[c["shape"]], -c["pull"], c["a"], c["b"])):
+    pool = list(candidates)
+    while pool:
+        c = min(pool, key=lambda c: (counts[c["shape"]], -c["pull"], c["a"], c["b"]))
+        pool.remove(c)
         busy = {g for t in live for g in (t["a"], t["b"])}
         if c["a"] in busy or c["b"] in busy:
             why[(c["a"], c["b"])] = "cap_member"
@@ -843,18 +896,24 @@ def _one(conn, sql, params, default=0.0):
 
 def _threads(conn, night, cast, now, rng):
     """The would-be threads after tonight's pulls: fade, relabel, then let the caps admit."""
+    from leeroy_mind.drama.couples import ACTIVE
+    # a member couple past noticing each other makes the other of it a third
+    couple = tuple(s for s in ACTIVE if s != "notices")
     rows = {(r["a"], r["b"]): dict(r) for r in conn.execute("SELECT * FROM pull_shadow").fetchall()}
     strong = [k for k, r in rows.items() if r["pull"] >= TRIANGLE_PULL]
     late = {g for g in cast.members if cast.gender.get(g) == "female" and _one(
         conn, "SELECT romance_stage FROM relationship WHERE a = ? AND b = ?",
         (g, cast.human), "none") in HIS_LATE}
-    marks = ",".join("?" * len(MEMBER_ACTIVE))
+    marks = ",".join("?" * len(couple))
 
     def couple_with_other(g, other):
         return conn.execute(
             f"SELECT 1 FROM relationship WHERE a = ? AND b NOT IN (?, ?, ?) "
             f"AND romance_stage IN ({marks}) LIMIT 1",
-            (g, cast.human, other, g, *MEMBER_ACTIVE)).fetchone() is not None
+            (g, cast.human, other, g, *couple)).fetchone() is not None
+
+    def affinity(a, b):
+        return _one(conn, "SELECT affinity FROM relationship WHERE a = ? AND b = ?", (a, b))
 
     def facts(a, b):
         r = rows[(a, b)]
@@ -912,7 +971,7 @@ def _threads(conn, night, cast, now, rng):
             why = "ex"
         elif r["social_pull"] < OPEN_SOCIAL:
             why = "social"
-        elif _one(conn, "SELECT affinity FROM relationship WHERE a = ? AND b = ?", pair) < OPEN_AFFINITY:
+        elif min(affinity(a, b), affinity(b, a)) < OPEN_AFFINITY:
             why = "affinity"
         elif rng(a, b).random() >= OPEN_P:
             why = "draw"
@@ -1006,4 +1065,12 @@ def attach(app):
     if load_drama_config(app.data_dir / "mind.toml").threads != "record":
         return None
     app.night_runner.add_stage(STAGE, stage_pulls, after="encounters", model=None)
+    return True
+
+
+def attach_night(runner, settings) -> bool:
+    """`nightly run`'s own runner: the stage when that night's settings say record."""
+    if getattr(settings, "drama_threads", "off") != "record":
+        return False
+    runner.add_stage(STAGE, stage_pulls, after="encounters", model=None)
     return True

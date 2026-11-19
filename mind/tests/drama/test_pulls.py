@@ -23,6 +23,7 @@ NIGHT = "2026-10-29"
 WINDOW = night_bounds(NIGHT, UTC)
 T = datetime(2026, 10, 29, 21, 0, tzinfo=UTC).timestamp()
 MEN, WOMEN = (101, 103, 105), (102, 104)
+EVERYONE = (1, *MEN, *WOMEN)
 OWN = ("pull_event", "pull_shadow", "pull_night")
 REF = re.compile(r"^(raid|event|encounter|feud|chat|discord|voice|move|claim|emotion|utterance):\d+$"
                  r"|^loot:guild:loot:\d+:[a-f0-9]+$")
@@ -52,6 +53,15 @@ def record(h, night=NIGHT, window=None):
     window = night_bounds(night, UTC) if window is None else window
     with h.store.transaction():
         return pulls.record_night(h.store, night, window, who, now=window[1])
+
+
+def say(h, t, guid, text, *, audience=EVERYONE, **kw):
+    """A stored chat line (the harness's `say`) that everyone of the test cast and the owner
+    could read, as the live store records a guild line's audience; `audience=None` stores none."""
+    line = h.say(t, guid, text, **kw)
+    if audience is not None:
+        sql(h, "UPDATE chat_line SET audience = ? WHERE id = ?", (json.dumps(sorted(audience)), line))
+    return line
 
 
 def events(h, kind=None):
@@ -252,19 +262,39 @@ def test_tonights_admiration_for_a_member_counts_only_on_open_memories(h):
     feel(h, 102, 103, "admiration", [seen], source="encounter")   # the scene's own, counted as a scene
     feel(h, 102, 105, "admiration", [seen], night="2026-10-28")
     record(h)
+    # her own feeling, which he never saw: private, never a pair's
     assert events(h) == [{"a": 102, "b": 101, "kind": "admired", "weight": 6.25, "factor": 1.0,
-                          "amount": 6.25, "scope": "pair", "ref": f"emotion:{ident}"}]
+                          "amount": 6.25, "scope": "private", "ref": f"emotion:{ident}"}]
+    assert shadow(h, 102, 101)["public_pull"] == 0.0
+
+
+def test_an_admiration_resting_on_a_memory_stored_open_over_a_private_one_is_never_read(h):
+    """The stored scope can be wider than the evidence until the night's settle runs (#372):
+    a memory stored open and unchecked that cites her whisper with the owner reads private by
+    its effective scope, and a feeling resting on it is not read."""
+    from leeroy_mind.memory.privacy import effective_scopes
+    cast(h)
+    whisper = h.mem(102, "a memory of a whisper", scope="private", scope_with=1)
+    over = h.mem(102, "a memory resting on it", evidence=(f"memory:{whisper}",))
+    h.legacy(over)                       # stored open, unchecked
+    assert effective_scopes(h.store.conn, [over]) == {over: ("private", 1)}
+    assert h.store.conn.execute("SELECT scope FROM memory WHERE id = ?", (over,)).fetchone()[0] == "open"
+    feel(h, 102, 101, "admiration", [over], intensity=3)
+    feel(h, 102, 103, "gratitude", [h.mem(102, "a memory of the raid"), over])
+    feel(h, 104, 105, "admiration", [9999])                  # a memory that has no row
+    summary = record(h)
+    assert events(h) == [] and summary["scopes"] == {}
 
 
 # -- chat ------------------------------------------------------------------------------------------
 
 def test_a_reply_naming_and_agreeing_with_a_member_is_her_being_heard(h):
     cast(h)
-    h.say(T, 102, "we should swap the tanks on this one")
-    line = h.say(T + 30, 101, "exactly, Belra is right")
-    h.say(T + 60, 103, "good point")                      # names nobody
-    h.say(T + 90, 105, "Belra is wrong, I don't agree")   # no agreement
-    h.say(T + 5000, 105, "exactly, Belra")                # nothing of hers recent enough
+    say(h, T, 102, "we should swap the tanks on this one")
+    line = say(h, T + 30, 101, "exactly, Belra is right")
+    say(h, T + 60, 103, "good point")                      # names nobody
+    say(h, T + 90, 105, "Belra is wrong, I don't agree")   # no agreement
+    say(h, T + 5000, 105, "exactly, Belra")                # nothing of hers recent enough
     record(h)
     assert events(h, "heard") == [{"a": 102, "b": 101, "kind": "heard", "weight": 7.5, "factor": 1.0,
                                    "amount": 7.5, "scope": "public", "ref": f"chat:{line}"}]
@@ -272,12 +302,12 @@ def test_a_reply_naming_and_agreeing_with_a_member_is_her_being_heard(h):
 
 def test_answering_a_taunt_aimed_at_another_member_defends_her(h):
     cast(h)
-    h.say(T, 103, "Dunna is such a noob")
-    first = h.say(T + 20, 101, "lay off Dunna")
-    h.say(T + 600, 1, "Belra is useless tonight")        # the owner's taunt counts as one too
-    second = h.say(T + 620, 105, "back off Testmage, she did fine")
-    h.say(T + 1200, 103, "Dunna is trash")
-    h.say(T + 1210, 105, "anyone want to do a heroic")   # no defence
+    say(h, T, 103, "Dunna is such a noob")
+    first = say(h, T + 20, 101, "lay off Dunna")
+    say(h, T + 600, 1, "Belra is useless tonight")        # the owner's taunt counts as one too
+    second = say(h, T + 620, 105, "back off Testmage, she did fine")
+    say(h, T + 1200, 103, "Dunna is trash")
+    say(h, T + 1210, 105, "anyone want to do a heroic")   # no defence
     record(h)
     assert [(e["a"], e["b"], e["ref"], e["weight"]) for e in events(h, "defended")] == [
         (102, 105, f"chat:{second}", 12.0), (104, 101, f"chat:{first}", 12.0)]
@@ -291,10 +321,10 @@ def test_only_public_channels_are_read(h, channel):
     channel the layout lacks are restricted audiences, and a private voice room is private:
     nothing said there pulls anyone."""
     cast(h)
-    h.say(T, 102, "we should swap the tanks", channel=channel, to=1 if channel == "whisper" else 0)
-    h.say(T + 5, 101, "exactly, Belra is right", channel=channel, to=1 if channel == "whisper" else 0)
-    h.say(T + 60, 103, "Dunna is such a noob", channel=channel)
-    h.say(T + 70, 105, "lay off Dunna", channel=channel)
+    say(h, T, 102, "we should swap the tanks", channel=channel, to=1 if channel == "whisper" else 0)
+    say(h, T + 5, 101, "exactly, Belra is right", channel=channel, to=1 if channel == "whisper" else 0)
+    say(h, T + 60, 103, "Dunna is such a noob", channel=channel)
+    say(h, T + 70, 105, "lay off Dunna", channel=channel)
     record(h)
     assert events(h) == [] and h.count("pull_shadow") == 0
 
@@ -305,30 +335,53 @@ def heard_by(h, line, *guids):
 
 def test_naming_a_member_on_the_games_channels(h):
     cast(h)
-    named = h.say(T, 101, "Belra and Dunna should take the left side")
-    h.say(T + 10, 103, "Arkon, wait for the tank")                    # names a man
-    h.say(T + 20, 105, "Dunna", channel="discord:general")            # Discord is _discord's
-    away = h.say(T + 30, 105, "Belra, the portal", channel="party")
+    named = say(h, T, 101, "Belra and Dunna should take the left side")
+    say(h, T + 10, 103, "Arkon, wait for the tank")                    # names a man
+    say(h, T + 20, 105, "Dunna", channel="discord:general")            # Discord is _discord's
+    away = say(h, T + 30, 105, "Belra, the portal", channel="party")
     heard_by(h, away, 105, 104)                                       # she was not in that party
     record(h)
     assert [(e["a"], e["b"], e["weight"], e["scope"], e["ref"]) for e in events(h, "mentioned")] == [
         (102, 101, 4.0, "public", f"chat:{named}"), (104, 101, 4.0, "public", f"chat:{named}")]
 
 
+def test_a_line_stored_without_an_audience_is_read_by_nobody(h):
+    cast(h)
+    say(h, T, 102, "we should swap the tanks", audience=None)
+    say(h, T + 30, 101, "exactly, Belra is right", audience=None)
+    say(h, T + 60, 103, "Dunna, the portal", audience=None)
+    move(h, 105, 102, "compliment", t=T + 90)
+    say(h, T + 90, 105, "nice pull", audience=None)
+    record(h)
+    assert events(h) == []
+
+
+def test_a_name_counts_capitalised_or_as_an_at_mention_and_a_common_word_does_not(h):
+    cast(h)
+    first = say(h, T, 101, "@belra take the left side")
+    say(h, T + 10, 103, "belra and dunna are words here")             # lower case: nobody named
+    second = say(h, T + 20, 105, "DUNNA, the portal")
+    post(h, 1, "general", 101, T + 30, text="dunna said so")          # nor on Discord
+    post(h, 2, "general", 103, T + 4000, text="ask @dunna")
+    record(h)
+    assert [(e["a"], e["b"], e["ref"]) for e in events(h, "mentioned")] == [
+        (102, 101, f"chat:{first}"), (104, 103, "discord:2"), (104, 105, f"chat:{second}")]
+
+
 def test_a_line_whose_audience_leaves_her_out_moves_nothing_of_hers(h):
     cast(h)
-    h.say(T, 102, "we should swap the tanks", channel="party")
-    agree = h.say(T + 30, 101, "exactly, Belra is right", channel="party")
+    say(h, T, 102, "we should swap the tanks", channel="party")
+    agree = say(h, T + 30, 101, "exactly, Belra is right", channel="party")
     heard_by(h, agree, 101, 103)                 # she had left the party
-    taunt = h.say(T + 600, 103, "Dunna is such a noob", channel="raid")
-    defend = h.say(T + 620, 101, "lay off Dunna", channel="raid")
+    taunt = say(h, T + 600, 103, "Dunna is such a noob", channel="raid")
+    defend = say(h, T + 620, 101, "lay off Dunna", channel="raid")
     for line in (taunt, defend):
         heard_by(h, line, 101, 103, 105)         # she was not in the raid
     move(h, 105, 102, "compliment", channel="party", t=T + 900)
-    said = h.say(T + 905, 105, "nice pull", channel="party")
+    said = say(h, T + 905, 105, "nice pull", channel="party")
     heard_by(h, said, 105, 101)                  # she was not there to hear it
     move(h, 103, 104, "joke", channel="say", t=T + 1000)   # no line of his: nobody heard it
-    good = h.say(T + 1200, 103, "Dunna carried that", channel="say")
+    good = say(h, T + 1200, 103, "Dunna carried that", channel="say")
     heard_by(h, good, 103, 105)
     claim(h, 103, "Dunna", good)
     record(h)
@@ -409,6 +462,26 @@ def test_a_reaction_counts_and_more_when_she_spoke_in_the_conversation(h):
     assert [(e["a"], e["b"], e["weight"]) for e in events(h, "reacted")] == [(104, 101, 2.5)]
 
 
+def test_one_discord_message_counts_once_for_a_pair(h):
+    """A member's Discord message is also stored as her chat line (meta discord:line:<id>):
+    agreeing with her by name there is `heard`, and the same message's reply to her is not
+    counted again as `answered` (nor the name as `mentioned`). The replier's own pull is
+    another direction and still moves."""
+    cast(h)
+    post(h, 1, "general", 102, T, text="we should swap the tanks")
+    line = say(h, T, 102, "we should swap the tanks", channel="discord:general")
+    h.store.set_meta("discord:line:1", str(line))
+    post(h, 2, "general", 101, T + 30, reply_to=1, text="exactly, Belra is right")
+    agree = say(h, T + 30, 101, "exactly, Belra is right", channel="discord:general")
+    h.store.set_meta("discord:line:2", str(agree))
+    post(h, 3, "general", 104, T + 3000, text="a new line")
+    post(h, 4, "general", 103, T + 3030, reply_to=3, text="Dunna, sure")   # no chat line of it
+    record(h)
+    got = sorted((e["a"], e["b"], e["kind"], e["ref"]) for e in events(h))
+    assert got == [(101, 102, "replied", "discord:2"), (102, 101, "heard", f"chat:{agree}"),
+                   (103, 104, "replied", "discord:4"), (104, 103, "answered", "discord:4")]
+
+
 @pytest.mark.parametrize("channel", ["officer-chat", "dm:102", "gdm:3", "no-such-channel"])
 def test_discord_outside_the_public_channels_is_never_read(h, channel):
     cast(h)
@@ -429,10 +502,17 @@ def move(h, guid, counterpart, main, *, channel="guild", t=T):
 def test_a_joke_at_a_member_is_shared_and_a_compliment_is_hers(h):
     cast(h)
     joke = move(h, 101, 102, "joke")
-    nice = move(h, 103, 104, "compliment", channel="discord:general")
-    move(h, 105, 104, "tease", channel="whisper")      # never read
-    move(h, 105, 102, "raid")                          # no social move
-    move(h, 101, 1, "joke")                            # at the owner
+    say(h, T + 5, 101, "x")                                  # his line that carried it
+    nice = move(h, 103, 104, "compliment", channel="discord:general", t=T + 100)
+    say(h, T + 100, 103, "x", channel="discord:general")
+    move(h, 105, 104, "tease", channel="whisper", t=T + 200)      # never read
+    say(h, T + 200, 105, "x", channel="whisper", to=1)
+    move(h, 105, 102, "raid", t=T + 300)                          # no social move
+    say(h, T + 300, 105, "x")
+    move(h, 101, 1, "joke", t=T + 400)                            # at the owner
+    say(h, T + 400, 101, "x")
+    move(h, 103, 102, "compliment", t=T + 900)                    # no line of his: nobody heard it
+    move(h, 105, 104, "joke", channel="discord:general", t=T + 950)  # nor on Discord
     record(h)
     assert [(e["a"], e["b"], e["weight"], e["ref"]) for e in events(h, "joked")] == [
         (101, 102, 4.0, f"move:{joke}"), (102, 101, 4.0, f"move:{joke}")]
@@ -448,8 +528,8 @@ def claim(h, guid, subject, line, *, polarity=1, kind="opinion"):
 
 def test_speaking_well_of_a_member_by_name_in_public(h):
     cast(h)
-    said = h.say(T, 101, "Belra carried that fight")
-    private = h.say(T + 5, 103, "Dunna is great", channel="officer")
+    said = say(h, T, 101, "Belra carried that fight")
+    private = say(h, T + 5, 103, "Dunna is great", channel="officer")
     good = claim(h, 101, "belra", said)
     claim(h, 105, "Belra", said, polarity=-1)            # a poor opinion
     claim(h, 103, "Dunna", private)                      # said among the officers
@@ -496,6 +576,9 @@ def test_a_crowded_room_and_the_officers_and_private_rooms_count_for_nobody(h, m
     seat(h, 104, "officers", LATE, 60)
     seat(h, 103, "private1", LATE + 4000, 40)
     seat(h, 104, "private1", LATE + 4000, 40)
+    for room in ("interview", "penalty_box"):
+        seat(h, 105, room, NOON + 9000, 40)
+        seat(h, 104, room, NOON + 9000, 40)
     monkeypatch.setattr(pulls, "VOICE_ROOM_MAX", 2)
     summary = record(h)
     assert {(e["a"], e["b"]): e["kind"] for e in events(h)} == {
@@ -505,6 +588,15 @@ def test_a_crowded_room_and_the_officers_and_private_rooms_count_for_nobody(h, m
 
 def test_the_room_limit_is_four_members():
     assert pulls.VOICE_ROOM_MAX == 4 and pulls.DISCORD_REPLY_S == 600.0
+
+
+def test_the_rooms_learn_reads_as_not_public_are_never_read():
+    from leeroy_mind.voice.rooms import PRIVATE
+    assert pulls.NON_PUBLIC_ROOMS == {*PRIVATE, "officers", "interview", "penalty_box"}
+    assert pulls.VOICE_SKIP == pulls.NON_PUBLIC_ROOMS | {"afk"}
+    for room in ("voice:interview", "voice:penalty_box", "voice:private2", "voice:officers"):
+        assert not pulls._readable(room)
+    assert pulls._readable("voice:smoke_room") and pulls._readable("guild")
 
 
 # -- DKP -------------------------------------------------------------------------------------------------
@@ -527,9 +619,26 @@ def test_a_close_award_is_an_outcome_and_respect_after_it_is_a_pull_once(h):
            "VALUES (102, 101, 'respect', 1, 'copresence', '[]', ?, 1)", (int(T + 86400),))
     record(h, "2026-10-30")
     record(h, "2026-10-31")
-    assert [(e["a"], e["b"], e["amount"], e["ref"]) for e in events(h, "dkp_respect")] == [
-        (102, 101, 7.5, "loot:guild:loot:3:abc123")]
-    assert shadow(h, 102, 101)["events"] == 1
+    # her respect is her own: private
+    assert [(e["a"], e["b"], e["amount"], e["scope"], e["ref"]) for e in events(h, "dkp_respect")] == [
+        (102, 101, 7.5, "private", "loot:guild:loot:3:abc123")]
+    assert shadow(h, 102, 101)["events"] == 1 and shadow(h, 102, 101)["public_pull"] == 0.0
+
+
+def test_respect_after_the_nights_end_waits_for_its_own_night(h):
+    """A replay holds every later delta already: respect gained two nights after the award
+    counts on the night it was gained, never earlier."""
+    cast(h)
+    award(h, 101, 102)
+    sql(h, "INSERT INTO rel_delta(a, b, dim, delta, reason, evidence, ts, applied) "
+           "VALUES (102, 101, 'respect', 1, 'copresence', '[]', ?, 1)", (int(T + 2 * 86400),))
+    record(h)
+    record(h, "2026-10-30")
+    assert events(h, "dkp_respect") == []
+    record(h, "2026-10-31")
+    assert [(e["a"], e["b"]) for e in events(h, "dkp_respect")] == [(102, 101)]
+    assert h.store.conn.execute("SELECT night FROM pull_event WHERE kind = 'dkp_respect'"
+                                ).fetchone()[0] == "2026-10-31"
 
 
 def test_an_award_that_was_not_close_is_nothing(h):
@@ -768,6 +877,21 @@ def test_the_caps_admit_three_threads_one_with_a_taken_member_and_one_a_night():
     assert [(t["a"], t["b"]) for t in opened] == [(5, 6)] and why == {(7, 8): "cap_night"}
 
 
+def test_the_rarest_shape_is_counted_again_after_each_opening():
+    """With room for several openings a night, a shape that has just opened is no longer the
+    rarest: the next opening goes to a shape still missing, whatever the pulls."""
+    def c(a, b, pull, shape):
+        return {"a": a, "b": b, "pull": pull, "shape": shape, "taken": False}
+    live = [c(1, 2, 40.0, "triangle")]
+    pool = [c(3, 4, 90.0, "unrequited"), c(5, 6, 80.0, "unrequited"), c(7, 8, 50.0, "slow_burn")]
+    opened, why = pulls.admit(pool, live, threads_max=9, opens_max=2)
+    # unrequited and slow_burn tie at none live, so the stronger pull opens; then unrequited
+    # has one and slow_burn is the rarer
+    assert [(t["a"], t["b"]) for t in opened] == [(3, 4), (7, 8)] and why == {(5, 6): "cap_night"}
+    opened, why = pulls.admit(pool, live, threads_max=9, opens_max=3)
+    assert [(t["a"], t["b"]) for t in opened] == [(3, 4), (7, 8), (5, 6)] and why == {}
+
+
 def test_one_opening_a_night_in_the_ledger(h, monkeypatch):
     monkeypatch.setattr(pulls, "OPEN_P", 1.0)
     cast(h)
@@ -850,6 +974,26 @@ def test_a_member_couple_with_someone_else_makes_a_triangle(h, sure):
     assert shadow(h, 101, 102)["shape"] == "triangle"
 
 
+def test_two_who_only_notice_each_other_make_no_triangle(h, sure):
+    cast(h)
+    seed_shadow(h, 101, 102, 60.0)
+    for x, y in ((102, 105), (105, 102)):
+        h.rel(x, y, romance_stage="notices")
+    record(h)
+    assert shadow(h, 101, 102)["shape"] == "unrequited"
+
+
+def test_affinity_is_checked_both_ways(h, sure):
+    """An unrequited pull toward someone who dislikes you waits, as one from someone who
+    dislikes her does."""
+    cast(h)
+    seed_shadow(h, 101, 102, 60.0)
+    h.rel(102, 101, affinity=-0.5)       # she dislikes him; his row is untouched
+    summary = record(h)
+    assert (shadow(h, 101, 102)["thread_state"], shadow(h, 101, 102)["thread_why"]) == ("waiting", "affinity")
+    assert summary["waiting"] == {"affinity": 1}
+
+
 def test_a_would_be_thread_fades_under_ten_and_a_waiting_one_lets_go(h, sure):
     cast(h)
     seed_shadow(h, 101, 102, 10.1, state="open", thread_night="2026-10-20")
@@ -868,8 +1012,8 @@ def everything(h):
     h.boss(T + 60, 533, 1, "killed", (101, 102))
     h.group(T + 90, (1, 101, 102))
     scene(h, 101, 102, [(101, 102, 2)])
-    first = h.say(T, 102, "SECRETWORDS we should swap the tanks")
-    h.say(T + 30, 101, "SECRETWORDS exactly, Belra is right")
+    first = say(h, T, 102, "SECRETWORDS we should swap the tanks")
+    say(h, T + 30, 101, "SECRETWORDS exactly, Belra is right")
     post(h, 1, "general", 101, T, text="SECRETWORDS")
     post(h, 2, "general", 102, T + 60, reply_to=1, text="SECRETWORDS Arkon")
     react(h, 1, 102, T + 90)
@@ -881,7 +1025,7 @@ def everything(h):
     award(h, 101, 102)
     for t, g in ((T + 100, 101), (T + 130, 102)):
         sql(h, "UPDATE utterance SET why = 'banter:topic' WHERE id = ?", (h.utter(t, g, "SECRETWORDS"),))
-    h.say(T + 200, 103, "SECRETWORDS Dunna, the portal")
+    say(h, T + 200, 103, "SECRETWORDS Dunna, the portal")
 
 
 def test_rows_hold_ids_counts_and_codes_never_text(h, monkeypatch):
@@ -976,8 +1120,8 @@ def busy_night(h):
     cast(h, taken=(102,), stance={104: "lust"})
     everything(h)
     raid(h, 2, (101, 102, 103, 104, 105), t=T + 60)
-    h.say(T + 100, 103, "Dunna is such a noob")
-    h.say(T + 120, 105, "lay off Dunna")
+    say(h, T + 100, 103, "Dunna is such a noob")
+    say(h, T + 120, 105, "lay off Dunna")
     seed_shadow(h, 105, 104, 60.0)
     h.rel(105, 104, affinity=30.0)
     h.rel(101, 102, affinity=12.0, attraction=7.0)

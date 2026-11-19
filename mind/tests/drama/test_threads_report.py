@@ -188,7 +188,8 @@ def test_health_is_quiet_while_off_and_while_recording_finds_events(h):
     assert off.status == health.OK and off.text.startswith("romantic threads: off")
     cast(h)
     young = check(h, RECORD)
-    assert young.status == health.OK and "0 nights so far" in young.text
+    assert young.status == health.OK and young.text == (
+        "romantic threads: recording only; no night recorded yet")
     for i, night in enumerate(("2026-10-29", "2026-10-30", "2026-10-31")):
         raid(h, i + 1, (101, 102), t=T + i * DAY)
         record(h, night)
@@ -212,8 +213,15 @@ def test_health_notes_three_nights_without_an_event(h):
 
 def test_health_notes_finished_nights_the_recorder_missed(h):
     cast(h)
+    # finished nights from before the first recorded one were never the recorder's to miss
     for i in range(3):
-        night_run(h, f"2026-10-2{i + 7}", T + i * DAY)
+        night_run(h, f"2026-10-2{i + 6}", T - (3 - i) * DAY)
+    assert check(h, RECORD).text == "romantic threads: recording only; no night recorded yet"
+    raid(h, 1, (101, 102))
+    record(h)
+    assert check(h, RECORD).text == "romantic threads: recording only; 1 nights so far"
+    for i, night in enumerate(("2026-10-30", "2026-10-31", "2026-11-01")):
+        night_run(h, night, T + (i + 1) * DAY)
     note = check(h, RECORD)
     assert note.status == health.NOTE and "last 3 finished nights were not recorded" in note.text
 

@@ -14,7 +14,7 @@ NIGHTS_MAX = 90
 TOP = 15
 WHY_WORDS = {
     "draw": "the night's draw said not yet",
-    "affinity": f"affinity under {OPEN_AFFINITY:g} (they dislike each other)",
+    "affinity": f"affinity under {OPEN_AFFINITY:g} either way (one dislikes the other)",
     "social": f"under {OPEN_SOCIAL:g} of the pull is social (presence alone never opens one)",
     "cap_night": f"{OPENS_PER_NIGHT} opening a night",
     "feud": "the two are feuding",
@@ -130,7 +130,7 @@ def render(data: dict) -> str:
                    f"since {t['first_night']}  {extra}".rstrip())
     r = data["rules"]
     out.append(f"\nWould-be threads (pull {r['open_pull']:g}, {r['open_social']:g} of it social, "
-               f"affinity {r['open_affinity']:g} or more; caps {r['threads_max']} live, "
+               f"affinity {r['open_affinity']:g} or more both ways; caps {r['threads_max']} live, "
                f"{r['taken_max']} with a taken member, {r['opens_per_night']} opening a night):")
     out.append("  night       candidates opened live taken faded  shapes; held back")
     for n in data["nights"]:

@@ -4,7 +4,9 @@ have recorded. The live database is opened read-only for the copy and never writ
 lives in the data directory's scratch folder and is deleted afterwards unless kept.
 
 Limits, stated in the output: every night is replayed against today's cast, personas
-(households, stances) and relationship rows, since older ones are not stored per night."""
+(households, stances) and relationship rows, since older ones are not stored per night; and the
+talk pipeline's scored moves (`talk_move`) are kept only MOVES_KEEP_S, so `joked` and
+`complimented` are found only on the last nights replayed (live recording reads tonight's)."""
 import sqlite3
 from pathlib import Path
 
@@ -13,9 +15,12 @@ from leeroy_mind.drama.pulls import cast_from_store, record_night
 from leeroy_mind.drama.report import threads_report
 from leeroy_mind.storage.db import open_db, snapshot
 from leeroy_mind.storage.store import Store
+from leeroy_mind.talk.movelog import MOVES_KEEP_S
 
 LABEL = "threads-replay"
-LIMITS = "replayed against today's cast, households, stances and relationship rows"
+LIMITS = ("replayed against today's cast, households, stances and relationship rows; scored "
+          f"jokes and compliments are kept {MOVES_KEEP_S / 86400:g} days, so only the last nights "
+          "can show them")
 
 
 def _human(conn) -> int:
