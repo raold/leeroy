@@ -68,8 +68,14 @@ class PhotoBooth:
         async with self._exclusive:
             await self._night(night, window)
 
+    def _manual(self):
+        """His Render selfies button's run (manual.py) owns the GPU while it runs."""
+        manual = getattr(self.app, 'selfie_manual', None)
+        return manual is not None and manual.running
+
     def _eligible(self):
         return (self.cfg.enabled and self.cfg.booth and not self.arbiter.holders
+                and not self._manual()
                 and not getattr(self.arbiter, 'paused', False)
                 and self.scheduler.presence.offline_seconds() >= OFFLINE_SECONDS
                 and self.scheduler.running is None and not self._exclusive.locked()
@@ -80,6 +86,8 @@ class PhotoBooth:
             return 'The GPU is paused. Resume it from the top bar first.'
         if not self.cfg.enabled or not self.cfg.booth:
             return "The photo booth is off."
+        if self._manual():
+            return "A Render selfies run is already rendering."
         if self.running or self._exclusive.locked():
             return "A photo booth or night pass is already running."
         if self.arbiter.holders:

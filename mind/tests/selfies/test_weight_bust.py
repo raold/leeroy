@@ -16,6 +16,7 @@ from leeroy_mind.personas.schema import (BUSTS, PersonaError, ProfilePhoto, appe
                                          persona_from_dict, persona_to_dict, validate_persona)
 from leeroy_mind.selfies import kind, varied
 from leeroy_mind.selfies.kind import EXPLICIT_RE, WEAR_RE
+from leeroy_mind.selfies.safe import selfie_framing
 from leeroy_mind.selfies.prompt import (_FRAMINGS, _KINDS, BUILD_WORDS, BUST_WORDS, FIT_MAX,
                                         FULL_BUILDS, LUST_NEGATIVE, NEGATIVE, PLAIN, SHORT,
                                         SIZE_WORDS, hair_skin_short, over_fit,
@@ -237,8 +238,14 @@ def test_every_word_is_clothed_adult_and_on_the_token_table():
 
 def test_the_negatives_are_unchanged():
     p = woman(build="voluptuous", weight_kg=100, bust="very_large")
-    assert build_prompt(p).negative == NEGATIVE
-    assert build_prompt(replace(p, photo=_lust_kind()), kind_style=LUST).negative == LUST_NEGATIVE
+    from leeroy_mind.selfies.prompt import BODY_NEGATIVE, BODY_NEGATIVE_LUST
+    from leeroy_mind.selfies.prompt import HEAD_NEGATIVE
+    close = replace(p, photo=replace(p.photo, framing="head_and_shoulders"))
+    assert build_prompt(close).negative == HEAD_NEGATIVE and set(NEGATIVE) < set(HEAD_NEGATIVE)
+    # a waist-up or wider photo takes the body negative (safe.py), its covered line unchanged
+    assert build_prompt(p).negative == BODY_NEGATIVE and NEGATIVE[1] in BODY_NEGATIVE
+    lust = build_prompt(replace(p, photo=_lust_kind()), kind_style=LUST).negative
+    assert lust == BODY_NEGATIVE_LUST and LUST_NEGATIVE[1] in lust
     assert "cleavage" in " ".join(t for t, _ in NEGATIVE)
 
 
@@ -365,7 +372,10 @@ def test_the_longest_lust_prompt_fits_and_never_cuts_her_body_hair_or_skin(build
                 assert not over_fit(spec), (framing, kind_, kg)
                 _never_cut(spec, p)
                 assert f"wearing {ph.outfit}, {ph.setting}" in _texts(spec, 0)
-                for text in (_KINDS[kind_], _FRAMINGS[framing]):
+                # a lust kind's mirror selfie renders as a selfie (safe.kind_of), and a lust
+                # selfie waist-up (safe.selfie_framing)
+                shown = "selfie" if kind_ == "mirror_selfie" else kind_
+                for text in (_KINDS[shown], _FRAMINGS[selfie_framing(shown, framing)]):
                     forms = {text, SHORT.get(text, text)}
                     assert forms & set(_texts(spec, 0)) or forms & set(_texts(spec, 1))
                 kept, dropped = fit(spec.phrases, estimate, 75)
@@ -393,12 +403,17 @@ def test_the_steps_run_in_the_rulings_order():
                 taken = [i for i, x in enumerate(steps) if x]
                 assert taken == list(range(len(taken))), (kg, bust, bool(looks), steps)
                 seen.add(len(taken) == len(steps) or len(taken))
-    assert True in seen and len(seen) >= 3  # from a few steps to the kind yielding
+    # with her standing pose required (safe.POSES) the longest phrase takes every step
+    assert True in seen
     heavy = woman(build="voluptuous", weight_kg=100, bust="very_large", **LONG_LOOKS)
     texts = _texts(build_prompt(replace(heavy, photo=ph0), kind_style=LUST), 0)
     assert "shoulder-length honey blonde with highlights hair" in texts and "olive skin" in texts
     assert build_words(heavy) in texts and "plus-size, heavyset" in texts
-    assert SHORT == {"candid photo taken by a friend": "candid photo",
+    from leeroy_mind.selfies.safe import POSE_SHORT as poses
+    assert set(poses.values()) == {"standing", "walking", "walking away"}
+    assert SHORT == {**poses,  # a body shot's pose shortens before her hair's style would go
+                     "selfie, close arm's-length shot": "selfie",
+                     "candid photo taken by a friend": "candid photo",
                      "professional headshot": "headshot",
                      "waist-up shot, upper body": "waist-up shot",
                      _FRAMINGS["three_quarter"]: "three-quarter shot, waist and hips in frame"}
@@ -548,8 +563,11 @@ def test_a_situational_photo_says_her_body_hair_and_skin_right_after_who_she_is(
     p = woman(build="voluptuous", weight_kg=88, bust="large")
     spec = build_scene_prompt(p, Scene(**SCENE))
     assert _after_subject(spec)[:2] == [PLUS_W, build_words(p)]
-    for text in (PLUS_W, build_words(p), HAIR, SKIN):
+    for text in (PLUS_W, build_words(p), SKIN):
         assert (text, 0) in spec.phrases
+    # what she wears is required too (safe.complete), so her hair may drop its style
+    assert any(t == HAIR or HAIR.startswith(t + ",") for t, pr in spec.phrases if pr == 0)
+    assert any(t.startswith("wearing ") and pr == 0 for t, pr in spec.phrases)
     plain = build_scene_prompt(woman(build="voluptuous"), Scene(**SCENE))
     assert _after_subject(plain)[0] == BUILD_WORDS["voluptuous"]
     assert not any(t in _texts(plain) for _, w, m in SIZE_WORDS for t in (w, m) if t)

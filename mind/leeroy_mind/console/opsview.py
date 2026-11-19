@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 import tomllib
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -354,7 +354,9 @@ def selfies_view(conn, now):
     def get_meta(key):
         rows = views.rows(conn, "SELECT value FROM meta WHERE key=?", (key,))
         return rows[0][0] if rows else None
-    proxy = SimpleNamespace(conn=conn, get_meta=get_meta)
+    # chosen_style may ask whether the photo pass ran (kind._pass_ran) inside a transaction:
+    # on this read-only connection that is a plain read
+    proxy = SimpleNamespace(conn=conn, get_meta=get_meta, transaction=nullcontext)
     for r in queue:
         rows = views.rows(conn, "SELECT json FROM persona_core WHERE guid=? AND length(json)<=?", (r[0], FILE_BYTES))
         try:
@@ -371,11 +373,16 @@ def selfies_view(conn, now):
         stage_rows.append({"stage": code(name), **{k: number(r.get(k)) for k in
                            ("started", "finished", "units", "calls", "call_s")}})
     booth = meta(conn, "selfies:booth:last")
+    manual = meta(conn, "selfies:manual:last")  # his Render selfies button (selfies/manual.py)
     return panel(counts=store.counts(conn), queue=[{"guid": r[0], "set": r[1], "requested": number(r[2])} for r in queue],
         held=held, stages=stage_rows,
         snaps=snaps.counts(conn, now=now) if "selfie_snap" in views.tables(conn) else None,
         booth={**{k: number(booth.get(k)) for k in ("started", "finished", "sets", "attempts", "seconds")},
-               "outcome": code(booth.get("outcome"))} if booth else None)
+               "outcome": code(booth.get("outcome"))} if booth else None,
+        manual={**{k: number(manual.get(k)) for k in ("started", "finished", "total", "done", "sets",
+                                                       "snaps", "failed", "held", "seconds")},
+                "outcome": code(manual.get("outcome")),
+                "by": code(manual.get("by")) if manual.get("by") is not None else None} if manual else None)
 
 
 def _entries(path, deadline):
@@ -687,7 +694,8 @@ class OpsView:
                 result = selfies_view(conn, now)
                 state = feature_state(self.data, "selfies")
                 result["enabled"] = state
-                if state == "off" and not (any(result["counts"].values()) or result["booth"] or result["stages"]
+                if state == "off" and not (any(result["counts"].values()) or result["booth"]
+                                            or result["manual"] or result["stages"]
                                             or any((result["snaps"] or {}).values())):
                     result.update(status="missing", why="selfies are off and no retained photo work exists.")
                 return result

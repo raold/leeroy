@@ -271,6 +271,25 @@ def test_selfie_queue_held_counts_stages_booth_and_no_private_text(store):
     assert SECRET not in json.dumps(got)
 
 
+def test_selfie_queue_of_a_kinded_member_and_the_last_render_selfies_run(store):
+    """A queued set whose member has a photo kind the pass never recorded (no adoption mark yet)
+    reads through the panel's read-only store; the last Render selfies run shows beside the
+    booth's, codes and counts only."""
+    from conftest import seed_test_cast
+    from selfies.fakes import renderable_cast
+    seed_test_cast(store)
+    renderable_cast(store, 101)
+    store.conn.execute("INSERT INTO selfie_set(guid,set_no,reason,status,requested) VALUES(101,1,'first','queued',?)", (NOW-100,))
+    put(store.conn, "selfies:manual:last", {"finished": NOW-5, "total": 7, "done": 1, "sets": 1,
+        "snaps": 0, "failed": 0, "held": 0, "seconds": 30.5, "outcome": "preempted", "by": "discord",
+        "prompt": SECRET})
+    got = ops.selfies_view(store.conn, NOW)
+    assert got["status"] == "ok" and got["queue"][0]["guid"] == 101 and got["held"] == []
+    assert got["manual"]["outcome"] == "preempted" and got["manual"]["by"] == "discord"
+    assert (got["manual"]["done"], got["manual"]["total"], got["manual"]["sets"]) == (1, 7, 1)
+    assert SECRET not in json.dumps(got)
+
+
 def test_backup_inventory_never_reads_dump_or_snapshot_contents(tmp_path):
     data = tmp_path / "data"
     snapshots = data / "snapshots"

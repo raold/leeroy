@@ -358,9 +358,33 @@ def _worse(mine, theirs):
     return bool(mine[1]) and (not theirs[0] or mine[1] / mine[0] > theirs[1] / theirs[0] + EPSILON)
 
 
+def _losing(used, by_key, control, now):
+    """The retirement verdict, room by room (a bandit context each): None unless the arm loses,
+    else (its best probability among the rooms that measure it, the uses there). It loses when,
+    in every context where it has 30 rewarded uses (at least one), its probability of beating
+    control's lines in that same context is under 0.5, and it beats control there with a
+    probability above 0.9 in no context at all. Never pooled: an arm's few uses in one room
+    would otherwise set it against all of control's lines in that room, whose rewards may run
+    on another scale (a DM line he answers scores far above a guild line)."""
+    rooms = {}
+    for row in used:
+        rooms.setdefault(row.key, []).append(row)
+
+    def probability(key):
+        return beats(_mass(rooms[key], now), _mass([r for r in by_key[key] if control in r.arms], now))
+    measured = {key: probability(key) for key, rows in sorted(rooms.items()) if len(rows) >= USES}
+    # A tie (quadrature gives 0.4999999999999993) is not a loser.
+    if not measured or any(p >= LOSING - 1e-9 for p in measured.values()):
+        return None
+    if any(probability(key) > PROBABILITY for key in sorted(rooms) if key not in measured):
+        return None
+    return max(measured.values()), sum(len(rooms[key]) for key in measured)
+
+
 def _lesson_evidence(conn, lesson_id, guid):
     """The member's rewarded and screened generations with and without the lesson, in the
-    rooms where it was used and since its first use."""
+    rooms where it was used and since its first use. These rooms are pooled, unlike arm
+    retirement's (_losing); no lesson is used in Discord yet, where pooling would tilt it."""
     rows = [SimpleNamespace(lessons=_ids(ids, int), verdict=verdict, channel=channel, ts=ts, value=value, cap=cap)
             for ids, verdict, channel, ts, value, cap in conn.execute(
                 "SELECT p.lesson_ids,p.guard_verdict,c.channel,c.ts,r.value,r.cap_weight FROM talk_recipe p "
@@ -466,10 +490,11 @@ def evaluate(conn, *, week, cfg, now, tz, owner):
                      rate=round(carrier.rate(), 6), control_rate=round(comparison.rate(), 6))
         (plan['held'] if reasons else plan['promote']).append(dict(entry, reasons=reasons) if reasons else entry)
 
-    # Retirement: a measured loser the bandit has stopped choosing. Thirty rewarded uses, under
-    # 0.5 probability of beating control on whole rewards, and under 5% of its family's
-    # generations in both weeks; never a promoted arm, nor one an owner rollback restored
-    # until it has 30 new uses. A lesson's own 14-day expiry retires it.
+    # Retirement: a measured loser the bandit has stopped choosing. Room by room (_losing): under
+    # 0.5 probability of beating control on whole rewards in every bandit context where it has
+    # thirty rewarded uses, and credibly better in none; under 5% of its family's generations in
+    # both weeks; never a promoted arm, nor one an owner rollback restored until it has 30 new
+    # uses. A lesson's own 14-day expiry retires it.
     shares, last_shares = (_shares(rows, registry, frozen_members, contexts) for rows in (this, last))
     promoted_ids = {ident for kind, ident, _ in in_force if kind == 'arm'}
     for aid, arm in sorted(registry.items()):
@@ -481,12 +506,11 @@ def evaluate(conn, *, week, cfg, now, tz, owner):
         used = [r for r in rewarded if aid in r.arms]
         if len(used) < USES or held(holds.get(('arm', aid, '')), used, now):
             continue
-        rooms = {r.key for r in used}
-        probability = beats(_mass(used, now), _mass([r for r in rewarded if r.key in rooms
-                                                      and controls[arm.family] in r.arms], now))
-        if probability < LOSING - 1e-9:  # a tie (quadrature gives 0.4999999999999993) is not a loser
+        verdict = _losing(used, by_key, controls[arm.family], now)
+        if verdict is not None:
+            probability, uses = verdict
             plan['retire_arms'].append(dict(id=aid, share=round(share, 6), share_previous=round(previous, 6),
-                                            probability=round(probability, 6), uses=len(used)))
+                                            probability=round(probability, 6), uses=uses))
     # Lapsed during the evaluated week, so each lapse is reported by exactly one cycle.
     for lid, guid in conn.execute(
             "SELECT id,guid FROM talk_lesson WHERE status='active' AND expires>? AND expires<=? ORDER BY id",

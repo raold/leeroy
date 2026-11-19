@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 import json
 import sqlite3
-from time import perf_counter
+from time import monotonic, perf_counter
 
 from leeroy_mind.logs import log
 from leeroy_mind.clock import SystemClock
@@ -20,7 +20,9 @@ from .weights import available, ensure
 from .generation import lines
 from .timing import record_timing, planning_seconds
 
-PER_NIGHT = 500
+PER_NIGHT = 500          # a night's units before any night has measured their cost
+BACKLOG_FACTOR = 8       # and at most this many times that, once it has
+BUDGET_S = 900.          # the wall time the measured cost may fill: a backlog drains in a night or two
 LOOKBACK_DAYS = 14
 PLAN = "nightly:rewards:plan:"
 GROUP = "SELECT line_id FROM talk_recipe_line WHERE recipe_line_id=c.id UNION SELECT c.id"
@@ -28,7 +30,7 @@ CHANGED = f"""(EXISTS (SELECT 1 FROM talk_signal s WHERE s.line_id IN ({GROUP}) 
     AND s.ts>r.scored_at) OR
     (SELECT min(s.value) FROM talk_signal s WHERE s.line_id IN ({GROUP}) AND s.ts<=:now
         AND s.kind='explicit' AND s.source='explicit')!=json_extract(r.parts,'$.explicit') OR
-    (SELECT count(*) FROM talk_signal s WHERE s.line_id IN ({GROUP}) AND s.ts<=:now) >
+    (SELECT count(*) FROM talk_signal s WHERE s.line_id IN ({GROUP}) AND s.ts<=:now) !=
      json_extract(r.parts,'$.evidence_count') OR
     (SELECT count(*) FROM chat_line WHERE id IN ({GROUP})) > coalesce(json_extract(r.parts,'$.line_count'),1))"""
 
@@ -38,6 +40,21 @@ def ready(store):
     if not hasattr(store, "_learn_available"):
         store._learn_available = available(store.conn)
     return store._learn_available
+
+
+def night_limit(conn):
+    """How many lines a night scores: PER_NIGHT until a night has measured what one costs (the
+    dearer of lexical and embedding units, the last seven nights), then as many as fit BUDGET_S, at most
+    BACKLOG_FACTOR times PER_NIGHT. About 500 new lines a day against a fixed 500 never drained."""
+    try:
+        cost = conn.execute("SELECT max(s/u) FROM (SELECT sum(seconds) s,sum(units) u FROM reward_timing "
+                            "GROUP BY mode HAVING u>0)").fetchone()[0]
+    except sqlite3.OperationalError:
+        return PER_NIGHT
+    if cost is None:
+        return PER_NIGHT
+    # The dearer of the two measured modes: a backlog of embedding units alone must fit too.
+    return max(PER_NIGHT, min(PER_NIGHT * BACKLOG_FACTOR, int(BUDGET_S / max(cost, .001))))
 
 
 def _pending(ctx, *, count=False, open_only=False):
@@ -54,8 +71,12 @@ def _pending(ctx, *, count=False, open_only=False):
                 start=now-LOOKBACK_DAYS*DAY,retained=now-RETENTION_S,
                 closed=now-REPLY_SECONDS,now=now)
     if not count:
-        query += " ORDER BY (r.line_id IS NOT NULL) DESC,c.ts DESC,c.id DESC LIMIT :limit"
-        args["limit"] = PER_NIGHT
+        # Changed evidence first, then lines he answered or reacted to (what the bandit can
+        # learn from), then the newest of the rest.
+        query += (" ORDER BY (r.line_id IS NOT NULL) DESC,"
+                  f"EXISTS (SELECT 1 FROM talk_signal s WHERE s.line_id IN ({GROUP}) AND s.source!='judge') DESC,"
+                  "c.ts DESC,c.id DESC LIMIT :limit")
+        args["limit"] = night_limit(ctx.store.conn)
     rows = ctx.store.conn.execute(query,args).fetchall()
     return rows[0][0] if count else [r[0] for r in rows]
 
@@ -67,7 +88,7 @@ def _selection(ctx):
     try:
         ids = json.loads(saved)
         if type(ids) is list and all(type(i) is int and i>0 for i in ids) and len(set(ids)) == len(ids):
-            return ids[:PER_NIGHT]
+            return ids[:PER_NIGHT * BACKLOG_FACTOR]
     except (ValueError,TypeError,RecursionError):
         pass
     return []
@@ -89,8 +110,8 @@ def _unit(ctx, lid):
         return str(lid)
     changed = ctx.store.conn.execute("SELECT max(ts),min(CASE WHEN kind='explicit' AND source='explicit' THEN value END),count(*) "
         "FROM talk_signal WHERE line_id IN (" + ",".join("?" for _ in ids) + ") AND ts<=?",(*ids,ctx.clock.now())).fetchone()
-    if changed[0] is not None and (changed[0]>row[0] or changed[2]>row[2] or
-                                  (changed[1] is not None and changed[1]!=row[1])) or len(ids)!=row[4]:
+    if changed[0] is not None and (changed[0]>row[0] or
+                                  (changed[1] is not None and changed[1]!=row[1])) or changed[2]!=row[2] or len(ids)!=row[4]:
         return f"{lid}:revision:{row[3]+1}"
     return None
 
@@ -187,9 +208,15 @@ async def stage_rewards(ctx):
         log("rewards_unavailable")
         return
     scored_count = 0
+    began, spent = monotonic(), False  # the stage's own wall guard, apart from unit timing
 
     async def one(unit):
-        nonlocal scored_count
+        nonlocal scored_count, spent
+        if monotonic() - began > 2 * BUDGET_S:
+            if not spent:  # the rest stays pending for the next night; nothing failed
+                spent = True
+                log("rewards_budget_spent", night=ctx.night, scored=scored_count)
+            return
         started = perf_counter()
         used_embedding = False
         lid = units[unit]

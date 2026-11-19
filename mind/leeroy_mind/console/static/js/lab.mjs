@@ -206,7 +206,8 @@ function turing(value) {
 function conversation(value) {
   const box=$('lab-conversation'); clear(box); const view=conversationView(value);
   if (!view.available) { empty(box,'Not set up yet. Turn on [lab] enabled in mind.toml; each night then runs the battery in a sandbox copy.'); return; }
-  box.appendChild(el('p','hint','Each night: invented lines of yours to sampled members in a sandbox copy, graded 0-3 (3: would pass as her) with rule checks and the blind judge; prompt variants tried against the wording in use. Variants tried: '+view.tried+', promoted into the learn bandit: '+view.promoted+'.'));
+  box.appendChild(el('p','hint',view.hint));
+  if (view.note) { box.appendChild(el('p','hint',view.note)); }
   if (!view.runs.length) { empty(box,'No nights stored yet.'); }
   view.runs.forEach((r,i) => {
     const part=el('div','turing-family'); part.appendChild(el('p','lab-stat',r.headline));

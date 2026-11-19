@@ -128,9 +128,10 @@ class Rehearsal:
         await self.worker.start()
         rendered = await self.worker.render(request(self.root))
         assert rendered is not None and (self.root / "c0.jpg").exists()
-        from leeroy_mind.selfies import stage
-        self.monkeypatch.setattr(stage, "worker_command", lambda cfg, **kw: command)
-        self.monkeypatch.setattr(stage, "worker_env", lambda cfg: env)
+        from leeroy_mind.selfies import manual, stage
+        for module in (stage, manual):  # the night's worker and the Render selfies button's
+            self.monkeypatch.setattr(module, "worker_command", lambda cfg, **kw: command)
+            self.monkeypatch.setattr(module, "worker_env", lambda cfg: env)
         await self.start_mind()
         if state != "running":
             await self.stop_mind()

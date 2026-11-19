@@ -189,7 +189,9 @@ preempts it; unfinished work resumes inside the next window. His game login or
 Discord activity can preempt a night separately; after the Discord lease's ten
 idle minutes the night can resume within that same window.
 
-The booth renders inside the quiet window only while the server is on. Generic
+The booth renders inside the quiet window only while the server is on. His Render selfies
+button (console/RENDER.md) renders at any hour he is out of WoW: it releases the server lease for
+its run, keeps it released while it renders and takes it back at its end. Generic
 voice room topics guide room conversation. Silent away seats represent scheduled
 presence only: they start no session or audio and refresh every five minutes
 between 17:00 and 03:00 local. The tick calculates regional presence directly,

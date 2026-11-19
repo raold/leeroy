@@ -76,8 +76,11 @@ def test_detector_defects_reject_and_the_score_ranks_the_clean_ones():
     assert critic.verdict(critic.from_answer(answer(faces=0))).codes == ("no_face",)
     assert critic.verdict(critic.from_answer(answer(faces=0)), face_expected=False).clean
     assert critic.verdict(critic.from_answer(answer(hands=3))).codes == ("extra_hands",)
+    # eyes off level only lower the score (calibrated against the audit, 2026-11-17)
     tilted = critic.from_answer(answer(eyes={"tilt": 12.0, "level": 0.01}))
-    assert critic.verdict(tilted).codes == ("eyes_tilt",)
+    assert critic.verdict(tilted).clean and critic.detector_notes(tilted) == ("eyes_tilt",)
+    assert critic.verdict(tilted).score == round(critic.verdict(c).score * critic.NOTE_FACTOR, 4)
+    assert "eyes_tilt" not in critic.REJECT and critic.NOTES == ("eyes_tilt",)
     judged = Judged("defect", "ok", False, True, False, True, 1)
     assert critic.verdict(c, judged).codes == ("limbs", "fingers")
     near = critic.score(critic.from_answer(answer(identity=0.85)), Judged(**{**CLEAN}))

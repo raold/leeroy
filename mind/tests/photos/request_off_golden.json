@@ -1,18 +1,18 @@
 {
  "offer_notes": [
-  "You're sending a photo of yourself: walking a dog on a leash, holding a dog leash, on a quiet park path.. Write the short message you'd send with it, in your own way; don't describe the photo in detail."
+  "You're sending a photo of yourself: out on a walk with a dog alongside, the dog looking up at the camera, on a quiet park path.. Write the short message you'd send with it, in your own way; don't describe the photo in detail."
  ],
  "rendered": 1,
  "scene": {
-  "activity": "walking a dog on a leash, holding a dog leash",
+  "activity": "out on a walk with a dog alongside, the dog looking up at the camera",
   "audience": "him",
   "expression": "a relaxed smile",
   "framing": "upper_body",
   "kind": "snapshot",
-  "outfit": "a jacket and trousers",
+  "outfit": "a jacket over a t-shirt and trousers",
   "recipe": 1,
   "setting": "on a quiet park path",
-  "shows": "walking a dog on a leash, holding a dog leash, on a quiet park path.",
+  "shows": "out on a walk with a dog alongside, the dog looking up at the camera, on a quiet park path.",
   "when": "any"
  },
  "scene_calls": [

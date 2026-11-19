@@ -140,8 +140,9 @@ def test_a_change_needs_the_key_the_origin_and_json_and_goes_to_the_mind(cast, d
             assert (await http(app, "POST", "/api/tune", body=b"x", origin=True,
                                headers={"Content-Type": "text/plain"})).status == 415
             assert link.calls == []
-            listen = asyncio.create_task(events(app, count=2))
+            listen = asyncio.create_task(events(app, count=2, skip={"status"}))
             await asyncio.sleep(0.2)
+            await app.refresh()  # a strip pass between the snapshot and the action, every run
             r = await http(app, "POST", "/api/tune", body=SET, origin=True)
             assert r.status == 200 and r.json()["change"] == 3
             kinds = await listen

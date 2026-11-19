@@ -14,7 +14,8 @@ store it); stdout carries the enum codes, the fallbacks and the NSFW score, neve
 vary --stance lust plans (the default, read-only) or queues (--go) a varied set (varied.py) for
 every cast member of the lust style. With the mind stopped --go holds its instance lock and
 writes the rows itself; while it runs, --go asks the running mind's `selfie` op (`vary`), the
-one writer of photo rows then. Rendering stays the night's and the booth's.
+one writer of photo rows then. Rendering stays the night's, the booth's and his Render
+selfies button's (manual.py); status shows the latest of each.
 
 critic --path FILE [--ref FILE [--crop L,T,R,B]] measures one JPEG as the photo critic does
 (selfies/critic.py) with the mind stopped: an embed-only selfie worker's detectors, then, once
@@ -115,6 +116,13 @@ def _parser():
                      help="the reference's square as fractions L,T,R,B (default: all of it)")
     sub.add_argument("--no-judge", action="store_true", help="the detectors only")
     subs.add_parser("critic-report", help="defect rates from the stored critic rows (read-only)")
+    sub = subs.add_parser("audit", help="the covers and stocked situational photos a visual "
+                          "audit's labels mark defective (read-only; --go with the mind stopped)")
+    sub.add_argument("--labels", required=True, help="the folder of the audit's *.jsonl labels")
+    mode = sub.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="read-only report (default)")
+    mode.add_argument("--go", action="store_true", help="expire those stocked photos (rows "
+                      "only) and queue a fresh set for each member with a defective cover")
     sub = subs.add_parser("variety", help="plan or re-roll similar chosen faces (mind stopped)")
     sub.add_argument("--top", type=_positive, default=30)
     sub.add_argument("--release", type=lambda text: tuple(_positive(g) for g in text.split(",")),
@@ -223,7 +231,26 @@ def _status(store, clock) -> dict:
     except sqlite3.Error:  # an older database has no selfie_snap
         snaps = {}
     return {"queue": view, "snaps": snaps, "stages": _stages(store.conn),
-            "booth": _booth_status(store)}
+            "booth": _booth_status(store), "manual": _manual_status(store)}
+
+
+def _manual_status(store) -> dict:
+    """His Render selfies button's latest run (manual.LAST) and its day's record, apart from
+    the night's and the booth's."""
+    from .manual import LAST, SNAPS_STAGE, STAGE as MANUAL
+    try:
+        row = store.conn.execute("SELECT * FROM night_stage WHERE stage=? "
+                                 "ORDER BY night DESC LIMIT 1", (MANUAL,)).fetchone()
+        if row is None:
+            return {}
+        rec = dict(row)
+        rec["day"] = rec["night"].removeprefix("manual:")
+        rec["units"] = store.conn.execute("SELECT count(*) FROM night_step WHERE night=? "
+            "AND stage IN (?, ?) AND unit<>'queue'", (rec["night"], MANUAL, SNAPS_STAGE)).fetchone()[0]
+        rec["last"] = json.loads(store.get_meta(LAST) or "{}")
+        return rec
+    except (sqlite3.Error, ValueError, TypeError):
+        return {}
 
 
 def _booth_status(store) -> dict:
@@ -328,7 +355,8 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
             guids = pool if args.guid is not None else pool[:args.limit]
             if args.guid is not None and not guids:
                 print(f"guid {args.guid}: not of the lust style", file=sys.stderr)
-            plans = {g: varied.compose(ctx.base(g), f"try:{g}:{night}") for g in guids}
+            plans = {g: varied.compose(ctx.base(g), f"try:{g}:{night}", scfg.body_shot_share)
+                     for g in guids}
             for guid in [g for g in guids if plans[g] is None]:
                 print(f"guid {guid}: no safe varied look", file=sys.stderr)
             ready = [g for g in guids if plans[g] is not None]
@@ -453,7 +481,8 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
             await ctx.reasoner.preflight()
             await ctx.arbiter.ensure_model(ctx.settings.reflection_model)
         for guid in guids:
-            scene, codes = await ask_scene(ctx, guid, about=ABOUT["everyday"])
+            scene, codes = await ask_scene(ctx, guid, about=ABOUT["everyday"],
+                                           romance_styling=scfg.romance_styling)
             if scene is None:
                 _snap_result(results, guid, "declined" if codes == ["declined"] else "refused",
                              codes=codes)
@@ -524,6 +553,7 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
     from types import SimpleNamespace
     from leeroy_mind.discord.presence import local_time
     from leeroy_mind.life.presence import presence_at
+    from leeroy_mind.learn.config import load_learn_config
     from .ration import SEND_MIN_AGE
     from .request_render import SIZE, THUMB_PX, seed_for
     from .request_scene import RequestSceneError, choose_words_scene
@@ -558,7 +588,9 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
             return 1
         await ctx.arbiter.ensure_model(cfg.models.live)
         app = SimpleNamespace(store=store, data_dir=root, personas=ctx.personas, clock=clock,
-                              engine=SimpleNamespace(human=ctx.ident), cfg=cfg,
+                              engine=SimpleNamespace(human=ctx.ident,
+                                  learn_settings=load_learn_config(root / 'mind.toml')), cfg=cfg,
+                              selfies=SimpleNamespace(cfg=scfg),
                               scheduler=_Direct(ctx.reasoner.llm))
         her = local_time(clock.local(), p.identity.region)
         block = (presence_at(p, her, medium="discord").block
@@ -632,7 +664,8 @@ def _vary(root, clock, args, call_mind) -> int:
         with _read_store(root / "mind.db", clock) as store:
             report = varied.queue(store, human=_identity(cfg, store).guid, now=clock.now(),
                                   day=clock.local().date().isoformat(), go=False,
-                                  stance=args.stance, guids=args.guid)
+                                  stance=args.stance, guids=args.guid,
+                                  share=scfg.body_shot_share)
         _print({**report, "switch": scfg.varied_sets})
         return 0
     if not (scfg.enabled and scfg.varied_sets):
@@ -646,7 +679,8 @@ def _vary(root, clock, args, call_mind) -> int:
             with closing(Store(open_db(root / "mind.db"), clock=clock)) as store:
                 report = varied.queue(store, human=_identity(cfg, store).guid, now=clock.now(),
                                       day=clock.local().date().isoformat(), go=True,
-                                      stance=args.stance, guids=args.guid)
+                                      stance=args.stance, guids=args.guid,
+                                      share=scfg.body_shot_share)
             _print(report)
             return 0
     except AlreadyRunning:
@@ -664,6 +698,29 @@ def _vary(root, clock, args, call_mind) -> int:
     return 0 if reply.get("ok") is True else 1
 
 
+def _audit(root, clock, args) -> int:
+    """`selfies audit --labels DIR [--go]` (audit.py): the report is guids, set numbers, photo
+    ids and codes; --go holds the mind's lock, snapshots first and writes rows only."""
+    from . import audit
+    labels, counts = audit.read_labels(args.labels)
+    if not args.go:
+        with _read_store(root / "mind.db", clock) as store:
+            with store.transaction():
+                report = audit.plan(store.conn, labels)
+        _print({**report, "labels": counts})
+        return 0
+    from leeroy_mind.storage.db import open_db
+    from leeroy_mind.storage.store import Store
+    with _exclusive(root, gpu=False):
+        from leeroy_mind.__main__ import _snapshot_file
+        _snapshot_file(root / "mind.db", root / "snapshots", "pre-audit")  # open_db migrates
+        with closing(Store(open_db(root / "mind.db"), clock=clock)) as store:
+            with store.transaction():
+                report = audit.apply(store, audit.plan(store.conn, labels), now=clock.now())
+    _print({**report, "labels": counts})
+    return 0
+
+
 def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) -> int:
     args = _parser().parse_args(argv)
     clock = SystemClock()
@@ -679,6 +736,8 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             with _read_store(root / "mind.db", clock) as store:
                 _print(_critic_report(store))
             return 0
+        if args.action == "audit":
+            return _audit(root, clock, args)
         if args.action == "critic":
             cfg = load_config(root / "mind.toml")
             scfg = load_selfie_config(root / "mind.toml")
@@ -698,7 +757,8 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
                            else _read_store(root / "mind.db", clock))
                 with context as store:
                     _print(run(store,_identity(cfg,store),clock,lust_only=args.lust_only,
-                               go=args.go,include_owner=args.include_owner))
+                               go=args.go,include_owner=args.include_owner,
+                               share=load_selfie_config(root / "mind.toml").body_shot_share))
             return 0
         if args.action == "variety":
             from .variety import run
@@ -745,6 +805,8 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             print("selfies variety: mind must be stopped", file=sys.stderr)
         elif args.action == "critic":
             print("selfies critic: mind must be stopped (it would share the GPU)", file=sys.stderr)
+        elif args.action == "audit":
+            print("selfies audit: --go needs the mind stopped", file=sys.stderr)
         else:
             print(f"{exc}; selfies try would share its GPU and could unload its live model")
         return 1
@@ -765,7 +827,7 @@ def selfies_main(argv=None, *, make_llm=None, make_worker=None, call_mind=None) 
             from leeroy_mind.personas.looks_diversity import LooksRefused
             message = (str(exc) if isinstance(exc, (LooksRefused, WorkerError)) else
                        "filesystem_error" if isinstance(exc, OSError) else "variety_failed")
-        elif args.action in ("critic", "critic-report"):
+        elif args.action in ("critic", "critic-report", "audit"):
             message = (str(exc) if isinstance(exc, (WorkerError, ValueError)) else
                        "database_error" if isinstance(exc, sqlite3.Error) else
                        "filesystem_error" if isinstance(exc, OSError) else "critic_failed")

@@ -137,8 +137,9 @@ async def http(app, method, path, *, headers=None, body=None, host=None, key=Tru
     return Reply(int(first.split(" ")[1]), out, payload)
 
 
-async def events(app, *, count=1, timeout=10.0):
-    """Open /api/events and read `count` events: [(kind, data)], then close."""
+async def events(app, *, count=1, timeout=10.0, skip=frozenset()):
+    """Open /api/events and read `count` events: [(kind, data)], then close. Events whose kind
+    is in `skip` (a status strip that moved on its own, say) are read past and not counted."""
     port = app.s.port
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write((f"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
@@ -158,7 +159,8 @@ async def events(app, *, count=1, timeout=10.0):
                     kind = line[7:]
                 elif line.startswith("data: "):
                     data = json.loads(line[6:])
-            out.append((kind, data))
+            if kind not in skip:
+                out.append((kind, data))
     finally:
         writer.close()
     return out

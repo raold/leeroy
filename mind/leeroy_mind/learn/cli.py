@@ -59,6 +59,12 @@ def learn_main(argv=None):
                                   help="the version to restore (default: the newest weekly one)")
     rollback_command.add_argument("--with-weights", action="store_true",
                                   help="also restore that version's reward weights (default: keep the current ones)")
+    backfill_command = sub.add_parser("backfill-signals", help="replay stored Discord exchanges into the "
+                                      "owner-response signals: a dry run unless --go (mind stopped)")
+    backfill_command.add_argument("--data-dir", default=argparse.SUPPRESS)
+    backfill_command.add_argument("--since", required=True, metavar="YYYY-MM-DD",
+                                  help="local date to replay from (never further back than 90 days)")
+    backfill_command.add_argument("--go", action="store_true", help="write: holds mind.lock, snapshots first")
     from .preference_cli import add_parsers, run
     add_parsers(sub)
     args = parser.parse_args(argv)
@@ -71,6 +77,13 @@ def learn_main(argv=None):
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()
     if args.action == 'rollback':
         return rollback_main(root, args.to, with_weights=args.with_weights)
+    if args.action == 'backfill-signals':
+        from datetime import datetime
+        try:
+            since = datetime.strptime(args.since, "%Y-%m-%d").timestamp()
+        except (ValueError, OverflowError, OSError):
+            parser.error("--since must be a date, YYYY-MM-DD")
+        return backfill_main(root, since, go=args.go)
     if args.action not in ('report', 'lessons', 'arms', 'versions'):
         return run(args,root)
     try:
@@ -110,6 +123,62 @@ def arms_report(conn, *, now=None):
                 "turns":shares.get(arm.id,0),"share":shares.get(arm.id,0)/total if total else 0.})
     from dataclasses import asdict
     return {"available":True,"arms":[asdict(a) for a in registry],"contexts":contexts}
+
+
+def backfill_main(root, since, *, go=False, now=None):
+    """Replay the stored Discord exchanges since `since` into talk_signal (signals.backfill).
+    A dry run opens mind.db read-only and prints counts. --go needs the mind stopped: it holds
+    mind.lock throughout, snapshots first, never migrates, and writes numbers only."""
+    from contextlib import nullcontext
+    from leeroy_mind.app import AlreadyRunning, acquire_instance_lock
+    from leeroy_mind.signals import backfill
+    from leeroy_mind.signals import store as signals
+    from leeroy_mind.storage.db import snapshot
+    now = time.time() if now is None else now
+    try:
+        (root / "mind.db").open("rb").close()  # never a lock file in a data dir without a mind
+        lock = acquire_instance_lock(root) if go else nullcontext()
+    except AlreadyRunning:
+        print("learn backfill-signals: mind.lock is held; stop the mind before --go. Nothing written.")
+        return 1
+    except OSError:
+        print("learn backfill-signals: no mind.db in that data directory")
+        return 1
+    with lock:
+        try:
+            with closing(sqlite3.connect((root / "mind.db").resolve().as_uri() + ("?mode=rw" if go else "?mode=ro"),
+                                         uri=True, timeout=5.0)) as conn:
+                conn.row_factory = sqlite3.Row
+                owner = conn.execute("SELECT value FROM meta WHERE key='human_guid'").fetchone()
+                if owner is None or not str(owner[0]).isdigit() or int(owner[0]) <= 0:
+                    print("learn backfill-signals: this mind does not know its owner yet")
+                    return 1
+                if not signals.available(conn):
+                    print("learn backfill-signals: signals are not set up in this database")
+                    return 1
+                sink, facts = backfill.plan(conn, since=since, now=now, owner=int(owner[0]))
+                result, new = backfill.report(conn, sink, facts)
+                result["written"] = 0
+                if go and new:
+                    if not backfill.ready(conn):
+                        print("learn backfill-signals: this mind.db is older than the code (run db migrate); "
+                              "nothing written")
+                        return 1
+                    conn.commit()
+                    snap = snapshot(conn, root / "snapshots", "pre-backfill-signals")
+                    with conn:
+                        result["written"] = backfill.write(conn, new)
+                        conn.execute("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE "
+                                     "SET value=excluded.value", (f"signals:backfill:{int(now)}", json.dumps(
+                                         dict(since=facts["since"], written=result["written"]))))
+                    result["snapshot"] = snap.name
+                print(json.dumps(result, sort_keys=True, allow_nan=False))
+                print("written" if result["written"] else "dry run, nothing written" if not go
+                      else "nothing new; nothing written")
+                return 0
+        except (sqlite3.Error, ValueError, OSError) as error:
+            print(f"learn backfill-signals: unavailable ({type(error).__name__}); nothing written", file=sys.stderr)
+            return 1
 
 
 def rollback_main(root, version=None, *, with_weights=False):

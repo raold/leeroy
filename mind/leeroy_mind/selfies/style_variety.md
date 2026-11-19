@@ -506,3 +506,116 @@ too, newest row first (an older row is refused once a later edit moved the same 
 is clear when her stored persona's `appearance` has none of the keys `owner_hair_*`, `wardrobe`,
 `palette`, `makeup`, `glasses`, `jewellery`, `tattoos`, `piercings`; a second `--clear-style`
 plan then lists nobody.
+
+## Compositions the photo audit designed out (2026-11-17)
+
+A visual audit of about 1,290 rendered photos (145 covers, 55 situational photos, the newest two
+sets of every member) tied each defect to the composition behind it. 8% were defective (severity
+2 or more), 1% badly (a third hand, an extra arm, the subject rendered twice, three feet).
+Headshots were clean (1%); defects grew with how much body shows (waist-up 12%, three-quarter
+11%, full-length 21%) and with what the hands touch (no hand in view 2%, one or more 12%).
+`safe.py` holds what changed; the keys the model picks and the stored kinds and plans did not.
+
+| trigger (defective share in the audit) | what changed |
+|---|---|
+| mirror selfies of the lust profile kinds (27% of 64, half a wrong or second reflection; plain head-and-shoulders mirror selfies 3% of 92) | the lust style is no longer offered a mirror selfie or the hallway-mirror setting; a stored lust one renders as a selfie in `her hallway at home`. A plain mirror selfie stays one, and so does one he asks for in his words (`scene_from_words`): there the negative names neither the mirror nor the phone, and the caption still says "a mirror selfie" |
+| a phone held in view (doubled, oversized, back to the camera) | a selfie is said `selfie, close arm's-length shot` (short form `selfie`), a timer photo `photo taken on a timer`; `mirror, phone` required in the negative wherever no mirror is rendered |
+| the car's front seat (the subject cloned as a passenger), the concert crowd (a frame full of faces) | retired; stored ones render as a quiet street beside her parked car and a festival field |
+| "bike shorts" at the gym (38%: a garbled bicycle every time) | the outfit says gym shorts; the exercise-bike activity is "resting after a workout" |
+| a hand on the hip plus another arm action, hands on rails, glasses, mugs, pens, sticks | a three-quarter or full-length photo requires one of 3-4 simple poses per view, drawn by seed (`safe.POSES`: standing or walking, arms at her sides, hands behind her back or clasped in front; none on a hip, none seated); a waist-up snapshot asks for `arms down, hands out of frame`; a selfie takes no pose at any framing (an arm holds the camera, so "arms at her sides" would contradict it) and a lust selfie kind is waist-up (`safe.selfie_framing`: the three-quarter mirror selfie was the audit's worst cell, 38%), chosen so and, stored three-quarter before, rendered so; props rest on the table and activities are said as what is there, not what the hands do |
+| seated and splayed swimwear poses (merged legs and feet) | no pose sits or lies |
+| busy places (2 or more people in frame: 17%, and most of the severity 3) | `another person, duplicate person` required in the body negative; a garden party is a summer garden, a dance floor an empty one; `alone, no one else in frame` at priority 3 |
+| garbled signs and equipment lettering | `text, logo` among the first optional words of the body negative |
+| men rendered shirtless, bare shoulders with no top | the outfit sat at priority 2 and never reached the worker's 75 tokens (0 of 12 waist-up prompts kept it, 7 of 42 men's); it is now required as `wearing ...` wherever shoulders show (a close-up of the face keeps it optional), a top and for a waist-up or wider photo a bottom, a man always a shirt (`safe.complete`: the default top goes first, "a plain t-shirt, a rain jacket and jeans"); an outfit too long for the window, or one that leaves the accessories no room, gives way to default garments (`prompt.fit_clothed`); free text naming swimwear or underwear is never required |
+| one strap, fused sleeves, a top with no bottom | every list outfit (the wardrobe's scene outfits too) names a top and a bottom or a one-piece with its length; the one-shoulder top is a wrap top; `bottomless, shirtless` required in the body negative |
+
+**One fit order** (`prompt.fit_clothed`, with #358's `reserve` and `give`). Required: who she is,
+her body and size, her hair's length and colour, her skin tone, what she wears, the framing and
+a body shot's pose. Then what the owner set her to wear (the first optional phrases, with room
+reserved). Then her hair's style, eye colour and the other details. To make room, in order: the
+short forms and her hair's style, skin's modifiers and size's last terms; for the accessories'
+reserve the kind of photo, then the pose, move behind them; for the worker's limit the kind, the
+pose and the framing yield. A request from his words (`words_scene`) puts what the owner set her
+to wear first among its optional phrases, then the moment, then a timer photo's pose; its selfie
+framing takes its short form (`selfie`) in the first step of the fit, before an accessory or her
+hair's style would go, and never yields.
+
+Measured on the live cast (145 members, a copy of `mind.db`) with the real tokenizers and the
+worker's fit, read-only; this work / main (requests: the longest work uniform and the casual
+outfit, at a staff bathroom, so two prompts a member and framing):
+
+| prompt (as stored, 2026-11-18) | n | too long | `wearing` kept | pose kept (whole form) | hair style kept | eye colour kept |
+|---|---|---|---|---|---|---|
+| lust profile, three-quarter snapshot or headshot | 54 | 0 | 54 / 54 | 54 (0) | 17 / 27 | 49 / 46 |
+| lust profile, stored three-quarter selfie (renders waist-up) | 8 | 0 | 8 / 8 | none (a selfie) | 4 / 2 | 7 / 6 |
+| lust profile, waist-up | 30 | 0 | 30 / 30 | none (selfies) | 22 / 21 | 25 / 24 |
+| plain, head and shoulders | 44 | 0 | 44 / 0 | n/a | 44 / 44 | 41 / 44 |
+| plain, waist-up | 9 | 0 | 9 / 0 | 8 (8) | 8 / 9 | 7 / 9 |
+| varied, the two back views | 184 | 0 | 184 / 184 | 175 (28) | 71 / 94 | 90 / 127 |
+| varied, front / side | 92 / 92 | 0 | all | 92 / 92 (33 / 30) | 58 / 70, 59 / 66 | 61 / 74, 55 / 72 |
+| request, handheld selfie | 290 | 0 | 290 / 290 | none (a selfie) | 258 / 271 | 211 / 245 |
+| request, mirror selfie | 290 | 0 | 290 / 290 | none (a selfie) | 256 / 271 | 230 / 245 |
+| request, timer | 290 | 0 | 290 / 290 | 158 (158) | 233 / 237 | 197 / 225 |
+| request, from behind | 290 | 0 | 290 / 290 | n/a | 219 / 237 | 207 / 225 |
+
+A body shot's pose takes its short form ("standing", "walking", "walking away": `safe.POSE_SHORT`)
+with the other short forms, before her hair would lose its style. The hair style and eye colour
+still kept less often than on main are the clothed rule's words: a dress's length, a jacket's
+top and bottom and a uniform's trousers (every request prompt that loses the hair style where
+main keeps it, 9 to 18 per framing, is the longest work uniform's, whose real count stays far
+below 75 but whose count by the mind's upper bound crosses it).
+
+With every accessory set on every member (glasses always, a tattoo sleeve, a nose piercing,
+defined makeup, statement jewellery; a request leaves out the tattoo sleeve, a limb detail), all
+of them keep their room in, this work / main: requests handheld 258 / 241, mirror 252 / 241,
+timer 211 / 160, from behind 200 / 160 (of 290 each); lust profiles waist-up 26 / 26 and
+three-quarter 27 / 32 of 54; varied back views 49 / 62 of 184, front 86 / 87, side 86 / 86; plain
+profiles 53 / 53. The profile and varied gaps are the outfit and setting words (the clothed rule's
+price, one to three required tokens).
+
+**The body negative.** A photo that shows the body (waist-up or wider; every situational one)
+takes `prompt.body_negative`. Required: the covered line, minors, likeness, the anatomy line
+without its eye words (no eye defect at severity 2 or more in 1,288 photos) and with `extra
+hands`, `another person, duplicate person`, `bottomless, shirtless`, and `mirror, phone` unless
+a mirror is rendered (a varied set: `mirror` alone). Required sets: 61 tokens (plain), 67 (lust),
+71 (varied). Then the optional words in the order the fit offers them room
+(`safe.BODY_OPTIONAL`), and the owner's "never" words ahead of them (`prompt.negative_for`): all
+four have room in the plain, lust, mirror and situational body negatives, the first two (glasses,
+tattoo) in a varied set's (main: none there). A head-and-shoulders profile negative keeps them
+where they have room beside its required `shirtless, mirror, phone`: one (glasses), where main's
+profile negative kept two. No stored persona sets a "never" or "none" today.
+
+| negative | optional words kept | dropped |
+|---|---|---|
+| plain body, situational | `plastic skin`, `airbrushed, doll`, `text, logo` | `deformed face, bad hands`; `3d render, anime, cgi`; `second face, crowd, group of people`; `vintage, retro, film grain, sepia, old photo`; `illustration, watermark` |
+| lust body, lust situational | `plastic skin`, `airbrushed, doll` | the above and `text, logo` |
+| varied | `plastic skin` | the above and `airbrushed, doll` |
+
+The old profile negative kept `plastic skin, airbrushed, doll, deformed face, extra fingers, bad
+hands` and the vintage line. `bad hands` and `extra fingers` are covered by the required anatomy
+line (`malformed hands`, `extra fingers`, `fused fingers`). `deformed face`, the render styles
+and the vintage line are what a body shot loses: compare on the GPU (same seeds, old negative
+against the new) before trusting it.
+
+**`[selfies] body_shot_share`** (0-1, default 1.0; read at the mind's start): the share of a
+varied set's four candidates that show her figure (below 1.0 the views from behind keep theirs
+first, then the front, then the side; the rest are waist-up) and of the lust profile kinds that
+are three-quarter (else waist-up); a lust selfie kind is waist-up whatever the share (a dry run of
+the balancer over the live lust cast at 1.0: 60 selfies waist-up, 32 snapshots three-quarter). 1.0, four body views, is the owner's ask (#307) and what the
+labels support: waist-up was no safer than three-quarter (12% against 11%). Front and side
+candidates are three-quarter rather than full-length (planned three-quarter 6% defective,
+full-length 12%).
+
+**`[selfies] snap_body_share`** (0-1, default 0.5): the share of situational photos that keep a
+waist-up or wider framing; the rest are head and shoulders (29% of the waist-up ones were
+defective, none of the closer ones).
+
+**`selfies audit --labels DIR`** reads an audit's label files (JSON lines: guid, path, severity,
+same_person_as_cover) and prints, as guids, set numbers and photo ids, the covers in force and
+the stocked situational photos they mark defective. With `--go` (the mind stopped; a snapshot
+first) those stocked photos end `flagged` (rows only, no file is deleted) and a fresh set is
+queued for each member with a defective cover. A cover is never changed: the owner picks.
+
+Not verified on the GPU: every wording here was chosen from the audit's numbers and the token
+counts, not from new renders. The labels carry no pose, so the poses avoid what failed rather
+than repeat what worked. Check the first night's sets and snaps.
