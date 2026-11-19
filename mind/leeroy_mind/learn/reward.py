@@ -17,6 +17,11 @@ MEMBER_DAILY_CAP = 10.0
 MEMBER_DECAY = 1 - 1 / MEMBER_DAILY_CAP
 HALF_LIFE_DAYS = 21
 METRICS = ("replied", "speed", "length", "continued")
+# What his Discord reply did (signals/discord.py): each is engagement at its own value when it
+# was observed and absent otherwise, with no baseline (most are 1 or missing).
+BONUS = ("asked_back", "laughed", "affection", "topic_kept", "sent_media", "turns_after")
+REACTION = .5         # his emoji on her message, against 1 for a game emote at her
+REPLY_RATE_MIN = 20   # earlier lines in that kind of room before the reply rate centres anything
 JUDGES = ("judge_repetition", "judge_nonsequitur", "judge_unawareness", "judge_contradiction")
 
 
@@ -80,6 +85,19 @@ def _baseline(conn, line_id, ts, channel):
     return {key: [s[key] for s in samples if key in s] for key in METRICS}
 
 
+def _reply_rate(conn, line_id, ts, channel):
+    """(share, count) of the members' earlier lines in this kind of Discord room (his DMs, or
+    channels and group DMs) over the baseline window that he replied to. Numbers only."""
+    condition, params = _scope(channel_kind(channel))
+    seen, replied = conn.execute(
+        "SELECT count(*),coalesce(sum(EXISTS(SELECT 1 FROM talk_signal s WHERE s.line_id=c.id "
+        "AND s.kind='replied' AND s.source='implicit' AND s.ts<?)),0) FROM (SELECT c.id FROM chat_line c "
+        "WHERE c.origin='mind' AND c.ts>=? AND (c.ts<? OR (c.ts=? AND c.id<?)) AND " + condition +
+        " ORDER BY c.ts DESC,c.id DESC LIMIT ?) c",
+        (ts, ts - BASELINE_DAYS * DAY, ts, ts, line_id, *params, BASELINE_LIMIT)).fetchone()
+    return (replied / seen if seen else 0.), seen
+
+
 def decayed(value, *, age_seconds):
     """Read-time age discount for reports/consumers, separate from raw line value."""
     return value * 2 ** (-max(0., age_seconds) / (HALF_LIFE_DAYS * DAY))
@@ -120,9 +138,26 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, scr
         parts[key] = value
         if key in observed:
             normalized.append(value)
+    for key in BONUS:
+        if key in signals:
+            value = max(0., min(1., signals[key]))
+            # A further reply or two must never score below none: 0.5 (a bare reply's value) up to 1.
+            parts[key] = .5 + value / 2 if key == "turns_after" else value
+            normalized.append(parts[key])
     engagement = sum(normalized) / len(normalized) if normalized else 0.
-    emote = max(-1., min(1., signals.get("emote_friendly", 0.) +
-                        signals.get("emote_romantic", 0.) - signals.get("emote_rude", 0.)))
+    if normalized and is_discord(channel):
+        # He answers most DM lines, so a reply alone would lift every arm used there alike.
+        # Engagement counts for what a reply says beyond the usual: scaled by how rare a reply
+        # is in this kind of room (1 where he answers half the lines or fewer, 0.6 at 70%).
+        rate, seen = _reply_rate(conn, line_id, ts, channel)
+        centre = min(1., 2 * (1 - rate)) if seen >= REPLY_RATE_MIN else 1.
+        parts.update(reply_rate=rate, reply_rate_n=float(seen), reply_centre=centre)
+        engagement *= centre
+    # His emoji on her Discord message is the same component as the game's emote at her, at half
+    # its size: one eye-roll alone is no harsher than his thumbs-down.
+    emote = max(-1., min(1., signals.get("emote_friendly", 0.) + signals.get("emote_romantic", 0.)
+                        - signals.get("emote_rude", 0.) + REACTION * (signals.get("react_positive", 0.)
+                        - signals.get("react_negative", 0.))))
     # A missing detector hit is not evidence of a clean line. The completed signals
     # receipt proves bounded screening only on that stage's supported, non-skipped rows.
     screened = screening is not None or channel in GAME_SCREENED and 0 < chars <= 4000 and conn.execute(
@@ -138,12 +173,14 @@ def reward(conn, line_id, *, now=None, schema_available=None, local_at=None, scr
     quality_measured = bool(screened or actual_guard or any(source=="judge" for _,source in raw))
     quality = -min(1., max(0., hits + guard_penalty)) if quality_measured else 0.
     penalties = (signals.get("muted", 0.) + .5 * signals.get("dial_down", 0.) +
-                 .5 * signals.get("nudged_against", 0.) + .1 * signals.get("ignored", 0.))
+                 .5 * signals.get("nudged_against", 0.) + .1 * signals.get("ignored", 0.) +
+                 .5 * signals.get("objected", 0.))  # topic_changed is observed and carries no weight
     components = dict(explicit=explicit, engagement=engagement, emote=emote, quality=quality)
     measured = dict(explicit=("explicit","explicit") in raw or
-                    any(key in signals for key in ("muted","dial_down","nudged_against")),
+                    any(key in signals for key in ("muted","dial_down","nudged_against","objected")),
                     engagement=bool(normalized),
-                    emote=any(key in signals for key in ("emote_friendly","emote_romantic","emote_rude")))
+                    emote=any(key in signals for key in ("emote_friendly","emote_romantic","emote_rude",
+                                                         "react_positive","react_negative")))
     measured_weight = sum(weights.values[k] for k in measured if measured[k])
     owner_part = (sum(weights.values[k] * components[k] for k in measured if measured[k]) /
                   measured_weight if measured_weight else 0.) - penalties

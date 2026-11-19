@@ -160,6 +160,9 @@ DEADLINE_S = {Priority.REPLY_HUMAN: 30.0}
 # the night holds, and nobody is standing in the game for it (ruling R9).
 DISCORD_DEADLINE_S = 120.0
 OTHER_DEADLINE_S = 20.0  # social talk and the raid lead; counted after the turn's delay
+# A Discord line's store takes the write lock first and is tried twice; each try waits this long
+# for another connection's lock, so the two together wait no longer than the one try before.
+STORE_LOCK_WAIT_S = 2.5
 # The deadline governs the model's answer; the first line's typing is capped to land this far
 # inside it, and never shorter than MIN_TYPING_S.
 SEND_MARGIN_S = 1.0
@@ -5096,56 +5099,71 @@ class Pipeline:
         self._dm_to_him(turn)
         server_turn = self._server_turn(turn, meta)
         from leeroy_mind.server.records import BadDayCounter
-        stage = 'store'
         photo = meta.photo if not meta.said else None
         atomic_record = photo is not None or meta.on_discord_record is not None or meta.outreach_item is not None
-        after_commit = []
-        try:
-            with self.store.transaction() if (server_turn or atomic_record
-                                              or meta.voice_note is not None) else nullcontext():
-                if photo is not None and (meta.photo_finished or not photo.valid()):
-                    return 'photo_stale'
-                posted_at = self.clock.now()
-                message = store_line(self.store, turn, meta, text, posted_at,
-                                     audience=self.world.audience(
-                                         turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
-                stage = 'record'
-                if server_turn:
-                    from leeroy_mind.server.records import posted
-                    posted(self.store, self.clock.local().date().isoformat(), self.clock.now(),
-                           conversation=meta.server_conversation,
-                           dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
-                if meta.voice_note is not None:
-                    self.voice_notes.record(message,turn.speaker,meta.voice_note)
-                if atomic_record:
-                    line = self._record(turn, meta, p, text, memory_ids, discord_id=message,
-                                        after_commit=after_commit)
-                    if meta.on_discord_record is not None:
-                        meta.on_discord_record(line, message, posted_at)
-            # The post and its budget are durable before _record updates memory-only
-            # guards, chain state and hooks. Those effects cannot survive a rollback.
-            if not meta.realism_correction:  # the turn's own messages, never a stored id lookup
-                meta.discord_messages.append(message)
-            if not atomic_record:
-                self._record(turn, meta, p, text, memory_ids, discord_id=message)
-            else:
-                if photo is not None:
-                    meta.photo_finished = True
-                    if photo.snap is not None:  # a culture meme (MemeOffer) logs its own posting
-                        log.info('photo_sent snap=%d line=%d', photo.snap.id, line)
-                for effect in after_commit:
-                    effect()
-        except DiscordRefused as e:
-            log.info("discord_line_refused: guid=%d channel=%s code=%s", turn.speaker,
-                     turn.channel, e.code)
-            return f"discord_{e.code}"
-        except BadDayCounter:
-            return 'record_error'  # counts() reports this once; server posts fail closed
-        except Exception:
-            log.exception(("discord_store_failed: guid=%d channel=%s" if stage == 'store'
-                           else "say_record_failed: guid=%d channel=%s"),
-                          turn.speaker, turn.channel)
-            return stage + '_error'
+        # An answer he is owed must never be lost to a lock. The unit takes the write lock before
+        # it reads (Store.write_first), so no other connection's commit can land between its
+        # reads and its insert; and a store SQLite still refuses as busy is tried once more,
+        # after the rollback, on a fresh snapshot. Each try waits half the connection's
+        # busy_timeout, so the event loop waits no longer than before the retry existed.
+        for attempt in (1, 2):
+            stage = 'store'
+            after_commit = []
+            try:
+                with self.store.transaction():
+                    self.store.write_first(wait_s=STORE_LOCK_WAIT_S)
+                    if photo is not None and (meta.photo_finished or not photo.valid()):
+                        return 'photo_stale'
+                    posted_at = self.clock.now()
+                    message = store_line(self.store, turn, meta, text, posted_at,
+                                         audience=self.world.audience(
+                                             turn.channel, from_guid=turn.speaker, to_guid=turn.to_guid))
+                    stage = 'record'
+                    if server_turn:
+                        from leeroy_mind.server.records import posted
+                        posted(self.store, self.clock.local().date().isoformat(), self.clock.now(),
+                               conversation=meta.server_conversation,
+                               dm_guid=turn.speaker if meta.why == 'server:dm' and not meta.said else None)
+                    if meta.voice_note is not None:
+                        self.voice_notes.record(message,turn.speaker,meta.voice_note)
+                    if atomic_record:
+                        line = self._record(turn, meta, p, text, memory_ids, discord_id=message,
+                                            after_commit=after_commit)
+                        if meta.on_discord_record is not None:
+                            meta.on_discord_record(line, message, posted_at)
+                # The post and its budget are durable before _record updates memory-only
+                # guards, chain state and hooks. Those effects cannot survive a rollback.
+                if not meta.realism_correction:  # the turn's own messages, never a stored id lookup
+                    meta.discord_messages.append(message)
+                if not atomic_record:
+                    self._record(turn, meta, p, text, memory_ids, discord_id=message)
+                else:
+                    if photo is not None:
+                        meta.photo_finished = True
+                        if photo.snap is not None:  # a culture meme (MemeOffer) logs its own posting
+                            log.info('photo_sent snap=%d line=%d', photo.snap.id, line)
+                    for effect in after_commit:
+                        effect()
+            except DiscordRefused as e:
+                log.info("discord_line_refused: guid=%d channel=%s code=%s", turn.speaker,
+                         turn.channel, e.code)
+                return f"discord_{e.code}"
+            except BadDayCounter:
+                return 'record_error'  # counts() reports this once; server posts fail closed
+            except sqlite3.OperationalError as e:
+                if stage == 'store' and attempt == 1 and ('locked' in str(e) or 'busy' in str(e)):
+                    log.warning("discord_store_retry: guid=%d channel=%s", turn.speaker, turn.channel)
+                    continue
+                log.exception(("discord_store_failed: guid=%d channel=%s" if stage == 'store'
+                               else "say_record_failed: guid=%d channel=%s"),
+                              turn.speaker, turn.channel)
+                return stage + '_error'
+            except Exception:
+                log.exception(("discord_store_failed: guid=%d channel=%s" if stage == 'store'
+                               else "say_record_failed: guid=%d channel=%s"),
+                              turn.speaker, turn.channel)
+                return stage + '_error'
+            break
         server = getattr(getattr(self, 'server_app', None), 'server', None)
         reactor = getattr(server, 'reactions', None)
         if reactor is not None:
@@ -5331,9 +5349,12 @@ class Pipeline:
             except Exception:
                 log.exception("on_line_sent hook failed")
         if (signals := getattr(self, "signals", None)) is not None:
+            # A brb/back line and a photo's caption are not answers that wait for his reply.
             signals.sent(line_id, chat, addressed=bool(hg and
-                         (meta.answers_human or turn.addressee == hg or turn.to_guid == hg)),
-                         heard=heard)
+                         (meta.answers_human or turn.addressee == hg or turn.to_guid == hg)
+                         and not meta.pair_line and not (discord and meta.photo is not None)),
+                         heard=heard,
+                         thread=getattr(getattr(meta, "discord", None), "thread", None) if discord else 0)
         if meta.on_recorded is not None and ack is not None:
             try:
                 meta.on_recorded(line_id, ack)

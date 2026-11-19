@@ -41,6 +41,7 @@ enabled = true
 minutes = 30
 pairs = 4
 judge = 2
+grader = "rubric"
 variants = 3
 """
 OWNER_OVERLAY = b"the owner's own wording, never read by the lab"

@@ -2,6 +2,7 @@
 import logging
 import re
 
+from leeroy_mind.discord.channels import DM_PREFIX, is_discord
 from leeroy_mind.protocol import AfkEvent, Boss, Group, Hello, Login, Logout, TextEmote, Zone
 from leeroy_mind.talk.emote_names import FRIENDLY_EMOTES, ROMANTIC_EMOTES, RUDE_EMOTES
 from leeroy_mind.tuning.dials import applies
@@ -19,7 +20,7 @@ NEGATIVE_NUDGE = re.compile(r"\b(?:stop|avoid|less|quit|don't|do not|no more|ton
 class Signals:
     def __init__(self, app, path):
         self.app = app
-        self.capture = Capture(path, app.clock)
+        self.capture = Capture(path, app.clock, getattr(app, 'store', None))
         self.fights = set()
         self.group = None
         self.owner_location = None
@@ -28,14 +29,19 @@ class Signals:
         return self.capture.offer(Observation(kind, self.app.clock.now(), self.app.human_guid,
                                               tuple(ids), tuple(values)))
 
-    def sent(self, line_id, chat, *, addressed, heard):
+    def sent(self, line_id, chat, *, addressed, heard, thread=0):
+        """`thread`: the Discord thread her message was posted in (0: none, or a game line)."""
         world = self.app.world
         self.offer('sent', (line_id,), (addressed, world.in_group(chat.from_guid) and
-                world.in_group(self.app.human_guid), heard and self._owner_visible(chat)))
+                world.in_group(self.app.human_guid), heard and self._owner_visible(chat), int(thread or 0)))
 
     def _owner_visible(self, chat):
         world, owner = self.app.world, self.app.human_guid
         channel = chat.channel
+        if is_discord(channel):
+            # The guild Discord is his own server: he reads every channel and group DM of it in
+            # the console, and a DM only when it is his. Never by his WoW presence.
+            return bool(owner) and (not channel.startswith(DM_PREFIX) or chat.to_guid == owner)
         if channel.startswith('voice:'):
             comms = self.app.engine.comms
             return comms is not None and channel == 'voice:' + (comms.human_room() or '')
@@ -60,6 +66,18 @@ class Signals:
         if chat is not None and chat.channel in ('guild', 'officer', 'party', 'raid', 'raid_warning', 'whisper', 'say', 'yell'):
             self.owner_location = (chat.map, chat.zone, self.app.clock.now())
         self.offer('owner', (line_id,), (min(length / REPLY_LEN_SCALE, 1), command))
+
+    def his_discord(self, line_id, *, reply_line=0, media=False, voice=False, thread=0):
+        """His stored Discord post's chat line (discord.desk), after its commit: ids and flags
+        only. `reply_line` is the chat line of the message he replied to by hand: 0 when he
+        replied to none, -1 when that message has no chat line (a bot's row), which credits nobody.
+        `thread`: the Discord thread he posted in (0: the room's own feed)."""
+        self.offer('discord_owner', (line_id, reply_line or 0, int(thread or 0)), (bool(media), bool(voice)))
+
+    def reacted(self, line_id, *, positive, negative):
+        """His emoji on a member's Discord line as they now stand (a removed one takes its
+        observation back)."""
+        self.offer('reaction', (line_id,), (bool(positive), bool(negative)))
 
     def played(self, msg):
         if msg.state == 'dropped' and msg.reason == 'muted':

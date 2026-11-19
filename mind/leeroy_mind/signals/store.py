@@ -5,8 +5,12 @@ REPLY_SECONDS = 120.0
 REPLY_LEN_SCALE = 500
 RETENTION_S = 120 * 86400
 REASONS = ('funny', 'in-character', 'boring', 'repetitive', 'weird', 'too-much', 'wrong-facts')
+# What his next Discord message, his emoji and the talk after a member's line say (signals/discord.py)
+DISCORD = ('asked_back', 'laughed', 'affection', 'topic_kept', 'topic_changed', 'objected',
+           'sent_media', 'turns_after', 'react_positive', 'react_negative')
 IMPLICIT = ('replied', 'reply_latency_s', 'reply_len', 'thread_continued', 'ignored',
-            'emote_friendly', 'emote_romantic', 'emote_rude', 'muted', 'dial_down', 'nudged_against')
+            'emote_friendly', 'emote_romantic', 'emote_rude', 'muted', 'dial_down', 'nudged_against',
+            *DISCORD)
 JUDGES = ('judge_repetition', 'judge_nonsequitur', 'judge_unawareness', 'judge_contradiction',
           'judge_guard_rewrite', 'judge_guard_drop', 'judge_guard_react')
 KINDS = (*IMPLICIT, 'explicit', *('reason_' + r.replace('-', '_') for r in REASONS), *JUDGES)
@@ -28,6 +32,21 @@ def put(conn, line_id, guid, kind, value, ts, source='implicit', *, act_id=None)
     return conn.execute(
         'INSERT OR IGNORE INTO talk_signal(line_id,act_id,guid,kind,value,ts,source) '
         'VALUES (?,?,?,?,?,?,?)', (line_id, act_id, guid, kind, value, ts, source)).rowcount
+
+
+def upsert(conn, line_id, guid, kind, value, ts):
+    """An implicit observation whose value grows (turns_after): the newer value and time replace
+    the stored ones, so the rewards stage sees changed evidence."""
+    if not put(conn, line_id, guid, kind, value, ts):
+        conn.execute("UPDATE talk_signal SET value=?,ts=? WHERE line_id=? AND kind=? AND source='implicit'",
+                     (value, ts, line_id, kind))
+    return 1
+
+
+def drop(conn, line_id, kind):
+    """An implicit observation he took back (an emoji he removed)."""
+    return conn.execute("DELETE FROM talk_signal WHERE line_id=? AND kind=? AND source='implicit'",
+                        (line_id, kind)).rowcount
 
 
 def prune(conn, now):

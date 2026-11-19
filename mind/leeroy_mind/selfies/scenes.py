@@ -24,7 +24,9 @@ from .kind import SWIM_OUTFITS, looks_line
 from .prompt import renderable
 from .safe import SNAP_BODY_SHARE, settle_framing
 from .ration import MEMBER_GAP_S, MEMBER_STOCK, SEND_MIN_AGE, send_weight, stock_target, channel_stock
+from .romance_styling import enum_category, restyle
 from .style import style_of, LUST
+from . import styling_history
 from .scene import (ABOUT, PHASES, SCENE_ASK, SCENE_ASK_AGAIN, scene_from, scene_json, scene_renderable,
                     scene_schema, scene_system, screen_scene, window)
 from .scene_choices import compose_choices, pairing_codes
@@ -176,7 +178,8 @@ def _guild_members(ctx: "NightContext", raid_id: int) -> list[tuple[int, int]]:
 
 
 async def ask_scene(ctx: "NightContext", guid: int, *, about: str,
-                    share: float = SNAP_BODY_SHARE):
+                    share: float = SNAP_BODY_SHARE, romance_styling: bool = False,
+                    audience=None):
     """One scene for `guid` from the reflection model, screened: (the Scene, []) or (None, the
     refusal codes). [DECLINED] when the member chose no photo, ["model"] for a non-fatal model
     failure. Writes nothing; a fatal ReflectionError is raised. A waist-up or wider framing
@@ -204,6 +207,7 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str,
         if again:
             return None, codes
         log("selfies_scene_asked_again", night=ctx.night, guid=guid, codes=codes)
+    category = enum_category(data)
     if data.get("outfit") not in SWIM_OUTFITS:
         data = {**data, "framing": settle_framing(
             data.get("framing"), share, f"{guid}:{ctx.night}:{about}",
@@ -217,6 +221,17 @@ async def ask_scene(ctx: "NightContext", guid: int, *, about: str,
     names += [ctx.ident.nickname, ctx.ident.character_name]
     codes = screen_scene(p, data, ident=ctx.ident, member_names=names)
     s = None if codes else scene_from(data)
+    if s is not None and romance_styling:
+        if audience is not None:
+            s = replace(s, audience=audience)
+        from leeroy_mind.learn.config import load_learn_config
+        history = (styling_history.read(ctx.store, guid, ctx.human, now=ctx.clock.now(),
+                    learn=load_learn_config(ctx.settings.data_dir / 'mind.toml'))
+                   if s.audience == 'him' else styling_history.History())
+        s = restyle(ctx.persona(guid), s, enabled=True, category=category,
+                    relationship=ctx.store.get_relationship(guid, ctx.human, lens=True),
+                    dial=ctx.settings.romance_dial, seed=ctx.night, ident=ctx.ident, names=names,
+                    history=history)
     if s is not None and scene_renderable(p, s):
         codes = ["unrenderable"]
     return (None, codes) if codes else (s, [])
@@ -302,7 +317,8 @@ def make_scenes_stage(cfg: SelfieCfg, *, dial: Callable[[], int], outlets: Calla
                 about += (' This photo is for his private DM only.' if audience == 'him' else
                           ' This photo is for a public guild channel, safe for everyone.')
             s, codes = await ask_scene(ctx, guid, about=about,
-                                       share=getattr(cfg, "snap_body_share", SNAP_BODY_SHARE))
+                                       share=getattr(cfg, "snap_body_share", SNAP_BODY_SHARE),
+                                       romance_styling=cfg.romance_styling, audience=audience)
             if codes == [DECLINED]:
                 declined += 1
                 log("selfies_scene_declined", night=ctx.night, guid=guid)

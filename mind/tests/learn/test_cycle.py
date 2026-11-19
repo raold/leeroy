@@ -340,6 +340,80 @@ def test_contexts_where_an_arm_was_never_used_do_not_dilute_its_share(store):
     assert next(a for a in plan['arms'] if a['id'] == ARM)['share'] == .05
 
 
+FOLLOW = 'followup.2.v1'
+FOLLOW_CONTROL = arms.controls()['followup']
+DM_KEY = bandit.Context('dm:101', stance='lust', talkative=8).key
+PARTY_KEY = bandit.Context('party').key
+
+
+def rewarded_uses(store, arm, n, value, *, key=KEY, channel='guild', at=LAST_START - 86400):
+    """n rewarded generations carrying `arm`, before both evaluated weeks."""
+    for i in range(n):
+        gen(store, at - i * 60, arm=arm, value=value, key=key, channel=channel)
+
+
+def rare_in_both_weeks(store, arm, control_id):
+    """The arm under a 5% share of its family in both weeks (unrewarded generations)."""
+    for begin in (START, LAST_START):
+        gen(store, begin + 3600, arm=arm)
+        for i in range(24):
+            gen(store, begin + 7200 + i * 60, arm=control_id)
+
+
+def test_one_dm_use_never_retires_an_arm_that_is_level_in_every_room(store):
+    """Re-review 359: pooled, one use in a DM room set the arm against all of control's DM lines,
+    whose rewards run far above the guild's, and retired an arm level with control everywhere."""
+    rewarded_uses(store, FOLLOW, 40, 0.)
+    rewarded_uses(store, FOLLOW_CONTROL, 40, 0., at=LAST_START - 86400 - 30)
+    rewarded_uses(store, FOLLOW, 1, .45, key=DM_KEY, channel='dm:101', at=LAST_START - 3 * 86400)
+    rewarded_uses(store, FOLLOW_CONTROL, 130, .32, key=DM_KEY, channel='dm:101', at=LAST_START - 3 * 86400 - 30)
+    rare_in_both_weeks(store, FOLLOW, FOLLOW_CONTROL)
+    rows = cycle._rewarded(store.conn, set())
+    used = [r for r in rows if FOLLOW in r.arms]
+    pooled = cycle.beats(cycle._mass(used, NOW), cycle._mass(
+        [r for r in rows if r.key in {u.key for u in used} and FOLLOW_CONTROL in r.arms], NOW))
+    assert pooled < cycle.LOSING  # what the pooled comparison retired
+    assert not evaluate(store)['retire_arms']
+    assert not run(store)['retired'] and status(store, FOLLOW) == 'active'
+
+
+@pytest.mark.parametrize('rooms,retired', [
+    ([(KEY, 'guild', 30, 0., .3)], True),                                  # a measured loser in its room
+    ([(KEY, 'guild', 30, 0., .3), (DM_KEY, 'dm:101', 20, .8, 0.)], False),  # credibly better in another room
+    ([(KEY, 'guild', 30, 0., .3), (PARTY_KEY, 'party', 30, .3, .3)], False),  # level in a second measured room
+    ([(KEY, 'guild', 30, 0., .3), (PARTY_KEY, 'party', 30, 0., .3)], True),   # a loser in both
+    ([(KEY, 'guild', 15, 0., .3), (PARTY_KEY, 'party', 15, 0., .3)], False),  # 30 uses, none measured alone
+    ([(KEY, 'guild', 30, 0., .3), (DM_KEY, 'dm:101', 2, .8, 0.)], True),    # two lucky uses prove nothing
+])
+def test_retirement_is_decided_room_by_room(store, rooms, retired):
+    for i, (key, channel, n, value, control_value) in enumerate(rooms):
+        at = LAST_START - (i + 1) * 86400
+        rewarded_uses(store, FOLLOW, n, value, key=key, channel=channel, at=at)
+        rewarded_uses(store, FOLLOW_CONTROL, 30, control_value, key=key, channel=channel, at=at - 30)
+    rare_in_both_weeks(store, FOLLOW, FOLLOW_CONTROL)
+    plan = evaluate(store)
+    entry = next((r for r in plan['retire_arms'] if r['id'] == FOLLOW), None)
+    assert (entry is not None) is retired
+    if retired:
+        assert entry['probability'] < .5 and entry['uses'] == sum(n for _, _, n, _, _ in rooms if n >= 30)
+
+
+def test_promotion_is_decided_room_by_room_too(store):
+    """Strong pooled, losing in its one measured room: control's poor lines in a room where the
+    arm was used once never lift it."""
+    for i in range(30):
+        ts = START + 3600 + i * 600
+        gen(store, ts, arm=FOLLOW, value=.5)
+        gen(store, ts + 60, arm=FOLLOW_CONTROL, value=.6)
+    gen(store, START + 2 * 86400, arm=FOLLOW, value=0., key=DM_KEY, channel='dm:101')
+    for i in range(130):
+        gen(store, START + 2 * 86400 + 60 + i * 60, arm=FOLLOW_CONTROL, value=-.5, key=DM_KEY, channel='dm:101')
+    plan = evaluate(store)
+    assert not [p for p in plan['promote'] if p['id'] == FOLLOW]
+    held = {json.dumps(h['context'], separators=(',', ':')): h['reasons'] for h in plan['held'] if h['id'] == FOLLOW}
+    assert 'probability' in held[KEY] and 'uses' in held[DM_KEY]
+
+
 def test_a_young_arm_with_a_small_share_stays_on_trial(store):
     small_shares(store, 30, 30)
     assert not run(store)['retired']

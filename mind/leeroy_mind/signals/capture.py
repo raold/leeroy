@@ -4,14 +4,20 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 import logging
+import re
 import sqlite3
 
+from leeroy_mind.discord.channels import is_discord
+
+from . import discord as D
 from . import store as S
 
 log = logging.getLogger(__name__)
 QUEUE_LIMIT = 512
 PENDING_LIMIT = 512
 COMBAT_MAX_AGE_S = 5.0
+CHAIN_LIMIT = 8  # her earlier answered lines in one conversation that still count his further replies
+MAIN_KINDS = frozenset({'discord_owner', 'reaction'})  # written on the mind's own connection
 BUSY_S = 2.0  # the writer thread may wait out a night stage's write; the send path never waits
 
 
@@ -40,9 +46,20 @@ def scope(row):
     return (ch,)
 
 
+def dscope(row):
+    """A Discord line's conversation: its room and, in a channel, its thread (0: the room's own
+    feed). A post in a thread never answers a line in the feed, nor the other way round."""
+    return (*scope(row), row.get('dthread') or 0)
+
+
 class Capture:
-    def __init__(self, path, clock):
+    def __init__(self, path, clock, store=None):
         self.path, self.clock = path, clock
+        # The mind's Store. With it, what his Discord actions write goes through the mind's own
+        # connection on the event loop, between its units: a commit from this capture's second
+        # connection while the pipeline holds a read snapshot makes the pipeline's next write
+        # fail at once ("database is locked"), and that write may be an answer he is owed.
+        self.store = store
         self.queue = asyncio.Queue(maxsize=QUEUE_LIMIT)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='talk-signals')
         self.inflight = None
@@ -50,6 +67,13 @@ class Capture:
         self.pending = OrderedDict()
         self.recent = OrderedDict()
         self.exchanges = OrderedDict()
+        # The guild Discord's own attribution state: his WoW presence, AFK, group and combat
+        # never touch it (he reads Discord whether or not he plays).
+        self.dpending = OrderedDict()
+        self.drecent = OrderedDict()
+        self.dexchanges = OrderedDict()
+        self.chains = OrderedDict()
+        self.sink = S  # put, upsert, drop: the backfill's dry run counts instead of writing
         self.active = float('-inf')
         self.online = self.afk = False
         self.combat = None
@@ -72,7 +96,31 @@ class Capture:
                 log.warning('signals_queue_full: dropped=%d', self.dropped)
             return False
 
+    def _on_main(self, item):
+        if self.worker_epoch != self.dropped:
+            self._reset()
+            self.worker_epoch = self.dropped
+        if item.epoch != self.worker_epoch:
+            return {'ok': False, 'error': 'Signal capture lost observations.'}
+        try:
+            with self.store.transaction():
+                # The lock before the reads: another connection's commit between them and the
+                # write would refuse the write at once and clear the attribution state below.
+                self.store.write_first()
+                if not S.available(self.store.conn):
+                    return {'ok': False, 'error': 'Signals are not set up in this database.'}
+                self._expire_discord(item.at)
+                self._apply(self.store.conn, item)
+            return {'ok': True}
+        except Exception as exc:
+            for state in (self.dpending, self.drecent, self.dexchanges, self.chains):
+                state.clear()
+            log.warning('signals_capture_failed: kind=%s error=%s', item.kind, type(exc).__name__)
+            return {'ok': False, 'error': 'Signal capture could not save this observation.'}
+
     async def _work(self, observation):
+        if self.store is not None and observation.kind in MAIN_KINDS:
+            return self._on_main(observation)  # the worker is idle here: run() takes one at a time
         self.inflight = asyncio.get_running_loop().run_in_executor(self.executor, self._process, observation)
         return await asyncio.shield(self.inflight)
 
@@ -141,6 +189,7 @@ class Capture:
         if item.epoch != self.worker_epoch:
             return {'ok': False, 'error': 'Signal capture lost observations.'}
         if item.kind == 'tick' and not self.pending:
+            self._expire_discord(item.at)  # in memory only: an idle Discord wait takes no lock
             return {'ok': True}
         try:
             conn = self._open()
@@ -165,9 +214,92 @@ class Capture:
             log.warning('signals_capture_failed: kind=%s error=%s', item.kind, type(exc).__name__)
             return {'ok': False, 'error': 'Signal capture could not save this observation.'}
 
+    def _sent_discord(self, row, owner, addressed, heard, thread=0):
+        if not (self._visible(row, owner) and heard):
+            return
+        held = dict(row) | {'dthread': thread or 0}
+        self.drecent[row['id']] = held
+        while len(self.drecent) > PENDING_LIMIT:
+            self.drecent.popitem(last=False)
+        if addressed:
+            self.dpending[row['id']] = dict(held)
+            while len(self.dpending) > PENDING_LIMIT:
+                self.dpending.popitem(last=False)
+
+    def _his_discord(self, conn, item):
+        """His Discord message as his reply to a member's line: the one he replied to by hand,
+        else the newest line addressed to him in that conversation (the room and, in a channel,
+        the thread: item.ids[2]) within D.WINDOW_S. A message
+        of his with no such line before it (he wrote first, or twice running) says nothing."""
+        now, owner = item.at, item.owner
+        row = self._row(conn, item.ids[0])
+        if (row is None or row['origin'] != 'human' or row['from_guid'] != owner
+                or not is_discord(row['channel'])):
+            return
+        media, voice = item.values
+        place = (*scope(row), (item.ids[2] if len(item.ids) > 2 else 0) or 0)
+        his = '' if voice else (conn.execute('SELECT text FROM chat_line WHERE id=?', (row['id'],)).fetchone() or ('',))[0]
+        if item.ids[1]:
+            # He replied to one message by hand: that member line or nobody. A bot row, a line
+            # from before a restart or one of another conversation (-1 or an id not held) never
+            # falls back to whoever else is waiting.
+            answered = self.drecent.get(item.ids[1])
+            if answered is None or dscope(answered) != place or answered['id'] >= row['id'] or now < answered['ts']:
+                return
+        else:
+            candidates = [r for r in self.dpending.values()
+                          if 0 <= now - r['ts'] <= D.WINDOW_S and r['id'] < row['id'] and dscope(r) == place]
+            if not candidates:
+                return
+            if not direct(row['channel']) and len({r['from_guid'] for r in candidates}) > 1:
+                # Several members wait in one room: the one he names, else nobody.
+                words = his.casefold()
+                named = {r['from_guid'] for r in candidates if r['from_name'] and re.search(
+                    r'(?<!\w)' + re.escape(r['from_name'].casefold()) + r'(?!\w)', words)}
+                if len(named) != 1:
+                    return
+                candidates = [r for r in candidates if r['from_guid'] in named]
+            answered = max(candidates, key=lambda r: (r['ts'], r['id']))
+        lid, guid = answered['id'], answered['from_guid']
+        put = self.sink.put
+        put(conn, lid, guid, 'replied', 1, now)
+        put(conn, lid, guid, 'reply_latency_s', min((now - answered['ts']) / D.WINDOW_S, 1), now)
+        if media:
+            put(conn, lid, guid, 'sent_media', 1, now)
+        if not voice:  # a voice note's line is a placeholder until it is transcribed
+            hers = (conn.execute('SELECT text FROM chat_line WHERE id=?', (lid,)).fetchone() or ('',))[0]
+            put(conn, lid, guid, 'reply_len', min(len(his) / S.REPLY_LEN_SCALE, 1), now)
+            for kind, value in D.read(his, hers).items():
+                put(conn, lid, guid, kind, value, now)
+        key = (place, guid)
+        previous = self.dexchanges.get(key)
+        running = previous is not None and 0 <= now - previous <= D.WINDOW_S
+        if running:
+            put(conn, lid, guid, 'thread_continued', 1, now)
+        self.dexchanges[key] = now
+        self.dexchanges.move_to_end(key)
+        chain = [(line, count + 1) for line, count in (self.chains.get(key, []) if running else [])]
+        for line, count in chain:
+            self.sink.upsert(conn, line, guid, 'turns_after', min(count / D.TURNS_SCALE, 1), now)
+        self.chains[key] = [*chain, (lid, 0)][-CHAIN_LIMIT:]
+        self.chains.move_to_end(key)
+        for store in (self.dexchanges, self.chains):
+            while len(store) > PENDING_LIMIT:
+                store.popitem(last=False)
+        for other in [k for k, r in self.dpending.items()
+                      if dscope(r) == place and (r['ts'], r['id']) <= (answered['ts'], lid)
+                      and (direct(row['channel']) or r['from_guid'] == guid)]:
+            self.dpending.pop(other)
+
+    def _expire_discord(self, now):
+        # Silence is no observation: a Discord line he never answered just stops waiting.
+        for lid, row in list(self.dpending.items()):
+            if now - row['ts'] > D.WINDOW_S:
+                self.dpending.pop(lid)
+
     @staticmethod
     def _row(conn, line_id):
-        return conn.execute('SELECT id,ts,channel,from_guid,to_guid,map,zone,thread_id,origin '
+        return conn.execute('SELECT id,ts,channel,from_guid,from_name,to_guid,map,zone,thread_id,origin '
                             'FROM chat_line WHERE id=?', (line_id,)).fetchone()
 
     @staticmethod
@@ -179,8 +311,10 @@ class Capture:
         kind, now, owner = item.kind, item.at, item.owner
         if kind == 'sent':
             row = self._row(conn, item.ids[0])
-            addressed, grouped, heard = item.values
-            if self._visible(row, owner) and heard:
+            addressed, grouped, heard = item.values[:3]
+            if row is not None and is_discord(row['channel']):
+                self._sent_discord(row, owner, addressed, heard, item.values[3] if len(item.values) > 3 else 0)
+            elif self._visible(row, owner) and heard:
                 self.recent[row['id']] = dict(row)
                 while len(self.recent) > PENDING_LIMIT:
                     self.recent.popitem(last=False)
@@ -216,6 +350,16 @@ class Capture:
             while len(self.exchanges) > PENDING_LIMIT:
                 self.exchanges.popitem(last=False)
             self.pending.pop(lid, None)
+        elif kind == 'discord_owner':
+            self._his_discord(conn, item)
+        elif kind == 'reaction':
+            row = self._row(conn, item.ids[0])
+            if self._visible(row, owner) and is_discord(row['channel']):
+                for name, on in zip(('react_positive', 'react_negative'), item.values, strict=True):
+                    if on:
+                        self.sink.put(conn, row['id'], row['from_guid'], name, 1, now)
+                    else:
+                        self.sink.drop(conn, row['id'], name)
         elif kind == 'emote':
             guid = item.ids[0]
             row = self._latest(conn, guid, owner, now, 60)
@@ -226,7 +370,7 @@ class Capture:
         elif kind == 'presence':
             self.online = bool(item.values[0])
             if not self.online:
-                self._reset()
+                self._reset(lost=False)
         elif kind == 'afk':
             self.afk = bool(item.values[0])
             if self.afk:
@@ -261,7 +405,10 @@ class Capture:
         self.pending = OrderedDict((key, (row, addressed, True))
                                    for key, (row, addressed, _) in self.pending.items())
 
-    def _reset(self):
+    def _reset(self, lost=True):
+        if lost:  # a gap in the observations; his WoW logout alone leaves Discord's as they are
+            for store in (self.dpending, self.drecent, self.dexchanges, self.chains):
+                store.clear()
         self.pending.clear()
         self.recent.clear()
         self.exchanges.clear()
@@ -283,6 +430,7 @@ class Capture:
         return None
 
     def _expire(self, conn, now):
+        self._expire_discord(now)
         for lid, (row, addressed, interrupted) in list(self.pending.items()):
             if now - row['ts'] < S.REPLY_SECONDS:
                 continue

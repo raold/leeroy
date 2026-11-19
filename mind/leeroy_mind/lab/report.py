@@ -18,6 +18,20 @@ def _arm_status(conn, arm_id: str | None) -> str | None:
     return row[0] if row else None
 
 
+def _promote(r: dict) -> bool:
+    """Whether the run may promote, as night.py decides it: what its finish recorded, else its
+    plan's `promote` (and only with the tells grader). A run whose plan says nothing either
+    finished under code from before the setting, which promoted (`done` or `budget`), or will
+    finish under this code, which only measures it; a `failed` or `skipped` one promoted
+    nothing."""
+    summary = r["summary"] or {}
+    if "promote" in summary:
+        return summary["promote"] is True
+    if "promote" in r["plan"]:
+        return r["plan"]["promote"] is True and r["plan"].get("grader", "rubric") == "tells"
+    return r["status"] in ("done", "budget")
+
+
 def report(conn, *, night: str | None = None, runs: int = 7) -> dict:
     """The newest `runs` runs (or the runs of `night`): status, piece, budget used, each arm's
     numbers and each variant's outcome, change in rubric mean and the arm it became."""
@@ -44,10 +58,13 @@ def report(conn, *, night: str | None = None, runs: int = 7) -> dict:
             variants.append({"id": v["id"], "status": v["status"], "outcome": v["outcome"],
                              "authored": written.get(v["id"]),
                              "delta": sheet.get("delta"), "graded": sheet.get("graded"),
+                             "prefer": sheet.get("prefer"),
                              "applied": sheet.get("applied"), "regressed": sheet.get("regressed", []),
                              "arm": v["arm_id"], "arm_status": _arm_status(conn, v["arm_id"]),
                              "diff": v["diff"][:DIFF_CHARS]})
         out.append({"id": rid, "night": r["night"], "source": r["source"], "status": r["status"],
+                    "grader": r["plan"].get("grader", "rubric"),
+                    "promote": _promote(r),
                     "reason": r["reason"], "piece": r["piece"], "started": r["started"],
                     "finished": r["finished"], "spent": r["spent"],
                     "pairs": len(r["plan"].get("pairs", [])), "arms": arms, "variants": variants})
@@ -67,12 +84,20 @@ def render(data: dict) -> str:
     for r in data["runs"]:
         lines.append(f"run {r['id']} night {r['night']} ({r['source']}): {r['status']}"
                      + (f" ({r['reason']})" if r["reason"] else "")
-                     + f", piece {r['piece']}, {r['pairs']} pairs, {round(r['spent'] or 0)} s")
+                     + f", piece {r['piece']}, {r['pairs']} pairs, {round(r['spent'] or 0)} s"
+                     + (f", grader {r['grader']}" if r.get("grader") else "")
+                     + ("" if r.get("promote", True) else ", measure only (deltas are indicative; "
+                        "nothing is proposed to the weekly gate)"))
         for arm, s in sorted(r["arms"].items(), key=lambda kv: (kv[0] != "control", kv[0])):
             flags = ", ".join(f"{c} {n}" for c, n in (s.get("flags") or {}).items() if n) or "none"
             human = s.get("human")
-            lines.append(f"  {arm}: rubric {_f(s.get('rubric'))} over {s.get('graded', 0)} of "
-                         f"{s.get('lines', 0)} answers, answered {s.get('answered', 0)}, "
+            if s.get("scored"):
+                graded = (f"judge score {_f(s.get('score'))} (1-5) over {s['scored']} of "
+                          f"{s.get('lines', 0)} answers ({s.get('score_calls', 0)} calls)")
+            else:
+                graded = (f"rubric {_f(s.get('rubric'))} over {s.get('graded', 0)} of "
+                          f"{s.get('lines', 0)} answers")
+            lines.append(f"  {arm}: {graded}, answered {s.get('answered', 0)}, "
                          f"applied {s.get('applied', 0)}; flags: {flags}; judge called her human "
                          + (f"{round(100 * human)}% of {s.get('judged')}" if isinstance(human, (int, float))
                             else "n/a"))
@@ -82,6 +107,8 @@ def render(data: dict) -> str:
             lines.append(f"  variant {v['id']}"
                          + (f" (hand-written: {v['authored']})" if v.get("authored") else "")
                          + f": {v['outcome'] or v['status']}, change {_f(v['delta'])}"
+                         + (f", preferred to the control's answer {round(100 * v['prefer']['share'])}% "
+                            f"over {v['prefer']['n']} lines" if v.get("prefer") else "")
                          + (f", regressed {','.join(v['regressed'])}" if v["regressed"] else "")
                          + (f", arm {v['arm']} ({v['arm_status']})" if v["arm"] else ""))
             lines.append(f"    {v['diff']}")
@@ -89,9 +116,10 @@ def render(data: dict) -> str:
 
 
 def panel(conn, *, nights: int = 14) -> dict:
-    """The console's Conversation lab panel: the last nights' control means by kind, rule-flag
-    rates and the judge, and the variants tried and promoted (their word diffs: prompt wording,
-    never a member's line)."""
+    """The console's Conversation lab panel: the last nights' control means by kind (the lab
+    judge's 1-5 score, or the old 0-3 rubric: `grader` says which), rule-flag rates and the
+    blind judge, and the variants tried and promoted (their word diffs: prompt wording, never a
+    member's line). `promote` false: the run only measured."""
     data = report(conn, runs=nights)
     if not data["available"]:
         return {"available": False, "runs": []}
@@ -100,11 +128,13 @@ def panel(conn, *, nights: int = 14) -> dict:
         control = r["arms"].get("control") or {}
         runs.append({"night": r["night"], "status": r["status"], "reason": r["reason"],
                      "piece": r["piece"], "pairs": r["pairs"], "spent": r["spent"],
+                     "grader": r["grader"], "promote": r["promote"],
+                     "score": control.get("score"), "scored": control.get("scored", 0),
                      "rubric": control.get("rubric"), "graded": control.get("graded", 0),
                      "human": control.get("human"), "kinds": control.get("kinds", {}),
                      "flags": control.get("flag_rates", {}),
                      "variants": [{k: v[k] for k in ("id", "outcome", "delta", "arm", "arm_status",
-                                                     "diff")} for v in r["variants"]]})
+                                                     "diff", "prefer")} for v in r["variants"]]})
     tried = sum(len(r["variants"]) for r in runs)
     promoted = sum(1 for r in runs for v in r["variants"] if v["outcome"] == "won")
     return {"available": True, "runs": runs, "tried": tried, "promoted": promoted}

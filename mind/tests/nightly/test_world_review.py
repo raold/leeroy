@@ -124,12 +124,14 @@ def test_700_member_photo_counters_are_linear(h,monkeypatch):
         calls.append(1)
         return original(*a,**kw)
     monkeypatch.setattr(photos,"roster",counted)
-    began=time.monotonic()
+    # CPU time, not wall-clock: a loaded CI runner (-n auto) stalls the process, not the work.
+    # The point is the few roster reads; quadratic work over 700 members would still take far longer.
+    began=time.process_time()
     ctx=h.ctx()
     assert photos.photo_count(ctx) == ctx.settings.world_selfies_per_night
     assert photos.image_count(ctx) == ctx.settings.world_selfies_per_night
     assert len(calls) <= 3
-    assert time.monotonic()-began < 1.5
+    assert time.process_time()-began < 3.0
 
 
 def test_budget_world_counters_run_off_loop(h,monkeypatch):

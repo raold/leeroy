@@ -60,6 +60,7 @@ SWITCHES = (
     ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
     ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
     ('selfies','variety','Photo style variety','selfies.enabled'),
+    ('selfies','romance_styling','Private photo romance styling','selfies.enabled; selfies.snaps'),
     ('selfies','varied_sets','Varied selfie sets','selfies.enabled'),
     ('selfies','identity_sets','Her face in every new set','selfies.enabled; identity adapter fetched'),
     ('selfies','detailer','Photo detailer: faces','selfies.enabled'),
@@ -92,6 +93,7 @@ SWITCHES = (
     ('bakeoff','capture','Bake-off capture (stores full prompts, 14 days)',''),
     ('prune','enabled','Nightly retention prune',''),
     ('lab','enabled','Conversation lab','learn.bandit and learn.apply for its arms to reach live talk'),
+    ('lab','promote','Lab winners proposed to the weekly gate','lab.enabled; grader = "tells" (refused with the rubric)'),
 )
 
 # Boolean keys the loaders define that are deliberately not rows, each with its reason.
