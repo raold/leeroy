@@ -62,3 +62,28 @@ def test_doctor_notes_the_adapter_until_snaps_are_on(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_quick_doctor", lambda py, data: [(True, "ipadapter: 3 files ok")])
     assert m._doctor_selfies(toml(tmp_path, head + "snaps = true\n")) == [
         (True, "selfies: ipadapter: 3 files ok")]
+
+
+def test_flux_doctor_checks_selected_weights_and_required_identity(tmp_path, monkeypatch):
+    python = tmp_path / "python.exe"
+    python.write_bytes(b"")
+    def quick(py, data, *, backend):
+        assert backend == "flux1-dev"
+        return [(None, f"{name}: not fetched") for name in
+                ("flux1-dev", "nsfw", "flux-ipadapter", "flux-clip")]
+    monkeypatch.setattr(m, "_quick_doctor", quick)
+    head = f'[selfies]\nenabled=true\nbackend="flux1-dev"\npython="{python.as_posix()}"\n'
+    assert [ok for ok, _ in m._doctor_selfies(toml(tmp_path, head))] == [False, False, None, None]
+    for setting in ("snaps", "identity_sets"):
+        assert all(ok is False for ok, _ in m._doctor_selfies(
+            toml(tmp_path, head + f"{setting}=true\n")))
+
+
+def test_quick_doctor_passes_backend_without_loading_models(tmp_path, monkeypatch):
+    import subprocess
+    def run(command, **kwargs):
+        assert command[-2:] == ["--backend", "flux1-dev"]
+        assert "--quick" in command
+        return subprocess.CompletedProcess(command, 0, "ok checked\n")
+    monkeypatch.setattr(subprocess, "run", run)
+    assert m._quick_doctor(tmp_path / "p", tmp_path, backend="flux1-dev") == [(True, "checked")]

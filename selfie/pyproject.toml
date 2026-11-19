@@ -24,6 +24,7 @@ gpu = [
   "numpy==2.5.4",
   "opencv-python-headless==5.0.0.93",
 ]
+flux = ["bitsandbytes==0.50.2", "sentencepiece==0.2.1"]
 # Pillow too: the caption test draws a real image with the bundled font
 test = ["pytest>=9.1,<10", "pillow==13.0.0"]
 

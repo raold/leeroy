@@ -43,7 +43,8 @@ def test_the_ipadapter_pin_names_its_commit_licence_and_three_files():
 
 
 def test_the_pins_name_the_files_the_loaders_read():
-    assert set(MODEL_PINS) == {"realvisxl", "nsfw", "ipadapter", "yunet", "palm", "handpose"}
+    assert set(MODEL_PINS) == {"realvisxl", "nsfw", "ipadapter", "yunet", "palm", "handpose",
+                               "flux1-dev", "flux-ipadapter", "flux-clip"}
     assert models.BASE_PINS == ("realvisxl", "nsfw")
     assert models.IDENTITY_PINS == ("ipadapter",)
     assert models.FACE_PINS == ("yunet",)

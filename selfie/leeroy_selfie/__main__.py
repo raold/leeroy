@@ -26,8 +26,12 @@ def cmd_where(args) -> int:
 
 def cmd_fetch_models(args) -> int:
     only = None if args.only is None else {n.strip() for n in args.only.split(",") if n.strip()}
+    if only is None and args.backend != "realvisxl":
+        base, identity = models.backend_pins(args.backend)
+        only = set(base + identity + models.FACE_PINS)
     try:
-        lines = models.fetch_models(data_dir(), only)
+        extra = {"authenticated": True} if args.auth else {}
+        lines = models.fetch_models(data_dir(), only, **extra)
     except (models.ModelError, OSError) as e:
         return _fail("fetch-models", e)
     for ok, text in lines:
@@ -41,9 +45,10 @@ def cmd_doctor(args) -> int:
     if sys.version_info[:2] != (3, 12):
         lines.append((False, f"python {sys.version_info.major}.{sys.version_info.minor}, "
                              "not the 3.12 this package needs"))
-    for name in models.BASE_PINS:
+    base, identity = models.backend_pins(args.backend)
+    for name in base:
         lines += models.check(root, name, quick=args.quick)
-    for name in models.IDENTITY_PINS + models.FACE_PINS + models.CRITIC_PINS:  # not fetched: a note
+    for name in identity + models.FACE_PINS + models.CRITIC_PINS:  # not fetched: a note
         lines += models.check(root, name, quick=args.quick)
     from .caption import FONT  # the memes' caption font and its licence, bundled with the package
     lines.append((FONT.is_file() and FONT.with_name("OFL.txt").is_file(), "caption font " + FONT.name))
@@ -78,6 +83,10 @@ DETAIL_NEGATIVE = ("child, teenager, blurry, deformed, crossed eyes, lazy eye, e
                    "fused fingers, missing fingers")
 
 
+def _backend(args) -> dict:
+    return {"backend": args.backend} if args.backend != "realvisxl" else {}
+
+
 def cmd_worker(args) -> int:
     from . import render, worker
     from . import embedding
@@ -85,7 +94,8 @@ def cmd_worker(args) -> int:
     stdin = worker.claim_stdin()
     root = Path(args.data) if args.data else data_dir()
     load = (lambda: embedding.load(root, min_free_gib=args.min_free_gib)) if args.embed_only else (
-        lambda: render.load(root, min_free_gib=args.min_free_gib, identity=args.identity))
+        lambda: render.load(root, min_free_gib=args.min_free_gib, identity=args.identity,
+                            **_backend(args)))
     code = worker.serve(load,
         stdin=stdin, out=out, on_eof=lambda: os._exit(0), identity=args.identity)
     # the reader thread still holds stdin's lock; a normal return would crash in finalization
@@ -105,7 +115,7 @@ def cmd_smoke(args) -> int:
     t0 = time.perf_counter()
     try:
         renderer = render.load(data_dir(), min_free_gib=args.min_free_gib,
-                               identity=args.identity)
+                               identity=args.identity, **_backend(args))
     except render.ReadyError as e:
         return _fail("smoke", e)
     load_s = time.perf_counter() - t0
@@ -173,7 +183,7 @@ def cmd_detail(args) -> int:
     t0 = time.perf_counter()
     try:
         renderer = render.load(root, min_free_gib=args.min_free_gib,
-                               identity=args.ref is not None)
+                               identity=args.ref is not None, **_backend(args))
     except render.ReadyError as e:
         return _fail("detail", e)
     load_s = time.perf_counter() - t0
@@ -211,13 +221,17 @@ def main(argv: list[str] | None = None) -> int:
                                                   "<data dir>/models and check them")
     p_fetch.add_argument("--only", metavar="NAMES",
                          help="comma-separated, of " + ", ".join(models.MODEL_PINS) +
-                              " (default: all)")
+                              " (default: the selected backend's models)")
+    p_fetch.add_argument("--backend", choices=models.BACKENDS, default="realvisxl")
+    p_fetch.add_argument("--auth", action="store_true",
+                         help="use your local Hugging Face login for gated model access")
     p_fetch.set_defaults(func=cmd_fetch_models)
     p_doc = sub.add_parser("doctor", help="check Python, the models and the GPU; one ok, note "
                                           "or FAIL line each")
     p_doc.add_argument("--quick", action="store_true",
                        help="never import torch or hash a file: files, records, revisions")
     p_doc.add_argument("--data", metavar="DIR", help="the data dir to check")
+    p_doc.add_argument("--backend", choices=models.BACKENDS, default="realvisxl")
     p_doc.set_defaults(func=cmd_doctor)
     p_worker = sub.add_parser("worker", help="the night worker: JSON lines on stdin and stdout")
     p_worker.add_argument("--data", metavar="DIR", help="the data dir with the models")
@@ -227,10 +241,12 @@ def main(argv: list[str] | None = None) -> int:
                           help="load the identity adapter and serve renders that carry one")
     p_worker.add_argument("--embed-only", action="store_true",
                           help="load only the fetched image encoder; use CPU if VRAM is occupied")
+    p_worker.add_argument("--backend", choices=models.BACKENDS, default="realvisxl")
     p_worker.set_defaults(func=cmd_worker)
     p_smoke = sub.add_parser("smoke", help="render one invented person into --out")
     p_smoke.add_argument("--out", metavar="DIR", required=True)
     p_smoke.add_argument("--min-free-gib", type=float, default=8.0)
+    p_smoke.add_argument("--backend", choices=models.BACKENDS, default="realvisxl")
     p_smoke.add_argument("--identity", action="store_true",
                          help="load the identity adapter and render a portrait with --ref's face")
     p_smoke.add_argument("--ref", metavar="FILE", help="the reference .jpg for --identity")
@@ -268,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     p_detail.add_argument("--nsfw-max", type=float, default=0.2)
     p_detail.add_argument("--min-free-gib", type=float, default=8.0)
     p_detail.add_argument("--data", metavar="DIR", help="the data dir with the models")
+    p_detail.add_argument("--backend", choices=models.BACKENDS, default="realvisxl")
     p_detail.add_argument("--boxes", action="store_true",
                           help="only find and print the crops: the CPU, no model but the "
                                "detectors, nothing written")

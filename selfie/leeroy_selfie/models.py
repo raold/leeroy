@@ -75,6 +75,41 @@ BASE_PINS = ("realvisxl", "nsfw")  # what every worker needs
 IDENTITY_PINS = ("ipadapter",)  # what only an --identity worker needs
 FACE_PINS = ("yunet",)  # an --identity worker's face crop: not fetched, the mind's square is used
 CRITIC_PINS = ("palm", "handpose")  # the critic's hands; not fetched: it reports hands unavailable
+DEFAULT_PINS = tuple(MODEL_PINS)  # the existing SDXL download; FLUX is an explicit opt-in
+BACKENDS = ("realvisxl", "flux1-dev")
+FLUX_BASE_PINS = ("flux1-dev", "nsfw")
+FLUX_IDENTITY_PINS = ("flux-ipadapter", "flux-clip")
+MODEL_PINS.update({
+    "flux1-dev": ModelPin(
+        "flux1-dev", "FLUX.1-dev (quantized locally to NF4)", "flux-1-dev-non-commercial-license",
+        "black-forest-labs/FLUX.1-dev", "45d95c497444bbaebe766e1528792fc9158c0c3a",
+        ("model_index.json", "scheduler/scheduler_config.json",
+         "text_encoder/config.json", "text_encoder/model.safetensors",
+         "text_encoder_2/config.json", "text_encoder_2/model.safetensors.index.json",
+         *(f"text_encoder_2/model-0000{i}-of-00002.safetensors" for i in (1, 2)),
+         *(f"tokenizer/{f}" for f in _TOKENIZER),
+         *(f"tokenizer_2/{f}" for f in ("special_tokens_map.json", "spiece.model", "tokenizer.json",
+                                        "tokenizer_config.json")),
+         "transformer/config.json", "transformer/diffusion_pytorch_model.safetensors.index.json",
+         *(f"transformer/diffusion_pytorch_model-0000{i}-of-00003.safetensors" for i in (1, 2, 3)),
+         "vae/config.json", "vae/diffusion_pytorch_model.safetensors")),
+    "flux-ipadapter": ModelPin(
+        "flux-ipadapter", "XLabs FLUX IP-Adapter v2", "flux-1-dev-non-commercial-license",
+        "XLabs-AI/flux-ip-adapter-v2", "d1507fa7314df9f7dbe30a1e9659e5e634a58464",
+        ("ip_adapter.safetensors",)),
+    "flux-clip": ModelPin(
+        "flux-clip", "CLIP ViT-L/14 image encoder for FLUX IP-Adapter", "MIT",
+        "openai/clip-vit-large-patch14", "32bd64288804d66eefd0ccbe215aa642df71cc41",
+        ("config.json", "model.safetensors", "preprocessor_config.json")),
+})
+
+
+def backend_pins(backend: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if backend == "realvisxl":
+        return BASE_PINS, IDENTITY_PINS
+    if backend == "flux1-dev":
+        return FLUX_BASE_PINS, FLUX_IDENTITY_PINS
+    raise ModelError(f"unknown backend {backend!r}")
 
 
 def model_dir(data_dir: Path, name: str) -> Path:
@@ -139,12 +174,13 @@ def _snapshot_download(repo_id: str, **kw):
 
 
 def fetch_models(data_dir: Path, only: Iterable[str] | None = None, *,
-                 say: Callable[[str], None] = print) -> list[tuple[bool | None, str]]:
-    """Fetch the models named in `only` (every pinned one when None), in the table's order, and
+                 say: Callable[[str], None] = print, authenticated: bool = False
+                 ) -> list[tuple[bool | None, str]]:
+    """Fetch `only` (the original SDXL pins when None), in the table's order, and
     return their check() lines. Raises ModelError for an unknown name (before fetching
     anything) or with every problem left once fetched."""
     data_dir = Path(data_dir)
-    wanted = set(MODEL_PINS) if only is None else set(only)
+    wanted = set(DEFAULT_PINS) if only is None else set(only)
     unknown = sorted(wanted - MODEL_PINS.keys())
     if unknown:
         raise ModelError(f"unknown model(s) {', '.join(unknown)}: one of {', '.join(MODEL_PINS)}")
@@ -152,14 +188,18 @@ def fetch_models(data_dir: Path, only: Iterable[str] | None = None, *,
     cache = data_dir / HF_CACHE
     for name in names:
         pin = MODEL_PINS[name]
-        # huggingface_hub reads these when it is first imported; no model needs a token
-        os.environ["HF_HOME"] = str(cache)
+        # huggingface_hub reads these when it is first imported.
+        # Authenticated fetches use the operator's normal HF login; cache_dir below still
+        # keeps downloaded data here. Never print or copy credentials into this directory.
+        if not authenticated:
+            os.environ["HF_HOME"] = str(cache)
         os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
         say(f"{name}: {pin.repo} @ {pin.revision[:12]}")
         try:
             _snapshot_download(pin.repo, revision=pin.revision,
                                local_dir=model_dir(data_dir, name),
-                               allow_patterns=list(pin.files), cache_dir=cache, token=False)
+                               allow_patterns=list(pin.files), cache_dir=cache,
+                               token=True if authenticated else False)
         except Exception as e:  # huggingface_hub's and httpx's errors share no narrower base
             raise ModelError(f"{name}: {pin.repo} @ {pin.revision[:12]} failed: "
                              f"{_reason(e)}") from e

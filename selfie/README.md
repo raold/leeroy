@@ -41,6 +41,55 @@ committed); models land in `<data>/models/<name>` at the revisions pinned in
 `pytest -m engines` runs the checks that need the fetched model files, `-m gpu` those that need
 the GPU; the default run deselects both.
 
+## Optional FLUX.1-dev backend
+
+RealVisXL remains the default. Standard FLUX.1-dev is an explicit alternative; it uses its
+own transformer, text encoders and XLabs IP-Adapter v2, retaining the shared image checks,
+reference cropping, captions, grids and detail pass. SDXL adapter weights cannot be reused.
+The existing embed-only worker still uses the SDXL ViT-H encoder so stored diversity vectors
+remain comparable. No prompt lists or content settings change when selecting a backend.
+
+Install the extra into the worker's Python 3.12 environment, accept the model's access terms
+on Hugging Face, and sign in locally (never put a token in TOML, shell arguments or the repo):
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe -e ".[gpu,flux,test]" --extra-index-url https://download.pytorch.org/whl/cu128
+.venv/Scripts/hf.exe auth login
+$env:LEEROY_SELFIE_DATA = 'F:/azerothcore/selfie-data'
+.venv/Scripts/python.exe -m leeroy_selfie fetch-models --backend flux1-dev --auth
+.venv/Scripts/python.exe -m leeroy_selfie doctor --backend flux1-dev --quick
+```
+
+`--auth` uses the local Hugging Face login; only the explicit fetch command accesses the
+network. The default fetch still downloads only the existing models. FLUX weights and its
+adapter are pinned by revision and checked like SDXL. The initial download is large: it fetches
+the original weights, then quantizes the transformer and T5 encoder to NF4 during loading.
+It requires a CUDA GPU with BF16 support and the pinned bitsandbytes extra, and uses model CPU
+offload plus VAE slicing/tiling. Measured load time, peak VRAM and identity quality must be
+checked on the intended hardware before release; unit tests do not establish those results.
+
+After deploying both packages, add `backend = "flux1-dev"` inside the existing `[selfies]`
+table and restart the mind. Remove that key or set `"realvisxl"` to switch back; old images
+and picks remain. Worker startup and render waits are bounded at 600 seconds for FLUX only.
+The existing VRAM floors still apply. A low-VRAM refusal happens before quantization and
+retries loading only after memory has been freed. The mind doctor checks the selected model
+and requires the FLUX identity weights when snaps or identity sets are enabled.
+
+In an owner-approved GPU window with the mind stopped and its models unloaded, the worker
+can be checked independently using `smoke --backend flux1-dev --out DIR`, then
+`smoke --backend flux1-dev --identity --ref FILE --out ANOTHER_DIR` with a generated fictional
+adult's reference. The output reports render time, peak VRAM and classifier score. Restore
+the mind afterward. The owner should inspect face consistency and appearance before enabling
+automatic rendering. The existing conservative prompt budget is retained. The protocol's
+CFG becomes FLUX `true_cfg_scale` (so negative prompts remain active above 1), while distilled
+guidance stays 3.5; SDXL parameter rankings need a fresh visual assessment on FLUX.
+
+FLUX.1-dev and the adapter use the FLUX.1-dev non-commercial license; the CLIP ViT-L/14
+encoder uses MIT. See the [model card](https://huggingface.co/black-forest-labs/FLUX.1-dev)
+and [adapter card](https://huggingface.co/XLabs-AI/flux-ip-adapter-v2) for their terms.
+
+## Worker protocol
+
 `python -m leeroy_selfie worker --data DIR --min-free-gib N` is the night worker, started by the
 mind and never by hand: JSON lines on stdin and stdout, one render at a time, `ready` first
 (`ok: false` with an error when it refuses, for example with too little free VRAM). Its start

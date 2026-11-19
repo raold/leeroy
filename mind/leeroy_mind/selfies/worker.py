@@ -233,12 +233,13 @@ class SelfieWorker:
     """`command` starts the worker (selfies.config.worker_command); `env` is its environment
     (None: this process's). start() may be called again after a stop: a fresh tree."""
 
-    def __init__(self, command, *, env=None, start_s: float = START_S,
-                 render_s: float = RENDER_S):
+    def __init__(self, command, *, env=None, start_s: float | None = None,
+                 render_s: float | None = None):
         self._command = [str(c) for c in command]
         self._env = env
-        self._start_s = start_s
-        self._render_s = render_s
+        flux = ("--backend", "flux1-dev") in tuple(zip(self._command, self._command[1:]))
+        self._start_s = start_s if start_s is not None else (600.0 if flux else START_S)
+        self._render_s = render_s if render_s is not None else (600.0 if flux else RENDER_S)
         self._tree: ProcessTree | None = None
         self._ready = False
         self._sequence = 0
