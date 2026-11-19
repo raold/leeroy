@@ -96,6 +96,26 @@ def set_rubric(conn, run_id: int, arm: str, pair: int, grades: list[tuple[int, s
                      "AND turn=?", (score, code, run_id, arm, pair, turn))
 
 
+def set_score(conn, run_id: int, arm: str, pair: int, marks: list[tuple[float, int]]) -> None:
+    """The lab judge's 1-5 score of each turn of a pair, with the calls it took."""
+    for turn, (score, calls) in enumerate(marks, 1):
+        conn.execute("UPDATE lab_score SET score=?, score_calls=? WHERE run=? AND arm=? AND pair=? "
+                     "AND turn=?", (score, calls, run_id, arm, pair, turn))
+
+
+def set_prefer(conn, run_id: int, arm: str, pair: int, shares: list[float | None]) -> None:
+    """A variant's answers against the control's to the same lines (judge.prefer's share)."""
+    for turn, share in enumerate(shares, 1):
+        conn.execute("UPDATE lab_score SET prefer=? WHERE run=? AND arm=? AND pair=? AND turn=?",
+                     (share, run_id, arm, pair, turn))
+
+
+def has_score(conn) -> bool:
+    """Whether this mind.db has the judge's columns (migration *_lab_judge.sql); a reader of an
+    older database sees every score as None."""
+    return "score" in {r[1] for r in conn.execute("PRAGMA table_info(lab_score)")}
+
+
 def set_judged(conn, run_id: int, arm: str, pair: int, her: int, him: int | None) -> None:
     conn.execute("UPDATE lab_score SET judged_human=?, his_judged_human=? WHERE run=? AND arm=? "
                  "AND pair=?", (her, him, run_id, arm, pair))
@@ -104,25 +124,34 @@ def set_judged(conn, run_id: int, arm: str, pair: int, her: int, him: int | None
 def scores(conn, run_id: int) -> dict[str, dict[tuple[int, int], dict]]:
     cols = ("arm", "pair", "turn", "guid", "kind", "channel", "answered", "applied", "rules",
             "words", "his_words", "rubric", "rubric_code", "judged_human", "his_judged_human")
+    extra = ("score", "score_calls", "prefer") if has_score(conn) else ()
     out: dict[str, dict] = {}
-    for r in conn.execute(f"SELECT {', '.join(cols)} FROM lab_score WHERE run=?", (run_id,)):
-        row = dict(zip(cols, r))
+    for r in conn.execute(f"SELECT {', '.join(cols + extra)} FROM lab_score WHERE run=?", (run_id,)):
+        row = dict(zip(cols + extra, r))
+        row.setdefault("score", None)
+        row.setdefault("score_calls", None)
+        row.setdefault("prefer", None)
         row["rules"] = json.loads(row["rules"])
         out.setdefault(row["arm"], {})[(row["pair"], row["turn"])] = row
     return out
 
 
 def arm_summary(rows: dict) -> dict:
-    """An arm's numbers: lines, answered, the rubric mean and how many graded, rule-flag rates,
-    the blind judge's rate of calling her human (per pair), by kind too."""
+    """An arm's numbers: lines, answered, the rubric mean and how many graded (the 0-3 rubric)
+    or the judge's mean score and how many scored (lab/judge.py's 1-5), rule-flag rates, the
+    blind judge's rate of calling her human (per pair), by kind too (the judge's score when the
+    arm has one, else the rubric)."""
     items = list(rows.values())
     graded = [r["rubric"] for r in items if r["rubric"] is not None]
+    scored = [r["score"] for r in items if r.get("score") is not None]
+    calls = [r["score_calls"] for r in items if r.get("score_calls") is not None]
     judged = {r["pair"]: r["judged_human"] for r in items if r["judged_human"] is not None}
     flags = rules.tally([r["rules"] for r in items])
     kinds: dict[str, list[int]] = {}
+    key = "score" if scored else "rubric"
     for r in items:
-        if r["rubric"] is not None:
-            kinds.setdefault(r["kind"], []).append(r["rubric"])
+        if r.get(key) is not None:
+            kinds.setdefault(r["kind"], []).append(r[key])
     codes: dict[str, int] = {}
     for r in items:
         if r["rubric_code"]:
@@ -130,6 +159,8 @@ def arm_summary(rows: dict) -> dict:
     return {"lines": len(items), "answered": sum(r["answered"] for r in items),
             "applied": sum(r["applied"] for r in items),
             "graded": len(graded), "rubric": round(mean(graded), 4) if graded else None,
+            "scored": len(scored), "score": round(mean(scored), 4) if scored else None,
+            "score_calls": sum(calls),
             "flags": flags, "flag_rates": {c: round(n / len(items), 4) if items else 0.0
                                            for c, n in flags.items()},
             "judged": len(judged), "human": round(sum(judged.values()) / len(judged), 4) if judged else None,
@@ -138,14 +169,18 @@ def arm_summary(rows: dict) -> dict:
 
 
 def feedback(conn, piece: str, *, tried: int = 5) -> dict:
-    """What the proposer reads: the newest graded control (its rubric mean, count, commonest
-    reason codes, rule-flag rates) and up to `tried` earlier variants of this piece with their
-    rubric change against their control and outcome."""
+    """What the proposer reads: the newest graded control (its rubric mean, or the judge's
+    mean score with its scale, count, commonest reason codes, rule-flag rates) and up to `tried`
+    earlier variants of this piece with their change against their control and outcome."""
     out: dict = {}
-    for (rid,) in conn.execute("SELECT DISTINCT run FROM lab_score WHERE arm='control' AND rubric IS "
-                               "NOT NULL ORDER BY run DESC LIMIT 1"):
+    graded = "(rubric IS NOT NULL OR score IS NOT NULL)" if has_score(conn) else "rubric IS NOT NULL"
+    for (rid,) in conn.execute(f"SELECT DISTINCT run FROM lab_score WHERE arm='control' AND {graded} "
+                               "ORDER BY run DESC LIMIT 1"):
         s = arm_summary(scores(conn, rid).get("control", {}))
-        if s["graded"]:
+        if s["scored"]:
+            out["control"] = {"rubric": s["score"], "n": s["scored"], "scale": "1-5",
+                              "codes": [], "flags": s["flag_rates"]}
+        elif s["graded"]:
             out["control"] = {"rubric": s["rubric"], "n": s["graded"],
                               "codes": list(s["codes"].items())[:4], "flags": s["flag_rates"]}
     rows = conn.execute("SELECT text, outcome, scores FROM prompt_variant WHERE piece=? AND scores "

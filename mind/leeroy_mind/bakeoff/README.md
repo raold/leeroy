@@ -291,3 +291,7 @@ machine).
   is counted as a silence.
 - The live beat is not replayed: its lines are never stored, so a candidate answers without
   one unless it asks its own (`beat = true`), whose items are read back from the request.
+- An optional reply scorer exists and is not called by a run: `lab.judge.score_lines(reasoner,
+  lines)` scores a window's replies 1-5 on the live model (lab/README.md, "The judge"). It
+  agrees with a strong grader at rho 0.31 on its test set, below the lab's own bar, so the
+  bake-off's tables do not use it.

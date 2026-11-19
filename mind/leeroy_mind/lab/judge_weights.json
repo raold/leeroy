@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "fit_on": 308,
+  "ridge": 30.0,
+  "modes": {
+    "features": {
+      "bias": 3.4073,
+      "weights": {
+        "over": -0.0723,
+        "words": -0.1321,
+        "rerun": -0.1393,
+        "dodge": 0.0232,
+        "stock": -0.0019
+      }
+    },
+    "checklist": {
+      "bias": 3.4521,
+      "weights": {
+        "tell_echo": -0.0506,
+        "tell_answers": -0.2167,
+        "tell_adds": -0.0105,
+        "tell_generic": 0.1583,
+        "tell_polished": -0.0177,
+        "tell_met": -0.1585,
+        "tell_repeats": 0.0221,
+        "tell_drifts": -0.2671,
+        "over": -0.0388,
+        "words": -0.0854
+      }
+    },
+    "fewshot": {
+      "bias": 2.2192,
+      "weights": {
+        "fewshot": 0.2366
+      }
+    },
+    "pairwise": {
+      "bias": 0.0,
+      "weights": {
+        "anchors": 1.0
+      }
+    },
+    "tells": {
+      "bias": 2.6117,
+      "weights": {
+        "grade": 0.1773,
+        "tell_context": -0.1858,
+        "tell_drifts": -0.2357,
+        "tell_met": -0.1604
+      }
+    }
+  }
+}

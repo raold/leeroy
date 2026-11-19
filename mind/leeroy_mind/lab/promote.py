@@ -10,7 +10,18 @@ bandit's family for its piece (learn.arms "prompt.<piece>"), sampled in live tal
 promoted there only through the weekly cycle's own gate (learn/cycle.py: P(beats control) > 0.9
 on 30+ rewarded uses, no guard regression, no veto). Every other variant is retired with its
 outcome code. Every variant keeps its scoresheet (numbers only). A global learning freeze or a
-frozen family promotes nothing (outcome `frozen`)."""
+frozen family promotes nothing (outcome `frozen`).
+
+The grade compared is the run's grader's (`key`): "rubric" (lab/grade.py's 0-3) or "score"
+(lab/judge.py's 1-5), each with its own margin (THRESHOLDS). With `allow` false (the default;
+the night passes true only for a run planned with [lab] promote and the tells grader) nothing
+becomes an arm: the variant that would have is retired `measure_only` with its scoresheet, so
+the lab records and reports and the weekly gate never sees it.
+
+With the tells grader the sheet also carries `prefer`: over the lines both arms answered, how
+often the judge, shown the variant's answer and the control's to the same line both ways round,
+took the variant's as reading more like a real person (0.5: no preference). It is recorded and
+reported; the outcome is decided on the mean grade alone."""
 import json
 import math
 from statistics import mean
@@ -21,15 +32,19 @@ from leeroy_mind.learn.control import effective
 from . import rules, store
 
 THRESHOLD = 0.15
+# of the 0-3 rubric, and of the judge's score: its shipped weights are shrunk, so it runs about
+# 2.2-3.5 and 0.1 is half a grade of its structured grade over every answer
+THRESHOLDS = {"rubric": THRESHOLD, "score": 0.1}
 MIN_GRADED = 8
 REGRESS_MIN, REGRESS_SHARE = 2, 0.10
 
 
-def compare(control: dict, variant: dict) -> dict:
-    """The scoresheet of `variant` against `control` (each {(pair, turn): lab_score row})."""
+def compare(control: dict, variant: dict, *, key: str = "rubric") -> dict:
+    """The scoresheet of `variant` against `control` (each {(pair, turn): lab_score row}), on
+    the rows' `key` grade."""
     keys = sorted(set(control) & set(variant))
-    graded = [k for k in keys if control[k]["rubric"] is not None and variant[k]["rubric"] is not None]
-    sheet = {"lines": len(keys), "graded": len(graded),
+    graded = [k for k in keys if control[k].get(key) is not None and variant[k].get(key) is not None]
+    sheet = {"lines": len(keys), "graded": len(graded), "grade": key,
              "applied": sum(int(variant[k]["applied"]) for k in keys)}
     c_flags = rules.tally([control[k]["rules"] for k in keys])
     v_flags = rules.tally([variant[k]["rules"] for k in keys])
@@ -37,10 +52,13 @@ def compare(control: dict, variant: dict) -> dict:
     margin = max(REGRESS_MIN, math.ceil(REGRESS_SHARE * len(keys)))
     sheet["regressed"] = [c for c in rules.CODES if v_flags[c] - c_flags[c] >= margin]
     if graded:
-        c_mean = mean(control[k]["rubric"] for k in graded)
-        v_mean = mean(variant[k]["rubric"] for k in graded)
+        c_mean = mean(control[k][key] for k in graded)
+        v_mean = mean(variant[k][key] for k in graded)
         sheet.update(control=round(c_mean, 4), variant=round(v_mean, 4),
                      delta=round(v_mean - c_mean, 4))
+    shares = [variant[k]["prefer"] for k in keys if variant[k].get("prefer") is not None]
+    if shares:  # the variant's answer against the control's to the same line (judge.prefer)
+        sheet["prefer"] = {"n": len(shares), "share": round(mean(shares), 4)}
     judged = [k for k in keys if control[k]["judged_human"] is not None
               and variant[k]["judged_human"] is not None]
     pairs = {k[0]: k for k in judged}
@@ -54,7 +72,7 @@ def compare(control: dict, variant: dict) -> dict:
         sheet["outcome"] = "untested"
     elif sheet["regressed"]:
         sheet["outcome"] = "regressed"
-    elif sheet["delta"] >= THRESHOLD - 1e-9:
+    elif sheet["delta"] >= THRESHOLDS[key] - 1e-9:
         sheet["outcome"] = "won"
     else:
         sheet["outcome"] = "lost"
@@ -65,18 +83,22 @@ def arm_id(piece: str, variant: int) -> str:
     return f"lab.{piece}.v{variant}"
 
 
-def promote(conn, run_id: int, *, settings=None, now: float, budget_cut: bool = False) -> dict:
+def promote(conn, run_id: int, *, settings=None, now: float, budget_cut: bool = False,
+            units_failed: bool = False, key: str = "rubric", allow: bool = False) -> dict:
     """Settle every proposed variant of the run and promote the best winner. Returns
     {"promoted": arm id or None, "outcomes": {variant id: outcome}, "summary": per arm}.
-    `budget_cut`: an arm the budget left unfinished is `budget` rather than too_few."""
+    `budget_cut`: an arm the budget left unfinished is `budget` rather than too_few;
+    `units_failed` (and no budget cut): one that grading units failed for is `failed`. `key`:
+    the grade compared. `allow` (default false, so a caller that forgets it only measures):
+    the best winner becomes an arm; without it the winner is retired `measure_only`."""
     by_arm = store.scores(conn, run_id)
     control = by_arm.get("control", {})
     proposed = [v for v in store.variants(conn, run_id) if v["status"] == "proposed"]
-    sheets = {v["id"]: compare(control, by_arm.get(f"v{v['id']}", {})) for v in proposed}
-    if budget_cut:
+    sheets = {v["id"]: compare(control, by_arm.get(f"v{v['id']}", {}), key=key) for v in proposed}
+    if budget_cut or units_failed:
         for sheet in sheets.values():
             if sheet["outcome"] == "too_few":
-                sheet["outcome"] = "budget"
+                sheet["outcome"] = "budget" if budget_cut else "failed"
     cfg = effective(conn, settings)
     winners = sorted((sheets[v["id"]]["delta"], -v["id"], v) for v in proposed
                      if sheets[v["id"]]["outcome"] == "won")
@@ -87,6 +109,8 @@ def promote(conn, run_id: int, *, settings=None, now: float, budget_cut: bool = 
         family = arms.PROMPT_PREFIX + v["piece"]
         if v is best and (cfg.freeze or family in cfg.frozen_families):
             sheet["outcome"] = "frozen"
+        if v is best and sheet["outcome"] == "won" and not allow:
+            sheet["outcome"] = "measure_only"
         if v is best and sheet["outcome"] == "won":
             ident = arm_id(v["piece"], v["id"])
             control_id = arms.control_of(family)

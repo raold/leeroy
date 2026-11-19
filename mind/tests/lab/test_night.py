@@ -1,6 +1,7 @@
-"""The lab's three night stages end to end on an invented cast: a scripted reflection model
-(proposer, rubric, blind judge), the real sandbox in this process with a FakeLLM live model, and
-the learn bandit receiving the winner. The live prompts dir is never written."""
+"""The lab's night stages with the rubric end to end on an invented cast: a scripted reflection
+model (proposer, rubric, blind judge) and the real sandbox in this process with a FakeLLM live
+model. The rubric only measures: its winner never reaches the learn bandit (a judge winner that
+may promote: test_score_stage.py). The live prompts dir is never written."""
 import asyncio
 import json
 
@@ -77,7 +78,7 @@ def run_night(live, tmp_path, *, cfg=None, before=None):
     return asyncio.run(go())
 
 
-def test_a_night_measures_tests_variants_and_promotes_the_winner(live, tmp_path):
+def test_a_night_measures_tests_variants_and_only_measures_the_winner(live, tmp_path):
     prompts_before = digest(live / "prompts")
     run, variants, scores, registry, failures, children = run_night(live, tmp_path)
     assert not failures, dict(failures)
@@ -86,16 +87,13 @@ def test_a_night_measures_tests_variants_and_promotes_the_winner(live, tmp_path)
     # the third proposal dropped its placeholders: refused by the screen, never stored
     assert [v["text"] for v in variants] == [variant_text(WIN), variant_text(LOSE)]
     win, lose = variants
-    assert win["status"] == "promoted" and win["outcome"] == "won", win["scores"]
+    assert (win["status"], win["outcome"], win["arm_id"]) == ("retired", "measure_only", None), win["scores"]
     assert lose["status"] == "retired" and lose["outcome"] == "lost"
     sheet = json.loads(win["scores"])
     assert sheet["delta"] == pytest.approx(2.0) and sheet["graded"] == 8 and sheet["applied"] == 8
-    assert sheet["regressed"] == []
-    # the winner is an active arm of the bandit's family for its piece, with a control
-    arm = registry[win["arm_id"]]
-    assert arm.family == "prompt.reply_human" and arm.status == "active"
-    assert arm.params == {"piece": "reply_human", "variant": win["id"]}
-    assert registry["prompt.reply_human.control.v1"].status == "control"
+    assert sheet["regressed"] == [] and sheet["grade"] == "rubric"
+    # nothing reached the bandit: no lab arm, no prompt family
+    assert not any(a.startswith(("lab.", "prompt.")) for a in registry)
     # every arm ran the same pairs and turns; the control never read a variant
     assert set(scores) == {"control", f"v{win['id']}", f"v{lose['id']}"}
     assert {k for k in scores["control"]} == {k for k in scores[f"v{win['id']}"]}
@@ -115,11 +113,23 @@ def test_a_night_measures_tests_variants_and_promotes_the_winner(live, tmp_path)
         f"{arm}.json" for arm in scores)
 
 
+def test_a_rubric_plan_that_says_promote_still_only_measures(live, tmp_path):
+    """mind.toml refuses promote with the rubric (review of #369); a plan that says so anyway (a
+    LabCfg built in code) still makes no arm."""
+    from dataclasses import replace
+    cfg = replace(load(live / "mind.toml"), promote=True)
+    run, variants, _, registry, failures, _ = run_night(live, tmp_path, cfg=cfg)
+    assert not failures and run["plan"]["promote"] is True and run["plan"]["grader"] == "rubric"
+    assert [v["outcome"] for v in variants] == ["measure_only", "lost"]
+    assert run["summary"]["promote"] is False
+    assert not any(a.startswith("lab.") for a in registry)
+
+
 def test_a_resumed_night_runs_nothing_again(live, tmp_path):
     run_night(live, tmp_path)
     run, variants, scores, registry, failures, children = run_night(live, tmp_path)
     assert run["status"] == "done" and not children and not failures
-    assert sum(1 for a in registry.values() if a.id.startswith("lab.")) == 1
+    assert not any(a.id.startswith("lab.") for a in registry.values())
 
 
 def test_the_budget_cuts_the_battery_and_settles_every_variant(live, tmp_path):
