@@ -497,10 +497,14 @@ Each run, in one transaction:
    included. A promoted arm is reported, listed in the Lab and never retired for its
    share; a promoted lesson leads the style block (with the cycle on), so trimming
    drops trial lessons first.
-4. **Retirement.** An active arm with 30 or more rewarded uses, a probability under
-   0.5 of beating control on whole rewards, and under 5% of its family's generations
-   in both weeks (counted in the bandit contexts where it has been used) is retired;
-   never a promoted arm. The Lab can accept a retired arm again. A lesson not
+4. **Retirement.** An active arm under 5% of its family's generations in both weeks
+   (counted in the bandit contexts where it has been used) is retired when it loses
+   room by room: in every bandit context where it has 30 or more rewarded uses (at
+   least one), a probability under 0.5 of beating control's lines in that same context
+   on whole rewards, and in no context a probability above 0.9. Rooms are never pooled:
+   a few uses in a DM, whose answered lines score far above a guild line, would set the
+   arm against all of control's DM lines. Never a promoted arm. The Lab can accept a
+   retired arm again. A lesson not
    reinforced in 14 days has already lapsed (lessons expire after 14 days without
    reinforcement); the cycle lists those that lapsed in the evaluated week and ends
    their promotions.
