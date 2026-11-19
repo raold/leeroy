@@ -22,7 +22,9 @@ change it). An invalid table means off.
 nobody (`HeatLive.reaches`): the world romance dial, each woman's own dial, every clock and every
 photo rate keep their exact effect, at whatever the romance dial is (the live one is 10, not 9).
 Offsets stored before a world value wait for it. The page says "Heat is on but not set: the
-romance dial (N) ... in force exactly as before". `tests/heat/test_heat_neutral.py` holds it:
+romance dial (N) ... in force exactly as before", and its slider starts at the value that dial
+stands for but never above 9 (today: the live dial 10 would be heat 10, which goes further than
+the dial 10 does). `tests/heat/test_heat_neutral.py` holds it:
 the full prompt over every stance, arc stage, channel, own dial (none, 1-10) and world dial
 0-10, the clocks, the photo side and the dials the older readers take. A replay of the 500
 newest captured turns (`bakeoff_turn`) plus turns to him from every woman with an attitude, on a
@@ -67,7 +69,7 @@ override, then how far his own lines have led, then (with `public_cap`) the publ
 | 6-7 | suggestive | as written | after one | x0.8 | P2 | x0.9 |
 | 8 | frank | as written | after one; late at night she may take one step herself | x0.9 | P3 | x1.0 |
 | 9 | explicit | as before | as before | x1.0 | P4 | x1.0 |
-| 10 | explicit | as before | none needed | x1.3; every private turn to him carries it | P4 | x1.2 |
+| 10 | explicit | as before | none needed | x1.3; every private turn to him carries it (every turn to him for a woman at her own dial 10, as before) | P4 | x1.2 |
 
 - The tier is a ceiling. Her stance and arc stage still set where she starts
   (`romance.ATTITUDE_REACH`, `STAGE_DEPTH`); a fond woman at heat 10 is still warm, and a woman
@@ -83,9 +85,12 @@ override, then how far his own lines have led, then (with `public_cap`) the publ
 - **Photo offers** multiply only the chance a turn to him offers a `him` photo. How many photos
   a week stays the `selfies` dial's.
 - **Voice notes**: below heat 10, and off a no-limits evening, a line that is *itself* plainly
-  explicit is typed instead of voiced (never dropped). The line is judged, with the public
-  guard's screen (`guard.public_hit`: a short built-in list plus his `public_block.txt`), not
-  the tier its prompt was worded at; every other line is spoken as before.
+  explicit is typed instead of voiced (never dropped). The line is judged with its own screen
+  (`guard.voice_hit`: a broader built-in list, `VOICE_RE`, of plainly sexual words about bodies,
+  undressing and sex, plus everything the public guard catches), not the tier its prompt was
+  worded at; every other line is spoken as before. The voice list is kept apart from the public
+  guard's short one, so it never widens `public_cap`. His `public_block.txt` words count for
+  both.
 - **What else reads it** once heat is set, through one helper (`live.member_dial`): the learn
   coach's lesson screen and `learn/apply`, the outreach fill's "miss you", the bond's night,
   invitations and recall (the pipeline's bond memories). Each already reads the romance dial
@@ -109,26 +114,35 @@ string from one tuple to another in `photos.py` is the whole edit.
 
 | Tier | Outfits added | Places added | Poses |
 |---|---|---|---|
-| P0 conservative | fitted blazer dress, cropped cardigan and wide-leg trousers, square-neck top and a pencil skirt, satin midi dress, fitted t-shirt and high-waisted jeans, flowy sundress | her living room couch, the mirror in her hallway, the front seat of her car, a cafe terrace, a park in summer | front, side |
+| P0 conservative | fitted blazer dress, cropped cardigan and wide-leg trousers, square-neck top and a pencil skirt, satin midi dress, fitted t-shirt and high-waisted jeans, flowy sundress | her living room couch, her hallway at home, a sunny window seat at home, a bookshop, a cafe terrace, a park in summer | front, side |
 | P1 dressed | off-the-shoulder sweater dress, sweetheart-neckline sundress, off-the-shoulder top and jeans | a garden party, a city street at night, a ski lodge terrace | front, side |
-| P2 going out | fitted little dress, low-cut cocktail dress, crop top and high-waisted shorts, bodycon mini dress, halter top and a miniskirt, tank top and denim shorts, backless summer dress, plunging wrap dress, one-shoulder top and leather trousers, midi dress with a high slit, sequin party dress, cut-out dress, ribbed tank dress, leather jacket over a crop top, silk blouse and a leather miniskirt | a rooftop bar at night, a wine bar, a nightclub, a dance floor, a hotel balcony at dusk, a concert crowd | plus the three-quarter rear view |
+| P2 going out | fitted little dress, low-cut cocktail dress, crop top and high-waisted shorts, bodycon mini dress, halter top and a miniskirt, tank top and denim shorts, backless summer dress, plunging wrap dress, one-shoulder top and leather trousers, midi dress with a high slit, sequin party dress, cut-out dress, ribbed tank dress, leather jacket over a crop top, silk blouse and a leather miniskirt | a rooftop bar at night, a wine bar, a nightclub, a dance floor, a hotel balcony at dusk | plus the three-quarter rear view |
 | P3 gym | the gym outfits (at the gym only, as the pairings already say) | the gym | plus from behind |
 | P4 swim (today) | the swimwear (at the water only, as the pairings already say) | the six water settings | all |
 
-So the 22 dressed outfits split into 7 covered (P0 and P1) and 15 going out (P2).
+So the 22 dressed outfits split into 7 covered (P0 and P1) and 15 going out (P2). The places
+follow main's photo audit (`selfies/safe.py`): the three it added (`NEW_SETTINGS`) are P0, and
+the three it retired (the hallway mirror, the car's front seat, the concert crowd) are in no
+tier, so a stored scene naming one reads P4 (fail closed). The audit's rules hold at every tier:
+a selfie is waist-up and takes no pose, a varied set has `body_shot_share`'s number of body
+shots below P4 as at P4 (never more), and heat's check on a kind runs after main's framing.
 
 Where the tier is read:
 
 - the night's photo-kind pass and the situational scenes (the lust reply schema's outfit and
-  setting enums are narrowed; the pairings and every screen run on the reply as before);
+  setting enums are narrowed; the pairings and every screen run on the reply as before), and
+  with `[selfies] variety` the balanced pick (`style_variety`: its outfits and places as the
+  tier allows);
 - varied sets (`varied.compose`: the categories, outfits, settings and poses the tier allows);
 - a photo read from his words (`words_scene`: swimwear only at P4, gym wear from P3, going-out
   wear from P2, else a casual outfit of her tier; fallback code `wearing:heat`);
 - sending: a stored photo above her tier is **passed over**, never expired, hidden, deleted or
   rendered again (`live.sends`, `live.sends_tier`, in `photos/send.py` and
   `photos/request_stock.py`). A situational photo's tier is read from its stored scene
-  (`photos.scene_tier`). A gallery photo's is read from the prompt it was rendered with and its
-  varied look's pose (`photos.prompt_tier`, `look_tier`), never from her photo kind of the day;
+  (`photos.scene_tier`). A gallery photo's is read from the prompt it was rendered with (its
+  outfit and place in the words of before or after the audit: `kind.OLD_TEMPLATES`,
+  `safe.setting_words`) and its varied look's pose (`photos.prompt_tier`, `look_tier`), never
+  from her photo kind of the day;
   the copy made for a request keeps that tier as a receipt (meta `photos:heat-tier:<snap>`), and
   the check at sending reads the receipt. So photos from before the dial are covered, and one
   reserved before heat was lowered is not delivered above the new tier. Raising heat makes the

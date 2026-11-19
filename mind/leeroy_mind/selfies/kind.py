@@ -530,7 +530,7 @@ async def kind_one(ctx: "NightContext", guid: int, *, variety=False,
             member.identity.real_name for member in all_personas.values()]
         if lust:
             picks,_,_,_ = style_variety.assign(all_personas,[guid],seed=ctx.night,ident=ctx.ident,
-                                               names=members,share=share)
+                                               names=members,share=share,tier=tier)
             return (picks[guid].photo,[]) if guid in picks else _refused(ctx,guid,["photo: no_safe_capacity"])
         ask += photo_extra.common(ctx.store,ctx.clock.now(),persona=p,ident=ctx.ident,names=members)
         ask += (" Prefer a coherent crop: headshots near the face, mirror selfies showing the upper body, "

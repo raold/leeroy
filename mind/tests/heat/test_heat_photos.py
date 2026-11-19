@@ -306,3 +306,79 @@ def test_heat_touches_no_screen_gate_or_negative():
     live = inspect.getsource(heat_live)  # the age rule is read, never set: style.suggestive
     assert "suggestive(p)" in live and "SUGGESTIVE_MIN_AGE" in live
     assert SUGGESTIVE_MIN_AGE == 25
+
+
+# -- main's photo audit (#362): review of #373, round 2 ---------------------------------------------
+
+def test_the_audits_settings_are_tiered_and_the_retired_ones_read_p4():
+    from leeroy_mind.selfies import safe
+    assert {photos.SETTING_TIER[s] for s in safe.NEW_SETTINGS} == {P0}
+    for retired in safe.RETIRED_SETTINGS:  # in no tier: a stored scene naming one fails closed
+        assert retired not in photos.SETTING_TIER
+        assert photos.scene_tier(dict(style="lust", outfit="satin midi dress",
+                                      setting=retired)) == P4
+
+
+def test_a_prompt_is_read_in_the_words_it_was_rendered_with_then_and_now():
+    """prompt_tier reads a setting as a prompt says it (safe.setting_words: "a garden party"
+    renders as "a summer garden") and an outfit in the words of before the audit
+    (kind.OLD_TEMPLATES) and after it."""
+    from leeroy_mind.selfies import safe
+    templates = {**kind.LUST_OUTFITS, **kind.VARIED_OUTFITS}
+    couch = "her living room couch"
+    for place, tier in photos.SETTING_TIER.items():
+        text = f"a woman, wearing a navy satin midi dress, {safe.setting_words(place)}, a smile"
+        assert photos.prompt_tier(text) == tier, place
+    for choice in templates:
+        olds = (kind.OLD_TEMPLATES[choice],) if choice in kind.OLD_TEMPLATES else ()
+        for template in (templates[choice], *olds):
+            text = f"a woman, wearing a {template.format(colour='red')}, {couch}, a smile"
+            assert photos.prompt_tier(text) == photos.OUTFIT_TIER[choice], (choice, template)
+    assert set(kind.OLD_TEMPLATES) <= set(photos.OUTFIT_TIER)
+
+
+@pytest.mark.parametrize("share", (0.0, 0.25, 0.5, 0.75, 1.0))
+def test_below_p4_a_varied_set_keeps_mains_body_shot_share(at, share):
+    """#362's audit: body_slots(share) of the four show her figure (front and side
+    three-quarter), the others waist-up. Below P4 the same count, never more."""
+    from leeroy_mind.selfies import safe
+    p = lust()
+    for tier, n in itertools.product(TIERS, range(16)):
+        looks = varied.compose(p, f"share-{n}", share, tier=tier)
+        assert looks is not None, (tier, n)
+        body = [x for x in looks if x.framing in kind.VARIED_BODY_FRAMINGS]
+        assert len(body) == safe.body_slots(share), (tier, n, share)
+        for x in looks:
+            assert photos.look_tier(x) <= tier
+            if x.framing not in kind.VARIED_BODY_FRAMINGS:
+                assert x.framing == "upper_body"
+            elif x.view in ("front", "side"):
+                assert x.framing == "three_quarter"
+        at(tier)
+        front = varied.recompose_slot(p, looks, 0, f"r-{n}", share)
+        at(None)
+        assert front is not None and front.view == "front" and photos.look_tier(front) <= tier
+        assert front.framing == ("three_quarter" if safe.body_slots(share) > 2 else "upper_body")
+
+
+@pytest.mark.parametrize("tier", TIERS)
+def test_the_variety_kind_pass_picks_inside_her_tier(tier):
+    """[selfies] variety: the lust kind comes from style_variety's balanced lists, which heat
+    narrows as it narrows the reply schema; at P4 the pick is the one it always was."""
+    from leeroy_mind.human import HumanIdentity
+    from leeroy_mind.selfies import style_variety
+    ident = HumanIdentity(guid=1, character_name="Zan", nickname="Zan", real_name="",
+                          is_guild_master=True)
+    cast = {g: lust(g) for g in (104, 105, 106)}
+    before, *_ = style_variety.assign(cast, list(cast), seed="s", ident=ident)
+    got, *_ = style_variety.assign(cast, list(cast), seed="s", ident=ident, tier=tier)
+    if tier == P4:
+        assert got == before
+    assert len(got) == len(cast)  # every tier still has a pick for each of them
+    for g, pick in got.items():
+        assert photos.choice_of(pick.photo.outfit) is not None
+        assert photos.picks_ok(dict(outfit=photos.choice_of(pick.photo.outfit),
+                                    setting=pick.photo.setting), tier), (tier, pick.photo)
+        assert pick.photo.kind != "mirror_selfie"
+        if pick.photo.kind == "selfie":
+            assert pick.photo.framing == "upper_body"
