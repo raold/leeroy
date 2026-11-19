@@ -39,6 +39,7 @@ from . import files
 from .config import SelfieCfg
 from .kind import chosen_style
 from .prompt import HELD, renderable
+from .safe import BODY_SHOT_SHARE
 from .style import suggestive
 from .store import (SelfieError, counts, current, member_of, photos, pick, picks, queue_more,
                     undo)
@@ -82,7 +83,7 @@ def queue_looks_set(store, cfg: SelfieCfg, p, guid: int, *, human: int, now: flo
             and renderable(p, chosen_style(store, p) or "plain") is None):
         from . import varied
         report = varied.queue(store, human=human, now=now, day=day, go=True, guids=[guid],
-                              daily=False)
+                              daily=False, share=getattr(cfg, "body_shot_share", BODY_SHOT_SHARE))
         if report["queued"]:
             set_no, varied_set = report["queued"][0]["set"], True
     if set_no is None:
@@ -221,7 +222,8 @@ class SelfieService:
             raise SelfieError("varied sets are off in mind.toml ([selfies] varied_sets = false)")
         app = self.app
         report = varied.queue(app.store, human=app.human_guid, now=app.clock.now(),
-                              day=app.clock.local().date().isoformat(), go=go, guids=guids)
+                              day=app.clock.local().date().isoformat(), go=go, guids=guids,
+                              share=self.cfg.body_shot_share)
         n = len(report["queued"])
         log("selfies_varied", go=go, queued=n, skipped=len(report["skipped"]))
         said = (f"{n} varied sets will be rendered at night." if go

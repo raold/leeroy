@@ -71,15 +71,15 @@ OLD_REFUSED = re.compile(
 PLAIN_KIND = {"kind": "snapshot", "framing": "upper_body", "setting": "on the deck of a small boat",
               "outfit": "orange rain bib over a grey hoodie",
               "expression": "squinting into the wind"}
-LUST_REPLY = {"kind": "mirror_selfie", "framing": "upper_body",
-              "setting": "the mirror in her hallway", "outfit": "fitted little dress",
+LUST_REPLY = {"kind": "selfie", "framing": "upper_body",
+              "setting": "her hallway at home", "outfit": "fitted little dress",
               "colour": "black", "expression": "a playful smile"}
-LUST_PHOTO = ProfilePhoto("mirror_selfie", "upper_body", "the mirror in her hallway",
-                          "a fitted little black dress", "a playful smile")
+LUST_PHOTO = ProfilePhoto("selfie", "upper_body", "her hallway at home",
+                          "a fitted short black dress", "a playful smile")
 SWIM_REPLY = {"kind": "snapshot", "framing": "upper_body", "setting": "the beach at sunset",
               "outfit": "string bikini", "colour": "red", "expression": "a teasing grin"}
 SWIM_AWAY = {**SWIM_REPLY, "setting": "a cafe terrace"}
-GYM_REPLY = {"kind": "mirror_selfie", "framing": "upper_body", "setting": "the gym",
+GYM_REPLY = {"kind": "selfie", "framing": "upper_body", "setting": "the gym",
              "outfit": "sports top and leggings", "colour": "teal",
              "expression": "a confident smirk"}
 GYM_AWAY = {**GYM_REPLY, "setting": "a wine bar"}
@@ -220,7 +220,10 @@ def test_the_schema_offers_only_the_lists_and_nothing_else():
     assert LUST_SCHEMA["title"] == "photo_lust" and LUST_SCHEMA["additionalProperties"] is False
     assert set(LUST_SCHEMA["required"]) == set(props) == {"kind", "framing", "setting", "outfit",
                                                           "colour", "expression"}
-    assert props["kind"] == kind._PROPS["kind"] and props["framing"] == kind._PROPS["framing"]
+    # never a mirror selfie, and waist-up or three-quarter (safe.py, the photo audit)
+    assert props["kind"]["enum"] == ["selfie", "snapshot", "headshot"]
+    assert set(props["kind"]["enum"]) < set(kind._PROPS["kind"]["enum"])
+    assert props["framing"]["enum"] == ["upper_body", "three_quarter"]
     assert props["setting"]["enum"] == list(LUST_SETTINGS)
     assert props["outfit"]["enum"] == list(LUST_OUTFITS)
     assert props["colour"]["enum"] == list(LUST_COLOURS)
@@ -309,7 +312,7 @@ def test_the_lists_hold_no_bedroom_bath_or_stage():
 
 
 def test_the_outfit_takes_its_colour_and_an_article():
-    assert compose_lust(LUST_REPLY).outfit == "a fitted little black dress"
+    assert compose_lust(LUST_REPLY).outfit == "a fitted short black dress"  # with its length
     assert compose_lust({**LUST_REPLY, "outfit": "satin midi dress", "colour": "emerald"}
                         ).outfit == "an emerald satin midi dress"
     assert compose_lust({**LUST_REPLY, "outfit": "off-the-shoulder top and jeans",
@@ -357,7 +360,7 @@ def test_the_hot_tub_takes_swimwear_only(h):
 
 
 @pytest.mark.parametrize("kind_,framing,problems", [
-    ("selfie", "upper_body", []), ("mirror_selfie", "upper_body", []),
+    ("selfie", "upper_body", []),
     ("snapshot", "upper_body", []), ("selfie", "face", [3]),
     ("snapshot", "head_and_shoulders", [3]), ("headshot", "upper_body", [4]),
     ("headshot", "face", [3, 4])])
@@ -369,6 +372,19 @@ def test_swimwear_goes_only_framed_upper_body_and_never_as_a_headshot(h, kind_, 
         assert out == [PAIRINGS[i] for i in problems], (outfit, kind_, framing)
     dressed = {**_reply("bodycon mini dress"), "kind": kind_, "framing": framing}
     assert screen_lust(p, dressed) == []                # a dressed kind may be any framing
+    mirror = {**_reply("bodycon mini dress"), "kind": "mirror_selfie", "framing": framing}
+    assert screen_lust(p, mirror) == ["photo.kind: not on its list"]  # never a mirror selfie
+
+
+@pytest.mark.parametrize("kind_,framing,stored", [
+    ("selfie", "three_quarter", "upper_body"), ("selfie", "upper_body", "upper_body"),
+    ("snapshot", "three_quarter", "three_quarter"), ("headshot", "three_quarter", "three_quarter")])
+def test_a_lust_selfie_is_framed_waist_up(h, kind_, framing, stored):
+    """Review of #362, round 2: an arm's-length selfie is waist-up (safe.selfie_framing); the
+    other kinds keep the share's framing."""
+    lust(h, 102)
+    night(h, 0, lusty=[{**LUST_REPLY, "kind": kind_, "framing": framing}])
+    assert photo(h, 102) == replace(LUST_PHOTO, kind=kind_, framing=stored)
 
 
 def test_a_swimwear_framing_that_fails_is_asked_once_more(h):
@@ -746,8 +762,11 @@ def test_the_render_follows_the_kinds_style_and_her_stance_at_render_time(h, tmp
     with caplog.at_level(logging.INFO):
         run(make_stage(SELFIE_CFG, worker=lambda: Seen(cmd, env=env))(h.ctx(night=NIGHTS[1])))
     negatives = {g: {n for n, _ in v} for g, v in seen.items()}
-    assert negatives == {"102": {LUST_NEGATIVE}, "104": {NEGATIVE}}   # 103 and 105 wait
-    joined = ("wearing a fitted little black dress, the mirror in her hallway", 0)
+    from leeroy_mind.selfies.prompt import BODY_NEGATIVE, BODY_NEGATIVE_LUST
+    # waist-up kinds: the body negative of each style (safe.py); 103 and 105 wait
+    assert negatives == {"102": {BODY_NEGATIVE_LUST}, "104": {BODY_NEGATIVE}}
+    assert LUST_NEGATIVE[1] in BODY_NEGATIVE_LUST and NEGATIVE[1] in BODY_NEGATIVE
+    joined = ("wearing a fitted short black dress, her hallway at home", 0)
     assert all(joined in ph for _, ph in seen["102"])
     assert not any(joined in ph for _, ph in seen["104"])
     for g in (103, 105):
@@ -876,23 +895,23 @@ def test_a_lust_kind_whose_name_filter_would_drop_its_phrase_is_held_and_chosen_
     night(h, 0, lusty=[LUST_REPLY])
     assert photo(h, 102) == LUST_PHOTO
     _save(h, 102, replace(load_persona(h.store, 102), identity=replace(
-        load_persona(h.store, 102).identity, real_name="Mirror")), "owner")   # renamed since
+        load_persona(h.store, 102).identity, real_name="Hallway")), "owner")   # renamed since
     p = load_persona(h.store, 102)
-    assert "mirror" in lust_phrase(p.photo) and renderable(p, LUST) == LUST_NAMED
+    assert "hallway" in lust_phrase(p.photo) and renderable(p, LUST) == LUST_NAMED
     with pytest.raises(ValueError, match="shares her name"):
         build_prompt(p, kind_style=LUST)
     ensure_first_sets(h.store, [102], now=h.T)
     assert not wants_gpu(ctx_for(h, 1))                 # a held set takes no GPU
     assert needs_rechoice(h.store, p) and style(h, 102) == LUST
     wine = {**LUST_REPLY, "setting": "a wine bar"}
-    ctx = ctx_for(h, 1, lusty=[LUST_REPLY, wine])       # the mirror clashes: asked once more
+    ctx = ctx_for(h, 1, lusty=[LUST_REPLY, wine])       # the hallway clashes: asked once more
     seen = calls(ctx)
     run(stage_photo(ctx))
     assert len(seen) == 2 and seen[1][1].endswith(LUST_ASK_AGAIN)
     p = load_persona(h.store, 102)
     assert p.photo == compose_lust(wine) and renderable(p, LUST) is None
     assert wants_gpu(ctx_for(h, 2))
-    assert "Mirror" not in caplog.text
+    assert "Hallway" not in caplog.text
 
 
 def test_a_name_such_as_wearing_refuses_every_lust_kind(h):

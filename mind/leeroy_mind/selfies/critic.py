@@ -7,10 +7,26 @@ best score. A flagged profile-set candidate keeps its place in the set and shows
 console's gallery.
 
 Rejected (codes): from the detectors a second face (extra_face), no face where one is expected
-(no_face), more than two hands (extra_hands) or eyes off level with the mouth (eyes_tilt); from
-the judge a limb, hand, finger or eye defect (limbs, hands, fingers, eyes) or another person
-(extra_people). The score (0-1) ranks the clean ones: the judge's overall grade, the identity
-cosine and the hands' shapes; a judge that says she is not the woman of the reference halves it.
+(no_face) or more than two hands (extra_hands); from the judge a limb, hand, finger or eye
+defect (limbs, hands, fingers, eyes) or another person (extra_people). Eyes off level with the
+mouth (eyes_tilt) only lower the score (NOTES): see the calibration below.
+
+Calibration (2026-11-17): the detectors and the identity cosine run offline (CPU) over 1288
+photos a visual audit had labelled by hand, against its severity 2 or more:
+- more than two hands: precision 0.89, recall 0.08 (0.43 of the severity 3 ones): the
+  one rule that is right when it fires, and what a third hand looks like. It rejects.
+- a second face: precision 0.17 against a defect, 0.72 against "someone else is in the
+  frame" (recall 0.67), which is what it measures. A situational or request photo shows her
+  alone, so it still rejects there; with best_of the next seed is taken.
+- eyes off level: 10 photos flagged, 3 of them defective; the audit found no eye defect
+  at severity 2 or more at all. It no longer rejects.
+- an odd hand shape (fewer than four distinct fingers): precision 0.21. It ranks, never rejects.
+- the identity cosine: "not the person of her cover" had a median of 0.66 against 0.84 for
+  "yes"; no threshold reaches precision 0.8 (the best, below 0.6, 0.23 at recall 0.18). It
+  ranks, never rejects.
+
+The score (0-1) ranks the clean ones: the judge's overall grade, the identity cosine and the
+hands' shapes; a judge that says she is not the woman of the reference halves it.
 
 Rows hold numbers and codes; `file` and `ref` are paths under mind-data built from integers.
 Logs carry ids, counts and codes, never a path, a prompt or a word of the judge's."""
@@ -30,8 +46,10 @@ MAX_FACES = 64
 MAX_HANDS = 64
 DETECTOR_STATES = ("ok", "unavailable", "failed")
 IDENTITY_CODES = ("", "ok", "no_ref", "no_face", "encoder_unavailable", "encoder_failed")
-REJECT = ("extra_face", "no_face", "extra_hands", "eyes_tilt", "limbs", "hands", "fingers",
-          "eyes", "extra_people")
+REJECT = ("extra_face", "no_face", "extra_hands", "limbs", "hands", "fingers", "eyes",
+          "extra_people")
+NOTES = ("eyes_tilt",)  # measured, never a reason to reject (the calibration above)
+NOTE_FACTOR = 0.8  # what one note leaves of the score
 PENDING_LIMIT = 200  # rows one judge pass takes
 
 
@@ -140,10 +158,16 @@ def detector_codes(c: "Critique | None", *, face_expected: bool = True) -> tuple
         out.append("no_face")
     if c.hands is not None and c.hands > 2:
         out.append("extra_hands")
-    if ((c.eye_tilt is not None and c.eye_tilt > EYE_TILT_MAX)
-            or (c.eye_level is not None and c.eye_level > EYE_LEVEL_MAX)):
-        out.append("eyes_tilt")
     return tuple(out)
+
+
+def detector_notes(c: "Critique | None") -> tuple[str, ...]:
+    """What the detectors measured that lowers the score without rejecting (NOTES)."""
+    if c is None:
+        return ()
+    tilted = ((c.eye_tilt is not None and c.eye_tilt > EYE_TILT_MAX)
+              or (c.eye_level is not None and c.eye_level > EYE_LEVEL_MAX))
+    return ("eyes_tilt",) if tilted else ()
 
 
 def score(c: "Critique | None", judged=None) -> float:
@@ -159,6 +183,7 @@ def score(c: "Critique | None", judged=None) -> float:
     if c is not None and c.hands is not None:
         parts.append((0.1, 1.0 if not c.hand else 1 - c.hands_odd / len(c.hand)))
     value = 0.5 if not parts else sum(w * v for w, v in parts) / sum(w for w, _ in parts)
+    value *= NOTE_FACTOR ** len(detector_notes(c))
     if judged is not None and judged.same_person is False:
         value /= 2
     return round(value, 4)
@@ -317,12 +342,13 @@ async def unload(admin, model: str) -> None:
 def scene_codes(scene) -> tuple[str, str, str]:
     """(framing, outfit, prop) codes of a composed Scene: the enum keys of the plain lists, 'lust'
     for a lust outfit, 'none' for no prop."""
-    from .scene_choices import OUTFITS, PROPS
+    from .scene_choices import LEGACY_OUTFITS, OUTFITS, prop_key
     from .style import LUST
-    outfit = next((k for k, v in OUTFITS.items() if v == scene.outfit), None)
+    said = list(OUTFITS.items()) + list(LEGACY_OUTFITS.items())
+    outfit = next((k for k, v in said if v == scene.outfit), None)
     if outfit is None:
         outfit = "lust" if getattr(scene, "style", None) == LUST else "other"
-    prop = next((k for k, v in PROPS.items() if v and scene.activity.endswith(", " + v)), "none")
+    prop = prop_key(scene.activity)
     return scene.framing, outfit, prop
 
 

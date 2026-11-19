@@ -57,9 +57,10 @@ LUST_TAGS: dict[str, tuple[str, ...]] = {
 LUST_ONLY = ("swim",)  # counts only for a woman of the lust style
 # A plain scene's outfits (scene_choices.OUTFITS keys, then SCENE_MORE's) by tag. "exercise"
 # stays the gym's own (scene_choices.pairing_codes), so sporty also names a track top.
-SCENE_MORE = {"track": "a track jacket and joggers",
+# every one names a top and a bottom (safe.is_complete): a jacket is worn over a tee
+SCENE_MORE = {"track": "a track jacket over a tee and joggers",
               "tailored": "a button-up shirt and tailored trousers",
-              "dark": "a black denim jacket and dark jeans",
+              "dark": "a black denim jacket over a tee and dark jeans",
               "linen": "a loose linen shirt and trousers",
               "dressy": "a dressy shirt and tailored trousers",
               "classic": "a collared shirt and high-waisted trousers",

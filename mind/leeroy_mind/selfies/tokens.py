@@ -109,6 +109,9 @@ WORD_TOKENS = {
     "nsfw": 1, "nude": 1, "painting": 1, "person": 1, "plastic": 1, "render": 1, "retro": 1,
     "see": 1, "sepia": 2, "sheer": 1, "swimwear": 1, "teenager": 1, "text": 1, "thong": 1,
     "through": 1, "topless": 1, "underwear": 1, "vintage": 1, "watermark": 2,
+    # the audit's poses, settings and garments (safe.py), measured 2026-11-17
+    "air": 1, "alone": 1, "beside": 1, "bookshop": 1, "else": 1, "festival": 1, "field": 1,
+    "knee": 1, "open": 1, "standing": 1, "sunny": 1, "walking": 1, "clasped": 2,
 }
 
 

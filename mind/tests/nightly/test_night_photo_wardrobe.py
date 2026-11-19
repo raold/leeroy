@@ -66,7 +66,7 @@ def test_a_lust_woman_picks_from_her_wardrobe_and_palette(h):
     assert schema["properties"]["colour"]["enum"] == ["black", "gold"]
     assert "a hot tub on a wooden deck" not in schema["properties"]["setting"]["enum"]
     p = load_persona(h.store, 102)
-    assert p.photo.outfit == "a fitted little black dress" and chosen_style(h.store, p) == LUST
+    assert p.photo.outfit == "a fitted short black dress" and chosen_style(h.store, p) == LUST
 
 
 def test_a_kind_the_pass_chose_is_chosen_once_more_when_the_wardrobe_changes(h):

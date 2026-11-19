@@ -42,11 +42,14 @@ _OUTFIT_STEPS = (P0_OUTFITS, P1_OUTFITS, P2_OUTFITS, P3_OUTFITS, P4_OUTFITS)
 OUTFIT_TIER: dict[str, int] = {o: t for t, step in enumerate(_OUTFIT_STEPS) for o in step}
 
 # -- settings: kind.LUST_SETTINGS ----------------------------------------------------------------
-P0_SETTINGS = ("her living room couch", "the mirror in her hallway", "the front seat of her car",
-               "a cafe terrace", "a park in summer")
+# The places the photo audit retired (selfies/safe.py RETIRED_SETTINGS: the hallway mirror, the
+# car's front seat, the concert crowd) are in no tier: a stored scene naming one reads P4 (fail
+# closed). The three plain places that took their slots (safe.NEW_SETTINGS) are P0.
+P0_SETTINGS = ("her living room couch", "her hallway at home", "a sunny window seat at home",
+               "a bookshop", "a cafe terrace", "a park in summer")
 P1_SETTINGS = ("a garden party", "a city street at night", "a ski lodge terrace")
 P2_SETTINGS = ("a rooftop bar at night", "a wine bar", "a nightclub", "a dance floor",
-               "a hotel balcony at dusk", "a concert crowd")
+               "a hotel balcony at dusk")
 P3_SETTINGS = kind.GYM_SETTINGS
 P4_SETTINGS = kind.WATER_SETTINGS
 _SETTING_STEPS = (P0_SETTINGS, P1_SETTINGS, P2_SETTINGS, P3_SETTINGS, P4_SETTINGS)
@@ -134,10 +137,26 @@ def picks_ok(data: dict, tier: int) -> bool:
 
 @lru_cache(maxsize=1)
 def _phrases() -> dict[str, str]:
-    """Every outfit phrase the lists can compose (colour put in, no article) -> its choice."""
-    templates = {**kind.LUST_OUTFITS, **kind.VARIED_OUTFITS}
-    return {t.format(colour=c): choice for choice, t in templates.items()
-            for c in kind.LUST_COLOURS}
+    """Every outfit phrase the lists can compose (colour put in, no article) -> its choice: the
+    words they compose now, and those a photo composed before the audit's outfit words
+    (kind.OLD_TEMPLATES, safe.OUTFIT_WORDS) was rendered and stored with."""
+    out = {}
+    for templates in (kind.OLD_TEMPLATES, kind.LUST_OUTFITS, kind.VARIED_OUTFITS):
+        out.update({t.format(colour=c): choice for choice, t in templates.items()
+                    for c in kind.LUST_COLOURS})
+    return out
+
+
+@lru_cache(maxsize=1)
+def _places() -> dict[str, int]:
+    """Every list setting as a prompt names it -> its tier: the setting itself and the words a
+    prompt says it with (safe.setting_words: "a garden party" renders as "a summer garden")."""
+    from leeroy_mind.selfies.safe import setting_words
+    out = {}
+    for place, tier in SETTING_TIER.items():
+        for words in (place, setting_words(place)):
+            out[words.lower()] = max(tier, out.get(words.lower(), tier))
+    return out
 
 
 def choice_of(phrase: str) -> str | None:
@@ -179,13 +198,14 @@ _VIEW_WORDS = (("from behind", P3), ("three-quarter rear view", P2))
 def prompt_tier(prompt) -> int:
     """The lowest tier a rendered lust photo fits, read from the prompt it was rendered with
     (a gallery candidate keeps its own: what it shows, whatever her photo kind is now). The
-    highest tier among the list outfits, settings and poses the prompt names; P4 when it names
-    no list outfit or no list setting (fail closed: sent only where everything is)."""
+    highest tier among the list outfits, settings and poses the prompt names, in the words of
+    then or now (_phrases, _places); P4 when it names no list outfit or no list setting (fail
+    closed: sent only where everything is, as a retired setting is)."""
     if not isinstance(prompt, str) or not prompt:
         return P4
     text = " ".join(prompt.lower().split())
     wear = [OUTFIT_TIER[choice] for phrase, choice in _phrases().items() if phrase in text]
-    places = [tier for place, tier in SETTING_TIER.items() if place.lower() in text]
+    places = [tier for place, tier in _places().items() if place in text]
     if not wear or not places:
         return P4
     poses = [tier for words, tier in _VIEW_WORDS if words in text]
