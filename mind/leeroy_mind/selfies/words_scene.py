@@ -35,9 +35,11 @@ lowercase, passes as text (the negatives keep "celebrity, famous person" and her
 day plan's block when [life] availability is on (else what she wears at the computer), the rest
 from the vetted outfit lists (scene_choices.OUTFITS for the plain style, kind.py's lists with a
 drawn colour for the lust style). Pyjamas resolve to clothed loungewear from those lists, never
-sleepwear; swimwear only for a lust-styled woman, at a water place, in a handheld selfie (framed
-waist-up), else casual; gym wear or swimwear beside a bed, sofa or the indoors (scene.INDOOR_RE)
-is casual for her too. Every resolved outfit meets her names and the age guard again, and what
+sleepwear; swimwear only for a lust-styled woman, at a water place, framed waist-up. With private
+romance styling it may use a mirror or timer too; otherwise only a handheld selfie, else casual.
+Gym wear or swimwear beside a bed, sofa or the indoors (scene.INDOOR_RE) is casual for her, and
+for every privately styled woman (romance_styling, which also never styles a scene on a bed).
+Every resolved outfit meets her names and the age guard again, and what
 she wears at the computer (her persona's own words) the scene screens.
 
 The scene is stored in the request's snap in the situational shape (scene.Scene's fields, so
@@ -63,6 +65,7 @@ from leeroy_mind.personas.schema import Persona
 from leeroy_mind.personas.screens import has_word
 from leeroy_mind.talk.everyday import is_everyday
 
+from . import wardrobe
 from .kind import LUST_COLOURS, VARIED_LOOKS, VARIED_OUTFITS, _enum, outfit_phrase
 from .prompt import (negative_for, _PHONE_TAIL, PromptSpec, _clean, body_phrases, eyes_face, fit_required,
                      accessory_phrases, glutes_words, hair_skin, identity_first, names_re, phrase_adder,
@@ -265,10 +268,15 @@ class Words:
 
 
 def system(data_dir: Path, *, human: HumanIdentity, name: str, card: str, facts: str, looks: str,
-           block: Block | None) -> str:
+           block: Block | None, private_style: bool = False) -> str:
     """The call's system prompt: the owner's overlay prompts/nightly_scene_words.txt or PROMPT,
     with what her day plan has her doing at the photo's time (NOW_WORDS)."""
-    return system_prompt(WORDS_NAME, PROMPT, data_dir, human=human, name=name, card=card,
+    prompt = PROMPT
+    if private_style:
+        prompt = prompt.replace("Fully clothed, nothing revealing or sexual,",
+            "Clothed and non-explicit; fitted outfits, date-night clothes and swimwear at "
+            "the water are welcome, with no nudity or sexual acts;")
+    return system_prompt(WORDS_NAME, prompt, data_dir, human=human, name=name, card=card,
                          facts=facts, looks=looks, now=NOW_WORDS.get(block, NOW_ANY))
 
 
@@ -409,15 +417,22 @@ def _wear_ok(p: Persona, phrase: str, *, vetted: bool) -> bool:
             and (vetted or not _text_codes("outfit", phrase, ident=_NOBODY, names=[])))
 
 
-def _listed(code: str, p: Persona, seed) -> str:
+def _listed(code: str, p: Persona, seed, *, private_style: bool = False) -> str:
     if style_of(p) != LUST:
+        if private_style and wardrobe.tags(p) and code in ("casual", "going_out"):
+            choices = tuple(k for k in wardrobe.scene_outfits(p, OUTFITS) if k != "exercise")
+            if choices:
+                return {**OUTFITS, **wardrobe.SCENE_MORE}[_draw(choices, seed, "wardrobe")]
         return PLAIN_WEAR[code]
-    choice = _draw(LUST_WEAR[code], seed, f"outfit:{code}")
-    return outfit_phrase(choice, _draw(LUST_COLOURS, seed, "colour"), VARIED_OUTFITS)
+    choices, colours = LUST_WEAR[code], LUST_COLOURS
+    if private_style:
+        choices, colours = wardrobe.outfits(p, choices), wardrobe.colours(p, colours)
+    choice = _draw(choices, seed, f"outfit:{code}")
+    return outfit_phrase(choice, _draw(colours, seed, "colour"), VARIED_OUTFITS)
 
 
 def resolve_wearing(code: str, p: Persona, *, place: str, framing: str, block: Block | None,
-                    seed) -> tuple[str, str, str | None]:
+                    seed, private_style: bool = False) -> tuple[str, str, str | None]:
     """(the outfit phrase, the wearing code it stands for, a fallback code or None)."""
     lust, fallback = style_of(p) == LUST, None
     if code == "as_now":
@@ -434,11 +449,12 @@ def resolve_wearing(code: str, p: Persona, *, place: str, framing: str, block: B
         code, fallback = "casual", "wearing:no_work" if phrase is None else "wearing:screen"
     if code == "swimwear" and not lust:
         code, fallback = "casual", "wearing:swimwear_plain"
-    elif code == "swimwear" and (not WATER_RE.search(place) or framing != "handheld_selfie"):
+    elif code == "swimwear" and (not WATER_RE.search(place) or framing not in (
+            ("handheld_selfie", "mirror_selfie", "timer") if private_style else ("handheld_selfie",))):
         code, fallback = "casual", "wearing:swimwear_pairing"
-    if lust and code in ("gym", "swimwear") and INDOOR_RE.search(place):
-        code, fallback = "casual", "wearing:indoor_pairing"
-    phrase = _listed(code, p, seed)
+    if (lust or private_style) and code in ("gym", "swimwear") and INDOOR_RE.search(place):
+        code, fallback = "casual", "wearing:indoor_pairing"  # any privately styled woman too
+    phrase = _listed(code, p, seed, private_style=private_style)
     if not _wear_ok(p, phrase, vetted=True):
         code, fallback, phrase = "casual", "wearing:screen", PLAIN_WEAR["casual"]
     return phrase, code, fallback
@@ -458,11 +474,11 @@ def resolve_time(code: str, hour: int) -> str:
 
 
 def resolve(p: Persona, data: dict, screened: Screened, *, place: str, block: Block | None,
-            hour: int, seed) -> Words:
+            hour: int, seed, private_style: bool = False) -> Words:
     """The scene's fields: the screened free text with `place` (screened or the enum path's), the
     outfit resolved (resolve_wearing) and the time of day (resolve_time)."""
     outfit, wearing, code = resolve_wearing(data["wearing"], p, place=place,
-                                            framing=data["framing"], block=block, seed=seed)
+        framing=data["framing"], block=block, seed=seed, private_style=private_style)
     return Words(place, data["framing"], wearing, outfit, screened.moment,
                  resolve_time(data["time"], hour), data["lighting"], screened.prop,
                  screened.fallbacks + ((code,) if code else ()))
@@ -504,6 +520,19 @@ def framing_words(p: Persona, framing: str) -> str:
 
 
 def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
+    """The prompt for a scene read from his words (_words_prompt). A privately styled one
+    (romance_styling) says its catalogue outfit in the short form whenever the whole one would
+    cost her a required word or leave her expression or the moment no room
+    (romance_styling.fit_choice), as a styled situational photo does (scene.build_scene_prompt)."""
+    if not scene.get("romance_style"):
+        return _words_prompt(p, scene)
+    from .romance_styling import fit_choice, outfit_forms
+    forms = outfit_forms(scene["outfit"])
+    specs = [_words_prompt(p, {**scene, "outfit": outfit}) for outfit in forms]
+    return fit_choice(specs, forms, scene.get("expression", ""), scene.get("activity", ""))
+
+
+def _words_prompt(p: Persona, scene: dict) -> PromptSpec:
     """The prompt for a scene read from his words, in this order: the framing (0), who she is (0),
     her body (0), `wearing <outfit>` (0), the place (0; with swimwear, a waist-up framing, 0), her
     hair and skin (0), what the owner set her to wear (1, its room reserved), the moment (1), a
@@ -548,16 +577,25 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
     worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
     room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
     out += worn
+    if s.romance_style:  # her styled expression, after the owner's accessories, before the moment
+        add(s.expression, 1, True)
     add(s.activity, 1, True)
     if w["framing"] == "timer" and not w.get("prop"):
         add(POSE_WAIST_UP, 1)
-    if w["framing"] != BEHIND:
+    if w["framing"] != BEHIND and not s.romance_pose:
         add("looking at the camera", 3)
     # none of her face details about her hands, arms, legs or feet (scene.limb_detail)
     out += identity_first(p, [d for d in eyes_face(p, name_re) if not limb_detail(d[0])])
     if w.get("prop"):
         add(f"with {w['prop']}", 2, True)
-    add(LIGHT_WORDS[w["lighting"]], 2)
+    if not s.romance_light:
+        add(LIGHT_WORDS[w["lighting"]], 2)
+    if not s.romance_style:
+        add(s.expression, 3, True)  # after face details; empty on old recipes
+    else:  # its pose and light: fixed codes (romance_styling)
+        from .romance_styling import LIGHTS, POSES
+        add(POSES.get(s.romance_pose, ''), 2, True)
+        add(LIGHTS.get(s.romance_light, ''), 3, True)
     if w["framing"] == BEHIND and glutes_words(p):
         out.append((glutes_words(p), 2))
     add(TIME_WORDS[w["time"]], 3)
