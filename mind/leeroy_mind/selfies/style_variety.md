@@ -184,9 +184,18 @@ time. With `[selfies] enabled = false` the looks save and no set is queued.
 **C-H presets** (owner, 2026-11-19). The same Bust select also offers C cup, D cup,
 E cup, F cup, G cup and H cup, stored as `c_cup` through `h_cup`. These are visual
 presets, not exact measurements: clothing, pose, seed and the reference influence the result.
-Each is carried whole into the profile, situation and requested-photo prompts as `C-cup bust`
-(and so on), with the existing clothing and identity requirements. They change only bust,
-not weight, waist, hips, outfit or romance level. Saving still queues the usual set; select a
+Bare cup letters produced nearly identical C and H images in the local comparison. The presets
+instead use the renderer's body descriptions: C `medium bust`, D `full bust`, E `large bust`,
+F `large full bust`, G `very large bust`, H `very large full bust`. Each is carried whole into
+the profile, situation and requested-photo prompts, with the existing clothing and identity
+requirements. They change only bust, not weight, waist, hips, outfit or romance level.
+The 2026-11-19 local visual pass did **not** establish six distinct or progressively larger
+results: both wordings overlapped heavily at two fixed seeds. A further C/H check without
+the face reference also showed weak separation. These are prompt preferences, not reliable
+size controls; inspect the queued images before choosing a cover. The tested reference used
+a detected face crop, not a whole-body fallback. No production renderer or identity setting
+was changed.
+Saving still queues the usual set; select a
 new cover to carry the changed proportions into later photos. The broad sizes and unset
 retain their original prompts. No migration or new global switch is needed; no member is
 changed until the owner selects a preset. Before rolling back to code without these values,

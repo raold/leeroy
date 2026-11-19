@@ -217,8 +217,10 @@ BUILD_WORDS = {"slim": "slim figure", "athletic": "athletic toned figure", "aver
 # women only. Never cleavage or a word of the negatives.
 BUST_WORDS = {"small": "small bust", "medium": "medium bust", "large": "large full bust",
               "very_large": "very large full bust",
-              "c_cup": "C-cup bust", "d_cup": "D-cup bust", "e_cup": "E-cup bust",
-              "f_cup": "F-cup bust", "g_cup": "G-cup bust", "h_cup": "H-cup bust"}
+              # RealVisXL barely distinguishes bare cup letters. These use the existing
+              # body vocabulary, but also overlapped in the visual audit: not measurements.
+              "c_cup": "medium bust", "d_cup": "full bust", "e_cup": "large bust",
+              "f_cup": "large full bust", "g_cup": "very large bust", "h_cup": "very large full bust"}
 WAIST_WORDS = {"very_narrow": "very narrow waist", "narrow": "narrow waist",
                "average": "average waist", "wide": "thick waist"}
 HIPS_WORDS = {"narrow": "narrow hips", "average": "average hips", "wide": "wide hips",

@@ -30,7 +30,7 @@ def test_each_cup_round_trips_and_changes_only_the_selected_proportion(cup):
     assert looks_hash(before.appearance) != looks_hash(after.appearance)
     assert replace(after.appearance, bust=None) == before.appearance
     words = build_words(after)
-    assert BUST_WORDS[cup] in words and 'full bust' not in words
+    assert words == f'curvy hourglass figure, {BUST_WORDS[cup]}, wide hips, narrow waist'
 
 
 @pytest.mark.parametrize('cup', CUPS)
