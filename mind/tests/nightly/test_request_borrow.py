@@ -142,13 +142,14 @@ def test_borrow_drains_active_chat_and_blocks_new_chat_but_not_embeddings(h):
 
 
 @pytest.mark.parametrize('cause',['external','hard_lease','pause','shutdown','models'])
-def test_midrender_interrupt_joins_worker_before_any_handback(h,cause):
+@pytest.mark.parametrize('work_timeout', [None, 600.0])
+def test_midrender_interrupt_joins_worker_before_any_handback(h,cause,work_timeout):
     arb,admin,w=rig(h)
     async def go():
         entered=asyncio.Event()
         w.release_stop=asyncio.Event()
         async def render():
-            async with arb.borrow('request:1') as room:
+            async with arb.borrow('request:1', work_timeout=work_timeout) as room:
                 room.own_worker(w)
                 await w.start()
                 entered.set()
@@ -191,6 +192,43 @@ def test_midrender_interrupt_joins_worker_before_any_handback(h,cause):
         assert preloads and admin.calls.index(('stop',)) < min(preloads)
         if cause=='models':
             assert admin.calls[-1] == ('preload','new-live',-1)
+    run(go())
+
+
+@pytest.mark.parametrize('budget', [None, 600.0])
+def test_per_request_budget_expires_and_stops_worker_before_reload(h, monkeypatch, budget):
+    arb, admin, worker = rig(h)
+    original = asyncio.timeout
+    timers = []
+    def timeout(seconds):
+        timer = original(seconds)
+        timers.append((seconds, timer))
+        return timer
+    monkeypatch.setattr(asyncio, 'timeout', timeout)
+    async def go():
+        with pytest.raises(TimeoutError):
+            async with arb.borrow('request:1', work_timeout=budget) as room:
+                expected = 180 if budget is None else budget
+                assert room.work_timeout == timers[0][0] == expected
+                assert arb.borrow_timeout == 180  # one request never changes the next
+                room.own_worker(worker)
+                await worker.start()
+                # Trigger the actual deadline without sleeping for minutes.
+                timers[0][1].reschedule(asyncio.get_running_loop().time())
+                await asyncio.Event().wait()
+        assert not worker.running and not arb.live_admission.blocked
+        assert admin.calls[-2:] == [('stop',), ('preload', h.LIVE, -1)]
+    run(go())
+
+
+@pytest.mark.parametrize('budget', [0, -1, 601, float('inf'), float('nan'), True, '600'])
+def test_invalid_work_budget_refuses_before_admission(h, budget):
+    arb, admin, _ = rig(h)
+    async def go():
+        with pytest.raises(ValueError, match='work timeout'):
+            async with arb.borrow('request:1', work_timeout=budget):
+                pytest.fail('admitted invalid budget')
+        assert not admin.calls and not arb.live_admission.blocked
     run(go())
 
 

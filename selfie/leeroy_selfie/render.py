@@ -110,7 +110,7 @@ class Renderer:
                 adapter_kw["ip_adapter_image_embeds"] = self._blank(req.cfg > 1)
                 self.pipe.set_ip_adapter_scale(0.0)
             generator = torch.Generator("cuda").manual_seed(req.seed)
-            image = self.pipe(prompt=prompt, negative_prompt=negative,
+            image = self._draw(self.pipe, prompt=prompt, negative_prompt=negative,
                               num_inference_steps=req.steps, guidance_scale=req.cfg,
                               width=width, height=height, generator=generator,
                               **adapter_kw).images[0]
@@ -194,7 +194,7 @@ class Renderer:
                     self.pipe.set_ip_adapter_scale(0.0)
             generator = torch.Generator("cuda").manual_seed(detail.seed_for(seed, kind, rank))
             try:
-                new = self._img2img()(
+                new = self._draw(self._img2img(),
                     prompt=hand_prompt if kind == "hand" else face_prompt,
                     negative_prompt=negative, image=crop,
                     strength=opts.hand_denoise if kind == "hand" else opts.face_denoise,
@@ -246,6 +246,14 @@ class Renderer:
             self._i2i.set_progress_bar_config(disable=True)
         return self._i2i
 
+    def _draw(self, pipe, **kwargs):
+        return pipe(**kwargs)
+
+    def _encode_reference(self, crop, cfg: bool):
+        return self.pipe.prepare_ip_adapter_image_embeds(
+            ip_adapter_image=crop, ip_adapter_image_embeds=None, device="cuda",
+            num_images_per_prompt=1, do_classifier_free_guidance=cfg)
+
     def _embeds(self, identity: Identity, cfg: bool):
         """The adapter's embeds of the reference's crop, computed once per file version, crop
         and `cfg` (the newest REF_CACHE kept). `cfg` must be the pipeline's own choice: CFG
@@ -266,9 +274,7 @@ class Renderer:
         box = ref_box(*img.size, identity.crop)
         crop = self.face_ref(img, box)[0] if self.face_ref is not None else img.crop(box)
         with self.torch.no_grad():
-            embeds = self.pipe.prepare_ip_adapter_image_embeds(
-                ip_adapter_image=crop, ip_adapter_image_embeds=None, device="cuda",
-                num_images_per_prompt=1, do_classifier_free_guidance=cfg)
+            embeds = self._encode_reference(crop, cfg)
         self._refs[key] = embeds
         while len(self._refs) > REF_CACHE:
             self._refs.popitem(last=False)
@@ -280,10 +286,8 @@ class Renderer:
         if cfg not in self._blanks:
             from PIL import Image
             with self.torch.no_grad():
-                self._blanks[cfg] = self.pipe.prepare_ip_adapter_image_embeds(
-                    ip_adapter_image=Image.new("RGB", (224, 224), (128, 128, 128)),
-                    ip_adapter_image_embeds=None, device="cuda", num_images_per_prompt=1,
-                    do_classifier_free_guidance=cfg)
+                self._blanks[cfg] = self._encode_reference(
+                    Image.new("RGB", (224, 224), (128, 128, 128)), cfg)
         return self._blanks[cfg]
 
     def critic(self, req: Critic) -> dict:
@@ -334,7 +338,7 @@ def _ms(seconds: float) -> int:
 
 
 def load(data: Path, *, min_free_gib: float, device: str = "cuda",
-         identity: bool = False) -> Renderer:
+         identity: bool = False, backend: str = "realvisxl") -> Renderer:
     """A ready Renderer, or ReadyError: cuda (no torch or no CUDA), model (a file missing, from
     another revision or without its download record, a load that failed, no `nsfw` label),
     vram (less than min_free_gib free just before the pipeline moves to the GPU, or CUDA out of
@@ -344,6 +348,11 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
     them), so the start reaches its VRAM check soon after the mind made room. With `identity`
     the IP-Adapter pin is checked too, and its image encoder and adapter are loaded into the
     pipeline on the CPU, before that check; the Renderer then says identity."""
+    if backend == "flux1-dev":
+        from .flux import load as load_flux
+        return load_flux(data, min_free_gib=min_free_gib, device=device, identity=identity)
+    if backend != "realvisxl":
+        raise ReadyError("model")
     try:
         import torch
     except ImportError as e:

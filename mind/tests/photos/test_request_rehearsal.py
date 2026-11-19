@@ -4,6 +4,7 @@ The subprocess is the existing standard-library fake worker; it loads no models.
 JPEG fixture is replaced by a protocol-sized synthetic JPEG for Discord's image-size gate.
 """
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import timedelta
 import json
@@ -137,10 +138,20 @@ def metrics(caplog, record_property, message):
 
 
 @pytest.mark.parametrize("channel", ["dm:101", "general"])
-def test_offline_request_sends_one_fresh_photo_after_handback(tmp_path, caplog, record_property, channel):
+@pytest.mark.parametrize("backend,budget", [("realvisxl", 180), ("flux1-dev", 600)])
+def test_offline_request_sends_one_fresh_photo_after_handback(
+        tmp_path, caplog, record_property, channel, backend, budget):
     caplog.set_level(logging.INFO, logger="leeroy_mind")
     async def scenario():
         app, workers, rendered, pids = rig(tmp_path)
+        app.selfies.cfg = replace(app.selfies.cfg, backend=backend)
+        borrow, budgets = app.arbiter.borrow, []
+        @asynccontextmanager
+        async def measured_borrow(*args, **kwargs):
+            async with borrow(*args, **kwargs) as room:
+                budgets.append(room.work_timeout)
+                yield room
+        app.arbiter.borrow = measured_borrow
         try:
             await offline(app)
             name = app.world.discord_members()[101].name
@@ -151,6 +162,7 @@ def test_offline_request_sends_one_fresh_photo_after_handback(tmp_path, caplog, 
             await drive(app, lambda: bool((r := snapshot(app, message)) and r.initial_message))
             request = snapshot(app, message)
             assert request.fresh_message == request.initial_message
+            assert budgets == [budget]
             assert request.fallback_snap is None and request.failure is None
             photo = records.snap(app.store, request.fresh_snap)
             assert (photo.source, photo.status, photo.request) == ("request", "sent", message)

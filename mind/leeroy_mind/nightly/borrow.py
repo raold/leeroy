@@ -8,8 +8,9 @@ from .gpu import LiveLeaseHeld, PausedRoom, norm
 
 
 class BorrowRoom:
-    def __init__(self, arbiter, holder):
+    def __init__(self, arbiter, holder, *, work_timeout):
         self.arbiter, self.holder = arbiter, holder
+        self.work_timeout = work_timeout
         self.owner = asyncio.current_task()
         self.revision = arbiter._revision
         self.workers = []

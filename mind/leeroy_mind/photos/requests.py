@@ -338,8 +338,12 @@ class RequestPhotos:
                     and records.admit_borrow(app.store, request.message, now=app.clock.now(),
                                              local_date=app.clock.local().date().isoformat()))
         started, room, result, outcome = time.perf_counter(), None, None, 'refused'
+        # FLUX includes a quantized cold load and a slower image pass. The whole
+        # borrow stays bounded, and login/voice/pause still cancel it immediately.
+        work_timeout = 600.0 if app.selfies.cfg.backend == 'flux1-dev' else None
         try:
-            async with app.arbiter.borrow(f'selfie_request:{request.message}', on_admitted=admitted) as room:
+            async with app.arbiter.borrow(f'selfie_request:{request.message}',
+                                         on_admitted=admitted, work_timeout=work_timeout) as room:
                 result = await render_request(app, photo, room, worker_factory=self.worker_factory)
                 outcome = result.outcome
                 if outcome != 'ready':

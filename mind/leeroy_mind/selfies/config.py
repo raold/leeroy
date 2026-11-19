@@ -20,7 +20,7 @@ class SelfieCfg:
     data: Path | None = None  # its models; None: LEEROY_SELFIE_DATA, else <checkout>/selfie-data
     nsfw_max: float = 0.2  # an image scoring this or more is never written
     steps: int = 30
-    guidance: float = 5.0  # the CFG scale (the protocol's cfg)
+    guidance: float = 5.0  # the protocol's cfg; TOML defaults FLUX to native guidance 3.5
     size: int = 1024
     min_free_gib: float = 11.5  # the worker refuses to load with less VRAM free
     snaps: bool = False  # situational photos and the guild photo (the identity worker)
@@ -55,6 +55,7 @@ class SelfieCfg:
     # needs the worker's palm and handpose models fetched). detailer_hands needs detailer.
     detailer: bool = False
     detailer_hands: bool = False
+    backend: str = "realvisxl"  # opt-in FLUX.1-dev; the existing renderer stays the default
 
 
 def _bool(v) -> bool:
@@ -103,6 +104,8 @@ _RULES = {
     "param_bandit": (_bool, "true or false"),
     "detailer": (_bool, "true or false"),
     "detailer_hands": (_bool, "true or false"),
+    "backend": (lambda v: type(v) is str and v in ("realvisxl", "flux1-dev"),
+                "realvisxl or flux1-dev"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib",
            "body_shot_share", "snap_body_share"}
@@ -144,6 +147,9 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         values["param_bandit"] = False
         values["detailer"] = False
         values["detailer_hands"] = False
+        values["backend"] = "realvisxl"
+    if values.get("backend") == "flux1-dev":
+        values.setdefault("guidance", 3.5)
     return SelfieCfg(**values)
 
 
@@ -168,6 +174,7 @@ def worker_command(cfg: SelfieCfg, *, identity: bool = False, embedding: bool = 
     return [str(worker_python(cfg)), "-I", "-X", "utf8", "-m", "leeroy_selfie", "worker",
             *(["--embed-only"] if embedding else []),
             *(["--identity"] if identity else []),
+            *(["--backend", cfg.backend] if cfg.backend != "realvisxl" and not embedding else []),
             "--data", str(worker_data(cfg)), "--min-free-gib", f"{free:g}"]
 
 
