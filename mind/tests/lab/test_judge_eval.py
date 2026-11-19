@@ -1,6 +1,7 @@
 """`lab judge-eval`: the judges against invented gold conversations, numbers only (FakeLLM)."""
 import asyncio
 import json
+import random
 
 import pytest
 
@@ -86,22 +87,88 @@ def test_a_judge_that_sees_the_defect_agrees_and_the_flat_rubric_does_not(tmp_pa
     assert "rho" in text and "arm agree" in text and "tells" in text
 
 
-def test_the_table_counts_failures_and_needs_both_bars_to_pass():
-    items = [gold.Item(f"c{i % 4}", i, "his", "word " * (3 + i % 40), (), (), 1 + i % 5,
-                       frozenset({"C"} if i % 5 == 0 else ())) for i in range(60)]
+def items_of(sizes):
+    """Invented graded replies: conversation k has sizes[k] of them."""
+    return [gold.Item(f"c{k}", i, "his", "word " * (3 + i % 40), (), (), 1 + (i + k) % 5,
+                      frozenset({"C"} if i % 5 == 0 else ()))
+            for k, n in enumerate(sizes) for i in range(n)]
+
+
+def test_the_table_counts_failures_and_passes_only_on_enough_gold():
+    items = items_of([13] * 12)   # 156 replies in 12 conversations: just over the minimum
     perfect = {i.key: float(i.score) for i in items}
-    t = judge_eval.table(items, perfect, calls=120, seconds=30.0)
+    t = judge_eval.table(items, perfect, calls=312, seconds=78.0)
     assert t["spearman"] == 1.0 and t["calls_per_reply"] == 2.0 and t["seconds_per_reply"] == 0.5
-    assert t["defects"]["C"]["n"] == 12 and t["defects"]["C"]["rho"] < 0
+    assert t["conversations"] == 12 and t["ci"] == [1.0, 1.0]
+    assert (t["verdict"], t["passes"]) == ("pass", True)
+    assert t["defects"]["C"]["n"] == 36 and t["defects"]["C"]["rho"] < 0
     missing = dict(perfect)
     for i in items[:10]:
         missing[i.key] = None
-    assert judge_eval.table(items, missing)["failed"] == 10
+    dropped = judge_eval.table(items, missing)
+    assert dropped["failed"] == 10 and dropped["verdict"] == "not enough gold"   # 146 scored
     flat = judge_eval.table(items, {i.key: 3.0 for i in items})
-    assert flat["spearman"] is None and flat["passes"] is False
-    weak = judge_eval.table(items, {i.key: float(i.score) if i.index % 3 else 3.0 for i in items})
-    assert weak["passes"] == (weak["spearman"] >= judge_eval.PASS_RHO
-                              and (weak["arm"]["agree"] or 0) >= judge_eval.PASS_ARM)
+    assert flat["spearman"] is None and flat["ci"] is None and flat["verdict"] == "fail"
+    # train and dev chose the designs and fit the weights: only the test part can pass
+    assert judge_eval.table(items, perfect, part="dev")["verdict"] == "not the test part"
+    assert judge_eval.table(items, perfect, part="all")["passes"] is False
+    # today's test part (82 replies in 6 conversations) is too small for any verdict
+    small = items_of([14, 14, 14, 14, 13, 13])
+    t = judge_eval.table(small, {i.key: float(i.score) for i in small})
+    assert t["spearman"] == 1.0 and (t["verdict"], t["passes"]) == ("not enough gold", False)
+    assert judge_eval.table(items_of([13] * 11), perfect)["verdict"] == "not enough gold"
+
+
+def test_arm_agreement_is_reported_and_never_decides(monkeypatch):
+    items = items_of([13] * 12)
+    rng = random.Random(3)
+    judges = {"perfect": {i.key: float(i.score) for i in items},
+              "weak": {i.key: rng.random() for i in items}}
+    seen = {}
+    for agree in (0.0, 1.0):
+        monkeypatch.setattr(gold, "arm_agreement",
+                            lambda *a, agree=agree, **k: {"agree": agree, "pairs": 99, "draws": 1})
+        for name, scores in judges.items():
+            t = judge_eval.table(items, scores)
+            assert t["arm"]["agree"] == agree   # reported as measured
+            seen.setdefault(name, set()).add(t["verdict"])
+    assert seen == {"perfect": {"pass"}, "weak": {"fail"}}
+
+
+def synthetic(rng, convs, r, shared):
+    """Gold 1-5 around 3.2 with a conversation effect (SD 0.45) and a judge with its own
+    conversation effect (`shared` of it the gold's) and a reply-level correlation `r` with the
+    gold (review of #369's simulation, synthetic numbers only)."""
+    names = sorted(set(convs))
+    gm = {c: rng.gauss(0, 0.45) for c in names}
+    jm = {c: shared * gm[c] + (1 - shared ** 2) ** 0.5 * rng.gauss(0, 0.45) for c in names}
+    g, j = [], []
+    for c in convs:
+        z, e = rng.gauss(0, 1), rng.gauss(0, 1)
+        g.append(float(min(5, max(1, round(3.2 + gm[c] + z)))))
+        j.append(3.0 + jm[c] + 0.4 * (r * z + (1 - r * r) ** 0.5 * e))
+    return g, j
+
+
+def pass_rate(r, shared, *, trials, sizes=(13,) * 12, seed=11):
+    convs = [f"c{k}" for k, n in enumerate(sizes) for _ in range(n)]
+    rng = random.Random(seed)
+    passed = 0
+    for k in range(trials):
+        g, j = synthetic(rng, convs, r, shared)
+        passed += judge_eval.verdict(convs, j, g, seed=k, draws=200)["passes"]
+    return passed / trials
+
+
+@pytest.mark.parametrize("r,shared,most", [(0.0, 0.0, 0.02), (0.25, 0.25, 0.05)])
+def test_the_bar_is_rarely_met_by_chance(r, shared, most):
+    """At the smallest gold the bar reads (12 conversations, 156 replies): a judge with no
+    agreement passes under 2% of the time, one whose true agreement is 0.25 under 5%."""
+    assert pass_rate(r, shared, trials=100) < most
+
+
+def test_a_judge_that_agrees_well_does_pass():
+    assert pass_rate(0.8, 0.8, trials=30) >= 0.9
 
 
 def test_refit_makes_numbers_only_weights_from_train_and_dev(tmp_path):

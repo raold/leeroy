@@ -7,9 +7,10 @@ reply carries "grade": {"score": 1-5 (a strong grader's "would a real person hav
 "flags"?: defect letters, comma separated or a list}. Ungraded turns are context only.
 
 Everything here is pure and model-free: the loader, the fixed split by conversation, Spearman's
-rank correlation, a bootstrap interval, and the agreement on which of two arms is better (the
-lab's actual decision) by resampling arms from the gold replies. Gold files are private: no text
-of theirs is logged, stored or printed by this module, only numbers."""
+rank correlation, its interval with whole conversations resampled (replies of one conversation
+move together, so resampling replies would make the interval too narrow), and the agreement on
+which of two resampled arms is better. Gold files are private: no text of theirs is logged,
+stored or printed by this module, only numbers."""
 import json
 import math
 import random
@@ -21,7 +22,7 @@ SPLIT = (("train", 0.6), ("dev", 0.2), ("test", 0.2))
 BANDS = (("<=10", 0, 10), ("11-25", 11, 25), ("26-50", 26, 50), (">50", 51, 10 ** 9))
 CONTEXT_TURNS = 6
 ARM_SIZE, ARM_DRAWS, ARM_MARGIN = 24, 2000, 0.15
-BOOT_DRAWS = 2000
+BOOT_DRAWS, CI_LEVEL = 2000, 0.90
 
 
 @dataclass(frozen=True)
@@ -150,23 +151,29 @@ def spearman(a: list[float], b: list[float]) -> float | None:
     return pearson(ranks(list(a)), ranks(list(b)))
 
 
-def bootstrap(a: list[float], b: list[float], *, seed: int = SPLIT_SEED,
-              draws: int = BOOT_DRAWS) -> tuple[float, float] | None:
-    """The 95% percentile interval of Spearman's rho over replies resampled with replacement."""
-    n = len(a)
-    if n < 8:
+def cluster_bootstrap(convs: list[str], a: list[float], b: list[float], *,
+                      seed: int = SPLIT_SEED, draws: int = BOOT_DRAWS,
+                      level: float = CI_LEVEL) -> tuple[float, float] | None:
+    """The `level` percentile interval of Spearman's rho between `a` and `b` with whole
+    conversations resampled with replacement (`convs[i]` names item i's conversation): each draw
+    takes as many conversations as there are, every reply of each. None with fewer than 2
+    conversations, or when fewer than half the draws had a rho (no spread)."""
+    names = sorted(set(convs))
+    if len(names) < 2 or len(convs) != len(a) or len(a) != len(b):
         return None
+    by = {n: [i for i, c in enumerate(convs) if c == n] for n in names}
     rng = random.Random(seed)
     found = []
     for _ in range(draws):
-        idx = [rng.randrange(n) for _ in range(n)]
+        idx = [i for _ in names for i in by[names[rng.randrange(len(names))]]]
         r = spearman([a[i] for i in idx], [b[i] for i in idx])
         if r is not None:
             found.append(r)
     if len(found) < draws // 2:
         return None
     found.sort()
-    return found[int(0.025 * len(found))], found[min(len(found) - 1, int(0.975 * len(found)))]
+    tail = (1.0 - level) / 2
+    return found[int(tail * len(found))], found[min(len(found) - 1, int((1.0 - tail) * len(found)))]
 
 
 def arm_agreement(convs: list[str], gold: list[float], judged: list[float], *,
@@ -174,10 +181,15 @@ def arm_agreement(convs: list[str], gold: list[float], judged: list[float], *,
                   margin: float = ARM_MARGIN) -> dict:
     """How often a judge picks the arm the gold picks. An arm is `size` replies drawn with
     replacement; the two arms of a draw come from two disjoint halves of the conversations
-    (split anew each draw), so they differ as two prompt arms do. Counted over the draws whose
-    gold means differ by `margin` or more (of the gold's 1-5 scale): {"agree", "pairs",
-    "draws"}; `agree` is None when no draw cleared the margin. A judge that calls a draw a tie
-    does not agree."""
+    (split anew each draw). Counted over the draws whose gold means differ by `margin` or more
+    (of the gold's 1-5 scale): {"agree", "pairs", "draws"}; `agree` is None when no draw cleared
+    the margin. A judge that calls a draw a tie does not agree.
+
+    Reported only, never a pass criterion: with few conversations there are few ways to halve
+    them, so the number mostly says whether the judge orders those groups of conversations as
+    the gold does (a judge with no agreement at all reaches 70% about one time in eight on 6),
+    and the lab's own decision is between two arms answering the same lines, not two sets of
+    conversations."""
     names = sorted(set(convs))
     by = {n: [i for i, c in enumerate(convs) if c == n] for n in names}
     rng = random.Random(seed)

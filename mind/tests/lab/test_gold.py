@@ -1,5 +1,6 @@
 """The gold loader, the fixed split and the agreement numbers, on invented conversations."""
 import json
+import random
 
 import pytest
 
@@ -80,13 +81,36 @@ def test_spearman_handles_ties_and_no_spread():
     assert gold.ranks([5, 1, 5, 3]) == [3.5, 1.0, 3.5, 2.0]
 
 
-def test_the_bootstrap_interval_holds_the_estimate_and_is_seeded():
-    a = [float(i % 7) for i in range(40)]
+def test_the_interval_resamples_whole_conversations_and_is_seeded():
+    convs = [f"c{i % 8}" for i in range(80)]
+    a = [float(i % 7) for i in range(80)]
     b = [x + (i % 3) for i, x in enumerate(a)]
-    low, high = gold.bootstrap(a, b, draws=300)
+    low, high = gold.cluster_bootstrap(convs, a, b, draws=300)
     assert low <= gold.spearman(a, b) <= high and low > 0
-    assert gold.bootstrap(a, b, draws=300) == (low, high)
-    assert gold.bootstrap(a[:5], b[:5]) is None
+    assert gold.cluster_bootstrap(convs, a, b, draws=300) == (low, high)
+    assert gold.cluster_bootstrap(["one"] * 80, a, b) is None
+    assert gold.cluster_bootstrap(convs, [1.0] * 80, b) is None   # no spread
+    assert gold.cluster_bootstrap(convs[:5], a[:5], b) is None
+
+
+def test_a_conversation_interval_is_wider_than_one_over_replies_when_conversations_differ():
+    """Replies of one conversation move together. A judge that agrees with the gold only about
+    which conversations are better looks sure of itself when replies are resampled one by one
+    (review of #369); resampling whole conversations shows how little 6 of them say."""
+    rng = random.Random(4)
+    convs = [f"c{k}" for k in range(6) for _ in range(14)]
+    level = {c: rng.gauss(0, 1) for c in sorted(set(convs))}
+    g = [level[c] + rng.gauss(0, 0.5) for c in convs]
+    j = [level[c] + rng.gauss(0, 0.5) for c in convs]
+    low, high = gold.cluster_bootstrap(convs, j, g, draws=400)
+    draws, n, found = random.Random(9), len(g), []
+    for _ in range(400):
+        idx = [draws.randrange(n) for _ in range(n)]
+        found.append(gold.spearman([j[i] for i in idx], [g[i] for i in idx]))
+    found.sort()
+    by_reply = found[int(0.05 * 400)], found[int(0.95 * 400)]
+    assert high - low > 1.5 * (by_reply[1] - by_reply[0])
+    assert low < by_reply[0]
 
 
 def test_arm_agreement_is_high_for_the_gold_itself_and_low_for_its_opposite():

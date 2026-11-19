@@ -2,9 +2,18 @@
 
 Reads a directory of gold conversations (lab/gold.py), splits it by conversation with the fixed
 seed, runs the judges on one part's graded replies and prints numbers only: Spearman's rho
-against the gold 1-5 with a bootstrap interval, by length band and per gold defect letter, the
-agreement on which of two resampled arms is better, and the calls and model seconds per reply.
-It writes nothing and never prints, logs or stores a word of the gold.
+against the gold 1-5 with its 90% interval by conversation, by length band and per gold defect
+letter, the agreement on which of two resampled arms is better (reported only), the calls and
+model seconds per reply, and each judge's verdict (`verdict`). It writes nothing and never
+prints, logs or stores a word of the gold.
+
+The bar (`verdict`): a judge passes when the lower end of rho's 90% interval, resampling whole
+conversations, is PASS_RHO or more, on the test part (train and dev chose the designs and fit
+the weights), measured on at least MIN_CONVERSATIONS conversations and MIN_REPLIES replies;
+below that the verdict is "not enough gold". A point estimate on a handful of conversations can
+clear a bar by chance, and so can arm agreement, which is why neither is the criterion
+(tests/lab/test_judge_eval.py simulates it). A pass is a reason to grade a fresh gold set, not
+to turn `[lab] promote` on by itself (lab/README.md, "The judge").
 
 The judges: lab/judge.py's modes with the shipped weights ("features", "checklist", "fewshot",
 "pairwise", and "tells", the combination the lab uses) and "rubric" (lab/grade.py's old 0-3
@@ -24,7 +33,9 @@ from . import gold, grade, judge
 DESIGNS = (*judge.MODES, "rubric")
 RUBRIC_TURNS = 2
 CARD_CHARS = 1500
-PASS_RHO, PASS_ARM = 0.35, 0.70
+PASS_RHO = 0.35   # the lower end of rho's 90% interval by conversation (gold.CI_LEVEL)
+MIN_CONVERSATIONS, MIN_REPLIES = 12, 150
+PASS, FAIL, TOO_LITTLE, NOT_TEST = "pass", "fail", "not enough gold", "not the test part"
 
 
 async def judge_items(reasoner, items: list, design: str, *, seed: int = 0,
@@ -70,14 +81,33 @@ async def judge_items(reasoner, items: list, design: str, *, seed: int = 0,
     return out
 
 
+def verdict(convs: list[str], judged: list[float], graded: list[float], *, part: str = "test",
+            seed: int = gold.SPLIT_SEED, draws: int = gold.BOOT_DRAWS) -> dict:
+    """Whether a judge's scores clear the bar against the gold's: {"conversations", "ci" (rho's
+    90% interval by conversation, or None), "verdict" (PASS, FAIL, TOO_LITTLE or NOT_TEST),
+    "passes"}. `convs[i]` names item i's conversation."""
+    n = len(set(convs))
+    ci = gold.cluster_bootstrap(convs, judged, graded, seed=seed, draws=draws)
+    if part != "test":
+        found = NOT_TEST
+    elif n < MIN_CONVERSATIONS or len(convs) < MIN_REPLIES:
+        found = TOO_LITTLE
+    elif ci is not None and ci[0] >= PASS_RHO:
+        found = PASS
+    else:
+        found = FAIL
+    return {"conversations": n, "ci": ci, "verdict": found, "passes": found == PASS}
+
+
 def table(items: list, scores: dict[str, float | None], *, calls: int = 0,
-          seconds: float = 0.0, seed: int = gold.SPLIT_SEED) -> dict:
+          seconds: float = 0.0, seed: int = gold.SPLIT_SEED, part: str = "test") -> dict:
     """One design's numbers against the gold, over the items it scored."""
     kept = [i for i in items if scores.get(i.key) is not None]
     g = [float(i.score) for i in kept]
     j = [float(scores[i.key]) for i in kept]
     rho = gold.spearman(j, g)
-    ci = gold.bootstrap(j, g, seed=seed)
+    bar = verdict([i.conv for i in kept], j, g, part=part, seed=seed)
+    ci = bar["ci"]
     bands = {}
     for name, low, high in gold.BANDS:
         rows = [(a, b) for i, a, b in zip(kept, j, g) if low <= len(i.reply.split()) <= high]
@@ -93,12 +123,12 @@ def table(items: list, scores: dict[str, float | None], *, calls: int = 0,
     arm = gold.arm_agreement([i.conv for i in kept], g, j, seed=seed)
     n = len(items) or 1
     return {"n": len(kept), "failed": len(items) - len(kept),
+            "conversations": bar["conversations"],
             "spearman": None if rho is None else round(rho, 3),
             "ci": None if ci is None else [round(ci[0], 3), round(ci[1], 3)],
             "bands": bands, "defects": defects, "arm": arm,
             "calls_per_reply": round(calls / n, 2), "seconds_per_reply": round(seconds / n, 2),
-            "passes": bool(rho is not None and rho >= PASS_RHO and arm["agree"] is not None
-                           and arm["agree"] >= PASS_ARM)}
+            "verdict": bar["verdict"], "passes": bar["passes"]}
 
 
 async def evaluate(reasoner, directory, *, designs=DESIGNS, part: str = "test", seed: int = 0,
@@ -114,7 +144,7 @@ async def evaluate(reasoner, directory, *, designs=DESIGNS, part: str = "test", 
         before = (reasoner.calls, reasoner.seconds)
         scores = await judge_items(reasoner, items, design, seed=seed, parallel=parallel)
         out["designs"][design] = table(items, scores, calls=reasoner.calls - before[0],
-                                       seconds=reasoner.seconds - before[1])
+                                       seconds=reasoner.seconds - before[1], part=part)
     return out
 
 
@@ -153,15 +183,15 @@ def render(data: dict) -> str:
     lines = [f"gold: {data['gold']['conversations']} conversations, graded replies "
              + ", ".join(f"{p} {n}" for p, n in sizes.items())
              + f"; part {data['part']}, seed {data['seed']}, weights v{data['weights']}",
-             f"{'judge':10s} {'n':>4s} {'rho':>7s} {'95% interval':>18s} {'arm agree':>10s} "
-             f"{'calls':>6s} {'s/reply':>8s}  pass"]
+             f"{'judge':10s} {'n':>4s} {'convs':>5s} {'rho':>7s} {'90% by conv':>16s} "
+             f"{'arm agree':>10s} {'calls':>6s} {'s/reply':>8s}  verdict"]
     for design, t in data["designs"].items():
         ci = "n/a" if t["ci"] is None else f"{t['ci'][0]:+.3f}..{t['ci'][1]:+.3f}"
         arm = t["arm"]
         agree = "n/a" if arm["agree"] is None else f"{100 * arm['agree']:.0f}% of {arm['pairs']}"
-        lines.append(f"{design:10s} {t['n']:4d} {_f(t['spearman']):>7s} {ci:>18s} {agree:>10s} "
-                     f"{t['calls_per_reply']:6.2f} {t['seconds_per_reply']:8.2f}  "
-                     + ("yes" if t["passes"] else "no"))
+        lines.append(f"{design:10s} {t['n']:4d} {t['conversations']:5d} {_f(t['spearman']):>7s} "
+                     f"{ci:>16s} {agree:>10s} {t['calls_per_reply']:6.2f} "
+                     f"{t['seconds_per_reply']:8.2f}  {t['verdict']}")
     for design, t in data["designs"].items():
         lines.append(f"{design}: mean by her words (judge / gold): "
                      + ", ".join(f"{b} {v['judge']:.2f} / {v['gold']:.2f} (n={v['n']})"
@@ -169,6 +199,11 @@ def render(data: dict) -> str:
         if t["defects"]:
             lines.append(f"{design}: rho with a gold defect (negative: the judge marks it down): "
                          + ", ".join(f"{k} {v['rho']:+.2f} (n={v['n']})" for k, v in t["defects"].items()))
-    lines.append(f"a judge passes at rho >= {PASS_RHO} and arm agreement >= {round(100 * PASS_ARM)}% "
-                 f"(arms of {gold.ARM_SIZE} replies whose gold means differ by {gold.ARM_MARGIN}+)")
+    lines.append(f"a judge passes when the low end of rho's {round(100 * gold.CI_LEVEL)}% interval, "
+                 f"resampling whole conversations, is {PASS_RHO} or more on the test part of "
+                 f"{MIN_CONVERSATIONS}+ conversations and {MIN_REPLIES}+ replies (fewer: "
+                 f"{TOO_LITTLE}); confirm a pass on a fresh gold set before [lab] promote")
+    lines.append(f"arm agreement (arms of {gold.ARM_SIZE} replies whose gold means differ by "
+                 f"{gold.ARM_MARGIN}+) is reported only: with few conversations a judge with no "
+                 "agreement reaches 70% about one time in eight")
     return "\n".join(lines)
