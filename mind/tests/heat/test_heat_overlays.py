@@ -142,7 +142,7 @@ def test_the_console_view_is_built_from_the_codes_own_words(cast, data, clock):
     unset = heat_view(cast.conn, config=HeatConfig(enabled=True), data_dir=data, romance_file=10,
                       now=clock.now())
     assert (unset["enabled"], unset["world"], unset["set"], unset["follows"], unset["suggest"],
-            unset["members"], unset["changes"]) == (True, None, False, 10, 10, [], [])
+            unset["members"], unset["changes"]) == (True, None, False, 10, 9, [], [])
     assert unset["note"] == UNSET_NOTE.format(dial=10)
     _sets(cast, ("world", "", 9))
     view = heat_view(cast.conn, config=HeatConfig(enabled=True), data_dir=data, romance_file=10,

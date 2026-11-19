@@ -48,7 +48,8 @@ ROWS: tuple[Row, ...] = (
     Row("explicit", 10, 1.0, True, 0, 1.3, "explicit", P4, 1.2),  # 10
 )
 LATE_SELF = 8  # at this heat she may take one step herself late at night (no lead needed)
-EVERY_TURN = 10  # from here every private turn of hers to him carries her romance
+EVERY_TURN = 10  # from here every private turn of hers to him carries her romance (every turn
+# to him for a woman at her own dial 10, as that dial always did)
 
 # The legacy romance dial (1-10) as a heat, for a world with no heat set (where only his session
 # override reaches a member): the same band, and 9 and 10 are themselves. A woman's own stored

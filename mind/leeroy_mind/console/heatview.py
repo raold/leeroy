@@ -52,8 +52,9 @@ def heat_view(conn, *, config: HeatConfig, data_dir: Path, romance_file: int | N
     if t.heat_world is None:
         # not set: heat governs nobody (heat.live.HeatLive.reaches). The romance dial, each
         # woman's own dial and every rate are in force exactly as before; the page only offers
-        # the value that dial would stand for as the slider's starting point.
-        out.update(follows=legacy, suggest=world)
+        # the value that dial would stand for as the slider's starting point, never above heat
+        # 9 (today's wording and rates: heat 10 goes further than the romance dial 10 does).
+        out.update(follows=legacy, suggest=min(world, TODAY))
         if config.enabled:
             out["note"] = UNSET_NOTE.format(dial=legacy)
         return out
