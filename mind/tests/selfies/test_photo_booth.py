@@ -518,7 +518,11 @@ def test_off_or_invalid_registers_no_booth_and_keeps_normal_scheduler(tmp_path, 
     try:
         assert not hasattr(app, "selfie_booth")
         assert app.night_scheduler.run_night.__self__ is app.night_runner
-        assert app.arbiter._preempt.__self__ is app.night_scheduler
+        # With selfies on, his Render selfies run chains the night's own preempt (manual.py).
+        manual = getattr(app, "selfie_manual", None)
+        preempt = app.arbiter._preempt if manual is None else manual._prior
+        assert preempt.__self__ is app.night_scheduler
+        assert manual is None or app.arbiter._preempt.__self__ is manual
     finally:
         app.store.close()
 

@@ -12,8 +12,8 @@ resume it. A cold Discord answer waits for the live model to load.
 
 While paused, autonomous conversations, DM openers, banter and model requests
 stop. Queued extraction waits, including work interrupted during a request.
-The pause first asks a running night and photo booth pass to stop, as your login
-does, and only then closes the model gate. The night resumes later as an
+The pause first asks a running night, photo booth pass and Render selfies run
+([RENDER.md](RENDER.md)) to stop, as your login does, and only then closes the model gate. The night resumes later as an
 interrupted run without spending another attempt, and the booth records a
 preemption with no failure cooldown. A model step that still meets the closed
 gate counts as the same interruption, never as a failure. Photo workers and their

@@ -7,7 +7,10 @@ rendered work with rendering off; only with `enabled = true` does the night gain
 "photo" (the photo-kind pass, kind.py) after "enrich" on the reflection model and "selfies" (the
 render, stage.py) after "regress" as an image stage. Then the photo files are repaired once
 (SelfieService.sync_all), here and nowhere else: before run() starts any loop or night, since
-the repair removes what a render in progress writes. It starts nothing and sends nothing."""
+the repair removes what a render in progress writes. It starts nothing and sends nothing.
+
+With `enabled = true` it also makes `app.selfie_manual` (manual.py, his Render selfies button),
+after the booth, whose preempt its own chains after."""
 import logging
 
 from leeroy_mind.config import ConfigError
@@ -16,6 +19,7 @@ from leeroy_mind.logs import log
 from . import kind, snapstage, stage
 from .config import SelfieCfg, load_selfie_config
 from .booth import PhotoBooth
+from .manual import ManualRender
 from .scenes import make_scenes_stage
 from .service import SelfieService
 from .snapstage import make_snaps_stage
@@ -55,4 +59,6 @@ def attach_selfies(app) -> SelfieService:
     if cfg.enabled and cfg.booth:
         app.selfie_booth = PhotoBooth(app, cfg)
         app.register_background(app.selfie_booth.run_forever)
+    if cfg.enabled:
+        app.selfie_manual = ManualRender(app, cfg)
     return service

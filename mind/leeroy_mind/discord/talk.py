@@ -166,6 +166,7 @@ class DiscordTalk:
         self.rng = rng or getattr(app, "rng", None) or random.Random()
         self._held = False
         self._arbiter = None
+        self.lease_reason = "post"  # what last took the lease (take_lease): a run it stops says so
         self._until = 0.0
         self._timer: asyncio.Task | None = None
         self._handbacks: set[asyncio.Task] = set()
@@ -190,7 +191,7 @@ class DiscordTalk:
                     speakers=None) -> asyncio.Task | None:
         """Queue his post's answers; return their job so an asynchronous source can own it.
         `speakers` keeps only those members' answers (a retry of one owed answer)."""
-        self._take_lease()
+        self.take_lease("post")
         try:
             row = self.app.store.conn.execute('SELECT channel FROM discord_message WHERE id=?',(message_id,)).fetchone()
             if row is not None and is_group(row[0]):
@@ -386,6 +387,19 @@ class DiscordTalk:
             out.append((guid, mid, ts))
         return out
 
+    def answers_due(self, within: float) -> int:
+        """Answers to him she put off to her own time (DMs, and group DMs) that fall due within
+        `within` seconds, or at once with the switch off: his Render selfies run waits for them
+        rather than holding them back without a live lease (selfies/manual.py)."""
+        now = self.app.clock.now()
+        on = self.own_time()
+        n = sum(1 for guid, mid, ts in self._owed()
+                if not on or self._due_of(guid, mid, ts) <= now + within)
+        groups = getattr(self.app, "groups", None)
+        if groups is not None:
+            n += groups.answers_due(now + within)
+        return n
+
     def owes(self, guid: int) -> bool:
         """Whether she owes him an answer to a DM she has not seen yet (DmOpeners waits)."""
         if not self.own_time():
@@ -460,7 +474,7 @@ class DiscordTalk:
             del self._queued[next(iter(self._queued))]
         # Its own lease keeps the model for the answer even if the one that admitted it ends;
         # held beside another, it hands nothing over (the night is not woken)
-        self._take_lease()
+        self.take_lease("answer")
         self.app.engine._queue(items)
         log.info("discord_dm_answered_later: guid=%d message=%d late_s=%d", guid, mid,
                  int(now - ts))
@@ -479,7 +493,7 @@ class DiscordTalk:
 
     def begin_photo(self) -> None:
         """Pin the live model before the post's asynchronous vision step."""
-        self._take_lease()
+        self.take_lease("post")
 
     def _photos(self, conn, ids):
         if not getattr(self.app.engine, 'photos_enabled', False):
@@ -992,6 +1006,13 @@ class DiscordTalk:
         return target, waiting
 
     # -- the lease -------------------------------------------------------------------------
+
+    def take_lease(self, reason: str) -> None:
+        """_take_lease for `reason`: post (his own), answer (one owed to him: a rescue, a carried
+        whisper, a DM answered on her own time) or group (a group DM's answer), kept as
+        lease_reason, so his Render selfies run it stops names it (selfies/manual.py)."""
+        self.lease_reason = reason
+        self._take_lease()
 
     def _take_lease(self) -> None:
         arbiter = getattr(self.app, "arbiter", None)

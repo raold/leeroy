@@ -8,7 +8,7 @@ See [the photo operator notes](../photos/README.md#requested-photos) for what th
 
 `GpuArbiter.borrow(holder)` allows the `server` and `discord` presence leases. It refuses
 human, offline-raid, voice-GPU and other job leases, paused GPU use, or any night/booth pass
-still running or cleaning up. Its temporary request lease prevents another image pass from
+or Render selfies run (`selfies/manual.py`) still running or cleaning up. Its temporary request lease prevents another image pass from
 starting. The request service additionally requires confirmed offline game presence and
 enforces its durable hourly/day limits at admission.
 
