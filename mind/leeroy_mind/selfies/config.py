@@ -56,6 +56,8 @@ class SelfieCfg:
     detailer: bool = False
     detailer_hands: bool = False
     backend: str = "realvisxl"  # opt-in FLUX.1-dev; the existing renderer stays the default
+    lora: Path | None = None  # an explicitly selected local FLUX SafeTensors adapter
+    lora_scale: float = 1.0
 
 
 def _bool(v) -> bool:
@@ -106,10 +108,13 @@ _RULES = {
     "detailer_hands": (_bool, "true or false"),
     "backend": (lambda v: type(v) is str and v in ("realvisxl", "flux1-dev"),
                 "realvisxl or flux1-dev"),
+    "lora": (lambda v: _absolute(v) and Path(v).suffix.lower() == ".safetensors",
+             "an absolute path to a local .safetensors file"),
+    "lora_scale": (_num(0, 2), "a number 0-2"),
 }
 _FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib",
-           "body_shot_share", "snap_body_share"}
-_PATHS = {"python", "data"}
+           "body_shot_share", "snap_body_share", "lora_scale"}
+_PATHS = {"python", "data", "lora"}
 
 
 def load_selfie_config(path: Path) -> SelfieCfg:
@@ -138,6 +143,10 @@ def load_selfie_config(path: Path) -> SelfieCfg:
             raise ConfigError(f"selfies.{key}: expected {rule[1]}")
         values[key] = float(v) if key in _FLOATS else Path(v) if key in _PATHS else v
     assert set(values) <= {f.name for f in fields(SelfieCfg)}
+    if values.get("lora") is not None and values.get("backend") != "flux1-dev":
+        raise ConfigError("selfies.lora: requires backend = flux1-dev")
+    if "lora_scale" in values and values.get("lora") is None:
+        raise ConfigError("selfies.lora_scale: requires selfies.lora")
     if set(table) - _RULES.keys():
         values["variety"] = False  # an invalid/unknown table never opts into new behaviour
         values["varied_sets"] = False
@@ -148,6 +157,8 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         values["detailer"] = False
         values["detailer_hands"] = False
         values["backend"] = "realvisxl"
+        values["lora"] = None
+        values["lora_scale"] = 1.0
     if values.get("backend") == "flux1-dev":
         values.setdefault("guidance", 3.5)
     return SelfieCfg(**values)
@@ -175,6 +186,8 @@ def worker_command(cfg: SelfieCfg, *, identity: bool = False, embedding: bool = 
             *(["--embed-only"] if embedding else []),
             *(["--identity"] if identity else []),
             *(["--backend", cfg.backend] if cfg.backend != "realvisxl" and not embedding else []),
+            *(["--lora", str(cfg.lora), "--lora-scale", f"{cfg.lora_scale:g}"]
+              if cfg.lora is not None and not embedding else []),
             *(["--nsfw-max", f"{cfg.nsfw_max:g}"] if not embedding else []),
             "--data", str(worker_data(cfg)), "--min-free-gib", f"{free:g}"]
 
