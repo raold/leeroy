@@ -174,6 +174,25 @@ def test_flagged_or_screened_meme_is_never_ready(h, tmp_path, case):
     assert memes.offer(SimpleNamespace(store=h.store, data_dir=tmp_path, clock=h.clock), mid) is None
 
 
+def test_misreported_base_score_retries_without_captioning_or_publishing(h, tmp_path):
+    mid = planned(h, joke(h))
+
+    class LaxWorker(Worker):
+        async def render(self, req, *, rid=None):
+            got = await super().render(req, rid=rid)
+            return replace(got, nsfw=SELFIES.nsfw_max)
+
+    worker = LaxWorker()
+    render(h, worker)
+    assert len(worker.renders) == 3 and worker.captions == []
+    assert all(req.nsfw_max is None for req in worker.renders)
+    row = h.store.conn.execute("SELECT status,path FROM discord_meme WHERE id=?", (mid,)).fetchone()
+    assert tuple(row) == ("refused", None)
+    assert all(not req.out.exists() and not req.thumb.exists() for req in worker.renders)
+    assert not (tmp_path / f"discord/memes/{mid}.jpg").exists()
+    assert memes.offer(SimpleNamespace(store=h.store, data_dir=tmp_path, clock=h.clock), mid) is None
+
+
 def posted_snap(h, tmp_path, channel, *, guid=102, line=4321, sent=3.0):
     """Her situational photo as the photo paths post it: a `snap` attachment on her own message in
     `channel`, the snap marked sent on 'discord' (what photos/requests.py does for any layout

@@ -352,7 +352,8 @@ async def _render_one(ctx, cfg, worker, row) -> str:
             await ctx.arbiter.make_room()
             _unleased(lambda: ctx.arbiter.holders)
         try:
-            got, _ = await render_slot(worker, request, rid=lambda a: f"m{meme}:{a}", make_room=room)
+            got, _ = await render_slot(worker, request, rid=lambda a: f"m{meme}:{a}", make_room=room,
+                                       nsfw_max=cfg.nsfw_max)
         except SetRefused:
             _refuse(ctx, row, "flagged")
             return "refused"
