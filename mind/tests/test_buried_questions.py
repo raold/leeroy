@@ -99,6 +99,52 @@ def test_a_statement_is_no_question(line):
     assert not length.asks(line)
 
 
+# his lines with line breaks (a Discord post): a break ends a clause (review of #387, Codex P2)
+MULTI_LINE = [
+    "long day at work\ndid you eat yet",
+    "the raid went fine\nyou ever been out west",
+    "im good\nyou",
+    "rough night\r\nyou ok",
+    "pizza for dinner\n\nwbu",
+    "busy busy   today\n  are you working tonight  ",
+]
+MULTI_STATEMENTS = [
+    "long day at work\nim starving",
+    "you\ndid great tonight",
+    "i got home\nand did the dishes",
+    "see ya\ntomorrow",
+]
+
+
+@pytest.mark.parametrize("line", MULTI_LINE)
+def test_a_question_on_its_own_line_is_a_question(line):
+    assert buried_question(line) and is_question(line, buried=True)
+    assert asks(line, buried=True) and length.asks(line)
+
+
+@pytest.mark.parametrize("line", MULTI_STATEMENTS)
+def test_a_statement_over_several_lines_is_no_question(line):
+    assert not buried_question(line) and not is_question(line, buried=True)
+    assert not length.asks(line)
+
+
+def test_his_lines_keep_their_breaks_through_the_readers():
+    """Each reader takes his text as it came: the waiting lines' instruction, the So far
+    block's open questions and the length rule's content question."""
+    from leeroy_mind.human import HumanIdentity
+    from leeroy_mind.talk.prompt import UNANSWERED_OLDEST, unanswered_text
+    me = HumanIdentity(HUMAN, "Testmage", "Testy", "", True, pronouns="he")
+    first = unanswered_text(["ok so", "long day at work\ndid you eat yet"], me)
+    assert "his question first" in first and UNANSWERED_OLDEST not in first
+    assert UNANSWERED_OLDEST in unanswered_text(["ok so", "long day at work\nim starving"], me)
+    lines = [sofar.Line(1, 10.0, False, "hey"),
+             sofar.Line(2, 20.0, True, "long day at work\ndid you eat yet"),
+             sofar.Line(3, 30.0, True, "anyway")]
+    assert sofar.open_questions(lines, skip=3, buried=True) == ["did you eat yet"]
+    assert sofar.open_questions(lines, skip=3) == []  # off: as before
+    assert length.content_question("long day\nwhat did you eat")
+
+
 def test_off_the_reading_is_as_before():
     """Without `buried` nothing changes: the line-start reading only."""
     assert not is_question("that was rough, you ever been out west")

@@ -212,7 +212,11 @@ def open_questions(lines: Sequence[Line], *, skip: int = 0, buried: bool = False
     for line in reversed(tail):
         if line.id == skip:
             continue
-        out.extend(_clip(s) for s in _sentences(line.text) if is_question(s, buried=buried))
+        # buried: each of his lines on its own first ("long day\ndid you eat yet"), since
+        # _sentences folds a line break into a space
+        parts = line.text.splitlines() if buried else [line.text]
+        out.extend(_clip(s) for part in parts for s in _sentences(part)
+                   if is_question(s, buried=buried))
     return out[-OPEN_QUESTIONS:]
 
 

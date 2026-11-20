@@ -79,18 +79,19 @@ def content_question(line: str) -> bool:
         return False
     if _EXPLAIN.search(text):
         return True
-    # the whole line, or one clause of it ("nerd question, who ruled the ogres before the war")
-    return any(is_question(part) and bool(_WH.search(part))
-               for part in (text, *re.split(r"[,.;:!]\s+", text)))
+    # the whole line, or one clause of it ("nerd question, who ruled the ogres before the war"),
+    # a line of a post that has several among them
+    parts = [p for x in (line or "").splitlines() for p in re.split(r"[,.;:!]\s+", x.strip())]
+    return any(is_question(part) and bool(_WH.search(part)) for part in (text, *parts))
 
 
 def asks(his: str) -> bool:
     """His line asks her anything: a question mark anywhere in it, a question (one buried in
     the line with no question mark too: "...so did you eat yet", "you ever been out west";
     asking.buried_question), or a request to explain. The reply to it is never cut."""
-    his = " ".join((his or "").split())
-    return bool(his) and ("?" in his or is_question(his, buried=True)
-                          or content_question(his))
+    if not (his or "").strip():
+        return False  # his own text below: its line breaks end clauses
+    return "?" in his or is_question(his, buried=True) or content_question(his)
 
 
 def _shares(words: list[str], other: str) -> bool:

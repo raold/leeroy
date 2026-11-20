@@ -13,6 +13,8 @@ from conftest import HUMAN, seed_test_cast
 from dbtemplate import open_migrated
 from engine_rig import engine_clock, make_rig, save_member
 from leeroy_mind.guards import pronouns
+from leeroy_mind.llm.client import LLMError
+from leeroy_mind.llm.scheduler import Expired, SchedulerError
 from leeroy_mind.life import day, interrupt
 from leeroy_mind.protocol import Chat
 from leeroy_mind.storage.store import Store
@@ -78,7 +80,8 @@ def converse(tmp_path, name, *, coherence, length, member, his, script=None, rep
             give(store, 102, sheet, **{**BASE, **member})
         else:
             save_member(store, 102, **{**BASE, **member})
-        kw = {"script": script_from(script)} if script is not None else {"reply": reply}
+        kw = ({"script": script if callable(script) else script_from(script)}
+              if script is not None else {"reply": reply})
         r = make_rig(store, clock, tmp_path / name, coherence=coherence,
                      coherence_length=length, **kw, **rig)
         try:
@@ -250,6 +253,42 @@ def test_a_failed_usual_length_retry_sends_the_first_answer_whole(tmp_path, seco
                              his="how many people signed up?", script=[LONG, second])
     assert len(prompts) == 2
     assert " ".join(said).split() == LONG.split()  # the answer, whole: it cost a call only
+
+
+@pytest.mark.parametrize("error", [LLMError("model down"), SchedulerError("queue closed"),
+                                   Expired(0.0)], ids=["llm", "scheduler", "expired"])
+def test_a_failed_usual_length_call_sends_the_first_answer_whole(tmp_path, error):
+    """Review of #387 (Codex P2): the retry at her usual length is optional. When its call
+    raises, the kept answer goes whole with its length allowance, as when the retry is silent
+    or refused, never the owed rescue's fresh fallback."""
+    calls = []
+
+    def script(model, messages):
+        calls.append(1)
+        if len(calls) == 1:
+            return LONG
+        raise error
+    said, prompts = converse(tmp_path, "raises", coherence=False, length=True,
+                             member=dict(words_per_line=[2, 8]),
+                             his="how many people signed up?", script=script)
+    assert len(calls) == 2  # no fresh fallback asked
+    assert " ".join(said).split() == LONG.split()
+
+
+def test_a_failed_first_call_is_still_an_llm_error(tmp_path):
+    """Only the optional retry falls back to the kept draft: a first call that raises has no
+    draft to keep, and the owed rescue answers as before."""
+    calls = []
+
+    def script(model, messages):
+        calls.append(1)
+        if len(calls) == 1:
+            raise LLMError("model down")
+        return "22 so far"
+    said, _ = converse(tmp_path, "first", coherence=False, length=True,
+                       member=dict(words_per_line=[2, 8]),
+                       his="how many people signed up?", script=script)
+    assert said == ["22 so far"] and len(calls) == 2  # the rescue's own call
 
 
 def test_a_retry_still_long_goes_as_written(tmp_path):

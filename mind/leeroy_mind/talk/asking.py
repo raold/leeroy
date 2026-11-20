@@ -15,7 +15,8 @@ channel, group DM and DM) reads the same rule; nothing here knows a member or a 
 `buried` ([talk] coherence and the length rule; blind sandbox test, 2026-11-20: "...nightmare
 day and i have not eaten yet so did you eat yet" and "you ever been out west" read as no
 question) also finds a question clause anywhere in his line, with no question mark: his line is
-split at punctuation and at joining words ("and", "but", "so", "lol", "btw"...), and a clause
+split at punctuation, at line breaks (a Discord post's lines keep theirs) and at joining
+words ("and", "but", "so", "lol", "btw"...), and a clause
 after the first asks when it is a question by stricter rules than the line's start (a joined
 "and did the dishes" or "and when i got home" is no question):
 
@@ -179,10 +180,17 @@ def _clause_asks(before: str, w: list[str], first: bool) -> bool:
     return head in _ANYONE and len(w) > 1 and w[1] in _ANYONE_ASKS
 
 
+def _lines(line: str) -> str:
+    """His line with each of its lines' whitespace collapsed and its line breaks kept: a break
+    ends a clause ("long day at work\ndid you eat yet")."""
+    return "\n".join(" ".join(x.split()) for x in (line or "").splitlines() if x.strip())
+
+
 def buried_question(line: str) -> bool:
     """His line holds a question clause the line-start reading misses, with or without a
-    question mark (module docstring)."""
-    clauses = _clauses(" ".join((line or "").split()))
+    question mark (module docstring). Pass his text as it came: its line breaks are clause
+    breaks."""
+    clauses = _clauses(_lines(line))
     return any(_clause_asks(before, words, i == 0) for i, (before, words) in enumerate(clauses))
 
 
@@ -194,7 +202,7 @@ def is_question(line: str, *, buried: bool = False) -> bool:
         return False
     if _ENDS_ASKING.search(text):
         return True
-    if buried and buried_question(text):
+    if buried and buried_question(line):  # his own text: its line breaks end clauses
         return True
     words = _words(text)
     if not words:

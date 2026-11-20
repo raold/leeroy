@@ -4528,6 +4528,26 @@ class Pipeline:
         # lines): when it is what goes, the styling leaves it whole as the return below would
         kept_lines: int | None = None
         blocking: set[str] = set()  # the last draft's tells that kept it from going
+        usual = False  # the last draft was a kept answer asked again at her usual length
+
+        def kept_whole() -> str | None:
+            """The kept draft (soft tells only), repaired, with its length allowance back when
+            the length rule kept it; None without one or when it repairs to nothing."""
+            if not kept or quiet(best := repair(kept, speaker=name, aliases=own, him=his,
+                                                keep_emoji=emoji)):
+                return None
+            if kept_lines is not None:
+                meta.keep_words, meta.keep_lines = len(best.split()), kept_lines
+            return best
+
+        def usual_failed(reason: str) -> str | None:
+            """The usual-length retry is optional: when its call fails, the kept answer goes
+            whole, as when the retry is silent or refused (review of #387)."""
+            best = kept_whole() if attempt and usual else None
+            if best is not None:
+                log.info("say_usual_failed: guid=%d kind=%s reason=%s", turn.speaker, turn.kind,
+                         reason)
+            return best
         for attempt in range(max_attempts):
             if not _scope_valid(meta):
                 return text, "scope_changed"
@@ -4537,11 +4557,15 @@ class Pipeline:
             except _ScopeChanged:
                 return text, "scope_changed"
             except Expired:
+                if (best := usual_failed("expired")) is not None:
+                    return best, None
                 return text, "expired"
             except GpuPaused:
                 return text, 'gpu_paused'
             except (SchedulerError, LLMError) as e:
                 log.warning("talk_llm_failed: guid=%d kind=%s: %s", turn.speaker, turn.kind, e)
+                if (best := usual_failed("llm_error")) is not None:
+                    return best, None
                 return text, "llm_error"
             finally:
                 meta.llm_s = (meta.llm_s or 0.0) + self.clock.now() - asked
@@ -4673,11 +4697,8 @@ class Pipeline:
                                  usual=usual), rest_hint)
                 if x))
         if owed:
-            if kept and not quiet(best := repair(kept, speaker=name, aliases=own, him=his,
-                                                 keep_emoji=emoji)):
+            if (best := kept_whole()) is not None:
                 log.info("say_owed_kept: guid=%d kind=%s", turn.speaker, turn.kind)
-                if kept_lines is not None:
-                    meta.keep_words, meta.keep_lines = len(best.split()), kept_lines
                 return best, None
             if blocking and blocking <= MEETING_TELLS and why == "tells":
                 # her rewrite still asks him over or says they have met: those sentences go and

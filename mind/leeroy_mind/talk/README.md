@@ -1099,11 +1099,12 @@ him keeps main's behaviour there. **In a game whisper to him only, a kept answer
 lines but runs past `KEEP_SLACK` (2) times her turn's words is asked again once** with her
 draft and `length.USUAL_HINT` ("Say it in your usual length, about N words, and keep the answer
 in it."); the retry goes as the rule reads it (never asked a third time), and a retry that is
-silent or refused sends the first draft whole (the owed answer's kept draft, styled with its
-room): it costs a call, never the answer (log `say_length: ... action=usual`). A line that
-asks nothing keeps her leading whole clauses, as many as fit (never ending on a dangling word
-or inside a quotation, never under 3 words), goes as written within twice the turn's words
-when there is no clean cut, and past that is asked
+silent or refused, or whose call fails or runs late (`say_usual_failed reason=llm_error|expired`),
+sends the first draft whole (the owed answer's kept draft, styled with its room), never the owed
+rescue's fresh line: it costs a call, never the answer (log `say_length: ... action=usual`). A
+line that asks nothing keeps her leading whole clauses, as many as fit (never ending on a
+dangling word or inside a quotation, never under 3 words), goes as written within twice the
+turn's words when there is no clean cut, and past that is asked
 again with the draft; a turn with its own subject (an opener's topic, an outreach item's
 words) is cut only after the last clause that names it. A draft of the turn's words or more
 that "fits" is also checked against her lines, so the styling never repacks its last clause
@@ -1155,8 +1156,10 @@ instance. Her brb's reason stays in "Right now" for 30 minutes after she is back
 **His question without a question mark** (`talk/asking.py` `buried_question`, 2026-11-20). With
 `coherence` on, every place the pipeline decides whether his line asks something also finds a
 question clause buried in it with no "?": "...i have not eaten yet so did you eat yet", "you
-ever been out west", "im good, you", "wanna raid later". His line is split at punctuation and at
-joining words; a clause after the first asks by stricter rules than the line's start, so "and
+ever been out west", "im good, you", "wanna raid later". His line is split at punctuation, at
+its line breaks (a Discord post's "long day at work" then "did you eat yet" on the next line:
+every reader takes his text as it came, never with its breaks folded to spaces) and at joining
+words; a clause after the first asks by stricter rules than the line's start, so "and
 when i got home", "and did the dishes" and "so do you" stay statements. Those places: answer
 his question first (`question_first`), the beat's answering wants (`Composed.asking`,
 `intent.allowed`, the answer-first weights), the position hold, the shape's `his_asks`, his
