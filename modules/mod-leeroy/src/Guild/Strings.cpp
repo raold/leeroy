@@ -637,7 +637,7 @@ void TickHolds(std::uint64_t now, bool stringsOn, bool invitesOnNow, Player* hum
         facts.raid = group && group->isRaidGroup();
         bool const sameMap = human && bot->GetMap() == human->GetMap() && !bot->IsBeingTeleported();
         float const yards = sameMap ? bot->GetDistance(human) : 0.0f;
-        facts.near = sameMap && yards <= kInviteFishYards;
+        facts.humanNearby = sameMap && yards <= kInviteFishYards;
         facts.left = !human || !sameMap || yards > kInviteLeftYards;
         NoteStringHold(state, facts);
         StringHoldStep const step = DecideStringHold(state, facts);

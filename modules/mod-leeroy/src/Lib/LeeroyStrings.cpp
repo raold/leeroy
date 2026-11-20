@@ -219,7 +219,7 @@ StringHoldStep DecideStringHold(StringHoldState const& hold, StringHoldFacts con
 
 void NoteStringHold(StringHoldState& hold, StringHoldFacts const& f)
 {
-    if (hold.fish && f.near)
+    if (hold.fish && f.humanNearby)
         hold.met = true;
 }
 

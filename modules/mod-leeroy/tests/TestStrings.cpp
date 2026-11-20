@@ -460,14 +460,14 @@ StringHoldState FishHold(std::uint64_t now, std::uint64_t group = 0)
 
 StringHoldFacts Near(StringHoldFacts f)
 {
-    f.near = true;
+    f.humanNearby = true;
     f.left = false;
     return f;
 }
 
 StringHoldFacts Away(StringHoldFacts f)
 {
-    f.near = false;
+    f.humanNearby = false;
     f.left = true;
     return f;
 }
