@@ -459,6 +459,46 @@ def test_ollama_truncates_long_vectors(monkeypatch):
     assert len(out[0]) == 512 and math.isclose(math.sqrt(sum(x * x for x in out[0])), 1.0)
 
 
+# What Ollama 0.40.15 (its llama-server backend) answered the night's reminders, 2026-11-17 to
+# 11-20: a request of several hundred inputs failed after 240 to 313 of them; up to 160 passed.
+RUNNER_REFUSED = (400, b'{"error":"Post \\"http://127.0.0.1:56718/tokenize\\": dial tcp '
+                       b'127.0.0.1:56718: connectex: No connection could be made because the '
+                       b'target machine actively refused it."}')
+
+
+def _embed_server(sizes, *, refuse_over=240):
+    def handler(path, body):
+        sizes.append(len(body["input"]))
+        if len(body["input"]) > refuse_over:
+            return RUNNER_REFUSED
+        return {"embeddings": [[float(t) + 1.0] + [0.0] * 511 for t in body["input"]]}
+    return handler
+
+
+def test_ollama_embeds_a_long_list_in_bounded_requests(monkeypatch):
+    sizes = []
+    _patch(monkeypatch, _embed_server(sizes))
+    out = run(OllamaClient("http://x:1").embed("m", [str(i) for i in range(300)]))
+    assert [v[0] for v in out] == [float(i) + 1.0 for i in range(300)]  # every vector, in order
+    assert sum(sizes) == 300 and max(sizes) <= client_mod.EMBED_BATCH < 240
+
+
+def test_ollama_embed_sends_a_short_list_whole(monkeypatch):
+    sizes = []
+    _patch(monkeypatch, _embed_server(sizes))
+    run(OllamaClient("http://x:1").embed("m", [str(i) for i in range(client_mod.EMBED_BATCH)]))
+    run(OllamaClient("http://x:1").embed("m", ["0"]))
+    assert sizes == [client_mod.EMBED_BATCH, 1]
+
+
+def test_ollama_embed_fails_whole_when_one_request_fails(monkeypatch):
+    sizes = []
+    _patch(monkeypatch, _embed_server(sizes, refuse_over=0))
+    with pytest.raises(LLMError, match="HTTP 400"):
+        run(OllamaClient("http://x:1").embed("m", [str(i) for i in range(100)]))
+    assert sizes == [client_mod.EMBED_BATCH]  # no vectors for a partial list, no further requests
+
+
 @pytest.mark.parametrize("reply", [
     {"embeddings": [[float("nan")] * 512, [1.0] * 512]},
     {"embeddings": [[float("inf")] * 512, [1.0] * 512]},
