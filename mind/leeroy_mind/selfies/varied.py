@@ -10,8 +10,9 @@ Since the photo audit (2026-11-17, safe.py) `[selfies] body_shot_share` says how
 four show her figure (safe.body_slots; all four at the default 1.0, the owner's ask): below
 1.0 the views from behind keep theirs first, then the front view, then the side view, and the
 others are framed waist-up. Front and side views are three-quarter rather than full-length (6%
-defective against 12%). Every candidate takes one of a few simple poses (safe.POSES), and the
-lists say their outfits and settings as safe.py rewrote them.
+defective against 12%). The lists say their outfits and settings as safe.py rewrote them. The
+audit's standing poses were taken out again (owner, 2026-11-19): each candidate's pose is its
+view, as before the audit.
 
 Off by default: `[selfies] varied_sets = true` (read at the mind's start, as the rest of the
 table). With it off nothing is queued, and a set queued while it was on renders as an ordinary

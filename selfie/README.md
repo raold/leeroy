@@ -100,6 +100,25 @@ FLUX.1-dev and the adapter use the FLUX.1-dev non-commercial license; the CLIP V
 encoder uses MIT. See the [model card](https://huggingface.co/black-forest-labs/FLUX.1-dev)
 and [adapter card](https://huggingface.co/XLabs-AI/flux-ip-adapter-v2) for their terms.
 
+### Local FLUX LoRA comparison
+
+The worker, smoke and detail commands accept `--lora FILE --lora-scale 0.8` with
+`--backend flux1-dev`. Install the optional `lora` extra alongside `gpu,flux` first.
+Use an explicit local `.safetensors` file, for example under `selfie-data/models/loras/`.
+Files are never discovered or enabled automatically. Missing or incompatible weights refuse
+startup; the worker does not silently render without the requested adapter. Strength defaults
+to 1 and accepts finite values from 0 to 2. SDXL and embedding-only workers refuse this option.
+
+The adapter is loaded before CPU offload, remains separate from the base weights, and shares
+its transformer with the detail pass. Readiness records its SHA-256 and strength without its
+filename or metadata. Trigger words are ordinary positive prompt phrases; the loader adds none.
+Existing image checks, negative guidance and required prompt budgets still apply.
+
+This is worker-level comparison support: the mind does not yet select a LoRA from `mind.toml`.
+It changes no cast settings, stored images or selections. Compare fixed seeds and identical
+prompts before choosing a LoRA or strength for regular use. No migration or native rebuild is
+needed; omit the options to use the previous rendering behavior.
+
 ## Worker protocol
 
 Screening is always active. `worker --nsfw-max N` sets the default cutoff once at startup;

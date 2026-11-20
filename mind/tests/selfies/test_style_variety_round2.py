@@ -35,7 +35,11 @@ def test_lighting_fits_real_75_cap_without_promoting_other_phrases(h,style):
     # No model or image worker is loaded; BPE/tokenizer integration belongs to the worker.
     count=lambda text:len(re.findall(r"[a-z]+|[0-9]|[^\sa-z0-9]+",text.casefold()))
     kept,dropped=_worker_fit()(lit.phrases,count,75)
-    assert count(kept)<=75 and light in dropped
+    _,base_dropped=_worker_fit()(base.phrases,count,75)
+    # the light is the last to be offered room: it never costs another phrase its place (it
+    # fits beside a lust kind since the audit's pose was taken out again, owner 2026-11-19)
+    said=lambda texts:{t.replace(", natural light","") for t in texts}  # a light drops it
+    assert count(kept)<=75 and said(set(dropped)-{light})==said(base_dropped)
     assert all(t in kept for t,pr in base.phrases if pr==0)
 
 

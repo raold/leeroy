@@ -3,6 +3,8 @@
 Uses the shared scoring, JPEG writes, face crop/cache, captions, grids and detail pass.
 The SDXL adapter is never used here. Model imports stay inside load().
 """
+import hashlib
+import math
 from pathlib import Path
 import time
 
@@ -12,6 +14,25 @@ from .render import RETRY_WAIT_S, ReadyError, Renderer, _face_ref, _free_gib, _m
 
 NEGATIVE_GUIDANCE = 1.5
 TEXT_SEQUENCE_LENGTH = 512
+
+
+def _local_lora(file, scale):
+    """Validate an explicitly selected local SafeTensors file before allocating models."""
+    if type(scale) not in (int, float) or not math.isfinite(scale) or not 0 <= scale <= 2:
+        raise ReadyError("model")
+    if file is None:
+        if scale != 1.0:
+            raise ReadyError("model")
+        return None, None
+    try:
+        path = Path(file).resolve(strict=True)
+        if path.suffix.lower() != ".safetensors" or not path.is_file():
+            raise ValueError("lora_file")
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    except (OSError, ValueError, TypeError) as exc:
+        raise ReadyError("model") from exc
+    return path, digest
 
 
 class FluxRenderer(Renderer):
@@ -56,7 +77,9 @@ class FluxRenderer(Renderer):
 
 
 def load(data: Path, *, min_free_gib: float, device: str = "cuda",
-         identity: bool = False, _wait_s: float = 0.0) -> Renderer:
+         identity: bool = False, lora: Path | None = None, lora_scale: float = 1.0,
+         _wait_s: float = 0.0) -> Renderer:
+    lora, lora_hash = _local_lora(lora, lora_scale)
     try:
         import torch
     except ImportError as exc:
@@ -77,6 +100,7 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
     if free < min_free_gib:
         raise ReadyError("vram", fields=fields, retry=lambda: load(
             data, min_free_gib=min_free_gib, device=device, identity=identity,
+            lora=lora, lora_scale=lora_scale,
             _wait_s=RETRY_WAIT_S))
     started_load = time.perf_counter()
     try:
@@ -110,6 +134,10 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
                                  weight_name="ip_adapter.safetensors",
                                  image_encoder_pretrained_model_name_or_path=None,
                                  local_files_only=True)
+        if lora is not None:
+            pipe.load_lora_weights(str(lora.parent), weight_name=lora.name, adapter_name="local",
+                                   local_files_only=True, use_safetensors=True)
+            pipe.set_adapters("local", adapter_weights=float(lora_scale))
         pipe.enable_model_cpu_offload()
         pipe.vae.enable_slicing()
         pipe.vae.enable_tiling()
@@ -128,5 +156,7 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
     info = {**fields, "load_ms": _ms(time.perf_counter() - started_load), "device": "cuda",
             "versions": {"torch": torch.__version__, "diffusers": diffusers.__version__,
                          "backend": "flux1-dev", "quantization": "nf4"}}
+    if lora is not None:
+        info["versions"].update(lora_sha256=lora_hash, lora_scale=f"{lora_scale:g}")
     return FluxRenderer(pipe, processor, classifier, labels["nsfw"], torch, info, identity,
                         _face_ref(data) if identity else None, data)

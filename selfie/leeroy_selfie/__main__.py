@@ -87,7 +87,11 @@ DETAIL_NEGATIVE = ("child, teenager, blurry, deformed, crossed eyes, lazy eye, e
 
 
 def _backend(args) -> dict:
-    return {"backend": args.backend} if args.backend != "realvisxl" else {}
+    options = {"backend": args.backend} if args.backend != "realvisxl" else {}
+    if getattr(args, "lora", None) is not None:
+        options.update(lora=Path(args.lora),
+                       lora_scale=1.0 if args.lora_scale is None else args.lora_scale)
+    return options
 
 
 def cmd_worker(args) -> int:
@@ -297,12 +301,23 @@ def main(argv: list[str] | None = None) -> int:
                           help="only find and print the crops: the CPU, no model but the "
                                "detectors, nothing written")
     p_detail.set_defaults(func=cmd_detail)
+    for command in (p_worker, p_smoke, p_detail):
+        command.add_argument("--lora", metavar="FILE",
+                             help="explicit local FLUX SafeTensors LoRA; no automatic discovery")
+        command.add_argument("--lora-scale", type=float, default=None,
+                             help="LoRA strength, 0-2 (default: 1); requires --lora")
     args = parser.parse_args(argv)
     if hasattr(args, "nsfw_max"):
         try:
             args.nsfw_max = screening_limit(args.nsfw_max)
         except ValueError:
             parser.error("--nsfw-max must be a finite number from 0.01 to 0.9")
+    if getattr(args, "lora_scale", None) is not None:
+        if getattr(args, "lora", None) is None or not 0 <= args.lora_scale <= 2:
+            parser.error("--lora-scale requires --lora and a finite strength from 0 to 2")
+    if getattr(args, "lora", None) is not None:
+        if args.backend != "flux1-dev" or getattr(args, "embed_only", False):
+            parser.error("--lora requires the flux1-dev rendering backend")
     if args.cmd == "detail" and args.cfg is None:
         args.cfg = 3.5 if args.backend == "flux1-dev" else 5.0
     if args.cmd == "smoke" and args.identity != (args.ref is not None):

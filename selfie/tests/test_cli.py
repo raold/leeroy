@@ -116,3 +116,37 @@ def test_fetch_models_prints_one_line_on_failure(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert err.startswith("fetch-models: ") and err.count("\n") == 1
     assert main(["fetch-models", "--only", "bogus"]) == 1
+
+
+def test_smoke_forwards_explicit_lora_without_adding_prompt_words(tmp_path, monkeypatch, capsys):
+    from leeroy_selfie import render
+    from leeroy_selfie.__main__ import SMOKE_PHRASES
+    renderer, loads = SmokeRenderer(), []
+    monkeypatch.setattr(render, 'load', lambda data, **kw: loads.append(kw) or renderer)
+    file = tmp_path / 'custom.safetensors'
+    assert main(['smoke', '--backend', 'flux1-dev', '--lora', str(file), '--lora-scale', '0.8',
+                 '--out', str(tmp_path/'out')]) == 0
+    assert loads == [{'min_free_gib': 8.0, 'identity': False, 'backend': 'flux1-dev',
+                      'lora': file, 'lora_scale': 0.8}]
+    assert [list(p) for p in renderer.seen[0].phrases] == SMOKE_PHRASES
+    assert renderer.seen[0].nsfw_max == 0.2
+
+
+@pytest.mark.parametrize('args', [
+    ['--lora-scale', '0.8'],
+    ['--lora', 'custom.safetensors'],
+    ['--backend', 'flux1-dev', '--lora', 'custom.safetensors', '--lora-scale', 'nan'],
+    ['--backend', 'flux1-dev', '--lora', 'custom.safetensors', '--lora-scale', 'inf'],
+    ['--backend', 'flux1-dev', '--lora', 'custom.safetensors', '--lora-scale', '-1'],
+])
+def test_invalid_lora_cli_options_fail_before_loading(tmp_path, args):
+    with pytest.raises(SystemExit) as error:
+        main(['smoke', '--out', str(tmp_path/'out'), *args])
+    assert error.value.code == 2
+
+
+def test_embedding_worker_rejects_lora():
+    with pytest.raises(SystemExit) as error:
+        main(['worker', '--min-free-gib', '8', '--embed-only', '--backend', 'flux1-dev',
+              '--lora', 'custom.safetensors'])
+    assert error.value.code == 2

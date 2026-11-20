@@ -1,4 +1,5 @@
 """FLUX plumbing without model files, network or GPU: guidance, identity and load admission."""
+import hashlib
 import os
 import sys
 import types
@@ -156,6 +157,8 @@ def stack(monkeypatch, *, free=20, labels=None):
     pipe.vae = types.SimpleNamespace(enable_slicing=lambda:None, enable_tiling=lambda:None)
     pipe.set_progress_bar_config = lambda **kw: None
     pipe.load_ip_adapter = lambda path, **kw: log.append(('adapter', path, kw))
+    pipe.load_lora_weights = lambda path, **kw: log.append(('lora', path, kw))
+    pipe.set_adapters = lambda name, **kw: log.append(('scale', name, kw))
     def loader(name, obj):
         def load(path, **kw):
             log.append((name, path, kw))
@@ -193,6 +196,7 @@ def test_load_checks_backend_pins_and_loads_only_local_nf4_components(tmp_path,m
         assert kwargs['quantization_config']['load_in_4bit'] is True
         assert kwargs['quantization_config']['bnb_4bit_quant_type']=='nf4'
     assert any(row[0]=='adapter' for row in log) is identity
+    assert not any(row[0] in ('lora', 'scale') for row in log)
     assert r.info['versions']['backend']=='flux1-dev'
 
 
@@ -209,6 +213,68 @@ def test_missing_classifier_label_cannot_make_a_ready_flux_worker(tmp_path,monke
     stack(monkeypatch,labels={0:'safe',1:'unknown'})
     with pytest.raises(render.ReadyError,match='model'):
         render.load(tmp_path,min_free_gib=13,backend='flux1-dev')
+
+
+@pytest.mark.parametrize('identity', [False, True])
+def test_local_lora_loads_before_offload_and_records_hash_and_strength(tmp_path, monkeypatch, identity):
+    _, log, _ = stack(monkeypatch)
+    file = tmp_path / 'custom.safetensors'
+    file.write_bytes(b'synthetic weights')
+    r = render.load(tmp_path, min_free_gib=13, backend='flux1-dev', identity=identity,
+                    lora=file, lora_scale=0.8)
+    assert ('lora', str(file.parent), {'weight_name': file.name, 'adapter_name': 'local',
+            'local_files_only': True, 'use_safetensors': True}) in log
+    assert ('scale', 'local', {'adapter_weights': 0.8}) in log
+    stages = [row[0] for row in log]
+    assert stages.index('lora') < stages.index('scale') < stages.index('offload')
+    assert ('adapter' in stages) is identity
+    assert r.info['versions']['lora_sha256'] == hashlib.sha256(file.read_bytes()).hexdigest()
+    assert r.info['versions']['lora_scale'] == '0.8'
+    assert str(file) not in str(r.info)
+
+
+def test_lora_survives_a_vram_retry(tmp_path, monkeypatch):
+    torch, log, _ = stack(monkeypatch, free=2)
+    file = tmp_path / 'custom.safetensors'
+    file.write_bytes(b'synthetic weights')
+    with pytest.raises(render.ReadyError) as error:
+        render.load(tmp_path, min_free_gib=13, backend='flux1-dev', lora=file, lora_scale=0.8)
+    assert error.value.reason == 'vram' and not log
+    torch.cuda.mem_get_info = lambda: (20*2**30, 24*2**30)
+    r = error.value.retry()
+    assert r.info['versions']['lora_scale'] == '0.8'
+    assert sum(row[0] == 'lora' for row in log) == 1
+
+
+@pytest.mark.parametrize('file,scale', [('missing.safetensors', 0.8), ('weights.bin', 0.8),
+    ('custom.safetensors', float('nan')), ('custom.safetensors', float('inf')),
+    ('custom.safetensors', -0.1), ('custom.safetensors', 2.1), ('custom.safetensors', True)])
+def test_invalid_lora_refuses_before_model_allocation(tmp_path, monkeypatch, file, scale):
+    _, log, _ = stack(monkeypatch)
+    (tmp_path / 'weights.bin').write_bytes(b'not SafeTensors')
+    (tmp_path / 'custom.safetensors').write_bytes(b'synthetic weights')
+    with pytest.raises(render.ReadyError, match='model'):
+        render.load(tmp_path, min_free_gib=13, backend='flux1-dev', lora=tmp_path/file, lora_scale=scale)
+    assert not log
+
+
+def test_lora_load_failure_never_falls_back_to_base(tmp_path, monkeypatch):
+    stack(monkeypatch)
+    file = tmp_path / 'custom.safetensors'
+    file.write_bytes(b'synthetic weights')
+    pipe = sys.modules['diffusers'].FluxPipeline.from_pretrained(None)
+    def fail(*args, **kwargs):
+        raise ValueError('incompatible adapter')
+    pipe.load_lora_weights = fail
+    with pytest.raises(render.ReadyError, match='model'):
+        render.load(tmp_path, min_free_gib=13, backend='flux1-dev', lora=file)
+
+
+def test_lora_is_not_silently_ignored_by_other_backends(tmp_path):
+    with pytest.raises(render.ReadyError, match='model'):
+        render.load(tmp_path, min_free_gib=13, lora=tmp_path/'custom.safetensors')
+    with pytest.raises(render.ReadyError, match='model'):
+        flux.load(tmp_path, min_free_gib=13, lora_scale=0.8)
 
 
 def test_authenticated_fetch_preserves_login_location_and_default_fetch_stays_sdxl(tmp_path,monkeypatch):

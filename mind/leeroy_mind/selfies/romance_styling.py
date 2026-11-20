@@ -169,8 +169,8 @@ def _choose(choices, seed, field, history, *, tone=None):
 
 def pose_choices(scene: Scene, tone: str, framing=None) -> tuple[str, ...]:
     # A requested rear view already has its own required pose and identity scale. Activity
-    # snapshots keep the action's pose. A selfie takes no body pose (safe.pose: an arm holds the
-    # camera), only where she looks; a timer photo can turn when no activity was asked for.
+    # snapshots keep the action's pose. A selfie takes no body pose (safe.SELFIE_KINDS: an arm
+    # holds the camera), only where she looks; a timer photo can turn when no activity was asked for.
     if framing == 'from_behind_over_shoulder' or (scene.kind == 'snapshot' and scene.activity):
         return ('',)
     out = ('direct', 'tilt')

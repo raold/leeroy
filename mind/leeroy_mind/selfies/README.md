@@ -60,7 +60,7 @@ screen, the negatives and the classifier gate stand behind them unchanged.
 
 Fixed poses add direct eye contact or a slight head tilt; a snapshot or timer photo may also
 angle her shoulders and, idle on a timer, glance over one shoulder. A selfie only looks: an arm
-holds the camera, so it takes no body pose (`safe.pose`, #362). Action snapshots keep their
+holds the camera, so it takes no body pose (`safe.SELFIE_KINDS`, #362). Action snapshots keep their
 action; a requested rear view keeps its existing framing and face-reference scale. Soft daylight,
 warm lamplight and golden evening light follow the place, time or requested light source.
 Neon, fluorescent and flash requests retain their original light. Poses follow face details

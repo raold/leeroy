@@ -1,7 +1,8 @@
 """Compositions the photo audit showed render badly, designed out (selfies/safe.py): clothed by
-construction, no mirror, phone, bicycle or gripped prop, one simple standing pose for a body
-shot, the body negative, how much body shows as a setting, and `selfies audit`. Every person
-here is invented."""
+construction, no phone, bicycle or gripped prop, the body negative, how much body shows as a
+setting, and `selfies audit`; and what the owner put back (2026-11-19): the mirror selfie and the
+three settings on the lust lists, no pose phrase of the audit's, the quality words in the
+negatives at their earlier priorities. Every person here is invented."""
 import json
 import os
 import re
@@ -15,12 +16,14 @@ from leeroy_mind.selfies import (audit, kind, safe, scene_choices, varied, wardr
                                  words_scene)
 from leeroy_mind.selfies.config import SelfieCfg, load_selfie_config
 from leeroy_mind.selfies.prompt import (BODY_NEGATIVE, BODY_NEGATIVE_LUST, BODY_NEGATIVE_MIRROR,
-                                        FIT_MAX, HEAD_NEGATIVE, HEAD_NEGATIVE_LUST,
+                                        BODY_NEGATIVE_LUST_MIRROR, FIT_MAX, HEAD_NEGATIVE,
+                                        HEAD_NEGATIVE_LUST, HEAD_NEGATIVE_LUST_MIRROR,
                                         HEAD_NEGATIVE_MIRROR, LUST_NEGATIVE, NEGATIVE,
+                                        _COVERED, _COVERED_LUST, body_negative,
                                         VARIED_NEGATIVE, accessory_phrases, negative_for, body_words, build_prompt,
                                         build_varied_prompt, lust_phrase)
 from leeroy_mind.selfies.scene import (SNAP_NEGATIVE, SNAP_NEGATIVE_LUST, SNAP_NEGATIVE_MIRROR,
-                                       TILE_NEGATIVE, Scene,
+                                       SNAP_NEGATIVE_LUST_MIRROR, TILE_NEGATIVE, Scene,
                                        _NOBODY, _text_codes, build_scene_prompt,
                                        build_tile_prompt)
 from leeroy_mind.selfies.store import pick as pick_photo
@@ -36,6 +39,15 @@ _TOKENIZERS = pytest.mark.skipif(
     clip_bpe.tokenizers() is None,
     reason="RealVisXL tokenizer files are not on this machine (set LEEROY_SELFIE_DATA)")
 COLOUR = "cobalt blue"  # the longest colour
+# the audit's pose phrases, taken out again (owner, 2026-11-19): no prompt may carry one
+AUDIT_POSE = re.compile(r"\b(?:arms at (?:her|his) sides|hands behind (?:her|his) back|"
+                        r"hands clasped in front|arms down, hands out of frame)\b|"
+                        r"^(?:standing|walking|walking away)$")
+RESTORED = ("the mirror in her hallway", "the front seat of her car", "a concert crowd")
+
+
+def _posed(spec) -> list[str]:
+    return [t for t, _ in spec.phrases if AUDIT_POSE.search(t)]
 
 
 def _snap(store, snap_id: int) -> tuple:
@@ -182,8 +194,7 @@ def test_a_situational_photo_and_a_tile_require_what_they_wear():
 
 def _new_strings():
     out = [*safe.KIND_WORDS.values(), *safe.SETTING_WORDS.values(), *safe.NEW_SETTINGS,
-           *safe.DEFAULT_TOP.values(), safe.DEFAULT_BOTTOM, safe.POSE_WAIST_UP, safe.ALONE,
-           *(pose for poses in safe.POSES.values() for pose in poses),
+           *safe.DEFAULT_TOP.values(), safe.DEFAULT_BOTTOM, safe.ALONE,
            *(phrase for phrase, _ in scene_choices.ACTIVITIES.values()),
            *filter(None, scene_choices.PROPS.values()), *scene_choices.OUTFITS.values(),
            *(words for _, words in words_scene.UNIFORMS), words_scene.OFFICE_WEAR,
@@ -205,20 +216,29 @@ def test_every_new_string_passes_the_age_explicit_and_wear_screens(text):
     *(("activity", phrase) for phrase in scene_choices.PROPS.values() if phrase),
     *(("outfit", phrase) for phrase in scene_choices.OUTFITS.values()),
     *(("setting", phrase) for phrase in (*safe.SETTING_WORDS.values(), *safe.NEW_SETTINGS)),
-    *(("activity", pose) for poses in safe.POSES.values() for pose in poses),
-    ("activity", safe.POSE_WAIST_UP), ("activity", safe.ALONE),
+    ("activity", safe.ALONE),
     *(("outfit", top) for top in safe.DEFAULT_TOP.values()), ("outfit", safe.DEFAULT_BOTTOM),
     *(("outfit", text) for text in wardrobe.SCENE_MORE.values())])
 def test_every_composed_scene_phrase_meets_the_scene_screens(field, text):
     assert _text_codes(field, text, ident=_NOBODY, names=[]) == []
 
 
-def test_the_new_settings_are_offered_and_the_retired_ones_are_not():
+def test_the_new_settings_are_offered_beside_the_three_put_back():
+    """The owner put the hallway mirror, the car's front seat and the concert crowd back on the
+    lust lists (2026-11-19) and kept the audit's three plain places. A situational photo takes
+    the car seat again; the hallway mirror and the crowd it never offered (before the audit
+    too: scene_choices.LUST_PLACES leaves out crowd, bathing and mirror places)."""
     assert set(safe.NEW_SETTINGS) <= set(kind.LUST_SETTINGS)
-    assert not set(safe.RETIRED_SETTINGS) & set(kind.LUST_SETTINGS)
-    assert len(kind.LUST_SETTINGS) == 21
-    assert not set(safe.RETIRED_SETTINGS) & set(scene_choices.SCENE_LUST_SETTINGS)
+    assert set(RESTORED) <= set(kind.LUST_SETTINGS)
+    assert len(kind.LUST_SETTINGS) == len(set(kind.LUST_SETTINGS)) == 24
+    assert set(RESTORED) <= set(kind.LUST_SCHEMA["properties"]["setting"]["enum"])
+    assert "the front seat of her car" in scene_choices.SCENE_LUST_SETTINGS
+    assert not {"the mirror in her hallway", "a concert crowd"} & set(
+        scene_choices.SCENE_LUST_SETTINGS)
     assert set(safe.NEW_SETTINGS) <= set(scene_choices.LUST_PLACES)
+    assert not set(RESTORED) & set(safe.SETTING_WORDS)  # said as they are named
+    from leeroy_mind.selfies import style_variety
+    assert set(RESTORED) <= set(style_variety.DATE_SETTINGS)
 
 
 # -- no mirror, phone, bicycle or gripped prop ------------------------------------------------------
@@ -235,8 +255,10 @@ def test_a_selfie_names_no_phone():
 
 @pytest.mark.parametrize("framing,negative", [("head_and_shoulders", HEAD_NEGATIVE_MIRROR),
                                               ("upper_body", BODY_NEGATIVE_MIRROR)])
-def test_a_plain_mirror_selfie_stays_one_and_its_negative_names_no_mirror(framing, negative):
-    """Plain mirror selfies were fine in the audit (3% of 92); the lust profile ones were not."""
+def test_a_mirror_selfie_stays_one_in_every_style_and_its_negative_names_no_mirror(framing,
+                                                                                   negative):
+    """Plain mirror selfies were fine in the audit (3% of 92); the lust ones are mirror selfies
+    again too (owner, 2026-11-19)."""
     photo = {"kind": "mirror_selfie", "framing": framing, "setting": "a quiet cafe",
              "outfit": "a grey jumper", "expression": "a small smile"}
     spec = build_prompt(woman(photo=photo))
@@ -252,7 +274,15 @@ def test_a_plain_mirror_selfie_stays_one_and_its_negative_names_no_mirror(framin
     hot = build_scene_prompt(lusty(), replace(plain_scene, setting="a cafe terrace",
                                               outfit="a red satin midi dress",
                                               expression="a wink", style=LUST))
-    assert hot.phrases[0] == ("selfie", 0) and hot.negative == SNAP_NEGATIVE_LUST  # a lust one
+    assert hot.phrases[0] == ("mirror selfie", 0) and hot.negative == SNAP_NEGATIVE_LUST_MIRROR
+    stored = ProfilePhoto("mirror_selfie", framing, "a rooftop bar at night",
+                          "a red satin midi dress", "a playful smile")
+    lust = build_prompt(lusty(photo=stored), kind_style=LUST)
+    assert lust.phrases[0] == ("mirror selfie", 0)
+    assert lust.negative == (HEAD_NEGATIVE_LUST_MIRROR if framing == "head_and_shoulders"
+                             else BODY_NEGATIVE_LUST_MIRROR)
+    assert not {"mirror", "phone"} & _terms(lust.negative)
+    assert _COVERED_LUST in [t for t, pr in lust.negative if pr == 0]
 
 
 def test_a_mirror_selfie_he_asks_for_keeps_its_mirror_and_its_caption():
@@ -269,7 +299,7 @@ def test_a_mirror_selfie_he_asks_for_keeps_its_mirror_and_its_caption():
     assert held.negative == SNAP_NEGATIVE and not any("arms down" in t for t, _ in held.phrases)
     timer = words_scene.build_words_prompt(p, words_scene.scene_of(
         p, replace(w, framing="timer"), audience="him"))
-    assert (safe.POSE_WAIST_UP, 1) in timer.phrases
+    assert timer.phrases[0] == ("photo taken on a timer", 0) and not _posed(timer)
 
 
 def test_the_selfies_long_form_shortens_before_the_worker_would_refuse_a_request():
@@ -291,10 +321,10 @@ def test_the_selfies_long_form_shortens_before_the_worker_would_refuse_a_request
         p, w, audience="him")))
 
 
-def test_a_request_keeps_the_owners_accessories_ahead_of_its_moment_and_the_timer_pose():
+def test_a_request_keeps_the_owners_accessories_ahead_of_its_moment():
     """Review of #362, round 2: what the owner set her to wear are a request's first optional
-    phrases, their room reserved; the moment and a timer photo's pose come after them, so
-    neither takes an accessory's room."""
+    phrases, their room reserved; the moment comes after them. No framing takes a pose phrase
+    (the audit's timer pose was taken out again, owner 2026-11-19)."""
     from leeroy_mind.selfies.scene import limb_detail
     a = replace(APPEARANCE, glasses="always", tattoos="small", piercings="nose",
                 makeup="defined", jewellery="statement")
@@ -309,10 +339,7 @@ def test_a_request_keeps_the_owners_accessories_ahead_of_its_moment_and_the_time
         texts = [t for t, _ in spec.phrases]
         assert all((t, 1) in spec.phrases for t in acc)
         assert max(map(texts.index, acc)) < texts.index("quick, between calls")
-        if framing == "timer":
-            assert texts.index("quick, between calls") < texts.index(safe.POSE_WAIST_UP)
-        else:
-            assert safe.POSE_WAIST_UP not in texts  # a selfie's arm holds the camera
+        assert not _posed(spec)
         kept, dropped = _worker_fit()(spec.phrases, estimate, FIT_MAX)
         assert all(t in kept for t in acc), (framing, dropped)
 
@@ -342,35 +369,43 @@ def test_a_requests_selfie_framing_shortens_before_an_accessory_or_her_hair_styl
                 assert spec.phrases[0] == ("selfie", 0)  # ... only after the framing shortened
 
 
-def test_the_lust_style_is_never_offered_a_mirror_selfie():
+def test_the_lust_style_is_offered_a_mirror_selfie_again():
+    """The owner put the mirror selfie back on the lust lists (2026-11-19): the profile schema,
+    the situational schema, the variety balancer and the re-roll offer it, as before the
+    audit."""
     props = kind.LUST_SCHEMA["properties"]
-    text = json.dumps(kind.LUST_SCHEMA)
-    assert "mirror_selfie" not in text and "the mirror in her hallway" not in text
-    assert "mirror_selfie" not in props["kind"]["enum"]
+    persona_kinds = ["selfie", "mirror_selfie", "headshot", "snapshot"]  # ProfilePhoto.kind
+    assert props["kind"]["enum"] == persona_kinds == list(kind.LUST_KINDS)
     data = {"kind": "mirror_selfie", "framing": "upper_body", "setting": "a wine bar",
             "outfit": "satin midi dress", "colour": "red", "expression": "a wink"}
-    assert kind.screen_lust(lusty(), data) == ["photo.kind: not on its list"]
+    assert kind.screen_lust(lusty(), data) == []
+    assert kind.screen_lust(lusty(), {**data, "setting": "the mirror in her hallway"}) == []
     assert kind.screen_lust(lusty(), {**data, "kind": "selfie"}) == []
+    assert kind.screen_lust(lusty(), {**data, "kind": "portrait"}) == [
+        "photo.kind: not on its list"]
     from leeroy_mind.selfies import scene, style_variety, variety
-    import inspect
-    assert "mirror_selfie" in scene.KINDS and "mirror_selfie" not in scene.LUST_KINDS
-    assert scene.SCENE_SCHEMA_LUST["properties"]["kind"]["enum"] == list(scene.LUST_KINDS)
+    assert not hasattr(scene, "LUST_KINDS")
+    assert scene.SCENE_SCHEMA_LUST["properties"]["kind"]["enum"] == list(scene.KINDS)
     assert scene.SCENE_SCHEMA["properties"]["kind"]["enum"] == list(scene.KINDS)
-    assert "mirror_selfie" not in style_variety.KINDS
-    assert "mirror_selfie" not in inspect.getsource(variety)
+    assert "mirror_selfie" in scene.KINDS and "mirror_selfie" in style_variety.KINDS
+    rolled = {variety.choose_photo(lusty(), seed=seed, ident=_NOBODY, names=()).kind
+              for seed in range(40)}
+    assert rolled == {"selfie", "mirror_selfie", "snapshot"}
 
 
-def test_a_kind_stored_before_the_audit_renders_with_the_words_that_replaced_it():
+def test_a_stored_kind_renders_as_it_was_chosen():
+    """A lust mirror selfie at the hallway mirror renders as a mirror selfie there again; the
+    car seat and the concert crowd are said as named; the audit's other words stay."""
     stored = ProfilePhoto("mirror_selfie", "three_quarter", "the mirror in her hallway",
                           "a fitted little red dress", "a playful smile")
-    assert lust_phrase(stored) == "wearing a fitted short red dress, her hallway at home"
+    assert lust_phrase(stored) == "wearing a fitted short red dress, the mirror in her hallway"
     spec = build_prompt(lusty(photo=stored), kind_style=LUST)
-    assert "mirror" not in _text(spec) and spec.negative == BODY_NEGATIVE_LUST
-    assert spec.phrases[0] == ("selfie", 0)  # a lust kind's mirror selfie is a selfie
-    for old, new in (("the front seat of her car", "a quiet street beside her parked car"),
-                     ("a concert crowd", "an open-air festival field at dusk"),
-                     ("the gym", "an empty gym")):
-        assert lust_phrase(replace(stored, setting=old)).endswith(new)
+    assert spec.phrases[0] == ("mirror selfie", 0) and spec.negative == BODY_NEGATIVE_LUST_MIRROR
+    for setting in RESTORED:
+        assert lust_phrase(replace(stored, setting=setting)).endswith(setting)
+    assert lust_phrase(replace(stored, setting="the gym")).endswith("an empty gym")
+    selfie = build_prompt(lusty(photo=replace(stored, kind="selfie")), kind_style=LUST)
+    assert selfie.phrases[0] == ("selfie", 0) and selfie.negative == BODY_NEGATIVE_LUST
     jacket = replace(stored, outfit="a black leather jacket over a crop top")
     assert "a black leather jacket over a crop top and jeans" in lust_phrase(jacket)
 
@@ -411,34 +446,22 @@ def test_rows_composed_before_the_audit_keep_their_channel_and_codes():
 
 # -- poses ------------------------------------------------------------------------------------------
 
-def test_a_body_shot_takes_one_of_a_few_simple_poses_and_never_a_hand_on_a_hip():
-    for view, poses in safe.POSES.items():
-        assert len(poses) >= 3 and poses[0] == "standing, arms at her sides"
-        for text in poses:
-            assert text.startswith(("standing, ", "walking")) and not re.search(
-                r"\b(hips?|rail|glass|sitting|seated|kneeling|lying|crossed|holding)\b", text)
-        drawn = {safe.pose(view, "full_body", f"seed-{n}") for n in range(60)}
-        assert drawn == set(poses)  # every pose is drawn, by seed
-        assert safe.pose(view, "full_body", "seed") == safe.pose(view, "full_body", "seed")
-    assert set(safe.POSES) == set(kind.VARIED_VIEWS)
-    assert safe.pose("front", "head_and_shoulders") == "" == safe.pose("front", "face")
-    assert safe.pose("front", "upper_body") == safe.POSE_WAIST_UP
-    assert safe.pose("front", "upper_body", kind="selfie") == ""  # an arm holds the camera
-    assert "his" in safe.pose("front", "three_quarter", pos="his")
-    assert "her" not in safe.pose("front", "three_quarter", pos="his")
-    assert safe.pose_priority("three_quarter") == 0 == safe.pose_priority("full_body")
-    assert safe.pose_priority("upper_body") == 1
+def test_the_audits_poses_are_gone():
+    """The owner took the audit's standing and waist-up poses out again (2026-11-19): safe.py
+    composes none, and a body shot is posed as before the audit (a varied set by its view)."""
+    for name in ("POSES", "POSE_SHORT", "POSE_WAIST_UP", "pose", "pose_priority", "kind_of",
+                 "RETIRED_SETTINGS"):
+        assert not hasattr(safe, name), name
+    from leeroy_mind.selfies.prompt import SHORT
+    assert not any(AUDIT_POSE.search(t) for t in (*SHORT, *SHORT.values()))
 
 
 def test_a_selfie_takes_no_pose_and_a_lust_selfie_kind_keeps_its_framing():
-    """Review of #362, round 2: an arm holds the camera, so no selfie takes a pose of POSES or
-    the waist-up one at any framing ("arms at her sides" would contradict it). The owner lifted
-    the lust selfie's waist-up rule (2026-11-19): it follows the share and renders as stored."""
-    hands = ({t for poses in safe.POSES.values() for t in poses} | {safe.POSE_WAIST_UP}
-             | set(safe.POSE_SHORT.values()))
-    framings = ("face", "head_and_shoulders", "upper_body", "three_quarter", "full_body")
+    """Review of #362, round 2: an arm holds the camera, so no selfie takes a pose at any
+    framing ("arms at her sides" would contradict it); since 2026-11-19 no photo takes one of
+    the audit's. The owner lifted the lust selfie's waist-up rule (2026-11-19): it follows the
+    share and renders as stored."""
     for k in safe.SELFIE_KINDS:
-        assert all(safe.pose("front", f, "seed", kind=k) == "" for f in framings)
         assert safe.lust_framing(0, 9, 1.0, k) == "three_quarter"
         assert safe.lust_framing(9, 0, 0.5, k) == "upper_body"  # the share, as for any kind
         assert safe.selfie_framing(k, "three_quarter") == "three_quarter"
@@ -450,26 +473,24 @@ def test_a_selfie_takes_no_pose_and_a_lust_selfie_kind_keeps_its_framing():
         spec = build_prompt(woman(photo={"kind": k, "framing": "three_quarter",
                                          "setting": "a quiet cafe", "outfit": "a grey jumper",
                                          "expression": "a small smile"}))
-        assert not hands & {t for t, _ in spec.phrases}
+        assert not _posed(spec)
         assert any(t.startswith("three-quarter shot") for t, _ in spec.phrases)
-    # a lust selfie stored three-quarter (or a mirror one, which renders as a selfie)
-    for k in safe.SELFIE_KINDS:
+    # a lust selfie or mirror selfie stored three-quarter
+    for k, said, negative in (("selfie", "selfie", BODY_NEGATIVE_LUST),
+                              ("mirror_selfie", "mirror selfie", BODY_NEGATIVE_LUST_MIRROR)):
         stored = ProfilePhoto(k, "three_quarter", "a rooftop bar at night",
                               "a red satin midi dress", "a playful smile")
         spec = build_prompt(lusty(photo=stored), kind_style=LUST)
         texts = [t for t, _ in spec.phrases]
-        assert spec.phrases[0] == ("selfie", 0) and not hands & set(texts)
+        assert spec.phrases[0] == (said, 0) and not _posed(spec)
         assert any(t.startswith("three-quarter shot") for t in texts)
-        assert spec.negative == BODY_NEGATIVE_LUST
-    # a situational selfie at three-quarter: no pose; a snapshot keeps its required one
+        assert spec.negative == negative
+    # a situational photo at three-quarter, a selfie or a snapshot: no pose
     s = Scene("selfie", "three_quarter", "at a quiet cafe table", "a cup of tea on the table",
               scene_choices.OUTFITS["casual"], "a relaxed smile", "day", "anyone", "x",
               recipe=scene_choices.RECIPE)
-    for k in safe.SELFIE_KINDS:
-        snap = build_scene_prompt(woman(), replace(s, kind=k))
-        assert not hands & {t for t, _ in snap.phrases}
-    snap = build_scene_prompt(woman(), replace(s, kind="snapshot"))
-    assert any(t in hands and pr == 0 for t, pr in snap.phrases)
+    for k in (*safe.SELFIE_KINDS, "snapshot"):
+        assert not _posed(build_scene_prompt(woman(), replace(s, kind=k)))
     # the variety balancer and a re-roll frame a lust selfie like any other kind
     from leeroy_mind.selfies import variety
     rolled = [variety.choose_photo(lusty(), seed=seed, ident=_NOBODY, names=())
@@ -478,89 +499,124 @@ def test_a_selfie_takes_no_pose_and_a_lust_selfie_kind_keeps_its_framing():
     assert {x.framing for x in rolled if x.kind == "snapshot"} == {"upper_body", "three_quarter"}
 
 
-def test_a_three_quarter_profile_photo_requires_its_pose():
+def test_a_three_quarter_profile_photo_takes_no_pose():
     stored = ProfilePhoto("snapshot", "three_quarter", "a rooftop bar at night",
                           "a red satin midi dress", "a playful smile")
     spec = build_prompt(lusty(photo=stored), kind_style=LUST)
-    assert any(t in safe.POSES["front"] and pr == 0 for t, pr in spec.phrases)
+    assert not _posed(spec)
     assert (safe.ALONE, 3) in spec.phrases  # a bar: nobody else in frame, where there is room
     assert spec.phrases[0] == ("candid photo", 0)  # the short forms make the room
+    plain = build_prompt(man(photo={"kind": "snapshot", "framing": "three_quarter",
+                                    "setting": "a quiet cafe", "outfit": "a grey jumper",
+                                    "expression": "a small smile"}))
+    assert not _posed(plain)
 
 
-def test_the_pose_takes_its_short_form_before_her_hair_loses_its_style():
-    """Review of #362: the required pose had cost the hair style on three-quarter lust profiles.
-    The pose now shortens first ("standing"), so a hair style that fits beside it stays."""
-    assert set(safe.POSE_SHORT.values()) == {"standing", "walking", "walking away"}
-    assert all(text.replace("her", "his") in safe.POSE_SHORT
-               for poses in safe.POSES.values() for text in poses)
-    stored = ProfilePhoto("snapshot", "three_quarter", "a rooftop bar at night",
-                          "a red satin midi dress", "a playful smile")
-    roomy = build_prompt(lusty(photo=stored), kind_style=LUST)
-    assert any(t in safe.POSES["front"] and pr == 0 for t, pr in roomy.phrases)  # whole
-    looks = replace(APPEARANCE, build="curvy", hair_style="loose beach waves")
-    tight = build_prompt(lusty(appearance=looks, photo=replace(
-        stored, outfit="a cobalt blue leather jacket over a crop top and jeans")), kind_style=LUST)
-    required = [t for t, pr in tight.phrases if pr == 0]
-    if any(t in ("standing", "walking") for t in required):  # the pose shortened ...
-        assert any("loose beach waves" in t for t in required)  # ... and her hair kept its style
-    else:
-        assert any(t in safe.POSES["front"] for t in required)
-
-
-def test_a_situational_photo_keeps_its_hands_out_of_the_picture():
+def test_a_situational_photo_takes_no_pose():
     s = Scene("snapshot", "upper_body", "at a quiet cafe table", "a cup of tea on the table",
               scene_choices.OUTFITS["casual"], "a relaxed smile", "day", "anyone", "x",
               recipe=scene_choices.RECIPE)
     spec = build_scene_prompt(woman(), s)
     texts = [t for t, _ in spec.phrases]
-    assert safe.POSE_WAIST_UP in texts and safe.ALONE in texts
-    assert (safe.POSE_WAIST_UP, 1) in spec.phrases  # after what the owner set her to wear
-    close = build_scene_prompt(woman(), replace(s, framing="head_and_shoulders"))
-    assert safe.POSE_WAIST_UP not in [t for t, _ in close.phrases]
+    assert safe.ALONE in texts and not _posed(spec)
+    for framing in ("head_and_shoulders", "three_quarter"):
+        assert not _posed(build_scene_prompt(woman(), replace(s, framing=framing)))
 
 
 # -- the body negative ------------------------------------------------------------------------------
 
-def test_the_body_negative_trades_the_eye_words_for_hands_duplicates_and_garments():
-    for negative in (BODY_NEGATIVE, BODY_NEGATIVE_LUST, VARIED_NEGATIVE, SNAP_NEGATIVE,
-                     SNAP_NEGATIVE_LUST, BODY_NEGATIVE_MIRROR, SNAP_NEGATIVE_MIRROR):
+STYLE_WORDS = {"cartoon", "anime", "painting", "illustration", "3d render", "cgi"}
+GUARDS = {"child", "teenager", "celebrity", "famous person", "nsfw", "nude", "bottomless",
+          "shirtless"}
+
+
+def test_the_body_negatives_require_the_style_words_again_beside_the_audits_lines():
+    """The owner put the quality words back where they were before the audit (2026-11-19): in a
+    profile body negative the style words are required again, as in the profile negative; the
+    face and hands, the second face and the vintage words are at 1 and the watermark at 2. The
+    audit's lines stay required where the worker's 75 tokens leave them room; the covered line
+    and the missing garments always."""
+    for negative, covered in ((BODY_NEGATIVE, _COVERED), (BODY_NEGATIVE_MIRROR, _COVERED),
+                              (BODY_NEGATIVE_LUST, _COVERED_LUST),
+                              (BODY_NEGATIVE_LUST_MIRROR, _COVERED_LUST),
+                              (VARIED_NEGATIVE, _COVERED_LUST)):
         required = _terms(negative, 0)
+        assert (covered, 0) in negative and ("bottomless, shirtless", 0) in negative
+        assert STYLE_WORDS | GUARDS <= required
         assert {"extra hands", "extra arms", "extra legs", "fused fingers", "malformed hands",
-                "deformed feet", "another person", "duplicate person", "bottomless",
-                "shirtless", "child", "teenager", "celebrity", "famous person", "nsfw",
-                "nude"} <= required
-        assert not {"cross-eyed", "lazy eye", "asymmetric eyes"} & _terms(negative)
-        # the realism words lead the optional ones, in safe.BODY_OPTIONAL's order
-        optional = [x for x in negative if x[1] > 0]
-        assert optional[:len(safe.BODY_OPTIONAL)] == list(safe.BODY_OPTIONAL)
-        assert optional[0] == ("plastic skin", 1)
-    for negative in (BODY_NEGATIVE, BODY_NEGATIVE_LUST, SNAP_NEGATIVE, SNAP_NEGATIVE_LUST):
-        assert {"mirror", "phone"} <= _terms(negative, 0)
-    assert "mirror" in _terms(VARIED_NEGATIVE, 0) and "phone" not in _terms(VARIED_NEGATIVE)
-    assert {"thong", "g-string"} <= _terms(VARIED_NEGATIVE, 0)
-    assert _terms(LUST_NEGATIVE, 0) <= _terms(BODY_NEGATIVE_LUST) | {"illustration"}
+                "deformed feet"} <= required
+        assert negative[-len(safe.BODY_OPTIONAL):] == safe.BODY_OPTIONAL
+    assert ("deformed face, bad hands", 1) in safe.BODY_OPTIONAL
+    assert ("vintage, retro, film grain, sepia, old photo", 1) in safe.BODY_OPTIONAL
+    assert ("second face, crowd, group of people", 1) in safe.BODY_OPTIONAL
+    assert ("watermark", 2) in safe.BODY_OPTIONAL
+    # the audit's lines: required where they fit, else first among the optional phrases
+    for negative in (BODY_NEGATIVE, BODY_NEGATIVE_MIRROR, BODY_NEGATIVE_LUST,
+                     BODY_NEGATIVE_LUST_MIRROR):
+        assert ("another person, duplicate person", 0) in negative
+    assert ("mirror, phone", 0) in BODY_NEGATIVE
+    assert ("mirror, phone", 1) in BODY_NEGATIVE_LUST  # the style words took its room
+    assert not {"mirror", "phone"} & (_terms(BODY_NEGATIVE_MIRROR)
+                                      | _terms(BODY_NEGATIVE_LUST_MIRROR))
+    assert ("another person, duplicate person", 1) in VARIED_NEGATIVE
+    assert ("mirror", 0) in VARIED_NEGATIVE and "phone" not in _terms(VARIED_NEGATIVE)
+    assert ("thong, g-string", 0) in VARIED_NEGATIVE
+    assert _terms(NEGATIVE, 0) <= _terms(BODY_NEGATIVE, 0)
+    assert _terms(LUST_NEGATIVE, 0) <= _terms(BODY_NEGATIVE_LUST, 0)
     assert _terms(LUST_NEGATIVE, 0) < _terms(HEAD_NEGATIVE_LUST, 0)
+    with pytest.raises(ValueError):  # the missing garments are never loosened
+        body_negative(_COVERED, loose=("bottomless, shirtless",))
+
+
+def test_the_situational_negative_has_its_anatomy_line_back():
+    """The owner put the situational negative's quality words back at their priorities before the
+    audit (2026-11-19): the anatomy line with its limbs, fingers and eye words required, "3d
+    render" required for a plain photo (2 for a lust one), the other style words at 2. The audit's
+    "bottomless, shirtless" stays required beside them, which leaves "mutated, disfigured" at 1;
+    its third hand, duplicate person, mirror and phone follow at 1."""
+    anatomy = {"extra limbs", "extra legs", "extra arms", "fused fingers", "missing fingers",
+               "extra fingers", "malformed hands", "deformed feet", "cross-eyed", "lazy eye",
+               "asymmetric eyes"}
+    for negative, lust, mirror in ((SNAP_NEGATIVE, False, False), (SNAP_NEGATIVE_LUST, True, False),
+                                   (SNAP_NEGATIVE_MIRROR, False, True),
+                                   (SNAP_NEGATIVE_LUST_MIRROR, True, True)):
+        required = _terms(negative, 0)
+        assert (_COVERED_LUST if lust else _COVERED, 0) in negative
+        assert anatomy | GUARDS | {"another person", "cartoon", "painting"} <= required
+        assert ("3d render" in required) is not lust
+        assert not {"anime", "cgi", "illustration", "mutated", "disfigured"} & required
+        optional = [x for x in negative if x[1] > 0]
+        assert optional[:3] == [("mutated, disfigured", 1), ("extra hands", 1),
+                                ("duplicate person", 1)]
+        assert (("mirror, phone", 1) in negative) is not mirror
+        for line in (("second face, crowd, group of people", 1),
+                     ("vintage, retro, film grain, sepia, old photo", 1),
+                     ("illustration, watermark", 2),
+                     ("3d render, anime, cgi" if lust else "anime, cgi", 2),
+                     ("face on screen, webcam, video call, portrait on wall", 2)):
+            assert line in negative
 
 
 KEPT = {  # what the worker's fit keeps of each body negative's optional phrases (real tokenizers)
-    "body": ["plastic skin", "airbrushed, doll", "text, logo"],
-    "body-lust": ["plastic skin", "airbrushed, doll"],
-    "varied": ["plastic skin"],
-    "snap": ["plastic skin", "airbrushed, doll", "text, logo"],
-    "snap-lust": ["plastic skin", "airbrushed, doll"],
+    "body": ["plastic skin"],
+    "body-mirror": ["plastic skin", "airbrushed, doll"],
+    "body-lust": [],
+    "varied": [],
+    "snap": ["extra hands"],
+    "snap-lust": [],
 }
 
 
 @pytest.mark.skipif(clip_bpe.tokenizers() is None, reason="no RealVisXL tokenizer files")
 @pytest.mark.parametrize("name,negative", [
-    ("body", BODY_NEGATIVE), ("body-lust", BODY_NEGATIVE_LUST), ("varied", VARIED_NEGATIVE),
+    ("body", BODY_NEGATIVE), ("body-mirror", BODY_NEGATIVE_MIRROR),
+    ("body-lust", BODY_NEGATIVE_LUST), ("varied", VARIED_NEGATIVE),
     ("snap", SNAP_NEGATIVE), ("snap-lust", SNAP_NEGATIVE_LUST)])
 def test_what_each_body_negative_keeps_and_drops_is_pinned_for_the_gpu_comparison(name, negative):
-    """The old profile negative kept "plastic skin, airbrushed, doll, deformed face, extra
-    fingers, bad hands" and "vintage, retro, film grain, sepia, old photo" beside its required
-    lines. A body negative keeps the phrases of KEPT and drops the rest of safe.BODY_OPTIONAL
-    ("deformed face, bad hands", "3d render, anime, cgi", the second-face and vintage lines,
-    "illustration, watermark"): the anatomy line names hands and fingers itself."""
+    """What the worker's fit keeps of a body negative's optional phrases beside its required set
+    (71 plain, 67 mirror, 73 lust, 74 varied, 71 and 73 situational): the style and anatomy
+    words at 0 leave little room, so most of the quality words at 1 and 2 are dropped, as on main
+    before the owner's revert."""
     kept, dropped = _worker_fit()(negative, clip_bpe.count, FIT_MAX)
     assert [t for t, pr in negative if pr > 0 and t not in dropped] == KEPT[name]
 
@@ -568,23 +624,23 @@ def test_what_each_body_negative_keeps_and_drops_is_pinned_for_the_gpu_compariso
 def test_the_owners_never_words_go_ahead_of_a_body_negatives_optional_phrases():
     a = replace(APPEARANCE, glasses="never", tattoos="none", piercings="none", jewellery="none")
     p = lusty(appearance=a)
-    for base in (BODY_NEGATIVE_LUST, VARIED_NEGATIVE, SNAP_NEGATIVE):
+    for base in (BODY_NEGATIVE_LUST, VARIED_NEGATIVE, SNAP_NEGATIVE, SNAP_NEGATIVE_LUST):
         got = negative_for(p, base)
         first = next(i for i, (_, pr) in enumerate(got) if pr > 0)
         assert got[first:first + 4] == (("glasses", 1), ("tattoo", 1), ("piercing", 1),
                                         ("jewellery", 1))
         assert [x for x in got if x not in got[first:first + 4]] == list(base)
-        if clip_bpe.tokenizers() is not None:
-            kept, _ = _worker_fit()(got, clip_bpe.count, FIT_MAX)
-            assert "glasses" in kept.split(", ")  # room where the body negative allows
+        if clip_bpe.tokenizers() is not None:  # room where the body negative allows: the
+            kept, _ = _worker_fit()(got, clip_bpe.count, FIT_MAX)  # varied set's has none
+            assert ("glasses" in kept.split(", ")) is (base is not VARIED_NEGATIVE)
     assert negative_for(lusty(), BODY_NEGATIVE_LUST) == BODY_NEGATIVE_LUST  # nothing set
     head = negative_for(p, HEAD_NEGATIVE)
     assert head[:len(HEAD_NEGATIVE)] == HEAD_NEGATIVE  # as #358 adds them there
 
 
 def test_what_he_set_her_to_wear_keeps_its_room_on_a_body_shot():
-    """The fit order: required, then the accessories (the kind of photo and the pose make way
-    for them), then her hair's style and eye colour."""
+    """The fit order: required, then the accessories (the kind of photo makes way for them),
+    then her hair's style and eye colour."""
     a = replace(APPEARANCE, glasses="always", tattoos="sleeve", piercings="nose", makeup="glam",
                 jewellery="statement")
     stored = ProfilePhoto("snapshot", "three_quarter", "a rooftop bar at night",
@@ -602,16 +658,19 @@ def test_what_he_set_her_to_wear_keeps_its_room_on_a_body_shot():
 
 @_TOKENIZERS
 @pytest.mark.parametrize("negative", [HEAD_NEGATIVE, HEAD_NEGATIVE_LUST, HEAD_NEGATIVE_MIRROR,
-                                      BODY_NEGATIVE, BODY_NEGATIVE_LUST, BODY_NEGATIVE_MIRROR,
-                                      VARIED_NEGATIVE, SNAP_NEGATIVE, SNAP_NEGATIVE_LUST,
-                                      SNAP_NEGATIVE_MIRROR, TILE_NEGATIVE],
-                         ids=["head", "head-lust", "head-mirror", "body", "body-lust",
-                              "body-mirror", "varied", "snap", "snap-lust", "snap-mirror",
-                              "tile"])
+                                      HEAD_NEGATIVE_LUST_MIRROR, BODY_NEGATIVE,
+                                      BODY_NEGATIVE_LUST, BODY_NEGATIVE_MIRROR,
+                                      BODY_NEGATIVE_LUST_MIRROR, VARIED_NEGATIVE, SNAP_NEGATIVE,
+                                      SNAP_NEGATIVE_LUST, SNAP_NEGATIVE_MIRROR,
+                                      SNAP_NEGATIVE_LUST_MIRROR, TILE_NEGATIVE],
+                         ids=["head", "head-lust", "head-mirror", "head-lust-mirror", "body",
+                              "body-lust", "body-mirror", "body-lust-mirror", "varied", "snap",
+                              "snap-lust", "snap-mirror", "snap-lust-mirror", "tile"])
 def test_every_negatives_required_set_fits_the_worker(negative):
-    """Measured with the worker's own fit and the real tokenizers (61, 67 and 71 for the body,
-    lust body and varied negatives when written): an addition at priority 0 that pushes one
-    over fails here, since the worker would refuse every such photo."""
+    """Measured with the worker's own fit and the real tokenizers (71, 73 and 74 for the body,
+    lust body and varied negatives, 71 and 73 for the situational ones, since the quality words
+    came back on 2026-11-19): an addition at priority 0 that pushes one over fails here, since
+    the worker would refuse every such photo."""
     required = ", ".join(t for t, pr in negative if pr == 0)
     assert clip_bpe.count(required) <= FIT_MAX
     kept, _ = _worker_fit()(negative, clip_bpe.count, FIT_MAX)
@@ -709,12 +768,12 @@ def test_the_default_set_shows_her_figure_in_all_four_views():
     by_view = {x.view: x for x in looks}
     assert by_view["front"].framing == by_view["side"].framing == "three_quarter"
     back = build_varied_prompt(p, by_view["behind"])
-    assert any(t in safe.POSES["behind"] and pr == 0 for t, pr in back.phrases)
-    assert back.negative == VARIED_NEGATIVE
+    assert ("from behind, looking over her shoulder", 0) in back.phrases  # its pose, the view
+    assert not _posed(back) and back.negative == VARIED_NEGATIVE
     half = {x.view: x for x in varied.compose(p, "seed", 0.5)}
     assert half["front"].framing == half["side"].framing == "upper_body"
     spec = build_varied_prompt(p, half["front"])
-    assert (safe.POSE_WAIST_UP, 1) in spec.phrases
+    assert not _posed(spec)
     assert any(t == "waist-up shot" for t, _ in spec.phrases)
 
 

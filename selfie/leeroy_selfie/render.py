@@ -340,7 +340,8 @@ def _ms(seconds: float) -> int:
 
 
 def load(data: Path, *, min_free_gib: float, device: str = "cuda",
-         identity: bool = False, backend: str = "realvisxl") -> Renderer:
+         identity: bool = False, backend: str = "realvisxl",
+         lora: Path | None = None, lora_scale: float = 1.0) -> Renderer:
     """A ready Renderer, or ReadyError: cuda (no torch or no CUDA), model (a file missing, from
     another revision or without its download record, a load that failed, no `nsfw` label),
     vram (less than min_free_gib free just before the pipeline moves to the GPU, or CUDA out of
@@ -352,7 +353,10 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
     pipeline on the CPU, before that check; the Renderer then says identity."""
     if backend == "flux1-dev":
         from .flux import load as load_flux
-        return load_flux(data, min_free_gib=min_free_gib, device=device, identity=identity)
+        return load_flux(data, min_free_gib=min_free_gib, device=device, identity=identity,
+                         lora=lora, lora_scale=lora_scale)
+    if lora is not None or lora_scale != 1.0:
+        raise ReadyError("model")
     if backend != "realvisxl":
         raise ReadyError("model")
     try:

@@ -54,8 +54,11 @@ def test_with_heat_off_the_tier_table_imports_and_the_pass_runs_as_main(h):  # n
     spec.loader.exec_module(fresh)  # the import-time asserts: the tiers partition kind's lists
     from leeroy_mind.selfies import kind, safe
     assert set(fresh.SETTING_TIER) == set(kind.LUST_SETTINGS)
-    assert not set(safe.RETIRED_SETTINGS) & set(fresh.SETTING_TIER)
     assert {fresh.SETTING_TIER[s] for s in safe.NEW_SETTINGS} == {P0}
+    # the three the audit had taken off, back on the lists (owner, 2026-11-19): their old tiers
+    assert [fresh.SETTING_TIER[s] for s in ("the mirror in her hallway",
+                                             "the front seat of her car",
+                                             "a concert crowd")] == [P0, P0, P2]
     assert _pass(h, SWIM_REPLY, None) == [LUST_SCHEMA]  # heat off: the schema itself
     assert photo(h, 102) is not None and "bikini" in photo(h, 102).outfit
 
