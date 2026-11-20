@@ -94,8 +94,9 @@ refused move is given back), one invitation pending per member.
 **Fishing** is playerbots' own "master fishing" (the strategy its bots take when their master
 fishes): in his group she fishes near him as his bots do; outside it native finds water from where
 she stands (or a spot to walk to) and puts her stay there, for 15 minutes at most or until he has
-come within 40 yards and gone farther than 60 again. A random bot without a pole is given one by
-playerbots; one without the fishing skill says she never learned. GuildFishing's single proved
+come within 40 yards and gone farther than 60 again; her weapons go back into her hands then. A
+random bot without a pole is given one by playerbots; one without the fishing skill says she
+never learned. GuildFishing's single proved
 cast (`bot_do` "go fishing") is not used: it refuses any member in a group or with a master, and
 the stay a come_to_me or go_to leaves her (`busy:string`) fences her from its Realm queue.
 

@@ -19,11 +19,13 @@
 #include "FishingAction.h"
 #include "FishValues.h"
 #include "Group.h"
+#include "Item.h"
 #include "LFGMgr.h"
 #include "Log.h"
 #include "Map.h"
 #include "MapMgr.h"
 #include "Opcodes.h"
+#include "Player.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
 #include "PositionValue.h"
@@ -31,6 +33,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <iterator>
 #include <map>
@@ -70,7 +73,11 @@ struct Hold
     WorldSession* session = nullptr;
     std::uint32_t guild = 0, human = 0;
     StringHoldState state;   // what it added and how long it lasts (LeeroyStrings.h)
+    // fish: her main hand, off hand and ranged item when the fishing began (playerbots puts a pole in her hands),
+    // given back when it ends
+    std::array<std::uint32_t, 3> weapons{};
 };
+constexpr std::array<std::uint8_t, 3> kWeaponSlots{EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND, EQUIPMENT_SLOT_RANGED};
 std::map<std::uint32_t, Hold> holds;   // world thread
 Realm::SocialSeats seats;                  // #244's lease, keyed by the string's command id
 
@@ -165,12 +172,46 @@ void EndSeat(Player* bot)
         bot->SetStandState(UNIT_STAND_STATE_STAND);
 }
 
-// Our master fishing taken back (only what we added), the rest of the hold left as it is.
+std::array<std::uint32_t, 3> Weapons(Player* bot)
+{
+    std::array<std::uint32_t, 3> out{};
+    for (std::size_t i = 0; i < kWeaponSlots.size(); ++i)
+        if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, kWeaponSlots[i]))
+            out[i] = item->GetGUID().GetCounter();
+    return out;
+}
+
+// Her weapons back in her hands where playerbots' fishing put its pole: each still hers, in her bags and equippable
+// in its old slot (main hand first, so an off hand fits again beside it). Anything else is left as it is.
+void GiveWeaponsBack(Player* bot, Hold& hold)
+{
+    for (std::size_t i = 0; i < kWeaponSlots.size(); ++i)
+    {
+        std::uint32_t const want = hold.weapons[i];
+        Item* equipped = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, kWeaponSlots[i]);
+        if (!want || (equipped && equipped->GetGUID().GetCounter() == want))
+            continue;
+        Item* item = bot->GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(want));
+        if (!item || item->GetOwnerGUID() != bot->GetGUID() || item->IsEquipped() || !Player::IsInventoryPos(item->GetPos()))
+            continue;
+        uint16 destination = 0;
+        if (bot->CanEquipItem(kWeaponSlots[i], destination, item, true) != EQUIP_ERR_OK
+            || destination != uint16((INVENTORY_SLOT_BAG_0 << 8) | kWeaponSlots[i]))
+            continue;
+        bot->SwapItem(item->GetPos(), destination);
+    }
+    hold.weapons = {};
+}
+
+// Our master fishing taken back (only what we added), and her weapons back in her hands; the rest of the hold left
+// as it is.
 void EndFishing(Hold& hold)
 {
     StringHoldState& state = hold.state;
     if (state.fishAdded && hold.ai && hold.ai->HasStrategy("master fishing", BOT_STATE_NON_COMBAT))
         hold.ai->ChangeStrategy("-master fishing", BOT_STATE_NON_COMBAT);
+    if (state.fish && hold.player)
+        GiveWeaponsBack(hold.player, hold);
     state.fish = state.fishAdded = state.met = false;
     state.fishUntil = 0;
 }
@@ -333,6 +374,8 @@ std::string Fish(Player* bot, std::string& outcome)
     }
     Hold& hold = Own(guid, bot);
     StringHoldState& state = hold.state;
+    if (!state.fish)
+        hold.weapons = Weapons(bot);   // before playerbots' fishing puts its pole in her hands
     if (water)
     {
         if (!ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
@@ -598,6 +641,9 @@ void TickHolds(std::uint64_t now, bool stringsOn, bool invitesOnNow, Player* hum
         StringHoldStep const step = DecideStringHold(state, facts);
         if (step == StringHoldStep::Drop)
         {
+            // Her weapons back from a fishing of ours while nobody else holds her body and she is not fighting.
+            if (state.fish && Fence(guid, bot).empty() && !bot->IsInCombat())
+                GiveWeaponsBack(bot, hold);
             it = holds.erase(it);   // she joined a group: its join reset her strategies, ours with them
             continue;
         }

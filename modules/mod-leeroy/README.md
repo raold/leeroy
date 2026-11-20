@@ -502,8 +502,11 @@ refusal above holds, and two kinds are added (pure policy `Lib/LeeroyStrings.h`,
   `stay` goes there (`no_water` when there is none) and she is fenced `busy:string` meanwhile.
   It ends after 15 minutes, once he has come within 40 yards and gone farther than 60 (or to
   another map, or offline), with the key at 0, or with any later string that moves her; only the
-  `master fishing` and `stay` it added are taken back (`invite_fish_ended guid= why=`). Done job
-  `fishing`.
+  `master fishing` and `stay` it added are taken back (`invite_fish_ended guid= why=`), and the
+  main hand, off hand and ranged items she held when it began go back into their slots when they
+  are still hers, in her bags and equippable there (playerbots' fishing puts its pole in her
+  hands; a group join takes them back only while nobody else holds her and she is not fighting;
+  a logout leaves the pole). Done job `fishing`.
 
 A hold records whose string it was: an invitation's lifts with `Leeroy.Invites.Enable` at 0, a
 console string's with `Leeroy.Strings.Enable`; a seat is kept while either is on. GuildFishing's
