@@ -186,6 +186,11 @@ std::vector<HazardZone> HazardZonesFor(std::vector<HazardZone> const& zones, std
     return out;
 }
 
+std::uint64_t HazardSelectionKey(std::uint64_t zonesVersion, std::uint32_t phaseMask, bool tank)
+{
+    return (zonesVersion << 33) | (static_cast<std::uint64_t>(phaseMask) << 1) | (tank ? 1u : 0u);
+}
+
 bool InHazard(HazardPoint p, HazardZone const& zone, float reach)
 {
     return SameFloor(p, zone) && Distance2d(p, zone.x, zone.y) <= zone.radius + reach;

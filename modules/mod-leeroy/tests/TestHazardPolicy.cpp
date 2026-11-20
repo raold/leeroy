@@ -644,3 +644,14 @@ LEEROY_TEST(Hazard_AZoneInAnotherPhaseNeverConcernsABody)
     CHECK(!HazardAt({0, 0, 0}, HazardZonesFor({physical}, 32, false), kReach).has_value());
     CHECK(HazardAt({0, 0, 0}, HazardZonesFor({physical}, 1, false), kReach).has_value());
 }
+
+// Review of #392: a follow goal memoised in one realm must not be reused in the other, nor across a tank reading.
+LEEROY_TEST(Hazard_AnAnswerIsMemoisedPerPhaseAndTankReading)
+{
+    std::uint64_t const physical = HazardSelectionKey(7, 1, false);
+    CHECK_EQ(physical, HazardSelectionKey(7, 1, false));
+    CHECK(physical != HazardSelectionKey(7, 32, false)); // into the twilight realm
+    CHECK(physical != HazardSelectionKey(7, 1, true));   // now read as a tank
+    CHECK(physical != HazardSelectionKey(8, 1, false));  // the zones changed
+    CHECK(HazardSelectionKey(1, 0xFFFFFFFFu, true) != HazardSelectionKey(2, 0xFFFFFFFFu, true));
+}

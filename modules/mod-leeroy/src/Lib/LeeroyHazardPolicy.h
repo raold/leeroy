@@ -90,6 +90,9 @@ struct HazardZone
 bool HazardApplies(HazardZone const& zone, std::uint32_t phaseMask, bool tank);
 // The zones that concern one body, in order.
 std::vector<HazardZone> HazardZonesFor(std::vector<HazardZone> const& zones, std::uint32_t phaseMask, bool tank);
+// What an answer worked out from one body's share of the zones is memoised against: the snapshot's zones version
+// with the phases and the tank reading that chose the share, so a body that changes realm or role asks again.
+std::uint64_t HazardSelectionKey(std::uint64_t zonesVersion, std::uint32_t phaseMask, bool tank);
 
 struct HazardPoint
 {

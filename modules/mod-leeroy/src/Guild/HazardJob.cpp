@@ -435,9 +435,10 @@ std::uint64_t NowMs()
 }
 
 // Map thread. The zones on the bot's map that concern it (its phases; an add's own aura not for a tank) when the
-// last pass found it aware, else null; `hold` keeps them alive, and `own` holds the bot's share when it differs.
+// last pass found it aware, else null; `hold` keeps them alive, `own` holds the bot's share when it differs, and
+// `selection` is what answers from that share are memoised against (HazardSelectionKey).
 std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shared_ptr<Snapshot const>& hold,
-    std::vector<HazardZone>& own)
+    std::vector<HazardZone>& own, std::uint64_t& selection)
 {
     if (!enabled.load(std::memory_order_relaxed))
         return nullptr;
@@ -459,6 +460,7 @@ std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shar
         return nullptr;
     std::uint32_t const phase = bot->GetPhaseMask();
     bool const tank = hold->tanks.contains(member->first);
+    selection = HazardSelectionKey(hold->version, phase, tank);
     if (std::all_of(zones->second.begin(), zones->second.end(),
             [&](HazardZone const& zone) { return HazardApplies(zone, phase, tank); }))
         return &zones->second;
@@ -499,7 +501,8 @@ public:
         PlayerbotAI* ai = nullptr;
         std::shared_ptr<Snapshot const> hold;
         std::vector<HazardZone> own;
-        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold, own);
+        std::uint64_t selection = 0;
+        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold, own, selection);
         if (!zones)
             return false;
         std::uint32_t const guid = bot->GetGUID().GetCounter();
@@ -507,12 +510,12 @@ public:
         HazardPoint const spot{x, y, z};
         HazardPoint const at = PointOf(bot);
 
-        Memo goal{hold->version, spot, false, spot};
+        Memo goal{selection, spot, false, spot};
         bool known = false;
         {
             std::lock_guard<std::mutex> lock(memoLock);
             auto const found = spotMemo.find(guid);
-            if (found != spotMemo.end() && found->second.version == hold->version && Close(found->second.asked, spot))
+            if (found != spotMemo.end() && found->second.version == selection && Close(found->second.asked, spot))
             {
                 goal = found->second;
                 known = true;
@@ -531,7 +534,7 @@ public:
 
         HazardPoint target = goal.answer;
         bool changed = goal.moved;
-        if (auto const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, hold->version))
+        if (auto const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, selection))
         {
             target = *waypoint;
             changed = true;
@@ -549,7 +552,8 @@ public:
         PlayerbotAI* ai = nullptr;
         std::shared_ptr<Snapshot const> hold;
         std::vector<HazardZone> own;
-        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold, own);
+        std::uint64_t selection = 0;
+        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold, own, selection);
         if (!zones)
             return false;
         std::uint32_t const guid = bot->GetGUID().GetCounter();
@@ -567,7 +571,7 @@ public:
         }
         std::uint64_t const now = NowMs();
 
-        Memo memo{hold->version, at, false, at};
+        Memo memo{selection, at, false, at};
         std::optional<HazardPoint> goal;
         bool known = false;
         bool yielded = false;
@@ -583,7 +587,7 @@ public:
                 memo = found->second; // keep walking to the exit already chosen: no new path every tick
                 known = true;
             }
-            else if (found != exitMemo.end() && !found->second.moved && found->second.version == hold->version
+            else if (found != exitMemo.end() && !found->second.moved && found->second.version == selection
                 && Close(found->second.asked, at))
                 known = true; // nothing reachable a moment ago
             else if (HazardEntry const entry = NoteHazardEntry(guard, inside, now); entry != HazardEntry::Exit)
