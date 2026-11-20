@@ -60,3 +60,42 @@ def product_period(seconds: float) -> ProductPeriod:
 def local_write_day(seconds: float) -> str:
     """Return the local calendar date at the supplied actual write time."""
     return _local(seconds).date().isoformat()
+
+
+SERVER_TIME = "server time"  # how WoW players say a raid's time; members live in other zones
+EVENING_HOUR = 17  # from here a day's time reads as its night ("tonight", "tomorrow night")
+LATE_HOUR = 6  # before here a time is the night before's, late ("late tonight, at 1am")
+
+
+def clock_words(when: datetime) -> str:
+    """A time as players type it: "9pm", "9:30pm", "midnight", "noon"."""
+    if when.minute == 0 and when.hour in (0, 12):
+        return "midnight" if when.hour == 0 else "noon"
+    hour = when.hour % 12 or 12
+    minutes = f":{when.minute:02d}" if when.minute else ""
+    return f"{hour}{minutes}{'am' if when.hour < 12 else 'pm'}"
+
+
+def when_words(at: float, local: datetime) -> str:
+    """When a calendar event is, said from `local` (now, aware) the way the guild would: "tonight
+    at 9pm server time", "tomorrow night at 8pm server time", "on Thursday at 9pm server time",
+    and a time after midnight as the night before's, late: "late tonight, at 1am server time"
+    (2026-11-20: "Raid night at 03:00" was read as a 3am raid). A 12-hour clock and the server's
+    zone, never a bare "03:00"."""
+    when = datetime.fromtimestamp(at, local.tzinfo)
+    clock = f"{clock_words(when)} {SERVER_TIME}"
+    if when.hour < LATE_HOUR:  # the night before's, late
+        night = (when - timedelta(hours=LATE_HOUR)).date()
+        tonight = (local - timedelta(hours=LATE_HOUR)).date()
+        days = (night - tonight).days
+        said = ("tonight" if days == 0 else "tomorrow night" if days == 1
+                else f"on {night:%A} night" if 1 < days < 7
+                else f"on the night of {night:%A} {night.day} {night:%B}")
+        return f"late {said}, at {clock}"
+    days = (when.date() - local.date()).days
+    evening = when.hour >= EVENING_HOUR
+    said = (("tonight" if evening else "today") if days == 0
+            else ("tomorrow night" if evening else "tomorrow") if days == 1
+            else f"on {when:%A}" if 1 < days < 7
+            else f"on {when:%A} {when.day} {when:%B}")
+    return f"{said} at {clock}"

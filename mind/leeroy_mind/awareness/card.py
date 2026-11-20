@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 
 from leeroy_mind.bodies import ALL
+from leeroy_mind.guild.raids import shown_kills
 from leeroy_mind.claims.store import nearest
 from leeroy_mind.claims.visibility import claim_visible
 from leeroy_mind.discord.channels import (OFFICER_GAME, is_private, is_discord, is_restricted,
@@ -628,7 +629,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         raids = []  # the grounding card's
     add("raid", "Guild raid", [f"{'Recorded active' if r['ended'] is None else 'Last'} raid" +
         (f" #{r['raid_id']} " if context.names is None else " ") +
-        f"({_text(r['raid_key'], 80)}): {r['kills']} kills, {r['wipes']} wipes" for r in raids])
+        f"({_text(r['raid_key'], 80)}): {shown_kills(r['raid_key'], r['kills'])} kills, "
+        f"{r['wipes']} wipes" for r in raids])
     signup = ",coalesce((SELECT json_group_array(json_array(guid,status)) FROM " \
         f"(SELECT guid,status FROM realm_rsvp WHERE event=c.event_id ORDER BY guid LIMIT {SIGNUPS_PER_EVENT})), '[]') AS signups" \
         if "realm_rsvp" in reader.tables else ",'[]' AS signups"

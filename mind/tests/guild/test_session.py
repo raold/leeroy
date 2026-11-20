@@ -606,3 +606,17 @@ async def test_due_decay_runs_with_attendance_at_open_or_at_attend(setup, attend
     assert len([text for _, _, text in fake.said if text.startswith("dkp updated")]) == 1
     assert fake.conn.execute("SELECT COUNT(*) FROM guild_attendance WHERE raid_id=?",
                              (session.raid_id,)).fetchone()[0] == len(plan.members) + 1 + len(plan.bench)
+
+
+@_run_async
+async def test_an_instance_scripts_step_is_no_kill(setup):
+    """A SetBossState step that is no fight (wow.NON_FIGHT_STEPS: the Sindragosa gauntlet here,
+    Halion's intro steps in the Ruby Sanctum) counts no kill and pays no DKP (2026-11-20: Ruby
+    Sanctum showed "7 kills")."""
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    await session.on_boss(Boss(0, 631, 77, 13, "", "killed", (101, 102)))
+    assert session.kills == 0
+    assert ports.conn.execute("SELECT COUNT(*) FROM dkp_ledger WHERE reason='kill'").fetchone()[0] == 0
+    await session.on_boss(Boss(0, 631, 77, 11, "Sindragosa", "killed", (101, 102)))
+    assert session.kills == 1

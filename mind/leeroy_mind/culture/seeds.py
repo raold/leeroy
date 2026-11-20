@@ -203,7 +203,7 @@ def meme_seeds(store, *, now, local, personas, human, library=None, ident=None) 
     """Text memes and copypastas for #memes: one subject an active, public running joke (the
     same rebuilt fact and butt as its joke seed, culture_seeds), and the guild's last raid with
     wipes. Together they weigh about one ordinary subject."""
-    from leeroy_mind.guild.raids import CATALOG
+    from leeroy_mind.guild.raids import CATALOG, shown_kills
     out = [Seed(f"meme:joke:{s.key[5:]}", "meme", ("memes",), s.fact, s.about)
            for s in _culture_seeds(store, now=now, personas=personas, human=human, library=library, ident=ident)]
     row = store.conn.execute("SELECT raid_id,raid_key,size,kills,wipes FROM guild_raid WHERE ended BETWEEN ? AND ? "
@@ -211,7 +211,8 @@ def meme_seeds(store, *, now, local, personas, human, library=None, ident=None) 
     if row is not None and row[1] in CATALOG:
         rid, key, size, kills, wipes = row
         out.append(Seed(f"meme:raid:{rid}", "meme", ("memes",),
-                        f"Last raid: {CATALOG[key].name} {size}, {wipes} wipes and {kills} kills"))
+                        f"Last raid: {CATALOG[key].name} {size}, {wipes} wipes and "
+                        f"{shown_kills(key, kills)} kills"))
     weight = min(1.0, 1 / len(out)) if out else 1.0
     return [replace(s, weight=weight) for s in out]
 

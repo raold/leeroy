@@ -11,7 +11,7 @@ import sqlite3
 
 from leeroy_mind.claims.visibility import audience_class
 from leeroy_mind.discord import layout
-from leeroy_mind.guild.raids import CATALOG
+from leeroy_mind.guild.raids import CATALOG, shown_kills
 from leeroy_mind.memory.privacy import STRICTEST, effective_scopes
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.wow import boss_name
@@ -138,10 +138,10 @@ def _read(kind, source):
 def _raid_before(conn, c):
     row = conn.execute("SELECT id,title,at FROM realm_calendar WHERE state='posted' AND kind='raid' "
                        'AND at>=? AND at<? ORDER BY at,id LIMIT 1', (c.now, c.now+43200)).fetchone()
-    if row:
-        at = datetime.fromtimestamp(row[2], c.local.tzinfo)
+    if row:  # "Raid night tonight at 9pm server time" (when_words: never a bare "03:00")
+        from leeroy_mind.realm.calendar_time import when_words
         yield Seed(f'raid_before:{row[0]}', 'raid_before', ('raid-planning', 'general'),
-                   f'Raid night: {row[1]} at {at:%H:%M}')
+                   f"{' '.join(str(row[1]).split())} {when_words(row[2], c.local)}")
 
 
 def _raid_after(conn, c):
@@ -150,7 +150,8 @@ def _raid_after(conn, c):
             'WHERE ended BETWEEN ? AND ? ORDER BY ended DESC LIMIT 16', (c.now-64800, c.now)):
         raid = CATALOG.get(key)
         yield Seed(f'raid_after:{rid}', 'raid_after', ('logs', 'loot-and-dkp', 'strategy', 'general'),
-                   f'Last raid: {raid.name if raid else key} {size}, {kills} kills, {wipes} wipes, led by {c.name(lead)}',
+                   f'Last raid: {raid.name if raid else key} {size}, {shown_kills(key, kills)} kills, '
+                   f'{wipes} wipes, led by {c.name(lead)}',
                    (lead,) if lead in c.cast else ())
 
 

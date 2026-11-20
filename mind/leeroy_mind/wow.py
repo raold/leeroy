@@ -150,6 +150,12 @@ def is_raid_fight(map_id: int, boss_id: int) -> bool:
     return map_id in RAID_MAPS and (map_id, boss_id) not in NON_FIGHT_STEPS
 
 
+def raid_fights(map_id: int) -> int:
+    """How many fights a raid map has (BOSS_NAMES less NON_FIGHT_STEPS): the most kills one run
+    of it can count (Ruby Sanctum 4, never the 7 its instance script's steps add up to)."""
+    return sum(1 for m, b in BOSS_NAMES if m == map_id and (m, b) not in NON_FIGHT_STEPS)
+
+
 # The battlegrounds and arenas by BattlegroundTypeId (bg_end's bg_type): a member's evening names
 # the one she played, never a zone it is not in (talk/reactions.py, 2026-11-15). Random (32) and
 # the custom Slavery Valley (31) are a battleground with no name here.

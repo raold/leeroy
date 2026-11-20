@@ -218,8 +218,10 @@ def _raid_line(r: _Reader, raid, sp: Speaker, now: float) -> str | None:
     known = CATALOG.get(raid["raid_key"])
     if known is None or type(raid["size"]) is not int:
         return None
+    from leeroy_mind.guild.raids import shown_kills
     what = f"{known.name} {_difficulty_words(raid['size'], bool(raid['heroic']))}"
-    tally = (f"{raid['kills']} kill{'s' if raid['kills'] != 1 else ''}, "
+    kills = shown_kills(raid["raid_key"], raid["kills"])  # never more than its fights
+    tally = (f"{kills} kill{'s' if kills != 1 else ''}, "
              f"{raid['wipes']} wipe{'s' if raid['wipes'] != 1 else ''}")
     seat = r.rows("SELECT status FROM guild_attendance WHERE raid_id=? AND guid=?",
                   (raid["raid_id"], sp.guid))
@@ -425,7 +427,7 @@ def _next_raid_line(r: _Reader, sp: Speaker, now: float) -> str | None:
 
 
 def _last_kills_line(r: _Reader, now: float) -> str | None:
-    from leeroy_mind.guild.raids import CATALOG
+    from leeroy_mind.guild.raids import CATALOG, shown_kills
     rows = r.rows("SELECT raid_key,size,heroic,kills,started,ended FROM guild_raid "
                   "WHERE kills>0 AND started<=? ORDER BY started DESC,raid_id DESC LIMIT 1", (now,))
     if not rows:
@@ -435,8 +437,9 @@ def _last_kills_line(r: _Reader, now: float) -> str | None:
     if known is None or type(row["size"]) is not int:
         return None
     when = row["ended"] if row["ended"] is not None else row["started"]
+    kills = shown_kills(row["raid_key"], row["kills"])
     return (f"Last kills: {known.name} {_difficulty_words(row['size'], bool(row['heroic']))}, "
-            f"{row['kills']} boss{'es' if row['kills'] != 1 else ''}, {_ago(now - when)} ago.")
+            f"{kills} boss{'es' if kills != 1 else ''}, {_ago(now - when)} ago.")
 
 
 def card_lines(conn: sqlite3.Connection, sp: Speaker, now: float, *,

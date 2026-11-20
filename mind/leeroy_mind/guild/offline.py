@@ -21,7 +21,7 @@ from .lines import public_text
 from .loot import _get, _put
 from .protocol import StartOfflineRaid, StopOfflineRaid
 from .raid_night import RaidRun
-from .raids import split_key
+from .raids import shown_kills, split_key
 from .session import RaidPlan, RaidSession
 from .store import attendance_counts, bench_streaks, last_run
 
@@ -967,10 +967,13 @@ class OfflineRaids:
         try:
             if self.session is not None:
                 session = self.session
+                # native's count holds the instance script's steps too (Ruby Sanctum's three
+                # Halion intro steps made "7 kills"): never more than the map's fights
+                kills = shown_kills(session.plan.raid_key, terminal["kills"])
                 with self.ports.conn:
                     self.ports.conn.execute("UPDATE guild_raid SET kills=MAX(kills,?),wipes=MAX(wipes,?) WHERE raid_id=?",
-                                            (terminal["kills"], terminal["wipes"], session.raid_id))
-                session.kills = max(session.kills, terminal["kills"])
+                                            (kills, terminal["wipes"], session.raid_id))
+                session.kills = max(session.kills, kills)
                 session.wipes = max(session.wipes, terminal["wipes"])
                 if raided and not self._owned.get("attended"):
                     await self._attend()
