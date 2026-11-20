@@ -355,6 +355,30 @@ Neither code is in `HARD_CODES`, `DROP_CODES` or the pipeline's `CUT_CODES`: a b
 that still has one after its rewrite is dropped `guard_rewrite_refused`, and an answer owed to
 him is never dropped for it (the best draft is kept, as for every soft code).
 
+## WoW turns (`[talk] wow_topic`, 2026-11-20)
+
+`Draft.wow_topic` is set by the live adapter on a WoW turn with `[talk] wow_topic` on
+(`talk/wowtopic.py`: grounding's `wow_turn` channels, and say or yell while he raids; never a
+whisper, a DM, a group DM or #general). On such a draft only:
+
+- `chat_register` (`register.py`), soft: the draft reads as written prose, not raid or guild
+  chat: a first sentence of 6+ words that opens with a capital, ends in "." or "!", holds a pair
+  chat contracts ("it is", "do not", "I am", "cannot") with no contraction anywhere; a line
+  opening "It is" (never "it is what it is"); a pet name ("honey", "hun", "sweetie", "darling",
+  "babe" anywhere, "dear", "love", "sugar", "hon" only as an address); a written stage note (a
+  bracketed label such as "[objection: ...]", never a recipe's "[Pattern: ...]", or one word
+  alone in parentheses written as a note, "(Tidy.)", never "(lol)"). One rewrite with
+  `HINTS['chat_register']`; never in `HARD_CODES`, `DROP_CODES` or `CUT_CODES`, so an answer
+  owed to him is never dropped for it.
+- Her own words (`says`) are rationed tighter: once in her last 9 lines of the conversation is
+  enough (`phrase_conversation`), and so are two of her lines of the last day anywhere
+  (`phrase_day`). The prompt side leaves a word of hers she used in one of her last 8 lines out
+  of the voice block's "You say, only now and then" on those turns (`personas.speech.unused`).
+
+The stock list gained generic talk ("rng gods", "fingers crossed": common), theatre metaphors
+("curtain call", "standing ovation", "take a bow", "steal the show", ...) and two scripted
+openers ("okay so listen", "second thing first"), the last two groups slop, for every turn.
+
 ## Live adapter
 
 `[guards] enabled = true` admits review independently of `[talk] aware = true`.

@@ -40,6 +40,7 @@ coherence = false              # conversations hold together (talk/README.md): h
 coherence_length = false       # the length rule on game lines (talk/length.py): a long answer to his question kept, never cut; read at start and at his login
 wow_grounding = true           # raid and guild turns get facts (her class and role, the raid, its boss, the last wipe, loot and DKP), raid words and her own earlier lines; never a whisper or a DM
 wow_exemplars_before = "2026-11-19T14:22:45-05:00"  # her example lines are from before this (the live model's switch from Orion)
+wow_topic = true               # raid and guild turns stay on the game: no unasked life topics, chat register, short game lines, bids in DKP
 invites = true                 # his invitations in game ("come to the inn", "let's go fishing"): her answer and her body agree (invites/README.md)
 
 [life]
@@ -147,6 +148,8 @@ class TalkCfg:
     wow_grounding: bool = True
     # [talk] wow_exemplars_before: an ISO time with its offset; her example lines are older
     wow_exemplars_before: str = EXEMPLARS_BEFORE
+    # [talk] wow_topic: talk/wowtopic.py on raid and guild turns (anything but true: off)
+    wow_topic: bool = True
     invites: bool = True  # [talk] invites: invites/service.py (a non-boolean: off, logged once)
 
 
@@ -274,6 +277,7 @@ _RULES = {
         "coherence": (lambda v: type(v) is bool, "a boolean"),
         "coherence_length": (lambda v: type(v) is bool, "a boolean"),
         "wow_grounding": (lambda v: type(v) is bool, "a boolean"),
+        "wow_topic": (lambda v: type(v) is bool, "a boolean"),
         "wow_exemplars_before": (lambda v: exemplars_time(v) is not None,
                                  "an ISO date and time with its UTC offset"),
         "invites": (lambda v: type(v) is bool, "a boolean"),
@@ -354,11 +358,10 @@ def _build(data: dict, source: str) -> MindConfig:
                                               "coherence", "coherence_length")
                     and type(v) is not bool):
                 v = False
-            if section == "talk" and key == "wow_grounding" and type(v) is not bool:
+            if section == "talk" and key in ("wow_grounding", "wow_topic") and type(v) is not bool:
                 if (key, repr(v)) not in _WARNED:  # off, logged once (each login reads it again)
                     _WARNED.add((key, repr(v)))
-                    log.warning("talk_wow_grounding_invalid key=wow_grounding want=a boolean "
-                                "default=false")
+                    log.warning("talk_%s_invalid key=%s want=a boolean default=false", key, key)
                 v = False
             if section == "talk" and key == "wow_exemplars_before" and not check(v):
                 if (key, repr(v)) not in _WARNED:  # the default, logged once

@@ -1267,3 +1267,81 @@ copy of the live mind.db (2026-11-20, 151 cast members, a raid 10 hours old): ca
 
 Rollback without code: `wow_grounding = false` under `[talk]`, then restart the mind (or wait for
 his next login). Older code ignores both keys with an unknown-key warning.
+
+# WoW turns stay on WoW (`[talk] wow_topic`, 2026-11-20)
+
+A blind A/B of 176 WoW-context turns (the new live model against Orion, raw drafts from before
+`wow_grounding`) found the WoW facts on par and the talk worse: Orion won usefulness 67-25 and
+naturalness 51-19. The new model drifted into real life mid-raid (33 against 7: a loot channel's
+answer turned into a story from work) because it took her voice sheet's "Unasked, you bring up"
+hooks literally; wrote generic phrases (15), a formal written register (14: capitalised full
+sentences without contractions, "It is ...", "dear"), ran long (12; 8 of 96 game turns hit
+num_predict, mostly her flirt mid-raid), said persona tics verbatim (6) and mixed DKP and gold
+in loot replies. `[talk] wow_topic` (default **true**; anything but a boolean is off, logged once;
+read at each compose, so a login reload applies it; no migration or native rebuild) answers each
+(`talk/wowtopic.py`, `guards/register.py`, `talk/entities.py`).
+
+**Which turns.** A WoW turn: `grounding.wow_turn`'s channels (game guild, officer, party, raid
+and raid warning; the WoW Discord channels; the raid, role, class, loot, lore and officers' voice
+rooms), plus say and yell while he is in his raid (`Pipeline._wow_topic_on`). Never a whisper, a
+DM, a group DM, #general or any other channel: those prompts and lines are byte for byte what they
+were (`tests/test_wow_topic_pipeline.py`, the tuning goldens).
+
+**The topic hold.** A WoW turn whose instruction is the channel's business is held: an answer to
+his line or a member's, a follow-on, an aside, a raid call or reaction and a gz
+(`wowtopic.HELD_KINDS`). Not an opener (its topic is its instruction), a bit, a flirt, a greeting,
+a goodbye or an emote's answer, and never a reply to a line that asks about her life ("how was
+work", "kids asleep?": `asks_life`, which leaves out what the game says too: "good job", "the
+boss", "cat form", "my pet"). A held turn's voice block leaves out the topics she brings up
+unasked, her Discord "where you live" line is left out, and its instruction ends with one line:
+`Stay on what this channel is about (the raid): bring up your job, home or day only if someone
+asks.` (what each channel is about: `wowtopic.about`). Her card's "About you" head (household,
+job, rhythm) stays: the identity audit's rule is that what is off the card gets invented.
+On the raid's or the party's channel while he raids, an opener the engine draws brings up a game
+topic of hers (what she wants in game, else the raid tonight; `TurnMeta.game_topic`) instead of
+her life, and is held with no "On your mind lately" or "Tonight so far".
+
+**Register and tics.** On a WoW draft the guards add the soft `chat_register` (guards/README.md:
+formal prose, "It is ...", pet names, written stage notes) and ration her own words tighter (once
+in the conversation, twice a day); the prompt leaves a word of hers she used in one of her last
+8 lines (`SAYS_RECENT`) out of the voice block's "You say, only now and then". The stock list
+gained generic talk ("rng gods", "fingers crossed": common), theatre metaphors and two scripted
+openers (slop) for every turn.
+
+**Length, game channels only** (guild, officer, party, raid, raid warning; never a whisper,
+Discord or a voice room). A tighter num_predict (`wowtopic.predict`: 1.6 tokens a word of her
+turn plus 16, between 24 and the preset's 80; a line cut off by it goes back to its last full
+sentence, `wow_line_cutoff`), and a draft past her usual words (`_word_budget`) is cut back to
+its first line, else its first sentence, else its leading whole clauses, never under 3 words or
+her sheet's low end (`wow_length_trim: ... words= kept= limit=`). Her flirt mid-raid follows the
+same cap. Never an answer to a line that asks something (the owner's rule: a cut never takes his
+answer; main's "long" tell asks again as before), and never with `[talk] coherence_length` on:
+the length rule owns game lines then, so this rule is off and the two never fight.
+
+**Loot.** A turn in a loot channel (`#loot-and-dkp`, the Loot & DKP room) or whose line, topic or
+instruction talks loot (bids, DKP, ms/os, rolls, tokens, a bracketed item) is told `Loot here goes
+by DKP: bids are DKP, never gold, and bind-on-pickup drops aren't traded.`
+
+**The mind's own instruction text** (every turn, no switch: `Pipeline._known_only`,
+`talk/entities.py`): a turn's instruction and an opener's topic lose each sentence that names a
+boss or a battleground the library does not know (the "game name" tell's reading) or a bracketed
+item the item table has no entry for (`instruction_entity_dropped: guid= kind= n=`, the count
+only). Members' chat is never filtered: it is what Chat shows. Without the library nothing moves.
+
+**What the mind fed it wrong** (no switch). Culture's loot wishes and the raid's bids judge an
+item by its stats against her role and family (`guild/upgrades.py suits`): a stat of another
+family's and none of hers is no item of hers, a tank's stats are a tank's alone, a healer wears no
+hit, expertise or armour penetration, and a trinket must show a stat of hers (its worth is its
+proc, which the armory does not read): a trinket of crit rating alone is nobody's wish. A raid's
+kills are never more than its map's fights (`wow.raid_fights`, `guild.raids.shown_kills`): the
+session counts no kill for an instance script's step (Halion's intro, a gauntlet:
+`wow.NON_FIGHT_STEPS`), an offline raid's native count is capped, and the cards, seeds and
+wrap-up show the capped number (Ruby Sanctum's "7 kills" was its 4 fights and 3 intro steps).
+The calendar desk's raid night starts at the evening's first login, never at a relog after
+midnight (`realm/calendar.py raid_nights`: such relogs had posted raid nights at 03:00), and
+the time is said in words with the server's zone (`realm.calendar_time.when_words`: "Raid night
+tonight at 9pm server time", "late tonight, at 1am server time"), never a bare "03:00".
+
+Rollback without code: `wow_topic = false` under `[talk]`, then restart the mind (or wait for his
+next login). The upstream fixes and the instruction check have no switch. Older code ignores the
+key with an unknown-key warning.

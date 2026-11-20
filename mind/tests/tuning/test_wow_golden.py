@@ -1,7 +1,14 @@
-"""The WoW golden ([talk] wow_grounding, talk/grounding.py; 2026-11-20): the plain tuning scenario
-over invented raid rows (scenario.wow_rows: a Naxxramas 25 ended three hours before it, a wipe to
-Frost Blast, Belra's loot, everyone's DKP and attendance, two days old guild and raid lines of
-each member, one slang term), recorded in golden_wow.json (scenario.write_golden_wow).
+"""The WoW golden ([talk] wow_grounding, talk/grounding.py, and [talk] wow_topic, talk/wowtopic.py;
+2026-11-20): the plain tuning scenario over invented raid rows (scenario.wow_rows: a Naxxramas 25
+ended three hours before it, a wipe to Frost Blast, Belra's loot, everyone's DKP and attendance,
+two days old guild and raid lines of each member, one slang term), recorded in golden_wow.json
+(scenario.write_golden_wow) with both switches on, as mind.toml has them by default.
+
+[talk] wow_topic adds the topic hold line to the instruction of each guild answer and follow-on
+(32 of the 35 guild prompts; the three greetings are not held) and nothing else: the scenario's
+cast has no voice sheet, nobody talks loot in game words and every draft fits her line.
+Re-recorded for it with a diff helper (then deleted) that showed exactly that line added to those
+32 prompts, no other prompt moving and the same lines sent.
 
 What it pins: each guild prompt (35 of the 41) gains the three grounding sections after the
 instruction's preamble blocks, in this order: "Raid and guild (facts; ...)" with her class and
@@ -15,6 +22,7 @@ with the switch off, record golden_prompts.json exactly."""
 import pytest
 
 from leeroy_mind.talk import grounding as g
+from leeroy_mind.talk import wowtopic
 from tuning.scenario import engine_clock, golden, golden_wow, record_wow
 
 
@@ -39,9 +47,12 @@ def _channels(sent, n):
     return [by_n[min(k for k in by_n if k >= i + 1)] for i in range(n)]
 
 
+HOLD = " " + wowtopic.hold_text("guild")  # always after a word of the instruction
+
+
 def strip(prompt):
-    """A prompt without its grounding sections."""
-    return "\n\n".join(block for block in prompt.split("\n\n")
+    """A prompt without its grounding sections and without the topic hold line."""
+    return "\n\n".join(block for block in prompt.replace(HOLD, "").split("\n\n")
                        if not block.startswith((g.CARD_HEAD, g.EXEMPLAR_HEAD, "Raid words: ")))
 
 
@@ -57,3 +68,6 @@ def test_only_the_guild_prompts_gain_the_sections_and_nothing_else_moves():
         assert on != off and strip(on) == off
         assert g.CARD_HEAD in on and g.GLOSSARY in on
         assert on.index(g.CARD_HEAD) < on.index(g.GLOSSARY)
+        greeting = "just logged on. Greet" in on
+        assert (HOLD in on) is not greeting  # every guild answer is held, no greeting is
+        assert wowtopic.DKP_RULE not in on

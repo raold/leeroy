@@ -112,6 +112,7 @@ from leeroy_mind.guards.pronouns import fix as fix_pronouns
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk import grounding
 from leeroy_mind.talk.grounding import wow_turn
+from leeroy_mind.talk import wowtopic
 from leeroy_mind.talk.gearfit import for_speaker as facts_for_speaker
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -191,6 +192,8 @@ QUIET_S = 120.0
 # medium (her DMs in a whisper, their whispers in a DM), at most PAIR_LINES from PAIR_WINDOW_S
 PAIR_LINES = 6
 PAIR_WINDOW_S = 86400.0
+# [talk] wow_topic: her own words used in this many of her last lines stay out of her voice block
+SAYS_RECENT = 8
 # [talk] wow_grounding: her example pool is read again after this long (the night's rewards move
 # it), and at most this many members' pools are kept
 WOW_POOL_S, WOW_POOLS = 3600.0, 512
@@ -587,6 +590,11 @@ class TurnMeta:
     # showed, which the guards' phrase cooldown never lets her copy (Draft.exemplars)
     wow_grounded: bool = False
     wow_exemplars: tuple[str, ...] = ()
+    # [talk] wow_topic (talk/wowtopic.py): an opener the engine drew a game topic for (on the
+    # raid's or party's channel while he raids: the topic hold holds it), and a game turn's
+    # num_predict (0: the preset's), which _generate_serial sets and _ask reads
+    game_topic: bool = False
+    wow_predict: int = 0
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); for a turn carrying an
     # outreach item, its words (outreach.service); "" for every other turn
@@ -1099,7 +1107,8 @@ class Pipeline:
                                     her=self._her_place(p), instant=self.clock.local(),
                                     apart=apart)
 
-    def _voice(self, turn: Turn, meta: TurnMeta, p: Persona, *, live: bool) -> tuple[list[str], str]:
+    def _voice(self, turn: Turn, meta: TurnMeta, p: Persona, *, live: bool, hooks: bool = True,
+               fresh_says: bool = False) -> tuple[list[str], str]:
         """Her voice sheet for this turn (personas/speech.py; ([], "") without one): the sample
         lines it shows and the block that goes just before the instruction. How she is with him
         only on a turn that is his, her stance only where only he reads and only while her
@@ -1107,12 +1116,19 @@ class Pipeline:
         the first by the turn's want (the draw's; on an answer that gets a beat, its lean), the
         second from a seeded stream of its own (voice, night, her, the minute, his line or
         post: never the engine's rng), and never a sample she already sent. A live turn's
-        recipe is tagged `voice.sheet-1` (learn.recipe.voice_used)."""
+        recipe is tagged `voice.sheet-1` (learn.recipe.voice_used). Without `hooks` ([talk]
+        wow_topic's hold) the topics she brings up unasked are left out; with `fresh_says` (a WoW
+        turn) so are her own words she used in one of her last SAYS_RECENT lines (speech.unused),
+        so a tic of hers is not handed back to her on every raid line."""
         speech = getattr(p, "speech", None)
         if speech is None:
             return [], ""
         from leeroy_mind.personas.speech import (RECIPE_TAG, pick_samples, stance_current,
-                                                 voice_block)
+                                                 unused, voice_block)
+        if not hooks or fresh_says:
+            said = [text for _, _, text in self._own_of(turn.speaker)][-SAYS_RECENT:]
+            speech = replace(speech, brings_up=speech.brings_up if hooks else (),
+                             says=unused(speech.says, said) if fresh_says else speech.says)
         to_him = self._aimed_at_him(turn) or self._private_to_him(turn)
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
@@ -3006,9 +3022,15 @@ class Pipeline:
             if real and live:
                 self._real_name_hold = meta.turn_id
 
+        # [talk] wow_topic (talk/wowtopic.py): a WoW turn whose instruction is the channel's
+        # business is held to it (no unasked topics of hers, no Discord "where you live", the
+        # hold line), and her own words she said lately are left out of her voice block
+        topic_on = self._wow_topic_on(turn)
+        hold = topic_on and wowtopic.held(turn.kind, trigger or his, game_topic=meta.game_topic)
         # a member with a voice sheet shows it by the instruction, with its own samples, in
         # place of the generator's sample lines (and of the card's trait sentences: _card)
-        samples, voice = (self._voice(turn, meta, p, live=live)
+        samples, voice = (self._voice(turn, meta, p, live=live, hooks=not hold,
+                                      fresh_says=topic_on)
                           if getattr(p, "speech", None) is not None else (select_samples(p), ""))
         # the facts go to the first answer only: a second recited the same table (rehearsal 2)
         facts = (await self.facts.for_line(meta.facts_line)
@@ -3070,6 +3092,11 @@ class Pipeline:
         # every situation template's length from here (situation_length); [talk] shape (core
         # plan Task 9): the drawn shape's length line in the place of every other length
         # (render_instruction's length_text wins over the Discord one and `long`)
+        if hold:
+            ends.append(wowtopic.hold_text(turn.channel))
+        if topic_on and wowtopic.loot_turn(turn.channel, (trigger, his, meta.topic,
+                                                          turn.instruction)):
+            ends.append(wowtopic.DKP_RULE)  # bids are DKP, never gold
         words = self._discord_words(turn)
         length_text = shape_text
         if not length_text and situation:
@@ -3077,9 +3104,9 @@ class Pipeline:
                                            typing=p.typing, two_lines=two)
         instruction = render_instruction(
             turn.kind, addressee=names.get(turn.addressee, "") if turn.addressee else "",
-            topic=meta.topic, lead=romance or "",
-            extra=" ".join(x for x in (turn.instruction, unanswered, follow, seen, story, lore,
-                                       quest, unsure, *ends) if x),
+            topic=self._known_only(turn, meta.topic), lead=romance or "",
+            extra=" ".join(x for x in (self._known_only(turn, turn.instruction), unanswered,
+                                       follow, seen, story, lore, quest, unsure, *ends) if x),
             forms=forms, after=after, tail=tail, long=two,
             quiet=quiet, to_him=to_human and turn.kind is TurnKind.OPEN,
             channel=turn.channel, discord_words=words, length_text=length_text,
@@ -3116,8 +3143,8 @@ class Pipeline:
                            with_him=self._human_in_talk(turn, recent)), rel_cards=cards,
             memories=[self.recall.format(m, past=realism, **aged) for m in memories],
             mood=mood_line(state, altered, substance_of(p, altered, local), phase,
-                           kind=turn.kind, life_thread=p.real_life.life_thread,
-                           lately=self._lately_line(turn.speaker, now),
+                           kind=turn.kind, life_thread="" if hold else p.real_life.life_thread,
+                           lately="" if hold else self._lately_line(turn.speaker, now),
                            variant=random.Random(f"{p.guid}:{night_of(local)}:mood")
                            .randrange(1000), today=today, where=where, state_words=feels),
             chat=[said_hi_text(r, names, human.called, now=now) if r.id in hi
@@ -3142,7 +3169,7 @@ class Pipeline:
                     NEVER_MET.format(name=human.called) if apart else "",
                     self._owner_home_line(turn, p, apart=apart)) if x)),
             old_chat=self._old_chat(recent) if dm_rows else 0,
-            place=self._place_parts(turn, p))
+            place=[] if hold else self._place_parts(turn, p))
         if live and getattr(self, 'learn_enabled', False):
             from leeroy_mind.learn.apply import prepare, yield_families
             meta.learning = await prepare(self, turn, meta, p, now=now)
@@ -3238,6 +3265,43 @@ class Pipeline:
                         beat_items=[x for _, x in beat_offer],
                         tail=overlaid, beat_keys=[k for k, _ in beat_offer],
                         asking=bool(his) and asks(his, buried=self._coherent()))
+
+    def _wow_length_on(self, turn: Turn, meta: TurnMeta, c: Composed, *, game: bool) -> bool:
+        """[talk] wow_topic's length rule for this turn: a WoW turn (_wow_topic_on) on the game's
+        typed channels (wowtopic.game_channel: never a whisper, Discord or a voice room), a game
+        turn of the model's (`game`: no template, no bit), with [talk] coherence_length off (the
+        length rule owns game lines then) and answering no line that asks something (the owner's
+        rule: a cut never takes his answer)."""
+        return (game and wowtopic.game_channel(turn.channel) and self._wow_topic_on(turn)
+                and not self._length_rule() and not length_asks(self._asked_line(turn, meta, c)))
+
+    def _wow_topic_on(self, turn: Turn) -> bool:
+        """[talk] wow_topic (read at each compose) on a WoW turn (wowtopic.wow_topic_channel:
+        grounding.wow_turn's, and say or yell while he is in his raid), never a template's: never a
+        whisper, a DM, a group DM or #general."""
+        return (getattr(self.cfg.talk, "wow_topic", False) is True and turn.template is None
+                and wowtopic.wow_topic_channel(turn.channel, his_raid=self._in_his_raid()))
+
+    def _known_only(self, turn: Turn, text: str) -> str:
+        """The mind's own instruction text (a turn's instruction, an opener's topic) without the
+        sentences that name a game entity the library does not know: a boss or a battleground
+        (talk/gamenames.py, the "game name" tell's reading) or a bracketed item the item table
+        has no entry for (talk/entities.py). Members' chat never passes through here, and quoted
+        material in the instruction is left whole. A private turn's (a whisper, a DM, a group DM:
+        his own words can be in its instruction) is as it was. Fails open: without the library
+        the text is as it was. Logs the count only."""
+        if not text or is_private(turn.channel) or is_group(turn.channel):
+            return text
+        from leeroy_mind.talk.entities import known_only
+        items = getattr(self, "items", None)
+        level = self._link_level(turn.speaker)
+        resolve = ((lambda name: items.resolve(name, level) is not None)
+                   if items is not None and items.ready() else None)
+        kept, dropped = known_only(text, invented=self._invents_game_name, item=resolve)
+        if dropped:
+            log.info("instruction_entity_dropped: guid=%d kind=%s n=%d", turn.speaker, turn.kind,
+                     dropped)
+        return kept
 
     def _wow_grounding_on(self, turn: Turn) -> bool:
         """[talk] wow_grounding (read at each compose) and a raid or guild turn
@@ -4389,6 +4453,9 @@ class Pipeline:
                 if (not is_discord(turn.channel) and meta is not None and meta.learning is not None
                         and meta.learning.num_predict is not None):
                     options['num_predict'] = min(options.get('num_predict', 80), meta.learning.num_predict, 80)
+                if not words and meta is not None and meta.wow_predict > 0:
+                    # [talk] wow_topic: a game line's room (wowtopic.predict), never above the preset's
+                    options['num_predict'] = min(options.get('num_predict', 80), meta.wow_predict)
                 if meta is not None and meta.seed is not None:  # a tuning preview's
                     options["seed"] = meta.seed
                 self.timing.model(trace, attempt, "call")
@@ -4440,11 +4507,19 @@ class Pipeline:
         finally:
             self.timing.model(trace, attempt, outcome)
         text = result.text
-        if words and getattr(result.diagnostics, "done_reason", None) == "length":
+        cutoff = getattr(result.diagnostics, "done_reason", None) == "length"
+        if words and cutoff:
             # cut off by num_predict: back to its last full sentence (none: as it is)
             cut = trim_to_sentence(text)
             if cut != text:
                 log.info("discord_line_trimmed: guid=%d kind=%s words=%d kept=%d", turn.speaker,
+                         turn.kind, len(text.split()), len(cut.split()))
+            text = cut
+        elif cutoff and meta is not None and meta.wow_predict > 0:
+            # [talk] wow_topic: a game line cut off by its tighter num_predict, likewise
+            cut = trim_to_sentence(text)
+            if cut != text:
+                log.info("wow_line_cutoff: guid=%d kind=%s words=%d kept=%d", turn.speaker,
                          turn.kind, len(text.split()), len(cut.split()))
             text = cut
         return text
@@ -4523,6 +4598,12 @@ class Pipeline:
         usual_ok = (keeps and owed and turn.channel == "whisper" and bool(hg)
                     and turn.to_guid == hg and length_asks(asked_line))
         meta.keep_words = meta.keep_lines = 0
+        # [talk] wow_topic, on the game's typed channels: a tighter num_predict and a draft past
+        # her usual words cut back to its first line or sentence (talk/wowtopic.py); never an
+        # answer to a line that asks something, never with the length rule on (it owns game lines)
+        wow_len = self._wow_length_on(turn, meta, c, game=game)
+        wow_budget = self._word_budget(turn, p, meta.two_lines) if wow_len else 0
+        meta.wow_predict = wowtopic.predict(wow_budget) if wow_len else 0
         kept, why = "", "tells"
         # the kept draft's lines are the length rule's (a kept or cut answer that fits her
         # lines): when it is what goes, the styling leaves it whole as the return below would
@@ -4585,6 +4666,14 @@ class Pipeline:
                 silent = quiet(text)  # a line that was only a command at him included
             if not silent and fit and len(text.split()) > fit:
                 text = fit_words(text, fit)
+            if not silent and wow_len:
+                voiced = _voice_words(p)
+                cut = wowtopic.trim(text, wow_budget, floor=min(voiced) if voiced else 0)
+                if cut is not None:
+                    log.info("wow_length_trim: guid=%d kind=%s attempt=%d words=%d kept=%d limit=%d",
+                             turn.speaker, turn.kind, attempt, len(text.split()),
+                             len(cut.split()), wow_budget)
+                    text = cut
             if not silent and echoes and asked_line:
                 text = without_question_echo(text, asked_line)
             length, draft, usual = "", text, False

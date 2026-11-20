@@ -23,7 +23,7 @@ from leeroy_mind.personas.facts import (Facts, conflicts as persona_conflicts, f
 from leeroy_mind.talk.everyday import everyday_reason
 from leeroy_mind.talk.moves import topics
 
-from . import owncopy, phrases, pronouns, voice
+from . import owncopy, phrases, pronouns, register, voice
 from .identity import CODES as SLIP_CODES, code_for as slip_code, slips
 from .opener import echo_opener
 from .types import Draft, GuardStores, HistoryLine, Reference, Score, Verdict
@@ -92,6 +92,7 @@ HINTS = {
                           'you sound, so say something new that way'),
     'phrase_exemplar': ('it copies words from one of your own past lines shown as examples; they '
                         'show how you talk, so say something new that way'),
+    register.CODE: register.HINT,
 }
 EXEMPLARS_MAX = 8  # Draft.exemplars: talk/grounding.py shows at most 3
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
@@ -249,6 +250,8 @@ def _validate(draft, now):
     if (not isinstance(draft.exemplars, tuple) or len(draft.exemplars) > EXEMPLARS_MAX
             or any(not isinstance(x, str) or len(x) > MAX_TEXT for x in draft.exemplars)):
         raise ValueError('guard_exemplars_invalid')
+    if type(draft.wow_topic) is not bool:
+        raise ValueError('guard_wow_topic_invalid')
 
 
 def _visible(line, draft, officer):
@@ -669,6 +672,9 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
         rewrite.append('voice_never')
     if voice.copies_sample(draft.text, sheet):
         rewrite.append('voice_sample_copy')
+    # [talk] wow_topic: raid and guild chat reads as chat (guards/register.py)
+    if draft.wow_topic and register.reasons(draft.text):
+        rewrite.append(register.CODE)
     # A line already dropped as a repeat or echo stays dropped; phrases only add a rewrite.
     cooled = (phrases.check(reader, draft, now, sheet) if cfg.phrase_cooldown and not drop
               else phrases.Found())

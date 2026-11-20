@@ -10,7 +10,9 @@ then goes by the owed rules (talk/pipeline.py: the best soft-only draft is kept)
   her words is hers, so the conversation, day and per-member stock rules leave it alone, up to
   a ration (over_ration): at most about one in three of her lines in a conversation, and
   never fewer than SAY_FREE uses, counted over her last SAY_WINDOW lines there. Above it the
-  cooldown names it as `phrase_conversation`, so a tic cannot take over.
+  cooldown names it as `phrase_conversation`, so a tic cannot take over. On a WoW turn
+  ([talk] wow_topic) the ration is tighter: once in that window (`phrase_conversation`) and twice
+  in her lines of the last day anywhere (`phrase_day`).
 
 Typing shortcuts (2026-11-17): the cooldown folds the cast's shortcuts back before it matches
 ("u" is "you", "tbh" is "to be honest": phrases.FOLD), and the draft the guards read is her
@@ -30,6 +32,10 @@ from . import phrases
 SAY_WINDOW = 9   # her earlier lines in the conversation the ration counts
 SAY_FREE = 2     # uses in the window (the draft's included) the ration never minds
 SAY_SHARE = 3    # one line in this many
+# A WoW turn ([talk] wow_topic, Draft.wow_topic): one of her words once in the window is enough,
+# and twice in her lines of the last day anywhere (the blind A/B's persona tics said verbatim)
+WOW_WINDOW_USES = 1
+WOW_DAY_USES = 2
 COPY_WORDS = 4   # a sample this long counts as copied when the draft holds it as a run
 MAX_NAMED = 3
 CODES = ("voice_never", "voice_sample_copy")
@@ -130,23 +136,41 @@ def any_said(toks, sheet: Sheet) -> bool:
     return any(_run(norms, entry) for entry in sheet.rationed)
 
 
-def rationed(toks, talk_words, sheet: Sheet) -> list[tuple[int, int]]:
-    """The spans (first, last token index) of her own words in the draft that are over their
-    ration. `toks`: phrases.tokens of the draft; `talk_words`: the folded words of each of her
-    earlier lines in this conversation, newest first."""
-    if not sheet.rationed:
-        return []
-    window = talk_words[:SAY_WINDOW]
+def _spans(toks, sheet: Sheet, over) -> list[tuple[int, int]]:
+    """The spans (first, last token index) of her own words in the draft for which
+    `over(entry)` holds."""
     norms = [t.norm for t in toks]
     spans = []
     for entry in sheet.rationed:
         n = len(entry)
         at = next((i for i in range(len(norms) - n + 1) if tuple(norms[i:i + n]) == entry), None)
-        if at is None:
-            continue
-        if over_ration(sum(_run(words, entry) for words in window), len(window)):
+        if at is not None and over(entry):
             spans.append((toks[at].i, toks[at + n - 1].i))
     return spans
+
+
+def rationed(toks, talk_words, sheet: Sheet, *, strict: bool = False) -> list[tuple[int, int]]:
+    """The spans (first, last token index) of her own words in the draft that are over their
+    ration. `toks`: phrases.tokens of the draft; `talk_words`: the folded words of each of her
+    earlier lines in this conversation, newest first. `strict` (a WoW turn): over once she used
+    it WOW_WINDOW_USES times in the window."""
+    if not sheet.rationed:
+        return []
+    window = talk_words[:SAY_WINDOW]
+
+    def over(entry) -> bool:
+        uses = sum(_run(words, entry) for words in window)
+        return uses >= WOW_WINDOW_USES if strict else over_ration(uses, len(window))
+    return _spans(toks, sheet, over)
+
+
+def over_day(toks, day_words, sheet: Sheet) -> list[tuple[int, int]]:
+    """A WoW turn's day cap: the spans of her own words in the draft that she used in
+    WOW_DAY_USES or more of her lines of the last day (`day_words`, folded words of each)."""
+    if not sheet.rationed:
+        return []
+    return _spans(toks, sheet, lambda entry: sum(_run(words, entry) for words in day_words)
+                  >= WOW_DAY_USES)
 
 
 def hint(never) -> str:

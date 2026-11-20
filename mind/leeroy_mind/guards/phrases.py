@@ -26,7 +26,8 @@ list's own words, named on her next turn (talk/pipeline.py `_phrase_pending`).
 A member with a voice sheet (Persona.speech) keeps her own words: a phrase that is one of her
 `says` is never her tic for the conversation, day or per-member stock rules, and is rationed
 instead (guards/voice.py: about one in three of her lines in a conversation; above that it is
-named as `phrase_conversation`). The cast rules still count it. A slop entry ("!" lines) is
+named as `phrase_conversation`; on a WoW turn, Draft.wow_topic, once in the conversation and twice
+a day, `phrase_day` for the day). The cast rules still count it. A slop entry ("!" lines) is
 never anyone's own word: a say-word inside one exempts nothing, and such a sheet is refused at
 import (`says_slop`).
 
@@ -437,8 +438,13 @@ def check(reader, draft, now: float, sheet=None) -> Found:
     subject, his = _subject(rows, draft.guid, key, now)
     talk = _conversation(own, key, now)[0] if phrases or said else []
     if said:  # her own words, over their ration in this conversation (voice.over_ration)
+        wow = bool(getattr(draft, 'wow_topic', False))  # a WoW turn's ration is tighter
         hits['phrase_conversation'] += voice.rationed(
-            toks, [_words(strip_wow_markup(r['text'] or '')) for r in talk], sheet)
+            toks, [_words(strip_wow_markup(r['text'] or '')) for r in talk], sheet, strict=wow)
+        if wow:
+            hits['phrase_day'] += voice.over_day(
+                toks, [_words(strip_wow_markup(r['text'] or '')) for r in own
+                       if now - r['ts'] <= DAY_SECONDS], sheet)
     if phrases:
         seen_talk = [_seen(r['text'])[1] for r in talk]
         day = [_seen(r['text'])[1] for r in own if now - r['ts'] <= DAY_SECONDS]
