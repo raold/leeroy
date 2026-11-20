@@ -80,6 +80,7 @@ class Asked:
     lead_id: str = ""            # world: the lead its start made (lead_do's command id)
     ended: str = ""              # world: that lead ended (native's why) before her answer was told
     told: bool = False           # her answer's instruction has been written
+    cancelled: bool = False      # his end came while it was being carried out
     ready: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -298,6 +299,8 @@ class LeadService:
                   else handing.guid if handing is not None else pending.leader)
         if ev.channel == "whisper" and ev.to_guid != leader:
             return None  # a whisper to someone else is talk with her
+        if pending is not None:
+            pending.cancelled = True  # whatever it starts is ended, and she calls nothing
         raidlead = getattr(self.app, "raidlead", None)
         if end.his and ev.channel != "whisper" and raidlead is not None:
             try:
@@ -386,7 +389,8 @@ class LeadService:
         """The member he named or whispered also calls his raid (raidlead/), as his designation
         "Ana, you lead" did before the lead read it; one he did not name changes nothing there."""
         raidlead = getattr(self.app, "raidlead", None)
-        if raidlead is not None and asked.start is not None and asked.start.who in ("you", "named"):
+        if (raidlead is not None and not asked.cancelled and asked.start is not None
+                and asked.start.who in ("you", "named")):
             try:
                 raidlead.designate(asked.leader)
             except Exception as exc:
@@ -509,7 +513,9 @@ class LeadService:
         if self.handing is not active:
             # his end came while dungeon-clear was being asked: what it started is stopped again
             if outcome == "done":
-                await self._dc(tank, "dc_off")
+                off, code, _ = await self._dc(tank, "dc_off")
+                if off != "done" and code not in DC_GONE:
+                    self.dc = Dc(tank, active.guid, active.channel)  # still his to stop again
             log_event("lead_handover", guid=active.guid, outcome="cancelled", code="-")
             return
         self.handing = None

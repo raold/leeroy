@@ -298,6 +298,61 @@ def test_his_stop_before_the_start_is_confirmed_still_stops_it(app):
     run(main())
 
 
+def test_his_ill_lead_during_a_start_keeps_the_calling_his(app):
+    calls = []
+    app.raidlead = SimpleNamespace(designate=lambda guid: calls.append(("designate", guid)) or True,
+                                   lead=lambda: None,
+                                   take_back=lambda: calls.append(("his",)) or True)
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, LeadDo) and cmd.action == "start":
+                await gate.wait()
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        app.bridge = Slow(app)
+        app.leading.claims(chat("Belra, you lead"), 552)
+        await asyncio.sleep(0)
+        app.leading.claims(chat("i'll lead"), 553)
+        gate.set()
+        await settle(app)
+        assert calls == [("his",)]   # the cancelled start designates nobody
+        assert [c.action for c in app.bridge.sent] == ["start", "end"]
+    run(main())
+
+
+def test_a_cancelled_handover_whose_stop_failed_stays_his_to_stop(app, monkeypatch):
+    async def speak(turn, *, why="speak", **kw):
+        return ["ok"]
+    monkeypatch.setattr(app.engine, "speak", speak)
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, RaidControl) and cmd.action == "dc_on":
+                await gate.wait()
+                self.connected = False   # and the link drops before the stop
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        app.leading.claims(chat("you lead"), 554)
+        await settle(app)
+        app.bridge = Slow(app)
+        active = app.leading.active
+        app.leading.on_job(job(SimpleNamespace(id=active.id, guid=TANK), kind="lead",
+                               state="ended", reason="instance"))
+        await app.clock.advance(svc.HANDOVER_S + 1, 1.0)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        app.leading.claims(chat("stop leading", at=NAXX), 555)
+        gate.set()
+        await settle(app)
+        assert app.leading.dc is not None   # dungeon-clear may run: his to stop again
+    run(main())
+
+
 def test_his_ill_lead_also_takes_the_raids_calling_back(app):
     calls = []
     app.raidlead = SimpleNamespace(designate=lambda guid: True, lead=lambda: None,
