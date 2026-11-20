@@ -89,7 +89,7 @@ class RenderRequest:
     out: Path  # absolute .jpg paths the worker writes
     thumb: Path
     thumb_size: int
-    nsfw_max: float
+    nsfw_max: float | None = None  # legacy override; new requests use the worker's startup policy
     identity: Identity | None = None  # an identity worker needs it, a plain one refuses it
     shape: str = "square"  # or "portrait" (832 x 1216, needs size 1024)
     detail: Detail | None = None  # the detailer's pass; None sends no detail key at all
@@ -137,6 +137,13 @@ def _field(answer: dict, key: str, *types):
     if type(v) not in types:
         raise _Malformed(key)
     return v
+
+
+def _score(answer: dict) -> float:
+    value = _field(answer, "nsfw", int, float)
+    if not 0 <= value <= 1:
+        raise _Malformed("nsfw")
+    return float(value)
 
 
 def _similarity(value, tiles: int) -> dict:
@@ -312,8 +319,9 @@ class SelfieWorker:
             "id": rid, "op": "render", "phrases": [[t, p] for t, p in req.phrases],
             "negative": [[t, p] for t, p in req.negative], "seed": req.seed,
             "steps": req.steps, "cfg": req.cfg, "size": req.size, "out": str(req.out),
-            "thumb": str(req.thumb), "thumb_size": req.thumb_size,
-            "nsfw_max": req.nsfw_max}
+            "thumb": str(req.thumb), "thumb_size": req.thumb_size}
+        if req.nsfw_max is not None:
+            body["nsfw_max"] = req.nsfw_max
         if req.identity is not None:
             body["identity"] = {"ref": str(req.identity.ref), "crop": list(req.identity.crop),
                                 "scale": req.identity.scale}
@@ -337,12 +345,11 @@ class SelfieWorker:
         if not answer["ok"]:
             raise WorkerError(_reason(answer))
         try:
-            return Rendered(_field(answer, "flagged", bool),
-                            float(_field(answer, "nsfw", int, float)),
-                            _field(answer, "prompt", str), _field(answer, "tokens", int),
-                            float(_field(answer, "seconds", int, float)),
-                            float(_field(answer, "peak_gib", int, float)),
-                            _field(answer, "width", int), _field(answer, "height", int),
+            return Rendered(flagged=_field(answer, "flagged", bool), nsfw=_score(answer),
+                            prompt=_field(answer, "prompt", str), tokens=_field(answer, "tokens", int),
+                            seconds=float(_field(answer, "seconds", int, float)),
+                            peak_gib=float(_field(answer, "peak_gib", int, float)),
+                            width=_field(answer, "width", int), height=_field(answer, "height", int),
                             **(_detailed(answer, rid) if detail is not None else {}))
         except _Malformed:
             await self._end_failed(tree)
@@ -383,7 +390,8 @@ class SelfieWorker:
             similarity = None  # a best-effort diagnostic never fails a good grid
         return Gridded(width, height, seconds, similarity)
 
-    async def caption(self, base: Path, *, top: str, bottom: str, out: Path, nsfw_max: float,
+    async def caption(self, base: Path, *, top: str, bottom: str, out: Path,
+                      nsfw_max: float | None = None,
                       rid: str | None = None) -> Captioned:
         """A meme: the worker draws `top` and `bottom` over the JPEG at `base` and writes `out`
         unless the result scores nsfw_max or more (Captioned.flagged). An ok false answer
@@ -393,9 +401,11 @@ class SelfieWorker:
         rid = f"c{self._sequence}" if rid is None else rid
         if type(rid) is not str or not 1 <= len(rid) <= 32:
             raise ValueError("a request id is 1-32 characters")
-        line = json.dumps({"id": rid, "op": "caption", "base_path": str(base), "top": top,
-                           "bottom": bottom, "out_path": str(out), "nsfw_max": nsfw_max}
-                          ).encode("utf-8") + b"\n"
+        body = {"id": rid, "op": "caption", "base_path": str(base), "top": top,
+                "bottom": bottom, "out_path": str(out)}
+        if nsfw_max is not None:
+            body["nsfw_max"] = nsfw_max
+        line = json.dumps(body).encode("utf-8") + b"\n"
         if len(line) - 1 > MAX_LINE:
             raise WorkerError("bad_request")
         tree = self._tree
@@ -407,9 +417,9 @@ class SelfieWorker:
         if not answer["ok"]:
             raise WorkerError(_reason(answer))
         try:
-            return Captioned(_field(answer, "flagged", bool), float(_field(answer, "nsfw", int, float)),
-                             _field(answer, "width", int), _field(answer, "height", int),
-                             float(_field(answer, "seconds", int, float)))
+            return Captioned(flagged=_field(answer, "flagged", bool), nsfw=_score(answer),
+                             width=_field(answer, "width", int), height=_field(answer, "height", int),
+                             seconds=float(_field(answer, "seconds", int, float)))
         except _Malformed:
             await self._end_failed(tree)
             raise WorkerError("gone") from None

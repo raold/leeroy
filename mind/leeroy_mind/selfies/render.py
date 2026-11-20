@@ -245,7 +245,7 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
         _unleased(leases)
         return RenderRequest(spec.phrases, spec.negative,
                              seed_for(night, guid, set_no, idx, attempt), steps, cfg.guidance,
-                             cfg.size, out, thumb, THUMB_PX, cfg.nsfw_max, identity=identity,
+                             cfg.size, out, thumb, THUMB_PX, identity=identity,
                              detail=detail_for(cfg, rear=rear))
 
     async def room() -> None:

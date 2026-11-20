@@ -66,7 +66,7 @@ class Worker:
             req.thumb.write_bytes(JPEG)
         return Rendered(self.flag_render, 0.95 if self.flag_render else 0.02, "p", 3, 0.1, 1.0, 1024, 1024)
 
-    async def caption(self, base, *, top, bottom, out, nsfw_max, rid=None):
+    async def caption(self, base, *, top, bottom, out, nsfw_max=None, rid=None):
         self.captions.append((base, top, bottom, out))
         if not self.flag_caption:
             out.write_bytes(JPEG)
@@ -141,7 +141,7 @@ def test_meme_scene_prompt_has_no_names(h, tmp_path):
     assert req.phrases == memes.scene_spec("burnt_pizza")[0] and req.negative == memes.SCENE_NEGATIVE
     prompt = " ".join(t for t, _ in (*req.phrases, *req.negative)).lower()
     assert not any(n.lower() in prompt for n in names()) and "inspect" not in prompt
-    assert req.identity is None and req.nsfw_max == SELFIES.nsfw_max  # a plain worker, the NSFW gate
+    assert req.identity is None and req.nsfw_max is None  # plain worker, its startup cutoff
     (row,) = h.store.conn.execute("SELECT * FROM discord_meme").fetchall()
     assert row["status"] == "ready" and row["path"] == f"discord/memes/{row['id']}.jpg"
     assert worker.captions[0][1:3] == ("when Belra inspects", "the floor again") and worker.stopped == 1

@@ -620,7 +620,7 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
         def request(attempt):
             return RenderRequest(spec.phrases, spec.negative, seed_for(0, guid, attempt),
                                  scfg.steps, scfg.guidance, SIZE, (folder / "photo.jpg").absolute(),
-                                 (folder / "photo.thumb.jpg").absolute(), THUMB_PX, scfg.nsfw_max,
+                                 (folder / "photo.thumb.jpg").absolute(), THUMB_PX,
                                  identity=identity, shape="portrait",
                                  detail=detail_for(scfg, rear=from_behind(scene)))
         try:

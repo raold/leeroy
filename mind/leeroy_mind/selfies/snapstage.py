@@ -304,7 +304,7 @@ class SnapRenderer:
             self._leases()
             return RenderRequest(spec.phrases, spec.negative,
                                  seed_for(ctx.night, guid, snap_id, idx, attempt), steps,
-                                 cfg.guidance, SIZE, out, thumb, thumb_size, cfg.nsfw_max,
+                                 cfg.guidance, SIZE, out, thumb, thumb_size,
                                  identity=identity, shape=shape,
                                  detail=detail_for(cfg) if detail else None)
         got, attempts = await render_slot(self.worker, request,

@@ -7,6 +7,13 @@ from leeroy_selfie import models, paths
 from leeroy_selfie.__main__ import main
 
 
+@pytest.mark.parametrize('value', ['nan', 'inf', '0', '1', '-0.1'])
+def test_worker_rejects_invalid_startup_cutoff_before_loading(value):
+    with pytest.raises(SystemExit) as error:
+        main(['worker', '--min-free-gib', '8', '--nsfw-max', value])
+    assert error.value.code == 2
+
+
 def test_where_prints_the_data_dir_from_the_environment(selfie_data, capsys):
     assert main(["where"]) == 0
     assert capsys.readouterr().out.strip() == f"data_dir={selfie_data}"

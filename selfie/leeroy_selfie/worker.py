@@ -92,7 +92,8 @@ def _id_of(line: bytes) -> str:
 
 
 def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
-          on_eof: Callable[[], None], identity: bool = False) -> int:
+          on_eof: Callable[[], None], identity: bool = False,
+          nsfw_max: float = protocol.DEFAULT_NSFW_MAX) -> int:
     """0 after a quit or the end of stdin, 1 when the renderer could not be loaded. `identity`
     says the start asked for the adapter (worker --identity); a renderer that did not load it
     then answers ready ok false, model. Ready says identity only for a renderer that has the
@@ -101,6 +102,7 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
     draws a caption and answers the critic; an embed-only worker answers embed and critic.
     The reader runs from the start, so the end of stdin calls on_eof (the worker's: os._exit)
     at once, during the load, a wait for a retry or a render too."""
+    nsfw_max = protocol.screening_limit(nsfw_max)
     lines: queue.Queue = queue.Queue()
     threading.Thread(target=_reader, args=(stdin, lines, on_eof), daemon=True).start()
     renderer = _ready(load, lines, out)
@@ -120,7 +122,7 @@ def serve(load: Callable[[], Renderer], *, stdin: BinaryIO, out: BinaryIO,
             _send(out, {"id": "", "ok": False, "error": "bad_request"})
             continue
         try:
-            req = protocol.parse(line)
+            req = protocol.parse(line, nsfw_max=nsfw_max)
         except ValueError:
             _send(out, {"id": _id_of(line), "ok": False, "error": "bad_request"})
             continue

@@ -23,7 +23,7 @@ async def render_slot(worker, request: Callable[[int], RenderRequest], *,
                       tries: int = TRIES) -> tuple[Rendered, int]:
     """(the rendered answer, the attempts used). `request(attempt)` and `rid(attempt)` build
     attempt n's request and id (attempt counts from 0). An answer flagged, or scoring its
-    request's nsfw_max or more, is never kept (its files are removed) and the next attempt
+    legacy request's explicit cutoff or more, is never kept (its files are removed) and the next attempt
     runs; `tries` of them raise SetRefused. The first WorkerError("oom") awaits make_room() and
     repeats that attempt once; a second propagates, as does any other WorkerError."""
     roomed = False
@@ -38,7 +38,7 @@ async def render_slot(worker, request: Callable[[int], RenderRequest], *,
             roomed = True
             await make_room()
             got = await worker.render(req, rid=name)
-        if not got.flagged and got.nsfw < req.nsfw_max:
+        if not got.flagged and (req.nsfw_max is None or got.nsfw < req.nsfw_max):
             return got, attempt + 1
         for path in (req.out, req.thumb):  # never kept, whatever a worker wrote
             with suppress(FileNotFoundError):

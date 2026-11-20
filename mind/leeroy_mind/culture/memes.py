@@ -346,7 +346,7 @@ async def _render_one(ctx, cfg, worker, row) -> str:
         def request(attempt: int) -> RenderRequest:
             _unleased(lambda: ctx.arbiter.holders)  # never under a live lease
             return RenderRequest(phrases, negative, seed_for(ctx.night, 0, meme, 0, attempt), cfg.steps,
-                                 cfg.guidance, cfg.size, base, thumb, 256, cfg.nsfw_max)
+                                 cfg.guidance, cfg.size, base, thumb, 256)
 
         async def room() -> None:
             await ctx.arbiter.make_room()
@@ -361,7 +361,7 @@ async def _render_one(ctx, cfg, worker, row) -> str:
         nsfw = got.nsfw
     _unleased(lambda: ctx.arbiter.holders)
     captioned = await worker.caption(base, top=row["top"], bottom=row["bottom"], out=out,
-                                     nsfw_max=cfg.nsfw_max, rid=f"m{meme}:caption")
+                                     rid=f"m{meme}:caption")
     if captioned.flagged or not math.isfinite(captioned.nsfw) or captioned.nsfw >= cfg.nsfw_max:
         _refuse(ctx, row, "flagged")
         return "refused"
